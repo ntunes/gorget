@@ -442,11 +442,25 @@ impl CodegenContext<'_> {
         // Try to figure out the receiver type for mangling
         let type_name = self.infer_receiver_type(receiver);
         let mangled = c_mangle::mangle_method(&type_name, method_name);
-        let mut all_args = vec![format!("&{recv}")];
-        for arg in args {
-            all_args.push(self.gen_expr(&arg.node.value));
+
+        // For non-lvalue receivers (e.g. function calls), we can't take `&recv`
+        // directly. Use a GCC statement expression to stash the result in a temp.
+        let needs_temp = !matches!(receiver.node, Expr::Identifier(_) | Expr::SelfExpr);
+        if needs_temp {
+            let arg_exprs: Vec<String> = args.iter().map(|a| self.gen_expr(&a.node.value)).collect();
+            let mut call_args = format!("&__recv");
+            for a in &arg_exprs {
+                call_args.push_str(", ");
+                call_args.push_str(a);
+            }
+            format!("({{ __typeof__({recv}) __recv = {recv}; {mangled}({call_args}); }})")
+        } else {
+            let mut all_args = vec![format!("&{recv}")];
+            for arg in args {
+                all_args.push(self.gen_expr(&arg.node.value));
+            }
+            format!("{mangled}({})", all_args.join(", "))
         }
-        format!("{mangled}({})", all_args.join(", "))
     }
 
     /// Check if a receiver expression has a trait object type, returning the trait name if so.
@@ -553,6 +567,19 @@ impl CodegenContext<'_> {
         format!("{mangled}({})", all_args.join(", "))
     }
 
+    /// Map a `TypeId` to the Gorget type name (for mangling).
+    fn type_name_from_type_id(&self, type_id: crate::semantic::ids::TypeId) -> Option<String> {
+        match self.types.get(type_id) {
+            crate::semantic::types::ResolvedType::Defined(tid) => {
+                Some(self.scopes.get_def(*tid).name.clone())
+            }
+            crate::semantic::types::ResolvedType::Generic(tid, _) => {
+                Some(self.scopes.get_def(*tid).name.clone())
+            }
+            _ => None,
+        }
+    }
+
     /// Try to infer the type name of a receiver expression (best-effort).
     fn infer_receiver_type(&self, expr: &Spanned<Expr>) -> String {
         match &expr.node {
@@ -566,18 +593,60 @@ impl CodegenContext<'_> {
                     });
 
                 if let Some(type_id) = type_id {
-                    match self.types.get(type_id) {
-                        crate::semantic::types::ResolvedType::Defined(tid) => {
-                            return self.scopes.get_def(*tid).name.clone();
-                        }
-                        crate::semantic::types::ResolvedType::Generic(tid, _) => {
-                            return self.scopes.get_def(*tid).name.clone();
-                        }
-                        _ => {}
+                    if let Some(name) = self.type_name_from_type_id(type_id) {
+                        return name;
                     }
                 }
                 name.clone()
             }
+            Expr::Call { callee, .. } => {
+                if let Expr::Identifier(name) = &callee.node {
+                    // Try resolution_map first, then search all definitions
+                    let def_id = self.resolution_map.get(&callee.span.start).copied()
+                        .or_else(|| {
+                            // lookup_by_name_anywhere only finds Variable/Const/Function,
+                            // so search all definitions for struct/newtype/variant/function
+                            self.scopes.lookup_by_name_anywhere(name)
+                        })
+                        .or_else(|| {
+                            // Search struct_fields keys (which are DefIds of struct defs)
+                            for (def_id, _) in self.struct_fields {
+                                if self.scopes.get_def(*def_id).name == *name {
+                                    return Some(*def_id);
+                                }
+                            }
+                            None
+                        });
+
+                    if let Some(def_id) = def_id {
+                        let def = self.scopes.get_def(def_id);
+                        // Struct/newtype constructor — type is the callee name
+                        if matches!(def.kind, DefKind::Struct | DefKind::Newtype) {
+                            return name.clone();
+                        }
+                        // Enum variant constructor — type is the parent enum
+                        if def.kind == DefKind::Variant {
+                            for (enum_def_id, info) in self.enum_variants {
+                                for (_, vid) in &info.variants {
+                                    if *vid == def_id {
+                                        return self.scopes.get_def(*enum_def_id).name.clone();
+                                    }
+                                }
+                            }
+                        }
+                        // Function call — use return type
+                        if let Some(func_info) = self.function_info.get(&def_id) {
+                            if let Some(ret_type_id) = func_info.return_type_id {
+                                if let Some(name) = self.type_name_from_type_id(ret_type_id) {
+                                    return name;
+                                }
+                            }
+                        }
+                    }
+                }
+                "Unknown".to_string()
+            }
+            Expr::StructLiteral { name, .. } => name.node.clone(),
             Expr::SelfExpr => self
                 .current_self_type
                 .clone()

@@ -44,4 +44,3 @@ cargo test               # all tests (use --test-threads=1 if integration tests 
 ## Known Codegen Limitations
 
 - Calling a `GorgetClosure` variable (e.g., `auto f = (int y): x + y; f(5)`) requires dispatch through `.fn_ptr` — not yet implemented
-- Method calls on non-identifier receivers (e.g., `get_point().sum()`) are unsupported

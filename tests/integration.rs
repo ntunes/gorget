@@ -110,7 +110,9 @@ point created
 rectangle created
 sum called
 origin called
-param sum called",
+param sum called
+direct sum called
+fn sum called",
     );
 }
 

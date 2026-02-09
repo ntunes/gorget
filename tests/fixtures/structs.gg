@@ -16,6 +16,9 @@ void print_sum(Point p):
     float s = p.sum()
     print("param sum called")
 
+Point make_point():
+    return Point(5.0, 6.0)
+
 void main():
     Point p = Point(3.0, 4.0)
     float px = p.x
@@ -28,3 +31,7 @@ void main():
     Point o = Point.origin()
     print("origin called")
     print_sum(p)
+    float direct_sum = Point(1.0, 2.0).sum()
+    print("direct sum called")
+    float fn_sum = make_point().sum()
+    print("fn sum called")
