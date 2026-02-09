@@ -4,9 +4,24 @@ void main():
     else:
         print("completed")
 
+    for i in 0..5:
+        if i == 3:
+            break
+    else:
+        print("should not print")
+
     int count = 0
     while count < 3:
         print("{count}")
         count += 1
     else:
         print("while done")
+
+    int n = 0
+    while n < 10:
+        if n == 2:
+            break
+        n += 1
+    else:
+        print("should not print either")
+    print("end")

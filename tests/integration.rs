@@ -163,7 +163,8 @@ completed
 0
 1
 2
-while done",
+while done
+end",
     );
 }
 

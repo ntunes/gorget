@@ -689,15 +689,119 @@ impl CodegenContext<'_> {
     }
 
     /// Generate a block where `break` statements set a flag before breaking.
+    /// Recurses into `if`, `match`, `unsafe`, and `with` bodies to find
+    /// nested breaks, but stops at inner loops (`for`, `while`, `loop`)
+    /// since those breaks target the inner loop.
     fn gen_block_with_break_flag(&self, block: &Block, flag: &str, emitter: &mut CEmitter) {
         for stmt in &block.stmts {
-            match &stmt.node {
-                Stmt::Break(_) => {
-                    emitter.emit_line(&format!("{flag} = true;"));
-                    emitter.emit_line("break;");
-                }
-                _ => self.gen_stmt(&stmt.node, emitter),
+            self.gen_stmt_with_break_flag(&stmt.node, flag, emitter);
+        }
+    }
+
+    /// Emit a single statement, instrumenting any `break` with the flag.
+    fn gen_stmt_with_break_flag(&self, stmt: &Stmt, flag: &str, emitter: &mut CEmitter) {
+        match stmt {
+            Stmt::Break(_) => {
+                emitter.emit_line(&format!("{flag} = true;"));
+                emitter.emit_line("break;");
             }
+            // Recurse into if/elif/else — breaks inside target the outer loop
+            Stmt::If {
+                condition,
+                then_body,
+                elif_branches,
+                else_body,
+            } => {
+                let cond = self.gen_expr(condition);
+                emitter.emit_line(&format!("if ({cond}) {{"));
+                emitter.indent();
+                self.gen_block_with_break_flag(then_body, flag, emitter);
+                emitter.dedent();
+
+                for (elif_cond, elif_body) in elif_branches {
+                    let ec = self.gen_expr(elif_cond);
+                    emitter.emit_line(&format!("}} else if ({ec}) {{"));
+                    emitter.indent();
+                    self.gen_block_with_break_flag(elif_body, flag, emitter);
+                    emitter.dedent();
+                }
+
+                if let Some(else_body) = else_body {
+                    emitter.emit_line("} else {");
+                    emitter.indent();
+                    self.gen_block_with_break_flag(else_body, flag, emitter);
+                    emitter.dedent();
+                }
+
+                emitter.emit_line("}");
+            }
+            // Recurse into match arms
+            Stmt::Match {
+                scrutinee,
+                arms,
+                else_arm,
+            } => {
+                let scrut_expr = self.gen_expr(scrutinee);
+                let tmp = emitter.fresh_temp();
+                emitter.emit_line(&format!(
+                    "__typeof__({scrut_expr}) {tmp} = {scrut_expr};"
+                ));
+                let mut first = true;
+                for arm in arms {
+                    let pattern_cond = self.pattern_to_condition(&arm.pattern.node, &tmp);
+                    let full_cond = if let Some(guard) = &arm.guard {
+                        let guard_expr = self.gen_expr(guard);
+                        format!("({pattern_cond}) && ({guard_expr})")
+                    } else {
+                        pattern_cond
+                    };
+                    if first {
+                        emitter.emit_line(&format!("if ({full_cond}) {{"));
+                        first = false;
+                    } else {
+                        emitter.emit_line(&format!("}} else if ({full_cond}) {{"));
+                    }
+                    emitter.indent();
+                    self.emit_pattern_bindings(&arm.pattern.node, &tmp, emitter);
+                    // Match arm body is an expression; emit it then check for breaks
+                    // in the block if the body contains statements
+                    let body = self.gen_expr(&arm.body);
+                    emitter.emit_line(&format!("{body};"));
+                    emitter.dedent();
+                }
+                if let Some(else_body) = else_arm {
+                    emitter.emit_line("} else {");
+                    emitter.indent();
+                    self.gen_block_with_break_flag(else_body, flag, emitter);
+                    emitter.dedent();
+                }
+                if !arms.is_empty() || else_arm.is_some() {
+                    emitter.emit_line("}");
+                }
+            }
+            // Recurse into unsafe/with blocks
+            Stmt::Unsafe { body } => {
+                emitter.emit_line("/* unsafe */ {");
+                emitter.indent();
+                self.gen_block_with_break_flag(body, flag, emitter);
+                emitter.dedent();
+                emitter.emit_line("}");
+            }
+            Stmt::With { bindings, body } => {
+                emitter.emit_line("{");
+                emitter.indent();
+                for binding in bindings {
+                    let e = self.gen_expr(&binding.expr);
+                    let name = c_mangle::escape_keyword(&binding.name.node);
+                    emitter.emit_line(&format!("/* with */ void* {name} = (void*)({e});"));
+                }
+                self.gen_block_with_break_flag(body, flag, emitter);
+                emitter.dedent();
+                emitter.emit_line("}");
+            }
+            // Do NOT recurse into inner loops — break inside them
+            // targets the inner loop, not our outer for/else or while/else.
+            _ => self.gen_stmt(stmt, emitter),
         }
     }
 
