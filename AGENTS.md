@@ -40,7 +40,3 @@ cargo test               # all tests (use --test-threads=1 if integration tests 
 - Generic structs need explicit type args: `Pair[int, int](10, 20)`
 - String interpolation: `print("{variable}")`
 - Match uses `case` keyword: `match x: case 1: ... else: ...`
-
-## Known Codegen Limitations
-
-- Calling a `GorgetClosure` variable (e.g., `auto f = (int y): x + y; f(5)`) requires dispatch through `.fn_ptr` — not yet implemented
