@@ -262,10 +262,13 @@ impl CodegenContext<'_> {
 
             Expr::Try { expr: try_expr } => {
                 let inner = self.gen_expr(try_expr);
+                // ? operator: on error, propagate by longjmp-ing directly (error struct is already populated)
                 format!(
                     "({{ __typeof__({inner}) __try_val; \
                     if (GORGET_TRY) {{ __try_val = {inner}; GORGET_CATCH_END; }} \
-                    else {{ GORGET_CATCH_END; gorget_throw(__gorget_last_error.message, __gorget_last_error.code); }} \
+                    else {{ GORGET_CATCH_END; \
+                    if (__gorget_jmp_top >= 0) longjmp(__gorget_jmp_stack[__gorget_jmp_top], 1); \
+                    else {{ fprintf(stderr, \"Unhandled error: %s\\n\", __gorget_last_error.message); exit(1); }} }} \
                     __try_val; }})"
                 )
             }

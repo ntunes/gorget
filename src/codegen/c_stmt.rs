@@ -153,13 +153,8 @@ impl CodegenContext<'_> {
 
             Stmt::Throw(expr) => {
                 let e = self.gen_expr(expr);
-                if matches!(&expr.node, Expr::StringLiteral(_)) {
-                    // String literal: gen_expr already returns a C string literal
-                    emitter.emit_line(&format!("GORGET_THROW({e}, 1);"));
-                } else {
-                    // Assume str-typed expression (GorgetString) — pass .data
-                    emitter.emit_line(&format!("GORGET_THROW(({e}).data, 1);"));
-                }
+                // str maps to const char* in all cases — pass directly
+                emitter.emit_line(&format!("GORGET_THROW({e}, 1);"));
             }
 
             Stmt::With { bindings, body } => {

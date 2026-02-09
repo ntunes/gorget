@@ -1,7 +1,34 @@
-void fail() throws str:
-    throw "something went wrong"
+int risky(int x) throws str:
+    if x < 0:
+        throw "negative input"
+    return x * 2
+
+int throw_var(str msg) throws str:
+    throw msg
+    return 0
+
+int propagate(int x) throws str:
+    int val = risky(x)?
+    return val + 1
 
 void main():
-    print("before")
-    # TODO: call fail() with try/catch once void-returning throwing functions are supported in codegen
-    print("after")
+    # try capture — success case
+    int a = try risky(5)
+    print("{a}")
+
+    # try capture — error case (returns zero-default)
+    int b = try risky(-1)
+    print("{b}")
+
+    # throw with a str variable (not a literal)
+    int c = try throw_var("variable error")
+    print("{c}")
+
+    # ? operator propagates errors through wrapper
+    int d = try propagate(5)
+    print("{d}")
+
+    int e = try propagate(-1)
+    print("{e}")
+
+    print("done")

@@ -178,8 +178,12 @@ fn error_handling() {
     run_gg(
         "error_handling.gg",
         "\
-before
-after",
+10
+0
+0
+11
+0
+done",
     );
 }
 
