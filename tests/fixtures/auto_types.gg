@@ -1,0 +1,21 @@
+void main():
+    auto n = 42
+    auto greeting = "hello"
+    auto pi = 3.14
+    auto flag = true
+    auto ch = 'A'
+
+    print("{n}")
+    print("{greeting}")
+    print("{pi}")
+    print("{flag}")
+    print("{ch}")
+
+    auto sum = n + 8
+    print("{sum}")
+
+    auto msg = "world"
+    print("{greeting} {msg}")
+
+    const auto limit = 100
+    print("{limit}")

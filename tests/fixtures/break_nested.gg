@@ -1,0 +1,68 @@
+void main():
+    # break inside if/elif/else inside for/else
+    for i in 0..10:
+        if i == 3:
+            break
+    else:
+        print("BAD: should not print 1")
+    print("test1 done")
+
+    # break inside elif branch
+    for i in 0..10:
+        if i < 0:
+            print("BAD")
+        elif i == 2:
+            break
+        else:
+            pass
+    else:
+        print("BAD: should not print 2")
+    print("test2 done")
+
+    # break inside nested if inside if
+    for i in 0..10:
+        if i > 1:
+            if i == 4:
+                break
+    else:
+        print("BAD: should not print 3")
+    print("test3 done")
+
+    # no break — else SHOULD run
+    for i in 0..3:
+        if i > 100:
+            break
+    else:
+        print("completed normally")
+    print("test4 done")
+
+    # while/else with break inside if
+    int n = 0
+    while n < 100:
+        if n == 5:
+            break
+        n += 1
+    else:
+        print("BAD: should not print 4")
+    print("test5 done")
+
+    # while/else with no break — else SHOULD run
+    int m = 0
+    while m < 3:
+        if m > 100:
+            break
+        m += 1
+    else:
+        print("while completed")
+    print("test6 done")
+
+    # break inside match inside for/else
+    for i in 0..10:
+        match i:
+            case 5:
+                break
+            else:
+                pass
+    else:
+        print("BAD: should not print 5")
+    print("test7 done")

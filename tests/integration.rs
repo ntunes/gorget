@@ -234,6 +234,39 @@ fn dynamic_dispatch() {
     run_gg("dynamic_dispatch.gg", "dispatch");
 }
 
+#[test]
+fn auto_types() {
+    run_gg(
+        "auto_types.gg",
+        "\
+42
+hello
+3.140000
+true
+A
+50
+hello world
+100",
+    );
+}
+
+#[test]
+fn break_nested() {
+    run_gg(
+        "break_nested.gg",
+        "\
+test1 done
+test2 done
+test3 done
+completed normally
+test4 done
+test5 done
+while completed
+test6 done
+test7 done",
+    );
+}
+
 /// Test that `gg run` works (compile + execute in one step).
 #[test]
 fn gg_run_command() {

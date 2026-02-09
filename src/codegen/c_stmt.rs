@@ -777,10 +777,13 @@ impl CodegenContext<'_> {
                     }
                     emitter.indent();
                     self.emit_pattern_bindings(&arm.pattern.node, &tmp, emitter);
-                    // Match arm body is an expression; emit it then check for breaks
-                    // in the block if the body contains statements
-                    let body = self.gen_expr(&arm.body);
-                    emitter.emit_line(&format!("{body};"));
+                    // If arm body is a block, recurse into it for break flag handling
+                    if let Expr::Block(block) = &arm.body.node {
+                        self.gen_block_with_break_flag(block, flag, emitter);
+                    } else {
+                        let body = self.gen_expr(&arm.body);
+                        emitter.emit_line(&format!("{body};"));
+                    }
                     emitter.dedent();
                 }
                 if let Some(else_body) = else_arm {
