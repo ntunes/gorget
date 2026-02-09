@@ -28,3 +28,8 @@ void main():
     print("{nested._0}")
     print("{nested._1._0}")
     print("{nested._1._1}")
+
+    # mixed-type tuple (bool + int)
+    auto mixed = (true, 7)
+    print("{mixed._0}")
+    print("{mixed._1}")

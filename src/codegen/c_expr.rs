@@ -723,16 +723,63 @@ impl CodegenContext<'_> {
         // Try to look up the variable's type
         let escaped = c_mangle::escape_keyword(var_name);
 
-        // Search all scopes for the variable (codegen doesn't track current scope)
-        if let Some(def_id) = self.scopes.lookup_by_name_anywhere(var_name) {
-            let def = self.scopes.get_def(def_id);
-            if let Some(type_id) = def.type_id {
-                return self.format_for_type_id(type_id, &escaped);
+        // Handle dotted paths like "t._0" or "nested._1._0" by resolving
+        // the base variable type, then following tuple field accesses.
+        if var_name.contains('.') {
+            let parts: Vec<&str> = var_name.splitn(2, '.').collect();
+            let base = parts[0];
+            let field_path = parts[1];
+            if let Some(def_id) = self.scopes.lookup_by_name_anywhere(base) {
+                let def = self.scopes.get_def(def_id);
+                if let Some(type_id) = def.type_id {
+                    if let Some(resolved_id) = self.resolve_field_type(type_id, field_path) {
+                        return self.format_for_type_id(resolved_id, &escaped);
+                    }
+                }
+            }
+        } else {
+            // Search all scopes for the variable (codegen doesn't track current scope)
+            if let Some(def_id) = self.scopes.lookup_by_name_anywhere(var_name) {
+                let def = self.scopes.get_def(def_id);
+                if let Some(type_id) = def.type_id {
+                    return self.format_for_type_id(type_id, &escaped);
+                }
             }
         }
 
         // Default: assume int64_t
         ("%lld".to_string(), format!("(long long){escaped}"))
+    }
+
+    /// Resolve a dotted field path against a type, returning the final TypeId.
+    /// Handles tuple field access like "_0", "_1._0", etc.
+    fn resolve_field_type(
+        &self,
+        type_id: crate::semantic::ids::TypeId,
+        field_path: &str,
+    ) -> Option<crate::semantic::ids::TypeId> {
+        use crate::semantic::types::ResolvedType;
+
+        let (field, rest) = match field_path.split_once('.') {
+            Some((f, r)) => (f, Some(r)),
+            None => (field_path, None),
+        };
+
+        // Tuple field access: _0, _1, etc.
+        if let Some(idx_str) = field.strip_prefix('_') {
+            if let Ok(idx) = idx_str.parse::<usize>() {
+                if let ResolvedType::Tuple(elems) = self.types.get(type_id) {
+                    if let Some(&elem_type_id) = elems.get(idx) {
+                        return match rest {
+                            Some(remaining) => self.resolve_field_type(elem_type_id, remaining),
+                            None => Some(elem_type_id),
+                        };
+                    }
+                }
+            }
+        }
+
+        None
     }
 
     /// Get printf format + expression for a given TypeId.
