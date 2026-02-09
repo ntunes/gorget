@@ -515,15 +515,23 @@ impl CodegenContext<'_> {
     fn infer_receiver_type(&self, expr: &Spanned<Expr>) -> String {
         match &expr.node {
             Expr::Identifier(name) => {
-                // Look up the variable's type
-                if let Some(def_id) = self.resolution_map.get(&expr.span.start) {
-                    let def = self.scopes.get_def(*def_id);
-                    if let Some(type_id) = def.type_id {
-                        if let crate::semantic::types::ResolvedType::Defined(tid) =
-                            self.types.get(type_id)
-                        {
+                // Try resolution_map first, then fallback to scope lookup
+                let type_id = self.resolution_map.get(&expr.span.start)
+                    .and_then(|def_id| self.scopes.get_def(*def_id).type_id)
+                    .or_else(|| {
+                        self.scopes.lookup_by_name_anywhere(name)
+                            .and_then(|def_id| self.scopes.get_def(def_id).type_id)
+                    });
+
+                if let Some(type_id) = type_id {
+                    match self.types.get(type_id) {
+                        crate::semantic::types::ResolvedType::Defined(tid) => {
                             return self.scopes.get_def(*tid).name.clone();
                         }
+                        crate::semantic::types::ResolvedType::Generic(tid, _) => {
+                            return self.scopes.get_def(*tid).name.clone();
+                        }
+                        _ => {}
                     }
                 }
                 name.clone()

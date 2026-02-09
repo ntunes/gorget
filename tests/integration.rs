@@ -107,7 +107,8 @@ fn structs() {
         "structs.gg",
         "\
 point created
-rectangle created",
+rectangle created
+sum called",
     );
 }
 

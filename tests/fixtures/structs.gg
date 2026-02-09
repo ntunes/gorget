@@ -6,6 +6,10 @@ struct Rectangle:
     float width
     float height
 
+equip Point:
+    float sum(self):
+        return self.x + self.y
+
 void print_point(Point p):
     print("point")
 
@@ -16,3 +20,5 @@ void main():
     print("point created")
     Rectangle r = Rectangle(10.0, 20.0)
     print("rectangle created")
+    float s = p.sum()
+    print("sum called")
