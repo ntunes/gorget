@@ -1,4 +1,4 @@
-# Gorget Language Design - Brainstorming Document
+# Gorget Language Design
 
 ## Vision
 
@@ -2628,3 +2628,7 @@ auto items = data["items"].as_array()
 7. **Phase 7 - Ecosystem**
    - Package registry (foundry?)
    - Community, tutorials, books
+
+### Post-V1 Ideas
+
+- **`--watch` mode** — `forge run --watch` and `forge test --watch` for automatic recompile-and-rerun on file changes. Node/Deno/Bun all ship this now. Essential for a language targeting Python developers who are used to fast iteration loops.
