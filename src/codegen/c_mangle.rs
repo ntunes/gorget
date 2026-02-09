@@ -54,6 +54,21 @@ pub fn mangle_closure_env(id: usize) -> String {
     format!("__vyper_env_{id}")
 }
 
+/// Mangle a vtable struct name: `Shape_VTable`
+pub fn mangle_vtable_struct(trait_name: &str) -> String {
+    format!("{trait_name}_VTable")
+}
+
+/// Mangle a trait object struct name: `Shape_TraitObj`
+pub fn mangle_trait_obj(trait_name: &str) -> String {
+    format!("{trait_name}_TraitObj")
+}
+
+/// Mangle a vtable instance name: `Shape_for_Circle_vtable`
+pub fn mangle_vtable_instance(trait_name: &str, type_name: &str) -> String {
+    format!("{trait_name}_for_{type_name}_vtable")
+}
+
 /// Mangle a generic type/function instantiation.
 /// `Pair` + `["int64_t", "double"]` → `Pair__int64_t__double`
 pub fn mangle_generic(base: &str, c_type_args: &[String]) -> String {
@@ -107,6 +122,22 @@ mod tests {
         assert_eq!(mangle_closure(5), "__vyper_closure_5");
         assert_eq!(mangle_closure_env(0), "__vyper_env_0");
         assert_eq!(mangle_closure_env(3), "__vyper_env_3");
+    }
+
+    #[test]
+    fn vtable_mangling() {
+        assert_eq!(mangle_vtable_struct("Shape"), "Shape_VTable");
+        assert_eq!(mangle_trait_obj("Shape"), "Shape_TraitObj");
+        assert_eq!(
+            mangle_vtable_instance("Shape", "Circle"),
+            "Shape_for_Circle_vtable"
+        );
+        assert_eq!(mangle_vtable_struct("Drawable"), "Drawable_VTable");
+        assert_eq!(mangle_trait_obj("Drawable"), "Drawable_TraitObj");
+        assert_eq!(
+            mangle_vtable_instance("Drawable", "Square"),
+            "Drawable_for_Square_vtable"
+        );
     }
 
     #[test]

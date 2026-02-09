@@ -16,6 +16,7 @@ use crate::semantic::ids::DefId;
 use crate::semantic::resolve::{EnumVariantInfo, FunctionInfo, ResolutionMap, StructFieldInfo};
 use crate::semantic::scope::ScopeTable;
 use crate::semantic::types::TypeTable;
+use crate::semantic::traits::TraitRegistry;
 use crate::semantic::AnalysisResult;
 
 use crate::parser::ast::{EnumDef, FunctionDef, StructDef};
@@ -59,6 +60,7 @@ pub struct CodegenContext<'a> {
     pub struct_fields: &'a FxHashMap<DefId, StructFieldInfo>,
     pub enum_variants: &'a FxHashMap<DefId, EnumVariantInfo>,
     pub function_info: &'a FxHashMap<DefId, FunctionInfo>,
+    pub traits: &'a TraitRegistry,
     pub current_self_type: Option<String>,
     pub current_function_throws: bool,
     /// Closures collected during codegen, emitted in a later pass.
@@ -84,6 +86,7 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult) -> String {
         struct_fields: &analysis.struct_fields,
         enum_variants: &analysis.enum_variants,
         function_info: &analysis.function_info,
+        traits: &analysis.traits,
         current_self_type: None,
         current_function_throws: false,
         lifted_closures: RefCell::new(Vec::new()),
@@ -113,6 +116,9 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult) -> String {
 
     // 4. Function declarations
     ctx.emit_function_declarations(module, &mut emitter);
+
+    // 4b. Vtable instances (after function declarations, before definitions)
+    ctx.emit_vtable_instances(module, &mut emitter);
 
     // 5. Function definitions (closures are collected during this pass)
     ctx.emit_function_definitions(module, &mut emitter);
@@ -393,6 +399,9 @@ trait Drawable:
         assert!(c_code.contains("/* trait Drawable:"));
         assert!(c_code.contains("draw"));
         assert!(c_code.contains("name"));
+        // Should also emit vtable and trait obj structs
+        assert!(c_code.contains("Drawable_VTable"), "Should emit vtable struct");
+        assert!(c_code.contains("Drawable_TraitObj"), "Should emit trait obj struct");
     }
 
     #[test]
@@ -520,7 +529,7 @@ void main():
             }),
         };
         let result = c_types::ast_type_to_c(&ty, &scopes);
-        assert_eq!(result, "void*");
+        assert_eq!(result, "Drawable_TraitObj");
     }
 
     // ── Phase 7 tests ──────────────────────────────────────
@@ -758,5 +767,137 @@ void main():
         assert!(!c_code.contains("int64_t identity("), "Generic template should not be emitted");
         // The specialized version should be emitted
         assert!(c_code.contains("identity__int64_t"), "Specialized function should be emitted");
+    }
+
+    // ── Phase 9 tests ──────────────────────────────────────
+
+    #[test]
+    fn trait_emits_vtable_struct() {
+        let source = "\
+trait Shape:
+    float area(self)
+    void draw(self)
+";
+        let c_code = compile_to_c(source);
+        // Vtable struct with function pointers
+        assert!(c_code.contains("Shape_VTable"), "Should emit vtable struct name");
+        assert!(c_code.contains("double (*area)(const void*)"), "Should have area fn ptr");
+        assert!(c_code.contains("void (*draw)(const void*)"), "Should have draw fn ptr");
+    }
+
+    #[test]
+    fn trait_emits_trait_obj_struct() {
+        let source = "\
+trait Shape:
+    float area(self)
+";
+        let c_code = compile_to_c(source);
+        // Trait object struct with data + vtable
+        assert!(c_code.contains("Shape_TraitObj"), "Should emit trait obj struct name");
+        assert!(c_code.contains("void* data;"), "Trait obj should have data pointer");
+        assert!(c_code.contains("const Shape_VTable* vtable;"), "Trait obj should have vtable pointer");
+    }
+
+    #[test]
+    fn trait_impl_emits_vtable_instance() {
+        let source = "\
+trait Shape:
+    float area(self)
+    void draw(self)
+
+struct Circle:
+    float radius
+
+implement Shape for Circle:
+    float area(self):
+        return 3.14
+    void draw(self):
+        pass
+";
+        let c_code = compile_to_c(source);
+        // Static vtable with function pointer assignments
+        assert!(c_code.contains("static const Shape_VTable Shape_for_Circle_vtable"),
+            "Should emit static vtable instance");
+        assert!(c_code.contains(".area = "),
+            "Should assign area in vtable");
+        assert!(c_code.contains(".draw = "),
+            "Should assign draw in vtable");
+        assert!(c_code.contains("Shape_for_Circle__area"),
+            "Should reference mangled impl function for area");
+        assert!(c_code.contains("Shape_for_Circle__draw"),
+            "Should reference mangled impl function for draw");
+    }
+
+    #[test]
+    fn dynamic_type_maps_to_trait_obj() {
+        use crate::semantic::scope::ScopeTable;
+        let scopes = ScopeTable::new();
+        let ty = crate::parser::ast::Type::Dynamic {
+            trait_: Box::new(crate::span::Spanned {
+                node: crate::parser::ast::Type::Named {
+                    name: crate::span::Spanned {
+                        node: "Shape".to_string(),
+                        span: crate::span::Span::new(0, 0),
+                    },
+                    generic_args: vec![],
+                },
+                span: crate::span::Span::new(0, 0),
+            }),
+        };
+        let result = c_types::ast_type_to_c(&ty, &scopes);
+        assert_eq!(result, "Shape_TraitObj");
+    }
+
+    #[test]
+    fn box_dynamic_trait_maps_to_trait_obj() {
+        use crate::semantic::scope::ScopeTable;
+        let scopes = ScopeTable::new();
+        let ty = crate::parser::ast::Type::Named {
+            name: crate::span::Spanned {
+                node: "Box".to_string(),
+                span: crate::span::Span::new(0, 0),
+            },
+            generic_args: vec![crate::span::Spanned {
+                node: crate::parser::ast::Type::Dynamic {
+                    trait_: Box::new(crate::span::Spanned {
+                        node: crate::parser::ast::Type::Named {
+                            name: crate::span::Spanned {
+                                node: "Shape".to_string(),
+                                span: crate::span::Span::new(0, 0),
+                            },
+                            generic_args: vec![],
+                        },
+                        span: crate::span::Span::new(0, 0),
+                    }),
+                },
+                span: crate::span::Span::new(0, 0),
+            }],
+        };
+        let result = c_types::ast_type_to_c(&ty, &scopes);
+        assert_eq!(result, "Shape_TraitObj");
+    }
+
+    #[test]
+    fn trait_vtable_forward_decl() {
+        let source = "\
+trait Drawable:
+    void draw(self)
+";
+        let c_code = compile_to_c(source);
+        // Forward declaration should appear in forward declarations section
+        assert!(c_code.contains("typedef struct Drawable_VTable Drawable_VTable;"),
+            "Should forward-declare vtable struct");
+    }
+
+    #[test]
+    fn trait_method_with_params() {
+        let source = "\
+trait Renderer:
+    void render(self, int width, int height)
+";
+        let c_code = compile_to_c(source);
+        // Vtable fn ptr should include non-self params
+        assert!(c_code.contains("void (*render)(const void*, int64_t, int64_t)"),
+            "Vtable fn ptr should include non-self params");
     }
 }

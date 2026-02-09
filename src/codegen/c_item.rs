@@ -42,6 +42,14 @@ impl CodegenContext<'_> {
             }
         }
 
+        // Forward-declare vtable structs
+        for item in &module.items {
+            if let Item::Trait(t) = &item.node {
+                let vtable_name = c_mangle::mangle_vtable_struct(&t.name.node);
+                emitter.emit_line(&format!("typedef struct {vtable_name} {vtable_name};"));
+            }
+        }
+
         emitter.blank_line();
     }
 
@@ -410,7 +418,7 @@ impl CodegenContext<'_> {
 
     // ─── Trait Definitions ─────────────────────────────────
 
-    /// Emit a trait definition as a descriptive comment (no vtable in Phase 6).
+    /// Emit a trait definition: vtable struct + trait object struct.
     fn emit_trait_def(&self, t: &TraitDef, emitter: &mut CEmitter) {
         let name = &t.name.node;
         let methods: Vec<String> = t.items.iter().filter_map(|item| {
@@ -420,6 +428,129 @@ impl CodegenContext<'_> {
             }
         }).collect();
         emitter.emit_line(&format!("/* trait {name}: {} */", methods.join(", ")));
+
+        // Emit vtable struct
+        let vtable_name = c_mangle::mangle_vtable_struct(name);
+        emitter.emit_line("typedef struct {");
+        emitter.indent();
+        for item in &t.items {
+            if let TraitItem::Method(f) = &item.node {
+                let ret_type = c_types::ast_type_to_c(&f.return_type.node, self.scopes);
+                let method_name = &f.name.node;
+
+                // Build parameter list: self → const void* (or void* for &self/!self)
+                let mut param_types = Vec::new();
+                for param in &f.params {
+                    if param.node.name.node == "self" {
+                        match param.node.ownership {
+                            Ownership::MutableBorrow | Ownership::Move => {
+                                param_types.push("void*".to_string());
+                            }
+                            _ => {
+                                param_types.push("const void*".to_string());
+                            }
+                        }
+                    } else {
+                        param_types.push(c_types::ast_type_to_c(&param.node.type_.node, self.scopes));
+                    }
+                }
+                let params_str = if param_types.is_empty() {
+                    "void".to_string()
+                } else {
+                    param_types.join(", ")
+                };
+                emitter.emit_line(&format!("{ret_type} (*{method_name})({params_str});"));
+            }
+        }
+        emitter.dedent();
+        emitter.emit_line(&format!("}} {vtable_name};"));
+        emitter.blank_line();
+
+        // Emit trait object struct
+        let trait_obj_name = c_mangle::mangle_trait_obj(name);
+        emitter.emit_line("typedef struct {");
+        emitter.indent();
+        emitter.emit_line("void* data;");
+        emitter.emit_line(&format!("const {vtable_name}* vtable;"));
+        emitter.dedent();
+        emitter.emit_line(&format!("}} {trait_obj_name};"));
+        emitter.blank_line();
+    }
+
+    // ─── Vtable Instances ─────────────────────────────────
+
+    /// Emit static vtable instances for all trait impl blocks.
+    pub fn emit_vtable_instances(&self, module: &crate::parser::ast::Module, emitter: &mut CEmitter) {
+        // Collect trait definitions for method ordering
+        let mut trait_defs: std::collections::HashMap<String, &TraitDef> = std::collections::HashMap::new();
+        for item in &module.items {
+            if let Item::Trait(t) = &item.node {
+                trait_defs.insert(t.name.node.clone(), t);
+            }
+        }
+
+        for item in &module.items {
+            if let Item::Implement(impl_block) = &item.node {
+                // Only trait impls (not inherent impls)
+                let Some(trait_ref) = &impl_block.trait_ else {
+                    continue;
+                };
+                let trait_name = match &trait_ref.trait_name.node {
+                    Type::Named { name, .. } => name.node.clone(),
+                    _ => continue,
+                };
+                let type_name = self.impl_type_name(impl_block);
+
+                let Some(trait_def) = trait_defs.get(&trait_name) else {
+                    continue;
+                };
+
+                let vtable_type = c_mangle::mangle_vtable_struct(&trait_name);
+                let vtable_instance = c_mangle::mangle_vtable_instance(&trait_name, &type_name);
+
+                emitter.emit_line(&format!("static const {vtable_type} {vtable_instance} = {{"));
+                emitter.indent();
+
+                // Emit function pointer assignments in trait method order
+                for trait_item in &trait_def.items {
+                    if let TraitItem::Method(method) = &trait_item.node {
+                        let method_name = &method.name.node;
+                        let impl_fn = c_mangle::mangle_trait_method(&trait_name, &type_name, method_name);
+
+                        // Build the cast type for the function pointer
+                        let ret_type = c_types::ast_type_to_c(&method.return_type.node, self.scopes);
+                        let mut cast_params = Vec::new();
+                        for param in &method.params {
+                            if param.node.name.node == "self" {
+                                match param.node.ownership {
+                                    Ownership::MutableBorrow | Ownership::Move => {
+                                        cast_params.push("void*".to_string());
+                                    }
+                                    _ => {
+                                        cast_params.push("const void*".to_string());
+                                    }
+                                }
+                            } else {
+                                cast_params.push(c_types::ast_type_to_c(&param.node.type_.node, self.scopes));
+                            }
+                        }
+                        let cast_params_str = if cast_params.is_empty() {
+                            "void".to_string()
+                        } else {
+                            cast_params.join(", ")
+                        };
+
+                        emitter.emit_line(&format!(
+                            ".{method_name} = ({ret_type} (*)({cast_params_str})){impl_fn},"
+                        ));
+                    }
+                }
+
+                emitter.dedent();
+                emitter.emit_line("};");
+                emitter.blank_line();
+            }
+        }
     }
 
     // ─── Lifted Closures ────────────────────────────────────

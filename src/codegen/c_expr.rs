@@ -353,6 +353,18 @@ impl CodegenContext<'_> {
             if segments.len() == 2 {
                 let type_name = &segments[0].node;
                 let method_name = &segments[1].node;
+
+                // Handle Box.new(value) → heap allocation
+                if type_name == "Box" && method_name == "new" {
+                    if let Some(arg) = args.first() {
+                        let inner = self.gen_expr(&arg.node.value);
+                        let inner_type = self.infer_c_type_from_expr(&arg.node.value.node);
+                        return format!(
+                            "({{ {inner_type}* __box_tmp = ({inner_type}*)malloc(sizeof({inner_type})); *__box_tmp = {inner}; (void*)__box_tmp; }})"
+                        );
+                    }
+                }
+
                 let mangled = c_mangle::mangle_method(type_name, method_name);
                 let arg_exprs: Vec<String> =
                     args.iter().map(|a| self.gen_expr(&a.node.value)).collect();
@@ -374,6 +386,16 @@ impl CodegenContext<'_> {
         method_name: &str,
         args: &[Spanned<crate::parser::ast::CallArg>],
     ) -> String {
+        // Check if receiver is a trait object → vtable dispatch
+        if let Some(_trait_name) = self.resolve_trait_object_type(receiver) {
+            let recv = self.gen_expr(receiver);
+            let mut all_args = vec![format!("{recv}.data")];
+            for arg in args {
+                all_args.push(self.gen_expr(&arg.node.value));
+            }
+            return format!("{recv}.vtable->{method_name}({})", all_args.join(", "));
+        }
+
         let recv = self.gen_expr(receiver);
         // Try to figure out the receiver type for mangling
         let type_name = self.infer_receiver_type(receiver);
@@ -383,6 +405,34 @@ impl CodegenContext<'_> {
             all_args.push(self.gen_expr(&arg.node.value));
         }
         format!("{mangled}({})", all_args.join(", "))
+    }
+
+    /// Check if a receiver expression has a trait object type, returning the trait name if so.
+    fn resolve_trait_object_type(&self, expr: &Spanned<Expr>) -> Option<String> {
+        if let Expr::Identifier(name) = &expr.node {
+            if let Some(def_id) = self.resolution_map.get(&expr.span.start) {
+                let def = self.scopes.get_def(*def_id);
+                if let Some(type_id) = def.type_id {
+                    if let crate::semantic::types::ResolvedType::TraitObject(trait_def_id) =
+                        self.types.get(type_id)
+                    {
+                        return Some(self.scopes.get_def(*trait_def_id).name.clone());
+                    }
+                }
+            }
+            // Fallback: check scopes lookup
+            if let Some(def_id) = self.scopes.lookup(name) {
+                let def = self.scopes.get_def(def_id);
+                if let Some(type_id) = def.type_id {
+                    if let crate::semantic::types::ResolvedType::TraitObject(trait_def_id) =
+                        self.types.get(type_id)
+                    {
+                        return Some(self.scopes.get_def(*trait_def_id).name.clone());
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// Generate a generic function call: `func[int](args)` → `func__int64_t(args)`

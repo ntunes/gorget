@@ -37,6 +37,17 @@ pub fn ast_type_to_c(ty: &crate::parser::ast::Type, scopes: &ScopeTable) -> Stri
                     "Vector" | "List" | "Array" => "VyperArray".to_string(),
                     "Set" => "VyperSet".to_string(),
                     "Dict" | "Map" | "HashMap" => "VyperMap".to_string(),
+                    "Box" if generic_args.len() == 1 => {
+                        // Box[dynamic Trait] → TraitObj type
+                        if let crate::parser::ast::Type::Dynamic { trait_ } = &generic_args[0].node {
+                            if let crate::parser::ast::Type::Named { name: trait_name, .. } = &trait_.node {
+                                return super::c_mangle::mangle_trait_obj(&trait_name.node);
+                            }
+                        }
+                        // Box[T] → T*
+                        let inner = ast_type_to_c(&generic_args[0].node, scopes);
+                        format!("{inner}*")
+                    }
                     _ => {
                         // User-defined generic type → mangled name
                         let c_args: Vec<String> = generic_args
@@ -97,7 +108,14 @@ pub fn ast_type_to_c(ty: &crate::parser::ast::Type, scopes: &ScopeTable) -> Stri
             let elem_c = ast_type_to_c(&element.node, scopes);
             format!("struct {{ const {elem_c}* data; size_t len; }}")
         }
-        crate::parser::ast::Type::Dynamic { .. } => "void*".to_string(),
+        crate::parser::ast::Type::Dynamic { trait_ } => {
+            // Extract trait name from the inner type
+            if let crate::parser::ast::Type::Named { name, .. } = &trait_.node {
+                super::c_mangle::mangle_trait_obj(&name.node)
+            } else {
+                "void*".to_string()
+            }
+        }
         crate::parser::ast::Type::SelfType => "/* Self */".to_string(),
         crate::parser::ast::Type::Inferred => "/* auto */".to_string(),
     }
@@ -162,9 +180,9 @@ pub fn type_id_to_c(type_id: TypeId, types: &TypeTable, scopes: &ScopeTable) -> 
                 }
             }
         }
-        ResolvedType::TraitObject(_def_id) => {
-            // Dynamic dispatch is Phase 7+; use void*
-            "void*".to_string()
+        ResolvedType::TraitObject(def_id) => {
+            let name = def_name_to_c(*def_id, scopes);
+            super::c_mangle::mangle_trait_obj(&name)
         }
         ResolvedType::Var(_) => {
             // Type variable should not escape inference

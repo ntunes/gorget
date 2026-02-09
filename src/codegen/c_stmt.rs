@@ -202,6 +202,25 @@ impl CodegenContext<'_> {
                 let escaped = c_mangle::escape_keyword(name);
                 let const_prefix = if is_const { "const " } else { "" };
 
+                // Special handling for trait object construction:
+                // Box[dynamic Trait] x = Box.new(ConcreteType(...))
+                if let Some((trait_name, concrete_type, inner_expr)) =
+                    self.extract_trait_object_construction(type_, value)
+                {
+                    let trait_obj_type = c_mangle::mangle_trait_obj(&trait_name);
+                    let vtable_instance = c_mangle::mangle_vtable_instance(&trait_name, &concrete_type);
+                    let inner_val = self.gen_expr(inner_expr);
+
+                    emitter.emit_line(&format!(
+                        "{concrete_type}* __box_{escaped} = ({concrete_type}*)malloc(sizeof({concrete_type}));"
+                    ));
+                    emitter.emit_line(&format!("*__box_{escaped} = {inner_val};"));
+                    emitter.emit_line(&format!(
+                        "{const_prefix}{trait_obj_type} {escaped} = {{ .data = (void*)__box_{escaped}, .vtable = &{vtable_instance} }};"
+                    ));
+                    return;
+                }
+
                 // Special handling for array literals: emit as C array declarations
                 if let Expr::ArrayLiteral(elements) = &value.node {
                     let elem_type = match &type_.node {
@@ -302,6 +321,67 @@ impl CodegenContext<'_> {
             Expr::StructLiteral { name, .. } => name.node.clone(),
             _ => "int64_t".to_string(),
         }
+    }
+
+    /// Detect trait object construction pattern:
+    /// - Declared type is `dynamic Trait` or `Box[dynamic Trait]`
+    /// - Value is `Box.new(ConcreteType(...))`
+    /// Returns (trait_name, concrete_type, inner_expr) if matched.
+    fn extract_trait_object_construction<'b>(
+        &self,
+        type_: &Spanned<Type>,
+        value: &'b Spanned<Expr>,
+    ) -> Option<(String, String, &'b Spanned<Expr>)> {
+        // Check if declared type is dynamic Trait or Box[dynamic Trait]
+        let trait_name = match &type_.node {
+            Type::Dynamic { trait_ } => {
+                if let Type::Named { name, .. } = &trait_.node {
+                    Some(name.node.clone())
+                } else {
+                    None
+                }
+            }
+            Type::Named { name, generic_args } if name.node == "Box" && generic_args.len() == 1 => {
+                if let Type::Dynamic { trait_ } = &generic_args[0].node {
+                    if let Type::Named { name: trait_name, .. } = &trait_.node {
+                        Some(trait_name.node.clone())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }?;
+
+        // Check if value is Box.new(ConcreteType(...)) or Box.new(expr)
+        if let Expr::Call { callee, args, .. } = &value.node {
+            if let Expr::Path { segments } = &callee.node {
+                if segments.len() == 2
+                    && segments[0].node == "Box"
+                    && segments[1].node == "new"
+                {
+                    if let Some(arg) = args.first() {
+                        let inner_expr = &arg.node.value;
+                        // Try to extract the concrete type from the inner expression
+                        let concrete_type = match &inner_expr.node {
+                            Expr::Call { callee: inner_callee, .. } => {
+                                if let Expr::Identifier(name) = &inner_callee.node {
+                                    name.clone()
+                                } else {
+                                    return None;
+                                }
+                            }
+                            Expr::StructLiteral { name, .. } => name.node.clone(),
+                            _ => return None,
+                        };
+                        return Some((trait_name, concrete_type, inner_expr));
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// Check if an iterable expression resolves to a VyperArray type.
