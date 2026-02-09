@@ -233,6 +233,10 @@ fn ownership() {
 fn closures() {
     run_gg("closures.gg", "\
 15
+30
+20
+10
+111
 closures");
 }
 

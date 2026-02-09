@@ -3,5 +3,22 @@ void main():
     GorgetClosure add_x = (int y): x + y
     int result = add_x(5)
     print("{result}")
+
+    int result2 = add_x(20)
+    print("{result2}")
+
+    auto sum_with = (int a, int b): a + b + x
+    int result3 = sum_with(3, 7)
+    print("{result3}")
+
+    auto get_x = (): x
+    int result4 = get_x()
+    print("{result4}")
+
+    int result5 = add_x(1) + 100
+    print("{result5}")
+
+    add_x(0)
+
     int(int) double_fn = (int y): y * 2
     print("closures")
