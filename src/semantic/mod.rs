@@ -8,8 +8,12 @@ pub mod traits;
 pub mod typecheck;
 pub mod types;
 
+use rustc_hash::FxHashMap;
+
 use crate::parser::ast::Module;
 use errors::SemanticError;
+use ids::DefId;
+use resolve::{EnumVariantInfo, FunctionInfo, ResolutionMap, StructFieldInfo};
 use scope::ScopeTable;
 use traits::TraitRegistry;
 use types::TypeTable;
@@ -20,6 +24,10 @@ pub struct AnalysisResult {
     pub types: TypeTable,
     pub traits: TraitRegistry,
     pub errors: Vec<SemanticError>,
+    pub resolution_map: ResolutionMap,
+    pub struct_fields: FxHashMap<DefId, StructFieldInfo>,
+    pub enum_variants: FxHashMap<DefId, EnumVariantInfo>,
+    pub function_info: FxHashMap<DefId, FunctionInfo>,
 }
 
 /// Run all semantic analysis passes on a parsed module.
@@ -29,10 +37,12 @@ pub fn analyze(module: &Module) -> AnalysisResult {
     let mut errors = Vec::new();
 
     // Pass 1: Collect top-level definitions
-    resolve::collect_top_level(module, &mut scopes, &mut types, &mut errors);
+    let resolve_ctx = resolve::collect_top_level(module, &mut scopes, &mut types, &mut errors);
 
     // Pass 2: Resolve names in all bodies
-    let resolution_map = resolve::resolve_bodies(module, &mut scopes, &mut types, &mut errors);
+    let mut resolution_map = resolve::resolve_bodies(module, &mut scopes, &mut types, &mut errors);
+    // Merge any resolutions collected during pass 1
+    resolution_map.extend(resolve_ctx.resolution_map);
 
     // Pass 3: Build trait/impl registry
     let trait_registry =
@@ -56,5 +66,9 @@ pub fn analyze(module: &Module) -> AnalysisResult {
         types,
         traits: trait_registry,
         errors,
+        resolution_map,
+        struct_fields: resolve_ctx.struct_fields,
+        enum_variants: resolve_ctx.enum_variants,
+        function_info: resolve_ctx.function_info,
     }
 }

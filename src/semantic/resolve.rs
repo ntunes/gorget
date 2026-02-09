@@ -60,10 +60,10 @@ pub fn collect_top_level(
     scopes: &mut ScopeTable,
     types: &mut TypeTable,
     errors: &mut Vec<SemanticError>,
-) {
+) -> ResolveContext {
     let mut ctx = ResolveContext::new();
     collect_top_level_inner(module, scopes, types, errors, &mut ctx);
-    // Store context in thread-local or pass it through — for now we'll recreate in resolve_bodies
+    ctx
 }
 
 fn collect_top_level_inner(
