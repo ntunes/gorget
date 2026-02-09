@@ -222,7 +222,7 @@ impl<'a> TypeChecker<'a> {
                 }
             }
 
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, generic_args, args, .. } => {
                 let callee_type = self.infer_expr(callee);
                 let resolved = self.resolve_type(callee_type);
 
@@ -250,6 +250,35 @@ impl<'a> TypeChecker<'a> {
                         return_type
                     }
                     ResolvedType::Error => {
+                        // Check if callee is a struct/newtype constructor
+                        if let Expr::Identifier(_) = &callee.node {
+                            if let Some(&def_id) = self.resolution_map.get(&callee.span.start) {
+                                let def = self.scopes.get_def(def_id);
+                                match def.kind {
+                                    DefKind::Struct | DefKind::Newtype => {
+                                        for arg in args {
+                                            self.infer_expr(&arg.node.value);
+                                        }
+                                        // For generic constructors like Pair[int, float](...),
+                                        // resolve type args and return Generic; for non-generic
+                                        // like Vec2(...), return Defined.
+                                        if let Some(type_args) = generic_args {
+                                            let resolved_args: Vec<TypeId> = type_args.iter().map(|ta| {
+                                                match super::types::ast_type_to_resolved(
+                                                    &ta.node, ta.span, self.scopes, self.types,
+                                                ) {
+                                                    Ok(tid) => tid,
+                                                    Err(_) => self.types.error_id,
+                                                }
+                                            }).collect();
+                                            return self.types.insert(ResolvedType::Generic(def_id, resolved_args));
+                                        }
+                                        return self.types.insert(ResolvedType::Defined(def_id));
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
                         // Don't cascade — just infer arg types
                         for arg in args {
                             self.infer_expr(&arg.node.value);

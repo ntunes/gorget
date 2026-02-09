@@ -251,7 +251,8 @@ true
 A
 50
 hello world
-100",
+100
+auto struct",
     );
 }
 

@@ -43,5 +43,5 @@ cargo test               # all tests (use --test-threads=1 if integration tests 
 
 ## Known Codegen Limitations
 
-- `auto` with struct types may not resolve correctly for all cases
+- `auto` with closure types may not resolve correctly (use explicit type annotations for closures)
 - Method calls on non-identifier receivers (e.g., `get_point().sum()`) are unsupported

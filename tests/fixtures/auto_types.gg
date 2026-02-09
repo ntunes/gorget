@@ -1,3 +1,11 @@
+struct Vec2:
+    float x
+    float y
+
+equip Vec2:
+    float sum(self):
+        return self.x + self.y
+
 void main():
     auto n = 42
     auto greeting = "hello"
@@ -19,3 +27,7 @@ void main():
 
     const auto limit = 100
     print("{limit}")
+
+    auto v = Vec2(1.0, 2.0)
+    float vsum = v.sum()
+    print("auto struct")
