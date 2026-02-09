@@ -128,7 +128,12 @@ impl CodegenContext<'_> {
 
             Expr::TupleLiteral(elements) => {
                 let elems: Vec<String> = elements.iter().map(|e| self.gen_expr(e)).collect();
-                format!("{{{}}}", elems.join(", "))
+                let c_field_types: Vec<String> = elements
+                    .iter()
+                    .map(|e| self.infer_c_type_from_expr(&e.node))
+                    .collect();
+                let tuple_name = self.register_tuple_typedef(&c_field_types);
+                format!("({tuple_name}){{{}}}", elems.join(", "))
             }
 
             Expr::As { expr, type_ } => {

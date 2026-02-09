@@ -79,6 +79,12 @@ pub fn mangle_generic(base: &str, c_type_args: &[String]) -> String {
     format!("{base}__{}", mangled.join("__"))
 }
 
+/// Mangle a tuple type: `["int64_t", "double"]` → `GorgetTuple_int64_t_double`
+pub fn mangle_tuple(c_field_types: &[String]) -> String {
+    let mangled: Vec<String> = c_field_types.iter().map(|t| sanitize_c_type(t)).collect();
+    format!("GorgetTuple_{}", mangled.join("_"))
+}
+
 /// Sanitize a C type string for embedding in an identifier.
 fn sanitize_c_type(t: &str) -> String {
     t.replace("const ", "const_")
@@ -149,6 +155,23 @@ mod tests {
         assert_eq!(mangle_generic("Box", &["int64_t".into()]), "Box__int64_t");
         // Empty args returns base name unchanged
         assert_eq!(mangle_generic("Pair", &[]), "Pair");
+    }
+
+    #[test]
+    fn tuple_mangling() {
+        assert_eq!(
+            mangle_tuple(&["int64_t".into(), "int64_t".into()]),
+            "GorgetTuple_int64_t_int64_t"
+        );
+        assert_eq!(
+            mangle_tuple(&["int64_t".into(), "double".into()]),
+            "GorgetTuple_int64_t_double"
+        );
+        // Nested tuple
+        assert_eq!(
+            mangle_tuple(&["int64_t".into(), "GorgetTuple_int64_t_int64_t".into()]),
+            "GorgetTuple_int64_t_GorgetTuple_int64_t_int64_t"
+        );
     }
 
     #[test]

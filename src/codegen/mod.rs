@@ -78,6 +78,8 @@ pub struct CodegenContext<'a> {
     pub generic_fn_templates: RefCell<FxHashMap<String, FunctionDef>>,
     /// Variables declared with GorgetClosure type (need fn_ptr dispatch on call).
     pub closure_vars: RefCell<HashSet<String>>,
+    /// Registered tuple typedefs: (mangled_name, field_c_types).
+    pub tuple_typedefs: RefCell<Vec<(String, Vec<String>)>>,
 }
 
 /// Generate C source code from a parsed and analyzed Gorget module.
@@ -99,18 +101,23 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult) -> String {
         generic_enum_templates: RefCell::new(FxHashMap::default()),
         generic_fn_templates: RefCell::new(FxHashMap::default()),
         closure_vars: RefCell::new(HashSet::new()),
+        tuple_typedefs: RefCell::new(Vec::new()),
     };
 
     let mut emitter = CEmitter::new();
 
     ctx.collect_generic_templates(module);
     ctx.discover_generic_usages(module);
+    ctx.discover_tuple_types(module);
 
     // 1. Runtime preamble (includes)
     emitter.emit(c_runtime::RUNTIME);
 
     // 2. Forward declarations
     ctx.emit_forward_declarations(module, &mut emitter);
+
+    // 2b. Tuple typedefs (after forward declarations, before type definitions)
+    ctx.emit_tuple_typedefs(&mut emitter);
 
     // 3. Type definitions (structs, enums, type aliases, newtypes)
     ctx.emit_type_definitions(module, &mut emitter);
@@ -453,7 +460,7 @@ void main():
 
     #[test]
     fn tuple_type_mapping() {
-        // Test that tuple types in AST map to anonymous structs
+        // Test that tuple types in AST map to named typedefs
         use crate::semantic::scope::ScopeTable;
         let scopes = ScopeTable::new();
         let ty = crate::parser::ast::Type::Tuple(vec![
@@ -467,9 +474,7 @@ void main():
             },
         ]);
         let result = c_types::ast_type_to_c(&ty, &scopes);
-        assert!(result.contains("struct"));
-        assert!(result.contains("int64_t _0"));
-        assert!(result.contains("double _1"));
+        assert_eq!(result, "GorgetTuple_int64_t_double");
     }
 
     #[test]

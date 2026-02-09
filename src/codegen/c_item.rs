@@ -1137,6 +1137,235 @@ impl CodegenContext<'_> {
         c_types::ast_type_to_c(ty, self.scopes)
     }
 
+    // ─── Tuple Typedefs ──────────────────────────────────────
+
+    /// Register a tuple typedef, deduplicating by name. Returns the mangled name.
+    pub fn register_tuple_typedef(&self, c_field_types: &[String]) -> String {
+        let name = c_mangle::mangle_tuple(c_field_types);
+        let mut typedefs = self.tuple_typedefs.borrow_mut();
+        if !typedefs.iter().any(|(n, _)| *n == name) {
+            typedefs.push((name.clone(), c_field_types.to_vec()));
+        }
+        name
+    }
+
+    /// Pre-scan the module AST to discover tuple types in type annotations.
+    pub fn discover_tuple_types(&self, module: &crate::parser::ast::Module) {
+        for item in &module.items {
+            match &item.node {
+                Item::Function(f) => self.scan_function_for_tuples(f),
+                Item::Equip(impl_block) => {
+                    for method in &impl_block.items {
+                        self.scan_function_for_tuples(&method.node);
+                    }
+                }
+                Item::Struct(s) if s.generic_params.is_none() => {
+                    for field in &s.fields {
+                        self.scan_type_for_tuples(&field.node.type_.node);
+                    }
+                }
+                Item::Enum(e) if e.generic_params.is_none() => {
+                    for variant in &e.variants {
+                        if let VariantFields::Tuple(fields) = &variant.node.fields {
+                            for field in fields {
+                                self.scan_type_for_tuples(&field.node);
+                            }
+                        }
+                    }
+                }
+                Item::TypeAlias(a) => self.scan_type_for_tuples(&a.type_.node),
+                Item::Newtype(nt) => self.scan_type_for_tuples(&nt.inner_type.node),
+                _ => {}
+            }
+        }
+    }
+
+    /// Scan a function's signature and body for tuple types.
+    fn scan_function_for_tuples(&self, f: &FunctionDef) {
+        if f.generic_params.is_some() {
+            return;
+        }
+        self.scan_type_for_tuples(&f.return_type.node);
+        for param in &f.params {
+            self.scan_type_for_tuples(&param.node.type_.node);
+        }
+        // Scan body for tuple literal expressions
+        match &f.body {
+            FunctionBody::Block(block) => self.scan_block_for_tuples(block),
+            FunctionBody::Expression(expr) => self.scan_expr_for_tuples(expr),
+            FunctionBody::Declaration => {}
+        }
+    }
+
+    /// Scan a block for tuple literal expressions.
+    fn scan_block_for_tuples(&self, block: &crate::parser::ast::Block) {
+        for stmt in &block.stmts {
+            self.scan_stmt_for_tuples(&stmt.node);
+        }
+    }
+
+    /// Scan a statement for tuple literal expressions.
+    fn scan_stmt_for_tuples(&self, stmt: &Stmt) {
+        match stmt {
+            Stmt::VarDecl { type_, value, .. } => {
+                self.scan_type_for_tuples(&type_.node);
+                self.scan_expr_for_tuples(value);
+            }
+            Stmt::Expr(expr) => self.scan_expr_for_tuples(expr),
+            Stmt::Assign { target, value } => {
+                self.scan_expr_for_tuples(target);
+                self.scan_expr_for_tuples(value);
+            }
+            Stmt::CompoundAssign { target, value, .. } => {
+                self.scan_expr_for_tuples(target);
+                self.scan_expr_for_tuples(value);
+            }
+            Stmt::Return(opt_expr) => {
+                if let Some(expr) = opt_expr {
+                    self.scan_expr_for_tuples(expr);
+                }
+            }
+            Stmt::If { condition, then_body, elif_branches, else_body } => {
+                self.scan_expr_for_tuples(condition);
+                self.scan_block_for_tuples(then_body);
+                for (cond, body) in elif_branches {
+                    self.scan_expr_for_tuples(cond);
+                    self.scan_block_for_tuples(body);
+                }
+                if let Some(body) = else_body {
+                    self.scan_block_for_tuples(body);
+                }
+            }
+            Stmt::While { condition, body, .. } => {
+                self.scan_expr_for_tuples(condition);
+                self.scan_block_for_tuples(body);
+            }
+            Stmt::For { iterable, body, .. } => {
+                self.scan_expr_for_tuples(iterable);
+                self.scan_block_for_tuples(body);
+            }
+            Stmt::Match { scrutinee, arms, else_arm } => {
+                self.scan_expr_for_tuples(scrutinee);
+                for arm in arms {
+                    self.scan_expr_for_tuples(&arm.body);
+                    if let Some(guard) = &arm.guard {
+                        self.scan_expr_for_tuples(guard);
+                    }
+                }
+                if let Some(else_body) = else_arm {
+                    self.scan_block_for_tuples(else_body);
+                }
+            }
+            Stmt::Loop { body } => self.scan_block_for_tuples(body),
+            Stmt::Throw(expr) => self.scan_expr_for_tuples(expr),
+            _ => {}
+        }
+    }
+
+    /// Scan an expression for tuple literals and register their typedefs.
+    fn scan_expr_for_tuples(&self, expr: &crate::span::Spanned<Expr>) {
+        match &expr.node {
+            Expr::TupleLiteral(elements) => {
+                // Register inner tuples first (depth-first)
+                for elem in elements {
+                    self.scan_expr_for_tuples(elem);
+                }
+                let c_field_types: Vec<String> = elements
+                    .iter()
+                    .map(|e| self.infer_c_type_from_expr(&e.node))
+                    .collect();
+                self.register_tuple_typedef(&c_field_types);
+            }
+            Expr::Call { callee, args, .. } => {
+                self.scan_expr_for_tuples(callee);
+                for arg in args {
+                    self.scan_expr_for_tuples(&arg.node.value);
+                }
+            }
+            Expr::BinaryOp { left, right, .. } => {
+                self.scan_expr_for_tuples(left);
+                self.scan_expr_for_tuples(right);
+            }
+            Expr::UnaryOp { operand, .. } => {
+                self.scan_expr_for_tuples(operand);
+            }
+            Expr::If { condition, then_branch, else_branch, .. } => {
+                self.scan_expr_for_tuples(condition);
+                self.scan_expr_for_tuples(then_branch);
+                if let Some(eb) = else_branch {
+                    self.scan_expr_for_tuples(eb);
+                }
+            }
+            Expr::FieldAccess { object, .. } | Expr::TupleFieldAccess { object, .. } => {
+                self.scan_expr_for_tuples(object);
+            }
+            Expr::Index { object, index } => {
+                self.scan_expr_for_tuples(object);
+                self.scan_expr_for_tuples(index);
+            }
+            Expr::MethodCall { receiver, args, .. } => {
+                self.scan_expr_for_tuples(receiver);
+                for arg in args {
+                    self.scan_expr_for_tuples(&arg.node.value);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Recursively scan a type for tuples, registering typedefs for any found.
+    fn scan_type_for_tuples(&self, ty: &Type) {
+        match ty {
+            Type::Tuple(fields) => {
+                let c_field_types: Vec<String> = fields
+                    .iter()
+                    .map(|f| c_types::ast_type_to_c(&f.node, self.scopes))
+                    .collect();
+                self.register_tuple_typedef(&c_field_types);
+                // Recurse into nested tuple fields
+                for field in fields {
+                    self.scan_type_for_tuples(&field.node);
+                }
+            }
+            Type::Array { element, .. } | Type::Slice { element } => {
+                self.scan_type_for_tuples(&element.node);
+            }
+            Type::Function { return_type, params } => {
+                self.scan_type_for_tuples(&return_type.node);
+                for p in params {
+                    self.scan_type_for_tuples(&p.node);
+                }
+            }
+            Type::Named { generic_args, .. } => {
+                for arg in generic_args {
+                    self.scan_type_for_tuples(&arg.node);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Emit all registered tuple typedefs.
+    pub fn emit_tuple_typedefs(&self, emitter: &mut CEmitter) {
+        let typedefs = self.tuple_typedefs.borrow();
+        if typedefs.is_empty() {
+            return;
+        }
+        emitter.emit_line("// ── Tuple Typedefs ──");
+        for (name, field_types) in typedefs.iter() {
+            let fields: Vec<String> = field_types
+                .iter()
+                .enumerate()
+                .map(|(i, t)| format!("{t} _{i};"))
+                .collect();
+            emitter.emit_line(&format!(
+                "typedef struct {{ {} }} {name};",
+                fields.join(" ")
+            ));
+        }
+        emitter.blank_line();
+    }
+
     // ─── Helpers ─────────────────────────────────────────────
 
     /// Extract the type name from an impl block.

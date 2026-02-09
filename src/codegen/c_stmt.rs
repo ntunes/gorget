@@ -237,18 +237,16 @@ impl CodegenContext<'_> {
                     return;
                 }
 
-                // Special handling for tuple literals: emit as struct
+                // Special handling for tuple literals: emit with named typedef
                 if let Expr::TupleLiteral(elements) = &value.node {
                     let elems: Vec<String> = elements.iter().map(|e| self.gen_expr(e)).collect();
-                    // Use anonymous struct for tuple
-                    let mut fields = Vec::new();
-                    for (i, elem) in elements.iter().enumerate() {
-                        let t = self.infer_c_type_from_expr(&elem.node);
-                        fields.push(format!("{t} _{i}"));
-                    }
+                    let c_field_types: Vec<String> = elements
+                        .iter()
+                        .map(|elem| self.infer_c_type_from_expr(&elem.node))
+                        .collect();
+                    let tuple_name = self.register_tuple_typedef(&c_field_types);
                     emitter.emit_line(&format!(
-                        "{const_prefix}struct {{ {}; }} {escaped} = {{{}}};",
-                        fields.join("; "),
+                        "{const_prefix}{tuple_name} {escaped} = ({tuple_name}){{{}}};",
                         elems.join(", ")
                     ));
                     return;
@@ -343,6 +341,13 @@ impl CodegenContext<'_> {
                 "int64_t".to_string()
             }
             Expr::StructLiteral { name, .. } => name.node.clone(),
+            Expr::TupleLiteral(elements) => {
+                let c_field_types: Vec<String> = elements
+                    .iter()
+                    .map(|elem| self.infer_c_type_from_expr(&elem.node))
+                    .collect();
+                super::c_mangle::mangle_tuple(&c_field_types)
+            }
             _ => "int64_t".to_string(),
         }
     }

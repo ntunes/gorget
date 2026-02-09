@@ -77,15 +77,11 @@ pub fn ast_type_to_c(ty: &crate::parser::ast::Type, scopes: &ScopeTable) -> Stri
             format!("{elem_c}[{size_val}]")
         }
         crate::parser::ast::Type::Tuple(fields) => {
-            let field_defs: Vec<String> = fields
+            let c_field_types: Vec<String> = fields
                 .iter()
-                .enumerate()
-                .map(|(i, f)| {
-                    let ft = ast_type_to_c(&f.node, scopes);
-                    format!("{ft} _{i}")
-                })
+                .map(|f| ast_type_to_c(&f.node, scopes))
                 .collect();
-            format!("struct {{ {}; }}", field_defs.join("; "))
+            super::c_mangle::mangle_tuple(&c_field_types)
         }
         crate::parser::ast::Type::Function { return_type, params } => {
             let ret = ast_type_to_c(&return_type.node, scopes);
@@ -130,15 +126,11 @@ pub fn type_id_to_c(type_id: TypeId, types: &TypeTable, scopes: &ScopeTable) -> 
             format!("{elem_c}[{size}]")
         }
         ResolvedType::Tuple(fields) => {
-            let field_defs: Vec<String> = fields
+            let c_field_types: Vec<String> = fields
                 .iter()
-                .enumerate()
-                .map(|(i, tid)| {
-                    let ft = type_id_to_c(*tid, types, scopes);
-                    format!("{ft} _{i}")
-                })
+                .map(|tid| type_id_to_c(*tid, types, scopes))
                 .collect();
-            format!("struct {{ {}; }}", field_defs.join("; "))
+            super::c_mangle::mangle_tuple(&c_field_types)
         }
         ResolvedType::Function { params, return_type } => {
             let ret = type_id_to_c(*return_type, types, scopes);

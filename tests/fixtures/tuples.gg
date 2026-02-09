@@ -1,3 +1,6 @@
+(int, int) get_pair():
+    return (10, 20)
+
 void main():
     # basic tuple with auto
     auto pair = (10, 20)
@@ -14,3 +17,14 @@ void main():
     print("{triple._0}")
     print("{triple._1}")
     print("{triple._2}")
+
+    # function returning tuple
+    auto p = get_pair()
+    print("{p._0}")
+    print("{p._1}")
+
+    # nested tuple
+    auto nested = (1, (2, 3))
+    print("{nested._0}")
+    print("{nested._1._0}")
+    print("{nested._1._1}")
