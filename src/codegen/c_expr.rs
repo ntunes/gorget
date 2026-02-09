@@ -741,7 +741,7 @@ impl CodegenContext<'_> {
     }
 
     /// Collect free variable references from an expression (simple walk).
-    fn collect_free_vars(
+    pub(super) fn collect_free_vars(
         &self,
         expr: &Expr,
         bound: &std::collections::HashSet<&str>,

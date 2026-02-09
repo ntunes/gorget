@@ -31,3 +31,7 @@ void main():
     auto v = Vec2(1.0, 2.0)
     float vsum = v.sum()
     print("auto struct")
+
+    int base = 10
+    auto add_base = (int y): base + y
+    print("auto closure")

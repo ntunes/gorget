@@ -286,6 +286,15 @@ impl CodegenContext<'_> {
     ) -> String {
         match &type_.node {
             Type::Inferred => {
+                // Special-case capturing closures → GorgetClosure
+                if let Expr::Closure { params, body, .. } = &value.node {
+                    let bound: std::collections::HashSet<&str> =
+                        params.iter().map(|p| p.node.name.node.as_str()).collect();
+                    let captures = self.collect_free_vars(&body.node, &bound);
+                    if !captures.is_empty() {
+                        return "GorgetClosure".to_string();
+                    }
+                }
                 // First, check if the semantic analysis stored a resolved type
                 if let Some(name) = var_name {
                     if let Some(def_id) = self.scopes.lookup_by_name_anywhere(name) {

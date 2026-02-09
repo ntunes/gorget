@@ -43,5 +43,5 @@ cargo test               # all tests (use --test-threads=1 if integration tests 
 
 ## Known Codegen Limitations
 
-- `auto` with closure types may not resolve correctly (use explicit type annotations for closures)
+- Calling a `GorgetClosure` variable (e.g., `auto f = (int y): x + y; f(5)`) requires dispatch through `.fn_ptr` — not yet implemented
 - Method calls on non-identifier receivers (e.g., `get_point().sum()`) are unsupported

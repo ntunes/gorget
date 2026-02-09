@@ -252,7 +252,8 @@ A
 50
 hello world
 100
-auto struct",
+auto struct
+auto closure",
     );
 }
 
