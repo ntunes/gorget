@@ -44,6 +44,23 @@ static inline bool vyper_string_eq(const VyperString* a, const VyperString* b) {
     return a->len == b->len && memcmp(a->data, b->data, a->len) == 0;
 }
 
+static inline const char* vyper_string_cstr(const VyperString* s) {
+    return s->data;
+}
+
+static inline VyperString vyper_string_format(const char* fmt, ...) {
+    va_list args1, args2;
+    va_start(args1, fmt);
+    va_copy(args2, args1);
+    int len = vsnprintf(NULL, 0, fmt, args1);
+    va_end(args1);
+    size_t cap = (size_t)len + 1;
+    char* data = (char*)malloc(cap);
+    vsnprintf(data, cap, fmt, args2);
+    va_end(args2);
+    return (VyperString){data, (size_t)len, cap};
+}
+
 // ── VyperArray ──────────────────────────────────────────────
 typedef struct {
     void* data;
@@ -79,6 +96,157 @@ static inline void vyper_array_free(VyperArray* arr) {
     arr->data = NULL;
     arr->len = 0;
     arr->cap = 0;
+}
+
+// ── VYPER_ARRAY_AT macro ────────────────────────────────────
+#define VYPER_ARRAY_AT(type, arr, i) (*(type*)vyper_array_get(&(arr), (i)))
+
+// ── VyperMap (open-addressing hash map) ─────────────────────
+typedef struct {
+    void* keys;
+    void* values;
+    uint8_t* states;  // 0=empty, 1=occupied, 2=tombstone
+    size_t count;
+    size_t cap;
+    size_t key_size;
+    size_t val_size;
+} VyperMap;
+
+static inline uint64_t __vyper_fnv1a(const void* data, size_t len) {
+    uint64_t hash = 14695981039346656037ULL;
+    const uint8_t* p = (const uint8_t*)data;
+    for (size_t i = 0; i < len; i++) {
+        hash ^= p[i];
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+
+static inline void __vyper_map_grow(VyperMap* m) {
+    size_t old_cap = m->cap;
+    void* old_keys = m->keys;
+    void* old_values = m->values;
+    uint8_t* old_states = m->states;
+
+    size_t new_cap = old_cap == 0 ? 16 : old_cap * 2;
+    m->keys = calloc(new_cap, m->key_size);
+    m->values = m->val_size > 0 ? calloc(new_cap, m->val_size) : NULL;
+    m->states = (uint8_t*)calloc(new_cap, 1);
+    m->cap = new_cap;
+    m->count = 0;
+
+    for (size_t i = 0; i < old_cap; i++) {
+        if (old_states[i] == 1) {
+            const void* key = (const char*)old_keys + i * m->key_size;
+            uint64_t h = __vyper_fnv1a(key, m->key_size);
+            size_t idx = (size_t)(h % new_cap);
+            while (m->states[idx] != 0) {
+                idx = (idx + 1) % new_cap;
+            }
+            memcpy((char*)m->keys + idx * m->key_size, key, m->key_size);
+            if (m->val_size > 0) {
+                const void* val = (const char*)old_values + i * m->val_size;
+                memcpy((char*)m->values + idx * m->val_size, val, m->val_size);
+            }
+            m->states[idx] = 1;
+            m->count++;
+        }
+    }
+
+    free(old_keys);
+    free(old_values);
+    free(old_states);
+}
+
+static inline VyperMap vyper_map_new(size_t key_size, size_t val_size) {
+    return (VyperMap){NULL, NULL, NULL, 0, 0, key_size, val_size};
+}
+
+static inline void vyper_map_put(VyperMap* m, const void* key, const void* value) {
+    if (m->cap == 0 || m->count * 4 >= m->cap * 3) {
+        __vyper_map_grow(m);
+    }
+    uint64_t h = __vyper_fnv1a(key, m->key_size);
+    size_t idx = (size_t)(h % m->cap);
+    size_t first_tombstone = (size_t)-1;
+    while (1) {
+        if (m->states[idx] == 0) {
+            size_t target = first_tombstone != (size_t)-1 ? first_tombstone : idx;
+            memcpy((char*)m->keys + target * m->key_size, key, m->key_size);
+            if (m->val_size > 0 && value != NULL) {
+                memcpy((char*)m->values + target * m->val_size, value, m->val_size);
+            }
+            m->states[target] = 1;
+            m->count++;
+            return;
+        }
+        if (m->states[idx] == 2 && first_tombstone == (size_t)-1) {
+            first_tombstone = idx;
+        }
+        if (m->states[idx] == 1 && memcmp((const char*)m->keys + idx * m->key_size, key, m->key_size) == 0) {
+            if (m->val_size > 0 && value != NULL) {
+                memcpy((char*)m->values + idx * m->val_size, value, m->val_size);
+            }
+            return;
+        }
+        idx = (idx + 1) % m->cap;
+    }
+}
+
+static inline void* vyper_map_get(const VyperMap* m, const void* key) {
+    if (m->cap == 0) return NULL;
+    uint64_t h = __vyper_fnv1a(key, m->key_size);
+    size_t idx = (size_t)(h % m->cap);
+    while (1) {
+        if (m->states[idx] == 0) return NULL;
+        if (m->states[idx] == 1 && memcmp((const char*)m->keys + idx * m->key_size, key, m->key_size) == 0) {
+            if (m->val_size == 0) return (void*)1;  // Set mode: non-NULL means present
+            return (char*)m->values + idx * m->val_size;
+        }
+        idx = (idx + 1) % m->cap;
+    }
+}
+
+static inline bool vyper_map_contains(const VyperMap* m, const void* key) {
+    return vyper_map_get(m, key) != NULL;
+}
+
+static inline size_t vyper_map_len(const VyperMap* m) {
+    return m->count;
+}
+
+static inline void vyper_map_free(VyperMap* m) {
+    free(m->keys);
+    free(m->values);
+    free(m->states);
+    m->keys = NULL;
+    m->values = NULL;
+    m->states = NULL;
+    m->count = 0;
+    m->cap = 0;
+}
+
+// ── VyperSet (thin wrapper over VyperMap) ───────────────────
+typedef VyperMap VyperSet;
+
+static inline VyperSet vyper_set_new(size_t elem_size) {
+    return vyper_map_new(elem_size, 0);
+}
+
+static inline void vyper_set_add(VyperSet* s, const void* elem) {
+    vyper_map_put(s, elem, NULL);
+}
+
+static inline bool vyper_set_contains(const VyperSet* s, const void* elem) {
+    return vyper_map_contains(s, elem);
+}
+
+static inline size_t vyper_set_len(const VyperSet* s) {
+    return vyper_map_len(s);
+}
+
+static inline void vyper_set_free(VyperSet* s) {
+    vyper_map_free(s);
 }
 
 // ── Error Handling (setjmp/longjmp) ─────────────────────────

@@ -487,6 +487,115 @@ void main():
         assert_eq!(result, "void*");
     }
 
+    // ── Phase 7 tests ──────────────────────────────────────
+
+    #[test]
+    fn runtime_includes_vyper_map() {
+        let source = "void main():\n    pass\n";
+        let c_code = compile_to_c(source);
+        assert!(c_code.contains("VyperMap"));
+        assert!(c_code.contains("__vyper_fnv1a"));
+        assert!(c_code.contains("vyper_map_new"));
+        assert!(c_code.contains("vyper_map_put"));
+        assert!(c_code.contains("vyper_map_get"));
+        assert!(c_code.contains("vyper_map_contains"));
+        assert!(c_code.contains("vyper_map_len"));
+        assert!(c_code.contains("vyper_map_free"));
+    }
+
+    #[test]
+    fn runtime_includes_vyper_set() {
+        let source = "void main():\n    pass\n";
+        let c_code = compile_to_c(source);
+        assert!(c_code.contains("VyperSet"));
+        assert!(c_code.contains("vyper_set_new"));
+        assert!(c_code.contains("vyper_set_add"));
+        assert!(c_code.contains("vyper_set_contains"));
+        assert!(c_code.contains("vyper_set_len"));
+        assert!(c_code.contains("vyper_set_free"));
+    }
+
+    #[test]
+    fn runtime_includes_string_format() {
+        let source = "void main():\n    pass\n";
+        let c_code = compile_to_c(source);
+        assert!(c_code.contains("vyper_string_format"));
+        assert!(c_code.contains("vyper_string_cstr"));
+    }
+
+    #[test]
+    fn runtime_includes_array_at_macro() {
+        let source = "void main():\n    pass\n";
+        let c_code = compile_to_c(source);
+        assert!(c_code.contains("VYPER_ARRAY_AT"));
+    }
+
+    #[test]
+    fn set_type_maps_to_vyper_set() {
+        use crate::semantic::scope::ScopeTable;
+        let scopes = ScopeTable::new();
+        let ty = crate::parser::ast::Type::Named {
+            name: crate::span::Spanned {
+                node: "Set".to_string(),
+                span: crate::span::Span::new(0, 0),
+            },
+            generic_args: vec![crate::span::Spanned {
+                node: crate::parser::ast::Type::Primitive(crate::parser::ast::PrimitiveType::Int),
+                span: crate::span::Span::new(0, 0),
+            }],
+        };
+        let result = c_types::ast_type_to_c(&ty, &scopes);
+        assert_eq!(result, "VyperSet");
+    }
+
+    #[test]
+    fn dict_type_maps_to_vyper_map() {
+        use crate::semantic::scope::ScopeTable;
+        let scopes = ScopeTable::new();
+        let ty = crate::parser::ast::Type::Named {
+            name: crate::span::Spanned {
+                node: "Dict".to_string(),
+                span: crate::span::Span::new(0, 0),
+            },
+            generic_args: vec![
+                crate::span::Spanned {
+                    node: crate::parser::ast::Type::Primitive(crate::parser::ast::PrimitiveType::Int),
+                    span: crate::span::Span::new(0, 0),
+                },
+                crate::span::Spanned {
+                    node: crate::parser::ast::Type::Primitive(crate::parser::ast::PrimitiveType::Int),
+                    span: crate::span::Span::new(0, 0),
+                },
+            ],
+        };
+        let result = c_types::ast_type_to_c(&ty, &scopes);
+        assert_eq!(result, "VyperMap");
+    }
+
+    #[test]
+    fn set_comprehension_generates_vyper_set() {
+        let source = "\
+void main():
+    Set[int] evens = {x for x in 0..10 if x % 2 == 0}
+";
+        let c_code = compile_to_c(source);
+        assert!(!c_code.contains("/* TODO"));
+        assert!(c_code.contains("vyper_set_new"));
+        assert!(c_code.contains("vyper_set_add"));
+    }
+
+    #[test]
+    fn dict_comprehension_generates_vyper_map() {
+        let source = "\
+void main():
+    Dict[int, int] squares = {x: x * x for x in 0..10}
+";
+        let c_code = compile_to_c(source);
+        assert!(!c_code.contains("/* TODO"));
+        assert!(c_code.contains("vyper_map_new"));
+        assert!(c_code.contains("vyper_map_put"));
+    }
+
     #[test]
     fn no_unsupported_expr_for_handled_variants() {
         // Ensure basic programs don't emit "unsupported expr"

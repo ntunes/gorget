@@ -185,17 +185,7 @@ impl CodegenContext<'_> {
                 iterable,
                 condition,
             } => {
-                // Emit as VyperArray stub (full set type is Phase 6+)
-                let var_name = c_mangle::escape_keyword(&variable.node);
-                let elem = self.gen_expr(comp_expr);
-                let iter = self.gen_expr(iterable);
-                let cond_str = condition
-                    .as_ref()
-                    .map(|c| format!(" if ({})", self.gen_expr(c)))
-                    .unwrap_or_default();
-                format!(
-                    "/* TODO: set comprehension [{elem} for {var_name} in {iter}{cond_str}] */ (VyperArray){{0}}"
-                )
+                self.gen_set_comprehension(comp_expr, variable, iterable, condition.as_deref())
             }
 
             Expr::DictComprehension {
@@ -205,19 +195,7 @@ impl CodegenContext<'_> {
                 iterable,
                 condition,
             } => {
-                // Emit as stub (full dict type is Phase 6+)
-                let k = self.gen_expr(key);
-                let v = self.gen_expr(dict_val);
-                let iter = self.gen_expr(iterable);
-                let vars: Vec<String> = variables.iter().map(|v| v.node.clone()).collect();
-                let cond_str = condition
-                    .as_ref()
-                    .map(|c| format!(" if ({})", self.gen_expr(c)))
-                    .unwrap_or_default();
-                format!(
-                    "/* TODO: dict comprehension {{{k}: {v} for {} in {iter}{cond_str}}} */ (VyperArray){{0}}",
-                    vars.join(", ")
-                )
+                self.gen_dict_comprehension(key, dict_val, variables, iterable, condition.as_deref())
             }
 
             Expr::Catch { expr: catch_expr } => {
@@ -715,6 +693,126 @@ impl CodegenContext<'_> {
             for (size_t __i = 0; __i < sizeof({iter})/sizeof({iter}[0]); __i++) {{ \
             {elem_type} {var_name} = {iter}[__i]; \
             {cond_guard}{{ {elem_type} __elem = {elem_expr}; vyper_array_push(&__comp, &__elem); }} \
+            }} __comp; }})"
+        )
+    }
+
+    /// Generate a set comprehension as a GCC statement expression.
+    fn gen_set_comprehension(
+        &self,
+        expr: &Spanned<Expr>,
+        variable: &Spanned<String>,
+        iterable: &Spanned<Expr>,
+        condition: Option<&Spanned<Expr>>,
+    ) -> String {
+        let elem_expr = self.gen_expr(expr);
+        let elem_type = self.infer_c_type_from_expr(&expr.node);
+        let var_name = c_mangle::escape_keyword(&variable.node);
+
+        // Check if iterable is a range
+        if let Expr::Range {
+            start,
+            end,
+            inclusive,
+        } = &iterable.node
+        {
+            let start_expr = start
+                .as_ref()
+                .map(|e| self.gen_expr(e))
+                .unwrap_or_else(|| "0".to_string());
+            let end_expr = end
+                .as_ref()
+                .map(|e| self.gen_expr(e))
+                .unwrap_or_else(|| "0".to_string());
+            let cmp = if *inclusive { "<=" } else { "<" };
+
+            let cond_guard = condition
+                .map(|c| format!("if ({}) ", self.gen_expr(c)))
+                .unwrap_or_default();
+
+            return format!(
+                "({{ VyperSet __comp = vyper_set_new(sizeof({elem_type})); \
+                for (int64_t {var_name} = {start_expr}; {var_name} {cmp} {end_expr}; {var_name}++) {{ \
+                {cond_guard}{{ {elem_type} __elem = {elem_expr}; vyper_set_add(&__comp, &__elem); }} \
+                }} __comp; }})"
+            );
+        }
+
+        // Generic iterable (array)
+        let iter = self.gen_expr(iterable);
+        let cond_guard = condition
+            .map(|c| format!("if ({}) ", self.gen_expr(c)))
+            .unwrap_or_default();
+
+        format!(
+            "({{ VyperSet __comp = vyper_set_new(sizeof({elem_type})); \
+            for (size_t __i = 0; __i < sizeof({iter})/sizeof({iter}[0]); __i++) {{ \
+            {elem_type} {var_name} = {iter}[__i]; \
+            {cond_guard}{{ {elem_type} __elem = {elem_expr}; vyper_set_add(&__comp, &__elem); }} \
+            }} __comp; }})"
+        )
+    }
+
+    /// Generate a dict comprehension as a GCC statement expression.
+    fn gen_dict_comprehension(
+        &self,
+        key: &Spanned<Expr>,
+        value: &Spanned<Expr>,
+        variables: &[Spanned<String>],
+        iterable: &Spanned<Expr>,
+        condition: Option<&Spanned<Expr>>,
+    ) -> String {
+        let key_expr = self.gen_expr(key);
+        let val_expr = self.gen_expr(value);
+        let key_type = self.infer_c_type_from_expr(&key.node);
+        let val_type = self.infer_c_type_from_expr(&value.node);
+        let var_name = variables
+            .first()
+            .map(|v| c_mangle::escape_keyword(&v.node))
+            .unwrap_or_else(|| "__vyper_v".to_string());
+
+        // Check if iterable is a range
+        if let Expr::Range {
+            start,
+            end,
+            inclusive,
+        } = &iterable.node
+        {
+            let start_expr = start
+                .as_ref()
+                .map(|e| self.gen_expr(e))
+                .unwrap_or_else(|| "0".to_string());
+            let end_expr = end
+                .as_ref()
+                .map(|e| self.gen_expr(e))
+                .unwrap_or_else(|| "0".to_string());
+            let cmp = if *inclusive { "<=" } else { "<" };
+
+            let cond_guard = condition
+                .map(|c| format!("if ({}) ", self.gen_expr(c)))
+                .unwrap_or_default();
+
+            return format!(
+                "({{ VyperMap __comp = vyper_map_new(sizeof({key_type}), sizeof({val_type})); \
+                for (int64_t {var_name} = {start_expr}; {var_name} {cmp} {end_expr}; {var_name}++) {{ \
+                {cond_guard}{{ {key_type} __k = {key_expr}; {val_type} __v = {val_expr}; \
+                vyper_map_put(&__comp, &__k, &__v); }} \
+                }} __comp; }})"
+            );
+        }
+
+        // Generic iterable (array)
+        let iter = self.gen_expr(iterable);
+        let cond_guard = condition
+            .map(|c| format!("if ({}) ", self.gen_expr(c)))
+            .unwrap_or_default();
+
+        format!(
+            "({{ VyperMap __comp = vyper_map_new(sizeof({key_type}), sizeof({val_type})); \
+            for (size_t __i = 0; __i < sizeof({iter})/sizeof({iter}[0]); __i++) {{ \
+            __typeof__({iter}[0]) {var_name} = {iter}[__i]; \
+            {cond_guard}{{ {key_type} __k = {key_expr}; {val_type} __v = {val_expr}; \
+            vyper_map_put(&__comp, &__k, &__v); }} \
             }} __comp; }})"
         )
     }

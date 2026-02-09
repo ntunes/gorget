@@ -42,7 +42,9 @@ pub fn ast_type_to_c(ty: &crate::parser::ast::Type, scopes: &ScopeTable) -> Stri
             } else if !generic_args.is_empty() {
                 // Generic collection types → VyperArray
                 match name.node.as_str() {
-                    "Vector" | "List" | "Array" | "Set" => "VyperArray".to_string(),
+                    "Vector" | "List" | "Array" => "VyperArray".to_string(),
+                    "Set" => "VyperSet".to_string(),
+                    "Dict" | "Map" | "HashMap" => "VyperMap".to_string(),
                     _ => "void*".to_string(),
                 }
             } else {

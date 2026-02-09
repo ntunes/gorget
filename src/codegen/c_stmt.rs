@@ -303,6 +303,28 @@ impl CodegenContext<'_> {
         }
     }
 
+    /// Check if an iterable expression resolves to a VyperArray type.
+    fn is_vyper_array_expr(&self, expr: &Spanned<Expr>) -> bool {
+        if let Expr::Identifier(name) = &expr.node {
+            if let Some(def_id) = self.scopes.lookup(name) {
+                let def = self.scopes.get_def(def_id);
+                if let Some(type_id) = def.type_id {
+                    let c_type = c_types::type_id_to_c(type_id, self.types, self.scopes);
+                    return c_type == "VyperArray";
+                }
+            }
+        }
+        // Also check inferred type as fallback
+        let c_type = self.infer_c_type_from_expr(&expr.node);
+        c_type == "VyperArray"
+    }
+
+    /// Infer the element C type for a VyperArray expression.
+    fn infer_array_elem_type(&self, _expr: &Spanned<Expr>) -> String {
+        // Default to int64_t; more refined inference would need generic type args
+        "int64_t".to_string()
+    }
+
     /// Generate a for loop over a range or iterable.
     fn gen_for_loop(
         &self,
@@ -339,8 +361,24 @@ impl CodegenContext<'_> {
             self.gen_block(body, emitter);
             emitter.dedent();
             emitter.emit_line("}");
+        } else if self.is_vyper_array_expr(iterable) {
+            // For-in over VyperArray
+            let iter = self.gen_expr(iterable);
+            let idx = emitter.fresh_temp();
+            let elem_type = self.infer_array_elem_type(iterable);
+
+            emitter.emit_line(&format!(
+                "for (size_t {idx} = 0; {idx} < vyper_array_len(&{iter}); {idx}++) {{"
+            ));
+            emitter.indent();
+            emitter.emit_line(&format!(
+                "{elem_type} {var_name} = VYPER_ARRAY_AT({elem_type}, {iter}, {idx});"
+            ));
+            self.gen_block(body, emitter);
+            emitter.dedent();
+            emitter.emit_line("}");
         } else {
-            // For-in over array or VyperArray
+            // For-in over C array
             let iter = self.gen_expr(iterable);
             let idx = emitter.fresh_temp();
 
@@ -515,6 +553,26 @@ impl CodegenContext<'_> {
                 emitter.emit_line(&format!(
                     "for (int64_t {var_name} = {start_expr}; {var_name} {cmp} {end_expr}; {var_name}++) {{"
                 ));
+            } else if self.is_vyper_array_expr(iterable) {
+                let iter = self.gen_expr(iterable);
+                let idx = emitter.fresh_temp();
+                let elem_type = self.infer_array_elem_type(iterable);
+                emitter.emit_line(&format!(
+                    "for (size_t {idx} = 0; {idx} < vyper_array_len(&{iter}); {idx}++) {{"
+                ));
+                emitter.indent();
+                emitter.emit_line(&format!(
+                    "{elem_type} {var_name} = VYPER_ARRAY_AT({elem_type}, {iter}, {idx});"
+                ));
+                self.gen_block_with_break_flag(body, &flag, emitter);
+                emitter.dedent();
+                emitter.emit_line("}");
+                emitter.emit_line(&format!("if (!{flag}) {{"));
+                emitter.indent();
+                self.gen_block(else_block, emitter);
+                emitter.dedent();
+                emitter.emit_line("}");
+                return;
             } else {
                 let iter = self.gen_expr(iterable);
                 let idx = emitter.fresh_temp();
