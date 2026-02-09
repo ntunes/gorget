@@ -12,8 +12,9 @@ equip Point:
     Point origin():
         return Point(0.0, 0.0)
 
-void print_point(Point p):
-    print("point")
+void print_sum(Point p):
+    float s = p.sum()
+    print("param sum called")
 
 void main():
     Point p = Point(3.0, 4.0)
@@ -26,3 +27,4 @@ void main():
     print("sum called")
     Point o = Point.origin()
     print("origin called")
+    print_sum(p)

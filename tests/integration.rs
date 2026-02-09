@@ -109,7 +109,8 @@ fn structs() {
 point created
 rectangle created
 sum called
-origin called",
+origin called
+param sum called",
     );
 }
 

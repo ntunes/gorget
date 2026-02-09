@@ -814,6 +814,23 @@ impl<'a> TypeChecker<'a> {
         self.current_return_type = Some(return_type);
         self.current_function_throws = func.throws.is_some();
 
+        // Resolve parameter types and write to DefInfo
+        for param in &func.params {
+            if let Ok(type_id) = super::types::ast_type_to_resolved(
+                &param.node.type_.node,
+                param.node.type_.span,
+                self.scopes,
+                self.types,
+            ) {
+                if let Some(def_id) = self.scopes.lookup_def_by_span(
+                    &param.node.name.node,
+                    param.node.name.span,
+                ) {
+                    self.scopes.get_def_mut(def_id).type_id = Some(type_id);
+                }
+            }
+        }
+
         match &func.body {
             FunctionBody::Block(block) => {
                 self.check_block(block);
