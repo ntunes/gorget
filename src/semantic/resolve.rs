@@ -8,6 +8,8 @@ use super::ids::{DefId, TypeId};
 use super::scope::{DefKind, ScopeTable};
 use super::types::{self, TypeTable};
 
+pub use crate::parser::ast::Ownership;
+
 /// Side table for struct field info.
 #[derive(Debug, Clone)]
 pub struct StructFieldInfo {
@@ -29,6 +31,8 @@ pub struct FunctionInfo {
     pub def_id: DefId,
     pub return_type_id: Option<TypeId>,
     pub param_type_ids: Vec<Option<TypeId>>,
+    pub param_ownerships: Vec<Ownership>,
+    pub param_names: Vec<String>,
     pub throws: bool,
     pub scope_id: super::ids::ScopeId,
 }
@@ -99,12 +103,19 @@ fn collect_item(
                     )
                     .ok();
 
+                    let param_ownerships: Vec<Ownership> =
+                        f.params.iter().map(|p| p.node.ownership).collect();
+                    let param_names: Vec<String> =
+                        f.params.iter().map(|p| p.node.name.node.clone()).collect();
+
                     ctx.function_info.insert(
                         def_id,
                         FunctionInfo {
                             def_id,
                             return_type_id: ret_type,
                             param_type_ids: Vec::new(),
+                            param_ownerships,
+                            param_names,
                             throws: f.throws.is_some(),
                             scope_id: scopes.current_scope(),
                         },

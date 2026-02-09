@@ -59,7 +59,14 @@ pub fn analyze(module: &Module) -> AnalysisResult {
     );
 
     // Pass 5: Borrow checking
-    borrow::check_module(module, &scopes, &types, &resolution_map, &mut errors);
+    borrow::check_module(
+        module,
+        &scopes,
+        &types,
+        &resolution_map,
+        &resolve_ctx.function_info,
+        &mut errors,
+    );
 
     AnalysisResult {
         scopes,

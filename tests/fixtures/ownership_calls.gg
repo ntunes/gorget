@@ -1,0 +1,22 @@
+void consume(String !s):
+    print("{s}")
+
+void borrow_it(String &s):
+    print("{s}")
+
+void look(int x):
+    print("{x}")
+
+void main():
+    # Bare borrow of copy type
+    int n = 42
+    look(n)
+
+    # Move ownership
+    String a = "moved"
+    consume(!a)
+
+    # Mutable borrow
+    String b = "borrowed"
+    borrow_it(&b)
+    print("done")

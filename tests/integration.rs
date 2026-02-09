@@ -447,3 +447,15 @@ fn block_expr() {
 20",
     );
 }
+
+#[test]
+fn ownership_calls() {
+    run_gg(
+        "ownership_calls.gg",
+        "\
+42
+moved
+borrowed
+done",
+    );
+}

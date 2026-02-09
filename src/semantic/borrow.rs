@@ -5,7 +5,7 @@ use crate::span::{Span, Spanned};
 
 use super::errors::{SemanticError, SemanticErrorKind};
 use super::ids::{DefId, TypeId};
-use super::resolve::ResolutionMap;
+use super::resolve::{FunctionInfo, ResolutionMap};
 use super::scope::{DefKind, ScopeTable};
 use super::types::{ResolvedType, TypeTable};
 
@@ -64,6 +64,7 @@ struct BorrowChecker<'a> {
     scopes: &'a ScopeTable,
     types: &'a TypeTable,
     resolution_map: &'a ResolutionMap,
+    function_info: &'a FxHashMap<DefId, FunctionInfo>,
     errors: Vec<SemanticError>,
     /// Variable state: DefId -> current state.
     var_states: FxHashMap<DefId, VarState>,
@@ -76,11 +77,13 @@ impl<'a> BorrowChecker<'a> {
         scopes: &'a ScopeTable,
         types: &'a TypeTable,
         resolution_map: &'a ResolutionMap,
+        function_info: &'a FxHashMap<DefId, FunctionInfo>,
     ) -> Self {
         Self {
             scopes,
             types,
             resolution_map,
+            function_info,
             errors: Vec::new(),
             var_states: FxHashMap::default(),
             loop_depth: 0,
@@ -230,6 +233,8 @@ impl<'a> BorrowChecker<'a> {
 
             Expr::Call { callee, args, .. } => {
                 self.check_expr(callee);
+                self.check_call_ownership(callee, args);
+                self.check_call_aliasing(args);
                 for arg in args {
                     match arg.node.ownership {
                         Ownership::Move => {
@@ -258,6 +263,7 @@ impl<'a> BorrowChecker<'a> {
                 receiver, args, ..
             } => {
                 self.check_expr(receiver);
+                self.check_call_aliasing(args);
                 for arg in args {
                     match arg.node.ownership {
                         Ownership::Move => {
@@ -720,6 +726,139 @@ impl<'a> BorrowChecker<'a> {
         self.scopes.lookup_by_name_anywhere(name)
     }
 
+    /// Resolve a Call callee expression to its DefId (if it's a simple identifier).
+    fn resolve_callee_def_id(&self, callee: &Spanned<Expr>) -> Option<DefId> {
+        match &callee.node {
+            Expr::Identifier(_) => self.resolution_map.get(&callee.span.start).copied(),
+            Expr::Path { segments } => {
+                segments.first().and_then(|s| self.resolution_map.get(&s.span.start).copied())
+            }
+            _ => None,
+        }
+    }
+
+    /// Check that call-site ownership annotations match the parameter declarations.
+    fn check_call_ownership(
+        &mut self,
+        callee: &Spanned<Expr>,
+        args: &[Spanned<CallArg>],
+    ) {
+        let def_id = match self.resolve_callee_def_id(callee) {
+            Some(id) => id,
+            None => return,
+        };
+
+        // Skip constructors (structs, enum variants) — they don't have FunctionInfo
+        let kind = self.scopes.get_def(def_id).kind;
+        if matches!(kind, DefKind::Struct | DefKind::Variant) {
+            return;
+        }
+
+        let info = match self.function_info.get(&def_id) {
+            Some(info) => info,
+            None => return, // builtins, extern, etc.
+        };
+
+        for (i, arg) in args.iter().enumerate() {
+            if i >= info.param_ownerships.len() {
+                break; // varargs or mismatched count (caught by type checker)
+            }
+
+            let expected = info.param_ownerships[i];
+            let found = arg.node.ownership;
+
+            if expected != found {
+                let param_name = info.param_names[i].clone();
+                let expected_str = match expected {
+                    Ownership::Borrow => "borrow (bare)",
+                    Ownership::MutableBorrow => "mutable borrow (&)",
+                    Ownership::Move => "move (!)",
+                };
+                let found_str = match found {
+                    Ownership::Borrow => "borrow (bare)",
+                    Ownership::MutableBorrow => "mutable borrow (&)",
+                    Ownership::Move => "move (!)",
+                };
+                self.error(
+                    SemanticErrorKind::OwnershipMismatch {
+                        param_name,
+                        expected: expected_str.to_string(),
+                        found: found_str.to_string(),
+                    },
+                    arg.span,
+                );
+            }
+        }
+    }
+
+    /// Detect aliasing conflicts within a single call's arguments.
+    /// e.g., f(&x, &x) — double mutable borrow
+    /// e.g., f(x, &x) — immutable read + mutable borrow
+    /// e.g., f(&x, !x) — mutable borrow + move
+    fn check_call_aliasing(&mut self, args: &[Spanned<CallArg>]) {
+        // Collect (DefId, Ownership, span) for identifier arguments
+        let mut arg_vars: Vec<(DefId, Ownership, Span)> = Vec::new();
+
+        for arg in args {
+            let (inner_expr, ownership) = match arg.node.ownership {
+                Ownership::Move => (&arg.node.value, Ownership::Move),
+                Ownership::MutableBorrow => (&arg.node.value, Ownership::MutableBorrow),
+                Ownership::Borrow => (&arg.node.value, Ownership::Borrow),
+            };
+
+            if let Expr::Identifier(_) = &inner_expr.node {
+                if let Some(&def_id) = self.resolution_map.get(&inner_expr.span.start) {
+                    let kind = self.scopes.get_def(def_id).kind;
+                    if kind == DefKind::Variable {
+                        arg_vars.push((def_id, ownership, arg.span));
+                    }
+                }
+            }
+        }
+
+        // Check pairs for conflicts
+        for i in 0..arg_vars.len() {
+            for j in (i + 1)..arg_vars.len() {
+                let (id_a, own_a, span_a) = &arg_vars[i];
+                let (id_b, own_b, _span_b) = &arg_vars[j];
+
+                if id_a != id_b {
+                    continue;
+                }
+
+                let name = self.scopes.get_def(*id_a).name.clone();
+
+                let conflict = match (own_a, own_b) {
+                    // Double mutable borrow
+                    (Ownership::MutableBorrow, Ownership::MutableBorrow) => {
+                        Some("cannot borrow `&` mutably more than once in the same call")
+                    }
+                    // Mutable borrow + move (either order)
+                    (Ownership::MutableBorrow, Ownership::Move)
+                    | (Ownership::Move, Ownership::MutableBorrow) => {
+                        Some("cannot borrow `&` and move `!` the same variable in a call")
+                    }
+                    // Borrow (bare read) + mutable borrow
+                    (Ownership::Borrow, Ownership::MutableBorrow)
+                    | (Ownership::MutableBorrow, Ownership::Borrow) => {
+                        Some("cannot use bare and mutable borrow `&` of the same variable in a call")
+                    }
+                    _ => None,
+                };
+
+                if let Some(detail) = conflict {
+                    self.error(
+                        SemanticErrorKind::BorrowConflict {
+                            name,
+                            detail: detail.to_string(),
+                        },
+                        *span_a,
+                    );
+                }
+            }
+        }
+    }
+
     fn check_function(&mut self, func: &FunctionDef) {
         // Reset state for each function
         self.var_states.clear();
@@ -743,9 +882,10 @@ pub fn check_module(
     scopes: &ScopeTable,
     types: &TypeTable,
     resolution_map: &ResolutionMap,
+    function_info: &FxHashMap<DefId, FunctionInfo>,
     errors: &mut Vec<SemanticError>,
 ) {
-    let mut checker = BorrowChecker::new(scopes, types, resolution_map);
+    let mut checker = BorrowChecker::new(scopes, types, resolution_map, function_info);
 
     for item in &module.items {
         match &item.node {
@@ -892,6 +1032,163 @@ void main():
                 SemanticErrorKind::UseAfterMove { .. }
             )),
             "unexpected UseAfterMove after reassignment: {:?}", errors
+        );
+    }
+
+    // ── Ownership mismatch tests ──
+
+    #[test]
+    fn ownership_mismatch_move_param_bare_call() {
+        let source = "\
+void consume(String !s):
+    pass
+
+void main():
+    String s = \"hello\"
+    consume(s)
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::OwnershipMismatch { param_name, .. } if param_name == "s")),
+            "expected OwnershipMismatch, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn ownership_mismatch_borrow_param_move_call() {
+        let source = "\
+void read_it(String &s):
+    pass
+
+void main():
+    String s = \"hello\"
+    read_it(!s)
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::OwnershipMismatch { param_name, .. } if param_name == "s")),
+            "expected OwnershipMismatch, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn ownership_mismatch_bare_param_mut_call() {
+        let source = "\
+void look(int x):
+    pass
+
+void main():
+    int x = 5
+    look(&x)
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::OwnershipMismatch { param_name, .. } if param_name == "x")),
+            "expected OwnershipMismatch, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn ownership_match_move_ok() {
+        let source = "\
+void consume(String !s):
+    pass
+
+void main():
+    String s = \"hello\"
+    consume(!s)
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::OwnershipMismatch { .. })),
+            "unexpected OwnershipMismatch: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn ownership_match_borrow_ok() {
+        let source = "\
+void read_it(String &s):
+    pass
+
+void main():
+    String s = \"hello\"
+    read_it(&s)
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::OwnershipMismatch { .. })),
+            "unexpected OwnershipMismatch: {:?}", errors
+        );
+    }
+
+    // ── Aliasing conflict tests ──
+
+    #[test]
+    fn aliasing_double_mut_borrow() {
+        let source = "\
+void both(String &a, String &b):
+    pass
+
+void main():
+    String s = \"hello\"
+    both(&s, &s)
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::BorrowConflict { name, .. } if name == "s")),
+            "expected BorrowConflict for double &, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn aliasing_borrow_and_mut_borrow() {
+        let source = "\
+void mixed(String a, String &b):
+    pass
+
+void main():
+    String s = \"hello\"
+    mixed(s, &s)
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::BorrowConflict { name, .. } if name == "s")),
+            "expected BorrowConflict for bare + &, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn aliasing_mut_borrow_and_move() {
+        let source = "\
+void danger(String &a, String !b):
+    pass
+
+void main():
+    String s = \"hello\"
+    danger(&s, !s)
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::BorrowConflict { name, .. } if name == "s")),
+            "expected BorrowConflict for & + !, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn aliasing_double_bare_ok() {
+        let source = "\
+void both(int a, int b):
+    pass
+
+void main():
+    int x = 5
+    both(x, x)
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::BorrowConflict { .. })),
+            "unexpected BorrowConflict for double bare: {:?}", errors
         );
     }
 

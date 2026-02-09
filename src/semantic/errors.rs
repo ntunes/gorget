@@ -84,6 +84,13 @@ pub enum SemanticErrorKind {
 
     /// Non-printable type used in string interpolation.
     NonPrintableInterpolation { var_name: String, type_name: String },
+
+    /// Call-site ownership annotation doesn't match parameter declaration.
+    OwnershipMismatch {
+        param_name: String,
+        expected: String,
+        found: String,
+    },
 }
 
 impl std::fmt::Display for SemanticError {
@@ -185,6 +192,16 @@ impl std::fmt::Display for SemanticError {
                 write!(
                     f,
                     "cannot interpolate `{var_name}` of type `{type_name}` in string"
+                )
+            }
+            SemanticErrorKind::OwnershipMismatch {
+                param_name,
+                expected,
+                found,
+            } => {
+                write!(
+                    f,
+                    "ownership mismatch for `{param_name}`: expected `{expected}`, found `{found}`"
                 )
             }
         }
