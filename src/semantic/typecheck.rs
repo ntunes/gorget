@@ -476,7 +476,9 @@ impl<'a> TypeChecker<'a> {
             Expr::Do { body } => self.check_block(body),
 
             Expr::Closure { params, body, .. } => {
-                // Infer closure type from params and body
+                // Infer closure type from params and body.
+                // Write resolved param types back to DefInfos so that
+                // references to the params inside the body can find them.
                 let mut param_types = Vec::new();
                 for param in params {
                     if let Some(ty) = &param.node.type_ {
@@ -485,6 +487,12 @@ impl<'a> TypeChecker<'a> {
                         )
                         .unwrap_or(self.types.error_id);
                         param_types.push(tid);
+                        if let Some(def_id) = self.scopes.lookup_def_by_span(
+                            &param.node.name.node,
+                            param.node.name.span,
+                        ) {
+                            self.scopes.get_def_mut(def_id).type_id = Some(tid);
+                        }
                     } else {
                         param_types.push(self.fresh_type_var());
                     }

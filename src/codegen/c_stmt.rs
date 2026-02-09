@@ -260,7 +260,8 @@ impl CodegenContext<'_> {
 
                 let c_type = self.resolve_decl_type(type_, value, Some(name));
                 let val = self.gen_expr(value);
-                emitter.emit_line(&format!("{const_prefix}{c_type} {escaped} = {val};"));
+                let decl = c_types::c_declare(&c_type, &escaped);
+                emitter.emit_line(&format!("{const_prefix}{decl} = {val};"));
             }
             Pattern::Wildcard => {
                 let val = self.gen_expr(value);
@@ -269,7 +270,8 @@ impl CodegenContext<'_> {
             _ => {
                 let c_type = self.resolve_decl_type(type_, value, None);
                 let val = self.gen_expr(value);
-                emitter.emit_line(&format!("/* pattern decl */ {c_type} __pat = {val};"));
+                let decl = c_types::c_declare(&c_type, "__pat");
+                emitter.emit_line(&format!("/* pattern decl */ {decl} = {val};"));
             }
         }
     }

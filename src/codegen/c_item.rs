@@ -86,7 +86,8 @@ impl CodegenContext<'_> {
         for field in &s.fields {
             let field_type = c_types::ast_type_to_c(&field.node.type_.node, self.scopes);
             let field_name = c_mangle::escape_keyword(&field.node.name.node);
-            emitter.emit_line(&format!("{field_type} {field_name};"));
+            let decl = c_types::c_declare(&field_type, &field_name);
+            emitter.emit_line(&format!("{decl};"));
         }
         emitter.dedent();
         emitter.emit_line("};");
@@ -125,7 +126,8 @@ impl CodegenContext<'_> {
                 emitter.indent();
                 for (i, field) in fields.iter().enumerate() {
                     let field_type = c_types::ast_type_to_c(&field.node, self.scopes);
-                    emitter.emit_line(&format!("{field_type} _{i};"));
+                    let decl = c_types::c_declare(&field_type, &format!("_{i}"));
+                    emitter.emit_line(&format!("{decl};"));
                 }
                 emitter.dedent();
                 emitter.emit_line(&format!("}} {data_name};"));
@@ -374,7 +376,7 @@ impl CodegenContext<'_> {
             }
             let param_type = c_types::ast_type_to_c(&param.node.type_.node, self.scopes);
             let param_name = c_mangle::escape_keyword(&param.node.name.node);
-            params_vec.push(format!("{param_type} {param_name}"));
+            params_vec.push(c_types::c_declare(&param_type, &param_name));
         }
 
         let params = if params_vec.is_empty() {
@@ -575,10 +577,13 @@ impl CodegenContext<'_> {
                 emitter.blank_line();
             }
 
-            // Closure function
-            let mut params_vec = vec!["void* __env_ptr".to_string()];
+            // Closure function — include env param only for capturing closures
+            let mut params_vec: Vec<String> = Vec::new();
+            if !closure.captures.is_empty() {
+                params_vec.push("void* __env_ptr".to_string());
+            }
             for (p_name, p_type) in &closure.params {
-                params_vec.push(format!("{p_type} {p_name}"));
+                params_vec.push(c_types::c_declare(p_type, p_name));
             }
             let params_str = params_vec.join(", ");
 
@@ -1010,7 +1015,7 @@ impl CodegenContext<'_> {
             }
             let param_type = self.substitute_type(&param.node.type_.node, &subs);
             let param_name = c_mangle::escape_keyword(&param.node.name.node);
-            params_vec.push(format!("{param_type} {param_name}"));
+            params_vec.push(c_types::c_declare(&param_type, &param_name));
         }
         let params = if params_vec.is_empty() {
             "void".to_string()

@@ -688,9 +688,10 @@ impl CodegenContext<'_> {
 
         self.lifted_closures.borrow_mut().push(lifted);
 
-        // At the creation site: allocate env, populate, create GorgetClosure
+        // At the creation site: emit a bare function pointer (no captures)
+        // or allocate env and create GorgetClosure (with captures).
         if captures.is_empty() {
-            format!("(GorgetClosure){{.fn_ptr = (void*){fn_name}, .env = NULL}}")
+            fn_name
         } else {
             // Use a GCC statement expression to allocate and populate the env
             let mut parts = Vec::new();
@@ -1162,7 +1163,8 @@ impl CodegenContext<'_> {
                             _ => c_types::ast_type_to_c(&type_.node, self.scopes),
                         };
                         let val = self.gen_expr(value);
-                        format!("{const_prefix}{c_type} {escaped} = {val};")
+                        let decl = c_types::c_declare(&c_type, &escaped);
+                        format!("{const_prefix}{decl} = {val};")
                     }
                     _ => {
                         let val = self.gen_expr(value);

@@ -188,6 +188,18 @@ fn def_name_to_c(def_id: DefId, scopes: &ScopeTable) -> String {
     scopes.get_def(def_id).name.clone()
 }
 
+/// Produce a valid C declaration by splicing `name` into the type string.
+/// For function pointer types like `int64_t (*)(int64_t)`, this inserts the
+/// name inside the `(*)` to produce `int64_t (*name)(int64_t)`.
+/// For plain types, returns `"{c_type} {name}"`.
+pub fn c_declare(c_type: &str, name: &str) -> String {
+    if let Some(pos) = c_type.find("(*)") {
+        format!("{}(*{}){}", &c_type[..pos], name, &c_type[pos + 3..])
+    } else {
+        format!("{c_type} {name}")
+    }
+}
+
 /// Get the printf format specifier for a primitive type.
 /// Returns a simple format specifier that can be embedded in a format string.
 pub fn printf_format_for_primitive(prim: PrimitiveType) -> &'static str {
@@ -219,6 +231,28 @@ mod tests {
         assert_eq!(primitive_to_c(PrimitiveType::Int8), "int8_t");
         assert_eq!(primitive_to_c(PrimitiveType::Uint64), "uint64_t");
         assert_eq!(primitive_to_c(PrimitiveType::Float32), "float");
+    }
+
+    #[test]
+    fn c_declare_plain_type() {
+        assert_eq!(c_declare("int64_t", "x"), "int64_t x");
+        assert_eq!(c_declare("const char*", "s"), "const char* s");
+    }
+
+    #[test]
+    fn c_declare_function_pointer() {
+        assert_eq!(
+            c_declare("int64_t (*)(int64_t)", "cb"),
+            "int64_t (*cb)(int64_t)"
+        );
+        assert_eq!(
+            c_declare("void (*)(void)", "f"),
+            "void (*f)(void)"
+        );
+        assert_eq!(
+            c_declare("int64_t (*)(int64_t, int64_t)", "add"),
+            "int64_t (*add)(int64_t, int64_t)"
+        );
     }
 
     #[test]

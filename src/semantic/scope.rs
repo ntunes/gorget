@@ -191,6 +191,17 @@ impl ScopeTable {
         self.definitions.len()
     }
 
+    /// Look up a definition by name and definition span. This is reliable even with
+    /// shadowing because each definition has a unique (name, span) pair.
+    pub fn lookup_def_by_span(&self, name: &str, span: Span) -> Option<DefId> {
+        for (i, def) in self.definitions.iter().enumerate() {
+            if def.name == name && def.span == span {
+                return Some(DefId(i as u32));
+            }
+        }
+        None
+    }
+
     /// Search all scopes for a variable with the given name (most recent definition wins).
     /// Used by the borrow checker to find DefIds for pattern bindings.
     pub fn lookup_by_name_anywhere(&self, name: &str) -> Option<DefId> {

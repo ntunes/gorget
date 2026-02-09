@@ -489,8 +489,11 @@ void main():
             ],
         };
         let result = c_types::ast_type_to_c(&ty, &scopes);
-        assert!(result.contains("int64_t"));
-        assert!(result.contains("(*)"));
+        assert_eq!(result, "int64_t (*)(int64_t, int64_t)");
+
+        // c_declare should splice the name into (*)
+        let decl = c_types::c_declare(&result, "add");
+        assert_eq!(decl, "int64_t (*add)(int64_t, int64_t)");
     }
 
     #[test]
