@@ -16,7 +16,7 @@ Gorget is a Python-like language that compiles to C via transpilation.
 ```bash
 cargo build              # build the compiler
 cargo test --lib         # 176 unit tests
-cargo test --test integration -- --test-threads=1  # 22 integration tests (run serially to avoid cargo lock contention)
+cargo test --test integration -- --test-threads=1  # 30 integration tests (run serially to avoid cargo lock contention)
 cargo test               # all tests (use --test-threads=1 if integration tests hang)
 ```
 

@@ -1100,7 +1100,20 @@ impl CodegenContext<'_> {
                 format!("{scrutinee} == {val}")
             }
             Pattern::Wildcard => "1".to_string(),
-            Pattern::Binding(_) => "1".to_string(),
+            Pattern::Binding(name) => {
+                // A bare identifier may be a unit enum variant (parser can't distinguish).
+                // Check if the name matches a known variant; if so, generate a tag check.
+                for (enum_def_id, info) in self.enum_variants {
+                    for (vname, _) in &info.variants {
+                        if vname == name {
+                            let enum_name = &self.scopes.get_def(*enum_def_id).name;
+                            let tag = c_mangle::mangle_tag(enum_name, name);
+                            return format!("{scrutinee}.tag == {tag}");
+                        }
+                    }
+                }
+                "1".to_string()
+            }
             Pattern::Constructor { path, .. } => {
                 if path.len() == 2 {
                     let tag = c_mangle::mangle_tag(&path[0].node, &path[1].node);
@@ -1153,7 +1166,12 @@ impl CodegenContext<'_> {
             let cond = self.pattern_to_condition_expr(&arm.pattern.node, "__gorget_scrut");
             let full_cond = if let Some(guard) = &arm.guard {
                 let guard_expr = self.gen_expr(guard);
-                format!("({cond}) && ({guard_expr})")
+                let guard_bindings = self.pattern_bindings_inline(&arm.pattern.node, "__gorget_scrut");
+                if guard_bindings.is_empty() {
+                    format!("({cond}) && ({guard_expr})")
+                } else {
+                    format!("({cond}) && ({{ {guard_bindings}({guard_expr}); }})")
+                }
             } else {
                 cond
             };

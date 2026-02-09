@@ -1,0 +1,23 @@
+void main():
+    # block as initializer
+    int x = do:
+        int a = 5
+        int b = 10
+        a + b
+
+    print("{x}")
+
+    # simple do block
+    int y = do:
+        int n = 3
+        n * n
+
+    print("{y}")
+
+    # do block with multiple steps
+    int z = do:
+        int first = 10
+        int second = first + 5
+        second * 2
+
+    print("{z}")

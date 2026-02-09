@@ -318,3 +318,117 @@ fn gg_run_command() {
     let _ = std::fs::remove_file(dir.join("hello.c"));
     let _ = std::fs::remove_file(dir.join("hello"));
 }
+
+#[test]
+fn operators() {
+    run_gg(
+        "operators.gg",
+        "\
+3
+1
+-5
+-5
+false
+true
+-10
+3
+2",
+    );
+}
+
+#[test]
+fn chars() {
+    run_gg(
+        "chars.gg",
+        "\
+A
+A < B
+equal
+\\
+true",
+    );
+}
+
+#[test]
+fn loops_advanced() {
+    run_gg(
+        "loops_advanced.gg",
+        "\
+0
+1
+2
+1
+3
+5
+1
+2
+4
+5
+0
+1
+2
+done",
+    );
+}
+
+#[test]
+fn tuples() {
+    run_gg(
+        "tuples.gg",
+        "\
+10
+20
+42
+99
+1
+2
+3",
+    );
+}
+
+#[test]
+fn type_casts() {
+    run_gg(
+        "type_casts.gg",
+        "\
+42.000000
+3
+2.500000
+-7",
+    );
+}
+
+#[test]
+fn match_advanced() {
+    run_gg(
+        "match_advanced.gg",
+        "\
+5
+3 4
+positive
+point",
+    );
+}
+
+#[test]
+fn pattern_is() {
+    run_gg(
+        "pattern_is.gg",
+        "\
+is red
+not blue
+not red
+is green",
+    );
+}
+
+#[test]
+fn block_expr() {
+    run_gg(
+        "block_expr.gg",
+        "\
+15
+9
+30",
+    );
+}

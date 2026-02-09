@@ -1,0 +1,19 @@
+void main():
+    # int to float
+    int x = 42
+    float f = x as float
+    print("{f}")
+
+    # float to int (truncation)
+    float pi = 3.14
+    int truncated = pi as int
+    print("{truncated}")
+
+    # cast in arithmetic
+    float result = (5 as float) / 2.0
+    print("{result}")
+
+    # negative float to int
+    float neg = -7.9
+    int n = neg as int
+    print("{n}")

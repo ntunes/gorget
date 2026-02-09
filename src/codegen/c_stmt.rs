@@ -522,10 +522,18 @@ impl CodegenContext<'_> {
         for arm in arms {
             let pattern_cond = self.pattern_to_condition(&arm.pattern.node, &tmp);
 
-            // Apply guard expression if present
+            // Apply guard expression if present.
+            // When a guard references pattern bindings (e.g. `case n if n > 0`),
+            // we must declare them before the guard is evaluated.  We wrap bindings
+            // + guard in a GCC statement expression so they live in the condition.
             let full_cond = if let Some(guard) = &arm.guard {
                 let guard_expr = self.gen_expr(guard);
-                format!("({pattern_cond}) && ({guard_expr})")
+                let bindings = self.stmt_pattern_bindings_inline(&arm.pattern.node, &tmp);
+                if bindings.is_empty() {
+                    format!("({pattern_cond}) && ({guard_expr})")
+                } else {
+                    format!("({pattern_cond}) && ({{ {bindings}({guard_expr}); }})")
+                }
             } else {
                 pattern_cond
             };
@@ -564,7 +572,15 @@ impl CodegenContext<'_> {
                 format!("{scrutinee} == {val}")
             }
             Pattern::Wildcard => "1".to_string(),
-            Pattern::Binding(_) => "1".to_string(), // always matches
+            Pattern::Binding(name) => {
+                // A bare identifier may be a unit enum variant (parser can't distinguish).
+                if let Some((enum_name, _)) = self.find_enum_for_variant_by_name(name) {
+                    let tag = c_mangle::mangle_tag(&enum_name, name);
+                    format!("{scrutinee}.tag == {tag}")
+                } else {
+                    "1".to_string() // genuine binding — always matches
+                }
+            }
             Pattern::Constructor { path, fields: _ } => {
                 // Enum variant destructuring: check the tag
                 if let Some((enum_name, variant_name)) = self.find_enum_for_variant_path(path) {
@@ -619,6 +635,46 @@ impl CodegenContext<'_> {
             Pattern::Wildcard | Pattern::Literal(_) | Pattern::Rest => {
                 // No bindings to emit
             }
+        }
+    }
+
+    /// Return inline pattern bindings as a string (for use in GCC statement expressions).
+    /// Uses statement-context enum variant lookup (vs expression-context in c_expr.rs).
+    fn stmt_pattern_bindings_inline(&self, pattern: &Pattern, scrutinee: &str) -> String {
+        match pattern {
+            Pattern::Binding(name) => {
+                let escaped = c_mangle::escape_keyword(name);
+                format!("__typeof__({scrutinee}) {escaped} = {scrutinee}; ")
+            }
+            Pattern::Constructor { path, fields } => {
+                if let Some((_enum_name, variant_name)) = self.find_enum_for_variant_path(path) {
+                    let mut result = String::new();
+                    for (i, field_pat) in fields.iter().enumerate() {
+                        let field_access =
+                            format!("{scrutinee}.data.{variant_name}._{i}");
+                        result.push_str(&self.stmt_pattern_bindings_inline(&field_pat.node, &field_access));
+                    }
+                    result
+                } else {
+                    String::new()
+                }
+            }
+            Pattern::Tuple(elements) => {
+                let mut result = String::new();
+                for (i, elem) in elements.iter().enumerate() {
+                    let field_access = format!("{scrutinee}._{i}");
+                    result.push_str(&self.stmt_pattern_bindings_inline(&elem.node, &field_access));
+                }
+                result
+            }
+            Pattern::Or(alternatives) => {
+                if let Some(first) = alternatives.first() {
+                    self.stmt_pattern_bindings_inline(&first.node, scrutinee)
+                } else {
+                    String::new()
+                }
+            }
+            Pattern::Wildcard | Pattern::Literal(_) | Pattern::Rest => String::new(),
         }
     }
 
@@ -849,6 +905,19 @@ impl CodegenContext<'_> {
                 if vname == variant_name {
                     let enum_name = self.scopes.get_def(*enum_def_id).name.clone();
                     return Some((enum_name, variant_name.clone()));
+                }
+            }
+        }
+        None
+    }
+
+    /// Look up which enum owns a variant given a bare variant name.
+    fn find_enum_for_variant_by_name(&self, variant_name: &str) -> Option<(String, String)> {
+        for (enum_def_id, info) in self.enum_variants {
+            for (vname, _) in &info.variants {
+                if vname == variant_name {
+                    let enum_name = self.scopes.get_def(*enum_def_id).name.clone();
+                    return Some((enum_name, variant_name.to_string()));
                 }
             }
         }

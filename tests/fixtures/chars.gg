@@ -1,0 +1,21 @@
+void main():
+    char c = 'A'
+    print("{c}")
+
+    # char comparison
+    if 'A' < 'B':
+        print("A < B")
+
+    if c == 'A':
+        print("equal")
+
+    # escape sequences
+    char backslash = '\\'
+    print("{backslash}")
+
+    char tab = '\t'
+    char zero = '\0'
+
+    # char in expressions
+    bool is_upper = c >= 'A' and c <= 'Z'
+    print("{is_upper}")

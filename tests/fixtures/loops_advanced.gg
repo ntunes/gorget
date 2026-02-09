@@ -1,0 +1,32 @@
+void main():
+    # loop with conditional break
+    int i = 0
+    loop:
+        if i >= 3:
+            break
+        print("{i}")
+        i += 1
+
+    # continue in for loop (skip even numbers)
+    for j in 0..6:
+        if j % 2 == 0:
+            continue
+        print("{j}")
+
+    # continue in while loop
+    int k = 0
+    while k < 5:
+        k += 1
+        if k == 3:
+            continue
+        print("{k}")
+
+    # nested loops with continue in inner
+    for outer in 0..3:
+        for inner in 0..3:
+            if inner == 1:
+                continue
+            pass
+        print("{outer}")
+
+    print("done")

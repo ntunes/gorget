@@ -1,0 +1,33 @@
+void main():
+    # integer division
+    int d = 10 / 3
+    print("{d}")
+
+    # modulo
+    int m = 10 % 3
+    print("{m}")
+
+    # unary negation
+    int neg = -5
+    print("{neg}")
+
+    int neg2 = -(3 + 2)
+    print("{neg2}")
+
+    # logical not
+    bool a = not true
+    print("{a}")
+
+    bool b = not (5 > 10)
+    print("{b}")
+
+    # combined precedence
+    int x = 7
+    int y = 3
+    int result = -x + y
+    print("{result}")
+
+    int q = 17 / 5
+    int r = 17 % 5
+    print("{q}")
+    print("{r}")

@@ -1,0 +1,28 @@
+enum Color:
+    Red
+    Green
+    Blue
+
+void main():
+    Color c = Red()
+
+    # is operator with enum variant
+    if c is Red:
+        print("is red")
+
+    # is not operator
+    if c is not Blue:
+        print("not blue")
+
+    # is with else
+    Color g = Green()
+    if g is Red:
+        print("BAD")
+    else:
+        print("not red")
+
+    # is not with negation
+    if g is not Green:
+        print("BAD")
+    else:
+        print("is green")

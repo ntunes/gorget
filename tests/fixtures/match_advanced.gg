@@ -1,0 +1,47 @@
+enum Shape:
+    Circle(int)
+    Rect(int, int)
+    Point
+
+void main():
+    # match with destructuring — Circle
+    Shape s1 = Circle(5)
+    match s1:
+        case Circle(r):
+            print("{r}")
+        case Rect(w, h):
+            print("{w} {h}")
+        case Point:
+            print("point")
+
+    # match with destructuring — Rect
+    Shape s2 = Rect(3, 4)
+    match s2:
+        case Circle(r):
+            print("{r}")
+        case Rect(w, h):
+            print("{w} {h}")
+        case Point:
+            print("point")
+
+    # match with guard
+    int x = 42
+    match x:
+        case n if n > 100:
+            print("large")
+        case n if n > 0:
+            print("positive")
+        case 0:
+            print("zero")
+        else:
+            print("negative")
+
+    # Point variant (no data)
+    Shape s3 = Point()
+    match s3:
+        case Circle(r):
+            print("{r}")
+        case Rect(w, h):
+            print("{w} {h}")
+        case Point:
+            print("point")

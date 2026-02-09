@@ -1,0 +1,16 @@
+void main():
+    # basic tuple with auto
+    auto pair = (10, 20)
+    print("{pair._0}")
+    print("{pair._1}")
+
+    # mixed-type tuple (int + int)
+    auto t = (42, 99)
+    print("{t._0}")
+    print("{t._1}")
+
+    # 3-element tuple
+    auto triple = (1, 2, 3)
+    print("{triple._0}")
+    print("{triple._1}")
+    print("{triple._2}")
