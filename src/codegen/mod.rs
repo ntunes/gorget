@@ -342,4 +342,163 @@ void main():
         // Vector[int] should be VyperArray, not void*
         assert!(c_code.contains("VyperArray"));
     }
+
+    // ── Phase 6 tests ──────────────────────────────────────
+
+    #[test]
+    fn trait_definition_comment() {
+        let source = "\
+trait Drawable:
+    void draw(self)
+    str name(self)
+";
+        let c_code = compile_to_c(source);
+        // Trait should be emitted as a descriptive comment
+        assert!(c_code.contains("/* trait Drawable:"));
+        assert!(c_code.contains("draw"));
+        assert!(c_code.contains("name"));
+    }
+
+    #[test]
+    fn extern_block() {
+        let source = "\
+extern \"C\":
+    int printf(str fmt)
+";
+        let c_code = compile_to_c(source);
+        assert!(c_code.contains("extern"));
+        assert!(c_code.contains("printf"));
+    }
+
+    #[test]
+    fn nil_coalescing_expr() {
+        let source = "\
+void main():
+    auto a = None
+    auto b = a ?? 42
+";
+        let c_code = compile_to_c(source);
+        assert!(c_code.contains("!= NULL"));
+    }
+
+    #[test]
+    fn await_stub() {
+        let source = "\
+async void main():
+    auto x = await 42
+";
+        let c_code = compile_to_c(source);
+        assert!(c_code.contains("/* await */"));
+    }
+
+    #[test]
+    fn spawn_stub() {
+        let source = "\
+void main():
+    auto x = spawn 42
+";
+        let c_code = compile_to_c(source);
+        assert!(c_code.contains("/* spawn */"));
+    }
+
+    #[test]
+    fn tuple_type_mapping() {
+        // Test that tuple types in AST map to anonymous structs
+        use crate::semantic::scope::ScopeTable;
+        let scopes = ScopeTable::new();
+        let ty = crate::parser::ast::Type::Tuple(vec![
+            crate::span::Spanned {
+                node: crate::parser::ast::Type::Primitive(crate::parser::ast::PrimitiveType::Int),
+                span: crate::span::Span::new(0, 0),
+            },
+            crate::span::Spanned {
+                node: crate::parser::ast::Type::Primitive(crate::parser::ast::PrimitiveType::Float),
+                span: crate::span::Span::new(0, 0),
+            },
+        ]);
+        let result = c_types::ast_type_to_c(&ty, &scopes);
+        assert!(result.contains("struct"));
+        assert!(result.contains("int64_t _0"));
+        assert!(result.contains("double _1"));
+    }
+
+    #[test]
+    fn function_pointer_type_mapping() {
+        // Test that function types in AST map to function pointers
+        use crate::semantic::scope::ScopeTable;
+        let scopes = ScopeTable::new();
+        let ty = crate::parser::ast::Type::Function {
+            return_type: Box::new(crate::span::Spanned {
+                node: crate::parser::ast::Type::Primitive(crate::parser::ast::PrimitiveType::Int),
+                span: crate::span::Span::new(0, 0),
+            }),
+            params: vec![
+                crate::span::Spanned {
+                    node: crate::parser::ast::Type::Primitive(crate::parser::ast::PrimitiveType::Int),
+                    span: crate::span::Span::new(0, 0),
+                },
+                crate::span::Spanned {
+                    node: crate::parser::ast::Type::Primitive(crate::parser::ast::PrimitiveType::Int),
+                    span: crate::span::Span::new(0, 0),
+                },
+            ],
+        };
+        let result = c_types::ast_type_to_c(&ty, &scopes);
+        assert!(result.contains("int64_t"));
+        assert!(result.contains("(*)"));
+    }
+
+    #[test]
+    fn slice_type_mapping() {
+        // Test that slice types in AST map to struct { data, len }
+        use crate::semantic::scope::ScopeTable;
+        let scopes = ScopeTable::new();
+        let ty = crate::parser::ast::Type::Slice {
+            element: Box::new(crate::span::Spanned {
+                node: crate::parser::ast::Type::Primitive(crate::parser::ast::PrimitiveType::Int),
+                span: crate::span::Span::new(0, 0),
+            }),
+        };
+        let result = c_types::ast_type_to_c(&ty, &scopes);
+        assert!(result.contains("struct"));
+        assert!(result.contains("data"));
+        assert!(result.contains("len"));
+        assert!(result.contains("int64_t"));
+    }
+
+    #[test]
+    fn dynamic_type_mapping() {
+        // Test that dynamic trait objects map to void*
+        use crate::semantic::scope::ScopeTable;
+        let scopes = ScopeTable::new();
+        let ty = crate::parser::ast::Type::Dynamic {
+            trait_: Box::new(crate::span::Spanned {
+                node: crate::parser::ast::Type::Named {
+                    name: crate::span::Spanned {
+                        node: "Drawable".to_string(),
+                        span: crate::span::Span::new(0, 0),
+                    },
+                    generic_args: vec![],
+                },
+                span: crate::span::Span::new(0, 0),
+            }),
+        };
+        let result = c_types::ast_type_to_c(&ty, &scopes);
+        assert_eq!(result, "void*");
+    }
+
+    #[test]
+    fn no_unsupported_expr_for_handled_variants() {
+        // Ensure basic programs don't emit "unsupported expr"
+        let source = "\
+void main():
+    int x = 5
+    if x > 0:
+        print(\"yes\")
+    else:
+        print(\"no\")
+";
+        let c_code = compile_to_c(source);
+        assert!(!c_code.contains("unsupported expr"));
+    }
 }

@@ -247,7 +247,47 @@ impl CodegenContext<'_> {
 
             Expr::It => "it".to_string(),
 
-            _ => format!("/* unsupported expr */0"),
+            Expr::Match {
+                scrutinee,
+                arms,
+                else_arm,
+            } => self.gen_match_expr(scrutinee, arms, else_arm.as_deref()),
+
+            Expr::Block(block) => self.gen_block_expr(block),
+
+            Expr::Do { body } => self.gen_block_expr(body),
+
+            Expr::OptionalChain { object, field } => {
+                let obj = self.gen_expr(object);
+                let field_name = c_mangle::escape_keyword(&field.node);
+                format!("({obj} != NULL ? {obj}->{field_name} : NULL)")
+            }
+
+            Expr::NilCoalescing { lhs, rhs } => {
+                let l = self.gen_expr(lhs);
+                let r = self.gen_expr(rhs);
+                format!("({l} != NULL ? {l} : {r})")
+            }
+
+            Expr::Try { expr: try_expr } => {
+                let inner = self.gen_expr(try_expr);
+                format!(
+                    "({{ __typeof__({inner}) __try_val; \
+                    if (VYPER_TRY) {{ __try_val = {inner}; VYPER_CATCH_END; }} \
+                    else {{ VYPER_CATCH_END; memset(&__try_val, 0, sizeof(__try_val)); return __try_val; }} \
+                    __try_val; }})"
+                )
+            }
+
+            Expr::Await { expr: await_expr } => {
+                let inner = self.gen_expr(await_expr);
+                format!("/* await */ {inner}")
+            }
+
+            Expr::Spawn { expr: spawn_expr } => {
+                let inner = self.gen_expr(spawn_expr);
+                format!("/* spawn */ {inner}")
+            }
         }
     }
 
@@ -718,6 +758,195 @@ impl CodegenContext<'_> {
                 format!("({})", conds.join(" || "))
             }
             Pattern::Tuple(_) | Pattern::Rest => "1".to_string(),
+        }
+    }
+
+    /// Generate a match expression as a GCC statement expression.
+    fn gen_match_expr(
+        &self,
+        scrutinee: &Spanned<Expr>,
+        arms: &[crate::parser::ast::MatchArm],
+        else_arm: Option<&Spanned<Expr>>,
+    ) -> String {
+        let scrut_expr = self.gen_expr(scrutinee);
+
+        let mut parts = Vec::new();
+        parts.push(format!("__typeof__({scrut_expr}) __vyper_scrut = {scrut_expr}"));
+
+        // Build if-else chain; each arm assigns to __vyper_match_result
+        let mut arm_parts = Vec::new();
+        let mut first = true;
+        for arm in arms {
+            let cond = self.pattern_to_condition_expr(&arm.pattern.node, "__vyper_scrut");
+            let full_cond = if let Some(guard) = &arm.guard {
+                let guard_expr = self.gen_expr(guard);
+                format!("({cond}) && ({guard_expr})")
+            } else {
+                cond
+            };
+
+            let bindings = self.pattern_bindings_inline(&arm.pattern.node, "__vyper_scrut");
+            let body = self.gen_expr(&arm.body);
+
+            if first {
+                arm_parts.push(format!("if ({full_cond}) {{ {bindings}__vyper_match_result = {body}; }}"));
+                first = false;
+            } else {
+                arm_parts.push(format!("else if ({full_cond}) {{ {bindings}__vyper_match_result = {body}; }}"));
+            }
+        }
+
+        if let Some(else_expr) = else_arm {
+            let else_body = self.gen_expr(else_expr);
+            arm_parts.push(format!("else {{ __vyper_match_result = {else_body}; }}"));
+        }
+
+        // Determine a result type from the first arm body
+        let result_type = if let Some(arm) = arms.first() {
+            format!("__typeof__(({}))", self.gen_expr(&arm.body))
+        } else {
+            "int64_t".to_string()
+        };
+
+        let chain = arm_parts.join(" ");
+        format!(
+            "({{ {result_type} __vyper_match_result; {} {chain} __vyper_match_result; }})",
+            parts.join("; ") + ";"
+        )
+    }
+
+    /// Generate inline variable bindings for a pattern (returns C statements as a string).
+    fn pattern_bindings_inline(&self, pattern: &crate::parser::ast::Pattern, scrutinee: &str) -> String {
+        use crate::parser::ast::Pattern;
+        match pattern {
+            Pattern::Binding(name) => {
+                let escaped = c_mangle::escape_keyword(name);
+                format!("__typeof__({scrutinee}) {escaped} = {scrutinee}; ")
+            }
+            Pattern::Constructor { path, fields } => {
+                if let Some((_enum_name, variant_name)) = self.find_enum_for_variant_path_expr(path) {
+                    let mut result = String::new();
+                    for (i, field_pat) in fields.iter().enumerate() {
+                        let field_access = format!("{scrutinee}.data.{variant_name}._{i}");
+                        result.push_str(&self.pattern_bindings_inline(&field_pat.node, &field_access));
+                    }
+                    result
+                } else {
+                    String::new()
+                }
+            }
+            Pattern::Tuple(elements) => {
+                let mut result = String::new();
+                for (i, elem) in elements.iter().enumerate() {
+                    let field_access = format!("{scrutinee}._{i}");
+                    result.push_str(&self.pattern_bindings_inline(&elem.node, &field_access));
+                }
+                result
+            }
+            Pattern::Or(alternatives) => {
+                if let Some(first) = alternatives.first() {
+                    self.pattern_bindings_inline(&first.node, scrutinee)
+                } else {
+                    String::new()
+                }
+            }
+            _ => String::new(),
+        }
+    }
+
+    /// Look up which enum owns a variant given a path (for expression context).
+    fn find_enum_for_variant_path_expr(&self, path: &[Spanned<String>]) -> Option<(String, String)> {
+        if path.len() == 2 {
+            return Some((path[0].node.clone(), path[1].node.clone()));
+        }
+        let variant_name = if path.len() == 1 {
+            &path[0].node
+        } else {
+            return None;
+        };
+        for (enum_def_id, info) in self.enum_variants {
+            for (vname, _) in &info.variants {
+                if vname == variant_name {
+                    let enum_name = self.scopes.get_def(*enum_def_id).name.clone();
+                    return Some((enum_name, variant_name.clone()));
+                }
+            }
+        }
+        None
+    }
+
+    /// Generate a block/do expression as a GCC statement expression.
+    fn gen_block_expr(&self, block: &crate::parser::ast::Block) -> String {
+        if block.stmts.is_empty() {
+            return "(void)0".to_string();
+        }
+
+        let mut parts = Vec::new();
+        let last_idx = block.stmts.len() - 1;
+
+        for (i, stmt) in block.stmts.iter().enumerate() {
+            if i == last_idx {
+                // Last statement: if it's an expression statement, use it as the result value
+                if let crate::parser::ast::Stmt::Expr(expr) = &stmt.node {
+                    let val = self.gen_expr(expr);
+                    parts.push(format!("{val};"));
+                } else {
+                    // Non-expression final statement: emit as statement, result is (void)0
+                    parts.push(self.stmt_to_inline_string(&stmt.node));
+                    parts.push("(void)0;".to_string());
+                }
+            } else {
+                parts.push(self.stmt_to_inline_string(&stmt.node));
+            }
+        }
+
+        format!("({{ {} }})", parts.join(" "))
+    }
+
+    /// Generate inline C code for a statement (for use inside GCC statement expressions).
+    fn stmt_to_inline_string(&self, stmt: &crate::parser::ast::Stmt) -> String {
+        use crate::parser::ast::Stmt;
+        match stmt {
+            Stmt::Expr(expr) => {
+                let e = self.gen_expr(expr);
+                format!("{e};")
+            }
+            Stmt::VarDecl {
+                is_const,
+                type_,
+                pattern,
+                value,
+            } => {
+                let const_prefix = if *is_const { "const " } else { "" };
+                match &pattern.node {
+                    crate::parser::ast::Pattern::Binding(name) => {
+                        let escaped = c_mangle::escape_keyword(name);
+                        let c_type = match &type_.node {
+                            crate::parser::ast::Type::Inferred => self.infer_c_type_from_expr(&value.node),
+                            _ => c_types::ast_type_to_c(&type_.node, self.scopes),
+                        };
+                        let val = self.gen_expr(value);
+                        format!("{const_prefix}{c_type} {escaped} = {val};")
+                    }
+                    _ => {
+                        let val = self.gen_expr(value);
+                        format!("/* pattern decl */ (void){val};")
+                    }
+                }
+            }
+            Stmt::Assign { target, value } => {
+                let t = self.gen_expr(target);
+                let v = self.gen_expr(value);
+                format!("{t} = {v};")
+            }
+            Stmt::Return(expr) => {
+                if let Some(e) = expr {
+                    format!("return {};", self.gen_expr(e))
+                } else {
+                    "return;".to_string()
+                }
+            }
+            _ => "/* stmt */ (void)0;".to_string(),
         }
     }
 }

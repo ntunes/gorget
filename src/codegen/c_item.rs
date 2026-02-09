@@ -51,6 +51,7 @@ impl CodegenContext<'_> {
                 Item::Enum(e) => self.emit_enum_def(e, emitter),
                 Item::TypeAlias(a) => self.emit_type_alias(a, emitter),
                 Item::Newtype(nt) => self.emit_newtype(nt, emitter),
+                Item::Trait(t) => self.emit_trait_def(t, emitter),
                 _ => {}
             }
         }
@@ -190,6 +191,17 @@ impl CodegenContext<'_> {
                             Some((&type_name, trait_name.as_deref())),
                             emitter,
                         );
+                    }
+                }
+                Item::ExternBlock(ext) => {
+                    if let Some(abi) = &ext.abi {
+                        emitter.emit_line(&format!("// extern \"{}\"", abi.node));
+                    } else {
+                        emitter.emit_line("// extern");
+                    }
+                    for func in &ext.items {
+                        let (ret_type, func_name, params) = self.function_signature(&func.node, None);
+                        emitter.emit_line(&format!("extern {ret_type} {func_name}({params});"));
                     }
                 }
                 _ => {}
@@ -376,6 +388,20 @@ impl CodegenContext<'_> {
         let inner = c_types::ast_type_to_c(&nt.inner_type.node, self.scopes);
         let name = &nt.name.node;
         emitter.emit_line(&format!("typedef struct {{ {inner} value; }} {name};"));
+    }
+
+    // ─── Trait Definitions ─────────────────────────────────
+
+    /// Emit a trait definition as a descriptive comment (no vtable in Phase 6).
+    fn emit_trait_def(&self, t: &TraitDef, emitter: &mut CEmitter) {
+        let name = &t.name.node;
+        let methods: Vec<String> = t.items.iter().filter_map(|item| {
+            match &item.node {
+                TraitItem::Method(f) => Some(f.name.node.clone()),
+                TraitItem::AssociatedType(a) => Some(format!("type {}", a.name.node)),
+            }
+        }).collect();
+        emitter.emit_line(&format!("/* trait {name}: {} */", methods.join(", ")));
     }
 
     // ─── Lifted Closures ────────────────────────────────────

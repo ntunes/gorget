@@ -61,10 +61,35 @@ pub fn ast_type_to_c(ty: &crate::parser::ast::Type, scopes: &ScopeTable) -> Stri
             let inner_c = ast_type_to_c(&inner.node, scopes);
             format!("const {inner_c}*")
         }
-        crate::parser::ast::Type::Tuple(_) => "/* tuple */ void*".to_string(),
-        crate::parser::ast::Type::Function { .. } => "/* fn ptr */ void*".to_string(),
-        crate::parser::ast::Type::Slice { .. } => "/* slice */ void*".to_string(),
-        crate::parser::ast::Type::Dynamic { .. } => "/* dyn */ void*".to_string(),
+        crate::parser::ast::Type::Tuple(fields) => {
+            let field_defs: Vec<String> = fields
+                .iter()
+                .enumerate()
+                .map(|(i, f)| {
+                    let ft = ast_type_to_c(&f.node, scopes);
+                    format!("{ft} _{i}")
+                })
+                .collect();
+            format!("struct {{ {}; }}", field_defs.join("; "))
+        }
+        crate::parser::ast::Type::Function { return_type, params } => {
+            let ret = ast_type_to_c(&return_type.node, scopes);
+            let param_types: Vec<String> = params
+                .iter()
+                .map(|p| ast_type_to_c(&p.node, scopes))
+                .collect();
+            let params_str = if param_types.is_empty() {
+                "void".to_string()
+            } else {
+                param_types.join(", ")
+            };
+            format!("{ret} (*)({params_str})")
+        }
+        crate::parser::ast::Type::Slice { element } => {
+            let elem_c = ast_type_to_c(&element.node, scopes);
+            format!("struct {{ const {elem_c}* data; size_t len; }}")
+        }
+        crate::parser::ast::Type::Dynamic { .. } => "void*".to_string(),
         crate::parser::ast::Type::SelfType => "/* Self */".to_string(),
         crate::parser::ast::Type::Inferred => "/* auto */".to_string(),
     }
@@ -86,7 +111,46 @@ pub fn type_id_to_c(type_id: TypeId, types: &TypeTable, scopes: &ScopeTable) -> 
             let elem_c = type_id_to_c(*elem, types, scopes);
             format!("{elem_c}[{size}]")
         }
-        _ => "/* unsupported */ void*".to_string(),
+        ResolvedType::Tuple(fields) => {
+            let field_defs: Vec<String> = fields
+                .iter()
+                .enumerate()
+                .map(|(i, tid)| {
+                    let ft = type_id_to_c(*tid, types, scopes);
+                    format!("{ft} _{i}")
+                })
+                .collect();
+            format!("struct {{ {}; }}", field_defs.join("; "))
+        }
+        ResolvedType::Function { params, return_type } => {
+            let ret = type_id_to_c(*return_type, types, scopes);
+            let param_types: Vec<String> = params
+                .iter()
+                .map(|tid| type_id_to_c(*tid, types, scopes))
+                .collect();
+            let params_str = if param_types.is_empty() {
+                "void".to_string()
+            } else {
+                param_types.join(", ")
+            };
+            format!("{ret} (*)({params_str})")
+        }
+        ResolvedType::Slice(elem) => {
+            let elem_c = type_id_to_c(*elem, types, scopes);
+            format!("struct {{ const {elem_c}* data; size_t len; }}")
+        }
+        ResolvedType::Generic(def_id, _args) => {
+            // Monomorphization is Phase 7+; fall back to the defined type name
+            def_name_to_c(*def_id, scopes)
+        }
+        ResolvedType::TraitObject(_def_id) => {
+            // Dynamic dispatch is Phase 7+; use void*
+            "void*".to_string()
+        }
+        ResolvedType::Var(_) => {
+            // Type variable should not escape inference
+            "/* type var */ void*".to_string()
+        }
     }
 }
 
