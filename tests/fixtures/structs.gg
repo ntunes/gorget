@@ -1,0 +1,18 @@
+struct Point:
+    float x
+    float y
+
+struct Rectangle:
+    float width
+    float height
+
+void print_point(Point p):
+    print("point")
+
+void main():
+    Point p = Point(3.0, 4.0)
+    float px = p.x
+    float py = p.y
+    print("point created")
+    Rectangle r = Rectangle(10.0, 20.0)
+    print("rectangle created")

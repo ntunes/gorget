@@ -1,0 +1,10 @@
+void main():
+    int x = 10
+    const int y = 20
+    float pi = 3.14
+    bool flag = true
+    int sum = x + y
+    int product = x * 2
+    print("{sum}")
+    print("{product}")
+    print("gorget")

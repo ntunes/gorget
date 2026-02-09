@@ -1,0 +1,18 @@
+void main():
+    int x = 42
+    match x:
+        case 0:
+            print("zero")
+        case 1:
+            print("one")
+        case 42:
+            print("the answer")
+        else:
+            print("other")
+
+    int y = 7
+    match y:
+        case 1 | 2 | 3:
+            print("small")
+        case n:
+            print("big")

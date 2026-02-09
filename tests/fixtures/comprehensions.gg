@@ -1,0 +1,7 @@
+void main():
+    Vector[int] squares = [x * x for x in 0..5]
+    print("list done")
+    Set[int] evens = {x for x in 0..10 if x % 2 == 0}
+    print("set done")
+    Dict[int, int] doubled = {x: x * 2 for x in 0..5}
+    print("dict done")

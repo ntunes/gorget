@@ -1,0 +1,6 @@
+void fail() throws str:
+    throw "something went wrong"
+
+void main():
+    print("before")
+    print("after")

@@ -1,0 +1,21 @@
+trait Greeter:
+    void greet(self)
+
+struct English:
+    int id
+
+struct Spanish:
+    int id
+
+equip English with Greeter:
+    void greet(self):
+        print("hello")
+
+equip Spanish with Greeter:
+    void greet(self):
+        print("hola")
+
+void main():
+    English e = English(1)
+    Spanish s = Spanish(2)
+    print("dispatch")

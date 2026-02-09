@@ -1,0 +1,6 @@
+void main():
+    int x = 42
+    int y = !x
+    print("{y}")
+    int z = 10
+    print("{z}")

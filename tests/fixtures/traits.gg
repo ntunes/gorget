@@ -1,0 +1,16 @@
+trait Shape:
+    float area(self)
+    void draw(self)
+
+struct Circle:
+    float radius
+
+equip Circle with Shape:
+    float area(self):
+        return 3.14
+    void draw(self):
+        print("drawing circle")
+
+void main():
+    Circle c = Circle(5.0)
+    print("circle created")

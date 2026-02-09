@@ -1,0 +1,17 @@
+void main():
+    int x = 5
+
+    if x > 0:
+        print("positive")
+    elif x < 0:
+        print("negative")
+    else:
+        print("zero")
+
+    int i = 0
+    while i < 3:
+        print("{i}")
+        i += 1
+
+    for j in 0..5:
+        print("{j}")

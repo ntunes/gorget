@@ -42,11 +42,13 @@ impl CodegenContext<'_> {
             }
         }
 
-        // Forward-declare vtable structs
+        // Forward-declare vtable and trait object structs
         for item in &module.items {
             if let Item::Trait(t) = &item.node {
                 let vtable_name = c_mangle::mangle_vtable_struct(&t.name.node);
+                let trait_obj_name = c_mangle::mangle_trait_obj(&t.name.node);
                 emitter.emit_line(&format!("typedef struct {vtable_name} {vtable_name};"));
+                emitter.emit_line(&format!("typedef struct {trait_obj_name} {trait_obj_name};"));
             }
         }
 
@@ -431,7 +433,7 @@ impl CodegenContext<'_> {
 
         // Emit vtable struct
         let vtable_name = c_mangle::mangle_vtable_struct(name);
-        emitter.emit_line("typedef struct {");
+        emitter.emit_line(&format!("struct {vtable_name} {{"));
         emitter.indent();
         for item in &t.items {
             if let TraitItem::Method(f) = &item.node {
@@ -463,17 +465,17 @@ impl CodegenContext<'_> {
             }
         }
         emitter.dedent();
-        emitter.emit_line(&format!("}} {vtable_name};"));
+        emitter.emit_line("};");
         emitter.blank_line();
 
         // Emit trait object struct
         let trait_obj_name = c_mangle::mangle_trait_obj(name);
-        emitter.emit_line("typedef struct {");
+        emitter.emit_line(&format!("struct {trait_obj_name} {{"));
         emitter.indent();
         emitter.emit_line("void* data;");
         emitter.emit_line(&format!("const {vtable_name}* vtable;"));
         emitter.dedent();
-        emitter.emit_line(&format!("}} {trait_obj_name};"));
+        emitter.emit_line("};");
         emitter.blank_line();
     }
 

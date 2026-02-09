@@ -1,0 +1,6 @@
+type Count = int
+
+void main():
+    int c = 42
+    print("{c}")
+    print("type alias works")

@@ -1,0 +1,11 @@
+void main():
+    int x = 5
+    int y = 10
+    int sum = x + y
+    int diff = x - y
+    int prod = x * y
+    bool gt = x > y
+    bool eq = x == 5
+    print("{sum}")
+    print("{diff}")
+    print("{prod}")

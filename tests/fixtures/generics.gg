@@ -1,0 +1,14 @@
+struct Pair[A, B]:
+    A first
+    B second
+
+int identity(int x) = x
+
+void main():
+    Pair[int, int] p = Pair[int, int](10, 20)
+    int a = p.first
+    int b = p.second
+    int sum = a + b
+    print("{sum}")
+    int v = identity(99)
+    print("{v}")

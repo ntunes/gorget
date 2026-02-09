@@ -1,0 +1,12 @@
+void main():
+    for i in 0..5:
+        print("{i}")
+    else:
+        print("completed")
+
+    int count = 0
+    while count < 3:
+        print("{count}")
+        count += 1
+    else:
+        print("while done")

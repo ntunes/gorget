@@ -1,0 +1,4 @@
+void main():
+    int x = 10
+    GorgetClosure add_x = (int y): x + y
+    print("closures")
