@@ -7,4 +7,5 @@ void main():
     int product = x * 2
     print("{sum}")
     print("{product}")
-    print("gorget")
+    auto name = "gorget"
+    print("{name}")

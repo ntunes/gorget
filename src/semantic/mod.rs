@@ -51,7 +51,7 @@ pub fn analyze(module: &Module) -> AnalysisResult {
     // Pass 4: Type check everything
     typecheck::check_module(
         module,
-        &scopes,
+        &mut scopes,
         &mut types,
         &trait_registry,
         &resolution_map,

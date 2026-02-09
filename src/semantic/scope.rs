@@ -196,7 +196,12 @@ impl ScopeTable {
     pub fn lookup_by_name_anywhere(&self, name: &str) -> Option<DefId> {
         // Walk backwards to find the most recent definition
         for (i, def) in self.definitions.iter().enumerate().rev() {
-            if def.name == name && def.kind == DefKind::Variable {
+            if def.name == name
+                && matches!(
+                    def.kind,
+                    DefKind::Variable | DefKind::Const | DefKind::Function
+                )
+            {
                 return Some(DefId(i as u32));
             }
         }

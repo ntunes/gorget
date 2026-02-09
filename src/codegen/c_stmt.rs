@@ -258,7 +258,7 @@ impl CodegenContext<'_> {
                     return;
                 }
 
-                let c_type = self.resolve_decl_type(type_, value);
+                let c_type = self.resolve_decl_type(type_, value, Some(name));
                 let val = self.gen_expr(value);
                 emitter.emit_line(&format!("{const_prefix}{c_type} {escaped} = {val};"));
             }
@@ -267,7 +267,7 @@ impl CodegenContext<'_> {
                 emitter.emit_line(&format!("(void){val};"));
             }
             _ => {
-                let c_type = self.resolve_decl_type(type_, value);
+                let c_type = self.resolve_decl_type(type_, value, None);
                 let val = self.gen_expr(value);
                 emitter.emit_line(&format!("/* pattern decl */ {c_type} __pat = {val};"));
             }
@@ -276,10 +276,24 @@ impl CodegenContext<'_> {
 
     /// Resolve the C type for a declaration, handling `auto` (Inferred).
     /// Also registers generic instantiations when a user-defined generic type is used.
-    fn resolve_decl_type(&self, type_: &Spanned<Type>, value: &Spanned<Expr>) -> String {
+    fn resolve_decl_type(
+        &self,
+        type_: &Spanned<Type>,
+        value: &Spanned<Expr>,
+        var_name: Option<&str>,
+    ) -> String {
         match &type_.node {
             Type::Inferred => {
-                // Infer type from value expression
+                // First, check if the semantic analysis stored a resolved type
+                if let Some(name) = var_name {
+                    if let Some(def_id) = self.scopes.lookup_by_name_anywhere(name) {
+                        let def = self.scopes.get_def(def_id);
+                        if let Some(type_id) = def.type_id {
+                            return c_types::type_id_to_c(type_id, self.types, self.scopes);
+                        }
+                    }
+                }
+                // Fall back to expression-based inference
                 self.infer_c_type_from_expr(&value.node)
             }
             _ => self.type_to_c_with_registration(&type_.node),
@@ -299,7 +313,7 @@ impl CodegenContext<'_> {
             Expr::Call { callee, .. } => {
                 // Try to look up the return type of the function
                 if let Expr::Identifier(name) = &callee.node {
-                    if let Some(def_id) = self.scopes.lookup(name) {
+                    if let Some(def_id) = self.scopes.lookup_by_name_anywhere(name) {
                         if let Some(func_info) = self.function_info.get(&def_id) {
                             if let Some(ret_type_id) = func_info.return_type_id {
                                 return c_types::type_id_to_c(ret_type_id, self.types, self.scopes);
@@ -310,7 +324,7 @@ impl CodegenContext<'_> {
                 "int64_t".to_string()
             }
             Expr::Identifier(name) => {
-                if let Some(def_id) = self.scopes.lookup(name) {
+                if let Some(def_id) = self.scopes.lookup_by_name_anywhere(name) {
                     let def = self.scopes.get_def(def_id);
                     if let Some(type_id) = def.type_id {
                         return c_types::type_id_to_c(type_id, self.types, self.scopes);

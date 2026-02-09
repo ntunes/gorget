@@ -12,7 +12,7 @@ use super::types::{ResolvedType, TypeTable};
 
 /// Type checker with bidirectional inference.
 struct TypeChecker<'a> {
-    scopes: &'a ScopeTable,
+    scopes: &'a mut ScopeTable,
     types: &'a mut TypeTable,
     traits: &'a TraitRegistry,
     resolution_map: &'a ResolutionMap,
@@ -28,7 +28,7 @@ struct TypeChecker<'a> {
 
 impl<'a> TypeChecker<'a> {
     fn new(
-        scopes: &'a ScopeTable,
+        scopes: &'a mut ScopeTable,
         types: &'a mut TypeTable,
         traits: &'a TraitRegistry,
         resolution_map: &'a ResolutionMap,
@@ -618,16 +618,18 @@ impl<'a> TypeChecker<'a> {
     fn check_stmt(&mut self, stmt: &Spanned<Stmt>) {
         match &stmt.node {
             Stmt::VarDecl {
-                type_, value, ..
+                type_, pattern, value, ..
             } => {
                 let value_type = self.infer_expr(value);
 
-                match &type_.node {
+                let resolved_type = match &type_.node {
                     Type::Inferred => {
                         // auto — infer from value
                         let resolved = self.resolve_type(value_type);
                         if resolved == self.types.error_id {
-                            // Can't infer — but don't cascade
+                            None
+                        } else {
+                            Some(resolved)
                         }
                     }
                     _ => {
@@ -639,6 +641,18 @@ impl<'a> TypeChecker<'a> {
                             self.types,
                         ) {
                             self.unify(declared_type, value_type, value.span);
+                            Some(declared_type)
+                        } else {
+                            None
+                        }
+                    }
+                };
+
+                // Write the resolved type back to the pattern binding's DefInfo
+                if let Some(type_id) = resolved_type {
+                    if let Pattern::Binding(name) = &pattern.node {
+                        if let Some(def_id) = self.scopes.lookup_by_name_anywhere(name) {
+                            self.scopes.get_def_mut(def_id).type_id = Some(type_id);
                         }
                     }
                 }
@@ -811,7 +825,7 @@ impl<'a> TypeChecker<'a> {
 /// Run type checking on the entire module.
 pub fn check_module(
     module: &Module,
-    scopes: &ScopeTable,
+    scopes: &mut ScopeTable,
     types: &mut TypeTable,
     traits: &TraitRegistry,
     resolution_map: &ResolutionMap,

@@ -420,8 +420,8 @@ impl CodegenContext<'_> {
                     }
                 }
             }
-            // Fallback: check scopes lookup
-            if let Some(def_id) = self.scopes.lookup(name) {
+            // Fallback: search all scopes (codegen doesn't track current scope)
+            if let Some(def_id) = self.scopes.lookup_by_name_anywhere(name) {
                 let def = self.scopes.get_def(def_id);
                 if let Some(type_id) = def.type_id {
                     if let crate::semantic::types::ResolvedType::TraitObject(trait_def_id) =
@@ -596,8 +596,8 @@ impl CodegenContext<'_> {
         // Try to look up the variable's type
         let escaped = c_mangle::escape_keyword(var_name);
 
-        // Try to find the variable in the scope to determine its type
-        if let Some(def_id) = self.scopes.lookup(var_name) {
+        // Search all scopes for the variable (codegen doesn't track current scope)
+        if let Some(def_id) = self.scopes.lookup_by_name_anywhere(var_name) {
             let def = self.scopes.get_def(def_id);
             if let Some(type_id) = def.type_id {
                 return self.format_for_type_id(type_id, &escaped);
