@@ -1,8 +1,8 @@
-# Vyper Language Design - Brainstorming Document
+# Gorget Language Design - Brainstorming Document
 
 ## Vision
 
-**Vyper** = Rust's memory safety + Python's indentation + C/Java's type declarations
+**Gorget** = Rust's memory safety + Python's indentation + C/Java's type declarations
 
 A systems-capable language that reads like pseudocode but compiles to safe, efficient machine code. The goal: make ownership and borrowing *feel natural* rather than fighting the programmer.
 
@@ -23,10 +23,10 @@ A systems-capable language that reads like pseudocode but compiles to safe, effi
 
 ### 2.1 Variables
 
-```vyper
+```gorget
 int x = 5              # mutable by default (C/Java-like)
 const int y = 10       # immutable (const, like C/C++/JS)
-auto name = "vyper"    # type inferred (mutable)
+auto name = "gorget"    # type inferred (mutable)
 const auto pi = 3.14   # type inferred (immutable)
 ```
 
@@ -46,7 +46,7 @@ char                             (Unicode scalar value, 4 bytes)
 
 C/Java-style: return type before name, typed parameters.
 
-```vyper
+```gorget
 int add(int a, int b):
     return a + b
 
@@ -61,14 +61,14 @@ int double(int x) = x * 2
 
 ### 2.4 Entry Point
 
-```vyper
+```gorget
 void main():
     print("Hello, World!")
 ```
 
 ### 2.5 Logical Operators (Python-style)
 
-```vyper
+```gorget
 if not ready:           # NOT (frees ! for move operator)
 if a and b:             # AND
 if a or b:              # OR
@@ -88,7 +88,7 @@ The heart of the language. Three modes of passing data, with visual "loudness" m
 | Mutable borrow | `String &s` | `f(&name)` | Read+write access, caller keeps ownership |
 | Move (ownership) | `String !s` | `f(!name)` | Full ownership transfer, caller loses access |
 
-```vyper
+```gorget
 # Immutable borrow (default - no symbol, safest)
 void print_len(String s):
     print(s.len())
@@ -104,7 +104,7 @@ void consume(String !s):
 ```
 
 At call sites, symbols mirror declarations:
-```vyper
+```gorget
 String name = "hello"
 print_len(name)          # immutable borrow - name still valid
 push_exclaim(&name)      # mutable borrow - name still valid (now "hello!")
@@ -115,14 +115,14 @@ consume(!name)           # moved - name is GONE after this
 ### 3.2 Ownership (Move Semantics)
 
 For non-Copy types (String, Vector, etc.), assignment with `!` moves:
-```vyper
+```gorget
 String s1 = "hello"
 String s2 = !s1          # explicit move, s1 is invalid
 # print(s1)              # COMPILE ERROR
 ```
 
 Primitive types (int, float, bool, char) are Copy - always copied automatically:
-```vyper
+```gorget
 int a = 5
 int b = a                # just copies, both valid (no ! needed)
 ```
@@ -141,7 +141,7 @@ Never both simultaneously. Enforced at compile time. This prevents data races an
 
 When explicit annotation is needed (e.g., trait methods without bodies), use the `live` keyword on parameters whose data the return value depends on:
 
-```vyper
+```gorget
 # Compiler infers: return borrows from both x and y (no annotation needed)
 str longer(str x, str y):
     if x.len() > y.len():
@@ -164,7 +164,7 @@ str process(live String &data):
 2. **`live` keyword** (~1% of code) - mark parameters whose data the return value depends on
 3. **Explicit lifetime variables** (almost never) - `[life a]` for truly exotic cases:
 
-```vyper
+```gorget
 # Tier 3: Explicit lifetime variables (rare — e.g., self-referential structures)
 struct Parser[life a]:
     str[a] input            # input has lifetime 'a'
@@ -180,7 +180,7 @@ struct Parser[life a]:
 
 ### 4.1 Structs
 
-```vyper
+```gorget
 struct Point:
     float x
     float y
@@ -198,7 +198,7 @@ const Person bob = Person("Bob", 25)  # immutable
 
 ### 4.2 Enums (Algebraic Data Types)
 
-```vyper
+```gorget
 enum Color:
     Red
     Green
@@ -216,9 +216,9 @@ enum Result[T, E]:
 
 ### 4.2.1 Option Sugar
 
-`Option[T]` is Vyper's null replacement. Rich sugar makes it ergonomic:
+`Option[T]` is Gorget's null replacement. Rich sugar makes it ergonomic:
 
-```vyper
+```gorget
 Option[String] name = Some("Alice")
 Option[int] age = None
 
@@ -256,7 +256,7 @@ String n = name.unwrap()                            # String (panics if None!)
 
 Square brackets `[]` for type parameters. `where...is` for trait bounds (readable English).
 
-```vyper
+```gorget
 # [] declares type variables, where constrains them
 T max[T](T a, T b) where T is Comparable:
     if a > b: a else: b
@@ -281,7 +281,7 @@ struct Pair[A, B]:
 
 ### 4.4 Traits (Interfaces)
 
-```vyper
+```gorget
 trait Displayable:
     String to_string(self)
 
@@ -311,8 +311,8 @@ trait Iterator[T]:
 
 ### 4.5 Self parameter modes
 
-```vyper
-implement Point:
+```gorget
+equip Point:
     float distance(self, Point other):        # immutable borrow (default)
         ...
     void translate(&self, float dx, float dy): # mutable borrow
@@ -326,28 +326,28 @@ implement Point:
 
 Method calls **auto-borrow** (no &/! at call sites for methods).
 
-### 4.6 Implementing Traits
+### 4.6 Equipping Traits
 
-```vyper
-implement Displayable for Point:
+```gorget
+equip Point with Displayable:
     String to_string(self):
         return "({self.x}, {self.y})"
 
 # Generic implementation with where...is
-implement Displayable for Vector[T] where T is Displayable:
+equip Vector[T] with Displayable where T is Displayable:
     String to_string(self):
         auto parts = [item.to_string() for item in self]
         return "[{parts.join(", ")}]"
 
 # Blanket implementation
-implement[T] Printable for T where T is Displayable:
+equip[T] T with Printable where T is Displayable:
     void print(self):
         println(self.to_string())
 ```
 
 ### 4.7 Trait Bounds with `where...is`
 
-```vyper
+```gorget
 # Single bound
 void print_all[T](Vector[T] items) where T is Displayable:
     for item in items:
@@ -366,7 +366,7 @@ void complex[T, U](T a, U b) where T is Displayable + Cloneable, U is Into[T]:
 
 When the concrete type isn't known at compile time, use `dynamic Trait` for vtable-based dispatch:
 
-```vyper
+```gorget
 # As a parameter — accepts any type implementing Shape
 void draw(dynamic Shape shape):
     shape.render()
@@ -393,7 +393,7 @@ Box[dynamic Shape] make_shape(str kind) throws ValueError:
 
 ### 4.9 Const Generics
 
-```vyper
+```gorget
 struct FixedArray[T, const int N]:
     T[N] data
 ```
@@ -401,7 +401,7 @@ struct FixedArray[T, const int N]:
 ### 4.10 V2 Feature: Structural Bounds (`has`)
 
 *Deferred to V2* - would allow ad-hoc polymorphism without defining a trait:
-```vyper
+```gorget
 # V2: int get_length[T](T item) where T has .length: int:
 ```
 
@@ -411,7 +411,7 @@ struct FixedArray[T, const int N]:
 
 ### 5.1 Conditionals
 
-```vyper
+```gorget
 if x > 0:
     print("positive")
 elif x < 0:
@@ -424,7 +424,7 @@ else:
 
 Exhaustive - compiler error if cases aren't covered. Uses `else` as catch-all (not `case _`).
 
-```vyper
+```gorget
 match color:
     case Red:
         print("red")
@@ -435,7 +435,7 @@ match color:
 ```
 
 **Guards:**
-```vyper
+```gorget
 match value:
     case x if x > 100:
         print("large")
@@ -446,7 +446,7 @@ match value:
 ```
 
 **Or-patterns:**
-```vyper
+```gorget
 match status_code:
     case 200 | 201 | 204:
         print("success")
@@ -457,7 +457,7 @@ match status_code:
 ```
 
 **Nested destructuring:**
-```vyper
+```gorget
 match response:
     case Ok(User(name, age)) if age >= 18:
         print("Adult: {name}")
@@ -471,7 +471,7 @@ match response:
 
 Single-expression arms use `:` with the value on the same line. Multi-line arms use `:` followed by an indented block:
 
-```vyper
+```gorget
 String label = match color:
     case Red: "red"
     case Green: "green"
@@ -483,7 +483,7 @@ String label = match color:
 
 Instead of Rust's `if let`, reads like English:
 
-```vyper
+```gorget
 if result is Ok(value):
     use(value)
 elif result is Error(e):
@@ -501,7 +501,7 @@ while iter.next() is Some(item):
 
 ### 5.5 If as Expression
 
-```vyper
+```gorget
 int abs_val = if x >= 0: x else: -x
 
 String msg = if user.is_admin():
@@ -512,7 +512,7 @@ else:
 
 ### 5.6 Loops
 
-```vyper
+```gorget
 # For loop (iterating - immutable borrow by default)
 for item in collection:
     process(item)                # collection still valid
@@ -541,7 +541,7 @@ loop:
 
 ### 5.7 for/else and while/else (Python-style)
 
-```vyper
+```gorget
 for item in collection:
     if item.matches():
         break
@@ -551,7 +551,7 @@ else:
 
 ### 5.8 Loop as Expression
 
-```vyper
+```gorget
 int result = loop:
     if compute() is Some(v):
         break v                  # break with a value
@@ -559,7 +559,7 @@ int result = loop:
 
 ### 5.9 Comprehensions (Python-style)
 
-```vyper
+```gorget
 Vector[int] squares = [x * x for x in 0..10]
 Vector[int] evens = [x for x in 0..100 if x % 2 == 0]
 HashMap[String, int] lengths = {s: s.len() for s in words}
@@ -570,20 +570,20 @@ HashSet[int] unique = {x * x for x in 1..=10}
 
 ## 6. Error Handling
 
-### 6.1 The `throws` + `catch` Model
+### 6.1 The `throws` + `try` Model
 
 Functions that can fail use `throws`. Errors auto-propagate without `?`:
 
-```vyper
+```gorget
 # Clean: no ?, no Result wrapping
 Data process(str path) throws AppError:
     String content = read_file(path)          # auto-propagates if error
     Config config = parse_config(content)     # auto-propagates if error
     return transform(config)
 
-# To handle an error locally, use catch:
+# To handle an error locally, use try:
 Data safe_process(str path) throws AppError:
-    auto result = catch read_file(path)       # captures Result instead of propagating
+    auto result = try read_file(path)       # captures Result instead of propagating
     match result:
         case Ok(content): return parse(content)
         case Error(e):
@@ -596,9 +596,9 @@ Record parse_line(str line) throws ParseError:
         throw ParseError("empty line")      # raises error, exits function
     return parse(line)
 
-# Non-throwing functions must catch:
+# Non-throwing functions must try:
 void main():
-    match catch process("data.txt"):
+    match try process("data.txt"):
         case Ok(data): print(data)
         case Error(e): print("Error: {e}")
 ```
@@ -606,7 +606,7 @@ void main():
 **Keywords summary:**
 - `throws` — annotates a function that can fail (on the signature)
 - `throw` — explicitly raises an error (inside a `throws` function)
-- `catch` — captures the result as `Result[T, E]` instead of auto-propagating
+- `try` — captures the result as `Result[T, E]` instead of auto-propagating
 
 Under the hood, `throws` desugars to `Result`. Both styles available:
 - **throws style**: clean, auto-propagation (most code)
@@ -614,20 +614,20 @@ Under the hood, `throws` desugars to `Result`. Both styles available:
 
 ### 6.2 Custom Error Types
 
-```vyper
+```gorget
 enum AppError:
     Io(IoError)
     Parse(ParseError)
     NotFound(String)
 
-implement Displayable for AppError:
+equip AppError with Displayable:
     String to_string(self):
         match self:
             case Io(e): "IO error: {e}"
             case Parse(e): "Parse error: {e}"
             case NotFound(path): "Not found: {path}"
 
-implement From[IoError] for AppError:
+equip AppError with From[IoError]:
     AppError from(IoError !e):
         return AppError.Io(!e)
 ```
@@ -641,15 +641,15 @@ Three layers, from cheap to detailed:
 | Source location | Always | ~zero | File + line where error was created |
 | Propagation trace | Debug builds | Moderate | Full chain of throws propagation |
 | `.context()` | Always | String alloc | Human-readable context messages |
-| `VYPER_BACKTRACE=1` | On demand | Heavy | Full native stack trace |
+| `GORGET_BACKTRACE=1` | On demand | Heavy | Full native stack trace |
 
-```vyper
+```gorget
 # Adding context:
-String content = catch read_file(path)
+String content = try read_file(path)
     .context("loading config from {path}")
 
 # Accessing trace:
-match catch process("data.txt"):
+match try process("data.txt"):
     case Error(e):
         print(e)           # error message
         print(e.trace())   # propagation trace (debug builds)
@@ -658,7 +658,7 @@ match catch process("data.txt"):
 
 ### 6.4 Panic (Unrecoverable)
 
-```vyper
+```gorget
 void critical_section():
     if not valid():
         panic("invariant violated")
@@ -672,7 +672,7 @@ void critical_section():
 
 Closures use parenthesized parameters with a colon, mirroring function definitions. For single-parameter closures, the implicit `it` keyword (Kotlin-inspired) eliminates boilerplate.
 
-```vyper
+```gorget
 # Implicit 'it' for single-parameter closures
 auto doubled = numbers.map(it * 2)
 auto names = users.filter(it.age >= 18).map(it.name)
@@ -712,7 +712,7 @@ auto lazy_init = ():
 
 Function types mirror declaration syntax — return type followed by parameter types in parentheses, with no name:
 
-```vyper
+```gorget
 # Function declaration:  int add(int a, int b)
 # Function type:         int(int, int)  — same shape, no names
 
@@ -755,7 +755,7 @@ The compiler infers the minimal capture mode automatically:
 
 Use `!` before the parameter list to force-move ALL captures:
 
-```vyper
+```gorget
 # Default: auto-infer (immutable borrow captures)
 String name = "Alice"
 auto greet = (): print("Hello {name}")
@@ -782,7 +782,7 @@ auto processor = !(data):
 
 *Deferred to V2.* Will allow fine-grained capture modes per variable using `(captures)(params)` syntax:
 
-```vyper
+```gorget
 # V2: Per-variable capture — captures first, params second
 # (!name, count)(x): x + count + name.len()
 # !name = move, count = borrow, x = parameter
@@ -795,7 +795,7 @@ auto processor = !(data):
 - `it` is always an immutable borrow (use explicit params for `&` or `!`)
 - Nested closures: `it` refers to the innermost closure's parameter
 
-```vyper
+```gorget
 # 'it' is the single parameter
 auto result = numbers.filter(it > 0).map(it * 2)
 
@@ -813,38 +813,38 @@ auto nested = matrix.map(it.map(it * 2))
 
 ### 8.1 Module System
 
-File = module (like Rust). Directory with `mod.vy` = package.
+File = module (like Rust). Directory with `mod.gg` = package.
 
 ```
 project/
   src/
-    main.vy
+    main.gg
     math/
-      mod.vy              # package root — controls what's exported
-      geometry.vy
-      algebra.vy
-    utils.vy
+      mod.gg              # package root — controls what's exported
+      geometry.gg
+      algebra.gg
+    utils.gg
 ```
 
-### 8.2 Package Root (`mod.vy`)
+### 8.2 Package Root (`mod.gg`)
 
-A `mod.vy` file defines the public API of a directory-based package. It explicitly re-exports items from its child modules:
+A `mod.gg` file defines the public API of a directory-based package. It explicitly re-exports items from its child modules:
 
-```vyper
-# math/mod.vy — the public API of the math package
+```gorget
+# math/mod.gg — the public API of the math package
 from math.geometry import Point, Circle       # re-export selectively
 from math.algebra import Matrix               # re-export selectively
-# internal.vy items are NOT re-exported — they stay private
+# internal.gg items are NOT re-exported — they stay private
 ```
 
 Consumers then import from the package:
-```vyper
+```gorget
 from math import Point, Circle, Matrix        # clean, flat imports
 ```
 
 ### 8.3 Imports
 
-```vyper
+```gorget
 import std.io                                 # import entire module
 import std.collections.HashMap                # import specific type
 from std.fmt import Displayable, format       # from...import
@@ -856,7 +856,7 @@ import std.sync.{Arc, Mutex, RwLock}          # multiple items with {}
 
 Two levels: `public` (visible everywhere) and private (default, visible only within the module).
 
-```vyper
+```gorget
 public struct Point:
     public float x                # public field
     public float y
@@ -869,7 +869,7 @@ int helper(int x):               # private (default, no keyword)
     return x + 1
 ```
 
-Items in a package are visible to sibling modules within the same package, but not outside it unless re-exported through `mod.vy`.
+Items in a package are visible to sibling modules within the same package, but not outside it unless re-exported through `mod.gg`.
 
 ---
 
@@ -877,7 +877,7 @@ Items in a package are visible to sibling modules within the same package, but n
 
 ### 9.1 Allocation
 
-```vyper
+```gorget
 # Stack allocation (default — fastest, no heap overhead)
 Point p = Point(1.0, 2.0)
 
@@ -887,7 +887,7 @@ Box[Point] heap_point = Box.new(Point(1.0, 2.0))
 
 ### 9.2 Shared Ownership
 
-```vyper
+```gorget
 # Reference-counted (single-threaded)
 Rc[String] shared = Rc.new("shared data")
 Rc[String] clone = shared.clone()     # increments ref count
@@ -905,7 +905,7 @@ Arc[Mutex[int]] counter = Arc.new(Mutex.new(0))
 
 When you need to mutate data behind an immutable reference:
 
-```vyper
+```gorget
 # Cell — for Copy types (single-threaded)
 Cell[int] counter = Cell.new(0)
 counter.set(counter.get() + 1)
@@ -924,7 +924,7 @@ guard.push(42)
 ### 9.4 Deref Coercion
 
 Smart pointers automatically dereference to their inner type:
-```vyper
+```gorget
 Box[String] boxed = Box.new(String.from("hello"))
 print(boxed.len())       # Box[String] auto-derefs to String, calls String.len()
 ```
@@ -933,7 +933,7 @@ print(boxed.len())       # Box[String] auto-derefs to String, calls String.len()
 
 ## 10. Concurrency
 
-```vyper
+```gorget
 import std.thread
 import std.sync.{Arc, Mutex}
 
@@ -959,7 +959,7 @@ void main():
 
 Python-style `await` as a prefix keyword (not postfix like Rust). Composes naturally with `throws`.
 
-```vyper
+```gorget
 # async + throws compose naturally
 async String fetch(str url) throws HttpError:
     Response resp = await http.get(url)        # await is a prefix keyword
@@ -990,9 +990,9 @@ async void fetch_all():
 auto fetcher = async (str url):
     return await http.get(url)
 
-# async with error handling (throws + catch)
+# async with error handling (throws + try)
 async void resilient_fetch(str url):
-    match catch await fetch(url):
+    match try await fetch(url):
         case Ok(data): print(data)
         case Error(e): print("Failed: {e}")
 ```
@@ -1001,11 +1001,11 @@ async void resilient_fetch(str url):
 
 ## 11. Unsafe Code
 
-Vyper is safe by default. The `unsafe` keyword opts into operations the compiler can't verify:
+Gorget is safe by default. The `unsafe` keyword opts into operations the compiler can't verify:
 
 ### 11.1 Unsafe Blocks
 
-```vyper
+```gorget
 unsafe:
     int &ptr = raw_pointer as int&
     *ptr = 42
@@ -1020,7 +1020,7 @@ unsafe:
 
 ### 11.3 Raw Pointers
 
-```vyper
+```gorget
 # Raw pointer types
 RawPtr[int] ptr = ...           # mutable raw pointer
 ConstRawPtr[int] cptr = ...     # immutable raw pointer
@@ -1032,7 +1032,7 @@ unsafe:
 
 ### 11.4 FFI (Foreign Function Interface)
 
-```vyper
+```gorget
 # Declare external C functions
 extern "C":
     int printf(str format, ...)
@@ -1052,7 +1052,7 @@ int abs_value(int x):
 
 ### 11.5 Unsafe Functions
 
-```vyper
+```gorget
 # Entire function is unsafe — caller must use unsafe block
 unsafe void dangerous_operation(RawPtr[int] ptr):
     *ptr = 0
@@ -1064,7 +1064,7 @@ unsafe void dangerous_operation(RawPtr[int] ptr):
 
 Built-in, no prefix needed (any type implementing Displayable auto-formats):
 
-```vyper
+```gorget
 String name = "world"
 int count = 42
 print("Hello, {name}! Count is {count}")
@@ -1076,7 +1076,7 @@ print("Escaped brace: {{literal}}")         # double-brace to escape
 
 ## 13. Comments & Documentation
 
-```vyper
+```gorget
 # Single-line comment
 
 #/ Documentation comment for the item below.
@@ -1095,7 +1095,7 @@ public int add(int a, int b):
 
 ## 14. Complete Example Program
 
-```vyper
+```gorget
 #/ A simple linked list implementation demonstrating
 #/ ownership, generics, traits, and pattern matching.
 
@@ -1105,7 +1105,7 @@ public enum List[T]:
     Cons(T, Box[List[T]])
     Nil
 
-implement[T] List[T] where T is Displayable:
+equip[T] List[T] where T is Displayable:
     #/ Creates an empty list.
     public static List[T] new():
         return List.Nil
@@ -1120,7 +1120,7 @@ implement[T] List[T] where T is Displayable:
             case Cons(_, tail): 1 + tail.len()
             case Nil: 0
 
-implement[T] Displayable for List[T] where T is Displayable:
+equip[T] List[T] with Displayable where T is Displayable:
     String to_string(self):
         match self:
             case Cons(head, tail):
@@ -1151,13 +1151,13 @@ void main():
 | 3 | **Expression-oriented blocks?** | Both — `return` for explicit early returns, last expression as implicit return value |
 | 4 | **Inheritance?** | None — composition via traits only |
 | 5 | **Macro system?** | None for V1; add hygienic macros in V2+ |
-| 6 | **File extension** | `.vy` |
-| 7 | **Indentation** | 4 spaces (enforced by `vyper fmt`) |
+| 6 | **File extension** | `.gg` |
+| 7 | **Indentation** | 4 spaces (enforced by `gg fmt`) |
 | 8 | **Compilation target** | LLVM (Cranelift for debug builds in future) |
-| 9 | **Package manager name** | `venom` |
+| 9 | **Package manager name** | `forge` |
 | 10 | **Option handling** | `Option[T]` with rich sugar: `is` pattern matching, `?.` optional chaining, `??` nil coalescing, `.unwrap()`, `.unwrap_or()`, `?` early return |
 | 11 | **Tuple syntax** | `(int, str)` — concise, universal |
-| 12 | **Array syntax** | C-style: `int[5]` fixed array, `Vector[int]` growable, `ref int[]` slice |
+| 12 | **Array syntax** | C-style: `int[5]` fixed array, `Vector[int]` growable, `int[]` slice |
 | 13 | **Operator overloading** | Via traits (like Rust) |
 | 14 | **Type aliases** | `type Name = String` |
 | 15 | **Mutability** | Mutable by default, `const` for immutable. No `mut` keyword. |
@@ -1166,9 +1166,9 @@ void main():
 
 ---
 
-## 16. How Vyper Compares
+## 16. How Gorget Compares
 
-| Feature | Vyper | Rust | Python | C/Java |
+| Feature | Gorget | Rust | Python | C/Java |
 |---------|-------|------|--------|--------|
 | Memory safety | Ownership | Ownership | GC | Manual/GC |
 | Block syntax | Indentation | `{}` | Indentation | `{}` |
@@ -1178,7 +1178,7 @@ void main():
 | Borrowing | bare / `&` / `!` | `&` / `&mut` / move | N/A | Implicit |
 | Generics | `[T]` | `<T>` | `[T]` | `<T>` |
 | Mutability | Mutable default + `const` | `let` default + `mut` | Default mutable | `final`/`const` |
-| Error handling | `throws` + `catch` | `Result` + `?` | Exceptions | Exceptions |
+| Error handling | `throws` + `try` | `Result` + `?` | Exceptions | Exceptions |
 | Closures | `(params):` + `it` | `\|params\|` | `lambda` | `->` (Java) |
 | Inheritance | Traits only | Traits only | Classes | Classes |
 
@@ -1190,7 +1190,7 @@ void main():
 
 ### 17.1 Variable Destructuring
 
-```vyper
+```gorget
 # Tuple destructuring
 auto (x, y) = get_coordinates()
 (int, String) pair = (42, "hello")
@@ -1209,7 +1209,7 @@ auto (Point(x1, y1), Point(x2, y2)) = get_line_segment()
 
 ### 17.2 Pattern Matching with Guards
 
-```vyper
+```gorget
 match value:
     case x if x > 100:
         print("large")
@@ -1223,9 +1223,9 @@ match value:
 
 ### 17.3 The `is` Keyword - Pattern Matching in Conditions
 
-Instead of Rust's `if let`, Vyper uses the more Pythonic `is`:
+Instead of Rust's `if let`, Gorget uses the more Pythonic `is`:
 
-```vyper
+```gorget
 # Single pattern
 if result is Ok(value):
     use(value)
@@ -1245,11 +1245,11 @@ if result is not Ok(_):
     panic("expected success")
 ```
 
-**Why `is` instead of `if let`**: Python developers already think of `is` as a check. Vyper repurposes it for structural pattern matching. It reads naturally: "if result *is* an Ok containing a value."
+**Why `is` instead of `if let`**: Python developers already think of `is` as a check. Gorget repurposes it for structural pattern matching. It reads naturally: "if result *is* an Ok containing a value."
 
 ### 17.4 Nested Match
 
-```vyper
+```gorget
 match (command, arg):
     case ("get", key):
         return store.get(key)
@@ -1263,7 +1263,7 @@ match (command, arg):
 
 ### 17.5 Or-patterns
 
-```vyper
+```gorget
 match status_code:
     case 200 | 201 | 204:
         print("success")
@@ -1283,7 +1283,7 @@ match status_code:
 
 ### 18.1 List Comprehensions
 
-```vyper
+```gorget
 Vector[int] squares = [x * x for x in 0..10]
 Vector[int] evens = [x for x in 0..100 if x % 2 == 0]
 Vector[String] names = [p.name for p in people if p.age >= 18]
@@ -1291,14 +1291,14 @@ Vector[String] names = [p.name for p in people if p.age >= 18]
 
 ### 18.2 Dict Comprehensions
 
-```vyper
+```gorget
 HashMap[String, int] lengths = {s: s.len() for s in words}
 HashMap[int, Vector[String]] grouped = {k: v for k, v in groups.entries()}
 ```
 
 ### 18.3 Set Comprehensions
 
-```vyper
+```gorget
 HashSet[int] unique_squares = {x * x for x in range}
 ```
 
@@ -1306,7 +1306,7 @@ HashSet[int] unique_squares = {x * x for x in range}
 
 Comprehensions produce **owned** collections. The iterator yields owned or cloned values:
 
-```vyper
+```gorget
 # Default: immutable borrow (people still valid after)
 Vector[str] names = [p.name for p in people]
 
@@ -1323,7 +1323,7 @@ This is where Rust's ownership model intersects Python's ergonomics. The compreh
 
 ## 19. Named Arguments & Default Parameters
 
-```vyper
+```gorget
 void create_user(String name, int age, bool admin = false, String role = "user"):
     ...
 
@@ -1346,7 +1346,7 @@ create_user(name = "Dave", age = 35, admin = true)
 
 Python-style `@` decorator syntax for compiler attributes:
 
-```vyper
+```gorget
 @derive(Debuggable, Cloneable, Equatable)
 struct Point:
     float x
@@ -1386,8 +1386,8 @@ void old_api():
 
 ### 21.1 Associated Types
 
-```vyper
-# Iterable: implement this to make your type work with for-loops
+```gorget
+# Iterable: equip your type with this to make it work with for-loops
 trait Iterable:
     type Item
     Iterator[Self.Item] iter(self)
@@ -1404,7 +1404,7 @@ trait Iterator[T]:
         return result
 
 # Making a custom type iterable
-implement Iterable for Counter:
+equip Counter with Iterable:
     type Item = int
     Iterator[int] iter(self):
         return CounterIterator(self.start, self.max)
@@ -1413,7 +1413,7 @@ struct CounterIterator:
     int current
     int max
 
-implement Iterator[int] for CounterIterator:
+equip CounterIterator with Iterator[int]:
     Option[int] next(&self):
         if self.current < self.max:
             self.current += 1
@@ -1423,17 +1423,17 @@ implement Iterator[int] for CounterIterator:
 
 ### 21.2 Const Generics
 
-```vyper
+```gorget
 struct FixedArray[T, const int N]:
     T[N] data
 
-implement[T, const int N] FixedArray[T, N]:
+equip[T, const int N] FixedArray[T, N]:
     static FixedArray[T, N] zeroed() where T is Default:
         return FixedArray([T.default(); N])
 
-    ref T get(self, int index):
+    T get(self, int index):
         assert(index < N, "index out of bounds")
-        return ref self.data[index]
+        return self.data[index]
 
 # Usage
 FixedArray[float, 3] vec3 = FixedArray([1.0, 2.0, 3.0])
@@ -1444,7 +1444,7 @@ FixedArray[int, 256] buffer = FixedArray[int, 256].zeroed()
 
 ## 22. Operator Overloading via Traits
 
-```vyper
+```gorget
 # Standard library defines:
 trait Add[Rhs = self]:
     type Output
@@ -1460,29 +1460,29 @@ trait Mul[Rhs = self]:
 
 trait Index[Idx]:
     type Output
-    ref Self.Output index(self, Idx idx)
+    Self.Output index(self, Idx idx)
 
-# User implements:
-implement Add for Point:
+# User equips:
+equip Point with Add:
     type Output = Point
     Point add(self, Point rhs):
         return Point(self.x + rhs.x, self.y + rhs.y)
 
-implement Index[int] for Matrix:
+equip Matrix with Index[int]:
     type Output = Vector[float]
-    ref Vector[float] index(self, int row):
-        return ref self.data[row]
+    Vector[float] index(self, int row):
+        return self.data[row]
 
 # Now operators work:
 Point c = a + b              # calls a.add(b)
-ref Vector[float] row = matrix[0]   # calls matrix.index(0)
+Vector[float] row = matrix[0]   # calls matrix.index(0)
 ```
 
 ---
 
 ## 23. String Types in Depth
 
-```vyper
+```gorget
 # str  - immutable string slice (borrowed, like Rust's &str)
 # String - owned, heap-allocated, growable (like Rust's String)
 
@@ -1508,7 +1508,7 @@ str query = """
 """
 
 # Byte strings
-ref [uint8] bytes = b"hello"
+[uint8] bytes = b"hello"
 
 # Character literals
 char letter = 'A'
@@ -1527,7 +1527,7 @@ String padded = "Value: {x:>10}"                     # right-align, width 10
 
 C-style array syntax: `Type[Size]` for fixed arrays, `Vector[T]` for growable.
 
-```vyper
+```gorget
 # Fixed-size array (C-style: type[size])
 int[5] arr = [1, 2, 3, 4, 5]
 
@@ -1535,7 +1535,7 @@ int[5] arr = [1, 2, 3, 4, 5]
 auto arr = [1, 2, 3, 4, 5]           # inferred as int[5]
 
 # Slice: a borrowed view into contiguous memory
-ref int[] slice = ref arr[1..4]       # [2, 3, 4]
+int[] slice = arr[1..4]       # [2, 3, 4]
 
 # Vector: owned, heap-allocated, growable
 Vector[int] vec = Vector.new()
@@ -1546,9 +1546,9 @@ vec.push(2)
 Vector[int] nums = [1, 2, 3, 4, 5]   # literal syntax, type annotation clarifies
 
 # Slicing operations
-ref int[] first_three = ref arr[..3]
-ref int[] last_two = ref arr[3..]
-ref int[] middle = ref arr[1..4]
+int[] first_three = arr[..3]
+int[] last_two = arr[3..]
+int[] middle = arr[1..4]
 
 # Array methods
 int length = arr.len()
@@ -1563,7 +1563,7 @@ bool has_3 = arr.contains(3)
 
 Python-style `with` for explicit resource scoping:
 
-```vyper
+```gorget
 # In a throws function, errors auto-propagate:
 void read_data(str path) throws IoError:
     with File.open(path) as file:
@@ -1587,7 +1587,7 @@ This is syntactic sugar - it just creates a scope. Ownership + Drop handles the 
 
 ## 26. Method Chaining & Fluent APIs
 
-```vyper
+```gorget
 # Leading-dot continuation for multi-line chains
 auto result = items
     .iter()
@@ -1611,7 +1611,7 @@ auto config = ConfigBuilder.new()
 
 For when you need a block that evaluates to a value:
 
-```vyper
+```gorget
 int result = do:
     int a = compute_a()
     int b = compute_b()
@@ -1631,7 +1631,7 @@ Config config = do:
 
 ## 28. Compile-Time Evaluation
 
-```vyper
+```gorget
 const int MAX_SIZE = 1024
 const float PI = 3.14159265358979
 const float TAU = 2.0 * PI
@@ -1653,7 +1653,7 @@ static Regex EMAIL_RE = Regex.compile(r"^[\w.]+@[\w.]+$")
 
 ## 29. Testing (Built-in, First-Class)
 
-```vyper
+```gorget
 # Unit tests live alongside the code (like Rust)
 @test
 void test_add():
@@ -1695,14 +1695,14 @@ void bench_sort(Bencher &b):
 
 ```bash
 # Run tests
-vyper test
-venom test
+gg test
+forge test
 
 # Run specific test
-vyper test test_add
+gg test test_add
 
 # Run benchmarks
-vyper bench
+gg bench
 ```
 
 ---
@@ -1711,7 +1711,7 @@ vyper bench
 
 ### 30.1 Long Function Signatures
 
-```vyper
+```gorget
 # Continuation with hanging indent
 Vector[ProcessedItem] process_all[T](Vector[T] items, Config config,
         Logger &logger) throws ProcessError
@@ -1724,7 +1724,7 @@ Vector[ProcessedItem] process_all[T](Vector[T] items, Config config,
 
 ### 30.2 Long Conditions
 
-```vyper
+```gorget
 if (user.is_authenticated()
         and user.has_permission("admin")
         and not user.is_banned()):
@@ -1733,7 +1733,7 @@ if (user.is_authenticated()
 
 ### 30.3 Nested Closures
 
-```vyper
+```gorget
 auto processor = (Vector[int] data):
     auto transform = (int x):
         return x * 2 + 1
@@ -1742,7 +1742,7 @@ auto processor = (Vector[int] data):
 
 ### 30.4 Multiline Collection Literals
 
-```vyper
+```gorget
 Vector[Point] points = [
     Point(0.0, 0.0),
     Point(1.0, 0.0),
@@ -1753,7 +1753,7 @@ Vector[Point] points = [
 
 ### 30.5 Where Clauses
 
-```vyper
+```gorget
 void complex_fn[T, U, V](T a, U b, V c)
         where T is Displayable + Cloneable,
               U is Into[T] + Debuggable,
@@ -1765,7 +1765,7 @@ void complex_fn[T, U, V](T a, U b, V c)
 
 ## 31. Type Aliases & Newtype Pattern
 
-```vyper
+```gorget
 # Simple alias
 type Callback = int(int, int)
 type StringMap[V] = HashMap[String, V]
@@ -1782,7 +1782,7 @@ Seconds time = Seconds(9.58)
 # float speed = distance + time    # COMPILE ERROR: can't add Meters + Seconds
 
 # Implement conversions explicitly
-implement Meters:
+equip Meters:
     float value(self):
         return self.0             # .0 accesses the first (only) field by position
 
@@ -1796,7 +1796,7 @@ Tuple fields are accessed by numeric index: `.0`, `.1`, `.2`, etc. This applies 
 
 ## 32. Ranges as First-Class Types
 
-```vyper
+```gorget
 Range[int] r1 = 0..10          # exclusive: 0,1,2,...,9
 RangeInclusive[int] r2 = 0..=10  # inclusive: 0,1,2,...,10
 RangeFrom[int] r3 = 5..        # unbounded end
@@ -1813,7 +1813,7 @@ bool in_range = value in 1..=100
 
 ## 33. Conditional Compilation & Platform Abstractions
 
-```vyper
+```gorget
 @cfg(target_os = "linux")
 void platform_init():
     # Linux-specific setup
@@ -1833,9 +1833,9 @@ void debug_log(str msg):
 
 ---
 
-## 34. Build System (`venom`) in Detail
+## 34. Build System (`forge`) in Detail
 
-### venom.toml (Best of Cargo + npm + pyproject.toml)
+### forge.toml (Best of Cargo + npm + pyproject.toml)
 ```toml
 [package]
 name = "my_project"
@@ -1843,13 +1843,13 @@ version = "0.1.0"
 authors = ["Nuno Antunes <nuno@example.com>"]
 edition = "2026"
 license = "MIT"
-vyper = ">=1.0"              # minimum compiler version
+gorget = ">=1.0"              # minimum compiler version
 
 # Custom tasks (inspired by npm scripts)
 [scripts]
-dev = "venom run --watch"
-deploy = "venom build --release && ./deploy.sh"
-lint = "venom check && venom fmt --check"
+dev = "forge run --watch"
+deploy = "forge build --release && ./deploy.sh"
+lint = "forge check && forge fmt --check"
 
 # Dependencies with explicit semver prefixes
 [dependencies]
@@ -1895,40 +1895,40 @@ warn = ["missing-docs"]
 ### Project Layout
 ```
 my_project/
-  venom.toml               # manifest
-  venom.lock               # lockfile (auto-generated, committed to git)
+  forge.toml               # manifest
+  forge.lock               # lockfile (auto-generated, committed to git)
   src/
-    main.vy                # binary entry point
-    lib.vy                 # library root
-    utils.vy
+    main.gg                # binary entry point
+    lib.gg                 # library root
+    utils.gg
     models/
-      mod.vy               # package root (public API)
-      user.vy
-      post.vy
+      mod.gg               # package root (public API)
+      user.gg
+      post.gg
   tests/
-    test_models.vy
+    test_models.gg
   benches/
-    bench_sort.vy
+    bench_sort.gg
   examples/
-    hello.vy
+    hello.gg
 ```
 
 ### CLI Commands
 ```bash
-venom new my_project       # create project from template
-venom build                # compile
-venom run                  # compile and run
-venom run dev              # run a custom script
-venom test                 # run tests
-venom bench                # run benchmarks
-venom check                # type-check only (fast)
-venom fmt                  # format code
-venom lint                 # run linter
-venom doc                  # generate documentation
-venom push                 # publish to venomhub registry
-venom add http             # add dependency to venom.toml
-venom update               # update lockfile
-venom audit                # scan for vulnerabilities
+forge new my_project       # create project from template
+forge build                # compile
+forge run                  # compile and run
+forge run dev              # run a custom script
+forge test                 # run tests
+forge bench                # run benchmarks
+forge check                # type-check only (fast)
+forge fmt                  # format code
+forge lint                 # run linter
+forge doc                  # generate documentation
+forge push                 # publish to foundry registry
+forge add http             # add dependency to forge.toml
+forge update               # update lockfile
+forge audit                # scan for vulnerabilities
 ```
 
 ---
@@ -1939,7 +1939,7 @@ Errors should be **helpful, specific, and suggest fixes**. Like Rust but even fr
 
 ```
 error[E0382]: use of moved value `name`
- --> src/main.vy:5:12
+ --> src/main.gg:5:12
   |
 3 |     String name = "hello"
   |            ---- `name` has type `String` (non-Copy)
@@ -1954,7 +1954,7 @@ help: consider cloning the value if you need both variables
   |                        ++++++++
 
 error[E0502]: cannot borrow `list` as mutable because it is also borrowed as immutable
- --> src/main.vy:8:5
+ --> src/main.gg:8:5
   |
 6 |     int first = list[0]
   |                 ------- immutable borrow occurs here
@@ -1973,12 +1973,12 @@ help: consider using the value before mutating the collection
 
 ### 36.1 HTTP Server
 
-```vyper
+```gorget
 import std.net.{TcpListener, TcpStream}
 import http.{Request, Response, Router}
 
 Response handle_index(Request req) throws HttpError:
-    return Response.ok("Welcome to Vyper!")
+    return Response.ok("Welcome to Gorget!")
 
 Response handle_user(Request req, int id) throws HttpError:
     auto user = db.find_user(id)
@@ -2003,12 +2003,12 @@ void main():
 
 ### 36.2 Generic Binary Tree with Ownership
 
-```vyper
+```gorget
 public enum Tree[T]:
     Node(T, Box[Tree[T]], Box[Tree[T]])
     Leaf
 
-implement[T] Tree[T] where T is Comparable + Displayable:
+equip[T] Tree[T] where T is Comparable + Displayable:
     public static Tree[T] new():
         return Tree.Leaf
 
@@ -2061,7 +2061,7 @@ void main():
 
 ### 36.3 File Processor with Error Handling
 
-```vyper
+```gorget
 import std.fs
 import std.path.Path
 from std.io import BufReader, BufRead
@@ -2071,7 +2071,7 @@ enum ProcessError:
     Parse(String)
     InvalidFormat(String)
 
-implement From[IoError] for ProcessError:
+equip ProcessError with From[IoError]:
     ProcessError from(IoError e):
         return ProcessError.Io(e)
 
@@ -2085,7 +2085,7 @@ Record parse_line(str line) throws ProcessError:
     if parts.len() != 2:
         throw ProcessError.InvalidFormat("expected 2 fields, got {parts.len()}")
     String name = parts[0].trim().to_string()
-    int value = catch parts[1].trim().parse[int]()
+    int value = try parts[1].trim().parse[int]()
         .map_err((e): ProcessError.Parse("invalid number: {e}"))
     return Record(name, value)
 
@@ -2104,7 +2104,7 @@ Vector[Record] process_file(Path path) throws ProcessError:
     return records
 
 void main():
-    match catch process_file(Path.new("data.csv")):
+    match try process_file(Path.new("data.csv")):
         case Ok(records):
             print("Processed {records.len()} records")
             int total = records.iter().map(it.value).sum()
@@ -2115,7 +2115,7 @@ void main():
 
 ### 36.4 Trait Objects and Dynamic Dispatch
 
-```vyper
+```gorget
 trait Animal:
     str name(self)
     str speak(self)
@@ -2130,14 +2130,14 @@ struct Cat:
     String name
     bool indoor
 
-implement Animal for Dog:
+equip Dog with Animal:
     str name(self):
         return self.name
 
     str speak(self):
         return "woof!"
 
-implement Animal for Cat:
+equip Cat with Animal:
     str name(self):
         return self.name
 
@@ -2173,7 +2173,7 @@ A simplified grammar showing the core structure:
 ```ebnf
 program        = { top_level_item } ;
 top_level_item = function_def | struct_def | enum_def | trait_def
-               | impl_block | import_stmt | type_alias | newtype_def ;
+               | equip_block | import_stmt | type_alias | newtype_def ;
 
 (* Indentation produces INDENT/DEDENT tokens in the lexer, like Python *)
 block          = COLON NEWLINE INDENT { statement } DEDENT ;
@@ -2202,15 +2202,14 @@ trait_def      = { attribute } [ "public" ] "trait" IDENT [ generic_params ]
                  COLON NEWLINE INDENT { trait_item } DEDENT ;
 trait_item     = function_def | "type" IDENT [ COLON trait_bound_list ] NEWLINE ;
 
-(* Impl blocks *)
-impl_block     = "implement" [ generic_params ] [ type "for" ] type
+(* Equip blocks *)
+equip_block    = "equip" [ generic_params ] type [ "with" type ]
                  COLON NEWLINE INDENT { function_def } DEDENT ;
 
 (* Types *)
 type           = primitive_type | IDENT [ generic_args ]
-               | "ref" type                   (* borrowed reference *)
                | type "[" expr "]"           (* fixed array: int[5] *)
-               | "ref" type "[" "]"          (* slice: ref int[] *)
+               | type "[" "]"               (* slice: int[] *)
                | "(" type_list ")"           (* tuple *)
                | "dynamic" IDENT
                | type "(" [ type_list ] ")"  (* function type: int(int, int) *) ;
@@ -2277,15 +2276,15 @@ attribute      = "@" IDENT [ "(" attr_args ")" ] NEWLINE ;
 
 ---
 
-## 39. What Makes Vyper Worth Building?
+## 39. What Makes Gorget Worth Building?
 
-1. **The "Readable Rust" gap is real**: Many developers want Rust's safety but find the syntax hostile. Vyper's indentation + bare/`&`/`!` borrowing + C-style types could genuinely lower the barrier.
+1. **The "Readable Rust" gap is real**: Many developers want Rust's safety but find the syntax hostile. Gorget's indentation + bare/`&`/`!` borrowing + C-style types could genuinely lower the barrier.
 
 2. **Python developers are the largest audience**: If you can give them memory safety without a GC while keeping the visual style they love, that's a huge unlock.
 
 3. **C/Java type declarations are universal**: `int x = 5` is the most widely-understood variable declaration in programming. Rust's `let x: i32 = 5` is alien by comparison.
 
-4. **Zero-cost abstractions without the ceremony**: Rust's `impl<T: Display + Clone> Foo<T> for Bar<'a, T> where T: Send + Sync` becomes `implement[T] Foo[T] for Bar[T] where T is Displayable + Cloneable + Sendable + Syncable:` — significantly less visual noise.
+4. **Zero-cost abstractions without the ceremony**: Rust's `impl<T: Display + Clone> Foo<T> for Bar<'a, T> where T: Send + Sync` becomes `equip[T] Bar[T] with Foo[T] where T is Displayable + Cloneable + Sendable + Syncable:` — significantly less visual noise.
 
 ---
 
@@ -2293,7 +2292,7 @@ attribute      = "@" IDENT [ "(" attr_args ")" ] NEWLINE ;
 
 ### 40.1 Philosophy
 
-Vyper ships with a rich standard library — everything you need for common tasks without external dependencies. Like Python and Go, not like Rust.
+Gorget ships with a rich standard library — everything you need for common tasks without external dependencies. Like Python and Go, not like Rust.
 
 ### 40.2 Module Map
 
@@ -2442,7 +2441,7 @@ std/
 
 ### 40.3 Core Traits (auto-imported, always available)
 
-```vyper
+```gorget
 # These are always available without import:
 trait Displayable       # .to_string() — human-readable representation
 trait Debuggable        # .debug() — development/debug representation
@@ -2461,7 +2460,7 @@ trait Deserializable    # .from_json(), .from_bytes() — deserialization
 
 The async runtime is part of the language — no external dependency needed.
 
-```vyper
+```gorget
 import std.async
 
 # Spawning tasks
@@ -2500,7 +2499,7 @@ async void with_timeout():
 
 ### 40.5 HTTP (Built-in)
 
-```vyper
+```gorget
 import std.http
 
 # HTTP client — simple
@@ -2520,7 +2519,7 @@ void main():
     auto server = http.Server.new()
 
     server.get("/", (Request req):
-        Response.ok("Hello, Vyper!")
+        Response.ok("Hello, Gorget!")
     )
 
     server.get("/users/{id}", (Request req):
@@ -2536,7 +2535,7 @@ void main():
 
 ### 40.6 JSON (Built-in)
 
-```vyper
+```gorget
 import std.json
 
 # Serialize — any type with @derive(Serializable)
@@ -2587,11 +2586,11 @@ auto items = data["items"].as_array()
    - Regex, crypto, logging, encoding, random
 
 6. **Phase 6 - Tooling**
-   - `venom` package manager
-   - `vyper fmt` formatter
+   - `forge` package manager
+   - `gg fmt` formatter
    - LSP server for editor support
-   - `vyper doc` documentation generator
+   - `gg doc` documentation generator
 
 7. **Phase 7 - Ecosystem**
-   - Package registry (venomhub?)
+   - Package registry (foundry?)
    - Community, tutorials, books

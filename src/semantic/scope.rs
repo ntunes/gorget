@@ -44,7 +44,7 @@ pub enum ScopeKind {
     Module,
     Function,
     Block,
-    ImplBlock { self_type: Option<TypeId> },
+    EquipBlock { self_type: Option<TypeId> },
     TraitDef,
     ForLoop,
 }

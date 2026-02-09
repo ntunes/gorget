@@ -26,9 +26,6 @@ pub enum ResolvedType {
     /// Slice: ref int[]
     Slice(TypeId),
 
-    /// Reference
-    Ref(TypeId),
-
     /// Function type: int(int, int)
     Function {
         params: Vec<TypeId>,
@@ -159,8 +156,7 @@ impl TypeTable {
             ResolvedType::Array(elem, size) => {
                 format!("{}[{size}]", self.display(*elem))
             }
-            ResolvedType::Slice(elem) => format!("ref {}[]", self.display(*elem)),
-            ResolvedType::Ref(inner) => format!("ref {}", self.display(*inner)),
+            ResolvedType::Slice(elem) => format!("{}[]", self.display(*elem)),
             ResolvedType::Function {
                 params,
                 return_type,
@@ -246,11 +242,6 @@ pub fn ast_type_to_resolved(
         ast::Type::Slice { element } => {
             let elem_id = ast_type_to_resolved(&element.node, element.span, scopes, types)?;
             Ok(types.insert(ResolvedType::Slice(elem_id)))
-        }
-
-        ast::Type::Ref { inner } => {
-            let inner_id = ast_type_to_resolved(&inner.node, inner.span, scopes, types)?;
-            Ok(types.insert(ResolvedType::Ref(inner_id)))
         }
 
         ast::Type::Tuple(elements) => {

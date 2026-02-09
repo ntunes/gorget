@@ -28,9 +28,9 @@ pub struct TraitInfo {
     pub extends: Vec<DefId>,
 }
 
-/// Information about an impl block.
+/// Information about an equip block.
 #[derive(Debug, Clone)]
-pub struct ImplInfo {
+pub struct EquipInfo {
     pub self_type: TypeId,
     pub self_type_name: String,
     pub trait_: Option<DefId>,
@@ -42,7 +42,7 @@ pub struct ImplInfo {
 /// Registry of all traits and implementations.
 pub struct TraitRegistry {
     pub traits: FxHashMap<DefId, TraitInfo>,
-    pub impls: Vec<ImplInfo>,
+    pub impls: Vec<EquipInfo>,
     /// type -> indices into impls for inherent impls
     pub inherent_impls: FxHashMap<TypeId, Vec<usize>>,
     /// (trait DefId, type TypeId) -> index into impls
@@ -106,7 +106,7 @@ pub fn build_registry(
 
     // Second pass: process all impl blocks
     for item in &module.items {
-        if let Item::Implement(impl_block) = &item.node {
+        if let Item::Equip(impl_block) = &item.node {
             process_impl(impl_block, scopes, types, &mut registry, errors);
         }
     }
@@ -161,7 +161,7 @@ fn collect_trait(
 }
 
 fn process_impl(
-    impl_block: &ImplBlock,
+    impl_block: &EquipBlock,
     scopes: &ScopeTable,
     types: &mut TypeTable,
     registry: &mut TraitRegistry,
@@ -218,7 +218,7 @@ fn process_impl(
     }
 
     let impl_idx = registry.impls.len();
-    registry.impls.push(ImplInfo {
+    registry.impls.push(EquipInfo {
         self_type: self_type_id,
         self_type_name: self_type_name.clone(),
         trait_: trait_def_id,
@@ -342,7 +342,7 @@ struct Point:
     float x
     float y
 
-implement Point:
+equip Point:
     float distance(self):
         return 0.0
 ";
@@ -362,7 +362,7 @@ trait Drawable:
 struct Circle:
     float radius
 
-implement Drawable for Circle:
+equip Circle with Drawable:
     void draw(self):
         pass
 ";
@@ -383,7 +383,7 @@ trait Drawable:
 struct Circle:
     float radius
 
-implement Drawable for Circle:
+equip Circle with Drawable:
     void draw(self):
         pass
 ";

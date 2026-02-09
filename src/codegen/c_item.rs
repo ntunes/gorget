@@ -202,7 +202,7 @@ impl CodegenContext<'_> {
                         self.emit_function_prototype(f, None, emitter);
                     }
                 }
-                Item::Implement(impl_block) => {
+                Item::Equip(impl_block) => {
                     let type_name = self.impl_type_name(impl_block);
                     let trait_name = self.impl_trait_name(impl_block);
                     for method in &impl_block.items {
@@ -256,7 +256,7 @@ impl CodegenContext<'_> {
                 Item::Function(f) => {
                     self.emit_function_def(f, None, emitter);
                 }
-                Item::Implement(impl_block) => {
+                Item::Equip(impl_block) => {
                     let type_name = self.impl_type_name(impl_block);
                     let trait_name = self.impl_trait_name(impl_block);
                     self.current_self_type = Some(type_name.clone());
@@ -490,7 +490,7 @@ impl CodegenContext<'_> {
         }
 
         for item in &module.items {
-            if let Item::Implement(impl_block) = &item.node {
+            if let Item::Equip(impl_block) = &item.node {
                 // Only trait impls (not inherent impls)
                 let Some(trait_ref) = &impl_block.trait_ else {
                     continue;
@@ -613,7 +613,7 @@ impl CodegenContext<'_> {
         for item in &module.items {
             match &item.node {
                 Item::Function(f) => self.scan_function_for_generics(f),
-                Item::Implement(impl_block) => {
+                Item::Equip(impl_block) => {
                     for method in &impl_block.items {
                         self.scan_function_for_generics(&method.node);
                     }
@@ -1088,16 +1088,13 @@ impl CodegenContext<'_> {
                     .collect();
                 // Check built-in collections
                 match name.node.as_str() {
-                    "Vector" | "List" | "Array" => "VyperArray".to_string(),
-                    "Set" => "VyperSet".to_string(),
-                    "Dict" | "Map" | "HashMap" => "VyperMap".to_string(),
+                    "Vector" | "List" | "Array" => "GorgetArray".to_string(),
+                    "Set" => "GorgetSet".to_string(),
+                    "Dict" | "Map" | "HashMap" => "GorgetMap".to_string(),
                     _ => c_mangle::mangle_generic(&name.node, &c_args),
                 }
             }
-            crate::parser::ast::Type::Ref { inner } => {
-                let inner_c = self.substitute_type(&inner.node, subs);
-                format!("const {inner_c}*")
-            }
+            // Type::Ref removed
             _ => c_types::ast_type_to_c(ty, self.scopes),
         }
     }
@@ -1132,7 +1129,7 @@ impl CodegenContext<'_> {
     // ─── Helpers ─────────────────────────────────────────────
 
     /// Extract the type name from an impl block.
-    fn impl_type_name(&self, impl_block: &ImplBlock) -> String {
+    fn impl_type_name(&self, impl_block: &EquipBlock) -> String {
         match &impl_block.type_.node {
             Type::Named { name, .. } => name.node.clone(),
             Type::Primitive(p) => c_types::primitive_to_c(*p).to_string(),
@@ -1141,7 +1138,7 @@ impl CodegenContext<'_> {
     }
 
     /// Extract the trait name from an impl block (if it's a trait impl).
-    fn impl_trait_name(&self, impl_block: &ImplBlock) -> Option<String> {
+    fn impl_trait_name(&self, impl_block: &EquipBlock) -> Option<String> {
         impl_block.trait_.as_ref().map(|t| {
             match &t.trait_name.node {
                 Type::Named { name, .. } => name.node.clone(),

@@ -311,7 +311,7 @@ impl<'a> BorrowChecker<'a> {
             Expr::Try { expr: inner }
             | Expr::Await { expr: inner }
             | Expr::Spawn { expr: inner }
-            | Expr::Catch { expr: inner } => {
+            | Expr::TryCapture { expr: inner } => {
                 self.check_expr(inner);
             }
 
@@ -752,7 +752,7 @@ pub fn check_module(
             Item::Function(f) => {
                 checker.check_function(f);
             }
-            Item::Implement(impl_block) => {
+            Item::Equip(impl_block) => {
                 for method in &impl_block.items {
                     checker.check_function(&method.node);
                 }

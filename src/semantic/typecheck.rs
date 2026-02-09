@@ -419,7 +419,7 @@ impl<'a> TypeChecker<'a> {
                 self.types.error_id // Task[T]
             }
 
-            Expr::Catch { expr: inner } => {
+            Expr::TryCapture { expr: inner } => {
                 self.infer_expr(inner);
                 self.types.error_id // Result[T, E]
             }
@@ -824,7 +824,7 @@ pub fn check_module(
             Item::Function(f) => {
                 checker.check_function(f);
             }
-            Item::Implement(impl_block) => {
+            Item::Equip(impl_block) => {
                 for method in &impl_block.items {
                     checker.check_function(&method.node);
                 }

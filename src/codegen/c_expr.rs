@@ -1,4 +1,4 @@
-/// Expression codegen: convert Vyper expressions to C expression strings.
+/// Expression codegen: convert Gorget expressions to C expression strings.
 use crate::lexer::token::{StringLit, StringSegment};
 use crate::parser::ast::{BinaryOp, Expr, PrimitiveType, UnaryOp};
 use crate::span::Spanned;
@@ -8,7 +8,7 @@ use super::c_types;
 use super::CodegenContext;
 
 impl CodegenContext<'_> {
-    /// Generate a C expression string from a Vyper expression.
+    /// Generate a C expression string from a Gorget expression.
     pub fn gen_expr(&self, expr: &Spanned<Expr>) -> String {
         match &expr.node {
             Expr::IntLiteral(n) => format!("INT64_C({n})"),
@@ -210,13 +210,13 @@ impl CodegenContext<'_> {
                 self.gen_dict_comprehension(key, dict_val, variables, iterable, condition.as_deref())
             }
 
-            Expr::Catch { expr: catch_expr } => {
+            Expr::TryCapture { expr: catch_expr } => {
                 // GCC statement expression: try the expression, on error return default
                 let inner = self.gen_expr(catch_expr);
                 format!(
                     "({{ __typeof__({inner}) __catch_val; \
-                    if (VYPER_TRY) {{ __catch_val = {inner}; VYPER_CATCH_END; }} \
-                    else {{ VYPER_CATCH_END; memset(&__catch_val, 0, sizeof(__catch_val)); }} \
+                    if (GORGET_TRY) {{ __catch_val = {inner}; GORGET_CATCH_END; }} \
+                    else {{ GORGET_CATCH_END; memset(&__catch_val, 0, sizeof(__catch_val)); }} \
                     __catch_val; }})"
                 )
             }
@@ -263,8 +263,8 @@ impl CodegenContext<'_> {
                 let inner = self.gen_expr(try_expr);
                 format!(
                     "({{ __typeof__({inner}) __try_val; \
-                    if (VYPER_TRY) {{ __try_val = {inner}; VYPER_CATCH_END; }} \
-                    else {{ VYPER_CATCH_END; memset(&__try_val, 0, sizeof(__try_val)); return __try_val; }} \
+                    if (GORGET_TRY) {{ __try_val = {inner}; GORGET_CATCH_END; }} \
+                    else {{ GORGET_CATCH_END; memset(&__try_val, 0, sizeof(__try_val)); return __try_val; }} \
                     __try_val; }})"
                 )
             }
@@ -688,9 +688,9 @@ impl CodegenContext<'_> {
 
         self.lifted_closures.borrow_mut().push(lifted);
 
-        // At the creation site: allocate env, populate, create VyperClosure
+        // At the creation site: allocate env, populate, create GorgetClosure
         if captures.is_empty() {
-            format!("(VyperClosure){{.fn_ptr = (void*){fn_name}, .env = NULL}}")
+            format!("(GorgetClosure){{.fn_ptr = (void*){fn_name}, .env = NULL}}")
         } else {
             // Use a GCC statement expression to allocate and populate the env
             let mut parts = Vec::new();
@@ -700,7 +700,7 @@ impl CodegenContext<'_> {
             }
             let stmts = parts.join("; ");
             format!(
-                "({{ {stmts}; (VyperClosure){{.fn_ptr = (void*){fn_name}, .env = (void*)__env}}; }})"
+                "({{ {stmts}; (GorgetClosure){{.fn_ptr = (void*){fn_name}, .env = (void*)__env}}; }})"
             )
         }
     }
@@ -788,7 +788,7 @@ impl CodegenContext<'_> {
 
         let var_name = match &variable.node {
             crate::parser::ast::Pattern::Binding(name) => c_mangle::escape_keyword(name),
-            _ => "__vyper_v".to_string(),
+            _ => "__gorget_v".to_string(),
         };
 
         // Check if iterable is a range
@@ -813,9 +813,9 @@ impl CodegenContext<'_> {
                 .unwrap_or_default();
 
             return format!(
-                "({{ VyperArray __comp = vyper_array_new(sizeof({elem_type})); \
+                "({{ GorgetArray __comp = gorget_array_new(sizeof({elem_type})); \
                 for (int64_t {var_name} = {start_expr}; {var_name} {cmp} {end_expr}; {var_name}++) {{ \
-                {cond_guard}{{ {elem_type} __elem = {elem_expr}; vyper_array_push(&__comp, &__elem); }} \
+                {cond_guard}{{ {elem_type} __elem = {elem_expr}; gorget_array_push(&__comp, &__elem); }} \
                 }} __comp; }})"
             );
         }
@@ -827,10 +827,10 @@ impl CodegenContext<'_> {
             .unwrap_or_default();
 
         format!(
-            "({{ VyperArray __comp = vyper_array_new(sizeof({elem_type})); \
+            "({{ GorgetArray __comp = gorget_array_new(sizeof({elem_type})); \
             for (size_t __i = 0; __i < sizeof({iter})/sizeof({iter}[0]); __i++) {{ \
             {elem_type} {var_name} = {iter}[__i]; \
-            {cond_guard}{{ {elem_type} __elem = {elem_expr}; vyper_array_push(&__comp, &__elem); }} \
+            {cond_guard}{{ {elem_type} __elem = {elem_expr}; gorget_array_push(&__comp, &__elem); }} \
             }} __comp; }})"
         )
     }
@@ -869,9 +869,9 @@ impl CodegenContext<'_> {
                 .unwrap_or_default();
 
             return format!(
-                "({{ VyperSet __comp = vyper_set_new(sizeof({elem_type})); \
+                "({{ GorgetSet __comp = gorget_set_new(sizeof({elem_type})); \
                 for (int64_t {var_name} = {start_expr}; {var_name} {cmp} {end_expr}; {var_name}++) {{ \
-                {cond_guard}{{ {elem_type} __elem = {elem_expr}; vyper_set_add(&__comp, &__elem); }} \
+                {cond_guard}{{ {elem_type} __elem = {elem_expr}; gorget_set_add(&__comp, &__elem); }} \
                 }} __comp; }})"
             );
         }
@@ -883,10 +883,10 @@ impl CodegenContext<'_> {
             .unwrap_or_default();
 
         format!(
-            "({{ VyperSet __comp = vyper_set_new(sizeof({elem_type})); \
+            "({{ GorgetSet __comp = gorget_set_new(sizeof({elem_type})); \
             for (size_t __i = 0; __i < sizeof({iter})/sizeof({iter}[0]); __i++) {{ \
             {elem_type} {var_name} = {iter}[__i]; \
-            {cond_guard}{{ {elem_type} __elem = {elem_expr}; vyper_set_add(&__comp, &__elem); }} \
+            {cond_guard}{{ {elem_type} __elem = {elem_expr}; gorget_set_add(&__comp, &__elem); }} \
             }} __comp; }})"
         )
     }
@@ -907,7 +907,7 @@ impl CodegenContext<'_> {
         let var_name = variables
             .first()
             .map(|v| c_mangle::escape_keyword(&v.node))
-            .unwrap_or_else(|| "__vyper_v".to_string());
+            .unwrap_or_else(|| "__gorget_v".to_string());
 
         // Check if iterable is a range
         if let Expr::Range {
@@ -931,10 +931,10 @@ impl CodegenContext<'_> {
                 .unwrap_or_default();
 
             return format!(
-                "({{ VyperMap __comp = vyper_map_new(sizeof({key_type}), sizeof({val_type})); \
+                "({{ GorgetMap __comp = gorget_map_new(sizeof({key_type}), sizeof({val_type})); \
                 for (int64_t {var_name} = {start_expr}; {var_name} {cmp} {end_expr}; {var_name}++) {{ \
                 {cond_guard}{{ {key_type} __k = {key_expr}; {val_type} __v = {val_expr}; \
-                vyper_map_put(&__comp, &__k, &__v); }} \
+                gorget_map_put(&__comp, &__k, &__v); }} \
                 }} __comp; }})"
             );
         }
@@ -946,11 +946,11 @@ impl CodegenContext<'_> {
             .unwrap_or_default();
 
         format!(
-            "({{ VyperMap __comp = vyper_map_new(sizeof({key_type}), sizeof({val_type})); \
+            "({{ GorgetMap __comp = gorget_map_new(sizeof({key_type}), sizeof({val_type})); \
             for (size_t __i = 0; __i < sizeof({iter})/sizeof({iter}[0]); __i++) {{ \
             __typeof__({iter}[0]) {var_name} = {iter}[__i]; \
             {cond_guard}{{ {key_type} __k = {key_expr}; {val_type} __v = {val_expr}; \
-            vyper_map_put(&__comp, &__k, &__v); }} \
+            gorget_map_put(&__comp, &__k, &__v); }} \
             }} __comp; }})"
         )
     }
@@ -1007,13 +1007,13 @@ impl CodegenContext<'_> {
         let scrut_expr = self.gen_expr(scrutinee);
 
         let mut parts = Vec::new();
-        parts.push(format!("__typeof__({scrut_expr}) __vyper_scrut = {scrut_expr}"));
+        parts.push(format!("__typeof__({scrut_expr}) __gorget_scrut = {scrut_expr}"));
 
-        // Build if-else chain; each arm assigns to __vyper_match_result
+        // Build if-else chain; each arm assigns to __gorget_match_result
         let mut arm_parts = Vec::new();
         let mut first = true;
         for arm in arms {
-            let cond = self.pattern_to_condition_expr(&arm.pattern.node, "__vyper_scrut");
+            let cond = self.pattern_to_condition_expr(&arm.pattern.node, "__gorget_scrut");
             let full_cond = if let Some(guard) = &arm.guard {
                 let guard_expr = self.gen_expr(guard);
                 format!("({cond}) && ({guard_expr})")
@@ -1021,20 +1021,20 @@ impl CodegenContext<'_> {
                 cond
             };
 
-            let bindings = self.pattern_bindings_inline(&arm.pattern.node, "__vyper_scrut");
+            let bindings = self.pattern_bindings_inline(&arm.pattern.node, "__gorget_scrut");
             let body = self.gen_expr(&arm.body);
 
             if first {
-                arm_parts.push(format!("if ({full_cond}) {{ {bindings}__vyper_match_result = {body}; }}"));
+                arm_parts.push(format!("if ({full_cond}) {{ {bindings}__gorget_match_result = {body}; }}"));
                 first = false;
             } else {
-                arm_parts.push(format!("else if ({full_cond}) {{ {bindings}__vyper_match_result = {body}; }}"));
+                arm_parts.push(format!("else if ({full_cond}) {{ {bindings}__gorget_match_result = {body}; }}"));
             }
         }
 
         if let Some(else_expr) = else_arm {
             let else_body = self.gen_expr(else_expr);
-            arm_parts.push(format!("else {{ __vyper_match_result = {else_body}; }}"));
+            arm_parts.push(format!("else {{ __gorget_match_result = {else_body}; }}"));
         }
 
         // Determine a result type from the first arm body
@@ -1046,7 +1046,7 @@ impl CodegenContext<'_> {
 
         let chain = arm_parts.join(" ");
         format!(
-            "({{ {result_type} __vyper_match_result; {} {chain} __vyper_match_result; }})",
+            "({{ {result_type} __gorget_match_result; {} {chain} __gorget_match_result; }})",
             parts.join("; ") + ";"
         )
     }

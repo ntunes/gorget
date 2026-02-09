@@ -191,13 +191,13 @@ impl Parser {
                 ))
             }
 
-            // Catch
-            Token::Keyword(Keyword::Catch) => {
+            // Try capture
+            Token::Keyword(Keyword::Try) => {
                 self.advance();
                 let operand = self.parse_expr_bp(2)?;
                 let end = operand.span;
                 Ok(Spanned::new(
-                    Expr::Catch {
+                    Expr::TryCapture {
                         expr: Box::new(operand),
                     },
                     start.merge(end),
@@ -1283,7 +1283,7 @@ impl Parser {
                 | Token::Keyword(Keyword::Match)
                 | Token::Keyword(Keyword::Do)
                 | Token::Keyword(Keyword::Await)
-                | Token::Keyword(Keyword::Catch)
+                | Token::Keyword(Keyword::Try)
                 | Token::Keyword(Keyword::Spawn)
                 | Token::Keyword(Keyword::SelfLower)
                 | Token::Keyword(Keyword::It)
@@ -1315,7 +1315,6 @@ impl Parser {
                     | Keyword::Void
                     | Keyword::Auto
                     | Keyword::SelfUpper
-                    | Keyword::Ref
                     | Keyword::Dynamic
                     | Keyword::Box
                     | Keyword::Rc

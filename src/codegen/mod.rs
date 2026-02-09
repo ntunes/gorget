@@ -1,4 +1,4 @@
-/// C code generation backend for the Vyper compiler.
+/// C code generation backend for the Gorget compiler.
 pub mod c_emitter;
 pub mod c_expr;
 pub mod c_item;
@@ -77,7 +77,7 @@ pub struct CodegenContext<'a> {
     pub generic_fn_templates: RefCell<FxHashMap<String, FunctionDef>>,
 }
 
-/// Generate C source code from a parsed and analyzed Vyper module.
+/// Generate C source code from a parsed and analyzed Gorget module.
 pub fn generate_c(module: &Module, analysis: &AnalysisResult) -> String {
     let mut ctx = CodegenContext {
         scopes: &analysis.scopes,
@@ -196,7 +196,7 @@ mod tests {
     fn expression_body_function() {
         let source = "int double(int x) = x * 2\n";
         let c_code = compile_to_c(source);
-        assert!(c_code.contains("int64_t __vyper_double(int64_t x)"));
+        assert!(c_code.contains("int64_t __gorget_double(int64_t x)"));
         assert!(c_code.contains("return (x * INT64_C(2));"));
     }
 
@@ -259,7 +259,7 @@ struct Point:
     float x
     float y
 
-implement Point:
+equip Point:
     Point origin():
         return Point(0.0, 0.0)
 
@@ -333,7 +333,7 @@ void fail() throws str:
     throw \"something went wrong\"
 ";
         let c_code = compile_to_c(source);
-        assert!(c_code.contains("VYPER_THROW("));
+        assert!(c_code.contains("GORGET_THROW("));
     }
 
     #[test]
@@ -341,11 +341,11 @@ void fail() throws str:
         let source = "void main():\n    pass\n";
         let c_code = compile_to_c(source);
         assert!(c_code.contains("#include <setjmp.h>"));
-        assert!(c_code.contains("VyperError"));
-        assert!(c_code.contains("VYPER_TRY"));
-        assert!(c_code.contains("VyperClosure"));
-        assert!(c_code.contains("VyperArray"));
-        assert!(c_code.contains("VyperString"));
+        assert!(c_code.contains("GorgetError"));
+        assert!(c_code.contains("GORGET_TRY"));
+        assert!(c_code.contains("GorgetClosure"));
+        assert!(c_code.contains("GorgetArray"));
+        assert!(c_code.contains("GorgetString"));
     }
 
     #[test]
@@ -355,9 +355,9 @@ void main():
     Vector[int] squares = [x * x for x in 0..10]
 ";
         let c_code = compile_to_c(source);
-        assert!(c_code.contains("vyper_array_new"));
-        assert!(c_code.contains("vyper_array_push"));
-        assert!(c_code.contains("VyperArray"));
+        assert!(c_code.contains("gorget_array_new"));
+        assert!(c_code.contains("gorget_array_push"));
+        assert!(c_code.contains("GorgetArray"));
     }
 
     #[test]
@@ -375,14 +375,14 @@ void main():
     }
 
     #[test]
-    fn vector_type_maps_to_vyper_array() {
+    fn vector_type_maps_to_gorget_array() {
         let source = "\
 void main():
     Vector[int] items = [1, 2, 3]
 ";
         let c_code = compile_to_c(source);
-        // Vector[int] should be VyperArray, not void*
-        assert!(c_code.contains("VyperArray"));
+        // Vector[int] should be GorgetArray, not void*
+        assert!(c_code.contains("GorgetArray"));
     }
 
     // ── Phase 6 tests ──────────────────────────────────────
@@ -535,48 +535,48 @@ void main():
     // ── Phase 7 tests ──────────────────────────────────────
 
     #[test]
-    fn runtime_includes_vyper_map() {
+    fn runtime_includes_gorget_map() {
         let source = "void main():\n    pass\n";
         let c_code = compile_to_c(source);
-        assert!(c_code.contains("VyperMap"));
-        assert!(c_code.contains("__vyper_fnv1a"));
-        assert!(c_code.contains("vyper_map_new"));
-        assert!(c_code.contains("vyper_map_put"));
-        assert!(c_code.contains("vyper_map_get"));
-        assert!(c_code.contains("vyper_map_contains"));
-        assert!(c_code.contains("vyper_map_len"));
-        assert!(c_code.contains("vyper_map_free"));
+        assert!(c_code.contains("GorgetMap"));
+        assert!(c_code.contains("__gorget_fnv1a"));
+        assert!(c_code.contains("gorget_map_new"));
+        assert!(c_code.contains("gorget_map_put"));
+        assert!(c_code.contains("gorget_map_get"));
+        assert!(c_code.contains("gorget_map_contains"));
+        assert!(c_code.contains("gorget_map_len"));
+        assert!(c_code.contains("gorget_map_free"));
     }
 
     #[test]
-    fn runtime_includes_vyper_set() {
+    fn runtime_includes_gorget_set() {
         let source = "void main():\n    pass\n";
         let c_code = compile_to_c(source);
-        assert!(c_code.contains("VyperSet"));
-        assert!(c_code.contains("vyper_set_new"));
-        assert!(c_code.contains("vyper_set_add"));
-        assert!(c_code.contains("vyper_set_contains"));
-        assert!(c_code.contains("vyper_set_len"));
-        assert!(c_code.contains("vyper_set_free"));
+        assert!(c_code.contains("GorgetSet"));
+        assert!(c_code.contains("gorget_set_new"));
+        assert!(c_code.contains("gorget_set_add"));
+        assert!(c_code.contains("gorget_set_contains"));
+        assert!(c_code.contains("gorget_set_len"));
+        assert!(c_code.contains("gorget_set_free"));
     }
 
     #[test]
     fn runtime_includes_string_format() {
         let source = "void main():\n    pass\n";
         let c_code = compile_to_c(source);
-        assert!(c_code.contains("vyper_string_format"));
-        assert!(c_code.contains("vyper_string_cstr"));
+        assert!(c_code.contains("gorget_string_format"));
+        assert!(c_code.contains("gorget_string_cstr"));
     }
 
     #[test]
     fn runtime_includes_array_at_macro() {
         let source = "void main():\n    pass\n";
         let c_code = compile_to_c(source);
-        assert!(c_code.contains("VYPER_ARRAY_AT"));
+        assert!(c_code.contains("GORGET_ARRAY_AT"));
     }
 
     #[test]
-    fn set_type_maps_to_vyper_set() {
+    fn set_type_maps_to_gorget_set() {
         use crate::semantic::scope::ScopeTable;
         let scopes = ScopeTable::new();
         let ty = crate::parser::ast::Type::Named {
@@ -590,11 +590,11 @@ void main():
             }],
         };
         let result = c_types::ast_type_to_c(&ty, &scopes);
-        assert_eq!(result, "VyperSet");
+        assert_eq!(result, "GorgetSet");
     }
 
     #[test]
-    fn dict_type_maps_to_vyper_map() {
+    fn dict_type_maps_to_gorget_map() {
         use crate::semantic::scope::ScopeTable;
         let scopes = ScopeTable::new();
         let ty = crate::parser::ast::Type::Named {
@@ -614,31 +614,31 @@ void main():
             ],
         };
         let result = c_types::ast_type_to_c(&ty, &scopes);
-        assert_eq!(result, "VyperMap");
+        assert_eq!(result, "GorgetMap");
     }
 
     #[test]
-    fn set_comprehension_generates_vyper_set() {
+    fn set_comprehension_generates_gorget_set() {
         let source = "\
 void main():
     Set[int] evens = {x for x in 0..10 if x % 2 == 0}
 ";
         let c_code = compile_to_c(source);
         assert!(!c_code.contains("/* TODO"));
-        assert!(c_code.contains("vyper_set_new"));
-        assert!(c_code.contains("vyper_set_add"));
+        assert!(c_code.contains("gorget_set_new"));
+        assert!(c_code.contains("gorget_set_add"));
     }
 
     #[test]
-    fn dict_comprehension_generates_vyper_map() {
+    fn dict_comprehension_generates_gorget_map() {
         let source = "\
 void main():
     Dict[int, int] squares = {x: x * x for x in 0..10}
 ";
         let c_code = compile_to_c(source);
         assert!(!c_code.contains("/* TODO"));
-        assert!(c_code.contains("vyper_map_new"));
-        assert!(c_code.contains("vyper_map_put"));
+        assert!(c_code.contains("gorget_map_new"));
+        assert!(c_code.contains("gorget_map_put"));
     }
 
     #[test]
@@ -704,11 +704,11 @@ void main():
 
     #[test]
     fn generic_type_maps_correctly() {
-        // Set[int] → VyperSet (built-in), Pair[int, str] → mangled name (user-defined)
+        // Set[int] → GorgetSet (built-in), Pair[int, str] → mangled name (user-defined)
         use crate::semantic::scope::ScopeTable;
         let scopes = ScopeTable::new();
 
-        // Set[int] should still map to VyperSet
+        // Set[int] should still map to GorgetSet
         let ty = crate::parser::ast::Type::Named {
             name: crate::span::Spanned {
                 node: "Set".to_string(),
@@ -719,7 +719,7 @@ void main():
                 span: crate::span::Span::new(0, 0),
             }],
         };
-        assert_eq!(c_types::ast_type_to_c(&ty, &scopes), "VyperSet");
+        assert_eq!(c_types::ast_type_to_c(&ty, &scopes), "GorgetSet");
 
         // Unknown generic type should produce mangled name
         let ty2 = crate::parser::ast::Type::Named {
@@ -808,7 +808,7 @@ trait Shape:
 struct Circle:
     float radius
 
-implement Shape for Circle:
+equip Circle with Shape:
     float area(self):
         return 3.14
     void draw(self):

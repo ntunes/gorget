@@ -38,13 +38,13 @@ trait Drawable:
 trait Colorable extends Drawable:
     String color(self)
 
-# Implement trait for struct
-implement Displayable for Point:
+# Equip trait for struct
+equip Point with Displayable:
     String to_string(self):
         return "({self.x}, {self.y})"
 
 # Inherent implementation
-implement Point:
+equip Point:
     float distance(self):
         return 0.0
 
@@ -76,7 +76,7 @@ void main():
     # Variable declarations
     int x = 5
     const int y = 10
-    auto name = "vyper"
+    auto name = "gorget"
     float pi = 3.14
 
     # If/elif/else

@@ -1,10 +1,10 @@
-/// Mapping from Vyper types to C type strings.
+/// Mapping from Gorget types to C type strings.
 use crate::parser::ast::PrimitiveType;
 use crate::semantic::ids::{DefId, TypeId};
 use crate::semantic::scope::ScopeTable;
 use crate::semantic::types::{ResolvedType, TypeTable};
 
-/// Convert a Vyper PrimitiveType to its C representation.
+/// Convert a Gorget PrimitiveType to its C representation.
 pub fn primitive_to_c(prim: PrimitiveType) -> &'static str {
     match prim {
         PrimitiveType::Void => "void",
@@ -34,9 +34,9 @@ pub fn ast_type_to_c(ty: &crate::parser::ast::Type, scopes: &ScopeTable) -> Stri
         crate::parser::ast::Type::Named { name, generic_args } => {
             if !generic_args.is_empty() {
                 match name.node.as_str() {
-                    "Vector" | "List" | "Array" => "VyperArray".to_string(),
-                    "Set" => "VyperSet".to_string(),
-                    "Dict" | "Map" | "HashMap" => "VyperMap".to_string(),
+                    "Vector" | "List" | "Array" => "GorgetArray".to_string(),
+                    "Set" => "GorgetSet".to_string(),
+                    "Dict" | "Map" | "HashMap" => "GorgetMap".to_string(),
                     "Box" if generic_args.len() == 1 => {
                         // Box[dynamic Trait] → TraitObj type
                         if let crate::parser::ast::Type::Dynamic { trait_ } = &generic_args[0].node {
@@ -75,10 +75,6 @@ pub fn ast_type_to_c(ty: &crate::parser::ast::Type, scopes: &ScopeTable) -> Stri
                 _ => "0".to_string(),
             };
             format!("{elem_c}[{size_val}]")
-        }
-        crate::parser::ast::Type::Ref { inner } => {
-            let inner_c = ast_type_to_c(&inner.node, scopes);
-            format!("const {inner_c}*")
         }
         crate::parser::ast::Type::Tuple(fields) => {
             let field_defs: Vec<String> = fields
@@ -129,10 +125,6 @@ pub fn type_id_to_c(type_id: TypeId, types: &TypeTable, scopes: &ScopeTable) -> 
         ResolvedType::Defined(def_id) => def_name_to_c(*def_id, scopes),
         ResolvedType::Error => "/* error */ int64_t".to_string(),
         ResolvedType::Never => "/* never */ void".to_string(),
-        ResolvedType::Ref(inner) => {
-            let inner_c = type_id_to_c(*inner, types, scopes);
-            format!("const {inner_c}*")
-        }
         ResolvedType::Array(elem, size) => {
             let elem_c = type_id_to_c(*elem, types, scopes);
             format!("{elem_c}[{size}]")
@@ -168,9 +160,9 @@ pub fn type_id_to_c(type_id: TypeId, types: &TypeTable, scopes: &ScopeTable) -> 
         ResolvedType::Generic(def_id, args) => {
             let base = def_name_to_c(*def_id, scopes);
             match base.as_str() {
-                "Vector" | "List" | "Array" => "VyperArray".to_string(),
-                "Set" => "VyperSet".to_string(),
-                "Dict" | "Map" | "HashMap" => "VyperMap".to_string(),
+                "Vector" | "List" | "Array" => "GorgetArray".to_string(),
+                "Set" => "GorgetSet".to_string(),
+                "Dict" | "Map" | "HashMap" => "GorgetMap".to_string(),
                 _ => {
                     let c_args: Vec<String> = args
                         .iter()

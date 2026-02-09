@@ -18,7 +18,7 @@ pub enum Item {
     Struct(StructDef),
     Enum(EnumDef),
     Trait(TraitDef),
-    Implement(ImplBlock),
+    Equip(EquipBlock),
     Import(ImportStmt),
     TypeAlias(TypeAlias),
     Newtype(NewtypeDef),
@@ -164,13 +164,13 @@ pub struct AssociatedTypeDef {
 }
 
 // ══════════════════════════════════════════════════════════════
-// Implement Blocks
+// Equip Blocks
 // ══════════════════════════════════════════════════════════════
 
 #[derive(Debug, Clone)]
-pub struct ImplBlock {
+pub struct EquipBlock {
     pub generic_params: Option<Spanned<GenericParams>>,
-    pub trait_: Option<ImplTrait>,
+    pub trait_: Option<EquipTrait>,
     pub type_: Spanned<Type>,
     pub where_clause: Option<Spanned<WhereClause>>,
     pub items: Vec<Spanned<FunctionDef>>,
@@ -178,7 +178,7 @@ pub struct ImplBlock {
 }
 
 #[derive(Debug, Clone)]
-pub struct ImplTrait {
+pub struct EquipTrait {
     pub trait_name: Spanned<Type>,
     pub span: Span,
 }
@@ -291,14 +291,9 @@ pub enum Type {
         size: Box<Spanned<Expr>>,
     },
 
-    /// Slice: `ref int[]`
+    /// Slice: `int[]`
     Slice {
         element: Box<Spanned<Type>>,
-    },
-
-    /// Reference type: `ref Type`
-    Ref {
-        inner: Box<Spanned<Type>>,
     },
 
     /// Tuple: `(int, String)`
@@ -538,8 +533,8 @@ pub enum Expr {
         expr: Box<Spanned<Expr>>,
     },
 
-    // ── Catch ──
-    Catch {
+    // ── Try capture ──
+    TryCapture {
         expr: Box<Spanned<Expr>>,
     },
 

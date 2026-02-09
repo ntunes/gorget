@@ -1,4 +1,4 @@
-/// Statement codegen: convert Vyper statements to C statements.
+/// Statement codegen: convert Gorget statements to C statements.
 use crate::parser::ast::{BinaryOp, Block, Expr, Pattern, Stmt, Type};
 use crate::span::Spanned;
 
@@ -155,9 +155,9 @@ impl CodegenContext<'_> {
                 let e = self.gen_expr(expr);
                 // If expr is a string literal, use it directly; otherwise stringify
                 if matches!(&expr.node, Expr::StringLiteral(_)) {
-                    emitter.emit_line(&format!("VYPER_THROW({e}, 1);"));
+                    emitter.emit_line(&format!("GORGET_THROW({e}, 1);"));
                 } else {
-                    emitter.emit_line(&format!("VYPER_THROW(\"{e}\", 1);"));
+                    emitter.emit_line(&format!("GORGET_THROW(\"{e}\", 1);"));
                 }
             }
 
@@ -384,23 +384,23 @@ impl CodegenContext<'_> {
         None
     }
 
-    /// Check if an iterable expression resolves to a VyperArray type.
-    fn is_vyper_array_expr(&self, expr: &Spanned<Expr>) -> bool {
+    /// Check if an iterable expression resolves to a GorgetArray type.
+    fn is_gorget_array_expr(&self, expr: &Spanned<Expr>) -> bool {
         if let Expr::Identifier(name) = &expr.node {
             if let Some(def_id) = self.scopes.lookup(name) {
                 let def = self.scopes.get_def(def_id);
                 if let Some(type_id) = def.type_id {
                     let c_type = c_types::type_id_to_c(type_id, self.types, self.scopes);
-                    return c_type == "VyperArray";
+                    return c_type == "GorgetArray";
                 }
             }
         }
         // Also check inferred type as fallback
         let c_type = self.infer_c_type_from_expr(&expr.node);
-        c_type == "VyperArray"
+        c_type == "GorgetArray"
     }
 
-    /// Infer the element C type for a VyperArray expression.
+    /// Infer the element C type for a GorgetArray expression.
     fn infer_array_elem_type(&self, _expr: &Spanned<Expr>) -> String {
         // Default to int64_t; more refined inference would need generic type args
         "int64_t".to_string()
@@ -416,7 +416,7 @@ impl CodegenContext<'_> {
     ) {
         let var_name = match &pattern.node {
             Pattern::Binding(name) => c_mangle::escape_keyword(name),
-            _ => "__vyper_i".to_string(),
+            _ => "__gorget_i".to_string(),
         };
 
         // Check if iterable is a Range expression
@@ -442,18 +442,18 @@ impl CodegenContext<'_> {
             self.gen_block(body, emitter);
             emitter.dedent();
             emitter.emit_line("}");
-        } else if self.is_vyper_array_expr(iterable) {
-            // For-in over VyperArray
+        } else if self.is_gorget_array_expr(iterable) {
+            // For-in over GorgetArray
             let iter = self.gen_expr(iterable);
             let idx = emitter.fresh_temp();
             let elem_type = self.infer_array_elem_type(iterable);
 
             emitter.emit_line(&format!(
-                "for (size_t {idx} = 0; {idx} < vyper_array_len(&{iter}); {idx}++) {{"
+                "for (size_t {idx} = 0; {idx} < gorget_array_len(&{iter}); {idx}++) {{"
             ));
             emitter.indent();
             emitter.emit_line(&format!(
-                "{elem_type} {var_name} = VYPER_ARRAY_AT({elem_type}, {iter}, {idx});"
+                "{elem_type} {var_name} = GORGET_ARRAY_AT({elem_type}, {iter}, {idx});"
             ));
             self.gen_block(body, emitter);
             emitter.dedent();
@@ -613,7 +613,7 @@ impl CodegenContext<'_> {
             // Emit the for loop header manually so we can use the break-flag body
             let var_name = match &pattern.node {
                 Pattern::Binding(name) => c_mangle::escape_keyword(name),
-                _ => "__vyper_i".to_string(),
+                _ => "__gorget_i".to_string(),
             };
 
             if let Expr::Range {
@@ -634,16 +634,16 @@ impl CodegenContext<'_> {
                 emitter.emit_line(&format!(
                     "for (int64_t {var_name} = {start_expr}; {var_name} {cmp} {end_expr}; {var_name}++) {{"
                 ));
-            } else if self.is_vyper_array_expr(iterable) {
+            } else if self.is_gorget_array_expr(iterable) {
                 let iter = self.gen_expr(iterable);
                 let idx = emitter.fresh_temp();
                 let elem_type = self.infer_array_elem_type(iterable);
                 emitter.emit_line(&format!(
-                    "for (size_t {idx} = 0; {idx} < vyper_array_len(&{iter}); {idx}++) {{"
+                    "for (size_t {idx} = 0; {idx} < gorget_array_len(&{iter}); {idx}++) {{"
                 ));
                 emitter.indent();
                 emitter.emit_line(&format!(
-                    "{elem_type} {var_name} = VYPER_ARRAY_AT({elem_type}, {iter}, {idx});"
+                    "{elem_type} {var_name} = GORGET_ARRAY_AT({elem_type}, {iter}, {idx});"
                 ));
                 self.gen_block_with_break_flag(body, &flag, emitter);
                 emitter.dedent();

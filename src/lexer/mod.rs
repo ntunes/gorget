@@ -6,7 +6,7 @@ use logos::Logos;
 use std::collections::VecDeque;
 use token::{Keyword, RawToken, StringKind, StringLit, StringSegment, Token};
 
-/// Indentation-aware lexer for Vyper source code.
+/// Indentation-aware lexer for Gorget source code.
 ///
 /// Wraps the logos-based raw tokenizer and emits synthetic INDENT/DEDENT/NEWLINE
 /// tokens based on indentation changes. Also handles string literals (including
@@ -940,14 +940,14 @@ mod tests {
 
     #[test]
     fn test_keywords() {
-        let tokens = lex("struct enum trait implement\n");
+        let tokens = lex("struct enum trait equip\n");
         assert_eq!(
             tokens,
             vec![
                 Token::Keyword(Keyword::Struct),
                 Token::Keyword(Keyword::Enum),
                 Token::Keyword(Keyword::Trait),
-                Token::Keyword(Keyword::Implement),
+                Token::Keyword(Keyword::Equip),
                 Token::Newline,
             ]
         );

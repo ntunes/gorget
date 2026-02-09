@@ -11,30 +11,6 @@ impl Parser {
         let start = self.peek_span();
 
         // Handle prefix modifiers
-        if self.match_keyword(Keyword::Ref) {
-            let inner = self.parse_type()?;
-            let end = self.previous_span();
-
-            // Check for slice syntax: ref int[]
-            if self.match_token(&Token::LBracket) {
-                self.expect(&Token::RBracket)?;
-                let end = self.previous_span();
-                return Ok(Spanned::new(
-                    Type::Slice {
-                        element: Box::new(inner),
-                    },
-                    start.merge(end),
-                ));
-            }
-
-            return Ok(Spanned::new(
-                Type::Ref {
-                    inner: Box::new(inner),
-                },
-                start.merge(end),
-            ));
-        }
-
         if self.match_keyword(Keyword::Dynamic) {
             let trait_ = self.parse_type()?;
             let end = self.previous_span();
@@ -170,10 +146,21 @@ impl Parser {
         base: Spanned<Type>,
         start: Span,
     ) -> Result<Spanned<Type>, ParseError> {
-        // Check for array suffix: int[5]
+        // Check for array/slice suffix: int[5] or int[]
         // Only applies to primitive types — for named types, [] was already parsed as generics
         if matches!(base.node, Type::Primitive(_)) && self.check(&Token::LBracket) {
             self.advance(); // [
+            // Check for empty brackets → slice type
+            if self.check(&Token::RBracket) {
+                self.advance(); // ]
+                let end = self.previous_span();
+                return Ok(Spanned::new(
+                    Type::Slice {
+                        element: Box::new(base),
+                    },
+                    start.merge(end),
+                ));
+            }
             let size = self.parse_expr()?;
             self.expect(&Token::RBracket)?;
             let end = self.previous_span();

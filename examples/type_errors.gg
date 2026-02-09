@@ -16,7 +16,7 @@ trait Greetable:
 struct Robot:
     String id
 
-implement Greetable for Robot:
+equip Robot with Greetable:
     void greet(self):
         pass
     # Missing: String name(self)

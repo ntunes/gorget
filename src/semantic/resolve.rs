@@ -194,7 +194,7 @@ fn collect_item(
             collect_import(import, scopes, errors);
         }
 
-        Item::Implement(_) => {
+        Item::Equip(_) => {
             // Processed in Step 7 (trait registry)
         }
 
@@ -263,8 +263,8 @@ fn resolve_item_body(
         Item::Function(f) => {
             resolve_function(f, scopes, types, errors, resolution_map);
         }
-        Item::Implement(impl_block) => {
-            resolve_impl_block(impl_block, scopes, types, errors, resolution_map);
+        Item::Equip(impl_block) => {
+            resolve_equip_block(impl_block, scopes, types, errors, resolution_map);
         }
         Item::ConstDecl(c) => {
             resolve_expr(&c.value, scopes, errors, resolution_map);
@@ -334,14 +334,14 @@ fn resolve_function(
     scopes.pop_scope();
 }
 
-fn resolve_impl_block(
-    impl_block: &ImplBlock,
+fn resolve_equip_block(
+    impl_block: &EquipBlock,
     scopes: &mut ScopeTable,
     types: &mut TypeTable,
     errors: &mut Vec<SemanticError>,
     resolution_map: &mut ResolutionMap,
 ) {
-    scopes.push_scope(super::scope::ScopeKind::ImplBlock { self_type: None });
+    scopes.push_scope(super::scope::ScopeKind::EquipBlock { self_type: None });
 
     // Define generic params for the impl block
     if let Some(generics) = &impl_block.generic_params {
@@ -675,7 +675,7 @@ fn resolve_expr(
         | Expr::Deref { expr: inner }
         | Expr::Await { expr: inner }
         | Expr::Spawn { expr: inner }
-        | Expr::Catch { expr: inner } => {
+        | Expr::TryCapture { expr: inner } => {
             resolve_expr(inner, scopes, errors, resolution_map);
         }
 

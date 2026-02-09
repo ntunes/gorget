@@ -45,7 +45,7 @@ impl CEmitter {
 
     /// Generate a fresh temporary variable name.
     pub fn fresh_temp(&mut self) -> String {
-        let name = format!("__vyper_tmp_{}", self.temp_counter);
+        let name = format!("__gorget_tmp_{}", self.temp_counter);
         self.temp_counter += 1;
         name
     }
@@ -75,9 +75,9 @@ mod tests {
     #[test]
     fn fresh_temp_increments() {
         let mut e = CEmitter::new();
-        assert_eq!(e.fresh_temp(), "__vyper_tmp_0");
-        assert_eq!(e.fresh_temp(), "__vyper_tmp_1");
-        assert_eq!(e.fresh_temp(), "__vyper_tmp_2");
+        assert_eq!(e.fresh_temp(), "__gorget_tmp_0");
+        assert_eq!(e.fresh_temp(), "__gorget_tmp_1");
+        assert_eq!(e.fresh_temp(), "__gorget_tmp_2");
     }
 
     #[test]

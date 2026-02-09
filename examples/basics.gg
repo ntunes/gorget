@@ -10,7 +10,7 @@ enum Color:
     Blue
     Custom(uint8, uint8, uint8)
 
-implement Displayable for Point:
+equip Point with Displayable:
     String to_string(self):
         return "({self.x}, {self.y})"
 
@@ -22,7 +22,7 @@ int double(int x) = x * 2
 void main():
     int x = 5
     const int y = 10
-    auto name = "vyper"
+    auto name = "gorget"
 
     if x > 0:
         print("positive")

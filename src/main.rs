@@ -3,15 +3,15 @@ use std::fs;
 use std::path::Path;
 use std::process::{self, Command};
 
-use vyper::errors::ErrorReporter;
-use vyper::lexer::Lexer;
-use vyper::parser::Parser;
+use gorget::errors::ErrorReporter;
+use gorget::lexer::Lexer;
+use gorget::parser::Parser;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 3 {
-        eprintln!("Usage: vyper <command> <file>");
+        eprintln!("Usage: gg <command> <file>");
         eprintln!("Commands: lex, parse, check, build");
         process::exit(1);
     }
@@ -65,7 +65,7 @@ fn main() {
                 process::exit(1);
             }
 
-            let result = vyper::semantic::analyze(&module);
+            let result = gorget::semantic::analyze(&module);
 
             if result.errors.is_empty() {
                 println!("OK: no semantic errors");
@@ -91,7 +91,7 @@ fn main() {
                 process::exit(1);
             }
 
-            let result = vyper::semantic::analyze(&module);
+            let result = gorget::semantic::analyze(&module);
 
             if !result.errors.is_empty() {
                 let reporter = ErrorReporter::new(filename.clone(), source.clone());
@@ -103,7 +103,7 @@ fn main() {
             }
 
             // Generate C code
-            let c_code = vyper::codegen::generate_c(&module, &result);
+            let c_code = gorget::codegen::generate_c(&module, &result);
 
             // Determine output paths
             let input_path = Path::new(filename);

@@ -50,7 +50,7 @@ struct Point:
     float x
     float y
 
-implement Point:
+equip Point:
     Point origin():
         return Point(0.0, 0.0)
 

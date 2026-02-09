@@ -13,7 +13,7 @@ const C_KEYWORDS: &[&str] = &[
 /// Escape a name if it collides with a C keyword.
 pub fn escape_keyword(name: &str) -> String {
     if C_KEYWORDS.contains(&name) {
-        format!("__vyper_{name}")
+        format!("__gorget_{name}")
     } else {
         name.to_string()
     }
@@ -44,14 +44,14 @@ pub fn mangle_variant_data(enum_name: &str, variant_name: &str) -> String {
     format!("{enum_name}_{variant_name}_Data")
 }
 
-/// Mangle a closure function name: `__vyper_closure_0`
+/// Mangle a closure function name: `__gorget_closure_0`
 pub fn mangle_closure(id: usize) -> String {
-    format!("__vyper_closure_{id}")
+    format!("__gorget_closure_{id}")
 }
 
-/// Mangle a closure environment struct name: `__vyper_env_0`
+/// Mangle a closure environment struct name: `__gorget_env_0`
 pub fn mangle_closure_env(id: usize) -> String {
-    format!("__vyper_env_{id}")
+    format!("__gorget_env_{id}")
 }
 
 /// Mangle a vtable struct name: `Shape_VTable`
@@ -95,8 +95,8 @@ mod tests {
 
     #[test]
     fn keyword_escaping() {
-        assert_eq!(escape_keyword("int"), "__vyper_int");
-        assert_eq!(escape_keyword("return"), "__vyper_return");
+        assert_eq!(escape_keyword("int"), "__gorget_int");
+        assert_eq!(escape_keyword("return"), "__gorget_return");
         assert_eq!(escape_keyword("myvar"), "myvar");
     }
 
@@ -118,10 +118,10 @@ mod tests {
 
     #[test]
     fn closure_mangling() {
-        assert_eq!(mangle_closure(0), "__vyper_closure_0");
-        assert_eq!(mangle_closure(5), "__vyper_closure_5");
-        assert_eq!(mangle_closure_env(0), "__vyper_env_0");
-        assert_eq!(mangle_closure_env(3), "__vyper_env_3");
+        assert_eq!(mangle_closure(0), "__gorget_closure_0");
+        assert_eq!(mangle_closure(5), "__gorget_closure_5");
+        assert_eq!(mangle_closure_env(0), "__gorget_env_0");
+        assert_eq!(mangle_closure_env(3), "__gorget_env_3");
     }
 
     #[test]

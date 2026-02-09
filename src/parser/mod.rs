@@ -9,7 +9,7 @@ use crate::lexer::token::{Keyword, Token};
 use crate::lexer::Lexer;
 use crate::span::{Span, Spanned};
 use ast::*;
-/// Recursive descent parser for Vyper source code.
+/// Recursive descent parser for Gorget source code.
 pub struct Parser {
     tokens: Vec<Spanned<Token>>,
     pos: usize,
@@ -186,7 +186,7 @@ impl Parser {
                     | Keyword::Struct
                     | Keyword::Enum
                     | Keyword::Trait
-                    | Keyword::Implement
+                    | Keyword::Equip
                     | Keyword::Import
                     | Keyword::From,
                 ) => return,
@@ -316,10 +316,10 @@ impl Parser {
                 let span = start.merge(def.span);
                 Ok(Spanned::new(Item::Trait(def), span))
             }
-            Token::Keyword(Keyword::Implement) => {
-                let block = self.parse_impl_block()?;
+            Token::Keyword(Keyword::Equip) => {
+                let block = self.parse_equip_block()?;
                 let span = start.merge(block.span);
-                Ok(Spanned::new(Item::Implement(block), span))
+                Ok(Spanned::new(Item::Equip(block), span))
             }
             Token::Keyword(Keyword::Import) => {
                 let stmt = self.parse_import()?;
@@ -676,11 +676,11 @@ impl Parser {
         ))
     }
 
-    // ── Implement Block ───────────────────────────────────────
+    // ── Equip Block ────────────────────────────────────────────
 
-    fn parse_impl_block(&mut self) -> Result<ImplBlock, ParseError> {
+    fn parse_equip_block(&mut self) -> Result<EquipBlock, ParseError> {
         let start = self.peek_span();
-        self.expect_keyword(Keyword::Implement)?;
+        self.expect_keyword(Keyword::Equip)?;
 
         let generic_params = if self.check(&Token::LBracket) {
             Some(self.parse_generic_params()?)
@@ -688,22 +688,19 @@ impl Parser {
             None
         };
 
-        // Parse first type (could be trait name or self type)
-        let first_type = self.parse_type()?;
+        // Parse self type (always comes first in equip syntax)
+        let self_type = self.parse_type()?;
 
-        // Check for "for" to determine if this is a trait impl
-        let (trait_, type_) = if self.match_keyword(Keyword::For) {
-            let self_type = self.parse_type()?;
-            let trait_span = first_type.span;
-            (
-                Some(ImplTrait {
-                    trait_name: first_type,
-                    span: trait_span,
-                }),
-                self_type,
-            )
+        // Check for "with Trait" to determine if this is a trait impl
+        let trait_ = if self.match_keyword(Keyword::With) {
+            let trait_name = self.parse_type()?;
+            let trait_span = trait_name.span;
+            Some(EquipTrait {
+                trait_name,
+                span: trait_span,
+            })
         } else {
-            (None, first_type)
+            None
         };
 
         let where_clause = if self.check_keyword(Keyword::Where) {
@@ -754,10 +751,10 @@ impl Parser {
         self.expect(&Token::Dedent)?;
         let end = self.previous_span();
 
-        Ok(ImplBlock {
+        Ok(EquipBlock {
             generic_params,
             trait_,
-            type_,
+            type_: self_type,
             where_clause,
             items,
             span: start.merge(end),
@@ -1497,37 +1494,37 @@ mod tests {
         }
     }
 
-    // ── Implement Block ─────────────────────────────────────────
+    // ── Equip Block ──────────────────────────────────────────────
 
     #[test]
     fn test_trait_impl() {
-        let module = parse("implement Displayable for Point:\n    String to_string(self):\n        return \"point\"\n");
+        let module = parse("equip Point with Displayable:\n    String to_string(self):\n        return \"point\"\n");
         assert_eq!(module.items.len(), 1);
-        if let Item::Implement(ref imp) = module.items[0].node {
+        if let Item::Equip(ref imp) = module.items[0].node {
             assert!(imp.trait_.is_some());
             assert_eq!(imp.items.len(), 1);
         } else {
-            panic!("Expected implement block");
+            panic!("Expected equip block");
         }
     }
 
     #[test]
     fn test_inherent_impl() {
-        let module = parse("implement Point:\n    float distance(self):\n        return 0.0\n");
+        let module = parse("equip Point:\n    float distance(self):\n        return 0.0\n");
         assert_eq!(module.items.len(), 1);
-        if let Item::Implement(ref imp) = module.items[0].node {
+        if let Item::Equip(ref imp) = module.items[0].node {
             assert!(imp.trait_.is_none());
             assert_eq!(imp.items.len(), 1);
         } else {
-            panic!("Expected implement block");
+            panic!("Expected equip block");
         }
     }
 
     #[test]
     fn test_self_param_variants() {
         // Test bare self (immutable borrow)
-        let module = parse("implement Foo:\n    void a(self):\n        pass\n");
-        if let Item::Implement(ref imp) = module.items[0].node {
+        let module = parse("equip Foo:\n    void a(self):\n        pass\n");
+        if let Item::Equip(ref imp) = module.items[0].node {
             let param = &imp.items[0].node.params[0].node;
             assert_eq!(param.ownership, Ownership::Borrow);
         } else {
@@ -1535,8 +1532,8 @@ mod tests {
         }
 
         // Test &self (mutable borrow)
-        let module = parse("implement Foo:\n    void b(&self):\n        pass\n");
-        if let Item::Implement(ref imp) = module.items[0].node {
+        let module = parse("equip Foo:\n    void b(&self):\n        pass\n");
+        if let Item::Equip(ref imp) = module.items[0].node {
             let param = &imp.items[0].node.params[0].node;
             assert_eq!(param.ownership, Ownership::MutableBorrow);
         } else {
@@ -1544,8 +1541,8 @@ mod tests {
         }
 
         // Test !self (move)
-        let module = parse("implement Foo:\n    void c(!self):\n        pass\n");
-        if let Item::Implement(ref imp) = module.items[0].node {
+        let module = parse("equip Foo:\n    void c(!self):\n        pass\n");
+        if let Item::Equip(ref imp) = module.items[0].node {
             let param = &imp.items[0].node.params[0].node;
             assert_eq!(param.ownership, Ownership::Move);
         } else {
@@ -1610,7 +1607,7 @@ mod tests {
 
     #[test]
     fn test_auto_var_decl() {
-        let module = parse("void main():\n    auto name = \"vyper\"\n");
+        let module = parse("void main():\n    auto name = \"gorget\"\n");
         if let Item::Function(ref f) = module.items[0].node {
             if let FunctionBody::Block(ref block) = f.body {
                 if let Stmt::VarDecl { ref type_, .. } = block.stmts[0].node {
@@ -1870,11 +1867,11 @@ mod tests {
     // ── Complex Programs ────────────────────────────────────────
 
     #[test]
-    fn test_basics_vy() {
-        let source = std::fs::read_to_string("examples/basics.vy")
-            .expect("Could not read examples/basics.vy");
+    fn test_basics_gg() {
+        let source = std::fs::read_to_string("examples/basics.gg")
+            .expect("Could not read examples/basics.gg");
         let module = parse(&source);
-        // 7 items: import, struct, enum, implement, add, double, main
+        // 7 items: import, struct, enum, equip, add, double, main
         assert_eq!(module.items.len(), 7);
     }
 
@@ -1929,9 +1926,9 @@ mod tests {
     }
 
     #[test]
-    fn test_comprehensive_vy() {
-        let source = std::fs::read_to_string("examples/comprehensive.vy")
-            .expect("Could not read examples/comprehensive.vy");
+    fn test_comprehensive_gg() {
+        let source = std::fs::read_to_string("examples/comprehensive.gg")
+            .expect("Could not read examples/comprehensive.gg");
         let module = parse(&source);
         // Should have many items: imports, type aliases, newtypes, structs, enums,
         // traits, impl blocks, functions, attributed struct
