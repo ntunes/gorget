@@ -64,6 +64,23 @@ pub enum SemanticErrorKind {
 
     /// Throw in non-throwing function.
     ThrowInNonThrowingFunction,
+
+    // ── Borrow checking errors ──
+
+    /// Variable used after ownership was moved.
+    UseAfterMove { name: String, moved_at: Span },
+
+    /// Non-Copy type assigned or passed without `!` move operator.
+    MoveWithoutOperator { name: String },
+
+    /// Borrow exclusivity violation.
+    BorrowConflict { name: String, detail: String },
+
+    /// Moving a variable inside a loop body.
+    MoveInLoop { name: String },
+
+    /// Same variable moved twice.
+    DoubleMove { name: String, first_move: Span },
 }
 
 impl std::fmt::Display for SemanticError {
@@ -136,6 +153,27 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::ThrowInNonThrowingFunction => {
                 write!(f, "throw in function that doesn't declare `throws`")
+            }
+            SemanticErrorKind::UseAfterMove { name, .. } => {
+                write!(f, "use of moved value `{name}`")
+            }
+            SemanticErrorKind::MoveWithoutOperator { name } => {
+                write!(
+                    f,
+                    "cannot copy `{name}`: non-Copy type requires `!` to move"
+                )
+            }
+            SemanticErrorKind::BorrowConflict { name, detail } => {
+                write!(f, "borrow conflict on `{name}`: {detail}")
+            }
+            SemanticErrorKind::MoveInLoop { name } => {
+                write!(
+                    f,
+                    "cannot move `{name}` inside loop: value would be moved on first iteration"
+                )
+            }
+            SemanticErrorKind::DoubleMove { name, .. } => {
+                write!(f, "value `{name}` moved more than once")
             }
         }
     }

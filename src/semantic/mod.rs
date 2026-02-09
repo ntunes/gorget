@@ -1,3 +1,4 @@
+pub mod borrow;
 pub mod errors;
 pub mod ids;
 pub mod intern;
@@ -46,6 +47,9 @@ pub fn analyze(module: &Module) -> AnalysisResult {
         &resolution_map,
         &mut errors,
     );
+
+    // Pass 5: Borrow checking
+    borrow::check_module(module, &scopes, &types, &resolution_map, &mut errors);
 
     AnalysisResult {
         scopes,

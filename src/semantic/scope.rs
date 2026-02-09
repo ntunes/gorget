@@ -190,6 +190,18 @@ impl ScopeTable {
     pub fn def_count(&self) -> usize {
         self.definitions.len()
     }
+
+    /// Search all scopes for a variable with the given name (most recent definition wins).
+    /// Used by the borrow checker to find DefIds for pattern bindings.
+    pub fn lookup_by_name_anywhere(&self, name: &str) -> Option<DefId> {
+        // Walk backwards to find the most recent definition
+        for (i, def) in self.definitions.iter().enumerate().rev() {
+            if def.name == name && def.kind == DefKind::Variable {
+                return Some(DefId(i as u32));
+            }
+        }
+        None
+    }
 }
 
 #[cfg(test)]

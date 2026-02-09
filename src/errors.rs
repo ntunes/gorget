@@ -134,12 +134,27 @@ impl ErrorReporter {
             err.span.start..err.span.end,
         )];
 
-        // Add secondary label for duplicate definitions pointing to the original.
-        if let SemanticErrorKind::DuplicateDefinition { original, .. } = &err.kind {
-            labels.push(
-                Label::secondary(self.file_id, original.start..original.end)
-                    .with_message("originally defined here"),
-            );
+        // Add secondary labels for errors that reference other locations.
+        match &err.kind {
+            SemanticErrorKind::DuplicateDefinition { original, .. } => {
+                labels.push(
+                    Label::secondary(self.file_id, original.start..original.end)
+                        .with_message("originally defined here"),
+                );
+            }
+            SemanticErrorKind::UseAfterMove { moved_at, .. } => {
+                labels.push(
+                    Label::secondary(self.file_id, moved_at.start..moved_at.end)
+                        .with_message("value moved here"),
+                );
+            }
+            SemanticErrorKind::DoubleMove { first_move, .. } => {
+                labels.push(
+                    Label::secondary(self.file_id, first_move.start..first_move.end)
+                        .with_message("first move here"),
+                );
+            }
+            _ => {}
         }
 
         let diag = diagnostic::Diagnostic::error()
