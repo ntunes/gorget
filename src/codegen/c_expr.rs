@@ -1,6 +1,7 @@
 /// Expression codegen: convert Gorget expressions to C expression strings.
 use crate::lexer::token::{StringLit, StringSegment};
 use crate::parser::ast::{BinaryOp, Expr, PrimitiveType, UnaryOp};
+use crate::semantic::scope::DefKind;
 use crate::span::Spanned;
 
 use super::c_mangle;
@@ -394,6 +395,29 @@ impl CodegenContext<'_> {
                 all_args.push(self.gen_expr(&arg.node.value));
             }
             return format!("{recv}.vtable->{method_name}({})", all_args.join(", "));
+        }
+
+        // Check if receiver is a type name (static method call like Point.origin())
+        if let Expr::Identifier(name) = &receiver.node {
+            let is_type = self
+                .resolution_map
+                .get(&receiver.span.start)
+                .map(|def_id| self.scopes.get_def(*def_id))
+                .or_else(|| {
+                    self.scopes
+                        .lookup_by_name_anywhere(name)
+                        .map(|def_id| self.scopes.get_def(def_id))
+                })
+                .map_or(false, |def| {
+                    matches!(def.kind, DefKind::Struct | DefKind::Enum)
+                });
+
+            if is_type {
+                let mangled = c_mangle::mangle_method(name, method_name);
+                let arg_exprs: Vec<String> =
+                    args.iter().map(|a| self.gen_expr(&a.node.value)).collect();
+                return format!("{mangled}({})", arg_exprs.join(", "));
+            }
         }
 
         let recv = self.gen_expr(receiver);

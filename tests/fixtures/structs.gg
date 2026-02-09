@@ -9,6 +9,8 @@ struct Rectangle:
 equip Point:
     float sum(self):
         return self.x + self.y
+    Point origin():
+        return Point(0.0, 0.0)
 
 void print_point(Point p):
     print("point")
@@ -22,3 +24,5 @@ void main():
     print("rectangle created")
     float s = p.sum()
     print("sum called")
+    Point o = Point.origin()
+    print("origin called")
