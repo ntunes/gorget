@@ -309,6 +309,40 @@ trait Iterator[T]:
     Option[T] next(&self)
 ```
 
+### 4.4.1 Trait Naming Conventions
+
+Gorget doesn't enforce trait naming rules, but following consistent conventions makes code read naturally with `is` (trait bounds) and `equip...with` (implementations).
+
+| Category | Suffix | Examples | Reads with `is` / `equip...with` |
+|----------|--------|----------|-----------------------------------|
+| Capabilities | `-able` / `-ible` | `Hashable`, `Equatable`, `Displayable`, `Serializable`, `Cloneable` | `is Hashable` / `equip Point with Hashable` |
+| Behaviors / roles | `-er` / `-or` | `Iterator`, `Handler`, `Formatter`, `Greeter` | `is Iterator` / `equip Vec with Iterator` |
+| Operators / conversions | bare verb/noun | `Add`, `Sub`, `From`, `Into`, `Index`, `Copy`, `Default` | `is Add` / `equip Point with Add` |
+| Domain abstractions | bare noun | `Shape`, `Animal`, `Collection` | `is Shape` / `equip Circle with Shape` |
+
+**Guidelines:**
+
+- Prefer `-able`/`-ible` suffixes for traits that describe **what a type can do** (capabilities). These read most naturally with `is`: "T is Displayable."
+- Prefer `-er`/`-or` suffixes for traits that describe **what a type acts as** (roles/behaviors). These work well with both keywords: "T is Iterator" / "equip Vec with Iterator."
+- Operator traits (`Add`, `Sub`, etc.) and conversion traits (`From`, `Into`) keep short, bare names — they're used so frequently that brevity wins.
+- Domain-specific traits (`Shape`, `Animal`) use whatever noun is natural — don't force `-able` onto everything.
+- When in doubt, ask: does the trait describe a **capability** (-able) or an **identity** (noun/-er)? Pick accordingly.
+
+**Anti-patterns:**
+
+```gorget
+# Avoid
+trait Sequence:           # ambiguous — is this a type or a trait?
+    ...
+# Prefer
+trait Iterable:           # clearly a capability
+    ...
+
+# But domain nouns are fine when they ARE the concept
+trait Shape:              # "Shape" is the right name — don't call it "Shapeable"
+    float area(self)
+```
+
 ### 4.5 Self parameter modes
 
 ```gorget

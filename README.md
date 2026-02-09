@@ -141,7 +141,7 @@ trait Shape:
 struct Circle:
     int radius
 
-equip Circle as Shape:
+equip Circle with Shape:
     int area(self):
         return 3 * self.radius * self.radius
 ```
