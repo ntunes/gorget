@@ -284,7 +284,8 @@ equip Point:
     fn newtype_def() {
         let source = "newtype UserId(int)\n";
         let c_code = compile_to_c(source);
-        assert!(c_code.contains("typedef struct { int64_t value; } UserId;"));
+        assert!(c_code.contains("struct UserId {"));
+        assert!(c_code.contains("int64_t value;"));
     }
 
     #[test]

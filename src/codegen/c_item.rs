@@ -417,7 +417,11 @@ impl CodegenContext<'_> {
     fn emit_newtype(&self, nt: &NewtypeDef, emitter: &mut CEmitter) {
         let inner = c_types::ast_type_to_c(&nt.inner_type.node, self.scopes);
         let name = &nt.name.node;
-        emitter.emit_line(&format!("typedef struct {{ {inner} value; }} {name};"));
+        emitter.emit_line(&format!("struct {name} {{"));
+        emitter.indent();
+        emitter.emit_line(&format!("{inner} value;"));
+        emitter.dedent();
+        emitter.emit_line("};");
     }
 
     // ─── Trait Definitions ─────────────────────────────────

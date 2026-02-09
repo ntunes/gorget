@@ -46,4 +46,3 @@ cargo test               # all tests (use --test-threads=1 if integration tests 
 - `auto` with struct types may not resolve correctly for all cases
 - Method call receiver type resolution can fail — `p.sum()` may generate incorrect C
 - Static method calls like `Point.origin()` generate invalid C
-- `newtype` has typedef redefinition issues with forward declarations

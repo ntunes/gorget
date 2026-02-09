@@ -322,7 +322,9 @@ impl CodegenContext<'_> {
             // Check if this is a struct constructor
             if let Some(def_id) = self.scopes.lookup(name) {
                 let def = self.scopes.get_def(def_id);
-                if def.kind == crate::semantic::scope::DefKind::Struct {
+                if def.kind == crate::semantic::scope::DefKind::Struct
+                    || def.kind == crate::semantic::scope::DefKind::Newtype
+                {
                     let field_exprs: Vec<String> =
                         args.iter().map(|a| self.gen_expr(&a.node.value)).collect();
                     let fields = field_exprs.join(", ");

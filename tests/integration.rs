@@ -271,6 +271,11 @@ test7 done",
     );
 }
 
+#[test]
+fn newtype() {
+    run_gg("newtype.gg", "newtype works");
+}
+
 /// Test that `gg run` works (compile + execute in one step).
 #[test]
 fn gg_run_command() {
