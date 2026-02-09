@@ -54,6 +54,26 @@ pub fn mangle_closure_env(id: usize) -> String {
     format!("__vyper_env_{id}")
 }
 
+/// Mangle a generic type/function instantiation.
+/// `Pair` + `["int64_t", "double"]` → `Pair__int64_t__double`
+pub fn mangle_generic(base: &str, c_type_args: &[String]) -> String {
+    if c_type_args.is_empty() {
+        return base.to_string();
+    }
+    let mangled: Vec<String> = c_type_args.iter().map(|t| sanitize_c_type(t)).collect();
+    format!("{base}__{}", mangled.join("__"))
+}
+
+/// Sanitize a C type string for embedding in an identifier.
+fn sanitize_c_type(t: &str) -> String {
+    t.replace("const ", "const_")
+        .replace("char*", "char_ptr")
+        .replace('*', "_ptr")
+        .replace(' ', "_")
+        .replace('[', "_")
+        .replace(']', "")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -87,5 +107,28 @@ mod tests {
         assert_eq!(mangle_closure(5), "__vyper_closure_5");
         assert_eq!(mangle_closure_env(0), "__vyper_env_0");
         assert_eq!(mangle_closure_env(3), "__vyper_env_3");
+    }
+
+    #[test]
+    fn generic_mangle_basic() {
+        assert_eq!(
+            mangle_generic("Pair", &["int64_t".into(), "double".into()]),
+            "Pair__int64_t__double"
+        );
+        assert_eq!(mangle_generic("Box", &["int64_t".into()]), "Box__int64_t");
+        // Empty args returns base name unchanged
+        assert_eq!(mangle_generic("Pair", &[]), "Pair");
+    }
+
+    #[test]
+    fn generic_mangle_pointer_type() {
+        assert_eq!(
+            mangle_generic("Box", &["const char*".into()]),
+            "Box__const_char_ptr"
+        );
+        assert_eq!(
+            mangle_generic("Wrapper", &["int64_t*".into()]),
+            "Wrapper__int64_t_ptr"
+        );
     }
 }

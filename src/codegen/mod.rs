@@ -18,7 +18,25 @@ use crate::semantic::scope::ScopeTable;
 use crate::semantic::types::TypeTable;
 use crate::semantic::AnalysisResult;
 
+use crate::parser::ast::{EnumDef, FunctionDef, StructDef};
 use c_emitter::CEmitter;
+
+/// A registered generic instantiation.
+#[derive(Clone)]
+pub struct GenericInstance {
+    pub base_name: String,
+    pub mangled_name: String,
+    pub c_type_args: Vec<String>,
+    pub kind: GenericInstanceKind,
+}
+
+/// The kind of generic definition being instantiated.
+#[derive(Clone)]
+pub enum GenericInstanceKind {
+    Struct,
+    Enum,
+    Function,
+}
 
 /// A closure that has been lifted to a top-level function.
 pub struct LiftedClosure {
@@ -47,6 +65,14 @@ pub struct CodegenContext<'a> {
     /// Uses RefCell to allow mutation from `&self` methods (gen_expr).
     pub lifted_closures: RefCell<Vec<LiftedClosure>>,
     pub closure_counter: RefCell<usize>,
+    /// Generic instantiations registered during codegen.
+    pub generic_instances: RefCell<Vec<GenericInstance>>,
+    /// Generic struct templates stored for monomorphization.
+    pub generic_struct_templates: RefCell<FxHashMap<String, StructDef>>,
+    /// Generic enum templates stored for monomorphization.
+    pub generic_enum_templates: RefCell<FxHashMap<String, EnumDef>>,
+    /// Generic function templates stored for monomorphization.
+    pub generic_fn_templates: RefCell<FxHashMap<String, FunctionDef>>,
 }
 
 /// Generate C source code from a parsed and analyzed Vyper module.
@@ -62,9 +88,16 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult) -> String {
         current_function_throws: false,
         lifted_closures: RefCell::new(Vec::new()),
         closure_counter: RefCell::new(0),
+        generic_instances: RefCell::new(Vec::new()),
+        generic_struct_templates: RefCell::new(FxHashMap::default()),
+        generic_enum_templates: RefCell::new(FxHashMap::default()),
+        generic_fn_templates: RefCell::new(FxHashMap::default()),
     };
 
     let mut emitter = CEmitter::new();
+
+    ctx.collect_generic_templates(module);
+    ctx.discover_generic_usages(module);
 
     // 1. Runtime preamble (includes)
     emitter.emit(c_runtime::RUNTIME);
@@ -74,6 +107,9 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult) -> String {
 
     // 3. Type definitions (structs, enums, type aliases, newtypes)
     ctx.emit_type_definitions(module, &mut emitter);
+
+    // 3b. Emit monomorphized generic instantiations
+    ctx.emit_generic_instantiations(&mut emitter);
 
     // 4. Function declarations
     ctx.emit_function_declarations(module, &mut emitter);
@@ -609,5 +645,118 @@ void main():
 ";
         let c_code = compile_to_c(source);
         assert!(!c_code.contains("unsupported expr"));
+    }
+
+    // ── Phase 8 tests ──────────────────────────────────────
+
+    #[test]
+    fn generic_struct_skips_template() {
+        // The bare generic struct (with type params) should NOT be emitted to C output
+        let source = "\
+struct Pair[A, B]:
+    A first
+    B second
+";
+        let c_code = compile_to_c(source);
+        assert!(!c_code.contains("struct Pair {"), "Generic template should not be emitted directly");
+        assert!(!c_code.contains("typedef struct Pair Pair;"), "Generic template forward decl should not be emitted");
+    }
+
+    #[test]
+    fn generic_struct_emits_specialized() {
+        let source = "\
+struct Pair[A, B]:
+    A first
+    B second
+
+void main():
+    Pair[int, float] p = Pair[int, float](1, 2.0)
+";
+        let c_code = compile_to_c(source);
+        assert!(c_code.contains("Pair__int64_t__double"), "Should contain mangled struct name");
+        assert!(c_code.contains("int64_t first;"), "Specialized struct should have int64_t field");
+        assert!(c_code.contains("double second;"), "Specialized struct should have double field");
+    }
+
+    #[test]
+    fn generic_struct_forward_decl() {
+        let source = "\
+struct Pair[A, B]:
+    A first
+    B second
+
+void main():
+    Pair[int, float] p = Pair[int, float](1, 2.0)
+";
+        let c_code = compile_to_c(source);
+        assert!(c_code.contains("typedef struct Pair__int64_t__double Pair__int64_t__double;"),
+            "Monomorphized struct should get typedef forward decl");
+    }
+
+    #[test]
+    fn generic_type_maps_correctly() {
+        // Set[int] → VyperSet (built-in), Pair[int, str] → mangled name (user-defined)
+        use crate::semantic::scope::ScopeTable;
+        let scopes = ScopeTable::new();
+
+        // Set[int] should still map to VyperSet
+        let ty = crate::parser::ast::Type::Named {
+            name: crate::span::Spanned {
+                node: "Set".to_string(),
+                span: crate::span::Span::new(0, 0),
+            },
+            generic_args: vec![crate::span::Spanned {
+                node: crate::parser::ast::Type::Primitive(crate::parser::ast::PrimitiveType::Int),
+                span: crate::span::Span::new(0, 0),
+            }],
+        };
+        assert_eq!(c_types::ast_type_to_c(&ty, &scopes), "VyperSet");
+
+        // Unknown generic type should produce mangled name
+        let ty2 = crate::parser::ast::Type::Named {
+            name: crate::span::Spanned {
+                node: "Pair".to_string(),
+                span: crate::span::Span::new(0, 0),
+            },
+            generic_args: vec![
+                crate::span::Spanned {
+                    node: crate::parser::ast::Type::Primitive(crate::parser::ast::PrimitiveType::Int),
+                    span: crate::span::Span::new(0, 0),
+                },
+                crate::span::Spanned {
+                    node: crate::parser::ast::Type::Primitive(crate::parser::ast::PrimitiveType::Str),
+                    span: crate::span::Span::new(0, 0),
+                },
+            ],
+        };
+        let result = c_types::ast_type_to_c(&ty2, &scopes);
+        assert_eq!(result, "Pair__int64_t__const_char_ptr");
+    }
+
+    #[test]
+    fn generic_call_mangles_name() {
+        let source = "\
+int max[T](T a, T b) = a
+
+void main():
+    int x = max[int](1, 2)
+";
+        let c_code = compile_to_c(source);
+        assert!(c_code.contains("max__int64_t("), "Generic call should use mangled name");
+    }
+
+    #[test]
+    fn generic_function_emits_specialized() {
+        let source = "\
+int identity[T](T x) = x
+
+void main():
+    int y = identity[int](42)
+";
+        let c_code = compile_to_c(source);
+        // The generic template should not be emitted
+        assert!(!c_code.contains("int64_t identity("), "Generic template should not be emitted");
+        // The specialized version should be emitted
+        assert!(c_code.contains("identity__int64_t"), "Specialized function should be emitted");
     }
 }

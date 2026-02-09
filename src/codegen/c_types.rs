@@ -32,20 +32,26 @@ pub fn ast_type_to_c(ty: &crate::parser::ast::Type, scopes: &ScopeTable) -> Stri
     match ty {
         crate::parser::ast::Type::Primitive(prim) => primitive_to_c(*prim).to_string(),
         crate::parser::ast::Type::Named { name, generic_args } => {
-            if let Some(def_id) = scopes.lookup(&name.node) {
+            if !generic_args.is_empty() {
+                match name.node.as_str() {
+                    "Vector" | "List" | "Array" => "VyperArray".to_string(),
+                    "Set" => "VyperSet".to_string(),
+                    "Dict" | "Map" | "HashMap" => "VyperMap".to_string(),
+                    _ => {
+                        // User-defined generic type → mangled name
+                        let c_args: Vec<String> = generic_args
+                            .iter()
+                            .map(|a| ast_type_to_c(&a.node, scopes))
+                            .collect();
+                        super::c_mangle::mangle_generic(&name.node, &c_args)
+                    }
+                }
+            } else if let Some(def_id) = scopes.lookup(&name.node) {
                 let def = scopes.get_def(def_id);
                 match def.kind {
                     crate::semantic::scope::DefKind::Struct => name.node.clone(),
                     crate::semantic::scope::DefKind::Enum => name.node.clone(),
                     _ => name.node.clone(),
-                }
-            } else if !generic_args.is_empty() {
-                // Generic collection types → VyperArray
-                match name.node.as_str() {
-                    "Vector" | "List" | "Array" => "VyperArray".to_string(),
-                    "Set" => "VyperSet".to_string(),
-                    "Dict" | "Map" | "HashMap" => "VyperMap".to_string(),
-                    _ => "void*".to_string(),
                 }
             } else {
                 name.node.clone()
@@ -141,9 +147,20 @@ pub fn type_id_to_c(type_id: TypeId, types: &TypeTable, scopes: &ScopeTable) -> 
             let elem_c = type_id_to_c(*elem, types, scopes);
             format!("struct {{ const {elem_c}* data; size_t len; }}")
         }
-        ResolvedType::Generic(def_id, _args) => {
-            // Monomorphization is Phase 7+; fall back to the defined type name
-            def_name_to_c(*def_id, scopes)
+        ResolvedType::Generic(def_id, args) => {
+            let base = def_name_to_c(*def_id, scopes);
+            match base.as_str() {
+                "Vector" | "List" | "Array" => "VyperArray".to_string(),
+                "Set" => "VyperSet".to_string(),
+                "Dict" | "Map" | "HashMap" => "VyperMap".to_string(),
+                _ => {
+                    let c_args: Vec<String> = args
+                        .iter()
+                        .map(|tid| type_id_to_c(*tid, types, scopes))
+                        .collect();
+                    super::c_mangle::mangle_generic(&base, &c_args)
+                }
+            }
         }
         ResolvedType::TraitObject(_def_id) => {
             // Dynamic dispatch is Phase 7+; use void*

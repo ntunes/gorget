@@ -51,14 +51,26 @@ impl CodegenContext<'_> {
                 format!("({l} {c_op} {r})")
             }
 
-            Expr::Call { callee, args, .. } => self.gen_call(callee, args),
+            Expr::Call { callee, generic_args, args } => {
+                if let Some(type_args) = generic_args {
+                    self.gen_generic_call(callee, type_args, args)
+                } else {
+                    self.gen_call(callee, args)
+                }
+            }
 
             Expr::MethodCall {
                 receiver,
                 method,
+                generic_args,
                 args,
-                ..
-            } => self.gen_method_call(receiver, &method.node, args),
+            } => {
+                if let Some(type_args) = generic_args {
+                    self.gen_generic_method_call(receiver, &method.node, type_args, args)
+                } else {
+                    self.gen_method_call(receiver, &method.node, args)
+                }
+            }
 
             Expr::FieldAccess { object, field } => {
                 let obj = self.gen_expr(object);
@@ -366,6 +378,82 @@ impl CodegenContext<'_> {
         // Try to figure out the receiver type for mangling
         let type_name = self.infer_receiver_type(receiver);
         let mangled = c_mangle::mangle_method(&type_name, method_name);
+        let mut all_args = vec![format!("&{recv}")];
+        for arg in args {
+            all_args.push(self.gen_expr(&arg.node.value));
+        }
+        format!("{mangled}({})", all_args.join(", "))
+    }
+
+    /// Generate a generic function call: `func[int](args)` → `func__int64_t(args)`
+    fn gen_generic_call(
+        &self,
+        callee: &Spanned<Expr>,
+        type_args: &[Spanned<crate::parser::ast::Type>],
+        args: &[Spanned<crate::parser::ast::CallArg>],
+    ) -> String {
+        let c_type_args: Vec<String> = type_args
+            .iter()
+            .map(|a| c_types::ast_type_to_c(&a.node, self.scopes))
+            .collect();
+
+        let base_name = match &callee.node {
+            Expr::Identifier(name) => name.clone(),
+            Expr::Path { segments } if segments.len() == 2 => {
+                let type_name = &segments[0].node;
+                let method_name = &segments[1].node;
+                let mangled = c_mangle::mangle_method(type_name, method_name);
+                let full_mangled = c_mangle::mangle_generic(&mangled, &c_type_args);
+                self.register_generic(&mangled, &c_type_args, super::GenericInstanceKind::Function);
+                let arg_exprs: Vec<String> =
+                    args.iter().map(|a| self.gen_expr(&a.node.value)).collect();
+                return format!("{full_mangled}({})", arg_exprs.join(", "));
+            }
+            _ => {
+                let callee_str = self.gen_expr(callee);
+                callee_str
+            }
+        };
+
+        // Check if the callee is a generic struct constructor
+        if self.generic_struct_templates.borrow().contains_key(&base_name) {
+            let mangled = self.register_generic(&base_name, &c_type_args, super::GenericInstanceKind::Struct);
+            let field_exprs: Vec<String> =
+                args.iter().map(|a| self.gen_expr(&a.node.value)).collect();
+            return format!("({mangled}){{{}}}", field_exprs.join(", "));
+        }
+
+        // Check if the callee is a generic enum variant constructor
+        if self.generic_enum_templates.borrow().contains_key(&base_name) {
+            let mangled = self.register_generic(&base_name, &c_type_args, super::GenericInstanceKind::Enum);
+            let field_exprs: Vec<String> =
+                args.iter().map(|a| self.gen_expr(&a.node.value)).collect();
+            return format!("({mangled}){{{}}}", field_exprs.join(", "));
+        }
+
+        let mangled = c_mangle::mangle_generic(&base_name, &c_type_args);
+        self.register_generic(&base_name, &c_type_args, super::GenericInstanceKind::Function);
+        let arg_exprs: Vec<String> = args.iter().map(|a| self.gen_expr(&a.node.value)).collect();
+        format!("{mangled}({})", arg_exprs.join(", "))
+    }
+
+    /// Generate a generic method call: `obj.method[T](args)` → `Type__method__T(&obj, args)`
+    fn gen_generic_method_call(
+        &self,
+        receiver: &Spanned<Expr>,
+        method_name: &str,
+        type_args: &[Spanned<crate::parser::ast::Type>],
+        args: &[Spanned<crate::parser::ast::CallArg>],
+    ) -> String {
+        let recv = self.gen_expr(receiver);
+        let type_name = self.infer_receiver_type(receiver);
+        let c_type_args: Vec<String> = type_args
+            .iter()
+            .map(|a| c_types::ast_type_to_c(&a.node, self.scopes))
+            .collect();
+        let base_method = c_mangle::mangle_method(&type_name, method_name);
+        let mangled = c_mangle::mangle_generic(&base_method, &c_type_args);
+        self.register_generic(&base_method, &c_type_args, super::GenericInstanceKind::Function);
         let mut all_args = vec![format!("&{recv}")];
         for arg in args {
             all_args.push(self.gen_expr(&arg.node.value));

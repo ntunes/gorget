@@ -256,13 +256,14 @@ impl CodegenContext<'_> {
     }
 
     /// Resolve the C type for a declaration, handling `auto` (Inferred).
+    /// Also registers generic instantiations when a user-defined generic type is used.
     fn resolve_decl_type(&self, type_: &Spanned<Type>, value: &Spanned<Expr>) -> String {
         match &type_.node {
             Type::Inferred => {
                 // Infer type from value expression
                 self.infer_c_type_from_expr(&value.node)
             }
-            _ => c_types::ast_type_to_c(&type_.node, self.scopes),
+            _ => self.type_to_c_with_registration(&type_.node),
         }
     }
 

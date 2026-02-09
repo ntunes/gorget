@@ -562,11 +562,14 @@ impl Parser {
 
                 let field = self.expect_name()?;
 
-                // Check for method call: expr.method(args)
-                if self.check(&Token::LParen) {
-                    // Check for generic args: expr.method[T](args)
-                    let generic_args = None; // TODO: handle .method[T]()
-                    self.advance(); // skip (
+                // Check for method call: expr.method(args) or expr.method[T](args)
+                if self.check(&Token::LBracket) || self.check(&Token::LParen) {
+                    let generic_args = if self.check(&Token::LBracket) {
+                        Some(self.parse_generic_type_args()?)
+                    } else {
+                        None
+                    };
+                    self.expect(&Token::LParen)?;
                     let args = self.parse_call_args()?;
                     self.expect(&Token::RParen)?;
                     let end = self.previous_span();
@@ -605,7 +608,30 @@ impl Parser {
             }
 
             Token::LBracket => {
-                self.advance();
+                // Ambiguity: expr[...] could be indexing OR generic call expr[T](args).
+                // Use save/restore backtracking: try parsing as generic type args.
+                // If the next token after ] is (, it's a generic call. Otherwise, restore
+                // and parse as index.
+                let saved_pos = self.pos;
+                if let Ok(type_args) = self.parse_generic_type_args() {
+                    if self.check(&Token::LParen) {
+                        self.advance(); // skip (
+                        let args = self.parse_call_args()?;
+                        self.expect(&Token::RParen)?;
+                        let end = self.previous_span();
+                        return Ok(Spanned::new(
+                            Expr::Call {
+                                callee: Box::new(lhs),
+                                generic_args: Some(type_args),
+                                args,
+                            },
+                            start.merge(end),
+                        ));
+                    }
+                }
+                // Not a generic call — backtrack, parse as index
+                self.pos = saved_pos;
+                self.advance(); // skip [
                 let index = self.parse_expr()?;
                 self.expect(&Token::RBracket)?;
                 let end = self.previous_span();
@@ -1157,6 +1183,21 @@ impl Parser {
     }
 
     // ── Call Arguments ────────────────────────────────────────
+
+    /// Parse generic type arguments: `[T1, T2, ...]`
+    /// Expects the opening `[` to be the current token.
+    fn parse_generic_type_args(&mut self) -> Result<Vec<Spanned<Type>>, ParseError> {
+        self.expect(&Token::LBracket)?;
+        let mut args = Vec::new();
+        while !self.check(&Token::RBracket) && !self.at_end() {
+            args.push(self.parse_type()?);
+            if !self.check(&Token::RBracket) {
+                self.expect(&Token::Comma)?;
+            }
+        }
+        self.expect(&Token::RBracket)?;
+        Ok(args)
+    }
 
     fn parse_call_args(&mut self) -> Result<Vec<Spanned<CallArg>>, ParseError> {
         let mut args = Vec::new();

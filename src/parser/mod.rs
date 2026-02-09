@@ -2045,4 +2045,75 @@ mod tests {
         let module = parse("# This is a comment\n# Another comment\n");
         assert_eq!(module.items.len(), 0);
     }
+
+    // ── Phase 8: Generic Call Parsing ─────────────────────────
+
+    #[test]
+    fn test_parse_generic_method_call() {
+        let module = parse("void main():\n    x.convert[str]()\n");
+        if let Item::Function(ref f) = module.items[0].node {
+            if let FunctionBody::Block(ref block) = f.body {
+                if let Stmt::Expr(ref expr) = block.stmts[0].node {
+                    if let Expr::MethodCall { ref method, ref generic_args, .. } = expr.node {
+                        assert_eq!(method.node, "convert");
+                        assert!(generic_args.is_some());
+                        let args = generic_args.as_ref().unwrap();
+                        assert_eq!(args.len(), 1);
+                    } else {
+                        panic!("Expected MethodCall");
+                    }
+                } else {
+                    panic!();
+                }
+            } else {
+                panic!();
+            }
+        } else {
+            panic!();
+        }
+    }
+
+    #[test]
+    fn test_parse_generic_function_call() {
+        let module = parse("void main():\n    max[int](a, b)\n");
+        if let Item::Function(ref f) = module.items[0].node {
+            if let FunctionBody::Block(ref block) = f.body {
+                if let Stmt::Expr(ref expr) = block.stmts[0].node {
+                    if let Expr::Call { ref generic_args, ref args, .. } = expr.node {
+                        assert!(generic_args.is_some());
+                        let type_args = generic_args.as_ref().unwrap();
+                        assert_eq!(type_args.len(), 1);
+                        assert_eq!(args.len(), 2);
+                    } else {
+                        panic!("Expected Call with generic args");
+                    }
+                } else {
+                    panic!();
+                }
+            } else {
+                panic!();
+            }
+        } else {
+            panic!();
+        }
+    }
+
+    #[test]
+    fn test_parse_index_still_works() {
+        // Regression: arr[0] should still produce Index, not a generic call
+        let module = parse("void main():\n    arr[0]\n");
+        if let Item::Function(ref f) = module.items[0].node {
+            if let FunctionBody::Block(ref block) = f.body {
+                if let Stmt::Expr(ref expr) = block.stmts[0].node {
+                    assert!(matches!(&expr.node, Expr::Index { .. }));
+                } else {
+                    panic!();
+                }
+            } else {
+                panic!();
+            }
+        } else {
+            panic!();
+        }
+    }
 }
