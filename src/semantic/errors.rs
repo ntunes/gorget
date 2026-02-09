@@ -81,6 +81,9 @@ pub enum SemanticErrorKind {
 
     /// Same variable moved twice.
     DoubleMove { name: String, first_move: Span },
+
+    /// Non-printable type used in string interpolation.
+    NonPrintableInterpolation { var_name: String, type_name: String },
 }
 
 impl std::fmt::Display for SemanticError {
@@ -174,6 +177,15 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::DoubleMove { name, .. } => {
                 write!(f, "value `{name}` moved more than once")
+            }
+            SemanticErrorKind::NonPrintableInterpolation {
+                var_name,
+                type_name,
+            } => {
+                write!(
+                    f,
+                    "cannot interpolate `{var_name}` of type `{type_name}` in string"
+                )
             }
         }
     }

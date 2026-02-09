@@ -750,7 +750,20 @@ impl CodegenContext<'_> {
                 (fmt.to_string(), arg)
             }
             ResolvedType::Void => ("%s".to_string(), "\"void\"".to_string()),
-            _ => ("%lld".to_string(), format!("(long long){expr}")),
+            ResolvedType::Defined(def_id) | ResolvedType::Generic(def_id, _) => {
+                let name = &self.scopes.get_def(*def_id).name;
+                panic!("type '{name}' cannot be used in string interpolation")
+            }
+            ResolvedType::Array(_, _)
+            | ResolvedType::Tuple(_)
+            | ResolvedType::Function { .. }
+            | ResolvedType::TraitObject(_)
+            | ResolvedType::Slice(_) => {
+                panic!("non-primitive type cannot be used in string interpolation")
+            }
+            ResolvedType::Error | ResolvedType::Never | ResolvedType::Var(_) => {
+                ("%lld".to_string(), format!("(long long){expr}"))
+            }
         }
     }
 

@@ -70,6 +70,20 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    /// Return a human-readable name for a resolved type.
+    /// Uses the definition name for `Defined`/`Generic` types instead of the
+    /// unhelpful `"<defined>"` from `TypeTable::display`.
+    fn describe_resolved_type(&self, type_id: TypeId) -> String {
+        match self.types.get(type_id) {
+            ResolvedType::Defined(def_id) => self.scopes.get_def(*def_id).name.clone(),
+            ResolvedType::Generic(def_id, _) => self.scopes.get_def(*def_id).name.clone(),
+            ResolvedType::TraitObject(def_id) => {
+                format!("trait {}", self.scopes.get_def(*def_id).name)
+            }
+            _ => self.types.display(type_id),
+        }
+    }
+
     /// Unify two types, binding type variables as needed.
     fn unify(&mut self, a: TypeId, b: TypeId, span: Span) -> TypeId {
         let a = self.resolve_type(a);
@@ -133,7 +147,31 @@ impl<'a> TypeChecker<'a> {
             Expr::FloatLiteral(_) => self.types.float_id,
             Expr::BoolLiteral(_) => self.types.bool_id,
             Expr::CharLiteral(_) => self.types.char_id,
-            Expr::StringLiteral(_) => self.types.string_id,
+            Expr::StringLiteral(s) => {
+                use crate::lexer::token::StringSegment;
+                for seg in &s.segments {
+                    if let StringSegment::Interpolation(var_name) = seg {
+                        if let Some(def_id) = self.scopes.lookup_by_name_anywhere(var_name) {
+                            let def = self.scopes.get_def(def_id);
+                            if let Some(type_id) = def.type_id {
+                                match self.types.get(type_id) {
+                                    ResolvedType::Primitive(_) | ResolvedType::Void => {}
+                                    _ => {
+                                        self.error(
+                                            SemanticErrorKind::NonPrintableInterpolation {
+                                                var_name: var_name.clone(),
+                                                type_name: self.describe_resolved_type(type_id),
+                                            },
+                                            expr.span.clone(),
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                self.types.string_id
+            }
             Expr::NoneLiteral => {
                 // None is Option[?T] — for now return error type
                 self.types.error_id
@@ -980,6 +1018,49 @@ mod tests {
                 super::SemanticErrorKind::TypeMismatch { .. }
             )),
             "unexpected errors: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn interpolation_struct_rejected() {
+        let errors = check(
+            "struct Foo:\n    int x\nvoid main():\n    Foo f = Foo(1)\n    print(\"{f}\")\n",
+        );
+        assert!(
+            errors.iter().any(|e| matches!(
+                &e.kind,
+                super::SemanticErrorKind::NonPrintableInterpolation { .. }
+            )),
+            "expected NonPrintableInterpolation error, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn interpolation_enum_rejected() {
+        let errors = check(
+            "enum Color:\n    Red()\n    Blue()\nvoid main():\n    Color c = Red()\n    print(\"{c}\")\n",
+        );
+        assert!(
+            errors.iter().any(|e| matches!(
+                &e.kind,
+                super::SemanticErrorKind::NonPrintableInterpolation { .. }
+            )),
+            "expected NonPrintableInterpolation error, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn interpolation_primitives_ok() {
+        let errors = check("void main():\n    int x = 42\n    print(\"{x}\")\n");
+        assert!(
+            !errors.iter().any(|e| matches!(
+                &e.kind,
+                super::SemanticErrorKind::NonPrintableInterpolation { .. }
+            )),
+            "unexpected NonPrintableInterpolation error: {:?}",
             errors
         );
     }
