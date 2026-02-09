@@ -1,0 +1,56 @@
+pub mod errors;
+pub mod ids;
+pub mod intern;
+pub mod resolve;
+pub mod scope;
+pub mod traits;
+pub mod typecheck;
+pub mod types;
+
+use crate::parser::ast::Module;
+use errors::SemanticError;
+use scope::ScopeTable;
+use traits::TraitRegistry;
+use types::TypeTable;
+
+/// The result of semantic analysis.
+pub struct AnalysisResult {
+    pub scopes: ScopeTable,
+    pub types: TypeTable,
+    pub traits: TraitRegistry,
+    pub errors: Vec<SemanticError>,
+}
+
+/// Run all semantic analysis passes on a parsed module.
+pub fn analyze(module: &Module) -> AnalysisResult {
+    let mut scopes = ScopeTable::new();
+    let mut types = TypeTable::new();
+    let mut errors = Vec::new();
+
+    // Pass 1: Collect top-level definitions
+    resolve::collect_top_level(module, &mut scopes, &mut types, &mut errors);
+
+    // Pass 2: Resolve names in all bodies
+    let resolution_map = resolve::resolve_bodies(module, &mut scopes, &mut types, &mut errors);
+
+    // Pass 3: Build trait/impl registry
+    let trait_registry =
+        traits::build_registry(module, &scopes, &mut types, &resolution_map, &mut errors);
+
+    // Pass 4: Type check everything
+    typecheck::check_module(
+        module,
+        &scopes,
+        &mut types,
+        &trait_registry,
+        &resolution_map,
+        &mut errors,
+    );
+
+    AnalysisResult {
+        scopes,
+        types,
+        traits: trait_registry,
+        errors,
+    }
+}

@@ -1,0 +1,22 @@
+# This file intentionally contains errors to test semantic analysis.
+
+# Error: duplicate definition
+int foo() = 1
+int foo() = 2
+
+# Error: undefined variable
+void use_undefined():
+    int x = unknown_variable
+
+# Error: missing trait method
+trait Greetable:
+    void greet(self)
+    String name(self)
+
+struct Robot:
+    String id
+
+implement Greetable for Robot:
+    void greet(self):
+        pass
+    # Missing: String name(self)

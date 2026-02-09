@@ -126,6 +126,28 @@ impl ErrorReporter {
         self.emit(&diag);
     }
 
+    pub fn report_semantic_error(&self, err: &crate::semantic::errors::SemanticError) {
+        use crate::semantic::errors::SemanticErrorKind;
+
+        let mut labels = vec![Label::primary(
+            self.file_id,
+            err.span.start..err.span.end,
+        )];
+
+        // Add secondary label for duplicate definitions pointing to the original.
+        if let SemanticErrorKind::DuplicateDefinition { original, .. } = &err.kind {
+            labels.push(
+                Label::secondary(self.file_id, original.start..original.end)
+                    .with_message("originally defined here"),
+            );
+        }
+
+        let diag = diagnostic::Diagnostic::error()
+            .with_message(err.to_string())
+            .with_labels(labels);
+        self.emit(&diag);
+    }
+
     fn emit(&self, diag: &diagnostic::Diagnostic<usize>) {
         let writer = StandardStream::stderr(ColorChoice::Auto);
         let config = term::Config::default();

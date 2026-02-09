@@ -11,7 +11,7 @@ fn main() {
 
     if args.len() < 3 {
         eprintln!("Usage: vyper <command> <file>");
-        eprintln!("Commands: lex, parse");
+        eprintln!("Commands: lex, parse, check");
         process::exit(1);
     }
 
@@ -51,9 +51,35 @@ fn main() {
 
             println!("{module:#?}");
         }
+        "check" => {
+            let mut parser = Parser::new(&source);
+            let module = parser.parse_module();
+
+            if !parser.errors.is_empty() {
+                let reporter = ErrorReporter::new(filename.clone(), source.clone());
+                for err in &parser.errors {
+                    reporter.report_parse_error(err);
+                }
+                eprintln!("\n{} parse error(s) found", parser.errors.len());
+                process::exit(1);
+            }
+
+            let result = vyper::semantic::analyze(&module);
+
+            if result.errors.is_empty() {
+                println!("OK: no semantic errors");
+            } else {
+                let reporter = ErrorReporter::new(filename.clone(), source.clone());
+                for err in &result.errors {
+                    reporter.report_semantic_error(err);
+                }
+                eprintln!("\n{} error(s) found", result.errors.len());
+                process::exit(1);
+            }
+        }
         _ => {
             eprintln!("Unknown command: {command}");
-            eprintln!("Commands: lex, parse");
+            eprintln!("Commands: lex, parse, check");
             process::exit(1);
         }
     }

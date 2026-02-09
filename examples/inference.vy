@@ -1,0 +1,62 @@
+# Tests for auto type inference and various type checking scenarios.
+
+void main():
+    # Auto inference from literals
+    auto x = 5
+    auto pi = 3.14
+    auto greeting = "hello"
+    auto flag = true
+    auto ch = 'a'
+
+    # Auto inference from expressions
+    auto sum = x + 10
+    auto product = pi * 2.0
+
+    # Array literal inference
+    auto nums = [1, 2, 3, 4, 5]
+    auto names = ["alice", "bob", "charlie"]
+
+    # Tuple literal inference
+    auto pair = (1, "hello")
+    auto triple = (true, 42, 3.14)
+
+    # Closure inference
+    auto doubler = (int x): x * 2
+    auto adder = (int a, int b): a + b
+
+    # If expression
+    if flag:
+        print("yes")
+    else:
+        print("no")
+
+    # While with bool condition
+    auto count = 0
+    while count < 10:
+        count += 1
+
+    # For loop
+    for i in 0..5:
+        print("{i}")
+
+    # Match statement
+    match x:
+        case 1: print("one")
+        case 2: print("two")
+        else:
+            print("other")
+
+struct Point:
+    float x
+    float y
+
+implement Point:
+    Point origin():
+        return Point(0.0, 0.0)
+
+    float magnitude(self):
+        return 0.0
+
+int add(int a, int b) = a + b
+int double(int x) = x * 2
+bool is_positive(int x) = x > 0
