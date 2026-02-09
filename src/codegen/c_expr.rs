@@ -251,13 +251,13 @@ impl CodegenContext<'_> {
             Expr::OptionalChain { object, field } => {
                 let obj = self.gen_expr(object);
                 let field_name = c_mangle::escape_keyword(&field.node);
-                format!("({obj} != NULL ? {obj}->{field_name} : NULL)")
+                format!("({{ __typeof__({obj}) __oc_tmp = {obj}; __oc_tmp != NULL ? __oc_tmp->{field_name} : NULL; }})")
             }
 
             Expr::NilCoalescing { lhs, rhs } => {
                 let l = self.gen_expr(lhs);
                 let r = self.gen_expr(rhs);
-                format!("({l} != NULL ? {l} : {r})")
+                format!("({{ __typeof__({l}) __nc_tmp = {l}; __nc_tmp != NULL ? __nc_tmp : {r}; }})")
             }
 
             Expr::Try { expr: try_expr } => {
@@ -265,7 +265,7 @@ impl CodegenContext<'_> {
                 format!(
                     "({{ __typeof__({inner}) __try_val; \
                     if (GORGET_TRY) {{ __try_val = {inner}; GORGET_CATCH_END; }} \
-                    else {{ GORGET_CATCH_END; memset(&__try_val, 0, sizeof(__try_val)); return __try_val; }} \
+                    else {{ GORGET_CATCH_END; gorget_throw(__gorget_last_error.message, __gorget_last_error.code); }} \
                     __try_val; }})"
                 )
             }
@@ -1144,6 +1144,7 @@ impl CodegenContext<'_> {
 
         // Build if-else chain; each arm assigns to __gorget_match_result
         let mut arm_parts = Vec::new();
+        let mut first_body: Option<String> = None;
         let mut first = true;
         for arm in arms {
             let cond = self.pattern_to_condition_expr(&arm.pattern.node, "__gorget_scrut");
@@ -1158,6 +1159,7 @@ impl CodegenContext<'_> {
             let body = self.gen_expr(&arm.body);
 
             if first {
+                first_body = Some(body.clone());
                 arm_parts.push(format!("if ({full_cond}) {{ {bindings}__gorget_match_result = {body}; }}"));
                 first = false;
             } else {
@@ -1170,9 +1172,9 @@ impl CodegenContext<'_> {
             arm_parts.push(format!("else {{ __gorget_match_result = {else_body}; }}"));
         }
 
-        // Determine a result type from the first arm body
-        let result_type = if let Some(arm) = arms.first() {
-            format!("__typeof__(({}))", self.gen_expr(&arm.body))
+        // Determine a result type from the first arm body (reuse already-generated body)
+        let result_type = if let Some(body) = &first_body {
+            format!("__typeof__(({}))", body)
         } else {
             "int64_t".to_string()
         };
@@ -1337,7 +1339,7 @@ fn binary_op_to_c(op: BinaryOp) -> &'static str {
         BinaryOp::GtEq => ">=",
         BinaryOp::And => "&&",
         BinaryOp::Or => "||",
-        BinaryOp::In => "/* in */ ==", // `in` doesn't have a direct C equivalent
+        BinaryOp::In => panic!("`in` as a binary expression is not yet implemented in codegen")
     }
 }
 

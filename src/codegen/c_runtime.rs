@@ -17,6 +17,7 @@ typedef struct {
 } GorgetString;
 
 static inline GorgetString gorget_string_new(const char* s) {
+    if (s == NULL) return (GorgetString){NULL, 0, 0};
     size_t len = strlen(s);
     size_t cap = len + 1;
     char* data = (char*)malloc(cap);
@@ -169,7 +170,7 @@ static inline void gorget_map_put(GorgetMap* m, const void* key, const void* val
     uint64_t h = __gorget_fnv1a(key, m->key_size);
     size_t idx = (size_t)(h % m->cap);
     size_t first_tombstone = (size_t)-1;
-    while (1) {
+    for (size_t __probes = 0; __probes < m->cap; __probes++) {
         if (m->states[idx] == 0) {
             size_t target = first_tombstone != (size_t)-1 ? first_tombstone : idx;
             memcpy((char*)m->keys + target * m->key_size, key, m->key_size);
@@ -191,13 +192,21 @@ static inline void gorget_map_put(GorgetMap* m, const void* key, const void* val
         }
         idx = (idx + 1) % m->cap;
     }
+    if (first_tombstone != (size_t)-1) {
+        memcpy((char*)m->keys + first_tombstone * m->key_size, key, m->key_size);
+        if (m->val_size > 0 && value != NULL) {
+            memcpy((char*)m->values + first_tombstone * m->val_size, value, m->val_size);
+        }
+        m->states[first_tombstone] = 1;
+        m->count++;
+    }
 }
 
 static inline void* gorget_map_get(const GorgetMap* m, const void* key) {
     if (m->cap == 0) return NULL;
     uint64_t h = __gorget_fnv1a(key, m->key_size);
     size_t idx = (size_t)(h % m->cap);
-    while (1) {
+    for (size_t __probes = 0; __probes < m->cap; __probes++) {
         if (m->states[idx] == 0) return NULL;
         if (m->states[idx] == 1 && memcmp((const char*)m->keys + idx * m->key_size, key, m->key_size) == 0) {
             if (m->val_size == 0) return (void*)1;  // Set mode: non-NULL means present
@@ -205,6 +214,7 @@ static inline void* gorget_map_get(const GorgetMap* m, const void* key) {
         }
         idx = (idx + 1) % m->cap;
     }
+    return NULL;
 }
 
 static inline bool gorget_map_contains(const GorgetMap* m, const void* key) {
@@ -259,7 +269,7 @@ static jmp_buf __gorget_jmp_stack[64];
 static int __gorget_jmp_top = -1;
 static GorgetError __gorget_last_error;
 
-#define GORGET_TRY (__gorget_jmp_top++, setjmp(__gorget_jmp_stack[__gorget_jmp_top]) == 0)
+#define GORGET_TRY (__gorget_jmp_top >= 63 ? (fprintf(stderr, "gorget: try stack overflow\n"), exit(1), 0) : (__gorget_jmp_top++, setjmp(__gorget_jmp_stack[__gorget_jmp_top]) == 0))
 #define GORGET_CATCH_END (__gorget_jmp_top--)
 
 static inline void gorget_throw(const char* msg, int code) {
