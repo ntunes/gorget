@@ -21,3 +21,26 @@ void main():
         second * 2
 
     print("{z}")
+
+    # do block with if as tail
+    int w = do:
+        int n = 10
+        if n > 5:
+            n + 1
+        else:
+            n - 1
+
+    print("{w}")
+
+    # do block with match as tail
+    int m = do:
+        int val = 2
+        match val:
+            case 1:
+                10
+            case 2:
+                20
+            else:
+                0
+
+    print("{m}")

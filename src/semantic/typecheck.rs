@@ -858,14 +858,46 @@ impl<'a> TypeChecker<'a> {
 
     fn check_block(&mut self, block: &Block) -> TypeId {
         let mut last_type = self.types.void_id;
-        for stmt in &block.stmts {
+        let last_idx = block.stmts.len().saturating_sub(1);
+        for (i, stmt) in block.stmts.iter().enumerate() {
             self.check_stmt(stmt);
-            // The "value" of a block is its last expression statement
+            // The "value" of a block is its last expression statement,
+            // or a tail if/match with branches that end in expressions.
             if let Stmt::Expr(expr) = &stmt.node {
                 last_type = self.infer_expr(expr);
+            } else if i == last_idx {
+                last_type = self.infer_stmt_tail_type(&stmt.node);
             }
         }
         last_type
+    }
+
+    /// Infer the type produced by a statement in tail position of a block.
+    /// Returns void for statements that don't produce values.
+    fn infer_stmt_tail_type(&mut self, stmt: &Stmt) -> TypeId {
+        match stmt {
+            Stmt::If { then_body, else_body, .. } => {
+                // Only value-producing if there's an else branch
+                if else_body.is_some() {
+                    // Type comes from the tail expression of the then branch
+                    if let Some(tail) = then_body.stmts.last() {
+                        if let Stmt::Expr(expr) = &tail.node {
+                            return self.infer_expr(expr);
+                        }
+                        return self.infer_stmt_tail_type(&tail.node);
+                    }
+                }
+                self.types.void_id
+            }
+            Stmt::Match { arms, .. } => {
+                // Type comes from the first arm's body expression
+                if let Some(first_arm) = arms.first() {
+                    return self.infer_expr(&first_arm.body);
+                }
+                self.types.void_id
+            }
+            _ => self.types.void_id,
+        }
     }
 
     fn check_function(&mut self, func: &FunctionDef) {

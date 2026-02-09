@@ -1334,6 +1334,9 @@ impl CodegenContext<'_> {
                 if let crate::parser::ast::Stmt::Expr(expr) = &stmt.node {
                     let val = self.gen_expr(expr);
                     parts.push(format!("{val};"));
+                } else if let Some(inline) = self.gen_value_producing_stmt(&stmt.node) {
+                    // Stmt::If / Stmt::Match with value-producing branches
+                    parts.push(inline);
                 } else {
                     // Non-expression final statement: emit as statement, result is (void)0
                     parts.push(self.stmt_to_inline_string(&stmt.node));
@@ -1345,6 +1348,125 @@ impl CodegenContext<'_> {
         }
 
         format!("({{ {} }})", parts.join(" "))
+    }
+
+    /// Try to generate a statement as a value-producing GCC statement expression.
+    /// Returns `Some(code)` for `Stmt::If` and `Stmt::Match` whose branches end
+    /// with an expression statement, `None` otherwise.
+    fn gen_value_producing_stmt(&self, stmt: &crate::parser::ast::Stmt) -> Option<String> {
+        use crate::parser::ast::Stmt;
+        match stmt {
+            Stmt::If {
+                condition,
+                then_body,
+                elif_branches,
+                else_body,
+            } => {
+                // Need at least an else branch to produce a value in all paths
+                let else_body = else_body.as_ref()?;
+                // Each branch must end with an expression statement
+                let then_val = self.block_tail_expr(then_body)?;
+                let else_val = self.block_tail_expr(else_body)?;
+
+                let cond = self.gen_expr(condition);
+                let then_code = self.gen_expr(&then_val);
+                let result_type = format!("__typeof__(({}))  ", then_code);
+
+                let mut code = format!("{result_type} __gorget_do_result; ");
+                code.push_str(&format!("if ({cond}) {{ "));
+                code.push_str(&self.block_stmts_except_last_inline(then_body));
+                code.push_str(&format!("__gorget_do_result = {then_code}; }} "));
+
+                for (elif_cond, elif_body) in elif_branches {
+                    let elif_val = self.block_tail_expr(elif_body)?;
+                    let ec = self.gen_expr(elif_cond);
+                    let elif_code = self.gen_expr(&elif_val);
+                    code.push_str(&format!("else if ({ec}) {{ "));
+                    code.push_str(&self.block_stmts_except_last_inline(elif_body));
+                    code.push_str(&format!("__gorget_do_result = {elif_code}; }} "));
+                }
+
+                let else_code = self.gen_expr(&else_val);
+                code.push_str("else { ");
+                code.push_str(&self.block_stmts_except_last_inline(else_body));
+                code.push_str(&format!("__gorget_do_result = {else_code}; }} "));
+                code.push_str("__gorget_do_result;");
+
+                Some(code)
+            }
+            Stmt::Match {
+                scrutinee,
+                arms,
+                else_arm,
+            } => {
+                // Need at least one arm to produce a value
+                let first_arm = arms.first()?;
+                let first_body = self.gen_expr(&first_arm.body);
+                let result_type = format!("__typeof__(({}))  ", first_body);
+
+                let scrut_expr = self.gen_expr(scrutinee);
+
+                let mut code = format!(
+                    "__typeof__({scrut_expr}) __gorget_scrut = {scrut_expr}; \
+                     {result_type} __gorget_do_result; "
+                );
+
+                let mut first = true;
+                for arm in arms {
+                    let cond = self.pattern_to_condition_expr(&arm.pattern.node, "__gorget_scrut");
+                    let full_cond = if let Some(guard) = &arm.guard {
+                        let guard_expr = self.gen_expr(guard);
+                        format!("({cond}) && ({guard_expr})")
+                    } else {
+                        cond
+                    };
+                    let bindings = self.pattern_bindings_inline(&arm.pattern.node, "__gorget_scrut");
+                    let body = self.gen_expr(&arm.body);
+
+                    if first {
+                        code.push_str(&format!("if ({full_cond}) {{ {bindings}__gorget_do_result = {body}; }} "));
+                        first = false;
+                    } else {
+                        code.push_str(&format!("else if ({full_cond}) {{ {bindings}__gorget_do_result = {body}; }} "));
+                    }
+                }
+
+                if let Some(else_body) = else_arm {
+                    let else_val = self.block_tail_expr(else_body)?;
+                    let else_code = self.gen_expr(else_val);
+                    code.push_str("else { ");
+                    code.push_str(&self.block_stmts_except_last_inline(else_body));
+                    code.push_str(&format!("__gorget_do_result = {else_code}; }} "));
+                }
+
+                code.push_str("__gorget_do_result;");
+                Some(code)
+            }
+            _ => None,
+        }
+    }
+
+    /// Extract the tail expression from a block (last stmt must be Stmt::Expr).
+    fn block_tail_expr<'b>(&self, block: &'b crate::parser::ast::Block) -> Option<&'b Spanned<Expr>> {
+        if let Some(last) = block.stmts.last() {
+            if let crate::parser::ast::Stmt::Expr(expr) = &last.node {
+                return Some(expr);
+            }
+        }
+        None
+    }
+
+    /// Generate all statements in a block except the last one, as inline C code.
+    fn block_stmts_except_last_inline(&self, block: &crate::parser::ast::Block) -> String {
+        if block.stmts.len() <= 1 {
+            return String::new();
+        }
+        let mut result = String::new();
+        for stmt in &block.stmts[..block.stmts.len() - 1] {
+            result.push_str(&self.stmt_to_inline_string(&stmt.node));
+            result.push(' ');
+        }
+        result
     }
 
     /// Generate inline C code for a statement (for use inside GCC statement expressions).
