@@ -27,6 +27,30 @@ void main():
     int result = -x + y
     print("{result}")
 
+    # -x * y should be (-x) * y, not -(x * y)
+    int p1 = -x * y
+    print("{p1}")
+
+    # -x - y should be (-x) - y
+    int p2 = -x - y
+    print("{p2}")
+
+    # double negation
+    int p3 = - -x
+    print("{p3}")
+
+    # negation with parenthesized addition (unchanged)
+    int p4 = -(x + y)
+    print("{p4}")
+
+    # not binds tighter than and: not false and false = (not false) and false = false
+    bool c1 = not false and false
+    print("{c1}")
+
+    # not binds tighter than or: not true or true = (not true) or true = true
+    bool c2 = not true or true
+    print("{c2}")
+
     int q = 17 / 5
     int r = 17 % 5
     print("{q}")

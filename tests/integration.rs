@@ -330,7 +330,13 @@ fn operators() {
 -5
 false
 true
+-4
+-21
 -10
+7
+-10
+false
+true
 3
 2",
     );

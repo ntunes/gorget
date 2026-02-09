@@ -124,7 +124,7 @@ impl Parser {
             // Unary negation
             Token::Minus => {
                 self.advance();
-                let operand = self.parse_expr_bp(16)?;
+                let operand = self.parse_expr_bp(23)?;
                 let end = operand.span;
                 Ok(Spanned::new(
                     Expr::UnaryOp {
@@ -138,7 +138,7 @@ impl Parser {
             // Dereference
             Token::Star => {
                 self.advance();
-                let operand = self.parse_expr_bp(16)?;
+                let operand = self.parse_expr_bp(23)?;
                 let end = operand.span;
                 Ok(Spanned::new(
                     Expr::Deref {
@@ -155,7 +155,7 @@ impl Parser {
                 if self.check(&Token::LParen) {
                     return self.parse_closure(true, false, start);
                 }
-                let operand = self.parse_expr_bp(16)?;
+                let operand = self.parse_expr_bp(23)?;
                 let end = operand.span;
                 Ok(Spanned::new(
                     Expr::Move {
@@ -168,7 +168,7 @@ impl Parser {
             // Mutable borrow
             Token::Ampersand => {
                 self.advance();
-                let operand = self.parse_expr_bp(16)?;
+                let operand = self.parse_expr_bp(23)?;
                 let end = operand.span;
                 Ok(Spanned::new(
                     Expr::MutableBorrow {
