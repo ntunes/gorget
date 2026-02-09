@@ -44,6 +44,16 @@ pub fn mangle_variant_data(enum_name: &str, variant_name: &str) -> String {
     format!("{enum_name}_{variant_name}_Data")
 }
 
+/// Mangle a closure function name: `__vyper_closure_0`
+pub fn mangle_closure(id: usize) -> String {
+    format!("__vyper_closure_{id}")
+}
+
+/// Mangle a closure environment struct name: `__vyper_env_0`
+pub fn mangle_closure_env(id: usize) -> String {
+    format!("__vyper_env_{id}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -69,5 +79,13 @@ mod tests {
         assert_eq!(mangle_variant("Color", "Red"), "Color__Red");
         assert_eq!(mangle_tag("Color", "Red"), "Color_TAG_Red");
         assert_eq!(mangle_variant_data("Color", "Red"), "Color_Red_Data");
+    }
+
+    #[test]
+    fn closure_mangling() {
+        assert_eq!(mangle_closure(0), "__vyper_closure_0");
+        assert_eq!(mangle_closure(5), "__vyper_closure_5");
+        assert_eq!(mangle_closure_env(0), "__vyper_env_0");
+        assert_eq!(mangle_closure_env(3), "__vyper_env_3");
     }
 }

@@ -99,14 +99,30 @@ impl CodegenContext<'_> {
             Stmt::While {
                 condition,
                 body,
-                ..
+                else_body,
             } => {
                 let cond = self.gen_expr(condition);
-                emitter.emit_line(&format!("while ({cond}) {{"));
-                emitter.indent();
-                self.gen_block(body, emitter);
-                emitter.dedent();
-                emitter.emit_line("}");
+                if let Some(else_block) = else_body {
+                    // while-else: flag tracks if we broke out
+                    let flag = emitter.fresh_temp();
+                    emitter.emit_line(&format!("bool {flag} = false;"));
+                    emitter.emit_line(&format!("while ({cond}) {{"));
+                    emitter.indent();
+                    self.gen_block_with_break_flag(body, &flag, emitter);
+                    emitter.dedent();
+                    emitter.emit_line("}");
+                    emitter.emit_line(&format!("if (!{flag}) {{"));
+                    emitter.indent();
+                    self.gen_block(else_block, emitter);
+                    emitter.dedent();
+                    emitter.emit_line("}");
+                } else {
+                    emitter.emit_line(&format!("while ({cond}) {{"));
+                    emitter.indent();
+                    self.gen_block(body, emitter);
+                    emitter.dedent();
+                    emitter.emit_line("}");
+                }
             }
 
             Stmt::Loop { body } => {
@@ -121,9 +137,10 @@ impl CodegenContext<'_> {
                 pattern,
                 iterable,
                 body,
+                else_body,
                 ..
             } => {
-                self.gen_for_loop(pattern, iterable, body, emitter);
+                self.gen_for_loop_with_else(pattern, iterable, body, else_body, emitter);
             }
 
             Stmt::Match {
@@ -136,9 +153,12 @@ impl CodegenContext<'_> {
 
             Stmt::Throw(expr) => {
                 let e = self.gen_expr(expr);
-                emitter.emit_line(&format!(
-                    "fprintf(stderr, \"throw: %s\\n\", \"{e}\"); exit(1);"
-                ));
+                // If expr is a string literal, use it directly; otherwise stringify
+                if matches!(&expr.node, Expr::StringLiteral(_)) {
+                    emitter.emit_line(&format!("VYPER_THROW({e}, 1);"));
+                } else {
+                    emitter.emit_line(&format!("VYPER_THROW(\"{e}\", 1);"));
+                }
             }
 
             Stmt::With { bindings, body } => {
@@ -247,7 +267,7 @@ impl CodegenContext<'_> {
     }
 
     /// Best-effort C type inference from a value expression.
-    fn infer_c_type_from_expr(&self, expr: &Expr) -> String {
+    pub(super) fn infer_c_type_from_expr(&self, expr: &Expr) -> String {
         match expr {
             Expr::IntLiteral(_) => "int64_t".to_string(),
             Expr::FloatLiteral(_) => "double".to_string(),
@@ -283,7 +303,7 @@ impl CodegenContext<'_> {
         }
     }
 
-    /// Generate a for loop over a range.
+    /// Generate a for loop over a range or iterable.
     fn gen_for_loop(
         &self,
         pattern: &Spanned<Pattern>,
@@ -320,12 +340,18 @@ impl CodegenContext<'_> {
             emitter.dedent();
             emitter.emit_line("}");
         } else {
-            // Generic for-in (not fully supported, emit a TODO)
+            // For-in over array or VyperArray
             let iter = self.gen_expr(iterable);
+            let idx = emitter.fresh_temp();
+
+            // Use sizeof-based iteration for C arrays
             emitter.emit_line(&format!(
-                "/* for {var_name} in {iter} - not yet supported */ {{"
+                "for (size_t {idx} = 0; {idx} < sizeof({iter})/sizeof({iter}[0]); {idx}++) {{"
             ));
             emitter.indent();
+            emitter.emit_line(&format!(
+                "__typeof__({iter}[0]) {var_name} = {iter}[{idx}];"
+            ));
             self.gen_block(body, emitter);
             emitter.dedent();
             emitter.emit_line("}");
@@ -340,68 +366,50 @@ impl CodegenContext<'_> {
         else_arm: &Option<Block>,
         emitter: &mut CEmitter,
     ) {
-        let scrut = self.gen_expr(scrutinee);
+        let scrut_expr = self.gen_expr(scrutinee);
 
-        // Check if all patterns are integer literals → use switch
-        let all_int_literals = arms.iter().all(|arm| {
-            matches!(
-                &arm.pattern.node,
-                Pattern::Literal(lit) if matches!(lit.node, Expr::IntLiteral(_))
-            )
-        });
+        // Always evaluate scrutinee into a temp to avoid double-evaluation
+        let tmp = emitter.fresh_temp();
+        emitter.emit_line(&format!(
+            "__typeof__({scrut_expr}) {tmp} = {scrut_expr};"
+        ));
 
-        if all_int_literals {
-            emitter.emit_line(&format!("switch ({scrut}) {{"));
+        // Use if-else chain for all patterns (simpler, handles all cases)
+        let mut first = true;
+        for arm in arms {
+            let pattern_cond = self.pattern_to_condition(&arm.pattern.node, &tmp);
+
+            // Apply guard expression if present
+            let full_cond = if let Some(guard) = &arm.guard {
+                let guard_expr = self.gen_expr(guard);
+                format!("({pattern_cond}) && ({guard_expr})")
+            } else {
+                pattern_cond
+            };
+
+            if first {
+                emitter.emit_line(&format!("if ({full_cond}) {{"));
+                first = false;
+            } else {
+                emitter.emit_line(&format!("}} else if ({full_cond}) {{"));
+            }
             emitter.indent();
-            for arm in arms {
-                if let Pattern::Literal(lit) = &arm.pattern.node {
-                    if let Expr::IntLiteral(n) = &lit.node {
-                        emitter.emit_line(&format!("case {n}: {{"));
-                        emitter.indent();
-                        // arm.body is a Spanned<Expr> — emit as expression statement
-                        let body = self.gen_expr(&arm.body);
-                        emitter.emit_line(&format!("{body};"));
-                        emitter.emit_line("break;");
-                        emitter.dedent();
-                        emitter.emit_line("}");
-                    }
-                }
-            }
-            if let Some(else_body) = else_arm {
-                emitter.emit_line("default: {");
-                emitter.indent();
-                self.gen_block(else_body, emitter);
-                emitter.emit_line("break;");
-                emitter.dedent();
-                emitter.emit_line("}");
-            }
+
+            // Emit pattern bindings inside the arm body
+            self.emit_pattern_bindings(&arm.pattern.node, &tmp, emitter);
+
+            let body = self.gen_expr(&arm.body);
+            emitter.emit_line(&format!("{body};"));
             emitter.dedent();
+        }
+        if let Some(else_body) = else_arm {
+            emitter.emit_line("} else {");
+            emitter.indent();
+            self.gen_block(else_body, emitter);
+            emitter.dedent();
+        }
+        if !arms.is_empty() || else_arm.is_some() {
             emitter.emit_line("}");
-        } else {
-            // Use if-else chain
-            let mut first = true;
-            for arm in arms {
-                let pattern_cond = self.pattern_to_condition(&arm.pattern.node, &scrut);
-                if first {
-                    emitter.emit_line(&format!("if ({pattern_cond}) {{"));
-                    first = false;
-                } else {
-                    emitter.emit_line(&format!("}} else if ({pattern_cond}) {{"));
-                }
-                emitter.indent();
-                let body = self.gen_expr(&arm.body);
-                emitter.emit_line(&format!("{body};"));
-                emitter.dedent();
-            }
-            if let Some(else_body) = else_arm {
-                emitter.emit_line("} else {");
-                emitter.indent();
-                self.gen_block(else_body, emitter);
-                emitter.dedent();
-            }
-            if !arms.is_empty() || else_arm.is_some() {
-                emitter.emit_line("}");
-            }
         }
     }
 
@@ -414,8 +422,167 @@ impl CodegenContext<'_> {
             }
             Pattern::Wildcard => "1".to_string(),
             Pattern::Binding(_) => "1".to_string(), // always matches
-            _ => "1".to_string(),
+            Pattern::Constructor { path, fields: _ } => {
+                // Enum variant destructuring: check the tag
+                if let Some((enum_name, variant_name)) = self.find_enum_for_variant_path(path) {
+                    let tag = c_mangle::mangle_tag(&enum_name, &variant_name);
+                    format!("{scrutinee}.tag == {tag}")
+                } else {
+                    "1".to_string()
+                }
+            }
+            Pattern::Or(alternatives) => {
+                let conds: Vec<String> = alternatives
+                    .iter()
+                    .map(|p| self.pattern_to_condition(&p.node, scrutinee))
+                    .collect();
+                format!("({})", conds.join(" || "))
+            }
+            Pattern::Tuple(_) => "1".to_string(), // tuple always matches structurally
+            Pattern::Rest => "1".to_string(),
         }
+    }
+
+    /// Emit variable bindings from a pattern into the current scope.
+    fn emit_pattern_bindings(&self, pattern: &Pattern, scrutinee: &str, emitter: &mut CEmitter) {
+        match pattern {
+            Pattern::Binding(name) => {
+                let escaped = c_mangle::escape_keyword(name);
+                emitter.emit_line(&format!(
+                    "__typeof__({scrutinee}) {escaped} = {scrutinee};"
+                ));
+            }
+            Pattern::Constructor { path, fields } => {
+                if let Some((_enum_name, variant_name)) = self.find_enum_for_variant_path(path) {
+                    for (i, field_pat) in fields.iter().enumerate() {
+                        let field_access =
+                            format!("{scrutinee}.data.{variant_name}._{i}");
+                        self.emit_pattern_bindings(&field_pat.node, &field_access, emitter);
+                    }
+                }
+            }
+            Pattern::Tuple(elements) => {
+                for (i, elem) in elements.iter().enumerate() {
+                    let field_access = format!("{scrutinee}._{i}");
+                    self.emit_pattern_bindings(&elem.node, &field_access, emitter);
+                }
+            }
+            Pattern::Or(alternatives) => {
+                // For or-patterns, bind from the first alternative (they must all bind the same names)
+                if let Some(first) = alternatives.first() {
+                    self.emit_pattern_bindings(&first.node, scrutinee, emitter);
+                }
+            }
+            Pattern::Wildcard | Pattern::Literal(_) | Pattern::Rest => {
+                // No bindings to emit
+            }
+        }
+    }
+
+    /// Generate a for loop with optional else clause.
+    fn gen_for_loop_with_else(
+        &self,
+        pattern: &Spanned<Pattern>,
+        iterable: &Spanned<Expr>,
+        body: &Block,
+        else_body: &Option<Block>,
+        emitter: &mut CEmitter,
+    ) {
+        if let Some(else_block) = else_body {
+            let flag = emitter.fresh_temp();
+            emitter.emit_line(&format!("bool {flag} = false;"));
+            // Emit the for loop header manually so we can use the break-flag body
+            let var_name = match &pattern.node {
+                Pattern::Binding(name) => c_mangle::escape_keyword(name),
+                _ => "__vyper_i".to_string(),
+            };
+
+            if let Expr::Range {
+                start,
+                end,
+                inclusive,
+            } = &iterable.node
+            {
+                let start_expr = start
+                    .as_ref()
+                    .map(|e| self.gen_expr(e))
+                    .unwrap_or_else(|| "0".to_string());
+                let end_expr = end
+                    .as_ref()
+                    .map(|e| self.gen_expr(e))
+                    .unwrap_or_else(|| "0".to_string());
+                let cmp = if *inclusive { "<=" } else { "<" };
+                emitter.emit_line(&format!(
+                    "for (int64_t {var_name} = {start_expr}; {var_name} {cmp} {end_expr}; {var_name}++) {{"
+                ));
+            } else {
+                let iter = self.gen_expr(iterable);
+                let idx = emitter.fresh_temp();
+                emitter.emit_line(&format!(
+                    "for (size_t {idx} = 0; {idx} < sizeof({iter})/sizeof({iter}[0]); {idx}++) {{"
+                ));
+                emitter.indent();
+                emitter.emit_line(&format!(
+                    "__typeof__({iter}[0]) {var_name} = {iter}[{idx}];"
+                ));
+                self.gen_block_with_break_flag(body, &flag, emitter);
+                emitter.dedent();
+                emitter.emit_line("}");
+                emitter.emit_line(&format!("if (!{flag}) {{"));
+                emitter.indent();
+                self.gen_block(else_block, emitter);
+                emitter.dedent();
+                emitter.emit_line("}");
+                return;
+            }
+            emitter.indent();
+            self.gen_block_with_break_flag(body, &flag, emitter);
+            emitter.dedent();
+            emitter.emit_line("}");
+            emitter.emit_line(&format!("if (!{flag}) {{"));
+            emitter.indent();
+            self.gen_block(else_block, emitter);
+            emitter.dedent();
+            emitter.emit_line("}");
+        } else {
+            self.gen_for_loop(pattern, iterable, body, emitter);
+        }
+    }
+
+    /// Generate a block where `break` statements set a flag before breaking.
+    fn gen_block_with_break_flag(&self, block: &Block, flag: &str, emitter: &mut CEmitter) {
+        for stmt in &block.stmts {
+            match &stmt.node {
+                Stmt::Break(_) => {
+                    emitter.emit_line(&format!("{flag} = true;"));
+                    emitter.emit_line("break;");
+                }
+                _ => self.gen_stmt(&stmt.node, emitter),
+            }
+        }
+    }
+
+    /// Look up which enum owns a variant given a path (e.g., ["Some"] or ["Color", "Red"]).
+    fn find_enum_for_variant_path(&self, path: &[Spanned<String>]) -> Option<(String, String)> {
+        let variant_name = if path.len() == 1 {
+            &path[0].node
+        } else if path.len() == 2 {
+            // Path is [EnumName, VariantName]
+            return Some((path[0].node.clone(), path[1].node.clone()));
+        } else {
+            return None;
+        };
+
+        // Search enum_variants to find which enum has this variant
+        for (enum_def_id, info) in self.enum_variants {
+            for (vname, _) in &info.variants {
+                if vname == variant_name {
+                    let enum_name = self.scopes.get_def(*enum_def_id).name.clone();
+                    return Some((enum_name, variant_name.clone()));
+                }
+            }
+        }
+        None
     }
 }
 

@@ -144,6 +144,107 @@ impl CodegenContext<'_> {
                 self.gen_expr(expr)
             }
 
+            Expr::Closure {
+                params,
+                body,
+                ..
+            } => {
+                self.gen_closure_expr(params, body)
+            }
+
+            Expr::ImplicitClosure { body } => {
+                // Implicit closure with `it` parameter
+                let param = crate::parser::ast::ClosureParam {
+                    type_: None,
+                    ownership: crate::parser::ast::Ownership::Borrow,
+                    name: crate::span::Spanned {
+                        node: "it".to_string(),
+                        span: body.span,
+                    },
+                };
+                let params = vec![crate::span::Spanned {
+                    node: param,
+                    span: body.span,
+                }];
+                self.gen_closure_expr(&params, body)
+            }
+
+            Expr::ListComprehension {
+                expr: comp_expr,
+                variable,
+                iterable,
+                condition,
+                ..
+            } => {
+                self.gen_list_comprehension(comp_expr, variable, iterable, condition.as_deref())
+            }
+
+            Expr::SetComprehension {
+                expr: comp_expr,
+                variable,
+                iterable,
+                condition,
+            } => {
+                // Emit as VyperArray stub (full set type is Phase 6+)
+                let var_name = c_mangle::escape_keyword(&variable.node);
+                let elem = self.gen_expr(comp_expr);
+                let iter = self.gen_expr(iterable);
+                let cond_str = condition
+                    .as_ref()
+                    .map(|c| format!(" if ({})", self.gen_expr(c)))
+                    .unwrap_or_default();
+                format!(
+                    "/* TODO: set comprehension [{elem} for {var_name} in {iter}{cond_str}] */ (VyperArray){{0}}"
+                )
+            }
+
+            Expr::DictComprehension {
+                key,
+                value: dict_val,
+                variables,
+                iterable,
+                condition,
+            } => {
+                // Emit as stub (full dict type is Phase 6+)
+                let k = self.gen_expr(key);
+                let v = self.gen_expr(dict_val);
+                let iter = self.gen_expr(iterable);
+                let vars: Vec<String> = variables.iter().map(|v| v.node.clone()).collect();
+                let cond_str = condition
+                    .as_ref()
+                    .map(|c| format!(" if ({})", self.gen_expr(c)))
+                    .unwrap_or_default();
+                format!(
+                    "/* TODO: dict comprehension {{{k}: {v} for {} in {iter}{cond_str}}} */ (VyperArray){{0}}",
+                    vars.join(", ")
+                )
+            }
+
+            Expr::Catch { expr: catch_expr } => {
+                // GCC statement expression: try the expression, on error return default
+                let inner = self.gen_expr(catch_expr);
+                format!(
+                    "({{ __typeof__({inner}) __catch_val; \
+                    if (VYPER_TRY) {{ __catch_val = {inner}; VYPER_CATCH_END; }} \
+                    else {{ VYPER_CATCH_END; memset(&__catch_val, 0, sizeof(__catch_val)); }} \
+                    __catch_val; }})"
+                )
+            }
+
+            Expr::Is {
+                expr: is_expr,
+                negated,
+                pattern,
+            } => {
+                let val = self.gen_expr(is_expr);
+                let cond = self.pattern_to_condition_expr(&pattern.node, &val);
+                if *negated {
+                    format!("(!({cond}))")
+                } else {
+                    format!("({cond})")
+                }
+            }
+
             Expr::It => "it".to_string(),
 
             _ => format!("/* unsupported expr */0"),
@@ -375,6 +476,248 @@ impl CodegenContext<'_> {
             }
             ResolvedType::Void => ("%s".to_string(), "\"void\"".to_string()),
             _ => ("%lld".to_string(), format!("(long long){expr}")),
+        }
+    }
+
+    /// Generate a closure expression via lambda lifting.
+    fn gen_closure_expr(
+        &self,
+        params: &[Spanned<crate::parser::ast::ClosureParam>],
+        body: &Spanned<Expr>,
+    ) -> String {
+        use super::LiftedClosure;
+
+        let id = {
+            let mut counter = self.closure_counter.borrow_mut();
+            let id = *counter;
+            *counter += 1;
+            id
+        };
+
+        let fn_name = c_mangle::mangle_closure(id);
+        let env_name = c_mangle::mangle_closure_env(id);
+
+        // Build parameter list
+        let closure_params: Vec<(String, String)> = params
+            .iter()
+            .map(|p| {
+                let name = c_mangle::escape_keyword(&p.node.name.node);
+                let ty = p
+                    .node
+                    .type_
+                    .as_ref()
+                    .map(|t| c_types::ast_type_to_c(&t.node, self.scopes))
+                    .unwrap_or_else(|| "int64_t".to_string());
+                (name, ty)
+            })
+            .collect();
+
+        // Collect free variables (simple heuristic: identifiers referenced in body
+        // that are not in params). For now, we collect none — full free variable
+        // analysis would require a scope walk. This suffices for simple closures.
+        let param_names: std::collections::HashSet<&str> =
+            params.iter().map(|p| p.node.name.node.as_str()).collect();
+        let captures = self.collect_free_vars(&body.node, &param_names);
+
+        // Generate the body expression
+        let body_expr = self.gen_expr(body);
+
+        let lifted = LiftedClosure {
+            id,
+            captures: captures.clone(),
+            params: closure_params,
+            return_type: "int64_t".to_string(), // default; refined later
+            body: body_expr,
+        };
+
+        self.lifted_closures.borrow_mut().push(lifted);
+
+        // At the creation site: allocate env, populate, create VyperClosure
+        if captures.is_empty() {
+            format!("(VyperClosure){{.fn_ptr = (void*){fn_name}, .env = NULL}}")
+        } else {
+            // Use a GCC statement expression to allocate and populate the env
+            let mut parts = Vec::new();
+            parts.push(format!("{env_name}* __env = ({env_name}*)malloc(sizeof({env_name}))"));
+            for (cap_name, _) in &captures {
+                parts.push(format!("__env->{cap_name} = {cap_name}"));
+            }
+            let stmts = parts.join("; ");
+            format!(
+                "({{ {stmts}; (VyperClosure){{.fn_ptr = (void*){fn_name}, .env = (void*)__env}}; }})"
+            )
+        }
+    }
+
+    /// Collect free variable references from an expression (simple walk).
+    fn collect_free_vars(
+        &self,
+        expr: &Expr,
+        bound: &std::collections::HashSet<&str>,
+    ) -> Vec<(String, String)> {
+        let mut free = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        self.walk_free_vars(expr, bound, &mut seen, &mut free);
+        free
+    }
+
+    fn walk_free_vars(
+        &self,
+        expr: &Expr,
+        bound: &std::collections::HashSet<&str>,
+        seen: &mut std::collections::HashSet<String>,
+        free: &mut Vec<(String, String)>,
+    ) {
+        match expr {
+            Expr::Identifier(name) if !bound.contains(name.as_str()) && name != "self" => {
+                if seen.insert(name.clone()) {
+                    let ty = self.infer_c_type_from_expr(expr);
+                    free.push((c_mangle::escape_keyword(name), ty));
+                }
+            }
+            Expr::BinaryOp { left, right, .. } => {
+                self.walk_free_vars(&left.node, bound, seen, free);
+                self.walk_free_vars(&right.node, bound, seen, free);
+            }
+            Expr::UnaryOp { operand, .. } => {
+                self.walk_free_vars(&operand.node, bound, seen, free);
+            }
+            Expr::Call { callee, args, .. } => {
+                self.walk_free_vars(&callee.node, bound, seen, free);
+                for arg in args {
+                    self.walk_free_vars(&arg.node.value.node, bound, seen, free);
+                }
+            }
+            Expr::FieldAccess { object, .. } => {
+                self.walk_free_vars(&object.node, bound, seen, free);
+            }
+            Expr::MethodCall {
+                receiver, args, ..
+            } => {
+                self.walk_free_vars(&receiver.node, bound, seen, free);
+                for arg in args {
+                    self.walk_free_vars(&arg.node.value.node, bound, seen, free);
+                }
+            }
+            Expr::If {
+                condition,
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                self.walk_free_vars(&condition.node, bound, seen, free);
+                self.walk_free_vars(&then_branch.node, bound, seen, free);
+                if let Some(eb) = else_branch {
+                    self.walk_free_vars(&eb.node, bound, seen, free);
+                }
+            }
+            Expr::Index { object, index } => {
+                self.walk_free_vars(&object.node, bound, seen, free);
+                self.walk_free_vars(&index.node, bound, seen, free);
+            }
+            _ => {}
+        }
+    }
+
+    /// Generate a list comprehension as a GCC statement expression.
+    fn gen_list_comprehension(
+        &self,
+        expr: &Spanned<Expr>,
+        variable: &Spanned<crate::parser::ast::Pattern>,
+        iterable: &Spanned<Expr>,
+        condition: Option<&Spanned<Expr>>,
+    ) -> String {
+        let elem_expr = self.gen_expr(expr);
+        let elem_type = self.infer_c_type_from_expr(&expr.node);
+
+        let var_name = match &variable.node {
+            crate::parser::ast::Pattern::Binding(name) => c_mangle::escape_keyword(name),
+            _ => "__vyper_v".to_string(),
+        };
+
+        // Check if iterable is a range
+        if let Expr::Range {
+            start,
+            end,
+            inclusive,
+        } = &iterable.node
+        {
+            let start_expr = start
+                .as_ref()
+                .map(|e| self.gen_expr(e))
+                .unwrap_or_else(|| "0".to_string());
+            let end_expr = end
+                .as_ref()
+                .map(|e| self.gen_expr(e))
+                .unwrap_or_else(|| "0".to_string());
+            let cmp = if *inclusive { "<=" } else { "<" };
+
+            let cond_guard = condition
+                .map(|c| format!("if ({}) ", self.gen_expr(c)))
+                .unwrap_or_default();
+
+            return format!(
+                "({{ VyperArray __comp = vyper_array_new(sizeof({elem_type})); \
+                for (int64_t {var_name} = {start_expr}; {var_name} {cmp} {end_expr}; {var_name}++) {{ \
+                {cond_guard}{{ {elem_type} __elem = {elem_expr}; vyper_array_push(&__comp, &__elem); }} \
+                }} __comp; }})"
+            );
+        }
+
+        // Generic iterable (array)
+        let iter = self.gen_expr(iterable);
+        let cond_guard = condition
+            .map(|c| format!("if ({}) ", self.gen_expr(c)))
+            .unwrap_or_default();
+
+        format!(
+            "({{ VyperArray __comp = vyper_array_new(sizeof({elem_type})); \
+            for (size_t __i = 0; __i < sizeof({iter})/sizeof({iter}[0]); __i++) {{ \
+            {elem_type} {var_name} = {iter}[__i]; \
+            {cond_guard}{{ {elem_type} __elem = {elem_expr}; vyper_array_push(&__comp, &__elem); }} \
+            }} __comp; }})"
+        )
+    }
+
+    /// Convert a pattern to a C boolean condition for `is` expressions.
+    fn pattern_to_condition_expr(&self, pattern: &crate::parser::ast::Pattern, scrutinee: &str) -> String {
+        use crate::parser::ast::Pattern;
+        match pattern {
+            Pattern::Literal(lit) => {
+                let val = self.gen_expr(lit);
+                format!("{scrutinee} == {val}")
+            }
+            Pattern::Wildcard => "1".to_string(),
+            Pattern::Binding(_) => "1".to_string(),
+            Pattern::Constructor { path, .. } => {
+                if path.len() == 2 {
+                    let tag = c_mangle::mangle_tag(&path[0].node, &path[1].node);
+                    format!("{scrutinee}.tag == {tag}")
+                } else if path.len() == 1 {
+                    // Try to find the enum for this variant
+                    let variant_name = &path[0].node;
+                    for (enum_def_id, info) in self.enum_variants {
+                        for (vname, _) in &info.variants {
+                            if vname == variant_name {
+                                let enum_name = &self.scopes.get_def(*enum_def_id).name;
+                                let tag = c_mangle::mangle_tag(enum_name, variant_name);
+                                return format!("{scrutinee}.tag == {tag}");
+                            }
+                        }
+                    }
+                    "1".to_string()
+                } else {
+                    "1".to_string()
+                }
+            }
+            Pattern::Or(alternatives) => {
+                let conds: Vec<String> = alternatives
+                    .iter()
+                    .map(|p| self.pattern_to_condition_expr(&p.node, scrutinee))
+                    .collect();
+                format!("({})", conds.join(" || "))
+            }
+            Pattern::Tuple(_) | Pattern::Rest => "1".to_string(),
         }
     }
 }

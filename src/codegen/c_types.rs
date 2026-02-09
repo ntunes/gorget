@@ -40,8 +40,11 @@ pub fn ast_type_to_c(ty: &crate::parser::ast::Type, scopes: &ScopeTable) -> Stri
                     _ => name.node.clone(),
                 }
             } else if !generic_args.is_empty() {
-                // Unknown generic type (e.g. Vector[int]) — not supported yet
-                "void*".to_string()
+                // Generic collection types → VyperArray
+                match name.node.as_str() {
+                    "Vector" | "List" | "Array" | "Set" => "VyperArray".to_string(),
+                    _ => "void*".to_string(),
+                }
             } else {
                 name.node.clone()
             }

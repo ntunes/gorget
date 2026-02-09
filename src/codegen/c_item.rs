@@ -28,6 +28,14 @@ impl CodegenContext<'_> {
             }
         }
 
+        // Forward-declare newtypes
+        for item in &module.items {
+            if let Item::Newtype(nt) = &item.node {
+                let name = &nt.name.node;
+                emitter.emit_line(&format!("typedef struct {name} {name};"));
+            }
+        }
+
         emitter.blank_line();
     }
 
@@ -41,6 +49,8 @@ impl CodegenContext<'_> {
             match &item.node {
                 Item::Struct(s) => self.emit_struct_def(s, emitter),
                 Item::Enum(e) => self.emit_enum_def(e, emitter),
+                Item::TypeAlias(a) => self.emit_type_alias(a, emitter),
+                Item::Newtype(nt) => self.emit_newtype(nt, emitter),
                 _ => {}
             }
         }
@@ -249,6 +259,9 @@ impl CodegenContext<'_> {
             self.function_signature(f, method_info)
         };
 
+        // Track whether this function throws
+        self.current_function_throws = f.throws.is_some();
+
         match &f.body {
             FunctionBody::Block(block) => {
                 emitter.emit_line(&format!("{ret_type} {func_name}({params}) {{"));
@@ -347,6 +360,74 @@ impl CodegenContext<'_> {
         let name = c_mangle::escape_keyword(&s.name.node);
         let val = self.gen_expr(&s.value);
         emitter.emit_line(&format!("static {c_type} {name} = {val};"));
+    }
+
+    // ─── Type Aliases & Newtypes ────────────────────────────
+
+    /// Emit a type alias as a C typedef.
+    fn emit_type_alias(&self, alias: &TypeAlias, emitter: &mut CEmitter) {
+        let target = c_types::ast_type_to_c(&alias.type_.node, self.scopes);
+        let name = &alias.name.node;
+        emitter.emit_line(&format!("typedef {target} {name};"));
+    }
+
+    /// Emit a newtype as a wrapper struct.
+    fn emit_newtype(&self, nt: &NewtypeDef, emitter: &mut CEmitter) {
+        let inner = c_types::ast_type_to_c(&nt.inner_type.node, self.scopes);
+        let name = &nt.name.node;
+        emitter.emit_line(&format!("typedef struct {{ {inner} value; }} {name};"));
+    }
+
+    // ─── Lifted Closures ────────────────────────────────────
+
+    /// Emit all lifted closure environment structs and functions.
+    pub fn emit_lifted_closures(&self, emitter: &mut CEmitter) {
+        for closure in self.lifted_closures.borrow().iter() {
+            let env_name = super::c_mangle::mangle_closure_env(closure.id);
+            let fn_name = super::c_mangle::mangle_closure(closure.id);
+
+            // Environment struct
+            if !closure.captures.is_empty() {
+                emitter.emit_line(&format!("typedef struct {{"));
+                emitter.indent();
+                for (cap_name, cap_type) in &closure.captures {
+                    emitter.emit_line(&format!("{cap_type} {cap_name};"));
+                }
+                emitter.dedent();
+                emitter.emit_line(&format!("}} {env_name};"));
+                emitter.blank_line();
+            }
+
+            // Closure function
+            let mut params_vec = vec!["void* __env_ptr".to_string()];
+            for (p_name, p_type) in &closure.params {
+                params_vec.push(format!("{p_type} {p_name}"));
+            }
+            let params_str = params_vec.join(", ");
+
+            emitter.emit_line(&format!(
+                "static inline {} {fn_name}({params_str}) {{",
+                closure.return_type
+            ));
+            emitter.indent();
+
+            // Unpack environment
+            if !closure.captures.is_empty() {
+                emitter.emit_line(&format!(
+                    "{env_name}* __env = ({env_name}*)__env_ptr;"
+                ));
+                for (cap_name, cap_type) in &closure.captures {
+                    emitter.emit_line(&format!(
+                        "{cap_type} {cap_name} = __env->{cap_name};"
+                    ));
+                }
+            }
+
+            emitter.emit_line(&format!("return {};", closure.body));
+            emitter.dedent();
+            emitter.emit_line("}");
+            emitter.blank_line();
+        }
     }
 
     // ─── Helpers ─────────────────────────────────────────────
