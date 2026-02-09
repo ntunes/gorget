@@ -8,6 +8,7 @@ pub mod c_stmt;
 pub mod c_types;
 
 use std::cell::RefCell;
+use std::collections::HashSet;
 
 use rustc_hash::FxHashMap;
 
@@ -75,6 +76,8 @@ pub struct CodegenContext<'a> {
     pub generic_enum_templates: RefCell<FxHashMap<String, EnumDef>>,
     /// Generic function templates stored for monomorphization.
     pub generic_fn_templates: RefCell<FxHashMap<String, FunctionDef>>,
+    /// Variables declared with GorgetClosure type (need fn_ptr dispatch on call).
+    pub closure_vars: RefCell<HashSet<String>>,
 }
 
 /// Generate C source code from a parsed and analyzed Gorget module.
@@ -95,6 +98,7 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult) -> String {
         generic_struct_templates: RefCell::new(FxHashMap::default()),
         generic_enum_templates: RefCell::new(FxHashMap::default()),
         generic_fn_templates: RefCell::new(FxHashMap::default()),
+        closure_vars: RefCell::new(HashSet::new()),
     };
 
     let mut emitter = CEmitter::new();

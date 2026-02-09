@@ -1,5 +1,7 @@
 void main():
     int x = 10
     GorgetClosure add_x = (int y): x + y
+    int result = add_x(5)
+    print("{result}")
     int(int) double_fn = (int y): y * 2
     print("closures")

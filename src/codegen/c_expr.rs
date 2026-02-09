@@ -349,6 +349,22 @@ impl CodegenContext<'_> {
                     }
                 }
             }
+
+            // Check if this is a GorgetClosure variable — dispatch through .fn_ptr
+            if self.closure_vars.borrow().contains(name.as_str()) {
+                let arg_exprs: Vec<String> =
+                    args.iter().map(|a| self.gen_expr(&a.node.value)).collect();
+                let arg_types: Vec<String> = args
+                    .iter()
+                    .map(|a| self.infer_c_type_from_expr(&a.node.value.node))
+                    .collect();
+                let mut cast_params = vec!["void*".to_string()];
+                cast_params.extend(arg_types);
+                let cast = format!("int64_t (*)({})", cast_params.join(", "));
+                let mut call_args = vec![format!("{name}.env")];
+                call_args.extend(arg_exprs);
+                return format!("(({cast})({name}.fn_ptr))({})", call_args.join(", "));
+            }
         }
 
         // Check if callee is a Path expression (static method call like Point.origin())

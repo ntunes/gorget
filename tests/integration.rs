@@ -231,7 +231,9 @@ fn ownership() {
 
 #[test]
 fn closures() {
-    run_gg("closures.gg", "closures");
+    run_gg("closures.gg", "\
+15
+closures");
 }
 
 #[test]
@@ -253,6 +255,7 @@ A
 hello world
 100
 auto struct
+15
 auto closure",
     );
 }

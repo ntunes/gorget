@@ -34,4 +34,6 @@ void main():
 
     int base = 10
     auto add_base = (int y): base + y
+    int result = add_base(5)
+    print("{result}")
     print("auto closure")

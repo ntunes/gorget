@@ -259,6 +259,9 @@ impl CodegenContext<'_> {
                 }
 
                 let c_type = self.resolve_decl_type(type_, value, Some(name));
+                if c_type == "GorgetClosure" {
+                    self.closure_vars.borrow_mut().insert(escaped.clone());
+                }
                 let val = self.gen_expr(value);
                 let decl = c_types::c_declare(&c_type, &escaped);
                 emitter.emit_line(&format!("{const_prefix}{decl} = {val};"));
