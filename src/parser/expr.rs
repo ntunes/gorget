@@ -318,15 +318,10 @@ impl Parser {
 
     fn infix_bp(&self) -> Option<InfixBP> {
         Some(match self.peek() {
-            // Assignment operators have the lowest precedence (right-associative)
-            Token::Eq => InfixBP {
-                left: 1,
-                right: 0,
-                op: InfixOp::Binary(BinaryOp::Add),
-            }, // handled specially
-            Token::PlusEq | Token::MinusEq | Token::StarEq | Token::SlashEq
+            // Assignment operators are handled as statements, not expressions
+            Token::Eq | Token::PlusEq | Token::MinusEq | Token::StarEq | Token::SlashEq
             | Token::PercentEq => {
-                return None; // handled as statements, not expressions
+                return None;
             }
 
             // Nil coalescing

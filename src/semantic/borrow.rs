@@ -876,6 +876,26 @@ void main():
     }
 
     #[test]
+    fn reassignment_revives() {
+        let source = "\
+void main():
+    String s = \"hello\"
+    String t = !s
+    s = \"world\"
+    print(s)
+";
+        let errors = check(source);
+        // After moving s and reassigning it, s is live again — no errors
+        assert!(
+            !has_error(&errors, |k| matches!(
+                k,
+                SemanticErrorKind::UseAfterMove { .. }
+            )),
+            "unexpected UseAfterMove after reassignment: {:?}", errors
+        );
+    }
+
+    #[test]
     fn if_else_branch_merging() {
         let source = "\
 void consume(String !s):
