@@ -1,0 +1,37 @@
+from std.fmt import Displayable
+
+struct Point:
+    float x
+    float y
+
+enum Color:
+    Red
+    Green
+    Blue
+    Custom(uint8, uint8, uint8)
+
+implement Displayable for Point:
+    String to_string(self):
+        return "({self.x}, {self.y})"
+
+int add(int a, int b):
+    return a + b
+
+int double(int x) = x * 2
+
+void main():
+    int x = 5
+    const int y = 10
+    auto name = "vyper"
+
+    if x > 0:
+        print("positive")
+    elif x < 0:
+        print("negative")
+    else:
+        print("zero")
+
+    for i in 0..10:
+        print("{i}")
+
+    Vector[int] squares = [x * x for x in 0..10]
