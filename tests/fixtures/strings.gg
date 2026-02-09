@@ -3,5 +3,5 @@ void main():
     int y = 10
     print("hello world")
     print("x is {x}")
-    print("sum is {x}")
+    print("sum is {x + y}")
     print("escape: \\n is newline")

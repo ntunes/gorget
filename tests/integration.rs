@@ -133,7 +133,7 @@ fn strings() {
         "\
 hello world
 x is 42
-sum is 42
+sum is 52
 escape: \\n is newline",
     );
 }
@@ -220,7 +220,9 @@ fn ownership() {
         "ownership.gg",
         "\
 42
-10",
+42
+1
+2",
     );
 }
 

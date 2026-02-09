@@ -3,4 +3,5 @@ void fail() throws str:
 
 void main():
     print("before")
+    # TODO: call fail() with try/catch once void-returning throwing functions are supported in codegen
     print("after")

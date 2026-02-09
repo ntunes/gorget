@@ -150,7 +150,7 @@ equip Circle with Shape:
 
 ```
 int x = 10
-GorgetClosure add_x = (int y): x + y
+int(int) add_x = (int y): x + y
 ```
 
 ## CLI Commands

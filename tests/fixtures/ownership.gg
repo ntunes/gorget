@@ -1,6 +1,15 @@
+struct Point:
+    int x
+    int y
+
 void main():
-    int x = 42
-    int y = !x
-    print("{y}")
-    int z = 10
-    print("{z}")
+    # Primitives are Copy — no ! needed
+    int a = 42
+    int b = a
+    print("{a}")
+    print("{b}")
+    # Structs use move semantics
+    Point p = Point(1, 2)
+    Point q = !p
+    print("{q.x}")
+    print("{q.y}")
