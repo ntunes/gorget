@@ -51,4 +51,5 @@ Maintain `TODO.md` and `DONE.md` at the project root to track work across plans 
 - **Quick-fix interruptions:** After finishing a tangential fix, remind the user about remaining `TODO.md` items.
 - **New conversation start:** Read `TODO.md` at the start to restore context on pending work.
 - **Stale items:** If a `TODO.md` item is older than 7 days, remind the user and ask whether to implement or drop it.
+- **Discovered issues:** If you encounter unrelated or tangential bugs, limitations, or issues while implementing a plan: fix them inline if they are small and straightforward. If they are too large or would require a separate plan, suggest the user add them as new tasks to `TODO.md` so they aren't forgotten.
 - **Never delete `TODO.md`** — only move completed items out of it.
