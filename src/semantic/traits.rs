@@ -37,6 +37,8 @@ pub struct EquipInfo {
     pub trait_name: Option<String>,
     pub methods: FxHashMap<String, (DefId, FunctionSig)>,
     pub span: Span,
+    /// Generic args from the trait type, e.g. [Type::Primitive(Int)] for Iterator[int].
+    pub trait_generic_args: Vec<Type>,
 }
 
 /// Registry of all traits and implementations.
@@ -190,6 +192,17 @@ fn register_builtin_traits(
             });
             m
         }),
+        // Iterator[T]: Option[T] next(&self)
+        ("Iterator", {
+            let mut m = FxHashMap::default();
+            m.insert("next".into(), FunctionSig {
+                params: vec![],
+                return_type: types.error_id, // placeholder — Option[T] depends on concrete T
+                has_self: true,
+                self_ownership: Some(Ownership::Borrow),
+            });
+            m
+        }),
     ];
 
     for (name, methods) in builtin_traits {
@@ -309,6 +322,17 @@ fn process_impl(
         methods.insert(method.node.name.node.clone(), (def_id, sig));
     }
 
+    // Extract generic args from the trait type (e.g., [int] from Iterator[int])
+    let trait_generic_args = impl_block.trait_.as_ref()
+        .and_then(|t| {
+            if let Type::Named { generic_args, .. } = &t.trait_name.node {
+                Some(generic_args.iter().map(|a| a.node.clone()).collect())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default();
+
     let impl_idx = registry.impls.len();
     registry.impls.push(EquipInfo {
         self_type: self_type_id,
@@ -317,6 +341,7 @@ fn process_impl(
         trait_name,
         methods,
         span: impl_block.span,
+        trait_generic_args,
     });
 
     if let Some(trait_id) = trait_def_id {
@@ -485,8 +510,8 @@ equip Circle with Drawable:
 ";
         let (registry, errors) = analyze(source);
         assert!(errors.is_empty(), "errors: {:?}", errors);
-        // 5 built-in traits + 1 user-defined trait
-        assert_eq!(registry.traits.len(), 6);
+        // 6 built-in traits + 1 user-defined trait
+        assert_eq!(registry.traits.len(), 7);
         assert_eq!(registry.impls.len(), 1);
         assert!(registry.impls[0].trait_.is_some());
     }
@@ -523,6 +548,49 @@ equip Circle with Drawable:
         assert!(trait_names.contains(&"Cloneable"));
         assert!(trait_names.contains(&"Hashable"));
         assert!(trait_names.contains(&"Drop"));
+        assert!(trait_names.contains(&"Iterator"));
+    }
+
+    #[test]
+    fn iterator_trait_impl() {
+        let source = "\
+struct Counter:
+    int current
+    int max
+
+equip Counter with Iterator[int]:
+    Option[int] next(&self):
+        if self.current >= self.max:
+            return None
+        int val = self.current
+        self.current = self.current + 1
+        return Some(val)
+";
+        let (registry, errors) = analyze(source);
+        assert!(errors.is_empty(), "errors: {:?}", errors);
+        assert!(registry.has_trait_impl_by_name("Counter", "Iterator"));
+        // Check that trait_generic_args is populated
+        let iter_impl = registry.impls.iter().find(|i| i.trait_name.as_deref() == Some("Iterator")).unwrap();
+        assert_eq!(iter_impl.trait_generic_args.len(), 1);
+    }
+
+    #[test]
+    fn iterator_missing_next_method() {
+        let source = "\
+struct Counter:
+    int current
+    int max
+
+equip Counter with Iterator[int]:
+    int count(self):
+        return self.current
+";
+        let (_, errors) = analyze(source);
+        assert!(errors.iter().any(|e| matches!(
+            &e.kind,
+            SemanticErrorKind::MissingTraitMethod { trait_, method, .. }
+                if trait_ == "Iterator" && method == "next"
+        )));
     }
 
     #[test]

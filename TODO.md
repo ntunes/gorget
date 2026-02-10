@@ -4,7 +4,6 @@
 - Higher-order collection methods: `.filter()`, `.fold()`, `.reduce()` on Vector/Dict/Set [added: 2026-02-10]
 
 ## Medium Priority
-- Iterator trait (user-defined): generic Iterator[T] trait for custom iterables [added: 2026-02-10]
 - Named args / default params (semantic validation) [added: 2026-02-10]
 - `@derive` macro expansion [added: 2026-02-10]
 - `via` delegation in equip blocks: auto-forward trait methods through a struct field (depends on default methods + trait inheritance) [added: 2026-02-10]

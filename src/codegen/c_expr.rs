@@ -18,7 +18,14 @@ impl CodegenContext<'_> {
             Expr::BoolLiteral(b) => if *b { "true" } else { "false" }.to_string(),
             Expr::CharLiteral(c) => format!("'{}'", escape_char(*c)),
             Expr::StringLiteral(s) => self.gen_string_literal(s),
-            Expr::NoneLiteral => "NULL".to_string(),
+            Expr::NoneLiteral => {
+                // Try to resolve to monomorphized Option None constructor via type hint
+                if let Some(mangled) = self.resolve_unit_variant_from_type_hint("Option", "None") {
+                    format!("{}()", c_mangle::mangle_variant(&mangled, "None"))
+                } else {
+                    "NULL".to_string()
+                }
+            }
 
             Expr::Identifier(name) => c_mangle::escape_keyword(name),
 

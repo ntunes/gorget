@@ -368,9 +368,20 @@ impl CodegenContext<'_> {
                     }
                 }
 
+                // Set decl_type_hint from return type so variant constructors
+                // (None, Some, Ok, Error) resolve to monomorphized names.
+                let prev_hint = self.decl_type_hint.borrow().clone();
+                if let Type::Named { generic_args, .. } = &f.return_type.node {
+                    if !generic_args.is_empty() {
+                        *self.decl_type_hint.borrow_mut() = Some(f.return_type.node.clone());
+                    }
+                }
+
                 self.push_drop_scope(DropScopeKind::Function);
                 self.gen_block(block, emitter);
                 self.pop_drop_scope(emitter);
+
+                *self.decl_type_hint.borrow_mut() = prev_hint;
 
                 if is_main {
                     emitter.emit_line("return 0;");
@@ -424,10 +435,18 @@ impl CodegenContext<'_> {
         let mut params_vec: Vec<String> = Vec::new();
 
         // Add self parameter for methods
-        let has_self = f.params.iter().any(|p| p.node.name.node == "self");
+        let self_param = f.params.iter().find(|p| p.node.name.node == "self");
+        let has_self = self_param.is_some();
         if has_self {
             if let Some((type_name, _)) = method_info {
-                params_vec.push(format!("const {type_name}* self"));
+                let is_mutable = self_param
+                    .map(|p| matches!(p.node.ownership, Ownership::MutableBorrow | Ownership::Move))
+                    .unwrap_or(false);
+                if is_mutable {
+                    params_vec.push(format!("{type_name}* self"));
+                } else {
+                    params_vec.push(format!("const {type_name}* self"));
+                }
             }
         }
 

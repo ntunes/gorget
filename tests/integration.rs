@@ -892,6 +892,19 @@ fn div_by_zero() {
     run_gg_panics("div_by_zero.gg", "division by zero");
 }
 
+#[test]
+fn iterator_trait() {
+    run_gg("iterator.gg", "\
+0
+1
+2
+3
+4
+10
+11
+12");
+}
+
 // ══════════════════════════════════════════════════════════════
 // Formatter idempotency tests
 // ══════════════════════════════════════════════════════════════

@@ -1,0 +1,23 @@
+struct Counter:
+    int current
+    int max
+
+equip Counter with Iterator[int]:
+    Option[int] next(&self):
+        if self.current >= self.max:
+            return None
+        int val = self.current
+        self.current = self.current + 1
+        return Some(val)
+
+void main():
+    Counter c = Counter(0, 5)
+    for x in c:
+        print("{x}")
+    Counter c2 = Counter(10, 13)
+    Option[int] v1 = c2.next()
+    print("{v1.unwrap()}")
+    Option[int] v2 = c2.next()
+    print("{v2.unwrap()}")
+    Option[int] v3 = c2.next()
+    print("{v3.unwrap()}")

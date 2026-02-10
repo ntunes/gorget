@@ -401,9 +401,10 @@ impl CodegenContext<'_> {
                     self.closure_vars.borrow_mut().insert(escaped.clone());
                 }
                 // Set type hint for unit variant constructors like None()
+                let prev_hint = self.decl_type_hint.borrow().clone();
                 *self.decl_type_hint.borrow_mut() = Some(type_.node.clone());
                 let val = self.gen_expr(value);
-                *self.decl_type_hint.borrow_mut() = None;
+                *self.decl_type_hint.borrow_mut() = prev_hint;
                 let decl = c_types::c_declare(&c_type, &escaped);
                 emitter.emit_line(&format!("{const_prefix}{decl} = {val};"));
 
@@ -681,6 +682,134 @@ impl CodegenContext<'_> {
         "int64_t".to_string()
     }
 
+    /// Infer the Gorget-level type name from an expression (e.g. "Counter").
+    fn infer_type_name_from_expr(&self, expr: &Spanned<Expr>) -> String {
+        if let Expr::Identifier(name) = &expr.node {
+            let type_id = self.resolution_map.get(&expr.span.start)
+                .and_then(|def_id| self.scopes.get_def(*def_id).type_id)
+                .or_else(|| {
+                    self.scopes.lookup_by_name_anywhere(name)
+                        .and_then(|def_id| self.scopes.get_def(def_id).type_id)
+                });
+            if let Some(tid) = type_id {
+                match self.types.get(tid) {
+                    crate::semantic::types::ResolvedType::Defined(def_id) => {
+                        return self.scopes.get_def(*def_id).name.clone();
+                    }
+                    crate::semantic::types::ResolvedType::Generic(def_id, _) => {
+                        return self.scopes.get_def(*def_id).name.clone();
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if let Expr::StructLiteral { name, .. } = &expr.node {
+            return name.node.clone();
+        }
+        if let Expr::Call { callee, .. } = &expr.node {
+            if let Expr::Identifier(name) = &callee.node {
+                return name.clone();
+            }
+        }
+        String::new()
+    }
+
+    /// Check if an iterable expression has an Iterator[T] trait implementation.
+    fn has_iterator_impl(&self, expr: &Spanned<Expr>) -> bool {
+        let type_name = self.infer_type_name_from_expr(expr);
+        if type_name.is_empty() {
+            return false;
+        }
+        self.traits.impls.iter().any(|i|
+            i.self_type_name == type_name && i.trait_name.as_deref() == Some("Iterator")
+        )
+    }
+
+    /// Get the element C type for an Iterator[T] implementation.
+    fn get_iterator_elem_c_type(&self, expr: &Spanned<Expr>) -> String {
+        let type_name = self.infer_type_name_from_expr(expr);
+        for imp in &self.traits.impls {
+            if imp.self_type_name == type_name && imp.trait_name.as_deref() == Some("Iterator") {
+                if let Some(first_arg) = imp.trait_generic_args.first() {
+                    return c_types::ast_type_to_c(first_arg, self.scopes);
+                }
+            }
+        }
+        "int64_t".to_string()
+    }
+
+    /// Generate a for-loop over a user-defined Iterator[T] type.
+    fn gen_for_loop_iterator(
+        &self,
+        pattern: &Spanned<Pattern>,
+        iterable: &Spanned<Expr>,
+        body: &Block,
+        emitter: &mut CEmitter,
+    ) {
+        let var_name = match &pattern.node {
+            Pattern::Binding(name) => c_mangle::escape_keyword(name),
+            _ => "__gorget_i".to_string(),
+        };
+        let iter_expr = self.gen_expr(iterable);
+        let type_name = self.infer_type_name_from_expr(iterable);
+        let elem_c_type = self.get_iterator_elem_c_type(iterable);
+
+        // Register Option[ElemType] so its typedef is emitted
+        let option_mangled = self.register_generic("Option", &[elem_c_type.clone()], super::GenericInstanceKind::Enum);
+        let tag_none = c_mangle::mangle_tag(&option_mangled, "None");
+        let next_fn = c_mangle::mangle_trait_method("Iterator", &type_name, "next");
+        let next_tmp = emitter.fresh_temp();
+
+        emitter.emit_line("while (1) {");
+        emitter.indent();
+        self.push_drop_scope(DropScopeKind::Loop);
+        emitter.emit_line(&format!("{option_mangled} {next_tmp} = {next_fn}(&{iter_expr});"));
+        emitter.emit_line(&format!("if ({next_tmp}.tag == {tag_none}) break;"));
+        emitter.emit_line(&format!("{elem_c_type} {var_name} = {next_tmp}.data.Some._0;"));
+        self.gen_block(body, emitter);
+        self.pop_drop_scope(emitter);
+        emitter.dedent();
+        emitter.emit_line("}");
+    }
+
+    /// Generate a for-loop over a user-defined Iterator[T] with an else clause.
+    fn gen_for_loop_iterator_with_else(
+        &self,
+        pattern: &Spanned<Pattern>,
+        iterable: &Spanned<Expr>,
+        body: &Block,
+        else_block: &Block,
+        flag: &str,
+        emitter: &mut CEmitter,
+    ) {
+        let var_name = match &pattern.node {
+            Pattern::Binding(name) => c_mangle::escape_keyword(name),
+            _ => "__gorget_i".to_string(),
+        };
+        let iter_expr = self.gen_expr(iterable);
+        let type_name = self.infer_type_name_from_expr(iterable);
+        let elem_c_type = self.get_iterator_elem_c_type(iterable);
+
+        let option_mangled = self.register_generic("Option", &[elem_c_type.clone()], super::GenericInstanceKind::Enum);
+        let tag_none = c_mangle::mangle_tag(&option_mangled, "None");
+        let next_fn = c_mangle::mangle_trait_method("Iterator", &type_name, "next");
+        let next_tmp = emitter.fresh_temp();
+
+        emitter.emit_line("while (1) {");
+        emitter.indent();
+        emitter.emit_line(&format!("{option_mangled} {next_tmp} = {next_fn}(&{iter_expr});"));
+        emitter.emit_line(&format!("if ({next_tmp}.tag == {tag_none}) break;"));
+        emitter.emit_line(&format!("{elem_c_type} {var_name} = {next_tmp}.data.Some._0;"));
+        self.gen_block_with_break_flag(body, flag, emitter);
+        emitter.dedent();
+        emitter.emit_line("}");
+        emitter.emit_line(&format!("if (!{flag}) {{"));
+        emitter.indent();
+        self.gen_block(else_block, emitter);
+        emitter.dedent();
+        emitter.emit_line("}");
+    }
+
     /// Generate a for loop over a range or iterable.
     fn gen_for_loop(
         &self,
@@ -741,6 +870,8 @@ impl CodegenContext<'_> {
             self.gen_for_loop_dict(pattern, iterable, body, emitter);
         } else if self.is_gorget_set_expr(iterable) {
             self.gen_for_loop_set(pattern, iterable, body, emitter);
+        } else if self.has_iterator_impl(iterable) {
+            self.gen_for_loop_iterator(pattern, iterable, body, emitter);
         } else {
             // For-in over C array
             let iter = self.gen_expr(iterable);
@@ -1145,6 +1276,9 @@ impl CodegenContext<'_> {
                 self.gen_block(else_block, emitter);
                 emitter.dedent();
                 emitter.emit_line("}");
+                return;
+            } else if self.has_iterator_impl(iterable) {
+                self.gen_for_loop_iterator_with_else(pattern, iterable, body, else_block, &flag, emitter);
                 return;
             } else {
                 let iter = self.gen_expr(iterable);
