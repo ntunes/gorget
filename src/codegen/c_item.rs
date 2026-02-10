@@ -1214,6 +1214,9 @@ impl CodegenContext<'_> {
         // Emit prototype
         emitter.emit_line(&format!("{ret_type} {mangled}({params});"));
 
+        // Activate type substitutions so that body codegen sees T → concrete type
+        *self.type_subs.borrow_mut() = subs.clone();
+
         // Emit definition
         match &template.body {
             FunctionBody::Expression(expr) => {
@@ -1237,6 +1240,9 @@ impl CodegenContext<'_> {
                 // External declaration — no body
             }
         }
+
+        // Clear substitutions after emitting the body
+        self.type_subs.borrow_mut().clear();
     }
 
     /// Build a substitution map from generic param names to concrete C types.
@@ -1318,7 +1324,7 @@ impl CodegenContext<'_> {
                 }
             }
         }
-        c_types::ast_type_to_c(ty, self.scopes)
+        self.type_to_c(ty)
     }
 
     // ─── Tuple Typedefs ──────────────────────────────────────
@@ -1584,6 +1590,19 @@ impl CodegenContext<'_> {
     /// Convert a TypeId to a C type string (convenience wrapper).
     fn type_id_to_c(&self, type_id: crate::semantic::ids::TypeId) -> String {
         c_types::type_id_to_c(type_id, self.types, self.scopes)
+    }
+
+    /// Resolve an AST type to C, respecting active generic substitutions.
+    /// During monomorphized function body codegen, type params (e.g. `T`) are
+    /// replaced with their concrete C types. Outside that context, this falls
+    /// back to `ast_type_to_c`.
+    pub fn type_to_c(&self, ty: &crate::parser::ast::Type) -> String {
+        let subs = self.type_subs.borrow();
+        if !subs.is_empty() {
+            self.substitute_type(ty, &subs)
+        } else {
+            c_types::ast_type_to_c(ty, self.scopes)
+        }
     }
 
     // ─── Helpers ─────────────────────────────────────────────

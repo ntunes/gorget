@@ -1,0 +1,22 @@
+T identity[T](T x) = x
+
+T first[T](T a, T b):
+    T result = a
+    return result
+
+T larger[T](T a, T b):
+    if a > b:
+        return a
+    return b
+
+void main():
+    int a = identity[int](42)
+    print("{a}")
+    float b = identity[float](3.14)
+    print("{b}")
+    str c = identity[str]("hello")
+    print("{c}")
+    int d = first[int](10, 20)
+    print("{d}")
+    int e = larger[int](7, 3)
+    print("{e}")

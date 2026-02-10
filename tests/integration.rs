@@ -822,6 +822,11 @@ false",
     let _ = std::fs::remove_file(fixture_dir.join("_test_output2.txt"));
 }
 
+#[test]
+fn generic_functions() {
+    run_gg("generic_functions.gg", "42\n3.140000\nhello\n10\n7");
+}
+
 // ══════════════════════════════════════════════════════════════
 // Formatter idempotency tests
 // ══════════════════════════════════════════════════════════════

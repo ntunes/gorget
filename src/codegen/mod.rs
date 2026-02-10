@@ -110,6 +110,9 @@ pub struct CodegenContext<'a> {
     pub decl_type_hint: RefCell<Option<crate::parser::ast::Type>>,
     /// Stack of drop scopes for RAII cleanup.
     pub drop_scopes: RefCell<Vec<(DropScopeKind, Vec<DropEntry>)>>,
+    /// Active generic type substitutions (param_name → C type) during monomorphized
+    /// function body codegen. Empty outside of `emit_monomorphized_function`.
+    pub type_subs: RefCell<Vec<(String, String)>>,
 }
 
 /// Generate C source code from a parsed and analyzed Gorget module.
@@ -134,6 +137,7 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult) -> String {
         tuple_typedefs: RefCell::new(Vec::new()),
         decl_type_hint: RefCell::new(None),
         drop_scopes: RefCell::new(Vec::new()),
+        type_subs: RefCell::new(Vec::new()),
     };
 
     let mut emitter = CEmitter::new();
@@ -1086,5 +1090,20 @@ equip Foo with Child:
             "Vtable instance should assign parent method, got:\n{c_code}");
         assert!(c_code.contains(".extra = "),
             "Vtable instance should assign own method, got:\n{c_code}");
+    }
+
+    #[test]
+    fn generic_function_block_body() {
+        let source = "\
+T first[T](T a, T b):
+    T result = a
+    return result
+
+void main():
+    int x = first[int](10, 20)
+";
+        let c_code = compile_to_c(source);
+        assert!(c_code.contains("first__int64_t"), "Should emit monomorphized function");
+        assert!(c_code.contains("int64_t result"), "Local var type T should be substituted");
     }
 }

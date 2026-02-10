@@ -13,3 +13,4 @@
 - [2026-02-10] Trait inheritance (extends) in vtables: child vtable structs include parent method slots, equip blocks validate and emit parent methods, semantic validation checks inherited required methods
 - [2026-02-10] `gg fmt` code formatter: lexer emits Comment tokens, parser side-tables them, AST-walking formatter with comment interleaving, --in-place flag, idempotency tested on all fixtures
 - [2026-02-10] File I/O: built-in File type with GorgetFile C runtime, free functions (read_file, write_file, append_file, file_exists), File struct (File.open, File.create, .read_all, .write, .close), Drop auto-close on scope exit
+- [2026-02-10] Generic function monomorphization: type substitutions now propagate into block bodies (local vars, casts, nested generic calls), added type_subs field to CodegenContext, type_to_c() convenience method

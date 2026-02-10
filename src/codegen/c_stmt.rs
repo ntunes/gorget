@@ -350,7 +350,7 @@ impl CodegenContext<'_> {
                                     "int64_t".to_string()
                                 }
                             }
-                            _ => c_types::ast_type_to_c(&type_.node, self.scopes),
+                            _ => self.type_to_c(&type_.node),
                         };
                         let elems: Vec<String> = elements.iter().map(|e| self.gen_expr(e)).collect();
                         emitter.emit_line(&format!(
@@ -362,7 +362,7 @@ impl CodegenContext<'_> {
                     // Collection type with array literal: create a GorgetArray and push elements
                     let elem_type = if let Type::Named { generic_args, .. } = &type_.node {
                         if let Some(first_arg) = generic_args.first() {
-                            c_types::ast_type_to_c(&first_arg.node, self.scopes)
+                            self.type_to_c(&first_arg.node)
                         } else {
                             "int64_t".to_string()
                         }

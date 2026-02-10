@@ -158,7 +158,7 @@ impl CodegenContext<'_> {
 
             Expr::As { expr, type_ } => {
                 let inner = self.gen_expr(expr);
-                let c_type = c_types::ast_type_to_c(&type_.node, self.scopes);
+                let c_type = self.type_to_c(&type_.node);
                 format!("(({c_type}){inner})")
             }
 
@@ -1330,7 +1330,7 @@ impl CodegenContext<'_> {
     ) -> String {
         let c_type_args: Vec<String> = type_args
             .iter()
-            .map(|a| c_types::ast_type_to_c(&a.node, self.scopes))
+            .map(|a| self.type_to_c(&a.node))
             .collect();
 
         let base_name = match &callee.node {
@@ -1412,7 +1412,7 @@ impl CodegenContext<'_> {
         let type_name = self.infer_receiver_type(receiver);
         let c_type_args: Vec<String> = type_args
             .iter()
-            .map(|a| c_types::ast_type_to_c(&a.node, self.scopes))
+            .map(|a| self.type_to_c(&a.node))
             .collect();
         let base_method = c_mangle::mangle_method(&type_name, method_name);
         let mangled = c_mangle::mangle_generic(&base_method, &c_type_args);
@@ -2491,7 +2491,7 @@ impl CodegenContext<'_> {
                         let escaped = c_mangle::escape_keyword(name);
                         let c_type = match &type_.node {
                             crate::parser::ast::Type::Inferred => self.infer_c_type_from_expr(&value.node),
-                            _ => c_types::ast_type_to_c(&type_.node, self.scopes),
+                            _ => self.type_to_c(&type_.node),
                         };
                         let val = self.gen_expr(value);
                         let decl = c_types::c_declare(&c_type, &escaped);

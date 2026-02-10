@@ -1,7 +1,6 @@
 # TODO
 
 ## Critical (blocks real-world use)
-- Generic function monomorphization in codegen [added: 2026-02-10]
 - Trait bounds enforcement in semantic analysis [added: 2026-02-10]
 
 ## High Priority
