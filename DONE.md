@@ -11,3 +11,4 @@
 - [2026-02-10] Drop trait / RAII (destructors): built-in Drop trait, scope-based cleanup at function/loop exit, Box[T] auto-free, user-defined Drop via equip, cleanup before return/break/continue
 - [2026-02-10] Default trait method resolution: codegen emits default method bodies when equip block doesn't override, vtable wiring, trait method call resolution for trait-provided methods
 - [2026-02-10] Trait inheritance (extends) in vtables: child vtable structs include parent method slots, equip blocks validate and emit parent methods, semantic validation checks inherited required methods
+- [2026-02-10] `gg fmt` code formatter: lexer emits Comment tokens, parser side-tables them, AST-walking formatter with comment interleaving, --in-place flag, idempotency tested on all fixtures

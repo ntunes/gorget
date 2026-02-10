@@ -17,12 +17,26 @@ pub struct Parser {
     /// Nesting depth for call-arg parsing. Used to auto-wrap `it` only at the
     /// outermost call-arg level and prevent double-wrapping in nested calls.
     call_arg_depth: usize,
+    /// Comments extracted from the token stream, for use by the formatter.
+    pub comments: Vec<Spanned<String>>,
 }
 
 impl Parser {
     pub fn new(source: &str) -> Self {
         let lexer = Lexer::new(source);
-        let mut tokens: Vec<Spanned<Token>> = lexer.collect();
+        let all_tokens: Vec<Spanned<Token>> = lexer.collect();
+
+        // Partition: Comment tokens go to side-table, everything else to tokens
+        let mut tokens = Vec::new();
+        let mut comments = Vec::new();
+        for tok in all_tokens {
+            if let Token::Comment(ref text) = tok.node {
+                comments.push(Spanned::new(text.clone(), tok.span));
+            } else {
+                tokens.push(tok);
+            }
+        }
+
         // Ensure we always have an EOF sentinel
         let eof_pos = tokens.last().map(|t| t.span.end).unwrap_or(0);
         tokens.push(Spanned::new(Token::Eof, Span::new(eof_pos, eof_pos)));
@@ -31,6 +45,7 @@ impl Parser {
             pos: 0,
             errors: Vec::new(),
             call_arg_depth: 0,
+            comments,
         }
     }
 

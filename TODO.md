@@ -3,7 +3,6 @@
 ## Critical (blocks real-world use)
 
 ## High Priority
-- [ ] `gg fmt` (code formatter) [added: 2026-02-10]
 - [ ] File I/O (read, write, path) [added: 2026-02-10]
 
 ## Medium Priority

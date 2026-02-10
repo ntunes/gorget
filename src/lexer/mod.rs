@@ -95,8 +95,12 @@ impl<'src> Lexer<'src> {
                         }
                         continue;
                     }
-                    // Regular comment — skip entire line
-                    self.skip_to_eol();
+                    // Regular comment — emit as token
+                    let content = self.scan_to_eol();
+                    self.pending.push_back(Spanned::new(
+                        Token::Comment(content),
+                        Span::new(line_start, self.pos),
+                    ));
                     if self.pos < self.source.len() {
                         self.pos += 1; // skip \n
                     }
@@ -241,8 +245,19 @@ impl<'src> Lexer<'src> {
             }
 
             match bytes[i] {
-                // Comment — stop processing line
-                b'#' => break,
+                // Comment — emit as token then stop processing line
+                b'#' => {
+                    let comment_start = i;
+                    while i < bytes.len() && bytes[i] != b'\n' {
+                        i += 1;
+                    }
+                    let content = self.source[comment_start..i].to_string();
+                    self.pending.push_back(Spanned::new(
+                        Token::Comment(content),
+                        Span::new(comment_start, i),
+                    ));
+                    break;
+                }
 
                 // String literals
                 b'"' => {
@@ -998,7 +1013,7 @@ mod tests {
     }
 
     #[test]
-    fn test_comments_stripped() {
+    fn test_comments_emitted() {
         let tokens = lex("x = 5  # comment\n");
         assert_eq!(
             tokens,
@@ -1006,6 +1021,7 @@ mod tests {
                 Token::Identifier("x".to_string()),
                 Token::Eq,
                 Token::IntLiteral(5),
+                Token::Comment("# comment".to_string()),
                 Token::Newline,
             ]
         );
@@ -1319,6 +1335,21 @@ void main():
                 Token::Newline,
                 Token::Dedent,
                 Token::Dedent,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_whole_line_comment() {
+        let tokens = lex("# whole line comment\nx = 1\n");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Comment("# whole line comment".to_string()),
+                Token::Identifier("x".to_string()),
+                Token::Eq,
+                Token::IntLiteral(1),
+                Token::Newline,
             ]
         );
     }

@@ -128,7 +128,7 @@ fn main() {
 
     if args.len() < 3 {
         eprintln!("Usage: gg <command> <file>");
-        eprintln!("Commands: lex, parse, check, build, run");
+        eprintln!("Commands: lex, parse, check, build, run, fmt");
         process::exit(1);
     }
 
@@ -211,9 +211,21 @@ fn main() {
                 });
             process::exit(status.code().unwrap_or(1));
         }
+        "fmt" => {
+            let in_place = args.iter().any(|a| a == "--in-place" || a == "-i");
+            let formatted = gorget::formatter::format_source(&source);
+            if in_place {
+                if let Err(e) = fs::write(filename, &formatted) {
+                    eprintln!("Error writing {filename}: {e}");
+                    process::exit(1);
+                }
+            } else {
+                print!("{formatted}");
+            }
+        }
         _ => {
             eprintln!("Unknown command: {command}");
-            eprintln!("Commands: lex, parse, check, build, run");
+            eprintln!("Commands: lex, parse, check, build, run, fmt");
             process::exit(1);
         }
     }

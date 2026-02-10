@@ -521,6 +521,9 @@ pub enum Token {
     // Documentation
     DocComment(String),
 
+    // Comments
+    Comment(String),
+
     // End of file
     Eof,
 
@@ -578,6 +581,7 @@ impl fmt::Display for Token {
             Token::Dedent => write!(f, "DEDENT"),
             Token::Newline => write!(f, "NEWLINE"),
             Token::DocComment(_) => write!(f, "doc comment"),
+            Token::Comment(_) => write!(f, "comment"),
             Token::Eof => write!(f, "end of file"),
             Token::Error(msg) => write!(f, "error: {msg}"),
         }

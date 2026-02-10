@@ -799,3 +799,42 @@ fn trait_inherit_defaults() {
 105",
     );
 }
+
+// ══════════════════════════════════════════════════════════════
+// Formatter idempotency tests
+// ══════════════════════════════════════════════════════════════
+
+/// Format a .gg fixture twice and assert the second pass produces the same
+/// output as the first (idempotency). Uses the library API directly.
+fn assert_fmt_idempotent(fixture: &str) {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures").join(fixture);
+
+    let source = std::fs::read_to_string(&fixture_path)
+        .unwrap_or_else(|e| panic!("Cannot read {}: {e}", fixture_path.display()));
+
+    let first = gorget::formatter::format_source(&source);
+    let second = gorget::formatter::format_source(&first);
+
+    assert_eq!(
+        first, second,
+        "Formatter is NOT idempotent for {fixture}.\n\
+         === First pass ===\n{first}\n\
+         === Second pass ===\n{second}"
+    );
+}
+
+#[test]
+fn fmt_idempotent() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixtures_dir = manifest_dir.join("tests/fixtures");
+
+    for entry in std::fs::read_dir(&fixtures_dir).expect("cannot read fixtures dir") {
+        let entry = entry.unwrap();
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("gg") {
+            let name = path.file_name().unwrap().to_str().unwrap();
+            assert_fmt_idempotent(name);
+        }
+    }
+}
