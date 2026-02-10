@@ -15,9 +15,6 @@ void main():
     for x in c:
         print("{x}")
     Counter c2 = Counter(10, 13)
-    Option[int] v1 = c2.next()
-    print("{v1.unwrap()}")
-    Option[int] v2 = c2.next()
-    print("{v2.unwrap()}")
-    Option[int] v3 = c2.next()
-    print("{v3.unwrap()}")
+    print("{c2.next().unwrap()}")
+    print("{c2.next().unwrap()}")
+    print("{c2.next().unwrap()}")

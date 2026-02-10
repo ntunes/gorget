@@ -20,3 +20,4 @@
 - [2026-02-10] Iterator[T] trait: built-in trait with `next(&self) -> Option[T]` method, user types implement via `equip Foo with Iterator[int]`, for-loop integration emits while/next/break pattern, trait_generic_args tracked in EquipInfo, mutable self support for &self params
 - [2026-02-10] Higher-order collection methods: Vector .filter()/.map()/.fold()/.reduce(), Dict .filter()/.fold(), Set .filter()/.fold() — closure-based functional operations with type inference and C codegen
 - [2026-02-10] Named args / default params: parser already supported syntax; added FunctionInfo.param_defaults, semantic validation (named arg matching, ordering, duplicate/unknown/missing checks, PositionalAfterNamed error), codegen reordering and default value substitution
+- [2026-02-10] Chained method calls on trait/inherent methods: `infer_receiver_type()` now handles `Expr::MethodCall` by recursively resolving receiver type and looking up method return type in TraitRegistry

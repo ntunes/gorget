@@ -1752,6 +1752,23 @@ impl CodegenContext<'_> {
                 .current_self_type
                 .clone()
                 .unwrap_or_else(|| "Self".to_string()),
+            Expr::MethodCall { receiver, method, .. } => {
+                let recv_type = self.infer_receiver_type(receiver);
+                if recv_type == "Unknown" {
+                    return "Unknown".to_string();
+                }
+                // Look up method return type in trait registry (inherent + trait impls)
+                for impl_info in &self.traits.impls {
+                    if impl_info.self_type_name == recv_type {
+                        if let Some((_def_id, sig)) = impl_info.methods.get(method.node.as_str()) {
+                            if let Some(name) = self.type_name_from_type_id(sig.return_type) {
+                                return name;
+                            }
+                        }
+                    }
+                }
+                "Unknown".to_string()
+            }
             _ => "Unknown".to_string(),
         }
     }
