@@ -62,6 +62,12 @@ static inline GorgetString gorget_string_format(const char* fmt, ...) {
     return (GorgetString){data, (size_t)len, cap};
 }
 
+// ── Panic helper ─────────────────────────────────────────────
+static inline void gorget_panic(const char* msg) {
+    fprintf(stderr, "gorget: panic: %s\n", msg);
+    exit(1);
+}
+
 // ── GorgetArray ──────────────────────────────────────────────
 typedef struct {
     void* data;
@@ -85,6 +91,10 @@ static inline void gorget_array_push(GorgetArray* arr, const void* elem) {
 }
 
 static inline void* gorget_array_get(const GorgetArray* arr, size_t index) {
+    if (index >= arr->len) {
+        fprintf(stderr, "gorget: panic: index out of bounds: index %zu, length %zu\n", index, arr->len);
+        exit(1);
+    }
     return (char*)arr->data + index * arr->elem_size;
 }
 
@@ -93,10 +103,18 @@ static inline size_t gorget_array_len(const GorgetArray* arr) {
 }
 
 static inline void gorget_array_set(GorgetArray* arr, size_t index, const void* elem) {
+    if (index >= arr->len) {
+        fprintf(stderr, "gorget: panic: index out of bounds: index %zu, length %zu\n", index, arr->len);
+        exit(1);
+    }
     memcpy((char*)arr->data + index * arr->elem_size, elem, arr->elem_size);
 }
 
 static inline void gorget_array_remove(GorgetArray* arr, size_t index) {
+    if (index >= arr->len) {
+        fprintf(stderr, "gorget: panic: index out of bounds: index %zu, length %zu\n", index, arr->len);
+        exit(1);
+    }
     if (index + 1 < arr->len) {
         memmove((char*)arr->data + index * arr->elem_size,
                 (char*)arr->data + (index + 1) * arr->elem_size,

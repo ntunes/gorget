@@ -828,6 +828,71 @@ fn trait_bounds() {
 }
 
 // ══════════════════════════════════════════════════════════════
+// Runtime safety tests (expected panics)
+// ══════════════════════════════════════════════════════════════
+
+/// Build and run a `.gg` fixture, asserting the binary panics with the expected stderr message.
+fn run_gg_panics(fixture: &str, expected_stderr: &str) {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures").join(fixture);
+
+    assert!(
+        fixture_path.exists(),
+        "Fixture not found: {}",
+        fixture_path.display()
+    );
+
+    let stem = fixture_path.file_stem().unwrap().to_str().unwrap();
+    let dir = fixture_path.parent().unwrap();
+    let c_path = dir.join(format!("{stem}.c"));
+    let exe_path = dir.join(stem);
+
+    // 1. Build: cargo run -- build <fixture>
+    let build = Command::new(env!("CARGO"))
+        .args(["run", "--quiet", "--", "build"])
+        .arg(&fixture_path)
+        .output()
+        .expect("failed to run cargo");
+
+    assert!(
+        build.status.success(),
+        "Build failed for {fixture}:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr),
+    );
+
+    // 2. Execute the compiled binary — expect it to fail
+    let run = Command::new(&exe_path)
+        .output()
+        .expect("failed to execute compiled binary");
+
+    assert!(
+        !run.status.success(),
+        "Expected panic but binary succeeded for {fixture}",
+    );
+
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        stderr.contains(expected_stderr),
+        "Stderr mismatch for {fixture}:\nExpected to contain: {expected_stderr}\nGot: {stderr}",
+    );
+
+    // 3. Clean up generated files
+    let _ = std::fs::remove_file(&c_path);
+    let _ = std::fs::remove_file(&exe_path);
+}
+
+#[test]
+fn bounds_check() {
+    run_gg_panics("bounds_check.gg", "index out of bounds: index 5, length 3");
+}
+
+#[test]
+fn div_by_zero() {
+    run_gg_panics("div_by_zero.gg", "division by zero");
+}
+
+// ══════════════════════════════════════════════════════════════
 // Formatter idempotency tests
 // ══════════════════════════════════════════════════════════════
 

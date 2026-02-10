@@ -69,7 +69,11 @@ impl CodegenContext<'_> {
                 let l = self.gen_expr(left);
                 let r = self.gen_expr(right);
                 let c_op = binary_op_to_c(*op);
-                format!("({l} {c_op} {r})")
+                if matches!(op, BinaryOp::Div | BinaryOp::Mod) {
+                    format!("({{ __typeof__({r}) __d = {r}; if (__d == 0) gorget_panic(\"division by zero\"); {l} {c_op} __d; }})")
+                } else {
+                    format!("({l} {c_op} {r})")
+                }
             }
 
             Expr::Call { callee, generic_args, args } => {
@@ -771,9 +775,9 @@ impl CodegenContext<'_> {
             }
             "pop" => {
                 if needs_temp {
-                    format!("({{ __typeof__({recv}) __recv = {recv}; __recv.len--; GORGET_ARRAY_AT({elem_type}, __recv, __recv.len); }})")
+                    format!("({{ __typeof__({recv}) __recv = {recv}; {elem_type} __popped = GORGET_ARRAY_AT({elem_type}, __recv, __recv.len - 1); __recv.len--; __popped; }})")
                 } else {
-                    format!("({{ {recv}.len--; GORGET_ARRAY_AT({elem_type}, {recv}, {recv}.len); }})")
+                    format!("({{ {elem_type} __popped = GORGET_ARRAY_AT({elem_type}, {recv}, {recv}.len - 1); {recv}.len--; __popped; }})")
                 }
             }
             "set" => {
