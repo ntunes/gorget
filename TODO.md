@@ -1,8 +1,12 @@
 # TODO
 
 ## Critical (blocks real-world use)
+- Generic function monomorphization in codegen [added: 2026-02-10]
+- Trait bounds enforcement in semantic analysis [added: 2026-02-10]
 
 ## High Priority
+- Match exhaustiveness checking (full) [added: 2026-02-10]
+- Higher-order collection methods: `.filter()`, `.fold()`, `.reduce()` on Vector/Dict/Set [added: 2026-02-10]
 
 ## Medium Priority
 - Iterator trait (user-defined): generic Iterator[T] trait for custom iterables [added: 2026-02-10]
@@ -10,7 +14,6 @@
 - `@derive` macro expansion [added: 2026-02-10]
 - `via` delegation in equip blocks: auto-forward trait methods through a struct field (depends on default methods + trait inheritance) [added: 2026-02-10]
 - Raw strings, multi-line strings [added: 2026-02-10]
-- Match exhaustiveness checking (full) [added: 2026-02-10]
 - `forge` package manager basics [added: 2026-02-10]
 
 ## Low Priority
