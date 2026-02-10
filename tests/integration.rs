@@ -682,3 +682,28 @@ fn result_map() {
 11",
     );
 }
+
+#[test]
+fn dict_iter() {
+    run_gg(
+        "dict_iter.gg",
+        "\
+90
+3",
+    );
+}
+
+#[test]
+fn set_iter() {
+    run_gg("set_iter.gg", "60");
+}
+
+#[test]
+fn iter_for_else() {
+    run_gg(
+        "iter_for_else.gg",
+        "\
+empty set
+done",
+    );
+}

@@ -1,0 +1,13 @@
+void main():
+    Set[int] empty = Set[int]()
+    for x in empty:
+        print("should not print")
+    else:
+        print("empty set")
+    Set[int] nums = Set[int]()
+    nums.add(1)
+    for x in nums:
+        break
+    else:
+        print("should not print")
+    print("done")

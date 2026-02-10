@@ -1,0 +1,13 @@
+void main():
+    Dict[str, int] ages = Dict[str, int]()
+    ages.put("alice", 30)
+    ages.put("bob", 25)
+    ages.put("carol", 35)
+    int total = 0
+    for (k, v) in ages:
+        total = total + v
+    print("{total}")
+    int count = 0
+    for k in ages:
+        count = count + 1
+    print("{count}")

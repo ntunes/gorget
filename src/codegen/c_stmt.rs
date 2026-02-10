@@ -459,6 +459,87 @@ impl CodegenContext<'_> {
         c_type == "GorgetArray"
     }
 
+    /// Check if an iterable expression resolves to a GorgetMap (Dict) type.
+    fn is_gorget_map_expr(&self, expr: &Spanned<Expr>) -> bool {
+        if let Expr::Identifier(name) = &expr.node {
+            let type_id = self.resolution_map.get(&expr.span.start)
+                .and_then(|def_id| self.scopes.get_def(*def_id).type_id)
+                .or_else(|| {
+                    self.scopes.lookup_by_name_anywhere(name)
+                        .and_then(|def_id| self.scopes.get_def(def_id).type_id)
+                });
+            if let Some(tid) = type_id {
+                if let crate::semantic::types::ResolvedType::Generic(def_id, _) = self.types.get(tid) {
+                    let def_name = &self.scopes.get_def(*def_id).name;
+                    return matches!(def_name.as_str(), "Dict" | "HashMap" | "Map");
+                }
+            }
+        }
+        false
+    }
+
+    /// Check if an iterable expression resolves to a GorgetSet (Set) type.
+    /// Must use Gorget-level type name since GorgetSet is typedef'd to GorgetMap at C level.
+    fn is_gorget_set_expr(&self, expr: &Spanned<Expr>) -> bool {
+        if let Expr::Identifier(name) = &expr.node {
+            let type_id = self.resolution_map.get(&expr.span.start)
+                .and_then(|def_id| self.scopes.get_def(*def_id).type_id)
+                .or_else(|| {
+                    self.scopes.lookup_by_name_anywhere(name)
+                        .and_then(|def_id| self.scopes.get_def(def_id).type_id)
+                });
+            if let Some(tid) = type_id {
+                if let crate::semantic::types::ResolvedType::Generic(def_id, _) = self.types.get(tid) {
+                    let def_name = &self.scopes.get_def(*def_id).name;
+                    return matches!(def_name.as_str(), "Set" | "HashSet");
+                }
+            }
+        }
+        false
+    }
+
+    /// Infer the key and value C types for a Dict expression.
+    fn infer_map_kv_types_for_iter(&self, expr: &Spanned<Expr>) -> (String, String) {
+        if let Expr::Identifier(name) = &expr.node {
+            let type_id = self.resolution_map.get(&expr.span.start)
+                .and_then(|def_id| self.scopes.get_def(*def_id).type_id)
+                .or_else(|| {
+                    self.scopes.lookup_by_name_anywhere(name)
+                        .and_then(|def_id| self.scopes.get_def(def_id).type_id)
+                });
+            if let Some(tid) = type_id {
+                if let crate::semantic::types::ResolvedType::Generic(_, args) = self.types.get(tid) {
+                    if args.len() >= 2 {
+                        let key = super::c_types::type_id_to_c(args[0], self.types, self.scopes);
+                        let val = super::c_types::type_id_to_c(args[1], self.types, self.scopes);
+                        return (key, val);
+                    }
+                }
+            }
+        }
+        ("int64_t".to_string(), "int64_t".to_string())
+    }
+
+    /// Infer the element C type for a Set expression.
+    fn infer_set_elem_type(&self, expr: &Spanned<Expr>) -> String {
+        if let Expr::Identifier(name) = &expr.node {
+            let type_id = self.resolution_map.get(&expr.span.start)
+                .and_then(|def_id| self.scopes.get_def(*def_id).type_id)
+                .or_else(|| {
+                    self.scopes.lookup_by_name_anywhere(name)
+                        .and_then(|def_id| self.scopes.get_def(def_id).type_id)
+                });
+            if let Some(tid) = type_id {
+                if let crate::semantic::types::ResolvedType::Generic(_, args) = self.types.get(tid) {
+                    if let Some(&elem_tid) = args.first() {
+                        return super::c_types::type_id_to_c(elem_tid, self.types, self.scopes);
+                    }
+                }
+            }
+        }
+        "int64_t".to_string()
+    }
+
     /// Infer the element C type for a GorgetArray expression.
     fn infer_array_elem_type(&self, expr: &Spanned<Expr>) -> String {
         if let Expr::Identifier(name) = &expr.node {
@@ -532,6 +613,10 @@ impl CodegenContext<'_> {
             self.gen_block(body, emitter);
             emitter.dedent();
             emitter.emit_line("}");
+        } else if self.is_gorget_map_expr(iterable) {
+            self.gen_for_loop_dict(pattern, iterable, body, emitter);
+        } else if self.is_gorget_set_expr(iterable) {
+            self.gen_for_loop_set(pattern, iterable, body, emitter);
         } else {
             // For-in over C array
             let iter = self.gen_expr(iterable);
@@ -549,6 +634,90 @@ impl CodegenContext<'_> {
             emitter.dedent();
             emitter.emit_line("}");
         }
+    }
+
+    /// Generate a for-loop over a Dict (GorgetMap).
+    /// Supports both key-only (`for k in dict`) and key-value (`for (k, v) in dict`) patterns.
+    fn gen_for_loop_dict(
+        &self,
+        pattern: &Spanned<Pattern>,
+        iterable: &Spanned<Expr>,
+        body: &Block,
+        emitter: &mut CEmitter,
+    ) {
+        let iter = self.gen_expr(iterable);
+        let idx = emitter.fresh_temp();
+        let (key_type, val_type) = self.infer_map_kv_types_for_iter(iterable);
+
+        emitter.emit_line(&format!(
+            "for (size_t {idx} = 0; {idx} < {iter}.cap; {idx}++) {{"
+        ));
+        emitter.indent();
+        emitter.emit_line(&format!("if ({iter}.states[{idx}] != 1) continue;"));
+
+        if let Pattern::Tuple(elems) = &pattern.node {
+            // (k, v) pattern
+            let k_name = match &elems[0].node {
+                Pattern::Binding(name) => c_mangle::escape_keyword(name),
+                _ => "__gorget_k".to_string(),
+            };
+            let v_name = if elems.len() >= 2 {
+                match &elems[1].node {
+                    Pattern::Binding(name) => c_mangle::escape_keyword(name),
+                    _ => "__gorget_v".to_string(),
+                }
+            } else {
+                "__gorget_v".to_string()
+            };
+            emitter.emit_line(&format!(
+                "{key_type} {k_name} = *({key_type}*)((char*){iter}.keys + {idx} * {iter}.key_size);"
+            ));
+            emitter.emit_line(&format!(
+                "{val_type} {v_name} = *({val_type}*)((char*){iter}.values + {idx} * {iter}.val_size);"
+            ));
+        } else {
+            // key-only pattern
+            let var_name = match &pattern.node {
+                Pattern::Binding(name) => c_mangle::escape_keyword(name),
+                _ => "__gorget_i".to_string(),
+            };
+            emitter.emit_line(&format!(
+                "{key_type} {var_name} = *({key_type}*)((char*){iter}.keys + {idx} * {iter}.key_size);"
+            ));
+        }
+
+        self.gen_block(body, emitter);
+        emitter.dedent();
+        emitter.emit_line("}");
+    }
+
+    /// Generate a for-loop over a Set (GorgetSet, which is typedef'd to GorgetMap).
+    fn gen_for_loop_set(
+        &self,
+        pattern: &Spanned<Pattern>,
+        iterable: &Spanned<Expr>,
+        body: &Block,
+        emitter: &mut CEmitter,
+    ) {
+        let iter = self.gen_expr(iterable);
+        let idx = emitter.fresh_temp();
+        let elem_type = self.infer_set_elem_type(iterable);
+        let var_name = match &pattern.node {
+            Pattern::Binding(name) => c_mangle::escape_keyword(name),
+            _ => "__gorget_i".to_string(),
+        };
+
+        emitter.emit_line(&format!(
+            "for (size_t {idx} = 0; {idx} < {iter}.cap; {idx}++) {{"
+        ));
+        emitter.indent();
+        emitter.emit_line(&format!("if ({iter}.states[{idx}] != 1) continue;"));
+        emitter.emit_line(&format!(
+            "{elem_type} {var_name} = *({elem_type}*)((char*){iter}.keys + {idx} * {iter}.key_size);"
+        ));
+        self.gen_block(body, emitter);
+        emitter.dedent();
+        emitter.emit_line("}");
     }
 
     /// Generate a match statement.
@@ -774,6 +943,69 @@ impl CodegenContext<'_> {
                 emitter.indent();
                 emitter.emit_line(&format!(
                     "{elem_type} {var_name} = GORGET_ARRAY_AT({elem_type}, {iter}, {idx});"
+                ));
+                self.gen_block_with_break_flag(body, &flag, emitter);
+                emitter.dedent();
+                emitter.emit_line("}");
+                emitter.emit_line(&format!("if (!{flag}) {{"));
+                emitter.indent();
+                self.gen_block(else_block, emitter);
+                emitter.dedent();
+                emitter.emit_line("}");
+                return;
+            } else if self.is_gorget_map_expr(iterable) {
+                let iter = self.gen_expr(iterable);
+                let idx = emitter.fresh_temp();
+                let (key_type, val_type) = self.infer_map_kv_types_for_iter(iterable);
+                emitter.emit_line(&format!(
+                    "for (size_t {idx} = 0; {idx} < {iter}.cap; {idx}++) {{"
+                ));
+                emitter.indent();
+                emitter.emit_line(&format!("if ({iter}.states[{idx}] != 1) continue;"));
+                if let Pattern::Tuple(elems) = &pattern.node {
+                    let k_name = match &elems[0].node {
+                        Pattern::Binding(name) => c_mangle::escape_keyword(name),
+                        _ => "__gorget_k".to_string(),
+                    };
+                    let v_name = if elems.len() >= 2 {
+                        match &elems[1].node {
+                            Pattern::Binding(name) => c_mangle::escape_keyword(name),
+                            _ => "__gorget_v".to_string(),
+                        }
+                    } else {
+                        "__gorget_v".to_string()
+                    };
+                    emitter.emit_line(&format!(
+                        "{key_type} {k_name} = *({key_type}*)((char*){iter}.keys + {idx} * {iter}.key_size);"
+                    ));
+                    emitter.emit_line(&format!(
+                        "{val_type} {v_name} = *({val_type}*)((char*){iter}.values + {idx} * {iter}.val_size);"
+                    ));
+                } else {
+                    emitter.emit_line(&format!(
+                        "{key_type} {var_name} = *({key_type}*)((char*){iter}.keys + {idx} * {iter}.key_size);"
+                    ));
+                }
+                self.gen_block_with_break_flag(body, &flag, emitter);
+                emitter.dedent();
+                emitter.emit_line("}");
+                emitter.emit_line(&format!("if (!{flag}) {{"));
+                emitter.indent();
+                self.gen_block(else_block, emitter);
+                emitter.dedent();
+                emitter.emit_line("}");
+                return;
+            } else if self.is_gorget_set_expr(iterable) {
+                let iter = self.gen_expr(iterable);
+                let idx = emitter.fresh_temp();
+                let elem_type = self.infer_set_elem_type(iterable);
+                emitter.emit_line(&format!(
+                    "for (size_t {idx} = 0; {idx} < {iter}.cap; {idx}++) {{"
+                ));
+                emitter.indent();
+                emitter.emit_line(&format!("if ({iter}.states[{idx}] != 1) continue;"));
+                emitter.emit_line(&format!(
+                    "{elem_type} {var_name} = *({elem_type}*)((char*){iter}.keys + {idx} * {iter}.key_size);"
                 ));
                 self.gen_block_with_break_flag(body, &flag, emitter);
                 emitter.dedent();

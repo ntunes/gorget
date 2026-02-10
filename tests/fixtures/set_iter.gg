@@ -1,0 +1,9 @@
+void main():
+    Set[int] nums = Set[int]()
+    nums.add(10)
+    nums.add(20)
+    nums.add(30)
+    int total = 0
+    for x in nums:
+        total = total + x
+    print("{total}")
