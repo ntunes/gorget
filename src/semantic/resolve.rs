@@ -33,6 +33,8 @@ pub struct FunctionInfo {
     pub param_type_ids: Vec<Option<TypeId>>,
     pub param_ownerships: Vec<Ownership>,
     pub param_names: Vec<String>,
+    /// Default value expressions for each parameter (None if no default).
+    pub param_defaults: Vec<Option<Spanned<Expr>>>,
     pub throws: bool,
     pub scope_id: super::ids::ScopeId,
     /// Names of generic type parameters, in declaration order.
@@ -134,6 +136,8 @@ fn collect_item(
                         f.params.iter().map(|p| p.node.ownership).collect();
                     let param_names: Vec<String> =
                         f.params.iter().map(|p| p.node.name.node.clone()).collect();
+                    let param_defaults: Vec<Option<Spanned<Expr>>> =
+                        f.params.iter().map(|p| p.node.default.clone()).collect();
 
                     let generic_param_names = extract_generic_param_names(&f.generic_params);
                     let where_bounds = extract_where_bounds(&f.where_clause);
@@ -146,6 +150,7 @@ fn collect_item(
                             param_type_ids: Vec::new(),
                             param_ownerships,
                             param_names,
+                            param_defaults,
                             throws: f.throws.is_some(),
                             scope_id: scopes.current_scope(),
                             generic_param_names,

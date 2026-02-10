@@ -865,6 +865,22 @@ fn set_higher_order() {
     );
 }
 
+#[test]
+fn named_args() {
+    run_gg(
+        "named_args.gg",
+        "\
+3
+13
+12
+alice is 25
+bob is 30
+carol is 40
+9
+1024",
+    );
+}
+
 // ══════════════════════════════════════════════════════════════
 // Runtime safety tests (expected panics)
 // ══════════════════════════════════════════════════════════════

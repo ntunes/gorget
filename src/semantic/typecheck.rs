@@ -294,26 +294,42 @@ impl<'a> TypeChecker<'a> {
                     }
                 }
 
+                // Try to look up FunctionInfo for named args / default params
+                let func_info = if let Expr::Identifier(_) = &callee.node {
+                    self.resolution_map.get(&callee.span.start)
+                        .and_then(|def_id| self.function_info.get(def_id))
+                } else {
+                    None
+                };
+
                 // Check if callee is a function
                 match self.types.get(resolved).clone() {
                     ResolvedType::Function {
                         params,
                         return_type,
                     } => {
-                        // Check argument count
-                        if args.len() != params.len() {
-                            self.error(
-                                SemanticErrorKind::WrongArgCount {
-                                    expected: params.len(),
-                                    found: args.len(),
-                                },
-                                expr.span,
-                            );
-                        }
-                        // Check argument types
-                        for (arg, &param_type) in args.iter().zip(params.iter()) {
-                            let arg_type = self.infer_expr(&arg.node.value);
-                            self.unify(param_type, arg_type, arg.span);
+                        let has_named = args.iter().any(|a| a.node.name.is_some());
+                        let has_defaults = func_info.map_or(false, |fi| fi.param_defaults.iter().any(|d| d.is_some()));
+
+                        if (has_named || has_defaults) && func_info.is_some() {
+                            // Full named-arg / default-param validation
+                            let fi = func_info.unwrap();
+                            self.check_named_args_and_defaults(args, &params, fi, expr.span);
+                        } else {
+                            // Simple positional check (original behavior)
+                            if args.len() != params.len() {
+                                self.error(
+                                    SemanticErrorKind::WrongArgCount {
+                                        expected: params.len(),
+                                        found: args.len(),
+                                    },
+                                    expr.span,
+                                );
+                            }
+                            for (arg, &param_type) in args.iter().zip(params.iter()) {
+                                let arg_type = self.infer_expr(&arg.node.value);
+                                self.unify(param_type, arg_type, arg.span);
+                            }
                         }
                         return_type
                     }
@@ -1179,6 +1195,101 @@ impl<'a> TypeChecker<'a> {
             }
 
             _ => None,
+        }
+    }
+
+    /// Validate a call with named arguments and/or default parameters.
+    /// Checks: no positional after named, no unknown names, no duplicates,
+    /// all required params are satisfied. Also type-checks args (including defaults).
+    fn check_named_args_and_defaults(
+        &mut self,
+        args: &[Spanned<CallArg>],
+        param_types: &[TypeId],
+        func_info: &FunctionInfo,
+        call_span: Span,
+    ) {
+        let param_names = &func_info.param_names;
+        let param_defaults = &func_info.param_defaults;
+
+        // Track which params have been satisfied
+        let mut satisfied = vec![false; param_names.len()];
+        let mut seen_named = false;
+
+        // First pass: validate structure and map args to param slots
+        for (i, arg) in args.iter().enumerate() {
+            if let Some(ref name) = arg.node.name {
+                seen_named = true;
+                // Check name matches a parameter
+                if let Some(pos) = param_names.iter().position(|pn| pn == &name.node) {
+                    if satisfied[pos] {
+                        self.error(
+                            SemanticErrorKind::DuplicateNamedArg { name: name.node.clone() },
+                            arg.span,
+                        );
+                    }
+                    satisfied[pos] = true;
+                    // Type-check this arg against the correct param
+                    let arg_type = self.infer_expr(&arg.node.value);
+                    if pos < param_types.len() {
+                        self.unify(param_types[pos], arg_type, arg.span);
+                    }
+                } else {
+                    self.error(
+                        SemanticErrorKind::UnknownNamedArg { name: name.node.clone() },
+                        arg.span,
+                    );
+                    // Still infer the arg to avoid cascading errors
+                    self.infer_expr(&arg.node.value);
+                }
+            } else {
+                // Positional arg
+                if seen_named {
+                    self.error(SemanticErrorKind::PositionalAfterNamed, arg.span);
+                }
+                if i < param_names.len() {
+                    satisfied[i] = true;
+                    let arg_type = self.infer_expr(&arg.node.value);
+                    if i < param_types.len() {
+                        self.unify(param_types[i], arg_type, arg.span);
+                    }
+                } else {
+                    // Extra positional arg beyond param count
+                    self.infer_expr(&arg.node.value);
+                }
+            }
+        }
+
+        // Check that all params without defaults are satisfied
+        for (i, sat) in satisfied.iter().enumerate() {
+            if !sat {
+                if i < param_defaults.len() && param_defaults[i].is_some() {
+                    // Has a default — OK, type-check the default expr
+                    if let Some(ref default_expr) = param_defaults[i] {
+                        let default_type = self.infer_expr(default_expr);
+                        if i < param_types.len() {
+                            self.unify(param_types[i], default_type, default_expr.span);
+                        }
+                    }
+                } else {
+                    self.error(
+                        SemanticErrorKind::MissingRequiredArg {
+                            name: param_names[i].clone(),
+                        },
+                        call_span,
+                    );
+                }
+            }
+        }
+
+        // Too many positional args
+        if args.len() > param_names.len() && !args.iter().any(|a| a.node.name.is_some()) {
+            self.error(
+                SemanticErrorKind::WrongArgCount {
+                    expected: param_names.len(),
+                    found: args.len(),
+                },
+                call_span,
+            );
         }
     }
 

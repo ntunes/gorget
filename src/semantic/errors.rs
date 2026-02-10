@@ -101,6 +101,18 @@ pub enum SemanticErrorKind {
 
     /// Match expression is not exhaustive — some enum variants are not covered.
     NonExhaustiveMatch { missing_variants: Vec<String> },
+
+    /// Named argument doesn't match any parameter.
+    UnknownNamedArg { name: String },
+
+    /// Same named argument passed twice.
+    DuplicateNamedArg { name: String },
+
+    /// Required parameter not provided (no default value).
+    MissingRequiredArg { name: String },
+
+    /// Positional argument follows a named argument.
+    PositionalAfterNamed,
 }
 
 impl std::fmt::Display for SemanticError {
@@ -230,6 +242,18 @@ impl std::fmt::Display for SemanticError {
                     "non-exhaustive match: missing variants: {}",
                     missing_variants.join(", ")
                 )
+            }
+            SemanticErrorKind::UnknownNamedArg { name } => {
+                write!(f, "unknown named argument `{name}`")
+            }
+            SemanticErrorKind::DuplicateNamedArg { name } => {
+                write!(f, "duplicate named argument `{name}`")
+            }
+            SemanticErrorKind::MissingRequiredArg { name } => {
+                write!(f, "missing required argument `{name}`")
+            }
+            SemanticErrorKind::PositionalAfterNamed => {
+                write!(f, "positional argument cannot follow named argument")
             }
         }
     }

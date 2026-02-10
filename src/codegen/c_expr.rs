@@ -516,8 +516,63 @@ impl CodegenContext<'_> {
         // General function call
         let callee_str = self.gen_expr(callee);
         let callee_name = c_mangle::escape_keyword(&callee_str);
-        let arg_exprs: Vec<String> = args.iter().map(|a| self.gen_expr(&a.node.value)).collect();
+        let arg_exprs = self.resolve_call_args(callee, args);
         format!("{callee_name}({})", arg_exprs.join(", "))
+    }
+
+    /// Resolve call arguments: reorder named args to match param order and
+    /// fill in default values for missing optional params.
+    fn resolve_call_args(
+        &self,
+        callee: &Spanned<Expr>,
+        args: &[Spanned<crate::parser::ast::CallArg>],
+    ) -> Vec<String> {
+        let has_named = args.iter().any(|a| a.node.name.is_some());
+        let func_info = if let Expr::Identifier(_) = &callee.node {
+            self.resolution_map.get(&callee.span.start)
+                .and_then(|def_id| self.function_info.get(def_id))
+        } else {
+            None
+        };
+        let has_defaults = func_info.map_or(false, |fi| fi.param_defaults.iter().any(|d| d.is_some()));
+
+        if (!has_named && !has_defaults) || func_info.is_none() {
+            // Simple positional — original behavior
+            return args.iter().map(|a| self.gen_expr(&a.node.value)).collect();
+        }
+
+        let fi = func_info.unwrap();
+        let param_names = &fi.param_names;
+        let param_defaults = &fi.param_defaults;
+
+        // Build a slot for each param
+        let mut slots: Vec<Option<String>> = vec![None; param_names.len()];
+
+        // Place positional args first, then named args
+        let mut positional_idx = 0;
+        for arg in args {
+            if let Some(ref name) = arg.node.name {
+                if let Some(pos) = param_names.iter().position(|pn| pn == &name.node) {
+                    slots[pos] = Some(self.gen_expr(&arg.node.value));
+                }
+            } else {
+                if positional_idx < slots.len() {
+                    slots[positional_idx] = Some(self.gen_expr(&arg.node.value));
+                }
+                positional_idx += 1;
+            }
+        }
+
+        // Fill missing slots with defaults
+        for (i, slot) in slots.iter_mut().enumerate() {
+            if slot.is_none() {
+                if let Some(Some(default_expr)) = param_defaults.get(i) {
+                    *slot = Some(self.gen_expr(default_expr));
+                }
+            }
+        }
+
+        slots.into_iter().map(|s| s.unwrap_or_else(|| "0".to_string())).collect()
     }
 
     /// Generate a method call: `receiver.method(args)` → `Type__method(&receiver, args)`
