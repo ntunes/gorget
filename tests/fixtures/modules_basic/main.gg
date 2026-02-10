@@ -1,0 +1,4 @@
+import math
+
+void main():
+    print("{add(2, 3)}")

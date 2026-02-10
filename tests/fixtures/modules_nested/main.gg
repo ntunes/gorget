@@ -1,0 +1,4 @@
+import util.greet
+
+void main():
+    hello("world")

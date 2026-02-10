@@ -90,6 +90,7 @@ impl ScopeTable {
     }
 
     /// Add a definition to the current scope. Returns error on duplicate.
+    /// An actual definition (function, struct, etc.) may replace a prior `Import` placeholder.
     pub fn define(
         &mut self,
         name: String,
@@ -98,7 +99,23 @@ impl ScopeTable {
     ) -> Result<DefId, SemanticError> {
         let scope = &self.scopes[self.current.0 as usize];
         if let Some(&existing_id) = scope.names.get(&name) {
-            let original_span = self.definitions[existing_id.0 as usize].span;
+            let existing = &self.definitions[existing_id.0 as usize];
+            // Allow a real definition to replace an import placeholder
+            if existing.kind == DefKind::Import && kind != DefKind::Import {
+                let def_id = DefId(self.definitions.len() as u32);
+                self.definitions.push(DefInfo {
+                    name: name.clone(),
+                    kind,
+                    span,
+                    scope: self.current,
+                    type_id: None,
+                });
+                self.scopes[self.current.0 as usize]
+                    .names
+                    .insert(name, def_id);
+                return Ok(def_id);
+            }
+            let original_span = existing.span;
             return Err(SemanticError {
                 kind: SemanticErrorKind::DuplicateDefinition {
                     name,

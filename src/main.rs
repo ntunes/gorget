@@ -5,7 +5,46 @@ use std::process::{self, Command};
 
 use gorget::errors::ErrorReporter;
 use gorget::lexer::Lexer;
+use gorget::loader::{self, ModuleLoader};
 use gorget::parser::Parser;
+
+/// Load imported modules and merge them into a single module.
+fn load_imports(filename: &str, source: &str, module: gorget::parser::ast::Module) -> gorget::parser::ast::Module {
+    let input_path = Path::new(filename).canonicalize().unwrap_or_else(|e| {
+        eprintln!("Error resolving path {filename}: {e}");
+        process::exit(1);
+    });
+
+    let mut ml = ModuleLoader::new();
+    let modules = ml
+        .load_all(&input_path, source.to_string(), module)
+        .unwrap_or_else(|e| {
+            match &e {
+                loader::LoadError::Parse {
+                    path,
+                    errors,
+                    source,
+                } => {
+                    let reporter = ErrorReporter::new(
+                        path.display().to_string(),
+                        source.clone(),
+                    );
+                    for err in errors {
+                        reporter.report_parse_error(err);
+                    }
+                    eprintln!(
+                        "\n{} parse error(s) in '{}'",
+                        errors.len(),
+                        path.display()
+                    );
+                }
+                _ => eprintln!("Error: {e}"),
+            }
+            process::exit(1);
+        });
+
+    loader::merge_modules(modules)
+}
 
 /// Build a .gg source file into a binary. Returns the path to the executable.
 fn build(filename: &str, source: &str) -> PathBuf {
@@ -20,6 +59,9 @@ fn build(filename: &str, source: &str) -> PathBuf {
         eprintln!("\n{} parse error(s) found", parser.errors.len());
         process::exit(1);
     }
+
+    // Load imported modules recursively and merge
+    let module = load_imports(filename, source, module);
 
     let result = gorget::semantic::analyze(&module);
 
@@ -138,6 +180,9 @@ fn main() {
                 eprintln!("\n{} parse error(s) found", parser.errors.len());
                 process::exit(1);
             }
+
+            // Load imported modules recursively and merge
+            let module = load_imports(filename, &source, module);
 
             let result = gorget::semantic::analyze(&module);
 

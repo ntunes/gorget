@@ -1,0 +1,2 @@
+void hello(String name):
+    print("hello {name}")

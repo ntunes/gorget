@@ -1,0 +1,4 @@
+from helpers import twice
+
+void main():
+    print("{twice(21)}")

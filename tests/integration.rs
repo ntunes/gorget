@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Build and run a `.gg` fixture, asserting its stdout matches `expected`.
@@ -458,4 +458,88 @@ moved
 borrowed
 done",
     );
+}
+
+// ══════════════════════════════════════════════════════════════
+// Module / import tests
+// ══════════════════════════════════════════════════════════════
+
+/// Build and run a multi-file `.gg` fixture from a directory.
+fn run_gg_dir(dir_name: &str, main_file: &str, expected: &str) {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let dir_path = manifest_dir.join("tests/fixtures").join(dir_name);
+    let main_path = dir_path.join(main_file);
+
+    assert!(
+        main_path.exists(),
+        "Fixture not found: {}",
+        main_path.display()
+    );
+
+    let stem = Path::new(main_file)
+        .file_stem()
+        .unwrap()
+        .to_str()
+        .unwrap();
+    let c_path = dir_path.join(format!("{stem}.c"));
+    let exe_path = dir_path.join(stem);
+
+    // 1. Build: cargo run -- build <dir/main.gg>
+    let build = Command::new(env!("CARGO"))
+        .args(["run", "--quiet", "--", "build"])
+        .arg(&main_path)
+        .output()
+        .expect("failed to run cargo");
+
+    assert!(
+        build.status.success(),
+        "Build failed for {dir_name}/{main_file}:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr),
+    );
+
+    // 2. Execute the compiled binary
+    let run = Command::new(&exe_path)
+        .output()
+        .expect("failed to execute compiled binary");
+
+    let stdout = String::from_utf8_lossy(&run.stdout);
+
+    // 3. Assert stdout
+    assert_eq!(
+        stdout.trim(),
+        expected.trim(),
+        "Output mismatch for {dir_name}/{main_file}:\nExpected:\n{expected}\nGot:\n{stdout}",
+    );
+
+    assert!(
+        run.status.success(),
+        "Binary exited with error for {dir_name}/{main_file}: {:?}\nstderr: {}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stderr),
+    );
+
+    // 4. Clean up generated files
+    let _ = std::fs::remove_file(&c_path);
+    let _ = std::fs::remove_file(&exe_path);
+}
+
+#[test]
+fn modules_basic() {
+    run_gg_dir("modules_basic", "main.gg", "5");
+}
+
+#[test]
+fn modules_nested() {
+    run_gg_dir("modules_nested", "main.gg", "hello world");
+}
+
+#[test]
+fn modules_from_import() {
+    run_gg_dir("modules_from", "main.gg", "42");
+}
+
+#[test]
+fn modules_chain() {
+    run_gg_dir("modules_chain", "main.gg", "99");
 }
