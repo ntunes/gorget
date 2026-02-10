@@ -1,0 +1,9 @@
+void main():
+    Box[int] b = Box(42)
+    print("{*b}")
+    int val = b.get()
+    print("{val}")
+    b.set(100)
+    print("{b.get()}")
+    Box[str] s = Box.new("hello")
+    print("{*s}")

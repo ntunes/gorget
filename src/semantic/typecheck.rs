@@ -304,10 +304,13 @@ impl<'a> TypeChecker<'a> {
                         if let Expr::Identifier(_) = &callee.node {
                             if let Some(&def_id) = self.resolution_map.get(&callee.span.start) {
                                 let def = self.scopes.get_def(def_id);
-                                match def.kind {
+                                let def_kind = def.kind;
+                                let def_name = def.name.clone();
+                                match def_kind {
                                     DefKind::Struct | DefKind::Newtype => {
+                                        let mut arg_types = Vec::new();
                                         for arg in args {
-                                            self.infer_expr(&arg.node.value);
+                                            arg_types.push(self.infer_expr(&arg.node.value));
                                         }
                                         // For generic constructors like Pair[int, float](...),
                                         // resolve type args and return Generic; for non-generic
@@ -322,6 +325,10 @@ impl<'a> TypeChecker<'a> {
                                                 }
                                             }).collect();
                                             return self.types.insert(ResolvedType::Generic(def_id, resolved_args));
+                                        }
+                                        // Box(value) → Box[T] where T is inferred from the argument
+                                        if def_name == "Box" && arg_types.len() == 1 {
+                                            return self.types.insert(ResolvedType::Generic(def_id, arg_types));
                                         }
                                         return self.types.insert(ResolvedType::Defined(def_id));
                                     }
@@ -338,11 +345,18 @@ impl<'a> TypeChecker<'a> {
                     ResolvedType::Defined(def_id) => {
                         // Could be a struct constructor or enum variant
                         let def = self.scopes.get_def(def_id);
-                        match def.kind {
+                        let def_kind = def.kind;
+                        let def_name = def.name.clone();
+                        match def_kind {
                             DefKind::Struct | DefKind::Variant | DefKind::Newtype => {
                                 // Infer argument types
+                                let mut arg_types = Vec::new();
                                 for arg in args {
-                                    self.infer_expr(&arg.node.value);
+                                    arg_types.push(self.infer_expr(&arg.node.value));
+                                }
+                                // Box.new(value) → Box[T] where T is inferred from the argument
+                                if def_name == "Box" && arg_types.len() == 1 {
+                                    return self.types.insert(ResolvedType::Generic(def_id, arg_types));
                                 }
                                 self.types.insert(ResolvedType::Defined(def_id))
                             }
@@ -1067,6 +1081,11 @@ impl<'a> TypeChecker<'a> {
             "Result" => match method {
                 "unwrap" | "unwrap_or" => Some(elem_type()),
                 "is_ok" | "is_err" => Some(self.types.bool_id),
+                _ => None,
+            },
+            "Box" => match method {
+                "get" => Some(elem_type()),
+                "set" => Some(self.types.void_id),
                 _ => None,
             },
             _ => None,

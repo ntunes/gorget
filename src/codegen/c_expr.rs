@@ -177,9 +177,20 @@ impl CodegenContext<'_> {
                 format!("({cond} ? {then_val} : {else_val})")
             }
 
-            Expr::Move { expr } | Expr::MutableBorrow { expr } | Expr::Deref { expr } => {
+            Expr::Move { expr } | Expr::MutableBorrow { expr } => {
                 // In C output, ownership/borrow semantics are erased
                 self.gen_expr(expr)
+            }
+
+            Expr::Deref { expr } => {
+                // For Box[T] pointers, generate actual dereference
+                let inner = self.gen_expr(expr);
+                if self.is_box_expr(expr) {
+                    format!("(*{inner})")
+                } else {
+                    // Non-box: ownership semantics erased
+                    inner
+                }
             }
 
             Expr::Closure {
@@ -354,6 +365,17 @@ impl CodegenContext<'_> {
                 _ => {}
             }
 
+            // Handle Box(value) constructor → heap allocation
+            if name == "Box" {
+                if let Some(arg) = args.first() {
+                    let inner = self.gen_expr(&arg.node.value);
+                    let inner_type = self.box_inner_c_type(&arg.node.value.node);
+                    return format!(
+                        "({{ {inner_type}* __box_tmp = ({inner_type}*)malloc(sizeof({inner_type})); *__box_tmp = {inner}; __box_tmp; }})"
+                    );
+                }
+            }
+
             // Check if this is a struct constructor
             if let Some(def_id) = self.scopes.lookup(name) {
                 let def = self.scopes.get_def(def_id);
@@ -421,9 +443,9 @@ impl CodegenContext<'_> {
                 if type_name == "Box" && method_name == "new" {
                     if let Some(arg) = args.first() {
                         let inner = self.gen_expr(&arg.node.value);
-                        let inner_type = self.infer_c_type_from_expr(&arg.node.value.node);
+                        let inner_type = self.box_inner_c_type(&arg.node.value.node);
                         return format!(
-                            "({{ {inner_type}* __box_tmp = ({inner_type}*)malloc(sizeof({inner_type})); *__box_tmp = {inner}; (void*)__box_tmp; }})"
+                            "({{ {inner_type}* __box_tmp = ({inner_type}*)malloc(sizeof({inner_type})); *__box_tmp = {inner}; __box_tmp; }})"
                         );
                     }
                 }
@@ -536,8 +558,9 @@ impl CodegenContext<'_> {
             || matches!(c_type.as_deref(), Some("const char*"));
         let is_option = type_name == "Option";
         let is_result = type_name == "Result";
+        let is_box = type_name == "Box";
 
-        if !is_vector && !is_map && !is_set && !is_string && !is_option && !is_result {
+        if !is_vector && !is_map && !is_set && !is_string && !is_option && !is_result && !is_box {
             return None;
         }
 
@@ -561,6 +584,9 @@ impl CodegenContext<'_> {
         }
         if is_result {
             return Some(self.gen_result_method(&recv, method_name, args, receiver, needs_temp));
+        }
+        if is_box {
+            return Some(self.gen_box_method(&recv, method_name, args));
         }
 
         None
@@ -852,6 +878,70 @@ impl CodegenContext<'_> {
         }
     }
 
+
+    /// Generate code for Box built-in methods: get(), set().
+    fn gen_box_method(
+        &self,
+        recv: &str,
+        method_name: &str,
+        args: &[Spanned<crate::parser::ast::CallArg>],
+    ) -> String {
+        match method_name {
+            "get" => format!("(*{recv})"),
+            "set" => {
+                if let Some(arg) = args.first() {
+                    let val = self.gen_expr(&arg.node.value);
+                    format!("({{ *{recv} = {val}; }})")
+                } else {
+                    format!("/* Box.set() missing arg */")
+                }
+            }
+            "new" => {
+                // Box.new(value) as a method call (when Box is the receiver)
+                if let Some(arg) = args.first() {
+                    let inner = self.gen_expr(&arg.node.value);
+                    let inner_type = self.box_inner_c_type(&arg.node.value.node);
+                    format!(
+                        "({{ {inner_type}* __box_tmp = ({inner_type}*)malloc(sizeof({inner_type})); *__box_tmp = {inner}; __box_tmp; }})"
+                    )
+                } else {
+                    format!("/* Box.new() missing arg */")
+                }
+            }
+            _ => format!("/* unknown Box method: {method_name} */"),
+        }
+    }
+
+    /// Check if an expression has Box type (for deciding whether to generate a real dereference).
+    fn is_box_expr(&self, expr: &Spanned<Expr>) -> bool {
+        if let Expr::Identifier(name) = &expr.node {
+            let type_id = self.resolution_map.get(&expr.span.start)
+                .and_then(|def_id| self.scopes.get_def(*def_id).type_id)
+                .or_else(|| {
+                    self.scopes.lookup_by_name_anywhere(name)
+                        .and_then(|def_id| self.scopes.get_def(def_id).type_id)
+                });
+            if let Some(tid) = type_id {
+                if let crate::semantic::types::ResolvedType::Generic(def_id, _) = self.types.get(tid) {
+                    return self.scopes.get_def(*def_id).name == "Box";
+                }
+            }
+        }
+        false
+    }
+
+    /// Infer the inner C type for a Box allocation.
+    /// Uses `decl_type_hint` to extract T from `Box[T]`, falling back to the argument's inferred type.
+    fn box_inner_c_type(&self, arg_expr: &Expr) -> String {
+        let hint = self.decl_type_hint.borrow();
+        if let Some(Type::Named { name, generic_args }) = hint.as_ref() {
+            if name.node == "Box" && generic_args.len() == 1 {
+                return c_types::ast_type_to_c(&generic_args[0].node, self.scopes);
+            }
+        }
+        // Fallback: infer from the argument expression
+        self.infer_c_type_from_expr(arg_expr)
+    }
 
     /// Resolve a unit variant constructor using the decl_type_hint.
     /// Returns the monomorphized enum name if the hint matches the expected enum.
@@ -1481,6 +1571,11 @@ impl CodegenContext<'_> {
                 (fmt.to_string(), arg)
             }
             ResolvedType::Void => ("%s".to_string(), "\"void\"".to_string()),
+            ResolvedType::Generic(def_id, args) if self.scopes.get_def(*def_id).name == "Box" && args.len() == 1 => {
+                // Box[T]: auto-dereference and format the inner type
+                let deref_expr = format!("(*{expr})");
+                self.format_for_type_id(args[0], &deref_expr)
+            }
             ResolvedType::Defined(def_id) | ResolvedType::Generic(def_id, _) => {
                 let name = self.scopes.get_def(*def_id).name.clone();
                 if self.traits.has_trait_impl_by_name(&name, "Displayable") {
@@ -1520,6 +1615,16 @@ impl CodegenContext<'_> {
                 recv_type
                     .as_deref()
                     .and_then(|rt| self.builtin_method_return_type(rt, &method.node))
+            }
+            Expr::Deref { expr: inner } => {
+                // *box_var → inner type of Box[T]
+                let inner_type_id = self.infer_interp_expr_type(inner)?;
+                if let crate::semantic::types::ResolvedType::Generic(def_id, args) = self.types.get(inner_type_id) {
+                    if self.scopes.get_def(*def_id).name == "Box" && args.len() == 1 {
+                        return Some(args[0]);
+                    }
+                }
+                None
             }
             Expr::IntLiteral(_) => Some(self.types.int_id),
             Expr::FloatLiteral(_) => Some(self.types.float_id),

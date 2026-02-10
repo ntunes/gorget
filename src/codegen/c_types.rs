@@ -155,6 +155,10 @@ pub fn type_id_to_c(type_id: TypeId, types: &TypeTable, scopes: &ScopeTable) -> 
                 "Vector" | "List" | "Array" => "GorgetArray".to_string(),
                 "Set" => "GorgetSet".to_string(),
                 "Dict" | "Map" | "HashMap" => "GorgetMap".to_string(),
+                "Box" if args.len() == 1 => {
+                    let inner = type_id_to_c(args[0], types, scopes);
+                    format!("{inner}*")
+                }
                 _ => {
                     let c_args: Vec<String> = args
                         .iter()

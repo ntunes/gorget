@@ -1,7 +1,6 @@
 # TODO
 
 ## Critical (blocks real-world use)
-- [ ] Box[T]: heap allocation [added: 2026-02-10]
 
 ## High Priority
 - [ ] Implicit `it` in closures [added: 2026-02-10]

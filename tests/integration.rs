@@ -734,3 +734,15 @@ empty set
 done",
     );
 }
+
+#[test]
+fn box_heap() {
+    run_gg(
+        "box_heap.gg",
+        "\
+42
+42
+100
+hello",
+    );
+}
