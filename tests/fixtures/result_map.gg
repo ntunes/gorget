@@ -1,0 +1,9 @@
+void main():
+    Result[int, str] ok = Ok(10)
+    Result[int, str] err = Error("fail")
+    Result[int, str] doubled = ok.map((int x): x * 2)
+    Result[int, str] err_mapped = err.map((int x): x * 2)
+    print("{doubled.unwrap()}")
+    print("{err_mapped.unwrap_or(0)}")
+    Result[int, str] chained = ok.and_then((int x): Ok(x + 1))
+    print("{chained.unwrap()}")

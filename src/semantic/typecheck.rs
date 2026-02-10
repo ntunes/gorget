@@ -404,14 +404,19 @@ impl<'a> TypeChecker<'a> {
                     }
                     sig.return_type
                 } else {
-                    // Method not found — check built-in type methods
-                    for arg in args {
-                        self.infer_expr(&arg.node.value);
-                    }
-                    if let Some(ret_type) = self.builtin_method_type(resolved_receiver, &method.node) {
+                    // Check for closure-returning Option/Result methods (map, and_then, or_else)
+                    if let Some(ret_type) = self.infer_closure_method_type(resolved_receiver, &method.node, args) {
                         ret_type
                     } else {
-                        self.types.error_id
+                        // Method not found — check built-in type methods
+                        for arg in args {
+                            self.infer_expr(&arg.node.value);
+                        }
+                        if let Some(ret_type) = self.builtin_method_type(resolved_receiver, &method.node) {
+                            ret_type
+                        } else {
+                            self.types.error_id
+                        }
                     }
                 }
             }
@@ -918,6 +923,73 @@ impl<'a> TypeChecker<'a> {
             }
         }
         false
+    }
+
+    /// Infer the return type of closure-taking methods like .map(), .and_then(), .or_else()
+    /// on Option[T] and Result[T,E]. Returns None if this isn't such a method.
+    fn infer_closure_method_type(
+        &mut self,
+        receiver_type: TypeId,
+        method: &str,
+        args: &[Spanned<CallArg>],
+    ) -> Option<TypeId> {
+        let (type_name, type_args, def_id) = match self.types.get(receiver_type) {
+            ResolvedType::Generic(def_id, args) => {
+                let name = self.scopes.get_def(*def_id).name.clone();
+                let args = args.clone();
+                let def_id = *def_id;
+                (name, args, def_id)
+            }
+            _ => return None,
+        };
+
+        match (type_name.as_str(), method) {
+            ("Option", "map") => {
+                // (T) -> U, returns Option[U]
+                let closure_type = self.infer_expr(&args.first()?.node.value);
+                let u_type = self.extract_fn_return_type(closure_type)?;
+                Some(self.types.insert(ResolvedType::Generic(def_id, vec![u_type])))
+            }
+            ("Option", "and_then") => {
+                // (T) -> Option[U], returns Option[U] directly
+                let closure_type = self.infer_expr(&args.first()?.node.value);
+                let ret_type = self.extract_fn_return_type(closure_type)?;
+                Some(ret_type)
+            }
+            ("Option", "or_else") => {
+                // () -> Option[T], returns Option[T]
+                let _ = args.first().map(|a| self.infer_expr(&a.node.value));
+                Some(receiver_type)
+            }
+            ("Result", "map") => {
+                // (T) -> U, returns Result[U, E]
+                let closure_type = self.infer_expr(&args.first()?.node.value);
+                let u_type = self.extract_fn_return_type(closure_type)?;
+                let e_type = type_args.get(1).copied()?;
+                Some(self.types.insert(ResolvedType::Generic(def_id, vec![u_type, e_type])))
+            }
+            ("Result", "and_then") => {
+                // (T) -> Result[U, E], returns Result[U, E] directly
+                let closure_type = self.infer_expr(&args.first()?.node.value);
+                let ret_type = self.extract_fn_return_type(closure_type)?;
+                Some(ret_type)
+            }
+            ("Result", "or_else") => {
+                // (E) -> Result[T, F], returns Result[T, F] directly
+                let closure_type = self.infer_expr(&args.first()?.node.value);
+                let ret_type = self.extract_fn_return_type(closure_type)?;
+                Some(ret_type)
+            }
+            _ => None,
+        }
+    }
+
+    /// Extract the return type from a Function type.
+    fn extract_fn_return_type(&self, type_id: TypeId) -> Option<TypeId> {
+        match self.types.get(type_id) {
+            ResolvedType::Function { return_type, .. } => Some(*return_type),
+            _ => None,
+        }
     }
 
     /// Check if a method call is on a known built-in type, returning

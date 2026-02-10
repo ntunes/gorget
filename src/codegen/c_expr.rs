@@ -873,6 +873,42 @@ impl CodegenContext<'_> {
         self.infer_receiver_c_type(receiver).unwrap_or_else(|| "Option__int64_t".to_string())
     }
 
+    /// Extract the C return type from a closure's body expression.
+    fn infer_closure_body_c_type(&self, arg: &Spanned<Expr>) -> String {
+        if let Expr::Closure { body, .. } = &arg.node {
+            return self.infer_c_type_from_expr(&body.node);
+        }
+        "int64_t".to_string()
+    }
+
+    /// Patch the return type of the most recently lifted closure.
+    fn patch_last_closure_return_type(&self, return_type: &str) {
+        let mut closures = self.lifted_closures.borrow_mut();
+        if let Some(last) = closures.last_mut() {
+            last.return_type = return_type.to_string();
+        }
+    }
+
+    /// Extract the C type args from a generic receiver expression.
+    fn infer_generic_type_args(&self, receiver: &Spanned<Expr>) -> Vec<String> {
+        if let Expr::Identifier(name) = &receiver.node {
+            let type_id = self.resolution_map.get(&receiver.span.start)
+                .and_then(|def_id| self.scopes.get_def(*def_id).type_id)
+                .or_else(|| {
+                    self.scopes.lookup_by_name_anywhere(name)
+                        .and_then(|def_id| self.scopes.get_def(def_id).type_id)
+                });
+            if let Some(tid) = type_id {
+                if let crate::semantic::types::ResolvedType::Generic(_, args) = self.types.get(tid) {
+                    return args.iter()
+                        .map(|&a| c_types::type_id_to_c(a, self.types, self.scopes))
+                        .collect();
+                }
+            }
+        }
+        vec![]
+    }
+
     /// Generate code for Option method calls.
     fn gen_option_method(
         &self,
@@ -909,6 +945,43 @@ impl CodegenContext<'_> {
                 } else {
                     format!("{recv}.tag == {tag_none}")
                 }
+            }
+            "map" => {
+                let closure_fn = self.gen_expr(&args[0].node.value);
+                // Determine closure body return C type for output Option type
+                let body_c_type = self.infer_closure_body_c_type(&args[0].node.value);
+                // Patch the lifted closure's return type
+                self.patch_last_closure_return_type(&body_c_type);
+                // Register output Option type (may be same as input for same-type map)
+                let output_mangled = self.register_generic("Option", &[body_c_type], super::GenericInstanceKind::Enum);
+                let ctor_some = c_mangle::mangle_variant(&output_mangled, "Some");
+                let ctor_none = c_mangle::mangle_variant(&output_mangled, "None");
+                format!(
+                    "({{ {mangled} __opt = {recv}; {output_mangled} __result; \
+                    if (__opt.tag == {tag_some}) {{ __result = {ctor_some}({closure_fn}(__opt.data.Some._0)); }} \
+                    else {{ __result = {ctor_none}(); }} \
+                    __result; }})"
+                )
+            }
+            "and_then" => {
+                let closure_fn = self.gen_expr(&args[0].node.value);
+                // Closure returns full Option type — patch return type
+                self.patch_last_closure_return_type(&mangled);
+                let ctor_none = c_mangle::mangle_variant(&mangled, "None");
+                format!(
+                    "({{ {mangled} __opt = {recv}; {mangled} __result; \
+                    if (__opt.tag == {tag_some}) {{ __result = {closure_fn}(__opt.data.Some._0); }} \
+                    else {{ __result = {ctor_none}(); }} \
+                    __result; }})"
+                )
+            }
+            "or_else" => {
+                let closure_fn = self.gen_expr(&args[0].node.value);
+                // Closure returns full Option type — patch return type
+                self.patch_last_closure_return_type(&mangled);
+                format!(
+                    "({{ {mangled} __opt = {recv}; (__opt.tag == {tag_some}) ? __opt : {closure_fn}(); }})"
+                )
             }
             _ => format!("/* unknown Option method {method_name} */ 0"),
         }
@@ -950,6 +1023,41 @@ impl CodegenContext<'_> {
                 } else {
                     format!("{recv}.tag == {tag_error}")
                 }
+            }
+            "map" => {
+                let closure_fn = self.gen_expr(&args[0].node.value);
+                let body_c_type = self.infer_closure_body_c_type(&args[0].node.value);
+                self.patch_last_closure_return_type(&body_c_type);
+                // Result[T,E].map() -> Result[U,E]: need E type for output
+                let type_args = self.infer_generic_type_args(receiver);
+                let error_c_type = type_args.get(1).cloned().unwrap_or_else(|| "int64_t".to_string());
+                let output_mangled = self.register_generic("Result", &[body_c_type, error_c_type.clone()], super::GenericInstanceKind::Enum);
+                let ctor_ok = c_mangle::mangle_variant(&output_mangled, "Ok");
+                let ctor_error = c_mangle::mangle_variant(&output_mangled, "Error");
+                format!(
+                    "({{ {mangled} __res = {recv}; {output_mangled} __result; \
+                    if (__res.tag == {tag_ok}) {{ __result = {ctor_ok}({closure_fn}(__res.data.Ok._0)); }} \
+                    else {{ __result = {ctor_error}(__res.data.Error._0); }} \
+                    __result; }})"
+                )
+            }
+            "and_then" => {
+                let closure_fn = self.gen_expr(&args[0].node.value);
+                self.patch_last_closure_return_type(&mangled);
+                let ctor_error = c_mangle::mangle_variant(&mangled, "Error");
+                format!(
+                    "({{ {mangled} __res = {recv}; {mangled} __result; \
+                    if (__res.tag == {tag_ok}) {{ __result = {closure_fn}(__res.data.Ok._0); }} \
+                    else {{ __result = {ctor_error}(__res.data.Error._0); }} \
+                    __result; }})"
+                )
+            }
+            "or_else" => {
+                let closure_fn = self.gen_expr(&args[0].node.value);
+                self.patch_last_closure_return_type(&mangled);
+                format!(
+                    "({{ {mangled} __res = {recv}; (__res.tag == {tag_ok}) ? __res : {closure_fn}(__res.data.Error._0); }})"
+                )
             }
             _ => format!("/* unknown Result method {method_name} */ 0"),
         }
@@ -1443,7 +1551,7 @@ impl CodegenContext<'_> {
             id,
             captures: captures.clone(),
             params: closure_params,
-            return_type: "int64_t".to_string(), // default; refined later
+            return_type: self.infer_c_type_from_expr(&body.node),
             body: body_expr,
         };
 
@@ -1488,7 +1596,10 @@ impl CodegenContext<'_> {
     ) {
         match expr {
             Expr::Identifier(name) if !bound.contains(name.as_str()) && name != "self" => {
-                if seen.insert(name.clone()) {
+                // Skip global definitions (functions, enum variants, structs, etc.)
+                // — they don't need to be captured, they're available globally in C.
+                let is_global = self.scopes.is_global_def(name);
+                if !is_global && seen.insert(name.clone()) {
                     let ty = self.infer_c_type_from_expr(expr);
                     free.push((c_mangle::escape_keyword(name), ty));
                 }

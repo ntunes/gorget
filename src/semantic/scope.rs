@@ -235,6 +235,25 @@ impl ScopeTable {
         }
         None
     }
+
+    /// Check if a name refers to a global definition (function, enum variant, struct, etc.)
+    /// that doesn't need to be captured by closures.
+    pub fn is_global_def(&self, name: &str) -> bool {
+        for def in self.definitions.iter().rev() {
+            if def.name == name {
+                return matches!(
+                    def.kind,
+                    DefKind::Function
+                        | DefKind::Variant
+                        | DefKind::Enum
+                        | DefKind::Struct
+                        | DefKind::Newtype
+                        | DefKind::Trait
+                );
+            }
+        }
+        false
+    }
 }
 
 #[cfg(test)]

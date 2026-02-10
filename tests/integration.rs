@@ -659,3 +659,26 @@ ok is ok
 err is err",
     );
 }
+
+#[test]
+fn option_map() {
+    run_gg(
+        "option_map.gg",
+        "\
+84
+0
+43
+99",
+    );
+}
+
+#[test]
+fn result_map() {
+    run_gg(
+        "result_map.gg",
+        "\
+20
+0
+11",
+    );
+}

@@ -1,0 +1,11 @@
+void main():
+    Option[int] some = Some(42)
+    Option[int] none = None()
+    Option[int] doubled = some.map((int x): x * 2)
+    Option[int] none_mapped = none.map((int x): x * 2)
+    print("{doubled.unwrap()}")
+    print("{none_mapped.unwrap_or(0)}")
+    Option[int] chained = some.and_then((int x): Some(x + 1))
+    print("{chained.unwrap()}")
+    Option[int] fallback = none.or_else((): Some(99))
+    print("{fallback.unwrap()}")
