@@ -1363,7 +1363,7 @@ void main():
 | 6 | **File extension** | `.gg` |
 | 7 | **Indentation** | 4 spaces (enforced by `gg fmt`) |
 | 8 | **Compilation target** | LLVM (Cranelift for debug builds in future) |
-| 9 | **Package manager name** | `forge` |
+| 9 | **Package management** | Built into `gg` CLI (`gg new`, `gg add`, `gg publish`, etc.) |
 | 10 | **Option handling** | `Option[T]` with rich sugar: `is` pattern matching, `?.` optional chaining, `??` nil coalescing, `.unwrap()`, `.unwrap_or()`, `?` early return |
 | 11 | **Tuple syntax** | `(int, str)` — concise, universal |
 | 12 | **Array syntax** | C-style: `int[5]` fixed array, `Vector[int]` growable, `int[]` slice |
@@ -1933,7 +1933,6 @@ void bench_sort(Bencher &b):
 ```bash
 # Run tests
 gg test
-forge test
 
 # Run specific test
 gg test test_add
@@ -2070,9 +2069,9 @@ void debug_log(str msg):
 
 ---
 
-## 34. Build System (`forge`) in Detail
+## 34. Build System & Package Management (`gg`) in Detail
 
-### forge.toml (Best of Cargo + npm + pyproject.toml)
+### gg.toml (Best of Cargo + npm + pyproject.toml)
 ```toml
 [package]
 name = "my_project"
@@ -2084,9 +2083,9 @@ gorget = ">=1.0"              # minimum compiler version
 
 # Custom tasks (inspired by npm scripts)
 [scripts]
-dev = "forge run --watch"
-deploy = "forge build --release && ./deploy.sh"
-lint = "forge check && forge fmt --check"
+dev = "gg run --watch"
+deploy = "gg build --release && ./deploy.sh"
+lint = "gg check && gg fmt --check"
 
 # Dependencies with explicit semver prefixes
 [dependencies]
@@ -2132,8 +2131,8 @@ warn = ["missing-docs"]
 ### Project Layout
 ```
 my_project/
-  forge.toml               # manifest
-  forge.lock               # lockfile (auto-generated, committed to git)
+  gg.toml                  # manifest
+  gg.lock                  # lockfile (auto-generated, committed to git)
   src/
     main.gg                # binary entry point
     lib.gg                 # library root
@@ -2152,20 +2151,20 @@ my_project/
 
 ### CLI Commands
 ```bash
-forge new my_project       # create project from template
-forge build                # compile
-forge run                  # compile and run
-forge run dev              # run a custom script
-forge test                 # run tests
-forge bench                # run benchmarks
-forge check                # type-check only (fast)
-forge fmt                  # format code
-forge lint                 # run linter
-forge doc                  # generate documentation
-forge push                 # publish to foundry registry
-forge add http             # add dependency to forge.toml
-forge update               # update lockfile
-forge audit                # scan for vulnerabilities
+gg new my_project          # create project from template
+gg build                   # compile
+gg run                     # compile and run
+gg run dev                 # run a custom script
+gg test                    # run tests
+gg bench                   # run benchmarks
+gg check                   # type-check only (fast)
+gg fmt                     # format code
+gg lint                    # run linter
+gg doc                     # generate documentation
+gg publish                 # publish to registry
+gg add http                # add dependency to gg.toml
+gg update                  # update lockfile
+gg audit                   # scan for vulnerabilities
 ```
 
 ---
@@ -2823,7 +2822,7 @@ auto items = data["items"].as_array()
    - Regex, crypto, logging, encoding, random
 
 6. **Phase 6 - Tooling**
-   - `forge` package manager
+   - `gg` package management subcommands
    - `gg fmt` formatter
    - LSP server for editor support
    - `gg doc` documentation generator
@@ -2834,4 +2833,4 @@ auto items = data["items"].as_array()
 
 ### Post-V1 Ideas
 
-- **`--watch` mode** — `forge run --watch` and `forge test --watch` for automatic recompile-and-rerun on file changes. Node/Deno/Bun all ship this now. Essential for a language targeting Python developers who are used to fast iteration loops.
+- **`--watch` mode** — `gg run --watch` and `gg test --watch` for automatic recompile-and-rerun on file changes. Node/Deno/Bun all ship this now. Essential for a language targeting Python developers who are used to fast iteration loops.

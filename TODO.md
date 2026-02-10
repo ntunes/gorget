@@ -8,7 +8,7 @@
 - `@derive` macro expansion [added: 2026-02-10]
 - `via` delegation in equip blocks: auto-forward trait methods through a struct field (depends on default methods + trait inheritance) [added: 2026-02-10]
 - Raw strings, multi-line strings [added: 2026-02-10]
-- `forge` package manager basics [added: 2026-02-10]
+- `gg` package management subcommands (`gg new`, `gg add`, `gg update`, `gg publish`, etc.) [added: 2026-02-10]
 
 ## Low Priority
 - Basic orphan rule: equip block must be in the module that defines the trait or the type (implement when module system matures) [added: 2026-02-10]
