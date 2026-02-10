@@ -1,0 +1,25 @@
+trait Base:
+    int value(self)
+    int doubled(self):
+        return self.value() * 2
+
+trait Extended extends Base:
+    int extra(self)
+
+struct MyStruct:
+    int x
+
+equip MyStruct with Extended:
+    int value(self):
+        return self.x
+    int extra(self):
+        return self.x + 100
+
+void main():
+    MyStruct s = MyStruct(5)
+    int v = s.value()
+    int d = s.doubled()
+    int e = s.extra()
+    print(v)
+    print(d)
+    print(e)

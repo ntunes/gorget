@@ -1001,4 +1001,88 @@ equip Foo with Cloneable:
         assert!(c_code.contains("Foo Cloneable_for_Foo__clone(const Foo* self)"),
             "Self return type should resolve to concrete type, got:\n{c_code}");
     }
+
+    #[test]
+    fn trait_default_method_emits_body() {
+        let source = "\
+trait Greeter:
+    int value(self)
+    int doubled(self):
+        return self.value() * 2
+
+struct Foo:
+    int x
+
+equip Foo with Greeter:
+    int value(self):
+        return self.x
+";
+        let c_code = compile_to_c(source);
+        // Default method should be emitted with the trait_for_type mangling
+        assert!(c_code.contains("Greeter_for_Foo__doubled"),
+            "Default method should be emitted, got:\n{c_code}");
+        // Vtable should reference the default method
+        assert!(c_code.contains(".doubled = "),
+            "Vtable should have default method slot, got:\n{c_code}");
+        // Explicitly implemented method should still be present
+        assert!(c_code.contains("Greeter_for_Foo__value"),
+            "Explicit method should be emitted, got:\n{c_code}");
+    }
+
+    #[test]
+    fn trait_default_method_override() {
+        let source = "\
+trait Greeter:
+    int base(self):
+        return 0
+
+struct Foo:
+    int x
+
+equip Foo with Greeter:
+    int base(self):
+        return self.x
+";
+        let c_code = compile_to_c(source);
+        // The override should be used, not the default
+        assert!(c_code.contains("Greeter_for_Foo__base"),
+            "Override should be emitted, got:\n{c_code}");
+        assert!(c_code.contains("return self->x;"),
+            "Override body should be used, got:\n{c_code}");
+    }
+
+    #[test]
+    fn trait_inheritance_vtable_includes_parent() {
+        let source = "\
+trait Base:
+    int value(self)
+
+trait Child extends Base:
+    int extra(self)
+
+struct Foo:
+    int x
+
+equip Foo with Child:
+    int value(self):
+        return self.x
+    int extra(self):
+        return 99
+";
+        let c_code = compile_to_c(source);
+        // Child vtable should have both parent and own method slots
+        assert!(c_code.contains("Child_VTable"),
+            "Should emit child vtable struct, got:\n{c_code}");
+        // Should have parent method in vtable struct
+        assert!(c_code.contains("(*value)"),
+            "Vtable should include parent method slot, got:\n{c_code}");
+        // Should have child method in vtable struct
+        assert!(c_code.contains("(*extra)"),
+            "Vtable should include own method slot, got:\n{c_code}");
+        // Vtable instance should reference both methods
+        assert!(c_code.contains(".value = "),
+            "Vtable instance should assign parent method, got:\n{c_code}");
+        assert!(c_code.contains(".extra = "),
+            "Vtable instance should assign own method, got:\n{c_code}");
+    }
 }

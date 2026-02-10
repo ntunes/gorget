@@ -512,11 +512,19 @@ impl CodegenContext<'_> {
         let recv = self.gen_expr(receiver);
         // Try to figure out the receiver type for mangling
         let type_name = self.infer_receiver_type(receiver);
-        let mangled = c_mangle::mangle_method(&type_name, method_name);
+        // Check if this method comes from a trait impl (not inherent)
+        let mangled = if let Some(trait_name) = self.find_trait_for_method(&type_name, method_name) {
+            c_mangle::mangle_trait_method(&trait_name, &type_name, method_name)
+        } else {
+            c_mangle::mangle_method(&type_name, method_name)
+        };
 
         // For non-lvalue receivers (e.g. function calls), we can't take `&recv`
         // directly. Use a GCC statement expression to stash the result in a temp.
         let needs_temp = !matches!(receiver.node, Expr::Identifier(_) | Expr::SelfExpr);
+        // Inside a method body, `self` is already a pointer (const T* self),
+        // so pass it directly instead of taking &self.
+        let is_self_ptr = self.current_self_type.is_some() && matches!(receiver.node, Expr::SelfExpr);
         if needs_temp {
             let arg_exprs: Vec<String> = args.iter().map(|a| self.gen_expr(&a.node.value)).collect();
             let mut call_args = format!("&__recv");
@@ -526,7 +534,12 @@ impl CodegenContext<'_> {
             }
             format!("({{ __typeof__({recv}) __recv = {recv}; {mangled}({call_args}); }})")
         } else {
-            let mut all_args = vec![format!("&{recv}")];
+            let self_arg = if is_self_ptr {
+                recv.clone()
+            } else {
+                format!("&{recv}")
+            };
+            let mut all_args = vec![self_arg];
             for arg in args {
                 all_args.push(self.gen_expr(&arg.node.value));
             }
@@ -1317,6 +1330,55 @@ impl CodegenContext<'_> {
     }
 
     /// Try to infer the type name of a receiver expression (best-effort).
+    /// Check if a method on a type comes from a trait equip (not inherent impl).
+    /// Returns the trait name if found, None if it's an inherent method.
+    fn find_trait_for_method(&self, type_name: &str, method_name: &str) -> Option<String> {
+        // First check if there's an inherent impl with this method — inherent wins
+        for impl_info in &self.traits.impls {
+            if impl_info.self_type_name == type_name
+                && impl_info.trait_.is_none()
+                && impl_info.methods.contains_key(method_name)
+            {
+                return None; // Inherent method takes priority
+            }
+        }
+        // Then check trait impls
+        for impl_info in &self.traits.impls {
+            if impl_info.self_type_name == type_name && impl_info.trait_.is_some() {
+                // Check if the method is directly in the equip block
+                if impl_info.methods.contains_key(method_name) {
+                    return impl_info.trait_name.clone();
+                }
+                // Check if the trait (or its parents) defines this method with a default
+                if let Some(trait_def_id) = impl_info.trait_ {
+                    if self.trait_hierarchy_has_method(trait_def_id, method_name) {
+                        return impl_info.trait_name.clone();
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Check if a trait (or any of its parent traits) defines a method.
+    fn trait_hierarchy_has_method(
+        &self,
+        trait_def_id: crate::semantic::ids::DefId,
+        method_name: &str,
+    ) -> bool {
+        if let Some(trait_info) = self.traits.traits.get(&trait_def_id) {
+            if trait_info.methods.contains_key(method_name) {
+                return true;
+            }
+            for &parent_id in &trait_info.extends {
+                if self.trait_hierarchy_has_method(parent_id, method_name) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     fn infer_receiver_type(&self, expr: &Spanned<Expr>) -> String {
         match &expr.node {
             Expr::Identifier(name) => {

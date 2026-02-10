@@ -9,3 +9,5 @@
 - [2026-02-10] Box[T]: heap allocation wrapper (Box(v) and Box.new(v) constructors, .get()/.set() methods, *b deref, string interpolation, type inference)
 - [2026-02-10] Implicit `it` in closures: parser auto-wraps call args containing `it` in ImplicitClosure, typecheck assigns fresh type var to `it`, codegen delegates to existing closure machinery
 - [2026-02-10] Drop trait / RAII (destructors): built-in Drop trait, scope-based cleanup at function/loop exit, Box[T] auto-free, user-defined Drop via equip, cleanup before return/break/continue
+- [2026-02-10] Default trait method resolution: codegen emits default method bodies when equip block doesn't override, vtable wiring, trait method call resolution for trait-provided methods
+- [2026-02-10] Trait inheritance (extends) in vtables: child vtable structs include parent method slots, equip blocks validate and emit parent methods, semantic validation checks inherited required methods

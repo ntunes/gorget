@@ -339,17 +339,14 @@ fn validate_trait_impls(registry: &TraitRegistry, errors: &mut Vec<SemanticError
             continue;
         };
 
-        // Check that all required methods are implemented
-        for (method_name, _sig) in &trait_info.methods {
-            let has_default = trait_info
-                .has_default_body
-                .get(method_name)
-                .copied()
-                .unwrap_or(false);
+        // Collect all required methods including inherited parent methods
+        let all_methods = collect_all_required_methods(trait_info, registry);
+
+        for (method_name, has_default, source_trait_name) in &all_methods {
             if !has_default && !impl_info.methods.contains_key(method_name) {
                 errors.push(SemanticError {
                     kind: SemanticErrorKind::MissingTraitMethod {
-                        trait_: trait_info.name.clone(),
+                        trait_: source_trait_name.clone(),
                         method: method_name.clone(),
                         type_: impl_info.self_type_name.clone(),
                     },
@@ -358,6 +355,34 @@ fn validate_trait_impls(registry: &TraitRegistry, errors: &mut Vec<SemanticError
             }
         }
     }
+}
+
+/// Collect all methods required by a trait, including inherited parent methods.
+/// Returns (method_name, has_default, source_trait_name) tuples.
+fn collect_all_required_methods(
+    trait_info: &TraitInfo,
+    registry: &TraitRegistry,
+) -> Vec<(String, bool, String)> {
+    let mut methods = Vec::new();
+
+    // Recursively collect parent trait methods
+    for &parent_id in &trait_info.extends {
+        if let Some(parent_info) = registry.traits.get(&parent_id) {
+            methods.extend(collect_all_required_methods(parent_info, registry));
+        }
+    }
+
+    // Add own methods
+    for (method_name, _sig) in &trait_info.methods {
+        let has_default = trait_info
+            .has_default_body
+            .get(method_name)
+            .copied()
+            .unwrap_or(false);
+        methods.push((method_name.clone(), has_default, trait_info.name.clone()));
+    }
+
+    methods
 }
 
 fn build_function_sig(func: &FunctionDef, scopes: &ScopeTable, types: &mut TypeTable) -> FunctionSig {
@@ -534,5 +559,72 @@ equip Point with Equatable:
             SemanticErrorKind::MissingTraitMethod { trait_, method, .. }
                 if trait_ == "Equatable" && method == "eq"
         )));
+    }
+
+    #[test]
+    fn default_method_not_required() {
+        let source = "\
+trait Greeter:
+    str name(self)
+    str greeting(self):
+        return \"hello\"
+
+struct Foo:
+    str s
+
+equip Foo with Greeter:
+    str name(self):
+        return self.s
+";
+        let (registry, errors) = analyze(source);
+        assert!(errors.is_empty(), "default method should not be required: {:?}", errors);
+        assert!(registry.has_trait_impl_by_name("Foo", "Greeter"));
+    }
+
+    #[test]
+    fn trait_inheritance_requires_parent_methods() {
+        let source = "\
+trait Base:
+    int value(self)
+
+trait Child extends Base:
+    int extra(self)
+
+struct Foo:
+    int x
+
+equip Foo with Child:
+    int extra(self):
+        return 99
+";
+        let (_, errors) = analyze(source);
+        // Should error about missing `value` from parent trait Base
+        assert!(errors.iter().any(|e| matches!(
+            &e.kind,
+            SemanticErrorKind::MissingTraitMethod { method, .. }
+                if method == "value"
+        )), "Should require parent trait methods: {:?}", errors);
+    }
+
+    #[test]
+    fn trait_inheritance_parent_default_not_required() {
+        let source = "\
+trait Base:
+    int value(self):
+        return 0
+
+trait Child extends Base:
+    int extra(self)
+
+struct Foo:
+    int x
+
+equip Foo with Child:
+    int extra(self):
+        return 99
+";
+        let (registry, errors) = analyze(source);
+        assert!(errors.is_empty(), "parent default should not be required: {:?}", errors);
+        assert!(registry.has_trait_impl_by_name("Foo", "Child"));
     }
 }

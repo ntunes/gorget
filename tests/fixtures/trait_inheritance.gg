@@ -1,0 +1,21 @@
+trait Named:
+    str name(self)
+
+trait Greeter extends Named:
+    str greet(self)
+
+struct Person:
+    str first_name
+
+equip Person with Greeter:
+    str name(self):
+        return self.first_name
+    str greet(self):
+        return "hi"
+
+void main():
+    Person p = Person("Alice")
+    str n = p.name()
+    str g = p.greet()
+    print(n)
+    print(g)

@@ -1,4 +1,5 @@
 /// Top-level item codegen: functions, structs, enums, impl blocks, const/static.
+use std::collections::HashMap;
 use crate::parser::ast::*;
 use super::c_emitter::CEmitter;
 use super::c_mangle;
@@ -199,6 +200,14 @@ impl CodegenContext<'_> {
     pub fn emit_function_declarations(&self, module: &crate::parser::ast::Module, emitter: &mut CEmitter) {
         emitter.emit_line("// ── Function Declarations ──");
 
+        // Collect trait defs for default method lookup
+        let mut trait_defs: HashMap<String, &TraitDef> = HashMap::new();
+        for item in &module.items {
+            if let Item::Trait(t) = &item.node {
+                trait_defs.insert(t.name.node.clone(), t);
+            }
+        }
+
         for item in &module.items {
             match &item.node {
                 Item::Function(f) => {
@@ -209,12 +218,28 @@ impl CodegenContext<'_> {
                 Item::Equip(impl_block) => {
                     let type_name = self.impl_type_name(impl_block);
                     let trait_name = self.impl_trait_name(impl_block);
+                    // Emit prototypes for explicitly implemented methods
                     for method in &impl_block.items {
                         self.emit_function_prototype(
                             &method.node,
                             Some((&type_name, trait_name.as_deref())),
                             emitter,
                         );
+                    }
+                    // Emit prototypes for default/inherited methods not overridden
+                    if let Some(tname) = &trait_name {
+                        if let Some(trait_def) = trait_defs.get(tname.as_str()) {
+                            let all_methods = self.collect_all_trait_methods(trait_def, &trait_defs);
+                            for (method, _) in &all_methods {
+                                if !Self::equip_has_method(impl_block, &method.name.node) {
+                                    self.emit_function_prototype(
+                                        method,
+                                        Some((&type_name, Some(tname))),
+                                        emitter,
+                                    );
+                                }
+                            }
+                        }
                     }
                 }
                 Item::ExternBlock(ext) => {
@@ -255,6 +280,14 @@ impl CodegenContext<'_> {
     pub fn emit_function_definitions(&mut self, module: &crate::parser::ast::Module, emitter: &mut CEmitter) {
         emitter.emit_line("// ── Function Definitions ──");
 
+        // Collect trait defs for default method lookup
+        let mut trait_defs: HashMap<String, &TraitDef> = HashMap::new();
+        for item in &module.items {
+            if let Item::Trait(t) = &item.node {
+                trait_defs.insert(t.name.node.clone(), t);
+            }
+        }
+
         for item in &module.items {
             match &item.node {
                 Item::Function(f) => {
@@ -264,12 +297,31 @@ impl CodegenContext<'_> {
                     let type_name = self.impl_type_name(impl_block);
                     let trait_name = self.impl_trait_name(impl_block);
                     self.current_self_type = Some(type_name.clone());
+                    // Emit explicitly implemented methods
                     for method in &impl_block.items {
                         self.emit_function_def(
                             &method.node,
                             Some((&type_name, trait_name.as_deref())),
                             emitter,
                         );
+                    }
+                    // Emit default/inherited method bodies not overridden
+                    if let Some(tname) = &trait_name {
+                        if let Some(trait_def) = trait_defs.get(tname.as_str()) {
+                            let all_methods = self.collect_all_trait_methods(trait_def, &trait_defs);
+                            for (method, _) in &all_methods {
+                                if !Self::equip_has_method(impl_block, &method.name.node) {
+                                    // Only emit if the method has a body (default)
+                                    if !matches!(method.body, FunctionBody::Declaration) {
+                                        self.emit_function_def(
+                                            method,
+                                            Some((&type_name, Some(tname))),
+                                            emitter,
+                                        );
+                                    }
+                                }
+                            }
+                        }
                     }
                     self.current_self_type = None;
                 }
@@ -445,6 +497,7 @@ impl CodegenContext<'_> {
     // ─── Trait Definitions ─────────────────────────────────
 
     /// Emit a trait definition: vtable struct + trait object struct.
+    /// The vtable includes slots for inherited parent trait methods.
     fn emit_trait_def(&self, t: &TraitDef, emitter: &mut CEmitter) {
         let name = &t.name.node;
         let methods: Vec<String> = t.items.iter().filter_map(|item| {
@@ -459,33 +512,14 @@ impl CodegenContext<'_> {
         let vtable_name = c_mangle::mangle_vtable_struct(name);
         emitter.emit_line(&format!("struct {vtable_name} {{"));
         emitter.indent();
+
+        // Emit parent trait method slots first (for trait inheritance)
+        self.emit_vtable_method_slots_for_parents(t, emitter);
+
+        // Emit own method slots
         for item in &t.items {
             if let TraitItem::Method(f) = &item.node {
-                let ret_type = c_types::ast_type_to_c(&f.return_type.node, self.scopes);
-                let method_name = &f.name.node;
-
-                // Build parameter list: self → const void* (or void* for &self/!self)
-                let mut param_types = Vec::new();
-                for param in &f.params {
-                    if param.node.name.node == "self" {
-                        match param.node.ownership {
-                            Ownership::MutableBorrow | Ownership::Move => {
-                                param_types.push("void*".to_string());
-                            }
-                            _ => {
-                                param_types.push("const void*".to_string());
-                            }
-                        }
-                    } else {
-                        param_types.push(c_types::ast_type_to_c(&param.node.type_.node, self.scopes));
-                    }
-                }
-                let params_str = if param_types.is_empty() {
-                    "void".to_string()
-                } else {
-                    param_types.join(", ")
-                };
-                emitter.emit_line(&format!("{ret_type} (*{method_name})({params_str});"));
+                self.emit_vtable_method_slot(f, emitter);
             }
         }
         emitter.dedent();
@@ -503,12 +537,82 @@ impl CodegenContext<'_> {
         emitter.blank_line();
     }
 
+    /// Emit vtable function pointer slot for a single method.
+    fn emit_vtable_method_slot(&self, f: &FunctionDef, emitter: &mut CEmitter) {
+        let ret_type = c_types::ast_type_to_c(&f.return_type.node, self.scopes);
+        let method_name = &f.name.node;
+
+        let mut param_types = Vec::new();
+        for param in &f.params {
+            if param.node.name.node == "self" {
+                match param.node.ownership {
+                    Ownership::MutableBorrow | Ownership::Move => {
+                        param_types.push("void*".to_string());
+                    }
+                    _ => {
+                        param_types.push("const void*".to_string());
+                    }
+                }
+            } else {
+                param_types.push(c_types::ast_type_to_c(&param.node.type_.node, self.scopes));
+            }
+        }
+        let params_str = if param_types.is_empty() {
+            "void".to_string()
+        } else {
+            param_types.join(", ")
+        };
+        emitter.emit_line(&format!("{ret_type} (*{method_name})({params_str});"));
+    }
+
+    /// Recursively emit vtable method slots for parent traits.
+    fn emit_vtable_method_slots_for_parents(&self, t: &TraitDef, emitter: &mut CEmitter) {
+        for parent_bound in &t.extends {
+            let parent_name = &parent_bound.node.name.node;
+            // Look up the parent trait's TraitInfo to find its methods
+            if let Some(parent_info) = self.traits.traits.values().find(|ti| ti.name == *parent_name) {
+                // Also recursively emit grandparent methods.
+                // We need the parent's AST to recurse, but for simplicity we use
+                // the TraitInfo which already has the flat method list.
+                // For deep hierarchies, we rely on the parent's own emit_trait_def
+                // having done the work — we just add the methods here.
+                for (method_name, sig) in &parent_info.methods {
+                    // Reconstruct the vtable slot from the signature info.
+                    // We need to map TypeId back to C types — use the type table.
+                    let ret_type = self.type_id_to_c(sig.return_type);
+                    let mut param_types = Vec::new();
+                    if sig.has_self {
+                        match sig.self_ownership {
+                            Some(Ownership::MutableBorrow) | Some(Ownership::Move) => {
+                                param_types.push("void*".to_string());
+                            }
+                            _ => {
+                                param_types.push("const void*".to_string());
+                            }
+                        }
+                    }
+                    for &param_tid in &sig.params {
+                        param_types.push(self.type_id_to_c(param_tid));
+                    }
+                    let params_str = if param_types.is_empty() {
+                        "void".to_string()
+                    } else {
+                        param_types.join(", ")
+                    };
+                    emitter.emit_line(&format!("{ret_type} (*{method_name})({params_str});"));
+                }
+            }
+        }
+    }
+
     // ─── Vtable Instances ─────────────────────────────────
 
     /// Emit static vtable instances for all trait impl blocks.
+    /// Handles default methods (uses trait body when equip block doesn't override)
+    /// and trait inheritance (includes parent trait methods in vtable).
     pub fn emit_vtable_instances(&self, module: &crate::parser::ast::Module, emitter: &mut CEmitter) {
         // Collect trait definitions for method ordering
-        let mut trait_defs: std::collections::HashMap<String, &TraitDef> = std::collections::HashMap::new();
+        let mut trait_defs: HashMap<String, &TraitDef> = HashMap::new();
         for item in &module.items {
             if let Item::Trait(t) = &item.node {
                 trait_defs.insert(t.name.node.clone(), t);
@@ -537,39 +641,40 @@ impl CodegenContext<'_> {
                 emitter.emit_line(&format!("static const {vtable_type} {vtable_instance} = {{"));
                 emitter.indent();
 
-                // Emit function pointer assignments in trait method order
-                for trait_item in &trait_def.items {
-                    if let TraitItem::Method(method) = &trait_item.node {
-                        let method_name = &method.name.node;
-                        let impl_fn = c_mangle::mangle_trait_method(&trait_name, &type_name, method_name);
+                // Collect all methods including inherited ones
+                let all_methods = self.collect_all_trait_methods(trait_def, &trait_defs);
 
-                        // Build the cast type for the function pointer
-                        let ret_type = c_types::ast_type_to_c(&method.return_type.node, self.scopes);
-                        let mut cast_params = Vec::new();
-                        for param in &method.params {
-                            if param.node.name.node == "self" {
-                                match param.node.ownership {
-                                    Ownership::MutableBorrow | Ownership::Move => {
-                                        cast_params.push("void*".to_string());
-                                    }
-                                    _ => {
-                                        cast_params.push("const void*".to_string());
-                                    }
+                for (method, _defining_trait) in &all_methods {
+                    let method_name = &method.name.node;
+                    // The impl function is always mangled with the leaf trait name + type
+                    let impl_fn = c_mangle::mangle_trait_method(&trait_name, &type_name, method_name);
+
+                    // Build the cast type for the function pointer
+                    let ret_type = c_types::ast_type_to_c(&method.return_type.node, self.scopes);
+                    let mut cast_params = Vec::new();
+                    for param in &method.params {
+                        if param.node.name.node == "self" {
+                            match param.node.ownership {
+                                Ownership::MutableBorrow | Ownership::Move => {
+                                    cast_params.push("void*".to_string());
                                 }
-                            } else {
-                                cast_params.push(c_types::ast_type_to_c(&param.node.type_.node, self.scopes));
+                                _ => {
+                                    cast_params.push("const void*".to_string());
+                                }
                             }
-                        }
-                        let cast_params_str = if cast_params.is_empty() {
-                            "void".to_string()
                         } else {
-                            cast_params.join(", ")
-                        };
-
-                        emitter.emit_line(&format!(
-                            ".{method_name} = ({ret_type} (*)({cast_params_str})){impl_fn},"
-                        ));
+                            cast_params.push(c_types::ast_type_to_c(&param.node.type_.node, self.scopes));
+                        }
                     }
+                    let cast_params_str = if cast_params.is_empty() {
+                        "void".to_string()
+                    } else {
+                        cast_params.join(", ")
+                    };
+
+                    emitter.emit_line(&format!(
+                        ".{method_name} = ({ret_type} (*)({cast_params_str})){impl_fn},"
+                    ));
                 }
 
                 emitter.dedent();
@@ -1443,6 +1548,42 @@ impl CodegenContext<'_> {
             ));
         }
         emitter.blank_line();
+    }
+
+    // ─── Trait Helpers ────────────────────────────────────────
+
+    /// Collect all methods for a trait, including inherited parent methods.
+    /// Returns (method_ast, defining_trait_name) tuples in parent-first order.
+    fn collect_all_trait_methods<'b>(
+        &self,
+        trait_def: &'b TraitDef,
+        trait_defs: &'b HashMap<String, &'b TraitDef>,
+    ) -> Vec<(&'b FunctionDef, String)> {
+        let mut methods = Vec::new();
+        // Recursively collect parent methods first
+        for parent_bound in &trait_def.extends {
+            let parent_name = &parent_bound.node.name.node;
+            if let Some(parent_def) = trait_defs.get(parent_name.as_str()) {
+                methods.extend(self.collect_all_trait_methods(parent_def, trait_defs));
+            }
+        }
+        // Then own methods
+        for item in &trait_def.items {
+            if let TraitItem::Method(f) = &item.node {
+                methods.push((f, trait_def.name.node.clone()));
+            }
+        }
+        methods
+    }
+
+    /// Check if a method name is provided in an equip block.
+    fn equip_has_method(impl_block: &EquipBlock, method_name: &str) -> bool {
+        impl_block.items.iter().any(|m| m.node.name.node == method_name)
+    }
+
+    /// Convert a TypeId to a C type string (convenience wrapper).
+    fn type_id_to_c(&self, type_id: crate::semantic::ids::TypeId) -> String {
+        c_types::type_id_to_c(type_id, self.types, self.scopes)
     }
 
     // ─── Helpers ─────────────────────────────────────────────

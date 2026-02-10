@@ -1,0 +1,30 @@
+trait Greeter:
+    str name(self)
+    str greeting(self):
+        return "hello"
+
+struct English:
+    str person
+
+struct French:
+    str person
+
+equip English with Greeter:
+    str name(self):
+        return self.person
+
+equip French with Greeter:
+    str name(self):
+        return self.person
+    str greeting(self):
+        return "bonjour"
+
+void main():
+    English e = English("Alice")
+    French f = French("Bob")
+    str g1 = e.greeting()
+    str n1 = e.name()
+    str g2 = f.greeting()
+    str n2 = f.name()
+    print("{g1} {n1}")
+    print("{g2} {n2}")

@@ -768,3 +768,34 @@ done
 dropping alpha",
     );
 }
+
+#[test]
+fn trait_defaults() {
+    run_gg(
+        "trait_defaults.gg",
+        "\
+hello Alice
+bonjour Bob",
+    );
+}
+
+#[test]
+fn trait_inheritance() {
+    run_gg(
+        "trait_inheritance.gg",
+        "\
+Alice
+hi",
+    );
+}
+
+#[test]
+fn trait_inherit_defaults() {
+    run_gg(
+        "trait_inherit_defaults.gg",
+        "\
+5
+10
+105",
+    );
+}
