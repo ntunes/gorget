@@ -56,6 +56,7 @@ pub fn analyze(module: &Module) -> AnalysisResult {
         &trait_registry,
         &resolution_map,
         &resolve_ctx.function_info,
+        &resolve_ctx.enum_variants,
         &mut errors,
     );
 

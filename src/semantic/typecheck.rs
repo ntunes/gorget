@@ -5,7 +5,7 @@ use crate::span::{Span, Spanned};
 
 use super::errors::{SemanticError, SemanticErrorKind};
 use super::ids::{DefId, TypeId};
-use super::resolve::{FunctionInfo, ResolutionMap};
+use super::resolve::{EnumVariantInfo, FunctionInfo, ResolutionMap};
 use super::scope::{DefKind, ScopeTable};
 use super::traits::TraitRegistry;
 use super::types::{ResolvedType, TypeTable};
@@ -17,6 +17,7 @@ struct TypeChecker<'a> {
     traits: &'a TraitRegistry,
     resolution_map: &'a ResolutionMap,
     function_info: &'a FxHashMap<DefId, FunctionInfo>,
+    enum_variants: &'a FxHashMap<DefId, EnumVariantInfo>,
     errors: Vec<SemanticError>,
     /// Substitution map: type variable ID -> resolved type ID.
     substitutions: FxHashMap<u32, TypeId>,
@@ -36,6 +37,7 @@ impl<'a> TypeChecker<'a> {
         traits: &'a TraitRegistry,
         resolution_map: &'a ResolutionMap,
         function_info: &'a FxHashMap<DefId, FunctionInfo>,
+        enum_variants: &'a FxHashMap<DefId, EnumVariantInfo>,
     ) -> Self {
         Self {
             scopes,
@@ -43,6 +45,7 @@ impl<'a> TypeChecker<'a> {
             traits,
             resolution_map,
             function_info,
+            enum_variants,
             errors: Vec::new(),
             substitutions: FxHashMap::default(),
             next_type_var: 0,
@@ -566,7 +569,7 @@ impl<'a> TypeChecker<'a> {
                 arms,
                 else_arm,
             } => {
-                self.infer_expr(scrutinee);
+                let scrutinee_type = self.infer_expr(scrutinee);
                 let mut result_type = self.fresh_type_var();
 
                 for arm in arms {
@@ -578,6 +581,8 @@ impl<'a> TypeChecker<'a> {
                     let else_type = self.infer_expr(else_arm);
                     result_type = self.unify(result_type, else_type, else_arm.span);
                 }
+
+                self.check_match_exhaustiveness(scrutinee_type, arms, else_arm.is_some(), expr.span);
 
                 result_type
             }
@@ -876,7 +881,7 @@ impl<'a> TypeChecker<'a> {
                 arms,
                 else_arm,
             } => {
-                self.infer_expr(scrutinee);
+                let scrutinee_type = self.infer_expr(scrutinee);
                 for arm in arms {
                     if let Some(guard) = &arm.guard {
                         let gt = self.infer_expr(guard);
@@ -887,6 +892,7 @@ impl<'a> TypeChecker<'a> {
                 if let Some(else_arm) = else_arm {
                     self.check_block(else_arm);
                 }
+                self.check_match_exhaustiveness(scrutinee_type, arms, else_arm.is_some(), stmt.span);
             }
 
             Stmt::With { bindings, body } => {
@@ -902,6 +908,103 @@ impl<'a> TypeChecker<'a> {
 
             Stmt::Item(_) => {
                 // Nested items are checked at the top level
+            }
+        }
+    }
+
+    /// Check that a match on an enum type covers all variants.
+    fn check_match_exhaustiveness(
+        &mut self,
+        scrutinee_type: TypeId,
+        arms: &[MatchArm],
+        has_else: bool,
+        span: Span,
+    ) {
+        if has_else {
+            return;
+        }
+
+        // Resolve the scrutinee type and check if it's an enum.
+        let resolved = self.resolve_type(scrutinee_type);
+        let enum_def_id = match self.types.get(resolved) {
+            ResolvedType::Defined(def_id) => *def_id,
+            ResolvedType::Generic(def_id, _) => *def_id,
+            _ => return,
+        };
+        if self.scopes.get_def(enum_def_id).kind != DefKind::Enum {
+            return;
+        }
+
+        let variant_info = match self.enum_variants.get(&enum_def_id) {
+            Some(info) => info,
+            None => return,
+        };
+        let all_variants: Vec<&str> = variant_info.variants.iter().map(|(n, _)| n.as_str()).collect();
+
+        // Collect covered variant names from unguarded arms.
+        let mut has_catchall = false;
+        let mut covered = rustc_hash::FxHashSet::default();
+        for arm in arms {
+            if arm.guard.is_some() {
+                continue; // guarded arms don't guarantee coverage
+            }
+            self.collect_covered_variants(&arm.pattern.node, &all_variants, &mut covered, &mut has_catchall);
+            if has_catchall {
+                return;
+            }
+        }
+
+        let missing: Vec<String> = all_variants
+            .iter()
+            .filter(|v| !covered.contains(**v))
+            .map(|v| v.to_string())
+            .collect();
+        if !missing.is_empty() {
+            self.error(SemanticErrorKind::NonExhaustiveMatch { missing_variants: missing }, span);
+        }
+    }
+
+    /// Recursively collect which enum variants a pattern covers.
+    fn collect_covered_variants<'p>(
+        &self,
+        pattern: &Pattern,
+        all_variants: &[&str],
+        covered: &mut rustc_hash::FxHashSet<String>,
+        has_catchall: &mut bool,
+    ) {
+        match pattern {
+            Pattern::Wildcard | Pattern::Rest => {
+                *has_catchall = true;
+            }
+            Pattern::Binding(name) => {
+                if all_variants.contains(&name.as_str()) {
+                    covered.insert(name.clone());
+                } else {
+                    // It's a variable binding — acts as a catch-all.
+                    *has_catchall = true;
+                }
+            }
+            Pattern::Constructor { path, .. } => {
+                if let Some(last) = path.last() {
+                    covered.insert(last.node.clone());
+                }
+            }
+            Pattern::Or(alts) => {
+                for alt in alts {
+                    self.collect_covered_variants(&alt.node, all_variants, covered, has_catchall);
+                    if *has_catchall {
+                        return;
+                    }
+                }
+            }
+            Pattern::Literal(lit) => {
+                if matches!(lit.node, Expr::NoneLiteral) {
+                    covered.insert("None".to_string());
+                }
+                // Other literals don't cover enum variants.
+            }
+            Pattern::Tuple(_) => {
+                // Tuples don't cover enum variants.
             }
         }
     }
@@ -1235,9 +1338,10 @@ pub fn check_module(
     traits: &TraitRegistry,
     resolution_map: &ResolutionMap,
     function_info: &FxHashMap<DefId, FunctionInfo>,
+    enum_variants: &FxHashMap<DefId, EnumVariantInfo>,
     errors: &mut Vec<SemanticError>,
 ) {
-    let mut checker = TypeChecker::new(scopes, types, traits, resolution_map, function_info);
+    let mut checker = TypeChecker::new(scopes, types, traits, resolution_map, function_info, enum_variants);
 
     for item in &module.items {
         match &item.node {
@@ -1502,6 +1606,251 @@ void main():
                 super::SemanticErrorKind::UnsatisfiedTraitBound { .. }
             )),
             "unexpected UnsatisfiedTraitBound: {:?}",
+            errors
+        );
+    }
+
+    // ── Match exhaustiveness tests ──
+
+    #[test]
+    fn match_exhaustive_all_variants_covered() {
+        let source = "\
+enum Color:
+    Red()
+    Green()
+    Blue()
+
+void main():
+    Color c = Red()
+    match c:
+        case Red():
+            pass
+        case Green():
+            pass
+        case Blue():
+            pass
+";
+        let errors = check(source);
+        assert!(
+            !errors.iter().any(|e| matches!(
+                &e.kind,
+                super::SemanticErrorKind::NonExhaustiveMatch { .. }
+            )),
+            "unexpected NonExhaustiveMatch error: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn match_non_exhaustive_missing_variant() {
+        let source = "\
+enum Color:
+    Red()
+    Green()
+    Blue()
+
+void main():
+    Color c = Red()
+    match c:
+        case Red():
+            pass
+        case Green():
+            pass
+";
+        let errors = check(source);
+        assert!(
+            errors.iter().any(|e| matches!(
+                &e.kind,
+                super::SemanticErrorKind::NonExhaustiveMatch { missing_variants }
+                    if missing_variants == &["Blue"]
+            )),
+            "expected NonExhaustiveMatch with Blue, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn match_exhaustive_with_else() {
+        let source = "\
+enum Color:
+    Red()
+    Green()
+    Blue()
+
+void main():
+    Color c = Red()
+    match c:
+        case Red():
+            pass
+        else:
+            pass
+";
+        let errors = check(source);
+        assert!(
+            !errors.iter().any(|e| matches!(
+                &e.kind,
+                super::SemanticErrorKind::NonExhaustiveMatch { .. }
+            )),
+            "unexpected NonExhaustiveMatch error: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn match_exhaustive_with_wildcard() {
+        let source = "\
+enum Color:
+    Red()
+    Green()
+    Blue()
+
+void main():
+    Color c = Red()
+    match c:
+        case Red():
+            pass
+        case _:
+            pass
+";
+        let errors = check(source);
+        assert!(
+            !errors.iter().any(|e| matches!(
+                &e.kind,
+                super::SemanticErrorKind::NonExhaustiveMatch { .. }
+            )),
+            "unexpected NonExhaustiveMatch error: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn match_exhaustive_with_binding_catchall() {
+        let source = "\
+enum Color:
+    Red()
+    Green()
+    Blue()
+
+void main():
+    Color c = Red()
+    match c:
+        case Red():
+            pass
+        case other:
+            pass
+";
+        let errors = check(source);
+        assert!(
+            !errors.iter().any(|e| matches!(
+                &e.kind,
+                super::SemanticErrorKind::NonExhaustiveMatch { .. }
+            )),
+            "unexpected NonExhaustiveMatch error: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn match_guarded_arm_not_exhaustive() {
+        let source = "\
+enum Color:
+    Red()
+    Green()
+    Blue()
+
+void main():
+    Color c = Red()
+    match c:
+        case Red():
+            pass
+        case Green():
+            pass
+        case Blue() if false:
+            pass
+";
+        let errors = check(source);
+        assert!(
+            errors.iter().any(|e| matches!(
+                &e.kind,
+                super::SemanticErrorKind::NonExhaustiveMatch { missing_variants }
+                    if missing_variants == &["Blue"]
+            )),
+            "expected NonExhaustiveMatch with Blue (guarded arm), got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn match_or_pattern_covers_multiple() {
+        let source = "\
+enum Color:
+    Red()
+    Green()
+    Blue()
+
+void main():
+    Color c = Red()
+    match c:
+        case Red() | Green():
+            pass
+        case Blue():
+            pass
+";
+        let errors = check(source);
+        assert!(
+            !errors.iter().any(|e| matches!(
+                &e.kind,
+                super::SemanticErrorKind::NonExhaustiveMatch { .. }
+            )),
+            "unexpected NonExhaustiveMatch error: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn match_constructor_covers_variant() {
+        let source = "\
+enum Shape:
+    Circle(float)
+    Rect(float, float)
+
+void main():
+    Shape s = Circle(1.0)
+    match s:
+        case Circle(r):
+            pass
+        case Rect(w, h):
+            pass
+";
+        let errors = check(source);
+        assert!(
+            !errors.iter().any(|e| matches!(
+                &e.kind,
+                super::SemanticErrorKind::NonExhaustiveMatch { .. }
+            )),
+            "unexpected NonExhaustiveMatch error: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn match_int_no_exhaustiveness_check() {
+        let source = "\
+void main():
+    int x = 5
+    match x:
+        case 1:
+            pass
+        case 2:
+            pass
+";
+        let errors = check(source);
+        assert!(
+            !errors.iter().any(|e| matches!(
+                &e.kind,
+                super::SemanticErrorKind::NonExhaustiveMatch { .. }
+            )),
+            "unexpected NonExhaustiveMatch error for int: {:?}",
             errors
         );
     }

@@ -98,6 +98,9 @@ pub enum SemanticErrorKind {
         trait_name: String,
         param_name: String,
     },
+
+    /// Match expression is not exhaustive — some enum variants are not covered.
+    NonExhaustiveMatch { missing_variants: Vec<String> },
 }
 
 impl std::fmt::Display for SemanticError {
@@ -219,6 +222,13 @@ impl std::fmt::Display for SemanticError {
                 write!(
                     f,
                     "type `{type_name}` does not satisfy trait bound `{param_name} is {trait_name}`"
+                )
+            }
+            SemanticErrorKind::NonExhaustiveMatch { missing_variants } => {
+                write!(
+                    f,
+                    "non-exhaustive match: missing variants: {}",
+                    missing_variants.join(", ")
                 )
             }
         }

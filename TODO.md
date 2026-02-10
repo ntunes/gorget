@@ -1,7 +1,6 @@
 # TODO
 
 ## High Priority
-- Match exhaustiveness checking (full) [added: 2026-02-10]
 - Higher-order collection methods: `.filter()`, `.fold()`, `.reduce()` on Vector/Dict/Set [added: 2026-02-10]
 
 ## Medium Priority
