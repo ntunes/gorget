@@ -382,6 +382,12 @@ impl CodegenContext<'_> {
                         return format!("gorget_file_exists({path})");
                     }
                 }
+                "delete_file" => {
+                    if let Some(arg) = args.first() {
+                        let path = self.gen_expr(&arg.node.value);
+                        return format!("gorget_delete_file({path})");
+                    }
+                }
                 _ => {}
             }
 

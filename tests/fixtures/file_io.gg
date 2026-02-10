@@ -32,3 +32,11 @@ void main():
     # Boolean check
     bool missing = file_exists("_nonexistent_file.txt")
     print(missing)
+
+    # Clean up test artifacts
+    delete_file("_test_output.txt")
+    delete_file("_test_output2.txt")
+    bool gone1 = file_exists("_test_output.txt")
+    bool gone2 = file_exists("_test_output2.txt")
+    print(gone1)
+    print(gone2)

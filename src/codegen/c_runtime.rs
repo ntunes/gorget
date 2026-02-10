@@ -389,6 +389,10 @@ static inline bool gorget_file_exists(const char* path) {
     return false;
 }
 
+static inline bool gorget_delete_file(const char* path) {
+    return remove(path) == 0;
+}
+
 // ── GorgetClosure ────────────────────────────────────────────
 typedef struct {
     void* fn_ptr;
