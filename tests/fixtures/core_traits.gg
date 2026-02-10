@@ -1,0 +1,21 @@
+struct Point:
+    float x
+    float y
+
+equip Point with Equatable:
+    bool eq(self, Point other):
+        return self.x == other.x and self.y == other.y
+
+equip Point with Displayable:
+    str display(self):
+        return "Point"
+
+void main():
+    Point a = Point(1.0, 2.0)
+    Point b = Point(1.0, 2.0)
+    Point c = Point(3.0, 4.0)
+    if a == b:
+        print("equal")
+    if a != c:
+        print("not equal")
+    print("{a}")

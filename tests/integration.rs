@@ -715,6 +715,17 @@ fn set_iter() {
 }
 
 #[test]
+fn core_traits() {
+    run_gg(
+        "core_traits.gg",
+        "\
+equal
+not equal
+Point",
+    );
+}
+
+#[test]
 fn iter_for_else() {
     run_gg(
         "iter_for_else.gg",

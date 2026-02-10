@@ -70,6 +70,10 @@ pub fn collect_top_level(
     for name in &["Vector", "List", "Array", "Dict", "HashMap", "Map", "Set", "HashSet"] {
         let _ = scopes.define(name.to_string(), DefKind::Struct, Span::dummy());
     }
+    // Register built-in core traits.
+    for trait_name in &["Displayable", "Equatable", "Cloneable", "Hashable"] {
+        let _ = scopes.define(trait_name.to_string(), DefKind::Trait, Span::dummy());
+    }
     // Register built-in Option[T] and Result[T,E] enum types with their variants.
     for (enum_name, variant_names) in &[
         ("Option", vec!["Some", "None"]),
@@ -919,6 +923,7 @@ fn is_builtin(name: &str) -> bool {
         "print" | "println" | "len" | "range" | "enumerate" | "zip" | "map" | "filter" | "type"
         | "Vector" | "Dict" | "Set" | "HashMap" | "HashSet" | "List" | "Array" | "Map"
         | "Option" | "Result" | "Some" | "None" | "Ok" | "Error"
+        | "Displayable" | "Equatable" | "Cloneable" | "Hashable"
     )
 }
 
@@ -1041,9 +1046,9 @@ void main():
     #[test]
     fn import_defines_names() {
         let (scopes, _, errors) =
-            parse_and_collect("from std.fmt import Displayable, format\n");
+            parse_and_collect("from std.fmt import Formatter, format\n");
         assert!(errors.is_empty(), "errors: {:?}", errors);
-        assert!(scopes.lookup("Displayable").is_some());
+        assert!(scopes.lookup("Formatter").is_some());
         assert!(scopes.lookup("format").is_some());
     }
 }

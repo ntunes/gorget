@@ -347,7 +347,15 @@ impl CodegenContext<'_> {
         f: &FunctionDef,
         method_info: Option<(&str, Option<&str>)>,
     ) -> (String, String, String) {
-        let ret_type = c_types::ast_type_to_c(&f.return_type.node, self.scopes);
+        let ret_type = if matches!(f.return_type.node, Type::SelfType) {
+            if let Some((type_name, _)) = method_info {
+                type_name.to_string()
+            } else {
+                c_types::ast_type_to_c(&f.return_type.node, self.scopes)
+            }
+        } else {
+            c_types::ast_type_to_c(&f.return_type.node, self.scopes)
+        };
 
         let func_name = if let Some((type_name, trait_name)) = method_info {
             if let Some(tname) = trait_name {
@@ -374,7 +382,15 @@ impl CodegenContext<'_> {
             if param.node.name.node == "self" {
                 continue;
             }
-            let param_type = c_types::ast_type_to_c(&param.node.type_.node, self.scopes);
+            let param_type = if matches!(param.node.type_.node, Type::SelfType) {
+                if let Some((type_name, _)) = method_info {
+                    type_name.to_string()
+                } else {
+                    c_types::ast_type_to_c(&param.node.type_.node, self.scopes)
+                }
+            } else {
+                c_types::ast_type_to_c(&param.node.type_.node, self.scopes)
+            };
             let param_name = c_mangle::escape_keyword(&param.node.name.node);
             params_vec.push(c_types::c_declare(&param_type, &param_name));
         }

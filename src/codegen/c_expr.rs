@@ -47,6 +47,25 @@ impl CodegenContext<'_> {
             }
 
             Expr::BinaryOp { left, op, right } => {
+                // Auto-hook: Eq/Neq on struct types → Equatable trait call
+                if matches!(op, BinaryOp::Eq | BinaryOp::Neq) {
+                    if let Some(type_name) = self.try_equatable_type(left) {
+                        let l = self.gen_expr(left);
+                        let r = self.gen_expr(right);
+                        let mangled = c_mangle::mangle_trait_method("Equatable", &type_name, "eq");
+                        let needs_temp = !matches!(left.node, Expr::Identifier(_) | Expr::SelfExpr);
+                        let eq_call = if needs_temp {
+                            format!("({{ __typeof__({l}) __recv = {l}; {mangled}(&__recv, {r}); }})")
+                        } else {
+                            format!("{mangled}(&{l}, {r})")
+                        };
+                        return if *op == BinaryOp::Neq {
+                            format!("(!{eq_call})")
+                        } else {
+                            eq_call
+                        };
+                    }
+                }
                 let l = self.gen_expr(left);
                 let r = self.gen_expr(right);
                 let c_op = binary_op_to_c(*op);
@@ -1282,6 +1301,21 @@ impl CodegenContext<'_> {
         }
     }
 
+    /// If `expr` has a Defined (struct) type that implements Equatable, return the type name.
+    fn try_equatable_type(&self, expr: &Spanned<Expr>) -> Option<String> {
+        let type_name = self.infer_receiver_type(expr);
+        // Exclude primitives and builtins
+        if matches!(type_name.as_str(), "Unknown" | "int" | "float" | "bool" | "str" | "char"
+            | "Vector" | "Dict" | "Set" | "Option" | "Result") {
+            return None;
+        }
+        if self.traits.has_trait_impl_by_name(&type_name, "Equatable") {
+            Some(type_name)
+        } else {
+            None
+        }
+    }
+
     /// Generate a print/println call, handling string interpolation.
     /// `print()` always appends a newline (like Python). `println()` is an alias.
     pub fn gen_print_call(
@@ -1448,8 +1482,16 @@ impl CodegenContext<'_> {
             }
             ResolvedType::Void => ("%s".to_string(), "\"void\"".to_string()),
             ResolvedType::Defined(def_id) | ResolvedType::Generic(def_id, _) => {
-                let name = &self.scopes.get_def(*def_id).name;
-                panic!("type '{name}' cannot be used in string interpolation")
+                let name = self.scopes.get_def(*def_id).name.clone();
+                if self.traits.has_trait_impl_by_name(&name, "Displayable") {
+                    let mangled = c_mangle::mangle_trait_method("Displayable", &name, "display");
+                    // Use a GCC statement expression to handle non-lvalue exprs
+                    let call = format!("({{ __typeof__({expr}) __tmp = {expr}; {mangled}(&__tmp); }})");
+                    ("%s".to_string(), call)
+                } else {
+                    // Fallback: print the type name
+                    ("%s".to_string(), format!("\"<{name}>\""))
+                }
             }
             ResolvedType::Array(_, _)
             | ResolvedType::Tuple(_)

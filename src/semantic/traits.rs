@@ -85,6 +85,14 @@ impl TraitRegistry {
 
         None
     }
+
+    /// Check if a type (by name) has an implementation for a trait (by name).
+    pub fn has_trait_impl_by_name(&self, type_name: &str, trait_name: &str) -> bool {
+        self.impls.iter().any(|impl_info| {
+            impl_info.self_type_name == type_name
+                && impl_info.trait_name.as_deref() == Some(trait_name)
+        })
+    }
 }
 
 /// Build the trait and impl registry from the module.
@@ -96,6 +104,9 @@ pub fn build_registry(
     errors: &mut Vec<SemanticError>,
 ) -> TraitRegistry {
     let mut registry = TraitRegistry::new();
+
+    // Register built-in core traits before processing user-defined ones.
+    register_builtin_traits(scopes, types, &mut registry);
 
     // First pass: collect all trait definitions
     for item in &module.items {
@@ -115,6 +126,76 @@ pub fn build_registry(
     validate_trait_impls(&registry, errors);
 
     registry
+}
+
+/// Register the four built-in core traits (Displayable, Equatable, Cloneable, Hashable).
+fn register_builtin_traits(
+    scopes: &ScopeTable,
+    types: &TypeTable,
+    registry: &mut TraitRegistry,
+) {
+    let builtin_traits: Vec<(&str, FxHashMap<String, FunctionSig>)> = vec![
+        // Displayable: str display(self)
+        ("Displayable", {
+            let mut m = FxHashMap::default();
+            m.insert("display".into(), FunctionSig {
+                params: vec![],
+                return_type: types.string_id,
+                has_self: true,
+                self_ownership: None,
+            });
+            m
+        }),
+        // Equatable: bool eq(self, Self other)
+        ("Equatable", {
+            let mut m = FxHashMap::default();
+            m.insert("eq".into(), FunctionSig {
+                params: vec![types.error_id], // Self placeholder
+                return_type: types.bool_id,
+                has_self: true,
+                self_ownership: None,
+            });
+            m
+        }),
+        // Cloneable: Self clone(self)
+        ("Cloneable", {
+            let mut m = FxHashMap::default();
+            m.insert("clone".into(), FunctionSig {
+                params: vec![],
+                return_type: types.error_id, // Self placeholder
+                has_self: true,
+                self_ownership: None,
+            });
+            m
+        }),
+        // Hashable: int hash(self)
+        ("Hashable", {
+            let mut m = FxHashMap::default();
+            m.insert("hash".into(), FunctionSig {
+                params: vec![],
+                return_type: types.int_id,
+                has_self: true,
+                self_ownership: None,
+            });
+            m
+        }),
+    ];
+
+    for (name, methods) in builtin_traits {
+        if let Some(def_id) = scopes.lookup(name) {
+            let has_default_body: FxHashMap<String, bool> = methods
+                .keys()
+                .map(|k| (k.clone(), false))
+                .collect();
+            registry.traits.insert(def_id, TraitInfo {
+                def_id,
+                name: name.to_string(),
+                methods,
+                has_default_body,
+                extends: Vec::new(),
+            });
+        }
+    }
 }
 
 fn collect_trait(
@@ -368,7 +449,8 @@ equip Circle with Drawable:
 ";
         let (registry, errors) = analyze(source);
         assert!(errors.is_empty(), "errors: {:?}", errors);
-        assert_eq!(registry.traits.len(), 1);
+        // 4 built-in traits + 1 user-defined trait
+        assert_eq!(registry.traits.len(), 5);
         assert_eq!(registry.impls.len(), 1);
         assert!(registry.impls[0].trait_.is_some());
     }
@@ -391,6 +473,54 @@ equip Circle with Drawable:
         assert!(errors.iter().any(|e| matches!(
             &e.kind,
             SemanticErrorKind::MissingTraitMethod { method, .. } if method == "area"
+        )));
+    }
+
+    #[test]
+    fn builtin_traits_registered() {
+        let (registry, errors) = analyze("");
+        assert!(errors.is_empty(), "errors: {:?}", errors);
+        // Four built-in traits should always be present
+        let trait_names: Vec<&str> = registry.traits.values().map(|t| t.name.as_str()).collect();
+        assert!(trait_names.contains(&"Displayable"));
+        assert!(trait_names.contains(&"Equatable"));
+        assert!(trait_names.contains(&"Cloneable"));
+        assert!(trait_names.contains(&"Hashable"));
+    }
+
+    #[test]
+    fn equip_with_builtin_trait() {
+        let source = "\
+struct Point:
+    float x
+    float y
+
+equip Point with Equatable:
+    bool eq(self, Point other):
+        return self.x == other.x
+";
+        let (registry, errors) = analyze(source);
+        assert!(errors.is_empty(), "errors: {:?}", errors);
+        assert!(registry.has_trait_impl_by_name("Point", "Equatable"));
+        assert!(!registry.has_trait_impl_by_name("Point", "Displayable"));
+    }
+
+    #[test]
+    fn missing_builtin_trait_method() {
+        let source = "\
+struct Point:
+    float x
+    float y
+
+equip Point with Equatable:
+    bool wrong_name(self, Point other):
+        return true
+";
+        let (_, errors) = analyze(source);
+        assert!(errors.iter().any(|e| matches!(
+            &e.kind,
+            SemanticErrorKind::MissingTraitMethod { trait_, method, .. }
+                if trait_ == "Equatable" && method == "eq"
         )));
     }
 }

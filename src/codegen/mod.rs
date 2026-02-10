@@ -917,4 +917,62 @@ trait Renderer:
         assert!(c_code.contains("void (*render)(const void*, int64_t, int64_t)"),
             "Vtable fn ptr should include non-self params");
     }
+
+    #[test]
+    fn equatable_eq_emits_trait_call() {
+        let source = "\
+struct Point:
+    float x
+    float y
+
+equip Point with Equatable:
+    bool eq(self, Point other):
+        return self.x == other.x
+
+void main():
+    Point a = Point(1.0, 2.0)
+    Point b = Point(1.0, 2.0)
+    if a == b:
+        print(\"equal\")
+";
+        let c_code = compile_to_c(source);
+        assert!(c_code.contains("Equatable_for_Point__eq"),
+            "== on struct with Equatable should emit trait method call, got:\n{c_code}");
+    }
+
+    #[test]
+    fn displayable_interpolation_emits_trait_call() {
+        let source = "\
+struct Point:
+    float x
+    float y
+
+equip Point with Displayable:
+    str display(self):
+        return \"Point\"
+
+void main():
+    Point p = Point(1.0, 2.0)
+    print(\"{p}\")
+";
+        let c_code = compile_to_c(source);
+        assert!(c_code.contains("Displayable_for_Point__display"),
+            "interpolation of Displayable struct should emit trait method call, got:\n{c_code}");
+    }
+
+    #[test]
+    fn self_type_resolves_in_signature() {
+        let source = "\
+struct Foo:
+    int x
+
+equip Foo with Cloneable:
+    Foo clone(self):
+        return Foo(self.x)
+";
+        let c_code = compile_to_c(source);
+        // Self in return type should resolve to Foo
+        assert!(c_code.contains("Foo Cloneable_for_Foo__clone(const Foo* self)"),
+            "Self return type should resolve to concrete type, got:\n{c_code}");
+    }
 }

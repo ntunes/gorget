@@ -156,6 +156,18 @@ impl<'a> TypeChecker<'a> {
                             if let Some(type_id) = def.type_id {
                                 match self.types.get(type_id) {
                                     ResolvedType::Primitive(_) | ResolvedType::Void => {}
+                                    ResolvedType::Defined(def_id) | ResolvedType::Generic(def_id, _) => {
+                                        let type_name = &self.scopes.get_def(*def_id).name;
+                                        if !self.traits.has_trait_impl_by_name(type_name, "Displayable") {
+                                            self.error(
+                                                SemanticErrorKind::NonPrintableInterpolation {
+                                                    var_name: var_name.clone(),
+                                                    type_name: self.describe_resolved_type(type_id),
+                                                },
+                                                expr.span.clone(),
+                                            );
+                                        }
+                                    }
                                     _ => {
                                         self.error(
                                             SemanticErrorKind::NonPrintableInterpolation {
