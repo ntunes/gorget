@@ -4,8 +4,8 @@ use crate::parser::ast::*;
 use crate::span::{Span, Spanned};
 
 use super::errors::{SemanticError, SemanticErrorKind};
-use super::ids::TypeId;
-use super::resolve::ResolutionMap;
+use super::ids::{DefId, TypeId};
+use super::resolve::{FunctionInfo, ResolutionMap};
 use super::scope::{DefKind, ScopeTable};
 use super::traits::TraitRegistry;
 use super::types::{ResolvedType, TypeTable};
@@ -16,6 +16,7 @@ struct TypeChecker<'a> {
     types: &'a mut TypeTable,
     traits: &'a TraitRegistry,
     resolution_map: &'a ResolutionMap,
+    function_info: &'a FxHashMap<DefId, FunctionInfo>,
     errors: Vec<SemanticError>,
     /// Substitution map: type variable ID -> resolved type ID.
     substitutions: FxHashMap<u32, TypeId>,
@@ -34,12 +35,14 @@ impl<'a> TypeChecker<'a> {
         types: &'a mut TypeTable,
         traits: &'a TraitRegistry,
         resolution_map: &'a ResolutionMap,
+        function_info: &'a FxHashMap<DefId, FunctionInfo>,
     ) -> Self {
         Self {
             scopes,
             types,
             traits,
             resolution_map,
+            function_info,
             errors: Vec::new(),
             substitutions: FxHashMap::default(),
             next_type_var: 0,
@@ -278,6 +281,15 @@ impl<'a> TypeChecker<'a> {
             Expr::Call { callee, generic_args, args, .. } => {
                 let callee_type = self.infer_expr(callee);
                 let resolved = self.resolve_type(callee_type);
+
+                // Check where-clause trait bounds for generic calls
+                if let Some(type_args) = generic_args {
+                    if let Expr::Identifier(_) = &callee.node {
+                        if let Some(&def_id) = self.resolution_map.get(&callee.span.start) {
+                            self.check_trait_bounds(def_id, type_args, expr.span);
+                        }
+                    }
+                }
 
                 // Check if callee is a function
                 match self.types.get(resolved).clone() {
@@ -1103,6 +1115,52 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    /// Check where-clause trait bounds for a generic function call.
+    /// `callee_def_id` is the DefId of the called function,
+    /// `generic_args` are the explicit type arguments at the call site.
+    fn check_trait_bounds(
+        &mut self,
+        callee_def_id: DefId,
+        generic_args: &[Spanned<Type>],
+        span: Span,
+    ) {
+        let info = match self.function_info.get(&callee_def_id) {
+            Some(info) => info.clone(),
+            None => return,
+        };
+        if info.where_bounds.is_empty() {
+            return;
+        }
+
+        // Build mapping: generic param name → concrete type name
+        let mut param_to_type: FxHashMap<&str, String> = FxHashMap::default();
+        for (i, param_name) in info.generic_param_names.iter().enumerate() {
+            if let Some(type_arg) = generic_args.get(i) {
+                if let Some(name) = ast_type_to_gorget_name(&type_arg.node) {
+                    param_to_type.insert(param_name, name);
+                }
+            }
+        }
+
+        // Check each bound
+        for (param_name, required_traits) in &info.where_bounds {
+            if let Some(concrete_type) = param_to_type.get(param_name.as_str()) {
+                for trait_name in required_traits {
+                    if !self.traits.has_trait_impl_by_name(concrete_type, trait_name) {
+                        self.error(
+                            SemanticErrorKind::UnsatisfiedTraitBound {
+                                type_name: concrete_type.clone(),
+                                trait_name: trait_name.clone(),
+                                param_name: param_name.clone(),
+                            },
+                            span,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     fn check_function(&mut self, func: &FunctionDef) {
         // Resolve return type
         let return_type = super::types::ast_type_to_resolved(
@@ -1149,6 +1207,26 @@ impl<'a> TypeChecker<'a> {
     }
 }
 
+/// Map an AST `Type` to its Gorget-level type name for trait bound checking.
+fn ast_type_to_gorget_name(ty: &Type) -> Option<String> {
+    match ty {
+        Type::Named { name, .. } => Some(name.node.clone()),
+        Type::Primitive(p) => {
+            let s = match p {
+                PrimitiveType::Int => "int",
+                PrimitiveType::Float => "float",
+                PrimitiveType::Bool => "bool",
+                PrimitiveType::Str | PrimitiveType::StringType => "str",
+                PrimitiveType::Char => "char",
+                PrimitiveType::Void => "void",
+                _ => return None,
+            };
+            Some(s.to_string())
+        }
+        _ => None,
+    }
+}
+
 /// Run type checking on the entire module.
 pub fn check_module(
     module: &Module,
@@ -1156,9 +1234,10 @@ pub fn check_module(
     types: &mut TypeTable,
     traits: &TraitRegistry,
     resolution_map: &ResolutionMap,
+    function_info: &FxHashMap<DefId, FunctionInfo>,
     errors: &mut Vec<SemanticError>,
 ) {
-    let mut checker = TypeChecker::new(scopes, types, traits, resolution_map);
+    let mut checker = TypeChecker::new(scopes, types, traits, resolution_map, function_info);
 
     for item in &module.items {
         match &item.node {
@@ -1296,6 +1375,133 @@ mod tests {
                 super::SemanticErrorKind::NonPrintableInterpolation { .. }
             )),
             "unexpected NonPrintableInterpolation error: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn trait_bound_satisfied() {
+        let source = "\
+trait Printable:
+    str show(self)
+
+struct Num:
+    int val
+
+equip Num with Printable:
+    str show(self):
+        return \"num\"
+
+T echo[T](T x) where T is Printable:
+    return x
+
+void main():
+    Num n = Num(42)
+    Num m = echo[Num](n)
+";
+        let errors = check(source);
+        assert!(
+            !errors.iter().any(|e| matches!(
+                &e.kind,
+                super::SemanticErrorKind::UnsatisfiedTraitBound { .. }
+            )),
+            "unexpected UnsatisfiedTraitBound error: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn trait_bound_unsatisfied() {
+        let source = "\
+trait Printable:
+    str show(self)
+
+struct Point:
+    int x
+
+T echo[T](T x) where T is Printable:
+    return x
+
+void main():
+    Point p = Point(1)
+    Point q = echo[Point](p)
+";
+        let errors = check(source);
+        assert!(
+            errors.iter().any(|e| matches!(
+                &e.kind,
+                super::SemanticErrorKind::UnsatisfiedTraitBound {
+                    type_name, trait_name, ..
+                } if type_name == "Point" && trait_name == "Printable"
+            )),
+            "expected UnsatisfiedTraitBound error for Point/Printable, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn trait_bound_multiple_traits() {
+        let source = "\
+trait A:
+    void a(self)
+
+trait B:
+    void b(self)
+
+struct Foo:
+    int x
+
+equip Foo with A:
+    void a(self):
+        pass
+
+T need_ab[T](T x) where T is A + B:
+    return x
+
+void main():
+    Foo f = Foo(1)
+    Foo g = need_ab[Foo](f)
+";
+        let errors = check(source);
+        // Foo implements A but not B
+        assert!(
+            errors.iter().any(|e| matches!(
+                &e.kind,
+                super::SemanticErrorKind::UnsatisfiedTraitBound {
+                    type_name, trait_name, ..
+                } if type_name == "Foo" && trait_name == "B"
+            )),
+            "expected UnsatisfiedTraitBound for Foo/B, got: {:?}",
+            errors
+        );
+        // Should NOT have error for trait A
+        assert!(
+            !errors.iter().any(|e| matches!(
+                &e.kind,
+                super::SemanticErrorKind::UnsatisfiedTraitBound {
+                    trait_name, ..
+                } if trait_name == "A"
+            )),
+            "unexpected UnsatisfiedTraitBound for A: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn trait_bound_no_where_clause_no_regression() {
+        let source = "\
+T identity[T](T x) = x
+
+void main():
+    int y = identity[int](42)
+";
+        let errors = check(source);
+        assert!(
+            !errors.iter().any(|e| matches!(
+                &e.kind,
+                super::SemanticErrorKind::UnsatisfiedTraitBound { .. }
+            )),
+            "unexpected UnsatisfiedTraitBound: {:?}",
             errors
         );
     }

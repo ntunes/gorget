@@ -1,0 +1,18 @@
+trait Printable:
+    str show(self)
+
+struct Num:
+    int val
+
+equip Num with Printable:
+    str show(self):
+        return "num"
+
+T echo[T](T x) where T is Printable:
+    return x
+
+void main():
+    Num n = Num(42)
+    Num m = echo[Num](n)
+    str s = m.show()
+    print("{s}")

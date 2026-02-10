@@ -827,6 +827,11 @@ fn generic_functions() {
     run_gg("generic_functions.gg", "42\n3.140000\nhello\n10\n7");
 }
 
+#[test]
+fn trait_bounds() {
+    run_gg("trait_bounds.gg", "num");
+}
+
 // ══════════════════════════════════════════════════════════════
 // Formatter idempotency tests
 // ══════════════════════════════════════════════════════════════

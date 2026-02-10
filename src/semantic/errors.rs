@@ -91,6 +91,13 @@ pub enum SemanticErrorKind {
         expected: String,
         found: String,
     },
+
+    /// Generic type argument does not satisfy a `where` clause trait bound.
+    UnsatisfiedTraitBound {
+        type_name: String,
+        trait_name: String,
+        param_name: String,
+    },
 }
 
 impl std::fmt::Display for SemanticError {
@@ -202,6 +209,16 @@ impl std::fmt::Display for SemanticError {
                 write!(
                     f,
                     "ownership mismatch for `{param_name}`: expected `{expected}`, found `{found}`"
+                )
+            }
+            SemanticErrorKind::UnsatisfiedTraitBound {
+                type_name,
+                trait_name,
+                param_name,
+            } => {
+                write!(
+                    f,
+                    "type `{type_name}` does not satisfy trait bound `{param_name} is {trait_name}`"
                 )
             }
         }

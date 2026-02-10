@@ -1,8 +1,5 @@
 # TODO
 
-## Critical (blocks real-world use)
-- Trait bounds enforcement in semantic analysis [added: 2026-02-10]
-
 ## High Priority
 - Match exhaustiveness checking (full) [added: 2026-02-10]
 - Higher-order collection methods: `.filter()`, `.fold()`, `.reduce()` on Vector/Dict/Set [added: 2026-02-10]

@@ -35,6 +35,10 @@ pub struct FunctionInfo {
     pub param_names: Vec<String>,
     pub throws: bool,
     pub scope_id: super::ids::ScopeId,
+    /// Names of generic type parameters, in declaration order.
+    pub generic_param_names: Vec<String>,
+    /// Where-clause bounds: `(param_name, [trait_name, ...])`.
+    pub where_bounds: Vec<(String, Vec<String>)>,
 }
 
 /// Shared context passed around during resolution.
@@ -131,6 +135,9 @@ fn collect_item(
                     let param_names: Vec<String> =
                         f.params.iter().map(|p| p.node.name.node.clone()).collect();
 
+                    let generic_param_names = extract_generic_param_names(&f.generic_params);
+                    let where_bounds = extract_where_bounds(&f.where_clause);
+
                     ctx.function_info.insert(
                         def_id,
                         FunctionInfo {
@@ -141,6 +148,8 @@ fn collect_item(
                             param_names,
                             throws: f.throws.is_some(),
                             scope_id: scopes.current_scope(),
+                            generic_param_names,
+                            where_bounds,
                         },
                     );
                 }
@@ -913,6 +922,46 @@ fn define_pattern_bindings(
             }
         }
         Pattern::Wildcard | Pattern::Literal(_) | Pattern::Rest => {}
+    }
+}
+
+/// Extract generic type-parameter names from a `GenericParams`.
+fn extract_generic_param_names(generics: &Option<Spanned<GenericParams>>) -> Vec<String> {
+    match generics {
+        Some(g) => g
+            .node
+            .params
+            .iter()
+            .filter_map(|p| match &p.node {
+                GenericParam::Type(name) => Some(name.node.clone()),
+                _ => None,
+            })
+            .collect(),
+        None => Vec::new(),
+    }
+}
+
+/// Extract where-clause bounds as `(param_name, [trait_name, ...])`.
+fn extract_where_bounds(
+    where_clause: &Option<Spanned<WhereClause>>,
+) -> Vec<(String, Vec<String>)> {
+    match where_clause {
+        Some(wc) => wc
+            .node
+            .bounds
+            .iter()
+            .map(|wb| {
+                let param = wb.node.type_name.node.clone();
+                let traits: Vec<String> = wb
+                    .node
+                    .bounds
+                    .iter()
+                    .map(|tb| tb.node.name.node.clone())
+                    .collect();
+                (param, traits)
+            })
+            .collect(),
+        None => Vec::new(),
     }
 }
 
