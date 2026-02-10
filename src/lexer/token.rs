@@ -265,6 +265,10 @@ pub enum Keyword {
     Mutex,
     RwLock,
 
+    // Ownership keywords
+    Moving,
+    Mutable,
+
     // Special identifiers
     It,
     Panic,
@@ -353,6 +357,8 @@ impl Keyword {
             "RefCell" => Some(Keyword::RefCell),
             "Mutex" => Some(Keyword::Mutex),
             "RwLock" => Some(Keyword::RwLock),
+            "moving" => Some(Keyword::Moving),
+            "mutable" => Some(Keyword::Mutable),
             "it" => Some(Keyword::It),
             "panic" => Some(Keyword::Panic),
             _ => Option::None,
@@ -442,6 +448,8 @@ impl fmt::Display for Keyword {
             Keyword::RefCell => "RefCell",
             Keyword::Mutex => "Mutex",
             Keyword::RwLock => "RwLock",
+            Keyword::Moving => "moving",
+            Keyword::Mutable => "mutable",
             Keyword::It => "it",
             Keyword::Panic => "panic",
         };

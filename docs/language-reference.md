@@ -149,6 +149,12 @@ self  Self
 Box  Rc  Arc  Weak  Cell  RefCell  Mutex  RwLock
 ```
 
+**Ownership keywords:**
+
+```
+moving  mutable
+```
+
 **Special identifiers:**
 
 ```
@@ -267,11 +273,13 @@ Type: `Option[T]` for some inferred `T`.
 
 **Ownership:**
 
-| Symbol | Name           | Meaning                |
-|--------|----------------|------------------------|
-| (bare) | Immutable borrow | Read-only access       |
-| `&`    | Mutable borrow   | Read+write access      |
-| `!`    | Move             | Ownership transfer     |
+| Symbol/Keyword | Name           | Meaning                |
+|----------------|----------------|------------------------|
+| (bare)         | Immutable borrow | Read-only access       |
+| `&` or `mutable` | Mutable borrow | Read+write access    |
+| `!` or `moving`  | Move           | Ownership transfer   |
+
+Both operator and keyword forms are equivalent and may be used interchangeably.
 
 **Range:**
 
@@ -340,7 +348,7 @@ Type: `Option[T]` for some inferred `T`.
 | `String`  | —       | Owned, heap-allocated string    |
 | `void`    | 0       | No value (unit type)            |
 
-All primitive numeric types and `bool` and `char` are **Copy** types — they are implicitly copied on assignment and do not require the `!` move operator.
+All primitive numeric types and `bool` and `char` are **Copy** types — they are implicitly copied on assignment and do not require `!` or `moving` to transfer.
 
 ### 4.2 Compound Types
 
@@ -456,7 +464,7 @@ auto name = "hello"  # inferred as String
 - `bool`, `char`
 - Tuples where all elements are Copy
 
-**Non-Copy types** (require `!` to transfer ownership):
+**Non-Copy types** (require `!` or `moving` to transfer ownership):
 - `String`
 - All structs
 - All enums
@@ -485,7 +493,7 @@ function_def = { attribute } [ "public" ] [ qualifiers ]
 qualifiers    = { "async" | "const" | "static" | "unsafe" } ;
 return_type   = type | "void" ;
 param_list    = param { "," param } ;
-param         = type [ "&" | "!" ] IDENTIFIER [ "=" expr ] ;
+param         = type [ "&" | "!" | "mutable" | "moving" ] IDENTIFIER [ "=" expr ] ;
 throws_clause = "throws" [ type ] ;
 block         = ":" NEWLINE INDENT { statement } DEDENT ;
 ```
@@ -504,13 +512,13 @@ A function has:
 
 **Parameter ownership modes:**
 
-| Declaration       | Meaning           | Call site |
-|-------------------|-------------------|-----------|
-| `Type name`       | Immutable borrow  | `f(arg)`  |
-| `Type &name`      | Mutable borrow    | `f(&arg)` |
-| `Type !name`      | Move (ownership)  | `f(!arg)` |
+| Declaration                      | Meaning           | Call site                      |
+|----------------------------------|-------------------|--------------------------------|
+| `Type name`                      | Immutable borrow  | `f(arg)`                       |
+| `Type &name` or `Type mutable name` | Mutable borrow | `f(&arg)` or `f(mutable arg)` |
+| `Type !name` or `Type moving name`  | Move (ownership) | `f(!arg)` or `f(moving arg)` |
 
-The ownership annotation at the call site **must match** the parameter declaration. Mismatches are compile-time errors.
+The ownership annotation at the call site **must match** the parameter declaration. Mismatches are compile-time errors. Both operator (`&`/`!`) and keyword (`mutable`/`moving`) forms are equivalent.
 
 **Expression body shorthand:**
 
@@ -522,12 +530,12 @@ Equivalent to a block body with `return`.
 
 **Self parameters** (in equip blocks):
 
-| Form           | Meaning           |
-|----------------|-------------------|
-| `self`         | Immutable borrow  |
-| `&self`        | Mutable borrow    |
-| `!self`        | Consuming (move)  |
-| *(no self)*    | Static method     |
+| Form                       | Meaning           |
+|----------------------------|-------------------|
+| `self`                     | Immutable borrow  |
+| `&self` or `mutable self`  | Mutable borrow    |
+| `!self` or `moving self`   | Consuming (move)  |
+| *(no self)*                | Static method     |
 
 The `live` keyword on a parameter indicates that the return value borrows from that parameter's data (explicit lifetime annotation):
 
@@ -926,17 +934,17 @@ match value:
 ### 6.11 For Loop
 
 ```ebnf
-for_stmt = "for" pattern "in" [ "&" | "!" ] expr ":" block
+for_stmt = "for" pattern "in" [ "&" | "!" | "mutable" | "moving" ] expr ":" block
            [ "else" ":" block ] ;
 ```
 
-Iterates over a collection or range. The optional `&`/`!` before the iterable controls ownership:
+Iterates over a collection or range. The optional ownership modifier before the iterable controls ownership:
 
-| Form                 | Meaning                              |
-|----------------------|--------------------------------------|
-| `for x in coll`      | Immutable borrow (collection intact) |
-| `for x in &coll`     | Mutable borrow (modify in-place)     |
-| `for x in !coll`     | Move (consumes collection)           |
+| Form                               | Meaning                              |
+|------------------------------------|--------------------------------------|
+| `for x in coll`                     | Immutable borrow (collection intact) |
+| `for x in &coll` or `for x in mutable coll` | Mutable borrow (modify in-place) |
+| `for x in !coll` or `for x in moving coll`   | Move (consumes collection)       |
 
 The optional `else` block runs if the loop completes without `break` (Python-style).
 
@@ -1059,16 +1067,16 @@ if value in 1..=100:
 ```ebnf
 call_expr = expr [ "[" type { "," type } "]" ] "(" [ arg_list ] ")" ;
 arg_list  = call_arg { "," call_arg } ;
-call_arg  = [ IDENTIFIER "=" ] [ "&" | "!" ] expr ;
+call_arg  = [ IDENTIFIER "=" ] [ "&" | "!" | "mutable" | "moving" ] expr ;
 ```
 
-The optional `[...]` provides explicit generic type arguments. Arguments may use ownership annotations matching the parameter declarations.
+The optional `[...]` provides explicit generic type arguments. Arguments may use ownership annotations matching the parameter declarations. Both operator and keyword forms are accepted.
 
 ```gorget
 add(1, 2)
 max[int](a, b)
-consume(!value)
-modify(&data)
+consume(!value)          # or: consume(moving value)
+modify(&data)            # or: modify(mutable data)
 create_user("Alice", 30, admin = true)
 ```
 
@@ -1170,26 +1178,29 @@ match result:
 ### 7.14 Move Expression
 
 ```ebnf
-move_expr = "!" expr ;
+move_expr = ( "!" | "moving" ) expr ;
 ```
 
-Transfers ownership of a value. The source variable becomes invalid after the move.
+Transfers ownership of a value. The source variable becomes invalid after the move. Both `!` and `moving` keyword are equivalent.
 
 ```gorget
-String s2 = !s1     # s1 is invalid after this
-consume(!data)       # data is moved into consume
+String s2 = !s1          # s1 is invalid after this
+String s3 = moving s2    # equivalent keyword form
+consume(!data)            # data is moved into consume
+consume(moving data)      # equivalent keyword form
 ```
 
 ### 7.15 Mutable Borrow Expression
 
 ```ebnf
-mut_borrow_expr = "&" expr ;
+mut_borrow_expr = ( "&" | "mutable" ) expr ;
 ```
 
-Creates a mutable borrow of a value. The original variable remains valid but cannot be accessed while the borrow is active.
+Creates a mutable borrow of a value. The original variable remains valid but cannot be accessed while the borrow is active. Both `&` and `mutable` keyword are equivalent.
 
 ```gorget
-modify(&data)
+modify(&data)          # operator form
+modify(mutable data)   # keyword form
 ```
 
 ### 7.16 Type Cast
@@ -1270,9 +1281,9 @@ int result = do:
 ### 7.21 Closures
 
 ```ebnf
-closure = [ "!" ] [ "async" ] "(" [ closure_param_list ] ")" ":" ( expr | block ) ;
+closure = [ "!" | "moving" ] [ "async" ] "(" [ closure_param_list ] ")" ":" ( expr | block ) ;
 closure_param_list = closure_param { "," closure_param } ;
-closure_param = [ type ] [ "&" | "!" ] IDENTIFIER ;
+closure_param = [ type ] [ "&" | "!" | "mutable" | "moving" ] IDENTIFIER ;
 ```
 
 Anonymous functions that capture variables from their environment.
@@ -1283,10 +1294,13 @@ auto sum = pairs.map((a, b): a + b)
 auto typed = strings.map((String s): s.parse[int]())
 ```
 
-**Move closures:** Prefix `!` forces all captured variables to be moved into the closure:
+**Move closures:** Prefix `!` or `moving` forces all captured variables to be moved into the closure:
 
 ```gorget
-auto handle = thread.spawn(!(x):
+auto handle = thread.spawn(!(x):          # operator form
+    print("value: {x}")
+)
+auto handle = thread.spawn(moving (x):    # keyword form
     print("value: {x}")
 )
 ```
@@ -1318,7 +1332,7 @@ Rules for `it`:
 #### List Comprehension
 
 ```ebnf
-list_comp = "[" expr "for" pattern "in" [ "&" | "!" ] expr [ "if" expr ] "]" ;
+list_comp = "[" expr "for" pattern "in" [ "&" | "!" | "mutable" | "moving" ] expr [ "if" expr ] "]" ;
 ```
 
 ```gorget
@@ -1474,11 +1488,11 @@ Gorget enforces memory safety through compile-time ownership and borrowing rules
 
 1. Every value has exactly one **owner** (the variable that holds it).
 2. When the owner goes out of scope, the value is dropped (freed).
-3. Ownership can be **transferred** (moved) using `!`.
+3. Ownership can be **transferred** (moved) using `!` or the `moving` keyword.
 4. After a move, the source variable is invalid. Any use is a compile-time error (**use-after-move**).
 5. A variable cannot be moved more than once (**double-move** error).
 6. A variable cannot be moved inside a loop body (**move-in-loop** error).
-7. **Copy types** (primitives, small value types) are implicitly copied on assignment; no `!` is needed.
+7. **Copy types** (primitives, small value types) are implicitly copied on assignment; no `!` or `moving` is needed.
 8. Reassigning a moved variable revives it — the new value makes it live again.
 
 ### 9.2 Borrowing Rules
@@ -1494,11 +1508,11 @@ Never both simultaneously. This is enforced at compile time.
 
 The ownership annotation on a call argument **must match** the parameter declaration:
 
-| Parameter declares | Call site must use | Meaning |
-|-------------------|-------------------|---------|
-| `String s`        | `f(s)`            | Immutable borrow |
-| `String &s`       | `f(&s)`           | Mutable borrow |
-| `String !s`       | `f(!s)`           | Move |
+| Parameter declares                 | Call site must use                 | Meaning |
+|------------------------------------|-----------------------------------|---------|
+| `String s`                         | `f(s)`                            | Immutable borrow |
+| `String &s` or `String mutable s`  | `f(&s)` or `f(mutable s)`        | Mutable borrow |
+| `String !s` or `String moving s`   | `f(!s)` or `f(moving s)`         | Move |
 
 Mismatches produce an **OwnershipMismatch** error.
 
@@ -1757,7 +1771,7 @@ The following functions are available without import:
 | `ReturnOutsideFunction`      | `return` outside of function                         |
 | `ThrowInNonThrowingFunction` | `throw` in function without `throws`                 |
 | `UseAfterMove`               | Variable used after ownership was moved              |
-| `MoveWithoutOperator`        | Non-Copy type passed without `!`                     |
+| `MoveWithoutOperator`        | Non-Copy type passed without `!` or `moving`         |
 | `BorrowConflict`             | Borrow exclusivity violated (aliasing in call)       |
 | `MoveInLoop`                 | Moving a variable inside a loop body                 |
 | `DoubleMove`                 | Same variable moved more than once                   |
@@ -1801,7 +1815,7 @@ function_def = { attribute } [ "public" ] { qualifier }
 qualifier     = "async" | "const" | "static" | "unsafe" ;
 return_type   = type | "void" ;
 param_list    = param { "," param } ;
-param         = type [ "&" | "!" ] IDENTIFIER [ "=" expr ] ;
+param         = type [ "&" | "!" | "mutable" | "moving" ] IDENTIFIER [ "=" expr ] ;
 throws_clause = "throws" [ type ] ;
 block         = ":" NEWLINE INDENT { statement } DEDENT ;
 
@@ -1886,7 +1900,7 @@ break_stmt          = "break" [ expr ] NEWLINE ;
 continue_stmt       = "continue" NEWLINE ;
 pass_stmt           = "pass" NEWLINE ;
 
-for_stmt   = "for" pattern "in" [ "&" | "!" ] expr ":" block [ "else" ":" block ] ;
+for_stmt   = "for" pattern "in" [ "&" | "!" | "mutable" | "moving" ] expr ":" block [ "else" ":" block ] ;
 while_stmt = "while" expr ":" block [ "else" ":" block ] ;
 loop_stmt  = "loop" ":" block ;
 if_stmt    = "if" expr ":" block { "elif" expr ":" block } [ "else" ":" block ] ;

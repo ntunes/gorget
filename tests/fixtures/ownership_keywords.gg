@@ -1,0 +1,39 @@
+struct Point:
+    int x
+    int y
+
+void consume(String moving s):
+    print("{s}")
+
+void borrow_it(String mutable s):
+    print("{s}")
+
+void look(int x):
+    print("{x}")
+
+void main():
+    # Primitives are Copy — no move needed
+    int a = 42
+    int b = a
+    print("{a}")
+    print("{b}")
+
+    # Structs use move semantics with `moving` keyword
+    Point p = Point(1, 2)
+    Point q = moving p
+    print("{q.x}")
+    print("{q.y}")
+
+    # Move ownership with keyword
+    String s1 = "moved"
+    consume(moving s1)
+
+    # Mutable borrow with keyword
+    String s2 = "borrowed"
+    borrow_it(mutable s2)
+
+    # Bare borrow of copy type
+    int n = 99
+    look(n)
+
+    print("done")

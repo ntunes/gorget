@@ -771,13 +771,13 @@ impl<'a> BorrowChecker<'a> {
                 let param_name = info.param_names[i].clone();
                 let expected_str = match expected {
                     Ownership::Borrow => "borrow (bare)",
-                    Ownership::MutableBorrow => "mutable borrow (&)",
-                    Ownership::Move => "move (!)",
+                    Ownership::MutableBorrow => "mutable borrow (& or mutable)",
+                    Ownership::Move => "move (! or moving)",
                 };
                 let found_str = match found {
                     Ownership::Borrow => "borrow (bare)",
-                    Ownership::MutableBorrow => "mutable borrow (&)",
-                    Ownership::Move => "move (!)",
+                    Ownership::MutableBorrow => "mutable borrow (& or mutable)",
+                    Ownership::Move => "move (! or moving)",
                 };
                 self.error(
                     SemanticErrorKind::OwnershipMismatch {
@@ -831,17 +831,17 @@ impl<'a> BorrowChecker<'a> {
                 let conflict = match (own_a, own_b) {
                     // Double mutable borrow
                     (Ownership::MutableBorrow, Ownership::MutableBorrow) => {
-                        Some("cannot borrow `&` mutably more than once in the same call")
+                        Some("cannot borrow mutably more than once in the same call")
                     }
                     // Mutable borrow + move (either order)
                     (Ownership::MutableBorrow, Ownership::Move)
                     | (Ownership::Move, Ownership::MutableBorrow) => {
-                        Some("cannot borrow `&` and move `!` the same variable in a call")
+                        Some("cannot borrow and move the same variable in a call")
                     }
                     // Borrow (bare read) + mutable borrow
                     (Ownership::Borrow, Ownership::MutableBorrow)
                     | (Ownership::MutableBorrow, Ownership::Borrow) => {
-                        Some("cannot use bare and mutable borrow `&` of the same variable in a call")
+                        Some("cannot use bare and mutable borrow of the same variable in a call")
                     }
                     _ => None,
                 };

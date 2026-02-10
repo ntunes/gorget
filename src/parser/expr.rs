@@ -148,10 +148,10 @@ impl Parser {
                 ))
             }
 
-            // Move
-            Token::Bang => {
+            // Move (! or moving keyword)
+            Token::Bang | Token::Keyword(Keyword::Moving) => {
                 self.advance();
-                // Check for move closure: !(params): or !():
+                // Check for move closure: !(params): or moving (params):
                 if self.check(&Token::LParen) {
                     return self.parse_closure(true, false, start);
                 }
@@ -165,8 +165,8 @@ impl Parser {
                 ))
             }
 
-            // Mutable borrow
-            Token::Ampersand => {
+            // Mutable borrow (& or mutable keyword)
+            Token::Ampersand | Token::Keyword(Keyword::Mutable) => {
                 self.advance();
                 let operand = self.parse_expr_bp(23)?;
                 let end = operand.span;
@@ -812,15 +812,7 @@ impl Parser {
                 let saved_pos = self.pos;
                 match self.parse_type() {
                     Ok(ty) => {
-                        let ownership = if self.check(&Token::Ampersand) {
-                            self.advance();
-                            Ownership::MutableBorrow
-                        } else if self.check(&Token::Bang) {
-                            self.advance();
-                            Ownership::Move
-                        } else {
-                            Ownership::Borrow
-                        };
+                        let ownership = self.parse_ownership_modifier();
 
                         if let Token::Identifier(_) = self.peek() {
                             let n = self.expect_identifier()?;
@@ -945,15 +937,7 @@ impl Parser {
         self.expect_keyword(Keyword::For)?;
         let variable = self.parse_pattern()?;
 
-        let ownership = if self.check(&Token::Ampersand) {
-            self.advance();
-            Ownership::MutableBorrow
-        } else if self.check(&Token::Bang) {
-            self.advance();
-            Ownership::Move
-        } else {
-            Ownership::Borrow
-        };
+        let ownership = self.parse_ownership_modifier();
 
         self.expect_keyword(Keyword::In)?;
         let iterable = self.parse_expr()?;
@@ -1218,15 +1202,7 @@ impl Parser {
         let start = self.peek_span();
 
         // Check for ownership modifiers
-        let ownership = if self.check(&Token::Ampersand) {
-            self.advance();
-            Ownership::MutableBorrow
-        } else if self.check(&Token::Bang) {
-            self.advance();
-            Ownership::Move
-        } else {
-            Ownership::Borrow
-        };
+        let ownership = self.parse_ownership_modifier();
 
         // Check for named argument: name = value
         let name = if matches!(self.peek(), Token::Identifier(_))
@@ -1287,6 +1263,8 @@ impl Parser {
                 | Token::Keyword(Keyword::Spawn)
                 | Token::Keyword(Keyword::SelfLower)
                 | Token::Keyword(Keyword::It)
+                | Token::Keyword(Keyword::Moving)
+                | Token::Keyword(Keyword::Mutable)
         )
     }
 
