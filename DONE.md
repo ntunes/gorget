@@ -7,3 +7,4 @@
 - [2026-02-10] Iterator protocol: for-loop iteration over Dict and Set collections (key-only, key-value tuple, for-else support)
 - [2026-02-10] Core traits: Displayable, Equatable, Cloneable, Hashable — built-in trait registration, auto-hooks for ==/!= (Equatable) and string interpolation (Displayable), Self type resolution in equip blocks
 - [2026-02-10] Box[T]: heap allocation wrapper (Box(v) and Box.new(v) constructors, .get()/.set() methods, *b deref, string interpolation, type inference)
+- [2026-02-10] Implicit `it` in closures: parser auto-wraps call args containing `it` in ImplicitClosure, typecheck assigns fresh type var to `it`, codegen delegates to existing closure machinery

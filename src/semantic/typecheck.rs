@@ -24,6 +24,8 @@ struct TypeChecker<'a> {
     current_return_type: Option<TypeId>,
     /// Whether the current function has `throws`.
     current_function_throws: bool,
+    /// Type variable for implicit `it` parameter inside ImplicitClosure.
+    implicit_it_type: Option<TypeId>,
 }
 
 impl<'a> TypeChecker<'a> {
@@ -43,6 +45,7 @@ impl<'a> TypeChecker<'a> {
             next_type_var: 0,
             current_return_type: None,
             current_function_throws: false,
+            implicit_it_type: None,
         }
     }
 
@@ -210,8 +213,8 @@ impl<'a> TypeChecker<'a> {
             }
 
             Expr::It => {
-                // Implicit closure parameter — type depends on context
-                self.types.error_id
+                // Implicit closure parameter — use type from enclosing ImplicitClosure
+                self.implicit_it_type.unwrap_or(self.types.error_id)
             }
 
             Expr::Path { segments } => {
@@ -601,8 +604,10 @@ impl<'a> TypeChecker<'a> {
             }
 
             Expr::ImplicitClosure { body } => {
-                let body_type = self.infer_expr(body);
                 let param_type = self.fresh_type_var();
+                let prev_it_type = self.implicit_it_type.replace(param_type);
+                let body_type = self.infer_expr(body);
+                self.implicit_it_type = prev_it_type;
                 self.types.insert(ResolvedType::Function {
                     params: vec![param_type],
                     return_type: body_type,

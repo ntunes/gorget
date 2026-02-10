@@ -1,0 +1,9 @@
+void main():
+    Option[int] some = Some(42)
+    Option[int] none = None()
+    Option[int] doubled = some.map(it * 2)
+    Option[int] none_mapped = none.map(it * 2)
+    print("{doubled.unwrap()}")
+    print("{none_mapped.unwrap_or(0)}")
+    Option[int] chained = some.and_then(Some(it + 1))
+    print("{chained.unwrap()}")

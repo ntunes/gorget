@@ -736,6 +736,17 @@ done",
 }
 
 #[test]
+fn implicit_it() {
+    run_gg(
+        "implicit_it.gg",
+        "\
+84
+0
+43",
+    );
+}
+
+#[test]
 fn box_heap() {
     run_gg(
         "box_heap.gg",

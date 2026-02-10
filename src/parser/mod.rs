@@ -14,6 +14,9 @@ pub struct Parser {
     tokens: Vec<Spanned<Token>>,
     pos: usize,
     pub errors: Vec<ParseError>,
+    /// Nesting depth for call-arg parsing. Used to auto-wrap `it` only at the
+    /// outermost call-arg level and prevent double-wrapping in nested calls.
+    call_arg_depth: usize,
 }
 
 impl Parser {
@@ -27,6 +30,7 @@ impl Parser {
             tokens,
             pos: 0,
             errors: Vec::new(),
+            call_arg_depth: 0,
         }
     }
 
@@ -2136,6 +2140,101 @@ mod tests {
                         assert_eq!(args.len(), 2);
                     } else {
                         panic!("Expected Call with generic args");
+                    }
+                } else {
+                    panic!();
+                }
+            } else {
+                panic!();
+            }
+        } else {
+            panic!();
+        }
+    }
+
+    // ── Implicit `it` in closures ──────────────────────────────
+
+    #[test]
+    fn test_implicit_it_wraps_in_method_call() {
+        // `some.map(it * 2)` → MethodCall with an ImplicitClosure arg
+        let module = parse("void main():\n    some.map(it * 2)\n");
+        if let Item::Function(ref f) = module.items[0].node {
+            if let FunctionBody::Block(ref block) = f.body {
+                if let Stmt::Expr(ref expr) = block.stmts[0].node {
+                    if let Expr::MethodCall { ref args, .. } = expr.node {
+                        assert_eq!(args.len(), 1);
+                        assert!(
+                            matches!(&args[0].node.value.node, Expr::ImplicitClosure { .. }),
+                            "Expected ImplicitClosure, got {:?}",
+                            args[0].node.value.node
+                        );
+                    } else {
+                        panic!("Expected MethodCall");
+                    }
+                } else {
+                    panic!();
+                }
+            } else {
+                panic!();
+            }
+        } else {
+            panic!();
+        }
+    }
+
+    #[test]
+    fn test_implicit_it_not_wrapped_in_explicit_closure() {
+        // `(x): it + x` — `it` inside an explicit closure should NOT
+        // produce ImplicitClosure at the arg level (it's just a free reference).
+        let module = parse("void main():\n    some.map((int x): it + x)\n");
+        if let Item::Function(ref f) = module.items[0].node {
+            if let FunctionBody::Block(ref block) = f.body {
+                if let Stmt::Expr(ref expr) = block.stmts[0].node {
+                    if let Expr::MethodCall { ref args, .. } = expr.node {
+                        assert_eq!(args.len(), 1);
+                        assert!(
+                            matches!(&args[0].node.value.node, Expr::Closure { .. }),
+                            "Expected Closure (not ImplicitClosure), got {:?}",
+                            args[0].node.value.node
+                        );
+                    } else {
+                        panic!("Expected MethodCall");
+                    }
+                } else {
+                    panic!();
+                }
+            } else {
+                panic!();
+            }
+        } else {
+            panic!();
+        }
+    }
+
+    #[test]
+    fn test_implicit_it_nested_call() {
+        // `some.and_then(Some(it + 1))` → single ImplicitClosure wrapping `Some(it + 1)`
+        let module = parse("void main():\n    some.and_then(Some(it + 1))\n");
+        if let Item::Function(ref f) = module.items[0].node {
+            if let FunctionBody::Block(ref block) = f.body {
+                if let Stmt::Expr(ref expr) = block.stmts[0].node {
+                    if let Expr::MethodCall { ref args, .. } = expr.node {
+                        assert_eq!(args.len(), 1);
+                        if let Expr::ImplicitClosure { ref body } = args[0].node.value.node {
+                            // Body should be a Call to Some, not another ImplicitClosure
+                            assert!(
+                                matches!(&body.node, Expr::Call { .. }),
+                                "Expected Call inside ImplicitClosure, got {:?}",
+                                body.node
+                            );
+                        } else {
+                            panic!(
+                                "Expected ImplicitClosure, got {:?}",
+                                args[0].node.value.node
+                            );
+                        }
+                    } else {
+                        panic!("Expected MethodCall");
                     }
                 } else {
                     panic!();

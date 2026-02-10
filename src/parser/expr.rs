@@ -5,6 +5,151 @@ use super::ast::*;
 use super::Parser;
 use crate::errors::ParseError;
 
+/// Recursively check whether an expression contains `Expr::It`.
+/// Returns `false` if `it` only appears inside a nested closure (where it
+/// would be bound by that closure instead).
+fn contains_it(expr: &Spanned<Expr>) -> bool {
+    match &expr.node {
+        Expr::It => true,
+
+        // Stop recursion at closure boundaries — `it` inside a nested
+        // closure belongs to that closure, not an outer implicit one.
+        Expr::Closure { .. } | Expr::ImplicitClosure { .. } => false,
+
+        // Unary
+        Expr::UnaryOp { operand, .. } => contains_it(operand),
+        Expr::Try { expr } | Expr::Move { expr } | Expr::MutableBorrow { expr }
+        | Expr::Deref { expr } | Expr::Await { expr } | Expr::Spawn { expr }
+        | Expr::TryCapture { expr } => contains_it(expr),
+
+        // Binary
+        Expr::BinaryOp { left, right, .. } => contains_it(left) || contains_it(right),
+        Expr::NilCoalescing { lhs, rhs } => contains_it(lhs) || contains_it(rhs),
+
+        // Access
+        Expr::FieldAccess { object, .. } | Expr::TupleFieldAccess { object, .. }
+        | Expr::OptionalChain { object, .. } => contains_it(object),
+        Expr::Index { object, index } => contains_it(object) || contains_it(index),
+
+        // Calls
+        Expr::Call { callee, args, .. } => {
+            contains_it(callee) || args.iter().any(|a| contains_it(&a.node.value))
+        }
+        Expr::MethodCall { receiver, args, .. } => {
+            contains_it(receiver) || args.iter().any(|a| contains_it(&a.node.value))
+        }
+
+        // If
+        Expr::If { condition, then_branch, elif_branches, else_branch } => {
+            contains_it(condition)
+                || contains_it(then_branch)
+                || elif_branches.iter().any(|(c, b)| contains_it(c) || contains_it(b))
+                || else_branch.as_ref().is_some_and(|b| contains_it(b))
+        }
+
+        // Match
+        Expr::Match { scrutinee, arms, else_arm } => {
+            contains_it(scrutinee)
+                || arms.iter().any(|arm| {
+                    arm.guard.as_ref().is_some_and(|g| contains_it(g))
+                        || contains_it(&arm.body)
+                })
+                || else_arm.as_ref().is_some_and(|b| contains_it(b))
+        }
+
+        // Cast
+        Expr::As { expr, .. } => contains_it(expr),
+
+        // Is
+        Expr::Is { expr, .. } => contains_it(expr),
+
+        // Range
+        Expr::Range { start, end, .. } => {
+            start.as_ref().is_some_and(|s| contains_it(s))
+                || end.as_ref().is_some_and(|e| contains_it(e))
+        }
+
+        // Collections
+        Expr::ArrayLiteral(elems) | Expr::TupleLiteral(elems) => {
+            elems.iter().any(contains_it)
+        }
+        Expr::StructLiteral { args, .. } => args.iter().any(contains_it),
+
+        // Comprehensions — these introduce their own bindings, but `it`
+        // would still refer to the outer implicit closure if present.
+        Expr::ListComprehension { expr, iterable, condition, .. } => {
+            contains_it(expr)
+                || contains_it(iterable)
+                || condition.as_ref().is_some_and(|c| contains_it(c))
+        }
+        Expr::DictComprehension { key, value, iterable, condition, .. } => {
+            contains_it(key)
+                || contains_it(value)
+                || contains_it(iterable)
+                || condition.as_ref().is_some_and(|c| contains_it(c))
+        }
+        Expr::SetComprehension { expr, iterable, condition, .. } => {
+            contains_it(expr)
+                || contains_it(iterable)
+                || condition.as_ref().is_some_and(|c| contains_it(c))
+        }
+
+        // Block / Do — walk statements for expressions
+        Expr::Block(block) | Expr::Do { body: block } => block_contains_it(block),
+
+        // Leaves — no sub-expressions
+        Expr::IntLiteral(_) | Expr::FloatLiteral(_) | Expr::BoolLiteral(_)
+        | Expr::CharLiteral(_) | Expr::StringLiteral(_) | Expr::NoneLiteral
+        | Expr::Identifier(_) | Expr::SelfExpr | Expr::Path { .. } => false,
+    }
+}
+
+/// Check whether any statement in a block contains `Expr::It`.
+fn block_contains_it(block: &Block) -> bool {
+    block.stmts.iter().any(|stmt| stmt_contains_it(&stmt.node))
+}
+
+fn stmt_contains_it(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Expr(e) => contains_it(e),
+        Stmt::VarDecl { value, .. } => contains_it(value),
+        Stmt::Assign { target, value } => contains_it(target) || contains_it(value),
+        Stmt::CompoundAssign { target, value, .. } => contains_it(target) || contains_it(value),
+        Stmt::Return(Some(e)) | Stmt::Throw(e) | Stmt::Break(Some(e)) => contains_it(e),
+        Stmt::Return(None) | Stmt::Break(None) | Stmt::Continue | Stmt::Pass => false,
+        Stmt::For { iterable, body, else_body, .. } => {
+            contains_it(iterable)
+                || block_contains_it(body)
+                || else_body.as_ref().is_some_and(block_contains_it)
+        }
+        Stmt::While { condition, body, else_body } => {
+            contains_it(condition)
+                || block_contains_it(body)
+                || else_body.as_ref().is_some_and(block_contains_it)
+        }
+        Stmt::Loop { body } | Stmt::Unsafe { body } => block_contains_it(body),
+        Stmt::If { condition, then_body, elif_branches, else_body } => {
+            contains_it(condition)
+                || block_contains_it(then_body)
+                || elif_branches.iter().any(|(c, b)| contains_it(c) || block_contains_it(b))
+                || else_body.as_ref().is_some_and(block_contains_it)
+        }
+        Stmt::Match { scrutinee, arms, else_arm } => {
+            contains_it(scrutinee)
+                || arms.iter().any(|arm| {
+                    arm.guard.as_ref().is_some_and(|g| contains_it(g))
+                        || contains_it(&arm.body)
+                })
+                || else_arm.as_ref().is_some_and(block_contains_it)
+        }
+        Stmt::With { bindings, body } => {
+            bindings.iter().any(|b| contains_it(&b.expr))
+                || block_contains_it(body)
+        }
+        Stmt::Item(_) => false,
+    }
+}
+
 /// Binding power (precedence) for operators.
 /// Higher = tighter binding. Left-assoc: (left_bp, left_bp + 1).
 /// Right-assoc: (right_bp + 1, right_bp).
@@ -1216,7 +1361,22 @@ impl Parser {
             None
         };
 
+        self.call_arg_depth += 1;
         let value = self.parse_expr()?;
+        self.call_arg_depth -= 1;
+
+        // Auto-wrap: if the argument expression contains `it`, wrap it in
+        // an ImplicitClosure so downstream passes treat it as a lambda.
+        // Only wrap at the outermost call-arg level (depth 0) to prevent
+        // double-wrapping when `it` appears inside nested calls like
+        // `and_then(Some(it + 1))`.
+        let value = if self.call_arg_depth == 0 && contains_it(&value) {
+            let span = value.span;
+            Spanned::new(Expr::ImplicitClosure { body: Box::new(value) }, span)
+        } else {
+            value
+        };
+
         let end = value.span;
 
         Ok(Spanned::new(

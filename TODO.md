@@ -3,7 +3,6 @@
 ## Critical (blocks real-world use)
 
 ## High Priority
-- [ ] Implicit `it` in closures [added: 2026-02-10]
 - [ ] Drop trait / RAII (destructors) [added: 2026-02-10]
 - [ ] `gg fmt` (code formatter) [added: 2026-02-10]
 - [ ] File I/O (read, write, path) [added: 2026-02-10]
