@@ -295,6 +295,17 @@ impl CodegenContext<'_> {
                 emitter.emit_line("}");
             }
 
+            Stmt::Assert { condition, message } => {
+                if !self.strip_asserts {
+                    let cond = self.gen_expr(condition);
+                    let msg = match message {
+                        Some(m) => self.gen_expr(m),
+                        None => "\"assertion failed\"".to_string(),
+                    };
+                    emitter.emit_line(&format!("if (!({cond})) gorget_panic({msg});"));
+                }
+            }
+
             Stmt::Item(_) => {
                 // Nested items handled during top-level pass
             }

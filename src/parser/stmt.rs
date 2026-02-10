@@ -14,6 +14,7 @@ impl Parser {
             // Explicit control flow keywords
             Token::Keyword(Keyword::Return) => self.parse_return_stmt(),
             Token::Keyword(Keyword::Throw) => self.parse_throw_stmt(),
+            Token::Keyword(Keyword::Assert) => self.parse_assert_stmt(),
             Token::Keyword(Keyword::Break) => self.parse_break_stmt(),
             Token::Keyword(Keyword::Continue) => {
                 self.advance();
@@ -88,6 +89,22 @@ impl Parser {
         let end = self.previous_span();
         self.consume_newline();
         Ok(Spanned::new(Stmt::Break(value), start.merge(end)))
+    }
+
+    fn parse_assert_stmt(&mut self) -> Result<Spanned<Stmt>, ParseError> {
+        let start = self.peek_span();
+        self.expect_keyword(Keyword::Assert)?;
+        let condition = self.parse_expr()?;
+
+        let message = if self.match_token(&Token::Comma) {
+            Some(self.parse_expr()?)
+        } else {
+            None
+        };
+
+        let end = self.previous_span();
+        self.consume_newline();
+        Ok(Spanned::new(Stmt::Assert { condition, message }, start.merge(end)))
     }
 
     fn parse_if_stmt(&mut self) -> Result<Spanned<Stmt>, ParseError> {

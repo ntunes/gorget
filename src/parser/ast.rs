@@ -719,6 +719,12 @@ pub enum Stmt {
         body: Block,
     },
 
+    /// assert condition [, message]
+    Assert {
+        condition: Spanned<Expr>,
+        message: Option<Spanned<Expr>>,
+    },
+
     /// Nested item definition
     Item(Box<Item>),
 }

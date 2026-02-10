@@ -842,6 +842,13 @@ impl<'a> TypeChecker<'a> {
                 }
             }
 
+            Stmt::Assert { condition, message } => {
+                self.infer_expr(condition);
+                if let Some(msg) = message {
+                    self.infer_expr(msg);
+                }
+            }
+
             Stmt::Continue | Stmt::Pass => {}
 
             Stmt::For {

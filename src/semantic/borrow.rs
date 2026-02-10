@@ -660,6 +660,13 @@ impl<'a> BorrowChecker<'a> {
                 self.check_block(body);
             }
 
+            Stmt::Assert { condition, message } => {
+                self.check_expr(condition);
+                if let Some(msg) = message {
+                    self.check_expr(msg);
+                }
+            }
+
             Stmt::Item(_) => {}
         }
     }

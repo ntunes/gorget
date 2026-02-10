@@ -1,0 +1,2 @@
+void main():
+    assert false, "this should fail"

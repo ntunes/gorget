@@ -272,6 +272,7 @@ pub enum Keyword {
     // Special identifiers
     It,
     Panic,
+    Assert,
 }
 
 impl Keyword {
@@ -361,6 +362,7 @@ impl Keyword {
             "mutable" => Some(Keyword::Mutable),
             "it" => Some(Keyword::It),
             "panic" => Some(Keyword::Panic),
+            "assert" => Some(Keyword::Assert),
             _ => Option::None,
         }
     }
@@ -452,6 +454,7 @@ impl fmt::Display for Keyword {
             Keyword::Mutable => "mutable",
             Keyword::It => "it",
             Keyword::Panic => "panic",
+            Keyword::Assert => "assert",
         };
         write!(f, "'{s}'")
     }

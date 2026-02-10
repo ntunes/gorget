@@ -1,0 +1,7 @@
+void main():
+    assert true
+    assert 2 + 2 == 4, "math works"
+    int x = 10
+    assert x > 0
+    assert x < 100, "x in range"
+    print("all asserts passed")

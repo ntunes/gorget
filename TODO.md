@@ -1,7 +1,6 @@
 # TODO
 
 ## High Priority
-- `assert` keyword: new statement, condition + optional message, desugars to panic; always-on (never stripped in release) [added: 2026-02-10]
 
 ## Medium Priority
 - Integer overflow checking on `+`/`-`/`*`: only div-by-zero guard exists today — add overflow detection on add/sub/mul that panics by default, plus `--overflow=wrap` compiler flag [added: 2026-02-10]

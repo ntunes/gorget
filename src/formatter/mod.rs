@@ -789,6 +789,15 @@ impl Formatter {
                 self.format_block_stmts(body);
                 self.emitter.dedent();
             }
+            Stmt::Assert { condition, message } => {
+                self.emitter.write("assert ");
+                self.format_expr(condition);
+                if let Some(msg) = message {
+                    self.emitter.write(", ");
+                    self.format_expr(msg);
+                }
+                self.emitter.newline();
+            }
             Stmt::Item(item) => {
                 let spanned = Spanned::new(*item.clone(), stmt.span);
                 self.format_item(&spanned);

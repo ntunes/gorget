@@ -953,6 +953,16 @@ fn run_gg_panics(fixture: &str, expected_stderr: &str) {
 }
 
 #[test]
+fn assert_basic() {
+    run_gg("assert_basic.gg", "all asserts passed");
+}
+
+#[test]
+fn assert_fails() {
+    run_gg_panics("assert_fails.gg", "this should fail");
+}
+
+#[test]
 fn bounds_check() {
     run_gg_panics("bounds_check.gg", "index out of bounds: index 5, length 3");
 }

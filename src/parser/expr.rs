@@ -146,6 +146,9 @@ fn stmt_contains_it(stmt: &Stmt) -> bool {
             bindings.iter().any(|b| contains_it(&b.expr))
                 || block_contains_it(body)
         }
+        Stmt::Assert { condition, message } => {
+            contains_it(condition) || message.as_ref().is_some_and(contains_it)
+        }
         Stmt::Item(_) => false,
     }
 }

@@ -113,10 +113,12 @@ pub struct CodegenContext<'a> {
     /// Active generic type substitutions (param_name → C type) during monomorphized
     /// function body codegen. Empty outside of `emit_monomorphized_function`.
     pub type_subs: RefCell<Vec<(String, String)>>,
+    /// When true, `assert` statements are stripped from output (no code emitted).
+    pub strip_asserts: bool,
 }
 
 /// Generate C source code from a parsed and analyzed Gorget module.
-pub fn generate_c(module: &Module, analysis: &AnalysisResult) -> String {
+pub fn generate_c(module: &Module, analysis: &AnalysisResult, strip_asserts: bool) -> String {
     let mut ctx = CodegenContext {
         scopes: &analysis.scopes,
         types: &analysis.types,
@@ -138,6 +140,7 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult) -> String {
         decl_type_hint: RefCell::new(None),
         drop_scopes: RefCell::new(Vec::new()),
         type_subs: RefCell::new(Vec::new()),
+        strip_asserts,
     };
 
     let mut emitter = CEmitter::new();
@@ -218,7 +221,7 @@ mod tests {
             result.errors
         );
 
-        generate_c(&module, &result)
+        generate_c(&module, &result, false)
     }
 
     #[test]

@@ -584,6 +584,13 @@ fn resolve_stmt(
             scopes.pop_scope();
         }
 
+        Stmt::Assert { condition, message } => {
+            resolve_expr(condition, scopes, errors, resolution_map);
+            if let Some(msg) = message {
+                resolve_expr(msg, scopes, errors, resolution_map);
+            }
+        }
+
         Stmt::Item(item) => {
             // Nested item definitions
             let mut ctx = ResolveContext::new();

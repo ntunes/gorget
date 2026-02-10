@@ -47,7 +47,7 @@ fn load_imports(filename: &str, source: &str, module: gorget::parser::ast::Modul
 }
 
 /// Build a .gg source file into a binary. Returns the path to the executable.
-fn build(filename: &str, source: &str) -> PathBuf {
+fn build(filename: &str, source: &str, strip_asserts: bool) -> PathBuf {
     let mut parser = Parser::new(source);
     let module = parser.parse_module();
 
@@ -75,7 +75,7 @@ fn build(filename: &str, source: &str) -> PathBuf {
     }
 
     // Generate C code
-    let c_code = gorget::codegen::generate_c(&module, &result);
+    let c_code = gorget::codegen::generate_c(&module, &result, strip_asserts);
 
     // Determine output paths
     let input_path = Path::new(filename);
@@ -133,7 +133,11 @@ fn main() {
     }
 
     let command = &args[1];
-    let filename = &args[2];
+    let strip_asserts = args.iter().any(|a| a == "--strip-asserts");
+    let filename = args.iter().skip(2).find(|a| !a.starts_with("--")).unwrap_or_else(|| {
+        eprintln!("Usage: gg <command> <file>");
+        process::exit(1);
+    });
 
     let source = match fs::read_to_string(filename) {
         Ok(s) => s,
@@ -198,11 +202,11 @@ fn main() {
             }
         }
         "build" => {
-            let exe_path = build(filename, &source);
+            let exe_path = build(filename, &source, strip_asserts);
             println!("Built: {}", exe_path.display());
         }
         "run" => {
-            let exe_path = build(filename, &source);
+            let exe_path = build(filename, &source, strip_asserts);
             let status = Command::new(&exe_path)
                 .status()
                 .unwrap_or_else(|e| {
