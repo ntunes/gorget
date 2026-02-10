@@ -70,6 +70,9 @@ impl CodegenContext<'_> {
             DropAction::BoxFree => {
                 emitter.emit_line(&format!("free({});", entry.var_name));
             }
+            DropAction::FileClose => {
+                emitter.emit_line(&format!("gorget_file_close(&{});", entry.var_name));
+            }
             DropAction::UserDrop { type_name } => {
                 let drop_fn = c_mangle::mangle_trait_method("Drop", type_name, "drop");
                 emitter.emit_line(&format!("{drop_fn}(&{});", entry.var_name));
@@ -87,6 +90,10 @@ impl CodegenContext<'_> {
                     && !matches!(&generic_args[0].node, Type::Dynamic { .. }) =>
             {
                 self.register_droppable(var_name, DropAction::BoxFree);
+            }
+            // File → auto-close on scope exit
+            Type::Named { name, generic_args } if name.node == "File" && generic_args.is_empty() => {
+                self.register_droppable(var_name, DropAction::FileClose);
             }
             // User-defined struct with Drop impl
             Type::Named { name, generic_args } if generic_args.is_empty() => {

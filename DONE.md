@@ -12,3 +12,4 @@
 - [2026-02-10] Default trait method resolution: codegen emits default method bodies when equip block doesn't override, vtable wiring, trait method call resolution for trait-provided methods
 - [2026-02-10] Trait inheritance (extends) in vtables: child vtable structs include parent method slots, equip blocks validate and emit parent methods, semantic validation checks inherited required methods
 - [2026-02-10] `gg fmt` code formatter: lexer emits Comment tokens, parser side-tables them, AST-walking formatter with comment interleaving, --in-place flag, idempotency tested on all fixtures
+- [2026-02-10] File I/O: built-in File type with GorgetFile C runtime, free functions (read_file, write_file, append_file, file_exists), File struct (File.open, File.create, .read_all, .write, .close), Drop auto-close on scope exit

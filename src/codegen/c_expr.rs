@@ -362,6 +362,26 @@ impl CodegenContext<'_> {
                         return format!("(sizeof({a}) / sizeof({a}[0]))");
                     }
                 }
+                "read_file" => {
+                    if let Some(arg) = args.first() {
+                        let path = self.gen_expr(&arg.node.value);
+                        return format!("gorget_read_file({path})");
+                    }
+                }
+                "write_file" | "append_file" => {
+                    let func = if name == "write_file" { "gorget_write_file" } else { "gorget_append_file" };
+                    if args.len() >= 2 {
+                        let path = self.gen_expr(&args[0].node.value);
+                        let content = self.gen_expr(&args[1].node.value);
+                        return format!("{func}({path}, {content})");
+                    }
+                }
+                "file_exists" => {
+                    if let Some(arg) = args.first() {
+                        let path = self.gen_expr(&arg.node.value);
+                        return format!("gorget_file_exists({path})");
+                    }
+                }
                 _ => {}
             }
 
@@ -450,6 +470,25 @@ impl CodegenContext<'_> {
                     }
                 }
 
+                // Handle File.open(path) and File.create(path)
+                if type_name == "File" {
+                    match method_name.as_str() {
+                        "open" => {
+                            if let Some(arg) = args.first() {
+                                let path_arg = self.gen_expr(&arg.node.value);
+                                return format!("gorget_file_open({path_arg}, \"r\")");
+                            }
+                        }
+                        "create" => {
+                            if let Some(arg) = args.first() {
+                                let path_arg = self.gen_expr(&arg.node.value);
+                                return format!("gorget_file_open({path_arg}, \"w\")");
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
                 let mangled = c_mangle::mangle_method(type_name, method_name);
                 let arg_exprs: Vec<String> =
                     args.iter().map(|a| self.gen_expr(&a.node.value)).collect();
@@ -488,6 +527,25 @@ impl CodegenContext<'_> {
 
         // Check if receiver is a type name (static method call like Point.origin())
         if let Expr::Identifier(name) = &receiver.node {
+            // Handle File.open(path) and File.create(path) as static constructors
+            if name == "File" {
+                match method_name {
+                    "open" => {
+                        if let Some(arg) = args.first() {
+                            let path_arg = self.gen_expr(&arg.node.value);
+                            return format!("gorget_file_open({path_arg}, \"r\")");
+                        }
+                    }
+                    "create" => {
+                        if let Some(arg) = args.first() {
+                            let path_arg = self.gen_expr(&arg.node.value);
+                            return format!("gorget_file_open({path_arg}, \"w\")");
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
             let is_type = self
                 .resolution_map
                 .get(&receiver.span.start)
@@ -572,8 +630,9 @@ impl CodegenContext<'_> {
         let is_option = type_name == "Option";
         let is_result = type_name == "Result";
         let is_box = type_name == "Box";
+        let is_file = type_name == "File" || c_type.as_deref() == Some("GorgetFile");
 
-        if !is_vector && !is_map && !is_set && !is_string && !is_option && !is_result && !is_box {
+        if !is_vector && !is_map && !is_set && !is_string && !is_option && !is_result && !is_box && !is_file {
             return None;
         }
 
@@ -600,6 +659,9 @@ impl CodegenContext<'_> {
         }
         if is_box {
             return Some(self.gen_box_method(&recv, method_name, args));
+        }
+        if is_file {
+            return Some(self.gen_file_method(&recv, method_name, args, needs_temp));
         }
 
         None
@@ -922,6 +984,52 @@ impl CodegenContext<'_> {
                 }
             }
             _ => format!("/* unknown Box method: {method_name} */"),
+        }
+    }
+
+    /// Generate code for File instance method calls.
+    fn gen_file_method(
+        &self,
+        recv: &str,
+        method_name: &str,
+        args: &[Spanned<crate::parser::ast::CallArg>],
+        needs_temp: bool,
+    ) -> String {
+        let recv_ref = if needs_temp {
+            format!("({{ __typeof__({recv}) __tmp = {recv}; &__tmp; }})")
+        } else {
+            format!("&{recv}")
+        };
+        match method_name {
+            // Static constructors (File.open / File.create)
+            "open" => {
+                if let Some(arg) = args.first() {
+                    let path_arg = self.gen_expr(&arg.node.value);
+                    format!("gorget_file_open({path_arg}, \"r\")")
+                } else {
+                    format!("/* File.open() missing arg */")
+                }
+            }
+            "create" => {
+                if let Some(arg) = args.first() {
+                    let path_arg = self.gen_expr(&arg.node.value);
+                    format!("gorget_file_open({path_arg}, \"w\")")
+                } else {
+                    format!("/* File.create() missing arg */")
+                }
+            }
+            // Instance methods
+            "read_all" => format!("gorget_file_read_all({recv_ref})"),
+            "write" => {
+                if let Some(arg) = args.first() {
+                    let content = self.gen_expr(&arg.node.value);
+                    format!("gorget_file_write({recv_ref}, {content})")
+                } else {
+                    format!("/* File.write() missing arg */")
+                }
+            }
+            "close" => format!("gorget_file_close({recv_ref})"),
+            _ => format!("/* unknown File method: {method_name} */"),
         }
     }
 

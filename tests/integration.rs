@@ -800,6 +800,28 @@ fn trait_inherit_defaults() {
     );
 }
 
+#[test]
+fn file_io() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_dir = manifest_dir.join("tests/fixtures");
+
+    run_gg(
+        "file_io.gg",
+        "\
+true
+hello world
+hello world
+second line
+from File struct
+from File struct
+false",
+    );
+
+    // Clean up test files created by the fixture
+    let _ = std::fs::remove_file(fixture_dir.join("_test_output.txt"));
+    let _ = std::fs::remove_file(fixture_dir.join("_test_output2.txt"));
+}
+
 // ══════════════════════════════════════════════════════════════
 // Formatter idempotency tests
 // ══════════════════════════════════════════════════════════════

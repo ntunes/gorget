@@ -59,6 +59,8 @@ pub struct DropEntry {
 pub enum DropAction {
     /// free(var) for Box[T]
     BoxFree,
+    /// gorget_file_close(&var) for File
+    FileClose,
     /// Drop_for_T__drop(&var) for user-defined Drop
     UserDrop { type_name: String },
 }

@@ -57,6 +57,8 @@ pub fn ast_type_to_c(ty: &crate::parser::ast::Type, scopes: &ScopeTable) -> Stri
                         super::c_mangle::mangle_generic(&name.node, &c_args)
                     }
                 }
+            } else if name.node == "File" {
+                return "GorgetFile".to_string();
             } else if let Some(def_id) = scopes.lookup(&name.node) {
                 let def = scopes.get_def(def_id);
                 match def.kind {
@@ -181,7 +183,11 @@ pub fn type_id_to_c(type_id: TypeId, types: &TypeTable, scopes: &ScopeTable) -> 
 
 /// Get the C type name for a defined type (struct/enum).
 fn def_name_to_c(def_id: DefId, scopes: &ScopeTable) -> String {
-    scopes.get_def(def_id).name.clone()
+    let name = scopes.get_def(def_id).name.clone();
+    match name.as_str() {
+        "File" => "GorgetFile".to_string(),
+        _ => name,
+    }
 }
 
 /// Produce a valid C declaration by splicing `name` into the type string.

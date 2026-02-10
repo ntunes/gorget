@@ -1,0 +1,34 @@
+void main():
+    # Write a file
+    write_file("_test_output.txt", "hello world")
+
+    # Check it exists
+    bool exists = file_exists("_test_output.txt")
+    print(exists)
+
+    # Read it back
+    str content = read_file("_test_output.txt")
+    print(content)
+
+    # Append to it
+    append_file("_test_output.txt", "\nsecond line")
+    str content2 = read_file("_test_output.txt")
+    print(content2)
+
+    # File struct usage
+    File f = File.create("_test_output2.txt")
+    f.write("from File struct")
+    f.close()
+
+    str data = read_file("_test_output2.txt")
+    print(data)
+
+    # File with read_all
+    File reader = File.open("_test_output2.txt")
+    str all = reader.read_all()
+    print(all)
+    reader.close()
+
+    # Boolean check
+    bool missing = file_exists("_nonexistent_file.txt")
+    print(missing)

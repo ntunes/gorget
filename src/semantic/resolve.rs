@@ -67,7 +67,7 @@ pub fn collect_top_level(
 ) -> ResolveContext {
     let mut ctx = ResolveContext::new();
     // Register built-in collection types so they can be resolved as types.
-    for name in &["Vector", "List", "Array", "Dict", "HashMap", "Map", "Set", "HashSet", "Box"] {
+    for name in &["Vector", "List", "Array", "Dict", "HashMap", "Map", "Set", "HashSet", "Box", "File"] {
         let _ = scopes.define(name.to_string(), DefKind::Struct, Span::dummy());
     }
     // Register built-in core traits.
@@ -925,6 +925,7 @@ fn is_builtin(name: &str) -> bool {
         | "Option" | "Result" | "Some" | "None" | "Ok" | "Error"
         | "Displayable" | "Equatable" | "Cloneable" | "Hashable" | "Drop"
         | "Box"
+        | "File" | "read_file" | "write_file" | "append_file" | "file_exists"
     )
 }
 

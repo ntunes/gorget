@@ -1093,6 +1093,12 @@ impl<'a> TypeChecker<'a> {
                 "set" => Some(self.types.void_id),
                 _ => None,
             },
+            "File" => match method {
+                "read_all" => Some(self.types.string_id),
+                "write" => Some(self.types.void_id),
+                "close" => Some(self.types.void_id),
+                _ => None,
+            },
             _ => None,
         }
     }

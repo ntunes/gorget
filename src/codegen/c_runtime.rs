@@ -333,6 +333,62 @@ static inline void gorget_throw(const char* msg, int code) {
 #define GORGET_THROW(msg, code) gorget_throw(msg, code)
 #define GORGET_CATCH_ERROR() (__gorget_last_error)
 
+// ── GorgetFile ──────────────────────────────────────────────
+typedef struct {
+    FILE* handle;
+    bool  owned;   // false for stdin/stdout/stderr
+} GorgetFile;
+
+static inline GorgetFile gorget_file_open(const char* path, const char* mode) {
+    FILE* f = fopen(path, mode);
+    if (!f) { fprintf(stderr, "Error: cannot open '%s'\n", path); exit(1); }
+    return (GorgetFile){f, true};
+}
+
+static inline void gorget_file_close(GorgetFile* f) {
+    if (f->handle && f->owned) { fclose(f->handle); f->handle = NULL; }
+}
+
+static inline const char* gorget_file_read_all(GorgetFile* f) {
+    fseek(f->handle, 0, SEEK_END);
+    long len = ftell(f->handle);
+    fseek(f->handle, 0, SEEK_SET);
+    char* buf = (char*)malloc(len + 1);
+    fread(buf, 1, len, f->handle);
+    buf[len] = '\0';
+    return buf;
+}
+
+static inline void gorget_file_write(GorgetFile* f, const char* s) {
+    fputs(s, f->handle);
+}
+
+// Free functions
+static inline const char* gorget_read_file(const char* path) {
+    GorgetFile f = gorget_file_open(path, "r");
+    const char* content = gorget_file_read_all(&f);
+    gorget_file_close(&f);
+    return content;
+}
+
+static inline void gorget_write_file(const char* path, const char* content) {
+    GorgetFile f = gorget_file_open(path, "w");
+    gorget_file_write(&f, content);
+    gorget_file_close(&f);
+}
+
+static inline void gorget_append_file(const char* path, const char* content) {
+    GorgetFile f = gorget_file_open(path, "a");
+    gorget_file_write(&f, content);
+    gorget_file_close(&f);
+}
+
+static inline bool gorget_file_exists(const char* path) {
+    FILE* f = fopen(path, "r");
+    if (f) { fclose(f); return true; }
+    return false;
+}
+
 // ── GorgetClosure ────────────────────────────────────────────
 typedef struct {
     void* fn_ptr;

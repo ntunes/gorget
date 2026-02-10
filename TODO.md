@@ -3,7 +3,6 @@
 ## Critical (blocks real-world use)
 
 ## High Priority
-- [ ] File I/O (read, write, path) [added: 2026-02-10]
 
 ## Medium Priority
 - [ ] Iterator trait (user-defined): generic Iterator[T] trait for custom iterables [added: 2026-02-10]
