@@ -1,0 +1,13 @@
+void main():
+    Vector[str] names = Vector[str]()
+    names.push("alice")
+    names.push("bob")
+    str first = names.get(0)
+    print(first)
+    str popped = names.pop()
+    print(popped)
+    Dict[str, int] ages = Dict[str, int]()
+    ages.put("alice", 30)
+    ages.put("bob", 25)
+    int age = ages.get("alice")
+    print("{age}")

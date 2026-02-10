@@ -923,38 +923,52 @@ impl<'a> TypeChecker<'a> {
     /// Check if a method call is on a known built-in type, returning
     /// the return TypeId if so.
     fn builtin_method_type(&self, receiver_type: TypeId, method: &str) -> Option<TypeId> {
-        // Determine the base type name
-        let type_name = match self.types.get(receiver_type) {
-            ResolvedType::Generic(def_id, _) => {
-                Some(self.scopes.get_def(*def_id).name.clone())
+        // Determine the base type name and generic type args (if any)
+        let (type_name, type_args) = match self.types.get(receiver_type) {
+            ResolvedType::Generic(def_id, args) => {
+                (self.scopes.get_def(*def_id).name.clone(), args.clone())
             }
             ResolvedType::Defined(def_id) => {
-                Some(self.scopes.get_def(*def_id).name.clone())
+                (self.scopes.get_def(*def_id).name.clone(), vec![])
             }
             ResolvedType::Primitive(PrimitiveType::Str | PrimitiveType::StringType) => {
-                Some("str".to_string())
+                ("str".to_string(), vec![])
             }
-            _ => None,
-        }?;
+            _ => return None,
+        };
+
+        // Helper: get element type T from Vector[T], fallback to int
+        let elem_type = || type_args.first().copied().unwrap_or(self.types.int_id);
+        // Helper: get value type V from Dict[K,V], fallback to int
+        let val_type = || type_args.get(1).copied().unwrap_or(self.types.int_id);
 
         match type_name.as_str() {
             "Vector" | "List" | "Array" => match method {
                 "push" => Some(self.types.void_id),
-                "pop" | "get" => Some(self.types.int_id), // TODO: return element type
+                "pop" | "get" | "remove" => Some(elem_type()),
+                "set" => Some(self.types.void_id),
                 "len" => Some(self.types.int_id),
+                "clear" => Some(self.types.void_id),
+                "is_empty" => Some(self.types.bool_id),
                 _ => None,
             },
             "Dict" | "HashMap" | "Map" => match method {
                 "put" => Some(self.types.void_id),
-                "get" => Some(self.types.int_id), // TODO: return value type
+                "get" => Some(val_type()),
                 "contains" => Some(self.types.bool_id),
                 "len" => Some(self.types.int_id),
+                "remove" => Some(self.types.bool_id),
+                "clear" => Some(self.types.void_id),
+                "is_empty" => Some(self.types.bool_id),
                 _ => None,
             },
             "Set" | "HashSet" => match method {
                 "add" => Some(self.types.void_id),
                 "contains" => Some(self.types.bool_id),
                 "len" => Some(self.types.int_id),
+                "remove" => Some(self.types.bool_id),
+                "clear" => Some(self.types.void_id),
+                "is_empty" => Some(self.types.bool_id),
                 _ => None,
             },
             "str" | "String" => match method {

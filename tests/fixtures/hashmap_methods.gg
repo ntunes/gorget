@@ -11,3 +11,11 @@ void main():
         print("has 1")
     if m.contains(99) == false:
         print("no 99")
+    m.remove(2)
+    print("{m.len()}")
+    if m.contains(2) == false:
+        print("removed 2")
+    m.clear()
+    print("{m.len()}")
+    if m.is_empty():
+        print("empty")

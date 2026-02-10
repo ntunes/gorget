@@ -552,7 +552,12 @@ fn vector_methods() {
 4
 1
 4
-3",
+3
+99
+2
+2
+0
+empty",
     );
 }
 
@@ -574,7 +579,11 @@ fn hashmap_methods() {
 3
 20
 has 1
-no 99",
+no 99
+2
+removed 2
+0
+empty",
     );
 }
 
@@ -585,7 +594,22 @@ fn hashset_methods() {
         "\
 2
 has 10
-no 99",
+no 99
+1
+removed 10
+0
+empty",
+    );
+}
+
+#[test]
+fn collection_types() {
+    run_gg(
+        "collection_types.gg",
+        "\
+alice
+bob
+30",
     );
 }
 

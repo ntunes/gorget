@@ -92,6 +92,23 @@ static inline size_t gorget_array_len(const GorgetArray* arr) {
     return arr->len;
 }
 
+static inline void gorget_array_set(GorgetArray* arr, size_t index, const void* elem) {
+    memcpy((char*)arr->data + index * arr->elem_size, elem, arr->elem_size);
+}
+
+static inline void gorget_array_remove(GorgetArray* arr, size_t index) {
+    if (index + 1 < arr->len) {
+        memmove((char*)arr->data + index * arr->elem_size,
+                (char*)arr->data + (index + 1) * arr->elem_size,
+                (arr->len - index - 1) * arr->elem_size);
+    }
+    arr->len--;
+}
+
+static inline void gorget_array_clear(GorgetArray* arr) {
+    arr->len = 0;
+}
+
 static inline void gorget_array_free(GorgetArray* arr) {
     free(arr->data);
     arr->data = NULL;
@@ -225,6 +242,27 @@ static inline size_t gorget_map_len(const GorgetMap* m) {
     return m->count;
 }
 
+static inline bool gorget_map_remove(GorgetMap* m, const void* key) {
+    if (m->cap == 0) return false;
+    uint64_t h = __gorget_fnv1a(key, m->key_size);
+    size_t idx = (size_t)(h % m->cap);
+    for (size_t __probes = 0; __probes < m->cap; __probes++) {
+        if (m->states[idx] == 0) return false;
+        if (m->states[idx] == 1 && memcmp((const char*)m->keys + idx * m->key_size, key, m->key_size) == 0) {
+            m->states[idx] = 2;  // tombstone
+            m->count--;
+            return true;
+        }
+        idx = (idx + 1) % m->cap;
+    }
+    return false;
+}
+
+static inline void gorget_map_clear(GorgetMap* m) {
+    if (m->states) memset(m->states, 0, m->cap);
+    m->count = 0;
+}
+
 static inline void gorget_map_free(GorgetMap* m) {
     free(m->keys);
     free(m->values);
@@ -249,6 +287,14 @@ static inline void gorget_set_add(GorgetSet* s, const void* elem) {
 
 static inline bool gorget_set_contains(const GorgetSet* s, const void* elem) {
     return gorget_map_contains(s, elem);
+}
+
+static inline bool gorget_set_remove(GorgetSet* s, const void* elem) {
+    return gorget_map_remove(s, elem);
+}
+
+static inline void gorget_set_clear(GorgetSet* s) {
+    gorget_map_clear(s);
 }
 
 static inline size_t gorget_set_len(const GorgetSet* s) {

@@ -9,3 +9,11 @@ void main():
         print("has 10")
     if s.contains(99) == false:
         print("no 99")
+    s.remove(10)
+    print("{s.len()}")
+    if s.contains(10) == false:
+        print("removed 10")
+    s.clear()
+    print("{s.len()}")
+    if s.is_empty():
+        print("empty")

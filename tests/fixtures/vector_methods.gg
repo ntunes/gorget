@@ -9,3 +9,12 @@ void main():
     int last = v.pop()
     print("{last}")
     print("{v.len()}")
+    v.set(0, 99)
+    print("{v.get(0)}")
+    int removed = v.remove(1)
+    print("{removed}")
+    print("{v.len()}")
+    v.clear()
+    print("{v.len()}")
+    if v.is_empty():
+        print("empty")

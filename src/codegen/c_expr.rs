@@ -626,6 +626,31 @@ impl CodegenContext<'_> {
                     format!("({{ {recv}.len--; GORGET_ARRAY_AT({elem_type}, {recv}, {recv}.len); }})")
                 }
             }
+            "set" => {
+                let idx = args.first()
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "0".to_string());
+                let val = args.get(1)
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "0".to_string());
+                format!("({{ {elem_type} __set_val = {val}; gorget_array_set({recv_ref}, {idx}, &__set_val); }})")
+            }
+            "remove" => {
+                let idx = args.first()
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "0".to_string());
+                if needs_temp {
+                    format!("({{ __typeof__({recv}) __recv = {recv}; {elem_type} __removed = GORGET_ARRAY_AT({elem_type}, __recv, {idx}); gorget_array_remove(&__recv, {idx}); __removed; }})")
+                } else {
+                    format!("({{ {elem_type} __removed = GORGET_ARRAY_AT({elem_type}, {recv}, {idx}); gorget_array_remove(&{recv}, {idx}); __removed; }})")
+                }
+            }
+            "clear" => {
+                format!("gorget_array_clear({recv_ref})")
+            }
+            "is_empty" => {
+                format!("(gorget_array_len({recv_ref}) == 0)")
+            }
             _ => {
                 // Unknown method — fall through to normal dispatch
                 format!("/* unknown Vector method {method_name} */ 0")
@@ -686,6 +711,21 @@ impl CodegenContext<'_> {
             "len" => {
                 format!("(int64_t)gorget_map_len({recv_ref})")
             }
+            "remove" => {
+                let key = args.first()
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "0".to_string());
+                let key_type = args.first()
+                    .map(|a| self.infer_c_type_from_expr(&a.node.value.node))
+                    .unwrap_or_else(|| "int64_t".to_string());
+                format!("({{ {key_type} __k = {key}; gorget_map_remove({recv_ref}, &__k); }})")
+            }
+            "clear" => {
+                format!("gorget_map_clear({recv_ref})")
+            }
+            "is_empty" => {
+                format!("(gorget_map_len({recv_ref}) == 0)")
+            }
             _ => {
                 format!("/* unknown Dict method {method_name} */ 0")
             }
@@ -728,6 +768,21 @@ impl CodegenContext<'_> {
             }
             "len" => {
                 format!("(int64_t)gorget_set_len({recv_ref})")
+            }
+            "remove" => {
+                let elem = args.first()
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "0".to_string());
+                let elem_type = args.first()
+                    .map(|a| self.infer_c_type_from_expr(&a.node.value.node))
+                    .unwrap_or_else(|| "int64_t".to_string());
+                format!("({{ {elem_type} __e = {elem}; gorget_set_remove({recv_ref}, &__e); }})")
+            }
+            "clear" => {
+                format!("gorget_set_clear({recv_ref})")
+            }
+            "is_empty" => {
+                format!("(gorget_set_len({recv_ref}) == 0)")
             }
             _ => {
                 format!("/* unknown Set method {method_name} */ 0")
@@ -995,6 +1050,18 @@ impl CodegenContext<'_> {
 
         // Non-string argument: try to print as the correct type
         let expr = self.gen_expr(arg);
+
+        // Look up the argument's type to determine the correct printf format
+        if let Expr::Identifier(name) = &arg.node {
+            if let Some(def_id) = self.scopes.lookup_by_name_anywhere(name) {
+                let def = self.scopes.get_def(def_id);
+                if let Some(type_id) = def.type_id {
+                    let (fmt, arg_expr) = self.format_for_type_id(type_id, &expr);
+                    return format!("printf(\"{fmt}\\n\", {arg_expr})");
+                }
+            }
+        }
+
         format!("printf(\"%lld\\n\", (long long){expr})")
     }
 
