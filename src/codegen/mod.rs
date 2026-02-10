@@ -80,6 +80,9 @@ pub struct CodegenContext<'a> {
     pub closure_vars: RefCell<HashSet<String>>,
     /// Registered tuple typedefs: (mangled_name, field_c_types).
     pub tuple_typedefs: RefCell<Vec<(String, Vec<String>)>>,
+    /// Hint for the declared type in a VarDecl, used to resolve unit variant
+    /// constructors like `None()` to the correct monomorphized enum.
+    pub decl_type_hint: RefCell<Option<crate::parser::ast::Type>>,
 }
 
 /// Generate C source code from a parsed and analyzed Gorget module.
@@ -102,6 +105,7 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult) -> String {
         generic_fn_templates: RefCell::new(FxHashMap::default()),
         closure_vars: RefCell::new(HashSet::new()),
         tuple_typedefs: RefCell::new(Vec::new()),
+        decl_type_hint: RefCell::new(None),
     };
 
     let mut emitter = CEmitter::new();
@@ -320,22 +324,22 @@ void main():
     #[test]
     fn match_with_enum_destructuring() {
         let source = "\
-enum Option:
-    Some(int)
-    None
+enum Maybe:
+    Just(int)
+    Nothing
 
 void main():
-    auto val = Some(42)
+    auto val = Just(42)
     match val:
-        case Some(x):
+        case Just(x):
             print(\"has value\")
-        case None:
+        case Nothing:
             print(\"empty\")
 ";
         let c_code = compile_to_c(source);
         // Should check the tag for enum variant patterns
-        assert!(c_code.contains("Option_TAG_Some"));
-        assert!(c_code.contains("Option_TAG_None"));
+        assert!(c_code.contains("Maybe_TAG_Just"));
+        assert!(c_code.contains("Maybe_TAG_Nothing"));
     }
 
     #[test]

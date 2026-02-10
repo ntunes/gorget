@@ -633,3 +633,29 @@ fn interp_method_call() {
 5",
     );
 }
+
+#[test]
+fn option_methods() {
+    run_gg(
+        "option_methods.gg",
+        "\
+42
+42
+99
+some is some
+none is none",
+    );
+}
+
+#[test]
+fn result_methods() {
+    run_gg(
+        "result_methods.gg",
+        "\
+10
+10
+99
+ok is ok
+err is err",
+    );
+}

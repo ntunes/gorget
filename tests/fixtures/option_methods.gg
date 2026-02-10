@@ -1,0 +1,10 @@
+void main():
+    Option[int] some = Some(42)
+    Option[int] none = None()
+    print("{some.unwrap()}")
+    print("{some.unwrap_or(0)}")
+    print("{none.unwrap_or(99)}")
+    if some.is_some():
+        print("some is some")
+    if none.is_none():
+        print("none is none")

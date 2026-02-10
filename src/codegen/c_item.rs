@@ -824,6 +824,66 @@ impl CodegenContext<'_> {
                 _ => {}
             }
         }
+
+        // Inject built-in Option[T] and Result[T,E] generic enum templates.
+        use crate::span::{Span, Spanned};
+        let mut enums = self.generic_enum_templates.borrow_mut();
+        if !enums.contains_key("Option") {
+            enums.insert("Option".to_string(), EnumDef {
+                attributes: vec![],
+                visibility: Visibility::Public,
+                name: Spanned::dummy("Option".to_string()),
+                generic_params: Some(Spanned::dummy(GenericParams {
+                    params: vec![Spanned::dummy(GenericParam::Type(Spanned::dummy("T".to_string())))],
+                })),
+                variants: vec![
+                    Spanned::dummy(Variant {
+                        name: Spanned::dummy("Some".to_string()),
+                        fields: VariantFields::Tuple(vec![Spanned::dummy(Type::Named {
+                            name: Spanned::dummy("T".to_string()),
+                            generic_args: vec![],
+                        })]),
+                    }),
+                    Spanned::dummy(Variant {
+                        name: Spanned::dummy("None".to_string()),
+                        fields: VariantFields::Unit,
+                    }),
+                ],
+                doc_comment: None,
+                span: Span::dummy(),
+            });
+        }
+        if !enums.contains_key("Result") {
+            enums.insert("Result".to_string(), EnumDef {
+                attributes: vec![],
+                visibility: Visibility::Public,
+                name: Spanned::dummy("Result".to_string()),
+                generic_params: Some(Spanned::dummy(GenericParams {
+                    params: vec![
+                        Spanned::dummy(GenericParam::Type(Spanned::dummy("T".to_string()))),
+                        Spanned::dummy(GenericParam::Type(Spanned::dummy("E".to_string()))),
+                    ],
+                })),
+                variants: vec![
+                    Spanned::dummy(Variant {
+                        name: Spanned::dummy("Ok".to_string()),
+                        fields: VariantFields::Tuple(vec![Spanned::dummy(Type::Named {
+                            name: Spanned::dummy("T".to_string()),
+                            generic_args: vec![],
+                        })]),
+                    }),
+                    Spanned::dummy(Variant {
+                        name: Spanned::dummy("Error".to_string()),
+                        fields: VariantFields::Tuple(vec![Spanned::dummy(Type::Named {
+                            name: Spanned::dummy("E".to_string()),
+                            generic_args: vec![],
+                        })]),
+                    }),
+                ],
+                doc_comment: None,
+                span: Span::dummy(),
+            });
+        }
     }
 
     /// Register a generic instantiation and return its mangled name.
@@ -944,6 +1004,7 @@ impl CodegenContext<'_> {
         }
 
         // Tagged union struct
+        emitter.emit_line(&format!("typedef struct {mangled} {mangled};"));
         emitter.emit_line(&format!("struct {mangled} {{"));
         emitter.indent();
         emitter.emit_line(&format!("{mangled}_Tag tag;"));

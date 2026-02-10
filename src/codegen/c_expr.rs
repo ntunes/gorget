@@ -1,6 +1,6 @@
 /// Expression codegen: convert Gorget expressions to C expression strings.
 use crate::lexer::token::{StringLit, StringSegment};
-use crate::parser::ast::{BinaryOp, Expr, PrimitiveType, UnaryOp};
+use crate::parser::ast::{BinaryOp, Expr, PrimitiveType, Type, UnaryOp};
 use crate::parser::Parser;
 use crate::semantic::scope::DefKind;
 use crate::span::Spanned;
@@ -315,6 +315,13 @@ impl CodegenContext<'_> {
         callee: &Spanned<Expr>,
         args: &[Spanned<crate::parser::ast::CallArg>],
     ) -> String {
+        // Handle None() as a variant constructor for Option[T]
+        if matches!(&callee.node, Expr::NoneLiteral) && args.is_empty() {
+            if let Some(mangled) = self.resolve_unit_variant_from_type_hint("Option", "None") {
+                return format!("{}()", c_mangle::mangle_variant(&mangled, "None"));
+            }
+        }
+
         // Check for built-in print/println
         if let Expr::Identifier(name) = &callee.node {
             match name.as_str() {
@@ -345,13 +352,22 @@ impl CodegenContext<'_> {
                     for (enum_def_id, info) in self.enum_variants {
                         for (vname, vid) in &info.variants {
                             if *vid == def_id {
-                                let enum_name = &self.scopes.get_def(*enum_def_id).name;
+                                let enum_name = self.scopes.get_def(*enum_def_id).name.clone();
                                 let field_exprs: Vec<String> =
                                     args.iter().map(|a| self.gen_expr(&a.node.value)).collect();
                                 let fields = field_exprs.join(", ");
+                                // For built-in generic enum templates, use decl_type_hint
+                                if self.generic_enum_templates.borrow().contains_key(&enum_name) {
+                                    if let Some(mangled) = self.resolve_unit_variant_from_type_hint(&enum_name, vname) {
+                                        return format!(
+                                            "{}({fields})",
+                                            c_mangle::mangle_variant(&mangled, vname)
+                                        );
+                                    }
+                                }
                                 return format!(
                                     "{}({fields})",
-                                    c_mangle::mangle_variant(enum_name, vname)
+                                    c_mangle::mangle_variant(&enum_name, vname)
                                 );
                             }
                         }
@@ -499,8 +515,10 @@ impl CodegenContext<'_> {
             || c_type.as_deref() == Some("GorgetSet");
         let is_string = matches!(type_name.as_str(), "str" | "String")
             || matches!(c_type.as_deref(), Some("const char*"));
+        let is_option = type_name == "Option";
+        let is_result = type_name == "Result";
 
-        if !is_vector && !is_map && !is_set && !is_string {
+        if !is_vector && !is_map && !is_set && !is_string && !is_option && !is_result {
             return None;
         }
 
@@ -518,6 +536,12 @@ impl CodegenContext<'_> {
         }
         if is_string {
             return self.gen_string_method(&recv, method_name, needs_temp);
+        }
+        if is_option {
+            return Some(self.gen_option_method(&recv, method_name, args, receiver, needs_temp));
+        }
+        if is_result {
+            return Some(self.gen_result_method(&recv, method_name, args, receiver, needs_temp));
         }
 
         None
@@ -809,6 +833,127 @@ impl CodegenContext<'_> {
         }
     }
 
+
+    /// Resolve a unit variant constructor using the decl_type_hint.
+    /// Returns the monomorphized enum name if the hint matches the expected enum.
+    fn resolve_unit_variant_from_type_hint(&self, enum_name: &str, _variant_name: &str) -> Option<String> {
+        let hint = self.decl_type_hint.borrow();
+        if let Some(Type::Named { name, generic_args }) = hint.as_ref() {
+            if name.node == enum_name && !generic_args.is_empty() {
+                let c_type_args: Vec<String> = generic_args.iter()
+                    .map(|a| c_types::ast_type_to_c(&a.node, self.scopes))
+                    .collect();
+                let mangled = self.register_generic(enum_name, &c_type_args, super::GenericInstanceKind::Enum);
+                return Some(mangled);
+            }
+        }
+        None
+    }
+
+    /// Infer the monomorphized C type name for a generic enum receiver (e.g. `Option__int64_t`).
+    fn infer_generic_enum_mangled_name(&self, receiver: &Spanned<Expr>) -> String {
+        if let Expr::Identifier(name) = &receiver.node {
+            let type_id = self.resolution_map.get(&receiver.span.start)
+                .and_then(|def_id| self.scopes.get_def(*def_id).type_id)
+                .or_else(|| {
+                    self.scopes.lookup_by_name_anywhere(name)
+                        .and_then(|def_id| self.scopes.get_def(def_id).type_id)
+                });
+            if let Some(tid) = type_id {
+                if let crate::semantic::types::ResolvedType::Generic(def_id, args) = self.types.get(tid) {
+                    let base = self.scopes.get_def(*def_id).name.clone();
+                    let c_args: Vec<String> = args.iter()
+                        .map(|&a| c_types::type_id_to_c(a, self.types, self.scopes))
+                        .collect();
+                    return c_mangle::mangle_generic(&base, &c_args);
+                }
+            }
+        }
+        // Fallback: use the receiver C type directly
+        self.infer_receiver_c_type(receiver).unwrap_or_else(|| "Option__int64_t".to_string())
+    }
+
+    /// Generate code for Option method calls.
+    fn gen_option_method(
+        &self,
+        recv: &str,
+        method_name: &str,
+        args: &[Spanned<crate::parser::ast::CallArg>],
+        receiver: &Spanned<Expr>,
+        needs_temp: bool,
+    ) -> String {
+        let mangled = self.infer_generic_enum_mangled_name(receiver);
+        let tag_some = c_mangle::mangle_tag(&mangled, "Some");
+        let tag_none = c_mangle::mangle_tag(&mangled, "None");
+
+        match method_name {
+            "unwrap" => {
+                format!("({{ {mangled} __opt = {recv}; if (__opt.tag == {tag_none}) {{ fprintf(stderr, \"unwrap called on None\\n\"); exit(1); }} __opt.data.Some._0; }})")
+            }
+            "unwrap_or" => {
+                let default = args.first()
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "0".to_string());
+                format!("({{ {mangled} __opt = {recv}; (__opt.tag == {tag_some}) ? __opt.data.Some._0 : {default}; }})")
+            }
+            "is_some" => {
+                if needs_temp {
+                    format!("({{ {mangled} __opt = {recv}; __opt.tag == {tag_some}; }})")
+                } else {
+                    format!("{recv}.tag == {tag_some}")
+                }
+            }
+            "is_none" => {
+                if needs_temp {
+                    format!("({{ {mangled} __opt = {recv}; __opt.tag == {tag_none}; }})")
+                } else {
+                    format!("{recv}.tag == {tag_none}")
+                }
+            }
+            _ => format!("/* unknown Option method {method_name} */ 0"),
+        }
+    }
+
+    /// Generate code for Result method calls.
+    fn gen_result_method(
+        &self,
+        recv: &str,
+        method_name: &str,
+        args: &[Spanned<crate::parser::ast::CallArg>],
+        receiver: &Spanned<Expr>,
+        needs_temp: bool,
+    ) -> String {
+        let mangled = self.infer_generic_enum_mangled_name(receiver);
+        let tag_ok = c_mangle::mangle_tag(&mangled, "Ok");
+        let tag_error = c_mangle::mangle_tag(&mangled, "Error");
+
+        match method_name {
+            "unwrap" => {
+                format!("({{ {mangled} __res = {recv}; if (__res.tag == {tag_error}) {{ fprintf(stderr, \"unwrap called on Error\\n\"); exit(1); }} __res.data.Ok._0; }})")
+            }
+            "unwrap_or" => {
+                let default = args.first()
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "0".to_string());
+                format!("({{ {mangled} __res = {recv}; (__res.tag == {tag_ok}) ? __res.data.Ok._0 : {default}; }})")
+            }
+            "is_ok" => {
+                if needs_temp {
+                    format!("({{ {mangled} __res = {recv}; __res.tag == {tag_ok}; }})")
+                } else {
+                    format!("{recv}.tag == {tag_ok}")
+                }
+            }
+            "is_err" => {
+                if needs_temp {
+                    format!("({{ {mangled} __res = {recv}; __res.tag == {tag_error}; }})")
+                } else {
+                    format!("{recv}.tag == {tag_error}")
+                }
+            }
+            _ => format!("/* unknown Result method {method_name} */ 0"),
+        }
+    }
 
     /// Check if a receiver expression has a trait object type, returning the trait name if so.
     fn resolve_trait_object_type(&self, expr: &Spanned<Expr>) -> Option<String> {

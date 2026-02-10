@@ -975,6 +975,16 @@ impl<'a> TypeChecker<'a> {
                 "len" => Some(self.types.int_id),
                 _ => None,
             },
+            "Option" => match method {
+                "unwrap" | "unwrap_or" => Some(elem_type()),
+                "is_some" | "is_none" => Some(self.types.bool_id),
+                _ => None,
+            },
+            "Result" => match method {
+                "unwrap" | "unwrap_or" => Some(elem_type()),
+                "is_ok" | "is_err" => Some(self.types.bool_id),
+                _ => None,
+            },
             _ => None,
         }
     }

@@ -1,0 +1,10 @@
+void main():
+    Result[int, str] ok = Ok(10)
+    Result[int, str] err = Error("fail")
+    print("{ok.unwrap()}")
+    print("{ok.unwrap_or(0)}")
+    print("{err.unwrap_or(99)}")
+    if ok.is_ok():
+        print("ok is ok")
+    if err.is_err():
+        print("err is err")

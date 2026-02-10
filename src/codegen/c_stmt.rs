@@ -283,7 +283,10 @@ impl CodegenContext<'_> {
                 if c_type == "GorgetClosure" {
                     self.closure_vars.borrow_mut().insert(escaped.clone());
                 }
+                // Set type hint for unit variant constructors like None()
+                *self.decl_type_hint.borrow_mut() = Some(type_.node.clone());
                 let val = self.gen_expr(value);
+                *self.decl_type_hint.borrow_mut() = None;
                 let decl = c_types::c_declare(&c_type, &escaped);
                 emitter.emit_line(&format!("{const_prefix}{decl} = {val};"));
             }

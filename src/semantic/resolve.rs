@@ -70,6 +70,21 @@ pub fn collect_top_level(
     for name in &["Vector", "List", "Array", "Dict", "HashMap", "Map", "Set", "HashSet"] {
         let _ = scopes.define(name.to_string(), DefKind::Struct, Span::dummy());
     }
+    // Register built-in Option[T] and Result[T,E] enum types with their variants.
+    for (enum_name, variant_names) in &[
+        ("Option", vec!["Some", "None"]),
+        ("Result", vec!["Ok", "Error"]),
+    ] {
+        if let Ok(enum_def_id) = scopes.define(enum_name.to_string(), DefKind::Enum, Span::dummy()) {
+            let mut variant_infos = Vec::new();
+            for vname in variant_names {
+                if let Ok(variant_def_id) = scopes.define(vname.to_string(), DefKind::Variant, Span::dummy()) {
+                    variant_infos.push((vname.to_string(), variant_def_id));
+                }
+            }
+            ctx.enum_variants.insert(enum_def_id, EnumVariantInfo { variants: variant_infos });
+        }
+    }
     collect_top_level_inner(module, scopes, types, errors, &mut ctx);
     ctx
 }
@@ -903,6 +918,7 @@ fn is_builtin(name: &str) -> bool {
         name,
         "print" | "println" | "len" | "range" | "enumerate" | "zip" | "map" | "filter" | "type"
         | "Vector" | "Dict" | "Set" | "HashMap" | "HashSet" | "List" | "Array" | "Map"
+        | "Option" | "Result" | "Some" | "None" | "Ok" | "Error"
     )
 }
 
@@ -953,11 +969,24 @@ mod tests {
     #[test]
     fn collect_enum_with_variants() {
         let (scopes, _, errors) =
-            parse_and_collect("enum Option[T]:\n    Some(T)\n    None\n");
+            parse_and_collect("enum Color:\n    Red\n    Green\n    Blue\n");
+        assert!(errors.is_empty(), "errors: {:?}", errors);
+        assert!(scopes.lookup("Color").is_some());
+        assert!(scopes.lookup("Red").is_some());
+        assert!(scopes.lookup("Green").is_some());
+        assert!(scopes.lookup("Blue").is_some());
+    }
+
+    #[test]
+    fn builtin_option_result_registered() {
+        let (scopes, _, errors) = parse_and_collect("");
         assert!(errors.is_empty(), "errors: {:?}", errors);
         assert!(scopes.lookup("Option").is_some());
         assert!(scopes.lookup("Some").is_some());
         assert!(scopes.lookup("None").is_some());
+        assert!(scopes.lookup("Result").is_some());
+        assert!(scopes.lookup("Ok").is_some());
+        assert!(scopes.lookup("Error").is_some());
     }
 
     #[test]
