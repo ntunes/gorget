@@ -134,6 +134,13 @@ static inline void gorget_array_free(GorgetArray* arr) {
     arr->cap = 0;
 }
 
+static inline bool gorget_array_contains(const GorgetArray* a, const void* needle, size_t elem_size) {
+    for (size_t i = 0; i < a->len; i++) {
+        if (memcmp((char*)a->data + i * a->elem_size, needle, elem_size) == 0) return true;
+    }
+    return false;
+}
+
 // ── GORGET_ARRAY_AT macro ────────────────────────────────────
 #define GORGET_ARRAY_AT(type, arr, i) (*(type*)gorget_array_get(&(arr), (i)))
 

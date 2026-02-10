@@ -54,6 +54,10 @@ impl CodegenContext<'_> {
             }
 
             Expr::BinaryOp { left, op, right } => {
+                // `x in coll` → desugared to coll.contains(x)
+                if *op == BinaryOp::In {
+                    return self.gen_in_operator(left, right);
+                }
                 // Auto-hook: Eq/Neq on struct types → Equatable trait call
                 if matches!(op, BinaryOp::Eq | BinaryOp::Neq) {
                     if let Some(type_name) = self.try_equatable_type(left) {
@@ -721,7 +725,7 @@ impl CodegenContext<'_> {
             return Some(self.gen_set_method(&recv, method_name, args, receiver, needs_temp));
         }
         if is_string {
-            return self.gen_string_method(&recv, method_name, needs_temp);
+            return self.gen_string_method(&recv, method_name, args, needs_temp);
         }
         if is_option {
             return Some(self.gen_option_method(&recv, method_name, args, receiver, needs_temp));
@@ -737,6 +741,47 @@ impl CodegenContext<'_> {
         }
 
         None
+    }
+
+    /// Generate code for `needle in collection` expressions.
+    /// Desugars to the appropriate `.contains()` call per collection type.
+    fn gen_in_operator(&self, needle: &Spanned<Expr>, collection: &Spanned<Expr>) -> String {
+        let type_name = self.infer_receiver_type(collection);
+        let c_type = self.infer_receiver_c_type(collection);
+
+        let is_vector = matches!(type_name.as_str(), "Vector" | "List" | "Array")
+            || c_type.as_deref() == Some("GorgetArray");
+        let is_map = matches!(type_name.as_str(), "Dict" | "HashMap" | "Map")
+            || c_type.as_deref() == Some("GorgetMap");
+        let is_set = matches!(type_name.as_str(), "Set" | "HashSet")
+            || c_type.as_deref() == Some("GorgetSet");
+        let is_string = matches!(type_name.as_str(), "str" | "String")
+            || matches!(c_type.as_deref(), Some("const char*"));
+
+        let coll = self.gen_expr(collection);
+        let elem = self.gen_expr(needle);
+        let needs_temp = !matches!(collection.node, Expr::Identifier(_) | Expr::SelfExpr);
+
+        let coll_ref = if needs_temp {
+            format!("({{ __typeof__({coll}) __recv = {coll}; &__recv; }})")
+        } else {
+            format!("&{coll}")
+        };
+
+        if is_vector {
+            let elem_type = self.infer_vector_elem_type(collection);
+            format!("({{ {elem_type} __needle = {elem}; gorget_array_contains({coll_ref}, &__needle, sizeof({elem_type})); }})")
+        } else if is_map {
+            let key_type = self.infer_c_type_from_expr(&needle.node);
+            format!("({{ {key_type} __needle = {elem}; gorget_map_contains({coll_ref}, &__needle); }})")
+        } else if is_set {
+            let elem_type = self.infer_c_type_from_expr(&needle.node);
+            format!("({{ {elem_type} __needle = {elem}; gorget_set_contains({coll_ref}, &__needle); }})")
+        } else if is_string {
+            format!("(strstr({coll}, {elem}) != NULL)")
+        } else {
+            format!("/* unsupported `in` for type {type_name} */ false")
+        }
     }
 
     /// Infer the C type of a receiver expression via the TypeId, if available.
@@ -866,6 +911,12 @@ impl CodegenContext<'_> {
             }
             "is_empty" => {
                 format!("(gorget_array_len({recv_ref}) == 0)")
+            }
+            "contains" => {
+                let arg = args.first()
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "0".to_string());
+                format!("({{ {elem_type} __needle = {arg}; gorget_array_contains({recv_ref}, &__needle, sizeof({elem_type})); }})")
             }
             "filter" => {
                 let closure_fn = self.gen_expr(&args[0].node.value);
@@ -1134,6 +1185,7 @@ impl CodegenContext<'_> {
         &self,
         recv: &str,
         method_name: &str,
+        args: &[Spanned<crate::parser::ast::CallArg>],
         needs_temp: bool,
     ) -> Option<String> {
         match method_name {
@@ -1143,6 +1195,12 @@ impl CodegenContext<'_> {
                 } else {
                     Some(format!("(int64_t)strlen({recv})"))
                 }
+            }
+            "contains" => {
+                let arg = args.first()
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "\"\"".to_string());
+                Some(format!("(strstr({recv}, {arg}) != NULL)"))
             }
             _ => None, // Not a known string method — fall through
         }

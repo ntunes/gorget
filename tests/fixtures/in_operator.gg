@@ -1,0 +1,43 @@
+void main():
+    # Vector
+    Vector[int] v = Vector[int]()
+    v.push(10)
+    v.push(20)
+    v.push(30)
+    if 20 in v:
+        print("true")
+    if 99 in v:
+        print("bug")
+    else:
+        print("false")
+
+    # Dict
+    Dict[int, int] d = Dict[int, int]()
+    d.put(1, 100)
+    d.put(2, 200)
+    if 1 in d:
+        print("true")
+    if 9 in d:
+        print("bug")
+    else:
+        print("false")
+
+    # Set
+    Set[int] s = Set[int]()
+    s.add(5)
+    s.add(15)
+    if 5 in s:
+        print("true")
+    if 42 in s:
+        print("bug")
+    else:
+        print("false")
+
+    # String
+    str text = "hello world"
+    if "world" in text:
+        print("true")
+    if "xyz" in text:
+        print("bug")
+    else:
+        print("false")

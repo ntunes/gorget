@@ -881,6 +881,22 @@ carol is 40
     );
 }
 
+#[test]
+fn in_operator() {
+    run_gg(
+        "in_operator.gg",
+        "\
+true
+false
+true
+false
+true
+false
+true
+false",
+    );
+}
+
 // ══════════════════════════════════════════════════════════════
 // Runtime safety tests (expected panics)
 // ══════════════════════════════════════════════════════════════

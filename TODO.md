@@ -1,7 +1,6 @@
 # TODO
 
 ## High Priority
-- `in` operator codegen: parser and semantic analysis already handle `BinaryOp::In` (returns bool), but codegen panics — desugar `x in coll` to `coll.contains(x)` for Vector/Set/Dict/Array/str/Range [added: 2026-02-10]
 - `assert` keyword: new statement, condition + optional message, desugars to panic; always-on (never stripped in release) [added: 2026-02-10]
 
 ## Medium Priority
