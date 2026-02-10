@@ -32,6 +32,25 @@ const auto pi = 3.14   # type inferred (immutable)
 
 No semicolons. Newline terminates statements. No curly braces - indentation defines blocks.
 
+#### Variable Initialization
+
+All variables are **zero-initialized by default** (like Go). Declaring a variable without an initializer gives it the zero value for its type:
+
+```gorget
+int x             # x == 0
+float y           # y == 0.0
+bool flag         # flag == false
+str name          # name == ""
+```
+
+This eliminates an entire class of bugs from uninitialized memory reads. For types with no natural zero (e.g., enums, non-nullable structs), the compiler requires an explicit initializer.
+
+The compiler flag `--require-init` switches to Rust-style behavior where *all* variables must be explicitly initialized. This is recommended for safety-critical projects:
+
+```bash
+gg build --require-init main.gg    # error: variable `x` declared without initializer
+```
+
 ### 2.2 Primitive Types
 
 ```
@@ -41,6 +60,32 @@ float32  float64                 (`float` aliases float64)
 bool
 char                             (Unicode scalar value, 4 bytes)
 ```
+
+#### Integer Overflow
+
+Integer arithmetic **panics on overflow** in both debug and release builds by default. This catches bugs that silently corrupt data in C/Go.
+
+```gorget
+int8 x = 127
+x += 1                    # panic: integer overflow (int8)
+```
+
+For intentional wrapping, use the `wrapping` module or wrapping operators:
+
+```gorget
+import std.math.wrapping
+
+int8 x = 127
+int8 y = wrapping.add(x, 1)    # y == -128 (wraps)
+
+# Wrapping operator syntax (alternative)
+int8 z = x +% 1                # z == -128 (wrapping add)
+int8 w = x *% 2                # wrapping multiply
+```
+
+Wrapping operators: `+%`, `-%`, `*%`. These mirror Zig's approach. No wrapping division (division by zero panics separately).
+
+The compiler flag `--overflow=wrap` switches the default to wrapping arithmetic for performance-critical code where overflow is expected. This is a per-build setting, not per-expression.
 
 ### 2.3 Functions
 
@@ -698,6 +743,30 @@ void critical_section():
         panic("invariant violated")
 ```
 
+### 6.5 Assert (Always-On)
+
+`assert` checks a condition and panics with a message if it fails. Unlike C/Java, **assertions are always enabled** — they are never stripped in release builds.
+
+```gorget
+void process(Vector[int] data):
+    assert data.len() > 0, "data must not be empty"
+    assert is_sorted(data)                             # message is optional
+
+    int result = compute(data)
+    assert result >= 0                                 # post-condition
+```
+
+Rationale: assertions that only run in debug builds create a false sense of safety. If a condition is worth checking, it's worth checking in production. The performance cost of an `assert` is the cost of evaluating its condition — if that's too expensive, use a debug-only check explicitly:
+
+```gorget
+@[debug_only]
+void expensive_invariant_check(Tree t):
+    assert t.is_balanced()
+    assert t.size() == t.count_nodes()
+```
+
+The `@[debug_only]` attribute strips the entire function in release builds, making the opt-out explicit rather than implicit.
+
 ---
 
 ## 7. Closures & Lambdas
@@ -1030,6 +1099,46 @@ async void resilient_fetch(str url):
         case Ok(data): print(data)
         case Error(e): print("Failed: {e}")
 ```
+
+### Thread Safety: Sendable & Syncable
+
+Gorget uses two marker traits to enforce thread safety at compile time, similar to Rust's `Send`/`Sync`:
+
+- **`Sendable`** — a type can be moved to another thread. Most types are Sendable. Types that aren't: raw pointers, thread-local handles, non-threadsafe FFI wrappers.
+- **`Syncable`** — a type can be shared (by reference) across threads. A type is Syncable if `&T` is safe to access from multiple threads concurrently.
+
+```gorget
+# thread.spawn requires the closure and its captures to be Sendable
+void main():
+    auto data = Vector[int].from([1, 2, 3])
+    thread.spawn(!():                # data is moved (!), Vector is Sendable — OK
+        print("{data.len()}")
+    )
+
+# Arc[T] is Sendable + Syncable when T is Syncable
+# Mutex[T] makes any T Syncable (by synchronizing access)
+Arc[Mutex[int]] counter = Arc.new(Mutex.new(0))    # Sendable + Syncable
+```
+
+**Auto-derivation**: The compiler automatically derives `Sendable` and `Syncable` for types whose fields are all `Sendable`/`Syncable`. Most user-defined structs and enums are automatically thread-safe.
+
+```gorget
+struct Point:                      # auto-Sendable, auto-Syncable (all fields are int)
+    int x
+    int y
+
+struct UnsafeHandle:
+    RawPtr[void] ptr               # RawPtr is NOT Sendable — Point is not auto-Sendable
+```
+
+To manually implement these traits for types the compiler can't verify (e.g., FFI wrappers with internal synchronization), use `unsafe equip`:
+
+```gorget
+unsafe equip MyFfiHandle with Sendable    # "I guarantee this is safe to send"
+unsafe equip MyFfiHandle with Syncable    # "I guarantee this is safe to share"
+```
+
+The `thread.spawn` function has an implicit `where F is Sendable` bound, so the compiler rejects any attempt to send non-Sendable types across threads — no data races from accidental sharing.
 
 ---
 
@@ -1590,6 +1699,27 @@ bool has_3 = arr.contains(3)
 ```
 
 **Disambiguation**: `int[5]` = fixed array type (type position), `arr[5]` = indexing (value position). Compiler knows which is which from context, same as generics (`Vector[int]` vs `vec[0]`).
+
+#### Bounds Checking
+
+All indexing operations on arrays, slices, and vectors are **bounds-checked at runtime**. Out-of-bounds access panics with a clear error message rather than causing undefined behavior:
+
+```gorget
+int[3] arr = [10, 20, 30]
+int x = arr[5]                   # panic: index 5 out of bounds (length 3)
+
+Vector[int] vec = [1, 2, 3]
+vec.set(10, 42)                  # panic: index 10 out of bounds (length 3)
+```
+
+This is a **language guarantee**, not an implementation detail. Gorget will never silently read or write out-of-bounds memory. The compiler may elide bounds checks when it can statically prove the index is in range (e.g., iterating with `for i in 0..arr.len()`), but the semantics are always as-if checked.
+
+For performance-critical inner loops where bounds are known safe, `unsafe` indexing is available:
+
+```gorget
+unsafe:
+    int x = arr.get_unchecked(i)     # no bounds check — UB if out of range
+```
 
 ---
 
