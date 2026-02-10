@@ -1,0 +1,18 @@
+void main():
+    Set[int] s = Set[int]()
+    s.add(10)
+    s.add(20)
+    s.add(30)
+    s.add(40)
+
+    # fold: sum all elements
+    int total = s.fold(0, (int acc, int x): acc + x)
+    print("{total}")
+
+    # filter: keep elements > 15
+    Set[int] big = s.filter((int x): x > 15)
+    print("{big.len()}")
+
+    # fold on filtered: sum the big elements
+    int big_total = big.fold(0, (int acc, int x): acc + x)
+    print("{big_total}")

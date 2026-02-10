@@ -1,0 +1,17 @@
+void main():
+    Dict[str, int] ages = Dict[str, int]()
+    ages.put("alice", 30)
+    ages.put("bob", 25)
+    ages.put("carol", 35)
+
+    # fold: sum all values
+    int total = ages.fold(0, (int acc, str k, int v): acc + v)
+    print("{total}")
+
+    # filter: keep entries where value > 28
+    Dict[str, int] older = ages.filter((str k, int v): v > 28)
+    print("{older.len()}")
+
+    # fold on filtered: sum the older ages
+    int older_total = older.fold(0, (int acc, str k, int v): acc + v)
+    print("{older_total}")

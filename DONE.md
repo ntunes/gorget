@@ -18,3 +18,4 @@
 - [2026-02-10] Runtime safety: bounds checking on Vector get/set/remove/pop (gorget_array_get, gorget_array_set, gorget_array_remove), division by zero guard on `/` and `%` operators — panics with clear error messages instead of UB
 - [2026-02-10] Match exhaustiveness checking: semantic analysis rejects non-exhaustive enum matches with `NonExhaustiveMatch` error listing missing variants; handles constructors, or-patterns, wildcards, catch-all bindings, guards; skips non-enum types
 - [2026-02-10] Iterator[T] trait: built-in trait with `next(&self) -> Option[T]` method, user types implement via `equip Foo with Iterator[int]`, for-loop integration emits while/next/break pattern, trait_generic_args tracked in EquipInfo, mutable self support for &self params
+- [2026-02-10] Higher-order collection methods: Vector .filter()/.map()/.fold()/.reduce(), Dict .filter()/.fold(), Set .filter()/.fold() — closure-based functional operations with type inference and C codegen

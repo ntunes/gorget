@@ -1,7 +1,6 @@
 # TODO
 
 ## High Priority
-- Higher-order collection methods: `.filter()`, `.fold()`, `.reduce()` on Vector/Dict/Set [added: 2026-02-10]
 
 ## Medium Priority
 - Chained method calls on trait methods: `obj.trait_method().other_method()` fails because `infer_receiver_type` doesn't handle `MethodCall` — need to resolve intermediate return types through trait registry [added: 2026-02-10]

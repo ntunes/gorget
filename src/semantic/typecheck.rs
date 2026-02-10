@@ -1126,6 +1126,58 @@ impl<'a> TypeChecker<'a> {
                 let ret_type = self.extract_fn_return_type(closure_type)?;
                 Some(ret_type)
             }
+
+            // --- Vector higher-order methods ---
+            ("Vector" | "List" | "Array", "filter") => {
+                // (T) -> bool, returns Vector[T]
+                let _ = self.infer_expr(&args.first()?.node.value);
+                Some(receiver_type)
+            }
+            ("Vector" | "List" | "Array", "map") => {
+                // (T) -> U, returns Vector[U]
+                let closure_type = self.infer_expr(&args.first()?.node.value);
+                let u_type = self.extract_fn_return_type(closure_type)?;
+                Some(self.types.insert(ResolvedType::Generic(def_id, vec![u_type])))
+            }
+            ("Vector" | "List" | "Array", "fold") => {
+                // args: initial_value, closure (U, T) -> U — returns U
+                let init_type = self.infer_expr(&args.first()?.node.value);
+                let _ = args.get(1).map(|a| self.infer_expr(&a.node.value));
+                Some(init_type)
+            }
+            ("Vector" | "List" | "Array", "reduce") => {
+                // (T, T) -> T, returns T
+                let _ = self.infer_expr(&args.first()?.node.value);
+                let elem_type = type_args.first().copied()?;
+                Some(elem_type)
+            }
+
+            // --- Dict higher-order methods ---
+            ("Dict" | "HashMap" | "Map", "filter") => {
+                // (K, V) -> bool, returns Dict[K,V]
+                let _ = self.infer_expr(&args.first()?.node.value);
+                Some(receiver_type)
+            }
+            ("Dict" | "HashMap" | "Map", "fold") => {
+                // args: initial_value, closure (U, K, V) -> U — returns U
+                let init_type = self.infer_expr(&args.first()?.node.value);
+                let _ = args.get(1).map(|a| self.infer_expr(&a.node.value));
+                Some(init_type)
+            }
+
+            // --- Set higher-order methods ---
+            ("Set" | "HashSet", "filter") => {
+                // (T) -> bool, returns Set[T]
+                let _ = self.infer_expr(&args.first()?.node.value);
+                Some(receiver_type)
+            }
+            ("Set" | "HashSet", "fold") => {
+                // args: initial_value, closure (U, T) -> U — returns U
+                let init_type = self.infer_expr(&args.first()?.node.value);
+                let _ = args.get(1).map(|a| self.infer_expr(&a.node.value));
+                Some(init_type)
+            }
+
             _ => None,
         }
     }

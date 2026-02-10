@@ -812,6 +812,62 @@ impl CodegenContext<'_> {
             "is_empty" => {
                 format!("(gorget_array_len({recv_ref}) == 0)")
             }
+            "filter" => {
+                let closure_fn = self.gen_expr(&args[0].node.value);
+                self.patch_last_closure_return_type("bool");
+                format!(
+                    "({{ GorgetArray __filt_src = {recv}; \
+                    GorgetArray __filt_result = gorget_array_new(sizeof({elem_type})); \
+                    for (size_t __filt_i = 0; __filt_i < __filt_src.len; __filt_i++) {{ \
+                        {elem_type} __filt_elem = GORGET_ARRAY_AT({elem_type}, __filt_src, __filt_i); \
+                        if ({closure_fn}(__filt_elem)) {{ gorget_array_push(&__filt_result, &__filt_elem); }} \
+                    }} \
+                    __filt_result; }})"
+                )
+            }
+            "map" => {
+                let closure_fn = self.gen_expr(&args[0].node.value);
+                let body_c_type = self.infer_closure_body_c_type(&args[0].node.value);
+                self.patch_last_closure_return_type(&body_c_type);
+                format!(
+                    "({{ GorgetArray __map_src = {recv}; \
+                    GorgetArray __map_result = gorget_array_new(sizeof({body_c_type})); \
+                    for (size_t __map_i = 0; __map_i < __map_src.len; __map_i++) {{ \
+                        {elem_type} __map_elem = GORGET_ARRAY_AT({elem_type}, __map_src, __map_i); \
+                        {body_c_type} __map_out = {closure_fn}(__map_elem); \
+                        gorget_array_push(&__map_result, &__map_out); \
+                    }} \
+                    __map_result; }})"
+                )
+            }
+            "fold" => {
+                let init = self.gen_expr(&args[0].node.value);
+                let init_c_type = self.infer_c_type_from_expr(&args[0].node.value.node);
+                let closure_fn = self.gen_expr(&args[1].node.value);
+                self.patch_last_closure_return_type(&init_c_type);
+                format!(
+                    "({{ GorgetArray __fold_src = {recv}; \
+                    {init_c_type} __fold_acc = {init}; \
+                    for (size_t __fold_i = 0; __fold_i < __fold_src.len; __fold_i++) {{ \
+                        {elem_type} __fold_elem = GORGET_ARRAY_AT({elem_type}, __fold_src, __fold_i); \
+                        __fold_acc = {closure_fn}(__fold_acc, __fold_elem); \
+                    }} \
+                    __fold_acc; }})"
+                )
+            }
+            "reduce" => {
+                let closure_fn = self.gen_expr(&args[0].node.value);
+                self.patch_last_closure_return_type(&elem_type);
+                format!(
+                    "({{ GorgetArray __red_src = {recv}; \
+                    {elem_type} __red_acc = GORGET_ARRAY_AT({elem_type}, __red_src, 0); \
+                    for (size_t __red_i = 1; __red_i < __red_src.len; __red_i++) {{ \
+                        {elem_type} __red_elem = GORGET_ARRAY_AT({elem_type}, __red_src, __red_i); \
+                        __red_acc = {closure_fn}(__red_acc, __red_elem); \
+                    }} \
+                    __red_acc; }})"
+                )
+            }
             _ => {
                 // Unknown method — fall through to normal dispatch
                 format!("/* unknown Vector method {method_name} */ 0")
@@ -887,6 +943,40 @@ impl CodegenContext<'_> {
             "is_empty" => {
                 format!("(gorget_map_len({recv_ref}) == 0)")
             }
+            "filter" => {
+                let (key_type, val_type) = self.infer_map_kv_types(receiver);
+                let closure_fn = self.gen_expr(&args[0].node.value);
+                self.patch_last_closure_return_type("bool");
+                format!(
+                    "({{ GorgetMap __dfilt_src = {recv}; \
+                    GorgetMap __dfilt_result = gorget_map_new(sizeof({key_type}), sizeof({val_type})); \
+                    for (size_t __dfilt_i = 0; __dfilt_i < __dfilt_src.cap; __dfilt_i++) {{ \
+                        if (__dfilt_src.states[__dfilt_i] != 1) continue; \
+                        {key_type} __dfilt_k = *({key_type}*)((char*)__dfilt_src.keys + __dfilt_i * __dfilt_src.key_size); \
+                        {val_type} __dfilt_v = *({val_type}*)((char*)__dfilt_src.values + __dfilt_i * __dfilt_src.val_size); \
+                        if ({closure_fn}(__dfilt_k, __dfilt_v)) {{ gorget_map_put(&__dfilt_result, &__dfilt_k, &__dfilt_v); }} \
+                    }} \
+                    __dfilt_result; }})"
+                )
+            }
+            "fold" => {
+                let (key_type, val_type) = self.infer_map_kv_types(receiver);
+                let init = self.gen_expr(&args[0].node.value);
+                let init_c_type = self.infer_c_type_from_expr(&args[0].node.value.node);
+                let closure_fn = self.gen_expr(&args[1].node.value);
+                self.patch_last_closure_return_type(&init_c_type);
+                format!(
+                    "({{ GorgetMap __dfold_src = {recv}; \
+                    {init_c_type} __dfold_acc = {init}; \
+                    for (size_t __dfold_i = 0; __dfold_i < __dfold_src.cap; __dfold_i++) {{ \
+                        if (__dfold_src.states[__dfold_i] != 1) continue; \
+                        {key_type} __dfold_k = *({key_type}*)((char*)__dfold_src.keys + __dfold_i * __dfold_src.key_size); \
+                        {val_type} __dfold_v = *({val_type}*)((char*)__dfold_src.values + __dfold_i * __dfold_src.val_size); \
+                        __dfold_acc = {closure_fn}(__dfold_acc, __dfold_k, __dfold_v); \
+                    }} \
+                    __dfold_acc; }})"
+                )
+            }
             _ => {
                 format!("/* unknown Dict method {method_name} */ 0")
             }
@@ -899,7 +989,7 @@ impl CodegenContext<'_> {
         recv: &str,
         method_name: &str,
         args: &[Spanned<crate::parser::ast::CallArg>],
-        _receiver: &Spanned<Expr>,
+        receiver: &Spanned<Expr>,
         needs_temp: bool,
     ) -> String {
         let recv_ref = if needs_temp {
@@ -944,6 +1034,39 @@ impl CodegenContext<'_> {
             }
             "is_empty" => {
                 format!("(gorget_set_len({recv_ref}) == 0)")
+            }
+            "filter" => {
+                // Set elem type is the first generic type arg, same as Vector
+                let elem_type = self.infer_vector_elem_type(receiver);
+                let closure_fn = self.gen_expr(&args[0].node.value);
+                self.patch_last_closure_return_type("bool");
+                format!(
+                    "({{ GorgetSet __sfilt_src = {recv}; \
+                    GorgetSet __sfilt_result = gorget_set_new(sizeof({elem_type})); \
+                    for (size_t __sfilt_i = 0; __sfilt_i < __sfilt_src.cap; __sfilt_i++) {{ \
+                        if (__sfilt_src.states[__sfilt_i] != 1) continue; \
+                        {elem_type} __sfilt_elem = *({elem_type}*)((char*)__sfilt_src.keys + __sfilt_i * __sfilt_src.key_size); \
+                        if ({closure_fn}(__sfilt_elem)) {{ gorget_set_add(&__sfilt_result, &__sfilt_elem); }} \
+                    }} \
+                    __sfilt_result; }})"
+                )
+            }
+            "fold" => {
+                let elem_type = self.infer_vector_elem_type(receiver);
+                let init = self.gen_expr(&args[0].node.value);
+                let init_c_type = self.infer_c_type_from_expr(&args[0].node.value.node);
+                let closure_fn = self.gen_expr(&args[1].node.value);
+                self.patch_last_closure_return_type(&init_c_type);
+                format!(
+                    "({{ GorgetSet __sfold_src = {recv}; \
+                    {init_c_type} __sfold_acc = {init}; \
+                    for (size_t __sfold_i = 0; __sfold_i < __sfold_src.cap; __sfold_i++) {{ \
+                        if (__sfold_src.states[__sfold_i] != 1) continue; \
+                        {elem_type} __sfold_elem = *({elem_type}*)((char*)__sfold_src.keys + __sfold_i * __sfold_src.key_size); \
+                        __sfold_acc = {closure_fn}(__sfold_acc, __sfold_elem); \
+                    }} \
+                    __sfold_acc; }})"
+                )
             }
             _ => {
                 format!("/* unknown Set method {method_name} */ 0")

@@ -827,6 +827,44 @@ fn trait_bounds() {
     run_gg("trait_bounds.gg", "num");
 }
 
+#[test]
+fn vector_higher_order() {
+    run_gg(
+        "vector_higher_order.gg",
+        "\
+2
+2
+4
+5
+2
+10
+15
+15",
+    );
+}
+
+#[test]
+fn dict_higher_order() {
+    run_gg(
+        "dict_higher_order.gg",
+        "\
+90
+2
+65",
+    );
+}
+
+#[test]
+fn set_higher_order() {
+    run_gg(
+        "set_higher_order.gg",
+        "\
+100
+3
+90",
+    );
+}
+
 // ══════════════════════════════════════════════════════════════
 // Runtime safety tests (expected panics)
 // ══════════════════════════════════════════════════════════════
