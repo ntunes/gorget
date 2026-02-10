@@ -40,3 +40,15 @@ cargo test               # all tests (use --test-threads=1 if integration tests 
 - Generic structs need explicit type args: `Pair[int, int](10, 20)`
 - String interpolation: `print("{variable}")`
 - Match uses `case` keyword: `match x: case 1: ... else: ...`
+
+## Task Continuity
+
+Maintain `TODO.md` and `DONE.md` at the project root to track work across plans and conversations.
+
+- **Starting a multi-step plan:** Write all high-level tasks to `TODO.md` (append, never replace existing items).
+- **Completing a task:** Move it from `TODO.md` → `DONE.md` with a date stamp: `- [2026-02-10] Task description`.
+- **Before replacing a plan:** Always read `TODO.md` first. Carry forward any incomplete items — they must remain in `TODO.md`.
+- **Quick-fix interruptions:** After finishing a tangential fix, remind the user about remaining `TODO.md` items.
+- **New conversation start:** Read `TODO.md` at the start to restore context on pending work.
+- **Stale items:** If a `TODO.md` item is older than 7 days, remind the user and ask whether to implement or drop it.
+- **Never delete `TODO.md`** — only move completed items out of it.
