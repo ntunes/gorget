@@ -543,3 +543,58 @@ fn modules_from_import() {
 fn modules_chain() {
     run_gg_dir("modules_chain", "main.gg", "99");
 }
+
+#[test]
+fn vector_methods() {
+    run_gg(
+        "vector_methods.gg",
+        "\
+4
+1
+4
+3",
+    );
+}
+
+#[test]
+fn collections_construct() {
+    run_gg(
+        "collections_construct.gg",
+        "\
+2
+10",
+    );
+}
+
+#[test]
+fn hashmap_methods() {
+    run_gg(
+        "hashmap_methods.gg",
+        "\
+3
+20
+has 1
+no 99",
+    );
+}
+
+#[test]
+fn hashset_methods() {
+    run_gg(
+        "hashset_methods.gg",
+        "\
+2
+has 10
+no 99",
+    );
+}
+
+#[test]
+fn string_methods() {
+    run_gg(
+        "string_methods.gg",
+        "\
+5
+0",
+    );
+}

@@ -1,0 +1,8 @@
+void main():
+    Vector[int] v = Vector[int]()
+    v.push(10)
+    v.push(20)
+    int len = v.len()
+    print("{len}")
+    int first = v.get(0)
+    print("{first}")

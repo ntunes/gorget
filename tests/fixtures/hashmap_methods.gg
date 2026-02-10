@@ -1,0 +1,13 @@
+void main():
+    Dict[int, int] m = Dict[int, int]()
+    m.put(1, 10)
+    m.put(2, 20)
+    m.put(3, 30)
+    int len = m.len()
+    print("{len}")
+    int val = m.get(2)
+    print("{val}")
+    if m.contains(1):
+        print("has 1")
+    if m.contains(99) == false:
+        print("no 99")

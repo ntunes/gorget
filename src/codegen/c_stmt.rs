@@ -217,23 +217,50 @@ impl CodegenContext<'_> {
                     return;
                 }
 
-                // Special handling for array literals: emit as C array declarations
+                // Special handling for array literals: emit as C array declarations.
+                // But NOT when the declared type is a collection type like Vector[T].
                 if let Expr::ArrayLiteral(elements) = &value.node {
-                    let elem_type = match &type_.node {
-                        Type::Inferred => {
-                            if let Some(first) = elements.first() {
-                                self.infer_c_type_from_expr(&first.node)
-                            } else {
-                                "int64_t".to_string()
+                    let is_collection_type = matches!(&type_.node,
+                        Type::Named { name, generic_args } if !generic_args.is_empty()
+                            && matches!(name.node.as_str(), "Vector" | "List" | "Array" | "Set" | "Dict" | "HashMap" | "Map")
+                    );
+                    if !is_collection_type {
+                        let elem_type = match &type_.node {
+                            Type::Inferred => {
+                                if let Some(first) = elements.first() {
+                                    self.infer_c_type_from_expr(&first.node)
+                                } else {
+                                    "int64_t".to_string()
+                                }
                             }
+                            _ => c_types::ast_type_to_c(&type_.node, self.scopes),
+                        };
+                        let elems: Vec<String> = elements.iter().map(|e| self.gen_expr(e)).collect();
+                        emitter.emit_line(&format!(
+                            "{const_prefix}{elem_type} {escaped}[] = {{{}}};",
+                            elems.join(", ")
+                        ));
+                        return;
+                    }
+                    // Collection type with array literal: create a GorgetArray and push elements
+                    let elem_type = if let Type::Named { generic_args, .. } = &type_.node {
+                        if let Some(first_arg) = generic_args.first() {
+                            c_types::ast_type_to_c(&first_arg.node, self.scopes)
+                        } else {
+                            "int64_t".to_string()
                         }
-                        _ => c_types::ast_type_to_c(&type_.node, self.scopes),
+                    } else {
+                        "int64_t".to_string()
                     };
-                    let elems: Vec<String> = elements.iter().map(|e| self.gen_expr(e)).collect();
                     emitter.emit_line(&format!(
-                        "{const_prefix}{elem_type} {escaped}[] = {{{}}};",
-                        elems.join(", ")
+                        "{const_prefix}GorgetArray {escaped} = gorget_array_new(sizeof({elem_type}));"
                     ));
+                    for e in elements {
+                        let val = self.gen_expr(e);
+                        emitter.emit_line(&format!(
+                            "{{ {elem_type} __tmp = {val}; gorget_array_push(&{escaped}, &__tmp); }}"
+                        ));
+                    }
                     return;
                 }
 
@@ -430,8 +457,23 @@ impl CodegenContext<'_> {
     }
 
     /// Infer the element C type for a GorgetArray expression.
-    fn infer_array_elem_type(&self, _expr: &Spanned<Expr>) -> String {
-        // Default to int64_t; more refined inference would need generic type args
+    fn infer_array_elem_type(&self, expr: &Spanned<Expr>) -> String {
+        if let Expr::Identifier(name) = &expr.node {
+            let type_id = self.resolution_map.get(&expr.span.start)
+                .and_then(|def_id| self.scopes.get_def(*def_id).type_id)
+                .or_else(|| {
+                    self.scopes.lookup_by_name_anywhere(name)
+                        .and_then(|def_id| self.scopes.get_def(def_id).type_id)
+                });
+            if let Some(tid) = type_id {
+                if let crate::semantic::types::ResolvedType::Generic(_, args) = self.types.get(tid) {
+                    if let Some(&elem_tid) = args.first() {
+                        return super::c_types::type_id_to_c(elem_tid, self.types, self.scopes);
+                    }
+                }
+            }
+        }
+        // Default fallback
         "int64_t".to_string()
     }
 

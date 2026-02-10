@@ -1,0 +1,11 @@
+void main():
+    Set[int] s = Set[int]()
+    s.add(10)
+    s.add(20)
+    s.add(10)
+    int len = s.len()
+    print("{len}")
+    if s.contains(10):
+        print("has 10")
+    if s.contains(99) == false:
+        print("no 99")

@@ -1,0 +1,7 @@
+void main():
+    str s = "hello"
+    int len1 = s.len()
+    print("{len1}")
+    str empty = ""
+    int len2 = empty.len()
+    print("{len2}")

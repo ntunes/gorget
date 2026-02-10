@@ -66,6 +66,10 @@ pub fn collect_top_level(
     errors: &mut Vec<SemanticError>,
 ) -> ResolveContext {
     let mut ctx = ResolveContext::new();
+    // Register built-in collection types so they can be resolved as types.
+    for name in &["Vector", "List", "Array", "Dict", "HashMap", "Map", "Set", "HashSet"] {
+        let _ = scopes.define(name.to_string(), DefKind::Struct, Span::dummy());
+    }
     collect_top_level_inner(module, scopes, types, errors, &mut ctx);
     ctx
 }
@@ -893,11 +897,12 @@ fn define_pattern_bindings(
     }
 }
 
-/// Check if a name is a built-in function.
+/// Check if a name is a built-in function or type.
 fn is_builtin(name: &str) -> bool {
     matches!(
         name,
         "print" | "println" | "len" | "range" | "enumerate" | "zip" | "map" | "filter" | "type"
+        | "Vector" | "Dict" | "Set" | "HashMap" | "HashSet" | "List" | "Array" | "Map"
     )
 }
 

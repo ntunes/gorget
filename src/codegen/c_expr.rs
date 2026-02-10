@@ -423,6 +423,11 @@ impl CodegenContext<'_> {
             return format!("{recv}.vtable->{method_name}({})", all_args.join(", "));
         }
 
+        // Check if receiver is a built-in collection or primitive type
+        if let Some(builtin_code) = self.try_gen_builtin_method(receiver, method_name, args) {
+            return builtin_code;
+        }
+
         // Check if receiver is a type name (static method call like Point.origin())
         if let Expr::Identifier(name) = &receiver.node {
             let is_type = self
@@ -470,6 +475,284 @@ impl CodegenContext<'_> {
             format!("{mangled}({})", all_args.join(", "))
         }
     }
+
+    /// Try to generate code for a built-in method call on a collection or primitive type.
+    /// Returns `Some(code)` if the receiver is a known built-in type, `None` otherwise.
+    fn try_gen_builtin_method(
+        &self,
+        receiver: &Spanned<Expr>,
+        method_name: &str,
+        args: &[Spanned<crate::parser::ast::CallArg>],
+    ) -> Option<String> {
+        let type_name = self.infer_receiver_type(receiver);
+
+        // Also check the C-level type for cases where infer_receiver_type
+        // returns the Gorget name vs the C type
+        let c_type = self.infer_receiver_c_type(receiver);
+
+        let is_vector = matches!(type_name.as_str(), "Vector" | "List" | "Array")
+            || c_type.as_deref() == Some("GorgetArray");
+        let is_map = matches!(type_name.as_str(), "Dict" | "HashMap" | "Map")
+            || c_type.as_deref() == Some("GorgetMap");
+        let is_set = matches!(type_name.as_str(), "Set" | "HashSet")
+            || c_type.as_deref() == Some("GorgetSet");
+        let is_string = matches!(type_name.as_str(), "str" | "String")
+            || matches!(c_type.as_deref(), Some("const char*"));
+
+        if !is_vector && !is_map && !is_set && !is_string {
+            return None;
+        }
+
+        let recv = self.gen_expr(receiver);
+        let needs_temp = !matches!(receiver.node, Expr::Identifier(_) | Expr::SelfExpr);
+
+        if is_vector {
+            return Some(self.gen_vector_method(&recv, method_name, args, receiver, needs_temp));
+        }
+        if is_map {
+            return Some(self.gen_map_method(&recv, method_name, args, receiver, needs_temp));
+        }
+        if is_set {
+            return Some(self.gen_set_method(&recv, method_name, args, receiver, needs_temp));
+        }
+        if is_string {
+            return self.gen_string_method(&recv, method_name, needs_temp);
+        }
+
+        None
+    }
+
+    /// Infer the C type of a receiver expression via the TypeId, if available.
+    fn infer_receiver_c_type(&self, expr: &Spanned<Expr>) -> Option<String> {
+        if let Expr::Identifier(name) = &expr.node {
+            let type_id = self.resolution_map.get(&expr.span.start)
+                .and_then(|def_id| self.scopes.get_def(*def_id).type_id)
+                .or_else(|| {
+                    self.scopes.lookup_by_name_anywhere(name)
+                        .and_then(|def_id| self.scopes.get_def(def_id).type_id)
+                });
+            if let Some(tid) = type_id {
+                return Some(c_types::type_id_to_c(tid, self.types, self.scopes));
+            }
+        }
+        None
+    }
+
+    /// Infer the element C type for a Vector receiver from its TypeId.
+    fn infer_vector_elem_type(&self, receiver: &Spanned<Expr>) -> String {
+        if let Expr::Identifier(name) = &receiver.node {
+            let type_id = self.resolution_map.get(&receiver.span.start)
+                .and_then(|def_id| self.scopes.get_def(*def_id).type_id)
+                .or_else(|| {
+                    self.scopes.lookup_by_name_anywhere(name)
+                        .and_then(|def_id| self.scopes.get_def(def_id).type_id)
+                });
+            if let Some(tid) = type_id {
+                if let crate::semantic::types::ResolvedType::Generic(_, args) = self.types.get(tid) {
+                    if let Some(&elem_tid) = args.first() {
+                        return c_types::type_id_to_c(elem_tid, self.types, self.scopes);
+                    }
+                }
+            }
+        }
+        "int64_t".to_string()
+    }
+
+    /// Infer the key and value C types for a Map receiver from its TypeId.
+    fn infer_map_kv_types(&self, receiver: &Spanned<Expr>) -> (String, String) {
+        if let Expr::Identifier(name) = &receiver.node {
+            let type_id = self.resolution_map.get(&receiver.span.start)
+                .and_then(|def_id| self.scopes.get_def(*def_id).type_id)
+                .or_else(|| {
+                    self.scopes.lookup_by_name_anywhere(name)
+                        .and_then(|def_id| self.scopes.get_def(def_id).type_id)
+                });
+            if let Some(tid) = type_id {
+                if let crate::semantic::types::ResolvedType::Generic(_, args) = self.types.get(tid) {
+                    if args.len() >= 2 {
+                        let key = c_types::type_id_to_c(args[0], self.types, self.scopes);
+                        let val = c_types::type_id_to_c(args[1], self.types, self.scopes);
+                        return (key, val);
+                    }
+                }
+            }
+        }
+        ("int64_t".to_string(), "int64_t".to_string())
+    }
+
+    /// Generate code for Vector method calls.
+    fn gen_vector_method(
+        &self,
+        recv: &str,
+        method_name: &str,
+        args: &[Spanned<crate::parser::ast::CallArg>],
+        receiver: &Spanned<Expr>,
+        needs_temp: bool,
+    ) -> String {
+        let elem_type = self.infer_vector_elem_type(receiver);
+
+        // For methods that need &recv, wrap non-lvalue receivers in a temp
+        let recv_ref = if needs_temp {
+            format!("({{ __typeof__({recv}) __recv = {recv}; &__recv; }})")
+        } else {
+            format!("&{recv}")
+        };
+
+        match method_name {
+            "push" => {
+                let arg = args.first()
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "0".to_string());
+                format!("({{ {elem_type} __push_val = {arg}; gorget_array_push({recv_ref}, &__push_val); }})")
+            }
+            "len" => {
+                format!("(int64_t)gorget_array_len({recv_ref})")
+            }
+            "get" => {
+                let idx = args.first()
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "0".to_string());
+                if needs_temp {
+                    format!("({{ __typeof__({recv}) __recv = {recv}; GORGET_ARRAY_AT({elem_type}, __recv, {idx}); }})")
+                } else {
+                    format!("GORGET_ARRAY_AT({elem_type}, {recv}, {idx})")
+                }
+            }
+            "pop" => {
+                if needs_temp {
+                    format!("({{ __typeof__({recv}) __recv = {recv}; __recv.len--; GORGET_ARRAY_AT({elem_type}, __recv, __recv.len); }})")
+                } else {
+                    format!("({{ {recv}.len--; GORGET_ARRAY_AT({elem_type}, {recv}, {recv}.len); }})")
+                }
+            }
+            _ => {
+                // Unknown method — fall through to normal dispatch
+                format!("/* unknown Vector method {method_name} */ 0")
+            }
+        }
+    }
+
+    /// Generate code for Map/Dict method calls.
+    fn gen_map_method(
+        &self,
+        recv: &str,
+        method_name: &str,
+        args: &[Spanned<crate::parser::ast::CallArg>],
+        receiver: &Spanned<Expr>,
+        needs_temp: bool,
+    ) -> String {
+        let recv_ref = if needs_temp {
+            format!("({{ __typeof__({recv}) __recv = {recv}; &__recv; }})")
+        } else {
+            format!("&{recv}")
+        };
+
+        match method_name {
+            "put" => {
+                let key = args.first()
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "0".to_string());
+                let val = args.get(1)
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "0".to_string());
+                let key_type = args.first()
+                    .map(|a| self.infer_c_type_from_expr(&a.node.value.node))
+                    .unwrap_or_else(|| "int64_t".to_string());
+                let val_type = args.get(1)
+                    .map(|a| self.infer_c_type_from_expr(&a.node.value.node))
+                    .unwrap_or_else(|| "int64_t".to_string());
+                format!("({{ {key_type} __k = {key}; {val_type} __v = {val}; gorget_map_put({recv_ref}, &__k, &__v); }})")
+            }
+            "get" => {
+                let key = args.first()
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "0".to_string());
+                let key_type = args.first()
+                    .map(|a| self.infer_c_type_from_expr(&a.node.value.node))
+                    .unwrap_or_else(|| "int64_t".to_string());
+                let (_, val_type) = self.infer_map_kv_types(receiver);
+                format!("({{ {key_type} __k = {key}; *({val_type}*)gorget_map_get({recv_ref}, &__k); }})")
+            }
+            "contains" => {
+                let key = args.first()
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "0".to_string());
+                let key_type = args.first()
+                    .map(|a| self.infer_c_type_from_expr(&a.node.value.node))
+                    .unwrap_or_else(|| "int64_t".to_string());
+                format!("({{ {key_type} __k = {key}; gorget_map_contains({recv_ref}, &__k); }})")
+            }
+            "len" => {
+                format!("(int64_t)gorget_map_len({recv_ref})")
+            }
+            _ => {
+                format!("/* unknown Dict method {method_name} */ 0")
+            }
+        }
+    }
+
+    /// Generate code for Set method calls.
+    fn gen_set_method(
+        &self,
+        recv: &str,
+        method_name: &str,
+        args: &[Spanned<crate::parser::ast::CallArg>],
+        _receiver: &Spanned<Expr>,
+        needs_temp: bool,
+    ) -> String {
+        let recv_ref = if needs_temp {
+            format!("({{ __typeof__({recv}) __recv = {recv}; &__recv; }})")
+        } else {
+            format!("&{recv}")
+        };
+
+        match method_name {
+            "add" => {
+                let elem = args.first()
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "0".to_string());
+                let elem_type = args.first()
+                    .map(|a| self.infer_c_type_from_expr(&a.node.value.node))
+                    .unwrap_or_else(|| "int64_t".to_string());
+                format!("({{ {elem_type} __e = {elem}; gorget_set_add({recv_ref}, &__e); }})")
+            }
+            "contains" => {
+                let elem = args.first()
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "0".to_string());
+                let elem_type = args.first()
+                    .map(|a| self.infer_c_type_from_expr(&a.node.value.node))
+                    .unwrap_or_else(|| "int64_t".to_string());
+                format!("({{ {elem_type} __e = {elem}; gorget_set_contains({recv_ref}, &__e); }})")
+            }
+            "len" => {
+                format!("(int64_t)gorget_set_len({recv_ref})")
+            }
+            _ => {
+                format!("/* unknown Set method {method_name} */ 0")
+            }
+        }
+    }
+
+    /// Generate code for String method calls.
+    fn gen_string_method(
+        &self,
+        recv: &str,
+        method_name: &str,
+        needs_temp: bool,
+    ) -> Option<String> {
+        match method_name {
+            "len" => {
+                if needs_temp {
+                    Some(format!("({{ const char* __s = {recv}; (int64_t)strlen(__s); }})"))
+                } else {
+                    Some(format!("(int64_t)strlen({recv})"))
+                }
+            }
+            _ => None, // Not a known string method — fall through
+        }
+    }
+
 
     /// Check if a receiver expression has a trait object type, returning the trait name if so.
     fn resolve_trait_object_type(&self, expr: &Spanned<Expr>) -> Option<String> {
@@ -528,6 +811,33 @@ impl CodegenContext<'_> {
                 callee_str
             }
         };
+
+        // Check if the callee is a built-in collection constructor
+        match base_name.as_str() {
+            "Vector" | "List" | "Array" => {
+                if c_type_args.is_empty() {
+                    return "gorget_array_new(sizeof(int64_t))".to_string();
+                }
+                let elem_size = format!("sizeof({})", c_type_args[0]);
+                return format!("gorget_array_new({elem_size})");
+            }
+            "Dict" | "HashMap" | "Map" => {
+                let key_size = c_type_args.first()
+                    .map(|t| format!("sizeof({t})"))
+                    .unwrap_or_else(|| "sizeof(int64_t)".to_string());
+                let val_size = c_type_args.get(1)
+                    .map(|t| format!("sizeof({t})"))
+                    .unwrap_or_else(|| "sizeof(int64_t)".to_string());
+                return format!("gorget_map_new({key_size}, {val_size})");
+            }
+            "Set" | "HashSet" => {
+                let elem_size = c_type_args.first()
+                    .map(|t| format!("sizeof({t})"))
+                    .unwrap_or_else(|| "sizeof(int64_t)".to_string());
+                return format!("gorget_set_new({elem_size})");
+            }
+            _ => {}
+        }
 
         // Check if the callee is a generic struct constructor
         if self.generic_struct_templates.borrow().contains_key(&base_name) {

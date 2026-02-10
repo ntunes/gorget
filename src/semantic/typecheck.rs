@@ -404,14 +404,12 @@ impl<'a> TypeChecker<'a> {
                     }
                     sig.return_type
                 } else {
-                    // Method not found — infer args, return error
+                    // Method not found — check built-in type methods
                     for arg in args {
                         self.infer_expr(&arg.node.value);
                     }
-                    // Only report error if receiver is not error type
-                    if resolved_receiver != self.types.error_id {
-                        // Don't error on well-known methods on error types
-                        self.types.error_id
+                    if let Some(ret_type) = self.builtin_method_type(resolved_receiver, &method.node) {
+                        ret_type
                     } else {
                         self.types.error_id
                     }
@@ -715,7 +713,11 @@ impl<'a> TypeChecker<'a> {
                             self.scopes,
                             self.types,
                         ) {
-                            self.unify(declared_type, value_type, value.span);
+                            // Allow assigning array literals to collection types
+                            // (e.g. Vector[int] v = [1, 2, 3])
+                            if !self.is_collection_assignment(declared_type, value_type) {
+                                self.unify(declared_type, value_type, value.span);
+                            }
                             Some(declared_type)
                         } else {
                             None
@@ -897,6 +899,69 @@ impl<'a> TypeChecker<'a> {
                 self.types.void_id
             }
             _ => self.types.void_id,
+        }
+    }
+
+    /// Check if this is an assignment from an array/comprehension to a
+    /// collection type (e.g. `Vector[int] v = [1, 2, 3]`), which should
+    /// be allowed without type unification.
+    fn is_collection_assignment(&self, declared: TypeId, value: TypeId) -> bool {
+        let declared_resolved = self.resolve_type(declared);
+        let value_resolved = self.resolve_type(value);
+        if let ResolvedType::Generic(def_id, _) = self.types.get(declared_resolved) {
+            let name = &self.scopes.get_def(*def_id).name;
+            if matches!(name.as_str(), "Vector" | "List" | "Array" | "Dict" | "HashMap" | "Map" | "Set" | "HashSet") {
+                // Allow any value type (array literal, comprehension, constructor call)
+                return matches!(self.types.get(value_resolved),
+                    ResolvedType::Array(_, _) | ResolvedType::Error
+                );
+            }
+        }
+        false
+    }
+
+    /// Check if a method call is on a known built-in type, returning
+    /// the return TypeId if so.
+    fn builtin_method_type(&self, receiver_type: TypeId, method: &str) -> Option<TypeId> {
+        // Determine the base type name
+        let type_name = match self.types.get(receiver_type) {
+            ResolvedType::Generic(def_id, _) => {
+                Some(self.scopes.get_def(*def_id).name.clone())
+            }
+            ResolvedType::Defined(def_id) => {
+                Some(self.scopes.get_def(*def_id).name.clone())
+            }
+            ResolvedType::Primitive(PrimitiveType::Str | PrimitiveType::StringType) => {
+                Some("str".to_string())
+            }
+            _ => None,
+        }?;
+
+        match type_name.as_str() {
+            "Vector" | "List" | "Array" => match method {
+                "push" => Some(self.types.void_id),
+                "pop" | "get" => Some(self.types.int_id), // TODO: return element type
+                "len" => Some(self.types.int_id),
+                _ => None,
+            },
+            "Dict" | "HashMap" | "Map" => match method {
+                "put" => Some(self.types.void_id),
+                "get" => Some(self.types.int_id), // TODO: return value type
+                "contains" => Some(self.types.bool_id),
+                "len" => Some(self.types.int_id),
+                _ => None,
+            },
+            "Set" | "HashSet" => match method {
+                "add" => Some(self.types.void_id),
+                "contains" => Some(self.types.bool_id),
+                "len" => Some(self.types.int_id),
+                _ => None,
+            },
+            "str" | "String" => match method {
+                "len" => Some(self.types.int_id),
+                _ => None,
+            },
+            _ => None,
         }
     }
 
