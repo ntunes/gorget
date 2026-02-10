@@ -134,6 +134,19 @@ impl Parser {
         }
     }
 
+    /// Parse an ownership modifier: `&`/`mutable` → MutableBorrow, `!`/`moving` → Move, else Borrow.
+    pub fn parse_ownership_modifier(&mut self) -> Ownership {
+        if self.check(&Token::Ampersand) || self.check_keyword(Keyword::Mutable) {
+            self.advance();
+            Ownership::MutableBorrow
+        } else if self.check(&Token::Bang) || self.check_keyword(Keyword::Moving) {
+            self.advance();
+            Ownership::Move
+        } else {
+            Ownership::Borrow
+        }
+    }
+
     pub fn at_end(&self) -> bool {
         matches!(self.peek(), Token::Eof)
     }
@@ -1139,10 +1152,10 @@ impl Parser {
                 start.merge(name_tok.span),
             ));
         }
-        if self.check(&Token::Ampersand)
+        if (self.check(&Token::Ampersand) || self.check_keyword(Keyword::Mutable))
             && matches!(self.peek_ahead(1), Token::Keyword(Keyword::SelfLower))
         {
-            self.advance(); // skip &
+            self.advance(); // skip & or mutable
             let name_tok = self.advance(); // self
             return Ok(Spanned::new(
                 Param {
@@ -1155,10 +1168,10 @@ impl Parser {
                 start.merge(name_tok.span),
             ));
         }
-        if self.check(&Token::Bang)
+        if (self.check(&Token::Bang) || self.check_keyword(Keyword::Moving))
             && matches!(self.peek_ahead(1), Token::Keyword(Keyword::SelfLower))
         {
-            self.advance(); // skip !
+            self.advance(); // skip ! or moving
             let name_tok = self.advance(); // self
             return Ok(Spanned::new(
                 Param {
@@ -1175,15 +1188,7 @@ impl Parser {
         let type_ = self.parse_type()?;
 
         // Check for ownership modifier on the name
-        let ownership = if self.check(&Token::Ampersand) {
-            self.advance();
-            Ownership::MutableBorrow
-        } else if self.check(&Token::Bang) {
-            self.advance();
-            Ownership::Move
-        } else {
-            Ownership::Borrow
-        };
+        let ownership = self.parse_ownership_modifier();
 
         let name = self.expect_identifier()?;
 
@@ -1545,6 +1550,54 @@ mod tests {
         if let Item::Equip(ref imp) = module.items[0].node {
             let param = &imp.items[0].node.params[0].node;
             assert_eq!(param.ownership, Ownership::Move);
+        } else {
+            panic!();
+        }
+    }
+
+    // ── Ownership Keyword Self Params ──────────────────────────
+
+    #[test]
+    fn test_mutable_self_param() {
+        // mutable self should be equivalent to &self
+        let module = parse("equip Foo:\n    void b(mutable self):\n        pass\n");
+        if let Item::Equip(ref imp) = module.items[0].node {
+            let param = &imp.items[0].node.params[0].node;
+            assert_eq!(param.ownership, Ownership::MutableBorrow);
+        } else {
+            panic!();
+        }
+    }
+
+    #[test]
+    fn test_moving_self_param() {
+        // moving self should be equivalent to !self
+        let module = parse("equip Foo:\n    void c(moving self):\n        pass\n");
+        if let Item::Equip(ref imp) = module.items[0].node {
+            let param = &imp.items[0].node.params[0].node;
+            assert_eq!(param.ownership, Ownership::Move);
+        } else {
+            panic!();
+        }
+    }
+
+    #[test]
+    fn test_moving_param() {
+        // moving keyword on regular param should be equivalent to !
+        let module = parse("void take(String moving s):\n    pass\n");
+        if let Item::Function(ref f) = module.items[0].node {
+            assert_eq!(f.params[0].node.ownership, Ownership::Move);
+        } else {
+            panic!();
+        }
+    }
+
+    #[test]
+    fn test_mutable_param() {
+        // mutable keyword on regular param should be equivalent to &
+        let module = parse("void modify(String mutable s):\n    pass\n");
+        if let Item::Function(ref f) = module.items[0].node {
+            assert_eq!(f.params[0].node.ownership, Ownership::MutableBorrow);
         } else {
             panic!();
         }

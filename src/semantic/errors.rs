@@ -170,7 +170,7 @@ impl std::fmt::Display for SemanticError {
             SemanticErrorKind::MoveWithoutOperator { name } => {
                 write!(
                     f,
-                    "cannot copy `{name}`: non-Copy type requires `!` to move"
+                    "cannot copy `{name}`: non-Copy type requires `!` or `moving` to move"
                 )
             }
             SemanticErrorKind::BorrowConflict { name, detail } => {

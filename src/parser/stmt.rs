@@ -129,15 +129,7 @@ impl Parser {
         self.expect_keyword(Keyword::In)?;
 
         // Check for ownership modifier on iterable
-        let ownership = if self.check(&Token::Ampersand) {
-            self.advance();
-            Ownership::MutableBorrow
-        } else if self.check(&Token::Bang) {
-            self.advance();
-            Ownership::Move
-        } else {
-            Ownership::Borrow
-        };
+        let ownership = self.parse_ownership_modifier();
 
         let iterable = self.parse_expr()?;
         let body = self.parse_block()?;
@@ -396,8 +388,9 @@ impl Parser {
                     return self.parse_expr_or_assign_stmt();
                 }
 
-                // Check for ownership modifier: type &name or type !name
-                if self.check(&Token::Ampersand) || self.check(&Token::Bang) {
+                // Check for ownership modifier: type &name, type !name, type mutable name, type moving name
+                if self.check(&Token::Ampersand) || self.check(&Token::Bang)
+                    || self.check_keyword(Keyword::Mutable) || self.check_keyword(Keyword::Moving) {
                     let _ownership_tok = self.advance();
                     if let Token::Identifier(_) = self.peek() {
                         let name = self.expect_identifier()?;
