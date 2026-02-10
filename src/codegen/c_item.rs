@@ -3,7 +3,7 @@ use crate::parser::ast::*;
 use super::c_emitter::CEmitter;
 use super::c_mangle;
 use super::c_types;
-use super::CodegenContext;
+use super::{CodegenContext, DropScopeKind};
 
 impl CodegenContext<'_> {
     // ─── Forward Declarations ────────────────────────────────
@@ -316,7 +316,9 @@ impl CodegenContext<'_> {
                     }
                 }
 
+                self.push_drop_scope(DropScopeKind::Function);
                 self.gen_block(block, emitter);
+                self.pop_drop_scope(emitter);
 
                 if is_main {
                     emitter.emit_line("return 0;");

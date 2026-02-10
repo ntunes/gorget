@@ -179,6 +179,17 @@ fn register_builtin_traits(
             });
             m
         }),
+        // Drop: void drop(self)
+        ("Drop", {
+            let mut m = FxHashMap::default();
+            m.insert("drop".into(), FunctionSig {
+                params: vec![],
+                return_type: types.void_id,
+                has_self: true,
+                self_ownership: None,
+            });
+            m
+        }),
     ];
 
     for (name, methods) in builtin_traits {
@@ -449,8 +460,8 @@ equip Circle with Drawable:
 ";
         let (registry, errors) = analyze(source);
         assert!(errors.is_empty(), "errors: {:?}", errors);
-        // 4 built-in traits + 1 user-defined trait
-        assert_eq!(registry.traits.len(), 5);
+        // 5 built-in traits + 1 user-defined trait
+        assert_eq!(registry.traits.len(), 6);
         assert_eq!(registry.impls.len(), 1);
         assert!(registry.impls[0].trait_.is_some());
     }
@@ -486,6 +497,7 @@ equip Circle with Drawable:
         assert!(trait_names.contains(&"Equatable"));
         assert!(trait_names.contains(&"Cloneable"));
         assert!(trait_names.contains(&"Hashable"));
+        assert!(trait_names.contains(&"Drop"));
     }
 
     #[test]

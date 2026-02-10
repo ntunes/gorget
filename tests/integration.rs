@@ -757,3 +757,14 @@ fn box_heap() {
 hello",
     );
 }
+
+#[test]
+fn drop_raii() {
+    run_gg(
+        "drop_raii.gg",
+        "\
+value: 42
+done
+dropping alpha",
+    );
+}

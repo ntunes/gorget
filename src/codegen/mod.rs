@@ -40,6 +40,29 @@ pub enum GenericInstanceKind {
     Function,
 }
 
+/// The kind of drop scope, determining when cleanup runs.
+#[derive(Clone, Copy, PartialEq)]
+pub enum DropScopeKind {
+    Function,
+    Loop,
+}
+
+/// A variable that needs cleanup when its scope exits.
+#[derive(Clone)]
+pub struct DropEntry {
+    pub var_name: String,
+    pub action: DropAction,
+}
+
+/// How to drop a variable.
+#[derive(Clone)]
+pub enum DropAction {
+    /// free(var) for Box[T]
+    BoxFree,
+    /// Drop_for_T__drop(&var) for user-defined Drop
+    UserDrop { type_name: String },
+}
+
 /// A closure that has been lifted to a top-level function.
 pub struct LiftedClosure {
     pub id: usize,
@@ -83,6 +106,8 @@ pub struct CodegenContext<'a> {
     /// Hint for the declared type in a VarDecl, used to resolve unit variant
     /// constructors like `None()` to the correct monomorphized enum.
     pub decl_type_hint: RefCell<Option<crate::parser::ast::Type>>,
+    /// Stack of drop scopes for RAII cleanup.
+    pub drop_scopes: RefCell<Vec<(DropScopeKind, Vec<DropEntry>)>>,
 }
 
 /// Generate C source code from a parsed and analyzed Gorget module.
@@ -106,6 +131,7 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult) -> String {
         closure_vars: RefCell::new(HashSet::new()),
         tuple_typedefs: RefCell::new(Vec::new()),
         decl_type_hint: RefCell::new(None),
+        drop_scopes: RefCell::new(Vec::new()),
     };
 
     let mut emitter = CEmitter::new();

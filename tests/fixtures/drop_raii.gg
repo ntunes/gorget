@@ -1,0 +1,13 @@
+struct Resource:
+    str name
+
+equip Resource with Drop:
+    void drop(self):
+        str n = self.name
+        print("dropping {n}")
+
+void main():
+    Resource r = Resource("alpha")
+    Box[int] b = Box(42)
+    print("value: {b.get()}")
+    print("done")

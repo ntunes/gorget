@@ -3,7 +3,6 @@
 ## Critical (blocks real-world use)
 
 ## High Priority
-- [ ] Drop trait / RAII (destructors) [added: 2026-02-10]
 - [ ] `gg fmt` (code formatter) [added: 2026-02-10]
 - [ ] File I/O (read, write, path) [added: 2026-02-10]
 - [ ] Default trait method resolution [added: 2026-02-10]

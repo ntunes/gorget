@@ -71,7 +71,7 @@ pub fn collect_top_level(
         let _ = scopes.define(name.to_string(), DefKind::Struct, Span::dummy());
     }
     // Register built-in core traits.
-    for trait_name in &["Displayable", "Equatable", "Cloneable", "Hashable"] {
+    for trait_name in &["Displayable", "Equatable", "Cloneable", "Hashable", "Drop"] {
         let _ = scopes.define(trait_name.to_string(), DefKind::Trait, Span::dummy());
     }
     // Register built-in Option[T] and Result[T,E] enum types with their variants.
@@ -923,7 +923,7 @@ fn is_builtin(name: &str) -> bool {
         "print" | "println" | "len" | "range" | "enumerate" | "zip" | "map" | "filter" | "type"
         | "Vector" | "Dict" | "Set" | "HashMap" | "HashSet" | "List" | "Array" | "Map"
         | "Option" | "Result" | "Some" | "None" | "Ok" | "Error"
-        | "Displayable" | "Equatable" | "Cloneable" | "Hashable"
+        | "Displayable" | "Equatable" | "Cloneable" | "Hashable" | "Drop"
         | "Box"
     )
 }

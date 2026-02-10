@@ -5,13 +5,101 @@ use crate::span::Spanned;
 use super::c_emitter::CEmitter;
 use super::c_mangle;
 use super::c_types;
-use super::CodegenContext;
+use super::{CodegenContext, DropAction, DropEntry, DropScopeKind};
 
 impl CodegenContext<'_> {
     /// Generate C code for a block of statements.
     pub fn gen_block(&self, block: &Block, emitter: &mut CEmitter) {
         for stmt in &block.stmts {
             self.gen_stmt(&stmt.node, emitter);
+        }
+    }
+
+    // ─── Drop Scope Helpers ─────────────────────────────────
+
+    /// Push a new drop scope onto the stack.
+    pub fn push_drop_scope(&self, kind: DropScopeKind) {
+        self.drop_scopes.borrow_mut().push((kind, Vec::new()));
+    }
+
+    /// Pop the top drop scope and emit cleanup for its entries.
+    pub fn pop_drop_scope(&self, emitter: &mut CEmitter) {
+        if let Some((_kind, entries)) = self.drop_scopes.borrow_mut().pop() {
+            for entry in entries.iter().rev() {
+                Self::emit_drop_entry(entry, emitter);
+            }
+        }
+    }
+
+    /// Emit cleanup for all scopes from innermost up to and including the
+    /// first scope matching `kind`. Does NOT pop any scopes.
+    pub fn emit_cleanup_to(&self, kind: DropScopeKind, emitter: &mut CEmitter) {
+        let scopes = self.drop_scopes.borrow();
+        for (scope_kind, entries) in scopes.iter().rev() {
+            for entry in entries.iter().rev() {
+                Self::emit_drop_entry(entry, emitter);
+            }
+            if *scope_kind == kind {
+                break;
+            }
+        }
+    }
+
+    /// Register a droppable variable in the current (topmost) scope.
+    pub fn register_droppable(&self, var_name: &str, action: DropAction) {
+        let mut scopes = self.drop_scopes.borrow_mut();
+        if let Some((_kind, entries)) = scopes.last_mut() {
+            entries.push(DropEntry {
+                var_name: var_name.to_string(),
+                action,
+            });
+        }
+    }
+
+    /// Check if any drop scope currently has droppable entries.
+    fn has_droppable_entries(&self) -> bool {
+        self.drop_scopes
+            .borrow()
+            .iter()
+            .any(|(_, entries)| !entries.is_empty())
+    }
+
+    /// Emit the C cleanup code for a single drop entry.
+    fn emit_drop_entry(entry: &DropEntry, emitter: &mut CEmitter) {
+        match &entry.action {
+            DropAction::BoxFree => {
+                emitter.emit_line(&format!("free({});", entry.var_name));
+            }
+            DropAction::UserDrop { type_name } => {
+                let drop_fn = c_mangle::mangle_trait_method("Drop", type_name, "drop");
+                emitter.emit_line(&format!("{drop_fn}(&{});", entry.var_name));
+            }
+        }
+    }
+
+    /// Check if a declared type needs drop and register it if so.
+    fn maybe_register_droppable(&self, var_name: &str, ty: &Type) {
+        match ty {
+            // Box[T] (but not Box[dynamic Trait] which is a trait object)
+            Type::Named { name, generic_args }
+                if name.node == "Box"
+                    && !generic_args.is_empty()
+                    && !matches!(&generic_args[0].node, Type::Dynamic { .. }) =>
+            {
+                self.register_droppable(var_name, DropAction::BoxFree);
+            }
+            // User-defined struct with Drop impl
+            Type::Named { name, generic_args } if generic_args.is_empty() => {
+                if self.traits.has_trait_impl_by_name(&name.node, "Drop") {
+                    self.register_droppable(
+                        var_name,
+                        DropAction::UserDrop {
+                            type_name: name.node.clone(),
+                        },
+                    );
+                }
+            }
+            _ => {}
         }
     }
 
@@ -46,7 +134,17 @@ impl CodegenContext<'_> {
             }
 
             Stmt::Return(expr) => {
-                if let Some(expr) = expr {
+                if self.has_droppable_entries() {
+                    if let Some(expr) = expr {
+                        let e = self.gen_expr(expr);
+                        emitter.emit_line(&format!("__typeof__({e}) __ret_tmp = {e};"));
+                        self.emit_cleanup_to(DropScopeKind::Function, emitter);
+                        emitter.emit_line("return __ret_tmp;");
+                    } else {
+                        self.emit_cleanup_to(DropScopeKind::Function, emitter);
+                        emitter.emit_line("return;");
+                    }
+                } else if let Some(expr) = expr {
                     let e = self.gen_expr(expr);
                     emitter.emit_line(&format!("return {e};"));
                 } else {
@@ -55,10 +153,16 @@ impl CodegenContext<'_> {
             }
 
             Stmt::Break(_) => {
+                if self.has_droppable_entries() {
+                    self.emit_cleanup_to(DropScopeKind::Loop, emitter);
+                }
                 emitter.emit_line("break;");
             }
 
             Stmt::Continue => {
+                if self.has_droppable_entries() {
+                    self.emit_cleanup_to(DropScopeKind::Loop, emitter);
+                }
                 emitter.emit_line("continue;");
             }
 
@@ -108,7 +212,9 @@ impl CodegenContext<'_> {
                     emitter.emit_line(&format!("bool {flag} = false;"));
                     emitter.emit_line(&format!("while ({cond}) {{"));
                     emitter.indent();
+                    self.push_drop_scope(DropScopeKind::Loop);
                     self.gen_block_with_break_flag(body, &flag, emitter);
+                    self.pop_drop_scope(emitter);
                     emitter.dedent();
                     emitter.emit_line("}");
                     emitter.emit_line(&format!("if (!{flag}) {{"));
@@ -119,7 +225,9 @@ impl CodegenContext<'_> {
                 } else {
                     emitter.emit_line(&format!("while ({cond}) {{"));
                     emitter.indent();
+                    self.push_drop_scope(DropScopeKind::Loop);
                     self.gen_block(body, emitter);
+                    self.pop_drop_scope(emitter);
                     emitter.dedent();
                     emitter.emit_line("}");
                 }
@@ -128,7 +236,9 @@ impl CodegenContext<'_> {
             Stmt::Loop { body } => {
                 emitter.emit_line("while (1) {");
                 emitter.indent();
+                self.push_drop_scope(DropScopeKind::Loop);
                 self.gen_block(body, emitter);
+                self.pop_drop_scope(emitter);
                 emitter.dedent();
                 emitter.emit_line("}");
             }
@@ -289,6 +399,9 @@ impl CodegenContext<'_> {
                 *self.decl_type_hint.borrow_mut() = None;
                 let decl = c_types::c_declare(&c_type, &escaped);
                 emitter.emit_line(&format!("{const_prefix}{decl} = {val};"));
+
+                // Register droppable variable for RAII cleanup
+                self.maybe_register_droppable(&escaped, &type_.node);
             }
             Pattern::Wildcard => {
                 let val = self.gen_expr(value);
@@ -594,7 +707,9 @@ impl CodegenContext<'_> {
                 "for (int64_t {var_name} = {start_expr}; {var_name} {cmp} {end_expr}; {var_name}++) {{"
             ));
             emitter.indent();
+            self.push_drop_scope(DropScopeKind::Loop);
             self.gen_block(body, emitter);
+            self.pop_drop_scope(emitter);
             emitter.dedent();
             emitter.emit_line("}");
         } else if self.is_gorget_array_expr(iterable) {
@@ -607,10 +722,12 @@ impl CodegenContext<'_> {
                 "for (size_t {idx} = 0; {idx} < gorget_array_len(&{iter}); {idx}++) {{"
             ));
             emitter.indent();
+            self.push_drop_scope(DropScopeKind::Loop);
             emitter.emit_line(&format!(
                 "{elem_type} {var_name} = GORGET_ARRAY_AT({elem_type}, {iter}, {idx});"
             ));
             self.gen_block(body, emitter);
+            self.pop_drop_scope(emitter);
             emitter.dedent();
             emitter.emit_line("}");
         } else if self.is_gorget_map_expr(iterable) {
@@ -627,10 +744,12 @@ impl CodegenContext<'_> {
                 "for (size_t {idx} = 0; {idx} < sizeof({iter})/sizeof({iter}[0]); {idx}++) {{"
             ));
             emitter.indent();
+            self.push_drop_scope(DropScopeKind::Loop);
             emitter.emit_line(&format!(
                 "__typeof__({iter}[0]) {var_name} = {iter}[{idx}];"
             ));
             self.gen_block(body, emitter);
+            self.pop_drop_scope(emitter);
             emitter.dedent();
             emitter.emit_line("}");
         }
@@ -654,6 +773,7 @@ impl CodegenContext<'_> {
         ));
         emitter.indent();
         emitter.emit_line(&format!("if ({iter}.states[{idx}] != 1) continue;"));
+        self.push_drop_scope(DropScopeKind::Loop);
 
         if let Pattern::Tuple(elems) = &pattern.node {
             // (k, v) pattern
@@ -687,6 +807,7 @@ impl CodegenContext<'_> {
         }
 
         self.gen_block(body, emitter);
+        self.pop_drop_scope(emitter);
         emitter.dedent();
         emitter.emit_line("}");
     }
@@ -712,10 +833,12 @@ impl CodegenContext<'_> {
         ));
         emitter.indent();
         emitter.emit_line(&format!("if ({iter}.states[{idx}] != 1) continue;"));
+        self.push_drop_scope(DropScopeKind::Loop);
         emitter.emit_line(&format!(
             "{elem_type} {var_name} = *({elem_type}*)((char*){iter}.keys + {idx} * {iter}.key_size);"
         ));
         self.gen_block(body, emitter);
+        self.pop_drop_scope(emitter);
         emitter.dedent();
         emitter.emit_line("}");
     }
