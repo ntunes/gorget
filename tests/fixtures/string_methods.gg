@@ -1,7 +1,5 @@
 void main():
     str s = "hello"
-    int len1 = s.len()
-    print("{len1}")
+    print("{s.len()}")
     str empty = ""
-    int len2 = empty.len()
-    print("{len2}")
+    print("{empty.len()}")

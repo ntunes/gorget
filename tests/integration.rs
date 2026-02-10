@@ -598,3 +598,14 @@ fn string_methods() {
 0",
     );
 }
+
+#[test]
+fn interp_method_call() {
+    run_gg(
+        "interp_method_call.gg",
+        "\
+2
+10
+5",
+    );
+}

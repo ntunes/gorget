@@ -1,6 +1,7 @@
 /// Expression codegen: convert Gorget expressions to C expression strings.
 use crate::lexer::token::{StringLit, StringSegment};
 use crate::parser::ast::{BinaryOp, Expr, PrimitiveType, UnaryOp};
+use crate::parser::Parser;
 use crate::semantic::scope::DefKind;
 use crate::span::Spanned;
 
@@ -1057,6 +1058,17 @@ impl CodegenContext<'_> {
             }
         }
 
+        // Try parsing as a full expression (handles method calls, function calls, operators)
+        if let Ok(parsed_expr) = Parser::new(var_name).parse_expr() {
+            let c_expr = self.gen_expr(&parsed_expr);
+            let type_id = self.infer_interp_expr_type(&parsed_expr);
+            if let Some(tid) = type_id {
+                return self.format_for_type_id(tid, &c_expr);
+            }
+            // Default: assume int for unknown expression types
+            return ("%lld".to_string(), format!("(long long){c_expr}"));
+        }
+
         // Default: assume int64_t
         ("%lld".to_string(), format!("(long long){escaped}"))
     }
@@ -1129,6 +1141,46 @@ impl CodegenContext<'_> {
             ResolvedType::Error | ResolvedType::Never | ResolvedType::Var(_) => {
                 ("%lld".to_string(), format!("(long long){expr}"))
             }
+        }
+    }
+
+    /// Infer the result TypeId of a sub-parsed interpolation expression.
+    fn infer_interp_expr_type(&self, expr: &Spanned<Expr>) -> Option<crate::semantic::ids::TypeId> {
+        match &expr.node {
+            Expr::Identifier(name) => {
+                let def_id = self.scopes.lookup_by_name_anywhere(name)?;
+                self.scopes.get_def(def_id).type_id
+            }
+            Expr::MethodCall {
+                receiver, method, ..
+            } => {
+                let recv_type = self.infer_receiver_c_type(receiver);
+                recv_type
+                    .as_deref()
+                    .and_then(|rt| self.builtin_method_return_type(rt, &method.node))
+            }
+            Expr::IntLiteral(_) => Some(self.types.int_id),
+            Expr::FloatLiteral(_) => Some(self.types.float_id),
+            Expr::BoolLiteral(_) => Some(self.types.bool_id),
+            Expr::BinaryOp { .. } => Some(self.types.int_id),
+            _ => None,
+        }
+    }
+
+    /// Map (receiver C type, method name) → return TypeId for known builtins.
+    fn builtin_method_return_type(
+        &self,
+        receiver_type: &str,
+        method: &str,
+    ) -> Option<crate::semantic::ids::TypeId> {
+        match (receiver_type, method) {
+            ("GorgetArray", "len" | "get" | "pop") => Some(self.types.int_id),
+            ("GorgetMap", "len" | "get") => Some(self.types.int_id),
+            ("GorgetMap", "contains") => Some(self.types.bool_id),
+            ("GorgetSet", "len") => Some(self.types.int_id),
+            ("GorgetSet", "contains") => Some(self.types.bool_id),
+            ("const char*", "len") => Some(self.types.int_id),
+            _ => None,
         }
     }
 
