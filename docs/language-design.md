@@ -104,6 +104,33 @@ int double(int x) = x * 2
 
 `void` means no return value. `str` is an immutable string slice (like Rust's `&str`). `String` is an owned, heap-allocated string.
 
+#### Multiple Return Values
+
+Functions can return tuples, which are destructured at the call site:
+
+```gorget
+# Return a tuple
+(int, int) divmod(int a, int b):
+    return (a / b, a % b)
+
+# Destructuring assignment at call site
+auto (quotient, remainder) = divmod(17, 5)
+
+# With explicit types
+(int, int) (q, r) = divmod(17, 5)
+
+# Ignore values with _
+auto (_, remainder) = divmod(17, 5)
+
+# Works with any tuple size
+(str, int, bool) parse_header(str line):
+    return (name, value, is_required)
+
+auto (name, value, _) = parse_header("Content-Type: text/html")
+```
+
+This is Go-style multiple returns with Python-style unpacking. Under the hood, it's just tuples + destructuring — no special multi-return mechanism needed.
+
 ### 2.4 Entry Point
 
 ```gorget
@@ -558,7 +585,46 @@ String label = match color:
     else: "other"
 ```
 
-### 5.4 The `is` Keyword (Pattern Matching in Conditions)
+### 5.4 The `in` Keyword (Containment Checks)
+
+`in` works as a boolean operator outside of `for` loops, testing whether a value exists in a collection:
+
+```gorget
+# Works on Vector, Set, Dict (checks keys), Array, str, String, Range
+if "admin" in roles:
+    grant_access()
+
+if user_id not in banned_ids:
+    allow_login()
+
+# String containment (substring search)
+if "error" in log_line:
+    alert()
+
+# Range containment
+if port in 1024..65535:
+    print("valid port")
+
+# Dict checks keys (like Python)
+if "name" in config:
+    print(config["name"])
+
+# Use in match guards and while conditions
+match try parse(input):
+    case Ok(n) if n in 1..=100: print("valid")
+    else: print("out of range")
+```
+
+Any type implementing the `Contains` trait supports `in`:
+
+```gorget
+trait Contains[T]:
+    bool contains(self, T value)
+```
+
+The compiler desugars `x in collection` to `collection.contains(x)` and `x not in collection` to `not collection.contains(x)`.
+
+### 5.5 The `is` Keyword (Pattern Matching in Conditions)
 
 Instead of Rust's `if let`, reads like English:
 
@@ -578,7 +644,7 @@ while iter.next() is Some(item):
     process(item)
 ```
 
-### 5.5 If as Expression
+### 5.6 If as Expression
 
 ```gorget
 int abs_val = if x >= 0: x else: -x
@@ -589,7 +655,7 @@ else:
     "Welcome, user"
 ```
 
-### 5.6 Loops
+### 5.7 Loops
 
 ```gorget
 # For loop (iterating - immutable borrow by default)
@@ -618,7 +684,7 @@ loop:
         break
 ```
 
-### 5.7 for/else and while/else (Python-style)
+### 5.8 for/else and while/else (Python-style)
 
 ```gorget
 for item in collection:
@@ -628,7 +694,7 @@ else:
     print("no match found")     # runs if loop completes without break
 ```
 
-### 5.8 Loop as Expression
+### 5.9 Loop as Expression
 
 ```gorget
 int result = loop:
@@ -636,7 +702,7 @@ int result = loop:
         break v                  # break with a value
 ```
 
-### 5.9 Comprehensions (Python-style)
+### 5.10 Comprehensions (Python-style)
 
 ```gorget
 Vector[int] squares = [x * x for x in 0..10]
@@ -1662,7 +1728,14 @@ String greeting = "Hello, {name}! You are {age} years old."
 String math = "2 + 2 = {2 + 2}"
 String formatted = "Pi is approximately {pi:.4}"     # format specifiers
 String padded = "Value: {x:>10}"                     # right-align, width 10
+
+# String repetition (Python-style * operator)
+String line = "-" * 40                   # "----------------------------------------"
+String indent = "  " * depth             # repeat by variable
+String border = "=-" * 20               # "=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-"
 ```
+
+String repetition uses `*` with a string on the left and an integer on the right (like Python's `"abc" * 3`). This is implemented via the `Mul[int]` trait on `str` and `String`, so it composes naturally with operator overloading.
 
 ---
 
