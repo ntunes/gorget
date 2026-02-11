@@ -1125,6 +1125,19 @@ fn overflow_wrap() {
 }
 
 #[test]
+fn string_format() {
+    run_gg(
+        "string_format.gg",
+        "\
+hello world
+no interp
+42
+10 + 20 = 30
+HELLO",
+    );
+}
+
+#[test]
 fn wrapping_ops() {
     run_gg("wrapping_ops.gg", "-9223372036854775808\n9223372036854775807\n-2\n-9223372036854775808");
 }

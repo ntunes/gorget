@@ -987,6 +987,7 @@ fn is_builtin(name: &str) -> bool {
         | "Displayable" | "Equatable" | "Cloneable" | "Hashable" | "Drop" | "Iterator"
         | "Box"
         | "File" | "read_file" | "write_file" | "append_file" | "file_exists" | "delete_file"
+        | "format"
     )
 }
 

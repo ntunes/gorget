@@ -400,6 +400,7 @@ impl CodegenContext<'_> {
         if let Expr::Identifier(name) = &callee.node {
             match name.as_str() {
                 "print" | "println" => return self.gen_print_call(args, name == "println"),
+                "format" => return self.gen_format_call(args),
                 "len" => {
                     if let Some(arg) = args.first() {
                         let a = self.gen_expr(&arg.node.value);
@@ -1968,6 +1969,59 @@ impl CodegenContext<'_> {
         }
 
         format!("printf(\"%lld\\n\", (long long){expr})")
+    }
+
+    /// Generate a `gorget_format(...)` call that returns `const char*`.
+    fn gen_format_call(
+        &self,
+        args: &[Spanned<crate::parser::ast::CallArg>],
+    ) -> String {
+        if args.is_empty() {
+            return "gorget_format(\"\")".to_string();
+        }
+
+        let arg = &args[0].node.value;
+
+        // String literal with interpolations → reuse interpolation_format
+        if let Expr::StringLiteral(s) = &arg.node {
+            return self.gen_gorget_format_from_string_lit(s);
+        }
+
+        // Non-string argument: format a single value
+        let expr = self.gen_expr(arg);
+
+        if let Some(type_id) = self.infer_interp_expr_type(arg) {
+            let (fmt, arg_expr) = self.format_for_type_id(type_id, &expr);
+            return format!("gorget_format(\"{fmt}\", {arg_expr})");
+        }
+
+        format!("gorget_format(\"%lld\", (long long){expr})")
+    }
+
+    /// Generate `gorget_format("fmt", args...)` from a StringLit.
+    fn gen_gorget_format_from_string_lit(&self, s: &StringLit) -> String {
+        let mut format_parts = Vec::new();
+        let mut format_args = Vec::new();
+
+        for segment in &s.segments {
+            match segment {
+                StringSegment::Literal(text) => {
+                    format_parts.push(escape_string(text));
+                }
+                StringSegment::Interpolation(var_name) => {
+                    let (fmt, arg_expr) = self.interpolation_format(var_name);
+                    format_parts.push(fmt);
+                    format_args.push(arg_expr);
+                }
+            }
+        }
+
+        let format_str = format_parts.join("");
+        if format_args.is_empty() {
+            format!("gorget_format(\"{format_str}\")")
+        } else {
+            format!("gorget_format(\"{format_str}\", {})", format_args.join(", "))
+        }
     }
 
     /// Generate printf from a StringLit with possible interpolation segments.

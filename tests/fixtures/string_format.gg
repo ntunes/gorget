@@ -1,0 +1,25 @@
+void main():
+    # Basic string interpolation
+    str name = "world"
+    str greeting = format("hello {name}")
+    print(greeting)
+
+    # Plain string (no interpolation)
+    str plain = format("no interp")
+    print(plain)
+
+    # Numeric formatting
+    int x = 42
+    str num_str = format("{x}")
+    print(num_str)
+
+    # Multiple interpolations
+    int a = 10
+    int b = 20
+    str expr = format("{a} + {b} = 30")
+    print(expr)
+
+    # Using format result in further string ops
+    str hello = format("hello")
+    str upper = hello.to_upper()
+    print(upper)

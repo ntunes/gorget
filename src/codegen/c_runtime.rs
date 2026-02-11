@@ -62,6 +62,18 @@ static inline GorgetString gorget_string_format(const char* fmt, ...) {
     return (GorgetString){data, (size_t)len, cap};
 }
 
+static inline const char* gorget_format(const char* fmt, ...) {
+    va_list args1, args2;
+    va_start(args1, fmt);
+    va_copy(args2, args1);
+    int len = vsnprintf(NULL, 0, fmt, args1);
+    va_end(args1);
+    char* data = (char*)malloc((size_t)len + 1);
+    vsnprintf(data, (size_t)len + 1, fmt, args2);
+    va_end(args2);
+    return data;
+}
+
 // ── String helpers ──────────────────────────────────────────
 static inline bool gorget_string_starts_with(const char* s, const char* prefix) {
     return strncmp(s, prefix, strlen(prefix)) == 0;
