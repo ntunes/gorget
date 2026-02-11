@@ -1,0 +1,77 @@
+# Ownership & Borrowing — A Message Pipeline
+#
+# Gorget's borrow checker ensures safe memory management at compile time.
+# Every value has exactly one owner, and the compiler tracks how values
+# are passed between functions:
+#
+#   msg           — borrow (read-only, caller keeps ownership)
+#   Message &msg  — mutable borrow (callee can modify, caller keeps ownership)
+#   Message !msg  — move (ownership transfers, caller can't use it again)
+#
+# Copy types (int, float, bool, char) are always copied — no annotations needed.
+
+struct Message:
+    str sender
+    str subject
+    int priority
+
+# Borrow: read-only access. The caller still owns the message.
+void preview(Message msg):
+    str sender = msg.sender
+    str subj = msg.subject
+    int pri = msg.priority
+    print("[Preview] sender={sender} subject={subj} priority={pri}")
+
+# Move: takes ownership. The caller's variable is dead after this call.
+void send(Message !msg):
+    str subj = msg.subject
+    str sender = msg.sender
+    print("[Sent] {subj} by {sender}")
+
+# Mutable borrow via method: can modify fields, caller keeps ownership.
+equip Message:
+    void set_priority(&self, int new_priority):
+        self.priority = new_priority
+
+void main():
+    # --- Copy types flow freely ---
+    # int is a Copy type, so it's implicitly copied on assignment and
+    # when passed to functions. No ! needed.
+    int priority = 3
+    int backup = priority
+    print("Priority: {priority}, backup: {backup}")
+
+    # --- Create a message ---
+    Message msg = Message("Alice", "Meeting tomorrow", 1)
+
+    # --- Borrow: peek at the message without consuming it ---
+    # preview() borrows msg read-only. After the call, msg is still ours.
+    preview(msg)
+
+    # --- Mutable borrow: modify the message, keep ownership ---
+    # set_priority() takes &self, so it can modify msg.priority
+    # without taking ownership. We can keep using msg afterward.
+    msg.set_priority(5)
+    preview(msg)
+
+    # --- Move: send the message, transferring ownership ---
+    # The ! at the call site makes the transfer of ownership explicit.
+    # After this, msg is dead — the compiler enforces this.
+    send(!msg)
+
+    # If we tried to use msg here, the compiler would reject it:
+    #   preview(msg)   → error: use of moved value `msg`
+    #   send(!msg)     → error: use of moved value `msg`
+
+    # --- Reassignment revives the variable ---
+    # Assigning a new value to msg gives it fresh ownership.
+    msg = Message("Bob", "Re: Meeting tomorrow", 2)
+    preview(msg)
+
+    # --- The safety guarantee ---
+    # The compiler prevents at compile time:
+    #   - Sending a message twice (double move)
+    #   - Reading a message after it's been sent (use after move)
+    #   - Accidentally aliasing mutable state
+    # All zero runtime cost.
+    print("done")

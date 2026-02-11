@@ -1,0 +1,45 @@
+# Ownership showcase — message pipeline with borrow, mutable borrow, and move
+
+struct Message:
+    str sender
+    str subject
+    int priority
+
+void preview(Message msg):
+    str sender = msg.sender
+    str subj = msg.subject
+    int pri = msg.priority
+    print("{sender} {subj} {pri}")
+
+void send(Message !msg):
+    str subj = msg.subject
+    str sender = msg.sender
+    print("sent {subj} by {sender}")
+
+equip Message:
+    void set_priority(&self, int new_priority):
+        self.priority = new_priority
+
+void main():
+    # Copy types flow freely
+    int priority = 3
+    int backup = priority
+    print("{priority}")
+    print("{backup}")
+
+    # Create and borrow
+    Message msg = Message("Alice", "Hello", 1)
+    preview(msg)
+    print("alive")
+
+    # Mutable borrow via method
+    msg.set_priority(5)
+    preview(msg)
+
+    # Move consumes
+    send(!msg)
+
+    # Reassignment revives
+    msg = Message("Bob", "Reply", 2)
+    preview(msg)
+    print("done")

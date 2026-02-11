@@ -476,6 +476,22 @@ done",
     );
 }
 
+#[test]
+fn ownership_showcase() {
+    run_gg(
+        "ownership_showcase.gg",
+        "\
+3
+3
+Alice Hello 1
+alive
+Alice Hello 5
+sent Hello by Alice
+Bob Reply 2
+done",
+    );
+}
+
 // ══════════════════════════════════════════════════════════════
 // Module / import tests
 // ══════════════════════════════════════════════════════════════

@@ -167,6 +167,35 @@ int x = 10
 int(int) add_x = (int y): x + y
 ```
 
+### Ownership & Borrowing
+
+Gorget uses Rust-style ownership to prevent use-after-free and double-free bugs at compile time, with zero runtime cost.
+
+```
+# Move: transfers ownership — caller can't use msg after this
+void send(Message !msg):
+    print("sent")
+
+# Borrow: read-only access — caller keeps ownership
+void preview(Message msg):
+    print("peek")
+
+# Mutable borrow via method — can modify, caller keeps ownership
+equip Message:
+    void set_priority(&self, int p):
+        self.priority = p
+```
+
+```
+Message msg = Message("Alice", "Hello", 1)
+preview(msg)        # borrow — msg still alive
+msg.set_priority(5) # mutable borrow — modify in place
+send(!msg)          # move — msg is now dead
+# preview(msg)      # compile error: use of moved value `msg`
+```
+
+Copy types (int, float, bool) pass freely without `!`. See [`examples/ownership.gg`](examples/ownership.gg) for a full walkthrough.
+
 ## CLI Commands
 
 | Command | Description |
