@@ -15,3 +15,6 @@
 
 ## Low Priority — Native backend (LLVM, QBE, or cranelift — after language stabilizes)
 - (no items yet — depends on earlier phases)
+
+## Very Low Priority — Still pondering
+- `directive implicit-auto`: Python-style implicit variable declarations (`x = 1` instead of `auto x = 1`). Semantic pass promotes first-use assignments to declarations. Trade-off: more Pythonic for quick scripts, but typos silently create new variables instead of erroring. Might pair with unused variable warnings as a safety net. [added: 2026-02-11]
