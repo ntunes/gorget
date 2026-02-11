@@ -882,6 +882,45 @@ carol is 40
 }
 
 #[test]
+fn raw_strings() {
+    run_gg(
+        "raw_strings.gg",
+        "\
+C:\\Users\\test
+\\d+\\.\\d+
+no {interp} here",
+    );
+}
+
+#[test]
+fn multiline_strings() {
+    run_gg(
+        "multiline_strings.gg",
+        "\
+hello
+world
+one line",
+    );
+}
+
+#[test]
+fn string_stdlib() {
+    run_gg(
+        "string_stdlib.gg",
+        "\
+starts yes
+ends yes
+empty yes
+contains yes
+hi
+HELLO, WORLD!
+hello, world!
+Hello, Gorget!
+3",
+    );
+}
+
+#[test]
 fn in_operator() {
     run_gg(
         "in_operator.gg",

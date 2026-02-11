@@ -1202,6 +1202,45 @@ impl CodegenContext<'_> {
                     .unwrap_or_else(|| "\"\"".to_string());
                 Some(format!("(strstr({recv}, {arg}) != NULL)"))
             }
+            "starts_with" => {
+                let arg = args.first()
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "\"\"".to_string());
+                Some(format!("gorget_string_starts_with({recv}, {arg})"))
+            }
+            "ends_with" => {
+                let arg = args.first()
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "\"\"".to_string());
+                Some(format!("gorget_string_ends_with({recv}, {arg})"))
+            }
+            "is_empty" => {
+                Some(format!("(strlen({recv}) == 0)"))
+            }
+            "trim" => {
+                Some(format!("gorget_string_trim({recv})"))
+            }
+            "to_upper" => {
+                Some(format!("gorget_string_to_upper({recv})"))
+            }
+            "to_lower" => {
+                Some(format!("gorget_string_to_lower({recv})"))
+            }
+            "replace" => {
+                let old_arg = args.first()
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "\"\"".to_string());
+                let new_arg = args.get(1)
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "\"\"".to_string());
+                Some(format!("gorget_string_replace({recv}, {old_arg}, {new_arg})"))
+            }
+            "split" => {
+                let arg = args.first()
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "\"\"".to_string());
+                Some(format!("gorget_string_split({recv}, {arg})"))
+            }
             _ => None, // Not a known string method — fall through
         }
     }

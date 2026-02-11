@@ -62,6 +62,73 @@ static inline GorgetString gorget_string_format(const char* fmt, ...) {
     return (GorgetString){data, (size_t)len, cap};
 }
 
+// ── String helpers ──────────────────────────────────────────
+static inline bool gorget_string_starts_with(const char* s, const char* prefix) {
+    return strncmp(s, prefix, strlen(prefix)) == 0;
+}
+
+static inline bool gorget_string_ends_with(const char* s, const char* suffix) {
+    size_t slen = strlen(s), plen = strlen(suffix);
+    if (plen > slen) return false;
+    return memcmp(s + slen - plen, suffix, plen) == 0;
+}
+
+static inline const char* gorget_string_trim(const char* s) {
+    while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r') s++;
+    size_t len = strlen(s);
+    while (len > 0 && (s[len-1] == ' ' || s[len-1] == '\t' || s[len-1] == '\n' || s[len-1] == '\r')) len--;
+    char* out = (char*)malloc(len + 1);
+    memcpy(out, s, len);
+    out[len] = '\0';
+    return out;
+}
+
+static inline const char* gorget_string_to_upper(const char* s) {
+    size_t len = strlen(s);
+    char* out = (char*)malloc(len + 1);
+    for (size_t i = 0; i < len; i++) out[i] = (s[i] >= 'a' && s[i] <= 'z') ? s[i] - 32 : s[i];
+    out[len] = '\0';
+    return out;
+}
+
+static inline const char* gorget_string_to_lower(const char* s) {
+    size_t len = strlen(s);
+    char* out = (char*)malloc(len + 1);
+    for (size_t i = 0; i < len; i++) out[i] = (s[i] >= 'A' && s[i] <= 'Z') ? s[i] + 32 : s[i];
+    out[len] = '\0';
+    return out;
+}
+
+static inline const char* gorget_string_replace(const char* s, const char* old, const char* new_s) {
+    size_t old_len = strlen(old);
+    size_t new_len = strlen(new_s);
+    if (old_len == 0) {
+        char* dup = (char*)malloc(strlen(s) + 1);
+        strcpy(dup, s);
+        return dup;
+    }
+    // Count occurrences
+    size_t count = 0;
+    const char* p = s;
+    while ((p = strstr(p, old)) != NULL) { count++; p += old_len; }
+    // Build result
+    size_t result_len = strlen(s) + count * (new_len - old_len);
+    char* out = (char*)malloc(result_len + 1);
+    char* dst = out;
+    p = s;
+    while (1) {
+        const char* found = strstr(p, old);
+        if (!found) { strcpy(dst, p); break; }
+        size_t chunk = (size_t)(found - p);
+        memcpy(dst, p, chunk);
+        dst += chunk;
+        memcpy(dst, new_s, new_len);
+        dst += new_len;
+        p = found + old_len;
+    }
+    return out;
+}
+
 // ── Panic helper ─────────────────────────────────────────────
 static inline void gorget_panic(const char* msg) {
     fprintf(stderr, "gorget: panic: %s\n", msg);
@@ -139,6 +206,38 @@ static inline bool gorget_array_contains(const GorgetArray* a, const void* needl
         if (memcmp((char*)a->data + i * a->elem_size, needle, elem_size) == 0) return true;
     }
     return false;
+}
+
+static inline GorgetArray gorget_string_split(const char* s, const char* delim) {
+    GorgetArray arr = gorget_array_new(sizeof(const char*));
+    size_t dlen = strlen(delim);
+    if (dlen == 0) {
+        size_t slen = strlen(s);
+        for (size_t i = 0; i < slen; i++) {
+            char* ch = (char*)malloc(2);
+            ch[0] = s[i]; ch[1] = '\0';
+            gorget_array_push(&arr, &ch);
+        }
+        return arr;
+    }
+    const char* p = s;
+    while (1) {
+        const char* found = strstr(p, delim);
+        if (!found) {
+            size_t rem = strlen(p);
+            char* part = (char*)malloc(rem + 1);
+            memcpy(part, p, rem + 1);
+            gorget_array_push(&arr, &part);
+            break;
+        }
+        size_t chunk = (size_t)(found - p);
+        char* part = (char*)malloc(chunk + 1);
+        memcpy(part, p, chunk);
+        part[chunk] = '\0';
+        gorget_array_push(&arr, &part);
+        p = found + dlen;
+    }
+    return arr;
 }
 
 // ── GORGET_ARRAY_AT macro ────────────────────────────────────

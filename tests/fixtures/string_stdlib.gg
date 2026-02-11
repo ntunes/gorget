@@ -1,0 +1,44 @@
+void main():
+    str s = "Hello, World!"
+
+    # starts_with / ends_with
+    bool sw1 = s.starts_with("Hello")
+    bool sw2 = s.ends_with("World!")
+    bool sw3 = s.starts_with("World")
+    if sw1:
+        print("starts yes")
+    if sw2:
+        print("ends yes")
+    if sw3:
+        print("bad")
+
+    # is_empty
+    str empty = ""
+    if empty.is_empty():
+        print("empty yes")
+    if s.is_empty():
+        print("bad")
+
+    # contains
+    if s.contains("World"):
+        print("contains yes")
+
+    # trim
+    str padded = "  hi  "
+    str trimmed = padded.trim()
+    print(trimmed)
+
+    # to_upper / to_lower
+    str upper = s.to_upper()
+    print(upper)
+    str lower = s.to_lower()
+    print(lower)
+
+    # replace
+    str replaced = s.replace("World", "Gorget")
+    print(replaced)
+
+    # split
+    str csv = "a,b,c"
+    Vector[str] parts = csv.split(",")
+    print("{parts.len()}")

@@ -1310,7 +1310,7 @@ impl<'a> TypeChecker<'a> {
 
     /// Check if a method call is on a known built-in type, returning
     /// the return TypeId if so.
-    fn builtin_method_type(&self, receiver_type: TypeId, method: &str) -> Option<TypeId> {
+    fn builtin_method_type(&mut self, receiver_type: TypeId, method: &str) -> Option<TypeId> {
         // Determine the base type name and generic type args (if any)
         let (type_name, type_args) = match self.types.get(receiver_type) {
             ResolvedType::Generic(def_id, args) => {
@@ -1361,6 +1361,16 @@ impl<'a> TypeChecker<'a> {
             },
             "str" | "String" => match method {
                 "len" => Some(self.types.int_id),
+                "contains" | "starts_with" | "ends_with" | "is_empty" => Some(self.types.bool_id),
+                "trim" | "to_upper" | "to_lower" | "replace" => Some(self.types.string_id),
+                "split" => {
+                    // Return Vector[str]
+                    if let Some(vec_def_id) = self.scopes.lookup("Vector") {
+                        Some(self.types.insert(ResolvedType::Generic(vec_def_id, vec![self.types.string_id])))
+                    } else {
+                        Some(self.types.string_id) // fallback
+                    }
+                }
                 _ => None,
             },
             "Option" => match method {

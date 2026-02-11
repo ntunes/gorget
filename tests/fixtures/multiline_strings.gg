@@ -1,0 +1,6 @@
+void main():
+    str text = """hello
+world"""
+    print(text)
+    str single = """one line"""
+    print(single)
