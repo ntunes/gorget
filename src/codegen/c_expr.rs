@@ -728,7 +728,7 @@ impl CodegenContext<'_> {
         let is_vector = matches!(type_name.as_str(), "Vector" | "List" | "Array")
             || c_type.as_deref() == Some("GorgetArray");
         let is_map = matches!(type_name.as_str(), "Dict" | "HashMap" | "Map")
-            || c_type.as_deref() == Some("GorgetMap");
+            || c_type.as_deref().map_or(false, |t| t.starts_with("GorgetMap__"));
         let is_set = matches!(type_name.as_str(), "Set" | "HashSet")
             || c_type.as_deref() == Some("GorgetSet");
         let is_string = matches!(type_name.as_str(), "str" | "String")
@@ -782,7 +782,7 @@ impl CodegenContext<'_> {
         let is_vector = matches!(type_name.as_str(), "Vector" | "List" | "Array")
             || c_type.as_deref() == Some("GorgetArray");
         let is_map = matches!(type_name.as_str(), "Dict" | "HashMap" | "Map")
-            || c_type.as_deref() == Some("GorgetMap");
+            || c_type.as_deref().map_or(false, |t| t.starts_with("GorgetMap__"));
         let is_set = matches!(type_name.as_str(), "Set" | "HashSet")
             || c_type.as_deref() == Some("GorgetSet");
         let is_string = matches!(type_name.as_str(), "str" | "String")
@@ -802,8 +802,9 @@ impl CodegenContext<'_> {
             let elem_type = self.infer_vector_elem_type(collection);
             format!("({{ {elem_type} __needle = {elem}; gorget_array_contains({coll_ref}, &__needle, sizeof({elem_type})); }})")
         } else if is_map {
-            let key_type = self.infer_c_type_from_expr(&needle.node);
-            format!("({{ {key_type} __needle = {elem}; gorget_map_contains({coll_ref}, &__needle); }})")
+            let (key_type, val_type) = self.infer_map_kv_types(collection);
+            let mangled = c_mangle::mangle_generic("GorgetMap", &[key_type, val_type]);
+            format!("{mangled}__contains({coll_ref}, {elem})")
         } else if is_set {
             let elem_type = self.infer_c_type_from_expr(&needle.node);
             format!("({{ {elem_type} __needle = {elem}; gorget_set_contains({coll_ref}, &__needle); }})")
@@ -848,6 +849,12 @@ impl CodegenContext<'_> {
             }
         }
         "int64_t".to_string()
+    }
+
+    /// Compute the mangled GorgetMap name for a Dict receiver.
+    fn infer_map_mangled(&self, receiver: &Spanned<Expr>) -> String {
+        let (key_type, val_type) = self.infer_map_kv_types(receiver);
+        c_mangle::mangle_generic("GorgetMap", &[key_type, val_type])
     }
 
     /// Infer the key and value C types for a Map receiver from its TypeId.
@@ -1020,6 +1027,7 @@ impl CodegenContext<'_> {
         receiver: &Spanned<Expr>,
         needs_temp: bool,
     ) -> String {
+        let mangled = self.infer_map_mangled(receiver);
         let recv_ref = if needs_temp {
             format!("({{ __typeof__({recv}) __recv = {recv}; &__recv; }})")
         } else {
@@ -1034,63 +1042,47 @@ impl CodegenContext<'_> {
                 let val = args.get(1)
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "0".to_string());
-                let key_type = args.first()
-                    .map(|a| self.infer_c_type_from_expr(&a.node.value.node))
-                    .unwrap_or_else(|| "int64_t".to_string());
-                let val_type = args.get(1)
-                    .map(|a| self.infer_c_type_from_expr(&a.node.value.node))
-                    .unwrap_or_else(|| "int64_t".to_string());
-                format!("({{ {key_type} __k = {key}; {val_type} __v = {val}; gorget_map_put({recv_ref}, &__k, &__v); }})")
+                format!("{mangled}__put({recv_ref}, {key}, {val})")
             }
             "get" => {
                 let key = args.first()
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "0".to_string());
-                let key_type = args.first()
-                    .map(|a| self.infer_c_type_from_expr(&a.node.value.node))
-                    .unwrap_or_else(|| "int64_t".to_string());
-                let (_, val_type) = self.infer_map_kv_types(receiver);
-                format!("({{ {key_type} __k = {key}; *({val_type}*)gorget_map_get({recv_ref}, &__k); }})")
+                format!("*{mangled}__get_ptr({recv_ref}, {key})")
             }
             "contains" => {
                 let key = args.first()
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "0".to_string());
-                let key_type = args.first()
-                    .map(|a| self.infer_c_type_from_expr(&a.node.value.node))
-                    .unwrap_or_else(|| "int64_t".to_string());
-                format!("({{ {key_type} __k = {key}; gorget_map_contains({recv_ref}, &__k); }})")
+                format!("{mangled}__contains({recv_ref}, {key})")
             }
             "len" => {
-                format!("(int64_t)gorget_map_len({recv_ref})")
+                format!("(int64_t){recv}.count")
             }
             "remove" => {
                 let key = args.first()
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "0".to_string());
-                let key_type = args.first()
-                    .map(|a| self.infer_c_type_from_expr(&a.node.value.node))
-                    .unwrap_or_else(|| "int64_t".to_string());
-                format!("({{ {key_type} __k = {key}; gorget_map_remove({recv_ref}, &__k); }})")
+                format!("{mangled}__remove({recv_ref}, {key})")
             }
             "clear" => {
-                format!("gorget_map_clear({recv_ref})")
+                format!("{mangled}__clear({recv_ref})")
             }
             "is_empty" => {
-                format!("(gorget_map_len({recv_ref}) == 0)")
+                format!("({recv}.count == 0)")
             }
             "filter" => {
                 let (key_type, val_type) = self.infer_map_kv_types(receiver);
                 let closure_fn = self.gen_expr(&args[0].node.value);
                 self.patch_last_closure_return_type("bool");
                 format!(
-                    "({{ GorgetMap __dfilt_src = {recv}; \
-                    GorgetMap __dfilt_result = gorget_map_new(sizeof({key_type}), sizeof({val_type})); \
+                    "({{ {mangled} __dfilt_src = {recv}; \
+                    {mangled} __dfilt_result = {mangled}__new(); \
                     for (size_t __dfilt_i = 0; __dfilt_i < __dfilt_src.cap; __dfilt_i++) {{ \
                         if (__dfilt_src.states[__dfilt_i] != 1) continue; \
-                        {key_type} __dfilt_k = *({key_type}*)((char*)__dfilt_src.keys + __dfilt_i * __dfilt_src.key_size); \
-                        {val_type} __dfilt_v = *({val_type}*)((char*)__dfilt_src.values + __dfilt_i * __dfilt_src.val_size); \
-                        if ({closure_fn}(__dfilt_k, __dfilt_v)) {{ gorget_map_put(&__dfilt_result, &__dfilt_k, &__dfilt_v); }} \
+                        {key_type} __dfilt_k = __dfilt_src.keys[__dfilt_i]; \
+                        {val_type} __dfilt_v = __dfilt_src.values[__dfilt_i]; \
+                        if ({closure_fn}(__dfilt_k, __dfilt_v)) {{ {mangled}__put(&__dfilt_result, __dfilt_k, __dfilt_v); }} \
                     }} \
                     __dfilt_result; }})"
                 )
@@ -1102,12 +1094,12 @@ impl CodegenContext<'_> {
                 let closure_fn = self.gen_expr(&args[1].node.value);
                 self.patch_last_closure_return_type(&init_c_type);
                 format!(
-                    "({{ GorgetMap __dfold_src = {recv}; \
+                    "({{ {mangled} __dfold_src = {recv}; \
                     {init_c_type} __dfold_acc = {init}; \
                     for (size_t __dfold_i = 0; __dfold_i < __dfold_src.cap; __dfold_i++) {{ \
                         if (__dfold_src.states[__dfold_i] != 1) continue; \
-                        {key_type} __dfold_k = *({key_type}*)((char*)__dfold_src.keys + __dfold_i * __dfold_src.key_size); \
-                        {val_type} __dfold_v = *({val_type}*)((char*)__dfold_src.values + __dfold_i * __dfold_src.val_size); \
+                        {key_type} __dfold_k = __dfold_src.keys[__dfold_i]; \
+                        {val_type} __dfold_v = __dfold_src.values[__dfold_i]; \
                         __dfold_acc = {closure_fn}(__dfold_acc, __dfold_k, __dfold_v); \
                     }} \
                     __dfold_acc; }})"
@@ -1683,13 +1675,9 @@ impl CodegenContext<'_> {
                 return format!("gorget_array_new({elem_size})");
             }
             "Dict" | "HashMap" | "Map" => {
-                let key_size = c_type_args.first()
-                    .map(|t| format!("sizeof({t})"))
-                    .unwrap_or_else(|| "sizeof(int64_t)".to_string());
-                let val_size = c_type_args.get(1)
-                    .map(|t| format!("sizeof({t})"))
-                    .unwrap_or_else(|| "sizeof(int64_t)".to_string());
-                return format!("gorget_map_new({key_size}, {val_size})");
+                let mangled = c_mangle::mangle_generic("GorgetMap", &c_type_args);
+                self.register_generic("GorgetMap", &c_type_args, super::GenericInstanceKind::Map);
+                return format!("{mangled}__new()");
             }
             "Set" | "HashSet" => {
                 let elem_size = c_type_args.first()
@@ -2512,6 +2500,8 @@ impl CodegenContext<'_> {
         let val_expr = self.gen_expr(value);
         let key_type = self.infer_c_type_from_expr(&key.node);
         let val_type = self.infer_c_type_from_expr(&value.node);
+        let mangled = c_mangle::mangle_generic("GorgetMap", &[key_type.clone(), val_type.clone()]);
+        self.register_generic("GorgetMap", &[key_type.clone(), val_type.clone()], super::GenericInstanceKind::Map);
         let var_name = variables
             .first()
             .map(|v| c_mangle::escape_keyword(&v.node))
@@ -2539,10 +2529,10 @@ impl CodegenContext<'_> {
                 .unwrap_or_default();
 
             return format!(
-                "({{ GorgetMap __comp = gorget_map_new(sizeof({key_type}), sizeof({val_type})); \
+                "({{ {mangled} __comp = {mangled}__new(); \
                 for (int64_t {var_name} = {start_expr}; {var_name} {cmp} {end_expr}; {var_name}++) {{ \
                 {cond_guard}{{ {key_type} __k = {key_expr}; {val_type} __v = {val_expr}; \
-                gorget_map_put(&__comp, &__k, &__v); }} \
+                {mangled}__put(&__comp, __k, __v); }} \
                 }} __comp; }})"
             );
         }
@@ -2554,11 +2544,11 @@ impl CodegenContext<'_> {
             .unwrap_or_default();
 
         format!(
-            "({{ GorgetMap __comp = gorget_map_new(sizeof({key_type}), sizeof({val_type})); \
+            "({{ {mangled} __comp = {mangled}__new(); \
             for (size_t __i = 0; __i < sizeof({iter})/sizeof({iter}[0]); __i++) {{ \
             __typeof__({iter}[0]) {var_name} = {iter}[__i]; \
             {cond_guard}{{ {key_type} __k = {key_expr}; {val_type} __v = {val_expr}; \
-            gorget_map_put(&__comp, &__k, &__v); }} \
+            {mangled}__put(&__comp, __k, __v); }} \
             }} __comp; }})"
         )
     }

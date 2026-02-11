@@ -604,6 +604,17 @@ empty",
 }
 
 #[test]
+fn hashmap_string_keys() {
+    run_gg(
+        "hashmap_string_keys.gg",
+        "\
+42
+found
+empty",
+    );
+}
+
+#[test]
 fn hashset_methods() {
     run_gg(
         "hashset_methods.gg",

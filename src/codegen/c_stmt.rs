@@ -965,10 +965,10 @@ impl CodegenContext<'_> {
                 "__gorget_v".to_string()
             };
             emitter.emit_line(&format!(
-                "{key_type} {k_name} = *({key_type}*)((char*){iter}.keys + {idx} * {iter}.key_size);"
+                "{key_type} {k_name} = {iter}.keys[{idx}];"
             ));
             emitter.emit_line(&format!(
-                "{val_type} {v_name} = *({val_type}*)((char*){iter}.values + {idx} * {iter}.val_size);"
+                "{val_type} {v_name} = {iter}.values[{idx}];"
             ));
         } else {
             // key-only pattern
@@ -977,7 +977,7 @@ impl CodegenContext<'_> {
                 _ => "__gorget_i".to_string(),
             };
             emitter.emit_line(&format!(
-                "{key_type} {var_name} = *({key_type}*)((char*){iter}.keys + {idx} * {iter}.key_size);"
+                "{key_type} {var_name} = {iter}.keys[{idx}];"
             ));
         }
 
@@ -1293,14 +1293,14 @@ impl CodegenContext<'_> {
                         "__gorget_v".to_string()
                     };
                     emitter.emit_line(&format!(
-                        "{key_type} {k_name} = *({key_type}*)((char*){iter}.keys + {idx} * {iter}.key_size);"
+                        "{key_type} {k_name} = {iter}.keys[{idx}];"
                     ));
                     emitter.emit_line(&format!(
-                        "{val_type} {v_name} = *({val_type}*)((char*){iter}.values + {idx} * {iter}.val_size);"
+                        "{val_type} {v_name} = {iter}.values[{idx}];"
                     ));
                 } else {
                     emitter.emit_line(&format!(
-                        "{key_type} {var_name} = *({key_type}*)((char*){iter}.keys + {idx} * {iter}.key_size);"
+                        "{key_type} {var_name} = {iter}.keys[{idx}];"
                     ));
                 }
                 self.gen_block_with_break_flag(body, &flag, emitter);

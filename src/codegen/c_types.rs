@@ -36,7 +36,13 @@ pub fn ast_type_to_c(ty: &crate::parser::ast::Type, scopes: &ScopeTable) -> Stri
                 match name.node.as_str() {
                     "Vector" | "List" | "Array" => "GorgetArray".to_string(),
                     "Set" => "GorgetSet".to_string(),
-                    "Dict" | "Map" | "HashMap" => "GorgetMap".to_string(),
+                    "Dict" | "Map" | "HashMap" => {
+                        let c_args: Vec<String> = generic_args
+                            .iter()
+                            .map(|a| ast_type_to_c(&a.node, scopes))
+                            .collect();
+                        super::c_mangle::mangle_generic("GorgetMap", &c_args)
+                    }
                     "Box" if generic_args.len() == 1 => {
                         // Box[dynamic Trait] → TraitObj type
                         if let crate::parser::ast::Type::Dynamic { trait_ } = &generic_args[0].node {
@@ -156,7 +162,13 @@ pub fn type_id_to_c(type_id: TypeId, types: &TypeTable, scopes: &ScopeTable) -> 
             match base.as_str() {
                 "Vector" | "List" | "Array" => "GorgetArray".to_string(),
                 "Set" => "GorgetSet".to_string(),
-                "Dict" | "Map" | "HashMap" => "GorgetMap".to_string(),
+                "Dict" | "Map" | "HashMap" => {
+                    let c_args: Vec<String> = args
+                        .iter()
+                        .map(|tid| type_id_to_c(*tid, types, scopes))
+                        .collect();
+                    super::c_mangle::mangle_generic("GorgetMap", &c_args)
+                }
                 "Box" if args.len() == 1 => {
                     let inner = type_id_to_c(args[0], types, scopes);
                     format!("{inner}*")

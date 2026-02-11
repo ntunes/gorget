@@ -1,0 +1,12 @@
+void main():
+    Dict[str, int] m = Dict[str, int]()
+    str key1 = "hello"
+    str key2 = "hello"
+    m.put(key1, 42)
+    int val = m.get(key2)
+    print("{val}")
+    if m.contains(key2):
+        print("found")
+    m.remove(key2)
+    if m.is_empty():
+        print("empty")

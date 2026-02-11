@@ -1,7 +1,6 @@
 # TODO
 
 ## Critical — Stdlib (benefits everyone, unblocks self-hosting)
-- Type-safe generic HashMap[K,V]: current Dict is type-erased (void*) — need proper generics over hash maps [added: 2026-02-11]
 - Vec capacity and slicing: `reserve(n)`, `with_capacity(n)`, `vec[start..end]` [added: 2026-02-11]
 - Iterator adapters: `.map()`, `.filter()`, `.collect()`, `.fold()` on iterators [added: 2026-02-11]
 - `?` operator for Result propagation: ergonomic error handling without exceptions [added: 2026-02-11]

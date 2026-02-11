@@ -867,14 +867,21 @@ impl CodegenContext<'_> {
                         .map(|a| c_types::ast_type_to_c(&a.node, self.scopes))
                         .collect();
                     if let Expr::Identifier(name) = &callee.node {
-                        let kind = if self.generic_struct_templates.borrow().contains_key(name) {
-                            super::GenericInstanceKind::Struct
-                        } else if self.generic_enum_templates.borrow().contains_key(name) {
-                            super::GenericInstanceKind::Enum
-                        } else {
-                            super::GenericInstanceKind::Function
-                        };
-                        self.register_generic(name, &c_type_args, kind);
+                        match name.as_str() {
+                            "Dict" | "Map" | "HashMap" => {
+                                self.register_generic("GorgetMap", &c_type_args, super::GenericInstanceKind::Map);
+                            }
+                            _ => {
+                                let kind = if self.generic_struct_templates.borrow().contains_key(name) {
+                                    super::GenericInstanceKind::Struct
+                                } else if self.generic_enum_templates.borrow().contains_key(name) {
+                                    super::GenericInstanceKind::Enum
+                                } else {
+                                    super::GenericInstanceKind::Function
+                                };
+                                self.register_generic(name, &c_type_args, kind);
+                            }
+                        }
                     }
                 }
                 self.scan_expr_for_generics(callee);
@@ -924,7 +931,14 @@ impl CodegenContext<'_> {
         if let Type::Named { name, generic_args } = ty {
             if !generic_args.is_empty() {
                 match name.node.as_str() {
-                    "Vector" | "List" | "Array" | "Set" | "Dict" | "Map" | "HashMap" => {}
+                    "Vector" | "List" | "Array" | "Set" => {}
+                    "Dict" | "Map" | "HashMap" => {
+                        let c_args: Vec<String> = generic_args
+                            .iter()
+                            .map(|a| c_types::ast_type_to_c(&a.node, self.scopes))
+                            .collect();
+                        self.register_generic("GorgetMap", &c_args, super::GenericInstanceKind::Map);
+                    }
                     _ => {
                         let c_args: Vec<String> = generic_args
                             .iter()
@@ -1075,9 +1089,158 @@ impl CodegenContext<'_> {
                         self.emit_monomorphized_function(&template, &inst.c_type_args, &inst.mangled_name, emitter);
                     }
                 }
+                super::GenericInstanceKind::Map => {
+                    self.emit_monomorphized_map(&inst.c_type_args, &inst.mangled_name, emitter);
+                }
             }
         }
         emitter.blank_line();
+    }
+
+    /// Emit a monomorphized map (Dict) struct and its inline functions.
+    fn emit_monomorphized_map(
+        &self,
+        c_type_args: &[String],
+        mangled: &str,
+        emitter: &mut CEmitter,
+    ) {
+        let key_type = c_type_args.first().map(|s| s.as_str()).unwrap_or("int64_t");
+        let val_type = c_type_args.get(1).map(|s| s.as_str()).unwrap_or("int64_t");
+        let is_str_key = key_type == "const char*";
+
+        let hash_expr = |var: &str| -> String {
+            if is_str_key {
+                format!("__gorget_hash_str({var})")
+            } else {
+                format!("__gorget_fnv1a(&{var}, sizeof({key_type}))")
+            }
+        };
+        let eq_expr = |a: &str, b: &str| -> String {
+            if is_str_key {
+                format!("strcmp({a}, {b}) == 0")
+            } else {
+                format!("memcmp(&{a}, &{b}, sizeof({key_type})) == 0")
+            }
+        };
+
+        let hash_key = hash_expr("key");
+        let hash_old = hash_expr("old_keys[i]");
+        let eq_put = eq_expr("m->keys[idx]", "key");
+        let eq_get = eq_expr("m->keys[idx]", "key");
+
+        emitter.emit(&format!(r#"typedef struct {mangled} {mangled};
+struct {mangled} {{
+    {key_type}* keys;
+    {val_type}* values;
+    uint8_t* states;
+    size_t count;
+    size_t cap;
+}};
+
+static inline void {mangled}__grow({mangled}* m) {{
+    size_t old_cap = m->cap;
+    {key_type}* old_keys = m->keys;
+    {val_type}* old_values = m->values;
+    uint8_t* old_states = m->states;
+    size_t new_cap = old_cap == 0 ? 16 : old_cap * 2;
+    m->keys = ({key_type}*)calloc(new_cap, sizeof({key_type}));
+    m->values = ({val_type}*)calloc(new_cap, sizeof({val_type}));
+    m->states = (uint8_t*)calloc(new_cap, 1);
+    m->cap = new_cap;
+    m->count = 0;
+    for (size_t i = 0; i < old_cap; i++) {{
+        if (old_states[i] == 1) {{
+            uint64_t h = {hash_old};
+            size_t idx = (size_t)(h % new_cap);
+            while (m->states[idx] != 0) {{ idx = (idx + 1) % new_cap; }}
+            m->keys[idx] = old_keys[i];
+            m->values[idx] = old_values[i];
+            m->states[idx] = 1;
+            m->count++;
+        }}
+    }}
+    free(old_keys); free(old_values); free(old_states);
+}}
+
+static inline {mangled} {mangled}__new(void) {{
+    return ({mangled}){{NULL, NULL, NULL, 0, 0}};
+}}
+
+static inline void {mangled}__put({mangled}* m, {key_type} key, {val_type} value) {{
+    if (m->cap == 0 || m->count * 4 >= m->cap * 3) {{ {mangled}__grow(m); }}
+    uint64_t h = {hash_key};
+    size_t idx = (size_t)(h % m->cap);
+    size_t first_tombstone = (size_t)-1;
+    for (size_t __probes = 0; __probes < m->cap; __probes++) {{
+        if (m->states[idx] == 0) {{
+            size_t target = first_tombstone != (size_t)-1 ? first_tombstone : idx;
+            m->keys[target] = key;
+            m->values[target] = value;
+            m->states[target] = 1;
+            m->count++;
+            return;
+        }}
+        if (m->states[idx] == 2 && first_tombstone == (size_t)-1) {{ first_tombstone = idx; }}
+        if (m->states[idx] == 1 && {eq_put}) {{
+            m->values[idx] = value;
+            return;
+        }}
+        idx = (idx + 1) % m->cap;
+    }}
+    if (first_tombstone != (size_t)-1) {{
+        m->keys[first_tombstone] = key;
+        m->values[first_tombstone] = value;
+        m->states[first_tombstone] = 1;
+        m->count++;
+    }}
+}}
+
+static inline {val_type}* {mangled}__get_ptr({mangled}* m, {key_type} key) {{
+    if (m->cap == 0) return NULL;
+    uint64_t h = {hash_key};
+    size_t idx = (size_t)(h % m->cap);
+    for (size_t __probes = 0; __probes < m->cap; __probes++) {{
+        if (m->states[idx] == 0) return NULL;
+        if (m->states[idx] == 1 && {eq_get}) {{
+            return &m->values[idx];
+        }}
+        idx = (idx + 1) % m->cap;
+    }}
+    return NULL;
+}}
+
+static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
+    return {mangled}__get_ptr(m, key) != NULL;
+}}
+
+static inline bool {mangled}__remove({mangled}* m, {key_type} key) {{
+    if (m->cap == 0) return false;
+    uint64_t h = {hash_key};
+    size_t idx = (size_t)(h % m->cap);
+    for (size_t __probes = 0; __probes < m->cap; __probes++) {{
+        if (m->states[idx] == 0) return false;
+        if (m->states[idx] == 1 && {eq_get}) {{
+            m->states[idx] = 2;
+            m->count--;
+            return true;
+        }}
+        idx = (idx + 1) % m->cap;
+    }}
+    return false;
+}}
+
+static inline void {mangled}__clear({mangled}* m) {{
+    if (m->states) memset(m->states, 0, m->cap);
+    m->count = 0;
+}}
+
+static inline void {mangled}__free({mangled}* m) {{
+    free(m->keys); free(m->values); free(m->states);
+    m->keys = NULL; m->values = NULL; m->states = NULL;
+    m->count = 0; m->cap = 0;
+}}
+
+"#));
     }
 
     /// Emit a monomorphized struct definition.
@@ -1310,7 +1473,7 @@ impl CodegenContext<'_> {
                 match name.node.as_str() {
                     "Vector" | "List" | "Array" => "GorgetArray".to_string(),
                     "Set" => "GorgetSet".to_string(),
-                    "Dict" | "Map" | "HashMap" => "GorgetMap".to_string(),
+                    "Dict" | "Map" | "HashMap" => c_mangle::mangle_generic("GorgetMap", &c_args),
                     _ => c_mangle::mangle_generic(&name.node, &c_args),
                 }
             }
@@ -1324,7 +1487,14 @@ impl CodegenContext<'_> {
         if let crate::parser::ast::Type::Named { name, generic_args } = ty {
             if !generic_args.is_empty() {
                 match name.node.as_str() {
-                    "Vector" | "List" | "Array" | "Set" | "Dict" | "Map" | "HashMap" => {}
+                    "Vector" | "List" | "Array" | "Set" => {}
+                    "Dict" | "Map" | "HashMap" => {
+                        let c_args: Vec<String> = generic_args
+                            .iter()
+                            .map(|a| c_types::ast_type_to_c(&a.node, self.scopes))
+                            .collect();
+                        self.register_generic("GorgetMap", &c_args, super::GenericInstanceKind::Map);
+                    }
                     _ => {
                         let c_args: Vec<String> = generic_args
                             .iter()

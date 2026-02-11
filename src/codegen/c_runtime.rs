@@ -352,6 +352,12 @@ static inline uint64_t __gorget_fnv1a(const void* data, size_t len) {
     return hash;
 }
 
+static inline uint64_t __gorget_hash_str(const char* s) {
+    uint64_t hash = 14695981039346656037ULL;
+    while (*s) { hash ^= (uint8_t)*s++; hash *= 1099511628211ULL; }
+    return hash;
+}
+
 static inline void __gorget_map_grow(GorgetMap* m) {
     size_t old_cap = m->cap;
     void* old_keys = m->keys;
