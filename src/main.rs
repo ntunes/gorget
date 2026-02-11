@@ -419,6 +419,22 @@ fn main() {
         return;
     }
 
+    // `gg --version` / `gg -V`
+    if args[1] == "--version" || args[1] == "-V" {
+        println!("gg {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+
+    // `gg --help` / `gg -h`
+    if args[1] == "--help" || args[1] == "-h" {
+        println!("Usage: gg <file.gg>              Run a script");
+        println!("       gg <command> <file.gg>     Run a compiler command");
+        println!("       gg                         Interactive REPL");
+        println!("       gg --version               Print version");
+        println!("Commands: lex, parse, check, build, run, fmt");
+        return;
+    }
+
     // `gg script.gg` shorthand → treat as `gg run script.gg`
     if args[1].ends_with(".gg") {
         let filename = &args[1];
@@ -447,6 +463,7 @@ fn main() {
         eprintln!("Usage: gg <file.gg>              Run a script");
         eprintln!("       gg <command> <file.gg>     Run a compiler command");
         eprintln!("       gg                         Interactive REPL");
+        eprintln!("       gg --version               Print version");
         eprintln!("Commands: lex, parse, check, build, run, fmt");
         process::exit(1);
     }
