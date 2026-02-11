@@ -1495,9 +1495,9 @@ impl CodegenContext<'_> {
 /// Convert a compound assignment operator to its C form.
 fn compound_op_to_c(op: BinaryOp) -> &'static str {
     match op {
-        BinaryOp::Add => "+=",
-        BinaryOp::Sub => "-=",
-        BinaryOp::Mul => "*=",
+        BinaryOp::Add | BinaryOp::AddWrap => "+=",
+        BinaryOp::Sub | BinaryOp::SubWrap => "-=",
+        BinaryOp::Mul | BinaryOp::MulWrap => "*=",
         BinaryOp::Div => "/=",
         BinaryOp::Mod => "%=",
         _ => "/* ?? */=",

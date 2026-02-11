@@ -2841,9 +2841,9 @@ impl CodegenContext<'_> {
 /// Convert a BinaryOp to its C operator string.
 fn binary_op_to_c(op: BinaryOp) -> &'static str {
     match op {
-        BinaryOp::Add => "+",
-        BinaryOp::Sub => "-",
-        BinaryOp::Mul => "*",
+        BinaryOp::Add | BinaryOp::AddWrap => "+",
+        BinaryOp::Sub | BinaryOp::SubWrap => "-",
+        BinaryOp::Mul | BinaryOp::MulWrap => "*",
         BinaryOp::Div => "/",
         BinaryOp::Mod => "%",
         BinaryOp::Eq => "==",

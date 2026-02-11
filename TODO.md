@@ -7,7 +7,6 @@
 - Vec capacity and slicing: `reserve(n)`, `with_capacity(n)`, `vec[start..end]` [added: 2026-02-11]
 - Iterator adapters: `.map()`, `.filter()`, `.collect()`, `.fold()` on iterators [added: 2026-02-11]
 - `?` operator for Result propagation: ergonomic error handling without exceptions [added: 2026-02-11]
-- Wrapping operators `+%`/`-%`/`*%`: new lexer tokens + parser + codegen for intentional wrapping arithmetic [added: 2026-02-10]
 
 ## High Priority — Self-hosting (write the compiler in Gorget, still targeting C)
 - Cross-module name resolution: module system loads files but resolution across modules is incomplete [added: 2026-02-11]

@@ -49,6 +49,18 @@ pub enum RawToken {
     SlashEq,
     #[token("%=")]
     PercentEq,
+    #[token("+%=")]
+    PlusPercentEq,
+    #[token("-%=")]
+    MinusPercentEq,
+    #[token("*%=")]
+    StarPercentEq,
+    #[token("+%")]
+    PlusPercent,
+    #[token("-%")]
+    MinusPercent,
+    #[token("*%")]
+    StarPercent,
 
     // ── Single-char operators & delimiters ────────────────────
     #[token("+")]
@@ -128,6 +140,12 @@ impl fmt::Display for RawToken {
             RawToken::StarEq => write!(f, "'*='"),
             RawToken::SlashEq => write!(f, "'/='"),
             RawToken::PercentEq => write!(f, "'%='"),
+            RawToken::PlusPercent => write!(f, "'+%'"),
+            RawToken::MinusPercent => write!(f, "'-%'"),
+            RawToken::StarPercent => write!(f, "'*%'"),
+            RawToken::PlusPercentEq => write!(f, "'+%='"),
+            RawToken::MinusPercentEq => write!(f, "'-%='"),
+            RawToken::StarPercentEq => write!(f, "'*%='"),
             RawToken::Plus => write!(f, "'+'"),
             RawToken::Minus => write!(f, "'-'"),
             RawToken::Star => write!(f, "'*'"),
@@ -501,6 +519,12 @@ pub enum Token {
     StarEq,
     SlashEq,
     PercentEq,
+    PlusPercent,
+    MinusPercent,
+    StarPercent,
+    PlusPercentEq,
+    MinusPercentEq,
+    StarPercentEq,
     DotDot,
     DotDotEq,
     QuestionDot,
@@ -568,6 +592,12 @@ impl fmt::Display for Token {
             Token::StarEq => write!(f, "'*='"),
             Token::SlashEq => write!(f, "'/='"),
             Token::PercentEq => write!(f, "'%='"),
+            Token::PlusPercent => write!(f, "'+%'"),
+            Token::MinusPercent => write!(f, "'-%'"),
+            Token::StarPercent => write!(f, "'*%'"),
+            Token::PlusPercentEq => write!(f, "'+%='"),
+            Token::MinusPercentEq => write!(f, "'-%='"),
+            Token::StarPercentEq => write!(f, "'*%='"),
             Token::DotDot => write!(f, "'..'"),
             Token::DotDotEq => write!(f, "'..='"),
             Token::QuestionDot => write!(f, "'?.'"),

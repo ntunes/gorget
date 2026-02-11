@@ -1417,6 +1417,9 @@ fn binary_op_str(op: BinaryOp) -> &'static str {
         BinaryOp::Mul => "*",
         BinaryOp::Div => "/",
         BinaryOp::Mod => "%",
+        BinaryOp::AddWrap => "+%",
+        BinaryOp::SubWrap => "-%",
+        BinaryOp::MulWrap => "*%",
         BinaryOp::Eq => "==",
         BinaryOp::Neq => "!=",
         BinaryOp::Lt => "<",
@@ -1436,6 +1439,9 @@ fn compound_op_str(op: BinaryOp) -> &'static str {
         BinaryOp::Mul => "*=",
         BinaryOp::Div => "/=",
         BinaryOp::Mod => "%=",
+        BinaryOp::AddWrap => "+%=",
+        BinaryOp::SubWrap => "-%=",
+        BinaryOp::MulWrap => "*%=",
         _ => "=",
     }
 }

@@ -462,6 +462,12 @@ impl<'src> Lexer<'src> {
             RawToken::StarEq => Token::StarEq,
             RawToken::SlashEq => Token::SlashEq,
             RawToken::PercentEq => Token::PercentEq,
+            RawToken::PlusPercent => Token::PlusPercent,
+            RawToken::MinusPercent => Token::MinusPercent,
+            RawToken::StarPercent => Token::StarPercent,
+            RawToken::PlusPercentEq => Token::PlusPercentEq,
+            RawToken::MinusPercentEq => Token::MinusPercentEq,
+            RawToken::StarPercentEq => Token::StarPercentEq,
             RawToken::DotDot => Token::DotDot,
             RawToken::DotDotEq => Token::DotDotEq,
             RawToken::QuestionDot => Token::QuestionDot,
@@ -1349,6 +1355,46 @@ void main():
                 Token::Identifier("x".to_string()),
                 Token::Eq,
                 Token::IntLiteral(1),
+                Token::Newline,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_wrapping_operators() {
+        let tokens = lex("a +% b -% c *% d\n");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Identifier("a".to_string()),
+                Token::PlusPercent,
+                Token::Identifier("b".to_string()),
+                Token::MinusPercent,
+                Token::Identifier("c".to_string()),
+                Token::StarPercent,
+                Token::Identifier("d".to_string()),
+                Token::Newline,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_wrapping_compound_assignment() {
+        let tokens = lex("x +%= 1\ny -%= 2\nz *%= 3\n");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Identifier("x".to_string()),
+                Token::PlusPercentEq,
+                Token::IntLiteral(1),
+                Token::Newline,
+                Token::Identifier("y".to_string()),
+                Token::MinusPercentEq,
+                Token::IntLiteral(2),
+                Token::Newline,
+                Token::Identifier("z".to_string()),
+                Token::StarPercentEq,
+                Token::IntLiteral(3),
                 Token::Newline,
             ]
         );

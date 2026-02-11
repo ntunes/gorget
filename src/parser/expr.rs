@@ -468,7 +468,8 @@ impl Parser {
         Some(match self.peek() {
             // Assignment operators are handled as statements, not expressions
             Token::Eq | Token::PlusEq | Token::MinusEq | Token::StarEq | Token::SlashEq
-            | Token::PercentEq => {
+            | Token::PercentEq | Token::PlusPercentEq | Token::MinusPercentEq
+            | Token::StarPercentEq => {
                 return None;
             }
 
@@ -564,12 +565,27 @@ impl Parser {
                 right: 20,
                 op: InfixOp::Binary(BinaryOp::Sub),
             },
+            Token::PlusPercent => InfixBP {
+                left: 19,
+                right: 20,
+                op: InfixOp::Binary(BinaryOp::AddWrap),
+            },
+            Token::MinusPercent => InfixBP {
+                left: 19,
+                right: 20,
+                op: InfixOp::Binary(BinaryOp::SubWrap),
+            },
 
             // Multiplicative
             Token::Star => InfixBP {
                 left: 21,
                 right: 22,
                 op: InfixOp::Binary(BinaryOp::Mul),
+            },
+            Token::StarPercent => InfixBP {
+                left: 21,
+                right: 22,
+                op: InfixOp::Binary(BinaryOp::MulWrap),
             },
             Token::Slash => InfixBP {
                 left: 21,
