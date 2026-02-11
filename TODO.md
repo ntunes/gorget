@@ -1,11 +1,10 @@
 # TODO
 
-## Critical — Codegen bugs (blocks struct-with-collection patterns)
-- Method calls on struct fields generate wrong type: `infer_receiver_type` returns `"Unknown"` for `FieldAccess` expressions (e.g. `list.values.push(x)` → `Unknown__push`). Need to resolve the object's struct type, look up the field's declared type, and return it. [added: 2026-02-11]
-- Silent data loss on mutating struct field collections: `needs_temp` wraps `self.field` and `obj.field` in a temporary copy, so `self.values.push(x)` pushes to a discarded copy. `FieldAccess` on identifiers/self is an lvalue and should use `&obj.field` directly. [added: 2026-02-11]
+## High Priority — Parser bugs
+- Index after field access (`self.values[i]`) fails to parse: the `[` triggers generic-type-arg disambiguation which succeeds (parsing `i` as type), then backtracks, but error recovery corrupts parser state. Workaround: use `.get(i)` method instead. [added: 2026-02-11]
 
-## On hold — waiting for bug fixes above
-- Linked list example (`examples/linked_list.gg`): arena-backed linked list with Iterator support. Blocked by the two struct-field codegen bugs above. [added: 2026-02-11]
+## High Priority — Unblocked
+- Linked list example (`examples/linked_list.gg`): arena-backed linked list with Iterator support. Unblocked by struct-field codegen fixes. [added: 2026-02-11]
 
 ## High Priority — Self-hosting blockers
 - Cross-module name resolution: module system loads files but resolution across modules is incomplete [added: 2026-02-11]

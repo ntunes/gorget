@@ -875,6 +875,18 @@ fn vector_higher_order() {
 }
 
 #[test]
+fn struct_field_methods() {
+    run_gg(
+        "struct_field_methods.gg",
+        "\
+3
+10
+20
+30",
+    );
+}
+
+#[test]
 fn dict_higher_order() {
     run_gg(
         "dict_higher_order.gg",

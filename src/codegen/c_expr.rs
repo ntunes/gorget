@@ -9,6 +9,16 @@ use super::c_mangle;
 use super::c_types;
 use super::CodegenContext;
 
+/// Check if an expression is a C lvalue (can take its address directly).
+fn is_lvalue(expr: &Expr) -> bool {
+    match expr {
+        Expr::Identifier(_) | Expr::SelfExpr => true,
+        Expr::FieldAccess { object, .. } => is_lvalue(&object.node),
+        Expr::TupleFieldAccess { object, .. } => is_lvalue(&object.node),
+        _ => false,
+    }
+}
+
 impl CodegenContext<'_> {
     /// Generate a C expression string from a Gorget expression.
     pub fn gen_expr(&self, expr: &Spanned<Expr>) -> String {
@@ -64,7 +74,7 @@ impl CodegenContext<'_> {
                         let l = self.gen_expr(left);
                         let r = self.gen_expr(right);
                         let mangled = c_mangle::mangle_trait_method("Equatable", &type_name, "eq");
-                        let needs_temp = !matches!(left.node, Expr::Identifier(_) | Expr::SelfExpr);
+                        let needs_temp = !is_lvalue(&left.node);
                         let eq_call = if needs_temp {
                             format!("({{ __typeof__({l}) __recv = {l}; {mangled}(&__recv, {r}); }})")
                         } else {
@@ -742,7 +752,7 @@ impl CodegenContext<'_> {
 
         // For non-lvalue receivers (e.g. function calls), we can't take `&recv`
         // directly. Use a GCC statement expression to stash the result in a temp.
-        let needs_temp = !matches!(receiver.node, Expr::Identifier(_) | Expr::SelfExpr);
+        let needs_temp = !is_lvalue(&receiver.node);
         // Inside a method body, `self` is already a pointer (const T* self),
         // so pass it directly instead of taking &self.
         let is_self_ptr = self.current_self_type.is_some() && matches!(receiver.node, Expr::SelfExpr);
@@ -806,7 +816,7 @@ impl CodegenContext<'_> {
         }
 
         let recv = self.gen_expr(receiver);
-        let needs_temp = !matches!(receiver.node, Expr::Identifier(_) | Expr::SelfExpr);
+        let needs_temp = !is_lvalue(&receiver.node);
 
         if is_iterator {
             return Some(self.gen_iterator_method(&recv, method_name, args, receiver, &type_name));
@@ -856,7 +866,7 @@ impl CodegenContext<'_> {
 
         let coll = self.gen_expr(collection);
         let elem = self.gen_expr(needle);
-        let needs_temp = !matches!(collection.node, Expr::Identifier(_) | Expr::SelfExpr);
+        let needs_temp = !is_lvalue(&collection.node);
 
         let coll_ref = if needs_temp {
             format!("({{ __typeof__({coll}) __recv = {coll}; &__recv; }})")
@@ -892,6 +902,15 @@ impl CodegenContext<'_> {
                 });
             if let Some(tid) = type_id {
                 return Some(c_types::type_id_to_c(tid, self.types, self.scopes));
+            }
+        }
+        if let Expr::FieldAccess { object, field } = &expr.node {
+            let obj_type = self.infer_receiver_type(object);
+            if obj_type != "Unknown" {
+                let key = (obj_type, field.node.clone());
+                if let Some(field_type) = self.field_type_names.get(&key) {
+                    return Some(c_types::ast_type_to_c(field_type, self.scopes));
+                }
             }
         }
         None
@@ -1964,7 +1983,7 @@ impl CodegenContext<'_> {
         false
     }
 
-    fn infer_receiver_type(&self, expr: &Spanned<Expr>) -> String {
+    pub(super) fn infer_receiver_type(&self, expr: &Spanned<Expr>) -> String {
         match &expr.node {
             Expr::Identifier(name) => {
                 // Try resolution_map first, then fallback to scope lookup
@@ -2051,7 +2070,36 @@ impl CodegenContext<'_> {
                 }
                 "Unknown".to_string()
             }
+            Expr::FieldAccess { object, field } => {
+                let obj_type = self.infer_receiver_type(object);
+                if obj_type != "Unknown" {
+                    let key = (obj_type, field.node.clone());
+                    if let Some(field_type) = self.field_type_names.get(&key) {
+                        return Self::type_to_name(field_type);
+                    }
+                }
+                "Unknown".to_string()
+            }
             Expr::StringLiteral(_) => "str".to_string(),
+            _ => "Unknown".to_string(),
+        }
+    }
+
+    /// Extract the base type name from an AST Type.
+    fn type_to_name(ty: &Type) -> String {
+        match ty {
+            Type::Named { name, .. } => name.node.clone(),
+            Type::Primitive(p) => match p {
+                PrimitiveType::Int | PrimitiveType::Int8 | PrimitiveType::Int16
+                | PrimitiveType::Int32 | PrimitiveType::Int64 => "int".to_string(),
+                PrimitiveType::Uint | PrimitiveType::Uint8 | PrimitiveType::Uint16
+                | PrimitiveType::Uint32 | PrimitiveType::Uint64 => "uint".to_string(),
+                PrimitiveType::Float | PrimitiveType::Float32 | PrimitiveType::Float64 => "float".to_string(),
+                PrimitiveType::Bool => "bool".to_string(),
+                PrimitiveType::Str | PrimitiveType::StringType => "str".to_string(),
+                PrimitiveType::Char => "char".to_string(),
+                PrimitiveType::Void => "void".to_string(),
+            },
             _ => "Unknown".to_string(),
         }
     }

@@ -13,6 +13,7 @@ use std::collections::HashSet;
 use rustc_hash::FxHashMap;
 
 use crate::parser::ast::Module;
+use crate::parser::ast::Type;
 use crate::semantic::ids::{DefId, TypeId};
 use crate::semantic::resolve::{EnumVariantInfo, FunctionInfo, ResolutionMap, StructFieldInfo};
 use crate::semantic::scope::ScopeTable;
@@ -21,7 +22,7 @@ use crate::semantic::traits::TraitRegistry;
 use crate::semantic::AnalysisResult;
 use crate::span::Span;
 
-use crate::parser::ast::{EnumDef, FunctionDef, StructDef};
+use crate::parser::ast::{EnumDef, FunctionDef, Item, StructDef};
 use c_emitter::CEmitter;
 
 /// A registered generic instantiation.
@@ -125,10 +126,26 @@ pub struct CodegenContext<'a> {
     pub current_function_return_c_type: RefCell<Option<String>>,
     /// Counter for unique `__try_rN` temp variable names in Result `?` codegen.
     pub try_counter: RefCell<usize>,
+    /// Map from (struct_name, field_name) → AST Type, used to resolve field types
+    /// in `infer_receiver_type` for FieldAccess expressions.
+    pub field_type_names: FxHashMap<(String, String), Type>,
 }
 
 /// Generate C source code from a parsed and analyzed Gorget module.
 pub fn generate_c(module: &Module, analysis: &AnalysisResult, strip_asserts: bool, overflow_wrap: bool) -> String {
+    let mut field_type_names = FxHashMap::default();
+    for item in &module.items {
+        if let Item::Struct(s) = &item.node {
+            let struct_name = s.name.node.clone();
+            for field in &s.fields {
+                field_type_names.insert(
+                    (struct_name.clone(), field.node.name.node.clone()),
+                    field.node.type_.node.clone(),
+                );
+            }
+        }
+    }
+
     let mut ctx = CodegenContext {
         scopes: &analysis.scopes,
         types: &analysis.types,
@@ -155,6 +172,7 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, strip_asserts: boo
         expr_types: &analysis.expr_types,
         current_function_return_c_type: RefCell::new(None),
         try_counter: RefCell::new(0),
+        field_type_names,
     };
 
     let mut emitter = CEmitter::new();

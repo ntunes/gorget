@@ -513,6 +513,16 @@ impl CodegenContext<'_> {
                 }
                 "int64_t".to_string()
             }
+            Expr::FieldAccess { object, field } => {
+                let obj_type = self.infer_receiver_type(object);
+                if obj_type != "Unknown" {
+                    let key = (obj_type, field.node.clone());
+                    if let Some(field_type) = self.field_type_names.get(&key) {
+                        return super::c_types::ast_type_to_c(field_type, self.scopes);
+                    }
+                }
+                "int64_t".to_string()
+            }
             Expr::StructLiteral { name, .. } => name.node.clone(),
             Expr::TupleLiteral(elements) => {
                 let c_field_types: Vec<String> = elements

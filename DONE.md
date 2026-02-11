@@ -1,5 +1,6 @@
 # DONE
 
+- [2026-02-11] Fix struct field codegen bugs: `infer_receiver_type` now handles `FieldAccess` via `field_type_names` map (resolves `self.values.push(x)` → `Vector__push` instead of `Unknown__push`); `needs_temp` uses `is_lvalue()` helper to recognize field access chains as lvalues (fixes silent data loss from temporary copies); `infer_receiver_c_type` and `infer_c_type_from_expr` also handle `FieldAccess`; new `struct_field_methods.gg` integration test
 - [2026-02-11] Iterator adapters: `.map()`, `.filter()`, `.collect()`, `.fold()` on any type implementing Iterator[T] — eager evaluation draining into Vector[T] (or scalar for fold), with typecheck inference and while/next/break codegen pattern
 - [2026-02-11] `?` operator for Result[T,E] propagation: dual-mode `?` — on Result values, generates value-based early return (unwrap Ok or `return Error(e)`); falls back to existing setjmp/longjmp for throws-based error handling; typecheck records expr_types map for codegen, validates enclosing function returns Result, new TryOnResultInNonResultFunction error
 - [2026-02-11] Vec capacity and slicing: `Vector[T](n)` with_capacity constructor, `.reserve(n)` method, `vec[i]` element indexing via `GORGET_ARRAY_AT`, `vec[start..end]` slicing via `gorget_array_slice()` — C runtime helpers, typecheck, codegen, integration test

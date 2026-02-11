@@ -1,0 +1,22 @@
+struct NumberList:
+    Vector[int] values
+
+equip NumberList:
+    void add(&self, int x):
+        self.values.push(x)
+
+    int length(self):
+        return self.values.len()
+
+    int get(self, int i):
+        return self.values.get(i)
+
+void main():
+    NumberList list = NumberList(Vector[int]())
+    list.add(10)
+    list.add(20)
+    list.add(30)
+    print(list.length())
+    print(list.get(0))
+    print(list.get(1))
+    print(list.get(2))
