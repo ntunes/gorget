@@ -23,13 +23,27 @@ Hello, World!
 - **For/else and while/else** loops (else runs when loop completes without `break`)
 - **Closures**, comprehensions, error handling, and more
 
-## Quick Start
+## Install
 
-### Build the compiler
+```bash
+curl -fsSL https://raw.githubusercontent.com/ntunes/gorget/main/install.sh | sh
+```
+
+Or install a specific version:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ntunes/gorget/main/install.sh | VERSION=v0.1.0 sh
+```
+
+Binaries are available for macOS (ARM64, x86_64) and Linux (x86_64, ARM64).
+
+### Build from source
 
 ```bash
 cargo build --release
 ```
+
+## Quick Start
 
 ### Write a program
 
