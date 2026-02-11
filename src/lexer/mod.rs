@@ -156,13 +156,7 @@ impl<'src> Lexer<'src> {
                 ));
             }
         } else if spaces > current {
-            // Indentation increased
-            if spaces != current + 4 {
-                self.errors.push(LexError {
-                    kind: LexErrorKind::InvalidIndentation { got: spaces },
-                    span: Span::new(line_start, line_start + spaces),
-                });
-            }
+            // Indentation increased — any amount is valid (Python-style)
             if self.need_newline {
                 self.pending.push_back(Spanned::new(
                     Token::Newline,
