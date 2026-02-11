@@ -1,0 +1,63 @@
+# Custom iterators — Range and Fibonacci sequence
+
+struct Range:
+    int current
+    int stop
+    int step
+
+equip Range with Iterator[int]:
+    Option[int] next(&self):
+        if self.current >= self.stop:
+            return None
+        int val = self.current
+        self.current = self.current + self.step
+        return Some(val)
+
+struct FibIter:
+    int a
+    int b
+    int remaining
+
+equip FibIter with Iterator[int]:
+    Option[int] next(&self):
+        if self.remaining <= 0:
+            return None
+        int val = self.a
+        int temp = self.b
+        self.b = self.a + self.b
+        self.a = temp
+        self.remaining = self.remaining - 1
+        return Some(val)
+
+void main():
+    # Range with custom step
+    print("Counting by 3s:")
+    Range r = Range(0, 20, 3)
+    for x in r:
+        print("  {x}")
+
+    # Collect evens from a range
+    Range r2 = Range(1, 20, 1)
+    Vector[int] evens = r2.filter((int x): x % 2 == 0)
+    print("Even numbers 1..20:")
+    for e in evens:
+        print("  {e}")
+
+    # First 10 Fibonacci numbers via iterator
+    print("Fibonacci (first 10):")
+    FibIter fibs = FibIter(0, 1, 10)
+    Vector[int] fib_list = fibs.collect()
+    for f in fib_list:
+        print("  {f}")
+
+    # Sum of first 20 Fibonacci numbers
+    FibIter fibs2 = FibIter(0, 1, 20)
+    int total = fibs2.fold(0, (int acc, int x): acc + x)
+    print("Sum of first 20 Fibonacci numbers: {total}")
+
+    # Map: square each element
+    Range r3 = Range(1, 6, 1)
+    Vector[int] squares = r3.map((int x): x * x)
+    print("Squares of 1..5:")
+    for s in squares:
+        print("  {s}")

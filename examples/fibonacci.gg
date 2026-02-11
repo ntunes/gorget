@@ -1,0 +1,30 @@
+# Fibonacci sequence — iterative and recursive
+
+int fib_recursive(int n):
+    if n <= 1:
+        return n
+    return fib_recursive(n - 1) + fib_recursive(n - 2)
+
+int fib_iterative(int n):
+    int a = 0
+    int b = 1
+    for i in 0..n:
+        int temp = b
+        b = a + b
+        a = temp
+    return a
+
+void main():
+    # First 20 Fibonacci numbers (iterative)
+    print("Fibonacci sequence:")
+    for i in 0..20:
+        print("  fib({i}) = {fib_iterative(i)}")
+
+    # Verify recursive matches iterative
+    print("Recursive check:")
+    for i in 0..15:
+        int r = fib_recursive(i)
+        int iter = fib_iterative(i)
+        assert r == iter, "mismatch!"
+        print("  fib({i}) = {r}")
+    print("All checks passed.")
