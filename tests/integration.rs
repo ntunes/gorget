@@ -908,10 +908,12 @@ fn string_stdlib() {
     run_gg(
         "string_stdlib.gg",
         "\
-starts yes
-ends yes
-empty yes
-contains yes
+true
+true
+false
+true
+false
+true
 hi
 HELLO, WORLD!
 hello, world!

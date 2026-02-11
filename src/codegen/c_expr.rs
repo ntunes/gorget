@@ -1908,14 +1908,9 @@ impl CodegenContext<'_> {
         let expr = self.gen_expr(arg);
 
         // Look up the argument's type to determine the correct printf format
-        if let Expr::Identifier(name) = &arg.node {
-            if let Some(def_id) = self.scopes.lookup_by_name_anywhere(name) {
-                let def = self.scopes.get_def(def_id);
-                if let Some(type_id) = def.type_id {
-                    let (fmt, arg_expr) = self.format_for_type_id(type_id, &expr);
-                    return format!("printf(\"{fmt}\\n\", {arg_expr})");
-                }
-            }
+        if let Some(type_id) = self.infer_interp_expr_type(arg) {
+            let (fmt, arg_expr) = self.format_for_type_id(type_id, &expr);
+            return format!("printf(\"{fmt}\\n\", {arg_expr})");
         }
 
         format!("printf(\"%lld\\n\", (long long){expr})")
@@ -2126,6 +2121,12 @@ impl CodegenContext<'_> {
             ("GorgetSet", "len") => Some(self.types.int_id),
             ("GorgetSet", "contains") => Some(self.types.bool_id),
             ("const char*", "len") => Some(self.types.int_id),
+            ("const char*", "contains" | "starts_with" | "ends_with" | "is_empty") => {
+                Some(self.types.bool_id)
+            }
+            ("const char*", "trim" | "to_upper" | "to_lower" | "replace") => {
+                Some(self.types.string_id)
+            }
             _ => None,
         }
     }

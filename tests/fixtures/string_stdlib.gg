@@ -1,38 +1,26 @@
 void main():
     str s = "Hello, World!"
 
-    # starts_with / ends_with
-    bool sw1 = s.starts_with("Hello")
-    bool sw2 = s.ends_with("World!")
-    bool sw3 = s.starts_with("World")
-    if sw1:
-        print("starts yes")
-    if sw2:
-        print("ends yes")
-    if sw3:
-        print("bad")
+    # starts_with / ends_with via interpolation
+    print("{s.starts_with("Hello")}")
+    print("{s.ends_with("World!")}")
+    print("{s.starts_with("World")}")
 
     # is_empty
     str empty = ""
-    if empty.is_empty():
-        print("empty yes")
-    if s.is_empty():
-        print("bad")
+    print("{empty.is_empty()}")
+    print("{s.is_empty()}")
 
     # contains
-    if s.contains("World"):
-        print("contains yes")
+    print("{s.contains("World")}")
 
-    # trim
+    # trim — print method call result directly
     str padded = "  hi  "
-    str trimmed = padded.trim()
-    print(trimmed)
+    print(padded.trim())
 
     # to_upper / to_lower
-    str upper = s.to_upper()
-    print(upper)
-    str lower = s.to_lower()
-    print(lower)
+    print(s.to_upper())
+    print(s.to_lower())
 
     # replace
     str replaced = s.replace("World", "Gorget")
