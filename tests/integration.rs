@@ -700,6 +700,11 @@ fn option_map() {
 }
 
 #[test]
+fn result_question_operator() {
+    run_gg("result_question.gg", "84\n-1\nis error\n52\ndone");
+}
+
+#[test]
 fn result_map() {
     run_gg(
         "result_map.gg",

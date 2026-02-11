@@ -65,6 +65,9 @@ pub enum SemanticErrorKind {
     /// Throw in non-throwing function.
     ThrowInNonThrowingFunction,
 
+    /// `?` on Result in a function that doesn't return Result.
+    TryOnResultInNonResultFunction,
+
     // ── Borrow checking errors ──
 
     /// Variable used after ownership was moved.
@@ -194,6 +197,9 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::ThrowInNonThrowingFunction => {
                 write!(f, "throw in function that doesn't declare `throws`")
+            }
+            SemanticErrorKind::TryOnResultInNonResultFunction => {
+                write!(f, "`?` on Result requires enclosing function to return Result")
             }
             SemanticErrorKind::UseAfterMove { name, .. } => {
                 write!(f, "use of moved value `{name}`")

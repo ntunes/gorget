@@ -1,0 +1,26 @@
+Result[int, str] parse_int(str s):
+    if s == "42":
+        return Ok(42)
+    return Error("not 42")
+
+Result[int, str] double_parsed(str s):
+    int val = parse_int(s)?
+    return Ok(val * 2)
+
+Result[int, str] add_ten(str s):
+    int val = parse_int(s)?
+    return Ok(val + 10)
+
+void main():
+    Result[int, str] r1 = double_parsed("42")
+    print("{r1.unwrap()}")
+
+    Result[int, str] r2 = double_parsed("abc")
+    print("{r2.unwrap_or(-1)}")
+    if r2.is_err():
+        print("is error")
+
+    Result[int, str] r3 = add_ten("42")
+    print("{r3.unwrap()}")
+
+    print("done")

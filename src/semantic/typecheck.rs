@@ -28,6 +28,8 @@ struct TypeChecker<'a> {
     current_function_throws: bool,
     /// Type variable for implicit `it` parameter inside ImplicitClosure.
     implicit_it_type: Option<TypeId>,
+    /// Map from expression span to its inferred TypeId (used by codegen for Result-based `?`).
+    expr_types: FxHashMap<Span, TypeId>,
 }
 
 impl<'a> TypeChecker<'a> {
@@ -52,6 +54,7 @@ impl<'a> TypeChecker<'a> {
             current_return_type: None,
             current_function_throws: false,
             implicit_it_type: None,
+            expr_types: FxHashMap::default(),
         }
     }
 
@@ -562,8 +565,46 @@ impl<'a> TypeChecker<'a> {
             }
 
             Expr::Try { expr: inner } => {
-                self.infer_expr(inner);
-                self.types.error_id // unwrapped Result type
+                let inner_type = self.infer_expr(inner);
+                let resolved = self.resolve_type(inner_type);
+
+                // Try to determine if inner expression has Result type.
+                // First check if infer_expr returned a concrete Result type.
+                // If not (returns error_id), try to look up the callee's return type
+                // from function_info (since function call inference is limited).
+                let result_type = if let ResolvedType::Generic(def_id, args) = self.types.get(resolved).clone() {
+                    let name = self.scopes.get_def(def_id).name.clone();
+                    if name == "Result" && args.len() == 2 {
+                        Some((resolved, args))
+                    } else {
+                        None
+                    }
+                } else {
+                    // Fallback: check callee's return type for Call expressions
+                    self.try_resolve_call_result_type(inner)
+                };
+
+                if let Some((type_id, args)) = result_type {
+                    // Record the inner expression type for codegen
+                    self.expr_types.insert(inner.span, type_id);
+                    // Validate that the enclosing function returns Result[_, E]
+                    if let Some(ret_type) = self.current_return_type {
+                        let resolved_ret = self.resolve_type(ret_type);
+                        if let ResolvedType::Generic(ret_def_id, ret_args) = self.types.get(resolved_ret).clone() {
+                            let ret_name = self.scopes.get_def(ret_def_id).name.clone();
+                            if ret_name == "Result" && ret_args.len() == 2 {
+                                // Unify error types
+                                self.unify(args[1], ret_args[1], expr.span);
+                                return args[0]; // T
+                            }
+                        }
+                        // Enclosing function doesn't return Result
+                        self.error(SemanticErrorKind::TryOnResultInNonResultFunction, expr.span);
+                        return args[0];
+                    }
+                    return args[0]; // No return type context
+                }
+                self.types.error_id // fallback for non-Result ?
             }
 
             Expr::Move { expr: inner }
@@ -1342,6 +1383,29 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    /// Try to determine if a Call expression returns a Result type by looking up
+    /// the callee's FunctionInfo. Returns Some((result_type_id, [T, E])) if found.
+    fn try_resolve_call_result_type(&self, expr: &Spanned<Expr>) -> Option<(TypeId, Vec<TypeId>)> {
+        if let Expr::Call { callee, .. } = &expr.node {
+            if let Expr::Identifier(_) = &callee.node {
+                if let Some(&def_id) = self.resolution_map.get(&callee.span.start) {
+                    if let Some(info) = self.function_info.get(&def_id) {
+                        if let Some(ret_type_id) = info.return_type_id {
+                            let resolved = self.resolve_type(ret_type_id);
+                            if let ResolvedType::Generic(def_id, args) = self.types.get(resolved).clone() {
+                                let name = self.scopes.get_def(def_id).name.clone();
+                                if name == "Result" && args.len() == 2 {
+                                    return Some((resolved, args));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Extract the return type from a Function type.
     fn extract_fn_return_type(&self, type_id: TypeId) -> Option<TypeId> {
         match self.types.get(type_id) {
@@ -1553,6 +1617,7 @@ fn ast_type_to_gorget_name(ty: &Type) -> Option<String> {
 }
 
 /// Run type checking on the entire module.
+/// Returns a map from expression spans to their inferred types (for Result-based `?` codegen).
 pub fn check_module(
     module: &Module,
     scopes: &mut ScopeTable,
@@ -1562,7 +1627,7 @@ pub fn check_module(
     function_info: &FxHashMap<DefId, FunctionInfo>,
     enum_variants: &FxHashMap<DefId, EnumVariantInfo>,
     errors: &mut Vec<SemanticError>,
-) {
+) -> FxHashMap<Span, TypeId> {
     let mut checker = TypeChecker::new(scopes, types, traits, resolution_map, function_info, enum_variants);
 
     for item in &module.items {
@@ -1586,6 +1651,7 @@ pub fn check_module(
     }
 
     errors.extend(checker.errors);
+    checker.expr_types
 }
 
 #[cfg(test)]

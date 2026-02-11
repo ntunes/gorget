@@ -360,8 +360,17 @@ impl CodegenContext<'_> {
             }
 
             Expr::Try { expr: try_expr } => {
+                // Check if inner expression has Result type via expr_types map
+                if let Some(&type_id) = self.expr_types.get(&try_expr.span) {
+                    if let crate::semantic::types::ResolvedType::Generic(def_id, ref args) = self.types.get(type_id).clone() {
+                        let base_name = self.scopes.get_def(def_id).name.clone();
+                        if base_name == "Result" && args.len() == 2 {
+                            return self.gen_result_try(try_expr, &args);
+                        }
+                    }
+                }
+                // Fallback: existing setjmp/longjmp behavior
                 let inner = self.gen_expr(try_expr);
-                // ? operator: on error, propagate by longjmp-ing directly (error struct is already populated)
                 format!(
                     "({{ __typeof__({inner}) __try_val; \
                     if (GORGET_TRY) {{ __try_val = {inner}; GORGET_CATCH_END; }} \
@@ -382,6 +391,35 @@ impl CodegenContext<'_> {
                 format!("/* spawn */ {inner}")
             }
         }
+    }
+
+    /// Generate Result-based `?` operator: unwrap Ok or early-return Error.
+    fn gen_result_try(&self, try_expr: &Spanned<Expr>, args: &[crate::semantic::ids::TypeId]) -> String {
+        let inner = self.gen_expr(try_expr);
+        let t_c = c_types::type_id_to_c(args[0], self.types, self.scopes);
+        let e_c = c_types::type_id_to_c(args[1], self.types, self.scopes);
+        let inner_mangled = c_mangle::mangle_generic("Result", &[t_c, e_c.clone()]);
+        let tag_error = c_mangle::mangle_tag(&inner_mangled, "Error");
+
+        // Get function's return type for Error constructor
+        let fn_ret = self.current_function_return_c_type.borrow().clone()
+            .unwrap_or_else(|| inner_mangled.clone());
+        let ret_error_ctor = c_mangle::mangle_variant(&fn_ret, "Error");
+
+        // Unique temp name for nested ? support
+        let try_id = {
+            let mut c = self.try_counter.borrow_mut();
+            let id = *c;
+            *c += 1;
+            id
+        };
+
+        format!(
+            "({{ {inner_mangled} __try_r{try_id} = {inner}; \
+            if (__try_r{try_id}.tag == {tag_error}) {{ \
+            return {ret_error_ctor}(__try_r{try_id}.data.Error._0); }} \
+            __try_r{try_id}.data.Ok._0; }})"
+        )
     }
 
     /// Generate a plain C string literal (no interpolation).

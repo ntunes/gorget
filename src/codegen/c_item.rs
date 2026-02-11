@@ -356,6 +356,13 @@ impl CodegenContext<'_> {
         // Track whether this function throws
         self.current_function_throws = f.throws.is_some();
 
+        // Track return type for Result-based ? codegen
+        *self.current_function_return_c_type.borrow_mut() = if is_main {
+            None
+        } else {
+            Some(c_types::ast_type_to_c(&f.return_type.node, self.scopes))
+        };
+
         match &f.body {
             FunctionBody::Block(block) => {
                 emitter.emit_line(&format!("{ret_type} {func_name}({params}) {{"));

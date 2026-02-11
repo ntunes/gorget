@@ -11,8 +11,9 @@ pub mod types;
 use rustc_hash::FxHashMap;
 
 use crate::parser::ast::{Item, Module};
+use crate::span::Span;
 use errors::{SemanticError, SemanticErrorKind};
-use ids::DefId;
+use ids::{DefId, TypeId};
 use resolve::{EnumVariantInfo, FunctionInfo, ResolutionMap, StructFieldInfo};
 use scope::ScopeTable;
 use traits::TraitRegistry;
@@ -28,6 +29,8 @@ pub struct AnalysisResult {
     pub struct_fields: FxHashMap<DefId, StructFieldInfo>,
     pub enum_variants: FxHashMap<DefId, EnumVariantInfo>,
     pub function_info: FxHashMap<DefId, FunctionInfo>,
+    /// Map from expression span to inferred TypeId (for Result-based `?` codegen).
+    pub expr_types: FxHashMap<Span, TypeId>,
 }
 
 /// Run all semantic analysis passes on a parsed module.
@@ -98,7 +101,7 @@ pub fn analyze(module: &Module) -> AnalysisResult {
         traits::build_registry(module, &scopes, &mut types, &resolution_map, &mut errors);
 
     // Pass 4: Type check everything
-    typecheck::check_module(
+    let expr_types = typecheck::check_module(
         module,
         &mut scopes,
         &mut types,
@@ -132,5 +135,6 @@ pub fn analyze(module: &Module) -> AnalysisResult {
         struct_fields: resolve_ctx.struct_fields,
         enum_variants: resolve_ctx.enum_variants,
         function_info: resolve_ctx.function_info,
+        expr_types,
     }
 }

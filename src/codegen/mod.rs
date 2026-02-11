@@ -13,12 +13,13 @@ use std::collections::HashSet;
 use rustc_hash::FxHashMap;
 
 use crate::parser::ast::Module;
-use crate::semantic::ids::DefId;
+use crate::semantic::ids::{DefId, TypeId};
 use crate::semantic::resolve::{EnumVariantInfo, FunctionInfo, ResolutionMap, StructFieldInfo};
 use crate::semantic::scope::ScopeTable;
 use crate::semantic::types::TypeTable;
 use crate::semantic::traits::TraitRegistry;
 use crate::semantic::AnalysisResult;
+use crate::span::Span;
 
 use crate::parser::ast::{EnumDef, FunctionDef, StructDef};
 use c_emitter::CEmitter;
@@ -118,6 +119,12 @@ pub struct CodegenContext<'a> {
     pub strip_asserts: bool,
     /// When true, integer overflow wraps silently instead of panicking.
     pub overflow_wrap: bool,
+    /// Map from expression span to inferred TypeId (for Result-based `?` codegen).
+    pub expr_types: &'a FxHashMap<Span, TypeId>,
+    /// C return type of the current function being emitted (for Result `?` early return).
+    pub current_function_return_c_type: RefCell<Option<String>>,
+    /// Counter for unique `__try_rN` temp variable names in Result `?` codegen.
+    pub try_counter: RefCell<usize>,
 }
 
 /// Generate C source code from a parsed and analyzed Gorget module.
@@ -145,6 +152,9 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, strip_asserts: boo
         type_subs: RefCell::new(Vec::new()),
         strip_asserts,
         overflow_wrap,
+        expr_types: &analysis.expr_types,
+        current_function_return_c_type: RefCell::new(None),
+        try_counter: RefCell::new(0),
     };
 
     let mut emitter = CEmitter::new();
