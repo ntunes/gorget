@@ -1103,6 +1103,23 @@ fn iterator_adapters() {
 106");
 }
 
+#[test]
+fn linked_list() {
+    run_gg(
+        "linked_list.gg",
+        "\
+3
+10
+10
+20
+30
+60
+20
+40
+60",
+    );
+}
+
 /// Build and run a `.gg` fixture with extra CLI flags, asserting its stdout matches `expected`.
 fn run_gg_with_flags(fixture: &str, flags: &[&str], expected: &str) {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

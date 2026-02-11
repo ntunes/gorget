@@ -1,8 +1,5 @@
 # TODO
 
-## High Priority — Unblocked
-- Linked list example (`examples/linked_list.gg`): arena-backed linked list with Iterator support. Unblocked by struct-field codegen fixes. [added: 2026-02-11]
-
 ## High Priority — Self-hosting blockers
 - Cross-module name resolution: module system loads files but resolution across modules is incomplete [added: 2026-02-11]
 - String concatenation (`+` on strings or StringBuilder): compiler needs to build C source strings, mangle names, compose error messages [added: 2026-02-11]

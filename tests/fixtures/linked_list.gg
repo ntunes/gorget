@@ -1,0 +1,50 @@
+struct LinkedList:
+    Vector[int] values
+    Vector[int] nexts
+    int head
+    int len
+    int cursor
+
+equip LinkedList:
+    void push_front(&self, int val):
+        int idx = self.values.len()
+        self.values.push(val)
+        self.nexts.push(self.head)
+        self.head = idx
+        self.len = self.len + 1
+        self.cursor = self.head
+
+    int length(self):
+        return self.len
+
+    int peek(self):
+        return self.values[self.head]
+
+    void reset(&self):
+        self.cursor = self.head
+
+equip LinkedList with Iterator[int]:
+    Option[int] next(&self):
+        if self.cursor == -1:
+            return None
+        int val = self.values[self.cursor]
+        self.cursor = self.nexts[self.cursor]
+        return Some(val)
+
+void main():
+    LinkedList list = LinkedList(Vector[int](), Vector[int](), -1, 0, -1)
+    list.push_front(30)
+    list.push_front(20)
+    list.push_front(10)
+    print(list.length())
+    print(list.peek())
+    for x in list:
+        print(x)
+    list.reset()
+    int total = list.fold(0, (int acc, int x): acc + x)
+    print(total)
+    list.reset()
+    Vector[int] doubled = list.map((int x): x * 2)
+    print(doubled.get(0))
+    print(doubled.get(1))
+    print(doubled.get(2))
