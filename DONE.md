@@ -1,5 +1,6 @@
 # DONE
 
+- [2026-02-11] Fix string interpolation of method calls: `infer_interp_expr_type()` now falls back to trait/inherent method lookup when builtin methods don't match, so `"{d.speak()}"` correctly emits `%s` instead of `%lld`
 - [2026-02-11] Cross-module name resolution: deferred return type fixup pass in resolve.rs (re-resolves function return types after all imports are collected), function signature pre-registration in typecheck.rs (sets DefInfo.type_id to ResolvedType::Function before body checking so callers infer correct types), 5 new cross-module test fixtures (struct, enum, struct_return, trait, auto inference)
 - [2026-02-11] Arena-backed linked list example (`examples/linked_list.gg` + `tests/fixtures/linked_list.gg`): parallel-vector arena with push_front, peek, length, reset, Iterator[int] impl, for-loop iteration, fold, map — exercises struct field indexing, &self mutation, Iterator trait, and iterator adapters
 - [2026-02-11] Fix parser bug: `self.values[i]` (index after field access) — Dot handler now uses save/restore backtracking for `[` ambiguity (generic method vs indexing), matching the LBracket handler pattern; updated `struct_field_methods.gg` to use direct indexing instead of `.get(i)` workaround

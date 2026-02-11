@@ -2406,10 +2406,24 @@ impl CodegenContext<'_> {
             Expr::MethodCall {
                 receiver, method, ..
             } => {
-                let recv_type = self.infer_receiver_c_type(receiver);
-                recv_type
+                // Try builtin methods first
+                let recv_c_type = self.infer_receiver_c_type(receiver);
+                if let Some(tid) = recv_c_type
                     .as_deref()
                     .and_then(|rt| self.builtin_method_return_type(rt, &method.node))
+                {
+                    return Some(tid);
+                }
+                // Fall back to trait/inherent method lookup
+                let type_name = self.infer_receiver_type(receiver);
+                for impl_info in &self.traits.impls {
+                    if impl_info.self_type_name == type_name {
+                        if let Some((_def_id, sig)) = impl_info.methods.get(method.node.as_str()) {
+                            return Some(sig.return_type);
+                        }
+                    }
+                }
+                None
             }
             Expr::Deref { expr: inner } => {
                 // *box_var → inner type of Box[T]
