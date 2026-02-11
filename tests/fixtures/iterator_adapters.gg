@@ -1,0 +1,45 @@
+struct Counter:
+    int current
+    int max
+
+equip Counter with Iterator[int]:
+    Option[int] next(&self):
+        if self.current >= self.max:
+            return None
+        int val = self.current
+        self.current = self.current + 1
+        return Some(val)
+
+void main():
+    # collect: drain iterator into a Vector
+    Counter c1 = Counter(0, 5)
+    Vector[int] collected = c1.collect()
+    print("{collected.len()}")
+
+    # filter: keep only even numbers
+    Counter c2 = Counter(0, 5)
+    Vector[int] evens = c2.filter((int x): x % 2 == 0)
+    print("{evens.len()}")
+
+    # filter: verify values
+    print("{evens.get(0)}")
+
+    # collect length
+    print("{collected.get(0)}")
+    print("{collected.get(4)}")
+
+    # map: double each element
+    Counter c3 = Counter(0, 5)
+    Vector[int] doubled = c3.map((int x): x * 2)
+    print("{doubled.get(0)}")
+    print("{doubled.get(2)}")
+
+    # fold: sum all elements
+    Counter c4 = Counter(0, 5)
+    int total = c4.fold(0, (int acc, int x): acc + x)
+    print("{total}")
+
+    # fold with non-zero init
+    Counter c5 = Counter(1, 4)
+    int total2 = c5.fold(100, (int acc, int x): acc + x)
+    print("{total2}")

@@ -794,14 +794,23 @@ impl CodegenContext<'_> {
         let is_result = type_name == "Result";
         let is_box = type_name == "Box";
         let is_file = type_name == "File" || c_type.as_deref() == Some("GorgetFile");
+        let is_iterator = !is_vector && !is_map && !is_set && !is_string
+            && !is_option && !is_result && !is_box && !is_file
+            && matches!(method_name, "collect" | "filter" | "map" | "fold")
+            && self.traits.impls.iter().any(|i|
+                i.self_type_name == type_name && i.trait_name.as_deref() == Some("Iterator")
+            );
 
-        if !is_vector && !is_map && !is_set && !is_string && !is_option && !is_result && !is_box && !is_file {
+        if !is_vector && !is_map && !is_set && !is_string && !is_option && !is_result && !is_box && !is_file && !is_iterator {
             return None;
         }
 
         let recv = self.gen_expr(receiver);
         let needs_temp = !matches!(receiver.node, Expr::Identifier(_) | Expr::SelfExpr);
 
+        if is_iterator {
+            return Some(self.gen_iterator_method(&recv, method_name, args, receiver, &type_name));
+        }
         if is_vector {
             return Some(self.gen_vector_method(&recv, method_name, args, receiver, needs_temp));
         }
@@ -1078,6 +1087,95 @@ impl CodegenContext<'_> {
                 // Unknown method — fall through to normal dispatch
                 format!("/* unknown Vector method {method_name} */ 0")
             }
+        }
+    }
+
+    /// Generate code for Iterator adapter method calls (collect, filter, map, fold).
+    /// Uses the while/next/break pattern from for-loop iterator codegen.
+    fn gen_iterator_method(
+        &self,
+        recv: &str,
+        method_name: &str,
+        args: &[Spanned<crate::parser::ast::CallArg>],
+        receiver: &Spanned<Expr>,
+        type_name: &str,
+    ) -> String {
+        // Get the element C type from the Iterator[T] impl
+        let elem_c_type = self.get_iterator_elem_c_type(receiver);
+
+        // Register Option[elem_c_type] so the typedef is emitted
+        let option_mangled = self.register_generic(
+            "Option",
+            &[elem_c_type.clone()],
+            super::GenericInstanceKind::Enum,
+        );
+        let tag_none = super::c_mangle::mangle_tag(&option_mangled, "None");
+        let next_fn = super::c_mangle::mangle_trait_method("Iterator", type_name, "next");
+
+        match method_name {
+            "collect" => {
+                format!(
+                    "({{ __typeof__({recv}) __it_recv = {recv}; \
+                    GorgetArray __it_result = gorget_array_new(sizeof({elem_c_type})); \
+                    while (1) {{ \
+                        {option_mangled} __it_next = {next_fn}(&__it_recv); \
+                        if (__it_next.tag == {tag_none}) break; \
+                        {elem_c_type} __it_elem = __it_next.data.Some._0; \
+                        gorget_array_push(&__it_result, &__it_elem); \
+                    }} \
+                    __it_result; }})"
+                )
+            }
+            "filter" => {
+                let closure_fn = self.gen_expr(&args[0].node.value);
+                self.patch_last_closure_return_type("bool");
+                format!(
+                    "({{ __typeof__({recv}) __it_recv = {recv}; \
+                    GorgetArray __it_result = gorget_array_new(sizeof({elem_c_type})); \
+                    while (1) {{ \
+                        {option_mangled} __it_next = {next_fn}(&__it_recv); \
+                        if (__it_next.tag == {tag_none}) break; \
+                        {elem_c_type} __it_elem = __it_next.data.Some._0; \
+                        if ({closure_fn}(__it_elem)) {{ gorget_array_push(&__it_result, &__it_elem); }} \
+                    }} \
+                    __it_result; }})"
+                )
+            }
+            "map" => {
+                let closure_fn = self.gen_expr(&args[0].node.value);
+                let body_c_type = self.infer_closure_body_c_type(&args[0].node.value);
+                self.patch_last_closure_return_type(&body_c_type);
+                format!(
+                    "({{ __typeof__({recv}) __it_recv = {recv}; \
+                    GorgetArray __it_result = gorget_array_new(sizeof({body_c_type})); \
+                    while (1) {{ \
+                        {option_mangled} __it_next = {next_fn}(&__it_recv); \
+                        if (__it_next.tag == {tag_none}) break; \
+                        {elem_c_type} __it_elem = __it_next.data.Some._0; \
+                        {body_c_type} __it_out = {closure_fn}(__it_elem); \
+                        gorget_array_push(&__it_result, &__it_out); \
+                    }} \
+                    __it_result; }})"
+                )
+            }
+            "fold" => {
+                let init = self.gen_expr(&args[0].node.value);
+                let init_c_type = self.infer_c_type_from_expr(&args[0].node.value.node);
+                let closure_fn = self.gen_expr(&args[1].node.value);
+                self.patch_last_closure_return_type(&init_c_type);
+                format!(
+                    "({{ __typeof__({recv}) __it_recv = {recv}; \
+                    {init_c_type} __it_acc = {init}; \
+                    while (1) {{ \
+                        {option_mangled} __it_next = {next_fn}(&__it_recv); \
+                        if (__it_next.tag == {tag_none}) break; \
+                        {elem_c_type} __it_elem = __it_next.data.Some._0; \
+                        __it_acc = {closure_fn}(__it_acc, __it_elem); \
+                    }} \
+                    __it_acc; }})"
+                )
+            }
+            _ => format!("/* unknown Iterator method {method_name} */ 0"),
         }
     }
 

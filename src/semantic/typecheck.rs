@@ -8,7 +8,7 @@ use super::ids::{DefId, TypeId};
 use super::resolve::{EnumVariantInfo, FunctionInfo, ResolutionMap};
 use super::scope::{DefKind, ScopeTable};
 use super::traits::TraitRegistry;
-use super::types::{ResolvedType, TypeTable};
+use super::types::{self, ResolvedType, TypeTable};
 
 /// Type checker with bidirectional inference.
 struct TypeChecker<'a> {
@@ -1192,8 +1192,20 @@ impl<'a> TypeChecker<'a> {
                 let def_id = *def_id;
                 (name, args, def_id)
             }
+            ResolvedType::Defined(def_id) => {
+                let name = self.scopes.get_def(*def_id).name.clone();
+                let def_id = *def_id;
+                (name, vec![], def_id)
+            }
             _ => return None,
         };
+
+        // Check for Iterator adapter methods on any type implementing Iterator[T]
+        if matches!(method, "filter" | "map" | "fold" | "collect") {
+            if let Some(ret) = self.try_iterator_adapter_type(&type_name, method, args) {
+                return Some(ret);
+            }
+        }
 
         match (type_name.as_str(), method) {
             ("Option", "map") => {
@@ -1284,6 +1296,56 @@ impl<'a> TypeChecker<'a> {
                 Some(init_type)
             }
 
+            _ => None,
+        }
+    }
+
+    /// Get the element TypeId for a type that implements Iterator[T].
+    /// Looks up the Iterator impl in the trait registry, converts the AST type arg to a resolved TypeId.
+    fn get_iterator_elem_type(&mut self, type_name: &str) -> Option<TypeId> {
+        // Find the Iterator impl and clone the AST type arg to release the borrow
+        let ast_type = self.traits.impls.iter()
+            .find(|i| i.self_type_name == type_name && i.trait_name.as_deref() == Some("Iterator"))
+            .and_then(|i| i.trait_generic_args.first().cloned())?;
+        // Convert AST type to resolved TypeId
+        types::ast_type_to_resolved(&ast_type, Span { start: 0, end: 0 }, self.scopes, self.types).ok()
+    }
+
+    /// Infer the return type of Iterator adapter methods (collect, filter, map, fold).
+    fn try_iterator_adapter_type(
+        &mut self,
+        type_name: &str,
+        method: &str,
+        args: &[Spanned<CallArg>],
+    ) -> Option<TypeId> {
+        // Check if this type implements Iterator[T]
+        let elem_type = self.get_iterator_elem_type(type_name)?;
+
+        // Look up the Vector def_id for wrapping results
+        let vector_def_id = self.scopes.lookup("Vector")?;
+
+        match method {
+            "collect" => {
+                // () -> Vector[T]
+                Some(self.types.insert(ResolvedType::Generic(vector_def_id, vec![elem_type])))
+            }
+            "filter" => {
+                // (T) -> bool, returns Vector[T]
+                let _ = self.infer_expr(&args.first()?.node.value);
+                Some(self.types.insert(ResolvedType::Generic(vector_def_id, vec![elem_type])))
+            }
+            "map" => {
+                // (T) -> U, returns Vector[U]
+                let closure_type = self.infer_expr(&args.first()?.node.value);
+                let u_type = self.extract_fn_return_type(closure_type)?;
+                Some(self.types.insert(ResolvedType::Generic(vector_def_id, vec![u_type])))
+            }
+            "fold" => {
+                // args: initial_value, closure (U, T) -> U — returns U
+                let init_type = self.infer_expr(&args.first()?.node.value);
+                let _ = args.get(1).map(|a| self.infer_expr(&a.node.value));
+                Some(init_type)
+            }
             _ => None,
         }
     }

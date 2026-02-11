@@ -1077,6 +1077,20 @@ fn iterator_trait() {
 12");
 }
 
+#[test]
+fn iterator_adapters() {
+    run_gg("iterator_adapters.gg", "\
+5
+3
+0
+0
+4
+0
+4
+10
+106");
+}
+
 /// Build and run a `.gg` fixture with extra CLI flags, asserting its stdout matches `expected`.
 fn run_gg_with_flags(fixture: &str, flags: &[&str], expected: &str) {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

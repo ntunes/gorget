@@ -748,7 +748,7 @@ impl CodegenContext<'_> {
     }
 
     /// Get the element C type for an Iterator[T] implementation.
-    fn get_iterator_elem_c_type(&self, expr: &Spanned<Expr>) -> String {
+    pub(crate) fn get_iterator_elem_c_type(&self, expr: &Spanned<Expr>) -> String {
         let type_name = self.infer_type_name_from_expr(expr);
         for imp in &self.traits.impls {
             if imp.self_type_name == type_name && imp.trait_name.as_deref() == Some("Iterator") {

@@ -1,5 +1,6 @@
 # DONE
 
+- [2026-02-11] Iterator adapters: `.map()`, `.filter()`, `.collect()`, `.fold()` on any type implementing Iterator[T] — eager evaluation draining into Vector[T] (or scalar for fold), with typecheck inference and while/next/break codegen pattern
 - [2026-02-11] Integer overflow checking: `+`/`-`/`*` and `+=`/`-=`/`*=` now panic on signed integer overflow by default, using `_Generic` + `__builtin_*_overflow` intrinsics (float-safe via C11 `_Generic` dispatch); `--overflow=wrap` flag opts out with `-fwrapv` wrapping semantics
 - [2026-02-10] Option[T] / Result[T,E] methods: unwrap, unwrap_or, is_some/is_none, is_ok/is_err (built-in type registration, typecheck, codegen, monomorphization)
 - [2026-02-10] Collections: Vector[T], HashMap[K,V], HashSet[T] with real impls (set/remove/clear/is_empty methods, generic return types, C runtime support)

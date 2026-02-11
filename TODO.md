@@ -1,8 +1,5 @@
 # TODO
 
-## Critical — Stdlib (benefits everyone, unblocks self-hosting)
-- Iterator adapters: `.map()`, `.filter()`, `.collect()`, `.fold()` on iterators [added: 2026-02-11]
-
 ## High Priority — Self-hosting (write the compiler in Gorget, still targeting C)
 - Cross-module name resolution: module system loads files but resolution across modules is incomplete [added: 2026-02-11]
 - `@derive` macro expansion: reduces boilerplate for Debug, Clone, etc. [added: 2026-02-10]
