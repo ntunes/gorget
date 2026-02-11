@@ -1,9 +1,17 @@
-from std.fmt import Displayable
-from std.collections import HashMap, Vector
-import std.io
+# Comprehensive — language feature showcase
+#
+# This example demonstrates the breadth of Gorget's syntax and features.
+# Features that aren't implemented yet are commented out with "NOT YET"
+# explaining what's missing.
+
+# NOT YET: stdlib imports (std.fmt, std.collections, std.io)
+# from std.fmt import Displayable
+# from std.collections import HashMap, Vector
+# import std.io
 
 # Type alias
-type StringList = Vector[String]
+# NOT YET: String type (use str); Vector in type alias needs stdlib import
+# type StringList = Vector[String]
 type IntPair = (int, int)
 
 # Newtype
@@ -19,10 +27,10 @@ struct Pair[A, B]:
     A first
     B second
 
-# Enum with variants
-enum Option[T]:
-    Some(T)
-    None
+# NOT YET: Option[T] is built-in; redefining it causes a "duplicate definition" error
+# enum Option[T]:
+#     Some(T)
+#     None
 
 enum Shape:
     Circle(float)
@@ -36,20 +44,22 @@ trait Drawable:
 
 # Trait with extends
 trait Colorable extends Drawable:
-    String color(self)
+    str color(self)
 
-# Equip trait for struct
-equip Point with Displayable:
-    String to_string(self):
-        return "({self.x}, {self.y})"
+# NOT YET: Displayable equip requires `str display(self)` method name,
+# and self.x/self.y interpolation in return value needs testing.
+# equip Point with Displayable:
+#     str display(self):
+#         return "({self.x}, {self.y})"
 
 # Inherent implementation
 equip Point:
     float distance(self):
         return 0.0
 
-    Point origin():
-        return Point(0.0, 0.0)
+    # NOT YET: static methods (no self parameter) in equip blocks
+    # Point origin():
+    #     return Point(0.0, 0.0)
 
 # Public function
 public int add(int a, int b):
@@ -58,18 +68,18 @@ public int add(int a, int b):
 # Expression body function
 int double(int x) = x * 2
 
-# Generic function with where clause
-void print_all[T](Vector[T] items) where T is Displayable:
-    for item in items:
-        print("{item}")
+# NOT YET: generic functions with where clause need stdlib Vector
+# void print_all[T](Vector[T] items) where T is Displayable:
+#     for item in items:
+#         print("{item}")
 
-# Async function
-async String fetch(String url):
-    pass
+# NOT YET: async functions
+# async str fetch(str url):
+#     pass
 
-# Function with throws
-int parse_int(String s) throws ValueError:
-    pass
+# NOT YET: throws declarations on function signatures
+# int parse_int(str s) throws ValueError:
+#     pass
 
 # Main function exercising many constructs
 void main():
@@ -108,14 +118,14 @@ void main():
     auto sum = add(3, 4)
     print("result: {sum}")
 
-    # List comprehension
-    Vector[int] squares = [x * x for x in 0..10]
+    # NOT YET: list comprehension
+    # Vector[int] squares = [x * x for x in 0..10]
 
     # Array literal
     auto nums = [1, 2, 3, 4, 5]
 
-    # Optional chaining and nil coalescing
-    auto val = a?.b ?? "default"
+    # NOT YET: optional chaining (?.) and nil coalescing (??)
+    # auto val = a?.b ?? "default"
 
     # Match statement
     match x:
@@ -125,10 +135,14 @@ void main():
             print("other")
 
     # Move and borrow
-    auto owned = !name
-    auto borrowed = &x
+    str greeting = "hello"
+    str owned = !greeting
+    # greeting is now dead — borrow checker enforced
 
-@derive(Debuggable)
-struct Config:
-    String host
-    int port
+    # NOT YET: @derive macros
+    # @derive(Debuggable)
+    # struct Config:
+    #     str host
+    #     int port
+
+    print("done")
