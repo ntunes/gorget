@@ -113,6 +113,9 @@ pub enum SemanticErrorKind {
 
     /// Positional argument follows a named argument.
     PositionalAfterNamed,
+
+    /// Unknown directive name.
+    UnknownDirective { name: String },
 }
 
 impl std::fmt::Display for SemanticError {
@@ -254,6 +257,9 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::PositionalAfterNamed => {
                 write!(f, "positional argument cannot follow named argument")
+            }
+            SemanticErrorKind::UnknownDirective { name } => {
+                write!(f, "unknown directive `{name}`")
             }
         }
     }

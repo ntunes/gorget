@@ -1,0 +1,6 @@
+directive overflow=wrap
+
+void main():
+    int x = 9223372036854775807
+    int y = x + 1
+    print("{y}")

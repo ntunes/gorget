@@ -1154,6 +1154,81 @@ fn wrapping_ops() {
 }
 
 // ══════════════════════════════════════════════════════════════
+// Directive tests
+// ══════════════════════════════════════════════════════════════
+
+/// Build and run a `.gg` fixture with extra CLI flags, asserting it panics with expected stderr.
+fn run_gg_panics_with_flags(fixture: &str, flags: &[&str], expected_stderr: &str) {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures").join(fixture);
+
+    assert!(
+        fixture_path.exists(),
+        "Fixture not found: {}",
+        fixture_path.display()
+    );
+
+    let stem = fixture_path.file_stem().unwrap().to_str().unwrap();
+    let dir = fixture_path.parent().unwrap();
+    let _c_path = dir.join(format!("{stem}.c"));
+    let exe_path = dir.join(stem);
+
+    // 1. Build with flags
+    let mut build_args = vec!["run", "--quiet", "--", "build"];
+    build_args.extend(flags.iter());
+    let build = Command::new(env!("CARGO"))
+        .args(&build_args)
+        .arg(&fixture_path)
+        .output()
+        .expect("failed to run cargo");
+
+    assert!(
+        build.status.success(),
+        "Build failed for {fixture}:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr),
+    );
+
+    // 2. Execute — expect panic
+    let run = Command::new(&exe_path)
+        .output()
+        .expect("failed to execute compiled binary");
+
+    assert!(
+        !run.status.success(),
+        "Expected panic but binary succeeded for {fixture}",
+    );
+
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        stderr.contains(expected_stderr),
+        "Expected stderr to contain '{expected_stderr}' for {fixture}, got: {stderr}",
+    );
+}
+
+#[test]
+fn directive_strip_asserts() {
+    run_gg("use_strip_asserts.gg", "directives work");
+}
+
+#[test]
+fn directive_overflow_wrap() {
+    run_gg("use_overflow_wrap.gg", "-9223372036854775808");
+}
+
+#[test]
+fn directive_cli_override_no_strip_asserts() {
+    // Source says `directive strip-asserts` but CLI says `--no-strip-asserts` → asserts kept → panic
+    run_gg_panics_with_flags("use_strip_asserts.gg", &["--no-strip-asserts"], "this would fail without strip-asserts");
+}
+
+#[test]
+fn directive_cli_override_overflow_checked() {
+    // Source says `directive overflow=wrap` but CLI says `--overflow=checked` → checked → panic
+    run_gg_panics_with_flags("use_overflow_wrap.gg", &["--overflow=checked"], "integer overflow");
+}
+
+// ══════════════════════════════════════════════════════════════
 // Formatter idempotency tests
 // ══════════════════════════════════════════════════════════════
 

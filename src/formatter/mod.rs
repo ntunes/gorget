@@ -143,6 +143,15 @@ impl Formatter {
             Item::ConstDecl(cd) => self.format_const_decl(cd),
             Item::StaticDecl(sd) => self.format_static_decl(sd),
             Item::ExternBlock(eb) => self.format_extern_block(eb),
+            Item::Directive(d) => {
+                self.emitter.write("directive ");
+                self.emitter.write(&d.name);
+                if let Some(ref val) = d.value {
+                    self.emitter.write("=");
+                    self.emitter.write(val);
+                }
+                self.emitter.newline();
+            }
         }
     }
 

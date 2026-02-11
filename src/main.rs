@@ -6,6 +6,7 @@ use std::process::{self, Command};
 use gorget::errors::ErrorReporter;
 use gorget::lexer::Lexer;
 use gorget::loader::{self, ModuleLoader};
+use gorget::parser::ast::{Item, Module};
 use gorget::parser::Parser;
 
 /// Load imported modules and merge them into a single module.
@@ -46,8 +47,31 @@ fn load_imports(filename: &str, source: &str, module: gorget::parser::ast::Modul
     loader::merge_modules(modules)
 }
 
+/// Extract directive flags from a parsed module.
+fn extract_directives(module: &Module) -> (bool, bool) {
+    let mut strip_asserts = false;
+    let mut overflow_wrap = false;
+    for item in &module.items {
+        if let Item::Directive(d) = &item.node {
+            match d.name.as_str() {
+                "strip-asserts" => strip_asserts = true,
+                "overflow" if d.value.as_deref() == Some("wrap") => overflow_wrap = true,
+                _ => {}
+            }
+        }
+    }
+    (strip_asserts, overflow_wrap)
+}
+
 /// Build a .gg source file into a binary. Returns the path to the executable.
-fn build(filename: &str, source: &str, strip_asserts: bool, overflow_wrap: bool) -> PathBuf {
+fn build(
+    filename: &str,
+    source: &str,
+    strip_asserts: bool,
+    no_strip_asserts: bool,
+    overflow_wrap: bool,
+    overflow_checked: bool,
+) -> PathBuf {
     let mut parser = Parser::new(source);
     let module = parser.parse_module();
 
@@ -62,6 +86,22 @@ fn build(filename: &str, source: &str, strip_asserts: bool, overflow_wrap: bool)
 
     // Load imported modules recursively and merge
     let module = load_imports(filename, source, module);
+
+    // Merge source directives with CLI flags.
+    // CLI explicit flags override directives: --no-strip-asserts beats
+    // `directive strip-asserts`, --overflow=checked beats `directive overflow=wrap`.
+    // Otherwise, source directives and CLI enable-flags are OR'd.
+    let (dir_strip, dir_overflow) = extract_directives(&module);
+    let strip_asserts = if no_strip_asserts {
+        false
+    } else {
+        strip_asserts || dir_strip
+    };
+    let overflow_wrap = if overflow_checked {
+        false
+    } else {
+        overflow_wrap || dir_overflow
+    };
 
     let result = gorget::semantic::analyze(&module);
 
@@ -139,7 +179,9 @@ fn main() {
 
     let command = &args[1];
     let strip_asserts = args.iter().any(|a| a == "--strip-asserts");
+    let no_strip_asserts = args.iter().any(|a| a == "--no-strip-asserts");
     let overflow_wrap = args.iter().any(|a| a == "--overflow=wrap");
+    let overflow_checked = args.iter().any(|a| a == "--overflow=checked");
     let filename = args.iter().skip(2).find(|a| !a.starts_with("--")).unwrap_or_else(|| {
         eprintln!("Usage: gg <command> <file>");
         process::exit(1);
@@ -208,11 +250,11 @@ fn main() {
             }
         }
         "build" => {
-            let exe_path = build(filename, &source, strip_asserts, overflow_wrap);
+            let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked);
             println!("Built: {}", exe_path.display());
         }
         "run" => {
-            let exe_path = build(filename, &source, strip_asserts, overflow_wrap);
+            let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked);
             let status = Command::new(&exe_path)
                 .status()
                 .unwrap_or_else(|e| {

@@ -1,0 +1,5 @@
+directive strip-asserts
+
+void main():
+    assert false, "this would fail without strip-asserts"
+    print("directives work")

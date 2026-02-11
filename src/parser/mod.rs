@@ -306,6 +306,13 @@ impl Parser {
     pub fn parse_item(&mut self) -> Result<Spanned<Item>, ParseError> {
         let start = self.peek_span();
 
+        // Check for directive before collecting doc comments/attributes
+        if matches!(self.peek(), Token::Keyword(Keyword::Directive)) {
+            let d = self.parse_directive()?;
+            let span = start.merge(d.span);
+            return Ok(Spanned::new(Item::Directive(d), span));
+        }
+
         // Collect doc comments
         let mut doc_comment = None;
         while matches!(self.peek(), Token::DocComment(_)) {
@@ -410,6 +417,40 @@ impl Parser {
                 Ok(Spanned::new(Item::Function(func), span))
             }
         }
+    }
+
+    // ── Directive ─────────────────────────────────────────────
+
+    fn parse_directive(&mut self) -> Result<Directive, ParseError> {
+        let start = self.peek_span();
+        self.expect_keyword(Keyword::Directive)?;
+
+        // Parse directive name (may be hyphenated: strip-asserts)
+        let first = self.expect_identifier()?;
+        let mut name = first.node;
+        while self.check(&Token::Minus) {
+            self.advance(); // consume '-'
+            let part = self.expect_identifier()?;
+            name.push('-');
+            name.push_str(&part.node);
+        }
+
+        // Parse optional =value
+        let value = if self.match_token(&Token::Eq) {
+            let val = self.expect_identifier()?;
+            Some(val.node)
+        } else {
+            None
+        };
+
+        let end = self.previous_span();
+        self.consume_newline();
+
+        Ok(Directive {
+            name,
+            value,
+            span: start.merge(end),
+        })
     }
 
     // ── Attributes ────────────────────────────────────────────
@@ -2259,6 +2300,32 @@ mod tests {
             }
         } else {
             panic!();
+        }
+    }
+
+    // ── Directive ──────────────────────────────────────────────
+
+    #[test]
+    fn test_directive_strip_asserts() {
+        let module = parse("directive strip-asserts\nvoid main():\n    pass\n");
+        assert_eq!(module.items.len(), 2);
+        if let Item::Directive(ref d) = module.items[0].node {
+            assert_eq!(d.name, "strip-asserts");
+            assert_eq!(d.value, None);
+        } else {
+            panic!("Expected Directive, got {:?}", module.items[0].node);
+        }
+    }
+
+    #[test]
+    fn test_directive_overflow_wrap() {
+        let module = parse("directive overflow=wrap\nvoid main():\n    pass\n");
+        assert_eq!(module.items.len(), 2);
+        if let Item::Directive(ref d) = module.items[0].node {
+            assert_eq!(d.name, "overflow");
+            assert_eq!(d.value, Some("wrap".to_string()));
+        } else {
+            panic!("Expected Directive, got {:?}", module.items[0].node);
         }
     }
 

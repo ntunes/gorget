@@ -257,6 +257,10 @@ fn collect_item(
                 }
             }
         }
+
+        Item::Directive(_) => {
+            // Directives are handled during codegen, not name resolution.
+        }
     }
 }
 

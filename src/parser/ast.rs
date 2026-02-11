@@ -25,6 +25,18 @@ pub enum Item {
     ConstDecl(ConstDecl),
     StaticDecl(StaticDecl),
     ExternBlock(ExternBlock),
+    Directive(Directive),
+}
+
+// ══════════════════════════════════════════════════════════════
+// Directives
+// ══════════════════════════════════════════════════════════════
+
+#[derive(Debug, Clone)]
+pub struct Directive {
+    pub name: String,
+    pub value: Option<String>,
+    pub span: Span,
 }
 
 // ══════════════════════════════════════════════════════════════

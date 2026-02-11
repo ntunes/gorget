@@ -1777,6 +1777,46 @@ The following functions are available without import:
 | `DoubleMove`                 | Same variable moved more than once                   |
 | `OwnershipMismatch`          | Call-site annotation doesn't match param declaration |
 | `NonPrintableInterpolation`  | Non-primitive type in string interpolation            |
+| `UnknownDirective`           | Unrecognized directive name                          |
+
+### 16.3 Directives
+
+Directives set per-file compilation options directly in source code.
+They must appear at the top of the file before any other items.
+
+```gorget
+directive strip-asserts
+directive overflow=wrap
+```
+
+**Syntax:**
+
+```ebnf
+directive = "directive" name [ "=" value ] ;
+name      = IDENT { "-" IDENT } ;
+value     = IDENT ;
+```
+
+**Available directives:**
+
+| Directive                | Equivalent CLI flag   | Effect                                    |
+|--------------------------|-----------------------|-------------------------------------------|
+| `directive strip-asserts`| `--strip-asserts`     | Remove all `assert` statements from build |
+| `directive overflow=wrap`| `--overflow=wrap`     | Enable wrapping arithmetic (no overflow panic) |
+
+**Interaction with CLI flags:** Source directives and CLI flags are merged so
+that either can enable an option. However, if the CLI explicitly contradicts a
+source directive, the CLI flag prevails. This lets build systems override
+per-file options without editing source code.
+
+| Source directive          | CLI flag              | Result           |
+|---------------------------|-----------------------|------------------|
+| `directive strip-asserts` | *(none)*              | asserts stripped |
+| *(none)*                  | `--strip-asserts`     | asserts stripped |
+| `directive strip-asserts` | `--no-strip-asserts`  | asserts kept     |
+| `directive overflow=wrap` | *(none)*              | wrapping         |
+| *(none)*                  | `--overflow=wrap`     | wrapping         |
+| `directive overflow=wrap` | `--overflow=checked`  | checked (panic)  |
 
 ---
 
@@ -1792,6 +1832,15 @@ The Gorget compiler is invoked as `gg` with the following commands:
 | `gg build <file>`  | Compile to native binary                 |
 | `gg run <file>`    | Compile and execute                      |
 
+**CLI flags:**
+
+| Flag                 | Description                                             |
+|----------------------|---------------------------------------------------------|
+| `--strip-asserts`    | Remove all `assert` statements                          |
+| `--no-strip-asserts` | Keep asserts even if source has `directive strip-asserts`|
+| `--overflow=wrap`    | Enable wrapping arithmetic (no overflow panic)          |
+| `--overflow=checked` | Force checked arithmetic even if source says `wrap`     |
+
 ---
 
 ## Appendix A: Grammar Summary
@@ -1803,9 +1852,12 @@ This appendix collects the grammar rules from throughout the document.
 module = { item } ;
 
 (* ── Items ── *)
-item = function_def | struct_def | enum_def | trait_def
+item = directive | function_def | struct_def | enum_def | trait_def
      | equip_block | import_stmt | type_alias | newtype_def
      | const_decl | static_decl | extern_block ;
+
+(* ── Directives ── *)
+directive = "directive" IDENTIFIER { "-" IDENTIFIER } [ "=" IDENTIFIER ] ;
 
 (* ── Functions ── *)
 function_def = { attribute } [ "public" ] { qualifier }

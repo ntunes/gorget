@@ -2056,4 +2056,30 @@ void main():
             errors
         );
     }
+
+    #[test]
+    fn unknown_directive_error() {
+        let errors = check("directive foo-bar\nvoid main():\n    pass\n");
+        assert!(
+            errors.iter().any(|e| matches!(
+                &e.kind,
+                super::SemanticErrorKind::UnknownDirective { name } if name == "foo-bar"
+            )),
+            "expected UnknownDirective error, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn valid_directives_no_error() {
+        let errors = check("directive strip-asserts\ndirective overflow=wrap\nvoid main():\n    pass\n");
+        assert!(
+            !errors.iter().any(|e| matches!(
+                &e.kind,
+                super::SemanticErrorKind::UnknownDirective { .. }
+            )),
+            "unexpected UnknownDirective error: {:?}",
+            errors
+        );
+    }
 }

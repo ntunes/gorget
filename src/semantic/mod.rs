@@ -10,8 +10,8 @@ pub mod types;
 
 use rustc_hash::FxHashMap;
 
-use crate::parser::ast::Module;
-use errors::SemanticError;
+use crate::parser::ast::{Item, Module};
+use errors::{SemanticError, SemanticErrorKind};
 use ids::DefId;
 use resolve::{EnumVariantInfo, FunctionInfo, ResolutionMap, StructFieldInfo};
 use scope::ScopeTable;
@@ -35,6 +35,45 @@ pub fn analyze(module: &Module) -> AnalysisResult {
     let mut scopes = ScopeTable::new();
     let mut types = TypeTable::new();
     let mut errors = Vec::new();
+
+    // Validate directives
+    for item in &module.items {
+        if let Item::Directive(d) = &item.node {
+            match d.name.as_str() {
+                "strip-asserts" => {
+                    if d.value.is_some() {
+                        errors.push(SemanticError {
+                            kind: SemanticErrorKind::UnknownDirective {
+                                name: format!("strip-asserts={}", d.value.as_deref().unwrap()),
+                            },
+                            span: d.span,
+                        });
+                    }
+                }
+                "overflow" => {
+                    if d.value.as_deref() != Some("wrap") {
+                        errors.push(SemanticError {
+                            kind: SemanticErrorKind::UnknownDirective {
+                                name: format!(
+                                    "overflow={}",
+                                    d.value.as_deref().unwrap_or("(missing value)")
+                                ),
+                            },
+                            span: d.span,
+                        });
+                    }
+                }
+                _ => {
+                    errors.push(SemanticError {
+                        kind: SemanticErrorKind::UnknownDirective {
+                            name: d.name.clone(),
+                        },
+                        span: d.span,
+                    });
+                }
+            }
+        }
+    }
 
     // Pass 1: Collect top-level definitions
     let resolve_ctx = resolve::collect_top_level(module, &mut scopes, &mut types, &mut errors);

@@ -249,6 +249,9 @@ pub enum Keyword {
     Import,
     From,
 
+    // Directives
+    Directive,
+
     // Resource/scope
     With,
     As,
@@ -354,6 +357,7 @@ impl Keyword {
             "try" => Some(Keyword::Try),
             "import" => Some(Keyword::Import),
             "from" => Some(Keyword::From),
+            "directive" => Some(Keyword::Directive),
             "with" => Some(Keyword::With),
             "as" => Some(Keyword::As),
             "where" => Some(Keyword::Where),
@@ -446,6 +450,7 @@ impl fmt::Display for Keyword {
             Keyword::Try => "try",
             Keyword::Import => "import",
             Keyword::From => "from",
+            Keyword::Directive => "directive",
             Keyword::With => "with",
             Keyword::As => "as",
             Keyword::Where => "where",
