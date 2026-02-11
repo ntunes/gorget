@@ -1,0 +1,12 @@
+void main():
+    auto a = "hello"
+    auto b = " world"
+    auto c = a + b
+    print(c)
+    auto greeting = "hi"
+    greeting += " there"
+    print(greeting)
+    print("foo" + "bar")
+    auto x = "a" + "b" + "c"
+    print(x)
+    print("{a + b}")

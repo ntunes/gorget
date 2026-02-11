@@ -87,6 +87,16 @@ impl CodegenContext<'_> {
                         };
                     }
                 }
+                // String concatenation: str + str → gorget_str_concat(a, b)
+                if *op == BinaryOp::Add {
+                    if let Some(type_id) = self.resolve_expr_type_id(left) {
+                        if type_id == self.types.string_id {
+                            let l = self.gen_expr(left);
+                            let r = self.gen_expr(right);
+                            return format!("gorget_str_concat({l}, {r})");
+                        }
+                    }
+                }
                 let l = self.gen_expr(left);
                 let r = self.gen_expr(right);
                 let c_op = binary_op_to_c(*op);
@@ -891,18 +901,96 @@ impl CodegenContext<'_> {
         }
     }
 
-    /// Infer the C type of a receiver expression via the TypeId, if available.
-    fn infer_receiver_c_type(&self, expr: &Spanned<Expr>) -> Option<String> {
-        if let Expr::Identifier(name) = &expr.node {
-            let type_id = self.resolution_map.get(&expr.span.start)
-                .and_then(|def_id| self.scopes.get_def(*def_id).type_id)
-                .or_else(|| {
-                    self.scopes.lookup_by_name_anywhere(name)
-                        .and_then(|def_id| self.scopes.get_def(def_id).type_id)
-                });
-            if let Some(tid) = type_id {
-                return Some(c_types::type_id_to_c(tid, self.types, self.scopes));
+    /// Canonical TypeId resolution for any expression.
+    /// Handles Identifier, literals, BinaryOp, UnaryOp, Call, MethodCall, Deref.
+    pub(super) fn resolve_expr_type_id(
+        &self,
+        expr: &Spanned<Expr>,
+    ) -> Option<crate::semantic::ids::TypeId> {
+        match &expr.node {
+            Expr::Identifier(name) => {
+                self.resolution_map
+                    .get(&expr.span.start)
+                    .and_then(|def_id| self.scopes.get_def(*def_id).type_id)
+                    .or_else(|| {
+                        self.scopes
+                            .lookup_by_name_anywhere(name)
+                            .and_then(|def_id| self.scopes.get_def(def_id).type_id)
+                    })
             }
+            Expr::IntLiteral(_) => Some(self.types.int_id),
+            Expr::FloatLiteral(_) => Some(self.types.float_id),
+            Expr::BoolLiteral(_) => Some(self.types.bool_id),
+            Expr::StringLiteral(_) => Some(self.types.string_id),
+            Expr::BinaryOp { op, left, .. } => match op {
+                BinaryOp::Eq
+                | BinaryOp::Neq
+                | BinaryOp::Lt
+                | BinaryOp::Gt
+                | BinaryOp::LtEq
+                | BinaryOp::GtEq
+                | BinaryOp::And
+                | BinaryOp::Or
+                | BinaryOp::In => Some(self.types.bool_id),
+                _ => self.resolve_expr_type_id(left),
+            },
+            Expr::UnaryOp { operand, .. } => self.resolve_expr_type_id(operand),
+            Expr::Call { callee, .. } => {
+                if let Expr::Identifier(name) = &callee.node {
+                    let def_id = self
+                        .resolution_map
+                        .get(&callee.span.start)
+                        .copied()
+                        .or_else(|| self.scopes.lookup_by_name_anywhere(name));
+                    if let Some(did) = def_id {
+                        if let Some(fi) = self.function_info.get(&did) {
+                            return fi.return_type_id;
+                        }
+                    }
+                }
+                None
+            }
+            Expr::MethodCall {
+                receiver, method, ..
+            } => {
+                let recv_c_type = self.infer_receiver_c_type(receiver);
+                if let Some(tid) = recv_c_type
+                    .as_deref()
+                    .and_then(|rt| self.builtin_method_return_type(rt, &method.node))
+                {
+                    return Some(tid);
+                }
+                let type_name = self.infer_receiver_type(receiver);
+                for impl_info in &self.traits.impls {
+                    if impl_info.self_type_name == type_name {
+                        if let Some((_def_id, sig)) =
+                            impl_info.methods.get(method.node.as_str())
+                        {
+                            return Some(sig.return_type);
+                        }
+                    }
+                }
+                None
+            }
+            Expr::Deref { expr: inner } => {
+                let inner_tid = self.resolve_expr_type_id(inner)?;
+                if let crate::semantic::types::ResolvedType::Generic(def_id, args) =
+                    self.types.get(inner_tid)
+                {
+                    if self.scopes.get_def(*def_id).name == "Box" && args.len() == 1 {
+                        return Some(args[0]);
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// Infer the C type of a receiver expression via the TypeId, if available.
+    pub(super) fn infer_receiver_c_type(&self, expr: &Spanned<Expr>) -> Option<String> {
+        if let Some(tid) = self.resolve_expr_type_id(expr) {
+            return Some(c_types::type_id_to_c(tid, self.types, self.scopes));
         }
         if let Expr::FieldAccess { object, field } = &expr.node {
             let obj_type = self.infer_receiver_type(object);
@@ -917,19 +1005,11 @@ impl CodegenContext<'_> {
     }
 
     /// Infer the element C type for a Vector receiver from its TypeId.
-    fn infer_vector_elem_type(&self, receiver: &Spanned<Expr>) -> String {
-        if let Expr::Identifier(name) = &receiver.node {
-            let type_id = self.resolution_map.get(&receiver.span.start)
-                .and_then(|def_id| self.scopes.get_def(*def_id).type_id)
-                .or_else(|| {
-                    self.scopes.lookup_by_name_anywhere(name)
-                        .and_then(|def_id| self.scopes.get_def(def_id).type_id)
-                });
-            if let Some(tid) = type_id {
-                if let crate::semantic::types::ResolvedType::Generic(_, args) = self.types.get(tid) {
-                    if let Some(&elem_tid) = args.first() {
-                        return c_types::type_id_to_c(elem_tid, self.types, self.scopes);
-                    }
+    pub(super) fn infer_vector_elem_type(&self, receiver: &Spanned<Expr>) -> String {
+        if let Some(tid) = self.resolve_expr_type_id(receiver) {
+            if let crate::semantic::types::ResolvedType::Generic(_, args) = self.types.get(tid) {
+                if let Some(&elem_tid) = args.first() {
+                    return c_types::type_id_to_c(elem_tid, self.types, self.scopes);
                 }
             }
         }
@@ -943,21 +1023,13 @@ impl CodegenContext<'_> {
     }
 
     /// Infer the key and value C types for a Map receiver from its TypeId.
-    fn infer_map_kv_types(&self, receiver: &Spanned<Expr>) -> (String, String) {
-        if let Expr::Identifier(name) = &receiver.node {
-            let type_id = self.resolution_map.get(&receiver.span.start)
-                .and_then(|def_id| self.scopes.get_def(*def_id).type_id)
-                .or_else(|| {
-                    self.scopes.lookup_by_name_anywhere(name)
-                        .and_then(|def_id| self.scopes.get_def(def_id).type_id)
-                });
-            if let Some(tid) = type_id {
-                if let crate::semantic::types::ResolvedType::Generic(_, args) = self.types.get(tid) {
-                    if args.len() >= 2 {
-                        let key = c_types::type_id_to_c(args[0], self.types, self.scopes);
-                        let val = c_types::type_id_to_c(args[1], self.types, self.scopes);
-                        return (key, val);
-                    }
+    pub(super) fn infer_map_kv_types(&self, receiver: &Spanned<Expr>) -> (String, String) {
+        if let Some(tid) = self.resolve_expr_type_id(receiver) {
+            if let crate::semantic::types::ResolvedType::Generic(_, args) = self.types.get(tid) {
+                if args.len() >= 2 {
+                    let key = c_types::type_id_to_c(args[0], self.types, self.scopes);
+                    let val = c_types::type_id_to_c(args[1], self.types, self.scopes);
+                    return (key, val);
                 }
             }
         }
@@ -1576,21 +1648,13 @@ impl CodegenContext<'_> {
 
     /// Infer the monomorphized C type name for a generic enum receiver (e.g. `Option__int64_t`).
     fn infer_generic_enum_mangled_name(&self, receiver: &Spanned<Expr>) -> String {
-        if let Expr::Identifier(name) = &receiver.node {
-            let type_id = self.resolution_map.get(&receiver.span.start)
-                .and_then(|def_id| self.scopes.get_def(*def_id).type_id)
-                .or_else(|| {
-                    self.scopes.lookup_by_name_anywhere(name)
-                        .and_then(|def_id| self.scopes.get_def(def_id).type_id)
-                });
-            if let Some(tid) = type_id {
-                if let crate::semantic::types::ResolvedType::Generic(def_id, args) = self.types.get(tid) {
-                    let base = self.scopes.get_def(*def_id).name.clone();
-                    let c_args: Vec<String> = args.iter()
-                        .map(|&a| c_types::type_id_to_c(a, self.types, self.scopes))
-                        .collect();
-                    return c_mangle::mangle_generic(&base, &c_args);
-                }
+        if let Some(tid) = self.resolve_expr_type_id(receiver) {
+            if let crate::semantic::types::ResolvedType::Generic(def_id, args) = self.types.get(tid) {
+                let base = self.scopes.get_def(*def_id).name.clone();
+                let c_args: Vec<String> = args.iter()
+                    .map(|&a| c_types::type_id_to_c(a, self.types, self.scopes))
+                    .collect();
+                return c_mangle::mangle_generic(&base, &c_args);
             }
         }
         // Fallback: use the receiver C type directly
@@ -1615,19 +1679,11 @@ impl CodegenContext<'_> {
 
     /// Extract the C type args from a generic receiver expression.
     fn infer_generic_type_args(&self, receiver: &Spanned<Expr>) -> Vec<String> {
-        if let Expr::Identifier(name) = &receiver.node {
-            let type_id = self.resolution_map.get(&receiver.span.start)
-                .and_then(|def_id| self.scopes.get_def(*def_id).type_id)
-                .or_else(|| {
-                    self.scopes.lookup_by_name_anywhere(name)
-                        .and_then(|def_id| self.scopes.get_def(def_id).type_id)
-                });
-            if let Some(tid) = type_id {
-                if let crate::semantic::types::ResolvedType::Generic(_, args) = self.types.get(tid) {
-                    return args.iter()
-                        .map(|&a| c_types::type_id_to_c(a, self.types, self.scopes))
-                        .collect();
-                }
+        if let Some(tid) = self.resolve_expr_type_id(receiver) {
+            if let crate::semantic::types::ResolvedType::Generic(_, args) = self.types.get(tid) {
+                return args.iter()
+                    .map(|&a| c_types::type_id_to_c(a, self.types, self.scopes))
+                    .collect();
             }
         }
         vec![]
@@ -1986,15 +2042,7 @@ impl CodegenContext<'_> {
     pub(super) fn infer_receiver_type(&self, expr: &Spanned<Expr>) -> String {
         match &expr.node {
             Expr::Identifier(name) => {
-                // Try resolution_map first, then fallback to scope lookup
-                let type_id = self.resolution_map.get(&expr.span.start)
-                    .and_then(|def_id| self.scopes.get_def(*def_id).type_id)
-                    .or_else(|| {
-                        self.scopes.lookup_by_name_anywhere(name)
-                            .and_then(|def_id| self.scopes.get_def(def_id).type_id)
-                    });
-
-                if let Some(type_id) = type_id {
+                if let Some(type_id) = self.resolve_expr_type_id(expr) {
                     if let Some(name) = self.type_name_from_type_id(type_id) {
                         return name;
                     }
@@ -2398,63 +2446,38 @@ impl CodegenContext<'_> {
 
     /// Infer the result TypeId of a sub-parsed interpolation expression.
     fn infer_interp_expr_type(&self, expr: &Spanned<Expr>) -> Option<crate::semantic::ids::TypeId> {
-        match &expr.node {
-            Expr::Identifier(name) => {
-                let def_id = self.scopes.lookup_by_name_anywhere(name)?;
-                self.scopes.get_def(def_id).type_id
-            }
-            Expr::MethodCall {
-                receiver, method, ..
-            } => {
-                // Try builtin methods first
-                let recv_c_type = self.infer_receiver_c_type(receiver);
-                if let Some(tid) = recv_c_type
-                    .as_deref()
-                    .and_then(|rt| self.builtin_method_return_type(rt, &method.node))
-                {
-                    return Some(tid);
-                }
-                // Fall back to trait/inherent method lookup
-                let type_name = self.infer_receiver_type(receiver);
-                for impl_info in &self.traits.impls {
-                    if impl_info.self_type_name == type_name {
-                        if let Some((_def_id, sig)) = impl_info.methods.get(method.node.as_str()) {
-                            return Some(sig.return_type);
-                        }
-                    }
-                }
-                None
-            }
-            Expr::Deref { expr: inner } => {
-                // *box_var → inner type of Box[T]
-                let inner_type_id = self.infer_interp_expr_type(inner)?;
-                if let crate::semantic::types::ResolvedType::Generic(def_id, args) = self.types.get(inner_type_id) {
-                    if self.scopes.get_def(*def_id).name == "Box" && args.len() == 1 {
-                        return Some(args[0]);
-                    }
-                }
-                None
-            }
-            Expr::IntLiteral(_) => Some(self.types.int_id),
-            Expr::FloatLiteral(_) => Some(self.types.float_id),
-            Expr::BoolLiteral(_) => Some(self.types.bool_id),
-            Expr::BinaryOp { .. } => Some(self.types.int_id),
-            _ => None,
-        }
+        self.resolve_expr_type_id(expr)
     }
 
     /// Map (receiver C type, method name) → return TypeId for known builtins.
-    fn builtin_method_return_type(
+    pub(super) fn builtin_method_return_type(
         &self,
         receiver_type: &str,
         method: &str,
     ) -> Option<crate::semantic::ids::TypeId> {
+        // GorgetMap/GorgetSet use prefix matching because monomorphized names
+        // are mangled (e.g. "GorgetMap__int64_t__int64_t").
+        if receiver_type == "GorgetArray" {
+            return match method {
+                "len" | "get" | "pop" => Some(self.types.int_id),
+                _ => None,
+            };
+        }
+        if receiver_type.starts_with("GorgetMap") {
+            return match method {
+                "len" | "get" => Some(self.types.int_id),
+                "contains" => Some(self.types.bool_id),
+                _ => None,
+            };
+        }
+        if receiver_type.starts_with("GorgetSet") {
+            return match method {
+                "len" => Some(self.types.int_id),
+                "contains" => Some(self.types.bool_id),
+                _ => None,
+            };
+        }
         match (receiver_type, method) {
-            ("GorgetArray", "len" | "get" | "pop") => Some(self.types.int_id),
-            ("GorgetMap", "len" | "get") => Some(self.types.int_id),
-            ("GorgetMap", "contains") => Some(self.types.bool_id),
-            ("GorgetSet", "len") => Some(self.types.int_id),
-            ("GorgetSet", "contains") => Some(self.types.bool_id),
             ("const char*", "len") => Some(self.types.int_id),
             ("const char*", "contains" | "starts_with" | "ends_with" | "is_empty") => {
                 Some(self.types.bool_id)

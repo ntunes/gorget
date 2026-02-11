@@ -74,6 +74,15 @@ static inline const char* gorget_format(const char* fmt, ...) {
     return data;
 }
 
+// ── String concatenation ────────────────────────────────────
+static inline const char* gorget_str_concat(const char* a, const char* b) {
+    size_t la = strlen(a), lb = strlen(b);
+    char* out = (char*)malloc(la + lb + 1);
+    memcpy(out, a, la);
+    memcpy(out + la, b, lb + 1);
+    return out;
+}
+
 // ── String helpers ──────────────────────────────────────────
 static inline bool gorget_string_starts_with(const char* s, const char* prefix) {
     return strncmp(s, prefix, strlen(prefix)) == 0;

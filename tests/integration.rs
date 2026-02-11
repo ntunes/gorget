@@ -1006,6 +1006,19 @@ c",
 }
 
 #[test]
+fn string_concat() {
+    run_gg(
+        "string_concat.gg",
+        "\
+hello world
+hi there
+foobar
+abc
+hello world",
+    );
+}
+
+#[test]
 fn in_operator() {
     run_gg(
         "in_operator.gg",

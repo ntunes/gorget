@@ -135,6 +135,16 @@ impl CodegenContext<'_> {
             }
 
             Stmt::CompoundAssign { target, op, value } => {
+                // String +=: s = gorget_str_concat(s, rhs)
+                if *op == BinaryOp::Add {
+                    let target_type = self.infer_c_type_from_expr(&target.node);
+                    if target_type == "const char*" {
+                        let t = self.gen_expr(target);
+                        let v = self.gen_expr(value);
+                        emitter.emit_line(&format!("{t} = gorget_str_concat({t}, {v});"));
+                        return;
+                    }
+                }
                 let t = self.gen_expr(target);
                 let v = self.gen_expr(value);
                 if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul) && !self.overflow_wrap {
@@ -489,7 +499,21 @@ impl CodegenContext<'_> {
             Expr::BoolLiteral(_) => "bool".to_string(),
             Expr::CharLiteral(_) => "char".to_string(),
             Expr::StringLiteral(_) => "const char*".to_string(),
-            Expr::BinaryOp { left, .. } => self.infer_c_type_from_expr(&left.node),
+            Expr::BinaryOp { op, left, .. } => {
+                use crate::parser::ast::BinaryOp;
+                match op {
+                    BinaryOp::Eq
+                    | BinaryOp::Neq
+                    | BinaryOp::Lt
+                    | BinaryOp::Gt
+                    | BinaryOp::LtEq
+                    | BinaryOp::GtEq
+                    | BinaryOp::And
+                    | BinaryOp::Or
+                    | BinaryOp::In => "bool".to_string(),
+                    _ => self.infer_c_type_from_expr(&left.node),
+                }
+            }
             Expr::UnaryOp { operand, .. } => self.infer_c_type_from_expr(&operand.node),
             Expr::Call { callee, .. } => {
                 // Try to look up the return type of the function
@@ -530,6 +554,27 @@ impl CodegenContext<'_> {
                     .map(|elem| self.infer_c_type_from_expr(&elem.node))
                     .collect();
                 super::c_mangle::mangle_tuple(&c_field_types)
+            }
+            Expr::MethodCall {
+                receiver, method, ..
+            } => {
+                let recv_c_type = self.infer_receiver_c_type(receiver);
+                if let Some(tid) = recv_c_type
+                    .as_deref()
+                    .and_then(|rt| self.builtin_method_return_type(rt, &method.node))
+                {
+                    return c_types::type_id_to_c(tid, self.types, self.scopes);
+                }
+                let type_name = self.infer_receiver_type(receiver);
+                for impl_info in &self.traits.impls {
+                    if impl_info.self_type_name == type_name {
+                        if let Some((_def_id, sig)) = impl_info.methods.get(method.node.as_str())
+                        {
+                            return c_types::type_id_to_c(sig.return_type, self.types, self.scopes);
+                        }
+                    }
+                }
+                "int64_t".to_string()
             }
             _ => "int64_t".to_string(),
         }
@@ -598,14 +643,9 @@ impl CodegenContext<'_> {
 
     /// Check if an iterable expression resolves to a GorgetArray type.
     fn is_gorget_array_expr(&self, expr: &Spanned<Expr>) -> bool {
-        if let Expr::Identifier(name) = &expr.node {
-            if let Some(def_id) = self.scopes.lookup(name) {
-                let def = self.scopes.get_def(def_id);
-                if let Some(type_id) = def.type_id {
-                    let c_type = c_types::type_id_to_c(type_id, self.types, self.scopes);
-                    return c_type == "GorgetArray";
-                }
-            }
+        if let Some(tid) = self.resolve_expr_type_id(expr) {
+            let c_type = c_types::type_id_to_c(tid, self.types, self.scopes);
+            return c_type == "GorgetArray";
         }
         // Also check inferred type as fallback
         let c_type = self.infer_c_type_from_expr(&expr.node);
@@ -614,18 +654,10 @@ impl CodegenContext<'_> {
 
     /// Check if an iterable expression resolves to a GorgetMap (Dict) type.
     fn is_gorget_map_expr(&self, expr: &Spanned<Expr>) -> bool {
-        if let Expr::Identifier(name) = &expr.node {
-            let type_id = self.resolution_map.get(&expr.span.start)
-                .and_then(|def_id| self.scopes.get_def(*def_id).type_id)
-                .or_else(|| {
-                    self.scopes.lookup_by_name_anywhere(name)
-                        .and_then(|def_id| self.scopes.get_def(def_id).type_id)
-                });
-            if let Some(tid) = type_id {
-                if let crate::semantic::types::ResolvedType::Generic(def_id, _) = self.types.get(tid) {
-                    let def_name = &self.scopes.get_def(*def_id).name;
-                    return matches!(def_name.as_str(), "Dict" | "HashMap" | "Map");
-                }
+        if let Some(tid) = self.resolve_expr_type_id(expr) {
+            if let crate::semantic::types::ResolvedType::Generic(def_id, _) = self.types.get(tid) {
+                let def_name = &self.scopes.get_def(*def_id).name;
+                return matches!(def_name.as_str(), "Dict" | "HashMap" | "Map");
             }
         }
         false
@@ -634,105 +666,38 @@ impl CodegenContext<'_> {
     /// Check if an iterable expression resolves to a GorgetSet (Set) type.
     /// Must use Gorget-level type name since GorgetSet is typedef'd to GorgetMap at C level.
     fn is_gorget_set_expr(&self, expr: &Spanned<Expr>) -> bool {
-        if let Expr::Identifier(name) = &expr.node {
-            let type_id = self.resolution_map.get(&expr.span.start)
-                .and_then(|def_id| self.scopes.get_def(*def_id).type_id)
-                .or_else(|| {
-                    self.scopes.lookup_by_name_anywhere(name)
-                        .and_then(|def_id| self.scopes.get_def(def_id).type_id)
-                });
-            if let Some(tid) = type_id {
-                if let crate::semantic::types::ResolvedType::Generic(def_id, _) = self.types.get(tid) {
-                    let def_name = &self.scopes.get_def(*def_id).name;
-                    return matches!(def_name.as_str(), "Set" | "HashSet");
-                }
+        if let Some(tid) = self.resolve_expr_type_id(expr) {
+            if let crate::semantic::types::ResolvedType::Generic(def_id, _) = self.types.get(tid) {
+                let def_name = &self.scopes.get_def(*def_id).name;
+                return matches!(def_name.as_str(), "Set" | "HashSet");
             }
         }
         false
     }
 
-    /// Infer the key and value C types for a Dict expression.
-    fn infer_map_kv_types_for_iter(&self, expr: &Spanned<Expr>) -> (String, String) {
-        if let Expr::Identifier(name) = &expr.node {
-            let type_id = self.resolution_map.get(&expr.span.start)
-                .and_then(|def_id| self.scopes.get_def(*def_id).type_id)
-                .or_else(|| {
-                    self.scopes.lookup_by_name_anywhere(name)
-                        .and_then(|def_id| self.scopes.get_def(def_id).type_id)
-                });
-            if let Some(tid) = type_id {
-                if let crate::semantic::types::ResolvedType::Generic(_, args) = self.types.get(tid) {
-                    if args.len() >= 2 {
-                        let key = super::c_types::type_id_to_c(args[0], self.types, self.scopes);
-                        let val = super::c_types::type_id_to_c(args[1], self.types, self.scopes);
-                        return (key, val);
-                    }
-                }
-            }
-        }
-        ("int64_t".to_string(), "int64_t".to_string())
-    }
-
     /// Infer the element C type for a Set expression.
     fn infer_set_elem_type(&self, expr: &Spanned<Expr>) -> String {
-        if let Expr::Identifier(name) = &expr.node {
-            let type_id = self.resolution_map.get(&expr.span.start)
-                .and_then(|def_id| self.scopes.get_def(*def_id).type_id)
-                .or_else(|| {
-                    self.scopes.lookup_by_name_anywhere(name)
-                        .and_then(|def_id| self.scopes.get_def(def_id).type_id)
-                });
-            if let Some(tid) = type_id {
-                if let crate::semantic::types::ResolvedType::Generic(_, args) = self.types.get(tid) {
-                    if let Some(&elem_tid) = args.first() {
-                        return super::c_types::type_id_to_c(elem_tid, self.types, self.scopes);
-                    }
+        if let Some(tid) = self.resolve_expr_type_id(expr) {
+            if let crate::semantic::types::ResolvedType::Generic(_, args) = self.types.get(tid) {
+                if let Some(&elem_tid) = args.first() {
+                    return super::c_types::type_id_to_c(elem_tid, self.types, self.scopes);
                 }
             }
         }
-        "int64_t".to_string()
-    }
-
-    /// Infer the element C type for a GorgetArray expression.
-    fn infer_array_elem_type(&self, expr: &Spanned<Expr>) -> String {
-        if let Expr::Identifier(name) = &expr.node {
-            let type_id = self.resolution_map.get(&expr.span.start)
-                .and_then(|def_id| self.scopes.get_def(*def_id).type_id)
-                .or_else(|| {
-                    self.scopes.lookup_by_name_anywhere(name)
-                        .and_then(|def_id| self.scopes.get_def(def_id).type_id)
-                });
-            if let Some(tid) = type_id {
-                if let crate::semantic::types::ResolvedType::Generic(_, args) = self.types.get(tid) {
-                    if let Some(&elem_tid) = args.first() {
-                        return super::c_types::type_id_to_c(elem_tid, self.types, self.scopes);
-                    }
-                }
-            }
-        }
-        // Default fallback
         "int64_t".to_string()
     }
 
     /// Infer the Gorget-level type name from an expression (e.g. "Counter").
     fn infer_type_name_from_expr(&self, expr: &Spanned<Expr>) -> String {
-        if let Expr::Identifier(name) = &expr.node {
-            let type_id = self.resolution_map.get(&expr.span.start)
-                .and_then(|def_id| self.scopes.get_def(*def_id).type_id)
-                .or_else(|| {
-                    self.scopes.lookup_by_name_anywhere(name)
-                        .and_then(|def_id| self.scopes.get_def(def_id).type_id)
-                });
-            if let Some(tid) = type_id {
-                match self.types.get(tid) {
-                    crate::semantic::types::ResolvedType::Defined(def_id) => {
-                        return self.scopes.get_def(*def_id).name.clone();
-                    }
-                    crate::semantic::types::ResolvedType::Generic(def_id, _) => {
-                        return self.scopes.get_def(*def_id).name.clone();
-                    }
-                    _ => {}
+        if let Some(tid) = self.resolve_expr_type_id(expr) {
+            match self.types.get(tid) {
+                crate::semantic::types::ResolvedType::Defined(def_id) => {
+                    return self.scopes.get_def(*def_id).name.clone();
                 }
+                crate::semantic::types::ResolvedType::Generic(def_id, _) => {
+                    return self.scopes.get_def(*def_id).name.clone();
+                }
+                _ => {}
             }
         }
         if let Expr::StructLiteral { name, .. } = &expr.node {
@@ -900,7 +865,7 @@ impl CodegenContext<'_> {
             // For-in over GorgetArray
             let iter = self.gen_expr(iterable);
             let idx = emitter.fresh_temp();
-            let elem_type = self.infer_array_elem_type(iterable);
+            let elem_type = self.infer_vector_elem_type(iterable);
 
             emitter.emit_line(&format!(
                 "for (size_t {idx} = 0; {idx} < gorget_array_len(&{iter}); {idx}++) {{"
@@ -952,7 +917,7 @@ impl CodegenContext<'_> {
     ) {
         let iter = self.gen_expr(iterable);
         let idx = emitter.fresh_temp();
-        let (key_type, val_type) = self.infer_map_kv_types_for_iter(iterable);
+        let (key_type, val_type) = self.infer_map_kv_types(iterable);
 
         emitter.emit_line(&format!(
             "for (size_t {idx} = 0; {idx} < {iter}.cap; {idx}++) {{"
@@ -1264,7 +1229,7 @@ impl CodegenContext<'_> {
             } else if self.is_gorget_array_expr(iterable) {
                 let iter = self.gen_expr(iterable);
                 let idx = emitter.fresh_temp();
-                let elem_type = self.infer_array_elem_type(iterable);
+                let elem_type = self.infer_vector_elem_type(iterable);
                 emitter.emit_line(&format!(
                     "for (size_t {idx} = 0; {idx} < gorget_array_len(&{iter}); {idx}++) {{"
                 ));
@@ -1284,7 +1249,7 @@ impl CodegenContext<'_> {
             } else if self.is_gorget_map_expr(iterable) {
                 let iter = self.gen_expr(iterable);
                 let idx = emitter.fresh_temp();
-                let (key_type, val_type) = self.infer_map_kv_types_for_iter(iterable);
+                let (key_type, val_type) = self.infer_map_kv_types(iterable);
                 emitter.emit_line(&format!(
                     "for (size_t {idx} = 0; {idx} < {iter}.cap; {idx}++) {{"
                 ));
