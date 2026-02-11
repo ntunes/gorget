@@ -503,9 +503,21 @@ impl<'a> TypeChecker<'a> {
             }
 
             Expr::Index { object, index } => {
-                let _object_type = self.infer_expr(object);
-                let _index_type = self.infer_expr(index);
-                self.types.error_id // element type requires more info
+                let object_type = self.infer_expr(object);
+                let index_type = self.infer_expr(index);
+                let resolved_obj = self.resolve_type(object_type);
+                // str[int] → char, str[Range] → str
+                if resolved_obj == self.types.string_id {
+                    if matches!(&index.node, Expr::Range { .. }) {
+                        // Range bounds already inferred recursively
+                        self.types.string_id
+                    } else {
+                        self.unify(index_type, self.types.int_id, expr.span);
+                        self.types.char_id
+                    }
+                } else {
+                    self.types.error_id // element type requires more info
+                }
             }
 
             Expr::Range { start, end, .. } => {
@@ -853,9 +865,18 @@ impl<'a> TypeChecker<'a> {
             Stmt::Continue | Stmt::Pass => {}
 
             Stmt::For {
-                iterable, body, else_body, ..
+                pattern, iterable, body, else_body, ..
             } => {
-                self.infer_expr(iterable);
+                let iter_type = self.infer_expr(iterable);
+                // If iterating over a string, the loop variable is char
+                let resolved_iter = self.resolve_type(iter_type);
+                if resolved_iter == self.types.string_id {
+                    if let Pattern::Binding(name) = &pattern.node {
+                        if let Some(def_id) = self.scopes.lookup_by_name_anywhere(name) {
+                            self.scopes.get_def_mut(def_id).type_id = Some(self.types.char_id);
+                        }
+                    }
+                }
                 self.check_block(body);
                 if let Some(else_body) = else_body {
                     self.check_block(else_body);

@@ -133,8 +133,29 @@ impl CodegenContext<'_> {
 
             Expr::Index { object, index } => {
                 let obj = self.gen_expr(object);
-                let idx = self.gen_expr(index);
-                format!("{obj}[{idx}]")
+                // Detect string receiver for runtime-checked indexing/slicing
+                if self.is_string_expr(object) {
+                    if let Expr::Range { start, end, inclusive } = &index.node {
+                        let s = start.as_ref().map(|e| self.gen_expr(e)).unwrap_or_else(|| "INT64_C(0)".to_string());
+                        let e = if let Some(end_expr) = end.as_ref() {
+                            let ev = self.gen_expr(end_expr);
+                            if *inclusive {
+                                format!("({ev} + 1)")
+                            } else {
+                                ev
+                            }
+                        } else {
+                            format!("(int64_t)strlen({obj})")
+                        };
+                        format!("gorget_string_slice({obj}, {s}, {e})")
+                    } else {
+                        let idx = self.gen_expr(index);
+                        format!("gorget_string_at({obj}, {idx})")
+                    }
+                } else {
+                    let idx = self.gen_expr(index);
+                    format!("{obj}[{idx}]")
+                }
             }
 
             Expr::Range {
@@ -1874,7 +1895,32 @@ impl CodegenContext<'_> {
                 }
                 "Unknown".to_string()
             }
+            Expr::StringLiteral(_) => "str".to_string(),
             _ => "Unknown".to_string(),
+        }
+    }
+
+    /// Check if an expression evaluates to a string (const char*) type.
+    pub(super) fn is_string_expr(&self, expr: &Spanned<Expr>) -> bool {
+        match &expr.node {
+            Expr::StringLiteral(_) => true,
+            Expr::Identifier(_) => {
+                let type_name = self.infer_receiver_type(expr);
+                if type_name == "str" {
+                    return true;
+                }
+                let c_type = self.infer_receiver_c_type(expr);
+                matches!(c_type.as_deref(), Some("const char*"))
+            }
+            Expr::MethodCall { .. } | Expr::Call { .. } => {
+                let c_type = self.infer_c_type_from_expr(&expr.node);
+                c_type == "const char*"
+            }
+            Expr::Index { object, index } => {
+                // str[range] returns str
+                self.is_string_expr(object) && matches!(&index.node, Expr::Range { .. })
+            }
+            _ => false,
         }
     }
 

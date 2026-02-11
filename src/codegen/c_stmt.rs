@@ -869,6 +869,22 @@ impl CodegenContext<'_> {
             self.pop_drop_scope(emitter);
             emitter.dedent();
             emitter.emit_line("}");
+        } else if self.is_string_expr(iterable) {
+            // For-in over string (char by char)
+            let iter = self.gen_expr(iterable);
+            let len_var = emitter.fresh_temp();
+            let idx = emitter.fresh_temp();
+            emitter.emit_line(&format!("size_t {len_var} = strlen({iter});"));
+            emitter.emit_line(&format!(
+                "for (size_t {idx} = 0; {idx} < {len_var}; {idx}++) {{"
+            ));
+            emitter.indent();
+            self.push_drop_scope(DropScopeKind::Loop);
+            emitter.emit_line(&format!("char {var_name} = {iter}[{idx}];"));
+            self.gen_block(body, emitter);
+            self.pop_drop_scope(emitter);
+            emitter.dedent();
+            emitter.emit_line("}");
         } else if self.is_gorget_array_expr(iterable) {
             // For-in over GorgetArray
             let iter = self.gen_expr(iterable);
@@ -1215,6 +1231,25 @@ impl CodegenContext<'_> {
                 emitter.emit_line(&format!(
                     "for (int64_t {var_name} = {start_expr}; {var_name} {cmp} {end_expr}; {var_name}++) {{"
                 ));
+            } else if self.is_string_expr(iterable) {
+                let iter = self.gen_expr(iterable);
+                let len_var = emitter.fresh_temp();
+                let idx = emitter.fresh_temp();
+                emitter.emit_line(&format!("size_t {len_var} = strlen({iter});"));
+                emitter.emit_line(&format!(
+                    "for (size_t {idx} = 0; {idx} < {len_var}; {idx}++) {{"
+                ));
+                emitter.indent();
+                emitter.emit_line(&format!("char {var_name} = {iter}[{idx}];"));
+                self.gen_block_with_break_flag(body, &flag, emitter);
+                emitter.dedent();
+                emitter.emit_line("}");
+                emitter.emit_line(&format!("if (!{flag}) {{"));
+                emitter.indent();
+                self.gen_block(else_block, emitter);
+                emitter.dedent();
+                emitter.emit_line("}");
+                return;
             } else if self.is_gorget_array_expr(iterable) {
                 let iter = self.gen_expr(iterable);
                 let idx = emitter.fresh_temp();

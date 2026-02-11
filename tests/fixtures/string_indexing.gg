@@ -1,0 +1,22 @@
+void main():
+    str s = "hello"
+
+    # char access
+    char first = s[0]
+    print("{first}")
+
+    char last = s[4]
+    print("{last}")
+
+    # slicing
+    str sub = s[1..3]
+    print(sub)
+
+    # slice from start
+    str prefix = s[0..2]
+    print(prefix)
+
+    # for-in iteration
+    str word = "abc"
+    for ch in word:
+        print("{ch}")

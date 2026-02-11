@@ -1,0 +1,4 @@
+void main():
+    str s = "hi"
+    char c = s[5]
+    print("{c}")

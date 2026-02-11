@@ -923,6 +923,21 @@ Hello, Gorget!
 }
 
 #[test]
+fn string_indexing() {
+    run_gg(
+        "string_indexing.gg",
+        "\
+h
+o
+el
+he
+a
+b
+c",
+    );
+}
+
+#[test]
 fn in_operator() {
     run_gg(
         "in_operator.gg",
@@ -1006,6 +1021,11 @@ fn assert_fails() {
 #[test]
 fn bounds_check() {
     run_gg_panics("bounds_check.gg", "index out of bounds: index 5, length 3");
+}
+
+#[test]
+fn string_index_oob() {
+    run_gg_panics("string_index_oob.gg", "string index out of bounds");
 }
 
 #[test]

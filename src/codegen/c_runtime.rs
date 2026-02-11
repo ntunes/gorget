@@ -129,6 +129,29 @@ static inline const char* gorget_string_replace(const char* s, const char* old, 
     return out;
 }
 
+// ── String indexing / slicing ────────────────────────────────
+static inline char gorget_string_at(const char* s, int64_t index) {
+    size_t len = strlen(s);
+    if (index < 0 || (size_t)index >= len) {
+        fprintf(stderr, "gorget: panic: string index out of bounds: index %" PRId64 ", length %zu\n", index, len);
+        exit(1);
+    }
+    return s[index];
+}
+
+static inline const char* gorget_string_slice(const char* s, int64_t start, int64_t end) {
+    size_t len = strlen(s);
+    if (start < 0 || end < 0 || (size_t)start > len || (size_t)end > len || start > end) {
+        fprintf(stderr, "gorget: panic: string slice out of bounds: [%" PRId64 "..%" PRId64 "], length %zu\n", start, end, len);
+        exit(1);
+    }
+    size_t slice_len = (size_t)(end - start);
+    char* result = (char*)malloc(slice_len + 1);
+    memcpy(result, s + start, slice_len);
+    result[slice_len] = '\0';
+    return result;
+}
+
 // ── Panic helper ─────────────────────────────────────────────
 static inline void gorget_panic(const char* msg) {
     fprintf(stderr, "gorget: panic: %s\n", msg);
