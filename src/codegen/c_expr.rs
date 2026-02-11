@@ -152,6 +152,25 @@ impl CodegenContext<'_> {
                         let idx = self.gen_expr(index);
                         format!("gorget_string_at({obj}, {idx})")
                     }
+                } else if self.is_vector_expr(object) {
+                    if let Expr::Range { start, end, inclusive } = &index.node {
+                        let s = start.as_ref().map(|e| self.gen_expr(e)).unwrap_or_else(|| "INT64_C(0)".to_string());
+                        let e = if let Some(end_expr) = end.as_ref() {
+                            let ev = self.gen_expr(end_expr);
+                            if *inclusive {
+                                format!("({ev} + 1)")
+                            } else {
+                                ev
+                            }
+                        } else {
+                            format!("(int64_t){obj}.len")
+                        };
+                        format!("({{ GorgetArray __slice_src = {obj}; gorget_array_slice(&__slice_src, {s}, {e}); }})")
+                    } else {
+                        let idx = self.gen_expr(index);
+                        let elem_type = self.infer_vector_elem_type(object);
+                        format!("GORGET_ARRAY_AT({elem_type}, {obj}, {idx})")
+                    }
                 } else {
                     let idx = self.gen_expr(index);
                     format!("{obj}[{idx}]")
@@ -955,6 +974,12 @@ impl CodegenContext<'_> {
                     .unwrap_or_else(|| "0".to_string());
                 format!("({{ {elem_type} __needle = {arg}; gorget_array_contains({recv_ref}, &__needle, sizeof({elem_type})); }})")
             }
+            "reserve" => {
+                let arg = args.first()
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "0".to_string());
+                format!("gorget_array_reserve({recv_ref}, (size_t)({arg}))")
+            }
             "filter" => {
                 let closure_fn = self.gen_expr(&args[0].node.value);
                 self.patch_last_closure_return_type("bool");
@@ -1668,10 +1693,16 @@ impl CodegenContext<'_> {
         // Check if the callee is a built-in collection constructor
         match base_name.as_str() {
             "Vector" | "List" | "Array" => {
-                if c_type_args.is_empty() {
-                    return "gorget_array_new(sizeof(int64_t))".to_string();
+                let elem_size = if c_type_args.is_empty() {
+                    "sizeof(int64_t)".to_string()
+                } else {
+                    format!("sizeof({})", c_type_args[0])
+                };
+                if args.len() == 1 {
+                    // Vector[T](n) → with_capacity
+                    let cap = self.gen_expr(&args[0].node.value);
+                    return format!("gorget_array_with_capacity({elem_size}, (size_t)({cap}))");
                 }
-                let elem_size = format!("sizeof({})", c_type_args[0]);
                 return format!("gorget_array_new({elem_size})");
             }
             "Dict" | "HashMap" | "Map" => {
@@ -1911,6 +1942,16 @@ impl CodegenContext<'_> {
             }
             _ => false,
         }
+    }
+
+    /// Check if an expression evaluates to a Vector (GorgetArray) type.
+    fn is_vector_expr(&self, expr: &Spanned<Expr>) -> bool {
+        let type_name = self.infer_receiver_type(expr);
+        if matches!(type_name.as_str(), "Vector" | "List" | "Array") {
+            return true;
+        }
+        let c_type = self.infer_receiver_c_type(expr);
+        c_type.as_deref() == Some("GorgetArray")
     }
 
     /// If `expr` has a Defined (struct) type that implements Equatable, return the type name.

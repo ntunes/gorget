@@ -1,0 +1,26 @@
+void main():
+    # with_capacity — creates vector with pre-allocated capacity
+    Vector[int] v = Vector[int](10)
+    print(v.len())
+
+    # reserve
+    Vector[int] w = Vector[int]()
+    w.push(1)
+    w.push(2)
+    w.reserve(100)
+    print(w.len())
+
+    # vec[i] indexing
+    print(w[0])
+    print(w[1])
+
+    # vec[start..end] slicing
+    Vector[int] x = Vector[int]()
+    x.push(10)
+    x.push(20)
+    x.push(30)
+    x.push(40)
+    Vector[int] s = x[1..3]
+    print(s.len())
+    print(s[0])
+    print(s[1])

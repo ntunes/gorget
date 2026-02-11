@@ -296,6 +296,38 @@ static inline bool gorget_array_contains(const GorgetArray* a, const void* needl
     return false;
 }
 
+static inline void gorget_array_reserve(GorgetArray* arr, size_t new_cap) {
+    if (new_cap > arr->cap) {
+        arr->data = realloc(arr->data, new_cap * arr->elem_size);
+        arr->cap = new_cap;
+    }
+}
+
+static inline GorgetArray gorget_array_with_capacity(size_t elem_size, size_t capacity) {
+    GorgetArray arr = {NULL, 0, 0, elem_size};
+    if (capacity > 0) {
+        arr.data = malloc(capacity * elem_size);
+        arr.cap = capacity;
+    }
+    return arr;
+}
+
+static inline GorgetArray gorget_array_slice(const GorgetArray* arr, int64_t start, int64_t end) {
+    if (start < 0 || end < 0 || (size_t)start > arr->len || (size_t)end > arr->len || start > end) {
+        fprintf(stderr, "gorget: panic: vector slice out of bounds: [%" PRId64 "..%" PRId64 "], length %zu\n", start, end, arr->len);
+        exit(1);
+    }
+    size_t slice_len = (size_t)(end - start);
+    GorgetArray result = {NULL, 0, 0, arr->elem_size};
+    if (slice_len > 0) {
+        result.data = malloc(slice_len * arr->elem_size);
+        memcpy(result.data, (char*)arr->data + (size_t)start * arr->elem_size, slice_len * arr->elem_size);
+        result.len = slice_len;
+        result.cap = slice_len;
+    }
+    return result;
+}
+
 static inline GorgetArray gorget_string_split(const char* s, const char* delim) {
     GorgetArray arr = gorget_array_new(sizeof(const char*));
     size_t dlen = strlen(delim);

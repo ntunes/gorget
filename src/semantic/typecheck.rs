@@ -516,7 +516,27 @@ impl<'a> TypeChecker<'a> {
                         self.types.char_id
                     }
                 } else {
-                    self.types.error_id // element type requires more info
+                    // Check for Vector[T] indexing/slicing
+                    let vec_info = if let ResolvedType::Generic(def_id, args) = self.types.get(resolved_obj) {
+                        let name = self.scopes.get_def(*def_id).name.clone();
+                        if matches!(name.as_str(), "Vector" | "List" | "Array") {
+                            Some(args.first().copied().unwrap_or(self.types.int_id))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                    if let Some(elem_tid) = vec_info {
+                        if matches!(&index.node, Expr::Range { .. }) {
+                            resolved_obj
+                        } else {
+                            self.unify(index_type, self.types.int_id, expr.span);
+                            elem_tid
+                        }
+                    } else {
+                        self.types.error_id // element type requires more info
+                    }
                 }
             }
 
@@ -1358,7 +1378,7 @@ impl<'a> TypeChecker<'a> {
                 "pop" | "get" | "remove" => Some(elem_type()),
                 "set" => Some(self.types.void_id),
                 "len" => Some(self.types.int_id),
-                "clear" => Some(self.types.void_id),
+                "clear" | "reserve" => Some(self.types.void_id),
                 "is_empty" => Some(self.types.bool_id),
                 _ => None,
             },

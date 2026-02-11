@@ -839,6 +839,21 @@ fn trait_bounds() {
 }
 
 #[test]
+fn vector_capacity() {
+    run_gg(
+        "vector_capacity.gg",
+        "\
+0
+2
+1
+2
+2
+20
+30",
+    );
+}
+
+#[test]
 fn vector_higher_order() {
     run_gg(
         "vector_higher_order.gg",

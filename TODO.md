@@ -1,7 +1,6 @@
 # TODO
 
 ## Critical — Stdlib (benefits everyone, unblocks self-hosting)
-- Vec capacity and slicing: `reserve(n)`, `with_capacity(n)`, `vec[start..end]` [added: 2026-02-11]
 - Iterator adapters: `.map()`, `.filter()`, `.collect()`, `.fold()` on iterators [added: 2026-02-11]
 - `?` operator for Result propagation: ergonomic error handling without exceptions [added: 2026-02-11]
 
