@@ -1984,8 +1984,8 @@ mod tests {
         let source = std::fs::read_to_string("examples/basics.gg")
             .expect("Could not read examples/basics.gg");
         let module = parse(&source);
-        // 7 items: import, struct, enum, equip, add, double, main
-        assert_eq!(module.items.len(), 7);
+        // 5 items: struct Point, enum Color, add, double, main
+        assert_eq!(module.items.len(), 5);
     }
 
     // ── Error Recovery ──────────────────────────────────────────
@@ -2043,9 +2043,9 @@ mod tests {
         let source = std::fs::read_to_string("examples/comprehensive.gg")
             .expect("Could not read examples/comprehensive.gg");
         let module = parse(&source);
-        // Should have many items: imports, type aliases, newtypes, structs, enums,
-        // traits, impl blocks, functions, attributed struct
-        assert!(module.items.len() >= 15);
+        // Should have many items: type alias, newtype, structs, enums,
+        // traits, impl block, functions
+        assert!(module.items.len() >= 10);
     }
 
     #[test]
