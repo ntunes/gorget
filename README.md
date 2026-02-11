@@ -172,6 +172,11 @@ cargo test --test integration -- --test-threads=1   # 21 integration tests
 
 Integration tests live in `tests/fixtures/*.gg` — each is a self-contained program with deterministic stdout.
 
+## Documentation
+
+- [Language Reference](docs/language-reference.md) — full syntax and semantics specification
+- [Language Design](docs/language-design.md) — design philosophy, safety features, and rationale
+
 ## Architecture
 
 ```

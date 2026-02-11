@@ -20,6 +20,11 @@ cargo test --test integration -- --test-threads=1  # 30 integration tests (run s
 cargo test               # all tests (use --test-threads=1 if integration tests hang)
 ```
 
+## Documentation
+
+- `docs/language-reference.md` — Full syntax and semantics specification (the authoritative language spec)
+- `docs/language-design.md` — Design philosophy, safety features, and rationale
+
 ## Project Structure
 
 - `src/lexer/` — Logos-based tokenizer with indentation tracking
