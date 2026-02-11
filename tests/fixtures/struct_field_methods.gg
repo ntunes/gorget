@@ -9,7 +9,7 @@ equip NumberList:
         return self.values.len()
 
     int get(self, int i):
-        return self.values.get(i)
+        return self.values[i]
 
 void main():
     NumberList list = NumberList(Vector[int]())

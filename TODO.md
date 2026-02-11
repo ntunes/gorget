@@ -1,8 +1,5 @@
 # TODO
 
-## High Priority — Parser bugs
-- Index after field access (`self.values[i]`) fails to parse: the `[` triggers generic-type-arg disambiguation which succeeds (parsing `i` as type), then backtracks, but error recovery corrupts parser state. Workaround: use `.get(i)` method instead. [added: 2026-02-11]
-
 ## High Priority — Unblocked
 - Linked list example (`examples/linked_list.gg`): arena-backed linked list with Iterator support. Unblocked by struct-field codegen fixes. [added: 2026-02-11]
 

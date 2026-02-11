@@ -728,8 +728,38 @@ impl Parser {
 
                 // Check for method call: expr.method(args) or expr.method[T](args)
                 if self.check(&Token::LBracket) || self.check(&Token::LParen) {
+                    // Ambiguity: expr.field[...] could be expr.field[T](args) (generic method)
+                    // or field access followed by indexing. Use save/restore backtracking.
                     let generic_args = if self.check(&Token::LBracket) {
-                        Some(self.parse_generic_type_args()?)
+                        let saved_pos = self.pos;
+                        if let Ok(type_args) = self.parse_generic_type_args() {
+                            if self.check(&Token::LParen) {
+                                Some(type_args)
+                            } else {
+                                // Not a generic method call — backtrack.
+                                // Return FieldAccess; the next iteration will handle [
+                                self.pos = saved_pos;
+                                let end = field.span;
+                                return Ok(Spanned::new(
+                                    Expr::FieldAccess {
+                                        object: Box::new(lhs),
+                                        field,
+                                    },
+                                    start.merge(end),
+                                ));
+                            }
+                        } else {
+                            // parse_generic_type_args failed — backtrack, return FieldAccess
+                            self.pos = saved_pos;
+                            let end = field.span;
+                            return Ok(Spanned::new(
+                                Expr::FieldAccess {
+                                    object: Box::new(lhs),
+                                    field,
+                                },
+                                start.merge(end),
+                            ));
+                        }
                     } else {
                         None
                     };
