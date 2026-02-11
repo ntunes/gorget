@@ -209,8 +209,8 @@ Copy types (int, float, bool) pass freely without `!`. See [`examples/ownership.
 ## Testing
 
 ```bash
-cargo test --lib                                    # 171 unit tests
-cargo test --test integration -- --test-threads=1   # 21 integration tests
+cargo test --lib                                    # 249 unit tests
+cargo test --test integration -- --test-threads=1   # 102 integration tests
 ```
 
 Integration tests live in `tests/fixtures/*.gg` — each is a self-contained program with deterministic stdout.
