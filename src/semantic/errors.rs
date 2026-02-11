@@ -116,6 +116,12 @@ pub enum SemanticErrorKind {
 
     /// Unknown directive name.
     UnknownDirective { name: String },
+
+    /// Assignment to an immutable variable (under `directive immutable-by-default`).
+    AssignmentToImmutable { name: String },
+
+    /// Assignment to a const binding (always an error).
+    AssignmentToConst { name: String },
 }
 
 impl std::fmt::Display for SemanticError {
@@ -260,6 +266,12 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::UnknownDirective { name } => {
                 write!(f, "unknown directive `{name}`")
+            }
+            SemanticErrorKind::AssignmentToImmutable { name } => {
+                write!(f, "cannot assign to immutable variable `{name}` (add `mutable` to declaration)")
+            }
+            SemanticErrorKind::AssignmentToConst { name } => {
+                write!(f, "cannot assign to constant `{name}`")
             }
         }
     }

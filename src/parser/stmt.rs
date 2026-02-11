@@ -44,6 +44,9 @@ impl Parser {
             // auto — type-inferred variable declaration
             Token::Keyword(Keyword::Auto) => self.parse_auto_var_decl(),
 
+            // mutable — prefix for mutable variable declaration under immutable-by-default
+            Token::Keyword(Keyword::Mutable) => self.parse_decl_or_expr_stmt(),
+
             // Type keyword starting a declaration or expression
             _ if self.is_type_start() => self.parse_decl_or_expr_stmt(),
 
@@ -341,6 +344,7 @@ impl Parser {
         Ok(Spanned::new(
             Stmt::VarDecl {
                 is_const: true,
+                is_mutable: false,
                 type_,
                 pattern,
                 value,
@@ -363,6 +367,7 @@ impl Parser {
         Ok(Spanned::new(
             Stmt::VarDecl {
                 is_const: false,
+                is_mutable: false,
                 type_,
                 pattern,
                 value,
@@ -375,6 +380,69 @@ impl Parser {
     fn parse_decl_or_expr_stmt(&mut self) -> Result<Spanned<Stmt>, ParseError> {
         let start = self.peek_span();
         let saved_pos = self.pos;
+
+        // Check for `mutable type name = expr` or `mutable auto name = expr` prefix syntax
+        if self.check_keyword(Keyword::Mutable) {
+            let mutable_pos = self.pos;
+            self.advance(); // consume `mutable`
+
+            // Try `mutable auto name = expr`
+            if self.check_keyword(Keyword::Auto) {
+                let auto_start = self.peek_span();
+                self.advance(); // consume `auto`
+                let type_ = Spanned::new(Type::Inferred, auto_start);
+                if let Token::Identifier(_) = self.peek() {
+                    let name = self.expect_identifier()?;
+                    if self.match_token(&Token::Eq) {
+                        let value = self.parse_expr()?;
+                        let end = value.span;
+                        self.consume_newline();
+                        return Ok(Spanned::new(
+                            Stmt::VarDecl {
+                                is_const: false,
+                                is_mutable: true,
+                                type_,
+                                pattern: Spanned::new(Pattern::Binding(name.node), name.span),
+                                value,
+                            },
+                            start.merge(end),
+                        ));
+                    }
+                }
+                // Not a declaration — backtrack past `mutable`
+                self.pos = mutable_pos;
+            } else {
+                // Try `mutable type name = expr`
+                match self.parse_type() {
+                    Ok(type_) => {
+                        if let Token::Identifier(_) = self.peek() {
+                            let name = self.expect_identifier()?;
+                            if self.match_token(&Token::Eq) {
+                                let value = self.parse_expr()?;
+                                let end = value.span;
+                                self.consume_newline();
+                                return Ok(Spanned::new(
+                                    Stmt::VarDecl {
+                                        is_const: false,
+                                        is_mutable: true,
+                                        type_,
+                                        pattern: Spanned::new(Pattern::Binding(name.node), name.span),
+                                        value,
+                                    },
+                                    start.merge(end),
+                                ));
+                            }
+                        }
+                        // Not a declaration — backtrack past `mutable`
+                        self.pos = mutable_pos;
+                    }
+                    Err(_) => {
+                        // Not a type after `mutable` — backtrack
+                        self.pos = mutable_pos;
+                    }
+                }
+            }
+        }
 
         // Try to parse as a type followed by a name
         match self.parse_type() {
@@ -392,6 +460,7 @@ impl Parser {
                         return Ok(Spanned::new(
                             Stmt::VarDecl {
                                 is_const: false,
+                                is_mutable: false,
                                 type_,
                                 pattern: Spanned::new(Pattern::Binding(name.node), name.span),
                                 value,
@@ -408,7 +477,8 @@ impl Parser {
                 // Check for ownership modifier: type &name, type !name, type mutable name, type moving name
                 if self.check(&Token::Ampersand) || self.check(&Token::Bang)
                     || self.check_keyword(Keyword::Mutable) || self.check_keyword(Keyword::Moving) {
-                    let _ownership_tok = self.advance();
+                    let ownership_tok = self.advance();
+                    let is_mutable = matches!(ownership_tok.node, Token::Keyword(Keyword::Mutable));
                     if let Token::Identifier(_) = self.peek() {
                         let name = self.expect_identifier()?;
                         if self.match_token(&Token::Eq) {
@@ -418,6 +488,7 @@ impl Parser {
                             return Ok(Spanned::new(
                                 Stmt::VarDecl {
                                     is_const: false,
+                                    is_mutable,
                                     type_,
                                     pattern: Spanned::new(Pattern::Binding(name.node), name.span),
                                     value,

@@ -651,6 +651,7 @@ pub enum Stmt {
     /// Variable declaration: int x = 5
     VarDecl {
         is_const: bool,
+        is_mutable: bool,
         type_: Spanned<Type>,
         pattern: Spanned<Pattern>,
         value: Spanned<Expr>,

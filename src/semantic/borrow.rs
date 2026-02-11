@@ -70,6 +70,8 @@ struct BorrowChecker<'a> {
     var_states: FxHashMap<DefId, VarState>,
     /// Nesting depth inside loops (for move-in-loop detection).
     loop_depth: usize,
+    /// Whether the file has `directive immutable-by-default`.
+    immutable_by_default: bool,
 }
 
 impl<'a> BorrowChecker<'a> {
@@ -78,6 +80,7 @@ impl<'a> BorrowChecker<'a> {
         types: &'a TypeTable,
         resolution_map: &'a ResolutionMap,
         function_info: &'a FxHashMap<DefId, FunctionInfo>,
+        immutable_by_default: bool,
     ) -> Self {
         Self {
             scopes,
@@ -87,6 +90,7 @@ impl<'a> BorrowChecker<'a> {
             errors: Vec::new(),
             var_states: FxHashMap::default(),
             loop_depth: 0,
+            immutable_by_default,
         }
     }
 
@@ -505,10 +509,26 @@ impl<'a> BorrowChecker<'a> {
                 // Check: if value is a bare identifier of non-Copy type, needs `!`
                 self.check_value_needs_move(value);
 
-                // Reassignment revives a moved variable (don't check_use on target)
+                // Check immutability/const constraints on identifier targets
                 match &target.node {
                     Expr::Identifier(_) => {
                         if let Some(&def_id) = self.resolution_map.get(&target.span.start) {
+                            let def = self.scopes.get_def(def_id);
+                            if def.kind == DefKind::Const {
+                                self.error(
+                                    SemanticErrorKind::AssignmentToConst { name: def.name.clone() },
+                                    target.span,
+                                );
+                            } else if self.immutable_by_default
+                                && !def.is_mutable
+                                && def.kind == DefKind::Variable
+                            {
+                                self.error(
+                                    SemanticErrorKind::AssignmentToImmutable { name: def.name.clone() },
+                                    target.span,
+                                );
+                            }
+                            // Reassignment revives a moved variable
                             self.mark_live(def_id);
                         }
                     }
@@ -520,6 +540,26 @@ impl<'a> BorrowChecker<'a> {
             }
 
             Stmt::CompoundAssign { target, value, .. } => {
+                // Check immutability/const constraints on identifier targets
+                if let Expr::Identifier(_) = &target.node {
+                    if let Some(&def_id) = self.resolution_map.get(&target.span.start) {
+                        let def = self.scopes.get_def(def_id);
+                        if def.kind == DefKind::Const {
+                            self.error(
+                                SemanticErrorKind::AssignmentToConst { name: def.name.clone() },
+                                target.span,
+                            );
+                        } else if self.immutable_by_default
+                            && !def.is_mutable
+                            && def.kind == DefKind::Variable
+                        {
+                            self.error(
+                                SemanticErrorKind::AssignmentToImmutable { name: def.name.clone() },
+                                target.span,
+                            );
+                        }
+                    }
+                }
                 self.check_expr(target);
                 self.check_expr(value);
             }
@@ -890,9 +930,10 @@ pub fn check_module(
     types: &TypeTable,
     resolution_map: &ResolutionMap,
     function_info: &FxHashMap<DefId, FunctionInfo>,
+    immutable_by_default: bool,
     errors: &mut Vec<SemanticError>,
 ) {
-    let mut checker = BorrowChecker::new(scopes, types, resolution_map, function_info);
+    let mut checker = BorrowChecker::new(scopes, types, resolution_map, function_info, immutable_by_default);
 
     for item in &module.items {
         match &item.node {

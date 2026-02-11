@@ -604,12 +604,15 @@ impl Formatter {
         match &stmt.node {
             Stmt::VarDecl {
                 is_const,
+                is_mutable,
                 type_,
                 pattern,
                 value,
             } => {
                 if *is_const {
                     self.emitter.write("const ");
+                } else if *is_mutable {
+                    self.emitter.write("mutable ");
                 }
                 self.format_type(type_);
                 self.emitter.write(" ");

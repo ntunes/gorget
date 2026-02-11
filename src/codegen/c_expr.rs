@@ -2892,6 +2892,7 @@ impl CodegenContext<'_> {
                 type_,
                 pattern,
                 value,
+                ..
             } => {
                 let const_prefix = if *is_const { "const " } else { "" };
                 match &pattern.node {

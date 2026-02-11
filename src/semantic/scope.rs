@@ -30,6 +30,8 @@ pub struct DefInfo {
     pub span: Span,
     pub scope: ScopeId,
     pub type_id: Option<TypeId>,
+    /// Whether this variable was declared with `mutable` (only meaningful for Variable kind).
+    pub is_mutable: bool,
 }
 
 /// A lexical scope.
@@ -97,6 +99,17 @@ impl ScopeTable {
         kind: DefKind,
         span: Span,
     ) -> Result<DefId, SemanticError> {
+        self.define_with_mutability(name, kind, span, false)
+    }
+
+    /// Add a definition with an explicit mutability flag.
+    pub fn define_with_mutability(
+        &mut self,
+        name: String,
+        kind: DefKind,
+        span: Span,
+        is_mutable: bool,
+    ) -> Result<DefId, SemanticError> {
         let scope = &self.scopes[self.current.0 as usize];
         if let Some(&existing_id) = scope.names.get(&name) {
             let existing = &self.definitions[existing_id.0 as usize];
@@ -109,6 +122,7 @@ impl ScopeTable {
                     span,
                     scope: self.current,
                     type_id: None,
+                    is_mutable,
                 });
                 self.scopes[self.current.0 as usize]
                     .names
@@ -132,6 +146,7 @@ impl ScopeTable {
             span,
             scope: self.current,
             type_id: None,
+            is_mutable,
         });
         self.scopes[self.current.0 as usize]
             .names

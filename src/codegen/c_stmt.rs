@@ -118,6 +118,7 @@ impl CodegenContext<'_> {
                 type_,
                 pattern,
                 value,
+                ..
             } => {
                 self.gen_var_decl(*is_const, type_, pattern, value, emitter);
             }

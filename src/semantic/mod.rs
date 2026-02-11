@@ -63,6 +63,16 @@ pub fn analyze(module: &Module) -> AnalysisResult {
                         });
                     }
                 }
+                "immutable-by-default" => {
+                    if d.value.is_some() {
+                        errors.push(SemanticError {
+                            kind: SemanticErrorKind::UnknownDirective {
+                                name: format!("immutable-by-default={}", d.value.as_deref().unwrap()),
+                            },
+                            span: d.span,
+                        });
+                    }
+                }
                 _ => {
                     errors.push(SemanticError {
                         kind: SemanticErrorKind::UnknownDirective {
@@ -100,12 +110,16 @@ pub fn analyze(module: &Module) -> AnalysisResult {
     );
 
     // Pass 5: Borrow checking
+    let immutable_by_default = module.items.iter().any(|item| {
+        matches!(&item.node, Item::Directive(d) if d.name == "immutable-by-default")
+    });
     borrow::check_module(
         module,
         &scopes,
         &types,
         &resolution_map,
         &resolve_ctx.function_info,
+        immutable_by_default,
         &mut errors,
     );
 

@@ -361,12 +361,13 @@ fn resolve_function(
         }
     }
 
-    // Define parameters
+    // Define parameters (always mutable — can reassign params in function body)
     for param in &f.params {
-        if let Err(e) = scopes.define(
+        if let Err(e) = scopes.define_with_mutability(
             param.node.name.node.clone(),
             DefKind::Variable,
             param.node.name.span,
+            true,
         ) {
             errors.push(e);
         }
@@ -438,12 +439,17 @@ fn resolve_stmt(
 ) {
     match stmt {
         Stmt::VarDecl {
-            pattern, value, ..
+            is_const, is_mutable, pattern, value, ..
         } => {
             // Resolve value first (before defining the variable, so `int x = x` refers to outer x)
             resolve_expr(value, scopes, errors, resolution_map);
             // Define bindings from pattern
-            define_pattern_bindings(&pattern.node, pattern.span, scopes, errors);
+            let (kind, mutable) = if *is_const {
+                (DefKind::Const, false)
+            } else {
+                (DefKind::Variable, *is_mutable)
+            };
+            define_pattern_bindings_with_kind(&pattern.node, pattern.span, scopes, errors, kind, mutable);
         }
 
         Stmt::Expr(expr) => {
@@ -487,7 +493,7 @@ fn resolve_stmt(
         } => {
             resolve_expr(iterable, scopes, errors, resolution_map);
             scopes.push_scope(super::scope::ScopeKind::ForLoop);
-            define_pattern_bindings(&pattern.node, pattern.span, scopes, errors);
+            define_pattern_bindings(&pattern.node, pattern.span, scopes, errors, false);
             resolve_block(body, scopes, types, errors, resolution_map);
             scopes.pop_scope();
             if let Some(else_body) = else_body {
@@ -552,7 +558,7 @@ fn resolve_stmt(
             resolve_expr(scrutinee, scopes, errors, resolution_map);
             for arm in arms {
                 scopes.push_scope(super::scope::ScopeKind::Block);
-                define_pattern_bindings(&arm.pattern.node, arm.pattern.span, scopes, errors);
+                define_pattern_bindings(&arm.pattern.node, arm.pattern.span, scopes, errors, false);
                 if let Some(guard) = &arm.guard {
                     resolve_expr(guard, scopes, errors, resolution_map);
                 }
@@ -570,10 +576,11 @@ fn resolve_stmt(
             scopes.push_scope(super::scope::ScopeKind::Block);
             for binding in bindings {
                 resolve_expr(&binding.expr, scopes, errors, resolution_map);
-                if let Err(e) = scopes.define(
+                if let Err(e) = scopes.define_with_mutability(
                     binding.name.node.clone(),
                     DefKind::Variable,
                     binding.name.span,
+                    false,
                 ) {
                     errors.push(e);
                 }
@@ -763,7 +770,7 @@ fn resolve_expr(
             resolve_expr(scrutinee, scopes, errors, resolution_map);
             for arm in arms {
                 scopes.push_scope(super::scope::ScopeKind::Block);
-                define_pattern_bindings(&arm.pattern.node, arm.pattern.span, scopes, errors);
+                define_pattern_bindings(&arm.pattern.node, arm.pattern.span, scopes, errors, false);
                 if let Some(guard) = &arm.guard {
                     resolve_expr(guard, scopes, errors, resolution_map);
                 }
@@ -821,7 +828,7 @@ fn resolve_expr(
         } => {
             resolve_expr(iterable, scopes, errors, resolution_map);
             scopes.push_scope(super::scope::ScopeKind::ForLoop);
-            define_pattern_bindings(&variable.node, variable.span, scopes, errors);
+            define_pattern_bindings(&variable.node, variable.span, scopes, errors, false);
             resolve_expr(comp_expr, scopes, errors, resolution_map);
             if let Some(cond) = condition {
                 resolve_expr(cond, scopes, errors, resolution_map);
@@ -907,34 +914,47 @@ fn resolve_expr(
     }
 }
 
-/// Define bindings introduced by a pattern.
+/// Define bindings introduced by a pattern (always as `DefKind::Variable`).
 fn define_pattern_bindings(
     pattern: &Pattern,
     span: Span,
     scopes: &mut ScopeTable,
     errors: &mut Vec<SemanticError>,
+    is_mutable: bool,
+) {
+    define_pattern_bindings_with_kind(pattern, span, scopes, errors, DefKind::Variable, is_mutable);
+}
+
+/// Define bindings introduced by a pattern with an explicit DefKind.
+fn define_pattern_bindings_with_kind(
+    pattern: &Pattern,
+    span: Span,
+    scopes: &mut ScopeTable,
+    errors: &mut Vec<SemanticError>,
+    kind: DefKind,
+    is_mutable: bool,
 ) {
     match pattern {
         Pattern::Binding(name) => {
-            if let Err(e) = scopes.define(name.clone(), DefKind::Variable, span) {
+            if let Err(e) = scopes.define_with_mutability(name.clone(), kind, span, is_mutable) {
                 errors.push(e);
             }
         }
         Pattern::Constructor { fields, .. } => {
             for field in fields {
-                define_pattern_bindings(&field.node, field.span, scopes, errors);
+                define_pattern_bindings_with_kind(&field.node, field.span, scopes, errors, kind, is_mutable);
             }
         }
         Pattern::Tuple(elements) => {
             for elem in elements {
-                define_pattern_bindings(&elem.node, elem.span, scopes, errors);
+                define_pattern_bindings_with_kind(&elem.node, elem.span, scopes, errors, kind, is_mutable);
             }
         }
         Pattern::Or(alternatives) => {
             // In an or pattern, each alternative must bind the same names.
             // For simplicity, just bind from the first alternative.
             if let Some(first) = alternatives.first() {
-                define_pattern_bindings(&first.node, first.span, scopes, errors);
+                define_pattern_bindings_with_kind(&first.node, first.span, scopes, errors, kind, is_mutable);
             }
         }
         Pattern::Wildcard | Pattern::Literal(_) | Pattern::Rest => {}

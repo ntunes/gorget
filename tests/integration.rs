@@ -1252,6 +1252,67 @@ fn assert_fmt_idempotent(fixture: &str) {
     );
 }
 
+// ══════════════════════════════════════════════════════════════
+// Semantic error tests (expected check failures)
+// ══════════════════════════════════════════════════════════════
+
+/// Run `gg check` on a fixture and assert it fails with a specific error message.
+fn check_gg_fails(fixture: &str, expected_stderr: &str) {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures").join(fixture);
+
+    assert!(
+        fixture_path.exists(),
+        "Fixture not found: {}",
+        fixture_path.display()
+    );
+
+    let output = Command::new(env!("CARGO"))
+        .args(["run", "--quiet", "--", "check"])
+        .arg(&fixture_path)
+        .output()
+        .expect("failed to run cargo");
+
+    assert!(
+        !output.status.success(),
+        "Expected `gg check` to fail for {fixture}, but it succeeded.\nstdout: {}",
+        String::from_utf8_lossy(&output.stdout),
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(expected_stderr),
+        "Expected stderr to contain '{expected_stderr}' for {fixture}, got:\n{stderr}",
+    );
+}
+
+#[test]
+fn immutable_by_default() {
+    run_gg(
+        "immutable_by_default.gg",
+        "\
+20
+40
+50",
+    );
+}
+
+#[test]
+fn immutable_by_default_error() {
+    check_gg_fails(
+        "immutable_by_default_error.gg",
+        "cannot assign to immutable variable `x`",
+    );
+}
+
+#[test]
+fn const_assign_error() {
+    check_gg_fails(
+        "const_assign_error.gg",
+        "cannot assign to constant `x`",
+    );
+}
+
 #[test]
 fn fmt_idempotent() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

@@ -1778,6 +1778,8 @@ The following functions are available without import:
 | `OwnershipMismatch`          | Call-site annotation doesn't match param declaration |
 | `NonPrintableInterpolation`  | Non-primitive type in string interpolation            |
 | `UnknownDirective`           | Unrecognized directive name                          |
+| `AssignmentToImmutable`      | Assignment to a non-`mutable` variable under `immutable-by-default` |
+| `AssignmentToConst`          | Assignment to a `const` binding (always an error)    |
 
 ### 16.3 Directives
 
@@ -1799,10 +1801,27 @@ value     = IDENT ;
 
 **Available directives:**
 
-| Directive                | Equivalent CLI flag   | Effect                                    |
-|--------------------------|-----------------------|-------------------------------------------|
-| `directive strip-asserts`| `--strip-asserts`     | Remove all `assert` statements from build |
-| `directive overflow=wrap`| `--overflow=wrap`     | Enable wrapping arithmetic (no overflow panic) |
+| Directive                          | Equivalent CLI flag   | Effect                                    |
+|------------------------------------|-----------------------|-------------------------------------------|
+| `directive strip-asserts`          | `--strip-asserts`     | Remove all `assert` statements from build |
+| `directive overflow=wrap`          | `--overflow=wrap`     | Enable wrapping arithmetic (no overflow panic) |
+| `directive immutable-by-default`   | *(none)*              | Make plain variables immutable; use `mutable` to opt in |
+
+#### Immutable-by-Default
+
+When `directive immutable-by-default` is present, Gorget enforces three tiers of variable mutability:
+
+| Tier       | Declaration                 | Behavior                                      |
+|------------|-----------------------------|-----------------------------------------------|
+| `const`    | `const int x = 5`          | Compile-time constant. Reassignment is always an error. |
+| plain      | `int x = 5`                | Runtime immutable. Reassignment is a semantic error under the directive. |
+| `mutable`  | `mutable int x = 5`        | Fully mutable. Reassignment is allowed.       |
+
+The `mutable` keyword can also precede `auto`: `mutable auto x = compute()`.
+
+Without the directive, all variables are mutable by default (backwards compatible with existing code).
+
+**Note:** `const` assignment is always rejected regardless of the directive.
 
 **Interaction with CLI flags:** Source directives and CLI flags are merged so
 that either can enable an option. However, if the CLI explicitly contradicts a
