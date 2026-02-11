@@ -1,6 +1,6 @@
 # Gorget
 
-Gorget is a statically typed, Python-like language that compiles to C.
+Gorget is a statically typed, Python-like language with Rust-inspired ownership and borrow checking.
 
 ```
 void main():
