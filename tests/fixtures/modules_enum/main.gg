@@ -1,0 +1,11 @@
+from colors import Color, Red, Green, Blue
+
+void main():
+    Color c = Red()
+    match c:
+        case Red():
+            print("red")
+        case Green():
+            print("green")
+        case Blue():
+            print("blue")

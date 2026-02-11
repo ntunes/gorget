@@ -1612,6 +1612,55 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    /// Pre-register a function's signature (return type + param types) on its DefInfo
+    /// so that callers can infer the function's type during type checking.
+    /// Skips generic functions since their type params aren't in scope at module level.
+    fn register_function_signature(&mut self, func: &FunctionDef) {
+        // Skip generic functions — type params not in scope at module level
+        if func.generic_params.is_some() {
+            return;
+        }
+
+        let def_id = match self.scopes.lookup(&func.name.node) {
+            Some(id) => id,
+            None => return,
+        };
+
+        // Only process Function defs
+        if self.scopes.get_def(def_id).kind != DefKind::Function {
+            return;
+        }
+
+        // Resolve return type
+        let return_type = super::types::ast_type_to_resolved(
+            &func.return_type.node,
+            func.return_type.span,
+            self.scopes,
+            self.types,
+        )
+        .unwrap_or(self.types.void_id);
+
+        // Resolve parameter types
+        let mut param_types = Vec::new();
+        for param in &func.params {
+            let type_id = super::types::ast_type_to_resolved(
+                &param.node.type_.node,
+                param.node.type_.span,
+                self.scopes,
+                self.types,
+            )
+            .unwrap_or(self.types.error_id);
+            param_types.push(type_id);
+        }
+
+        // Create the Function type and set it on the DefInfo
+        let func_type = self.types.insert(ResolvedType::Function {
+            params: param_types,
+            return_type,
+        });
+        self.scopes.get_def_mut(def_id).type_id = Some(func_type);
+    }
+
     fn check_function(&mut self, func: &FunctionDef) {
         // Resolve return type
         let return_type = super::types::ast_type_to_resolved(
@@ -1691,6 +1740,23 @@ pub fn check_module(
     errors: &mut Vec<SemanticError>,
 ) -> FxHashMap<Span, TypeId> {
     let mut checker = TypeChecker::new(scopes, types, traits, resolution_map, function_info, enum_variants);
+
+    // Pre-pass: register function signatures so callers can infer return types.
+    // This must run before body checking so that e.g. `auto x = imported_fn()`
+    // can resolve the function's type.
+    for item in &module.items {
+        match &item.node {
+            Item::Function(f) => {
+                checker.register_function_signature(f);
+            }
+            Item::Equip(impl_block) => {
+                for method in &impl_block.items {
+                    checker.register_function_signature(&method.node);
+                }
+            }
+            _ => {}
+        }
+    }
 
     for item in &module.items {
         match &item.node {

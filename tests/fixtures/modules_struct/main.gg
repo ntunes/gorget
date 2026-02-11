@@ -1,0 +1,5 @@
+from shapes import Circle
+
+void main():
+    Circle c = Circle(5, 0, 0)
+    print("{c.radius}")

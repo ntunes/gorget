@@ -1,0 +1,9 @@
+trait Animal:
+    str speak(self)
+
+struct Dog:
+    str name
+
+equip Dog with Animal:
+    str speak(self):
+        return "woof"

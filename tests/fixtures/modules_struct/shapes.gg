@@ -1,0 +1,4 @@
+struct Circle:
+    int radius
+    int x
+    int y

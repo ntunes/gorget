@@ -96,6 +96,29 @@ pub fn collect_top_level(
         }
     }
     collect_top_level_inner(module, scopes, types, errors, &mut ctx);
+
+    // Fixup: re-resolve function return types that failed during collection.
+    // In cross-module scenarios, entry file items come before imported module items
+    // in the merged AST, so a function whose return type is an imported type gets
+    // return_type_id: None on the first pass — the type isn't in scope yet.
+    for item in &module.items {
+        if let Item::Function(f) = &item.node {
+            if let Some(def_id) = scopes.lookup(&f.name.node) {
+                if let Some(fi) = ctx.function_info.get_mut(&def_id) {
+                    if fi.return_type_id.is_none() {
+                        fi.return_type_id = types::ast_type_to_resolved(
+                            &f.return_type.node,
+                            f.return_type.span,
+                            scopes,
+                            types,
+                        )
+                        .ok();
+                    }
+                }
+            }
+        }
+    }
+
     ctx
 }
 
@@ -1138,5 +1161,32 @@ void main():
         assert!(errors.is_empty(), "errors: {:?}", errors);
         assert!(scopes.lookup("Formatter").is_some());
         assert!(scopes.lookup("format").is_some());
+    }
+
+    #[test]
+    fn forward_return_type_fixup() {
+        // Simulate cross-module ordering: function referencing a type defined later
+        let source = "\
+Point origin() = Point(0, 0)
+struct Point:
+    int x
+    int y
+";
+        let mut parser = Parser::new(source);
+        let module = parser.parse_module();
+        assert!(parser.errors.is_empty(), "parse errors: {:?}", parser.errors);
+
+        let mut scopes = ScopeTable::new();
+        let mut types = TypeTable::new();
+        let mut errors = Vec::new();
+        let ctx = collect_top_level(&module, &mut scopes, &mut types, &mut errors);
+
+        // The fixup pass should have resolved the return type
+        let origin_def_id = scopes.lookup("origin").expect("origin not defined");
+        let fi = ctx.function_info.get(&origin_def_id).expect("no FunctionInfo for origin");
+        assert!(
+            fi.return_type_id.is_some(),
+            "return_type_id should be resolved after fixup pass"
+        );
     }
 }

@@ -561,6 +561,31 @@ fn modules_chain() {
 }
 
 #[test]
+fn modules_struct() {
+    run_gg_dir("modules_struct", "main.gg", "5");
+}
+
+#[test]
+fn modules_enum() {
+    run_gg_dir("modules_enum", "main.gg", "red");
+}
+
+#[test]
+fn modules_struct_return() {
+    run_gg_dir("modules_struct_return", "main.gg", "0\n0");
+}
+
+#[test]
+fn modules_trait() {
+    run_gg_dir("modules_trait", "main.gg", "woof");
+}
+
+#[test]
+fn modules_auto() {
+    run_gg_dir("modules_auto", "main.gg", "49");
+}
+
+#[test]
 fn vector_methods() {
     run_gg(
         "vector_methods.gg",

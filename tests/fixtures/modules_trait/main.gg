@@ -1,0 +1,6 @@
+from animal import Animal, Dog
+
+void main():
+    Dog d = Dog("Rex")
+    str s = d.speak()
+    print("{s}")
