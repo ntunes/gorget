@@ -1,8 +1,5 @@
 # TODO
 
-## High Priority — Bugs
-- String interpolation of struct `str` fields prints pointer address instead of string content: `{msg.name}` prints address, but `str n = msg.name; print("{n}")` works [added: 2026-02-11]
-
 ## High Priority — Self-hosting blockers
 - Nested generics (`Vector[Vector[int]]`): compiler data structures use nested collections extensively [added: 2026-02-11]
 - Enum destructuring in match: `case Generic(def_id, args):` must bind payload fields to variables [added: 2026-02-11]

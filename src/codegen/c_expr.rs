@@ -902,7 +902,7 @@ impl CodegenContext<'_> {
     }
 
     /// Canonical TypeId resolution for any expression.
-    /// Handles Identifier, literals, BinaryOp, UnaryOp, Call, MethodCall, Deref.
+    /// Handles Identifier, literals, BinaryOp, UnaryOp, Call, MethodCall, Deref, FieldAccess.
     pub(super) fn resolve_expr_type_id(
         &self,
         expr: &Spanned<Expr>,
@@ -979,6 +979,16 @@ impl CodegenContext<'_> {
                 {
                     if self.scopes.get_def(*def_id).name == "Box" && args.len() == 1 {
                         return Some(args[0]);
+                    }
+                }
+                None
+            }
+            Expr::FieldAccess { object, field } => {
+                let obj_type = self.infer_receiver_type(object);
+                if obj_type != "Unknown" {
+                    let key = (obj_type, field.node.clone());
+                    if let Some(ast_type) = self.field_type_names.get(&key) {
+                        return self.ast_type_to_type_id(ast_type);
                     }
                 }
                 None
@@ -2361,7 +2371,7 @@ impl CodegenContext<'_> {
     }
 
     /// Resolve a dotted field path against a type, returning the final TypeId.
-    /// Handles tuple field access like "_0", "_1._0", etc.
+    /// Handles tuple field access ("_0", "_1._0") and struct field access ("name", "msg.sender").
     fn resolve_field_type(
         &self,
         type_id: crate::semantic::ids::TypeId,
@@ -2388,7 +2398,44 @@ impl CodegenContext<'_> {
             }
         }
 
+        // Struct field access
+        if let ResolvedType::Defined(def_id) = self.types.get(type_id) {
+            let struct_name = self.scopes.get_def(*def_id).name.clone();
+            let key = (struct_name, field.to_string());
+            if let Some(ast_type) = self.field_type_names.get(&key) {
+                if let Some(field_tid) = self.ast_type_to_type_id(ast_type) {
+                    return match rest {
+                        Some(remaining) => self.resolve_field_type(field_tid, remaining),
+                        None => Some(field_tid),
+                    };
+                }
+            }
+        }
+
         None
+    }
+
+    /// Convert an AST `Type` to a semantic `TypeId`.
+    fn ast_type_to_type_id(&self, ty: &Type) -> Option<crate::semantic::ids::TypeId> {
+        match ty {
+            Type::Primitive(p) => match p {
+                PrimitiveType::Int | PrimitiveType::Int64 => Some(self.types.int_id),
+                PrimitiveType::Float | PrimitiveType::Float64 => Some(self.types.float_id),
+                PrimitiveType::Bool => Some(self.types.bool_id),
+                PrimitiveType::Char => Some(self.types.char_id),
+                PrimitiveType::Str | PrimitiveType::StringType => Some(self.types.string_id),
+                PrimitiveType::Void => Some(self.types.void_id),
+                _ => None,
+            },
+            Type::Named { name, generic_args } if generic_args.is_empty() => {
+                self.scopes.lookup_by_name_anywhere(&name.node)
+                    .and_then(|def_id| {
+                        let def = self.scopes.get_def(def_id);
+                        def.type_id
+                    })
+            }
+            _ => None,
+        }
     }
 
     /// Get printf format + expression for a given TypeId.

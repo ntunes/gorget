@@ -6,15 +6,10 @@ struct Message:
     int priority
 
 void preview(Message msg):
-    str sender = msg.sender
-    str subj = msg.subject
-    int pri = msg.priority
-    print("{sender} {subj} {pri}")
+    print("{msg.sender} {msg.subject} {msg.priority}")
 
 void send(Message !msg):
-    str subj = msg.subject
-    str sender = msg.sender
-    print("sent {subj} by {sender}")
+    print("sent {msg.subject} by {msg.sender}")
 
 equip Message:
     void set_priority(&self, int new_priority):
