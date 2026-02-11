@@ -122,7 +122,11 @@ fn try_build(
         .and_then(|s| s.to_str())
         .unwrap_or("output");
     let c_path = dir.join(format!("{stem}.c"));
+    // Canonicalize to an absolute path so Command::new() doesn't search $PATH.
+    // For a bare filename like "hello.gg", dir is "." and exe_path would be "hello",
+    // which Unix interprets as a $PATH lookup rather than ./hello.
     let exe_path = dir.join(stem);
+    let exe_path = std::path::absolute(&exe_path).unwrap_or(exe_path);
 
     // Write .c file
     if let Err(e) = fs::write(&c_path, &c_code) {
