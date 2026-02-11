@@ -115,10 +115,12 @@ pub struct CodegenContext<'a> {
     pub type_subs: RefCell<Vec<(String, String)>>,
     /// When true, `assert` statements are stripped from output (no code emitted).
     pub strip_asserts: bool,
+    /// When true, integer overflow wraps silently instead of panicking.
+    pub overflow_wrap: bool,
 }
 
 /// Generate C source code from a parsed and analyzed Gorget module.
-pub fn generate_c(module: &Module, analysis: &AnalysisResult, strip_asserts: bool) -> String {
+pub fn generate_c(module: &Module, analysis: &AnalysisResult, strip_asserts: bool, overflow_wrap: bool) -> String {
     let mut ctx = CodegenContext {
         scopes: &analysis.scopes,
         types: &analysis.types,
@@ -141,6 +143,7 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, strip_asserts: boo
         drop_scopes: RefCell::new(Vec::new()),
         type_subs: RefCell::new(Vec::new()),
         strip_asserts,
+        overflow_wrap,
     };
 
     let mut emitter = CEmitter::new();
@@ -221,7 +224,7 @@ mod tests {
             result.errors
         );
 
-        generate_c(&module, &result, false)
+        generate_c(&module, &result, false, false)
     }
 
     #[test]
@@ -239,7 +242,7 @@ mod tests {
         let source = "int add(int a, int b):\n    return a + b\n";
         let c_code = compile_to_c(source);
         assert!(c_code.contains("int64_t add(int64_t a, int64_t b)"));
-        assert!(c_code.contains("return (a + b);"));
+        assert!(c_code.contains("GORGET_CHECKED_ADD(a, b)"));
     }
 
     #[test]
@@ -247,7 +250,7 @@ mod tests {
         let source = "int double(int x) = x * 2\n";
         let c_code = compile_to_c(source);
         assert!(c_code.contains("int64_t __gorget_double(int64_t x)"));
-        assert!(c_code.contains("return (x * INT64_C(2));"));
+        assert!(c_code.contains("GORGET_CHECKED_MUL(x, INT64_C(2))"));
     }
 
     #[test]
@@ -291,7 +294,7 @@ mod tests {
         let source = "void main():\n    int x = 0\n    while x < 10:\n        x += 1\n";
         let c_code = compile_to_c(source);
         assert!(c_code.contains("while ((x < INT64_C(10)))"));
-        assert!(c_code.contains("x += INT64_C(1);"));
+        assert!(c_code.contains("GORGET_CHECKED_ADD_ASSIGN(x, INT64_C(1));"));
     }
 
     #[test]

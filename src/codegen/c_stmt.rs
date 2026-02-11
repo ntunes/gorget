@@ -136,8 +136,18 @@ impl CodegenContext<'_> {
             Stmt::CompoundAssign { target, op, value } => {
                 let t = self.gen_expr(target);
                 let v = self.gen_expr(value);
-                let c_op = compound_op_to_c(*op);
-                emitter.emit_line(&format!("{t} {c_op} {v};"));
+                if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul) && !self.overflow_wrap {
+                    let macro_name = match op {
+                        BinaryOp::Add => "GORGET_CHECKED_ADD_ASSIGN",
+                        BinaryOp::Sub => "GORGET_CHECKED_SUB_ASSIGN",
+                        BinaryOp::Mul => "GORGET_CHECKED_MUL_ASSIGN",
+                        _ => unreachable!(),
+                    };
+                    emitter.emit_line(&format!("{macro_name}({t}, {v});"));
+                } else {
+                    let c_op = compound_op_to_c(*op);
+                    emitter.emit_line(&format!("{t} {c_op} {v};"));
+                }
             }
 
             Stmt::Return(expr) => {

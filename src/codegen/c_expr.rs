@@ -82,6 +82,14 @@ impl CodegenContext<'_> {
                 let c_op = binary_op_to_c(*op);
                 if matches!(op, BinaryOp::Div | BinaryOp::Mod) {
                     format!("({{ __typeof__({r}) __d = {r}; if (__d == 0) gorget_panic(\"division by zero\"); {l} {c_op} __d; }})")
+                } else if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul) && !self.overflow_wrap {
+                    let macro_name = match op {
+                        BinaryOp::Add => "GORGET_CHECKED_ADD",
+                        BinaryOp::Sub => "GORGET_CHECKED_SUB",
+                        BinaryOp::Mul => "GORGET_CHECKED_MUL",
+                        _ => unreachable!(),
+                    };
+                    format!("{macro_name}({l}, {r})")
                 } else {
                     format!("({l} {c_op} {r})")
                 }

@@ -1026,6 +1026,84 @@ fn iterator_trait() {
 12");
 }
 
+/// Build and run a `.gg` fixture with extra CLI flags, asserting its stdout matches `expected`.
+fn run_gg_with_flags(fixture: &str, flags: &[&str], expected: &str) {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures").join(fixture);
+
+    assert!(
+        fixture_path.exists(),
+        "Fixture not found: {}",
+        fixture_path.display()
+    );
+
+    let stem = fixture_path.file_stem().unwrap().to_str().unwrap();
+    let dir = fixture_path.parent().unwrap();
+    let c_path = dir.join(format!("{stem}.c"));
+    let exe_path = dir.join(stem);
+
+    // 1. Build: cargo run -- build <flags> <fixture>
+    let mut build_args = vec!["run", "--quiet", "--", "build"];
+    build_args.extend(flags.iter());
+    let build = Command::new(env!("CARGO"))
+        .args(&build_args)
+        .arg(&fixture_path)
+        .output()
+        .expect("failed to run cargo");
+
+    assert!(
+        build.status.success(),
+        "Build failed for {fixture}:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr),
+    );
+
+    // 2. Execute the compiled binary
+    let run = Command::new(&exe_path)
+        .output()
+        .expect("failed to execute compiled binary");
+
+    let stdout = String::from_utf8_lossy(&run.stdout);
+
+    // 3. Assert stdout
+    assert_eq!(
+        stdout.trim(),
+        expected.trim(),
+        "Output mismatch for {fixture}:\nExpected:\n{expected}\nGot:\n{stdout}",
+    );
+
+    assert!(
+        run.status.success(),
+        "Binary exited with error for {fixture}: {:?}\nstderr: {}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stderr),
+    );
+
+    // 4. Clean up generated files
+    let _ = std::fs::remove_file(&c_path);
+    let _ = std::fs::remove_file(&exe_path);
+}
+
+#[test]
+fn overflow_add() {
+    run_gg_panics("overflow_add.gg", "integer overflow");
+}
+
+#[test]
+fn overflow_sub() {
+    run_gg_panics("overflow_sub.gg", "integer overflow");
+}
+
+#[test]
+fn overflow_mul() {
+    run_gg_panics("overflow_mul.gg", "integer overflow");
+}
+
+#[test]
+fn overflow_wrap() {
+    run_gg_with_flags("overflow_wrap.gg", &["--overflow=wrap"], "-9223372036854775808");
+}
+
 // ══════════════════════════════════════════════════════════════
 // Formatter idempotency tests
 // ══════════════════════════════════════════════════════════════

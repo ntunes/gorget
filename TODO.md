@@ -3,7 +3,6 @@
 ## High Priority
 
 ## Medium Priority
-- Integer overflow checking on `+`/`-`/`*`: only div-by-zero guard exists today — add overflow detection on add/sub/mul that panics by default, plus `--overflow=wrap` compiler flag [added: 2026-02-10]
 - Wrapping operators `+%`/`-%`/`*%`: new lexer tokens + parser + codegen for intentional wrapping arithmetic (pairs with overflow checking) [added: 2026-02-10]
 - `@derive` macro expansion [added: 2026-02-10]
 - `via` delegation in equip blocks: auto-forward trait methods through a struct field (depends on default methods + trait inheritance) [added: 2026-02-10]

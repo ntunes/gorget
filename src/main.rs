@@ -47,7 +47,7 @@ fn load_imports(filename: &str, source: &str, module: gorget::parser::ast::Modul
 }
 
 /// Build a .gg source file into a binary. Returns the path to the executable.
-fn build(filename: &str, source: &str, strip_asserts: bool) -> PathBuf {
+fn build(filename: &str, source: &str, strip_asserts: bool, overflow_wrap: bool) -> PathBuf {
     let mut parser = Parser::new(source);
     let module = parser.parse_module();
 
@@ -75,7 +75,7 @@ fn build(filename: &str, source: &str, strip_asserts: bool) -> PathBuf {
     }
 
     // Generate C code
-    let c_code = gorget::codegen::generate_c(&module, &result, strip_asserts);
+    let c_code = gorget::codegen::generate_c(&module, &result, strip_asserts, overflow_wrap);
 
     // Determine output paths
     let input_path = Path::new(filename);
@@ -95,13 +95,18 @@ fn build(filename: &str, source: &str, strip_asserts: bool) -> PathBuf {
 
     // Invoke C compiler
     let cc = env::var("CC").unwrap_or_else(|_| "cc".to_string());
-    let status = Command::new(&cc)
+    let mut cc_cmd = Command::new(&cc);
+    cc_cmd
         .arg("-std=c11")
         .arg("-Wall")
         .arg("-Wextra")
         .arg("-Wno-unused-parameter")
         .arg("-Wno-unused-variable")
-        .arg("-Wno-unused-function")
+        .arg("-Wno-unused-function");
+    if overflow_wrap {
+        cc_cmd.arg("-fwrapv");
+    }
+    let status = cc_cmd
         .arg("-o")
         .arg(&exe_path)
         .arg(&c_path)
@@ -134,6 +139,7 @@ fn main() {
 
     let command = &args[1];
     let strip_asserts = args.iter().any(|a| a == "--strip-asserts");
+    let overflow_wrap = args.iter().any(|a| a == "--overflow=wrap");
     let filename = args.iter().skip(2).find(|a| !a.starts_with("--")).unwrap_or_else(|| {
         eprintln!("Usage: gg <command> <file>");
         process::exit(1);
@@ -202,11 +208,11 @@ fn main() {
             }
         }
         "build" => {
-            let exe_path = build(filename, &source, strip_asserts);
+            let exe_path = build(filename, &source, strip_asserts, overflow_wrap);
             println!("Built: {}", exe_path.display());
         }
         "run" => {
-            let exe_path = build(filename, &source, strip_asserts);
+            let exe_path = build(filename, &source, strip_asserts, overflow_wrap);
             let status = Command::new(&exe_path)
                 .status()
                 .unwrap_or_else(|e| {
