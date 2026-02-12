@@ -148,7 +148,10 @@ impl TypeTable {
         match self.get(id) {
             ResolvedType::Primitive(p) => format!("{p:?}").to_lowercase(),
             ResolvedType::Defined(_) => "<defined>".into(),
-            ResolvedType::Generic(_, _) => "<generic>".into(),
+            ResolvedType::Generic(_, args) => {
+                let arg_strs: Vec<_> = args.iter().map(|a| self.display(*a)).collect();
+                format!("<generic>[{}]", arg_strs.join(", "))
+            }
             ResolvedType::Tuple(elems) => {
                 let parts: Vec<_> = elems.iter().map(|e| self.display(*e)).collect();
                 format!("({})", parts.join(", "))

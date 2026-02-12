@@ -703,6 +703,24 @@ fn interp_method_call() {
 }
 
 #[test]
+fn nested_generics() {
+    run_gg(
+        "nested_generics.gg",
+        "\
+2
+1
+2
+3
+4
+10
+2
+2
+2
+4",
+    );
+}
+
+#[test]
 fn option_methods() {
     run_gg(
         "option_methods.gg",

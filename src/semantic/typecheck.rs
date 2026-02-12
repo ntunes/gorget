@@ -88,7 +88,16 @@ impl<'a> TypeChecker<'a> {
     fn describe_resolved_type(&self, type_id: TypeId) -> String {
         match self.types.get(type_id) {
             ResolvedType::Defined(def_id) => self.scopes.get_def(*def_id).name.clone(),
-            ResolvedType::Generic(def_id, _) => self.scopes.get_def(*def_id).name.clone(),
+            ResolvedType::Generic(def_id, args) => {
+                let name = self.scopes.get_def(*def_id).name.clone();
+                if args.is_empty() {
+                    name
+                } else {
+                    let arg_strs: Vec<_> =
+                        args.iter().map(|a| self.describe_resolved_type(*a)).collect();
+                    format!("{}[{}]", name, arg_strs.join(", "))
+                }
+            }
             ResolvedType::TraitObject(def_id) => {
                 format!("trait {}", self.scopes.get_def(*def_id).name)
             }
@@ -133,12 +142,64 @@ impl<'a> TypeChecker<'a> {
                 self.substitutions.insert(*var_id, a);
                 a
             }
+            // Structural unification for compound types with fresh TypeIds
+            (
+                ResolvedType::Generic(def_a, args_a),
+                ResolvedType::Generic(def_b, args_b),
+            ) if def_a == def_b && args_a.len() == args_b.len() => {
+                let pairs: Vec<_> = args_a.iter().copied().zip(args_b.iter().copied()).collect();
+                for (arg_a, arg_b) in pairs {
+                    self.unify(arg_a, arg_b, span);
+                }
+                a
+            }
+            (ResolvedType::Tuple(a_elems), ResolvedType::Tuple(b_elems))
+                if a_elems.len() == b_elems.len() =>
+            {
+                let pairs: Vec<_> =
+                    a_elems.iter().copied().zip(b_elems.iter().copied()).collect();
+                for (ea, eb) in pairs {
+                    self.unify(ea, eb, span);
+                }
+                a
+            }
+            (ResolvedType::Array(a_elem, a_size), ResolvedType::Array(b_elem, b_size))
+                if a_size == b_size =>
+            {
+                self.unify(*a_elem, *b_elem, span);
+                a
+            }
+            (ResolvedType::Slice(a_elem), ResolvedType::Slice(b_elem)) => {
+                self.unify(*a_elem, *b_elem, span);
+                a
+            }
+            (
+                ResolvedType::Function {
+                    params: a_params,
+                    return_type: a_ret,
+                },
+                ResolvedType::Function {
+                    params: b_params,
+                    return_type: b_ret,
+                },
+            ) if a_params.len() == b_params.len() => {
+                let pairs: Vec<_> = a_params
+                    .iter()
+                    .copied()
+                    .zip(b_params.iter().copied())
+                    .collect();
+                for (pa, pb) in pairs {
+                    self.unify(pa, pb, span);
+                }
+                self.unify(*a_ret, *b_ret, span);
+                a
+            }
             _ => {
                 if a_ty != b_ty {
                     self.error(
                         SemanticErrorKind::TypeMismatch {
-                            expected: self.types.display(a),
-                            found: self.types.display(b),
+                            expected: self.describe_resolved_type(a),
+                            found: self.describe_resolved_type(b),
                         },
                         span,
                     );

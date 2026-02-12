@@ -1,7 +1,6 @@
 # TODO
 
 ## High Priority — Self-hosting blockers
-- Nested generics (`Vector[Vector[int]]`): compiler data structures use nested collections extensively [added: 2026-02-11]
 - Enum destructuring in match: `case Generic(def_id, args):` must bind payload fields to variables [added: 2026-02-11]
 - Interior mutability (RefCell equivalent): codegen uses RefCell for mutation from immutable contexts — could redesign to avoid need [added: 2026-02-11]
 - Closures capturing mutable references: compiler passes use `&mut self` heavily [added: 2026-02-11]

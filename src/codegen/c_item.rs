@@ -961,6 +961,11 @@ impl CodegenContext<'_> {
                         self.register_generic(&name.node, &c_args, kind);
                     }
                 }
+                // Recurse into generic args to discover nested instantiations
+                // e.g. Vector[Pair[int, int]] needs Pair__int64_t__int64_t registered
+                for arg in generic_args {
+                    self.scan_type_for_generics(&arg.node);
+                }
             }
         }
     }
