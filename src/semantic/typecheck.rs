@@ -724,6 +724,7 @@ impl<'a> TypeChecker<'a> {
                 let mut result_type = self.fresh_type_var();
 
                 for arm in arms {
+                    self.assign_pattern_types(&arm.pattern.node, scrutinee_type);
                     let arm_type = self.infer_expr(&arm.body);
                     result_type = self.unify(result_type, arm_type, arm.body.span);
                 }
@@ -1050,6 +1051,7 @@ impl<'a> TypeChecker<'a> {
             } => {
                 let scrutinee_type = self.infer_expr(scrutinee);
                 for arm in arms {
+                    self.assign_pattern_types(&arm.pattern.node, scrutinee_type);
                     if let Some(guard) = &arm.guard {
                         let gt = self.infer_expr(guard);
                         self.unify(gt, self.types.bool_id, guard.span);
@@ -1174,6 +1176,123 @@ impl<'a> TypeChecker<'a> {
                 // Tuples don't cover enum variants.
             }
         }
+    }
+
+    /// Assign type_ids to pattern-bound variables based on the scrutinee type.
+    /// Called from match handlers so that destructured bindings (e.g. `case Error(e):`)
+    /// get proper types for string interpolation and other uses.
+    fn assign_pattern_types(&mut self, pattern: &Pattern, scrutinee_type: TypeId) {
+        match pattern {
+            Pattern::Binding(name) => {
+                // Skip if the name is a known variant (unit variant, not a real binding)
+                let is_variant = self.enum_variants.values().any(|info|
+                    info.variants.iter().any(|(vn, _)| vn == name)
+                );
+                if !is_variant {
+                    if let Some(def_id) = self.scopes.lookup_by_name_anywhere(name) {
+                        self.scopes.get_def_mut(def_id).type_id = Some(scrutinee_type);
+                    }
+                }
+            }
+            Pattern::Constructor { path, fields } => {
+                let variant_name = path.last().map(|s| s.node.as_str()).unwrap_or("");
+                let field_types = self.resolve_variant_field_types(scrutinee_type, variant_name);
+                for (i, field_pat) in fields.iter().enumerate() {
+                    if let Some(&field_tid) = field_types.get(i) {
+                        self.assign_pattern_types(&field_pat.node, field_tid);
+                    }
+                }
+            }
+            Pattern::Tuple(elements) => {
+                let resolved = self.resolve_type(scrutinee_type);
+                if let ResolvedType::Tuple(field_tids) = self.types.get(resolved).clone() {
+                    for (i, elem) in elements.iter().enumerate() {
+                        if let Some(&tid) = field_tids.get(i) {
+                            self.assign_pattern_types(&elem.node, tid);
+                        }
+                    }
+                }
+            }
+            Pattern::Or(alts) => {
+                for alt in alts {
+                    self.assign_pattern_types(&alt.node, scrutinee_type);
+                }
+            }
+            _ => {} // Wildcard, Literal, Rest — no bindings
+        }
+    }
+
+    /// Resolve the field types for a particular variant given the scrutinee type.
+    fn resolve_variant_field_types(&mut self, scrutinee_type: TypeId, variant_name: &str) -> Vec<TypeId> {
+        let resolved = self.resolve_type(scrutinee_type);
+        match self.types.get(resolved).clone() {
+            ResolvedType::Generic(def_id, args) => {
+                let name = self.scopes.get_def(def_id).name.clone();
+                // Built-in generic enums
+                match name.as_str() {
+                    "Option" if !args.is_empty() => match variant_name {
+                        "Some" => vec![args[0]],
+                        _ => vec![],
+                    },
+                    "Result" if args.len() >= 2 => match variant_name {
+                        "Ok" => vec![args[0]],
+                        "Error" => vec![args[1]],
+                        _ => vec![],
+                    },
+                    _ => {
+                        // User-defined generic enum: substitute type params
+                        self.resolve_user_enum_field_types(def_id, &args, variant_name)
+                    }
+                }
+            }
+            ResolvedType::Defined(def_id) => {
+                // Non-generic user-defined enum
+                self.resolve_user_enum_field_types(def_id, &[], variant_name)
+            }
+            _ => vec![],
+        }
+    }
+
+    /// Look up variant field types from EnumVariantInfo and resolve AST types to TypeIds.
+    /// For generic enums, builds a substitution map from param names → actual TypeIds.
+    fn resolve_user_enum_field_types(&mut self, enum_def_id: DefId, type_args: &[TypeId], variant_name: &str) -> Vec<TypeId> {
+        // Look up the EnumVariantInfo
+        let info = match self.enum_variants.get(&enum_def_id) {
+            Some(info) => info.clone(),
+            None => return vec![],
+        };
+
+        // Find the variant's AST field types
+        let ast_field_types = match info.variant_field_types.iter().find(|(vn, _)| vn == variant_name) {
+            Some((_, types)) => types.clone(),
+            None => return vec![],
+        };
+
+        // Build substitution map: generic param name → actual TypeId
+        let subst: FxHashMap<String, TypeId> = info.generic_param_names.iter()
+            .zip(type_args.iter())
+            .map(|(name, &tid)| (name.clone(), tid))
+            .collect();
+
+        // Resolve each AST field type
+        ast_field_types.iter().map(|ast_ty| {
+            self.resolve_ast_type_with_subst(&ast_ty.node, ast_ty.span, &subst)
+        }).collect()
+    }
+
+    /// Resolve an AST type to a TypeId, applying generic substitutions.
+    fn resolve_ast_type_with_subst(&mut self, ast_ty: &Type, span: Span, subst: &FxHashMap<String, TypeId>) -> TypeId {
+        // Check if the type is a named type that matches a substitution
+        if let Type::Named { name, generic_args } = ast_ty {
+            if generic_args.is_empty() {
+                if let Some(&tid) = subst.get(&name.node) {
+                    return tid;
+                }
+            }
+        }
+        // Fall back to normal resolution
+        types::ast_type_to_resolved(ast_ty, span, self.scopes, self.types)
+            .unwrap_or(self.types.error_id)
     }
 
     fn check_block(&mut self, block: &Block) -> TypeId {

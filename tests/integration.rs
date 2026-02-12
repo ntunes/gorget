@@ -431,7 +431,7 @@ fn match_option_result() {
 42
 none
 100
--1
+fail
 is some
 is none",
     );

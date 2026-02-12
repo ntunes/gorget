@@ -20,6 +20,12 @@ pub struct StructFieldInfo {
 #[derive(Debug, Clone)]
 pub struct EnumVariantInfo {
     pub variants: Vec<(String, DefId)>,
+    /// AST types per variant's fields — for resolving pattern-bound var types.
+    /// Key: variant name, Value: AST field types. Empty for built-in enums.
+    pub variant_field_types: Vec<(String, Vec<Spanned<Type>>)>,
+    /// Generic type parameter names for the enum (e.g. ["T", "E"] for Result[T, E]).
+    /// Empty for non-generic or built-in enums.
+    pub generic_param_names: Vec<String>,
 }
 
 /// Maps name-use spans to their definitions (the resolution map).
@@ -92,7 +98,7 @@ pub fn collect_top_level(
                     variant_infos.push((vname.to_string(), variant_def_id));
                 }
             }
-            ctx.enum_variants.insert(enum_def_id, EnumVariantInfo { variants: variant_infos });
+            ctx.enum_variants.insert(enum_def_id, EnumVariantInfo { variants: variant_infos, variant_field_types: Vec::new(), generic_param_names: Vec::new() });
         }
     }
     collect_top_level_inner(module, scopes, types, errors, &mut ctx);
@@ -204,6 +210,7 @@ fn collect_item(
             match scopes.define(e.name.node.clone(), DefKind::Enum, e.name.span) {
                 Ok(enum_def_id) => {
                     let mut variant_infos = Vec::new();
+                    let mut variant_field_types = Vec::new();
                     for variant in &e.variants {
                         // Define each variant at module scope so `Some(x)` works
                         match scopes.define(
@@ -216,14 +223,26 @@ fn collect_item(
                                     variant.node.name.node.clone(),
                                     variant_def_id,
                                 ));
+                                // Collect AST field types for pattern type inference
+                                let field_types = match &variant.node.fields {
+                                    VariantFields::Tuple(types) => types.clone(),
+                                    VariantFields::Unit => Vec::new(),
+                                };
+                                variant_field_types.push((
+                                    variant.node.name.node.clone(),
+                                    field_types,
+                                ));
                             }
                             Err(e) => errors.push(e),
                         }
                     }
+                    let generic_param_names = extract_generic_param_names(&e.generic_params);
                     ctx.enum_variants.insert(
                         enum_def_id,
                         EnumVariantInfo {
                             variants: variant_infos,
+                            variant_field_types,
+                            generic_param_names,
                         },
                     );
                 }
