@@ -1,0 +1,9 @@
+# Expression AST — recursive enum using Box for indirection
+#
+# Demonstrates: enums with payloads, Box[T] for recursive types.
+
+enum Expr:
+    Num(int)
+    Add(Box[Expr], Box[Expr])
+    Mul(Box[Expr], Box[Expr])
+    Neg(Box[Expr])

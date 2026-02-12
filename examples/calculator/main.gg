@@ -1,0 +1,38 @@
+# Calculator — expression tree evaluation
+#
+# Demonstrates:
+#   - Recursive enum types (Box[Expr] payloads)
+#   - Pattern matching with destructuring
+#   - Cross-module imports
+#   - Recursive function evaluation
+#   - String interpolation with function calls
+
+from expr import Expr, Num, Add, Mul, Neg
+from eval import eval
+
+# Helper to build expression nodes concisely
+Expr num(int n) = Num(n)
+Expr add(Expr a, Expr b) = Add(Box.new(a), Box.new(b))
+Expr mul(Expr a, Expr b) = Mul(Box.new(a), Box.new(b))
+Expr neg(Expr a) = Neg(Box.new(a))
+
+void main():
+    # 2 + 3 = 5
+    Expr e1 = add(num(2), num(3))
+    print("2 + 3 = {eval(e1)}")
+
+    # (2 + 3) * 4 = 20
+    Expr e2 = mul(add(num(2), num(3)), num(4))
+    print("(2 + 3) * 4 = {eval(e2)}")
+
+    # -(7) = -7
+    Expr e3 = neg(num(7))
+    print("-7 = {eval(e3)}")
+
+    # 1 + 2 + 3 = 6  (left-associative)
+    Expr e4 = add(add(num(1), num(2)), num(3))
+    print("1 + 2 + 3 = {eval(e4)}")
+
+    # (3 + 4) * (2 + 5) = 49
+    Expr e5 = mul(add(num(3), num(4)), add(num(2), num(5)))
+    print("(3 + 4) * (2 + 5) = {eval(e5)}")

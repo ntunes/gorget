@@ -266,14 +266,9 @@ impl CodegenContext<'_> {
             }
 
             Expr::Deref { expr } => {
-                // For Box[T] pointers, generate actual dereference
+                // Gorget `*x` is exclusively Box[T] dereference — always emit C deref
                 let inner = self.gen_expr(expr);
-                if self.is_box_expr(expr) {
-                    format!("(*{inner})")
-                } else {
-                    // Non-box: ownership semantics erased
-                    inner
-                }
+                format!("(*{inner})")
             }
 
             Expr::Closure {
@@ -518,7 +513,7 @@ impl CodegenContext<'_> {
             if name == "Box" {
                 if let Some(arg) = args.first() {
                     let inner = self.gen_expr(&arg.node.value);
-                    let inner_type = self.box_inner_c_type(&arg.node.value.node);
+                    let inner_type = self.box_inner_c_type(&arg.node.value);
                     return format!(
                         "({{ {inner_type}* __box_tmp = ({inner_type}*)malloc(sizeof({inner_type})); *__box_tmp = {inner}; __box_tmp; }})"
                     );
@@ -592,7 +587,7 @@ impl CodegenContext<'_> {
                 if type_name == "Box" && method_name == "new" {
                     if let Some(arg) = args.first() {
                         let inner = self.gen_expr(&arg.node.value);
-                        let inner_type = self.box_inner_c_type(&arg.node.value.node);
+                        let inner_type = self.box_inner_c_type(&arg.node.value);
                         return format!(
                             "({{ {inner_type}* __box_tmp = ({inner_type}*)malloc(sizeof({inner_type})); *__box_tmp = {inner}; __box_tmp; }})"
                         );
@@ -1576,7 +1571,7 @@ impl CodegenContext<'_> {
                 // Box.new(value) as a method call (when Box is the receiver)
                 if let Some(arg) = args.first() {
                     let inner = self.gen_expr(&arg.node.value);
-                    let inner_type = self.box_inner_c_type(&arg.node.value.node);
+                    let inner_type = self.box_inner_c_type(&arg.node.value);
                     format!(
                         "({{ {inner_type}* __box_tmp = ({inner_type}*)malloc(sizeof({inner_type})); *__box_tmp = {inner}; __box_tmp; }})"
                     )
@@ -1634,35 +1629,21 @@ impl CodegenContext<'_> {
         }
     }
 
-    /// Check if an expression has Box type (for deciding whether to generate a real dereference).
-    fn is_box_expr(&self, expr: &Spanned<Expr>) -> bool {
-        if let Expr::Identifier(name) = &expr.node {
-            let type_id = self.resolution_map.get(&expr.span.start)
-                .and_then(|def_id| self.scopes.get_def(*def_id).type_id)
-                .or_else(|| {
-                    self.scopes.lookup_by_name_anywhere(name)
-                        .and_then(|def_id| self.scopes.get_def(def_id).type_id)
-                });
-            if let Some(tid) = type_id {
-                if let crate::semantic::types::ResolvedType::Generic(def_id, _) = self.types.get(tid) {
-                    return self.scopes.get_def(*def_id).name == "Box";
-                }
-            }
-        }
-        false
-    }
-
     /// Infer the inner C type for a Box allocation.
     /// Uses `decl_type_hint` to extract T from `Box[T]`, falling back to the argument's inferred type.
-    fn box_inner_c_type(&self, arg_expr: &Expr) -> String {
+    fn box_inner_c_type(&self, arg_expr: &Spanned<Expr>) -> String {
         let hint = self.decl_type_hint.borrow();
         if let Some(Type::Named { name, generic_args }) = hint.as_ref() {
             if name.node == "Box" && generic_args.len() == 1 {
                 return c_types::ast_type_to_c(&generic_args[0].node, self.scopes);
             }
         }
+        // Use resolve_expr_type_id for reliable type resolution (uses resolution map)
+        if let Some(type_id) = self.resolve_expr_type_id(arg_expr) {
+            return c_types::type_id_to_c(type_id, self.types, self.scopes);
+        }
         // Fallback: infer from the argument expression
-        self.infer_c_type_from_expr(arg_expr)
+        self.infer_c_type_from_expr(&arg_expr.node)
     }
 
     /// Resolve a unit variant constructor using the decl_type_hint.

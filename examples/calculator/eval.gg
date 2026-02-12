@@ -1,0 +1,17 @@
+# Evaluator — recursive match over expression trees
+#
+# Demonstrates: cross-module imports, pattern matching with
+# destructuring, recursion, Box dereference.
+
+from expr import Expr, Num, Add, Mul, Neg
+
+int eval(Expr e):
+    match e:
+        case Num(n):
+            return n
+        case Add(a, b):
+            return eval(*a) + eval(*b)
+        case Mul(a, b):
+            return eval(*a) * eval(*b)
+        case Neg(a):
+            return 0 - eval(*a)
