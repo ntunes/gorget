@@ -1051,10 +1051,13 @@ impl CodegenContext<'_> {
             "__typeof__({scrut_expr}) {tmp} = {scrut_expr};"
         ));
 
+        // Resolve the mangled enum type name for generic enums (e.g. Option__int64_t)
+        let enum_c_type = self.resolve_enum_c_type_for_scrutinee(scrutinee);
+
         // Use if-else chain for all patterns (simpler, handles all cases)
         let mut first = true;
         for arm in arms {
-            let pattern_cond = self.pattern_to_condition(&arm.pattern.node, &tmp);
+            let pattern_cond = self.pattern_to_condition(&arm.pattern.node, &tmp, enum_c_type.as_deref());
 
             // Apply guard expression if present.
             // When a guard references pattern bindings (e.g. `case n if n > 0`),
@@ -1099,8 +1102,21 @@ impl CodegenContext<'_> {
     }
 
     /// Convert a pattern to a C boolean condition (for if-else chain).
-    fn pattern_to_condition(&self, pattern: &Pattern, scrutinee: &str) -> String {
+    /// `enum_c_type` overrides the enum name used for tag constants (needed for generic enums
+    /// where the monomorphized name like `Option__int64_t` differs from the raw name `Option`).
+    fn pattern_to_condition(&self, pattern: &Pattern, scrutinee: &str, enum_c_type: Option<&str>) -> String {
         match pattern {
+            Pattern::Literal(lit) if matches!(lit.node, Expr::NoneLiteral) => {
+                // None literal as pattern: generate tag check for the None variant
+                if let Some((enum_name, _)) = self.find_enum_for_variant_by_name("None") {
+                    let effective = enum_c_type.unwrap_or(&enum_name);
+                    let tag = c_mangle::mangle_tag(effective, "None");
+                    format!("{scrutinee}.tag == {tag}")
+                } else {
+                    let val = self.gen_expr(lit);
+                    format!("{scrutinee} == {val}")
+                }
+            }
             Pattern::Literal(lit) => {
                 let val = self.gen_expr(lit);
                 format!("{scrutinee} == {val}")
@@ -1109,7 +1125,8 @@ impl CodegenContext<'_> {
             Pattern::Binding(name) => {
                 // A bare identifier may be a unit enum variant (parser can't distinguish).
                 if let Some((enum_name, _)) = self.find_enum_for_variant_by_name(name) {
-                    let tag = c_mangle::mangle_tag(&enum_name, name);
+                    let effective = enum_c_type.unwrap_or(&enum_name);
+                    let tag = c_mangle::mangle_tag(effective, name);
                     format!("{scrutinee}.tag == {tag}")
                 } else {
                     "1".to_string() // genuine binding — always matches
@@ -1118,7 +1135,8 @@ impl CodegenContext<'_> {
             Pattern::Constructor { path, fields: _ } => {
                 // Enum variant destructuring: check the tag
                 if let Some((enum_name, variant_name)) = self.find_enum_for_variant_path(path) {
-                    let tag = c_mangle::mangle_tag(&enum_name, &variant_name);
+                    let effective = enum_c_type.unwrap_or(&enum_name);
+                    let tag = c_mangle::mangle_tag(effective, &variant_name);
                     format!("{scrutinee}.tag == {tag}")
                 } else {
                     "1".to_string()
@@ -1127,7 +1145,7 @@ impl CodegenContext<'_> {
             Pattern::Or(alternatives) => {
                 let conds: Vec<String> = alternatives
                     .iter()
-                    .map(|p| self.pattern_to_condition(&p.node, scrutinee))
+                    .map(|p| self.pattern_to_condition(&p.node, scrutinee, enum_c_type))
                     .collect();
                 format!("({})", conds.join(" || "))
             }
@@ -1445,9 +1463,10 @@ impl CodegenContext<'_> {
                 emitter.emit_line(&format!(
                     "__typeof__({scrut_expr}) {tmp} = {scrut_expr};"
                 ));
+                let enum_c_type = self.resolve_enum_c_type_for_scrutinee(scrutinee);
                 let mut first = true;
                 for arm in arms {
-                    let pattern_cond = self.pattern_to_condition(&arm.pattern.node, &tmp);
+                    let pattern_cond = self.pattern_to_condition(&arm.pattern.node, &tmp, enum_c_type.as_deref());
                     let full_cond = if let Some(guard) = &arm.guard {
                         let guard_expr = self.gen_expr(guard);
                         format!("({pattern_cond}) && ({guard_expr})")

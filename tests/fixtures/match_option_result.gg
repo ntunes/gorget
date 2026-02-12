@@ -1,0 +1,39 @@
+void main():
+    # Match on Option[int] — Some
+    Option[int] some = Some(42)
+    match some:
+        case Some(x):
+            print("{x}")
+        case None:
+            print("none")
+
+    # Match on Option[int] — None
+    Option[int] none = None()
+    match none:
+        case Some(x):
+            print("{x}")
+        case None:
+            print("none")
+
+    # Match on Result[int, int] — Ok
+    Result[int, int] ok = Ok(100)
+    match ok:
+        case Ok(v):
+            print("{v}")
+        case Error(e):
+            print("{e}")
+
+    # Match on Result[int, int] — Error
+    Result[int, int] err = Error(-1)
+    match err:
+        case Ok(v):
+            print("{v}")
+        case Error(e):
+            print("{e}")
+
+    # is expression on Option[int]
+    if some is Some:
+        print("is some")
+
+    if none is None:
+        print("is none")

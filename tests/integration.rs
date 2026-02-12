@@ -424,6 +424,20 @@ point",
 }
 
 #[test]
+fn match_option_result() {
+    run_gg(
+        "match_option_result.gg",
+        "\
+42
+none
+100
+-1
+is some
+is none",
+    );
+}
+
+#[test]
 fn pattern_is() {
     run_gg(
         "pattern_is.gg",

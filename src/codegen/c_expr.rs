@@ -346,8 +346,9 @@ impl CodegenContext<'_> {
                 negated,
                 pattern,
             } => {
+                let enum_c_type = self.resolve_enum_c_type_for_scrutinee(is_expr);
                 let val = self.gen_expr(is_expr);
-                let cond = self.pattern_to_condition_expr(&pattern.node, &val);
+                let cond = self.pattern_to_condition_expr(&pattern.node, &val, enum_c_type.as_deref());
                 if *negated {
                     format!("(!({cond}))")
                 } else {
@@ -992,6 +993,30 @@ impl CodegenContext<'_> {
                     }
                 }
                 None
+            }
+            _ => None,
+        }
+    }
+
+    /// Resolve the mangled C enum type name for a match scrutinee.
+    /// For generic enums (e.g. `Option[int]`), returns the mangled name (`Option__int64_t`).
+    /// For non-generic enums, returns the raw name. Returns `None` for non-enum types.
+    pub(super) fn resolve_enum_c_type_for_scrutinee(
+        &self,
+        scrutinee: &Spanned<Expr>,
+    ) -> Option<String> {
+        let type_id = self.resolve_expr_type_id(scrutinee)?;
+        match self.types.get(type_id) {
+            crate::semantic::types::ResolvedType::Generic(def_id, args) => {
+                let base = c_types::def_name_to_c(*def_id, self.scopes);
+                let c_args: Vec<String> = args
+                    .iter()
+                    .map(|tid| c_types::type_id_to_c(*tid, self.types, self.scopes))
+                    .collect();
+                Some(c_mangle::mangle_generic(&base, &c_args))
+            }
+            crate::semantic::types::ResolvedType::Defined(def_id) => {
+                Some(c_types::def_name_to_c(*def_id, self.scopes))
             }
             _ => None,
         }
@@ -2863,9 +2888,25 @@ impl CodegenContext<'_> {
     }
 
     /// Convert a pattern to a C boolean condition for `is` expressions.
-    fn pattern_to_condition_expr(&self, pattern: &crate::parser::ast::Pattern, scrutinee: &str) -> String {
+    /// `enum_c_type` overrides the enum name used for tag constants (needed for generic enums
+    /// where the monomorphized name like `Option__int64_t` differs from the raw name `Option`).
+    fn pattern_to_condition_expr(&self, pattern: &crate::parser::ast::Pattern, scrutinee: &str, enum_c_type: Option<&str>) -> String {
         use crate::parser::ast::Pattern;
         match pattern {
+            Pattern::Literal(lit) if matches!(lit.node, Expr::NoneLiteral) => {
+                // None literal as pattern: generate tag check for the None variant
+                for (enum_def_id, info) in self.enum_variants {
+                    for (vname, _) in &info.variants {
+                        if vname == "None" {
+                            let effective = enum_c_type.unwrap_or(&self.scopes.get_def(*enum_def_id).name);
+                            let tag = c_mangle::mangle_tag(effective, "None");
+                            return format!("{scrutinee}.tag == {tag}");
+                        }
+                    }
+                }
+                let val = self.gen_expr(lit);
+                format!("{scrutinee} == {val}")
+            }
             Pattern::Literal(lit) => {
                 let val = self.gen_expr(lit);
                 format!("{scrutinee} == {val}")
@@ -2877,8 +2918,8 @@ impl CodegenContext<'_> {
                 for (enum_def_id, info) in self.enum_variants {
                     for (vname, _) in &info.variants {
                         if vname == name {
-                            let enum_name = &self.scopes.get_def(*enum_def_id).name;
-                            let tag = c_mangle::mangle_tag(enum_name, name);
+                            let effective = enum_c_type.unwrap_or(&self.scopes.get_def(*enum_def_id).name);
+                            let tag = c_mangle::mangle_tag(effective, name);
                             return format!("{scrutinee}.tag == {tag}");
                         }
                     }
@@ -2887,7 +2928,9 @@ impl CodegenContext<'_> {
             }
             Pattern::Constructor { path, .. } => {
                 if path.len() == 2 {
-                    let tag = c_mangle::mangle_tag(&path[0].node, &path[1].node);
+                    // Explicit path like Shape.Circle — use enum_c_type override if available
+                    let effective = enum_c_type.unwrap_or(&path[0].node);
+                    let tag = c_mangle::mangle_tag(effective, &path[1].node);
                     format!("{scrutinee}.tag == {tag}")
                 } else if path.len() == 1 {
                     // Try to find the enum for this variant
@@ -2895,8 +2938,8 @@ impl CodegenContext<'_> {
                     for (enum_def_id, info) in self.enum_variants {
                         for (vname, _) in &info.variants {
                             if vname == variant_name {
-                                let enum_name = &self.scopes.get_def(*enum_def_id).name;
-                                let tag = c_mangle::mangle_tag(enum_name, variant_name);
+                                let effective = enum_c_type.unwrap_or(&self.scopes.get_def(*enum_def_id).name);
+                                let tag = c_mangle::mangle_tag(effective, variant_name);
                                 return format!("{scrutinee}.tag == {tag}");
                             }
                         }
@@ -2909,7 +2952,7 @@ impl CodegenContext<'_> {
             Pattern::Or(alternatives) => {
                 let conds: Vec<String> = alternatives
                     .iter()
-                    .map(|p| self.pattern_to_condition_expr(&p.node, scrutinee))
+                    .map(|p| self.pattern_to_condition_expr(&p.node, scrutinee, enum_c_type))
                     .collect();
                 format!("({})", conds.join(" || "))
             }
@@ -2925,6 +2968,7 @@ impl CodegenContext<'_> {
         else_arm: Option<&Spanned<Expr>>,
     ) -> String {
         let scrut_expr = self.gen_expr(scrutinee);
+        let enum_c_type = self.resolve_enum_c_type_for_scrutinee(scrutinee);
 
         let mut parts = Vec::new();
         parts.push(format!("__typeof__({scrut_expr}) __gorget_scrut = {scrut_expr}"));
@@ -2934,7 +2978,7 @@ impl CodegenContext<'_> {
         let mut first_body: Option<String> = None;
         let mut first = true;
         for arm in arms {
-            let cond = self.pattern_to_condition_expr(&arm.pattern.node, "__gorget_scrut");
+            let cond = self.pattern_to_condition_expr(&arm.pattern.node, "__gorget_scrut", enum_c_type.as_deref());
             let full_cond = if let Some(guard) = &arm.guard {
                 let guard_expr = self.gen_expr(guard);
                 let guard_bindings = self.pattern_bindings_inline(&arm.pattern.node, "__gorget_scrut");
@@ -3124,6 +3168,7 @@ impl CodegenContext<'_> {
                 let result_type = format!("__typeof__(({}))  ", first_body);
 
                 let scrut_expr = self.gen_expr(scrutinee);
+                let enum_c_type = self.resolve_enum_c_type_for_scrutinee(scrutinee);
 
                 let mut code = format!(
                     "__typeof__({scrut_expr}) __gorget_scrut = {scrut_expr}; \
@@ -3132,7 +3177,7 @@ impl CodegenContext<'_> {
 
                 let mut first = true;
                 for arm in arms {
-                    let cond = self.pattern_to_condition_expr(&arm.pattern.node, "__gorget_scrut");
+                    let cond = self.pattern_to_condition_expr(&arm.pattern.node, "__gorget_scrut", enum_c_type.as_deref());
                     let full_cond = if let Some(guard) = &arm.guard {
                         let guard_expr = self.gen_expr(guard);
                         format!("({cond}) && ({guard_expr})")

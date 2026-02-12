@@ -1,7 +1,7 @@
 # TODO
 
 ## High Priority — Self-hosting blockers
-- Enum destructuring in match: `case Generic(def_id, args):` must bind payload fields to variables [added: 2026-02-11]
+- Pattern-bound variable type inference in `print()`: destructured bindings from `case Error(e):` etc. don't have type_id in the resolution map, so `print("{e}")` defaults to `%lld` instead of the correct format specifier. Workaround: use `print(e)` for non-int types. [added: 2026-02-12]
 - Interior mutability (RefCell equivalent): codegen uses RefCell for mutation from immutable contexts — could redesign to avoid need [added: 2026-02-11]
 - Closures capturing mutable references: compiler passes use `&mut self` heavily [added: 2026-02-11]
 - `@derive` macro expansion: reduces boilerplate for Debug, Clone, etc. [added: 2026-02-10]

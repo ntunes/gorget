@@ -190,7 +190,7 @@ pub fn type_id_to_c(type_id: TypeId, types: &TypeTable, scopes: &ScopeTable) -> 
 }
 
 /// Get the C type name for a defined type (struct/enum).
-fn def_name_to_c(def_id: DefId, scopes: &ScopeTable) -> String {
+pub(super) fn def_name_to_c(def_id: DefId, scopes: &ScopeTable) -> String {
     let name = scopes.get_def(def_id).name.clone();
     match name.as_str() {
         "File" => "GorgetFile".to_string(),
