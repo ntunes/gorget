@@ -1,0 +1,40 @@
+# Shapes — multi-module showcase
+#
+# Demonstrates:
+#   - Traits defined in one module, equipped in another
+#   - Cross-module imports (from ... import ...)
+#   - Struct methods (inherent + trait)
+#   - Box[Trait] dynamic dispatch via vtable
+#   - String interpolation with method calls
+#   - Control flow with trait method results
+
+from shape import Shape
+from circle import Circle
+from rect import Rect
+
+void main():
+    # Direct dispatch — compiler knows the concrete types
+    Circle c = Circle(5)
+    Rect r = Rect(3, 4)
+    print("{c.name()} area={c.area()}")
+    print("{r.name()} area={r.area()}")
+    print("circumference={c.circumference()}")
+
+    # Inherent method
+    Rect sq = Rect(5, 5)
+    if sq.is_square():
+        print("square")
+
+    # Dynamic dispatch — Box[Shape] erases the concrete type
+    Box[Shape] s1 = Box.new(Circle(10))
+    Box[Shape] s2 = Box.new(Rect(6, 7))
+    int a1 = s1.area()
+    int a2 = s2.area()
+    print("s1 area={a1}")
+    print("s2 area={a2}")
+
+    # Compare areas
+    if a1 > a2:
+        print("circle wins")
+    else:
+        print("rect wins")

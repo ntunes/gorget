@@ -1,0 +1,19 @@
+# Rect — a shape defined by width and height
+#
+# Demonstrates: cross-module trait equip, expression-body methods.
+
+from shape import Shape
+
+struct Rect:
+    int width
+    int height
+
+equip Rect:
+    bool is_square(self):
+        return self.width == self.height
+
+equip Rect with Shape:
+    int area(self):
+        return self.width * self.height
+    str name(self):
+        return format("rect({self.width}x{self.height})")

@@ -1,0 +1,18 @@
+# Circle — a shape defined by its radius
+#
+# Demonstrates: cross-module trait equip, struct methods, string interpolation.
+
+from shape import Shape
+
+struct Circle:
+    int radius
+
+equip Circle:
+    int circumference(self):
+        return 6 * self.radius
+
+equip Circle with Shape:
+    int area(self):
+        return 3 * self.radius * self.radius
+    str name(self):
+        return format("circle(r={self.radius})")

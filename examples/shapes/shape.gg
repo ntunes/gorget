@@ -1,0 +1,7 @@
+# Shape trait — defines the interface for all shapes
+#
+# Imported by circle.gg and rect.gg to equip their structs.
+
+trait Shape:
+    int area(self)
+    str name(self)
