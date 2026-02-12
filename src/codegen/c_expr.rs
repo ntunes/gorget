@@ -635,8 +635,9 @@ impl CodegenContext<'_> {
         args: &[Spanned<crate::parser::ast::CallArg>],
     ) -> Vec<String> {
         let has_named = args.iter().any(|a| a.node.name.is_some());
-        let func_info = if let Expr::Identifier(_) = &callee.node {
+        let func_info = if let Expr::Identifier(cname) = &callee.node {
             self.resolution_map.get(&callee.span.start)
+                .filter(|def_id| self.scopes.get_def(**def_id).name == *cname)
                 .and_then(|def_id| self.function_info.get(def_id))
         } else {
             None
@@ -728,6 +729,7 @@ impl CodegenContext<'_> {
             let is_type = self
                 .resolution_map
                 .get(&receiver.span.start)
+                .filter(|did| self.scopes.get_def(**did).name == *name)
                 .map(|def_id| self.scopes.get_def(*def_id))
                 .or_else(|| {
                     self.scopes
@@ -907,6 +909,9 @@ impl CodegenContext<'_> {
             Expr::Identifier(name) => {
                 self.resolution_map
                     .get(&expr.span.start)
+                    // Guard against cross-module span collisions: verify the
+                    // resolved definition actually matches this identifier.
+                    .filter(|def_id| self.scopes.get_def(**def_id).name == *name)
                     .and_then(|def_id| self.scopes.get_def(*def_id).type_id)
                     .or_else(|| {
                         self.scopes
@@ -936,6 +941,7 @@ impl CodegenContext<'_> {
                     let def_id = self
                         .resolution_map
                         .get(&callee.span.start)
+                        .filter(|did| self.scopes.get_def(**did).name == *name)
                         .copied()
                         .or_else(|| self.scopes.lookup_by_name_anywhere(name));
                     if let Some(did) = def_id {
@@ -1877,7 +1883,9 @@ impl CodegenContext<'_> {
     /// Check if a receiver expression has a trait object type, returning the trait name if so.
     fn resolve_trait_object_type(&self, expr: &Spanned<Expr>) -> Option<String> {
         if let Expr::Identifier(name) = &expr.node {
-            if let Some(def_id) = self.resolution_map.get(&expr.span.start) {
+            if let Some(def_id) = self.resolution_map.get(&expr.span.start)
+                .filter(|did| self.scopes.get_def(**did).name == *name)
+            {
                 let def = self.scopes.get_def(*def_id);
                 if let Some(type_id) = def.type_id {
                     if let crate::semantic::types::ResolvedType::TraitObject(trait_def_id) =
@@ -2083,7 +2091,9 @@ impl CodegenContext<'_> {
             Expr::Call { callee, .. } => {
                 if let Expr::Identifier(name) = &callee.node {
                     // Try resolution_map first, then search all definitions
-                    let def_id = self.resolution_map.get(&callee.span.start).copied()
+                    let def_id = self.resolution_map.get(&callee.span.start)
+                        .filter(|did| self.scopes.get_def(**did).name == *name)
+                        .copied()
                         .or_else(|| {
                             // lookup_by_name_anywhere only finds Variable/Const/Function,
                             // so search all definitions for struct/newtype/variant/function

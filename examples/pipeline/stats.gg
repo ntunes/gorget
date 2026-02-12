@@ -1,0 +1,30 @@
+# Stats — reusable analysis functions
+#
+# Demonstrates: Vector iteration, fold, for-loops with
+# accumulation, expression-body functions.
+
+int sum(Vector[int] values):
+    return values.fold(0, (int acc, int x): acc + x)
+
+int max_val(Vector[int] values):
+    int result = values.get(0)
+    for i in 1..values.len():
+        int v = values.get(i)
+        if v > result:
+            result = v
+    return result
+
+int min_val(Vector[int] values):
+    int result = values.get(0)
+    for i in 1..values.len():
+        int v = values.get(i)
+        if v < result:
+            result = v
+    return result
+
+int count_above(Vector[int] values, int threshold):
+    int n = 0
+    for i in 0..values.len():
+        if values.get(i) >= threshold:
+            n = n + 1
+    return n

@@ -1,0 +1,28 @@
+# Data — domain types and sample data generator
+#
+# Demonstrates: struct with Displayable, format() with field access,
+# Vector of user-defined structs, function returning a collection.
+
+struct Student:
+    str name
+    int grade
+    bool honors
+
+equip Student with Displayable:
+    str display(self):
+        if self.honors:
+            return format("{self.name} ({self.grade}*)")
+        else:
+            return format("{self.name} ({self.grade})")
+
+Vector[Student] class_roster():
+    Vector[Student] r = Vector[Student]()
+    r.push(Student("Alice", 95, true))
+    r.push(Student("Bob", 67, false))
+    r.push(Student("Carol", 82, true))
+    r.push(Student("Dave", 45, false))
+    r.push(Student("Eve", 91, true))
+    r.push(Student("Frank", 73, false))
+    r.push(Student("Grace", 88, true))
+    r.push(Student("Hank", 56, false))
+    return r

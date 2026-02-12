@@ -1,5 +1,8 @@
 # TODO
 
+## Critical — Regressions
+- `examples/calculator/main.gg` fails semantic check: "type mismatch: expected `Expr`, found `Box[Expr]`" on expression-body functions returning enum variants with Box args (e.g. `Expr add(Expr a, Expr b) = Add(Box.new(a), Box.new(b))`). Likely introduced by recent `dynamic` keyword removal. [added: 2026-02-12]
+
 ## High Priority — Self-hosting blockers
 - Interior mutability (RefCell equivalent): codegen uses RefCell for mutation from immutable contexts — could redesign to avoid need [added: 2026-02-11]
 - Closures capturing mutable references: compiler passes use `&mut self` heavily [added: 2026-02-11]
@@ -12,7 +15,6 @@
 - `gg info` command: show fields, methods, traits, memory layout for a type [added: 2026-02-10]
 
 ## Low Priority — Showcase examples
-- [showcase] `examples/pipeline/` — Generics + closures + iterators: generic Pipeline[T] struct with chainable map/filter/collect, implicit it [added: 2026-02-12]
 - [showcase] `examples/ecs/` — Entity-component system: trait-based components, Option[T] fields, system iteration with pattern matching [added: 2026-02-12]
 - [showcase] `examples/collections/` — Custom generic data structure: generic Stack[T] backed by Vector, Iterator[T] impl, ownership moves [added: 2026-02-12]
 

@@ -1,0 +1,50 @@
+# Pipeline — data processing showcase
+#
+# Demonstrates:
+#   - Vector filter/map/fold with closures on structs
+#   - Cross-module imports and function calls
+#   - Struct field access in closures
+#   - Displayable trait in print interpolation
+#   - Pipeline-style data transformation
+#   - Reusable stats functions
+
+from data import Student, class_roster
+from stats import sum, max_val, min_val, count_above
+
+void main():
+    Vector[Student] roster = class_roster()
+
+    # Show all students (uses Displayable)
+    print("Class roster:")
+    for i in 0..roster.len():
+        Student s = roster.get(i)
+        print("  {s}")
+
+    # Extract grades via map (struct → int)
+    Vector[int] grades = roster.map((Student s): s.grade)
+
+    # Aggregate stats using reusable functions
+    print("count: {grades.len()}")
+    print("sum: {sum(grades)}")
+    print("max: {max_val(grades)}")
+    print("min: {min_val(grades)}")
+
+    # Filter: honors students only
+    Vector[Student] honors = roster.filter((Student s): s.honors)
+    print("honors: {honors.len()}")
+
+    # Pipeline: filter passing → extract grades → sum
+    Vector[Student] passing = roster.filter((Student s): s.grade >= 60)
+    Vector[int] pass_grades = passing.map((Student s): s.grade)
+    int avg = sum(pass_grades) / passing.len()
+    print("passing: {passing.len()}")
+    print("passing avg: {avg}")
+
+    # Count above threshold
+    print("above 80: {count_above(grades, 80)}")
+
+    # Filter + map chain: names of top scorers
+    Vector[Student] top = roster.filter((Student s): s.grade >= 85)
+    for i in 0..top.len():
+        Student s = top.get(i)
+        print("top: {s.name}")
