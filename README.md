@@ -2,6 +2,8 @@
 
 Gorget is a statically typed, Python-like language with Rust-inspired ownership and borrow checking.
 
+> **Note:** Gorget is highly experimental. Expect breaking changes, missing features, and the possibility of a complete redesign before version 1.0.0.
+
 ```
 void main():
     print("Hello, World!")
