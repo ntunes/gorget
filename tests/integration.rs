@@ -1476,3 +1476,349 @@ fn fmt_idempotent() {
         }
     }
 }
+
+// ── Examples (programs under examples/) ─────────────────────────
+
+/// Build and run an example, asserting its stdout matches `expected`.
+/// Handles both single-file (`examples/foo.gg`) and multi-file
+/// (`examples/foo/main.gg`) layouts.
+fn run_example(name: &str, expected: &str) {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let examples_dir = manifest_dir.join("examples");
+
+    // Determine source path: directory with main.gg, or standalone .gg file
+    let (source_path, c_path, exe_path) = {
+        let dir_path = examples_dir.join(name);
+        if dir_path.is_dir() {
+            let main = dir_path.join("main.gg");
+            let c = dir_path.join("main.c");
+            let exe = dir_path.join("main");
+            (main, c, exe)
+        } else {
+            let gg = examples_dir.join(format!("{name}.gg"));
+            let c = examples_dir.join(format!("{name}.c"));
+            let exe = examples_dir.join(name);
+            (gg, c, exe)
+        }
+    };
+
+    assert!(
+        source_path.exists(),
+        "Example not found: {}",
+        source_path.display()
+    );
+
+    // 1. Build
+    let build = Command::new(env!("CARGO"))
+        .args(["run", "--quiet", "--", "build"])
+        .arg(&source_path)
+        .output()
+        .expect("failed to run cargo");
+
+    assert!(
+        build.status.success(),
+        "Build failed for examples/{name}:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr),
+    );
+
+    // 2. Execute
+    let run = Command::new(&exe_path)
+        .output()
+        .expect("failed to execute compiled binary");
+
+    let stdout = String::from_utf8_lossy(&run.stdout);
+
+    // 3. Assert stdout
+    assert_eq!(
+        stdout.trim(),
+        expected.trim(),
+        "Output mismatch for examples/{name}:\nExpected:\n{expected}\nGot:\n{stdout}",
+    );
+
+    assert!(
+        run.status.success(),
+        "Binary exited with error for examples/{name}: {:?}\nstderr: {}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stderr),
+    );
+
+    // 4. Clean up
+    let _ = std::fs::remove_file(&c_path);
+    let _ = std::fs::remove_file(&exe_path);
+}
+
+#[test]
+fn example_hello() {
+    run_example("hello", "Hello, World!");
+}
+
+#[test]
+fn example_basics() {
+    run_example("basics", "\
+positive
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+add(3, 4) = 7
+double(5) = 10
+name = gorget");
+}
+
+#[test]
+fn example_fibonacci() {
+    run_example("fibonacci", "\
+Fibonacci sequence:
+  fib(0) = 0
+  fib(1) = 1
+  fib(2) = 1
+  fib(3) = 2
+  fib(4) = 3
+  fib(5) = 5
+  fib(6) = 8
+  fib(7) = 13
+  fib(8) = 21
+  fib(9) = 34
+  fib(10) = 55
+  fib(11) = 89
+  fib(12) = 144
+  fib(13) = 233
+  fib(14) = 377
+  fib(15) = 610
+  fib(16) = 987
+  fib(17) = 1597
+  fib(18) = 2584
+  fib(19) = 4181
+Recursive check:
+  fib(0) = 0
+  fib(1) = 1
+  fib(2) = 1
+  fib(3) = 2
+  fib(4) = 3
+  fib(5) = 5
+  fib(6) = 8
+  fib(7) = 13
+  fib(8) = 21
+  fib(9) = 34
+  fib(10) = 55
+  fib(11) = 89
+  fib(12) = 144
+  fib(13) = 233
+  fib(14) = 377
+All checks passed.");
+}
+
+#[test]
+fn example_fizzbuzz() {
+    let mut lines = Vec::new();
+    for i in 1..=100 {
+        if i % 15 == 0 {
+            lines.push("FizzBuzz".to_string());
+        } else if i % 3 == 0 {
+            lines.push("Fizz".to_string());
+        } else if i % 5 == 0 {
+            lines.push("Buzz".to_string());
+        } else {
+            lines.push(i.to_string());
+        }
+    }
+    run_example("fizzbuzz", &lines.join("\n"));
+}
+
+#[test]
+fn example_inference() {
+    run_example("inference", "\
+yes
+0
+1
+2
+3
+4
+other");
+}
+
+#[test]
+fn example_comprehensive() {
+    run_example("comprehensive", "\
+positive
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+result: 7
+two
+done");
+}
+
+#[test]
+fn example_ownership() {
+    run_example("ownership", "\
+Priority: 3, backup: 3
+[Preview] sender=Alice subject=Meeting tomorrow priority=1
+[Preview] sender=Alice subject=Meeting tomorrow priority=5
+[Sent] Meeting tomorrow by Alice
+[Preview] sender=Bob subject=Re: Meeting tomorrow priority=2
+done");
+}
+
+#[test]
+fn example_sieve() {
+    run_example("sieve", "\
+Primes up to 100 (25 found):
+  2
+  3
+  5
+  7
+  11
+  13
+  17
+  19
+  23
+  29
+  31
+  37
+  41
+  43
+  47
+  53
+  59
+  61
+  67
+  71
+  73
+  79
+  83
+  89
+  97");
+}
+
+#[test]
+fn example_iterator_demo() {
+    run_example("iterator_demo", "\
+Counting by 3s:
+  0
+  3
+  6
+  9
+  12
+  15
+  18
+Even numbers 1..20:
+  2
+  4
+  6
+  8
+  10
+  12
+  14
+  16
+  18
+Fibonacci (first 10):
+  0
+  1
+  1
+  2
+  3
+  5
+  8
+  13
+  21
+  34
+Sum of first 20 Fibonacci numbers: 10945
+Squares of 1..5:
+  1
+  4
+  9
+  16
+  25");
+}
+
+#[test]
+fn example_linked_list() {
+    run_example("linked_list", "\
+3
+10
+10
+20
+30
+60
+20
+40
+60");
+}
+
+#[test]
+fn example_shapes() {
+    run_example("shapes", "\
+circle(r=5) area=75
+rect(3x4) area=12
+circumference=30
+square
+s1 area=300
+s2 area=42
+circle wins");
+}
+
+#[test]
+fn example_calculator() {
+    run_example("calculator", "\
+2 + 3 = 5
+(2 + 3) * 4 = 20
+-7 = -7
+1 + 2 + 3 = 6
+(3 + 4) * (2 + 5) = 49");
+}
+
+#[test]
+fn example_todo_app() {
+    run_example("todo_app", "\
+All tasks:
+[x] Write parser
+[ ] Implement codegen
+[ ] Add error messages
+[ ] Write docs
+[x] Release v1.0
+total: 5
+done: 2
+pending: 3
+high priority: 2
+[x] Implement codegen");
+}
+
+#[test]
+fn example_pipeline() {
+    run_example("pipeline", "\
+Class roster:
+  Alice (95*)
+  Bob (67)
+  Carol (82*)
+  Dave (45)
+  Eve (91*)
+  Frank (73)
+  Grace (88*)
+  Hank (56)
+count: 8
+sum: 597
+max: 95
+min: 45
+honors: 4
+passing: 6
+passing avg: 82
+above 80: 4
+top: Alice
+top: Eve
+top: Grace");
+}
