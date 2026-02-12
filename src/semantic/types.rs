@@ -32,7 +32,7 @@ pub enum ResolvedType {
         return_type: TypeId,
     },
 
-    /// Trait object: dynamic Drawable
+    /// Trait object: Box[Trait] → automatic vtable dispatch
     TraitObject(DefId),
 
     /// Type variable for inference: ?T0, ?T1, ...
@@ -191,6 +191,7 @@ pub fn ast_type_to_resolved(
                     match def.kind {
                         DefKind::Struct
                         | DefKind::Enum
+                        | DefKind::Trait
                         | DefKind::TypeAlias
                         | DefKind::Newtype
                         | DefKind::GenericParam
@@ -208,6 +209,18 @@ pub fn ast_type_to_resolved(
                                     resolved_args.push(ast_type_to_resolved(
                                         &arg.node, arg.span, scopes, types,
                                     )?);
+                                }
+                                // Box[Trait] → TraitObject: automatic dispatch
+                                if name.node == "Box" && resolved_args.len() == 1 {
+                                    if let ResolvedType::Defined(inner_def_id) =
+                                        *types.get(resolved_args[0])
+                                    {
+                                        if scopes.get_def(inner_def_id).kind == DefKind::Trait {
+                                            return Ok(types.insert(
+                                                ResolvedType::TraitObject(inner_def_id),
+                                            ));
+                                        }
+                                    }
                                 }
                                 Ok(types
                                     .insert(ResolvedType::Generic(def_id, resolved_args)))

@@ -44,7 +44,17 @@ pub fn ast_type_to_c(ty: &crate::parser::ast::Type, scopes: &ScopeTable) -> Stri
                         super::c_mangle::mangle_generic("GorgetMap", &c_args)
                     }
                     "Box" if generic_args.len() == 1 => {
-                        // Box[T] → T*
+                        // Box[Trait] → Trait_TraitObj (automatic dispatch)
+                        if let crate::parser::ast::Type::Named { name: inner_name, generic_args: inner_args } = &generic_args[0].node {
+                            if inner_args.is_empty() {
+                                if let Some(def_id) = scopes.lookup(&inner_name.node) {
+                                    if scopes.get_def(def_id).kind == crate::semantic::scope::DefKind::Trait {
+                                        return super::c_mangle::mangle_trait_obj(&inner_name.node);
+                                    }
+                                }
+                            }
+                        }
+                        // Box[T] → T* (regular box)
                         let inner = ast_type_to_c(&generic_args[0].node, scopes);
                         format!("{inner}*")
                     }

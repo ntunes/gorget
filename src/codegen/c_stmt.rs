@@ -70,6 +70,9 @@ impl CodegenContext<'_> {
             DropAction::BoxFree => {
                 emitter.emit_line(&format!("free({});", entry.var_name));
             }
+            DropAction::TraitObjFree => {
+                emitter.emit_line(&format!("free({}.data);", entry.var_name));
+            }
             DropAction::FileClose => {
                 emitter.emit_line(&format!("gorget_file_close(&{});", entry.var_name));
             }
@@ -83,12 +86,29 @@ impl CodegenContext<'_> {
     /// Check if a declared type needs drop and register it if so.
     fn maybe_register_droppable(&self, var_name: &str, ty: &Type) {
         match ty {
-            // Box[T]
+            // Box[T] — if T is a trait, register TraitObjFree (free .data field)
             Type::Named { name, generic_args }
                 if name.node == "Box"
                     && !generic_args.is_empty() =>
             {
-                self.register_droppable(var_name, DropAction::BoxFree);
+                let is_trait_obj = if let Some(Type::Named { name: inner, generic_args: inner_args }) =
+                    generic_args.first().map(|a| &a.node)
+                {
+                    if inner_args.is_empty() {
+                        self.scopes.lookup(&inner.node).map_or(false, |def_id| {
+                            self.scopes.get_def(def_id).kind == crate::semantic::scope::DefKind::Trait
+                        })
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+                if is_trait_obj {
+                    self.register_droppable(var_name, DropAction::TraitObjFree);
+                } else {
+                    self.register_droppable(var_name, DropAction::BoxFree);
+                }
             }
             // File → auto-close on scope exit
             Type::Named { name, generic_args } if name.node == "File" && generic_args.is_empty() => {
@@ -579,15 +599,87 @@ impl CodegenContext<'_> {
         }
     }
 
-    /// Detect trait object construction pattern.
-    /// The `dynamic Trait` syntax has been removed — trait object dispatch is now
-    /// automatic via `equip`. This stub remains for the VarDecl codepath.
+    /// Detect trait object construction pattern: `Box[Trait] x = Box.new(ConcreteValue)`.
+    /// When the type annotation is `Box[T]` and `T` is a trait, this extracts the
+    /// trait name, concrete type name, and inner expression for trait object codegen.
     fn extract_trait_object_construction<'b>(
         &self,
-        _type: &Spanned<Type>,
-        _value: &'b Spanned<Expr>,
+        type_: &Spanned<Type>,
+        value: &'b Spanned<Expr>,
     ) -> Option<(String, String, &'b Spanned<Expr>)> {
-        None
+        // Check if type is Box[TraitName] where TraitName is a trait
+        let trait_name = match &type_.node {
+            Type::Named { name, generic_args }
+                if name.node == "Box" && generic_args.len() == 1 =>
+            {
+                if let Type::Named {
+                    name: inner_name,
+                    generic_args: inner_args,
+                } = &generic_args[0].node
+                {
+                    if inner_args.is_empty() {
+                        let def_id = self.scopes.lookup(&inner_name.node)?;
+                        let def = self.scopes.get_def(def_id);
+                        if def.kind == crate::semantic::scope::DefKind::Trait {
+                            Some(inner_name.node.clone())
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }?;
+
+        // Extract inner expression from Box.new(expr) or Box(expr)
+        let inner_expr = match &value.node {
+            Expr::MethodCall {
+                receiver,
+                method,
+                args,
+                ..
+            } => {
+                if let Expr::Identifier(name) = &receiver.node {
+                    if name == "Box" && method.node == "new" && args.len() == 1 {
+                        Some(&args[0].node.value)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            Expr::Call { callee, args, .. } => {
+                if let Expr::Identifier(name) = &callee.node {
+                    if name == "Box" && args.len() == 1 {
+                        Some(&args[0].node.value)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }?;
+
+        // Infer the concrete type from the inner expression (struct constructor call)
+        let concrete_type = match &inner_expr.node {
+            Expr::Call { callee, .. } => {
+                if let Expr::Identifier(name) = &callee.node {
+                    Some(name.clone())
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }?;
+
+        Some((trait_name, concrete_type, inner_expr))
     }
 
     /// Check if an iterable expression resolves to a GorgetArray type.

@@ -62,6 +62,8 @@ pub struct DropEntry {
 pub enum DropAction {
     /// free(var) for Box[T]
     BoxFree,
+    /// free(var.data) for trait objects (Box[Trait])
+    TraitObjFree,
     /// gorget_file_close(&var) for File
     FileClose,
     /// Drop_for_T__drop(&var) for user-defined Drop

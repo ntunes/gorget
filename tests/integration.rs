@@ -248,7 +248,7 @@ closures");
 
 #[test]
 fn dynamic_dispatch() {
-    run_gg("dynamic_dispatch.gg", "dispatch");
+    run_gg("dynamic_dispatch.gg", "hello\nhola\nhello\nhola");
 }
 
 #[test]

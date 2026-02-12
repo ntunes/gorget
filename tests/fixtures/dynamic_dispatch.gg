@@ -16,6 +16,14 @@ equip Spanish with Greeter:
         print("hola")
 
 void main():
+    # Direct dispatch — compiler knows the concrete types
     English e = English(1)
+    e.greet()
     Spanish s = Spanish(2)
-    print("dispatch")
+    s.greet()
+
+    # Dynamic dispatch — Box[Greeter] is a trait object, vtable dispatch
+    Box[Greeter] g1 = Box.new(English(10))
+    g1.greet()
+    Box[Greeter] g2 = Box.new(Spanish(20))
+    g2.greet()
