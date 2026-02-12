@@ -1,8 +1,5 @@
 # TODO
 
-## Critical — Regressions
-- `examples/calculator/main.gg` fails semantic check: "type mismatch: expected `Expr`, found `Box[Expr]`" on expression-body functions returning enum variants with Box args (e.g. `Expr add(Expr a, Expr b) = Add(Box.new(a), Box.new(b))`). Likely introduced by recent `dynamic` keyword removal. [added: 2026-02-12]
-
 ## High Priority — Self-hosting blockers
 - Interior mutability (RefCell equivalent): codegen uses RefCell for mutation from immutable contexts — could redesign to avoid need [added: 2026-02-11]
 - Closures capturing mutable references: compiler passes use `&mut self` heavily [added: 2026-02-11]

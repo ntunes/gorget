@@ -68,6 +68,16 @@ impl<'a> TypeChecker<'a> {
         self.errors.push(SemanticError { kind, span });
     }
 
+    /// Look up a definition in the resolution map, guarding against cross-module
+    /// span collisions by verifying the resolved name matches the expected name.
+    fn resolve_name(&self, span_start: usize, expected_name: &str) -> Option<DefId> {
+        self.resolution_map
+            .get(&span_start)
+            .copied()
+            .filter(|&def_id| self.scopes.get_def(def_id).name == expected_name)
+            .or_else(|| self.scopes.lookup_by_name_anywhere(expected_name))
+    }
+
     /// Resolve a type variable to its substitution, following chains.
     fn resolve_type(&self, id: TypeId) -> TypeId {
         match self.types.get(id) {
@@ -262,8 +272,8 @@ impl<'a> TypeChecker<'a> {
                 self.types.error_id
             }
 
-            Expr::Identifier(_) => {
-                if let Some(&def_id) = self.resolution_map.get(&expr.span.start) {
+            Expr::Identifier(name) => {
+                if let Some(def_id) = self.resolve_name(expr.span.start, name) {
                     let def = self.scopes.get_def(def_id);
                     if let Some(type_id) = def.type_id {
                         type_id
@@ -289,7 +299,7 @@ impl<'a> TypeChecker<'a> {
 
             Expr::Path { segments } => {
                 if let Some(first) = segments.first() {
-                    if let Some(&def_id) = self.resolution_map.get(&first.span.start) {
+                    if let Some(def_id) = self.resolve_name(first.span.start, &first.node) {
                         let def = self.scopes.get_def(def_id);
                         match def.kind {
                             DefKind::Enum => {
@@ -350,19 +360,21 @@ impl<'a> TypeChecker<'a> {
                 let callee_type = self.infer_expr(callee);
                 let resolved = self.resolve_type(callee_type);
 
+
+
                 // Check where-clause trait bounds for generic calls
                 if let Some(type_args) = generic_args {
-                    if let Expr::Identifier(_) = &callee.node {
-                        if let Some(&def_id) = self.resolution_map.get(&callee.span.start) {
+                    if let Expr::Identifier(cname) = &callee.node {
+                        if let Some(def_id) = self.resolve_name(callee.span.start, cname) {
                             self.check_trait_bounds(def_id, type_args, expr.span);
                         }
                     }
                 }
 
                 // Try to look up FunctionInfo for named args / default params
-                let func_info = if let Expr::Identifier(_) = &callee.node {
-                    self.resolution_map.get(&callee.span.start)
-                        .and_then(|def_id| self.function_info.get(def_id))
+                let func_info = if let Expr::Identifier(cname) = &callee.node {
+                    self.resolve_name(callee.span.start, cname)
+                        .and_then(|def_id| self.function_info.get(&def_id))
                 } else {
                     None
                 };
@@ -400,8 +412,8 @@ impl<'a> TypeChecker<'a> {
                     }
                     ResolvedType::Error => {
                         // Check if callee is a struct/newtype constructor
-                        if let Expr::Identifier(_) = &callee.node {
-                            if let Some(&def_id) = self.resolution_map.get(&callee.span.start) {
+                        if let Expr::Identifier(cname) = &callee.node {
+                            if let Some(def_id) = self.resolve_name(callee.span.start, cname) {
                                 let def = self.scopes.get_def(def_id);
                                 let def_kind = def.kind;
                                 let def_name = def.name.clone();
@@ -470,8 +482,8 @@ impl<'a> TypeChecker<'a> {
                     _ => {
                         // Not a function type — could still be a constructor call
                         // Check if the callee is an identifier resolving to a struct/enum
-                        if let Expr::Identifier(_) = &callee.node {
-                            if let Some(&def_id) = self.resolution_map.get(&callee.span.start) {
+                        if let Expr::Identifier(cname) = &callee.node {
+                            if let Some(def_id) = self.resolve_name(callee.span.start, cname) {
                                 let def = self.scopes.get_def(def_id);
                                 match def.kind {
                                     DefKind::Struct | DefKind::Variant | DefKind::Newtype => {
@@ -669,9 +681,20 @@ impl<'a> TypeChecker<'a> {
             }
 
             Expr::Move { expr: inner }
-            | Expr::MutableBorrow { expr: inner }
-            | Expr::Deref { expr: inner } => {
+            | Expr::MutableBorrow { expr: inner } => {
                 self.infer_expr(inner) // ownership modifiers don't change the type
+            }
+
+            Expr::Deref { expr: inner } => {
+                let inner_type = self.infer_expr(inner);
+                let resolved = self.resolve_type(inner_type);
+                // *expr unwraps Box[T] → T
+                if let ResolvedType::Generic(def_id, args) = self.types.get(resolved).clone() {
+                    if self.scopes.get_def(def_id).name == "Box" && args.len() == 1 {
+                        return args[0];
+                    }
+                }
+                inner_type
             }
 
             Expr::Await { expr: inner } => {
@@ -851,7 +874,7 @@ impl<'a> TypeChecker<'a> {
 
             Expr::StructLiteral { name, args } => {
                 // Resolve struct type
-                if let Some(&def_id) = self.resolution_map.get(&name.span.start) {
+                if let Some(def_id) = self.resolve_name(name.span.start, &name.node) {
                     let def = self.scopes.get_def(def_id);
                     if def.kind != DefKind::Struct {
                         self.error(
@@ -1629,8 +1652,8 @@ impl<'a> TypeChecker<'a> {
     /// the callee's FunctionInfo. Returns Some((result_type_id, [T, E])) if found.
     fn try_resolve_call_result_type(&self, expr: &Spanned<Expr>) -> Option<(TypeId, Vec<TypeId>)> {
         if let Expr::Call { callee, .. } = &expr.node {
-            if let Expr::Identifier(_) = &callee.node {
-                if let Some(&def_id) = self.resolution_map.get(&callee.span.start) {
+            if let Expr::Identifier(cname) = &callee.node {
+                if let Some(def_id) = self.resolve_name(callee.span.start, cname) {
                     if let Some(info) = self.function_info.get(&def_id) {
                         if let Some(ret_type_id) = info.return_type_id {
                             let resolved = self.resolve_type(ret_type_id);
