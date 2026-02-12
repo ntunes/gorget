@@ -83,11 +83,10 @@ impl CodegenContext<'_> {
     /// Check if a declared type needs drop and register it if so.
     fn maybe_register_droppable(&self, var_name: &str, ty: &Type) {
         match ty {
-            // Box[T] (but not Box[dynamic Trait] which is a trait object)
+            // Box[T]
             Type::Named { name, generic_args }
                 if name.node == "Box"
-                    && !generic_args.is_empty()
-                    && !matches!(&generic_args[0].node, Type::Dynamic { .. }) =>
+                    && !generic_args.is_empty() =>
             {
                 self.register_droppable(var_name, DropAction::BoxFree);
             }
@@ -580,64 +579,14 @@ impl CodegenContext<'_> {
         }
     }
 
-    /// Detect trait object construction pattern:
-    /// - Declared type is `dynamic Trait` or `Box[dynamic Trait]`
-    /// - Value is `Box.new(ConcreteType(...))`
-    /// Returns (trait_name, concrete_type, inner_expr) if matched.
+    /// Detect trait object construction pattern.
+    /// The `dynamic Trait` syntax has been removed — trait object dispatch is now
+    /// automatic via `equip`. This stub remains for the VarDecl codepath.
     fn extract_trait_object_construction<'b>(
         &self,
-        type_: &Spanned<Type>,
-        value: &'b Spanned<Expr>,
+        _type: &Spanned<Type>,
+        _value: &'b Spanned<Expr>,
     ) -> Option<(String, String, &'b Spanned<Expr>)> {
-        // Check if declared type is dynamic Trait or Box[dynamic Trait]
-        let trait_name = match &type_.node {
-            Type::Dynamic { trait_ } => {
-                if let Type::Named { name, .. } = &trait_.node {
-                    Some(name.node.clone())
-                } else {
-                    None
-                }
-            }
-            Type::Named { name, generic_args } if name.node == "Box" && generic_args.len() == 1 => {
-                if let Type::Dynamic { trait_ } = &generic_args[0].node {
-                    if let Type::Named { name: trait_name, .. } = &trait_.node {
-                        Some(trait_name.node.clone())
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        }?;
-
-        // Check if value is Box.new(ConcreteType(...)) or Box.new(expr)
-        if let Expr::Call { callee, args, .. } = &value.node {
-            if let Expr::Path { segments } = &callee.node {
-                if segments.len() == 2
-                    && segments[0].node == "Box"
-                    && segments[1].node == "new"
-                {
-                    if let Some(arg) = args.first() {
-                        let inner_expr = &arg.node.value;
-                        // Try to extract the concrete type from the inner expression
-                        let concrete_type = match &inner_expr.node {
-                            Expr::Call { callee: inner_callee, .. } => {
-                                if let Expr::Identifier(name) = &inner_callee.node {
-                                    name.clone()
-                                } else {
-                                    return None;
-                                }
-                            }
-                            Expr::StructLiteral { name, .. } => name.node.clone(),
-                            _ => return None,
-                        };
-                        return Some((trait_name, concrete_type, inner_expr));
-                    }
-                }
-            }
-        }
         None
     }
 

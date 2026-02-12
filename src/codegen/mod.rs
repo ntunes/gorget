@@ -595,27 +595,6 @@ void main():
         assert!(result.contains("int64_t"));
     }
 
-    #[test]
-    fn dynamic_type_mapping() {
-        // Test that dynamic trait objects map to void*
-        use crate::semantic::scope::ScopeTable;
-        let scopes = ScopeTable::new();
-        let ty = crate::parser::ast::Type::Dynamic {
-            trait_: Box::new(crate::span::Spanned {
-                node: crate::parser::ast::Type::Named {
-                    name: crate::span::Spanned {
-                        node: "Drawable".to_string(),
-                        span: crate::span::Span::new(0, 0),
-                    },
-                    generic_args: vec![],
-                },
-                span: crate::span::Span::new(0, 0),
-            }),
-        };
-        let result = c_types::ast_type_to_c(&ty, &scopes);
-        assert_eq!(result, "Drawable_TraitObj");
-    }
-
     // ── Phase 7 tests ──────────────────────────────────────
 
     #[test]
@@ -911,55 +890,6 @@ equip Circle with Shape:
             "Should reference mangled impl function for area");
         assert!(c_code.contains("Shape_for_Circle__draw"),
             "Should reference mangled impl function for draw");
-    }
-
-    #[test]
-    fn dynamic_type_maps_to_trait_obj() {
-        use crate::semantic::scope::ScopeTable;
-        let scopes = ScopeTable::new();
-        let ty = crate::parser::ast::Type::Dynamic {
-            trait_: Box::new(crate::span::Spanned {
-                node: crate::parser::ast::Type::Named {
-                    name: crate::span::Spanned {
-                        node: "Shape".to_string(),
-                        span: crate::span::Span::new(0, 0),
-                    },
-                    generic_args: vec![],
-                },
-                span: crate::span::Span::new(0, 0),
-            }),
-        };
-        let result = c_types::ast_type_to_c(&ty, &scopes);
-        assert_eq!(result, "Shape_TraitObj");
-    }
-
-    #[test]
-    fn box_dynamic_trait_maps_to_trait_obj() {
-        use crate::semantic::scope::ScopeTable;
-        let scopes = ScopeTable::new();
-        let ty = crate::parser::ast::Type::Named {
-            name: crate::span::Spanned {
-                node: "Box".to_string(),
-                span: crate::span::Span::new(0, 0),
-            },
-            generic_args: vec![crate::span::Spanned {
-                node: crate::parser::ast::Type::Dynamic {
-                    trait_: Box::new(crate::span::Spanned {
-                        node: crate::parser::ast::Type::Named {
-                            name: crate::span::Spanned {
-                                node: "Shape".to_string(),
-                                span: crate::span::Span::new(0, 0),
-                            },
-                            generic_args: vec![],
-                        },
-                        span: crate::span::Span::new(0, 0),
-                    }),
-                },
-                span: crate::span::Span::new(0, 0),
-            }],
-        };
-        let result = c_types::ast_type_to_c(&ty, &scopes);
-        assert_eq!(result, "Shape_TraitObj");
     }
 
     #[test]

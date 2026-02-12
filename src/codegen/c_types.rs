@@ -44,12 +44,6 @@ pub fn ast_type_to_c(ty: &crate::parser::ast::Type, scopes: &ScopeTable) -> Stri
                         super::c_mangle::mangle_generic("GorgetMap", &c_args)
                     }
                     "Box" if generic_args.len() == 1 => {
-                        // Box[dynamic Trait] → TraitObj type
-                        if let crate::parser::ast::Type::Dynamic { trait_ } = &generic_args[0].node {
-                            if let crate::parser::ast::Type::Named { name: trait_name, .. } = &trait_.node {
-                                return super::c_mangle::mangle_trait_obj(&trait_name.node);
-                            }
-                        }
                         // Box[T] → T*
                         let inner = ast_type_to_c(&generic_args[0].node, scopes);
                         format!("{inner}*")
@@ -107,14 +101,6 @@ pub fn ast_type_to_c(ty: &crate::parser::ast::Type, scopes: &ScopeTable) -> Stri
         crate::parser::ast::Type::Slice { element } => {
             let elem_c = ast_type_to_c(&element.node, scopes);
             format!("struct {{ const {elem_c}* data; size_t len; }}")
-        }
-        crate::parser::ast::Type::Dynamic { trait_ } => {
-            // Extract trait name from the inner type
-            if let crate::parser::ast::Type::Named { name, .. } = &trait_.node {
-                super::c_mangle::mangle_trait_obj(&name.node)
-            } else {
-                "void*".to_string()
-            }
         }
         crate::parser::ast::Type::SelfType => "/* Self */".to_string(),
         crate::parser::ast::Type::Inferred => "/* auto */".to_string(),

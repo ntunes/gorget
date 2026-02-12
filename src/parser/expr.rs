@@ -1502,7 +1502,6 @@ impl Parser {
                     | Keyword::Void
                     | Keyword::Auto
                     | Keyword::SelfUpper
-                    | Keyword::Dynamic
                     | Keyword::Box
                     | Keyword::Rc
                     | Keyword::Arc

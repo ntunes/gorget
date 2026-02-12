@@ -259,7 +259,6 @@ pub enum Keyword {
     // Generics/type constraints
     Where,
     Extends,
-    Dynamic,
     Live,
     Life,
 
@@ -362,7 +361,6 @@ impl Keyword {
             "as" => Some(Keyword::As),
             "where" => Some(Keyword::Where),
             "extends" => Some(Keyword::Extends),
-            "dynamic" => Some(Keyword::Dynamic),
             "live" => Some(Keyword::Live),
             "life" => Some(Keyword::Life),
             "async" => Some(Keyword::Async),
@@ -455,7 +453,6 @@ impl fmt::Display for Keyword {
             Keyword::As => "as",
             Keyword::Where => "where",
             Keyword::Extends => "extends",
-            Keyword::Dynamic => "dynamic",
             Keyword::Live => "live",
             Keyword::Life => "life",
             Keyword::Async => "async",

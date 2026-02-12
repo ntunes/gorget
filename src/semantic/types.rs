@@ -268,19 +268,6 @@ pub fn ast_type_to_resolved(
             }))
         }
 
-        ast::Type::Dynamic { trait_ } => {
-            // Look up the trait name
-            if let ast::Type::Named { name, .. } = &trait_.node {
-                if let Some(def_id) = scopes.lookup(&name.node) {
-                    Ok(types.insert(ResolvedType::TraitObject(def_id)))
-                } else {
-                    Ok(types.error_id)
-                }
-            } else {
-                Ok(types.error_id)
-            }
-        }
-
         ast::Type::SelfType => {
             // Self type — resolved based on enclosing impl block's self_type
             // For now, return error (resolved during type checking)

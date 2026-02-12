@@ -317,11 +317,6 @@ pub enum Type {
         params: Vec<Spanned<Type>>,
     },
 
-    /// Dynamic trait object: `dynamic Shape`
-    Dynamic {
-        trait_: Box<Spanned<Type>>,
-    },
-
     /// Self type
     SelfType,
 

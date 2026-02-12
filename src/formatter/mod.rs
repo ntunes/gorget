@@ -890,10 +890,6 @@ impl Formatter {
                 }
                 self.emitter.write(")");
             }
-            Type::Dynamic { trait_ } => {
-                self.emitter.write("dynamic ");
-                self.format_type(trait_);
-            }
             Type::SelfType => self.emitter.write("Self"),
             Type::Inferred => self.emitter.write("auto"),
         }

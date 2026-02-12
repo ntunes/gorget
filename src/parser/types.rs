@@ -10,18 +10,6 @@ impl Parser {
     pub fn parse_type(&mut self) -> Result<Spanned<Type>, ParseError> {
         let start = self.peek_span();
 
-        // Handle prefix modifiers
-        if self.match_keyword(Keyword::Dynamic) {
-            let trait_ = self.parse_type()?;
-            let end = self.previous_span();
-            return Ok(Spanned::new(
-                Type::Dynamic {
-                    trait_: Box::new(trait_),
-                },
-                start.merge(end),
-            ));
-        }
-
         let base = self.parse_base_type()?;
         self.parse_type_postfix(base, start)
     }
