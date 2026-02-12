@@ -468,34 +468,35 @@ void complex[T, U](T a, U b) where T is Displayable + Cloneable, U is Into[T]:
     ...
 ```
 
-### 4.8 Dynamic Dispatch
+### 4.8 Method Dispatch
 
-When the concrete type isn't known at compile time, use `dynamic Trait` for vtable-based dispatch:
+Gorget uses a simple dispatch model — the programmer never chooses between static and dynamic dispatch. The compiler does the right thing automatically:
+
+- **Known concrete type → direct dispatch.** When the compiler can see the concrete type at compile time, it calls the method directly. This enables inlining and is zero-cost.
+- **Unknown concrete type → dynamic dispatch.** When the concrete type isn't known (heterogeneous collections, trait-typed parameters), the compiler uses vtable-based dispatch automatically.
 
 ```gorget
-# As a parameter — accepts any type implementing Shape
-void draw(dynamic Shape shape):
-    shape.render()
+# Direct dispatch — compiler knows c is a Circle
+Circle c = Circle(5.0)
+c.render()                # calls Circle_render() directly
 
-# Stored in collections — must be boxed (known size on heap)
-Vector[Box[dynamic Shape]] shapes = Vector.new()
+# Dynamic dispatch — collection holds mixed types
+Vector[Box[Shape]] shapes = Vector.new()
 shapes.push(Box.new(Circle(5.0)))
 shapes.push(Box.new(Rectangle(3.0, 4.0)))
 
 for shape in shapes:
-    shape.render()
+    shape.render()        # vtable dispatch — could be Circle or Rectangle
 
-# As a return type — caller doesn't know the concrete type
-Box[dynamic Shape] make_shape(str kind) throws ValueError:
+# Return type is a trait — caller doesn't know the concrete type
+Box[Shape] make_shape(str kind) throws ValueError:
     match kind:
         case "circle": Box.new(Circle(1.0))
         case "rect": Box.new(Rectangle(1.0, 1.0))
         else: throw ValueError("unknown shape: {kind}")
 ```
 
-**When to use `dynamic` vs generics:**
-- **Generics** (`[T] where T is Shape`): zero-cost, monomorphized at compile time. Use when types are known statically.
-- **`dynamic`**: small runtime cost (vtable indirection). Use when types vary at runtime (heterogeneous collections, plugin systems, returned from factories).
+**Design rationale:** No `dyn`/`dynamic` keyword. The programmer focuses on *what* they want (a Shape), not *how* it's dispatched. The compiler has enough information to decide. Generics are still monomorphized — `Vector[int]` and `Vector[str]` generate separate specialized code. This combines the simplicity of Go's interfaces with the performance of Rust's monomorphized generics.
 
 ### 4.9 Const Generics
 
@@ -2382,12 +2383,12 @@ equip Cat with Animal:
             return "mew"
         return "MEOW!"
 
-void introduce_all(Vector[Box[dynamic Animal]] animals):
+void introduce_all(Vector[Box[Animal]] animals):
     for animal in animals:
         print(animal.describe())
 
 void main():
-    Vector[Box[dynamic Animal]] zoo = Vector.new()
+    Vector[Box[Animal]] zoo = Vector.new()
     zoo.push(Box.new(Dog(String.from("Rex"))))
     zoo.push(Box.new(Cat(String.from("Whiskers"), true)))
     zoo.push(Box.new(Dog(String.from("Buddy"))))
@@ -2447,7 +2448,6 @@ type           = primitive_type | IDENT [ generic_args ]
                | type "[" expr "]"           (* fixed array: int[5] *)
                | type "[" "]"               (* slice: int[] *)
                | "(" type_list ")"           (* tuple *)
-               | "dynamic" IDENT
                | type "(" [ type_list ] ")"  (* function type: int(int, int) *) ;
 generic_params = "[" generic_param { "," generic_param } "]" ;
 generic_param  = IDENT [ COLON trait_bound_list ]

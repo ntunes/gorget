@@ -122,7 +122,7 @@ with  as
 **Generic/constraint keywords:**
 
 ```
-where  extends  dynamic  live  life
+where  extends  live  life
 ```
 
 **Concurrency keywords:**
@@ -416,19 +416,6 @@ Pair[String, int] entry = Pair("key", 42)
 ```
 
 ### 4.4 Special Types
-
-#### Dynamic Trait Objects
-
-```ebnf
-dynamic_type = "dynamic" IDENTIFIER ;
-```
-
-A trait object with dynamic dispatch via vtable. Used when the concrete type is not known at compile time.
-
-```gorget
-void draw(dynamic Shape shape):
-    shape.render()
-```
 
 #### Self Type
 
@@ -1943,7 +1930,7 @@ trait_bound    = IDENTIFIER [ "[" type_or_binding { "," type_or_binding } "]" ] 
 
 (* ── Types ── *)
 type = primitive_type | named_type | array_type | slice_type
-     | tuple_type | function_type | dynamic_type | "Self" | "auto" ;
+     | tuple_type | function_type | "Self" | "auto" ;
 primitive_type = "int" | "int8" | "int16" | "int32" | "int64"
                | "uint" | "uint8" | "uint16" | "uint32" | "uint64"
                | "float" | "float32" | "float64"
@@ -1953,8 +1940,6 @@ array_type     = type "[" const_expr "]" ;
 slice_type     = type "[" "]" ;
 tuple_type     = "(" type "," type { "," type } ")" ;
 function_type  = type "(" [ type { "," type } ] ")" ;
-dynamic_type   = "dynamic" IDENTIFIER ;
-
 (* ── Statements ── *)
 statement = var_decl | expr_stmt | assign_stmt | compound_assign_stmt
           | return_stmt | throw_stmt | break_stmt | continue_stmt | pass_stmt
