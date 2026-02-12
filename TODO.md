@@ -1,7 +1,6 @@
 # TODO
 
 ## High Priority — Self-hosting blockers
-- Interior mutability (RefCell equivalent): codegen uses RefCell for mutation from immutable contexts — could redesign to avoid need [added: 2026-02-11]
 - Closures capturing mutable references: compiler passes use `&mut self` heavily [added: 2026-02-11]
 - `@derive` macro expansion: reduces boilerplate for Debug, Clone, etc. [added: 2026-02-10]
 

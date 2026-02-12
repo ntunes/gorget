@@ -21,7 +21,7 @@ fn is_lvalue(expr: &Expr) -> bool {
 
 impl CodegenContext<'_> {
     /// Generate a C expression string from a Gorget expression.
-    pub fn gen_expr(&self, expr: &Spanned<Expr>) -> String {
+    pub fn gen_expr(&mut self, expr: &Spanned<Expr>) -> String {
         match &expr.node {
             Expr::IntLiteral(n) => format!("INT64_C({n})"),
             Expr::FloatLiteral(f) => format!("{f}"),
@@ -410,7 +410,7 @@ impl CodegenContext<'_> {
     }
 
     /// Generate Result-based `?` operator: unwrap Ok or early-return Error.
-    fn gen_result_try(&self, try_expr: &Spanned<Expr>, args: &[crate::semantic::ids::TypeId]) -> String {
+    fn gen_result_try(&mut self, try_expr: &Spanned<Expr>, args: &[crate::semantic::ids::TypeId]) -> String {
         let inner = self.gen_expr(try_expr);
         let t_c = c_types::type_id_to_c(args[0], self.types, self.scopes);
         let e_c = c_types::type_id_to_c(args[1], self.types, self.scopes);
@@ -418,15 +418,14 @@ impl CodegenContext<'_> {
         let tag_error = c_mangle::mangle_tag(&inner_mangled, "Error");
 
         // Get function's return type for Error constructor
-        let fn_ret = self.current_function_return_c_type.borrow().clone()
+        let fn_ret = self.current_function_return_c_type.clone()
             .unwrap_or_else(|| inner_mangled.clone());
         let ret_error_ctor = c_mangle::mangle_variant(&fn_ret, "Error");
 
         // Unique temp name for nested ? support
         let try_id = {
-            let mut c = self.try_counter.borrow_mut();
-            let id = *c;
-            *c += 1;
+            let id = self.try_counter;
+            self.try_counter += 1;
             id
         };
 
@@ -439,7 +438,7 @@ impl CodegenContext<'_> {
     }
 
     /// Generate a plain C string literal (no interpolation).
-    fn gen_string_literal(&self, s: &StringLit) -> String {
+    fn gen_string_literal(&mut self, s: &StringLit) -> String {
         let mut result = String::from("\"");
         for segment in &s.segments {
             match segment {
@@ -458,7 +457,7 @@ impl CodegenContext<'_> {
 
     /// Generate a function/builtin call.
     fn gen_call(
-        &self,
+        &mut self,
         callee: &Spanned<Expr>,
         args: &[Spanned<crate::parser::ast::CallArg>],
     ) -> String {
@@ -542,7 +541,7 @@ impl CodegenContext<'_> {
                                     args.iter().map(|a| self.gen_expr(&a.node.value)).collect();
                                 let fields = field_exprs.join(", ");
                                 // For built-in generic enum templates, use decl_type_hint
-                                if self.generic_enum_templates.borrow().contains_key(&enum_name) {
+                                if self.generic_enum_templates.contains_key(&enum_name) {
                                     if let Some(mangled) = self.resolve_unit_variant_from_type_hint(&enum_name, vname) {
                                         return format!(
                                             "{}({fields})",
@@ -561,7 +560,7 @@ impl CodegenContext<'_> {
             }
 
             // Check if this is a GorgetClosure variable — dispatch through .fn_ptr
-            if self.closure_vars.borrow().contains(name.as_str()) {
+            if self.closure_vars.contains(name.as_str()) {
                 let arg_exprs: Vec<String> =
                     args.iter().map(|a| self.gen_expr(&a.node.value)).collect();
                 let arg_types: Vec<String> = args
@@ -630,7 +629,7 @@ impl CodegenContext<'_> {
     /// Resolve call arguments: reorder named args to match param order and
     /// fill in default values for missing optional params.
     fn resolve_call_args(
-        &self,
+        &mut self,
         callee: &Spanned<Expr>,
         args: &[Spanned<crate::parser::ast::CallArg>],
     ) -> Vec<String> {
@@ -685,7 +684,7 @@ impl CodegenContext<'_> {
 
     /// Generate a method call: `receiver.method(args)` → `Type__method(&receiver, args)`
     fn gen_method_call(
-        &self,
+        &mut self,
         receiver: &Spanned<Expr>,
         method_name: &str,
         args: &[Spanned<crate::parser::ast::CallArg>],
@@ -789,7 +788,7 @@ impl CodegenContext<'_> {
     /// Try to generate code for a built-in method call on a collection or primitive type.
     /// Returns `Some(code)` if the receiver is a known built-in type, `None` otherwise.
     fn try_gen_builtin_method(
-        &self,
+        &mut self,
         receiver: &Spanned<Expr>,
         method_name: &str,
         args: &[Spanned<crate::parser::ast::CallArg>],
@@ -859,7 +858,7 @@ impl CodegenContext<'_> {
 
     /// Generate code for `needle in collection` expressions.
     /// Desugars to the appropriate `.contains()` call per collection type.
-    fn gen_in_operator(&self, needle: &Spanned<Expr>, collection: &Spanned<Expr>) -> String {
+    fn gen_in_operator(&mut self, needle: &Spanned<Expr>, collection: &Spanned<Expr>) -> String {
         let type_name = self.infer_receiver_type(collection);
         let c_type = self.infer_receiver_c_type(collection);
 
@@ -902,7 +901,7 @@ impl CodegenContext<'_> {
     /// Canonical TypeId resolution for any expression.
     /// Handles Identifier, literals, BinaryOp, UnaryOp, Call, MethodCall, Deref, FieldAccess.
     pub(super) fn resolve_expr_type_id(
-        &self,
+        &mut self,
         expr: &Spanned<Expr>,
     ) -> Option<crate::semantic::ids::TypeId> {
         match &expr.node {
@@ -989,8 +988,8 @@ impl CodegenContext<'_> {
                 let obj_type = self.infer_receiver_type(object);
                 if obj_type != "Unknown" {
                     let key = (obj_type, field.node.clone());
-                    if let Some(ast_type) = self.field_type_names.get(&key) {
-                        return self.ast_type_to_type_id(ast_type);
+                    if let Some(ast_type) = self.field_type_names.get(&key).cloned() {
+                        return self.ast_type_to_type_id(&ast_type);
                     }
                 }
                 None
@@ -1003,7 +1002,7 @@ impl CodegenContext<'_> {
     /// For generic enums (e.g. `Option[int]`), returns the mangled name (`Option__int64_t`).
     /// For non-generic enums, returns the raw name. Returns `None` for non-enum types.
     pub(super) fn resolve_enum_c_type_for_scrutinee(
-        &self,
+        &mut self,
         scrutinee: &Spanned<Expr>,
     ) -> Option<String> {
         let type_id = self.resolve_expr_type_id(scrutinee)?;
@@ -1024,7 +1023,7 @@ impl CodegenContext<'_> {
     }
 
     /// Infer the C type of a receiver expression via the TypeId, if available.
-    pub(super) fn infer_receiver_c_type(&self, expr: &Spanned<Expr>) -> Option<String> {
+    pub(super) fn infer_receiver_c_type(&mut self, expr: &Spanned<Expr>) -> Option<String> {
         if let Some(tid) = self.resolve_expr_type_id(expr) {
             return Some(c_types::type_id_to_c(tid, self.types, self.scopes));
         }
@@ -1041,7 +1040,7 @@ impl CodegenContext<'_> {
     }
 
     /// Infer the element C type for a Vector receiver from its TypeId.
-    pub(super) fn infer_vector_elem_type(&self, receiver: &Spanned<Expr>) -> String {
+    pub(super) fn infer_vector_elem_type(&mut self, receiver: &Spanned<Expr>) -> String {
         if let Some(tid) = self.resolve_expr_type_id(receiver) {
             if let crate::semantic::types::ResolvedType::Generic(_, args) = self.types.get(tid) {
                 if let Some(&elem_tid) = args.first() {
@@ -1068,13 +1067,13 @@ impl CodegenContext<'_> {
     }
 
     /// Compute the mangled GorgetMap name for a Dict receiver.
-    fn infer_map_mangled(&self, receiver: &Spanned<Expr>) -> String {
+    fn infer_map_mangled(&mut self, receiver: &Spanned<Expr>) -> String {
         let (key_type, val_type) = self.infer_map_kv_types(receiver);
         c_mangle::mangle_generic("GorgetMap", &[key_type, val_type])
     }
 
     /// Infer the key and value C types for a Map receiver from its TypeId.
-    pub(super) fn infer_map_kv_types(&self, receiver: &Spanned<Expr>) -> (String, String) {
+    pub(super) fn infer_map_kv_types(&mut self, receiver: &Spanned<Expr>) -> (String, String) {
         if let Some(tid) = self.resolve_expr_type_id(receiver) {
             if let crate::semantic::types::ResolvedType::Generic(_, args) = self.types.get(tid) {
                 if args.len() >= 2 {
@@ -1089,7 +1088,7 @@ impl CodegenContext<'_> {
 
     /// Generate code for Vector method calls.
     fn gen_vector_method(
-        &self,
+        &mut self,
         recv: &str,
         method_name: &str,
         args: &[Spanned<crate::parser::ast::CallArg>],
@@ -1235,7 +1234,7 @@ impl CodegenContext<'_> {
     /// Generate code for Iterator adapter method calls (collect, filter, map, fold).
     /// Uses the while/next/break pattern from for-loop iterator codegen.
     fn gen_iterator_method(
-        &self,
+        &mut self,
         recv: &str,
         method_name: &str,
         args: &[Spanned<crate::parser::ast::CallArg>],
@@ -1323,7 +1322,7 @@ impl CodegenContext<'_> {
 
     /// Generate code for Map/Dict method calls.
     fn gen_map_method(
-        &self,
+        &mut self,
         recv: &str,
         method_name: &str,
         args: &[Spanned<crate::parser::ast::CallArg>],
@@ -1416,7 +1415,7 @@ impl CodegenContext<'_> {
 
     /// Generate code for Set method calls.
     fn gen_set_method(
-        &self,
+        &mut self,
         recv: &str,
         method_name: &str,
         args: &[Spanned<crate::parser::ast::CallArg>],
@@ -1507,7 +1506,7 @@ impl CodegenContext<'_> {
 
     /// Generate code for String method calls.
     fn gen_string_method(
-        &self,
+        &mut self,
         recv: &str,
         method_name: &str,
         args: &[Spanned<crate::parser::ast::CallArg>],
@@ -1573,7 +1572,7 @@ impl CodegenContext<'_> {
 
     /// Generate code for Box built-in methods: get(), set().
     fn gen_box_method(
-        &self,
+        &mut self,
         recv: &str,
         method_name: &str,
         args: &[Spanned<crate::parser::ast::CallArg>],
@@ -1606,7 +1605,7 @@ impl CodegenContext<'_> {
 
     /// Generate code for File instance method calls.
     fn gen_file_method(
-        &self,
+        &mut self,
         recv: &str,
         method_name: &str,
         args: &[Spanned<crate::parser::ast::CallArg>],
@@ -1652,9 +1651,8 @@ impl CodegenContext<'_> {
 
     /// Infer the inner C type for a Box allocation.
     /// Uses `decl_type_hint` to extract T from `Box[T]`, falling back to the argument's inferred type.
-    fn box_inner_c_type(&self, arg_expr: &Spanned<Expr>) -> String {
-        let hint = self.decl_type_hint.borrow();
-        if let Some(Type::Named { name, generic_args }) = hint.as_ref() {
+    fn box_inner_c_type(&mut self, arg_expr: &Spanned<Expr>) -> String {
+        if let Some(Type::Named { name, generic_args }) = self.decl_type_hint.as_ref() {
             if name.node == "Box" && generic_args.len() == 1 {
                 return c_types::ast_type_to_c(&generic_args[0].node, self.scopes);
             }
@@ -1669,9 +1667,8 @@ impl CodegenContext<'_> {
 
     /// Resolve a unit variant constructor using the decl_type_hint.
     /// Returns the monomorphized enum name if the hint matches the expected enum.
-    fn resolve_unit_variant_from_type_hint(&self, enum_name: &str, _variant_name: &str) -> Option<String> {
-        let hint = self.decl_type_hint.borrow();
-        if let Some(Type::Named { name, generic_args }) = hint.as_ref() {
+    fn resolve_unit_variant_from_type_hint(&mut self, enum_name: &str, _variant_name: &str) -> Option<String> {
+        if let Some(Type::Named { name, generic_args }) = self.decl_type_hint.as_ref() {
             if name.node == enum_name && !generic_args.is_empty() {
                 let c_type_args: Vec<String> = generic_args.iter()
                     .map(|a| c_types::ast_type_to_c(&a.node, self.scopes))
@@ -1684,7 +1681,7 @@ impl CodegenContext<'_> {
     }
 
     /// Infer the monomorphized C type name for a generic enum receiver (e.g. `Option__int64_t`).
-    fn infer_generic_enum_mangled_name(&self, receiver: &Spanned<Expr>) -> String {
+    fn infer_generic_enum_mangled_name(&mut self, receiver: &Spanned<Expr>) -> String {
         if let Some(tid) = self.resolve_expr_type_id(receiver) {
             if let crate::semantic::types::ResolvedType::Generic(def_id, args) = self.types.get(tid) {
                 let base = self.scopes.get_def(*def_id).name.clone();
@@ -1699,7 +1696,7 @@ impl CodegenContext<'_> {
     }
 
     /// Extract the C return type from a closure's body expression.
-    fn infer_closure_body_c_type(&self, arg: &Spanned<Expr>) -> String {
+    fn infer_closure_body_c_type(&mut self, arg: &Spanned<Expr>) -> String {
         if let Expr::Closure { body, .. } = &arg.node {
             return self.infer_c_type_from_expr(&body.node);
         }
@@ -1707,15 +1704,14 @@ impl CodegenContext<'_> {
     }
 
     /// Patch the return type of the most recently lifted closure.
-    fn patch_last_closure_return_type(&self, return_type: &str) {
-        let mut closures = self.lifted_closures.borrow_mut();
-        if let Some(last) = closures.last_mut() {
+    fn patch_last_closure_return_type(&mut self, return_type: &str) {
+        if let Some(last) = self.lifted_closures.last_mut() {
             last.return_type = return_type.to_string();
         }
     }
 
     /// Extract the C type args from a generic receiver expression.
-    fn infer_generic_type_args(&self, receiver: &Spanned<Expr>) -> Vec<String> {
+    fn infer_generic_type_args(&mut self, receiver: &Spanned<Expr>) -> Vec<String> {
         if let Some(tid) = self.resolve_expr_type_id(receiver) {
             if let crate::semantic::types::ResolvedType::Generic(_, args) = self.types.get(tid) {
                 return args.iter()
@@ -1728,7 +1724,7 @@ impl CodegenContext<'_> {
 
     /// Generate code for Option method calls.
     fn gen_option_method(
-        &self,
+        &mut self,
         recv: &str,
         method_name: &str,
         args: &[Spanned<crate::parser::ast::CallArg>],
@@ -1806,7 +1802,7 @@ impl CodegenContext<'_> {
 
     /// Generate code for Result method calls.
     fn gen_result_method(
-        &self,
+        &mut self,
         recv: &str,
         method_name: &str,
         args: &[Spanned<crate::parser::ast::CallArg>],
@@ -1881,7 +1877,7 @@ impl CodegenContext<'_> {
     }
 
     /// Check if a receiver expression has a trait object type, returning the trait name if so.
-    fn resolve_trait_object_type(&self, expr: &Spanned<Expr>) -> Option<String> {
+    fn resolve_trait_object_type(&mut self, expr: &Spanned<Expr>) -> Option<String> {
         if let Expr::Identifier(name) = &expr.node {
             if let Some(def_id) = self.resolution_map.get(&expr.span.start)
                 .filter(|did| self.scopes.get_def(**did).name == *name)
@@ -1912,7 +1908,7 @@ impl CodegenContext<'_> {
 
     /// Generate a generic function call: `func[int](args)` → `func__int64_t(args)`
     fn gen_generic_call(
-        &self,
+        &mut self,
         callee: &Spanned<Expr>,
         type_args: &[Spanned<crate::parser::ast::Type>],
         args: &[Spanned<crate::parser::ast::CallArg>],
@@ -1970,7 +1966,7 @@ impl CodegenContext<'_> {
         }
 
         // Check if the callee is a generic struct constructor
-        if self.generic_struct_templates.borrow().contains_key(&base_name) {
+        if self.generic_struct_templates.contains_key(&base_name) {
             let mangled = self.register_generic(&base_name, &c_type_args, super::GenericInstanceKind::Struct);
             let field_exprs: Vec<String> =
                 args.iter().map(|a| self.gen_expr(&a.node.value)).collect();
@@ -1978,7 +1974,7 @@ impl CodegenContext<'_> {
         }
 
         // Check if the callee is a generic enum variant constructor
-        if self.generic_enum_templates.borrow().contains_key(&base_name) {
+        if self.generic_enum_templates.contains_key(&base_name) {
             let mangled = self.register_generic(&base_name, &c_type_args, super::GenericInstanceKind::Enum);
             let field_exprs: Vec<String> =
                 args.iter().map(|a| self.gen_expr(&a.node.value)).collect();
@@ -1993,7 +1989,7 @@ impl CodegenContext<'_> {
 
     /// Generate a generic method call: `obj.method[T](args)` → `Type__method__T(&obj, args)`
     fn gen_generic_method_call(
-        &self,
+        &mut self,
         receiver: &Spanned<Expr>,
         method_name: &str,
         type_args: &[Spanned<crate::parser::ast::Type>],
@@ -2016,7 +2012,7 @@ impl CodegenContext<'_> {
     }
 
     /// Map a `TypeId` to the Gorget type name (for mangling).
-    fn type_name_from_type_id(&self, type_id: crate::semantic::ids::TypeId) -> Option<String> {
+    fn type_name_from_type_id(&mut self, type_id: crate::semantic::ids::TypeId) -> Option<String> {
         match self.types.get(type_id) {
             crate::semantic::types::ResolvedType::Defined(tid) => {
                 Some(self.scopes.get_def(*tid).name.clone())
@@ -2031,7 +2027,7 @@ impl CodegenContext<'_> {
     /// Try to infer the type name of a receiver expression (best-effort).
     /// Check if a method on a type comes from a trait equip (not inherent impl).
     /// Returns the trait name if found, None if it's an inherent method.
-    fn find_trait_for_method(&self, type_name: &str, method_name: &str) -> Option<String> {
+    fn find_trait_for_method(&mut self, type_name: &str, method_name: &str) -> Option<String> {
         // First check if there's an inherent impl with this method — inherent wins
         for impl_info in &self.traits.impls {
             if impl_info.self_type_name == type_name
@@ -2061,7 +2057,7 @@ impl CodegenContext<'_> {
 
     /// Check if a trait (or any of its parent traits) defines a method.
     fn trait_hierarchy_has_method(
-        &self,
+        &mut self,
         trait_def_id: crate::semantic::ids::DefId,
         method_name: &str,
     ) -> bool {
@@ -2078,7 +2074,7 @@ impl CodegenContext<'_> {
         false
     }
 
-    pub(super) fn infer_receiver_type(&self, expr: &Spanned<Expr>) -> String {
+    pub(super) fn infer_receiver_type(&mut self, expr: &Spanned<Expr>) -> String {
         match &expr.node {
             Expr::Identifier(name) => {
                 if let Some(type_id) = self.resolve_expr_type_id(expr) {
@@ -2194,7 +2190,7 @@ impl CodegenContext<'_> {
     }
 
     /// Check if an expression evaluates to a string (const char*) type.
-    pub(super) fn is_string_expr(&self, expr: &Spanned<Expr>) -> bool {
+    pub(super) fn is_string_expr(&mut self, expr: &Spanned<Expr>) -> bool {
         match &expr.node {
             Expr::StringLiteral(_) => true,
             Expr::Identifier(_) => {
@@ -2218,7 +2214,7 @@ impl CodegenContext<'_> {
     }
 
     /// Check if an expression evaluates to a Vector (GorgetArray) type.
-    fn is_vector_expr(&self, expr: &Spanned<Expr>) -> bool {
+    fn is_vector_expr(&mut self, expr: &Spanned<Expr>) -> bool {
         let type_name = self.infer_receiver_type(expr);
         if matches!(type_name.as_str(), "Vector" | "List" | "Array") {
             return true;
@@ -2228,7 +2224,7 @@ impl CodegenContext<'_> {
     }
 
     /// If `expr` has a Defined (struct) type that implements Equatable, return the type name.
-    fn try_equatable_type(&self, expr: &Spanned<Expr>) -> Option<String> {
+    fn try_equatable_type(&mut self, expr: &Spanned<Expr>) -> Option<String> {
         let type_name = self.infer_receiver_type(expr);
         // Exclude primitives and builtins
         if matches!(type_name.as_str(), "Unknown" | "int" | "float" | "bool" | "str" | "char"
@@ -2245,7 +2241,7 @@ impl CodegenContext<'_> {
     /// Generate a print/println call, handling string interpolation.
     /// `print()` always appends a newline (like Python). `println()` is an alias.
     pub fn gen_print_call(
-        &self,
+        &mut self,
         args: &[Spanned<crate::parser::ast::CallArg>],
         _is_println: bool,
     ) -> String {
@@ -2275,7 +2271,7 @@ impl CodegenContext<'_> {
 
     /// Generate a `gorget_format(...)` call that returns `const char*`.
     fn gen_format_call(
-        &self,
+        &mut self,
         args: &[Spanned<crate::parser::ast::CallArg>],
     ) -> String {
         if args.is_empty() {
@@ -2301,7 +2297,7 @@ impl CodegenContext<'_> {
     }
 
     /// Generate `gorget_format("fmt", args...)` from a StringLit.
-    fn gen_gorget_format_from_string_lit(&self, s: &StringLit) -> String {
+    fn gen_gorget_format_from_string_lit(&mut self, s: &StringLit) -> String {
         let mut format_parts = Vec::new();
         let mut format_args = Vec::new();
 
@@ -2327,7 +2323,7 @@ impl CodegenContext<'_> {
     }
 
     /// Generate printf from a StringLit with possible interpolation segments.
-    fn gen_printf_from_string_lit(&self, s: &StringLit, is_println: bool) -> String {
+    fn gen_printf_from_string_lit(&mut self, s: &StringLit, is_println: bool) -> String {
         let mut format_parts = Vec::new();
         let mut printf_args = Vec::new();
 
@@ -2358,7 +2354,7 @@ impl CodegenContext<'_> {
     }
 
     /// Determine printf format specifier and C expression for an interpolated variable.
-    fn interpolation_format(&self, var_name: &str) -> (String, String) {
+    fn interpolation_format(&mut self, var_name: &str) -> (String, String) {
         // Try to look up the variable's type
         let escaped = c_mangle::escape_keyword(var_name);
 
@@ -2404,7 +2400,7 @@ impl CodegenContext<'_> {
     /// Resolve a dotted field path against a type, returning the final TypeId.
     /// Handles tuple field access ("_0", "_1._0") and struct field access ("name", "msg.sender").
     fn resolve_field_type(
-        &self,
+        &mut self,
         type_id: crate::semantic::ids::TypeId,
         field_path: &str,
     ) -> Option<crate::semantic::ids::TypeId> {
@@ -2433,8 +2429,8 @@ impl CodegenContext<'_> {
         if let ResolvedType::Defined(def_id) = self.types.get(type_id) {
             let struct_name = self.scopes.get_def(*def_id).name.clone();
             let key = (struct_name, field.to_string());
-            if let Some(ast_type) = self.field_type_names.get(&key) {
-                if let Some(field_tid) = self.ast_type_to_type_id(ast_type) {
+            if let Some(ast_type) = self.field_type_names.get(&key).cloned() {
+                if let Some(field_tid) = self.ast_type_to_type_id(&ast_type) {
                     return match rest {
                         Some(remaining) => self.resolve_field_type(field_tid, remaining),
                         None => Some(field_tid),
@@ -2447,7 +2443,7 @@ impl CodegenContext<'_> {
     }
 
     /// Convert an AST `Type` to a semantic `TypeId`.
-    fn ast_type_to_type_id(&self, ty: &Type) -> Option<crate::semantic::ids::TypeId> {
+    fn ast_type_to_type_id(&mut self, ty: &Type) -> Option<crate::semantic::ids::TypeId> {
         match ty {
             Type::Primitive(p) => match p {
                 PrimitiveType::Int | PrimitiveType::Int64 => Some(self.types.int_id),
@@ -2471,7 +2467,7 @@ impl CodegenContext<'_> {
 
     /// Get printf format + expression for a given TypeId.
     fn format_for_type_id(
-        &self,
+        &mut self,
         type_id: crate::semantic::ids::TypeId,
         expr: &str,
     ) -> (String, String) {
@@ -2523,13 +2519,13 @@ impl CodegenContext<'_> {
     }
 
     /// Infer the result TypeId of a sub-parsed interpolation expression.
-    fn infer_interp_expr_type(&self, expr: &Spanned<Expr>) -> Option<crate::semantic::ids::TypeId> {
+    fn infer_interp_expr_type(&mut self, expr: &Spanned<Expr>) -> Option<crate::semantic::ids::TypeId> {
         self.resolve_expr_type_id(expr)
     }
 
     /// Map (receiver C type, method name) → return TypeId for known builtins.
     pub(super) fn builtin_method_return_type(
-        &self,
+        &mut self,
         receiver_type: &str,
         method: &str,
     ) -> Option<crate::semantic::ids::TypeId> {
@@ -2569,16 +2565,15 @@ impl CodegenContext<'_> {
 
     /// Generate a closure expression via lambda lifting.
     fn gen_closure_expr(
-        &self,
+        &mut self,
         params: &[Spanned<crate::parser::ast::ClosureParam>],
         body: &Spanned<Expr>,
     ) -> String {
         use super::LiftedClosure;
 
         let id = {
-            let mut counter = self.closure_counter.borrow_mut();
-            let id = *counter;
-            *counter += 1;
+            let id = self.closure_counter;
+            self.closure_counter += 1;
             id
         };
 
@@ -2618,7 +2613,7 @@ impl CodegenContext<'_> {
             body: body_expr,
         };
 
-        self.lifted_closures.borrow_mut().push(lifted);
+        self.lifted_closures.push(lifted);
 
         // At the creation site: emit a bare function pointer (no captures)
         // or allocate env and create GorgetClosure (with captures).
@@ -2640,7 +2635,7 @@ impl CodegenContext<'_> {
 
     /// Collect free variable references from an expression (simple walk).
     pub(super) fn collect_free_vars(
-        &self,
+        &mut self,
         expr: &Expr,
         bound: &std::collections::HashSet<&str>,
     ) -> Vec<(String, String)> {
@@ -2651,7 +2646,7 @@ impl CodegenContext<'_> {
     }
 
     fn walk_free_vars(
-        &self,
+        &mut self,
         expr: &Expr,
         bound: &std::collections::HashSet<&str>,
         seen: &mut std::collections::HashSet<String>,
@@ -2713,7 +2708,7 @@ impl CodegenContext<'_> {
 
     /// Generate a list comprehension as a GCC statement expression.
     fn gen_list_comprehension(
-        &self,
+        &mut self,
         expr: &Spanned<Expr>,
         variable: &Spanned<crate::parser::ast::Pattern>,
         iterable: &Spanned<Expr>,
@@ -2773,7 +2768,7 @@ impl CodegenContext<'_> {
 
     /// Generate a set comprehension as a GCC statement expression.
     fn gen_set_comprehension(
-        &self,
+        &mut self,
         expr: &Spanned<Expr>,
         variable: &Spanned<String>,
         iterable: &Spanned<Expr>,
@@ -2829,7 +2824,7 @@ impl CodegenContext<'_> {
 
     /// Generate a dict comprehension as a GCC statement expression.
     fn gen_dict_comprehension(
-        &self,
+        &mut self,
         key: &Spanned<Expr>,
         value: &Spanned<Expr>,
         variables: &[Spanned<String>],
@@ -2896,7 +2891,7 @@ impl CodegenContext<'_> {
     /// Convert a pattern to a C boolean condition for `is` expressions.
     /// `enum_c_type` overrides the enum name used for tag constants (needed for generic enums
     /// where the monomorphized name like `Option__int64_t` differs from the raw name `Option`).
-    fn pattern_to_condition_expr(&self, pattern: &crate::parser::ast::Pattern, scrutinee: &str, enum_c_type: Option<&str>) -> String {
+    fn pattern_to_condition_expr(&mut self, pattern: &crate::parser::ast::Pattern, scrutinee: &str, enum_c_type: Option<&str>) -> String {
         use crate::parser::ast::Pattern;
         match pattern {
             Pattern::Literal(lit) if matches!(lit.node, Expr::NoneLiteral) => {
@@ -2968,7 +2963,7 @@ impl CodegenContext<'_> {
 
     /// Generate a match expression as a GCC statement expression.
     fn gen_match_expr(
-        &self,
+        &mut self,
         scrutinee: &Spanned<Expr>,
         arms: &[crate::parser::ast::MatchArm],
         else_arm: Option<&Spanned<Expr>>,
@@ -3029,7 +3024,7 @@ impl CodegenContext<'_> {
     }
 
     /// Generate inline variable bindings for a pattern (returns C statements as a string).
-    fn pattern_bindings_inline(&self, pattern: &crate::parser::ast::Pattern, scrutinee: &str) -> String {
+    fn pattern_bindings_inline(&mut self, pattern: &crate::parser::ast::Pattern, scrutinee: &str) -> String {
         use crate::parser::ast::Pattern;
         match pattern {
             Pattern::Binding(name) => {
@@ -3068,7 +3063,7 @@ impl CodegenContext<'_> {
     }
 
     /// Look up which enum owns a variant given a path (for expression context).
-    fn find_enum_for_variant_path_expr(&self, path: &[Spanned<String>]) -> Option<(String, String)> {
+    fn find_enum_for_variant_path_expr(&mut self, path: &[Spanned<String>]) -> Option<(String, String)> {
         if path.len() == 2 {
             return Some((path[0].node.clone(), path[1].node.clone()));
         }
@@ -3089,7 +3084,7 @@ impl CodegenContext<'_> {
     }
 
     /// Generate a block/do expression as a GCC statement expression.
-    fn gen_block_expr(&self, block: &crate::parser::ast::Block) -> String {
+    fn gen_block_expr(&mut self, block: &crate::parser::ast::Block) -> String {
         if block.stmts.is_empty() {
             return "(void)0".to_string();
         }
@@ -3122,7 +3117,7 @@ impl CodegenContext<'_> {
     /// Try to generate a statement as a value-producing GCC statement expression.
     /// Returns `Some(code)` for `Stmt::If` and `Stmt::Match` whose branches end
     /// with an expression statement, `None` otherwise.
-    fn gen_value_producing_stmt(&self, stmt: &crate::parser::ast::Stmt) -> Option<String> {
+    fn gen_value_producing_stmt(&mut self, stmt: &crate::parser::ast::Stmt) -> Option<String> {
         use crate::parser::ast::Stmt;
         match stmt {
             Stmt::If {
@@ -3217,7 +3212,7 @@ impl CodegenContext<'_> {
     }
 
     /// Extract the tail expression from a block (last stmt must be Stmt::Expr).
-    fn block_tail_expr<'b>(&self, block: &'b crate::parser::ast::Block) -> Option<&'b Spanned<Expr>> {
+    fn block_tail_expr<'b>(&mut self, block: &'b crate::parser::ast::Block) -> Option<&'b Spanned<Expr>> {
         if let Some(last) = block.stmts.last() {
             if let crate::parser::ast::Stmt::Expr(expr) = &last.node {
                 return Some(expr);
@@ -3227,7 +3222,7 @@ impl CodegenContext<'_> {
     }
 
     /// Generate all statements in a block except the last one, as inline C code.
-    fn block_stmts_except_last_inline(&self, block: &crate::parser::ast::Block) -> String {
+    fn block_stmts_except_last_inline(&mut self, block: &crate::parser::ast::Block) -> String {
         if block.stmts.len() <= 1 {
             return String::new();
         }
@@ -3240,7 +3235,7 @@ impl CodegenContext<'_> {
     }
 
     /// Generate inline C code for a statement (for use inside GCC statement expressions).
-    fn stmt_to_inline_string(&self, stmt: &crate::parser::ast::Stmt) -> String {
+    fn stmt_to_inline_string(&mut self, stmt: &crate::parser::ast::Stmt) -> String {
         use crate::parser::ast::Stmt;
         match stmt {
             Stmt::Expr(expr) => {

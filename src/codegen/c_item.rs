@@ -357,7 +357,7 @@ impl CodegenContext<'_> {
         self.current_function_throws = f.throws.is_some();
 
         // Track return type for Result-based ? codegen
-        *self.current_function_return_c_type.borrow_mut() = if is_main {
+        self.current_function_return_c_type = if is_main {
             None
         } else {
             Some(c_types::ast_type_to_c(&f.return_type.node, self.scopes))
@@ -377,10 +377,10 @@ impl CodegenContext<'_> {
 
                 // Set decl_type_hint from return type so variant constructors
                 // (None, Some, Ok, Error) resolve to monomorphized names.
-                let prev_hint = self.decl_type_hint.borrow().clone();
+                let prev_hint = self.decl_type_hint.clone();
                 if let Type::Named { generic_args, .. } = &f.return_type.node {
                     if !generic_args.is_empty() {
-                        *self.decl_type_hint.borrow_mut() = Some(f.return_type.node.clone());
+                        self.decl_type_hint = Some(f.return_type.node.clone());
                     }
                 }
 
@@ -388,7 +388,7 @@ impl CodegenContext<'_> {
                 self.gen_block(block, emitter);
                 self.pop_drop_scope(emitter);
 
-                *self.decl_type_hint.borrow_mut() = prev_hint;
+                self.decl_type_hint = prev_hint;
 
                 if is_main {
                     emitter.emit_line("return 0;");
@@ -485,7 +485,7 @@ impl CodegenContext<'_> {
     }
 
     /// Emit a const declaration.
-    fn emit_const_decl(&self, c: &ConstDecl, emitter: &mut CEmitter) {
+    fn emit_const_decl(&mut self, c: &ConstDecl, emitter: &mut CEmitter) {
         let c_type = c_types::ast_type_to_c(&c.type_.node, self.scopes);
         let name = c_mangle::escape_keyword(&c.name.node);
         let val = self.gen_expr(&c.value);
@@ -493,7 +493,7 @@ impl CodegenContext<'_> {
     }
 
     /// Emit a static declaration.
-    fn emit_static_decl(&self, s: &StaticDecl, emitter: &mut CEmitter) {
+    fn emit_static_decl(&mut self, s: &StaticDecl, emitter: &mut CEmitter) {
         let c_type = c_types::ast_type_to_c(&s.type_.node, self.scopes);
         let name = c_mangle::escape_keyword(&s.name.node);
         let val = self.gen_expr(&s.value);
@@ -714,7 +714,7 @@ impl CodegenContext<'_> {
 
     /// Emit all lifted closure environment structs and functions.
     pub fn emit_lifted_closures(&self, emitter: &mut CEmitter) {
-        for closure in self.lifted_closures.borrow().iter() {
+        for closure in self.lifted_closures.iter() {
             let env_name = super::c_mangle::mangle_closure_env(closure.id);
             let fn_name = super::c_mangle::mangle_closure(closure.id);
 
@@ -769,7 +769,7 @@ impl CodegenContext<'_> {
 
     /// Pre-scan the module AST to discover and register generic type usages.
     /// This must run before codegen so that monomorphized types are emitted before use.
-    pub fn discover_generic_usages(&self, module: &crate::parser::ast::Module) {
+    pub fn discover_generic_usages(&mut self, module: &crate::parser::ast::Module) {
         for item in &module.items {
             match &item.node {
                 Item::Function(f) => self.scan_function_for_generics(f),
@@ -784,7 +784,7 @@ impl CodegenContext<'_> {
     }
 
     /// Scan a function for generic type usages in declarations and calls.
-    fn scan_function_for_generics(&self, f: &FunctionDef) {
+    fn scan_function_for_generics(&mut self, f: &FunctionDef) {
         if f.generic_params.is_some() {
             return; // Don't scan inside generic templates
         }
@@ -802,13 +802,13 @@ impl CodegenContext<'_> {
         }
     }
 
-    fn scan_block_for_generics(&self, block: &crate::parser::ast::Block) {
+    fn scan_block_for_generics(&mut self, block: &crate::parser::ast::Block) {
         for stmt in &block.stmts {
             self.scan_stmt_for_generics(&stmt.node);
         }
     }
 
-    fn scan_stmt_for_generics(&self, stmt: &crate::parser::ast::Stmt) {
+    fn scan_stmt_for_generics(&mut self, stmt: &crate::parser::ast::Stmt) {
         match stmt {
             Stmt::VarDecl { type_, value, .. } => {
                 self.scan_type_for_generics(&type_.node);
@@ -865,7 +865,7 @@ impl CodegenContext<'_> {
         }
     }
 
-    fn scan_expr_for_generics(&self, expr: &crate::span::Spanned<Expr>) {
+    fn scan_expr_for_generics(&mut self, expr: &crate::span::Spanned<Expr>) {
         match &expr.node {
             Expr::Call { callee, generic_args, args } => {
                 if let Some(type_args) = generic_args {
@@ -879,9 +879,9 @@ impl CodegenContext<'_> {
                                 self.register_generic("GorgetMap", &c_type_args, super::GenericInstanceKind::Map);
                             }
                             _ => {
-                                let kind = if self.generic_struct_templates.borrow().contains_key(name) {
+                                let kind = if self.generic_struct_templates.contains_key(name) {
                                     super::GenericInstanceKind::Struct
-                                } else if self.generic_enum_templates.borrow().contains_key(name) {
+                                } else if self.generic_enum_templates.contains_key(name) {
                                     super::GenericInstanceKind::Enum
                                 } else {
                                     super::GenericInstanceKind::Function
@@ -934,7 +934,7 @@ impl CodegenContext<'_> {
         }
     }
 
-    fn scan_type_for_generics(&self, ty: &Type) {
+    fn scan_type_for_generics(&mut self, ty: &Type) {
         if let Type::Named { name, generic_args } = ty {
             if !generic_args.is_empty() {
                 match name.node.as_str() {
@@ -951,9 +951,9 @@ impl CodegenContext<'_> {
                             .iter()
                             .map(|a| c_types::ast_type_to_c(&a.node, self.scopes))
                             .collect();
-                        let kind = if self.generic_struct_templates.borrow().contains_key(&name.node) {
+                        let kind = if self.generic_struct_templates.contains_key(&name.node) {
                             super::GenericInstanceKind::Struct
-                        } else if self.generic_enum_templates.borrow().contains_key(&name.node) {
+                        } else if self.generic_enum_templates.contains_key(&name.node) {
                             super::GenericInstanceKind::Enum
                         } else {
                             super::GenericInstanceKind::Function
@@ -971,22 +971,19 @@ impl CodegenContext<'_> {
     }
 
     /// Collect generic struct/enum/function templates from the module.
-    pub fn collect_generic_templates(&self, module: &crate::parser::ast::Module) {
+    pub fn collect_generic_templates(&mut self, module: &crate::parser::ast::Module) {
         for item in &module.items {
             match &item.node {
                 Item::Struct(s) if s.generic_params.is_some() => {
                     self.generic_struct_templates
-                        .borrow_mut()
                         .insert(s.name.node.clone(), s.clone());
                 }
                 Item::Enum(e) if e.generic_params.is_some() => {
                     self.generic_enum_templates
-                        .borrow_mut()
                         .insert(e.name.node.clone(), e.clone());
                 }
                 Item::Function(f) if f.generic_params.is_some() => {
                     self.generic_fn_templates
-                        .borrow_mut()
                         .insert(f.name.node.clone(), f.clone());
                 }
                 _ => {}
@@ -995,7 +992,7 @@ impl CodegenContext<'_> {
 
         // Inject built-in Option[T] and Result[T,E] generic enum templates.
         use crate::span::{Span, Spanned};
-        let mut enums = self.generic_enum_templates.borrow_mut();
+        let enums = &mut self.generic_enum_templates;
         if !enums.contains_key("Option") {
             enums.insert("Option".to_string(), EnumDef {
                 attributes: vec![],
@@ -1056,15 +1053,14 @@ impl CodegenContext<'_> {
 
     /// Register a generic instantiation and return its mangled name.
     pub fn register_generic(
-        &self,
+        &mut self,
         base: &str,
         c_type_args: &[String],
         kind: super::GenericInstanceKind,
     ) -> String {
         let mangled = c_mangle::mangle_generic(base, c_type_args);
-        let mut instances = self.generic_instances.borrow_mut();
-        if !instances.iter().any(|i| i.mangled_name == mangled) {
-            instances.push(super::GenericInstance {
+        if !self.generic_instances.iter().any(|i| i.mangled_name == mangled) {
+            self.generic_instances.push(super::GenericInstance {
                 base_name: base.to_string(),
                 mangled_name: mangled.clone(),
                 c_type_args: c_type_args.to_vec(),
@@ -1075,8 +1071,8 @@ impl CodegenContext<'_> {
     }
 
     /// Emit all registered generic instantiations.
-    pub fn emit_generic_instantiations(&self, emitter: &mut CEmitter) {
-        let instances = self.generic_instances.borrow().clone();
+    pub fn emit_generic_instantiations(&mut self, emitter: &mut CEmitter) {
+        let instances = self.generic_instances.clone();
         if instances.is_empty() {
             return;
         }
@@ -1084,20 +1080,20 @@ impl CodegenContext<'_> {
         for inst in &instances {
             match inst.kind {
                 super::GenericInstanceKind::Struct => {
-                    if let Some(template) = self.generic_struct_templates.borrow().get(&inst.base_name) {
-                        let template = template.clone();
+                    let template = self.generic_struct_templates.get(&inst.base_name).cloned();
+                    if let Some(template) = template {
                         self.emit_monomorphized_struct(&template, &inst.c_type_args, &inst.mangled_name, emitter);
                     }
                 }
                 super::GenericInstanceKind::Enum => {
-                    if let Some(template) = self.generic_enum_templates.borrow().get(&inst.base_name) {
-                        let template = template.clone();
+                    let template = self.generic_enum_templates.get(&inst.base_name).cloned();
+                    if let Some(template) = template {
                         self.emit_monomorphized_enum(&template, &inst.c_type_args, &inst.mangled_name, emitter);
                     }
                 }
                 super::GenericInstanceKind::Function => {
-                    if let Some(template) = self.generic_fn_templates.borrow().get(&inst.base_name) {
-                        let template = template.clone();
+                    let template = self.generic_fn_templates.get(&inst.base_name).cloned();
+                    if let Some(template) = template {
                         self.emit_monomorphized_function(&template, &inst.c_type_args, &inst.mangled_name, emitter);
                     }
                 }
@@ -1380,7 +1376,7 @@ static inline void {mangled}__free({mangled}* m) {{
 
     /// Emit a monomorphized function definition (expression-body only for now).
     fn emit_monomorphized_function(
-        &self,
+        &mut self,
         template: &FunctionDef,
         c_type_args: &[String],
         mangled: &str,
@@ -1409,7 +1405,7 @@ static inline void {mangled}__free({mangled}* m) {{
         emitter.emit_line(&format!("{ret_type} {mangled}({params});"));
 
         // Activate type substitutions so that body codegen sees T → concrete type
-        *self.type_subs.borrow_mut() = subs.clone();
+        self.type_subs = subs.clone();
 
         // Emit definition
         match &template.body {
@@ -1436,7 +1432,7 @@ static inline void {mangled}__free({mangled}* m) {{
         }
 
         // Clear substitutions after emitting the body
-        self.type_subs.borrow_mut().clear();
+        self.type_subs.clear();
     }
 
     /// Build a substitution map from generic param names to concrete C types.
@@ -1495,7 +1491,7 @@ static inline void {mangled}__free({mangled}* m) {{
     }
 
     /// Map an AST type to C and register any generic instantiations found.
-    pub fn type_to_c_with_registration(&self, ty: &crate::parser::ast::Type) -> String {
+    pub fn type_to_c_with_registration(&mut self, ty: &crate::parser::ast::Type) -> String {
         if let crate::parser::ast::Type::Named { name, generic_args } = ty {
             if !generic_args.is_empty() {
                 match name.node.as_str() {
@@ -1513,9 +1509,9 @@ static inline void {mangled}__free({mangled}* m) {{
                             .map(|a| c_types::ast_type_to_c(&a.node, self.scopes))
                             .collect();
                         // Determine kind
-                        let kind = if self.generic_struct_templates.borrow().contains_key(&name.node) {
+                        let kind = if self.generic_struct_templates.contains_key(&name.node) {
                             super::GenericInstanceKind::Struct
-                        } else if self.generic_enum_templates.borrow().contains_key(&name.node) {
+                        } else if self.generic_enum_templates.contains_key(&name.node) {
                             super::GenericInstanceKind::Enum
                         } else {
                             super::GenericInstanceKind::Function
@@ -1531,17 +1527,16 @@ static inline void {mangled}__free({mangled}* m) {{
     // ─── Tuple Typedefs ──────────────────────────────────────
 
     /// Register a tuple typedef, deduplicating by name. Returns the mangled name.
-    pub fn register_tuple_typedef(&self, c_field_types: &[String]) -> String {
+    pub fn register_tuple_typedef(&mut self, c_field_types: &[String]) -> String {
         let name = c_mangle::mangle_tuple(c_field_types);
-        let mut typedefs = self.tuple_typedefs.borrow_mut();
-        if !typedefs.iter().any(|(n, _)| *n == name) {
-            typedefs.push((name.clone(), c_field_types.to_vec()));
+        if !self.tuple_typedefs.iter().any(|(n, _)| *n == name) {
+            self.tuple_typedefs.push((name.clone(), c_field_types.to_vec()));
         }
         name
     }
 
     /// Pre-scan the module AST to discover tuple types in type annotations.
-    pub fn discover_tuple_types(&self, module: &crate::parser::ast::Module) {
+    pub fn discover_tuple_types(&mut self, module: &crate::parser::ast::Module) {
         for item in &module.items {
             match &item.node {
                 Item::Function(f) => self.scan_function_for_tuples(f),
@@ -1572,7 +1567,7 @@ static inline void {mangled}__free({mangled}* m) {{
     }
 
     /// Scan a function's signature and body for tuple types.
-    fn scan_function_for_tuples(&self, f: &FunctionDef) {
+    fn scan_function_for_tuples(&mut self, f: &FunctionDef) {
         if f.generic_params.is_some() {
             return;
         }
@@ -1589,14 +1584,14 @@ static inline void {mangled}__free({mangled}* m) {{
     }
 
     /// Scan a block for tuple literal expressions.
-    fn scan_block_for_tuples(&self, block: &crate::parser::ast::Block) {
+    fn scan_block_for_tuples(&mut self, block: &crate::parser::ast::Block) {
         for stmt in &block.stmts {
             self.scan_stmt_for_tuples(&stmt.node);
         }
     }
 
     /// Scan a statement for tuple literal expressions.
-    fn scan_stmt_for_tuples(&self, stmt: &Stmt) {
+    fn scan_stmt_for_tuples(&mut self, stmt: &Stmt) {
         match stmt {
             Stmt::VarDecl { type_, value, .. } => {
                 self.scan_type_for_tuples(&type_.node);
@@ -1654,7 +1649,7 @@ static inline void {mangled}__free({mangled}* m) {{
     }
 
     /// Scan an expression for tuple literals and register their typedefs.
-    fn scan_expr_for_tuples(&self, expr: &crate::span::Spanned<Expr>) {
+    fn scan_expr_for_tuples(&mut self, expr: &crate::span::Spanned<Expr>) {
         match &expr.node {
             Expr::TupleLiteral(elements) => {
                 // Register inner tuples first (depth-first)
@@ -1705,7 +1700,7 @@ static inline void {mangled}__free({mangled}* m) {{
     }
 
     /// Recursively scan a type for tuples, registering typedefs for any found.
-    fn scan_type_for_tuples(&self, ty: &Type) {
+    fn scan_type_for_tuples(&mut self, ty: &Type) {
         match ty {
             Type::Tuple(fields) => {
                 let c_field_types: Vec<String> = fields
@@ -1738,12 +1733,11 @@ static inline void {mangled}__free({mangled}* m) {{
 
     /// Emit all registered tuple typedefs.
     pub fn emit_tuple_typedefs(&self, emitter: &mut CEmitter) {
-        let typedefs = self.tuple_typedefs.borrow();
-        if typedefs.is_empty() {
+        if self.tuple_typedefs.is_empty() {
             return;
         }
         emitter.emit_line("// ── Tuple Typedefs ──");
-        for (name, field_types) in typedefs.iter() {
+        for (name, field_types) in self.tuple_typedefs.iter() {
             let fields: Vec<String> = field_types
                 .iter()
                 .enumerate()
@@ -1798,9 +1792,8 @@ static inline void {mangled}__free({mangled}* m) {{
     /// replaced with their concrete C types. Outside that context, this falls
     /// back to `ast_type_to_c`.
     pub fn type_to_c(&self, ty: &crate::parser::ast::Type) -> String {
-        let subs = self.type_subs.borrow();
-        if !subs.is_empty() {
-            self.substitute_type(ty, &subs)
+        if !self.type_subs.is_empty() {
+            self.substitute_type(ty, &self.type_subs)
         } else {
             c_types::ast_type_to_c(ty, self.scopes)
         }

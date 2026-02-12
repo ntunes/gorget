@@ -7,7 +7,6 @@ pub mod c_runtime;
 pub mod c_stmt;
 pub mod c_types;
 
-use std::cell::RefCell;
 use std::collections::HashSet;
 
 use rustc_hash::FxHashMap;
@@ -95,29 +94,28 @@ pub struct CodegenContext<'a> {
     pub current_self_type: Option<String>,
     pub current_function_throws: bool,
     /// Closures collected during codegen, emitted in a later pass.
-    /// Uses RefCell to allow mutation from `&self` methods (gen_expr).
-    pub lifted_closures: RefCell<Vec<LiftedClosure>>,
-    pub closure_counter: RefCell<usize>,
+    pub lifted_closures: Vec<LiftedClosure>,
+    pub closure_counter: usize,
     /// Generic instantiations registered during codegen.
-    pub generic_instances: RefCell<Vec<GenericInstance>>,
+    pub generic_instances: Vec<GenericInstance>,
     /// Generic struct templates stored for monomorphization.
-    pub generic_struct_templates: RefCell<FxHashMap<String, StructDef>>,
+    pub generic_struct_templates: FxHashMap<String, StructDef>,
     /// Generic enum templates stored for monomorphization.
-    pub generic_enum_templates: RefCell<FxHashMap<String, EnumDef>>,
+    pub generic_enum_templates: FxHashMap<String, EnumDef>,
     /// Generic function templates stored for monomorphization.
-    pub generic_fn_templates: RefCell<FxHashMap<String, FunctionDef>>,
+    pub generic_fn_templates: FxHashMap<String, FunctionDef>,
     /// Variables declared with GorgetClosure type (need fn_ptr dispatch on call).
-    pub closure_vars: RefCell<HashSet<String>>,
+    pub closure_vars: HashSet<String>,
     /// Registered tuple typedefs: (mangled_name, field_c_types).
-    pub tuple_typedefs: RefCell<Vec<(String, Vec<String>)>>,
+    pub tuple_typedefs: Vec<(String, Vec<String>)>,
     /// Hint for the declared type in a VarDecl, used to resolve unit variant
     /// constructors like `None()` to the correct monomorphized enum.
-    pub decl_type_hint: RefCell<Option<crate::parser::ast::Type>>,
+    pub decl_type_hint: Option<crate::parser::ast::Type>,
     /// Stack of drop scopes for RAII cleanup.
-    pub drop_scopes: RefCell<Vec<(DropScopeKind, Vec<DropEntry>)>>,
+    pub drop_scopes: Vec<(DropScopeKind, Vec<DropEntry>)>,
     /// Active generic type substitutions (param_name → C type) during monomorphized
     /// function body codegen. Empty outside of `emit_monomorphized_function`.
-    pub type_subs: RefCell<Vec<(String, String)>>,
+    pub type_subs: Vec<(String, String)>,
     /// When true, `assert` statements are stripped from output (no code emitted).
     pub strip_asserts: bool,
     /// When true, integer overflow wraps silently instead of panicking.
@@ -125,9 +123,9 @@ pub struct CodegenContext<'a> {
     /// Map from expression span to inferred TypeId (for Result-based `?` codegen).
     pub expr_types: &'a FxHashMap<Span, TypeId>,
     /// C return type of the current function being emitted (for Result `?` early return).
-    pub current_function_return_c_type: RefCell<Option<String>>,
+    pub current_function_return_c_type: Option<String>,
     /// Counter for unique `__try_rN` temp variable names in Result `?` codegen.
-    pub try_counter: RefCell<usize>,
+    pub try_counter: usize,
     /// Map from (struct_name, field_name) → AST Type, used to resolve field types
     /// in `infer_receiver_type` for FieldAccess expressions.
     pub field_type_names: FxHashMap<(String, String), Type>,
@@ -158,22 +156,22 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, strip_asserts: boo
         traits: &analysis.traits,
         current_self_type: None,
         current_function_throws: false,
-        lifted_closures: RefCell::new(Vec::new()),
-        closure_counter: RefCell::new(0),
-        generic_instances: RefCell::new(Vec::new()),
-        generic_struct_templates: RefCell::new(FxHashMap::default()),
-        generic_enum_templates: RefCell::new(FxHashMap::default()),
-        generic_fn_templates: RefCell::new(FxHashMap::default()),
-        closure_vars: RefCell::new(HashSet::new()),
-        tuple_typedefs: RefCell::new(Vec::new()),
-        decl_type_hint: RefCell::new(None),
-        drop_scopes: RefCell::new(Vec::new()),
-        type_subs: RefCell::new(Vec::new()),
+        lifted_closures: Vec::new(),
+        closure_counter: 0,
+        generic_instances: Vec::new(),
+        generic_struct_templates: FxHashMap::default(),
+        generic_enum_templates: FxHashMap::default(),
+        generic_fn_templates: FxHashMap::default(),
+        closure_vars: HashSet::new(),
+        tuple_typedefs: Vec::new(),
+        decl_type_hint: None,
+        drop_scopes: Vec::new(),
+        type_subs: Vec::new(),
         strip_asserts,
         overflow_wrap,
         expr_types: &analysis.expr_types,
-        current_function_return_c_type: RefCell::new(None),
-        try_counter: RefCell::new(0),
+        current_function_return_c_type: None,
+        try_counter: 0,
         field_type_names,
     };
 
@@ -210,7 +208,7 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, strip_asserts: boo
     // 6. Emit lifted closures (env structs + functions) — these were
     //    collected during expression codegen in step 5. We insert them
     //    before main by re-emitting into a separate buffer and splicing.
-    if !ctx.lifted_closures.borrow().is_empty() {
+    if !ctx.lifted_closures.is_empty() {
         let mut closure_buf = CEmitter::new();
         closure_buf.emit_line("// ── Lifted Closures ──");
         ctx.emit_lifted_closures(&mut closure_buf);

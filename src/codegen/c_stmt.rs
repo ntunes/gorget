@@ -9,7 +9,7 @@ use super::{CodegenContext, DropAction, DropEntry, DropScopeKind};
 
 impl CodegenContext<'_> {
     /// Generate C code for a block of statements.
-    pub fn gen_block(&self, block: &Block, emitter: &mut CEmitter) {
+    pub fn gen_block(&mut self, block: &Block, emitter: &mut CEmitter) {
         for stmt in &block.stmts {
             self.gen_stmt(&stmt.node, emitter);
         }
@@ -18,13 +18,13 @@ impl CodegenContext<'_> {
     // ─── Drop Scope Helpers ─────────────────────────────────
 
     /// Push a new drop scope onto the stack.
-    pub fn push_drop_scope(&self, kind: DropScopeKind) {
-        self.drop_scopes.borrow_mut().push((kind, Vec::new()));
+    pub fn push_drop_scope(&mut self, kind: DropScopeKind) {
+        self.drop_scopes.push((kind, Vec::new()));
     }
 
     /// Pop the top drop scope and emit cleanup for its entries.
-    pub fn pop_drop_scope(&self, emitter: &mut CEmitter) {
-        if let Some((_kind, entries)) = self.drop_scopes.borrow_mut().pop() {
+    pub fn pop_drop_scope(&mut self, emitter: &mut CEmitter) {
+        if let Some((_kind, entries)) = self.drop_scopes.pop() {
             for entry in entries.iter().rev() {
                 Self::emit_drop_entry(entry, emitter);
             }
@@ -33,9 +33,8 @@ impl CodegenContext<'_> {
 
     /// Emit cleanup for all scopes from innermost up to and including the
     /// first scope matching `kind`. Does NOT pop any scopes.
-    pub fn emit_cleanup_to(&self, kind: DropScopeKind, emitter: &mut CEmitter) {
-        let scopes = self.drop_scopes.borrow();
-        for (scope_kind, entries) in scopes.iter().rev() {
+    pub fn emit_cleanup_to(&mut self, kind: DropScopeKind, emitter: &mut CEmitter) {
+        for (scope_kind, entries) in self.drop_scopes.iter().rev() {
             for entry in entries.iter().rev() {
                 Self::emit_drop_entry(entry, emitter);
             }
@@ -46,9 +45,8 @@ impl CodegenContext<'_> {
     }
 
     /// Register a droppable variable in the current (topmost) scope.
-    pub fn register_droppable(&self, var_name: &str, action: DropAction) {
-        let mut scopes = self.drop_scopes.borrow_mut();
-        if let Some((_kind, entries)) = scopes.last_mut() {
+    pub fn register_droppable(&mut self, var_name: &str, action: DropAction) {
+        if let Some((_kind, entries)) = self.drop_scopes.last_mut() {
             entries.push(DropEntry {
                 var_name: var_name.to_string(),
                 action,
@@ -57,9 +55,8 @@ impl CodegenContext<'_> {
     }
 
     /// Check if any drop scope currently has droppable entries.
-    fn has_droppable_entries(&self) -> bool {
+    fn has_droppable_entries(&mut self) -> bool {
         self.drop_scopes
-            .borrow()
             .iter()
             .any(|(_, entries)| !entries.is_empty())
     }
@@ -84,7 +81,7 @@ impl CodegenContext<'_> {
     }
 
     /// Check if a declared type needs drop and register it if so.
-    fn maybe_register_droppable(&self, var_name: &str, ty: &Type) {
+    fn maybe_register_droppable(&mut self, var_name: &str, ty: &Type) {
         match ty {
             // Box[T] — if T is a trait, register TraitObjFree (free .data field)
             Type::Named { name, generic_args }
@@ -130,7 +127,7 @@ impl CodegenContext<'_> {
     }
 
     /// Generate C code for a single statement.
-    pub fn gen_stmt(&self, stmt: &Stmt, emitter: &mut CEmitter) {
+    pub fn gen_stmt(&mut self, stmt: &Stmt, emitter: &mut CEmitter) {
         match stmt {
             Stmt::VarDecl {
                 is_const,
@@ -354,7 +351,7 @@ impl CodegenContext<'_> {
 
     /// Generate a variable declaration.
     fn gen_var_decl(
-        &self,
+        &mut self,
         is_const: bool,
         type_: &Spanned<Type>,
         pattern: &Spanned<Pattern>,
@@ -449,13 +446,13 @@ impl CodegenContext<'_> {
 
                 let c_type = self.resolve_decl_type(type_, value, Some(name));
                 if c_type == "GorgetClosure" {
-                    self.closure_vars.borrow_mut().insert(escaped.clone());
+                    self.closure_vars.insert(escaped.clone());
                 }
                 // Set type hint for unit variant constructors like None()
-                let prev_hint = self.decl_type_hint.borrow().clone();
-                *self.decl_type_hint.borrow_mut() = Some(type_.node.clone());
+                let prev_hint = self.decl_type_hint.clone();
+                self.decl_type_hint = Some(type_.node.clone());
                 let val = self.gen_expr(value);
-                *self.decl_type_hint.borrow_mut() = prev_hint;
+                self.decl_type_hint = prev_hint;
                 let decl = c_types::c_declare(&c_type, &escaped);
                 emitter.emit_line(&format!("{const_prefix}{decl} = {val};"));
 
@@ -478,7 +475,7 @@ impl CodegenContext<'_> {
     /// Resolve the C type for a declaration, handling `auto` (Inferred).
     /// Also registers generic instantiations when a user-defined generic type is used.
     fn resolve_decl_type(
-        &self,
+        &mut self,
         type_: &Spanned<Type>,
         value: &Spanned<Expr>,
         var_name: Option<&str>,
@@ -511,7 +508,7 @@ impl CodegenContext<'_> {
     }
 
     /// Best-effort C type inference from a value expression.
-    pub(super) fn infer_c_type_from_expr(&self, expr: &Expr) -> String {
+    pub(super) fn infer_c_type_from_expr(&mut self, expr: &Expr) -> String {
         match expr {
             Expr::IntLiteral(_) => "int64_t".to_string(),
             Expr::FloatLiteral(_) => "double".to_string(),
@@ -603,7 +600,7 @@ impl CodegenContext<'_> {
     /// When the type annotation is `Box[T]` and `T` is a trait, this extracts the
     /// trait name, concrete type name, and inner expression for trait object codegen.
     fn extract_trait_object_construction<'b>(
-        &self,
+        &mut self,
         type_: &Spanned<Type>,
         value: &'b Spanned<Expr>,
     ) -> Option<(String, String, &'b Spanned<Expr>)> {
@@ -683,7 +680,7 @@ impl CodegenContext<'_> {
     }
 
     /// Check if an iterable expression resolves to a GorgetArray type.
-    fn is_gorget_array_expr(&self, expr: &Spanned<Expr>) -> bool {
+    fn is_gorget_array_expr(&mut self, expr: &Spanned<Expr>) -> bool {
         if let Some(tid) = self.resolve_expr_type_id(expr) {
             let c_type = c_types::type_id_to_c(tid, self.types, self.scopes);
             return c_type == "GorgetArray";
@@ -694,7 +691,7 @@ impl CodegenContext<'_> {
     }
 
     /// Check if an iterable expression resolves to a GorgetMap (Dict) type.
-    fn is_gorget_map_expr(&self, expr: &Spanned<Expr>) -> bool {
+    fn is_gorget_map_expr(&mut self, expr: &Spanned<Expr>) -> bool {
         if let Some(tid) = self.resolve_expr_type_id(expr) {
             if let crate::semantic::types::ResolvedType::Generic(def_id, _) = self.types.get(tid) {
                 let def_name = &self.scopes.get_def(*def_id).name;
@@ -706,7 +703,7 @@ impl CodegenContext<'_> {
 
     /// Check if an iterable expression resolves to a GorgetSet (Set) type.
     /// Must use Gorget-level type name since GorgetSet is typedef'd to GorgetMap at C level.
-    fn is_gorget_set_expr(&self, expr: &Spanned<Expr>) -> bool {
+    fn is_gorget_set_expr(&mut self, expr: &Spanned<Expr>) -> bool {
         if let Some(tid) = self.resolve_expr_type_id(expr) {
             if let crate::semantic::types::ResolvedType::Generic(def_id, _) = self.types.get(tid) {
                 let def_name = &self.scopes.get_def(*def_id).name;
@@ -717,7 +714,7 @@ impl CodegenContext<'_> {
     }
 
     /// Infer the element C type for a Set expression.
-    fn infer_set_elem_type(&self, expr: &Spanned<Expr>) -> String {
+    fn infer_set_elem_type(&mut self, expr: &Spanned<Expr>) -> String {
         if let Some(tid) = self.resolve_expr_type_id(expr) {
             if let crate::semantic::types::ResolvedType::Generic(_, args) = self.types.get(tid) {
                 if let Some(&elem_tid) = args.first() {
@@ -729,7 +726,7 @@ impl CodegenContext<'_> {
     }
 
     /// Infer the Gorget-level type name from an expression (e.g. "Counter").
-    fn infer_type_name_from_expr(&self, expr: &Spanned<Expr>) -> String {
+    fn infer_type_name_from_expr(&mut self, expr: &Spanned<Expr>) -> String {
         if let Some(tid) = self.resolve_expr_type_id(expr) {
             match self.types.get(tid) {
                 crate::semantic::types::ResolvedType::Defined(def_id) => {
@@ -753,7 +750,7 @@ impl CodegenContext<'_> {
     }
 
     /// Check if an iterable expression has an Iterator[T] trait implementation.
-    fn has_iterator_impl(&self, expr: &Spanned<Expr>) -> bool {
+    fn has_iterator_impl(&mut self, expr: &Spanned<Expr>) -> bool {
         let type_name = self.infer_type_name_from_expr(expr);
         if type_name.is_empty() {
             return false;
@@ -764,7 +761,7 @@ impl CodegenContext<'_> {
     }
 
     /// Get the element C type for an Iterator[T] implementation.
-    pub(crate) fn get_iterator_elem_c_type(&self, expr: &Spanned<Expr>) -> String {
+    pub(crate) fn get_iterator_elem_c_type(&mut self, expr: &Spanned<Expr>) -> String {
         let type_name = self.infer_type_name_from_expr(expr);
         for imp in &self.traits.impls {
             if imp.self_type_name == type_name && imp.trait_name.as_deref() == Some("Iterator") {
@@ -778,7 +775,7 @@ impl CodegenContext<'_> {
 
     /// Generate a for-loop over a user-defined Iterator[T] type.
     fn gen_for_loop_iterator(
-        &self,
+        &mut self,
         pattern: &Spanned<Pattern>,
         iterable: &Spanned<Expr>,
         body: &Block,
@@ -812,7 +809,7 @@ impl CodegenContext<'_> {
 
     /// Generate a for-loop over a user-defined Iterator[T] with an else clause.
     fn gen_for_loop_iterator_with_else(
-        &self,
+        &mut self,
         pattern: &Spanned<Pattern>,
         iterable: &Spanned<Expr>,
         body: &Block,
@@ -850,7 +847,7 @@ impl CodegenContext<'_> {
 
     /// Generate a for loop over a range or iterable.
     fn gen_for_loop(
-        &self,
+        &mut self,
         pattern: &Spanned<Pattern>,
         iterable: &Spanned<Expr>,
         body: &Block,
@@ -950,7 +947,7 @@ impl CodegenContext<'_> {
     /// Generate a for-loop over a Dict (GorgetMap).
     /// Supports both key-only (`for k in dict`) and key-value (`for (k, v) in dict`) patterns.
     fn gen_for_loop_dict(
-        &self,
+        &mut self,
         pattern: &Spanned<Pattern>,
         iterable: &Spanned<Expr>,
         body: &Block,
@@ -1006,7 +1003,7 @@ impl CodegenContext<'_> {
 
     /// Generate a for-loop over a Set (GorgetSet, which is typedef'd to GorgetMap).
     fn gen_for_loop_set(
-        &self,
+        &mut self,
         pattern: &Spanned<Pattern>,
         iterable: &Spanned<Expr>,
         body: &Block,
@@ -1037,7 +1034,7 @@ impl CodegenContext<'_> {
 
     /// Generate a match statement.
     fn gen_match_stmt(
-        &self,
+        &mut self,
         scrutinee: &Spanned<Expr>,
         arms: &[crate::parser::ast::MatchArm],
         else_arm: &Option<Block>,
@@ -1104,7 +1101,7 @@ impl CodegenContext<'_> {
     /// Convert a pattern to a C boolean condition (for if-else chain).
     /// `enum_c_type` overrides the enum name used for tag constants (needed for generic enums
     /// where the monomorphized name like `Option__int64_t` differs from the raw name `Option`).
-    fn pattern_to_condition(&self, pattern: &Pattern, scrutinee: &str, enum_c_type: Option<&str>) -> String {
+    fn pattern_to_condition(&mut self, pattern: &Pattern, scrutinee: &str, enum_c_type: Option<&str>) -> String {
         match pattern {
             Pattern::Literal(lit) if matches!(lit.node, Expr::NoneLiteral) => {
                 // None literal as pattern: generate tag check for the None variant
@@ -1155,7 +1152,7 @@ impl CodegenContext<'_> {
     }
 
     /// Emit variable bindings from a pattern into the current scope.
-    fn emit_pattern_bindings(&self, pattern: &Pattern, scrutinee: &str, emitter: &mut CEmitter) {
+    fn emit_pattern_bindings(&mut self, pattern: &Pattern, scrutinee: &str, emitter: &mut CEmitter) {
         match pattern {
             Pattern::Binding(name) => {
                 let escaped = c_mangle::escape_keyword(name);
@@ -1192,7 +1189,7 @@ impl CodegenContext<'_> {
 
     /// Return inline pattern bindings as a string (for use in GCC statement expressions).
     /// Uses statement-context enum variant lookup (vs expression-context in c_expr.rs).
-    fn stmt_pattern_bindings_inline(&self, pattern: &Pattern, scrutinee: &str) -> String {
+    fn stmt_pattern_bindings_inline(&mut self, pattern: &Pattern, scrutinee: &str) -> String {
         match pattern {
             Pattern::Binding(name) => {
                 let escaped = c_mangle::escape_keyword(name);
@@ -1232,7 +1229,7 @@ impl CodegenContext<'_> {
 
     /// Generate a for loop with optional else clause.
     fn gen_for_loop_with_else(
-        &self,
+        &mut self,
         pattern: &Spanned<Pattern>,
         iterable: &Spanned<Expr>,
         body: &Block,
@@ -1409,14 +1406,14 @@ impl CodegenContext<'_> {
     /// Recurses into `if`, `match`, `unsafe`, and `with` bodies to find
     /// nested breaks, but stops at inner loops (`for`, `while`, `loop`)
     /// since those breaks target the inner loop.
-    fn gen_block_with_break_flag(&self, block: &Block, flag: &str, emitter: &mut CEmitter) {
+    fn gen_block_with_break_flag(&mut self, block: &Block, flag: &str, emitter: &mut CEmitter) {
         for stmt in &block.stmts {
             self.gen_stmt_with_break_flag(&stmt.node, flag, emitter);
         }
     }
 
     /// Emit a single statement, instrumenting any `break` with the flag.
-    fn gen_stmt_with_break_flag(&self, stmt: &Stmt, flag: &str, emitter: &mut CEmitter) {
+    fn gen_stmt_with_break_flag(&mut self, stmt: &Stmt, flag: &str, emitter: &mut CEmitter) {
         match stmt {
             Stmt::Break(_) => {
                 emitter.emit_line(&format!("{flag} = true;"));
@@ -1527,7 +1524,7 @@ impl CodegenContext<'_> {
     }
 
     /// Look up which enum owns a variant given a path (e.g., ["Some"] or ["Color", "Red"]).
-    fn find_enum_for_variant_path(&self, path: &[Spanned<String>]) -> Option<(String, String)> {
+    fn find_enum_for_variant_path(&mut self, path: &[Spanned<String>]) -> Option<(String, String)> {
         let variant_name = if path.len() == 1 {
             &path[0].node
         } else if path.len() == 2 {
@@ -1550,7 +1547,7 @@ impl CodegenContext<'_> {
     }
 
     /// Look up which enum owns a variant given a bare variant name.
-    fn find_enum_for_variant_by_name(&self, variant_name: &str) -> Option<(String, String)> {
+    fn find_enum_for_variant_by_name(&mut self, variant_name: &str) -> Option<(String, String)> {
         for (enum_def_id, info) in self.enum_variants {
             for (vname, _) in &info.variants {
                 if vname == variant_name {
