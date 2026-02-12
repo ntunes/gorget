@@ -1,0 +1,35 @@
+# TaskStore — collection wrapper with query methods
+#
+# Demonstrates: struct wrapping Vector of user-defined type,
+# &self mutation, closures in filter, fold for aggregation.
+
+from task import Task
+
+struct TaskStore:
+    Vector[Task] tasks
+
+equip TaskStore:
+    void add(&self, Task t):
+        self.tasks.push(t)
+
+    int count(self):
+        return self.tasks.len()
+
+    int count_done(self):
+        int n = 0
+        for i in 0..self.tasks.len():
+            Task t = self.tasks.get(i)
+            if t.done:
+                n = n + 1
+        return n
+
+    void show_all(self):
+        for i in 0..self.tasks.len():
+            Task t = self.tasks.get(i)
+            print("{t}")
+
+    Vector[Task] pending(self):
+        return self.tasks.filter((Task t): t.done == false)
+
+    Vector[Task] high_priority(self):
+        return self.tasks.filter((Task t): t.is_high())

@@ -1,0 +1,43 @@
+# Todo App — multi-module data modeling showcase
+#
+# Demonstrates:
+#   - Structs and enums for domain modeling
+#   - Displayable trait for pretty-printing
+#   - Vector of user-defined structs
+#   - Closures with struct types in filter
+#   - Cross-module imports
+#   - Method calls on imported types
+#   - Mutable struct (&self) methods
+
+from task import Task
+from store import TaskStore
+
+void main():
+    # Build a task store
+    TaskStore store = TaskStore(Vector[Task]())
+    store.add(Task("Write parser", 0, true))
+    store.add(Task("Implement codegen", 0, false))
+    store.add(Task("Add error messages", 1, false))
+    store.add(Task("Write docs", 2, false))
+    store.add(Task("Release v1.0", 1, true))
+
+    # Show all tasks (uses Displayable)
+    print("All tasks:")
+    store.show_all()
+
+    # Statistics
+    print("total: {store.count()}")
+    print("done: {store.count_done()}")
+
+    # Filter: pending tasks
+    Vector[Task] todo = store.pending()
+    print("pending: {todo.len()}")
+
+    # Filter: high priority
+    Vector[Task] urgent = store.high_priority()
+    print("high priority: {urgent.len()}")
+
+    # Complete a task and show it
+    Task t = store.tasks.get(1)
+    Task finished = t.complete()
+    print(finished)

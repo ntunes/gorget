@@ -13,7 +13,6 @@
 - `gg info` command: show fields, methods, traits, memory layout for a type [added: 2026-02-10]
 
 ## Low Priority — Showcase examples
-- [showcase] `examples/todo_app/` — Data modeling + error handling: Task struct, Priority enum, Displayable trait, TaskStore with Vector, filter/map [added: 2026-02-12]
 - [showcase] `examples/pipeline/` — Generics + closures + iterators: generic Pipeline[T] struct with chainable map/filter/collect, implicit it [added: 2026-02-12]
 - [showcase] `examples/ecs/` — Entity-component system: trait-based components, Option[T] fields, system iteration with pattern matching [added: 2026-02-12]
 - [showcase] `examples/collections/` — Custom generic data structure: generic Stack[T] backed by Vector, Iterator[T] impl, ownership moves [added: 2026-02-12]

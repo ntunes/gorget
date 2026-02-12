@@ -1043,6 +1043,21 @@ impl CodegenContext<'_> {
                 }
             }
         }
+        // Fallback for field access: extract elem type from the AST type annotation
+        // (resolve_expr_type_id can't resolve generic types like Vector[Task] from fields)
+        if let Expr::FieldAccess { object, field } = &receiver.node {
+            let obj_type = self.infer_receiver_type(object);
+            if obj_type != "Unknown" {
+                let key = (obj_type, field.node.clone());
+                if let Some(ast_type) = self.field_type_names.get(&key) {
+                    if let Type::Named { generic_args, .. } = ast_type {
+                        if let Some(arg) = generic_args.first() {
+                            return c_types::ast_type_to_c(&arg.node, self.scopes);
+                        }
+                    }
+                }
+            }
+        }
         "int64_t".to_string()
     }
 

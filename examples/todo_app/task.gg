@@ -1,0 +1,28 @@
+# Task — data model for a simple task manager
+#
+# Demonstrates: enum definition, struct definition, cross-module
+# trait equip (Displayable), format() with field access.
+
+enum Priority:
+    High
+    Medium
+    Low
+
+struct Task:
+    str title
+    int priority
+    bool done
+
+equip Task with Displayable:
+    str display(self):
+        if self.done:
+            return format("[x] {self.title}")
+        else:
+            return format("[ ] {self.title}")
+
+equip Task:
+    bool is_high(self):
+        return self.priority == 0
+
+    Task complete(self):
+        return Task(self.title, self.priority, true)
