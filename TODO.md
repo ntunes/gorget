@@ -5,6 +5,7 @@
 - `@derive` macro expansion: reduces boilerplate for Debug, Clone, etc. [added: 2026-02-10]
 
 ## Medium Priority — Language ergonomics & tooling
+- Closure parameter type inference: ensure untyped params `(acc, x): acc + x` infer types from calling context everywhere (not just `it`). See design note in `docs/language-design.md` §7.6. [added: 2026-02-12]
 - `via` delegation in equip blocks: auto-forward trait methods through a struct field [added: 2026-02-10]
 - `gg` package management subcommands (`gg new`, `gg add`, `gg update`, `gg publish`, etc.) [added: 2026-02-10]
 - Basic orphan rule: equip block must be in the module that defines the trait or the type [added: 2026-02-10]

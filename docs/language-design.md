@@ -958,7 +958,34 @@ auto processor = !(data):
 # !name = move, count = borrow, x = parameter
 ```
 
-### 7.5 `it` Rules
+### 7.5 Untyped Parameters & Contextual Inference
+
+Closure parameters can omit type annotations when the compiler can infer them from the calling context. This is the recommended middle ground between the fully implicit `it` (single-param only) and fully typed parameters:
+
+```gorget
+# Fully typed — always works, most verbose
+auto sum = v.fold(0, (int acc, int x): acc + x)
+
+# Untyped — inferred from fold's signature: T(T, T) where T = int
+auto sum = v.fold(0, (acc, x): acc + x)
+
+# Implicit it — only works for single-param closures
+auto doubled = v.map(it * 2)
+```
+
+The three tiers give authors a smooth verbosity dial:
+
+| Need | Syntax | When to use |
+|---|---|---|
+| Trivial single-param body | `it` | `.map(it * 2)`, `.filter(it > 0)` |
+| Multi-param or named clarity | `(params): body` | `.fold(0, (acc, x): acc + x)` |
+| Explicit types needed | `(typed params): body` | Ambiguous contexts, documentation |
+
+**Design rationale.** Positional placeholders like `$1`, `$2` (Swift-style) were considered and rejected. They add a new sigil, introduce arity ambiguity (the compiler must scan the body to determine parameter count), and lose readability for multi-param closures where names like `acc` and `x` carry semantic meaning. The untyped-but-named style `(acc, x):` is nearly as concise while remaining self-documenting.
+
+**Inference strategy.** When a closure is passed to a function or method whose parameter type is known (e.g., `fold` expects `T(T, T)`), the compiler unifies each untyped closure parameter with the corresponding type from the expected signature. This is the same mechanism used for `it` inference, generalized to N parameters.
+
+### 7.6 `it` Rules
 
 - `it` is only valid inside closures with exactly one parameter
 - If `it` appears, no explicit parameter list is needed
