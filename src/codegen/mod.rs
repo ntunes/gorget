@@ -148,6 +148,9 @@ pub struct CodegenContext<'a> {
     /// These are emitted as `Type*` pointers and need `(*name)` for reads and
     /// `name->field` for field access.
     pub pointer_params: HashSet<String>,
+    /// Top-level function names (not main, not methods) — these get a `gg_` prefix
+    /// in C to avoid collisions with C library symbols.
+    pub function_names: HashSet<String>,
 }
 
 /// Generate C source code from a parsed and analyzed Gorget module.
@@ -161,6 +164,17 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, strip_asserts: boo
                     (struct_name.clone(), field.node.name.node.clone()),
                     field.node.type_.node.clone(),
                 );
+            }
+        }
+    }
+
+    // Collect all top-level function names (except main) so codegen can
+    // prefix them with `gg_` to avoid C library symbol collisions.
+    let mut function_names = HashSet::new();
+    for item in &module.items {
+        if let Item::Function(f) = &item.node {
+            if f.name.node != "main" && f.span != crate::span::Span::dummy() {
+                function_names.insert(f.name.node.clone());
             }
         }
     }
@@ -195,6 +209,7 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, strip_asserts: boo
         field_type_names,
         mutable_captures: HashSet::new(),
         pointer_params: HashSet::new(),
+        function_names,
     };
 
     let mut emitter = CEmitter::new();
@@ -297,7 +312,7 @@ mod tests {
     fn function_with_return() {
         let source = "int add(int a, int b):\n    return a + b\n";
         let c_code = compile_to_c(source);
-        assert!(c_code.contains("int64_t add(int64_t a, int64_t b)"));
+        assert!(c_code.contains("int64_t gg_add(int64_t a, int64_t b)"));
         assert!(c_code.contains("GORGET_CHECKED_ADD(a, b)"));
     }
 
@@ -305,7 +320,7 @@ mod tests {
     fn expression_body_function() {
         let source = "int double(int x) = x * 2\n";
         let c_code = compile_to_c(source);
-        assert!(c_code.contains("int64_t __gorget_double(int64_t x)"));
+        assert!(c_code.contains("int64_t gg_double(int64_t x)"));
         assert!(c_code.contains("GORGET_CHECKED_MUL(x, INT64_C(2))"));
     }
 

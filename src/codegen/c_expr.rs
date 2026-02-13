@@ -42,6 +42,10 @@ impl CodegenContext<'_> {
                 if (name == "stderr" || name == "stdout") && self.is_stdlib_static(name) {
                     return name.clone();
                 }
+                // Top-level functions get `gg_` prefix to avoid C library collisions
+                if self.function_names.contains(name.as_str()) {
+                    return c_mangle::escape_function(name);
+                }
                 let escaped = c_mangle::escape_keyword(name);
                 if self.mutable_captures.contains(&escaped) {
                     format!("(*__env->{escaped})")
@@ -707,7 +711,8 @@ impl CodegenContext<'_> {
             }
 
             // Check if this is a GorgetClosure variable — dispatch through .fn_ptr
-            if self.closure_vars.contains(name.as_str()) {
+            let escaped_name = c_mangle::escape_keyword(name);
+            if self.closure_vars.contains(escaped_name.as_str()) {
                 let arg_exprs: Vec<String> =
                     args.iter().map(|a| self.gen_expr(&a.node.value)).collect();
                 let arg_types: Vec<String> = args
@@ -717,9 +722,9 @@ impl CodegenContext<'_> {
                 let mut cast_params = vec!["void*".to_string()];
                 cast_params.extend(arg_types);
                 let cast = format!("int64_t (*)({})", cast_params.join(", "));
-                let mut call_args = vec![format!("{name}.env")];
+                let mut call_args = vec![format!("{escaped_name}.env")];
                 call_args.extend(arg_exprs);
-                return format!("(({cast})({name}.fn_ptr))({})", call_args.join(", "));
+                return format!("(({cast})({escaped_name}.fn_ptr))({})", call_args.join(", "));
             }
         }
 
@@ -768,9 +773,8 @@ impl CodegenContext<'_> {
 
         // General function call
         let callee_str = self.gen_expr(callee);
-        let callee_name = c_mangle::escape_keyword(&callee_str);
         let arg_exprs = self.resolve_call_args(callee, args);
-        format!("{callee_name}({})", arg_exprs.join(", "))
+        format!("{callee_str}({})", arg_exprs.join(", "))
     }
 
     /// Wrap a generated expression with `&` if the call arg has MutableBorrow ownership.

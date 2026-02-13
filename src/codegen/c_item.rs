@@ -477,7 +477,7 @@ impl CodegenContext<'_> {
                 c_mangle::mangle_method(type_name, &f.name.node)
             }
         } else {
-            c_mangle::escape_keyword(&f.name.node)
+            c_mangle::escape_function(&f.name.node)
         };
 
         let mut params_vec: Vec<String> = Vec::new();

@@ -1,22 +1,32 @@
 /// Name mangling for C identifiers.
 
-/// C11 reserved keywords that must be escaped.
+/// C reserved words that must never be used as identifiers in generated code.
 const C_KEYWORDS: &[&str] = &[
     "auto", "break", "case", "char", "const", "continue", "default", "do", "double", "else",
     "enum", "extern", "float", "for", "goto", "if", "inline", "int", "long", "register",
     "restrict", "return", "short", "signed", "sizeof", "static", "struct", "switch", "typedef",
     "union", "unsigned", "void", "volatile", "while", "_Bool", "_Complex", "_Imaginary",
+    // C11+
     "_Alignas", "_Alignof", "_Atomic", "_Generic", "_Noreturn", "_Static_assert",
     "_Thread_local",
 ];
 
-/// Escape a name if it collides with a C keyword.
+/// Escape C keywords by appending an underscore.  Non-keywords pass through unchanged.
+/// Use this for local variables, parameters, and struct fields — names that are
+/// scoped in C and cannot collide with library symbols.
 pub fn escape_keyword(name: &str) -> String {
     if C_KEYWORDS.contains(&name) {
-        format!("__gorget_{name}")
+        format!("{name}_")
     } else {
         name.to_string()
     }
+}
+
+/// Prefix a user-defined *function* name with `gg_` so it cannot collide with
+/// any C library symbol (e.g. `send`, `read`, `close`).  Only used for
+/// top-level function definitions and their call sites.
+pub fn escape_function(name: &str) -> String {
+    format!("gg_{name}")
 }
 
 /// Mangle a method name: `Point__distance`
@@ -101,9 +111,17 @@ mod tests {
 
     #[test]
     fn keyword_escaping() {
-        assert_eq!(escape_keyword("int"), "__gorget_int");
-        assert_eq!(escape_keyword("return"), "__gorget_return");
+        assert_eq!(escape_keyword("int"), "int_");
+        assert_eq!(escape_keyword("return"), "return_");
         assert_eq!(escape_keyword("myvar"), "myvar");
+        assert_eq!(escape_keyword("send"), "send");
+    }
+
+    #[test]
+    fn function_escaping() {
+        assert_eq!(escape_function("send"), "gg_send");
+        assert_eq!(escape_function("main"), "gg_main");
+        assert_eq!(escape_function("add"), "gg_add");
     }
 
     #[test]
