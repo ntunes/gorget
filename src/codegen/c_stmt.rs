@@ -294,7 +294,7 @@ impl CodegenContext<'_> {
                 else_body,
                 ..
             } => {
-                self.gen_for_loop_with_else(pattern, iterable, body, else_body, emitter);
+                self.gen_for_loop(pattern, iterable, body, else_body, emitter);
             }
 
             Stmt::Match {
@@ -787,84 +787,13 @@ impl CodegenContext<'_> {
         "int64_t".to_string()
     }
 
-    /// Generate a for-loop over a user-defined Iterator[T] type.
-    fn gen_for_loop_iterator(
-        &mut self,
-        pattern: &Spanned<Pattern>,
-        iterable: &Spanned<Expr>,
-        body: &Block,
-        emitter: &mut CEmitter,
-    ) {
-        let var_name = match &pattern.node {
-            Pattern::Binding(name) => c_mangle::escape_keyword(name),
-            _ => "__gorget_i".to_string(),
-        };
-        let iter_expr = self.gen_expr(iterable);
-        let type_name = self.infer_type_name_from_expr(iterable);
-        let elem_c_type = self.get_iterator_elem_c_type(iterable);
-
-        // Register Option[ElemType] so its typedef is emitted
-        let option_mangled = self.register_generic("Option", &[elem_c_type.clone()], super::GenericInstanceKind::Enum);
-        let tag_none = c_mangle::mangle_tag(&option_mangled, "None");
-        let next_fn = c_mangle::mangle_trait_method("Iterator", &type_name, "next");
-        let next_tmp = emitter.fresh_temp();
-
-        emitter.emit_line("while (1) {");
-        emitter.indent();
-        self.push_drop_scope(DropScopeKind::Loop);
-        emitter.emit_line(&format!("{option_mangled} {next_tmp} = {next_fn}(&{iter_expr});"));
-        emitter.emit_line(&format!("if ({next_tmp}.tag == {tag_none}) break;"));
-        emitter.emit_line(&format!("{elem_c_type} {var_name} = {next_tmp}.data.Some._0;"));
-        self.gen_block(body, emitter);
-        self.pop_drop_scope(emitter);
-        emitter.dedent();
-        emitter.emit_line("}");
-    }
-
-    /// Generate a for-loop over a user-defined Iterator[T] with an else clause.
-    fn gen_for_loop_iterator_with_else(
-        &mut self,
-        pattern: &Spanned<Pattern>,
-        iterable: &Spanned<Expr>,
-        body: &Block,
-        else_block: &Block,
-        flag: &str,
-        emitter: &mut CEmitter,
-    ) {
-        let var_name = match &pattern.node {
-            Pattern::Binding(name) => c_mangle::escape_keyword(name),
-            _ => "__gorget_i".to_string(),
-        };
-        let iter_expr = self.gen_expr(iterable);
-        let type_name = self.infer_type_name_from_expr(iterable);
-        let elem_c_type = self.get_iterator_elem_c_type(iterable);
-
-        let option_mangled = self.register_generic("Option", &[elem_c_type.clone()], super::GenericInstanceKind::Enum);
-        let tag_none = c_mangle::mangle_tag(&option_mangled, "None");
-        let next_fn = c_mangle::mangle_trait_method("Iterator", &type_name, "next");
-        let next_tmp = emitter.fresh_temp();
-
-        emitter.emit_line("while (1) {");
-        emitter.indent();
-        emitter.emit_line(&format!("{option_mangled} {next_tmp} = {next_fn}(&{iter_expr});"));
-        emitter.emit_line(&format!("if ({next_tmp}.tag == {tag_none}) break;"));
-        emitter.emit_line(&format!("{elem_c_type} {var_name} = {next_tmp}.data.Some._0;"));
-        self.gen_block_with_break_flag(body, flag, emitter);
-        emitter.dedent();
-        emitter.emit_line("}");
-        emitter.emit_line(&format!("if (!{flag}) {{"));
-        emitter.indent();
-        self.gen_block(else_block, emitter);
-        emitter.dedent();
-        emitter.emit_line("}");
-    }
-
-    /// Generate a for loop over a range or iterable.
+    /// Generate a for loop over a range or iterable, with optional else clause.
     fn gen_for_loop(
         &mut self,
         pattern: &Spanned<Pattern>,
         iterable: &Spanned<Expr>,
         body: &Block,
+        else_body: &Option<Block>,
         emitter: &mut CEmitter,
     ) {
         let var_name = match &pattern.node {
@@ -872,7 +801,16 @@ impl CodegenContext<'_> {
             _ => "__gorget_i".to_string(),
         };
 
-        // Check if iterable is a Range expression
+        // Else handling: emit a break-flag before the loop
+        let flag = else_body.as_ref().map(|_| {
+            let f = emitter.fresh_temp();
+            emitter.emit_line(&format!("bool {f} = false;"));
+            f
+        });
+        let has_else = flag.is_some();
+
+        // --- Iterable-specific: preamble, loop header, indent, inner preamble, bindings ---
+
         if let Expr::Range {
             start,
             end,
@@ -892,13 +830,8 @@ impl CodegenContext<'_> {
                 "for (int64_t {var_name} = {start_expr}; {var_name} {cmp} {end_expr}; {var_name}++) {{"
             ));
             emitter.indent();
-            self.push_drop_scope(DropScopeKind::Loop);
-            self.gen_block(body, emitter);
-            self.pop_drop_scope(emitter);
-            emitter.dedent();
-            emitter.emit_line("}");
+            if !has_else { self.push_drop_scope(DropScopeKind::Loop); }
         } else if self.is_string_expr(iterable) {
-            // For-in over string (char by char)
             let iter = self.gen_expr(iterable);
             let len_var = emitter.fresh_temp();
             let idx = emitter.fresh_temp();
@@ -907,143 +840,115 @@ impl CodegenContext<'_> {
                 "for (size_t {idx} = 0; {idx} < {len_var}; {idx}++) {{"
             ));
             emitter.indent();
-            self.push_drop_scope(DropScopeKind::Loop);
+            if !has_else { self.push_drop_scope(DropScopeKind::Loop); }
             emitter.emit_line(&format!("char {var_name} = {iter}[{idx}];"));
-            self.gen_block(body, emitter);
-            self.pop_drop_scope(emitter);
-            emitter.dedent();
-            emitter.emit_line("}");
         } else if self.is_gorget_array_expr(iterable) {
-            // For-in over GorgetArray
             let iter = self.gen_expr(iterable);
             let idx = emitter.fresh_temp();
             let elem_type = self.infer_vector_elem_type(iterable);
-
             emitter.emit_line(&format!(
                 "for (size_t {idx} = 0; {idx} < gorget_array_len(&{iter}); {idx}++) {{"
             ));
             emitter.indent();
-            self.push_drop_scope(DropScopeKind::Loop);
+            if !has_else { self.push_drop_scope(DropScopeKind::Loop); }
             emitter.emit_line(&format!(
                 "{elem_type} {var_name} = GORGET_ARRAY_AT({elem_type}, {iter}, {idx});"
             ));
-            self.gen_block(body, emitter);
-            self.pop_drop_scope(emitter);
-            emitter.dedent();
-            emitter.emit_line("}");
         } else if self.is_gorget_map_expr(iterable) {
-            self.gen_for_loop_dict(pattern, iterable, body, emitter);
+            let iter = self.gen_expr(iterable);
+            let idx = emitter.fresh_temp();
+            let (key_type, val_type) = self.infer_map_kv_types(iterable);
+            emitter.emit_line(&format!(
+                "for (size_t {idx} = 0; {idx} < {iter}.cap; {idx}++) {{"
+            ));
+            emitter.indent();
+            emitter.emit_line(&format!("if ({iter}.states[{idx}] != 1) continue;"));
+            if !has_else { self.push_drop_scope(DropScopeKind::Loop); }
+            if let Pattern::Tuple(elems) = &pattern.node {
+                let k_name = match &elems[0].node {
+                    Pattern::Binding(name) => c_mangle::escape_keyword(name),
+                    _ => "__gorget_k".to_string(),
+                };
+                let v_name = if elems.len() >= 2 {
+                    match &elems[1].node {
+                        Pattern::Binding(name) => c_mangle::escape_keyword(name),
+                        _ => "__gorget_v".to_string(),
+                    }
+                } else {
+                    "__gorget_v".to_string()
+                };
+                emitter.emit_line(&format!(
+                    "{key_type} {k_name} = {iter}.keys[{idx}];"
+                ));
+                emitter.emit_line(&format!(
+                    "{val_type} {v_name} = {iter}.values[{idx}];"
+                ));
+            } else {
+                emitter.emit_line(&format!(
+                    "{key_type} {var_name} = {iter}.keys[{idx}];"
+                ));
+            }
         } else if self.is_gorget_set_expr(iterable) {
-            self.gen_for_loop_set(pattern, iterable, body, emitter);
+            let iter = self.gen_expr(iterable);
+            let idx = emitter.fresh_temp();
+            let elem_type = self.infer_set_elem_type(iterable);
+            emitter.emit_line(&format!(
+                "for (size_t {idx} = 0; {idx} < {iter}.cap; {idx}++) {{"
+            ));
+            emitter.indent();
+            emitter.emit_line(&format!("if ({iter}.states[{idx}] != 1) continue;"));
+            if !has_else { self.push_drop_scope(DropScopeKind::Loop); }
+            emitter.emit_line(&format!(
+                "{elem_type} {var_name} = *({elem_type}*)((char*){iter}.keys + {idx} * {iter}.key_size);"
+            ));
         } else if self.has_iterator_impl(iterable) {
-            self.gen_for_loop_iterator(pattern, iterable, body, emitter);
+            let iter_expr = self.gen_expr(iterable);
+            let type_name = self.infer_type_name_from_expr(iterable);
+            let elem_c_type = self.get_iterator_elem_c_type(iterable);
+            let option_mangled = self.register_generic("Option", &[elem_c_type.clone()], super::GenericInstanceKind::Enum);
+            let tag_none = c_mangle::mangle_tag(&option_mangled, "None");
+            let next_fn = c_mangle::mangle_trait_method("Iterator", &type_name, "next");
+            let next_tmp = emitter.fresh_temp();
+            emitter.emit_line("while (1) {");
+            emitter.indent();
+            if !has_else { self.push_drop_scope(DropScopeKind::Loop); }
+            emitter.emit_line(&format!("{option_mangled} {next_tmp} = {next_fn}(&{iter_expr});"));
+            emitter.emit_line(&format!("if ({next_tmp}.tag == {tag_none}) break;"));
+            emitter.emit_line(&format!("{elem_c_type} {var_name} = {next_tmp}.data.Some._0;"));
         } else {
             // For-in over C array
             let iter = self.gen_expr(iterable);
             let idx = emitter.fresh_temp();
-
-            // Use sizeof-based iteration for C arrays
             emitter.emit_line(&format!(
                 "for (size_t {idx} = 0; {idx} < sizeof({iter})/sizeof({iter}[0]); {idx}++) {{"
             ));
             emitter.indent();
-            self.push_drop_scope(DropScopeKind::Loop);
+            if !has_else { self.push_drop_scope(DropScopeKind::Loop); }
             emitter.emit_line(&format!(
                 "__typeof__({iter}[0]) {var_name} = {iter}[{idx}];"
             ));
+        }
+
+        // --- Common: body ---
+        if let Some(ref flag) = flag {
+            self.gen_block_with_break_flag(body, flag, emitter);
+        } else {
             self.gen_block(body, emitter);
             self.pop_drop_scope(emitter);
+        }
+
+        // --- Common: close loop ---
+        emitter.dedent();
+        emitter.emit_line("}");
+
+        // --- Common: else block ---
+        if let (Some(flag), Some(else_block)) = (&flag, else_body) {
+            emitter.emit_line(&format!("if (!{flag}) {{"));
+            emitter.indent();
+            self.gen_block(else_block, emitter);
             emitter.dedent();
             emitter.emit_line("}");
         }
-    }
-
-    /// Generate a for-loop over a Dict (GorgetMap).
-    /// Supports both key-only (`for k in dict`) and key-value (`for (k, v) in dict`) patterns.
-    fn gen_for_loop_dict(
-        &mut self,
-        pattern: &Spanned<Pattern>,
-        iterable: &Spanned<Expr>,
-        body: &Block,
-        emitter: &mut CEmitter,
-    ) {
-        let iter = self.gen_expr(iterable);
-        let idx = emitter.fresh_temp();
-        let (key_type, val_type) = self.infer_map_kv_types(iterable);
-
-        emitter.emit_line(&format!(
-            "for (size_t {idx} = 0; {idx} < {iter}.cap; {idx}++) {{"
-        ));
-        emitter.indent();
-        emitter.emit_line(&format!("if ({iter}.states[{idx}] != 1) continue;"));
-        self.push_drop_scope(DropScopeKind::Loop);
-
-        if let Pattern::Tuple(elems) = &pattern.node {
-            // (k, v) pattern
-            let k_name = match &elems[0].node {
-                Pattern::Binding(name) => c_mangle::escape_keyword(name),
-                _ => "__gorget_k".to_string(),
-            };
-            let v_name = if elems.len() >= 2 {
-                match &elems[1].node {
-                    Pattern::Binding(name) => c_mangle::escape_keyword(name),
-                    _ => "__gorget_v".to_string(),
-                }
-            } else {
-                "__gorget_v".to_string()
-            };
-            emitter.emit_line(&format!(
-                "{key_type} {k_name} = {iter}.keys[{idx}];"
-            ));
-            emitter.emit_line(&format!(
-                "{val_type} {v_name} = {iter}.values[{idx}];"
-            ));
-        } else {
-            // key-only pattern
-            let var_name = match &pattern.node {
-                Pattern::Binding(name) => c_mangle::escape_keyword(name),
-                _ => "__gorget_i".to_string(),
-            };
-            emitter.emit_line(&format!(
-                "{key_type} {var_name} = {iter}.keys[{idx}];"
-            ));
-        }
-
-        self.gen_block(body, emitter);
-        self.pop_drop_scope(emitter);
-        emitter.dedent();
-        emitter.emit_line("}");
-    }
-
-    /// Generate a for-loop over a Set (GorgetSet, which is typedef'd to GorgetMap).
-    fn gen_for_loop_set(
-        &mut self,
-        pattern: &Spanned<Pattern>,
-        iterable: &Spanned<Expr>,
-        body: &Block,
-        emitter: &mut CEmitter,
-    ) {
-        let iter = self.gen_expr(iterable);
-        let idx = emitter.fresh_temp();
-        let elem_type = self.infer_set_elem_type(iterable);
-        let var_name = match &pattern.node {
-            Pattern::Binding(name) => c_mangle::escape_keyword(name),
-            _ => "__gorget_i".to_string(),
-        };
-
-        emitter.emit_line(&format!(
-            "for (size_t {idx} = 0; {idx} < {iter}.cap; {idx}++) {{"
-        ));
-        emitter.indent();
-        emitter.emit_line(&format!("if ({iter}.states[{idx}] != 1) continue;"));
-        self.push_drop_scope(DropScopeKind::Loop);
-        emitter.emit_line(&format!(
-            "{elem_type} {var_name} = *({elem_type}*)((char*){iter}.keys + {idx} * {iter}.key_size);"
-        ));
-        self.gen_block(body, emitter);
-        self.pop_drop_scope(emitter);
-        emitter.dedent();
-        emitter.emit_line("}");
     }
 
     /// Generate a match statement.
@@ -1254,181 +1159,6 @@ impl CodegenContext<'_> {
                 }
             }
             Pattern::Wildcard | Pattern::Literal(_) | Pattern::Rest => String::new(),
-        }
-    }
-
-    /// Generate a for loop with optional else clause.
-    fn gen_for_loop_with_else(
-        &mut self,
-        pattern: &Spanned<Pattern>,
-        iterable: &Spanned<Expr>,
-        body: &Block,
-        else_body: &Option<Block>,
-        emitter: &mut CEmitter,
-    ) {
-        if let Some(else_block) = else_body {
-            let flag = emitter.fresh_temp();
-            emitter.emit_line(&format!("bool {flag} = false;"));
-            // Emit the for loop header manually so we can use the break-flag body
-            let var_name = match &pattern.node {
-                Pattern::Binding(name) => c_mangle::escape_keyword(name),
-                _ => "__gorget_i".to_string(),
-            };
-
-            if let Expr::Range {
-                start,
-                end,
-                inclusive,
-            } = &iterable.node
-            {
-                let start_expr = start
-                    .as_ref()
-                    .map(|e| self.gen_expr(e))
-                    .unwrap_or_else(|| "0".to_string());
-                let end_expr = end
-                    .as_ref()
-                    .map(|e| self.gen_expr(e))
-                    .unwrap_or_else(|| "0".to_string());
-                let cmp = if *inclusive { "<=" } else { "<" };
-                emitter.emit_line(&format!(
-                    "for (int64_t {var_name} = {start_expr}; {var_name} {cmp} {end_expr}; {var_name}++) {{"
-                ));
-            } else if self.is_string_expr(iterable) {
-                let iter = self.gen_expr(iterable);
-                let len_var = emitter.fresh_temp();
-                let idx = emitter.fresh_temp();
-                emitter.emit_line(&format!("size_t {len_var} = strlen({iter});"));
-                emitter.emit_line(&format!(
-                    "for (size_t {idx} = 0; {idx} < {len_var}; {idx}++) {{"
-                ));
-                emitter.indent();
-                emitter.emit_line(&format!("char {var_name} = {iter}[{idx}];"));
-                self.gen_block_with_break_flag(body, &flag, emitter);
-                emitter.dedent();
-                emitter.emit_line("}");
-                emitter.emit_line(&format!("if (!{flag}) {{"));
-                emitter.indent();
-                self.gen_block(else_block, emitter);
-                emitter.dedent();
-                emitter.emit_line("}");
-                return;
-            } else if self.is_gorget_array_expr(iterable) {
-                let iter = self.gen_expr(iterable);
-                let idx = emitter.fresh_temp();
-                let elem_type = self.infer_vector_elem_type(iterable);
-                emitter.emit_line(&format!(
-                    "for (size_t {idx} = 0; {idx} < gorget_array_len(&{iter}); {idx}++) {{"
-                ));
-                emitter.indent();
-                emitter.emit_line(&format!(
-                    "{elem_type} {var_name} = GORGET_ARRAY_AT({elem_type}, {iter}, {idx});"
-                ));
-                self.gen_block_with_break_flag(body, &flag, emitter);
-                emitter.dedent();
-                emitter.emit_line("}");
-                emitter.emit_line(&format!("if (!{flag}) {{"));
-                emitter.indent();
-                self.gen_block(else_block, emitter);
-                emitter.dedent();
-                emitter.emit_line("}");
-                return;
-            } else if self.is_gorget_map_expr(iterable) {
-                let iter = self.gen_expr(iterable);
-                let idx = emitter.fresh_temp();
-                let (key_type, val_type) = self.infer_map_kv_types(iterable);
-                emitter.emit_line(&format!(
-                    "for (size_t {idx} = 0; {idx} < {iter}.cap; {idx}++) {{"
-                ));
-                emitter.indent();
-                emitter.emit_line(&format!("if ({iter}.states[{idx}] != 1) continue;"));
-                if let Pattern::Tuple(elems) = &pattern.node {
-                    let k_name = match &elems[0].node {
-                        Pattern::Binding(name) => c_mangle::escape_keyword(name),
-                        _ => "__gorget_k".to_string(),
-                    };
-                    let v_name = if elems.len() >= 2 {
-                        match &elems[1].node {
-                            Pattern::Binding(name) => c_mangle::escape_keyword(name),
-                            _ => "__gorget_v".to_string(),
-                        }
-                    } else {
-                        "__gorget_v".to_string()
-                    };
-                    emitter.emit_line(&format!(
-                        "{key_type} {k_name} = {iter}.keys[{idx}];"
-                    ));
-                    emitter.emit_line(&format!(
-                        "{val_type} {v_name} = {iter}.values[{idx}];"
-                    ));
-                } else {
-                    emitter.emit_line(&format!(
-                        "{key_type} {var_name} = {iter}.keys[{idx}];"
-                    ));
-                }
-                self.gen_block_with_break_flag(body, &flag, emitter);
-                emitter.dedent();
-                emitter.emit_line("}");
-                emitter.emit_line(&format!("if (!{flag}) {{"));
-                emitter.indent();
-                self.gen_block(else_block, emitter);
-                emitter.dedent();
-                emitter.emit_line("}");
-                return;
-            } else if self.is_gorget_set_expr(iterable) {
-                let iter = self.gen_expr(iterable);
-                let idx = emitter.fresh_temp();
-                let elem_type = self.infer_set_elem_type(iterable);
-                emitter.emit_line(&format!(
-                    "for (size_t {idx} = 0; {idx} < {iter}.cap; {idx}++) {{"
-                ));
-                emitter.indent();
-                emitter.emit_line(&format!("if ({iter}.states[{idx}] != 1) continue;"));
-                emitter.emit_line(&format!(
-                    "{elem_type} {var_name} = *({elem_type}*)((char*){iter}.keys + {idx} * {iter}.key_size);"
-                ));
-                self.gen_block_with_break_flag(body, &flag, emitter);
-                emitter.dedent();
-                emitter.emit_line("}");
-                emitter.emit_line(&format!("if (!{flag}) {{"));
-                emitter.indent();
-                self.gen_block(else_block, emitter);
-                emitter.dedent();
-                emitter.emit_line("}");
-                return;
-            } else if self.has_iterator_impl(iterable) {
-                self.gen_for_loop_iterator_with_else(pattern, iterable, body, else_block, &flag, emitter);
-                return;
-            } else {
-                let iter = self.gen_expr(iterable);
-                let idx = emitter.fresh_temp();
-                emitter.emit_line(&format!(
-                    "for (size_t {idx} = 0; {idx} < sizeof({iter})/sizeof({iter}[0]); {idx}++) {{"
-                ));
-                emitter.indent();
-                emitter.emit_line(&format!(
-                    "__typeof__({iter}[0]) {var_name} = {iter}[{idx}];"
-                ));
-                self.gen_block_with_break_flag(body, &flag, emitter);
-                emitter.dedent();
-                emitter.emit_line("}");
-                emitter.emit_line(&format!("if (!{flag}) {{"));
-                emitter.indent();
-                self.gen_block(else_block, emitter);
-                emitter.dedent();
-                emitter.emit_line("}");
-                return;
-            }
-            emitter.indent();
-            self.gen_block_with_break_flag(body, &flag, emitter);
-            emitter.dedent();
-            emitter.emit_line("}");
-            emitter.emit_line(&format!("if (!{flag}) {{"));
-            emitter.indent();
-            self.gen_block(else_block, emitter);
-            emitter.dedent();
-            emitter.emit_line("}");
-        } else {
-            self.gen_for_loop(pattern, iterable, body, emitter);
         }
     }
 
