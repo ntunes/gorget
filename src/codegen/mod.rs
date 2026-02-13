@@ -144,6 +144,10 @@ pub struct CodegenContext<'a> {
     /// When generating expressions inside a closure, identifiers in this set
     /// emit `(*__env->NAME)` instead of bare `NAME`.
     pub mutable_captures: HashSet<String>,
+    /// Parameters declared with `Ownership::MutableBorrow` in the current function.
+    /// These are emitted as `Type*` pointers and need `(*name)` for reads and
+    /// `name->field` for field access.
+    pub pointer_params: HashSet<String>,
 }
 
 /// Generate C source code from a parsed and analyzed Gorget module.
@@ -190,6 +194,7 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, strip_asserts: boo
         try_counter: 0,
         field_type_names,
         mutable_captures: HashSet::new(),
+        pointer_params: HashSet::new(),
     };
 
     let mut emitter = CEmitter::new();

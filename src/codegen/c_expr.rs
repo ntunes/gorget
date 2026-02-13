@@ -41,6 +41,8 @@ impl CodegenContext<'_> {
                 let escaped = c_mangle::escape_keyword(name);
                 if self.mutable_captures.contains(&escaped) {
                     format!("(*__env->{escaped})")
+                } else if self.pointer_params.contains(&escaped) {
+                    format!("(*{escaped})")
                 } else {
                     escaped
                 }
@@ -144,11 +146,18 @@ impl CodegenContext<'_> {
             }
 
             Expr::FieldAccess { object, field } => {
-                let obj = self.gen_expr(object);
                 let field_name = c_mangle::escape_keyword(&field.node);
                 if self.current_self_type.is_some() && matches!(object.node, Expr::SelfExpr) {
                     format!("self->{field_name}")
+                } else if let Expr::Identifier(name) = &object.node {
+                    let escaped = c_mangle::escape_keyword(name);
+                    if self.pointer_params.contains(&escaped) {
+                        format!("{escaped}->{field_name}")
+                    } else {
+                        format!("{escaped}.{field_name}")
+                    }
                 } else {
+                    let obj = self.gen_expr(object);
                     format!("{obj}.{field_name}")
                 }
             }
@@ -644,6 +653,15 @@ impl CodegenContext<'_> {
         format!("{callee_name}({})", arg_exprs.join(", "))
     }
 
+    /// Wrap a generated expression with `&` if the call arg has MutableBorrow ownership.
+    fn wrap_borrow_arg(&self, expr: String, ownership: crate::parser::ast::Ownership) -> String {
+        if matches!(ownership, crate::parser::ast::Ownership::MutableBorrow) {
+            format!("&{expr}")
+        } else {
+            expr
+        }
+    }
+
     /// Resolve call arguments: reorder named args to match param order and
     /// fill in default values for missing optional params.
     fn resolve_call_args(
@@ -662,8 +680,11 @@ impl CodegenContext<'_> {
         let has_defaults = func_info.map_or(false, |fi| fi.param_defaults.iter().any(|d| d.is_some()));
 
         if (!has_named && !has_defaults) || func_info.is_none() {
-            // Simple positional — original behavior
-            return args.iter().map(|a| self.gen_expr(&a.node.value)).collect();
+            // Simple positional — wrap with & for MutableBorrow args
+            return args.iter().map(|a| {
+                let expr = self.gen_expr(&a.node.value);
+                self.wrap_borrow_arg(expr, a.node.ownership)
+            }).collect();
         }
 
         let fi = func_info.unwrap();
@@ -678,11 +699,13 @@ impl CodegenContext<'_> {
         for arg in args {
             if let Some(ref name) = arg.node.name {
                 if let Some(pos) = param_names.iter().position(|pn| pn == &name.node) {
-                    slots[pos] = Some(self.gen_expr(&arg.node.value));
+                    let expr = self.gen_expr(&arg.node.value);
+                    slots[pos] = Some(self.wrap_borrow_arg(expr, arg.node.ownership));
                 }
             } else {
                 if positional_idx < slots.len() {
-                    slots[positional_idx] = Some(self.gen_expr(&arg.node.value));
+                    let expr = self.gen_expr(&arg.node.value);
+                    slots[positional_idx] = Some(self.wrap_borrow_arg(expr, arg.node.ownership));
                 }
                 positional_idx += 1;
             }
@@ -765,7 +788,18 @@ impl CodegenContext<'_> {
             }
         }
 
-        let recv = self.gen_expr(receiver);
+        // Check if the receiver is a pointer param (already a pointer, pass directly).
+        let is_pointer_param = matches!(&receiver.node, Expr::Identifier(name) if self.pointer_params.contains(&c_mangle::escape_keyword(name)));
+        let recv = if is_pointer_param {
+            // Don't dereference — we need the raw pointer for method calls
+            if let Expr::Identifier(name) = &receiver.node {
+                c_mangle::escape_keyword(name)
+            } else {
+                unreachable!()
+            }
+        } else {
+            self.gen_expr(receiver)
+        };
         // Try to figure out the receiver type for mangling
         let type_name = self.infer_receiver_type(receiver);
         // Check if this method comes from a trait impl (not inherent)
@@ -782,9 +816,13 @@ impl CodegenContext<'_> {
         let needs_temp = !is_lvalue(&receiver.node);
         // Inside a method body, `self` is already a pointer (const T* self),
         // so pass it directly instead of taking &self.
-        let is_self_ptr = self.current_self_type.is_some() && matches!(receiver.node, Expr::SelfExpr);
+        let is_self_ptr = (self.current_self_type.is_some() && matches!(receiver.node, Expr::SelfExpr))
+            || is_pointer_param;
         if needs_temp {
-            let arg_exprs: Vec<String> = args.iter().map(|a| self.gen_expr(&a.node.value)).collect();
+            let arg_exprs: Vec<String> = args.iter().map(|a| {
+                let expr = self.gen_expr(&a.node.value);
+                self.wrap_borrow_arg(expr, a.node.ownership)
+            }).collect();
             let mut call_args = format!("&__recv");
             for a in &arg_exprs {
                 call_args.push_str(", ");
@@ -799,7 +837,8 @@ impl CodegenContext<'_> {
             };
             let mut all_args = vec![self_arg];
             for arg in args {
-                all_args.push(self.gen_expr(&arg.node.value));
+                let expr = self.gen_expr(&arg.node.value);
+                all_args.push(self.wrap_borrow_arg(expr, arg.node.ownership));
             }
             format!("{mangled}({})", all_args.join(", "))
         }
@@ -1976,7 +2015,10 @@ impl CodegenContext<'_> {
                 let full_mangled = c_mangle::mangle_generic(&mangled, &c_type_args);
                 self.register_generic(&mangled, &c_type_args, super::GenericInstanceKind::Function);
                 let arg_exprs: Vec<String> =
-                    args.iter().map(|a| self.gen_expr(&a.node.value)).collect();
+                    args.iter().map(|a| {
+                        let expr = self.gen_expr(&a.node.value);
+                        self.wrap_borrow_arg(expr, a.node.ownership)
+                    }).collect();
                 return format!("{full_mangled}({})", arg_exprs.join(", "));
             }
             _ => {
@@ -2032,7 +2074,10 @@ impl CodegenContext<'_> {
 
         let mangled = c_mangle::mangle_generic(&base_name, &c_type_args);
         self.register_generic(&base_name, &c_type_args, super::GenericInstanceKind::Function);
-        let arg_exprs: Vec<String> = args.iter().map(|a| self.gen_expr(&a.node.value)).collect();
+        let arg_exprs: Vec<String> = args.iter().map(|a| {
+            let expr = self.gen_expr(&a.node.value);
+            self.wrap_borrow_arg(expr, a.node.ownership)
+        }).collect();
         format!("{mangled}({})", arg_exprs.join(", "))
     }
 
@@ -2044,7 +2089,16 @@ impl CodegenContext<'_> {
         type_args: &[Spanned<crate::parser::ast::Type>],
         args: &[Spanned<crate::parser::ast::CallArg>],
     ) -> String {
-        let recv = self.gen_expr(receiver);
+        let is_pointer_param = matches!(&receiver.node, Expr::Identifier(name) if self.pointer_params.contains(&c_mangle::escape_keyword(name)));
+        let recv = if is_pointer_param {
+            if let Expr::Identifier(name) = &receiver.node {
+                c_mangle::escape_keyword(name)
+            } else {
+                unreachable!()
+            }
+        } else {
+            self.gen_expr(receiver)
+        };
         let type_name = self.infer_receiver_type(receiver);
         let c_type_args: Vec<String> = type_args
             .iter()
@@ -2053,9 +2107,11 @@ impl CodegenContext<'_> {
         let base_method = c_mangle::mangle_method(&type_name, method_name);
         let mangled = c_mangle::mangle_generic(&base_method, &c_type_args);
         self.register_generic(&base_method, &c_type_args, super::GenericInstanceKind::Function);
-        let mut all_args = vec![format!("&{recv}")];
+        let self_arg = if is_pointer_param { recv.clone() } else { format!("&{recv}") };
+        let mut all_args = vec![self_arg];
         for arg in args {
-            all_args.push(self.gen_expr(&arg.node.value));
+            let expr = self.gen_expr(&arg.node.value);
+            all_args.push(self.wrap_borrow_arg(expr, arg.node.ownership));
         }
         format!("{mangled}({})", all_args.join(", "))
     }
@@ -2466,20 +2522,33 @@ impl CodegenContext<'_> {
             let parts: Vec<&str> = var_name.splitn(2, '.').collect();
             let base = parts[0];
             let field_path = parts[1];
+            // Use -> for pointer param field access
+            let base_escaped = c_mangle::escape_keyword(base);
+            let c_expr = if self.pointer_params.contains(&base_escaped) {
+                format!("{base_escaped}->{}", c_mangle::escape_keyword(field_path))
+            } else {
+                escaped.clone()
+            };
             if let Some(def_id) = self.scopes.lookup_by_name_anywhere(base) {
                 let def = self.scopes.get_def(def_id);
                 if let Some(type_id) = def.type_id {
                     if let Some(resolved_id) = self.resolve_field_type(type_id, field_path) {
-                        return self.format_for_type_id(resolved_id, &escaped);
+                        return self.format_for_type_id(resolved_id, &c_expr);
                     }
                 }
             }
         } else {
+            // Dereference pointer params for interpolation
+            let c_expr = if self.pointer_params.contains(&escaped) {
+                format!("(*{escaped})")
+            } else {
+                escaped.clone()
+            };
             // Search all scopes for the variable (codegen doesn't track current scope)
             if let Some(def_id) = self.scopes.lookup_by_name_anywhere(var_name) {
                 let def = self.scopes.get_def(def_id);
                 if let Some(type_id) = def.type_id {
-                    return self.format_for_type_id(type_id, &escaped);
+                    return self.format_for_type_id(type_id, &c_expr);
                 }
             }
         }
@@ -2496,7 +2565,12 @@ impl CodegenContext<'_> {
         }
 
         // Default: assume int64_t
-        ("%lld".to_string(), format!("(long long){escaped}"))
+        let c_expr = if self.pointer_params.contains(&escaped) {
+            format!("(*{escaped})")
+        } else {
+            escaped
+        };
+        ("%lld".to_string(), format!("(long long){c_expr}"))
     }
 
     /// Resolve a dotted field path against a type, returning the final TypeId.

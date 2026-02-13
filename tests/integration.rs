@@ -1511,6 +1511,20 @@ fn const_assign_error() {
 }
 
 #[test]
+fn mutable_borrow_params() {
+    run_gg(
+        "mutable_borrow_params.gg",
+        "\
+5
+8
+0
+0
+20
+10",
+    );
+}
+
+#[test]
 fn fmt_idempotent() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fixtures_dir = manifest_dir.join("tests/fixtures");

@@ -382,6 +382,18 @@ impl CodegenContext<'_> {
             Some(c_types::ast_type_to_c(&f.return_type.node, self.scopes))
         };
 
+        // Track mutable borrow params as pointer params for body codegen.
+        let prev_pointer_params = std::mem::take(&mut self.pointer_params);
+        for param in &f.params {
+            if param.node.name.node == "self" {
+                continue;
+            }
+            if matches!(param.node.ownership, Ownership::MutableBorrow) {
+                self.pointer_params
+                    .insert(c_mangle::escape_keyword(&param.node.name.node));
+            }
+        }
+
         match &f.body {
             FunctionBody::Block(block) => {
                 emitter.emit_line(&format!("{ret_type} {func_name}({params}) {{"));
@@ -430,6 +442,8 @@ impl CodegenContext<'_> {
                 // External declaration — no body
             }
         }
+
+        self.pointer_params = prev_pointer_params;
     }
 
     /// Build the (return_type, mangled_name, param_list) for a function.
@@ -491,7 +505,11 @@ impl CodegenContext<'_> {
                 c_types::ast_type_to_c(&param.node.type_.node, self.scopes)
             };
             let param_name = c_mangle::escape_keyword(&param.node.name.node);
-            params_vec.push(c_types::c_declare(&param_type, &param_name));
+            if matches!(param.node.ownership, Ownership::MutableBorrow) {
+                params_vec.push(format!("{param_type}* {param_name}"));
+            } else {
+                params_vec.push(c_types::c_declare(&param_type, &param_name));
+            }
         }
 
         let params = if params_vec.is_empty() {
@@ -1954,7 +1972,11 @@ static inline void {mangled}__free({mangled}* m) {{
             }
             let param_type = self.substitute_type(&param.node.type_.node, &subs);
             let param_name = c_mangle::escape_keyword(&param.node.name.node);
-            params_vec.push(c_types::c_declare(&param_type, &param_name));
+            if matches!(param.node.ownership, Ownership::MutableBorrow) {
+                params_vec.push(format!("{param_type}* {param_name}"));
+            } else {
+                params_vec.push(c_types::c_declare(&param_type, &param_name));
+            }
         }
         let params = if params_vec.is_empty() {
             "void".to_string()
@@ -1969,6 +1991,18 @@ static inline void {mangled}__free({mangled}* m) {{
         self.type_subs = subs;
         let prev_self_type = self.current_self_type.take();
         self.current_self_type = Some(mangled_type_name.to_string());
+
+        // Track mutable borrow params as pointer params for body codegen
+        let prev_pointer_params = std::mem::take(&mut self.pointer_params);
+        for param in &method.params {
+            if param.node.name.node == "self" {
+                continue;
+            }
+            if matches!(param.node.ownership, Ownership::MutableBorrow) {
+                self.pointer_params
+                    .insert(c_mangle::escape_keyword(&param.node.name.node));
+            }
+        }
 
         // Emit definition
         match &method.body {
@@ -1994,6 +2028,7 @@ static inline void {mangled}__free({mangled}* m) {{
 
         self.type_subs.clear();
         self.current_self_type = prev_self_type;
+        self.pointer_params = prev_pointer_params;
     }
 
     /// Apply type parameter substitutions to an AST Type, returning a new AST Type.
