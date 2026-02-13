@@ -2358,3 +2358,22 @@ fn trace_no_trace_flag() {
     let _ = std::fs::remove_file(&exe_path);
     let _ = std::fs::remove_file(&trace_path);
 }
+
+#[test]
+fn string_methods2() {
+    run_gg(
+        "string_methods2.gg",
+        "\
+hello
+world
+h
+6
+-1
+3
+0
+hahaha
+
+a, b, c
+a-b-c",
+    );
+}

@@ -1907,6 +1907,45 @@ impl CodegenContext<'_> {
                     Some(format!("(int64_t)__gorget_hash_str({recv})"))
                 }
             }
+            "substring" => {
+                let start_arg = args.first()
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "0".to_string());
+                let end_arg = args.get(1)
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "0".to_string());
+                Some(format!("gorget_string_slice({recv}, {start_arg}, {end_arg})"))
+            }
+            "char_at" => {
+                let arg = args.first()
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "0".to_string());
+                Some(format!("gorget_string_at({recv}, {arg})"))
+            }
+            "index_of" => {
+                let arg = args.first()
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "\"\"".to_string());
+                Some(format!("gorget_string_index_of({recv}, {arg})"))
+            }
+            "count" => {
+                let arg = args.first()
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "\"\"".to_string());
+                Some(format!("gorget_string_count({recv}, {arg})"))
+            }
+            "repeat" => {
+                let arg = args.first()
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "0".to_string());
+                Some(format!("gorget_string_repeat({recv}, {arg})"))
+            }
+            "join" => {
+                let arg = args.first()
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "gorget_array_new(sizeof(const char*))".to_string());
+                Some(format!("gorget_string_join({recv}, {arg})"))
+            }
             _ => None, // Not a known string method — fall through
         }
     }
@@ -3114,13 +3153,14 @@ impl CodegenContext<'_> {
             };
         }
         match (receiver_type, method) {
-            ("const char*", "len" | "hash") => Some(self.types.int_id),
+            ("const char*", "len" | "hash" | "index_of" | "count") => Some(self.types.int_id),
             ("const char*", "contains" | "starts_with" | "ends_with" | "is_empty") => {
                 Some(self.types.bool_id)
             }
-            ("const char*", "trim" | "to_upper" | "to_lower" | "replace") => {
+            ("const char*", "trim" | "to_upper" | "to_lower" | "replace" | "substring" | "repeat" | "join") => {
                 Some(self.types.string_id)
             }
+            ("const char*", "char_at") => Some(self.types.char_id),
             (
                 "int64_t" | "int8_t" | "int16_t" | "int32_t" |
                 "uint64_t" | "uint8_t" | "uint16_t" | "uint32_t" |

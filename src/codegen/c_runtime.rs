@@ -180,6 +180,41 @@ static inline const char* gorget_string_slice(const char* s, int64_t start, int6
     return result;
 }
 
+// ── Additional string methods ────────────────────────────────
+static inline int64_t gorget_string_index_of(const char* s, const char* needle) {
+    const char* p = strstr(s, needle);
+    if (p == NULL) return -1;
+    return (int64_t)(p - s);
+}
+
+static inline int64_t gorget_string_count(const char* s, const char* needle) {
+    int64_t count = 0;
+    size_t needle_len = strlen(needle);
+    if (needle_len == 0) return 0;
+    const char* p = s;
+    while ((p = strstr(p, needle)) != NULL) {
+        count++;
+        p += needle_len;
+    }
+    return count;
+}
+
+static inline const char* gorget_string_repeat(const char* s, int64_t n) {
+    if (n <= 0) {
+        char* empty = (char*)malloc(1);
+        empty[0] = '\0';
+        return empty;
+    }
+    size_t len = strlen(s);
+    size_t total = len * (size_t)n;
+    char* result = (char*)malloc(total + 1);
+    for (int64_t i = 0; i < n; i++) {
+        memcpy(result + i * len, s, len);
+    }
+    result[total] = '\0';
+    return result;
+}
+
 // ── Panic helper ─────────────────────────────────────────────
 static inline void gorget_panic(const char* msg) {
     fprintf(stderr, "gorget: panic: %s\n", msg);
@@ -378,6 +413,36 @@ static inline GorgetArray gorget_string_split(const char* s, const char* delim) 
 
 // ── GORGET_ARRAY_AT macro ────────────────────────────────────
 #define GORGET_ARRAY_AT(type, arr, i) (*(type*)gorget_array_get(&(arr), (i)))
+
+// ── String join (needs GorgetArray) ─────────────────────────
+static inline const char* gorget_string_join(const char* sep, GorgetArray parts) {
+    if (parts.len == 0) {
+        char* empty = (char*)malloc(1);
+        empty[0] = '\0';
+        return empty;
+    }
+    size_t sep_len = strlen(sep);
+    size_t total = 0;
+    for (size_t i = 0; i < parts.len; i++) {
+        const char* part = *(const char**)((char*)parts.data + i * parts.elem_size);
+        total += strlen(part);
+    }
+    total += sep_len * (parts.len - 1);
+    char* result = (char*)malloc(total + 1);
+    char* dst = result;
+    for (size_t i = 0; i < parts.len; i++) {
+        if (i > 0) {
+            memcpy(dst, sep, sep_len);
+            dst += sep_len;
+        }
+        const char* part = *(const char**)((char*)parts.data + i * parts.elem_size);
+        size_t plen = strlen(part);
+        memcpy(dst, part, plen);
+        dst += plen;
+    }
+    *dst = '\0';
+    return result;
+}
 
 // ── GorgetMap (open-addressing hash map) ─────────────────────
 typedef struct {
