@@ -1,0 +1,10 @@
+void main():
+    auto code = exec("echo hello > /dev/null")
+    print("{code}")
+    str path = getenv("PATH")
+    if path.len() > 0:
+        print("has_path")
+    else:
+        print("no_path")
+    auto code2 = exec("exit 42")
+    print("{code2}")

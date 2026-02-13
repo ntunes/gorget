@@ -1,0 +1,21 @@
+void main():
+    char c1 = 'A'
+    char c2 = '3'
+    char c3 = ' '
+    char c4 = '!'
+    print("{c1.is_alpha()}")
+    print("{c2.is_alpha()}")
+    print("{c1.is_digit()}")
+    print("{c2.is_digit()}")
+    print("{c1.is_alphanumeric()}")
+    print("{c4.is_alphanumeric()}")
+    print("{c3.is_whitespace()}")
+    print("{c4.is_whitespace()}")
+    int code = ord('A')
+    print("{code}")
+    char back = chr(65)
+    print("{back}")
+    int n = parse_int("42")
+    print("{n}")
+    int neg = parse_int("-7")
+    print("{neg}")

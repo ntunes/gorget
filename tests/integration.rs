@@ -2009,3 +2009,33 @@ fn cli_args() {
 hello
 world");
 }
+
+#[test]
+fn exec_builtin() {
+    run_gg("exec_builtin.gg", "\
+0
+has_path
+42");
+}
+
+#[test]
+fn eprint_builtin() {
+    run_gg("eprint_builtin.gg", "stdout_line");
+}
+
+#[test]
+fn char_methods() {
+    run_gg("char_methods.gg", "\
+true
+false
+false
+true
+true
+false
+true
+false
+65
+A
+42
+-7");
+}

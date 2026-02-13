@@ -576,6 +576,52 @@ impl CodegenContext<'_> {
                 "args" => {
                     return "gorget_args()".to_string();
                 }
+                "exec" => {
+                    if let Some(arg) = args.first() {
+                        let cmd = self.gen_expr(&arg.node.value);
+                        return format!("gorget_exec({cmd})");
+                    }
+                }
+                "exit" => {
+                    if let Some(arg) = args.first() {
+                        let code = self.gen_expr(&arg.node.value);
+                        return format!("exit((int)({code}))");
+                    }
+                    return "exit(0)".to_string();
+                }
+                "eprint" | "eprintln" => {
+                    return self.gen_eprint_call(args, name == "eprintln");
+                }
+                "ord" => {
+                    if let Some(arg) = args.first() {
+                        let c = self.gen_expr(&arg.node.value);
+                        return format!("(int64_t)({c})");
+                    }
+                }
+                "chr" => {
+                    if let Some(arg) = args.first() {
+                        let n = self.gen_expr(&arg.node.value);
+                        return format!("(char)({n})");
+                    }
+                }
+                "parse_int" => {
+                    // Allow user-defined parse_int to shadow the builtin
+                    let is_user_defined = self.scopes.lookup(name)
+                        .map(|did| self.function_info.contains_key(&did))
+                        .unwrap_or(false);
+                    if !is_user_defined {
+                        if let Some(arg) = args.first() {
+                            let s = self.gen_expr(&arg.node.value);
+                            return format!("gorget_parse_int({s})");
+                        }
+                    }
+                }
+                "getenv" => {
+                    if let Some(arg) = args.first() {
+                        let name_expr = self.gen_expr(&arg.node.value);
+                        return format!("gorget_getenv({name_expr})");
+                    }
+                }
                 _ => {}
             }
 
@@ -931,8 +977,12 @@ impl CodegenContext<'_> {
                 i.self_type_name == type_name && i.trait_name.as_deref() == Some("Iterator")
             );
 
+        let is_char = c_type.as_deref() == Some("char")
+            && matches!(method_name, "is_alpha" | "is_digit" | "is_alphanumeric" | "is_whitespace");
+
         let is_primitive_hashable = !is_vector && !is_map && !is_set && !is_string
             && !is_option && !is_result && !is_box && !is_file && !is_iterator
+            && !is_char
             && method_name == "hash"
             && matches!(c_type.as_deref(), Some(
                 "int64_t" | "int8_t" | "int16_t" | "int32_t" |
@@ -941,13 +991,23 @@ impl CodegenContext<'_> {
                 "bool" | "char32_t"
             ));
 
-        if !is_vector && !is_map && !is_set && !is_string && !is_option && !is_result && !is_box && !is_file && !is_iterator && !is_primitive_hashable {
+        if !is_vector && !is_map && !is_set && !is_string && !is_option && !is_result && !is_box && !is_file && !is_iterator && !is_primitive_hashable && !is_char {
             return None;
         }
 
         let recv = self.gen_expr(receiver);
         let needs_temp = !is_lvalue(&receiver.node);
 
+        if is_char {
+            let c_func = match method_name {
+                "is_alpha" => "isalpha",
+                "is_digit" => "isdigit",
+                "is_alphanumeric" => "isalnum",
+                "is_whitespace" => "isspace",
+                _ => unreachable!(),
+            };
+            return Some(format!("((bool){c_func}((int)({recv})))"));
+        }
         if is_primitive_hashable {
             return Some(format!(
                 "({{ __typeof__({recv}) __hv = {recv}; (int64_t)__gorget_fnv1a(&__hv, sizeof(__hv)); }})"
@@ -1068,11 +1128,15 @@ impl CodegenContext<'_> {
                     // Check builtin return types first
                     match name.as_str() {
                         "path_parent" | "path_basename" | "path_extension"
-                        | "path_stem" | "path_join" | "read_file" | "format" => {
+                        | "path_stem" | "path_join" | "read_file" | "format"
+                        | "getenv" => {
                             return Some(self.types.string_id);
                         }
                         "file_exists" | "delete_file" => {
                             return Some(self.types.bool_id);
+                        }
+                        "exec" | "parse_int" | "ord" => {
+                            return Some(self.types.int_id);
                         }
                         _ => {}
                     }
@@ -2501,7 +2565,7 @@ impl CodegenContext<'_> {
         // Check if the argument is a string literal with interpolations
         if let Expr::StringLiteral(s) = &arg.node {
             // print() always adds a newline
-            return self.gen_printf_from_string_lit(s, true);
+            return self.gen_printf_from_string_lit(s, true, None);
         }
 
         // Non-string argument: try to print as the correct type
@@ -2514,6 +2578,40 @@ impl CodegenContext<'_> {
         }
 
         format!("printf(\"%lld\\n\", (long long){expr})")
+    }
+
+    /// Generate an `eprint`/`eprintln` call that outputs to stderr.
+    pub fn gen_eprint_call(
+        &mut self,
+        args: &[Spanned<crate::parser::ast::CallArg>],
+        is_println: bool,
+    ) -> String {
+        if args.is_empty() {
+            return if is_println {
+                "fprintf(stderr, \"\\n\")".to_string()
+            } else {
+                "fprintf(stderr, \"\")".to_string()
+            };
+        }
+
+        let arg = &args[0].node.value;
+
+        // Check if the argument is a string literal with interpolations
+        if let Expr::StringLiteral(s) = &arg.node {
+            return self.gen_printf_from_string_lit(s, is_println, Some("stderr"));
+        }
+
+        // Non-string argument: try to print as the correct type
+        let expr = self.gen_expr(arg);
+
+        let nl = if is_println { "\\n" } else { "" };
+
+        if let Some(type_id) = self.infer_interp_expr_type(arg) {
+            let (fmt, arg_expr) = self.format_for_type_id(type_id, &expr);
+            return format!("fprintf(stderr, \"{fmt}{nl}\", {arg_expr})");
+        }
+
+        format!("fprintf(stderr, \"%lld{nl}\", (long long){expr})")
     }
 
     /// Generate a `gorget_format(...)` call that returns `const char*`.
@@ -2569,8 +2667,9 @@ impl CodegenContext<'_> {
         }
     }
 
-    /// Generate printf from a StringLit with possible interpolation segments.
-    fn gen_printf_from_string_lit(&mut self, s: &StringLit, is_println: bool) -> String {
+    /// Generate printf/fprintf from a StringLit with possible interpolation segments.
+    /// When `stream` is `None`, emits `printf(...)`. When `Some("stderr")`, emits `fprintf(stderr, ...)`.
+    fn gen_printf_from_string_lit(&mut self, s: &StringLit, is_println: bool, stream: Option<&str>) -> String {
         let mut format_parts = Vec::new();
         let mut printf_args = Vec::new();
 
@@ -2593,10 +2692,14 @@ impl CodegenContext<'_> {
         }
 
         let format_str = format_parts.join("");
+        let (func, prefix) = match stream {
+            Some(s) => ("fprintf", format!("{s}, ")),
+            None => ("printf", String::new()),
+        };
         if printf_args.is_empty() {
-            format!("printf(\"{format_str}\")")
+            format!("{func}({prefix}\"{format_str}\")")
         } else {
-            format!("printf(\"{format_str}\", {})", printf_args.join(", "))
+            format!("{func}({prefix}\"{format_str}\", {})", printf_args.join(", "))
         }
     }
 
@@ -2868,6 +2971,9 @@ impl CodegenContext<'_> {
                 "double" | "float" | "bool" | "char32_t",
                 "hash",
             ) => Some(self.types.int_id),
+            ("char" | "char32_t", "is_alpha" | "is_digit" | "is_alphanumeric" | "is_whitespace") => {
+                Some(self.types.bool_id)
+            }
             _ => None,
         }
     }

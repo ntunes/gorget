@@ -1,7 +1,7 @@
 # TODO
 
 ## High Priority — Self-hosting blockers
-(none currently)
+- Minimal stdlib module system: move file I/O, path ops, OS builtins out of hardcoded compiler builtins into importable modules (`std.fs`, `std.path`, `std.os`); keep only builtins that need special codegen (print/println/eprint/eprintln, format, len); requires module-level function definitions that compile to C without special-casing in gen_call [added: 2026-02-13]
 
 ## Medium Priority — Language ergonomics & tooling
 - `via` delegation in equip blocks: auto-forward trait methods through a struct field [added: 2026-02-10]

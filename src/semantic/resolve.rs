@@ -1057,6 +1057,8 @@ fn is_builtin(name: &str) -> bool {
         | "readdir"
         | "args"
         | "format"
+        | "exec" | "exit" | "eprint" | "eprintln"
+        | "ord" | "chr" | "parse_int" | "getenv"
     )
 }
 
