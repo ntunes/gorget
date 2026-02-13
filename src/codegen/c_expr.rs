@@ -645,6 +645,43 @@ impl CodegenContext<'_> {
                             return format!("gorget_getenv({name_expr})");
                         }
                     }
+                    // std.math — integer
+                    "abs" => {
+                        if let Some(arg) = args.first() {
+                            let x = self.gen_expr(&arg.node.value);
+                            return format!("gorget_abs({x})");
+                        }
+                    }
+                    "min" => {
+                        if args.len() >= 2 {
+                            let a = self.gen_expr(&args[0].node.value);
+                            let b = self.gen_expr(&args[1].node.value);
+                            return format!("gorget_min({a}, {b})");
+                        }
+                    }
+                    "max" => {
+                        if args.len() >= 2 {
+                            let a = self.gen_expr(&args[0].node.value);
+                            let b = self.gen_expr(&args[1].node.value);
+                            return format!("gorget_max({a}, {b})");
+                        }
+                    }
+                    // std.math — float (1-arg)
+                    "sqrt" | "floor" | "ceil" | "round" | "log" | "log2" | "log10"
+                    | "sin" | "cos" | "tan" | "asin" | "acos" | "atan" | "fabs" => {
+                        if let Some(arg) = args.first() {
+                            let x = self.gen_expr(&arg.node.value);
+                            return format!("gorget_{name}({x})");
+                        }
+                    }
+                    // std.math — float (2-arg)
+                    "pow" | "atan2" | "fmin" | "fmax" => {
+                        if args.len() >= 2 {
+                            let a = self.gen_expr(&args[0].node.value);
+                            let b = self.gen_expr(&args[1].node.value);
+                            return format!("gorget_{name}({a}, {b})");
+                        }
+                    }
                     _ => {}
                 }
             }

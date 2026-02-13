@@ -1,0 +1,29 @@
+from std.math import abs, min, max, sqrt, pow, floor, ceil, round, sin, cos, log2, log10, fabs, fmin, fmax
+
+void main():
+    # Integer math
+    print("{abs(-42)}")
+    print("{abs(10)}")
+    print("{min(3, 7)}")
+    print("{max(3, 7)}")
+
+    # Float math
+    print("{sqrt(4.0)}")
+    print("{pow(2.0, 10.0)}")
+    print("{floor(3.7)}")
+    print("{ceil(3.2)}")
+    print("{round(3.5)}")
+    print("{round(3.4)}")
+
+    # Trig (sin(0) = 0, cos(0) = 1)
+    print("{sin(0.0)}")
+    print("{cos(0.0)}")
+
+    # Log
+    print("{log2(8.0)}")
+    print("{log10(1000.0)}")
+
+    # fabs/fmin/fmax
+    print("{fabs(-2.5)}")
+    print("{fmin(1.5, 2.5)}")
+    print("{fmax(1.5, 2.5)}")

@@ -1782,6 +1782,32 @@ The following functions are available via `import`:
 | `time` | `int()` | Current Unix timestamp in seconds |
 | `sleep_ms` | `void(int)` | Sleep for milliseconds |
 
+**`std.math`** — Math
+
+| Function | Signature | Description |
+|---|---|---|
+| `abs` | `int(int)` | Absolute value (integer) |
+| `min` | `int(int, int)` | Minimum of two integers |
+| `max` | `int(int, int)` | Maximum of two integers |
+| `sqrt` | `float(float)` | Square root |
+| `pow` | `float(float, float)` | Exponentiation |
+| `floor` | `float(float)` | Round down |
+| `ceil` | `float(float)` | Round up |
+| `round` | `float(float)` | Round to nearest |
+| `log` | `float(float)` | Natural logarithm |
+| `log2` | `float(float)` | Base-2 logarithm |
+| `log10` | `float(float)` | Base-10 logarithm |
+| `sin` | `float(float)` | Sine |
+| `cos` | `float(float)` | Cosine |
+| `tan` | `float(float)` | Tangent |
+| `asin` | `float(float)` | Arcsine |
+| `acos` | `float(float)` | Arccosine |
+| `atan` | `float(float)` | Arctangent |
+| `atan2` | `float(float, float)` | Two-argument arctangent |
+| `fabs` | `float(float)` | Absolute value (float) |
+| `fmin` | `float(float, float)` | Minimum of two floats |
+| `fmax` | `float(float, float)` | Maximum of two floats |
+
 ---
 
 ## 16. Compilation Model

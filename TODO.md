@@ -9,6 +9,14 @@
 - **scan_for_generics / scan_for_tuples duplication** (c_item.rs ~860-1044 vs ~1717-1879): Nearly identical AST traversal code exists for generic discovery and tuple discovery — two ~200-line walkers doing the same recursive descent with different leaf actions. A shared visitor pattern could consolidate this but it's a bigger refactor. Discuss whether it's worth the abstraction. [added: 2026-02-13]
 - **No cycle detection in collect_all_trait_methods** (c_item.rs:1905): Recursive trait method collection via `extends` assumes acyclic graph. If a trait accidentally extends itself (directly or transitively), this infinite-loops. Semantic analysis likely prevents it, but a `visited: HashSet` would be cheap insurance. Discuss whether to fix here or in semantic. [added: 2026-02-13]
 
+## Medium Priority — Stdlib additions
+- **`std.io.input`** / **`readline`**: read a line from stdin as `str`. Unlocks interactive programs beyond raw-terminal games [added: 2026-02-13]
+- **`std.conv` additions**: `parse_float(str) -> float`, `to_str(int) -> str`, `to_str(float) -> str` [added: 2026-02-13]
+- **`std.random.rand_range(int, int) -> int`**: random integer in a range [added: 2026-02-13]
+- **`std.os` additions**: `getcwd() -> str`, `setenv(str, str)`, `platform() -> str` [added: 2026-02-13]
+- **`std.time.time_ms`**: millisecond-precision timestamp for benchmarking [added: 2026-02-13]
+- **`std.fmt`** module: `Displayable` trait, `format` function — referenced in formatter tests but not implemented [added: 2026-02-13]
+
 ## Medium Priority — Language ergonomics & tooling
 - `via` delegation in equip blocks: auto-forward trait methods through a struct field [added: 2026-02-10]
 - `gg` package management subcommands (`gg new`, `gg add`, `gg update`, `gg publish`, etc.) [added: 2026-02-10]

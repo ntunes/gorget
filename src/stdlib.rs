@@ -14,7 +14,7 @@ pub fn is_stdlib_module(segments: &[String]) -> bool {
     if segments.len() != 2 || segments[0] != "std" {
         return false;
     }
-    matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv" | "io" | "random" | "time" | "collections")
+    matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv" | "io" | "random" | "time" | "collections" | "math")
 }
 
 /// Generate a synthetic `Module` for a stdlib module.
@@ -31,6 +31,7 @@ pub fn generate_stdlib_module(segments: &[String]) -> Option<Module> {
         "random" => Some(gen_random_module()),
         "time" => Some(gen_time_module()),
         "collections" => Some(gen_collections_module()),
+        "math" => Some(gen_math_module()),
         _ => None,
     }
 }
@@ -119,6 +120,34 @@ fn gen_time_module() -> Module {
     make_module(vec![
         decl_fn("time", &[], ty_int()),
         decl_fn("sleep_ms", &[("ms", ty_int())], ty_void()),
+    ])
+}
+
+fn gen_math_module() -> Module {
+    make_module(vec![
+        // Integer math
+        decl_fn("abs", &[("x", ty_int())], ty_int()),
+        decl_fn("min", &[("a", ty_int()), ("b", ty_int())], ty_int()),
+        decl_fn("max", &[("a", ty_int()), ("b", ty_int())], ty_int()),
+        // Float math
+        decl_fn("sqrt", &[("x", ty_float())], ty_float()),
+        decl_fn("pow", &[("base", ty_float()), ("exp", ty_float())], ty_float()),
+        decl_fn("floor", &[("x", ty_float())], ty_float()),
+        decl_fn("ceil", &[("x", ty_float())], ty_float()),
+        decl_fn("round", &[("x", ty_float())], ty_float()),
+        decl_fn("log", &[("x", ty_float())], ty_float()),
+        decl_fn("log2", &[("x", ty_float())], ty_float()),
+        decl_fn("log10", &[("x", ty_float())], ty_float()),
+        decl_fn("sin", &[("x", ty_float())], ty_float()),
+        decl_fn("cos", &[("x", ty_float())], ty_float()),
+        decl_fn("tan", &[("x", ty_float())], ty_float()),
+        decl_fn("asin", &[("x", ty_float())], ty_float()),
+        decl_fn("acos", &[("x", ty_float())], ty_float()),
+        decl_fn("atan", &[("x", ty_float())], ty_float()),
+        decl_fn("atan2", &[("y", ty_float()), ("x", ty_float())], ty_float()),
+        decl_fn("fabs", &[("x", ty_float())], ty_float()),
+        decl_fn("fmin", &[("a", ty_float()), ("b", ty_float())], ty_float()),
+        decl_fn("fmax", &[("a", ty_float()), ("b", ty_float())], ty_float()),
     ])
 }
 
@@ -226,6 +255,10 @@ fn ty_char() -> Type {
     Type::Primitive(PrimitiveType::Char)
 }
 
+fn ty_float() -> Type {
+    Type::Primitive(PrimitiveType::Float)
+}
+
 fn ty_void() -> Type {
     Type::Primitive(PrimitiveType::Void)
 }
@@ -250,6 +283,7 @@ mod tests {
         assert!(is_stdlib_module(&["std".into(), "io".into()]));
         assert!(is_stdlib_module(&["std".into(), "random".into()]));
         assert!(is_stdlib_module(&["std".into(), "time".into()]));
+        assert!(is_stdlib_module(&["std".into(), "math".into()]));
         assert!(!is_stdlib_module(&["std".into(), "foo".into()]));
         assert!(!is_stdlib_module(&["foo".into(), "fs".into()]));
         assert!(!is_stdlib_module(&["std".into()]));
@@ -304,6 +338,21 @@ mod tests {
         }).collect();
         assert!(names.contains(&"time".to_string()));
         assert!(names.contains(&"sleep_ms".to_string()));
+    }
+
+    #[test]
+    fn generate_math() {
+        let m = generate_stdlib_module(&["std".into(), "math".into()]).unwrap();
+        assert_eq!(m.items.len(), 21);
+        let names: Vec<_> = m.items.iter().map(|i| match &i.node {
+            Item::Function(f) => f.name.node.clone(),
+            _ => panic!("expected function"),
+        }).collect();
+        assert!(names.contains(&"abs".to_string()));
+        assert!(names.contains(&"sqrt".to_string()));
+        assert!(names.contains(&"sin".to_string()));
+        assert!(names.contains(&"atan2".to_string()));
+        assert!(names.contains(&"fmin".to_string()));
     }
 
     #[test]
