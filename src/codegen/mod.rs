@@ -157,10 +157,14 @@ pub struct CodegenContext<'a> {
     /// Top-level function names (not main, not methods) — these get a `gg_` prefix
     /// in C to avoid collisions with C library symbols.
     pub function_names: HashSet<String>,
+    /// Whether this module contains `test` blocks (drives test runner generation).
+    pub is_test_module: bool,
+    /// Tags to filter which tests run (empty = run all).
+    pub test_tag_filter: Vec<String>,
 }
 
 /// Generate C source code from a parsed and analyzed Gorget module.
-pub fn generate_c(module: &Module, analysis: &AnalysisResult, strip_asserts: bool, overflow_wrap: bool, trace: bool, trace_filename: &str) -> String {
+pub fn generate_c(module: &Module, analysis: &AnalysisResult, strip_asserts: bool, overflow_wrap: bool, trace: bool, trace_filename: &str, test_tags: &[String]) -> String {
     let mut field_type_names = FxHashMap::default();
     for item in &module.items {
         if let Item::Struct(s) = &item.node {
@@ -184,6 +188,8 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, strip_asserts: boo
             }
         }
     }
+
+    let is_test_module = module.items.iter().any(|i| matches!(&i.node, Item::Test(_)));
 
     let mut ctx = CodegenContext {
         scopes: &analysis.scopes,
@@ -219,6 +225,8 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, strip_asserts: boo
         mutable_captures: HashSet::new(),
         pointer_params: HashSet::new(),
         function_names,
+        is_test_module,
+        test_tag_filter: test_tags.to_vec(),
     };
 
     let mut emitter = CEmitter::new();
@@ -227,10 +235,28 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, strip_asserts: boo
     ctx.discover_generic_usages(module);
     ctx.discover_tuple_types(module);
 
-    // 1. Runtime preamble (includes)
-    emitter.emit(c_runtime::RUNTIME);
+    // 1. Runtime preamble (includes, types, string helpers)
+    emitter.emit(c_runtime::RUNTIME_PREAMBLE);
 
-    // 1b. Trace runtime (only when trace is enabled)
+    // 1a. Panic handler (test mode uses setjmp recovery, normal uses exit)
+    if is_test_module {
+        emitter.emit(c_runtime::PANIC_TEST);
+    } else {
+        emitter.emit(c_runtime::PANIC_NORMAL);
+    }
+
+    // 1b. Runtime core (checked arithmetic, collections, etc.)
+    emitter.emit(c_runtime::RUNTIME_CORE);
+
+    // 1c. Test process runtime (when std.test.process is imported)
+    let has_test_process = module.items.iter().any(|i| {
+        matches!(&i.node, Item::Struct(s) if s.name.node == "ProcessResult" && s.span == crate::span::Span::dummy())
+    });
+    if has_test_process {
+        emitter.emit(c_runtime::TEST_PROCESS_RUNTIME);
+    }
+
+    // 1d. Trace runtime (only when trace is enabled)
     if ctx.trace {
         emitter.emit(c_runtime::TRACE_RUNTIME);
     }
@@ -309,7 +335,7 @@ mod tests {
             result.errors
         );
 
-        generate_c(&module, &result, false, false, false, "")
+        generate_c(&module, &result, false, false, false, "", &[])
     }
 
     #[test]

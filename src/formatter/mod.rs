@@ -152,7 +152,38 @@ impl Formatter {
                 }
                 self.emitter.newline();
             }
+            Item::Test(t) => self.format_test(t),
+            Item::SuiteSetup(s) => self.format_suite_setup(s),
+            Item::SuiteTeardown(s) => self.format_suite_teardown(s),
         }
+    }
+
+    fn format_test(&mut self, t: &TestDef) {
+        self.format_doc_comment(&t.doc_comment);
+        self.format_attributes(&t.attributes);
+        self.emitter.write("test \"");
+        self.emitter.write(&t.name.node);
+        self.emitter.write("\":");
+        self.emitter.newline();
+        self.emitter.indent();
+        self.format_block_stmts(&t.body);
+        self.emitter.dedent();
+    }
+
+    fn format_suite_setup(&mut self, s: &SuiteSetup) {
+        self.emitter.write("suite setup:");
+        self.emitter.newline();
+        self.emitter.indent();
+        self.format_block_stmts(&s.body);
+        self.emitter.dedent();
+    }
+
+    fn format_suite_teardown(&mut self, s: &SuiteTeardown) {
+        self.emitter.write("suite teardown:");
+        self.emitter.newline();
+        self.emitter.indent();
+        self.format_block_stmts(&s.body);
+        self.emitter.dedent();
     }
 
     fn format_doc_comment(&mut self, doc: &Option<String>) {

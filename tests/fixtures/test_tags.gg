@@ -1,0 +1,10 @@
+@tag("smoke")
+test "smoke test":
+    assert true
+
+@tag("slow")
+test "slow test":
+    assert true
+
+test "untagged test":
+    assert true

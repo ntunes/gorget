@@ -77,6 +77,7 @@ fn try_build(
     overflow_checked: bool,
     trace: bool,
     no_trace: bool,
+    test_tags: &[String],
 ) -> Result<PathBuf, String> {
     let mut parser = Parser::new(source);
     let module = parser.parse_module();
@@ -138,7 +139,7 @@ fn try_build(
     };
 
     // Generate C code
-    let c_code = gorget::codegen::generate_c(&module, &result, strip_asserts, overflow_wrap, trace, &trace_filename);
+    let c_code = gorget::codegen::generate_c(&module, &result, strip_asserts, overflow_wrap, trace, &trace_filename, test_tags);
     let c_path = dir.join(format!("{stem}.c"));
     // Canonicalize to an absolute path so Command::new() doesn't search $PATH.
     // For a bare filename like "hello.gg", dir is "." and exe_path would be "hello",
@@ -194,8 +195,9 @@ fn build(
     overflow_checked: bool,
     trace: bool,
     no_trace: bool,
+    test_tags: &[String],
 ) -> PathBuf {
-    try_build(filename, source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace)
+    try_build(filename, source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, test_tags)
         .unwrap_or_else(|e| {
             eprintln!("{e}");
             process::exit(1);
@@ -211,6 +213,7 @@ fn is_definition_line(line: &str) -> bool {
     // Keywords that always start definitions
     let def_keywords = [
         "struct ", "enum ", "trait ", "equip ", "import ", "directive ", "fn ",
+        "test ", "suite ",
     ];
     for kw in &def_keywords {
         if trimmed.starts_with(kw) {
@@ -391,7 +394,7 @@ fn run_repl() {
         let gg_path_str = gg_path.display().to_string();
 
         // Try to build
-        match try_build(&gg_path_str, &source, false, false, false, false, false, false) {
+        match try_build(&gg_path_str, &source, false, false, false, false, false, false, &[]) {
             Err(e) => {
                 eprintln!("{e}");
                 // Don't update buffers on error
@@ -475,7 +478,7 @@ fn main() {
         let overflow_checked = args.iter().any(|a| a == "--overflow=checked");
         let trace = args.iter().any(|a| a == "--trace");
         let no_trace = args.iter().any(|a| a == "--no-trace");
-        let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace);
+        let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, &[]);
         let status = Command::new(&exe_path)
             .status()
             .unwrap_or_else(|e| {
@@ -569,11 +572,35 @@ fn main() {
             }
         }
         "build" => {
-            let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace);
+            let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, &[]);
             println!("Built: {}", exe_path.display());
         }
         "run" => {
-            let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace);
+            let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, &[]);
+            let status = Command::new(&exe_path)
+                .status()
+                .unwrap_or_else(|e| {
+                    eprintln!("Failed to execute {}: {e}", exe_path.display());
+                    process::exit(1);
+                });
+            process::exit(status.code().unwrap_or(1));
+        }
+        "test" => {
+            // Collect --tag values
+            let mut test_tags = Vec::new();
+            let mut i = 0;
+            while i < args.len() {
+                if args[i] == "--tag" && i + 1 < args.len() {
+                    test_tags.push(args[i + 1].clone());
+                    i += 2;
+                } else if args[i].starts_with("--tag=") {
+                    test_tags.push(args[i]["--tag=".len()..].to_string());
+                    i += 1;
+                } else {
+                    i += 1;
+                }
+            }
+            let exe_path = build(filename, &source, false, false, false, false, false, false, &test_tags);
             let status = Command::new(&exe_path)
                 .status()
                 .unwrap_or_else(|e| {
@@ -596,7 +623,7 @@ fn main() {
         }
         _ => {
             eprintln!("Unknown command: {command}");
-            eprintln!("Commands: lex, parse, check, build, run, fmt");
+            eprintln!("Commands: lex, parse, check, build, run, test, fmt");
             process::exit(1);
         }
     }

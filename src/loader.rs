@@ -151,7 +151,7 @@ impl ModuleLoader {
     ) -> Result<(), LoadError> {
         // Intercept virtual stdlib modules before filesystem resolution
         if crate::stdlib::is_stdlib_module(segments) {
-            let virtual_path = PathBuf::from(format!("<std.{}>", segments[1]));
+            let virtual_path = PathBuf::from(format!("<{}>", segments.join(".")));
             if self.loaded.contains(&virtual_path) {
                 return Ok(());
             }

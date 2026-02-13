@@ -102,6 +102,45 @@ pub fn analyze(module: &mut Module) -> AnalysisResult {
         }
     }
 
+    // Validate test blocks
+    {
+        let has_tests = module.items.iter().any(|i| matches!(&i.node, Item::Test(_)));
+        let has_main = module.items.iter().any(|i| matches!(&i.node, Item::Function(f) if f.name.node == "main"));
+        if has_tests && has_main {
+            if let Some(item) = module.items.iter().find(|i| matches!(&i.node, Item::Function(f) if f.name.node == "main")) {
+                errors.push(SemanticError {
+                    kind: SemanticErrorKind::TestMainConflict,
+                    span: item.span,
+                });
+            }
+        }
+        let mut seen_setup = false;
+        let mut seen_teardown = false;
+        for item in &module.items {
+            match &item.node {
+                Item::SuiteSetup(_) => {
+                    if seen_setup {
+                        errors.push(SemanticError {
+                            kind: SemanticErrorKind::DuplicateSuiteBlock { kind: "setup".to_string() },
+                            span: item.span,
+                        });
+                    }
+                    seen_setup = true;
+                }
+                Item::SuiteTeardown(_) => {
+                    if seen_teardown {
+                        errors.push(SemanticError {
+                            kind: SemanticErrorKind::DuplicateSuiteBlock { kind: "teardown".to_string() },
+                            span: item.span,
+                        });
+                    }
+                    seen_teardown = true;
+                }
+                _ => {}
+            }
+        }
+    }
+
     // Pass 1: Collect top-level definitions
     let resolve_ctx = resolve::collect_top_level(module, &mut scopes, &mut types, &mut errors);
 

@@ -26,6 +26,9 @@ pub enum Item {
     StaticDecl(StaticDecl),
     ExternBlock(ExternBlock),
     Directive(Directive),
+    Test(TestDef),
+    SuiteSetup(SuiteSetup),
+    SuiteTeardown(SuiteTeardown),
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -36,6 +39,31 @@ pub enum Item {
 pub struct Directive {
     pub name: String,
     pub value: Option<String>,
+    pub span: Span,
+}
+
+// ══════════════════════════════════════════════════════════════
+// Test Definitions
+// ══════════════════════════════════════════════════════════════
+
+#[derive(Debug, Clone)]
+pub struct TestDef {
+    pub attributes: Vec<Spanned<Attribute>>,
+    pub name: Spanned<String>,
+    pub body: Block,
+    pub doc_comment: Option<String>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct SuiteSetup {
+    pub body: Block,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct SuiteTeardown {
+    pub body: Block,
     pub span: Span,
 }
 

@@ -290,6 +290,10 @@ pub enum Keyword {
     Moving,
     Mutable,
 
+    // Testing
+    Test,
+    Suite,
+
     // Special identifiers
     It,
     Panic,
@@ -382,6 +386,8 @@ impl Keyword {
             "RwLock" => Some(Keyword::RwLock),
             "moving" => Some(Keyword::Moving),
             "mutable" => Some(Keyword::Mutable),
+            "test" => Some(Keyword::Test),
+            "suite" => Some(Keyword::Suite),
             "it" => Some(Keyword::It),
             "panic" => Some(Keyword::Panic),
             "assert" => Some(Keyword::Assert),
@@ -475,6 +481,8 @@ impl fmt::Display for Keyword {
             Keyword::RwLock => "RwLock",
             Keyword::Moving => "moving",
             Keyword::Mutable => "mutable",
+            Keyword::Test => "test",
+            Keyword::Suite => "suite",
             Keyword::It => "it",
             Keyword::Panic => "panic",
             Keyword::Assert => "assert",

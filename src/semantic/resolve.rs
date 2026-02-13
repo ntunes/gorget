@@ -299,6 +299,10 @@ fn collect_item(
         Item::Directive(_) => {
             // Directives are handled during codegen, not name resolution.
         }
+
+        Item::Test(_) | Item::SuiteSetup(_) | Item::SuiteTeardown(_) => {
+            // Test items don't define top-level names.
+        }
     }
 }
 
@@ -361,6 +365,21 @@ fn resolve_item_body(
         }
         Item::StaticDecl(s) => {
             resolve_expr(&s.value, scopes, errors, resolution_map);
+        }
+        Item::Test(t) => {
+            scopes.push_scope(super::scope::ScopeKind::Function);
+            resolve_block(&t.body, scopes, types, errors, resolution_map);
+            scopes.pop_scope();
+        }
+        Item::SuiteSetup(s) => {
+            scopes.push_scope(super::scope::ScopeKind::Function);
+            resolve_block(&s.body, scopes, types, errors, resolution_map);
+            scopes.pop_scope();
+        }
+        Item::SuiteTeardown(s) => {
+            scopes.push_scope(super::scope::ScopeKind::Function);
+            resolve_block(&s.body, scopes, types, errors, resolution_map);
+            scopes.pop_scope();
         }
         // Other items don't have bodies to resolve
         _ => {}

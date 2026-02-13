@@ -2061,6 +2061,24 @@ pub fn check_module(
             Item::StaticDecl(s) => {
                 checker.infer_expr(&s.value);
             }
+            Item::Test(t) => {
+                checker.current_return_type = Some(checker.types.void_id);
+                checker.current_function_throws = false;
+                checker.check_block(&t.body);
+                checker.current_return_type = None;
+            }
+            Item::SuiteSetup(s) => {
+                checker.current_return_type = Some(checker.types.void_id);
+                checker.current_function_throws = false;
+                checker.check_block(&s.body);
+                checker.current_return_type = None;
+            }
+            Item::SuiteTeardown(s) => {
+                checker.current_return_type = Some(checker.types.void_id);
+                checker.current_function_throws = false;
+                checker.check_block(&s.body);
+                checker.current_return_type = None;
+            }
             _ => {}
         }
     }

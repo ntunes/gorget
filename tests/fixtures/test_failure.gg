@@ -1,0 +1,5 @@
+test "this passes":
+    assert 1 + 1 == 2
+
+test "this fails":
+    assert 1 == 2

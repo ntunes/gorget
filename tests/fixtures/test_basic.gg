@@ -1,0 +1,10 @@
+test "addition works":
+    assert 1 + 1 == 2
+
+test "string equality":
+    auto s = "hello"
+    assert s == "hello"
+
+test "boolean logic":
+    assert true or false
+    assert not false

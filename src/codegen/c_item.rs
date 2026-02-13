@@ -13,11 +13,11 @@ impl CodegenContext<'_> {
     pub fn emit_forward_declarations(&self, module: &crate::parser::ast::Module, emitter: &mut CEmitter) {
         emitter.emit_line("// ── Forward Declarations ──");
 
-        // Forward-declare structs (skip generic templates)
+        // Forward-declare structs (skip generic templates and stdlib synthetic structs)
         for item in &module.items {
             if let Item::Struct(s) = &item.node {
-                if s.generic_params.is_some() {
-                    continue; // Generic template — emitted per-instantiation
+                if s.generic_params.is_some() || s.span == crate::span::Span::dummy() {
+                    continue;
                 }
                 let name = &s.name.node;
                 emitter.emit_line(&format!("typedef struct {name} {name};"));
@@ -91,6 +91,9 @@ impl CodegenContext<'_> {
     fn emit_struct_def(&self, s: &StructDef, emitter: &mut CEmitter) {
         if s.generic_params.is_some() {
             return; // Generic template — emitted per-instantiation
+        }
+        if s.span == crate::span::Span::dummy() {
+            return; // Stdlib synthetic struct — C definition provided by runtime
         }
         let name = &s.name.node;
         emitter.emit_line(&format!("struct {name} {{"));
@@ -367,6 +370,11 @@ impl CodegenContext<'_> {
                 }
                 _ => {}
             }
+        }
+
+        // If this is a test module, emit the test runner main()
+        if self.is_test_module {
+            self.emit_test_runner_main(module, emitter);
         }
     }
 
@@ -2323,5 +2331,111 @@ static inline void {mangled}__free({mangled}* m) {{
                 _ => "Unknown".to_string(),
             }
         })
+    }
+
+    // ─── Test Runner ────────────────────────────────────────────
+
+    /// Check whether a test definition matches the tag filter.
+    fn test_matches_tag(&self, test: &crate::parser::ast::TestDef) -> bool {
+        if self.test_tag_filter.is_empty() {
+            return true; // No filter — run all tests
+        }
+        for attr in &test.attributes {
+            if attr.node.name.node == "tag" {
+                for arg in &attr.node.args {
+                    if let crate::parser::ast::AttributeArg::StringLiteral(s) = arg {
+                        if self.test_tag_filter.contains(s) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Emit the test runner `main()` function for test modules.
+    pub fn emit_test_runner_main(&mut self, module: &crate::parser::ast::Module, emitter: &mut CEmitter) {
+        emitter.emit_line("// ── Test Runner ──");
+        emitter.emit_line("int main(int argc, char** argv) {");
+        emitter.indent();
+        emitter.emit_line("gorget_init_args(argc, argv);");
+        emitter.emit_line("int __test_passed = 0, __test_failed = 0;");
+        emitter.blank_line();
+
+        // Suite setup (inlined)
+        for item in &module.items {
+            if let Item::SuiteSetup(s) = &item.node {
+                emitter.emit_line("// suite setup");
+                emitter.emit_line("{");
+                emitter.indent();
+                self.push_drop_scope(DropScopeKind::Function);
+                self.gen_block(&s.body, emitter);
+                self.pop_drop_scope(emitter);
+                emitter.dedent();
+                emitter.emit_line("}");
+                emitter.blank_line();
+            }
+        }
+
+        // Each test
+        for item in &module.items {
+            if let Item::Test(t) = &item.node {
+                if !self.test_matches_tag(t) {
+                    continue;
+                }
+                let test_name = &t.name.node;
+                let escaped_name = test_name.replace('\\', "\\\\").replace('"', "\\\"");
+                emitter.emit_line(&format!("printf(\"  test: {escaped_name} ... \");"));
+                emitter.emit_line("fflush(stdout);");
+                emitter.emit_line("{");
+                emitter.indent();
+                emitter.emit_line("__gorget_in_test = 1;");
+                emitter.emit_line("__gorget_test_fail_msg = NULL;");
+                emitter.emit_line("if (setjmp(__gorget_test_jmp) == 0) {");
+                emitter.indent();
+                self.push_drop_scope(DropScopeKind::Function);
+                self.gen_block(&t.body, emitter);
+                self.pop_drop_scope(emitter);
+                emitter.dedent();
+                emitter.emit_line("}");
+                emitter.emit_line("__gorget_in_test = 0;");
+                emitter.emit_line("if (!__gorget_test_fail_msg) {");
+                emitter.indent();
+                emitter.emit_line("__test_passed++;");
+                emitter.emit_line("printf(\"PASS\\n\");");
+                emitter.dedent();
+                emitter.emit_line("} else {");
+                emitter.indent();
+                emitter.emit_line("__test_failed++;");
+                emitter.emit_line("printf(\"FAIL: %s\\n\", __gorget_test_fail_msg);");
+                emitter.dedent();
+                emitter.emit_line("}");
+                emitter.dedent();
+                emitter.emit_line("}");
+                emitter.blank_line();
+            }
+        }
+
+        // Suite teardown (inlined)
+        for item in &module.items {
+            if let Item::SuiteTeardown(s) = &item.node {
+                emitter.emit_line("// suite teardown");
+                emitter.emit_line("{");
+                emitter.indent();
+                self.push_drop_scope(DropScopeKind::Function);
+                self.gen_block(&s.body, emitter);
+                self.pop_drop_scope(emitter);
+                emitter.dedent();
+                emitter.emit_line("}");
+                emitter.blank_line();
+            }
+        }
+
+        emitter.emit_line("printf(\"\\n%d passed, %d failed\\n\", __test_passed, __test_failed);");
+        emitter.emit_line("return __test_failed > 0 ? 1 : 0;");
+        emitter.dedent();
+        emitter.emit_line("}");
+        emitter.blank_line();
     }
 }

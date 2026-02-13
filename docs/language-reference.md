@@ -1840,6 +1840,14 @@ The following functions are available via `import`:
 
 Re-exports the `Displayable` trait and `format` builtin for discoverability. Both are available in the prelude without an explicit import.
 
+**`std.test.process`** — Test process execution
+
+| Name | Signature | Description |
+|---|---|---|
+| `ProcessResult` | struct | Result of a process: `output: str`, `errors: str`, `exit_code: int` |
+| `run` | `int(str)` | Run a shell command, return exit code |
+| `run_output` | `ProcessResult(str)` | Run a command, capture stdout and exit code |
+
 ### 15.2 Built-in Type Methods
 
 The following methods are available on built-in types without any import.
@@ -2080,6 +2088,7 @@ The Gorget compiler is invoked as `gg` with the following commands:
 | `gg check <file>`  | Run semantic analysis (no code output)   |
 | `gg build <file>`  | Compile to native binary                 |
 | `gg run <file>`    | Compile and execute                      |
+| `gg test <file>`   | Compile and run tests                    |
 
 **CLI flags:**
 
@@ -2089,6 +2098,74 @@ The Gorget compiler is invoked as `gg` with the following commands:
 | `--no-strip-asserts` | Keep asserts even if source has `directive strip-asserts`|
 | `--overflow=wrap`    | Enable wrapping arithmetic (no overflow panic)          |
 | `--overflow=checked` | Force checked arithmetic even if source says `wrap`     |
+| `--tag <name>`       | Only run tests matching this tag (repeatable)           |
+
+---
+
+## 18. Testing
+
+Gorget has a built-in test framework. Test files use `test` blocks instead of `main()`.
+
+### 18.1 Test Blocks
+
+```gorget
+test "addition works":
+    assert 1 + 1 == 2
+
+test "string equality":
+    auto s = "hello"
+    assert s == "hello"
+```
+
+Run with `gg test <file>`. Each test runs in isolation — assertion failures are caught and reported without terminating the process.
+
+### 18.2 Suite Setup and Teardown
+
+```gorget
+suite setup:
+    print("before all tests")
+
+suite teardown:
+    print("after all tests")
+```
+
+`suite setup` runs once before all tests. `suite teardown` runs once after all tests. At most one of each per file. Panics in setup/teardown are fatal (terminate the process).
+
+### 18.3 Tag Filtering
+
+```gorget
+@tag("smoke")
+test "quick check":
+    assert true
+
+@tag("slow")
+test "long computation":
+    assert true
+```
+
+Run only tagged tests: `gg test file.gg --tag smoke`. Multiple `--tag` flags select tests matching any tag.
+
+### 18.4 Process Testing
+
+```gorget
+from std.test.process import run_output, run
+
+test "echo captures stdout":
+    auto result = run_output("echo hello")
+    assert result.exit_code == 0
+    assert result.output == "hello\n"
+
+test "run returns exit code":
+    auto code = run("true")
+    assert code == 0
+```
+
+`ProcessResult` has fields: `output: str`, `errors: str`, `exit_code: int`.
+
+### 18.5 Constraints
+
+- A file cannot have both `test` blocks and a `main()` function.
+- At most one `suite setup` and one `suite teardown` per file.
 
 ---
 
@@ -2103,7 +2180,8 @@ module = { item } ;
 (* ── Items ── *)
 item = directive | function_def | struct_def | enum_def | trait_def
      | equip_block | import_stmt | type_alias | newtype_def
-     | const_decl | static_decl | extern_block ;
+     | const_decl | static_decl | extern_block
+     | test_def | suite_setup | suite_teardown ;
 
 (* ── Directives ── *)
 directive = "directive" IDENTIFIER { "-" IDENTIFIER } [ "=" IDENTIFIER ] ;
@@ -2157,6 +2235,11 @@ static_decl = [ "public" ] "static" type IDENTIFIER "=" expr NEWLINE ;
 
 (* ── Extern ── *)
 extern_block  = "extern" [ STRING_LITERAL ] ":" NEWLINE INDENT { function_def } DEDENT ;
+
+(* ── Tests ── *)
+test_def       = { attribute } "test" STRING_LITERAL block ;
+suite_setup    = "suite" "setup" block ;
+suite_teardown = "suite" "teardown" block ;
 
 (* ── Attributes ── *)
 attribute = "@" IDENTIFIER [ "(" attr_args ")" ] NEWLINE ;

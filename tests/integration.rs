@@ -2377,3 +2377,118 @@ a, b, c
 a-b-c",
     );
 }
+
+// ─── Test Framework Integration Tests ────────────────────────
+
+/// Run `gg test` on a fixture, assert stdout contains expected, and check exit code.
+fn run_gg_test(fixture: &str, expected_fragments: &[&str], expect_success: bool) {
+    run_gg_test_with_tags(fixture, &[], expected_fragments, expect_success);
+}
+
+/// Run `gg test` with optional `--tag` flags.
+fn run_gg_test_with_tags(
+    fixture: &str,
+    tags: &[&str],
+    expected_fragments: &[&str],
+    expect_success: bool,
+) {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures").join(fixture);
+
+    assert!(
+        fixture_path.exists(),
+        "Fixture not found: {}",
+        fixture_path.display()
+    );
+
+    let stem = fixture_path.file_stem().unwrap().to_str().unwrap();
+    let dir = fixture_path.parent().unwrap();
+    let c_path = dir.join(format!("{stem}.c"));
+    let exe_path = dir.join(stem);
+
+    // Build args: cargo run -- test <fixture> [--tag <tag>]...
+    let mut args: Vec<&str> = vec!["run", "--quiet", "--", "test"];
+    args.push(fixture_path.to_str().unwrap());
+    for tag in tags {
+        args.push("--tag");
+        args.push(tag);
+    }
+
+    let output = Command::new(env!("CARGO"))
+        .args(&args)
+        .output()
+        .expect("failed to run cargo");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    for fragment in expected_fragments {
+        assert!(
+            stdout.contains(fragment),
+            "Expected fragment {fragment:?} not found in output:\n{stdout}",
+        );
+    }
+
+    if expect_success {
+        assert!(
+            output.status.success(),
+            "Expected success for {fixture} but got {:?}\nstdout: {stdout}\nstderr: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    } else {
+        assert!(
+            !output.status.success(),
+            "Expected failure for {fixture} but got success\nstdout: {stdout}",
+        );
+    }
+
+    // Clean up
+    let _ = std::fs::remove_file(&c_path);
+    let _ = std::fs::remove_file(&exe_path);
+}
+
+#[test]
+fn test_basic() {
+    run_gg_test(
+        "test_basic.gg",
+        &["3 passed, 0 failed", "PASS"],
+        true,
+    );
+}
+
+#[test]
+fn test_failure() {
+    run_gg_test(
+        "test_failure.gg",
+        &["1 passed, 1 failed", "FAIL: assertion failed"],
+        false,
+    );
+}
+
+#[test]
+fn test_suite_setup_teardown() {
+    run_gg_test(
+        "test_suite.gg",
+        &["SETUP", "TEARDOWN", "2 passed, 0 failed"],
+        true,
+    );
+}
+
+#[test]
+fn test_tag_filtering() {
+    run_gg_test_with_tags(
+        "test_tags.gg",
+        &["smoke"],
+        &["1 passed, 0 failed", "smoke test"],
+        true,
+    );
+}
+
+#[test]
+fn test_process() {
+    run_gg_test(
+        "test_process.gg",
+        &["2 passed, 0 failed"],
+        true,
+    );
+}

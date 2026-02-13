@@ -410,6 +410,16 @@ impl Parser {
                 });
                 Ok(Spanned::new(decl, span))
             }
+            Token::Keyword(Keyword::Test) => {
+                let def = self.parse_test_def(attributes, doc_comment)?;
+                let span = start.merge(def.span);
+                Ok(Spanned::new(Item::Test(def), span))
+            }
+            Token::Keyword(Keyword::Suite) => {
+                let (item, item_span) = self.parse_suite_block()?;
+                let span = start.merge(item_span);
+                Ok(Spanned::new(item, span))
+            }
             // Function definition (starts with return type or qualifiers)
             _ => {
                 let func = self.parse_function_def(attributes, visibility, doc_comment)?;
@@ -1360,6 +1370,79 @@ impl Parser {
 
         let end = self.previous_span();
         Ok(Spanned::new(WhereClause { bounds }, start.merge(end)))
+    }
+
+    // ── Test Definition ────────────────────────────────────────
+
+    fn parse_test_def(
+        &mut self,
+        attributes: Vec<Spanned<Attribute>>,
+        doc_comment: Option<String>,
+    ) -> Result<TestDef, ParseError> {
+        let start = self.peek_span();
+        self.expect_keyword(Keyword::Test)?;
+
+        let name = self.expect_plain_string()?;
+        let body = self.parse_block()?;
+        let end = self.previous_span();
+
+        Ok(TestDef {
+            attributes,
+            name,
+            body,
+            doc_comment,
+            span: start.merge(end),
+        })
+    }
+
+    // ── Suite Block ──────────────────────────────────────────
+
+    fn parse_suite_block(&mut self) -> Result<(Item, Span), ParseError> {
+        let start = self.peek_span();
+        self.expect_keyword(Keyword::Suite)?;
+
+        let ident = self.expect_identifier()?;
+        match ident.node.as_str() {
+            "setup" => {
+                let body = self.parse_block()?;
+                let end = self.previous_span();
+                let span = start.merge(end);
+                Ok((Item::SuiteSetup(SuiteSetup { body, span }), span))
+            }
+            "teardown" => {
+                let body = self.parse_block()?;
+                let end = self.previous_span();
+                let span = start.merge(end);
+                Ok((Item::SuiteTeardown(SuiteTeardown { body, span }), span))
+            }
+            _ => Err(self.error_at(ident.span, "expected 'setup' or 'teardown' after 'suite'")),
+        }
+    }
+
+    /// Consume a string literal that must be plain (no interpolations).
+    fn expect_plain_string(&mut self) -> Result<Spanned<String>, ParseError> {
+        match self.peek().clone() {
+            Token::StringLiteral(ref s) => {
+                let text: String = s
+                    .segments
+                    .iter()
+                    .filter_map(|seg| {
+                        if let crate::lexer::token::StringSegment::Literal(l) = seg {
+                            Some(l.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                if s.segments.iter().any(|seg| matches!(seg, crate::lexer::token::StringSegment::Interpolation(_))) {
+                    return Err(self.error_at(self.peek_span(), "test name must be a plain string (no interpolations)"));
+                }
+                let span = self.peek_span();
+                self.advance();
+                Ok(Spanned::new(text, span))
+            }
+            _ => Err(self.error_unexpected("string literal")),
+        }
     }
 
     pub fn parse_trait_bound_list(&mut self) -> Result<Vec<Spanned<TraitBound>>, ParseError> {
@@ -2361,5 +2444,54 @@ mod tests {
         } else {
             panic!();
         }
+    }
+
+    // ── Test Blocks ──────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_test_block() {
+        let module = parse("test \"basic math\":\n    assert 1 + 1 == 2\n");
+        assert_eq!(module.items.len(), 1);
+        if let Item::Test(ref t) = module.items[0].node {
+            assert_eq!(t.name.node, "basic math");
+            assert_eq!(t.body.stmts.len(), 1);
+        } else {
+            panic!("Expected Test, got {:?}", module.items[0].node);
+        }
+    }
+
+    #[test]
+    fn test_parse_test_with_tag() {
+        let module = parse("@tag(\"smoke\")\ntest \"tagged test\":\n    assert true\n");
+        assert_eq!(module.items.len(), 1);
+        if let Item::Test(ref t) = module.items[0].node {
+            assert_eq!(t.name.node, "tagged test");
+            assert_eq!(t.attributes.len(), 1);
+            assert_eq!(t.attributes[0].node.name.node, "tag");
+        } else {
+            panic!("Expected Test, got {:?}", module.items[0].node);
+        }
+    }
+
+    #[test]
+    fn test_parse_suite_setup() {
+        let module = parse("suite setup:\n    print(\"setup\")\n");
+        assert_eq!(module.items.len(), 1);
+        assert!(matches!(&module.items[0].node, Item::SuiteSetup(_)));
+    }
+
+    #[test]
+    fn test_parse_suite_teardown() {
+        let module = parse("suite teardown:\n    print(\"done\")\n");
+        assert_eq!(module.items.len(), 1);
+        assert!(matches!(&module.items[0].node, Item::SuiteTeardown(_)));
+    }
+
+    #[test]
+    fn test_parse_multiple_tests() {
+        let module = parse("test \"a\":\n    assert true\n\ntest \"b\":\n    assert false\n");
+        assert_eq!(module.items.len(), 2);
+        assert!(matches!(&module.items[0].node, Item::Test(_)));
+        assert!(matches!(&module.items[1].node, Item::Test(_)));
     }
 }

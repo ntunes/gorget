@@ -1,0 +1,11 @@
+suite setup:
+    print("SETUP")
+
+suite teardown:
+    print("TEARDOWN")
+
+test "first":
+    assert true
+
+test "second":
+    assert 2 + 2 == 4

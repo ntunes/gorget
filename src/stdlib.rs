@@ -11,28 +11,39 @@ use crate::span::{Span, Spanned};
 
 /// Check if an import path refers to a stdlib module.
 pub fn is_stdlib_module(segments: &[String]) -> bool {
-    if segments.len() != 2 || segments[0] != "std" {
+    if segments.first().map(|s| s.as_str()) != Some("std") {
         return false;
     }
-    matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv" | "io" | "random" | "time" | "collections" | "math" | "fmt")
+    match segments.len() {
+        2 => matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv" | "io" | "random" | "time" | "collections" | "math" | "fmt"),
+        3 => segments[1] == "test" && segments[2] == "process",
+        _ => false,
+    }
 }
 
 /// Generate a synthetic `Module` for a stdlib module.
 pub fn generate_stdlib_module(segments: &[String]) -> Option<Module> {
-    if segments.len() != 2 || segments[0] != "std" {
+    if segments.first().map(|s| s.as_str()) != Some("std") {
         return None;
     }
-    match segments[1].as_str() {
-        "fs" => Some(gen_fs_module()),
-        "path" => Some(gen_path_module()),
-        "os" => Some(gen_os_module()),
-        "conv" => Some(gen_conv_module()),
-        "io" => Some(gen_io_module()),
-        "random" => Some(gen_random_module()),
-        "time" => Some(gen_time_module()),
-        "collections" => Some(gen_collections_module()),
-        "math" => Some(gen_math_module()),
-        "fmt" => Some(gen_fmt_module()),
+    match segments.len() {
+        2 => match segments[1].as_str() {
+            "fs" => Some(gen_fs_module()),
+            "path" => Some(gen_path_module()),
+            "os" => Some(gen_os_module()),
+            "conv" => Some(gen_conv_module()),
+            "io" => Some(gen_io_module()),
+            "random" => Some(gen_random_module()),
+            "time" => Some(gen_time_module()),
+            "collections" => Some(gen_collections_module()),
+            "math" => Some(gen_math_module()),
+            "fmt" => Some(gen_fmt_module()),
+            _ => None,
+        },
+        3 => match (segments[1].as_str(), segments[2].as_str()) {
+            ("test", "process") => Some(gen_test_process_module()),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -174,6 +185,47 @@ fn gen_fmt_module() -> Module {
     make_module(vec![])
 }
 
+fn gen_test_process_module() -> Module {
+    let process_result_type = Type::Named {
+        name: Spanned::dummy("ProcessResult".to_string()),
+        generic_args: vec![],
+    };
+    let struct_def = StructDef {
+        attributes: vec![],
+        visibility: Visibility::Public,
+        name: Spanned::dummy("ProcessResult".to_string()),
+        generic_params: None,
+        fields: vec![
+            Spanned::dummy(FieldDef {
+                visibility: Visibility::Public,
+                name: Spanned::dummy("output".to_string()),
+                type_: Spanned::dummy(ty_str()),
+            }),
+            Spanned::dummy(FieldDef {
+                visibility: Visibility::Public,
+                name: Spanned::dummy("errors".to_string()),
+                type_: Spanned::dummy(ty_str()),
+            }),
+            Spanned::dummy(FieldDef {
+                visibility: Visibility::Public,
+                name: Spanned::dummy("exit_code".to_string()),
+                type_: Spanned::dummy(ty_int()),
+            }),
+        ],
+        doc_comment: None,
+        span: Span::dummy(),
+    };
+    let items = vec![
+        Spanned::dummy(Item::Struct(struct_def)),
+        Spanned::dummy(Item::Function(decl_fn("run", &[("cmd", ty_str())], ty_int()))),
+        Spanned::dummy(Item::Function(decl_fn("run_output", &[("cmd", ty_str())], process_result_type))),
+    ];
+    Module {
+        items,
+        span: Span::dummy(),
+    }
+}
+
 fn gen_collections_module() -> Module {
     let type_defs: Vec<(&str, usize)> = vec![
         ("Vector", 1), ("List", 1), ("Array", 1),   // [T]
@@ -308,6 +360,8 @@ mod tests {
         assert!(is_stdlib_module(&["std".into(), "time".into()]));
         assert!(is_stdlib_module(&["std".into(), "math".into()]));
         assert!(is_stdlib_module(&["std".into(), "fmt".into()]));
+        assert!(is_stdlib_module(&["std".into(), "test".into(), "process".into()]));
+        assert!(!is_stdlib_module(&["std".into(), "test".into(), "unknown".into()]));
         assert!(!is_stdlib_module(&["std".into(), "foo".into()]));
         assert!(!is_stdlib_module(&["foo".into(), "fs".into()]));
         assert!(!is_stdlib_module(&["std".into()]));

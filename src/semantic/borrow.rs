@@ -945,6 +945,21 @@ pub fn check_module(
                     checker.check_function(&method.node);
                 }
             }
+            Item::Test(t) => {
+                checker.var_states.clear();
+                checker.loop_depth = 0;
+                checker.check_block(&t.body);
+            }
+            Item::SuiteSetup(s) => {
+                checker.var_states.clear();
+                checker.loop_depth = 0;
+                checker.check_block(&s.body);
+            }
+            Item::SuiteTeardown(s) => {
+                checker.var_states.clear();
+                checker.loop_depth = 0;
+                checker.check_block(&s.body);
+            }
             _ => {}
         }
     }
