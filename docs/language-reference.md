@@ -1765,6 +1765,8 @@ The following functions are available via `import`:
 | `stderr` | `File` | Standard error stream |
 | `stdout` | `File` | Standard output stream |
 | `getchar` | `int()` | Read one byte from stdin (-1 on EOF) |
+| `term_cols` | `int()` | Terminal width in columns |
+| `term_rows` | `int()` | Terminal height in rows |
 
 **`std.random`** — Random numbers
 

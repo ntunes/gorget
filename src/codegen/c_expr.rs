@@ -603,6 +603,8 @@ impl CodegenContext<'_> {
                     "rand" => return "gorget_rand()".to_string(),
                     "time" => return "gorget_time()".to_string(),
                     "getchar" => return "gorget_getchar()".to_string(),
+                    "term_cols" => return "gorget_term_cols()".to_string(),
+                    "term_rows" => return "gorget_term_rows()".to_string(),
                     "seed" => {
                         if let Some(arg) = args.first() {
                             let n = self.gen_expr(&arg.node.value);
@@ -1148,7 +1150,7 @@ impl CodegenContext<'_> {
                         "format" => {
                             return Some(self.types.string_id);
                         }
-                        "rand" | "getchar" | "time" => {
+                        "rand" | "getchar" | "time" | "term_cols" | "term_rows" => {
                             return Some(self.types.int_id);
                         }
                         _ => {}

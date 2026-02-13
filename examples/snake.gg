@@ -10,7 +10,7 @@
 from std.collections import Vector
 from std.random import rand, seed
 from std.time import time, sleep_ms
-from std.io import getchar
+from std.io import getchar, term_cols, term_rows
 from std.os import exec
 
 enum Direction:
@@ -105,8 +105,18 @@ void render(Game game):
 
 void main():
     seed(time())
-    int w = 30
-    int h = 15
+
+    # Fit board to terminal (leave room for score line)
+    int w = term_cols()
+    int h = term_rows() - 3
+    if w < 20:
+        w = 20
+    if w > 80:
+        w = 80
+    if h < 10:
+        h = 10
+    if h > 40:
+        h = 40
     Vector[Position] body = Vector[Position]()
     body.push(Position(w / 2 - 2, h / 2))
     body.push(Position(w / 2 - 1, h / 2))
@@ -114,8 +124,8 @@ void main():
     Game game = Game(body, Right(), 0, 0, w, h, 0, false)
     spawn_food(mutable game)
 
-    # Set terminal to raw non-blocking mode
-    exec("stty raw -echo min 0 time 0")
+    # Set terminal to non-blocking input (preserves output newline handling)
+    exec("stty -icanon -echo min 0 time 0")
 
     render(game)
     loop:
@@ -143,6 +153,6 @@ void main():
         sleep_ms(150)
 
     # Restore terminal
-    exec("stty cooked echo")
+    exec("stty icanon echo")
     print("\u{1b}[2J\u{1b}[H")
     print("Game Over! Final score: {game.score}")

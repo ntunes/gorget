@@ -96,10 +96,12 @@ fn gen_io_module() -> Module {
             span: Span::dummy(),
         })),
     ];
-    // Add getchar function
-    items.push(Spanned::dummy(Item::Function(
-        decl_fn("getchar", &[], ty_int()),
-    )));
+    // Add functions
+    for name in &["getchar", "term_cols", "term_rows"] {
+        items.push(Spanned::dummy(Item::Function(
+            decl_fn(name, &[], ty_int()),
+        )));
+    }
     Module {
         items,
         span: Span::dummy(),
@@ -277,7 +279,7 @@ mod tests {
     #[test]
     fn generate_io() {
         let m = generate_stdlib_module(&["std".into(), "io".into()]).unwrap();
-        assert_eq!(m.items.len(), 3); // stderr, stdout, getchar
+        assert_eq!(m.items.len(), 5); // stderr, stdout, getchar, term_cols, term_rows
     }
 
     #[test]

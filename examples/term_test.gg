@@ -1,0 +1,31 @@
+from std.io import term_cols, term_rows
+
+void main():
+    int tc = term_cols()
+    int tr = term_rows()
+    print("Terminal: {tc} cols x {tr} rows")
+
+    int w = tc
+    int h = tr - 3
+    if w < 20:
+        w = 20
+    if w > 80:
+        w = 80
+    if h < 10:
+        h = 10
+    if h > 40:
+        h = 40
+    print("Board: {w} wide x {h} tall")
+    print("")
+
+    # Draw just the border so we can see if it fits
+    for y in 0..h:
+        String row = ""
+        for x in 0..w:
+            if y == 0 or y == h - 1 or x == 0 or x == w - 1:
+                row = row + "#"
+            else:
+                row = row + " "
+        print(row)
+    print("")
+    print("  Score: 0  |  WASD: move  Q: quit")
