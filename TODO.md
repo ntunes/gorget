@@ -10,7 +10,6 @@
 - **No cycle detection in collect_all_trait_methods** (c_item.rs:1905): Recursive trait method collection via `extends` assumes acyclic graph. If a trait accidentally extends itself (directly or transitively), this infinite-loops. Semantic analysis likely prevents it, but a `visited: HashSet` would be cheap insurance. Discuss whether to fix here or in semantic. [added: 2026-02-13]
 
 ## Medium Priority — Stdlib additions
-- **`std.io.input`** / **`readline`**: read a line from stdin as `str`. Unlocks interactive programs beyond raw-terminal games [added: 2026-02-13]
 - **`std.conv` additions**: `parse_float(str) -> float`, `to_str(int) -> str`, `to_str(float) -> str` [added: 2026-02-13]
 - **`std.random.rand_range(int, int) -> int`**: random integer in a range [added: 2026-02-13]
 - **`std.os` additions**: `getcwd() -> str`, `setenv(str, str)`, `platform() -> str` [added: 2026-02-13]

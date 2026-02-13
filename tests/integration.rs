@@ -572,6 +572,76 @@ fn run_gg_with_args(fixture: &str, binary_args: &[&str], expected: &str) {
     let _ = std::fs::remove_file(&exe_path);
 }
 
+/// Build and run a `.gg` fixture, piping `stdin_data` to the binary.
+fn run_gg_with_stdin(fixture: &str, stdin_data: &str, expected: &str) {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures").join(fixture);
+
+    assert!(
+        fixture_path.exists(),
+        "Fixture not found: {}",
+        fixture_path.display()
+    );
+
+    let stem = fixture_path.file_stem().unwrap().to_str().unwrap();
+    let dir = fixture_path.parent().unwrap();
+    let c_path = dir.join(format!("{stem}.c"));
+    let exe_path = dir.join(stem);
+
+    // 1. Build
+    let build = Command::new(env!("CARGO"))
+        .args(["run", "--quiet", "--", "build"])
+        .arg(&fixture_path)
+        .output()
+        .expect("failed to run cargo");
+
+    assert!(
+        build.status.success(),
+        "Build failed for {fixture}:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr),
+    );
+
+    // 2. Execute with stdin
+    let mut child = Command::new(&exe_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to execute compiled binary");
+
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(stdin_data.as_bytes())
+        .unwrap();
+
+    let output = child.wait_with_output().expect("failed to wait on child");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // 3. Assert stdout
+    assert_eq!(
+        stdout.trim(),
+        expected.trim(),
+        "Output mismatch for {fixture}:\nExpected:\n{expected}\nGot:\n{stdout}",
+    );
+
+    assert!(
+        output.status.success(),
+        "Binary exited with error for {fixture}: {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    // 4. Clean up
+    let _ = std::fs::remove_file(&c_path);
+    let _ = std::fs::remove_file(&exe_path);
+}
+
 /// Build and run a multi-file `.gg` fixture from a directory.
 fn run_gg_dir(dir_name: &str, main_file: &str, expected: &str) {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -2069,4 +2139,11 @@ fn math_stdlib() {
 2.500000
 1.500000
 2.500000");
+}
+
+#[test]
+fn io_input() {
+    run_gg_with_stdin("io_input.gg", "world\nAlice\n", "\
+got: world
+name? hello Alice");
 }

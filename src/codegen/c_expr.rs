@@ -607,6 +607,13 @@ impl CodegenContext<'_> {
                     "rand" => return "gorget_rand()".to_string(),
                     "time" => return "gorget_time()".to_string(),
                     "getchar" => return "gorget_getchar()".to_string(),
+                    "readline" => return "gorget_readline()".to_string(),
+                    "input" => {
+                        if let Some(arg) = args.first() {
+                            let prompt = self.gen_expr(&arg.node.value);
+                            return format!("gorget_input({prompt})");
+                        }
+                    }
                     "term_cols" => return "gorget_term_cols()".to_string(),
                     "term_rows" => return "gorget_term_rows()".to_string(),
                     "seed" => {

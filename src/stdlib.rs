@@ -103,6 +103,12 @@ fn gen_io_module() -> Module {
             decl_fn(name, &[], ty_int()),
         )));
     }
+    items.push(Spanned::dummy(Item::Function(
+        decl_fn("input", &[("prompt", ty_str())], ty_str()),
+    )));
+    items.push(Spanned::dummy(Item::Function(
+        decl_fn("readline", &[], ty_str()),
+    )));
     Module {
         items,
         span: Span::dummy(),
@@ -313,7 +319,7 @@ mod tests {
     #[test]
     fn generate_io() {
         let m = generate_stdlib_module(&["std".into(), "io".into()]).unwrap();
-        assert_eq!(m.items.len(), 5); // stderr, stdout, getchar, term_cols, term_rows
+        assert_eq!(m.items.len(), 7); // stderr, stdout, getchar, term_cols, term_rows, input, readline
     }
 
     #[test]

@@ -1,0 +1,10 @@
+from std.io import input, readline
+
+void main():
+    # readline reads a line from stdin (no prompt)
+    str line1 = readline()
+    print("got: {line1}")
+
+    # input prints a prompt then reads a line
+    str line2 = input("name? ")
+    print("hello {line2}")

@@ -824,6 +824,23 @@ static inline int64_t gorget_time(void) { return (int64_t)time(NULL); }
 static inline int64_t gorget_term_cols(void) { struct winsize ws; if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1) return 80; return (int64_t)ws.ws_col; }
 static inline int64_t gorget_term_rows(void) { struct winsize ws; if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1) return 24; return (int64_t)ws.ws_row; }
 
+// ── Line input ───────────────────────────────────────────────
+static inline const char* gorget_readline(void) {
+    char buf[4096];
+    if (fgets(buf, sizeof(buf), stdin) == NULL) return "";
+    size_t len = strlen(buf);
+    if (len > 0 && buf[len - 1] == '\n') buf[--len] = '\0';
+    char* out = (char*)malloc(len + 1);
+    memcpy(out, buf, len + 1);
+    return out;
+}
+
+static inline const char* gorget_input(const char* prompt) {
+    fputs(prompt, stdout);
+    fflush(stdout);
+    return gorget_readline();
+}
+
 // ── Math functions ───────────────────────────────────────────
 static inline int64_t gorget_abs(int64_t x) { return x < 0 ? -x : x; }
 static inline int64_t gorget_min(int64_t a, int64_t b) { return a < b ? a : b; }

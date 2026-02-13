@@ -1767,6 +1767,8 @@ The following functions are available via `import`:
 | `getchar` | `int()` | Read one byte from stdin (-1 on EOF) |
 | `term_cols` | `int()` | Terminal width in columns |
 | `term_rows` | `int()` | Terminal height in rows |
+| `input` | `str(str)` | Print prompt, read a line from stdin |
+| `readline` | `str()` | Read a line from stdin (no prompt) |
 
 **`std.random`** — Random numbers
 
