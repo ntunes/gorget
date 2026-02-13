@@ -776,6 +776,12 @@ impl Parser {
             None
         };
 
+        let via_field = if self.match_keyword(Keyword::Via) {
+            Some(self.expect_identifier()?)
+        } else {
+            None
+        };
+
         let where_clause = if self.check_keyword(Keyword::Where) {
             Some(self.parse_where_clause()?)
         } else {
@@ -804,6 +810,14 @@ impl Parser {
                 continue;
             }
 
+            // `pass` means no methods in this equip block
+            if self.match_keyword(Keyword::Pass) {
+                if self.check(&Token::Newline) {
+                    self.advance();
+                }
+                continue;
+            }
+
             // Collect attributes for methods
             let mut attrs = Vec::new();
             while self.check(&Token::At) {
@@ -828,6 +842,7 @@ impl Parser {
             generic_params,
             trait_,
             type_: self_type,
+            via_field,
             where_clause,
             items,
             span: start.merge(end),

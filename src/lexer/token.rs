@@ -255,6 +255,7 @@ pub enum Keyword {
     // Resource/scope
     With,
     As,
+    Via,
 
     // Generics/type constraints
     Where,
@@ -359,6 +360,7 @@ impl Keyword {
             "directive" => Some(Keyword::Directive),
             "with" => Some(Keyword::With),
             "as" => Some(Keyword::As),
+            "via" => Some(Keyword::Via),
             "where" => Some(Keyword::Where),
             "extends" => Some(Keyword::Extends),
             "live" => Some(Keyword::Live),
@@ -451,6 +453,7 @@ impl fmt::Display for Keyword {
             Keyword::Directive => "directive",
             Keyword::With => "with",
             Keyword::As => "as",
+            Keyword::Via => "via",
             Keyword::Where => "where",
             Keyword::Extends => "extends",
             Keyword::Live => "live",

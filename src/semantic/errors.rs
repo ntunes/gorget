@@ -128,6 +128,15 @@ pub enum SemanticErrorKind {
 
     /// Assignment to a const binding (always an error).
     AssignmentToConst { name: String },
+
+    /// `via` used without a trait in equip block.
+    ViaWithoutTrait,
+
+    /// `via` field does not exist on the struct.
+    ViaFieldNotFound { field: String, type_: String },
+
+    /// `via` field's type does not implement the target trait.
+    ViaFieldTypeMissingTrait { field: String, field_type: String, trait_: String },
 }
 
 impl std::fmt::Display for SemanticError {
@@ -284,6 +293,15 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::AssignmentToConst { name } => {
                 write!(f, "cannot assign to constant `{name}`")
+            }
+            SemanticErrorKind::ViaWithoutTrait => {
+                write!(f, "`via` delegation can only be used in trait equip blocks")
+            }
+            SemanticErrorKind::ViaFieldNotFound { field, type_ } => {
+                write!(f, "`via` field `{field}` not found on type `{type_}`")
+            }
+            SemanticErrorKind::ViaFieldTypeMissingTrait { field, field_type, trait_ } => {
+                write!(f, "`via` field `{field}` of type `{field_type}` does not implement trait `{trait_}`")
             }
         }
     }

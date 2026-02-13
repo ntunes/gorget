@@ -184,6 +184,7 @@ pub struct EquipBlock {
     pub generic_params: Option<Spanned<GenericParams>>,
     pub trait_: Option<EquipTrait>,
     pub type_: Spanned<Type>,
+    pub via_field: Option<Spanned<String>>,
     pub where_clause: Option<Spanned<WhereClause>>,
     pub items: Vec<Spanned<FunctionDef>>,
     pub span: Span,

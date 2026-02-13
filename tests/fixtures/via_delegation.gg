@@ -1,0 +1,45 @@
+struct Inner:
+    int value
+
+trait Showable:
+    str show(self)
+
+equip Inner with Showable:
+    str show(self):
+        return "inner"
+
+struct Outer:
+    Inner inner
+    int extra
+
+equip Outer with Showable via inner:
+    pass
+
+trait Describable:
+    str describe(self)
+    int count(self)
+
+equip Inner with Describable:
+    str describe(self):
+        return "desc"
+    int count(self):
+        return self.value
+
+struct Wrapper:
+    Inner inner
+    str label
+
+equip Wrapper with Describable via inner:
+    str describe(self):
+        return self.label
+
+void main():
+    Inner i = Inner(42)
+    Outer o = Outer(Inner(10), 5)
+    str s = o.show()
+    print(s)
+    Wrapper w = Wrapper(Inner(7), "custom")
+    str d = w.describe()
+    print(d)
+    int c = w.count()
+    print("{c}")

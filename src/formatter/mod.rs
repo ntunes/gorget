@@ -364,18 +364,27 @@ impl Formatter {
             self.emitter.write(" with ");
             self.format_type(&trait_.trait_name);
         }
+        if let Some(ref via) = e.via_field {
+            self.emitter.write(" via ");
+            self.emitter.write(&via.node);
+        }
         if let Some(ref wc) = e.where_clause {
             self.format_where_clause(wc);
         }
         self.emitter.write(":");
         self.emitter.newline();
         self.emitter.indent();
-        for (i, method) in e.items.iter().enumerate() {
-            if i > 0 {
-                self.emitter.blank_line();
+        if e.items.is_empty() {
+            self.emitter.write("pass");
+            self.emitter.newline();
+        } else {
+            for (i, method) in e.items.iter().enumerate() {
+                if i > 0 {
+                    self.emitter.blank_line();
+                }
+                self.emit_comments_before(method.span.start);
+                self.format_function(&method.node);
             }
-            self.emit_comments_before(method.span.start);
-            self.format_function(&method.node);
         }
         self.emitter.dedent();
     }

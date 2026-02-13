@@ -39,6 +39,8 @@ pub struct EquipInfo {
     pub span: Span,
     /// Generic args from the trait type, e.g. [Type::Primitive(Int)] for Iterator[int].
     pub trait_generic_args: Vec<Type>,
+    /// Field name for `via` delegation (auto-forward unimplemented methods through this field).
+    pub via_field: Option<String>,
 }
 
 /// Registry of all traits and implementations.
@@ -125,7 +127,7 @@ pub fn build_registry(
     }
 
     // Third pass: validate trait impls (check all required methods are present)
-    validate_trait_impls(&registry, errors);
+    validate_trait_impls(&registry, module, errors);
 
     registry
 }
@@ -299,6 +301,16 @@ fn process_impl(
         }
     });
 
+    // Validate `via` is only used with `with Trait`
+    let via_field = impl_block.via_field.as_ref().map(|v| v.node.clone());
+    if via_field.is_some() && trait_def_id.is_none() {
+        errors.push(SemanticError {
+            kind: SemanticErrorKind::ViaWithoutTrait,
+            span: impl_block.span,
+        });
+        return;
+    }
+
     // Check for duplicate trait impl
     if let Some(trait_id) = trait_def_id {
         if registry.trait_impls.contains_key(&(trait_id, self_type_id)) {
@@ -342,6 +354,7 @@ fn process_impl(
         methods,
         span: impl_block.span,
         trait_generic_args,
+        via_field,
     });
 
     if let Some(trait_id) = trait_def_id {
@@ -355,7 +368,7 @@ fn process_impl(
     }
 }
 
-fn validate_trait_impls(registry: &TraitRegistry, errors: &mut Vec<SemanticError>) {
+fn validate_trait_impls(registry: &TraitRegistry, module: &Module, errors: &mut Vec<SemanticError>) {
     for impl_info in &registry.impls {
         let Some(trait_def_id) = impl_info.trait_ else {
             continue;
@@ -364,11 +377,29 @@ fn validate_trait_impls(registry: &TraitRegistry, errors: &mut Vec<SemanticError
             continue;
         };
 
+        // Validate `via` delegation field
+        if let Some(ref via_field_name) = impl_info.via_field {
+            validate_via_field(
+                via_field_name,
+                &impl_info.self_type_name,
+                trait_info.name.as_str(),
+                module,
+                registry,
+                impl_info.span,
+                errors,
+            );
+        }
+
         // Collect all required methods including inherited parent methods
         let all_methods = collect_all_required_methods(trait_info, registry);
 
         for (method_name, has_default, source_trait_name) in &all_methods {
             if !has_default && !impl_info.methods.contains_key(method_name) {
+                // If `via` delegation is active, skip missing method errors
+                // (they'll be auto-forwarded in codegen)
+                if impl_info.via_field.is_some() {
+                    continue;
+                }
                 errors.push(SemanticError {
                     kind: SemanticErrorKind::MissingTraitMethod {
                         trait_: source_trait_name.clone(),
@@ -379,6 +410,70 @@ fn validate_trait_impls(registry: &TraitRegistry, errors: &mut Vec<SemanticError
                 });
             }
         }
+    }
+}
+
+/// Validate that a `via` field exists on the struct and its type implements the target trait.
+fn validate_via_field(
+    field_name: &str,
+    type_name: &str,
+    trait_name: &str,
+    module: &Module,
+    registry: &TraitRegistry,
+    span: Span,
+    errors: &mut Vec<SemanticError>,
+) {
+    // Find the struct definition in the module
+    let struct_def = module.items.iter().find_map(|item| {
+        if let Item::Struct(s) = &item.node {
+            if s.name.node == type_name { Some(s) } else { None }
+        } else {
+            None
+        }
+    });
+    let Some(struct_def) = struct_def else {
+        // Not a struct (could be an enum or primitive) — skip validation
+        return;
+    };
+
+    // Check the field exists
+    let field = struct_def.fields.iter().find(|f| f.node.name.node == field_name);
+    let Some(field) = field else {
+        errors.push(SemanticError {
+            kind: SemanticErrorKind::ViaFieldNotFound {
+                field: field_name.to_string(),
+                type_: type_name.to_string(),
+            },
+            span,
+        });
+        return;
+    };
+
+    // Extract the field's type name
+    let field_type_name = type_name_from_ast(&field.node.type_.node);
+    let Some(ref field_type_name) = field_type_name else {
+        return; // Complex type — skip validation, C compiler will catch issues
+    };
+
+    // Check the field's type implements the target trait
+    if !registry.has_trait_impl_by_name(field_type_name, trait_name) {
+        errors.push(SemanticError {
+            kind: SemanticErrorKind::ViaFieldTypeMissingTrait {
+                field: field_name.to_string(),
+                field_type: field_type_name.clone(),
+                trait_: trait_name.to_string(),
+            },
+            span,
+        });
+    }
+}
+
+/// Extract a simple type name from an AST type (returns None for complex types).
+fn type_name_from_ast(ty: &Type) -> Option<String> {
+    match ty {
+        Type::Named { name, .. } => Some(name.node.clone()),
+        Type::Primitive(p) => Some(format!("{p:?}").to_lowercase()),
+        _ => None,
     }
 }
 
@@ -694,5 +789,96 @@ equip Foo with Child:
         let (registry, errors) = analyze(source);
         assert!(errors.is_empty(), "parent default should not be required: {:?}", errors);
         assert!(registry.has_trait_impl_by_name("Foo", "Child"));
+    }
+
+    #[test]
+    fn via_delegation_skips_missing_method() {
+        let source = "\
+trait Showable:
+    str show(self)
+
+struct Inner:
+    int value
+
+equip Inner with Showable:
+    str show(self):
+        return \"inner\"
+
+struct Outer:
+    Inner inner
+
+equip Outer with Showable via inner:
+    pass
+";
+        let (registry, errors) = analyze(source);
+        assert!(errors.is_empty(), "via delegation should skip missing method errors: {:?}", errors);
+        assert!(registry.has_trait_impl_by_name("Outer", "Showable"));
+        let outer_impl = registry.impls.iter().find(|i| i.self_type_name == "Outer").unwrap();
+        assert_eq!(outer_impl.via_field.as_deref(), Some("inner"));
+    }
+
+    #[test]
+    fn via_without_trait_errors() {
+        let source = "\
+struct Foo:
+    int x
+
+equip Foo via x:
+    pass
+";
+        let (_, errors) = analyze(source);
+        assert!(errors.iter().any(|e| matches!(
+            &e.kind,
+            SemanticErrorKind::ViaWithoutTrait
+        )), "via without trait should error: {:?}", errors);
+    }
+
+    #[test]
+    fn via_field_not_found_errors() {
+        let source = "\
+trait Showable:
+    str show(self)
+
+struct Inner:
+    int value
+
+equip Inner with Showable:
+    str show(self):
+        return \"inner\"
+
+struct Outer:
+    Inner inner
+
+equip Outer with Showable via nonexistent:
+    pass
+";
+        let (_, errors) = analyze(source);
+        assert!(errors.iter().any(|e| matches!(
+            &e.kind,
+            SemanticErrorKind::ViaFieldNotFound { field, .. } if field == "nonexistent"
+        )), "via with nonexistent field should error: {:?}", errors);
+    }
+
+    #[test]
+    fn via_field_type_missing_trait_errors() {
+        let source = "\
+trait Showable:
+    str show(self)
+
+struct Inner:
+    int value
+
+struct Outer:
+    Inner inner
+
+equip Outer with Showable via inner:
+    pass
+";
+        let (_, errors) = analyze(source);
+        assert!(errors.iter().any(|e| matches!(
+            &e.kind,
+            SemanticErrorKind::ViaFieldTypeMissingTrait { field, field_type, trait_, .. }
+                if field == "inner" && field_type == "Inner" && trait_ == "Showable"
+        )), "via with field type not implementing trait should error: {:?}", errors);
     }
 }

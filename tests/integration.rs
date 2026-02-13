@@ -2184,3 +2184,11 @@ fn time_stdlib() {
 time_ms_ok
 ms_reasonable");
 }
+
+#[test]
+fn via_delegation() {
+    run_gg("via_delegation.gg", "\
+inner
+custom
+7");
+}

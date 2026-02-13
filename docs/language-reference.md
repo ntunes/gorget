@@ -625,11 +625,11 @@ trait Animal extends Displayable:
 ### 5.5 Equip Blocks
 
 ```ebnf
-equip_block = "equip" [ generic_params ] type [ "with" type ]
-              [ where_clause ] ":" NEWLINE INDENT { function_def } DEDENT ;
+equip_block = "equip" [ generic_params ] type [ "with" type ] [ "via" IDENTIFIER ]
+              [ where_clause ] ":" NEWLINE INDENT { function_def | "pass" } DEDENT ;
 ```
 
-Equip blocks attach methods to types. There are two forms:
+Equip blocks attach methods to types. There are three forms:
 
 **Inherent implementation** (methods directly on a type):
 
@@ -647,6 +647,22 @@ equip Point:
 equip Point with Displayable:
     String to_string(self):
         return "({self.x}, {self.y})"
+```
+
+**Delegation via field** (auto-forward unimplemented trait methods through a struct field):
+
+```gorget
+equip Outer with Showable via inner:
+    pass
+```
+
+When `via field_name` is specified, any trait method not explicitly provided in the equip block is automatically delegated to the named field. The field's type must implement the target trait. Explicitly provided methods take priority over delegation.
+
+```gorget
+equip Wrapper with Describable via inner:
+    str describe(self):
+        return self.label   # explicit override
+    # count() auto-forwarded to self.inner.count()
 ```
 
 ### 5.6 Imports
@@ -2002,8 +2018,8 @@ trait_def  = { attribute } [ "public" ] "trait" IDENTIFIER
 trait_item = function_def | "type" IDENTIFIER [ ":" trait_bound_list ] NEWLINE ;
 
 (* ── Equip blocks ── *)
-equip_block = "equip" [ generic_params ] type [ "with" type ]
-              [ where_clause ] ":" NEWLINE INDENT { function_def } DEDENT ;
+equip_block = "equip" [ generic_params ] type [ "with" type ] [ "via" IDENTIFIER ]
+              [ where_clause ] ":" NEWLINE INDENT { function_def | "pass" } DEDENT ;
 
 (* ── Imports ── *)
 import_stmt    = simple_import | grouped_import | from_import ;

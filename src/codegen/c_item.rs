@@ -335,11 +335,21 @@ impl CodegenContext<'_> {
                             let all_methods = self.collect_all_trait_methods(trait_def, &trait_defs);
                             for (method, _) in &all_methods {
                                 if !Self::equip_has_method(impl_block, &method.name.node) {
-                                    // Only emit if the method has a body (default)
                                     if !matches!(method.body, FunctionBody::Declaration) {
+                                        // Default method body — emit as-is
                                         self.emit_function_def(
                                             method,
                                             Some((&type_name, Some(tname))),
+                                            emitter,
+                                        );
+                                    } else if let Some(ref via) = impl_block.via_field {
+                                        // No default body — delegate via field
+                                        self.emit_via_forwarding_method(
+                                            method,
+                                            &type_name,
+                                            tname,
+                                            &via.node,
+                                            impl_block,
                                             emitter,
                                         );
                                     }
@@ -1936,6 +1946,73 @@ static inline void {mangled}__free({mangled}* m) {{
     /// Check if a method name is provided in an equip block.
     fn equip_has_method(impl_block: &EquipBlock, method_name: &str) -> bool {
         impl_block.items.iter().any(|m| m.node.name.node == method_name)
+    }
+
+    /// Emit a forwarding function that delegates a trait method through a field (`via` delegation).
+    fn emit_via_forwarding_method(
+        &self,
+        method: &FunctionDef,
+        type_name: &str,
+        trait_name: &str,
+        field_name: &str,
+        _impl_block: &EquipBlock,
+        emitter: &mut CEmitter,
+    ) {
+        // Resolve the field's type name from the field_type_names map
+        let field_type_name = self.field_type_names
+            .get(&(type_name.to_string(), field_name.to_string()))
+            .and_then(|ty| match ty {
+                Type::Named { name, .. } => Some(name.node.clone()),
+                Type::Primitive(p) => Some(c_types::primitive_to_c(*p).to_string()),
+                _ => None,
+            });
+        let Some(field_type_name) = field_type_name else {
+            return; // Cannot resolve field type — skip
+        };
+
+        // Build the wrapper function signature (for the Outer type)
+        let (ret_type, func_name, params) =
+            self.function_signature(method, Some((type_name, Some(trait_name))));
+
+        // Build the target function name (for the field's type)
+        let target_fn = c_mangle::mangle_trait_method(trait_name, &field_type_name, &method.name.node);
+
+        // Build the forwarding arguments
+        let self_param = method.params.iter().find(|p| p.node.name.node == "self");
+        let is_mutable = self_param
+            .map(|p| matches!(p.node.ownership, Ownership::MutableBorrow | Ownership::Move))
+            .unwrap_or(false);
+
+        let mut arg_parts = Vec::new();
+        // Forward self as &self->field (pointer to the field)
+        if self_param.is_some() {
+            if is_mutable {
+                arg_parts.push(format!("&self->{field_name}"));
+            } else {
+                arg_parts.push(format!("&self->{field_name}"));
+            }
+        }
+        // Forward remaining parameters as-is
+        for param in &method.params {
+            if param.node.name.node == "self" {
+                continue;
+            }
+            arg_parts.push(c_mangle::escape_keyword(&param.node.name.node));
+        }
+        let args = arg_parts.join(", ");
+
+        // Emit the forwarding function
+        emitter.emit_line(&format!("{ret_type} {func_name}({params}) {{"));
+        emitter.indent();
+        let is_void = matches!(method.return_type.node, Type::Primitive(PrimitiveType::Void));
+        if is_void {
+            emitter.emit_line(&format!("{target_fn}({args});"));
+        } else {
+            emitter.emit_line(&format!("return {target_fn}({args});"));
+        }
+        emitter.dedent();
+        emitter.emit_line("}");
+        emitter.blank_line();
     }
 
     /// Check if an equip block is for a generic type (should be deferred for monomorphization).
