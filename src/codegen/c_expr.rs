@@ -2188,9 +2188,18 @@ impl CodegenContext<'_> {
             Expr::FieldAccess { object, field } => {
                 let obj_type = self.infer_receiver_type(object);
                 if obj_type != "Unknown" {
-                    let key = (obj_type, field.node.clone());
+                    let key = (obj_type.clone(), field.node.clone());
                     if let Some(field_type) = self.field_type_names.get(&key) {
-                        return Self::type_to_name(field_type);
+                        return self.type_to_resolved_name(field_type);
+                    }
+                    // Fallback: for monomorphized generic types like "SparseSet__Health",
+                    // try the base name "SparseSet" since field_type_names may use it.
+                    if let Some(pos) = obj_type.find("__") {
+                        let base = &obj_type[..pos];
+                        let fallback_key = (base.to_string(), field.node.clone());
+                        if let Some(field_type) = self.field_type_names.get(&fallback_key) {
+                            return self.type_to_resolved_name(field_type);
+                        }
                     }
                 }
                 "Unknown".to_string()
@@ -2200,7 +2209,7 @@ impl CodegenContext<'_> {
         }
     }
 
-    /// Extract the base type name from an AST Type.
+    /// Extract the base type name from an AST Type (static, no generic mangling).
     fn type_to_name(ty: &Type) -> String {
         match ty {
             Type::Named { name, .. } => name.node.clone(),
@@ -2216,6 +2225,31 @@ impl CodegenContext<'_> {
                 PrimitiveType::Void => "void".to_string(),
             },
             _ => "Unknown".to_string(),
+        }
+    }
+
+    /// Resolve an AST Type to a name suitable for method dispatch.
+    /// For user-defined generic types like SparseSet[Health], returns the
+    /// mangled name "SparseSet__Health". For built-in types, returns the base name.
+    fn type_to_resolved_name(&self, ty: &Type) -> String {
+        match ty {
+            Type::Named { name, generic_args } if !generic_args.is_empty() => {
+                // Built-in collection/wrapper types — return base name
+                match name.node.as_str() {
+                    "Vector" | "List" | "Array" | "Set" | "Dict" | "Map" | "HashMap"
+                    | "Box" | "Rc" | "Arc" | "Weak" | "Cell" | "RefCell" | "Mutex" | "RwLock"
+                    | "Option" | "Result" | "Iterator" => name.node.clone(),
+                    _ => {
+                        // User-defined generic type → mangle for method dispatch
+                        let c_args: Vec<String> = generic_args
+                            .iter()
+                            .map(|a| super::c_types::ast_type_to_c(&a.node, self.scopes))
+                            .collect();
+                        super::c_mangle::mangle_generic(&name.node, &c_args)
+                    }
+                }
+            }
+            _ => Self::type_to_name(ty),
         }
     }
 

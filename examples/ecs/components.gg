@@ -1,0 +1,13 @@
+# Components — game component definitions
+#
+# Demonstrates: @derive(Displayable) for auto-generated display,
+# simple value structs as ECS components.
+
+@derive(Displayable)
+struct Health:
+    int hp
+    int max_hp
+
+@derive(Displayable)
+struct Attack:
+    int damage

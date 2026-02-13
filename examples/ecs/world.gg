@@ -1,0 +1,104 @@
+# World — game world composing ECS building blocks
+#
+# Demonstrates: user-defined World struct with typed component storage,
+# EntityPool + SparseSet composition, multi-component spawn/kill,
+# game systems as methods operating on World via &self.
+
+from entity import EntityPool
+from sparse_set import SparseSet
+from components import Health
+from components import Attack
+
+struct World:
+    EntityPool entities
+    SparseSet[Health] health
+    SparseSet[Attack] attacks
+    SparseSet[int] teams
+    SparseSet[str] names
+
+equip World:
+    int add(&self, str name, int hp, int damage, int team):
+        int id = self.entities.create()
+        self.health.insert(id, Health(hp, hp))
+        self.attacks.insert(id, Attack(damage))
+        self.teams.insert(id, team)
+        self.names.insert(id, name)
+        return id
+
+    void kill(&self, int id):
+        self.health.remove(id)
+        self.attacks.remove(id)
+        self.teams.remove(id)
+        self.names.remove(id)
+        self.entities.destroy(id)
+
+    bool is_alive(self, int id):
+        if self.health.has(id) == false:
+            return false
+        Health h = self.health.get(id)
+        return h.hp > 0
+
+    int team_alive_count(self, int team):
+        int n = 0
+        for i in 0..self.health.len():
+            int eid = self.health.entity_at(i)
+            Health h = self.health.data_at(i)
+            if h.hp > 0 and self.teams.get(eid) == team:
+                n = n + 1
+        return n
+
+    void combat_round(&self):
+        int max_id = self.entities.next_id
+        for i in 0..max_id:
+            if self.is_alive(i) == false:
+                continue
+            if self.attacks.has(i) == false:
+                continue
+            Attack atk = self.attacks.get(i)
+            str attacker_name = self.names.get(i)
+            int attacker_team = self.teams.get(i)
+            # Find target: living enemy with highest HP, tie-break: lowest ID
+            int target = -1
+            int best_hp = -1
+            for j in 0..max_id:
+                if j == i:
+                    continue
+                if self.is_alive(j) == false:
+                    continue
+                if self.teams.has(j) == false:
+                    continue
+                if self.teams.get(j) == attacker_team:
+                    continue
+                Health h = self.health.get(j)
+                if h.hp > best_hp:
+                    best_hp = h.hp
+                    target = j
+            if target == -1:
+                continue
+            # Apply damage
+            Health target_health = self.health.get(target)
+            int new_hp = target_health.hp - atk.damage
+            self.health.set(target, Health(new_hp, target_health.max_hp))
+            str target_name = self.names.get(target)
+            if new_hp <= 0:
+                print("{attacker_name} attacks {target_name} for {atk.damage} damage (defeated)")
+            else:
+                print("{attacker_name} attacks {target_name} for {atk.damage} damage ({new_hp} HP left)")
+
+    void remove_dead(&self):
+        Vector[int] dead = Vector[int]()
+        for i in 0..self.health.len():
+            Health h = self.health.data_at(i)
+            if h.hp <= 0:
+                int eid = self.health.entity_at(i)
+                dead.push(eid)
+        for i in 0..dead.len():
+            int id = dead.get(i)
+            self.kill(id)
+
+    void print_state(self):
+        for i in 0..self.health.len():
+            int eid = self.health.entity_at(i)
+            str name = self.names.get(eid)
+            Health h = self.health.data_at(i)
+            print("{name}: {h.hp}/{h.max_hp} HP")

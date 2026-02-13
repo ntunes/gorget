@@ -1834,6 +1834,27 @@ high priority: 2
 }
 
 #[test]
+fn example_ecs() {
+    run_example("ecs", "\
+=== Turn 1 ===
+Knight attacks Orc for 30 damage (50 HP left)
+Archer attacks Orc for 20 damage (30 HP left)
+Orc attacks Knight for 25 damage (75 HP left)
+Goblin attacks Knight for 15 damage (60 HP left)
+=== Turn 2 ===
+Knight attacks Goblin for 30 damage (20 HP left)
+Archer attacks Orc for 20 damage (10 HP left)
+Orc attacks Knight for 25 damage (35 HP left)
+Goblin attacks Archer for 15 damage (45 HP left)
+=== Turn 3 ===
+Knight attacks Goblin for 30 damage (defeated)
+Archer attacks Orc for 20 damage (defeated)
+Heroes win!
+Knight: 35/100 HP
+Archer: 45/60 HP");
+}
+
+#[test]
 fn example_pipeline() {
     run_example("pipeline", "\
 Class roster:

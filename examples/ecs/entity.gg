@@ -1,0 +1,22 @@
+# EntityPool — entity ID allocation with recycling
+#
+# Demonstrates: struct with Vector field, &self mutation,
+# pop/push for free-list ID recycling.
+
+struct EntityPool:
+    int next_id
+    Vector[int] free_ids
+
+equip EntityPool:
+    int create(&self):
+        if self.free_ids.len() > 0:
+            return self.free_ids.pop()
+        int id = self.next_id
+        self.next_id = self.next_id + 1
+        return id
+
+    void destroy(&self, int id):
+        self.free_ids.push(id)
+
+    int count(self):
+        return self.next_id - self.free_ids.len()

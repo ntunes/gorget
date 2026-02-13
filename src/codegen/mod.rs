@@ -21,7 +21,7 @@ use crate::semantic::traits::TraitRegistry;
 use crate::semantic::AnalysisResult;
 use crate::span::Span;
 
-use crate::parser::ast::{EnumDef, FunctionDef, Item, StructDef};
+use crate::parser::ast::{EnumDef, EquipBlock, FunctionDef, Item, StructDef};
 use c_emitter::CEmitter;
 
 /// A registered generic instantiation.
@@ -113,6 +113,8 @@ pub struct CodegenContext<'a> {
     pub generic_enum_templates: FxHashMap<String, EnumDef>,
     /// Generic function templates stored for monomorphization.
     pub generic_fn_templates: FxHashMap<String, FunctionDef>,
+    /// Equip blocks for generic types, stored for monomorphization.
+    pub generic_equip_templates: FxHashMap<String, Vec<EquipBlock>>,
     /// Variables declared with GorgetClosure type (need fn_ptr dispatch on call).
     pub closure_vars: HashSet<String>,
     /// Registered tuple typedefs: (mangled_name, field_c_types).
@@ -175,6 +177,7 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, strip_asserts: boo
         generic_struct_templates: FxHashMap::default(),
         generic_enum_templates: FxHashMap::default(),
         generic_fn_templates: FxHashMap::default(),
+        generic_equip_templates: FxHashMap::default(),
         closure_vars: HashSet::new(),
         tuple_typedefs: Vec::new(),
         decl_type_hint: None,
@@ -204,11 +207,16 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, strip_asserts: boo
     // 2b. Tuple typedefs (after forward declarations, before type definitions)
     ctx.emit_tuple_typedefs(&mut emitter);
 
+    // 2c. Emit monomorphized generic type definitions (structs/enums only)
+    //     These must appear before regular type definitions so that structs
+    //     like World can use SparseSet__Health as a field type.
+    ctx.emit_generic_type_definitions(&mut emitter);
+
     // 3. Type definitions (structs, enums, type aliases, newtypes)
     ctx.emit_type_definitions(module, &mut emitter);
 
-    // 3b. Emit monomorphized generic instantiations
-    ctx.emit_generic_instantiations(&mut emitter);
+    // 3b. Emit monomorphized generic method definitions
+    ctx.emit_generic_method_definitions(&mut emitter);
 
     // 4. Function declarations
     ctx.emit_function_declarations(module, &mut emitter);

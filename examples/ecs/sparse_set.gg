@@ -1,0 +1,69 @@
+# SparseSet[T] — sparse set component storage
+#
+# Demonstrates: generic struct with methods, swap-and-pop removal,
+# dynamic array growth, O(1) insert/remove/lookup.
+
+struct SparseSet[T]:
+    Vector[int] sparse
+    Vector[int] entity_ids
+    Vector[T] data
+    int count
+
+equip SparseSet[T]:
+    void insert(&self, int id, T value):
+        # Grow sparse array if needed
+        while self.sparse.len() <= id:
+            self.sparse.push(-1)
+        if self.sparse.get(id) != -1:
+            # Already present — update in place
+            int idx = self.sparse.get(id)
+            self.data.set(idx, value)
+            return
+        # Add new entry
+        int idx = self.count
+        self.sparse.set(id, idx)
+        self.entity_ids.push(id)
+        self.data.push(value)
+        self.count = self.count + 1
+
+    void remove(&self, int id):
+        if id >= self.sparse.len():
+            return
+        int idx = self.sparse.get(id)
+        if idx == -1:
+            return
+        int last = self.count - 1
+        if idx != last:
+            # Swap with last element
+            int last_entity = self.entity_ids.get(last)
+            T last_data = self.data.get(last)
+            self.entity_ids.set(idx, last_entity)
+            self.data.set(idx, last_data)
+            self.sparse.set(last_entity, idx)
+        # Pop last element
+        self.entity_ids.pop()
+        self.data.pop()
+        self.sparse.set(id, -1)
+        self.count = self.count - 1
+
+    bool has(self, int id):
+        if id >= self.sparse.len():
+            return false
+        return self.sparse.get(id) != -1
+
+    T get(self, int id):
+        int idx = self.sparse.get(id)
+        return self.data.get(idx)
+
+    void set(&self, int id, T value):
+        int idx = self.sparse.get(id)
+        self.data.set(idx, value)
+
+    int len(self):
+        return self.count
+
+    int entity_at(self, int idx):
+        return self.entity_ids.get(idx)
+
+    T data_at(self, int idx):
+        return self.data.get(idx)

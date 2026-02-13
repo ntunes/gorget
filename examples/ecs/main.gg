@@ -1,0 +1,41 @@
+# ECS Battle Simulation — turn-based combat using Entity Component System
+#
+# Demonstrates: full ECS architecture with reusable library (EntityPool,
+# SparseSet), user-defined World struct, system methods, game loop.
+
+from entity import EntityPool
+from sparse_set import SparseSet
+from components import Health
+from components import Attack
+from world import World
+
+void main():
+    # Build an empty world
+    EntityPool pool = EntityPool(0, Vector[int]())
+    SparseSet[Health] health = SparseSet[Health](Vector[int](), Vector[int](), Vector[Health](), 0)
+    SparseSet[Attack] attacks = SparseSet[Attack](Vector[int](), Vector[int](), Vector[Attack](), 0)
+    SparseSet[int] teams = SparseSet[int](Vector[int](), Vector[int](), Vector[int](), 0)
+    SparseSet[str] names = SparseSet[str](Vector[int](), Vector[int](), Vector[str](), 0)
+    World world = World(pool, health, attacks, teams, names)
+
+    # Team 1 (Heroes)
+    world.add("Knight", 100, 30, 1)
+    world.add("Archer", 60, 20, 1)
+
+    # Team 2 (Monsters)
+    world.add("Orc", 80, 25, 2)
+    world.add("Goblin", 50, 15, 2)
+
+    int turn = 0
+    while world.team_alive_count(1) > 0 and world.team_alive_count(2) > 0:
+        turn = turn + 1
+        print("=== Turn {turn} ===")
+        world.combat_round()
+        world.remove_dead()
+
+    # Print winner
+    if world.team_alive_count(1) > 0:
+        print("Heroes win!")
+    else:
+        print("Monsters win!")
+    world.print_state()

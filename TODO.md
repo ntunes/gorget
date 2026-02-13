@@ -12,7 +12,10 @@
 - `gg info` command: show fields, methods, traits, memory layout for a type [added: 2026-02-10]
 
 ## Low Priority — Showcase examples
-- [showcase] `examples/ecs/` — Entity-component system: trait-based components, Option[T] fields, system iteration with pattern matching [added: 2026-02-12]
+- Mutable borrow parameters in free functions: `Type &name` params in non-method free functions generate by-value C code instead of pointer params — mutations don't propagate to caller; workaround: use `&self` methods instead [added: 2026-02-13]
+- `DenseStore[T]` / archetype ECS storage: needs Default trait for generic slot initialization [added: 2026-02-13]
+- Type erasure / `any` type: allows fully generic World without user-defined struct [added: 2026-02-13]
+- Query builder API for ECS: `world.query[Position, Health]()` returning iterator — needs variadic generics or macro system [added: 2026-02-13]
 - [showcase] `examples/collections/` — Custom generic data structure: generic Stack[T] backed by Vector, Iterator[T] impl, ownership moves [added: 2026-02-12]
 
 ## Low Priority — Native backend (LLVM, QBE, or cranelift — after language stabilizes)

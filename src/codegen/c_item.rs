@@ -53,6 +53,17 @@ impl CodegenContext<'_> {
             }
         }
 
+        // Forward-declare generic instantiations (structs and enums)
+        for inst in &self.generic_instances {
+            match inst.kind {
+                super::GenericInstanceKind::Struct | super::GenericInstanceKind::Enum => {
+                    let name = &inst.mangled_name;
+                    emitter.emit_line(&format!("typedef struct {name} {name};"));
+                }
+                _ => {}
+            }
+        }
+
         emitter.blank_line();
     }
 
@@ -216,6 +227,10 @@ impl CodegenContext<'_> {
                     }
                 }
                 Item::Equip(impl_block) => {
+                    // Skip equip blocks for generic types — emitted per-instantiation
+                    if self.is_generic_equip(impl_block) {
+                        continue;
+                    }
                     let type_name = self.impl_type_name(impl_block);
                     let trait_name = self.impl_trait_name(impl_block);
                     // Emit prototypes for explicitly implemented methods
@@ -294,6 +309,10 @@ impl CodegenContext<'_> {
                     self.emit_function_def(f, None, emitter);
                 }
                 Item::Equip(impl_block) => {
+                    // Skip equip blocks for generic types — emitted per-instantiation
+                    if self.is_generic_equip(impl_block) {
+                        continue;
+                    }
                     let type_name = self.impl_type_name(impl_block);
                     let trait_name = self.impl_trait_name(impl_block);
                     self.current_self_type = Some(type_name.clone());
@@ -1003,6 +1022,17 @@ impl CodegenContext<'_> {
                     self.generic_fn_templates
                         .insert(f.name.node.clone(), f.clone());
                 }
+                Item::Equip(impl_block) => {
+                    // Collect equip blocks whose type is a generic struct/enum
+                    if let Type::Named { name, generic_args } = &impl_block.type_.node {
+                        if !generic_args.is_empty() {
+                            self.generic_equip_templates
+                                .entry(name.node.clone())
+                                .or_default()
+                                .push(impl_block.clone());
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -1087,10 +1117,16 @@ impl CodegenContext<'_> {
         mangled
     }
 
-    /// Emit all registered generic instantiations.
-    pub fn emit_generic_instantiations(&mut self, emitter: &mut CEmitter) {
+    /// Emit struct/enum definitions for generic instantiations.
+    /// Must be called before regular type definitions so that structs like World
+    /// can use monomorphized generic types (e.g., SparseSet__Health) as fields.
+    pub fn emit_generic_type_definitions(&mut self, emitter: &mut CEmitter) {
         let instances = self.generic_instances.clone();
-        if instances.is_empty() {
+        let has_types = instances.iter().any(|i| matches!(
+            i.kind,
+            super::GenericInstanceKind::Struct | super::GenericInstanceKind::Enum | super::GenericInstanceKind::Map
+        ));
+        if !has_types {
             return;
         }
         emitter.emit_line("// ── Generic Instantiations ──");
@@ -1100,6 +1136,22 @@ impl CodegenContext<'_> {
                     let template = self.generic_struct_templates.get(&inst.base_name).cloned();
                     if let Some(template) = template {
                         self.emit_monomorphized_struct(&template, &inst.c_type_args, &inst.mangled_name, emitter);
+                        // Register field types for the monomorphized struct
+                        // so infer_receiver_type can resolve field accesses.
+                        let subs = self.build_type_substitutions(
+                            template.generic_params.as_ref(),
+                            &inst.c_type_args,
+                        );
+                        for field in &template.fields {
+                            let subst_type = self.substitute_type_ast(
+                                &field.node.type_.node,
+                                &subs,
+                            );
+                            self.field_type_names.insert(
+                                (inst.mangled_name.clone(), field.node.name.node.clone()),
+                                subst_type,
+                            );
+                        }
                     }
                 }
                 super::GenericInstanceKind::Enum => {
@@ -1108,18 +1160,55 @@ impl CodegenContext<'_> {
                         self.emit_monomorphized_enum(&template, &inst.c_type_args, &inst.mangled_name, emitter);
                     }
                 }
+                super::GenericInstanceKind::Map => {
+                    self.emit_monomorphized_map(&inst.c_type_args, &inst.mangled_name, emitter);
+                }
+                _ => {}
+            }
+        }
+        emitter.blank_line();
+    }
+
+    /// Emit method definitions for generic instantiations (equip blocks + generic functions).
+    /// Must be called after regular type definitions so that method signatures
+    /// can reference user-defined types like Health by value.
+    pub fn emit_generic_method_definitions(&mut self, emitter: &mut CEmitter) {
+        let instances = self.generic_instances.clone();
+        for inst in &instances {
+            match inst.kind {
+                super::GenericInstanceKind::Struct => {
+                    // Emit monomorphized equip block methods for this type
+                    let equip_blocks = self.generic_equip_templates
+                        .get(&inst.base_name)
+                        .cloned()
+                        .unwrap_or_default();
+                    for equip_block in &equip_blocks {
+                        let struct_template = self.generic_struct_templates.get(&inst.base_name).cloned();
+                        let generic_params = struct_template
+                            .as_ref()
+                            .and_then(|t| t.generic_params.as_ref());
+                        let trait_name = self.impl_trait_name(&equip_block);
+                        for method in &equip_block.items {
+                            self.emit_monomorphized_equip_method(
+                                &method.node,
+                                generic_params,
+                                &inst.c_type_args,
+                                &inst.mangled_name,
+                                trait_name.as_deref(),
+                                emitter,
+                            );
+                        }
+                    }
+                }
                 super::GenericInstanceKind::Function => {
                     let template = self.generic_fn_templates.get(&inst.base_name).cloned();
                     if let Some(template) = template {
                         self.emit_monomorphized_function(&template, &inst.c_type_args, &inst.mangled_name, emitter);
                     }
                 }
-                super::GenericInstanceKind::Map => {
-                    self.emit_monomorphized_map(&inst.c_type_args, &inst.mangled_name, emitter);
-                }
+                _ => {}
             }
         }
-        emitter.blank_line();
     }
 
     /// Emit a monomorphized map (Dict) struct and its inline functions.
@@ -1797,6 +1886,142 @@ static inline void {mangled}__free({mangled}* m) {{
     /// Check if a method name is provided in an equip block.
     fn equip_has_method(impl_block: &EquipBlock, method_name: &str) -> bool {
         impl_block.items.iter().any(|m| m.node.name.node == method_name)
+    }
+
+    /// Check if an equip block is for a generic type (should be deferred for monomorphization).
+    fn is_generic_equip(&self, impl_block: &EquipBlock) -> bool {
+        if let Type::Named { name, generic_args } = &impl_block.type_.node {
+            if !generic_args.is_empty() && self.generic_struct_templates.contains_key(&name.node) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Emit a monomorphized method from a generic equip block.
+    fn emit_monomorphized_equip_method(
+        &mut self,
+        method: &FunctionDef,
+        struct_generic_params: Option<&crate::span::Spanned<GenericParams>>,
+        c_type_args: &[String],
+        mangled_type_name: &str,
+        trait_name: Option<&str>,
+        emitter: &mut CEmitter,
+    ) {
+        let subs = self.build_type_substitutions(struct_generic_params, c_type_args);
+
+        let ret_type = self.substitute_type(&method.return_type.node, &subs);
+
+        // Build function name
+        let func_name = if let Some(tname) = trait_name {
+            c_mangle::mangle_trait_method(tname, mangled_type_name, &method.name.node)
+        } else {
+            c_mangle::mangle_method(mangled_type_name, &method.name.node)
+        };
+
+        // Build parameters
+        let mut params_vec: Vec<String> = Vec::new();
+        let self_param = method.params.iter().find(|p| p.node.name.node == "self");
+        if let Some(sp) = self_param {
+            let is_mutable = matches!(
+                sp.node.ownership,
+                Ownership::MutableBorrow | Ownership::Move
+            );
+            if is_mutable {
+                params_vec.push(format!("{mangled_type_name}* self"));
+            } else {
+                params_vec.push(format!("const {mangled_type_name}* self"));
+            }
+        }
+        for param in &method.params {
+            if param.node.name.node == "self" {
+                continue;
+            }
+            let param_type = self.substitute_type(&param.node.type_.node, &subs);
+            let param_name = c_mangle::escape_keyword(&param.node.name.node);
+            params_vec.push(c_types::c_declare(&param_type, &param_name));
+        }
+        let params = if params_vec.is_empty() {
+            "void".to_string()
+        } else {
+            params_vec.join(", ")
+        };
+
+        // Emit prototype
+        emitter.emit_line(&format!("{ret_type} {func_name}({params});"));
+
+        // Activate substitutions and self type for body codegen
+        self.type_subs = subs;
+        let prev_self_type = self.current_self_type.take();
+        self.current_self_type = Some(mangled_type_name.to_string());
+
+        // Emit definition
+        match &method.body {
+            FunctionBody::Expression(expr) => {
+                emitter.emit_line(&format!("{ret_type} {func_name}({params}) {{"));
+                emitter.indent();
+                let e = self.gen_expr(expr);
+                emitter.emit_line(&format!("return {e};"));
+                emitter.dedent();
+                emitter.emit_line("}");
+                emitter.blank_line();
+            }
+            FunctionBody::Block(block) => {
+                emitter.emit_line(&format!("{ret_type} {func_name}({params}) {{"));
+                emitter.indent();
+                self.gen_block(block, emitter);
+                emitter.dedent();
+                emitter.emit_line("}");
+                emitter.blank_line();
+            }
+            FunctionBody::Declaration => {}
+        }
+
+        self.type_subs.clear();
+        self.current_self_type = prev_self_type;
+    }
+
+    /// Apply type parameter substitutions to an AST Type, returning a new AST Type.
+    /// Used to register substituted field types for monomorphized generic structs.
+    fn substitute_type_ast(
+        &self,
+        ty: &Type,
+        subs: &[(String, String)],
+    ) -> Type {
+        match ty {
+            Type::Named { name, generic_args } if generic_args.is_empty() => {
+                // Check if this is a type parameter being substituted
+                for (param_name, c_type) in subs {
+                    if name.node == *param_name {
+                        // Map C type back to an AST type for field_type_names
+                        return match c_type.as_str() {
+                            "int64_t" => Type::Primitive(PrimitiveType::Int),
+                            "double" => Type::Primitive(PrimitiveType::Float),
+                            "bool" => Type::Primitive(PrimitiveType::Bool),
+                            "const char*" => Type::Primitive(PrimitiveType::Str),
+                            "char" => Type::Primitive(PrimitiveType::Char),
+                            _ => Type::Named {
+                                name: crate::span::Spanned::dummy(c_type.clone()),
+                                generic_args: vec![],
+                            },
+                        };
+                    }
+                }
+                ty.clone()
+            }
+            Type::Named { name, generic_args } => {
+                // Recursively substitute generic args
+                let new_args: Vec<crate::span::Spanned<Type>> = generic_args
+                    .iter()
+                    .map(|a| crate::span::Spanned::dummy(self.substitute_type_ast(&a.node, subs)))
+                    .collect();
+                Type::Named {
+                    name: name.clone(),
+                    generic_args: new_args,
+                }
+            }
+            _ => ty.clone(),
+        }
     }
 
     /// Convert a TypeId to a C type string (convenience wrapper).
