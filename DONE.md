@@ -1,5 +1,6 @@
 # DONE
 
+- [2026-02-13] Replace generic_instances.clone() with index-based loops in emit_generic_type_definitions and emit_generic_method_definitions (c_item.rs) — avoids cloning entire Vec on every compilation
 - [2026-02-13] Unify for-loop codegen: merged 6 functions (`gen_for_loop`, `gen_for_loop_with_else`, `gen_for_loop_iterator`, `gen_for_loop_iterator_with_else`, `gen_for_loop_dict`, `gen_for_loop_set`) into a single `gen_for_loop` taking `else_body: &Option<Block>`. Removed ~280 lines of duplicated code. All 7 iterable kinds (range, string, array, map, set, iterator, C-array) share common body/close/else logic.
 - [2026-02-13] Prefix user-defined function names with `gg_` in C output to prevent collisions with C library symbols (e.g. `send` vs `sys/socket.h`): added `escape_function()` to c_mangle.rs for `gg_` prefix, `function_names: HashSet<String>` to CodegenContext populated from module items, used in `function_signature()` for definitions and `gen_expr` Identifier for call sites; variables, struct fields, and parameters keep bare names (scoped in C, no collision risk); `escape_keyword()` reverted to C-keyword-only escaping
 - [2026-02-13] Trim `is_builtin()` to just `print | format | len | type`: removed dead builtins `range`, `enumerate`, `zip`, `map`, `filter` which had zero usage and zero codegen support

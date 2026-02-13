@@ -1151,8 +1151,7 @@ impl CodegenContext<'_> {
     /// Must be called before regular type definitions so that structs like World
     /// can use monomorphized generic types (e.g., SparseSet__Health) as fields.
     pub fn emit_generic_type_definitions(&mut self, emitter: &mut CEmitter) {
-        let instances = self.generic_instances.clone();
-        let has_types = instances.iter().any(|i| matches!(
+        let has_types = self.generic_instances.iter().any(|i| matches!(
             i.kind,
             super::GenericInstanceKind::Struct | super::GenericInstanceKind::Enum | super::GenericInstanceKind::Map
         ));
@@ -1160,14 +1159,13 @@ impl CodegenContext<'_> {
             return;
         }
         emitter.emit_line("// ── Generic Instantiations ──");
-        for inst in &instances {
+        for i in 0..self.generic_instances.len() {
+            let inst = self.generic_instances[i].clone();
             match inst.kind {
                 super::GenericInstanceKind::Struct => {
                     let template = self.generic_struct_templates.get(&inst.base_name).cloned();
                     if let Some(template) = template {
                         self.emit_monomorphized_struct(&template, &inst.c_type_args, &inst.mangled_name, emitter);
-                        // Register field types for the monomorphized struct
-                        // so infer_receiver_type can resolve field accesses.
                         let subs = self.build_type_substitutions(
                             template.generic_params.as_ref(),
                             &inst.c_type_args,
@@ -1203,8 +1201,8 @@ impl CodegenContext<'_> {
     /// Must be called after regular type definitions so that method signatures
     /// can reference user-defined types like Health by value.
     pub fn emit_generic_method_definitions(&mut self, emitter: &mut CEmitter) {
-        let instances = self.generic_instances.clone();
-        for inst in &instances {
+        for i in 0..self.generic_instances.len() {
+            let inst = self.generic_instances[i].clone();
             match inst.kind {
                 super::GenericInstanceKind::Struct | super::GenericInstanceKind::Enum => {
                     // Emit monomorphized equip block methods for this type
