@@ -2147,3 +2147,17 @@ fn io_input() {
 got: world
 name? hello Alice");
 }
+
+#[test]
+fn conv_stdlib() {
+    run_gg("conv_stdlib.gg", "\
+3.140000
+-0.500000
+42
+-100
+2.5
+1000
+true
+false
+A");
+}

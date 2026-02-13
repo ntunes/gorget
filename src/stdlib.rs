@@ -73,6 +73,11 @@ fn gen_conv_module() -> Module {
         decl_fn("ord", &[("c", ty_char())], ty_int()),
         decl_fn("chr", &[("n", ty_int())], ty_char()),
         decl_fn("parse_int", &[("s", ty_str())], ty_int()),
+        decl_fn("parse_float", &[("s", ty_str())], ty_float()),
+        decl_fn("int_to_str", &[("n", ty_int())], ty_str()),
+        decl_fn("float_to_str", &[("x", ty_float())], ty_str()),
+        decl_fn("bool_to_str", &[("b", ty_bool())], ty_str()),
+        decl_fn("char_to_str", &[("c", ty_char())], ty_str()),
     ])
 }
 
@@ -313,7 +318,7 @@ mod tests {
     #[test]
     fn generate_conv() {
         let m = generate_stdlib_module(&["std".into(), "conv".into()]).unwrap();
-        assert_eq!(m.items.len(), 3);
+        assert_eq!(m.items.len(), 8);
     }
 
     #[test]

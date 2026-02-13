@@ -805,6 +805,47 @@ static inline int64_t gorget_parse_int(const char* s) {
     return (int64_t)result;
 }
 
+// ── parse_float ──────────────────────────────────────────────
+static inline double gorget_parse_float(const char* s) {
+    char* endptr;
+    double result = strtod(s, &endptr);
+    if (*endptr != '\0' && !isspace((unsigned char)*endptr)) {
+        fprintf(stderr, "panic: parse_float: invalid float '%s'\n", s);
+        exit(1);
+    }
+    return result;
+}
+
+// ── to_str conversions ──────────────────────────────────────
+static inline const char* gorget_int_to_str(int64_t n) {
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%" PRId64, n);
+    size_t len = strlen(buf);
+    char* out = (char*)malloc(len + 1);
+    memcpy(out, buf, len + 1);
+    return out;
+}
+
+static inline const char* gorget_float_to_str(double x) {
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%g", x);
+    size_t len = strlen(buf);
+    char* out = (char*)malloc(len + 1);
+    memcpy(out, buf, len + 1);
+    return out;
+}
+
+static inline const char* gorget_bool_to_str(bool b) {
+    return b ? "true" : "false";
+}
+
+static inline const char* gorget_char_to_str(char c) {
+    char* out = (char*)malloc(2);
+    out[0] = c;
+    out[1] = '\0';
+    return out;
+}
+
 // ── getenv ───────────────────────────────────────────────────
 static inline const char* gorget_getenv(const char* name) {
     const char* val = getenv(name);

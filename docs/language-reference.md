@@ -1757,6 +1757,11 @@ The following functions are available via `import`:
 | `ord` | `int(char)` | Character to integer code point |
 | `chr` | `char(int)` | Integer code point to character |
 | `parse_int` | `int(str)` | Parse string as integer |
+| `parse_float` | `float(str)` | Parse string as float |
+| `int_to_str` | `str(int)` | Integer to string |
+| `float_to_str` | `str(float)` | Float to string (compact format) |
+| `bool_to_str` | `str(bool)` | Bool to `"true"` or `"false"` |
+| `char_to_str` | `str(char)` | Single character to string |
 
 **`std.io`** — I/O
 

@@ -1,0 +1,29 @@
+from std.conv import parse_float, int_to_str, float_to_str, bool_to_str, char_to_str
+
+void main():
+    # parse_float
+    float pi = parse_float("3.14")
+    print("{pi}")
+
+    float neg = parse_float("-0.5")
+    print("{neg}")
+
+    # int_to_str
+    str s1 = int_to_str(42)
+    print(s1)
+    str s2 = int_to_str(-100)
+    print(s2)
+
+    # float_to_str
+    str s3 = float_to_str(2.5)
+    print(s3)
+    str s4 = float_to_str(1000.0)
+    print(s4)
+
+    # bool_to_str
+    print(bool_to_str(true))
+    print(bool_to_str(false))
+
+    # char_to_str
+    str s5 = char_to_str('A')
+    print(s5)

@@ -646,6 +646,36 @@ impl CodegenContext<'_> {
                             return format!("gorget_parse_int({s})");
                         }
                     }
+                    "parse_float" => {
+                        if let Some(arg) = args.first() {
+                            let s = self.gen_expr(&arg.node.value);
+                            return format!("gorget_parse_float({s})");
+                        }
+                    }
+                    "int_to_str" => {
+                        if let Some(arg) = args.first() {
+                            let n = self.gen_expr(&arg.node.value);
+                            return format!("gorget_int_to_str({n})");
+                        }
+                    }
+                    "float_to_str" => {
+                        if let Some(arg) = args.first() {
+                            let x = self.gen_expr(&arg.node.value);
+                            return format!("gorget_float_to_str({x})");
+                        }
+                    }
+                    "bool_to_str" => {
+                        if let Some(arg) = args.first() {
+                            let b = self.gen_expr(&arg.node.value);
+                            return format!("gorget_bool_to_str({b})");
+                        }
+                    }
+                    "char_to_str" => {
+                        if let Some(arg) = args.first() {
+                            let c = self.gen_expr(&arg.node.value);
+                            return format!("gorget_char_to_str({c})");
+                        }
+                    }
                     "getenv" => {
                         if let Some(arg) = args.first() {
                             let name_expr = self.gen_expr(&arg.node.value);
