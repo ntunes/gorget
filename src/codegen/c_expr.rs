@@ -548,8 +548,18 @@ impl CodegenContext<'_> {
                                 let field_exprs: Vec<String> =
                                     args.iter().map(|a| self.gen_expr(&a.node.value)).collect();
                                 let fields = field_exprs.join(", ");
-                                // For built-in generic enum templates, use decl_type_hint
+                                // For generic enum templates, resolve the monomorphized name
                                 if self.generic_enum_templates.contains_key(&enum_name) {
+                                    // In a monomorphized method body, use the self type
+                                    if let Some(self_type) = &self.current_self_type {
+                                        let prefix = format!("{enum_name}__");
+                                        if self_type.starts_with(&prefix) {
+                                            return format!(
+                                                "{}({fields})",
+                                                c_mangle::mangle_variant(self_type, vname)
+                                            );
+                                        }
+                                    }
                                     if let Some(mangled) = self.resolve_unit_variant_from_type_hint(&enum_name, vname) {
                                         return format!(
                                             "{}({fields})",
@@ -760,7 +770,9 @@ impl CodegenContext<'_> {
         let type_name = self.infer_receiver_type(receiver);
         // Check if this method comes from a trait impl (not inherent)
         let mangled = if let Some(trait_name) = self.find_trait_for_method(&type_name, method_name) {
-            c_mangle::mangle_trait_method(&trait_name, &type_name, method_name)
+            // Use mangled name for generic types (e.g., Pair[int] → Pair__int64_t)
+            let mangled_type = self.infer_receiver_mangled_type(receiver);
+            c_mangle::mangle_trait_method(&trait_name, &mangled_type, method_name)
         } else {
             c_mangle::mangle_method(&type_name, method_name)
         };
@@ -1028,6 +1040,13 @@ impl CodegenContext<'_> {
         &mut self,
         scrutinee: &Spanned<Expr>,
     ) -> Option<String> {
+        // For `self` in a monomorphized method body, use the current self type
+        // (which is the mangled type name, e.g., "Wrapper__int64_t")
+        if matches!(&scrutinee.node, Expr::SelfExpr) {
+            if let Some(self_type) = &self.current_self_type {
+                return Some(self_type.clone());
+            }
+        }
         let type_id = self.resolve_expr_type_id(scrutinee)?;
         match self.types.get(type_id) {
             crate::semantic::types::ResolvedType::Generic(def_id, args) => {
@@ -2209,6 +2228,23 @@ impl CodegenContext<'_> {
         }
     }
 
+    /// Infer the mangled C type name for a receiver, handling generic instantiations.
+    /// For `Pair[int]` returns `"Pair__int64_t"`, for non-generic `Point` returns `"Point"`.
+    /// Falls back to `infer_receiver_type()` for non-generic types.
+    pub(super) fn infer_receiver_mangled_type(&mut self, expr: &Spanned<Expr>) -> String {
+        if let Some(type_id) = self.resolve_expr_type_id(expr) {
+            if let crate::semantic::types::ResolvedType::Generic(def_id, args) = self.types.get(type_id) {
+                let base = super::c_types::def_name_to_c(*def_id, self.scopes);
+                let c_args: Vec<String> = args
+                    .iter()
+                    .map(|tid| super::c_types::type_id_to_c(*tid, self.types, self.scopes))
+                    .collect();
+                return super::c_mangle::mangle_generic(&base, &c_args);
+            }
+        }
+        self.infer_receiver_type(expr)
+    }
+
     /// Extract the base type name from an AST Type (static, no generic mangling).
     fn type_to_name(ty: &Type) -> String {
         match ty {
@@ -2287,7 +2323,8 @@ impl CodegenContext<'_> {
         c_type.as_deref() == Some("GorgetArray")
     }
 
-    /// If `expr` has a Defined (struct) type that implements Equatable, return the type name.
+    /// If `expr` has a Defined (struct) type that implements Equatable, return the mangled type name.
+    /// For generic types like `Pair[int]`, returns `"Pair__int64_t"`.
     fn try_equatable_type(&mut self, expr: &Spanned<Expr>) -> Option<String> {
         let type_name = self.infer_receiver_type(expr);
         // Exclude primitives and builtins
@@ -2296,7 +2333,8 @@ impl CodegenContext<'_> {
             return None;
         }
         if self.traits.has_trait_impl_by_name(&type_name, "Equatable") {
-            Some(type_name)
+            // Use mangled name for generic types (e.g., Pair[int] → Pair__int64_t)
+            Some(self.infer_receiver_mangled_type(expr))
         } else {
             None
         }
@@ -2560,7 +2598,17 @@ impl CodegenContext<'_> {
             ResolvedType::Defined(def_id) | ResolvedType::Generic(def_id, _) => {
                 let name = self.scopes.get_def(*def_id).name.clone();
                 if self.traits.has_trait_impl_by_name(&name, "Displayable") {
-                    let mangled = c_mangle::mangle_trait_method("Displayable", &name, "display");
+                    // For generic types, use the mangled name (e.g., Pair__int64_t)
+                    let mangled_name = if let ResolvedType::Generic(gdef_id, args) = self.types.get(type_id) {
+                        let base = super::c_types::def_name_to_c(*gdef_id, self.scopes);
+                        let c_args: Vec<String> = args.iter()
+                            .map(|tid| super::c_types::type_id_to_c(*tid, self.types, self.scopes))
+                            .collect();
+                        super::c_mangle::mangle_generic(&base, &c_args)
+                    } else {
+                        name.clone()
+                    };
+                    let mangled = c_mangle::mangle_trait_method("Displayable", &mangled_name, "display");
                     // Use a GCC statement expression to handle non-lvalue exprs
                     let call = format!("({{ __typeof__({expr}) __tmp = {expr}; {mangled}(&__tmp); }})");
                     ("%s".to_string(), call)

@@ -1,0 +1,22 @@
+@derive(Equatable, Displayable, Cloneable)
+struct Pair[T]:
+    T first
+    T second
+
+@derive(Cloneable)
+enum Wrapper[T]:
+    Empty()
+    Value(T)
+
+void main():
+    Pair[int] p1 = Pair[int](10, 20)
+    Pair[int] p2 = Pair[int](10, 20)
+    if p1 == p2:
+        print("pair equal")
+    print("{p1}")
+    Pair[int] p3 = p1.clone()
+    print("{p3}")
+    Wrapper[int] w = Value(42)
+    Wrapper[int] w2 = w.clone()
+    Wrapper[int] e = Empty()
+    print("clone ok")

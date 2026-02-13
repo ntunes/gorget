@@ -666,6 +666,10 @@ impl CodegenContext<'_> {
 
         for item in &module.items {
             if let Item::Equip(impl_block) = &item.node {
+                // Skip generic equip blocks — vtables emitted per-instantiation
+                if self.is_generic_equip(impl_block) {
+                    continue;
+                }
                 // Only trait impls (not inherent impls)
                 let Some(trait_ref) = &impl_block.trait_ else {
                     continue;
@@ -810,8 +814,12 @@ impl CodegenContext<'_> {
             match &item.node {
                 Item::Function(f) => self.scan_function_for_generics(f),
                 Item::Equip(impl_block) => {
-                    for method in &impl_block.items {
-                        self.scan_function_for_generics(&method.node);
+                    // Skip generic equip blocks — their bodies contain template
+                    // type params (e.g. Pair[T]) that would register spurious instances
+                    if !self.is_generic_equip(impl_block) {
+                        for method in &impl_block.items {
+                            self.scan_function_for_generics(&method.node);
+                        }
                     }
                 }
                 _ => {}
@@ -1176,22 +1184,26 @@ impl CodegenContext<'_> {
         let instances = self.generic_instances.clone();
         for inst in &instances {
             match inst.kind {
-                super::GenericInstanceKind::Struct => {
+                super::GenericInstanceKind::Struct | super::GenericInstanceKind::Enum => {
                     // Emit monomorphized equip block methods for this type
                     let equip_blocks = self.generic_equip_templates
                         .get(&inst.base_name)
                         .cloned()
                         .unwrap_or_default();
+                    let generic_params = self.generic_struct_templates
+                        .get(&inst.base_name)
+                        .and_then(|t| t.generic_params.clone())
+                        .or_else(|| {
+                            self.generic_enum_templates
+                                .get(&inst.base_name)
+                                .and_then(|t| t.generic_params.clone())
+                        });
                     for equip_block in &equip_blocks {
-                        let struct_template = self.generic_struct_templates.get(&inst.base_name).cloned();
-                        let generic_params = struct_template
-                            .as_ref()
-                            .and_then(|t| t.generic_params.as_ref());
                         let trait_name = self.impl_trait_name(&equip_block);
                         for method in &equip_block.items {
                             self.emit_monomorphized_equip_method(
                                 &method.node,
-                                generic_params,
+                                generic_params.as_ref(),
                                 &inst.c_type_args,
                                 &inst.mangled_name,
                                 trait_name.as_deref(),
@@ -1891,7 +1903,10 @@ static inline void {mangled}__free({mangled}* m) {{
     /// Check if an equip block is for a generic type (should be deferred for monomorphization).
     fn is_generic_equip(&self, impl_block: &EquipBlock) -> bool {
         if let Type::Named { name, generic_args } = &impl_block.type_.node {
-            if !generic_args.is_empty() && self.generic_struct_templates.contains_key(&name.node) {
+            if !generic_args.is_empty()
+                && (self.generic_struct_templates.contains_key(&name.node)
+                    || self.generic_enum_templates.contains_key(&name.node))
+            {
                 return true;
             }
         }

@@ -1,10 +1,31 @@
 use crate::parser::ast::{
-    Attribute, AttributeArg, EnumDef, Item, Module, StructDef, VariantFields,
+    Attribute, AttributeArg, EnumDef, GenericParam, GenericParams, Item, Module, StructDef,
+    VariantFields,
 };
 use crate::parser::Parser;
 use crate::span::{Span, Spanned};
 
 use super::errors::{SemanticError, SemanticErrorKind};
+
+/// Format generic parameters back to source text.
+/// Returns `""` for `None`, `"[T]"` for single param, `"[T, U]"` for multiple.
+fn format_generic_params(gp: &Option<Spanned<GenericParams>>) -> String {
+    match gp {
+        Some(gp) => {
+            let params: Vec<&str> = gp
+                .node
+                .params
+                .iter()
+                .map(|p| match &p.node {
+                    GenericParam::Type(name) => name.node.as_str(),
+                    _ => "auto",
+                })
+                .collect();
+            format!("[{}]", params.join(", "))
+        }
+        None => String::new(),
+    }
+}
 
 /// Expand all `@derive(...)` attributes on structs and enums in the module.
 ///
@@ -37,6 +58,7 @@ fn collect_struct_derives(
     errors: &mut Vec<SemanticError>,
 ) {
     let type_name = &s.name.node;
+    let gs = format_generic_params(&s.generic_params);
 
     for trait_name in extract_derive_args(&s.attributes) {
         if !DERIVABLE_STRUCT_TRAITS.contains(&trait_name.as_str()) {
@@ -63,7 +85,7 @@ fn collect_struct_derives(
             })
             .collect();
 
-        let source = generate_struct_derive(type_name, &trait_name, &fields);
+        let source = generate_struct_derive(type_name, &gs, &trait_name, &fields);
         parse_and_collect_equip_blocks(&source, new_items);
     }
 }
@@ -74,6 +96,7 @@ fn collect_enum_derives(
     errors: &mut Vec<SemanticError>,
 ) {
     let type_name = &e.name.node;
+    let gs = format_generic_params(&e.generic_params);
 
     for trait_name in extract_derive_args(&e.attributes) {
         if !DERIVABLE_ENUM_TRAITS.contains(&trait_name.as_str()) {
@@ -87,7 +110,7 @@ fn collect_enum_derives(
             continue;
         }
 
-        let source = generate_enum_derive(type_name, &trait_name, e);
+        let source = generate_enum_derive(type_name, &gs, &trait_name, e);
         parse_and_collect_equip_blocks(&source, new_items);
     }
 }
@@ -145,17 +168,22 @@ fn format_type(ty: &crate::parser::ast::Type) -> String {
 
 // ── Struct derive generation ──────────────────────────────────
 
-fn generate_struct_derive(type_name: &str, trait_name: &str, fields: &[(&str, &str)]) -> String {
+fn generate_struct_derive(
+    type_name: &str,
+    gs: &str,
+    trait_name: &str,
+    fields: &[(&str, &str)],
+) -> String {
     match trait_name {
-        "Equatable" => generate_struct_equatable(type_name, fields),
-        "Displayable" => generate_struct_displayable(type_name, fields),
-        "Cloneable" => generate_struct_cloneable(type_name, fields),
-        "Hashable" => generate_struct_hashable(type_name, fields),
+        "Equatable" => generate_struct_equatable(type_name, gs, fields),
+        "Displayable" => generate_struct_displayable(type_name, gs, fields),
+        "Cloneable" => generate_struct_cloneable(type_name, gs, fields),
+        "Hashable" => generate_struct_hashable(type_name, gs, fields),
         _ => String::new(),
     }
 }
 
-fn generate_struct_equatable(type_name: &str, fields: &[(&str, &str)]) -> String {
+fn generate_struct_equatable(type_name: &str, gs: &str, fields: &[(&str, &str)]) -> String {
     let body = if fields.is_empty() {
         "        return true".to_string()
     } else {
@@ -167,11 +195,11 @@ fn generate_struct_equatable(type_name: &str, fields: &[(&str, &str)]) -> String
     };
 
     format!(
-        "equip {type_name} with Equatable:\n    bool eq(self, {type_name} other):\n{body}\n"
+        "equip {type_name}{gs} with Equatable:\n    bool eq(self, {type_name}{gs} other):\n{body}\n"
     )
 }
 
-fn generate_struct_displayable(type_name: &str, fields: &[(&str, &str)]) -> String {
+fn generate_struct_displayable(type_name: &str, gs: &str, fields: &[(&str, &str)]) -> String {
     let body = if fields.is_empty() {
         format!("        return \"{type_name}()\"")
     } else {
@@ -186,20 +214,20 @@ fn generate_struct_displayable(type_name: &str, fields: &[(&str, &str)]) -> Stri
     };
 
     format!(
-        "equip {type_name} with Displayable:\n    str display(self):\n{body}\n"
+        "equip {type_name}{gs} with Displayable:\n    str display(self):\n{body}\n"
     )
 }
 
-fn generate_struct_cloneable(type_name: &str, fields: &[(&str, &str)]) -> String {
+fn generate_struct_cloneable(type_name: &str, gs: &str, fields: &[(&str, &str)]) -> String {
     let args: Vec<String> = fields.iter().map(|(name, _)| format!("self.{name}")).collect();
-    let body = format!("        return {type_name}({})", args.join(", "));
+    let body = format!("        return {type_name}{gs}({})", args.join(", "));
 
     format!(
-        "equip {type_name} with Cloneable:\n    {type_name} clone(self):\n{body}\n"
+        "equip {type_name}{gs} with Cloneable:\n    {type_name}{gs} clone(self):\n{body}\n"
     )
 }
 
-fn generate_struct_hashable(type_name: &str, fields: &[(&str, &str)]) -> String {
+fn generate_struct_hashable(type_name: &str, gs: &str, fields: &[(&str, &str)]) -> String {
     let body = if fields.is_empty() {
         "        return 0".to_string()
     } else if fields.len() == 1 {
@@ -217,23 +245,23 @@ fn generate_struct_hashable(type_name: &str, fields: &[(&str, &str)]) -> String 
     };
 
     format!(
-        "equip {type_name} with Hashable:\n    int hash(self):\n{body}\n"
+        "equip {type_name}{gs} with Hashable:\n    int hash(self):\n{body}\n"
     )
 }
 
 // ── Enum derive generation ────────────────────────────────────
 
-fn generate_enum_derive(type_name: &str, trait_name: &str, e: &EnumDef) -> String {
+fn generate_enum_derive(type_name: &str, gs: &str, trait_name: &str, e: &EnumDef) -> String {
     match trait_name {
-        "Equatable" => generate_enum_equatable(type_name, e),
-        "Displayable" => generate_enum_displayable(type_name, e),
-        "Cloneable" => generate_enum_cloneable(type_name, e),
-        "Hashable" => generate_enum_hashable(type_name, e),
+        "Equatable" => generate_enum_equatable(type_name, gs, e),
+        "Displayable" => generate_enum_displayable(type_name, gs, e),
+        "Cloneable" => generate_enum_cloneable(type_name, gs, e),
+        "Hashable" => generate_enum_hashable(type_name, gs, e),
         _ => String::new(),
     }
 }
 
-fn generate_enum_equatable(type_name: &str, e: &EnumDef) -> String {
+fn generate_enum_equatable(type_name: &str, gs: &str, e: &EnumDef) -> String {
     let mut arms = String::new();
 
     for variant in &e.variants {
@@ -283,14 +311,14 @@ fn generate_enum_equatable(type_name: &str, e: &EnumDef) -> String {
     }
 
     format!(
-        "equip {type_name} with Equatable:\n\
-         \x20   bool eq(self, {type_name} other):\n\
+        "equip {type_name}{gs} with Equatable:\n\
+         \x20   bool eq(self, {type_name}{gs} other):\n\
          \x20       match self:\n\
          {arms}"
     )
 }
 
-fn generate_enum_displayable(type_name: &str, e: &EnumDef) -> String {
+fn generate_enum_displayable(type_name: &str, gs: &str, e: &EnumDef) -> String {
     let mut arms = String::new();
 
     for variant in &e.variants {
@@ -322,14 +350,14 @@ fn generate_enum_displayable(type_name: &str, e: &EnumDef) -> String {
     }
 
     format!(
-        "equip {type_name} with Displayable:\n\
+        "equip {type_name}{gs} with Displayable:\n\
          \x20   str display(self):\n\
          \x20       match self:\n\
          {arms}"
     )
 }
 
-fn generate_enum_cloneable(type_name: &str, e: &EnumDef) -> String {
+fn generate_enum_cloneable(type_name: &str, gs: &str, e: &EnumDef) -> String {
     let mut arms = String::new();
 
     for variant in &e.variants {
@@ -360,14 +388,14 @@ fn generate_enum_cloneable(type_name: &str, e: &EnumDef) -> String {
     }
 
     format!(
-        "equip {type_name} with Cloneable:\n\
-         \x20   {type_name} clone(self):\n\
+        "equip {type_name}{gs} with Cloneable:\n\
+         \x20   {type_name}{gs} clone(self):\n\
          \x20       match self:\n\
          {arms}"
     )
 }
 
-fn generate_enum_hashable(type_name: &str, e: &EnumDef) -> String {
+fn generate_enum_hashable(type_name: &str, gs: &str, e: &EnumDef) -> String {
     let mut arms = String::new();
 
     for (idx, variant) in e.variants.iter().enumerate() {
@@ -403,7 +431,7 @@ fn generate_enum_hashable(type_name: &str, e: &EnumDef) -> String {
     }
 
     format!(
-        "equip {type_name} with Hashable:\n\
+        "equip {type_name}{gs} with Hashable:\n\
          \x20   int hash(self):\n\
          \x20       match self:\n\
          {arms}"
@@ -439,26 +467,26 @@ mod tests {
 
     #[test]
     fn test_struct_equatable_no_fields() {
-        let src = generate_struct_equatable("Empty", &[]);
+        let src = generate_struct_equatable("Empty", "", &[]);
         assert!(src.contains("return true"));
         assert!(src.contains("equip Empty with Equatable"));
     }
 
     #[test]
     fn test_struct_equatable_two_fields() {
-        let src = generate_struct_equatable("Point", &[("x", "float"), ("y", "float")]);
+        let src = generate_struct_equatable("Point", "", &[("x", "float"), ("y", "float")]);
         assert!(src.contains("self.x == other.x and self.y == other.y"));
     }
 
     #[test]
     fn test_struct_displayable() {
-        let src = generate_struct_displayable("Point", &[("x", "float"), ("y", "float")]);
+        let src = generate_struct_displayable("Point", "", &[("x", "float"), ("y", "float")]);
         assert!(src.contains("Point(x={self.x}, y={self.y})"));
     }
 
     #[test]
     fn test_struct_cloneable() {
-        let src = generate_struct_cloneable("Point", &[("x", "float"), ("y", "float")]);
+        let src = generate_struct_cloneable("Point", "", &[("x", "float"), ("y", "float")]);
         assert!(src.contains("return Point(self.x, self.y)"));
     }
 
@@ -480,7 +508,7 @@ mod tests {
 
     #[test]
     fn test_generated_source_parses() {
-        let src = generate_struct_equatable("Point", &[("x", "float"), ("y", "float")]);
+        let src = generate_struct_equatable("Point", "", &[("x", "float"), ("y", "float")]);
         let mut parser = Parser::new(&src);
         let module = parser.parse_module();
         assert!(
@@ -575,7 +603,7 @@ void main():
 
     #[test]
     fn test_struct_hashable() {
-        let src = generate_struct_hashable("Point", &[("x", "float"), ("y", "float")]);
+        let src = generate_struct_hashable("Point", "", &[("x", "float"), ("y", "float")]);
         assert!(src.contains("equip Point with Hashable"));
         assert!(src.contains("int hash(self)"));
         assert!(src.contains("self.x.hash()"));
@@ -584,13 +612,13 @@ void main():
 
     #[test]
     fn test_struct_hashable_single_field() {
-        let src = generate_struct_hashable("Wrapper", &[("val", "int")]);
+        let src = generate_struct_hashable("Wrapper", "", &[("val", "int")]);
         assert!(src.contains("return self.val.hash()"));
     }
 
     #[test]
     fn test_struct_hashable_no_fields() {
-        let src = generate_struct_hashable("Empty", &[]);
+        let src = generate_struct_hashable("Empty", "", &[]);
         assert!(src.contains("return 0"));
     }
 
@@ -648,5 +676,73 @@ void main():
             .filter(|i| matches!(&i.node, Item::Equip(_)))
             .count();
         assert_eq!(equip_count, 1, "expected 1 equip block");
+    }
+
+    #[test]
+    fn test_generic_struct_derive_parses() {
+        let source = "\
+@derive(Equatable, Displayable, Cloneable)
+struct Pair[T]:
+    T first
+    T second
+
+void main():
+    pass
+";
+        let mut parser = Parser::new(source);
+        let mut module = parser.parse_module();
+        assert!(parser.errors.is_empty(), "parse errors: {:?}", parser.errors);
+
+        let mut errors = Vec::new();
+        expand_derives(&mut module, &mut errors);
+        assert!(errors.is_empty(), "derive errors: {:?}", errors);
+
+        let equip_count = module
+            .items
+            .iter()
+            .filter(|i| matches!(&i.node, Item::Equip(_)))
+            .count();
+        assert_eq!(equip_count, 3, "expected 3 equip blocks for 3 traits");
+    }
+
+    #[test]
+    fn test_generic_enum_derive_parses() {
+        let source = "\
+@derive(Displayable, Cloneable)
+enum Wrapper[T]:
+    Empty()
+    Value(T)
+
+void main():
+    pass
+";
+        let mut parser = Parser::new(source);
+        let mut module = parser.parse_module();
+        assert!(parser.errors.is_empty(), "parse errors: {:?}", parser.errors);
+
+        let mut errors = Vec::new();
+        expand_derives(&mut module, &mut errors);
+        assert!(errors.is_empty(), "derive errors: {:?}", errors);
+
+        let equip_count = module
+            .items
+            .iter()
+            .filter(|i| matches!(&i.node, Item::Equip(_)))
+            .count();
+        assert_eq!(equip_count, 2, "expected 2 equip blocks for 2 traits");
+    }
+
+    #[test]
+    fn test_struct_equatable_generic() {
+        let src = generate_struct_equatable("Pair", "[T]", &[("first", "T"), ("second", "T")]);
+        assert!(src.contains("equip Pair[T] with Equatable"));
+        assert!(src.contains("Pair[T] other"));
+    }
+
+    #[test]
+    fn test_struct_cloneable_generic() {
+        let src = generate_struct_cloneable("Pair", "[T]", &[("first", "T"), ("second", "T")]);
+        assert!(src.contains("equip Pair[T] with Cloneable"));
+        assert!(src.contains("Pair[T] clone(self)"));
     }
 }

@@ -851,6 +851,18 @@ red != blue",
 }
 
 #[test]
+fn derive_generic() {
+    run_gg(
+        "derive_generic.gg",
+        "\
+pair equal
+Pair(first=10, second=20)
+Pair(first=10, second=20)
+clone ok",
+    );
+}
+
+#[test]
 fn iter_for_else() {
     run_gg(
         "iter_for_else.gg",
