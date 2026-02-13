@@ -80,6 +80,16 @@ pub fn analyze(module: &mut Module) -> AnalysisResult {
                         });
                     }
                 }
+                "trace" => {
+                    if d.value.is_some() {
+                        errors.push(SemanticError {
+                            kind: SemanticErrorKind::UnknownDirective {
+                                name: format!("trace={}", d.value.as_deref().unwrap()),
+                            },
+                            span: d.span,
+                        });
+                    }
+                }
                 _ => {
                     errors.push(SemanticError {
                         kind: SemanticErrorKind::UnknownDirective {

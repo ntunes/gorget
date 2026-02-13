@@ -235,6 +235,87 @@ pub fn format_for_c_type(c_type: &str, expr: &str) -> (String, String) {
     }
 }
 
+/// Convert an AST Type to a Gorget-syntax display name for trace output.
+pub fn ast_type_to_gorget(ty: &crate::parser::ast::Type) -> String {
+    match ty {
+        crate::parser::ast::Type::Primitive(prim) => primitive_to_gorget(*prim).to_string(),
+        crate::parser::ast::Type::Named { name, generic_args } => {
+            if generic_args.is_empty() {
+                name.node.clone()
+            } else {
+                let args: Vec<String> = generic_args
+                    .iter()
+                    .map(|a| ast_type_to_gorget(&a.node))
+                    .collect();
+                format!("{}[{}]", name.node, args.join(", "))
+            }
+        }
+        crate::parser::ast::Type::Tuple(fields) => {
+            let parts: Vec<String> = fields
+                .iter()
+                .map(|f| ast_type_to_gorget(&f.node))
+                .collect();
+            format!("({})", parts.join(", "))
+        }
+        crate::parser::ast::Type::Function { return_type, params } => {
+            let ret = ast_type_to_gorget(&return_type.node);
+            let ps: Vec<String> = params
+                .iter()
+                .map(|p| ast_type_to_gorget(&p.node))
+                .collect();
+            format!("{}({})", ret, ps.join(", "))
+        }
+        crate::parser::ast::Type::Array { element, size } => {
+            let elem = ast_type_to_gorget(&element.node);
+            match &size.node {
+                crate::parser::ast::Expr::IntLiteral(n) => format!("{elem}[{n}]"),
+                _ => format!("{elem}[]"),
+            }
+        }
+        crate::parser::ast::Type::Slice { element } => {
+            let elem = ast_type_to_gorget(&element.node);
+            format!("{elem}[]")
+        }
+        crate::parser::ast::Type::SelfType => "Self".to_string(),
+        crate::parser::ast::Type::Inferred => "auto".to_string(),
+    }
+}
+
+/// Convert a Gorget PrimitiveType to its Gorget-syntax display name.
+fn primitive_to_gorget(prim: PrimitiveType) -> &'static str {
+    match prim {
+        PrimitiveType::Void => "void",
+        PrimitiveType::Bool => "bool",
+        PrimitiveType::Int | PrimitiveType::Int64 => "int",
+        PrimitiveType::Int8 => "int8",
+        PrimitiveType::Int16 => "int16",
+        PrimitiveType::Int32 => "int32",
+        PrimitiveType::Uint | PrimitiveType::Uint64 => "uint",
+        PrimitiveType::Uint8 => "uint8",
+        PrimitiveType::Uint16 => "uint16",
+        PrimitiveType::Uint32 => "uint32",
+        PrimitiveType::Float | PrimitiveType::Float64 => "float",
+        PrimitiveType::Float32 => "float32",
+        PrimitiveType::Char => "char",
+        PrimitiveType::Str | PrimitiveType::StringType => "str",
+    }
+}
+
+/// Return the trace runtime formatter function name for a given C type.
+/// Used to emit `__gorget_trace_val_TYPE(fp, expr)` calls.
+pub fn trace_formatter_for_c_type(c_type: &str) -> &'static str {
+    match c_type {
+        "int64_t" | "int8_t" | "int16_t" | "int32_t" | "uint64_t" | "uint8_t"
+        | "uint16_t" | "uint32_t" => "__gorget_trace_val_int",
+        "double" | "float" => "__gorget_trace_val_float",
+        "bool" => "__gorget_trace_val_bool",
+        "const char*" => "__gorget_trace_val_str",
+        "char" => "__gorget_trace_val_char",
+        "void" => "__gorget_trace_val_void",
+        _ => "__gorget_trace_val_int", // fallback for struct/enum types
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

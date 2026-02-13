@@ -2192,3 +2192,169 @@ inner
 custom
 7");
 }
+
+// ══════════════════════════════════════════════════════════════
+// Trace tests
+// ══════════════════════════════════════════════════════════════
+
+#[test]
+fn trace_directive() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures/trace_test.gg");
+    let dir = fixture_path.parent().unwrap();
+    let c_path = dir.join("trace_test.c");
+    let exe_path = dir.join("trace_test");
+    let trace_path = dir.join("trace_test.trace.jsonl");
+
+    // 1. Build
+    let build = Command::new(env!("CARGO"))
+        .args(["run", "--quiet", "--", "build"])
+        .arg(&fixture_path)
+        .output()
+        .expect("failed to run cargo");
+
+    assert!(
+        build.status.success(),
+        "Build failed for trace_test.gg:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr),
+    );
+
+    // 2. Execute the compiled binary
+    let run = Command::new(&exe_path)
+        .output()
+        .expect("failed to execute compiled binary");
+
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert_eq!(stdout.trim(), "6", "factorial(3) should print 6");
+
+    assert!(
+        run.status.success(),
+        "Binary exited with error:\nstderr: {}",
+        String::from_utf8_lossy(&run.stderr),
+    );
+
+    // 3. Verify trace file exists and contains expected entries
+    assert!(trace_path.exists(), "Trace file should be created");
+
+    let trace_content = std::fs::read_to_string(&trace_path)
+        .expect("Failed to read trace file");
+    let lines: Vec<&str> = trace_content.lines().collect();
+
+    assert_eq!(lines.len(), 6, "Should have 6 trace lines (3 calls + 3 returns)");
+
+    // Verify first call
+    assert!(lines[0].contains(r#""type":"call""#), "First line should be a call");
+    assert!(lines[0].contains(r#""fn":"factorial""#), "Should use Gorget name");
+    assert!(lines[0].contains(r#""n":3"#), "First call should have n=3");
+    assert!(lines[0].contains(r#""depth":0"#), "First call at depth 0");
+
+    // Verify recursive calls
+    assert!(lines[1].contains(r#""n":2"#), "Second call should have n=2");
+    assert!(lines[1].contains(r#""depth":1"#), "Second call at depth 1");
+    assert!(lines[2].contains(r#""n":1"#), "Third call should have n=1");
+    assert!(lines[2].contains(r#""depth":2"#), "Third call at depth 2");
+
+    // Verify returns
+    assert!(lines[3].contains(r#""type":"return""#), "Line 4 should be a return");
+    assert!(lines[3].contains(r#""value":1"#), "First return value should be 1");
+    assert!(lines[3].contains(r#""depth":2"#), "First return at depth 2");
+    assert!(lines[5].contains(r#""value":6"#), "Last return value should be 6");
+    assert!(lines[5].contains(r#""depth":0"#), "Last return at depth 0");
+
+    // 4. Clean up
+    let _ = std::fs::remove_file(&c_path);
+    let _ = std::fs::remove_file(&exe_path);
+    let _ = std::fs::remove_file(&trace_path);
+}
+
+#[test]
+fn trace_cli_flag() {
+    // Test --trace flag on a file WITHOUT the directive
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures/functions.gg");
+    let dir = fixture_path.parent().unwrap();
+    let c_path = dir.join("functions.c");
+    let exe_path = dir.join("functions");
+    let trace_path = dir.join("functions.trace.jsonl");
+
+    // Build with --trace
+    let build = Command::new(env!("CARGO"))
+        .args(["run", "--quiet", "--", "build", "--trace"])
+        .arg(&fixture_path)
+        .output()
+        .expect("failed to run cargo");
+
+    assert!(
+        build.status.success(),
+        "Build failed:\nstderr: {}",
+        String::from_utf8_lossy(&build.stderr),
+    );
+
+    // Execute
+    let run = Command::new(&exe_path)
+        .output()
+        .expect("failed to execute compiled binary");
+
+    assert!(run.status.success());
+
+    // Trace file should exist
+    assert!(trace_path.exists(), "Trace file should be created with --trace flag");
+
+    let trace_content = std::fs::read_to_string(&trace_path)
+        .expect("Failed to read trace file");
+    assert!(!trace_content.is_empty(), "Trace file should not be empty");
+    // Should contain function calls with Gorget names (not gg_ prefixed)
+    assert!(
+        !trace_content.contains("gg_"),
+        "Trace should use Gorget names, not C-mangled names"
+    );
+
+    // Clean up
+    let _ = std::fs::remove_file(&c_path);
+    let _ = std::fs::remove_file(&exe_path);
+    let _ = std::fs::remove_file(&trace_path);
+}
+
+#[test]
+fn trace_no_trace_flag() {
+    // Test --no-trace overrides directive trace
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures/trace_test.gg");
+    let dir = fixture_path.parent().unwrap();
+    let c_path = dir.join("trace_test.c");
+    let exe_path = dir.join("trace_test");
+    let trace_path = dir.join("trace_test.trace.jsonl");
+
+    // Build with --no-trace (overrides directive)
+    let build = Command::new(env!("CARGO"))
+        .args(["run", "--quiet", "--", "build", "--no-trace"])
+        .arg(&fixture_path)
+        .output()
+        .expect("failed to run cargo");
+
+    assert!(
+        build.status.success(),
+        "Build failed:\nstderr: {}",
+        String::from_utf8_lossy(&build.stderr),
+    );
+
+    // Execute
+    let run = Command::new(&exe_path)
+        .output()
+        .expect("failed to execute compiled binary");
+
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert_eq!(stdout.trim(), "6", "factorial(3) should still print 6");
+
+    // Trace file should NOT exist
+    assert!(
+        !trace_path.exists(),
+        "--no-trace should prevent trace file creation"
+    );
+
+    // Clean up
+    let _ = std::fs::remove_file(&c_path);
+    let _ = std::fs::remove_file(&exe_path);
+    let _ = std::fs::remove_file(&trace_path);
+}

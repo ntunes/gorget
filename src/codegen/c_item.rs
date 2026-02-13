@@ -409,6 +409,17 @@ impl CodegenContext<'_> {
             }
         }
 
+        // Compute the Gorget-display name for this function (used in trace output).
+        let gorget_name = if let Some((type_name, _)) = method_info {
+            format!("{}.{}", type_name, f.name.node)
+        } else {
+            f.name.node.clone()
+        };
+
+        // Save/set the current function Gorget name for return tracing.
+        let prev_gorget_name = self.current_function_gorget_name.take();
+        self.current_function_gorget_name = Some(gorget_name.clone());
+
         match &f.body {
             FunctionBody::Block(block) => {
                 emitter.emit_line(&format!("{ret_type} {func_name}({params}) {{"));
@@ -433,11 +444,34 @@ impl CodegenContext<'_> {
                 self.push_drop_scope(DropScopeKind::Function);
                 if is_main {
                     emitter.emit_line("gorget_init_args(argc, argv);");
+                    if self.trace {
+                        let trace_path = self.trace_filename.replace('\\', "\\\\").replace('"', "\\\"");
+                        emitter.emit_line(&format!(
+                            "__gorget_trace_init(\"{trace_path}\");"
+                        ));
+                    }
                 }
+
+                // Trace function entry
+                if self.trace && !is_main {
+                    self.emit_trace_entry(f, &gorget_name, emitter);
+                }
+
                 self.gen_block(block, emitter);
                 self.pop_drop_scope(emitter);
 
                 self.decl_type_hint = prev_hint;
+
+                // Trace implicit return for void functions (and main)
+                if self.trace && !is_main {
+                    if matches!(f.return_type.node, Type::Primitive(PrimitiveType::Void)) {
+                        emitter.emit_line("__gorget_trace_depth--;");
+                        let s = format!(
+                            r#"fprintf(__gorget_trace_fp, "{{\"type\":\"return\",\"fn\":\"{gorget_name}\",\"value\":null,\"depth\":%d}}\n", __gorget_trace_depth);"#
+                        );
+                        emitter.emit_line(&s);
+                    }
+                }
 
                 if is_main {
                     emitter.emit_line("return 0;");
@@ -450,8 +484,37 @@ impl CodegenContext<'_> {
             FunctionBody::Expression(expr) => {
                 emitter.emit_line(&format!("{ret_type} {func_name}({params}) {{"));
                 emitter.indent();
+
+                if self.trace {
+                    self.emit_trace_entry(f, &gorget_name, emitter);
+                }
+
                 let e = self.gen_expr(expr);
-                emitter.emit_line(&format!("return {e};"));
+
+                if self.trace {
+                    let ret_c_type = c_types::ast_type_to_c(&f.return_type.node, self.scopes);
+                    let formatter = c_types::trace_formatter_for_c_type(&ret_c_type);
+                    emitter.emit_line(&format!("__typeof__({e}) __trace_ret = {e};"));
+                    emitter.emit_line("__gorget_trace_depth--;");
+                    let s = format!(
+                        r#"fprintf(__gorget_trace_fp, "{{\"type\":\"return\",\"fn\":\"{gorget_name}\",\"value\":");"#
+                    );
+                    emitter.emit_line(&s);
+                    if formatter == "__gorget_trace_val_void" {
+                        emitter.emit_line(r#"fprintf(__gorget_trace_fp, "null");"#);
+                    } else {
+                        emitter.emit_line(&format!(
+                            "{formatter}(__gorget_trace_fp, __trace_ret);"
+                        ));
+                    }
+                    emitter.emit_line(
+                        r#"fprintf(__gorget_trace_fp, ",\"depth\":%d}\n", __gorget_trace_depth);"#
+                    );
+                    emitter.emit_line("return __trace_ret;");
+                } else {
+                    emitter.emit_line(&format!("return {e};"));
+                }
+
                 emitter.dedent();
                 emitter.emit_line("}");
                 emitter.blank_line();
@@ -461,7 +524,60 @@ impl CodegenContext<'_> {
             }
         }
 
+        self.current_function_gorget_name = prev_gorget_name;
+
         self.pointer_params = prev_pointer_params;
+    }
+
+    /// Emit trace entry (call) instrumentation for a function.
+    fn emit_trace_entry(
+        &self,
+        f: &FunctionDef,
+        gorget_name: &str,
+        emitter: &mut CEmitter,
+    ) {
+        // Emit: {"type":"call","fn":"NAME","args":{...},"depth":N}\n
+        // We use multiple fprintf/formatter calls and let the C compiler optimize.
+
+        // Open the JSON object with type, fn, and args key
+        let s = format!(
+            r#"fprintf(__gorget_trace_fp, "{{\"type\":\"call\",\"fn\":\"{gorget_name}\",\"args\":{{");"#
+        );
+        emitter.emit_line(&s);
+
+        // Emit each non-self parameter as "name":value
+        let mut first = true;
+        for param in &f.params {
+            if param.node.name.node == "self" {
+                continue;
+            }
+            let param_name = &param.node.name.node;
+            let c_param_name = c_mangle::escape_keyword(param_name);
+            let c_type = c_types::ast_type_to_c(&param.node.type_.node, self.scopes);
+            let formatter = c_types::trace_formatter_for_c_type(&c_type);
+
+            let comma = if first { "" } else { "," };
+            first = false;
+
+            let s = format!(
+                r#"fprintf(__gorget_trace_fp, "{comma}\"{param_name}\":");"#
+            );
+            emitter.emit_line(&s);
+
+            if formatter == "__gorget_trace_val_void" {
+                emitter.emit_line(r#"fprintf(__gorget_trace_fp, "null");"#);
+            } else {
+                emitter.emit_line(&format!(
+                    "{formatter}(__gorget_trace_fp, {c_param_name});"
+                ));
+            }
+        }
+
+        // Close args object and add depth
+        emitter.emit_line(
+            r#"fprintf(__gorget_trace_fp, "},\"depth\":%d}\n", __gorget_trace_depth);"#
+        );
+        emitter.emit_line("__gorget_trace_depth++;");
     }
 
     /// Build the (return_type, mangled_name, param_list) for a function.

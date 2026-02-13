@@ -49,19 +49,21 @@ fn load_imports(filename: &str, source: &str, module: gorget::parser::ast::Modul
 }
 
 /// Extract directive flags from a parsed module.
-fn extract_directives(module: &Module) -> (bool, bool) {
+fn extract_directives(module: &Module) -> (bool, bool, bool) {
     let mut strip_asserts = false;
     let mut overflow_wrap = false;
+    let mut trace = false;
     for item in &module.items {
         if let Item::Directive(d) = &item.node {
             match d.name.as_str() {
                 "strip-asserts" => strip_asserts = true,
                 "overflow" if d.value.as_deref() == Some("wrap") => overflow_wrap = true,
+                "trace" => trace = true,
                 _ => {}
             }
         }
     }
-    (strip_asserts, overflow_wrap)
+    (strip_asserts, overflow_wrap, trace)
 }
 
 /// Build a .gg source file into a binary. Returns the path to the executable,
@@ -73,6 +75,8 @@ fn try_build(
     no_strip_asserts: bool,
     overflow_wrap: bool,
     overflow_checked: bool,
+    trace: bool,
+    no_trace: bool,
 ) -> Result<PathBuf, String> {
     let mut parser = Parser::new(source);
     let module = parser.parse_module();
@@ -89,7 +93,7 @@ fn try_build(
     let mut module = load_imports(filename, source, module);
 
     // Merge source directives with CLI flags.
-    let (dir_strip, dir_overflow) = extract_directives(&module);
+    let (dir_strip, dir_overflow, dir_trace) = extract_directives(&module);
     let strip_asserts = if no_strip_asserts {
         false
     } else {
@@ -99,6 +103,11 @@ fn try_build(
         false
     } else {
         overflow_wrap || dir_overflow
+    };
+    let trace = if no_trace {
+        false
+    } else {
+        trace || dir_trace
     };
 
     let result = gorget::semantic::analyze(&mut module);
@@ -111,9 +120,6 @@ fn try_build(
         return Err(format!("{} semantic error(s) found", result.errors.len()));
     }
 
-    // Generate C code
-    let c_code = gorget::codegen::generate_c(&module, &result, strip_asserts, overflow_wrap);
-
     // Determine output paths
     let input_path = Path::new(filename);
     let dir = input_path.parent().unwrap_or(Path::new("."));
@@ -121,6 +127,18 @@ fn try_build(
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("output");
+
+    // Build trace filename: <stem>.trace.jsonl (resolved to absolute path later)
+    let trace_filename = if trace {
+        let trace_path = dir.join(format!("{stem}.trace.jsonl"));
+        let trace_path = std::path::absolute(&trace_path).unwrap_or(trace_path);
+        trace_path.display().to_string()
+    } else {
+        String::new()
+    };
+
+    // Generate C code
+    let c_code = gorget::codegen::generate_c(&module, &result, strip_asserts, overflow_wrap, trace, &trace_filename);
     let c_path = dir.join(format!("{stem}.c"));
     // Canonicalize to an absolute path so Command::new() doesn't search $PATH.
     // For a bare filename like "hello.gg", dir is "." and exe_path would be "hello",
@@ -174,8 +192,10 @@ fn build(
     no_strip_asserts: bool,
     overflow_wrap: bool,
     overflow_checked: bool,
+    trace: bool,
+    no_trace: bool,
 ) -> PathBuf {
-    try_build(filename, source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked)
+    try_build(filename, source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace)
         .unwrap_or_else(|e| {
             eprintln!("{e}");
             process::exit(1);
@@ -371,7 +391,7 @@ fn run_repl() {
         let gg_path_str = gg_path.display().to_string();
 
         // Try to build
-        match try_build(&gg_path_str, &source, false, false, false, false) {
+        match try_build(&gg_path_str, &source, false, false, false, false, false, false) {
             Err(e) => {
                 eprintln!("{e}");
                 // Don't update buffers on error
@@ -453,7 +473,9 @@ fn main() {
         let no_strip_asserts = args.iter().any(|a| a == "--no-strip-asserts");
         let overflow_wrap = args.iter().any(|a| a == "--overflow=wrap");
         let overflow_checked = args.iter().any(|a| a == "--overflow=checked");
-        let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked);
+        let trace = args.iter().any(|a| a == "--trace");
+        let no_trace = args.iter().any(|a| a == "--no-trace");
+        let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace);
         let status = Command::new(&exe_path)
             .status()
             .unwrap_or_else(|e| {
@@ -477,6 +499,8 @@ fn main() {
     let no_strip_asserts = args.iter().any(|a| a == "--no-strip-asserts");
     let overflow_wrap = args.iter().any(|a| a == "--overflow=wrap");
     let overflow_checked = args.iter().any(|a| a == "--overflow=checked");
+    let trace = args.iter().any(|a| a == "--trace");
+    let no_trace = args.iter().any(|a| a == "--no-trace");
     let filename = args.iter().skip(2).find(|a| !a.starts_with("--")).unwrap_or_else(|| {
         eprintln!("Usage: gg <command> <file.gg>");
         process::exit(1);
@@ -545,11 +569,11 @@ fn main() {
             }
         }
         "build" => {
-            let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked);
+            let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace);
             println!("Built: {}", exe_path.display());
         }
         "run" => {
-            let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked);
+            let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace);
             let status = Command::new(&exe_path)
                 .status()
                 .unwrap_or_else(|e| {

@@ -948,3 +948,41 @@ typedef struct {
 } GorgetClosure;
 
 "#;
+
+/// Trace runtime emitted only when `directive trace` or `--trace` is active.
+pub const TRACE_RUNTIME: &str = r#"
+// ── Gorget Trace Runtime ──────────────────────────────────────
+static FILE* __gorget_trace_fp = NULL;
+static int __gorget_trace_depth = 0;
+
+static void __gorget_trace_close(void) {
+    if (__gorget_trace_fp && __gorget_trace_fp != stderr) fclose(__gorget_trace_fp);
+    __gorget_trace_fp = NULL;
+}
+
+static void __gorget_trace_init(const char* path) {
+    __gorget_trace_fp = fopen(path, "w");
+    if (!__gorget_trace_fp) __gorget_trace_fp = stderr;
+    atexit(__gorget_trace_close);
+}
+
+static void __gorget_trace_val_int(FILE* fp, int64_t v) { fprintf(fp, "%" PRId64, v); }
+static void __gorget_trace_val_float(FILE* fp, double v) { fprintf(fp, "%g", v); }
+static void __gorget_trace_val_bool(FILE* fp, bool v) { fprintf(fp, v ? "true" : "false"); }
+static void __gorget_trace_val_str(FILE* fp, const char* v) {
+    fputc('"', fp);
+    if (v) {
+        for (const char* p = v; *p; p++) {
+            if (*p == '"') fputs("\\\"", fp);
+            else if (*p == '\\') fputs("\\\\", fp);
+            else if (*p == '\n') fputs("\\n", fp);
+            else if (*p == '\t') fputs("\\t", fp);
+            else fputc(*p, fp);
+        }
+    }
+    fputc('"', fp);
+}
+static void __gorget_trace_val_char(FILE* fp, char v) { fprintf(fp, "'%c'", v); }
+static void __gorget_trace_val_void(FILE* fp) { (void)fp; }
+
+"#;

@@ -131,6 +131,12 @@ pub struct CodegenContext<'a> {
     pub strip_asserts: bool,
     /// When true, integer overflow wraps silently instead of panicking.
     pub overflow_wrap: bool,
+    /// When true, emit execution trace instrumentation (JSONL output).
+    pub trace: bool,
+    /// The Gorget name of the function currently being emitted (for trace return events).
+    pub current_function_gorget_name: Option<String>,
+    /// The binary stem name, used to construct the trace output filename.
+    pub trace_filename: String,
     /// Map from expression span to inferred TypeId (for Result-based `?` codegen).
     pub expr_types: &'a FxHashMap<Span, TypeId>,
     /// C return type of the current function being emitted (for Result `?` early return).
@@ -154,7 +160,7 @@ pub struct CodegenContext<'a> {
 }
 
 /// Generate C source code from a parsed and analyzed Gorget module.
-pub fn generate_c(module: &Module, analysis: &AnalysisResult, strip_asserts: bool, overflow_wrap: bool) -> String {
+pub fn generate_c(module: &Module, analysis: &AnalysisResult, strip_asserts: bool, overflow_wrap: bool, trace: bool, trace_filename: &str) -> String {
     let mut field_type_names = FxHashMap::default();
     for item in &module.items {
         if let Item::Struct(s) = &item.node {
@@ -203,6 +209,9 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, strip_asserts: boo
         type_subs: Vec::new(),
         strip_asserts,
         overflow_wrap,
+        trace,
+        current_function_gorget_name: None,
+        trace_filename: trace_filename.to_string(),
         expr_types: &analysis.expr_types,
         current_function_return_c_type: None,
         try_counter: 0,
@@ -220,6 +229,11 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, strip_asserts: boo
 
     // 1. Runtime preamble (includes)
     emitter.emit(c_runtime::RUNTIME);
+
+    // 1b. Trace runtime (only when trace is enabled)
+    if ctx.trace {
+        emitter.emit(c_runtime::TRACE_RUNTIME);
+    }
 
     // 2. Forward declarations
     ctx.emit_forward_declarations(module, &mut emitter);
@@ -295,7 +309,7 @@ mod tests {
             result.errors
         );
 
-        generate_c(&module, &result, false, false)
+        generate_c(&module, &result, false, false, false, "")
     }
 
     #[test]

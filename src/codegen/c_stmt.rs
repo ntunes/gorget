@@ -80,6 +80,38 @@ impl CodegenContext<'_> {
         }
     }
 
+    /// Emit a trace "return" event. If `expr_var` is Some, it's the C variable
+    /// holding the return value; if None, this is a void return.
+    fn emit_trace_return(&self, expr_var: Option<&str>, emitter: &mut CEmitter) {
+        let fn_name = self.current_function_gorget_name.as_deref().unwrap_or("?");
+        emitter.emit_line("__gorget_trace_depth--;");
+        let s = format!(
+            r#"fprintf(__gorget_trace_fp, "{{\"type\":\"return\",\"fn\":\"{fn_name}\",\"value\":");"#
+        );
+        emitter.emit_line(&s);
+        if let Some(var) = expr_var {
+            // Use _Generic to pick the right formatter at compile time.
+            emitter.emit_line(&format!(
+                "_Generic(({var}), \
+                 int64_t: __gorget_trace_val_int, \
+                 long: __gorget_trace_val_int, \
+                 double: __gorget_trace_val_float, \
+                 float: __gorget_trace_val_float, \
+                 _Bool: __gorget_trace_val_bool, \
+                 char: __gorget_trace_val_char, \
+                 const char*: __gorget_trace_val_str, \
+                 char*: __gorget_trace_val_str, \
+                 default: __gorget_trace_val_int\
+                 )(__gorget_trace_fp, {var});"
+            ));
+        } else {
+            emitter.emit_line(r#"fprintf(__gorget_trace_fp, "null");"#);
+        }
+        emitter.emit_line(
+            r#"fprintf(__gorget_trace_fp, ",\"depth\":%d}\n", __gorget_trace_depth);"#
+        );
+    }
+
     /// Check if a declared type needs drop and register it if so.
     fn maybe_register_droppable(&mut self, var_name: &str, ty: &Type) {
         match ty {
@@ -183,15 +215,30 @@ impl CodegenContext<'_> {
                         let e = self.gen_expr(expr);
                         emitter.emit_line(&format!("__typeof__({e}) __ret_tmp = {e};"));
                         self.emit_cleanup_to(DropScopeKind::Function, emitter);
+                        if self.trace {
+                            self.emit_trace_return(Some("__ret_tmp"), emitter);
+                        }
                         emitter.emit_line("return __ret_tmp;");
                     } else {
                         self.emit_cleanup_to(DropScopeKind::Function, emitter);
+                        if self.trace {
+                            self.emit_trace_return(None, emitter);
+                        }
                         emitter.emit_line("return;");
                     }
                 } else if let Some(expr) = expr {
                     let e = self.gen_expr(expr);
-                    emitter.emit_line(&format!("return {e};"));
+                    if self.trace {
+                        emitter.emit_line(&format!("__typeof__({e}) __ret_tmp = {e};"));
+                        self.emit_trace_return(Some("__ret_tmp"), emitter);
+                        emitter.emit_line("return __ret_tmp;");
+                    } else {
+                        emitter.emit_line(&format!("return {e};"));
+                    }
                 } else {
+                    if self.trace {
+                        self.emit_trace_return(None, emitter);
+                    }
                     emitter.emit_line("return;");
                 }
             }
@@ -250,6 +297,13 @@ impl CodegenContext<'_> {
                 else_body,
             } => {
                 let cond = self.gen_expr(condition);
+                let trace_iter = if self.trace {
+                    let t = emitter.fresh_temp();
+                    emitter.emit_line(&format!("int64_t {t} = 0;"));
+                    Some(t)
+                } else {
+                    None
+                };
                 if let Some(else_block) = else_body {
                     // while-else: flag tracks if we broke out
                     let flag = emitter.fresh_temp();
@@ -257,6 +311,17 @@ impl CodegenContext<'_> {
                     emitter.emit_line(&format!("while ({cond}) {{"));
                     emitter.indent();
                     self.push_drop_scope(DropScopeKind::Loop);
+                    if let Some(ref ti) = trace_iter {
+                        emitter.emit_line(
+                            r#"fprintf(__gorget_trace_fp, "{\"type\":\"loop\",\"kind\":\"while\",\"iter\":");"#
+                        );
+                        emitter.emit_line(&format!(
+                            "__gorget_trace_val_int(__gorget_trace_fp, {ti}++);"
+                        ));
+                        emitter.emit_line(
+                            r#"fprintf(__gorget_trace_fp, ",\"depth\":%d}\n", __gorget_trace_depth);"#
+                        );
+                    }
                     self.gen_block_with_break_flag(body, &flag, emitter);
                     self.pop_drop_scope(emitter);
                     emitter.dedent();
@@ -270,6 +335,17 @@ impl CodegenContext<'_> {
                     emitter.emit_line(&format!("while ({cond}) {{"));
                     emitter.indent();
                     self.push_drop_scope(DropScopeKind::Loop);
+                    if let Some(ref ti) = trace_iter {
+                        emitter.emit_line(
+                            r#"fprintf(__gorget_trace_fp, "{\"type\":\"loop\",\"kind\":\"while\",\"iter\":");"#
+                        );
+                        emitter.emit_line(&format!(
+                            "__gorget_trace_val_int(__gorget_trace_fp, {ti}++);"
+                        ));
+                        emitter.emit_line(
+                            r#"fprintf(__gorget_trace_fp, ",\"depth\":%d}\n", __gorget_trace_depth);"#
+                        );
+                    }
                     self.gen_block(body, emitter);
                     self.pop_drop_scope(emitter);
                     emitter.dedent();
@@ -796,6 +872,10 @@ impl CodegenContext<'_> {
         else_body: &Option<Block>,
         emitter: &mut CEmitter,
     ) {
+        let gorget_var_name = match &pattern.node {
+            Pattern::Binding(name) => name.clone(),
+            _ => "__gorget_i".to_string(),
+        };
         let var_name = match &pattern.node {
             Pattern::Binding(name) => c_mangle::escape_keyword(name),
             _ => "__gorget_i".to_string(),
@@ -808,6 +888,9 @@ impl CodegenContext<'_> {
             f
         });
         let has_else = flag.is_some();
+
+        // Track the loop kind for trace output
+        let is_range = matches!(iterable.node, Expr::Range { .. });
 
         // --- Iterable-specific: preamble, loop header, indent, inner preamble, bindings ---
 
@@ -927,6 +1010,42 @@ impl CodegenContext<'_> {
             emitter.emit_line(&format!(
                 "__typeof__({iter}[0]) {var_name} = {iter}[{idx}];"
             ));
+        }
+
+        // --- Common: trace loop iteration ---
+        if self.trace && is_range {
+            let s = format!(
+                r#"fprintf(__gorget_trace_fp, "{{\"type\":\"loop\",\"kind\":\"for\",\"var\":\"{gorget_var_name}\",\"value\":");"#
+            );
+            emitter.emit_line(&s);
+            emitter.emit_line(&format!(
+                "__gorget_trace_val_int(__gorget_trace_fp, {var_name});"
+            ));
+            emitter.emit_line(
+                r#"fprintf(__gorget_trace_fp, ",\"depth\":%d}\n", __gorget_trace_depth);"#
+            );
+        } else if self.trace {
+            // For collection loops, emit var and value using _Generic
+            let s = format!(
+                r#"fprintf(__gorget_trace_fp, "{{\"type\":\"loop\",\"kind\":\"for\",\"var\":\"{gorget_var_name}\",\"value\":");"#
+            );
+            emitter.emit_line(&s);
+            emitter.emit_line(&format!(
+                "_Generic(({var_name}), \
+                 int64_t: __gorget_trace_val_int, \
+                 long: __gorget_trace_val_int, \
+                 double: __gorget_trace_val_float, \
+                 float: __gorget_trace_val_float, \
+                 _Bool: __gorget_trace_val_bool, \
+                 char: __gorget_trace_val_char, \
+                 const char*: __gorget_trace_val_str, \
+                 char*: __gorget_trace_val_str, \
+                 default: __gorget_trace_val_int\
+                 )(__gorget_trace_fp, {var_name});"
+            ));
+            emitter.emit_line(
+                r#"fprintf(__gorget_trace_fp, ",\"depth\":%d}\n", __gorget_trace_depth);"#
+            );
         }
 
         // --- Common: body ---
