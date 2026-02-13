@@ -92,6 +92,30 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    /// Deeply resolve a type: follow Var chains and also resolve inner types
+    /// of composite types like Function. Returns a new TypeId if any inner
+    /// types changed, or the original if already fully resolved.
+    fn resolve_type_deep(&mut self, id: TypeId) -> TypeId {
+        let base = self.resolve_type(id);
+        match self.types.get(base).clone() {
+            ResolvedType::Function { params, return_type } => {
+                let new_params: Vec<TypeId> = params.iter()
+                    .map(|&p| self.resolve_type_deep(p))
+                    .collect();
+                let new_ret = self.resolve_type_deep(return_type);
+                if new_params == params && new_ret == return_type {
+                    base
+                } else {
+                    self.types.insert(ResolvedType::Function {
+                        params: new_params,
+                        return_type: new_ret,
+                    })
+                }
+            }
+            _ => base,
+        }
+    }
+
     /// Return a human-readable name for a resolved type.
     /// Uses the definition name for `Defined`/`Generic` types instead of the
     /// unhelpful `"<defined>"` from `TypeTable::display`.
@@ -785,7 +809,14 @@ impl<'a> TypeChecker<'a> {
                             self.scopes.get_def_mut(def_id).type_id = Some(tid);
                         }
                     } else {
-                        param_types.push(self.fresh_type_var());
+                        let tid = self.fresh_type_var();
+                        param_types.push(tid);
+                        if let Some(def_id) = self.scopes.lookup_def_by_span(
+                            &param.node.name.node,
+                            param.node.name.span,
+                        ) {
+                            self.scopes.get_def_mut(def_id).type_id = Some(tid);
+                        }
                     }
                 }
                 let body_type = self.infer_expr(body);
@@ -1978,6 +2009,18 @@ pub fn check_module(
                 checker.infer_expr(&s.value);
             }
             _ => {}
+        }
+    }
+
+    // Resolve type variables in DefInfos so codegen sees concrete types.
+    // Uses deep resolution to handle composite types like Function([Var, Var], Var).
+    for i in 0..checker.scopes.def_count() {
+        let def_id = DefId(i as u32);
+        if let Some(tid) = checker.scopes.get_def(def_id).type_id {
+            let resolved = checker.resolve_type_deep(tid);
+            if resolved != tid {
+                checker.scopes.get_def_mut(def_id).type_id = Some(resolved);
+            }
         }
     }
 

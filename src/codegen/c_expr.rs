@@ -2590,6 +2590,12 @@ impl CodegenContext<'_> {
                     .type_
                     .as_ref()
                     .map(|t| c_types::ast_type_to_c(&t.node, self.scopes))
+                    .or_else(|| {
+                        self.scopes
+                            .lookup_def_by_span(&p.node.name.node, p.node.name.span)
+                            .and_then(|def_id| self.scopes.get_def(def_id).type_id)
+                            .map(|tid| c_types::type_id_to_c(tid, self.types, self.scopes))
+                    })
                     .unwrap_or_else(|| "int64_t".to_string());
                 (name, ty)
             })

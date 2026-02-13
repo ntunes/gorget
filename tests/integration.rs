@@ -243,6 +243,8 @@ fn closures() {
 20
 10
 111
+7
+-42
 closures");
 }
 
