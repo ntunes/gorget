@@ -1,0 +1,18 @@
+void main():
+    # Create a temp directory with known files
+    write_file("__test_a.txt", "a")
+    write_file("__test_b.txt", "b")
+
+    Vector[str] entries = readdir(".")
+    auto count = 0
+    for e in entries:
+        if e == "__test_a.txt":
+            count = count + 1
+        if e == "__test_b.txt":
+            count = count + 1
+
+    print("{count}")
+
+    # Clean up
+    delete_file("__test_a.txt")
+    delete_file("__test_b.txt")

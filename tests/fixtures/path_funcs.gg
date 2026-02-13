@@ -1,0 +1,28 @@
+void main():
+    # path_parent
+    print(path_parent("/usr/local/bin"))
+    print(path_parent("/usr/local/bin/"))
+    print(path_parent("file.txt"))
+    print(path_parent("/"))
+
+    # path_basename
+    print(path_basename("/usr/local/bin"))
+    print(path_basename("/usr/local/bin/"))
+    print(path_basename("file.txt"))
+
+    # path_extension
+    print(path_extension("archive.tar.gz"))
+    print(path_extension("README"))
+    print(path_extension(".hidden"))
+    print(path_extension("photo.jpg"))
+
+    # path_stem
+    print(path_stem("archive.tar.gz"))
+    print(path_stem("README"))
+    print(path_stem(".hidden"))
+    print(path_stem("photo.jpg"))
+
+    # path_join
+    print(path_join("usr/local", "bin"))
+    print(path_join("/usr/", "/local"))
+    print(path_join("a", "b"))

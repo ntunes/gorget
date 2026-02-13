@@ -95,6 +95,20 @@ impl CodegenContext<'_> {
                             eq_call
                         };
                     }
+                    // String Eq/Neq: use strcmp instead of pointer comparison
+                    let is_str = self.resolve_expr_type_id(left).map_or(false, |t| t == self.types.string_id)
+                        || self.resolve_expr_type_id(right).map_or(false, |t| t == self.types.string_id)
+                        || matches!(&left.node, Expr::StringLiteral(_))
+                        || matches!(&right.node, Expr::StringLiteral(_));
+                    if is_str {
+                        let l = self.gen_expr(left);
+                        let r = self.gen_expr(right);
+                        return if *op == BinaryOp::Neq {
+                            format!("(strcmp({l}, {r}) != 0)")
+                        } else {
+                            format!("(strcmp({l}, {r}) == 0)")
+                        };
+                    }
                 }
                 // String concatenation: str + str → gorget_str_concat(a, b)
                 if *op == BinaryOp::Add {
@@ -521,6 +535,46 @@ impl CodegenContext<'_> {
                         let path = self.gen_expr(&arg.node.value);
                         return format!("gorget_delete_file({path})");
                     }
+                }
+                "path_parent" => {
+                    if let Some(arg) = args.first() {
+                        let p = self.gen_expr(&arg.node.value);
+                        return format!("gorget_path_parent({p})");
+                    }
+                }
+                "path_basename" => {
+                    if let Some(arg) = args.first() {
+                        let p = self.gen_expr(&arg.node.value);
+                        return format!("gorget_path_basename({p})");
+                    }
+                }
+                "path_extension" => {
+                    if let Some(arg) = args.first() {
+                        let p = self.gen_expr(&arg.node.value);
+                        return format!("gorget_path_extension({p})");
+                    }
+                }
+                "path_stem" => {
+                    if let Some(arg) = args.first() {
+                        let p = self.gen_expr(&arg.node.value);
+                        return format!("gorget_path_stem({p})");
+                    }
+                }
+                "path_join" => {
+                    if args.len() >= 2 {
+                        let a = self.gen_expr(&args[0].node.value);
+                        let b = self.gen_expr(&args[1].node.value);
+                        return format!("gorget_path_join({a}, {b})");
+                    }
+                }
+                "readdir" => {
+                    if let Some(arg) = args.first() {
+                        let path = self.gen_expr(&arg.node.value);
+                        return format!("gorget_readdir({path})");
+                    }
+                }
+                "args" => {
+                    return "gorget_args()".to_string();
                 }
                 _ => {}
             }
@@ -1011,6 +1065,17 @@ impl CodegenContext<'_> {
             Expr::UnaryOp { operand, .. } => self.resolve_expr_type_id(operand),
             Expr::Call { callee, .. } => {
                 if let Expr::Identifier(name) = &callee.node {
+                    // Check builtin return types first
+                    match name.as_str() {
+                        "path_parent" | "path_basename" | "path_extension"
+                        | "path_stem" | "path_join" | "read_file" | "format" => {
+                            return Some(self.types.string_id);
+                        }
+                        "file_exists" | "delete_file" => {
+                            return Some(self.types.bool_id);
+                        }
+                        _ => {}
+                    }
                     let def_id = self
                         .resolution_map
                         .get(&callee.span.start)
@@ -1044,6 +1109,21 @@ impl CodegenContext<'_> {
                             return Some(sig.return_type);
                         }
                     }
+                }
+                None
+            }
+            Expr::Index { object, .. } => {
+                // For Vector[T] indexing, return the element type T
+                if let Some(tid) = self.resolve_expr_type_id(object) {
+                    if let crate::semantic::types::ResolvedType::Generic(_, args) = self.types.get(tid) {
+                        if let Some(&elem_tid) = args.first() {
+                            return Some(elem_tid);
+                        }
+                    }
+                }
+                // For string indexing, return char
+                if self.is_string_expr(object) {
+                    return Some(self.types.int_id); // char is printed as int
                 }
                 None
             }

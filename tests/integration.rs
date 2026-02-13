@@ -515,6 +515,63 @@ done",
 // Module / import tests
 // ══════════════════════════════════════════════════════════════
 
+/// Build and run a `.gg` fixture, passing extra args to the compiled binary.
+fn run_gg_with_args(fixture: &str, binary_args: &[&str], expected: &str) {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures").join(fixture);
+
+    assert!(
+        fixture_path.exists(),
+        "Fixture not found: {}",
+        fixture_path.display()
+    );
+
+    let stem = fixture_path.file_stem().unwrap().to_str().unwrap();
+    let dir = fixture_path.parent().unwrap();
+    let c_path = dir.join(format!("{stem}.c"));
+    let exe_path = dir.join(stem);
+
+    // 1. Build
+    let build = Command::new(env!("CARGO"))
+        .args(["run", "--quiet", "--", "build"])
+        .arg(&fixture_path)
+        .output()
+        .expect("failed to run cargo");
+
+    assert!(
+        build.status.success(),
+        "Build failed for {fixture}:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr),
+    );
+
+    // 2. Execute with args
+    let run = Command::new(&exe_path)
+        .args(binary_args)
+        .output()
+        .expect("failed to execute compiled binary");
+
+    let stdout = String::from_utf8_lossy(&run.stdout);
+
+    // 3. Assert stdout
+    assert_eq!(
+        stdout.trim(),
+        expected.trim(),
+        "Output mismatch for {fixture}:\nExpected:\n{expected}\nGot:\n{stdout}",
+    );
+
+    assert!(
+        run.status.success(),
+        "Binary exited with error for {fixture}: {:?}\nstderr: {}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stderr),
+    );
+
+    // 4. Clean up
+    let _ = std::fs::remove_file(&c_path);
+    let _ = std::fs::remove_file(&exe_path);
+}
+
 /// Build and run a multi-file `.gg` fixture from a directory.
 fn run_gg_dir(dir_name: &str, main_file: &str, expected: &str) {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -1908,4 +1965,47 @@ above 80: 4
 top: Alice
 top: Eve
 top: Grace");
+}
+
+// ══════════════════════════════════════════════════════════════
+// Builtin function tests
+// ══════════════════════════════════════════════════════════════
+
+#[test]
+fn path_funcs() {
+    run_gg(
+        "path_funcs.gg",
+        "\
+/usr/local
+/usr/local
+.
+/
+bin
+bin
+file.txt
+gz
+
+
+jpg
+archive.tar
+README
+.hidden
+photo
+usr/local/bin
+/usr/local
+a/b",
+    );
+}
+
+#[test]
+fn readdir() {
+    run_gg("readdir.gg", "2");
+}
+
+#[test]
+fn cli_args() {
+    run_gg_with_args("cli_args.gg", &["hello", "world"], "\
+3
+hello
+world");
 }

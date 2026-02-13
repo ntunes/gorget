@@ -1053,6 +1053,9 @@ fn is_builtin(name: &str) -> bool {
         | "Displayable" | "Equatable" | "Cloneable" | "Hashable" | "Drop" | "Iterator"
         | "Box"
         | "File" | "read_file" | "write_file" | "append_file" | "file_exists" | "delete_file"
+        | "path_join" | "path_parent" | "path_basename" | "path_extension" | "path_stem"
+        | "readdir"
+        | "args"
         | "format"
     )
 }

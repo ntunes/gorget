@@ -287,7 +287,7 @@ mod tests {
     fn hello_world_generates_c() {
         let source = "void main():\n    print(\"Hello, World!\")\n";
         let c_code = compile_to_c(source);
-        assert!(c_code.contains("int main(void)"));
+        assert!(c_code.contains("int main(int argc, char** argv)"));
         assert!(c_code.contains("printf"));
         assert!(c_code.contains("Hello, World!"));
         assert!(c_code.contains("return 0;"));

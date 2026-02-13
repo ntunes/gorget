@@ -1,0 +1,5 @@
+void main():
+    Vector[str] a = args()
+    print("{a.len()}")
+    print("{a[1]}")
+    print("{a[2]}")

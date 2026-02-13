@@ -367,7 +367,7 @@ impl CodegenContext<'_> {
         }
         let is_main = f.name.node == "main" && method_info.is_none();
         let (ret_type, func_name, params) = if is_main {
-            ("int".to_string(), "main".to_string(), "void".to_string())
+            ("int".to_string(), "main".to_string(), "int argc, char** argv".to_string())
         } else {
             self.function_signature(f, method_info)
         };
@@ -416,6 +416,9 @@ impl CodegenContext<'_> {
                 }
 
                 self.push_drop_scope(DropScopeKind::Function);
+                if is_main {
+                    emitter.emit_line("gorget_init_args(argc, argv);");
+                }
                 self.gen_block(block, emitter);
                 self.pop_drop_scope(emitter);
 
