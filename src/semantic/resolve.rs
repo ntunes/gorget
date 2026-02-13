@@ -1043,10 +1043,7 @@ fn extract_where_bounds(
 /// Collection types live in `std.collections`; traits and Option/Result are
 /// pre-registered in `collect_top_level`.
 fn is_builtin(name: &str) -> bool {
-    matches!(
-        name,
-        "print" | "format" | "len" | "range" | "enumerate" | "zip" | "map" | "filter" | "type"
-    )
+    matches!(name, "print" | "format" | "len" | "type")
 }
 
 #[cfg(test)]
