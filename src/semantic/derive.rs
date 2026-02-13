@@ -28,8 +28,8 @@ pub fn expand_derives(module: &mut Module, errors: &mut Vec<SemanticError>) {
     module.items.extend(new_items);
 }
 
-const DERIVABLE_STRUCT_TRAITS: &[&str] = &["Equatable", "Displayable", "Cloneable"];
-const DERIVABLE_ENUM_TRAITS: &[&str] = &["Equatable", "Displayable"];
+const DERIVABLE_STRUCT_TRAITS: &[&str] = &["Equatable", "Displayable", "Cloneable", "Hashable"];
+const DERIVABLE_ENUM_TRAITS: &[&str] = &["Equatable", "Displayable", "Hashable"];
 
 fn collect_struct_derives(
     s: &StructDef,
@@ -150,6 +150,7 @@ fn generate_struct_derive(type_name: &str, trait_name: &str, fields: &[(&str, &s
         "Equatable" => generate_struct_equatable(type_name, fields),
         "Displayable" => generate_struct_displayable(type_name, fields),
         "Cloneable" => generate_struct_cloneable(type_name, fields),
+        "Hashable" => generate_struct_hashable(type_name, fields),
         _ => String::new(),
     }
 }
@@ -198,12 +199,35 @@ fn generate_struct_cloneable(type_name: &str, fields: &[(&str, &str)]) -> String
     )
 }
 
+fn generate_struct_hashable(type_name: &str, fields: &[(&str, &str)]) -> String {
+    let body = if fields.is_empty() {
+        "        return 0".to_string()
+    } else if fields.len() == 1 {
+        format!("        return self.{}.hash()", fields[0].0)
+    } else {
+        let mut lines = vec![format!(
+            "        int h = self.{}.hash()",
+            fields[0].0
+        )];
+        for (name, _) in &fields[1..] {
+            lines.push(format!("        h = h *% 31 +% self.{name}.hash()"));
+        }
+        lines.push("        return h".to_string());
+        lines.join("\n")
+    };
+
+    format!(
+        "equip {type_name} with Hashable:\n    int hash(self):\n{body}\n"
+    )
+}
+
 // ── Enum derive generation ────────────────────────────────────
 
 fn generate_enum_derive(type_name: &str, trait_name: &str, e: &EnumDef) -> String {
     match trait_name {
         "Equatable" => generate_enum_equatable(type_name, e),
         "Displayable" => generate_enum_displayable(type_name, e),
+        "Hashable" => generate_enum_hashable(type_name, e),
         _ => String::new(),
     }
 }
@@ -299,6 +323,49 @@ fn generate_enum_displayable(type_name: &str, e: &EnumDef) -> String {
     format!(
         "equip {type_name} with Displayable:\n\
          \x20   str display(self):\n\
+         \x20       match self:\n\
+         {arms}"
+    )
+}
+
+fn generate_enum_hashable(type_name: &str, e: &EnumDef) -> String {
+    let mut arms = String::new();
+
+    for (idx, variant) in e.variants.iter().enumerate() {
+        let vname = &variant.node.name.node;
+        let field_count = match &variant.node.fields {
+            VariantFields::Unit => 0,
+            VariantFields::Tuple(fields) => fields.len(),
+        };
+
+        let bindings: Vec<String> = (0..field_count).map(|i| format!("a{i}")).collect();
+
+        let pattern = if field_count == 0 {
+            format!("{vname}()")
+        } else {
+            format!("{vname}({})", bindings.join(", "))
+        };
+
+        let hash_body = if field_count == 0 {
+            format!("return {idx}")
+        } else {
+            let mut lines = vec![format!("int h = {idx}")];
+            for b in &bindings {
+                lines.push(format!("                h = h *% 31 +% {b}.hash()"));
+            }
+            lines.push("                return h".to_string());
+            lines.join("\n")
+        };
+
+        arms.push_str(&format!(
+            "            case {pattern}:\n\
+             \x20               {hash_body}\n"
+        ));
+    }
+
+    format!(
+        "equip {type_name} with Hashable:\n\
+         \x20   int hash(self):\n\
          \x20       match self:\n\
          {arms}"
     )
@@ -446,7 +513,7 @@ void main():
     #[test]
     fn test_underivable_trait_error() {
         let source = "\
-@derive(Hashable)
+@derive(Drop)
 struct Point:
     float x
 
@@ -463,7 +530,56 @@ void main():
         assert!(matches!(
             &errors[0].kind,
             SemanticErrorKind::UnderivableTrait { trait_name, type_name }
-            if trait_name == "Hashable" && type_name == "Point"
+            if trait_name == "Drop" && type_name == "Point"
         ));
+    }
+
+    #[test]
+    fn test_struct_hashable() {
+        let src = generate_struct_hashable("Point", &[("x", "float"), ("y", "float")]);
+        assert!(src.contains("equip Point with Hashable"));
+        assert!(src.contains("int hash(self)"));
+        assert!(src.contains("self.x.hash()"));
+        assert!(src.contains("h *% 31 +% self.y.hash()"));
+    }
+
+    #[test]
+    fn test_struct_hashable_single_field() {
+        let src = generate_struct_hashable("Wrapper", &[("val", "int")]);
+        assert!(src.contains("return self.val.hash()"));
+    }
+
+    #[test]
+    fn test_struct_hashable_no_fields() {
+        let src = generate_struct_hashable("Empty", &[]);
+        assert!(src.contains("return 0"));
+    }
+
+    #[test]
+    fn test_enum_hashable_parses() {
+        let source = "\
+@derive(Hashable)
+enum Color:
+    Red()
+    Green()
+    Blue(int)
+
+void main():
+    pass
+";
+        let mut parser = Parser::new(source);
+        let mut module = parser.parse_module();
+        assert!(parser.errors.is_empty(), "parse errors: {:?}", parser.errors);
+
+        let mut errors = Vec::new();
+        expand_derives(&mut module, &mut errors);
+        assert!(errors.is_empty(), "derive errors: {:?}", errors);
+
+        let equip_count = module
+            .items
+            .iter()
+            .filter(|i| matches!(&i.node, Item::Equip(_)))
+            .count();
+        assert_eq!(equip_count, 1, "expected 1 equip block");
     }
 }

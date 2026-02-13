@@ -826,13 +826,28 @@ impl CodegenContext<'_> {
                 i.self_type_name == type_name && i.trait_name.as_deref() == Some("Iterator")
             );
 
-        if !is_vector && !is_map && !is_set && !is_string && !is_option && !is_result && !is_box && !is_file && !is_iterator {
+        let is_primitive_hashable = !is_vector && !is_map && !is_set && !is_string
+            && !is_option && !is_result && !is_box && !is_file && !is_iterator
+            && method_name == "hash"
+            && matches!(c_type.as_deref(), Some(
+                "int64_t" | "int8_t" | "int16_t" | "int32_t" |
+                "uint64_t" | "uint8_t" | "uint16_t" | "uint32_t" |
+                "double" | "float" |
+                "bool" | "char32_t"
+            ));
+
+        if !is_vector && !is_map && !is_set && !is_string && !is_option && !is_result && !is_box && !is_file && !is_iterator && !is_primitive_hashable {
             return None;
         }
 
         let recv = self.gen_expr(receiver);
         let needs_temp = !is_lvalue(&receiver.node);
 
+        if is_primitive_hashable {
+            return Some(format!(
+                "({{ __typeof__({recv}) __hv = {recv}; (int64_t)__gorget_fnv1a(&__hv, sizeof(__hv)); }})"
+            ));
+        }
         if is_iterator {
             return Some(self.gen_iterator_method(&recv, method_name, args, receiver, &type_name));
         }
@@ -1572,6 +1587,13 @@ impl CodegenContext<'_> {
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "\"\"".to_string());
                 Some(format!("gorget_string_split({recv}, {arg})"))
+            }
+            "hash" => {
+                if needs_temp {
+                    Some(format!("({{ const char* __s = {recv}; (int64_t)__gorget_hash_str(__s); }})"))
+                } else {
+                    Some(format!("(int64_t)__gorget_hash_str({recv})"))
+                }
             }
             _ => None, // Not a known string method — fall through
         }
@@ -2560,13 +2582,19 @@ impl CodegenContext<'_> {
             };
         }
         match (receiver_type, method) {
-            ("const char*", "len") => Some(self.types.int_id),
+            ("const char*", "len" | "hash") => Some(self.types.int_id),
             ("const char*", "contains" | "starts_with" | "ends_with" | "is_empty") => {
                 Some(self.types.bool_id)
             }
             ("const char*", "trim" | "to_upper" | "to_lower" | "replace") => {
                 Some(self.types.string_id)
             }
+            (
+                "int64_t" | "int8_t" | "int16_t" | "int32_t" |
+                "uint64_t" | "uint8_t" | "uint16_t" | "uint32_t" |
+                "double" | "float" | "bool" | "char32_t",
+                "hash",
+            ) => Some(self.types.int_id),
             _ => None,
         }
     }

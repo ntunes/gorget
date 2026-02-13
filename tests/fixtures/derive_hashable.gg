@@ -1,0 +1,42 @@
+@derive(Hashable)
+struct Point:
+    int x
+    int y
+
+@derive(Hashable)
+enum Color:
+    Red()
+    Green()
+    Blue(int)
+
+void main():
+    # Primitive .hash()
+    int h1 = 42.hash()
+    int h2 = 42.hash()
+    if h1 == h2:
+        print("int hash consistent")
+
+    str s = "hello"
+    int sh = s.hash()
+    if sh != 0:
+        print("str hash nonzero")
+
+    # Struct hash equality
+    Point a = Point(1, 2)
+    Point b = Point(1, 2)
+    if a.hash() == b.hash():
+        print("same fields same hash")
+
+    # Struct hash difference
+    Point c = Point(3, 4)
+    if a.hash() != c.hash():
+        print("diff fields diff hash")
+
+    # Enum variant hashes differ
+    Color r = Red()
+    Color g = Green()
+    Color bl = Blue(42)
+    if r.hash() != g.hash():
+        print("red != green")
+    if r.hash() != bl.hash():
+        print("red != blue")

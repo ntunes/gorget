@@ -836,6 +836,20 @@ Blue(42)",
 }
 
 #[test]
+fn derive_hashable() {
+    run_gg(
+        "derive_hashable.gg",
+        "\
+int hash consistent
+str hash nonzero
+same fields same hash
+diff fields diff hash
+red != green
+red != blue",
+    );
+}
+
+#[test]
 fn iter_for_else() {
     run_gg(
         "iter_for_else.gg",

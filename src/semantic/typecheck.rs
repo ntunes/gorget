@@ -30,6 +30,8 @@ struct TypeChecker<'a> {
     implicit_it_type: Option<TypeId>,
     /// Map from expression span to its inferred TypeId (used by codegen for Result-based `?`).
     expr_types: FxHashMap<Span, TypeId>,
+    /// The self type of the current equip block (if any).
+    current_self_type: Option<TypeId>,
 }
 
 impl<'a> TypeChecker<'a> {
@@ -55,6 +57,7 @@ impl<'a> TypeChecker<'a> {
             current_function_throws: false,
             implicit_it_type: None,
             expr_types: FxHashMap::default(),
+            current_self_type: None,
         }
     }
 
@@ -312,8 +315,7 @@ impl<'a> TypeChecker<'a> {
             }
 
             Expr::SelfExpr => {
-                // Type of self depends on enclosing impl block
-                self.types.error_id
+                self.current_self_type.unwrap_or(self.types.error_id)
             }
 
             Expr::It => {
@@ -1724,6 +1726,17 @@ impl<'a> TypeChecker<'a> {
             ResolvedType::Primitive(PrimitiveType::Str | PrimitiveType::StringType) => {
                 ("str".to_string(), vec![])
             }
+            ResolvedType::Primitive(
+                PrimitiveType::Int | PrimitiveType::Int8 | PrimitiveType::Int16 |
+                PrimitiveType::Int32 | PrimitiveType::Int64 |
+                PrimitiveType::Uint | PrimitiveType::Uint8 | PrimitiveType::Uint16 |
+                PrimitiveType::Uint32 | PrimitiveType::Uint64 |
+                PrimitiveType::Float | PrimitiveType::Float32 | PrimitiveType::Float64 |
+                PrimitiveType::Bool | PrimitiveType::Char
+            ) => {
+                if method == "hash" { return Some(self.types.int_id); }
+                return None;
+            }
             _ => return None,
         };
 
@@ -1762,7 +1775,7 @@ impl<'a> TypeChecker<'a> {
                 _ => None,
             },
             "str" | "String" => match method {
-                "len" => Some(self.types.int_id),
+                "len" | "hash" => Some(self.types.int_id),
                 "contains" | "starts_with" | "ends_with" | "is_empty" => Some(self.types.bool_id),
                 "trim" | "to_upper" | "to_lower" | "replace" => Some(self.types.string_id),
                 "split" => {
@@ -1998,9 +2011,17 @@ pub fn check_module(
                 checker.check_function(f);
             }
             Item::Equip(impl_block) => {
+                // Set current_self_type so SelfExpr resolves to the equip target type
+                checker.current_self_type = types::ast_type_to_resolved(
+                    &impl_block.type_.node,
+                    impl_block.type_.span,
+                    checker.scopes,
+                    checker.types,
+                ).ok();
                 for method in &impl_block.items {
                     checker.check_function(&method.node);
                 }
+                checker.current_self_type = None;
             }
             Item::ConstDecl(c) => {
                 checker.infer_expr(&c.value);
