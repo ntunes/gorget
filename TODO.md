@@ -4,10 +4,8 @@
 (none currently)
 
 ## Medium Priority — Codegen cleanup (discuss before fixing)
-- **tuple_typedefs linear dedup** (c_item.rs:1679): `register_tuple_typedef` scans the whole vec with `.iter().any()` on every call — O(n) per registration. A parallel `HashSet<String>` for O(1) dedup would be trivial but adds a field to CodegenContext. Discuss whether tuple counts are high enough to matter. [added: 2026-02-13]
 - **Closure env memory leak** (c_expr.rs ~3140): Capturing closures emit `malloc(sizeof(env))` but never `free` the env. No GC or ref-counting exists. Fixing properly requires either registering closure envs in the drop scope system or adding reference counting. Fine for V0.3 MVP but should be addressed before any long-running program showcase. Discuss design approach. [added: 2026-02-13]
 - **scan_for_generics / scan_for_tuples duplication** (c_item.rs ~860-1044 vs ~1717-1879): Nearly identical AST traversal code exists for generic discovery and tuple discovery — two ~200-line walkers doing the same recursive descent with different leaf actions. A shared visitor pattern could consolidate this but it's a bigger refactor. Discuss whether it's worth the abstraction. [added: 2026-02-13]
-- **No cycle detection in collect_all_trait_methods** (c_item.rs:1905): Recursive trait method collection via `extends` assumes acyclic graph. If a trait accidentally extends itself (directly or transitively), this infinite-loops. Semantic analysis likely prevents it, but a `visited: HashSet` would be cheap insurance. Discuss whether to fix here or in semantic. [added: 2026-02-13]
 
 ## Medium Priority — Stdlib additions
 - **`std.conv` additions**: `parse_float(str) -> float`, `to_str(int) -> str`, `to_str(float) -> str` [added: 2026-02-13]

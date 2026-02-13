@@ -1,5 +1,5 @@
 /// Top-level item codegen: functions, structs, enums, impl blocks, const/static.
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use crate::parser::ast::*;
 use super::c_emitter::CEmitter;
 use super::c_mangle;
@@ -1665,6 +1665,8 @@ static inline void {mangled}__free({mangled}* m) {{
     // ─── Tuple Typedefs ──────────────────────────────────────
 
     /// Register a tuple typedef, deduplicating by name. Returns the mangled name.
+    // Linear dedup is fine here — typical programs have <30 tuple types,
+    // where a scan over short strings is faster than HashSet hashing overhead.
     pub fn register_tuple_typedef(&mut self, c_field_types: &[String]) -> String {
         let name = c_mangle::mangle_tuple(c_field_types);
         if !self.tuple_typedefs.iter().any(|(n, _)| *n == name) {
@@ -1898,12 +1900,25 @@ static inline void {mangled}__free({mangled}* m) {{
         trait_def: &'b TraitDef,
         trait_defs: &'b HashMap<String, &'b TraitDef>,
     ) -> Vec<(&'b FunctionDef, String)> {
+        let mut visited = HashSet::new();
+        self.collect_all_trait_methods_inner(trait_def, trait_defs, &mut visited)
+    }
+
+    fn collect_all_trait_methods_inner<'b>(
+        &self,
+        trait_def: &'b TraitDef,
+        trait_defs: &'b HashMap<String, &'b TraitDef>,
+        visited: &mut HashSet<String>,
+    ) -> Vec<(&'b FunctionDef, String)> {
+        if !visited.insert(trait_def.name.node.clone()) {
+            return Vec::new(); // cycle detected — skip
+        }
         let mut methods = Vec::new();
         // Recursively collect parent methods first
         for parent_bound in &trait_def.extends {
             let parent_name = &parent_bound.node.name.node;
             if let Some(parent_def) = trait_defs.get(parent_name.as_str()) {
-                methods.extend(self.collect_all_trait_methods(parent_def, trait_defs));
+                methods.extend(self.collect_all_trait_methods_inner(parent_def, trait_defs, visited));
             }
         }
         // Then own methods
