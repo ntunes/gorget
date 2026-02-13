@@ -1,0 +1,15 @@
+from std.random import seed, rand_range
+
+void main():
+    seed(42)
+    # With a fixed seed, rand_range should produce deterministic values in [0, 100)
+    int a = rand_range(0, 100)
+    int b = rand_range(0, 100)
+    # Verify they are in range
+    if a >= 0 and a < 100:
+        print("a_ok")
+    if b >= 0 and b < 100:
+        print("b_ok")
+    # Edge case: lo == hi returns lo
+    int c = rand_range(5, 5)
+    print("{c}")

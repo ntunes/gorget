@@ -1,0 +1,17 @@
+from std.os import getcwd, platform, setenv, getenv
+
+void main():
+    # getcwd returns a non-empty string
+    str cwd = getcwd()
+    if cwd.len() > 0:
+        print("cwd_ok")
+
+    # platform returns a known value
+    str p = platform()
+    if p == "macos" or p == "linux" or p == "windows" or p == "freebsd":
+        print("platform_ok")
+
+    # setenv + getenv round-trip
+    setenv("GORGET_TEST_VAR", "hello123")
+    str val = getenv("GORGET_TEST_VAR")
+    print(val)

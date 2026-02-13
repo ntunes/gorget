@@ -14,7 +14,7 @@ pub fn is_stdlib_module(segments: &[String]) -> bool {
     if segments.len() != 2 || segments[0] != "std" {
         return false;
     }
-    matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv" | "io" | "random" | "time" | "collections" | "math")
+    matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv" | "io" | "random" | "time" | "collections" | "math" | "fmt")
 }
 
 /// Generate a synthetic `Module` for a stdlib module.
@@ -32,6 +32,7 @@ pub fn generate_stdlib_module(segments: &[String]) -> Option<Module> {
         "time" => Some(gen_time_module()),
         "collections" => Some(gen_collections_module()),
         "math" => Some(gen_math_module()),
+        "fmt" => Some(gen_fmt_module()),
         _ => None,
     }
 }
@@ -63,6 +64,9 @@ fn gen_os_module() -> Module {
         decl_fn("exec", &[("cmd", ty_str())], ty_int()),
         decl_fn("exit", &[("code", ty_int())], ty_void()),
         decl_fn("getenv", &[("name", ty_str())], ty_str()),
+        decl_fn("setenv", &[("name", ty_str()), ("value", ty_str())], ty_void()),
+        decl_fn("getcwd", &[], ty_str()),
+        decl_fn("platform", &[], ty_str()),
         decl_fn("args", &[], ty_vector_str()),
         decl_fn("readdir", &[("path", ty_str())], ty_vector_str()),
     ])
@@ -124,12 +128,14 @@ fn gen_random_module() -> Module {
     make_module(vec![
         decl_fn("rand", &[], ty_int()),
         decl_fn("seed", &[("n", ty_int())], ty_void()),
+        decl_fn("rand_range", &[("lo", ty_int()), ("hi", ty_int())], ty_int()),
     ])
 }
 
 fn gen_time_module() -> Module {
     make_module(vec![
         decl_fn("time", &[], ty_int()),
+        decl_fn("time_ms", &[], ty_int()),
         decl_fn("sleep_ms", &[("ms", ty_int())], ty_void()),
     ])
 }
@@ -160,6 +166,12 @@ fn gen_math_module() -> Module {
         decl_fn("fmin", &[("a", ty_float()), ("b", ty_float())], ty_float()),
         decl_fn("fmax", &[("a", ty_float()), ("b", ty_float())], ty_float()),
     ])
+}
+
+fn gen_fmt_module() -> Module {
+    // Displayable trait and format() are already in the prelude/builtins.
+    // This module exists so `from std.fmt import Displayable` doesn't error.
+    make_module(vec![])
 }
 
 fn gen_collections_module() -> Module {
@@ -295,6 +307,7 @@ mod tests {
         assert!(is_stdlib_module(&["std".into(), "random".into()]));
         assert!(is_stdlib_module(&["std".into(), "time".into()]));
         assert!(is_stdlib_module(&["std".into(), "math".into()]));
+        assert!(is_stdlib_module(&["std".into(), "fmt".into()]));
         assert!(!is_stdlib_module(&["std".into(), "foo".into()]));
         assert!(!is_stdlib_module(&["foo".into(), "fs".into()]));
         assert!(!is_stdlib_module(&["std".into()]));
@@ -330,25 +343,27 @@ mod tests {
     #[test]
     fn generate_random() {
         let m = generate_stdlib_module(&["std".into(), "random".into()]).unwrap();
-        assert_eq!(m.items.len(), 2);
+        assert_eq!(m.items.len(), 3);
         let names: Vec<_> = m.items.iter().map(|i| match &i.node {
             Item::Function(f) => f.name.node.clone(),
             _ => panic!("expected function"),
         }).collect();
         assert!(names.contains(&"rand".to_string()));
         assert!(names.contains(&"seed".to_string()));
+        assert!(names.contains(&"rand_range".to_string()));
     }
 
     #[test]
     fn generate_time() {
         let m = generate_stdlib_module(&["std".into(), "time".into()]).unwrap();
-        assert_eq!(m.items.len(), 2);
+        assert_eq!(m.items.len(), 3);
         let names: Vec<_> = m.items.iter().map(|i| match &i.node {
             Item::Function(f) => f.name.node.clone(),
             _ => panic!("expected function"),
         }).collect();
         assert!(names.contains(&"time".to_string()));
         assert!(names.contains(&"sleep_ms".to_string()));
+        assert!(names.contains(&"time_ms".to_string()));
     }
 
     #[test]

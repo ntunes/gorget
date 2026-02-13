@@ -605,7 +605,15 @@ impl CodegenContext<'_> {
                         return "exit(0)".to_string();
                     }
                     "rand" => return "gorget_rand()".to_string(),
+                    "rand_range" => {
+                        if args.len() >= 2 {
+                            let lo = self.gen_expr(&args[0].node.value);
+                            let hi = self.gen_expr(&args[1].node.value);
+                            return format!("gorget_rand_range({lo}, {hi})");
+                        }
+                    }
                     "time" => return "gorget_time()".to_string(),
+                    "time_ms" => return "gorget_time_ms()".to_string(),
                     "getchar" => return "gorget_getchar()".to_string(),
                     "readline" => return "gorget_readline()".to_string(),
                     "input" => {
@@ -682,6 +690,15 @@ impl CodegenContext<'_> {
                             return format!("gorget_getenv({name_expr})");
                         }
                     }
+                    "setenv" => {
+                        if args.len() >= 2 {
+                            let name_expr = self.gen_expr(&args[0].node.value);
+                            let val_expr = self.gen_expr(&args[1].node.value);
+                            return format!("gorget_setenv({name_expr}, {val_expr})");
+                        }
+                    }
+                    "getcwd" => return "gorget_getcwd()".to_string(),
+                    "platform" => return "gorget_platform()".to_string(),
                     // std.math — integer
                     "abs" => {
                         if let Some(arg) = args.first() {

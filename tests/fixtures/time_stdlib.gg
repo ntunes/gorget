@@ -1,0 +1,12 @@
+from std.time import time, time_ms
+
+void main():
+    int t = time()
+    int ms = time_ms()
+    # time_ms should be roughly time * 1000 (within a second)
+    int diff = ms - t * 1000
+    if diff >= 0 and diff < 1000:
+        print("time_ms_ok")
+    # time_ms should be a large number (after 2020 = 1577836800000)
+    if ms > 1577836800000:
+        print("ms_reasonable")

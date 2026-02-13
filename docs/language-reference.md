@@ -1747,6 +1747,9 @@ The following functions are available via `import`:
 | `exec` | `int(str)` | Run a shell command, return exit code |
 | `exit` | `void(int)` | Exit with status code |
 | `getenv` | `str(str)` | Get environment variable |
+| `setenv` | `void(str, str)` | Set environment variable |
+| `getcwd` | `str()` | Current working directory |
+| `platform` | `str()` | OS name: `"macos"`, `"linux"`, `"windows"`, `"freebsd"` |
 | `args` | `Vector[str]()` | CLI arguments |
 | `readdir` | `Vector[str](str)` | List directory entries |
 
@@ -1781,12 +1784,14 @@ The following functions are available via `import`:
 |---|---|---|
 | `rand` | `int()` | Random integer |
 | `seed` | `void(int)` | Seed the random number generator |
+| `rand_range` | `int(int, int)` | Random integer in `[lo, hi)` |
 
 **`std.time`** — Time
 
 | Function | Signature | Description |
 |---|---|---|
 | `time` | `int()` | Current Unix timestamp in seconds |
+| `time_ms` | `int()` | Current time in milliseconds |
 | `sleep_ms` | `void(int)` | Sleep for milliseconds |
 
 **`std.math`** — Math
@@ -1814,6 +1819,10 @@ The following functions are available via `import`:
 | `fabs` | `float(float)` | Absolute value (float) |
 | `fmin` | `float(float, float)` | Minimum of two floats |
 | `fmax` | `float(float, float)` | Maximum of two floats |
+
+**`std.fmt`** — Formatting
+
+Re-exports the `Displayable` trait and `format` builtin for discoverability. Both are available in the prelude without an explicit import.
 
 ---
 

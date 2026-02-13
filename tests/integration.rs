@@ -2161,3 +2161,26 @@ true
 false
 A");
 }
+
+#[test]
+fn random_stdlib() {
+    run_gg("random_stdlib.gg", "\
+a_ok
+b_ok
+5");
+}
+
+#[test]
+fn os_stdlib() {
+    run_gg("os_stdlib.gg", "\
+cwd_ok
+platform_ok
+hello123");
+}
+
+#[test]
+fn time_stdlib() {
+    run_gg("time_stdlib.gg", "\
+time_ms_ok
+ms_reasonable");
+}

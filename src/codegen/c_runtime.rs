@@ -846,15 +846,46 @@ static inline const char* gorget_char_to_str(char c) {
     return out;
 }
 
-// ── getenv ───────────────────────────────────────────────────
+// ── getenv / setenv / getcwd / platform ──────────────────────
 static inline const char* gorget_getenv(const char* name) {
     const char* val = getenv(name);
     return val ? val : "";
 }
 
+static inline void gorget_setenv(const char* name, const char* value) {
+    setenv(name, value, 1);
+}
+
+static inline const char* gorget_getcwd(void) {
+    char buf[4096];
+    if (getcwd(buf, sizeof(buf)) == NULL) return "";
+    size_t len = strlen(buf);
+    char* out = (char*)malloc(len + 1);
+    memcpy(out, buf, len + 1);
+    return out;
+}
+
+static inline const char* gorget_platform(void) {
+#if defined(__APPLE__)
+    return "macos";
+#elif defined(__linux__)
+    return "linux";
+#elif defined(_WIN32)
+    return "windows";
+#elif defined(__FreeBSD__)
+    return "freebsd";
+#else
+    return "unknown";
+#endif
+}
+
 // ── Interactive I/O ─────────────────────────────────────────
 static inline int64_t gorget_rand(void) { return (int64_t)rand(); }
 static inline void gorget_seed(int64_t seed) { srand((unsigned int)seed); }
+static inline int64_t gorget_rand_range(int64_t lo, int64_t hi) {
+    if (lo >= hi) return lo;
+    return lo + (int64_t)(rand() % (int)(hi - lo));
+}
 static inline int64_t gorget_getchar(void) {
     unsigned char c;
     ssize_t n = read(STDIN_FILENO, &c, 1);
@@ -862,6 +893,11 @@ static inline int64_t gorget_getchar(void) {
 }
 static inline void gorget_sleep_ms(int64_t ms) { usleep((useconds_t)(ms * 1000)); }
 static inline int64_t gorget_time(void) { return (int64_t)time(NULL); }
+static inline int64_t gorget_time_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return (int64_t)ts.tv_sec * 1000 + (int64_t)(ts.tv_nsec / 1000000);
+}
 static inline int64_t gorget_term_cols(void) { struct winsize ws; if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1) return 80; return (int64_t)ws.ws_col; }
 static inline int64_t gorget_term_rows(void) { struct winsize ws; if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1) return 24; return (int64_t)ws.ws_row; }
 
