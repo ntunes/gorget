@@ -1,3 +1,5 @@
+from std.conv import ord, chr, parse_int
+
 void main():
     char c1 = 'A'
     char c2 = '3'

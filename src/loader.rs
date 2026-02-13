@@ -149,6 +149,19 @@ impl ModuleLoader {
         segments: &[String],
         results: &mut Vec<(PathBuf, String, Module)>,
     ) -> Result<(), LoadError> {
+        // Intercept virtual stdlib modules before filesystem resolution
+        if crate::stdlib::is_stdlib_module(segments) {
+            let virtual_path = PathBuf::from(format!("<std.{}>", segments[1]));
+            if self.loaded.contains(&virtual_path) {
+                return Ok(());
+            }
+            if let Some(module) = crate::stdlib::generate_stdlib_module(segments) {
+                self.loaded.insert(virtual_path.clone());
+                results.push((virtual_path, String::new(), module));
+                return Ok(());
+            }
+        }
+
         let file_path = resolve_import_path(base_dir, segments);
 
         let canonical = file_path.canonicalize().map_err(|e| LoadError::Io {

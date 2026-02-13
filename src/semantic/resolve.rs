@@ -1044,6 +1044,8 @@ fn extract_where_bounds(
 }
 
 /// Check if a name is a built-in function or type.
+/// Stdlib functions (std.fs, std.path, std.os, std.conv) are NOT listed here —
+/// they're resolved via synthetic Module imports instead.
 fn is_builtin(name: &str) -> bool {
     matches!(
         name,
@@ -1051,14 +1053,9 @@ fn is_builtin(name: &str) -> bool {
         | "Vector" | "Dict" | "Set" | "HashMap" | "HashSet" | "List" | "Array" | "Map"
         | "Option" | "Result" | "Some" | "None" | "Ok" | "Error"
         | "Displayable" | "Equatable" | "Cloneable" | "Hashable" | "Drop" | "Iterator"
-        | "Box"
-        | "File" | "read_file" | "write_file" | "append_file" | "file_exists" | "delete_file"
-        | "path_join" | "path_parent" | "path_basename" | "path_extension" | "path_stem"
-        | "readdir"
-        | "args"
+        | "Box" | "File"
         | "format"
-        | "exec" | "exit" | "eprint" | "eprintln"
-        | "ord" | "chr" | "parse_int" | "getenv"
+        | "eprint" | "eprintln"
     )
 }
 

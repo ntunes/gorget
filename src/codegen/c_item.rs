@@ -222,7 +222,9 @@ impl CodegenContext<'_> {
         for item in &module.items {
             match &item.node {
                 Item::Function(f) => {
-                    if f.name.node != "main" {
+                    // Skip main (emitted separately) and stdlib synthetic defs
+                    // (they map to C runtime functions, not user code)
+                    if f.name.node != "main" && f.span != crate::span::Span::dummy() {
                         self.emit_function_prototype(f, None, emitter);
                     }
                 }
@@ -306,7 +308,10 @@ impl CodegenContext<'_> {
         for item in &module.items {
             match &item.node {
                 Item::Function(f) => {
-                    self.emit_function_def(f, None, emitter);
+                    // Skip stdlib synthetic defs (Declaration body + dummy span)
+                    if f.span != crate::span::Span::dummy() {
+                        self.emit_function_def(f, None, emitter);
+                    }
                 }
                 Item::Equip(impl_block) => {
                     // Skip equip blocks for generic types — emitted per-instantiation

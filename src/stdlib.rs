@@ -1,0 +1,182 @@
+/// Virtual stdlib module system.
+///
+/// When the loader encounters `std.*` imports, it generates synthetic
+/// `Module` ASTs with `FunctionDef` / `FunctionBody::Declaration` nodes.
+/// No filesystem files needed — the C runtime already has the implementations.
+///
+/// All synthetic defs use `Span::dummy()`, which distinguishes them from
+/// user-defined code and enables the `is_stdlib_call()` guard in codegen.
+use crate::parser::ast::*;
+use crate::span::{Span, Spanned};
+
+/// Check if an import path refers to a stdlib module.
+pub fn is_stdlib_module(segments: &[String]) -> bool {
+    if segments.len() != 2 || segments[0] != "std" {
+        return false;
+    }
+    matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv")
+}
+
+/// Generate a synthetic `Module` for a stdlib module.
+pub fn generate_stdlib_module(segments: &[String]) -> Option<Module> {
+    if segments.len() != 2 || segments[0] != "std" {
+        return None;
+    }
+    match segments[1].as_str() {
+        "fs" => Some(gen_fs_module()),
+        "path" => Some(gen_path_module()),
+        "os" => Some(gen_os_module()),
+        "conv" => Some(gen_conv_module()),
+        _ => None,
+    }
+}
+
+// ─── Module Generators ──────────────────────────────────────
+
+fn gen_fs_module() -> Module {
+    make_module(vec![
+        decl_fn("read_file", &[("path", ty_str())], ty_str()),
+        decl_fn("write_file", &[("path", ty_str()), ("content", ty_str())], ty_void()),
+        decl_fn("append_file", &[("path", ty_str()), ("content", ty_str())], ty_void()),
+        decl_fn("file_exists", &[("path", ty_str())], ty_bool()),
+        decl_fn("delete_file", &[("path", ty_str())], ty_bool()),
+    ])
+}
+
+fn gen_path_module() -> Module {
+    make_module(vec![
+        decl_fn("path_join", &[("a", ty_str()), ("b", ty_str())], ty_str()),
+        decl_fn("path_parent", &[("path", ty_str())], ty_str()),
+        decl_fn("path_basename", &[("path", ty_str())], ty_str()),
+        decl_fn("path_extension", &[("path", ty_str())], ty_str()),
+        decl_fn("path_stem", &[("path", ty_str())], ty_str()),
+    ])
+}
+
+fn gen_os_module() -> Module {
+    make_module(vec![
+        decl_fn("exec", &[("cmd", ty_str())], ty_int()),
+        decl_fn("exit", &[("code", ty_int())], ty_void()),
+        decl_fn("getenv", &[("name", ty_str())], ty_str()),
+        decl_fn("args", &[], ty_vector_str()),
+        decl_fn("readdir", &[("path", ty_str())], ty_vector_str()),
+    ])
+}
+
+fn gen_conv_module() -> Module {
+    make_module(vec![
+        decl_fn("ord", &[("c", ty_char())], ty_int()),
+        decl_fn("chr", &[("n", ty_int())], ty_char()),
+        decl_fn("parse_int", &[("s", ty_str())], ty_int()),
+    ])
+}
+
+// ─── Helpers ────────────────────────────────────────────────
+
+fn make_module(fns: Vec<FunctionDef>) -> Module {
+    let items: Vec<Spanned<Item>> = fns
+        .into_iter()
+        .map(|f| Spanned::dummy(Item::Function(f)))
+        .collect();
+    Module {
+        items,
+        span: Span::dummy(),
+    }
+}
+
+fn decl_fn(name: &str, params: &[(&str, Type)], ret: Type) -> FunctionDef {
+    FunctionDef {
+        attributes: Vec::new(),
+        visibility: Visibility::Public,
+        qualifiers: FunctionQualifiers::default(),
+        return_type: Spanned::dummy(ret),
+        name: Spanned::dummy(name.to_string()),
+        generic_params: None,
+        params: params
+            .iter()
+            .map(|(pname, pty)| {
+                Spanned::dummy(Param {
+                    type_: Spanned::dummy(pty.clone()),
+                    ownership: Ownership::Borrow,
+                    name: Spanned::dummy(pname.to_string()),
+                    default: None,
+                    is_live: false,
+                })
+            })
+            .collect(),
+        throws: None,
+        where_clause: None,
+        body: FunctionBody::Declaration,
+        doc_comment: None,
+        span: Span::dummy(),
+    }
+}
+
+fn ty_str() -> Type {
+    Type::Primitive(PrimitiveType::Str)
+}
+
+fn ty_int() -> Type {
+    Type::Primitive(PrimitiveType::Int)
+}
+
+fn ty_bool() -> Type {
+    Type::Primitive(PrimitiveType::Bool)
+}
+
+fn ty_char() -> Type {
+    Type::Primitive(PrimitiveType::Char)
+}
+
+fn ty_void() -> Type {
+    Type::Primitive(PrimitiveType::Void)
+}
+
+fn ty_vector_str() -> Type {
+    Type::Named {
+        name: Spanned::dummy("Vector".to_string()),
+        generic_args: vec![Spanned::dummy(ty_str())],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_stdlib() {
+        assert!(is_stdlib_module(&["std".into(), "fs".into()]));
+        assert!(is_stdlib_module(&["std".into(), "path".into()]));
+        assert!(is_stdlib_module(&["std".into(), "os".into()]));
+        assert!(is_stdlib_module(&["std".into(), "conv".into()]));
+        assert!(!is_stdlib_module(&["std".into(), "foo".into()]));
+        assert!(!is_stdlib_module(&["foo".into(), "fs".into()]));
+        assert!(!is_stdlib_module(&["std".into()]));
+    }
+
+    #[test]
+    fn generate_fs() {
+        let m = generate_stdlib_module(&["std".into(), "fs".into()]).unwrap();
+        assert_eq!(m.items.len(), 5);
+        let names: Vec<_> = m.items.iter().map(|i| match &i.node {
+            Item::Function(f) => f.name.node.clone(),
+            _ => panic!("expected function"),
+        }).collect();
+        assert!(names.contains(&"read_file".to_string()));
+        assert!(names.contains(&"write_file".to_string()));
+        assert!(names.contains(&"append_file".to_string()));
+        assert!(names.contains(&"file_exists".to_string()));
+        assert!(names.contains(&"delete_file".to_string()));
+    }
+
+    #[test]
+    fn generate_conv() {
+        let m = generate_stdlib_module(&["std".into(), "conv".into()]).unwrap();
+        assert_eq!(m.items.len(), 3);
+    }
+
+    #[test]
+    fn generate_unknown_returns_none() {
+        assert!(generate_stdlib_module(&["std".into(), "foo".into()]).is_none());
+    }
+}

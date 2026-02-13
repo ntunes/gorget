@@ -1,3 +1,6 @@
+from std.os import readdir
+from std.fs import write_file, delete_file
+
 void main():
     # Create a temp directory with known files
     write_file("__test_a.txt", "a")

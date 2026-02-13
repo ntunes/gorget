@@ -6,3 +6,4 @@ pub mod loader;
 pub mod parser;
 pub mod semantic;
 pub mod span;
+pub mod stdlib;

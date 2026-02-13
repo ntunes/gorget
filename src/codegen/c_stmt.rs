@@ -534,17 +534,9 @@ impl CodegenContext<'_> {
             Expr::Call { callee, .. } => {
                 // Try to look up the return type of the function
                 if let Expr::Identifier(name) = &callee.node {
-                    // Builtin return types
+                    // Builtin return types (compiler builtins only; stdlib uses function_info)
                     match name.as_str() {
-                        "readdir" | "args" => return "GorgetArray".to_string(),
-                        "path_parent" | "path_basename" | "path_extension"
-                        | "path_stem" | "path_join" | "read_file" | "format"
-                        | "getenv" => {
-                            return "const char*".to_string();
-                        }
-                        "file_exists" | "delete_file" => return "bool".to_string(),
-                        "exec" | "parse_int" | "ord" => return "int64_t".to_string(),
-                        "chr" => return "char".to_string(),
+                        "format" => return "const char*".to_string(),
                         _ => {}
                     }
                     if let Some(def_id) = self.scopes.lookup_by_name_anywhere(name) {

@@ -499,8 +499,9 @@ impl CodegenContext<'_> {
             }
         }
 
-        // Check for built-in print/println
+        // Check for built-in and stdlib function calls
         if let Expr::Identifier(name) = &callee.node {
+            // Compiler builtins — always dispatch (no stdlib guard needed)
             match name.as_str() {
                 "print" | "println" => return self.gen_print_call(args, name == "println"),
                 "format" => return self.gen_format_call(args),
@@ -510,119 +511,120 @@ impl CodegenContext<'_> {
                         return format!("(sizeof({a}) / sizeof({a}[0]))");
                     }
                 }
-                "read_file" => {
-                    if let Some(arg) = args.first() {
-                        let path = self.gen_expr(&arg.node.value);
-                        return format!("gorget_read_file({path})");
-                    }
-                }
-                "write_file" | "append_file" => {
-                    let func = if name == "write_file" { "gorget_write_file" } else { "gorget_append_file" };
-                    if args.len() >= 2 {
-                        let path = self.gen_expr(&args[0].node.value);
-                        let content = self.gen_expr(&args[1].node.value);
-                        return format!("{func}({path}, {content})");
-                    }
-                }
-                "file_exists" => {
-                    if let Some(arg) = args.first() {
-                        let path = self.gen_expr(&arg.node.value);
-                        return format!("gorget_file_exists({path})");
-                    }
-                }
-                "delete_file" => {
-                    if let Some(arg) = args.first() {
-                        let path = self.gen_expr(&arg.node.value);
-                        return format!("gorget_delete_file({path})");
-                    }
-                }
-                "path_parent" => {
-                    if let Some(arg) = args.first() {
-                        let p = self.gen_expr(&arg.node.value);
-                        return format!("gorget_path_parent({p})");
-                    }
-                }
-                "path_basename" => {
-                    if let Some(arg) = args.first() {
-                        let p = self.gen_expr(&arg.node.value);
-                        return format!("gorget_path_basename({p})");
-                    }
-                }
-                "path_extension" => {
-                    if let Some(arg) = args.first() {
-                        let p = self.gen_expr(&arg.node.value);
-                        return format!("gorget_path_extension({p})");
-                    }
-                }
-                "path_stem" => {
-                    if let Some(arg) = args.first() {
-                        let p = self.gen_expr(&arg.node.value);
-                        return format!("gorget_path_stem({p})");
-                    }
-                }
-                "path_join" => {
-                    if args.len() >= 2 {
-                        let a = self.gen_expr(&args[0].node.value);
-                        let b = self.gen_expr(&args[1].node.value);
-                        return format!("gorget_path_join({a}, {b})");
-                    }
-                }
-                "readdir" => {
-                    if let Some(arg) = args.first() {
-                        let path = self.gen_expr(&arg.node.value);
-                        return format!("gorget_readdir({path})");
-                    }
-                }
-                "args" => {
-                    return "gorget_args()".to_string();
-                }
-                "exec" => {
-                    if let Some(arg) = args.first() {
-                        let cmd = self.gen_expr(&arg.node.value);
-                        return format!("gorget_exec({cmd})");
-                    }
-                }
-                "exit" => {
-                    if let Some(arg) = args.first() {
-                        let code = self.gen_expr(&arg.node.value);
-                        return format!("exit((int)({code}))");
-                    }
-                    return "exit(0)".to_string();
-                }
                 "eprint" | "eprintln" => {
                     return self.gen_eprint_call(args, name == "eprintln");
                 }
-                "ord" => {
-                    if let Some(arg) = args.first() {
-                        let c = self.gen_expr(&arg.node.value);
-                        return format!("(int64_t)({c})");
+                _ => {}
+            }
+
+            // Stdlib functions — only dispatch if resolved to a stdlib (dummy-span) def
+            if self.is_stdlib_call(name) {
+                match name.as_str() {
+                    "read_file" => {
+                        if let Some(arg) = args.first() {
+                            let path = self.gen_expr(&arg.node.value);
+                            return format!("gorget_read_file({path})");
+                        }
                     }
-                }
-                "chr" => {
-                    if let Some(arg) = args.first() {
-                        let n = self.gen_expr(&arg.node.value);
-                        return format!("(char)({n})");
+                    "write_file" | "append_file" => {
+                        let func = if name == "write_file" { "gorget_write_file" } else { "gorget_append_file" };
+                        if args.len() >= 2 {
+                            let path = self.gen_expr(&args[0].node.value);
+                            let content = self.gen_expr(&args[1].node.value);
+                            return format!("{func}({path}, {content})");
+                        }
                     }
-                }
-                "parse_int" => {
-                    // Allow user-defined parse_int to shadow the builtin
-                    let is_user_defined = self.scopes.lookup(name)
-                        .map(|did| self.function_info.contains_key(&did))
-                        .unwrap_or(false);
-                    if !is_user_defined {
+                    "file_exists" => {
+                        if let Some(arg) = args.first() {
+                            let path = self.gen_expr(&arg.node.value);
+                            return format!("gorget_file_exists({path})");
+                        }
+                    }
+                    "delete_file" => {
+                        if let Some(arg) = args.first() {
+                            let path = self.gen_expr(&arg.node.value);
+                            return format!("gorget_delete_file({path})");
+                        }
+                    }
+                    "path_parent" => {
+                        if let Some(arg) = args.first() {
+                            let p = self.gen_expr(&arg.node.value);
+                            return format!("gorget_path_parent({p})");
+                        }
+                    }
+                    "path_basename" => {
+                        if let Some(arg) = args.first() {
+                            let p = self.gen_expr(&arg.node.value);
+                            return format!("gorget_path_basename({p})");
+                        }
+                    }
+                    "path_extension" => {
+                        if let Some(arg) = args.first() {
+                            let p = self.gen_expr(&arg.node.value);
+                            return format!("gorget_path_extension({p})");
+                        }
+                    }
+                    "path_stem" => {
+                        if let Some(arg) = args.first() {
+                            let p = self.gen_expr(&arg.node.value);
+                            return format!("gorget_path_stem({p})");
+                        }
+                    }
+                    "path_join" => {
+                        if args.len() >= 2 {
+                            let a = self.gen_expr(&args[0].node.value);
+                            let b = self.gen_expr(&args[1].node.value);
+                            return format!("gorget_path_join({a}, {b})");
+                        }
+                    }
+                    "readdir" => {
+                        if let Some(arg) = args.first() {
+                            let path = self.gen_expr(&arg.node.value);
+                            return format!("gorget_readdir({path})");
+                        }
+                    }
+                    "args" => {
+                        return "gorget_args()".to_string();
+                    }
+                    "exec" => {
+                        if let Some(arg) = args.first() {
+                            let cmd = self.gen_expr(&arg.node.value);
+                            return format!("gorget_exec({cmd})");
+                        }
+                    }
+                    "exit" => {
+                        if let Some(arg) = args.first() {
+                            let code = self.gen_expr(&arg.node.value);
+                            return format!("exit((int)({code}))");
+                        }
+                        return "exit(0)".to_string();
+                    }
+                    "ord" => {
+                        if let Some(arg) = args.first() {
+                            let c = self.gen_expr(&arg.node.value);
+                            return format!("(int64_t)({c})");
+                        }
+                    }
+                    "chr" => {
+                        if let Some(arg) = args.first() {
+                            let n = self.gen_expr(&arg.node.value);
+                            return format!("(char)({n})");
+                        }
+                    }
+                    "parse_int" => {
                         if let Some(arg) = args.first() {
                             let s = self.gen_expr(&arg.node.value);
                             return format!("gorget_parse_int({s})");
                         }
                     }
-                }
-                "getenv" => {
-                    if let Some(arg) = args.first() {
-                        let name_expr = self.gen_expr(&arg.node.value);
-                        return format!("gorget_getenv({name_expr})");
+                    "getenv" => {
+                        if let Some(arg) = args.first() {
+                            let name_expr = self.gen_expr(&arg.node.value);
+                            return format!("gorget_getenv({name_expr})");
+                        }
                     }
+                    _ => {}
                 }
-                _ => {}
             }
 
             // Handle Box(value) constructor → heap allocation
@@ -1127,16 +1129,8 @@ impl CodegenContext<'_> {
                 if let Expr::Identifier(name) = &callee.node {
                     // Check builtin return types first
                     match name.as_str() {
-                        "path_parent" | "path_basename" | "path_extension"
-                        | "path_stem" | "path_join" | "read_file" | "format"
-                        | "getenv" => {
+                        "format" => {
                             return Some(self.types.string_id);
-                        }
-                        "file_exists" | "delete_file" => {
-                            return Some(self.types.bool_id);
-                        }
-                        "exec" | "parse_int" | "ord" => {
-                            return Some(self.types.int_id);
                         }
                         _ => {}
                     }
@@ -2499,6 +2493,18 @@ impl CodegenContext<'_> {
     }
 
     /// Check if an expression evaluates to a string (const char*) type.
+    /// Check if `name` resolves to a stdlib function (synthetic def with dummy span).
+    /// User-defined functions with the same name will have real spans and won't match.
+    fn is_stdlib_call(&self, name: &str) -> bool {
+        self.scopes
+            .lookup(name)
+            .map(|did| {
+                let def = self.scopes.get_def(did);
+                def.kind == DefKind::Function && def.span == crate::span::Span::dummy()
+            })
+            .unwrap_or(false)
+    }
+
     pub(super) fn is_string_expr(&mut self, expr: &Spanned<Expr>) -> bool {
         match &expr.node {
             Expr::StringLiteral(_) => true,

@@ -1,3 +1,5 @@
+from std.path import path_parent, path_basename, path_extension, path_stem, path_join
+
 void main():
     # path_parent
     print(path_parent("/usr/local/bin"))
