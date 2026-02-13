@@ -831,7 +831,8 @@ Point(x=1.000000, y=2.000000)
 colors equal
 colors differ
 Red()
-Blue(42)",
+Blue(42)
+Red()",
     );
 }
 

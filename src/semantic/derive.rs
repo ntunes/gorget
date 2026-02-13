@@ -29,7 +29,7 @@ pub fn expand_derives(module: &mut Module, errors: &mut Vec<SemanticError>) {
 }
 
 const DERIVABLE_STRUCT_TRAITS: &[&str] = &["Equatable", "Displayable", "Cloneable", "Hashable"];
-const DERIVABLE_ENUM_TRAITS: &[&str] = &["Equatable", "Displayable", "Hashable"];
+const DERIVABLE_ENUM_TRAITS: &[&str] = &["Equatable", "Displayable", "Cloneable", "Hashable"];
 
 fn collect_struct_derives(
     s: &StructDef,
@@ -227,6 +227,7 @@ fn generate_enum_derive(type_name: &str, trait_name: &str, e: &EnumDef) -> Strin
     match trait_name {
         "Equatable" => generate_enum_equatable(type_name, e),
         "Displayable" => generate_enum_displayable(type_name, e),
+        "Cloneable" => generate_enum_cloneable(type_name, e),
         "Hashable" => generate_enum_hashable(type_name, e),
         _ => String::new(),
     }
@@ -323,6 +324,44 @@ fn generate_enum_displayable(type_name: &str, e: &EnumDef) -> String {
     format!(
         "equip {type_name} with Displayable:\n\
          \x20   str display(self):\n\
+         \x20       match self:\n\
+         {arms}"
+    )
+}
+
+fn generate_enum_cloneable(type_name: &str, e: &EnumDef) -> String {
+    let mut arms = String::new();
+
+    for variant in &e.variants {
+        let vname = &variant.node.name.node;
+        let field_count = match &variant.node.fields {
+            VariantFields::Unit => 0,
+            VariantFields::Tuple(fields) => fields.len(),
+        };
+
+        let bindings: Vec<String> = (0..field_count).map(|i| format!("a{i}")).collect();
+
+        let pattern = if field_count == 0 {
+            format!("{vname}()")
+        } else {
+            format!("{vname}({})", bindings.join(", "))
+        };
+
+        let reconstruction = if field_count == 0 {
+            format!("return {vname}()")
+        } else {
+            format!("return {vname}({})", bindings.join(", "))
+        };
+
+        arms.push_str(&format!(
+            "            case {pattern}:\n\
+             \x20               {reconstruction}\n"
+        ));
+    }
+
+    format!(
+        "equip {type_name} with Cloneable:\n\
+         \x20   {type_name} clone(self):\n\
          \x20       match self:\n\
          {arms}"
     )
@@ -553,6 +592,34 @@ void main():
     fn test_struct_hashable_no_fields() {
         let src = generate_struct_hashable("Empty", &[]);
         assert!(src.contains("return 0"));
+    }
+
+    #[test]
+    fn test_enum_cloneable_parses() {
+        let source = "\
+@derive(Cloneable)
+enum Color:
+    Red()
+    Green()
+    Blue(int)
+
+void main():
+    pass
+";
+        let mut parser = Parser::new(source);
+        let mut module = parser.parse_module();
+        assert!(parser.errors.is_empty(), "parse errors: {:?}", parser.errors);
+
+        let mut errors = Vec::new();
+        expand_derives(&mut module, &mut errors);
+        assert!(errors.is_empty(), "derive errors: {:?}", errors);
+
+        let equip_count = module
+            .items
+            .iter()
+            .filter(|i| matches!(&i.node, Item::Equip(_)))
+            .count();
+        assert_eq!(equip_count, 1, "expected 1 equip block");
     }
 
     #[test]

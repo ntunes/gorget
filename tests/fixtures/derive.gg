@@ -3,7 +3,7 @@ struct Point:
     float x
     float y
 
-@derive(Equatable, Displayable)
+@derive(Equatable, Displayable, Cloneable)
 enum Color:
     Red()
     Green()
@@ -30,3 +30,5 @@ void main():
         print("colors differ")
     print("{r}")
     print("{bl}")
+    Color r_clone = r.clone()
+    print("{r_clone}")
