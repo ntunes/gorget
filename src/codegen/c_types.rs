@@ -69,13 +69,6 @@ pub fn ast_type_to_c(ty: &crate::parser::ast::Type, scopes: &ScopeTable) -> Stri
                 }
             } else if name.node == "File" {
                 return "GorgetFile".to_string();
-            } else if let Some(def_id) = scopes.lookup(&name.node) {
-                let def = scopes.get_def(def_id);
-                match def.kind {
-                    crate::semantic::scope::DefKind::Struct => name.node.clone(),
-                    crate::semantic::scope::DefKind::Enum => name.node.clone(),
-                    _ => name.node.clone(),
-                }
             } else {
                 name.node.clone()
             }

@@ -55,7 +55,7 @@ impl CodegenContext<'_> {
     }
 
     /// Check if any drop scope currently has droppable entries.
-    fn has_droppable_entries(&mut self) -> bool {
+    fn has_droppable_entries(&self) -> bool {
         self.drop_scopes
             .iter()
             .any(|(_, entries)| !entries.is_empty())
@@ -1554,7 +1554,7 @@ impl CodegenContext<'_> {
     }
 
     /// Look up which enum owns a variant given a path (e.g., ["Some"] or ["Color", "Red"]).
-    fn find_enum_for_variant_path(&mut self, path: &[Spanned<String>]) -> Option<(String, String)> {
+    fn find_enum_for_variant_path(&self, path: &[Spanned<String>]) -> Option<(String, String)> {
         let variant_name = if path.len() == 1 {
             &path[0].node
         } else if path.len() == 2 {
@@ -1577,7 +1577,7 @@ impl CodegenContext<'_> {
     }
 
     /// Look up which enum owns a variant given a bare variant name.
-    fn find_enum_for_variant_by_name(&mut self, variant_name: &str) -> Option<(String, String)> {
+    fn find_enum_for_variant_by_name(&self, variant_name: &str) -> Option<(String, String)> {
         for (enum_def_id, info) in self.enum_variants {
             for (vname, _) in &info.variants {
                 if vname == variant_name {

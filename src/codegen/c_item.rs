@@ -969,14 +969,7 @@ impl CodegenContext<'_> {
                     self.scan_expr_for_generics(&arg.node.value);
                 }
             }
-            Expr::MethodCall { receiver, generic_args, args, .. } => {
-                if let Some(type_args) = generic_args {
-                    let _c_type_args: Vec<String> = type_args
-                        .iter()
-                        .map(|a| c_types::ast_type_to_c(&a.node, self.scopes))
-                        .collect();
-                    // Method generic instantiation registered during codegen
-                }
+            Expr::MethodCall { receiver, args, .. } => {
                 self.scan_expr_for_generics(receiver);
                 for arg in args {
                     self.scan_expr_for_generics(&arg.node.value);
@@ -1552,7 +1545,7 @@ static inline void {mangled}__free({mangled}* m) {{
         emitter.emit_line(&format!("{ret_type} {mangled}({params});"));
 
         // Activate type substitutions so that body codegen sees T → concrete type
-        self.type_subs = subs.clone();
+        let prev_subs = std::mem::replace(&mut self.type_subs, subs);
 
         // Emit definition
         match &template.body {
@@ -1578,8 +1571,8 @@ static inline void {mangled}__free({mangled}* m) {{
             }
         }
 
-        // Clear substitutions after emitting the body
-        self.type_subs.clear();
+        // Restore previous substitutions
+        self.type_subs = prev_subs;
     }
 
     /// Build a substitution map from generic param names to concrete C types.
