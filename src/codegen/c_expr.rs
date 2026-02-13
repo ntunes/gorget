@@ -38,6 +38,10 @@ impl CodegenContext<'_> {
             }
 
             Expr::Identifier(name) => {
+                // Stdlib I/O constants → C stdio macros
+                if (name == "stderr" || name == "stdout") && self.is_stdlib_static(name) {
+                    return name.clone();
+                }
                 let escaped = c_mangle::escape_keyword(name);
                 if self.mutable_captures.contains(&escaped) {
                     format!("(*__env->{escaped})")
@@ -503,16 +507,13 @@ impl CodegenContext<'_> {
         if let Expr::Identifier(name) = &callee.node {
             // Compiler builtins — always dispatch (no stdlib guard needed)
             match name.as_str() {
-                "print" | "println" => return self.gen_print_call(args, name == "println"),
+                "print" => return self.gen_print_call(args),
                 "format" => return self.gen_format_call(args),
                 "len" => {
                     if let Some(arg) = args.first() {
                         let a = self.gen_expr(&arg.node.value);
                         return format!("(sizeof({a}) / sizeof({a}[0]))");
                     }
-                }
-                "eprint" | "eprintln" => {
-                    return self.gen_eprint_call(args, name == "eprintln");
                 }
                 _ => {}
             }
@@ -2505,6 +2506,16 @@ impl CodegenContext<'_> {
             .unwrap_or(false)
     }
 
+    fn is_stdlib_static(&self, name: &str) -> bool {
+        self.scopes
+            .lookup(name)
+            .map(|did| {
+                let def = self.scopes.get_def(did);
+                def.kind == DefKind::Static && def.span == crate::span::Span::dummy()
+            })
+            .unwrap_or(false)
+    }
+
     pub(super) fn is_string_expr(&mut self, expr: &Spanned<Expr>) -> bool {
         match &expr.node {
             Expr::StringLiteral(_) => true,
@@ -2555,69 +2566,93 @@ impl CodegenContext<'_> {
         }
     }
 
-    /// Generate a print/println call, handling string interpolation.
-    /// `print()` always appends a newline (like Python). `println()` is an alias.
+    /// Generate a `print()` call with optional `file=` and `newline=` kwargs.
+    ///
+    /// - `print("hello")` → stdout with newline
+    /// - `print("hello", file=stderr)` → stderr with newline
+    /// - `print("hello", newline=false)` → stdout without newline
     pub fn gen_print_call(
         &mut self,
         args: &[Spanned<crate::parser::ast::CallArg>],
-        _is_println: bool,
     ) -> String {
-        if args.is_empty() {
-            return "printf(\"\\n\")".to_string();
-        }
+        let stream = self.extract_print_file_kwarg(args);
+        let newline = self.extract_print_newline_kwarg(args);
 
-        let arg = &args[0].node.value;
+        // Filter out kwargs to get content args
+        let content_args: Vec<_> = args
+            .iter()
+            .filter(|a| {
+                !matches!(&a.node.name, Some(n) if n.node == "file" || n.node == "newline")
+            })
+            .collect();
 
-        // Check if the argument is a string literal with interpolations
-        if let Expr::StringLiteral(s) = &arg.node {
-            // print() always adds a newline
-            return self.gen_printf_from_string_lit(s, true, None);
-        }
-
-        // Non-string argument: try to print as the correct type
-        let expr = self.gen_expr(arg);
-
-        // Look up the argument's type to determine the correct printf format
-        if let Some(type_id) = self.infer_interp_expr_type(arg) {
-            let (fmt, arg_expr) = self.format_for_type_id(type_id, &expr);
-            return format!("printf(\"{fmt}\\n\", {arg_expr})");
-        }
-
-        format!("printf(\"%lld\\n\", (long long){expr})")
-    }
-
-    /// Generate an `eprint`/`eprintln` call that outputs to stderr.
-    pub fn gen_eprint_call(
-        &mut self,
-        args: &[Spanned<crate::parser::ast::CallArg>],
-        is_println: bool,
-    ) -> String {
-        if args.is_empty() {
-            return if is_println {
-                "fprintf(stderr, \"\\n\")".to_string()
+        if content_args.is_empty() {
+            return if newline {
+                match &stream {
+                    Some(s) => format!("fprintf({s}, \"\\n\")"),
+                    None => "printf(\"\\n\")".to_string(),
+                }
             } else {
-                "fprintf(stderr, \"\")".to_string()
+                // No content, no newline → no-op
+                "((void)0)".to_string()
             };
         }
 
-        let arg = &args[0].node.value;
+        let arg = &content_args[0].node.value;
 
-        // Check if the argument is a string literal with interpolations
         if let Expr::StringLiteral(s) = &arg.node {
-            return self.gen_printf_from_string_lit(s, is_println, Some("stderr"));
+            return self.gen_printf_from_string_lit(s, newline, stream.as_deref());
         }
 
         // Non-string argument: try to print as the correct type
         let expr = self.gen_expr(arg);
-
-        let nl = if is_println { "\\n" } else { "" };
+        let nl = if newline { "\\n" } else { "" };
 
         if let Some(type_id) = self.infer_interp_expr_type(arg) {
             let (fmt, arg_expr) = self.format_for_type_id(type_id, &expr);
-            return format!("fprintf(stderr, \"{fmt}{nl}\", {arg_expr})");
+            return match &stream {
+                Some(s) => format!("fprintf({s}, \"{fmt}{nl}\", {arg_expr})"),
+                None => format!("printf(\"{fmt}{nl}\", {arg_expr})"),
+            };
         }
 
-        format!("fprintf(stderr, \"%lld{nl}\", (long long){expr})")
+        match &stream {
+            Some(s) => format!("fprintf({s}, \"%lld{nl}\", (long long){expr})"),
+            None => format!("printf(\"%lld{nl}\", (long long){expr})"),
+        }
+    }
+
+    /// Extract `file=` kwarg from print args → C stream name (e.g. "stderr").
+    fn extract_print_file_kwarg(
+        &mut self,
+        args: &[Spanned<crate::parser::ast::CallArg>],
+    ) -> Option<String> {
+        for arg in args {
+            if let Some(ref name) = arg.node.name {
+                if name.node == "file" {
+                    let val = self.gen_expr(&arg.node.value);
+                    return Some(val);
+                }
+            }
+        }
+        None
+    }
+
+    /// Extract `newline=` kwarg from print args → bool (defaults to true).
+    fn extract_print_newline_kwarg(
+        &self,
+        args: &[Spanned<crate::parser::ast::CallArg>],
+    ) -> bool {
+        for arg in args {
+            if let Some(ref name) = arg.node.name {
+                if name.node == "newline" {
+                    if let Expr::BoolLiteral(b) = &arg.node.value.node {
+                        return *b;
+                    }
+                }
+            }
+        }
+        true
     }
 
     /// Generate a `gorget_format(...)` call that returns `const char*`.

@@ -2019,8 +2019,8 @@ has_path
 }
 
 #[test]
-fn eprint_builtin() {
-    run_gg("eprint_builtin.gg", "stdout_line");
+fn print_builtin() {
+    run_gg("print_builtin.gg", "hello world");
 }
 
 #[test]

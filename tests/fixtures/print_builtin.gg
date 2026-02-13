@@ -1,0 +1,7 @@
+from std.io import stderr
+
+void main():
+    print("hello ", newline=false)
+    print("world")
+    int x = 42
+    print("to stderr: {x}", file=stderr)

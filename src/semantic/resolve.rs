@@ -1049,13 +1049,12 @@ fn extract_where_bounds(
 fn is_builtin(name: &str) -> bool {
     matches!(
         name,
-        "print" | "println" | "len" | "range" | "enumerate" | "zip" | "map" | "filter" | "type"
+        "print" | "len" | "range" | "enumerate" | "zip" | "map" | "filter" | "type"
         | "Vector" | "Dict" | "Set" | "HashMap" | "HashSet" | "List" | "Array" | "Map"
         | "Option" | "Result" | "Some" | "None" | "Ok" | "Error"
         | "Displayable" | "Equatable" | "Cloneable" | "Hashable" | "Drop" | "Iterator"
         | "Box" | "File"
         | "format"
-        | "eprint" | "eprintln"
     )
 }
 

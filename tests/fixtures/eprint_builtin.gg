@@ -1,4 +1,0 @@
-void main():
-    print("stdout_line")
-    eprint("stderr_msg")
-    eprintln("stderr_line")

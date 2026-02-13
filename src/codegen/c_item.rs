@@ -537,8 +537,11 @@ impl CodegenContext<'_> {
         emitter.emit_line(&format!("static const {c_type} {name} = {val};"));
     }
 
-    /// Emit a static declaration.
+    /// Emit a static declaration. Skip stdlib statics (dummy span).
     fn emit_static_decl(&mut self, s: &StaticDecl, emitter: &mut CEmitter) {
+        if s.span == crate::span::Span::dummy() {
+            return; // stdlib static — codegen maps directly to C macros
+        }
         let c_type = c_types::ast_type_to_c(&s.type_.node, self.scopes);
         let name = c_mangle::escape_keyword(&s.name.node);
         let val = self.gen_expr(&s.value);

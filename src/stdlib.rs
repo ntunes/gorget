@@ -14,7 +14,7 @@ pub fn is_stdlib_module(segments: &[String]) -> bool {
     if segments.len() != 2 || segments[0] != "std" {
         return false;
     }
-    matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv")
+    matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv" | "io")
 }
 
 /// Generate a synthetic `Module` for a stdlib module.
@@ -27,6 +27,7 @@ pub fn generate_stdlib_module(segments: &[String]) -> Option<Module> {
         "path" => Some(gen_path_module()),
         "os" => Some(gen_os_module()),
         "conv" => Some(gen_conv_module()),
+        "io" => Some(gen_io_module()),
         _ => None,
     }
 }
@@ -69,6 +70,33 @@ fn gen_conv_module() -> Module {
         decl_fn("chr", &[("n", ty_int())], ty_char()),
         decl_fn("parse_int", &[("s", ty_str())], ty_int()),
     ])
+}
+
+fn gen_io_module() -> Module {
+    let file_type = Type::Named {
+        name: Spanned::dummy("File".to_string()),
+        generic_args: vec![],
+    };
+    let items = vec![
+        Spanned::dummy(Item::StaticDecl(StaticDecl {
+            visibility: Visibility::Public,
+            name: Spanned::dummy("stderr".to_string()),
+            type_: Spanned::dummy(file_type.clone()),
+            value: Spanned::dummy(Expr::IntLiteral(0)), // placeholder — codegen special-cases
+            span: Span::dummy(),
+        })),
+        Spanned::dummy(Item::StaticDecl(StaticDecl {
+            visibility: Visibility::Public,
+            name: Spanned::dummy("stdout".to_string()),
+            type_: Spanned::dummy(file_type),
+            value: Spanned::dummy(Expr::IntLiteral(0)), // placeholder
+            span: Span::dummy(),
+        })),
+    ];
+    Module {
+        items,
+        span: Span::dummy(),
+    }
 }
 
 // ─── Helpers ────────────────────────────────────────────────
@@ -149,6 +177,7 @@ mod tests {
         assert!(is_stdlib_module(&["std".into(), "path".into()]));
         assert!(is_stdlib_module(&["std".into(), "os".into()]));
         assert!(is_stdlib_module(&["std".into(), "conv".into()]));
+        assert!(is_stdlib_module(&["std".into(), "io".into()]));
         assert!(!is_stdlib_module(&["std".into(), "foo".into()]));
         assert!(!is_stdlib_module(&["foo".into(), "fs".into()]));
         assert!(!is_stdlib_module(&["std".into()]));
@@ -173,6 +202,18 @@ mod tests {
     fn generate_conv() {
         let m = generate_stdlib_module(&["std".into(), "conv".into()]).unwrap();
         assert_eq!(m.items.len(), 3);
+    }
+
+    #[test]
+    fn generate_io() {
+        let m = generate_stdlib_module(&["std".into(), "io".into()]).unwrap();
+        assert_eq!(m.items.len(), 2);
+        let names: Vec<_> = m.items.iter().map(|i| match &i.node {
+            Item::StaticDecl(s) => s.name.node.clone(),
+            _ => panic!("expected static decl"),
+        }).collect();
+        assert!(names.contains(&"stderr".to_string()));
+        assert!(names.contains(&"stdout".to_string()));
     }
 
     #[test]
