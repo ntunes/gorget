@@ -1092,7 +1092,7 @@ impl CodegenContext<'_> {
                 let base = c_types::def_name_to_c(*def_id, self.scopes);
                 let c_args: Vec<String> = args
                     .iter()
-                    .map(|tid| c_types::type_id_to_c(*tid, self.types, self.scopes))
+                    .map(|tid| self.type_id_to_c_substituted(*tid))
                     .collect();
                 Some(c_mangle::mangle_generic(&base, &c_args))
             }
@@ -1106,7 +1106,7 @@ impl CodegenContext<'_> {
     /// Infer the C type of a receiver expression via the TypeId, if available.
     pub(super) fn infer_receiver_c_type(&mut self, expr: &Spanned<Expr>) -> Option<String> {
         if let Some(tid) = self.resolve_expr_type_id(expr) {
-            return Some(c_types::type_id_to_c(tid, self.types, self.scopes));
+            return Some(self.type_id_to_c_substituted(tid));
         }
         if let Expr::FieldAccess { object, field } = &expr.node {
             let obj_type = self.infer_receiver_type(object);
@@ -2289,11 +2289,20 @@ impl CodegenContext<'_> {
     /// Falls back to `infer_receiver_type()` for non-generic types.
     pub(super) fn infer_receiver_mangled_type(&mut self, expr: &Spanned<Expr>) -> String {
         if let Some(type_id) = self.resolve_expr_type_id(expr) {
+            // If the type is a generic param with an active substitution, use it directly.
+            if let crate::semantic::types::ResolvedType::Defined(def_id) = self.types.get(type_id) {
+                let def = self.scopes.get_def(*def_id);
+                if def.kind == DefKind::GenericParam {
+                    if let Some((_, c_type)) = self.type_subs.iter().find(|(n, _)| *n == def.name) {
+                        return c_type.clone();
+                    }
+                }
+            }
             if let crate::semantic::types::ResolvedType::Generic(def_id, args) = self.types.get(type_id) {
                 let base = super::c_types::def_name_to_c(*def_id, self.scopes);
                 let c_args: Vec<String> = args
                     .iter()
-                    .map(|tid| super::c_types::type_id_to_c(*tid, self.types, self.scopes))
+                    .map(|tid| self.type_id_to_c_substituted(*tid))
                     .collect();
                 return super::c_mangle::mangle_generic(&base, &c_args);
             }
@@ -2648,6 +2657,18 @@ impl CodegenContext<'_> {
         expr: &str,
     ) -> (String, String) {
         use crate::semantic::types::ResolvedType;
+
+        // If the type is a generic param with an active substitution, resolve through it.
+        if let ResolvedType::Defined(def_id) = self.types.get(type_id) {
+            let def = self.scopes.get_def(*def_id);
+            if def.kind == DefKind::GenericParam {
+                let param_name = def.name.clone();
+                if let Some(c_type) = self.type_subs.iter().find(|(n, _)| *n == param_name).map(|(_, v)| v.clone()) {
+                    return c_types::format_for_c_type(&c_type, expr);
+                }
+            }
+        }
+
         match self.types.get(type_id) {
             ResolvedType::Primitive(prim) => {
                 let fmt = c_types::printf_format_for_primitive(*prim);
@@ -2702,6 +2723,22 @@ impl CodegenContext<'_> {
                 ("%lld".to_string(), format!("(long long){expr}"))
             }
         }
+    }
+
+    /// Convert a TypeId to a C type string, applying active type_subs for GenericParams.
+    /// Falls back to the standard `type_id_to_c` when no substitution applies.
+    fn type_id_to_c_substituted(&self, tid: crate::semantic::ids::TypeId) -> String {
+        if !self.type_subs.is_empty() {
+            if let crate::semantic::types::ResolvedType::Defined(def_id) = self.types.get(tid) {
+                let def = self.scopes.get_def(*def_id);
+                if def.kind == DefKind::GenericParam {
+                    if let Some((_, c_type)) = self.type_subs.iter().find(|(n, _)| *n == def.name) {
+                        return c_type.clone();
+                    }
+                }
+            }
+        }
+        c_types::type_id_to_c(tid, self.types, self.scopes)
     }
 
     /// Infer the result TypeId of a sub-parsed interpolation expression.

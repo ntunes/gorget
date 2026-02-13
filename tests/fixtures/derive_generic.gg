@@ -3,7 +3,7 @@ struct Pair[T]:
     T first
     T second
 
-@derive(Cloneable)
+@derive(Equatable, Displayable, Cloneable, Hashable)
 enum Wrapper[T]:
     Empty()
     Value(T)
@@ -19,4 +19,11 @@ void main():
     Wrapper[int] w = Value(42)
     Wrapper[int] w2 = w.clone()
     Wrapper[int] e = Empty()
-    print("clone ok")
+    if w == w2:
+        print("wrapper equal")
+    if w != e:
+        print("wrapper not equal")
+    print("{w}")
+    print("{e}")
+    int h = w.hash()
+    print("hash ok")

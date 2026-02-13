@@ -6,7 +6,7 @@ use crate::span::{Span, Spanned};
 use super::errors::{SemanticError, SemanticErrorKind};
 use super::ids::{DefId, TypeId};
 use super::resolve::{EnumVariantInfo, FunctionInfo, ResolutionMap};
-use super::scope::{DefKind, ScopeTable};
+use super::scope::{DefKind, ScopeKind, ScopeTable};
 use super::traits::TraitRegistry;
 use super::types::{self, ResolvedType, TypeTable};
 
@@ -267,15 +267,18 @@ impl<'a> TypeChecker<'a> {
                                 match self.types.get(type_id) {
                                     ResolvedType::Primitive(_) | ResolvedType::Void => {}
                                     ResolvedType::Defined(def_id) | ResolvedType::Generic(def_id, _) => {
-                                        let type_name = &self.scopes.get_def(*def_id).name;
-                                        if !self.traits.has_trait_impl_by_name(type_name, "Displayable") {
-                                            self.error(
-                                                SemanticErrorKind::NonPrintableInterpolation {
-                                                    var_name: var_name.clone(),
-                                                    type_name: self.describe_resolved_type(type_id),
-                                                },
-                                                expr.span.clone(),
-                                            );
+                                        let def = self.scopes.get_def(*def_id);
+                                        if def.kind != DefKind::GenericParam {
+                                            let type_name = &def.name;
+                                            if !self.traits.has_trait_impl_by_name(type_name, "Displayable") {
+                                                self.error(
+                                                    SemanticErrorKind::NonPrintableInterpolation {
+                                                        var_name: var_name.clone(),
+                                                        type_name: self.describe_resolved_type(type_id),
+                                                    },
+                                                    expr.span.clone(),
+                                                );
+                                            }
                                         }
                                     }
                                     _ => {
@@ -1997,8 +2000,22 @@ pub fn check_module(
                 checker.register_function_signature(f);
             }
             Item::Equip(impl_block) => {
+                let has_generics = impl_block.generic_params.is_some();
+                if let Some(generics) = &impl_block.generic_params {
+                    checker.scopes.push_scope(ScopeKind::EquipBlock { self_type: None });
+                    for param in &generics.node.params {
+                        if let GenericParam::Type(name) = &param.node {
+                            let _ = checker.scopes.define(
+                                name.node.clone(), DefKind::GenericParam, name.span,
+                            );
+                        }
+                    }
+                }
                 for method in &impl_block.items {
                     checker.register_function_signature(&method.node);
+                }
+                if has_generics {
+                    checker.scopes.pop_scope();
                 }
             }
             _ => {}
@@ -2011,6 +2028,17 @@ pub fn check_module(
                 checker.check_function(f);
             }
             Item::Equip(impl_block) => {
+                let has_generics = impl_block.generic_params.is_some();
+                if let Some(generics) = &impl_block.generic_params {
+                    checker.scopes.push_scope(ScopeKind::EquipBlock { self_type: None });
+                    for param in &generics.node.params {
+                        if let GenericParam::Type(name) = &param.node {
+                            let _ = checker.scopes.define(
+                                name.node.clone(), DefKind::GenericParam, name.span,
+                            );
+                        }
+                    }
+                }
                 // Set current_self_type so SelfExpr resolves to the equip target type
                 checker.current_self_type = types::ast_type_to_resolved(
                     &impl_block.type_.node,
@@ -2022,6 +2050,9 @@ pub fn check_module(
                     checker.check_function(&method.node);
                 }
                 checker.current_self_type = None;
+                if has_generics {
+                    checker.scopes.pop_scope();
+                }
             }
             Item::ConstDecl(c) => {
                 checker.infer_expr(&c.value);

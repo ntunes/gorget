@@ -226,6 +226,22 @@ pub fn printf_format_for_primitive(prim: PrimitiveType) -> &'static str {
     }
 }
 
+/// Given a C type name (e.g., "int64_t"), return the printf format and argument
+/// expression for string interpolation. Used when substituting generic type params.
+pub fn format_for_c_type(c_type: &str, expr: &str) -> (String, String) {
+    match c_type {
+        "int64_t" => ("%lld".to_string(), format!("(long long){expr}")),
+        "int8_t" | "int16_t" | "int32_t" => ("%d".to_string(), expr.to_string()),
+        "uint64_t" => ("%llu".to_string(), format!("(unsigned long long){expr}")),
+        "uint8_t" | "uint16_t" | "uint32_t" => ("%u".to_string(), expr.to_string()),
+        "double" | "float" => ("%f".to_string(), expr.to_string()),
+        "bool" => ("%s".to_string(), format!("{expr} ? \"true\" : \"false\"")),
+        "char" => ("%c".to_string(), expr.to_string()),
+        "const char*" => ("%s".to_string(), expr.to_string()),
+        _ => ("%lld".to_string(), format!("(long long){expr}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

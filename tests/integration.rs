@@ -858,7 +858,11 @@ fn derive_generic() {
 pair equal
 Pair(first=10, second=20)
 Pair(first=10, second=20)
-clone ok",
+wrapper equal
+wrapper not equal
+Value(42)
+Empty()
+hash ok",
     );
 }
 

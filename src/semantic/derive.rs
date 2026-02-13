@@ -166,6 +166,16 @@ fn format_type(ty: &crate::parser::ast::Type) -> String {
     }
 }
 
+/// Returns `""` for non-generic types, `"[T] "` (with trailing space) for generic.
+/// Used as the equip block generic-param prefix: `equip {gp}{type_name}...`
+fn equip_generic_prefix(gs: &str) -> String {
+    if gs.is_empty() {
+        String::new()
+    } else {
+        format!("{gs} ")
+    }
+}
+
 // ── Struct derive generation ──────────────────────────────────
 
 fn generate_struct_derive(
@@ -184,6 +194,7 @@ fn generate_struct_derive(
 }
 
 fn generate_struct_equatable(type_name: &str, gs: &str, fields: &[(&str, &str)]) -> String {
+    let gp = equip_generic_prefix(gs);
     let body = if fields.is_empty() {
         "        return true".to_string()
     } else {
@@ -195,11 +206,12 @@ fn generate_struct_equatable(type_name: &str, gs: &str, fields: &[(&str, &str)])
     };
 
     format!(
-        "equip {type_name}{gs} with Equatable:\n    bool eq(self, {type_name}{gs} other):\n{body}\n"
+        "equip {gp}{type_name}{gs} with Equatable:\n    bool eq(self, {type_name}{gs} other):\n{body}\n"
     )
 }
 
 fn generate_struct_displayable(type_name: &str, gs: &str, fields: &[(&str, &str)]) -> String {
+    let gp = equip_generic_prefix(gs);
     let body = if fields.is_empty() {
         format!("        return \"{type_name}()\"")
     } else {
@@ -214,16 +226,17 @@ fn generate_struct_displayable(type_name: &str, gs: &str, fields: &[(&str, &str)
     };
 
     format!(
-        "equip {type_name}{gs} with Displayable:\n    str display(self):\n{body}\n"
+        "equip {gp}{type_name}{gs} with Displayable:\n    str display(self):\n{body}\n"
     )
 }
 
 fn generate_struct_cloneable(type_name: &str, gs: &str, fields: &[(&str, &str)]) -> String {
+    let gp = equip_generic_prefix(gs);
     let args: Vec<String> = fields.iter().map(|(name, _)| format!("self.{name}")).collect();
     let body = format!("        return {type_name}{gs}({})", args.join(", "));
 
     format!(
-        "equip {type_name}{gs} with Cloneable:\n    {type_name}{gs} clone(self):\n{body}\n"
+        "equip {gp}{type_name}{gs} with Cloneable:\n    {type_name}{gs} clone(self):\n{body}\n"
     )
 }
 
@@ -244,8 +257,9 @@ fn generate_struct_hashable(type_name: &str, gs: &str, fields: &[(&str, &str)]) 
         lines.join("\n")
     };
 
+    let gp = equip_generic_prefix(gs);
     format!(
-        "equip {type_name}{gs} with Hashable:\n    int hash(self):\n{body}\n"
+        "equip {gp}{type_name}{gs} with Hashable:\n    int hash(self):\n{body}\n"
     )
 }
 
@@ -262,6 +276,7 @@ fn generate_enum_derive(type_name: &str, gs: &str, trait_name: &str, e: &EnumDef
 }
 
 fn generate_enum_equatable(type_name: &str, gs: &str, e: &EnumDef) -> String {
+    let gp = equip_generic_prefix(gs);
     let mut arms = String::new();
 
     for variant in &e.variants {
@@ -311,7 +326,7 @@ fn generate_enum_equatable(type_name: &str, gs: &str, e: &EnumDef) -> String {
     }
 
     format!(
-        "equip {type_name}{gs} with Equatable:\n\
+        "equip {gp}{type_name}{gs} with Equatable:\n\
          \x20   bool eq(self, {type_name}{gs} other):\n\
          \x20       match self:\n\
          {arms}"
@@ -319,6 +334,7 @@ fn generate_enum_equatable(type_name: &str, gs: &str, e: &EnumDef) -> String {
 }
 
 fn generate_enum_displayable(type_name: &str, gs: &str, e: &EnumDef) -> String {
+    let gp = equip_generic_prefix(gs);
     let mut arms = String::new();
 
     for variant in &e.variants {
@@ -350,7 +366,7 @@ fn generate_enum_displayable(type_name: &str, gs: &str, e: &EnumDef) -> String {
     }
 
     format!(
-        "equip {type_name}{gs} with Displayable:\n\
+        "equip {gp}{type_name}{gs} with Displayable:\n\
          \x20   str display(self):\n\
          \x20       match self:\n\
          {arms}"
@@ -358,6 +374,7 @@ fn generate_enum_displayable(type_name: &str, gs: &str, e: &EnumDef) -> String {
 }
 
 fn generate_enum_cloneable(type_name: &str, gs: &str, e: &EnumDef) -> String {
+    let gp = equip_generic_prefix(gs);
     let mut arms = String::new();
 
     for variant in &e.variants {
@@ -388,7 +405,7 @@ fn generate_enum_cloneable(type_name: &str, gs: &str, e: &EnumDef) -> String {
     }
 
     format!(
-        "equip {type_name}{gs} with Cloneable:\n\
+        "equip {gp}{type_name}{gs} with Cloneable:\n\
          \x20   {type_name}{gs} clone(self):\n\
          \x20       match self:\n\
          {arms}"
@@ -396,6 +413,7 @@ fn generate_enum_cloneable(type_name: &str, gs: &str, e: &EnumDef) -> String {
 }
 
 fn generate_enum_hashable(type_name: &str, gs: &str, e: &EnumDef) -> String {
+    let gp = equip_generic_prefix(gs);
     let mut arms = String::new();
 
     for (idx, variant) in e.variants.iter().enumerate() {
@@ -431,7 +449,7 @@ fn generate_enum_hashable(type_name: &str, gs: &str, e: &EnumDef) -> String {
     }
 
     format!(
-        "equip {type_name}{gs} with Hashable:\n\
+        "equip {gp}{type_name}{gs} with Hashable:\n\
          \x20   int hash(self):\n\
          \x20       match self:\n\
          {arms}"
@@ -735,14 +753,14 @@ void main():
     #[test]
     fn test_struct_equatable_generic() {
         let src = generate_struct_equatable("Pair", "[T]", &[("first", "T"), ("second", "T")]);
-        assert!(src.contains("equip Pair[T] with Equatable"));
+        assert!(src.contains("equip [T] Pair[T] with Equatable"));
         assert!(src.contains("Pair[T] other"));
     }
 
     #[test]
     fn test_struct_cloneable_generic() {
         let src = generate_struct_cloneable("Pair", "[T]", &[("first", "T"), ("second", "T")]);
-        assert!(src.contains("equip Pair[T] with Cloneable"));
+        assert!(src.contains("equip [T] Pair[T] with Cloneable"));
         assert!(src.contains("Pair[T] clone(self)"));
     }
 }

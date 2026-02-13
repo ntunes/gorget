@@ -4,7 +4,6 @@
 (none currently)
 
 ## Medium Priority — Language ergonomics & tooling
-- `@derive(Displayable, Equatable, Hashable)` for generic enums: pattern bindings in match arms of generic equip blocks have type `<error>` — semantic analysis doesn't resolve variant field types for generic enums in equip block context; struct derives work fine [added: 2026-02-13]
 - `via` delegation in equip blocks: auto-forward trait methods through a struct field [added: 2026-02-10]
 - `gg` package management subcommands (`gg new`, `gg add`, `gg update`, `gg publish`, etc.) [added: 2026-02-10]
 - Basic orphan rule: equip block must be in the module that defines the trait or the type [added: 2026-02-10]
