@@ -714,6 +714,8 @@ impl CodegenContext<'_> {
 
     /// Emit all lifted closure environment structs and functions.
     pub fn emit_lifted_closures(&self, emitter: &mut CEmitter) {
+        use super::CaptureMode;
+
         for closure in self.lifted_closures.iter() {
             let env_name = super::c_mangle::mangle_closure_env(closure.id);
             let fn_name = super::c_mangle::mangle_closure(closure.id);
@@ -722,8 +724,15 @@ impl CodegenContext<'_> {
             if !closure.captures.is_empty() {
                 emitter.emit_line(&format!("typedef struct {{"));
                 emitter.indent();
-                for (cap_name, cap_type) in &closure.captures {
-                    emitter.emit_line(&format!("{cap_type} {cap_name};"));
+                for (cap_name, cap_type, mode) in &closure.captures {
+                    match mode {
+                        CaptureMode::ByMutRef => {
+                            emitter.emit_line(&format!("{cap_type}* {cap_name};"));
+                        }
+                        CaptureMode::ByValue => {
+                            emitter.emit_line(&format!("{cap_type} {cap_name};"));
+                        }
+                    }
                 }
                 emitter.dedent();
                 emitter.emit_line(&format!("}} {env_name};"));
@@ -751,14 +760,22 @@ impl CodegenContext<'_> {
                 emitter.emit_line(&format!(
                     "{env_name}* __env = ({env_name}*)__env_ptr;"
                 ));
-                for (cap_name, cap_type) in &closure.captures {
-                    emitter.emit_line(&format!(
-                        "{cap_type} {cap_name} = __env->{cap_name};"
-                    ));
+                // Only unpack ByValue captures into local variables.
+                // ByMutRef captures are accessed via (*__env->NAME) in the body.
+                for (cap_name, cap_type, mode) in &closure.captures {
+                    if *mode == CaptureMode::ByValue {
+                        emitter.emit_line(&format!(
+                            "{cap_type} {cap_name} = __env->{cap_name};"
+                        ));
+                    }
                 }
             }
 
-            emitter.emit_line(&format!("return {};", closure.body));
+            if closure.return_type == "void" {
+                emitter.emit_line(&format!("{};", closure.body));
+            } else {
+                emitter.emit_line(&format!("return {};", closure.body));
+            }
             emitter.dedent();
             emitter.emit_line("}");
             emitter.blank_line();

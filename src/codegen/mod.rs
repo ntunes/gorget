@@ -69,11 +69,20 @@ pub enum DropAction {
     UserDrop { type_name: String },
 }
 
+/// How a closure captures a variable from its enclosing scope.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CaptureMode {
+    /// Copy the value into the closure environment.
+    ByValue,
+    /// Store a pointer to the outer variable so mutations propagate.
+    ByMutRef,
+}
+
 /// A closure that has been lifted to a top-level function.
 pub struct LiftedClosure {
     pub id: usize,
-    /// Captured variable names and their C types.
-    pub captures: Vec<(String, String)>,
+    /// Captured variable names, their C types, and capture mode.
+    pub captures: Vec<(String, String, CaptureMode)>,
     /// Parameter names and their C types.
     pub params: Vec<(String, String)>,
     /// The C return type.
@@ -129,6 +138,10 @@ pub struct CodegenContext<'a> {
     /// Map from (struct_name, field_name) → AST Type, used to resolve field types
     /// in `infer_receiver_type` for FieldAccess expressions.
     pub field_type_names: FxHashMap<(String, String), Type>,
+    /// Variables captured by mutable reference in the current closure body.
+    /// When generating expressions inside a closure, identifiers in this set
+    /// emit `(*__env->NAME)` instead of bare `NAME`.
+    pub mutable_captures: HashSet<String>,
 }
 
 /// Generate C source code from a parsed and analyzed Gorget module.
@@ -173,6 +186,7 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, strip_asserts: boo
         current_function_return_c_type: None,
         try_counter: 0,
         field_type_names,
+        mutable_captures: HashSet::new(),
     };
 
     let mut emitter = CEmitter::new();

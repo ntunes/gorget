@@ -245,6 +245,9 @@ fn closures() {
 111
 7
 -42
+3
+60
+203
 closures");
 }
 

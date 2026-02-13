@@ -37,7 +37,14 @@ impl CodegenContext<'_> {
                 }
             }
 
-            Expr::Identifier(name) => c_mangle::escape_keyword(name),
+            Expr::Identifier(name) => {
+                let escaped = c_mangle::escape_keyword(name);
+                if self.mutable_captures.contains(&escaped) {
+                    format!("(*__env->{escaped})")
+                } else {
+                    escaped
+                }
+            }
 
             Expr::SelfExpr => "self".to_string(),
 
@@ -274,9 +281,10 @@ impl CodegenContext<'_> {
             Expr::Closure {
                 params,
                 body,
+                is_move,
                 ..
             } => {
-                self.gen_closure_expr(params, body)
+                self.gen_closure_expr(params, body, *is_move)
             }
 
             Expr::ImplicitClosure { body } => {
@@ -293,7 +301,7 @@ impl CodegenContext<'_> {
                     node: param,
                     span: body.span,
                 }];
-                self.gen_closure_expr(&params, body)
+                self.gen_closure_expr(&params, body, false)
             }
 
             Expr::ListComprehension {
@@ -2568,8 +2576,9 @@ impl CodegenContext<'_> {
         &mut self,
         params: &[Spanned<crate::parser::ast::ClosureParam>],
         body: &Spanned<Expr>,
+        is_move: bool,
     ) -> String {
-        use super::LiftedClosure;
+        use super::{CaptureMode, LiftedClosure};
 
         let id = {
             let id = self.closure_counter;
@@ -2601,15 +2610,45 @@ impl CodegenContext<'_> {
             })
             .collect();
 
-        // Collect free variables (simple heuristic: identifiers referenced in body
-        // that are not in params). For now, we collect none — full free variable
-        // analysis would require a scope walk. This suffices for simple closures.
+        // Collect free variables
         let param_names: std::collections::HashSet<&str> =
             params.iter().map(|p| p.node.name.node.as_str()).collect();
-        let captures = self.collect_free_vars(&body.node, &param_names);
+        let free_vars = self.collect_free_vars(&body.node, &param_names);
+
+        // Detect mutations: walk body for assignments to captured variables
+        let mutated = if is_move {
+            // Move closures own their captures — all by value
+            std::collections::HashSet::new()
+        } else {
+            self.detect_mutations(&body.node, &param_names)
+        };
+
+        // Build captures with modes
+        let captures: Vec<(String, String, CaptureMode)> = free_vars
+            .into_iter()
+            .map(|(name, ty)| {
+                let mode = if mutated.contains(&name) {
+                    CaptureMode::ByMutRef
+                } else {
+                    CaptureMode::ByValue
+                };
+                (name, ty, mode)
+            })
+            .collect();
+
+        // Set mutable_captures so that gen_expr emits (*__env->NAME)
+        let prev_mutable = std::mem::take(&mut self.mutable_captures);
+        for (name, _, mode) in &captures {
+            if *mode == CaptureMode::ByMutRef {
+                self.mutable_captures.insert(name.clone());
+            }
+        }
 
         // Generate the body expression
         let body_expr = self.gen_expr(body);
+
+        // Restore previous mutable_captures (for nested closures)
+        self.mutable_captures = prev_mutable;
 
         let lifted = LiftedClosure {
             id,
@@ -2629,8 +2668,15 @@ impl CodegenContext<'_> {
             // Use a GCC statement expression to allocate and populate the env
             let mut parts = Vec::new();
             parts.push(format!("{env_name}* __env = ({env_name}*)malloc(sizeof({env_name}))"));
-            for (cap_name, _) in &captures {
-                parts.push(format!("__env->{cap_name} = {cap_name}"));
+            for (cap_name, _, mode) in &captures {
+                match mode {
+                    CaptureMode::ByMutRef => {
+                        parts.push(format!("__env->{cap_name} = &{cap_name}"));
+                    }
+                    CaptureMode::ByValue => {
+                        parts.push(format!("__env->{cap_name} = {cap_name}"));
+                    }
+                }
             }
             let stmts = parts.join("; ");
             format!(
@@ -2684,6 +2730,9 @@ impl CodegenContext<'_> {
             Expr::FieldAccess { object, .. } => {
                 self.walk_free_vars(&object.node, bound, seen, free);
             }
+            Expr::TupleFieldAccess { object, .. } => {
+                self.walk_free_vars(&object.node, bound, seen, free);
+            }
             Expr::MethodCall {
                 receiver, args, ..
             } => {
@@ -2707,6 +2756,287 @@ impl CodegenContext<'_> {
             Expr::Index { object, index } => {
                 self.walk_free_vars(&object.node, bound, seen, free);
                 self.walk_free_vars(&index.node, bound, seen, free);
+            }
+            Expr::Block(block) | Expr::Do { body: block } => {
+                self.walk_free_vars_in_block(block, &mut bound.clone(), seen, free);
+            }
+            Expr::Match { scrutinee, arms, else_arm } => {
+                self.walk_free_vars(&scrutinee.node, bound, seen, free);
+                for arm in arms {
+                    // Pattern bindings are local to the arm
+                    let mut arm_bound = bound.clone();
+                    self.collect_pattern_names(&arm.pattern.node, &mut arm_bound);
+                    if let Some(guard) = &arm.guard {
+                        self.walk_free_vars(&guard.node, &arm_bound, seen, free);
+                    }
+                    self.walk_free_vars(&arm.body.node, &arm_bound, seen, free);
+                }
+                if let Some(else_body) = else_arm {
+                    self.walk_free_vars(&else_body.node, bound, seen, free);
+                }
+            }
+            Expr::Closure { params, body, .. } => {
+                // Nested closure: its params are bound, recurse into body
+                let mut inner_bound = bound.clone();
+                for p in params {
+                    inner_bound.insert(p.node.name.node.as_str());
+                }
+                self.walk_free_vars(&body.node, &inner_bound, seen, free);
+            }
+            Expr::StringLiteral(s) => {
+                for seg in &s.segments {
+                    if let crate::lexer::token::StringSegment::Interpolation(name) = seg {
+                        // Treat interpolated names as identifier references
+                        let fake = Expr::Identifier(name.clone());
+                        self.walk_free_vars(&fake, bound, seen, free);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Walk a block's statements collecting free variables.
+    fn walk_free_vars_in_block<'b>(
+        &mut self,
+        block: &'b crate::parser::ast::Block,
+        bound: &mut std::collections::HashSet<&'b str>,
+        seen: &mut std::collections::HashSet<String>,
+        free: &mut Vec<(String, String)>,
+    ) {
+        for stmt in &block.stmts {
+            self.walk_free_vars_in_stmt(&stmt.node, bound, seen, free);
+        }
+    }
+
+    /// Walk a statement collecting free variables (with mutable bound set
+    /// so that VarDecl names become bound for subsequent statements).
+    fn walk_free_vars_in_stmt<'b>(
+        &mut self,
+        stmt: &'b crate::parser::ast::Stmt,
+        bound: &mut std::collections::HashSet<&'b str>,
+        seen: &mut std::collections::HashSet<String>,
+        free: &mut Vec<(String, String)>,
+    ) {
+        use crate::parser::ast::{Pattern, Stmt};
+        match stmt {
+            Stmt::VarDecl { pattern, value, .. } => {
+                // Value is evaluated before binding, so walk it first
+                self.walk_free_vars(&value.node, bound, seen, free);
+                // Then add the declared name to bound
+                if let Pattern::Binding(name) = &pattern.node {
+                    bound.insert(name.as_str());
+                }
+            }
+            Stmt::Assign { target, value } => {
+                self.walk_free_vars(&target.node, bound, seen, free);
+                self.walk_free_vars(&value.node, bound, seen, free);
+            }
+            Stmt::CompoundAssign { target, value, .. } => {
+                self.walk_free_vars(&target.node, bound, seen, free);
+                self.walk_free_vars(&value.node, bound, seen, free);
+            }
+            Stmt::Expr(expr) => {
+                self.walk_free_vars(&expr.node, bound, seen, free);
+            }
+            Stmt::Return(Some(expr)) => {
+                self.walk_free_vars(&expr.node, bound, seen, free);
+            }
+            Stmt::For { iterable, body, else_body, pattern, .. } => {
+                self.walk_free_vars(&iterable.node, bound, seen, free);
+                let mut for_bound = bound.clone();
+                self.collect_pattern_names(&pattern.node, &mut for_bound);
+                self.walk_free_vars_in_block(body, &mut for_bound, seen, free);
+                if let Some(eb) = else_body {
+                    self.walk_free_vars_in_block(eb, bound, seen, free);
+                }
+            }
+            Stmt::While { condition, body, else_body } => {
+                self.walk_free_vars(&condition.node, bound, seen, free);
+                self.walk_free_vars_in_block(body, &mut bound.clone(), seen, free);
+                if let Some(eb) = else_body {
+                    self.walk_free_vars_in_block(eb, bound, seen, free);
+                }
+            }
+            Stmt::If { condition, then_body, elif_branches, else_body } => {
+                self.walk_free_vars(&condition.node, bound, seen, free);
+                self.walk_free_vars_in_block(then_body, &mut bound.clone(), seen, free);
+                for (cond, body) in elif_branches {
+                    self.walk_free_vars(&cond.node, bound, seen, free);
+                    self.walk_free_vars_in_block(body, &mut bound.clone(), seen, free);
+                }
+                if let Some(eb) = else_body {
+                    self.walk_free_vars_in_block(eb, &mut bound.clone(), seen, free);
+                }
+            }
+            Stmt::Match { scrutinee, arms, else_arm } => {
+                self.walk_free_vars(&scrutinee.node, bound, seen, free);
+                for arm in arms {
+                    let mut arm_bound: std::collections::HashSet<&str> = bound.iter().copied().collect();
+                    self.collect_pattern_names(&arm.pattern.node, &mut arm_bound);
+                    self.walk_free_vars(&arm.body.node, &arm_bound, seen, free);
+                }
+                if let Some(eb) = else_arm {
+                    let mut eb_bound = bound.clone();
+                    self.walk_free_vars_in_block(eb, &mut eb_bound, seen, free);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Collect binding names from a pattern into a bound set.
+    fn collect_pattern_names<'b>(
+        &self,
+        pattern: &'b crate::parser::ast::Pattern,
+        bound: &mut std::collections::HashSet<&'b str>,
+    ) {
+        use crate::parser::ast::Pattern;
+        match pattern {
+            Pattern::Binding(name) => { bound.insert(name.as_str()); }
+            Pattern::Constructor { fields, .. } => {
+                for f in fields {
+                    self.collect_pattern_names(&f.node, bound);
+                }
+            }
+            Pattern::Tuple(pats) => {
+                for p in pats {
+                    self.collect_pattern_names(&p.node, bound);
+                }
+            }
+            Pattern::Or(pats) => {
+                for p in pats {
+                    self.collect_pattern_names(&p.node, bound);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Detect which free variables are mutated inside a closure body.
+    /// Returns a set of escaped variable names that are assigned to.
+    fn detect_mutations(
+        &self,
+        expr: &Expr,
+        param_names: &std::collections::HashSet<&str>,
+    ) -> std::collections::HashSet<String> {
+        let mut mutated = std::collections::HashSet::new();
+        self.walk_mutations(expr, param_names, &mut mutated);
+        mutated
+    }
+
+    fn walk_mutations(
+        &self,
+        expr: &Expr,
+        bound: &std::collections::HashSet<&str>,
+        mutated: &mut std::collections::HashSet<String>,
+    ) {
+        match expr {
+            Expr::Block(block) | Expr::Do { body: block } => {
+                self.walk_mutations_in_block(block, &mut bound.clone(), mutated);
+            }
+            Expr::If { condition, then_branch, else_branch, .. } => {
+                self.walk_mutations(&condition.node, bound, mutated);
+                self.walk_mutations(&then_branch.node, bound, mutated);
+                if let Some(eb) = else_branch {
+                    self.walk_mutations(&eb.node, bound, mutated);
+                }
+            }
+            Expr::Match { scrutinee, arms, else_arm } => {
+                self.walk_mutations(&scrutinee.node, bound, mutated);
+                for arm in arms {
+                    self.walk_mutations(&arm.body.node, bound, mutated);
+                }
+                if let Some(eb) = else_arm {
+                    self.walk_mutations(&eb.node, bound, mutated);
+                }
+            }
+            Expr::BinaryOp { left, right, .. } => {
+                self.walk_mutations(&left.node, bound, mutated);
+                self.walk_mutations(&right.node, bound, mutated);
+            }
+            Expr::UnaryOp { operand, .. } => {
+                self.walk_mutations(&operand.node, bound, mutated);
+            }
+            Expr::Call { callee, args, .. } => {
+                self.walk_mutations(&callee.node, bound, mutated);
+                for arg in args {
+                    self.walk_mutations(&arg.node.value.node, bound, mutated);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn walk_mutations_in_block<'b>(
+        &self,
+        block: &'b crate::parser::ast::Block,
+        bound: &mut std::collections::HashSet<&'b str>,
+        mutated: &mut std::collections::HashSet<String>,
+    ) {
+        for stmt in &block.stmts {
+            self.walk_mutations_in_stmt(&stmt.node, bound, mutated);
+        }
+    }
+
+    fn walk_mutations_in_stmt<'b>(
+        &self,
+        stmt: &'b crate::parser::ast::Stmt,
+        bound: &mut std::collections::HashSet<&'b str>,
+        mutated: &mut std::collections::HashSet<String>,
+    ) {
+        use crate::parser::ast::{Pattern, Stmt};
+        match stmt {
+            Stmt::Assign { target, value, .. } => {
+                if let Expr::Identifier(name) = &target.node {
+                    if !bound.contains(name.as_str()) {
+                        mutated.insert(c_mangle::escape_keyword(name));
+                    }
+                }
+                self.walk_mutations(&value.node, bound, mutated);
+            }
+            Stmt::CompoundAssign { target, value, .. } => {
+                if let Expr::Identifier(name) = &target.node {
+                    if !bound.contains(name.as_str()) {
+                        mutated.insert(c_mangle::escape_keyword(name));
+                    }
+                }
+                self.walk_mutations(&value.node, bound, mutated);
+            }
+            Stmt::VarDecl { pattern, value, .. } => {
+                self.walk_mutations(&value.node, bound, mutated);
+                if let Pattern::Binding(name) = &pattern.node {
+                    bound.insert(name.as_str());
+                }
+            }
+            Stmt::Expr(expr) => {
+                self.walk_mutations(&expr.node, bound, mutated);
+            }
+            Stmt::Return(Some(expr)) => {
+                self.walk_mutations(&expr.node, bound, mutated);
+            }
+            Stmt::For { iterable, body, pattern, .. } => {
+                self.walk_mutations(&iterable.node, bound, mutated);
+                let mut for_bound = bound.clone();
+                if let Pattern::Binding(name) = &pattern.node {
+                    for_bound.insert(name.as_str());
+                }
+                self.walk_mutations_in_block(body, &mut for_bound, mutated);
+            }
+            Stmt::While { condition, body, .. } => {
+                self.walk_mutations(&condition.node, bound, mutated);
+                self.walk_mutations_in_block(body, &mut bound.clone(), mutated);
+            }
+            Stmt::If { condition, then_body, elif_branches, else_body } => {
+                self.walk_mutations(&condition.node, bound, mutated);
+                self.walk_mutations_in_block(then_body, &mut bound.clone(), mutated);
+                for (cond, body) in elif_branches {
+                    self.walk_mutations(&cond.node, bound, mutated);
+                    self.walk_mutations_in_block(body, &mut bound.clone(), mutated);
+                }
+                if let Some(eb) = else_body {
+                    self.walk_mutations_in_block(eb, &mut bound.clone(), mutated);
+                }
             }
             _ => {}
         }
@@ -3277,6 +3607,22 @@ impl CodegenContext<'_> {
                 let t = self.gen_expr(target);
                 let v = self.gen_expr(value);
                 format!("{t} = {v};")
+            }
+            Stmt::CompoundAssign { target, op, value } => {
+                let t = self.gen_expr(target);
+                let v = self.gen_expr(value);
+                if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul) && !self.overflow_wrap {
+                    let macro_name = match op {
+                        BinaryOp::Add => "GORGET_CHECKED_ADD_ASSIGN",
+                        BinaryOp::Sub => "GORGET_CHECKED_SUB_ASSIGN",
+                        BinaryOp::Mul => "GORGET_CHECKED_MUL_ASSIGN",
+                        _ => unreachable!(),
+                    };
+                    format!("{macro_name}({t}, {v});")
+                } else {
+                    let c_op = binary_op_to_c(*op);
+                    format!("{t} {c_op}= {v};")
+                }
             }
             Stmt::Return(expr) => {
                 if let Some(e) = expr {

@@ -592,6 +592,15 @@ impl CodegenContext<'_> {
                 }
                 "int64_t".to_string()
             }
+            Expr::Block(block) | Expr::Do { body: block } => {
+                // Infer from the last statement of the block
+                if let Some(last) = block.stmts.last() {
+                    if let crate::parser::ast::Stmt::Expr(e) = &last.node {
+                        return self.infer_c_type_from_expr(&e.node);
+                    }
+                }
+                "void".to_string()
+            }
             _ => "int64_t".to_string(),
         }
     }

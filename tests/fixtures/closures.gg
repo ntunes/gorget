@@ -31,4 +31,31 @@ void main():
     int neg_result = negate(42)
     print("{neg_result}")
 
+    # Mutable capture: mutation propagates to outer scope
+    int count = 0
+    auto increment = ():
+        count = count + 1
+    increment()
+    increment()
+    increment()
+    print("{count}")
+
+    # Compound assignment mutable capture
+    int total = 0
+    auto accumulate = (int n):
+        total += n
+    accumulate(10)
+    accumulate(20)
+    accumulate(30)
+    print("{total}")
+
+    # Mixed captures: some mutable, some immutable
+    int base = 100
+    int accum = 0
+    auto add_to_accum = (int n):
+        accum += base + n
+    add_to_accum(1)
+    add_to_accum(2)
+    print("{accum}")
+
     print("closures")
