@@ -1840,6 +1840,125 @@ The following functions are available via `import`:
 
 Re-exports the `Displayable` trait and `format` builtin for discoverability. Both are available in the prelude without an explicit import.
 
+### 15.2 Built-in Type Methods
+
+The following methods are available on built-in types without any import.
+
+**`str`** — String methods
+
+| Method | Signature | Description |
+|---|---|---|
+| `len()` | `→ int` | String length in bytes |
+| `is_empty()` | `→ bool` | True if length is zero |
+| `contains(needle)` | `str → bool` | True if `needle` is a substring |
+| `starts_with(prefix)` | `str → bool` | True if string starts with `prefix` |
+| `ends_with(suffix)` | `str → bool` | True if string ends with `suffix` |
+| `index_of(needle)` | `str → int` | Offset of first occurrence, or `-1` |
+| `count(needle)` | `str → int` | Number of non-overlapping occurrences |
+| `char_at(index)` | `int → char` | Character at byte index (panics if out of bounds) |
+| `substring(start, end)` | `int, int → str` | Substring from `start` to `end` (panics if out of bounds) |
+| `trim()` | `→ str` | Strip leading and trailing whitespace |
+| `to_upper()` | `→ str` | Convert to uppercase |
+| `to_lower()` | `→ str` | Convert to lowercase |
+| `replace(old, new)` | `str, str → str` | Replace all occurrences of `old` with `new` |
+| `split(delim)` | `str → Vector[str]` | Split into parts by delimiter |
+| `join(parts)` | `Vector[str] → str` | Join strings with receiver as separator |
+| `repeat(n)` | `int → str` | Repeat string `n` times |
+| `hash()` | `→ int` | Hash value |
+
+**`char`** — Character methods
+
+| Method | Signature | Description |
+|---|---|---|
+| `is_alpha()` | `→ bool` | True if alphabetic |
+| `is_digit()` | `→ bool` | True if ASCII digit |
+| `is_alphanumeric()` | `→ bool` | True if alphabetic or digit |
+| `is_whitespace()` | `→ bool` | True if whitespace |
+
+**`Vector[T]`** — Dynamic array
+
+| Method | Signature | Description |
+|---|---|---|
+| `push(item)` | `T → void` | Append an element |
+| `pop()` | `→ T` | Remove and return last element |
+| `get(index)` | `int → T` | Get element at index (panics if out of bounds) |
+| `set(index, item)` | `int, T → void` | Set element at index |
+| `remove(index)` | `int → T` | Remove element at index, shifting subsequent elements |
+| `len()` | `→ int` | Number of elements |
+| `is_empty()` | `→ bool` | True if length is zero |
+| `clear()` | `→ void` | Remove all elements |
+| `reserve(n)` | `int → void` | Pre-allocate capacity for at least `n` elements |
+| `filter(pred)` | `T(T) → bool → Vector[T]` | Elements satisfying predicate |
+| `map(f)` | `T(T) → U → Vector[U]` | Apply function to each element |
+| `fold(init, f)` | `U, (U, T) → U → U` | Left fold with initial value |
+| `reduce(f)` | `(T, T) → T → T` | Reduce without initial value |
+
+**`Dict[K, V]`** — Hash map
+
+| Method | Signature | Description |
+|---|---|---|
+| `put(key, value)` | `K, V → void` | Insert or update a key-value pair |
+| `get(key)` | `K → V` | Get value for key (panics if missing) |
+| `contains(key)` | `K → bool` | True if key exists |
+| `remove(key)` | `K → bool` | Remove key, return whether it existed |
+| `len()` | `→ int` | Number of entries |
+| `is_empty()` | `→ bool` | True if length is zero |
+| `clear()` | `→ void` | Remove all entries |
+| `filter(pred)` | `(K, V) → bool → Dict[K, V]` | Entries satisfying predicate |
+| `fold(init, f)` | `U, (U, K, V) → U → U` | Left fold over entries |
+
+**`Set[T]`** — Hash set
+
+| Method | Signature | Description |
+|---|---|---|
+| `add(item)` | `T → void` | Insert an element |
+| `contains(item)` | `T → bool` | True if element exists |
+| `remove(item)` | `T → bool` | Remove element, return whether it existed |
+| `len()` | `→ int` | Number of elements |
+| `is_empty()` | `→ bool` | True if length is zero |
+| `clear()` | `→ void` | Remove all elements |
+| `filter(pred)` | `T(T) → bool → Set[T]` | Elements satisfying predicate |
+| `fold(init, f)` | `U, (U, T) → U → U` | Left fold over elements |
+
+**`Option[T]`** — Optional value
+
+| Method | Signature | Description |
+|---|---|---|
+| `unwrap()` | `→ T` | Extract value (panics if `None`) |
+| `unwrap_or(default)` | `T → T` | Extract value or return default |
+| `is_some()` | `→ bool` | True if `Some` |
+| `is_none()` | `→ bool` | True if `None` |
+| `map(f)` | `(T) → U → Option[U]` | Apply function to inner value |
+| `and_then(f)` | `(T) → Option[U] → Option[U]` | Flat-map |
+| `or_else(f)` | `() → Option[T] → Option[T]` | Fallback if `None` |
+
+**`Result[T, E]`** — Success or error
+
+| Method | Signature | Description |
+|---|---|---|
+| `unwrap()` | `→ T` | Extract value (panics if `Error`) |
+| `unwrap_or(default)` | `T → T` | Extract value or return default |
+| `is_ok()` | `→ bool` | True if `Ok` |
+| `is_err()` | `→ bool` | True if `Error` |
+| `map(f)` | `(T) → U → Result[U, E]` | Apply function to success value |
+| `and_then(f)` | `(T) → Result[U, E] → Result[U, E]` | Flat-map on success |
+| `or_else(f)` | `(E) → Result[T, F] → Result[T, F]` | Flat-map on error |
+
+**`Box[T]`** — Heap-allocated value
+
+| Method | Signature | Description |
+|---|---|---|
+| `get()` | `→ T` | Get the contained value |
+| `set(value)` | `T → void` | Replace the contained value |
+
+**`File`** — File handle
+
+| Method | Signature | Description |
+|---|---|---|
+| `read_all()` | `→ str` | Read entire file contents |
+| `write(data)` | `str → void` | Write string to file |
+| `close()` | `→ void` | Close the file handle |
+
 ---
 
 ## 16. Compilation Model
