@@ -1716,6 +1716,70 @@ The following functions are available without import:
 | `type`        | `String(any)`           | Runtime type name               |
 | `panic`       | `Never(String)`         | Abort with message              |
 
+### 15.1 Standard Library Modules
+
+The following functions are available via `import`:
+
+**`std.fs`** — File system
+
+| Function | Signature | Description |
+|---|---|---|
+| `read_file` | `str(str)` | Read entire file to string |
+| `write_file` | `void(str, str)` | Write string to file |
+| `append_file` | `void(str, str)` | Append string to file |
+| `file_exists` | `bool(str)` | Check if file exists |
+| `delete_file` | `bool(str)` | Delete a file |
+
+**`std.path`** — Path manipulation
+
+| Function | Signature | Description |
+|---|---|---|
+| `path_join` | `str(str, str)` | Join two path segments |
+| `path_parent` | `str(str)` | Parent directory |
+| `path_basename` | `str(str)` | File name component |
+| `path_extension` | `str(str)` | File extension |
+| `path_stem` | `str(str)` | File name without extension |
+
+**`std.os`** — Operating system
+
+| Function | Signature | Description |
+|---|---|---|
+| `exec` | `int(str)` | Run a shell command, return exit code |
+| `exit` | `void(int)` | Exit with status code |
+| `getenv` | `str(str)` | Get environment variable |
+| `args` | `Vector[str]()` | CLI arguments |
+| `readdir` | `Vector[str](str)` | List directory entries |
+
+**`std.conv`** — Type conversions
+
+| Function | Signature | Description |
+|---|---|---|
+| `ord` | `int(char)` | Character to integer code point |
+| `chr` | `char(int)` | Integer code point to character |
+| `parse_int` | `int(str)` | Parse string as integer |
+
+**`std.io`** — I/O
+
+| Name | Signature | Description |
+|---|---|---|
+| `stderr` | `File` | Standard error stream |
+| `stdout` | `File` | Standard output stream |
+| `getchar` | `int()` | Read one byte from stdin (-1 on EOF) |
+
+**`std.random`** — Random numbers
+
+| Function | Signature | Description |
+|---|---|---|
+| `rand` | `int()` | Random integer |
+| `seed` | `void(int)` | Seed the random number generator |
+
+**`std.time`** — Time
+
+| Function | Signature | Description |
+|---|---|---|
+| `time` | `int()` | Current Unix timestamp in seconds |
+| `sleep_ms` | `void(int)` | Sleep for milliseconds |
+
 ---
 
 ## 16. Compilation Model

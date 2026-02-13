@@ -600,6 +600,21 @@ impl CodegenContext<'_> {
                         }
                         return "exit(0)".to_string();
                     }
+                    "rand" => return "gorget_rand()".to_string(),
+                    "time" => return "gorget_time()".to_string(),
+                    "getchar" => return "gorget_getchar()".to_string(),
+                    "seed" => {
+                        if let Some(arg) = args.first() {
+                            let n = self.gen_expr(&arg.node.value);
+                            return format!("gorget_seed({n})");
+                        }
+                    }
+                    "sleep_ms" => {
+                        if let Some(arg) = args.first() {
+                            let ms = self.gen_expr(&arg.node.value);
+                            return format!("gorget_sleep_ms({ms})");
+                        }
+                    }
                     "ord" => {
                         if let Some(arg) = args.first() {
                             let c = self.gen_expr(&arg.node.value);
@@ -1132,6 +1147,9 @@ impl CodegenContext<'_> {
                     match name.as_str() {
                         "format" => {
                             return Some(self.types.string_id);
+                        }
+                        "rand" | "getchar" | "time" => {
+                            return Some(self.types.int_id);
                         }
                         _ => {}
                     }

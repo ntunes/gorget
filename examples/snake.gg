@@ -1,0 +1,147 @@
+# Snake — console game
+#
+# Demonstrates: stdlib modules (std.random, std.time, std.io, std.os),
+# enums, structs, vectors, mutable borrow parameters, pattern matching,
+# game loop, ANSI terminal escape codes, string interpolation.
+#
+# Controls: W/A/S/D to move, Q to quit.
+# Run: gg run examples/snake.gg
+
+from std.random import rand, seed
+from std.time import time, sleep_ms
+from std.io import getchar
+from std.os import exec
+
+enum Direction:
+    Up()
+    Down()
+    Left()
+    Right()
+
+struct Position:
+    int x
+    int y
+
+struct Game:
+    Vector[Position] body
+    Direction dir
+    int food_x
+    int food_y
+    int width
+    int height
+    int score
+    bool game_over
+
+void spawn_food(Game mutable game):
+    loop:
+        int fx = rand() % (game.width - 2) + 1
+        int fy = rand() % (game.height - 2) + 1
+        bool on_snake = false
+        for i in 0..game.body.len():
+            Position p = game.body.get(i)
+            if p.x == fx and p.y == fy:
+                on_snake = true
+                break
+        if not on_snake:
+            game.food_x = fx
+            game.food_y = fy
+            break
+
+void update(Game mutable game):
+    Position head = game.body.get(game.body.len() - 1)
+    int new_x = head.x
+    int new_y = head.y
+    match game.dir:
+        case Up():
+            new_y = head.y - 1
+        case Down():
+            new_y = head.y + 1
+        case Left():
+            new_x = head.x - 1
+        case Right():
+            new_x = head.x + 1
+    if new_x <= 0 or new_x >= game.width - 1 or new_y <= 0 or new_y >= game.height - 1:
+        game.game_over = true
+        return
+    for i in 0..game.body.len():
+        Position p = game.body.get(i)
+        if p.x == new_x and p.y == new_y:
+            game.game_over = true
+            return
+    game.body.push(Position(new_x, new_y))
+    if new_x == game.food_x and new_y == game.food_y:
+        game.score = game.score + 1
+        spawn_food(mutable game)
+    else:
+        game.body.remove(0)
+
+void render(Game game):
+    # Clear screen and move cursor to top-left
+    print("\u{1b}[2J\u{1b}[H")
+    for y in 0..game.height:
+        String row = ""
+        for x in 0..game.width:
+            if y == 0 or y == game.height - 1 or x == 0 or x == game.width - 1:
+                row = row + "#"
+            elif x == game.food_x and y == game.food_y:
+                row = row + "*"
+            else:
+                bool is_snake = false
+                for i in 0..game.body.len():
+                    Position p = game.body.get(i)
+                    if p.x == x and p.y == y:
+                        if i == game.body.len() - 1:
+                            row = row + "@"
+                        else:
+                            row = row + "o"
+                        is_snake = true
+                        break
+                if not is_snake:
+                    row = row + " "
+        print(row)
+    print("")
+    print("  Score: {game.score}  |  WASD: move  Q: quit")
+
+void main():
+    seed(time())
+    int w = 30
+    int h = 15
+    Vector[Position] body = Vector[Position]()
+    body.push(Position(w / 2 - 2, h / 2))
+    body.push(Position(w / 2 - 1, h / 2))
+    body.push(Position(w / 2, h / 2))
+    Game game = Game(body, Right(), 0, 0, w, h, 0, false)
+    spawn_food(mutable game)
+
+    # Set terminal to raw non-blocking mode
+    exec("stty raw -echo min 0 time 0")
+
+    render(game)
+    loop:
+        # Drain input buffer, keep last keypress
+        int last_key = -1
+        loop:
+            int ch = getchar()
+            if ch == -1:
+                break
+            last_key = ch
+        if last_key == 113:
+            break
+        if last_key == 119:
+            game.dir = Up()
+        elif last_key == 115:
+            game.dir = Down()
+        elif last_key == 97:
+            game.dir = Left()
+        elif last_key == 100:
+            game.dir = Right()
+        update(mutable game)
+        if game.game_over:
+            break
+        render(game)
+        sleep_ms(150)
+
+    # Restore terminal
+    exec("stty cooked echo")
+    print("\u{1b}[2J\u{1b}[H")
+    print("Game Over! Final score: {game.score}")

@@ -2039,3 +2039,12 @@ A
 42
 -7");
 }
+
+#[test]
+fn builtins_interactive() {
+    run_gg("builtins_interactive.gg", "\
+94
+23
+time ok
+done");
+}

@@ -14,7 +14,7 @@ pub fn is_stdlib_module(segments: &[String]) -> bool {
     if segments.len() != 2 || segments[0] != "std" {
         return false;
     }
-    matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv" | "io")
+    matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv" | "io" | "random" | "time")
 }
 
 /// Generate a synthetic `Module` for a stdlib module.
@@ -28,6 +28,8 @@ pub fn generate_stdlib_module(segments: &[String]) -> Option<Module> {
         "os" => Some(gen_os_module()),
         "conv" => Some(gen_conv_module()),
         "io" => Some(gen_io_module()),
+        "random" => Some(gen_random_module()),
+        "time" => Some(gen_time_module()),
         _ => None,
     }
 }
@@ -77,7 +79,7 @@ fn gen_io_module() -> Module {
         name: Spanned::dummy("File".to_string()),
         generic_args: vec![],
     };
-    let items = vec![
+    let mut items = vec![
         Spanned::dummy(Item::StaticDecl(StaticDecl {
             visibility: Visibility::Public,
             name: Spanned::dummy("stderr".to_string()),
@@ -93,10 +95,28 @@ fn gen_io_module() -> Module {
             span: Span::dummy(),
         })),
     ];
+    // Add getchar function
+    items.push(Spanned::dummy(Item::Function(
+        decl_fn("getchar", &[], ty_int()),
+    )));
     Module {
         items,
         span: Span::dummy(),
     }
+}
+
+fn gen_random_module() -> Module {
+    make_module(vec![
+        decl_fn("rand", &[], ty_int()),
+        decl_fn("seed", &[("n", ty_int())], ty_void()),
+    ])
+}
+
+fn gen_time_module() -> Module {
+    make_module(vec![
+        decl_fn("time", &[], ty_int()),
+        decl_fn("sleep_ms", &[("ms", ty_int())], ty_void()),
+    ])
 }
 
 // ─── Helpers ────────────────────────────────────────────────
@@ -178,6 +198,8 @@ mod tests {
         assert!(is_stdlib_module(&["std".into(), "os".into()]));
         assert!(is_stdlib_module(&["std".into(), "conv".into()]));
         assert!(is_stdlib_module(&["std".into(), "io".into()]));
+        assert!(is_stdlib_module(&["std".into(), "random".into()]));
+        assert!(is_stdlib_module(&["std".into(), "time".into()]));
         assert!(!is_stdlib_module(&["std".into(), "foo".into()]));
         assert!(!is_stdlib_module(&["foo".into(), "fs".into()]));
         assert!(!is_stdlib_module(&["std".into()]));
@@ -207,13 +229,31 @@ mod tests {
     #[test]
     fn generate_io() {
         let m = generate_stdlib_module(&["std".into(), "io".into()]).unwrap();
+        assert_eq!(m.items.len(), 3); // stderr, stdout, getchar
+    }
+
+    #[test]
+    fn generate_random() {
+        let m = generate_stdlib_module(&["std".into(), "random".into()]).unwrap();
         assert_eq!(m.items.len(), 2);
         let names: Vec<_> = m.items.iter().map(|i| match &i.node {
-            Item::StaticDecl(s) => s.name.node.clone(),
-            _ => panic!("expected static decl"),
+            Item::Function(f) => f.name.node.clone(),
+            _ => panic!("expected function"),
         }).collect();
-        assert!(names.contains(&"stderr".to_string()));
-        assert!(names.contains(&"stdout".to_string()));
+        assert!(names.contains(&"rand".to_string()));
+        assert!(names.contains(&"seed".to_string()));
+    }
+
+    #[test]
+    fn generate_time() {
+        let m = generate_stdlib_module(&["std".into(), "time".into()]).unwrap();
+        assert_eq!(m.items.len(), 2);
+        let names: Vec<_> = m.items.iter().map(|i| match &i.node {
+            Item::Function(f) => f.name.node.clone(),
+            _ => panic!("expected function"),
+        }).collect();
+        assert!(names.contains(&"time".to_string()));
+        assert!(names.contains(&"sleep_ms".to_string()));
     }
 
     #[test]

@@ -1,0 +1,13 @@
+from std.random import rand, seed
+from std.time import time
+
+void main():
+    seed(42)
+    int a = rand() % 100
+    int b = rand() % 100
+    print("{a}")
+    print("{b}")
+    int t = time()
+    if t > 0:
+        print("time ok")
+    print("done")
