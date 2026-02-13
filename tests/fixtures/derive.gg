@@ -1,0 +1,32 @@
+@derive(Equatable, Displayable, Cloneable)
+struct Point:
+    float x
+    float y
+
+@derive(Equatable, Displayable)
+enum Color:
+    Red()
+    Green()
+    Blue(int)
+
+void main():
+    Point a = Point(1.0, 2.0)
+    Point b = Point(1.0, 2.0)
+    Point c = Point(3.0, 4.0)
+    if a == b:
+        print("equal")
+    if a != c:
+        print("not equal")
+    print("{a}")
+    Point d = a.clone()
+    print("{d}")
+
+    Color r = Red()
+    Color r2 = Red()
+    Color bl = Blue(42)
+    if r == r2:
+        print("colors equal")
+    if r != bl:
+        print("colors differ")
+    print("{r}")
+    print("{bl}")

@@ -253,14 +253,14 @@ mod tests {
 
     fn compile_to_c(source: &str) -> String {
         let mut parser = Parser::new(source);
-        let module = parser.parse_module();
+        let mut module = parser.parse_module();
         assert!(
             parser.errors.is_empty(),
             "parse errors: {:?}",
             parser.errors
         );
 
-        let result = semantic::analyze(&module);
+        let result = semantic::analyze(&mut module);
         assert!(
             result.errors.is_empty(),
             "semantic errors: {:?}",

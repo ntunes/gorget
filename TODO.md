@@ -1,9 +1,12 @@
 # TODO
 
 ## High Priority — Self-hosting blockers
-- `@derive` macro expansion: reduces boilerplate for Debug, Clone, etc. [added: 2026-02-10]
+(none currently)
 
 ## Medium Priority — Language ergonomics & tooling
+- `@derive(Hashable)`: needs built-in hash functions for primitive types before Hashable can be derived [added: 2026-02-13]
+- `@derive(Cloneable)` for enums: requires variant reconstruction in generated clone() body [added: 2026-02-13]
+- `@derive` for generic structs/enums: needs type parameter forwarding in generated equip blocks [added: 2026-02-13]
 - `via` delegation in equip blocks: auto-forward trait methods through a struct field [added: 2026-02-10]
 - `gg` package management subcommands (`gg new`, `gg add`, `gg update`, `gg publish`, etc.) [added: 2026-02-10]
 - Basic orphan rule: equip block must be in the module that defines the trait or the type [added: 2026-02-10]

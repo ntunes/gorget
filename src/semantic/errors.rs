@@ -120,6 +120,9 @@ pub enum SemanticErrorKind {
     /// Unknown directive name.
     UnknownDirective { name: String },
 
+    /// Trait cannot be derived for this type.
+    UnderivableTrait { trait_name: String, type_name: String },
+
     /// Assignment to an immutable variable (under `directive immutable-by-default`).
     AssignmentToImmutable { name: String },
 
@@ -272,6 +275,9 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::UnknownDirective { name } => {
                 write!(f, "unknown directive `{name}`")
+            }
+            SemanticErrorKind::UnderivableTrait { trait_name, type_name } => {
+                write!(f, "cannot derive `{trait_name}` for `{type_name}`")
             }
             SemanticErrorKind::AssignmentToImmutable { name } => {
                 write!(f, "cannot assign to immutable variable `{name}` (add `mutable` to declaration)")

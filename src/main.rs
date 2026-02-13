@@ -86,7 +86,7 @@ fn try_build(
     }
 
     // Load imported modules recursively and merge
-    let module = load_imports(filename, source, module);
+    let mut module = load_imports(filename, source, module);
 
     // Merge source directives with CLI flags.
     let (dir_strip, dir_overflow) = extract_directives(&module);
@@ -101,7 +101,7 @@ fn try_build(
         overflow_wrap || dir_overflow
     };
 
-    let result = gorget::semantic::analyze(&module);
+    let result = gorget::semantic::analyze(&mut module);
 
     if !result.errors.is_empty() {
         let reporter = ErrorReporter::new(filename.to_string(), source.to_string());
@@ -529,9 +529,9 @@ fn main() {
             }
 
             // Load imported modules recursively and merge
-            let module = load_imports(filename, &source, module);
+            let mut module = load_imports(filename, &source, module);
 
-            let result = gorget::semantic::analyze(&module);
+            let result = gorget::semantic::analyze(&mut module);
 
             if result.errors.is_empty() {
                 println!("OK: no semantic errors");

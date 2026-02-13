@@ -1,4 +1,5 @@
 pub mod borrow;
+pub mod derive;
 pub mod errors;
 pub mod ids;
 pub mod intern;
@@ -34,10 +35,13 @@ pub struct AnalysisResult {
 }
 
 /// Run all semantic analysis passes on a parsed module.
-pub fn analyze(module: &Module) -> AnalysisResult {
+pub fn analyze(module: &mut Module) -> AnalysisResult {
     let mut scopes = ScopeTable::new();
     let mut types = TypeTable::new();
     let mut errors = Vec::new();
+
+    // Expand @derive(...) attributes into equip blocks
+    derive::expand_derives(module, &mut errors);
 
     // Validate directives
     for item in &module.items {

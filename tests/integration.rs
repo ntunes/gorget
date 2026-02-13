@@ -820,6 +820,22 @@ Point",
 }
 
 #[test]
+fn derive() {
+    run_gg(
+        "derive.gg",
+        "\
+equal
+not equal
+Point(x=1.000000, y=2.000000)
+Point(x=1.000000, y=2.000000)
+colors equal
+colors differ
+Red()
+Blue(42)",
+    );
+}
+
+#[test]
 fn iter_for_else() {
     run_gg(
         "iter_for_else.gg",

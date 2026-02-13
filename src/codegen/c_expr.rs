@@ -3308,7 +3308,14 @@ impl CodegenContext<'_> {
         let enum_c_type = self.resolve_enum_c_type_for_scrutinee(scrutinee);
 
         let mut parts = Vec::new();
-        parts.push(format!("__typeof__({scrut_expr}) __gorget_scrut = {scrut_expr}"));
+        // When the scrutinee is `self` inside a method body, `self` is a pointer
+        // (const T *self), so we must dereference it to get the struct value.
+        let is_self_scrutinee = self.current_self_type.is_some() && matches!(scrutinee.node, Expr::SelfExpr);
+        if is_self_scrutinee {
+            parts.push(format!("__typeof__(*{scrut_expr}) __gorget_scrut = *{scrut_expr}"));
+        } else {
+            parts.push(format!("__typeof__({scrut_expr}) __gorget_scrut = {scrut_expr}"));
+        }
 
         // Build if-else chain; each arm assigns to __gorget_match_result
         let mut arm_parts = Vec::new();

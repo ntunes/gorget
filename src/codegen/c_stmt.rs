@@ -1051,11 +1051,20 @@ impl CodegenContext<'_> {
     ) {
         let scrut_expr = self.gen_expr(scrutinee);
 
-        // Always evaluate scrutinee into a temp to avoid double-evaluation
+        // Always evaluate scrutinee into a temp to avoid double-evaluation.
+        // When the scrutinee is `self` inside a method body, `self` is a pointer
+        // (const T *self), so we must dereference it to get the struct value.
         let tmp = emitter.fresh_temp();
-        emitter.emit_line(&format!(
-            "__typeof__({scrut_expr}) {tmp} = {scrut_expr};"
-        ));
+        let is_self_scrutinee = self.current_self_type.is_some() && matches!(scrutinee.node, Expr::SelfExpr);
+        if is_self_scrutinee {
+            emitter.emit_line(&format!(
+                "__typeof__(*{scrut_expr}) {tmp} = *{scrut_expr};"
+            ));
+        } else {
+            emitter.emit_line(&format!(
+                "__typeof__({scrut_expr}) {tmp} = {scrut_expr};"
+            ));
+        }
 
         // Resolve the mangled enum type name for generic enums (e.g. Option__int64_t)
         let enum_c_type = self.resolve_enum_c_type_for_scrutinee(scrutinee);
@@ -1092,8 +1101,15 @@ impl CodegenContext<'_> {
             // Emit pattern bindings inside the arm body
             self.emit_pattern_bindings(&arm.pattern.node, &tmp, emitter);
 
-            let body = self.gen_expr(&arm.body);
-            emitter.emit_line(&format!("{body};"));
+            // If the arm body is a block, generate it as statements directly
+            // (avoids wrapping in a GCC statement expression which can't handle
+            // nested match/if statements that only contain returns).
+            if let Expr::Block(block) = &arm.body.node {
+                self.gen_block(block, emitter);
+            } else {
+                let body = self.gen_expr(&arm.body);
+                emitter.emit_line(&format!("{body};"));
+            }
             emitter.dedent();
         }
         if let Some(else_body) = else_arm {

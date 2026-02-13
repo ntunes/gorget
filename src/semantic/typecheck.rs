@@ -2035,9 +2035,9 @@ mod tests {
 
     fn check(source: &str) -> Vec<super::SemanticError> {
         let mut parser = Parser::new(source);
-        let module = parser.parse_module();
+        let mut module = parser.parse_module();
         assert!(parser.errors.is_empty(), "parse errors: {:?}", parser.errors);
-        let result = semantic::analyze(&module);
+        let result = semantic::analyze(&mut module);
         result.errors
     }
 
