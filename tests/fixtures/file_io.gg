@@ -1,3 +1,4 @@
+from std.collections import File
 from std.fs import read_file, write_file, append_file, file_exists, delete_file
 
 void main():

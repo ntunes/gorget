@@ -1,3 +1,5 @@
+from std.collections import Dict
+
 void main():
     Dict[str, int] ages = Dict[str, int]()
     ages.put("alice", 30)

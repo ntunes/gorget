@@ -78,10 +78,6 @@ pub fn collect_top_level(
     errors: &mut Vec<SemanticError>,
 ) -> ResolveContext {
     let mut ctx = ResolveContext::new();
-    // Register built-in collection types so they can be resolved as types.
-    for name in &["Vector", "List", "Array", "Dict", "HashMap", "Map", "Set", "HashSet", "Box", "File"] {
-        let _ = scopes.define(name.to_string(), DefKind::Struct, Span::dummy());
-    }
     // Register built-in core traits.
     for trait_name in &["Displayable", "Equatable", "Cloneable", "Hashable", "Drop", "Iterator"] {
         let _ = scopes.define(trait_name.to_string(), DefKind::Trait, Span::dummy());
@@ -1043,18 +1039,13 @@ fn extract_where_bounds(
     }
 }
 
-/// Check if a name is a built-in function or type.
-/// Stdlib functions (std.fs, std.path, std.os, std.conv) are NOT listed here —
-/// they're resolved via synthetic Module imports instead.
+/// Check if a name is a compiler intrinsic (always available without imports).
+/// Collection types live in `std.collections`; traits and Option/Result are
+/// pre-registered in `collect_top_level`.
 fn is_builtin(name: &str) -> bool {
     matches!(
         name,
-        "print" | "len" | "range" | "enumerate" | "zip" | "map" | "filter" | "type"
-        | "Vector" | "Dict" | "Set" | "HashMap" | "HashSet" | "List" | "Array" | "Map"
-        | "Option" | "Result" | "Some" | "None" | "Ok" | "Error"
-        | "Displayable" | "Equatable" | "Cloneable" | "Hashable" | "Drop" | "Iterator"
-        | "Box" | "File"
-        | "format"
+        "print" | "format" | "len" | "range" | "enumerate" | "zip" | "map" | "filter" | "type"
     )
 }
 

@@ -9,6 +9,7 @@
 #   - Method calls on imported types
 #   - Mutable struct (&self) methods
 
+from std.collections import Vector
 from task import Task
 from store import TaskStore
 

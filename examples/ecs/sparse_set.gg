@@ -3,6 +3,8 @@
 # Demonstrates: generic struct with methods, swap-and-pop removal,
 # dynamic array growth, O(1) insert/remove/lookup.
 
+from std.collections import Vector
+
 struct SparseSet[T]:
     Vector[int] sparse
     Vector[int] entity_ids

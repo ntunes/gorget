@@ -8,6 +8,7 @@
 #   - String interpolation with method calls
 #   - Control flow with trait method results
 
+from std.collections import Box
 from shape import Shape
 from circle import Circle
 from rect import Rect

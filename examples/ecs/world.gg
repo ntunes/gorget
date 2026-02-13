@@ -4,6 +4,7 @@
 # EntityPool + SparseSet composition, multi-component spawn/kill,
 # game systems as methods operating on World via &self.
 
+from std.collections import Vector
 from entity import EntityPool
 from sparse_set import SparseSet
 from components import Health

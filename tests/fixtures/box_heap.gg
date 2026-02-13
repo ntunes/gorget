@@ -1,3 +1,5 @@
+from std.collections import Box
+
 void main():
     Box[int] b = Box(42)
     print("{*b}")

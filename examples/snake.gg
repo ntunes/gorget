@@ -7,6 +7,7 @@
 # Controls: W/A/S/D to move, Q to quit.
 # Run: gg run examples/snake.gg
 
+from std.collections import Vector
 from std.random import rand, seed
 from std.time import time, sleep_ms
 from std.io import getchar

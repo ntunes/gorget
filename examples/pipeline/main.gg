@@ -8,6 +8,7 @@
 #   - Pipeline-style data transformation
 #   - Reusable stats functions
 
+from std.collections import Vector
 from data import Student, class_roster
 from stats import sum, max_val, min_val, count_above
 

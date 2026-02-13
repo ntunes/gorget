@@ -1,3 +1,5 @@
+from std.collections import Vector
+
 void main():
     Vector[int] v = Vector[int]()
     v.push(10)

@@ -3,6 +3,7 @@
 # Demonstrates: struct wrapping Vector of user-defined type,
 # &self mutation, closures in filter, fold for aggregation.
 
+from std.collections import Vector
 from task import Task
 
 struct TaskStore:

@@ -3,6 +3,8 @@
 # Demonstrates: struct with Vector field, &self mutation,
 # pop/push for free-list ID recycling.
 
+from std.collections import Vector
+
 struct EntityPool:
     int next_id
     Vector[int] free_ids

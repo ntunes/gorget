@@ -7,6 +7,7 @@
 #   - Recursive function evaluation
 #   - String interpolation with function calls
 
+from std.collections import Box
 from expr import Expr, Num, Add, Mul, Neg
 from eval import eval
 

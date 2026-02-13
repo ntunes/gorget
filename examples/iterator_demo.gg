@@ -1,5 +1,7 @@
 # Custom iterators — Range and Fibonacci sequence
 
+from std.collections import Vector
+
 struct Range:
     int current
     int stop

@@ -3,6 +3,7 @@
 # Demonstrates: full ECS architecture with reusable library (EntityPool,
 # SparseSet), user-defined World struct, system methods, game loop.
 
+from std.collections import Vector
 from entity import EntityPool
 from sparse_set import SparseSet
 from components import Health

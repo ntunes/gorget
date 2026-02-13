@@ -12,6 +12,8 @@
 #   nexts[i]  = the index of the next node (-1 = null)
 # This avoids Option[Box[Node[T]]] which requires nested generics.
 
+from std.collections import Vector
+
 struct LinkedList:
     Vector[int] values
     Vector[int] nexts

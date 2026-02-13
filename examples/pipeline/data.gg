@@ -3,6 +3,8 @@
 # Demonstrates: struct with Displayable, format() with field access,
 # Vector of user-defined structs, function returning a collection.
 
+from std.collections import Vector
+
 struct Student:
     str name
     int grade

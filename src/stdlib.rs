@@ -14,7 +14,7 @@ pub fn is_stdlib_module(segments: &[String]) -> bool {
     if segments.len() != 2 || segments[0] != "std" {
         return false;
     }
-    matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv" | "io" | "random" | "time")
+    matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv" | "io" | "random" | "time" | "collections")
 }
 
 /// Generate a synthetic `Module` for a stdlib module.
@@ -30,6 +30,7 @@ pub fn generate_stdlib_module(segments: &[String]) -> Option<Module> {
         "io" => Some(gen_io_module()),
         "random" => Some(gen_random_module()),
         "time" => Some(gen_time_module()),
+        "collections" => Some(gen_collections_module()),
         _ => None,
     }
 }
@@ -117,6 +118,53 @@ fn gen_time_module() -> Module {
         decl_fn("time", &[], ty_int()),
         decl_fn("sleep_ms", &[("ms", ty_int())], ty_void()),
     ])
+}
+
+fn gen_collections_module() -> Module {
+    let type_defs: Vec<(&str, usize)> = vec![
+        ("Vector", 1), ("List", 1), ("Array", 1),   // [T]
+        ("Dict", 2), ("HashMap", 2), ("Map", 2),     // [K, V]
+        ("Set", 1), ("HashSet", 1),                   // [T]
+        ("Box", 1),                                    // [T]
+        ("File", 0),                                   // no generics
+    ];
+    let items = type_defs
+        .into_iter()
+        .map(|(name, n_params)| {
+            Spanned::dummy(Item::Struct(StructDef {
+                attributes: vec![],
+                visibility: Visibility::Public,
+                name: Spanned::dummy(name.to_string()),
+                generic_params: if n_params > 0 {
+                    Some(Spanned::dummy(GenericParams {
+                        params: (0..n_params)
+                            .map(|i| {
+                                let param_name = if n_params == 2 && i == 0 {
+                                    "K"
+                                } else if n_params == 2 && i == 1 {
+                                    "V"
+                                } else {
+                                    "T"
+                                };
+                                Spanned::dummy(GenericParam::Type(Spanned::dummy(
+                                    param_name.to_string(),
+                                )))
+                            })
+                            .collect(),
+                    }))
+                } else {
+                    None
+                },
+                fields: vec![],
+                doc_comment: None,
+                span: Span::dummy(),
+            }))
+        })
+        .collect();
+    Module {
+        items,
+        span: Span::dummy(),
+    }
 }
 
 // ─── Helpers ────────────────────────────────────────────────
@@ -254,6 +302,21 @@ mod tests {
         }).collect();
         assert!(names.contains(&"time".to_string()));
         assert!(names.contains(&"sleep_ms".to_string()));
+    }
+
+    #[test]
+    fn generate_collections() {
+        let m = generate_stdlib_module(&["std".into(), "collections".into()]).unwrap();
+        assert_eq!(m.items.len(), 10);
+        let names: Vec<_> = m.items.iter().map(|i| match &i.node {
+            Item::Struct(s) => s.name.node.clone(),
+            _ => panic!("expected struct"),
+        }).collect();
+        assert!(names.contains(&"Vector".to_string()));
+        assert!(names.contains(&"Dict".to_string()));
+        assert!(names.contains(&"Set".to_string()));
+        assert!(names.contains(&"Box".to_string()));
+        assert!(names.contains(&"File".to_string()));
     }
 
     #[test]

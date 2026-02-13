@@ -2,6 +2,8 @@
 #
 # Demonstrates: enums with payloads, Box[T] for recursive types.
 
+from std.collections import Box
+
 enum Expr:
     Num(int)
     Add(Box[Expr], Box[Expr])

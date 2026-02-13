@@ -1,5 +1,7 @@
 # Sieve of Eratosthenes — find all primes up to N
 
+from std.collections import Vector
+
 Vector[int] sieve(int limit):
     # is_prime[i] tracks whether i is prime
     # We use a Vector of 1s (true) and 0s (false)

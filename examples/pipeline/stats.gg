@@ -3,6 +3,8 @@
 # Demonstrates: Vector iteration, fold, for-loops with
 # accumulation, expression-body functions.
 
+from std.collections import Vector
+
 int sum(Vector[int] values):
     return values.fold(0, (int acc, int x): acc + x)
 

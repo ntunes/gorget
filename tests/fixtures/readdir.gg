@@ -1,3 +1,4 @@
+from std.collections import Vector
 from std.os import readdir
 from std.fs import write_file, delete_file
 
