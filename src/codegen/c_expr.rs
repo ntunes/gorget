@@ -3177,26 +3177,23 @@ impl CodegenContext<'_> {
         self.lifted_closures.push(lifted);
 
         // At the creation site: emit a bare function pointer (no captures)
-        // or allocate env and create GorgetClosure (with captures).
+        // or stack-allocate env via compound literal and create GorgetClosure.
         if captures.is_empty() {
             fn_name
         } else {
-            // Use a GCC statement expression to allocate and populate the env
-            let mut parts = Vec::new();
-            parts.push(format!("{env_name}* __env = ({env_name}*)malloc(sizeof({env_name}))"));
-            for (cap_name, _, mode) in &captures {
-                match mode {
-                    CaptureMode::ByMutRef => {
-                        parts.push(format!("__env->{cap_name} = &{cap_name}"));
-                    }
-                    CaptureMode::ByValue => {
-                        parts.push(format!("__env->{cap_name} = {cap_name}"));
-                    }
-                }
-            }
-            let stmts = parts.join("; ");
+            // C99 compound literal: the env struct has automatic storage duration
+            // tied to the enclosing block, so no malloc/free needed. The env lives
+            // on the stack as long as the closure variable's scope.
+            let fields: Vec<String> = captures
+                .iter()
+                .map(|(cap_name, _, mode)| match mode {
+                    CaptureMode::ByMutRef => format!(".{cap_name} = &{cap_name}"),
+                    CaptureMode::ByValue => format!(".{cap_name} = {cap_name}"),
+                })
+                .collect();
+            let field_init = fields.join(", ");
             format!(
-                "({{ {stmts}; (GorgetClosure){{.fn_ptr = (void*){fn_name}, .env = (void*)__env}}; }})"
+                "(GorgetClosure){{.fn_ptr = (void*){fn_name}, .env = (void*)&({env_name}){{{field_init}}}}}"
             )
         }
     }
