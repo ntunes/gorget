@@ -838,6 +838,9 @@ impl CodegenContext<'_> {
 
     /// Pre-scan the module AST to discover and register generic type usages.
     /// This must run before codegen so that monomorphized types are emitted before use.
+    // Note: this walker is structurally similar to discover_tuple_types below.
+    // A shared visitor was considered but rejected — the duplication is mechanical,
+    // both walkers are stable, and the abstraction cost outweighs the savings.
     pub fn discover_generic_usages(&mut self, module: &crate::parser::ast::Module) {
         for item in &module.items {
             match &item.node {

@@ -1,5 +1,6 @@
 # DONE
 
+- [2026-02-13] Close scan_for_generics/scan_for_tuples duplication as accepted — added comment explaining the decision (abstraction cost outweighs savings for stable, mechanical walkers)
 - [2026-02-13] Complete remaining stdlib items: `rand_range(lo, hi)` in std.random; `setenv`, `getcwd`, `platform` in std.os; `time_ms` (millisecond-precision via `clock_gettime`) in std.time; `std.fmt` module (empty — Displayable/format already in prelude, module exists for discoverability). New fixtures: random_stdlib.gg, os_stdlib.gg, time_stdlib.gg
 - [2026-02-13] Expand `std.conv` with 5 new functions: `parse_float(str) -> float`, `int_to_str(int) -> str`, `float_to_str(float) -> str` (compact `%g` format), `bool_to_str(bool) -> str`, `char_to_str(char) -> str`; C runtime uses `strtod` for parse_float, `snprintf` for numeric-to-string; new fixture `conv_stdlib.gg`
 - [2026-02-13] Add `input(str) -> str` and `readline() -> str` to `std.io`: `input` prints a prompt and reads a line from stdin (like Python's `input()`), `readline` reads a line with no prompt; C runtime uses `fgets` with newline stripping; new `run_gg_with_stdin` test helper for piping stdin in integration tests; new fixture `io_input.gg`

@@ -3,9 +3,6 @@
 ## High Priority — Self-hosting blockers
 (none currently)
 
-## Medium Priority — Codegen cleanup (discuss before fixing)
-- **scan_for_generics / scan_for_tuples duplication** (c_item.rs ~860-1044 vs ~1717-1879): Nearly identical AST traversal code exists for generic discovery and tuple discovery — two ~200-line walkers doing the same recursive descent with different leaf actions. A shared visitor pattern could consolidate this but it's a bigger refactor. Discuss whether it's worth the abstraction. [added: 2026-02-13]
-
 ## Medium Priority — Language ergonomics & tooling
 - `via` delegation in equip blocks: auto-forward trait methods through a struct field [added: 2026-02-10]
 - `gg` package management subcommands (`gg new`, `gg add`, `gg update`, `gg publish`, etc.) [added: 2026-02-10]
