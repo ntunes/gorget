@@ -2064,6 +2064,12 @@ pub fn check_module(
             Item::Test(t) => {
                 checker.current_return_type = Some(checker.types.void_id);
                 checker.current_function_throws = false;
+                for binding in &t.with_bindings {
+                    let value_type = checker.infer_expr(&binding.expr);
+                    if let Some(def_id) = checker.scopes.lookup_by_name_anywhere(&binding.name.node) {
+                        checker.scopes.get_def_mut(def_id).type_id = Some(value_type);
+                    }
+                }
                 checker.check_block(&t.body);
                 checker.current_return_type = None;
             }

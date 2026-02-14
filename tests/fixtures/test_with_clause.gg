@@ -1,0 +1,17 @@
+struct Resource:
+    str name
+
+equip Resource with Drop:
+    void drop(self):
+        str n = self.name
+        print("dropping {n}")
+
+test "single with" with Resource("alpha") as r:
+    assert r.name == "alpha"
+
+test "with cleanup on failure" with Resource("beta") as r:
+    assert 1 == 2
+
+test "multiple with" with Resource("gamma") as a, Resource("delta") as b:
+    assert a.name == "gamma"
+    assert b.name == "delta"

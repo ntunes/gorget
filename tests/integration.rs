@@ -2501,3 +2501,18 @@ fn test_cleanup() {
         false,
     );
 }
+
+#[test]
+fn test_with_clause() {
+    run_gg_test(
+        "test_with_clause.gg",
+        &[
+            "dropping alpha",
+            "dropping beta",
+            "dropping delta",
+            "dropping gamma",
+            "2 passed, 1 failed",
+        ],
+        false,
+    );
+}

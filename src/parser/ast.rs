@@ -50,6 +50,7 @@ pub struct Directive {
 pub struct TestDef {
     pub attributes: Vec<Spanned<Attribute>>,
     pub name: Spanned<String>,
+    pub with_bindings: Vec<WithBinding>,
     pub body: Block,
     pub doc_comment: Option<String>,
     pub span: Span,

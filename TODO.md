@@ -1,7 +1,6 @@
 # TODO
 
 ## High Priority — Test Framework Enhancements (Phase 2)
-- `with` clause on test blocks — per-test resource management with automatic teardown. Syntax: `test "name" with Resource(...) as r:`. Resource created before test body, closed/dropped automatically after (even on failure). Multiple resources: `test "name" with (A(...) as a, B(...) as b):`. Leverages existing Drop trait + cleanup stack. [added: 2026-02-14]
 - `--filter` name-based test filtering — `gg test file.gg --filter "fibonacci"` runs only tests whose name contains the substring. Complement to existing `--tag` attribute-based filtering. [added: 2026-02-14]
 - `--exclude-tag` flag — `gg test file.gg --exclude-tag slow` skips tests tagged "slow". Complement to existing `--tag` inclusion filter. If both `--tag` and `--exclude-tag` are specified, exclusion wins. [added: 2026-02-14]
 - Console reporter improvements — per-test duration (milliseconds), test count header (`Running N tests...`). [added: 2026-02-14]
@@ -43,7 +42,7 @@
 - **Rust-model closures**: embed captures inside the closure struct (not a separate env allocation). Each closure becomes a unique anonymous type; polymorphic dispatch via `Fn`/`FnMut`/`FnOnce` traits + monomorphization, `dyn Fn` for trait objects. Eliminates the env pointer indirection and makes closure lifetime identical to the closure value's lifetime. Depends on: closure traits, monomorphization of closure types, trait object support for closures. [added: 2026-02-13]
 
 ### Future: Fixture System
-- **Evolutionary path**: suite setup/teardown (done) → `with` clause for per-test resources (Phase 2) → fixture injection (long-term). Each stage builds on the previous; fixtures are the final generalization where named, composable, scoped resources are injected into test signatures automatically. [added: 2026-02-14]
+- **Evolutionary path**: suite setup/teardown (done) → `with` clause for per-test resources (done) → fixture injection (long-term). Each stage builds on the previous; fixtures are the final generalization where named, composable, scoped resources are injected into test signatures automatically. [added: 2026-02-14]
 - **Design questions to resolve**:
   - *Yield semantics*: pytest fixtures use `yield` for co-located setup/teardown. In a C-targeting language without coroutines, alternatives include Drop-based teardown (leverage existing cleanup stack), explicit `setup`/`teardown` blocks within the fixture definition, or a callback/closure pattern.
   - *Keyword choice*: `fixture` as a new keyword is the most explicit option. `equip` was considered and rejected — it's the wrong abstraction (`equip` means "implement a trait for a type", not "inject a dependency into a test").

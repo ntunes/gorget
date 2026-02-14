@@ -2119,6 +2119,24 @@ test "string equality":
 
 Run with `gg test <file>`. Each test runs in isolation — assertion failures are caught and reported without terminating the process.
 
+#### `with` Clause
+
+Tests can declare scoped resources using a `with` clause. Resources are created before the test body, available as named bindings, and automatically cleaned up after the test — even if the test fails via assertion.
+
+```gorget
+# Single resource
+test "reads file" with File.open("data.txt") as f:
+    auto content = f.read_all()
+    assert content == "expected"
+
+# Multiple resources (comma-separated)
+test "copies data" with Resource("a") as a, Resource("b") as b:
+    assert a.name == "a"
+    assert b.name == "b"
+```
+
+If a with-binding's type implements the `Drop` trait, its `drop()` method is called on both the success and failure paths.
+
 ### 18.2 Suite Setup and Teardown
 
 ```gorget

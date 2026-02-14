@@ -948,6 +948,9 @@ pub fn check_module(
             Item::Test(t) => {
                 checker.var_states.clear();
                 checker.loop_depth = 0;
+                for binding in &t.with_bindings {
+                    checker.check_expr(&binding.expr);
+                }
                 checker.check_block(&t.body);
             }
             Item::SuiteSetup(s) => {

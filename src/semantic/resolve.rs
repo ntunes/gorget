@@ -368,6 +368,17 @@ fn resolve_item_body(
         }
         Item::Test(t) => {
             scopes.push_scope(super::scope::ScopeKind::Function);
+            for binding in &t.with_bindings {
+                resolve_expr(&binding.expr, scopes, errors, resolution_map);
+                if let Err(e) = scopes.define_with_mutability(
+                    binding.name.node.clone(),
+                    DefKind::Variable,
+                    binding.name.span,
+                    false,
+                ) {
+                    errors.push(e);
+                }
+            }
             resolve_block(&t.body, scopes, types, errors, resolution_map);
             scopes.pop_scope();
         }

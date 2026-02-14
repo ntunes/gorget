@@ -297,16 +297,10 @@ impl Parser {
         let mut bindings = Vec::new();
         loop {
             let bind_start = self.peek_span();
-            let expr = self.parse_expr()?;
-            self.expect_keyword(Keyword::As)?;
-            let name = self.expect_identifier()?;
+            let full_expr = self.parse_expr()?;
             let bind_end = self.previous_span();
-
-            bindings.push(WithBinding {
-                expr,
-                name,
-                span: bind_start.merge(bind_end),
-            });
+            let binding = self.decompose_as_binding(full_expr, bind_start.merge(bind_end))?;
+            bindings.push(binding);
 
             if !self.match_token(&Token::Comma) {
                 break;

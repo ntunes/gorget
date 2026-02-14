@@ -4,7 +4,7 @@ use crate::parser::ast::*;
 use super::c_emitter::CEmitter;
 use super::c_mangle;
 use super::c_types;
-use super::{CodegenContext, DropScopeKind};
+use super::{CodegenContext, DropAction, DropScopeKind};
 
 impl CodegenContext<'_> {
     // ─── Forward Declarations ────────────────────────────────
@@ -2397,6 +2397,37 @@ static inline void {mangled}__free({mangled}* m) {{
                 emitter.indent();
                 self.in_test_body = true;
                 self.push_drop_scope(DropScopeKind::Function);
+
+                // Emit with-binding declarations
+                for binding in &t.with_bindings {
+                    let val = self.gen_expr(&binding.expr);
+                    let escaped = c_mangle::escape_keyword(&binding.name.node);
+                    // Resolve C type from semantic TypeId, falling back to expression inference
+                    let c_type = if let Some(def_id) = self.scopes.lookup_by_name_anywhere(&binding.name.node) {
+                        let def = self.scopes.get_def(def_id);
+                        if let Some(type_id) = def.type_id {
+                            c_types::type_id_to_c(type_id, self.types, self.scopes)
+                        } else {
+                            self.infer_c_type_from_expr(&binding.expr.node)
+                        }
+                    } else {
+                        self.infer_c_type_from_expr(&binding.expr.node)
+                    };
+                    let decl = c_types::c_declare(&c_type, &escaped);
+                    emitter.emit_line(&format!("{decl} = {val};"));
+                    // Register for Drop cleanup (struct with Drop trait)
+                    if self.traits.has_trait_impl_by_name(&c_type, "Drop") {
+                        let drop_fn = c_mangle::mangle_trait_method("Drop", &c_type, "drop");
+                        self.register_droppable(
+                            &escaped,
+                            DropAction::UserDrop { type_name: c_type.clone() },
+                        );
+                        emitter.emit_line(&format!(
+                            "__gorget_cleanup_push((__gorget_cleanup_fn){drop_fn}, (void*)&{escaped});"
+                        ));
+                    }
+                }
+
                 self.gen_block(&t.body, emitter);
                 self.pop_drop_scope(emitter);
                 self.in_test_body = false;

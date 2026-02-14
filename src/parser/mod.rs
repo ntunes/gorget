@@ -1383,16 +1383,65 @@ impl Parser {
         self.expect_keyword(Keyword::Test)?;
 
         let name = self.expect_plain_string()?;
+
+        // Optional `with` clause: with expr as name [, expr as name ...]
+        // Note: `as` is the highest-precedence infix operator (cast), so
+        // parse_expr() consumes `expr as name` as an Expr::As cast node.
+        // We decompose it back into a with-binding.
+        let with_bindings = if self.check(&Token::Keyword(Keyword::With)) {
+            self.advance(); // consume `with`
+            let mut bindings = Vec::new();
+            loop {
+                let bind_start = self.peek_span();
+                let full_expr = self.parse_expr()?;
+                let bind_end = self.previous_span();
+                let binding = self.decompose_as_binding(full_expr, bind_start.merge(bind_end))?;
+                bindings.push(binding);
+                if !self.match_token(&Token::Comma) {
+                    break;
+                }
+            }
+            bindings
+        } else {
+            vec![]
+        };
+
         let body = self.parse_block()?;
         let end = self.previous_span();
 
         Ok(TestDef {
             attributes,
             name,
+            with_bindings,
             body,
             doc_comment,
             span: start.merge(end),
         })
+    }
+
+    /// Decompose an `Expr::As { expr, type_ }` node (produced by parse_expr)
+    /// into a `WithBinding`. The `as` keyword has the highest infix precedence,
+    /// so `parse_expr()` consumes `expr as name` as a cast; we extract the
+    /// binding name from the type position.
+    fn decompose_as_binding(
+        &self,
+        full_expr: Spanned<Expr>,
+        span: Span,
+    ) -> Result<WithBinding, ParseError> {
+        if let Expr::As { expr, type_ } = full_expr.node {
+            if let Type::Named { name, generic_args } = type_.node {
+                if generic_args.is_empty() {
+                    return Ok(WithBinding {
+                        expr: *expr,
+                        name,
+                        span,
+                    });
+                }
+            }
+            Err(self.error_at(span, "expected 'as <name>' in with-binding"))
+        } else {
+            Err(self.error_at(span, "expected '<expr> as <name>' in with-binding"))
+        }
     }
 
     // ── Suite Block ──────────────────────────────────────────
@@ -2468,6 +2517,33 @@ mod tests {
             assert_eq!(t.name.node, "tagged test");
             assert_eq!(t.attributes.len(), 1);
             assert_eq!(t.attributes[0].node.name.node, "tag");
+        } else {
+            panic!("Expected Test, got {:?}", module.items[0].node);
+        }
+    }
+
+    #[test]
+    fn test_parse_test_with_clause() {
+        let module = parse("test \"reads file\" with File.open(\"data.txt\") as f:\n    assert true\n");
+        assert_eq!(module.items.len(), 1);
+        if let Item::Test(ref t) = module.items[0].node {
+            assert_eq!(t.name.node, "reads file");
+            assert_eq!(t.with_bindings.len(), 1);
+            assert_eq!(t.with_bindings[0].name.node, "f");
+        } else {
+            panic!("Expected Test, got {:?}", module.items[0].node);
+        }
+    }
+
+    #[test]
+    fn test_parse_test_with_clause_multiple() {
+        let module = parse("test \"multi\" with Resource(\"a\") as a, Resource(\"b\") as b:\n    assert true\n");
+        assert_eq!(module.items.len(), 1);
+        if let Item::Test(ref t) = module.items[0].node {
+            assert_eq!(t.name.node, "multi");
+            assert_eq!(t.with_bindings.len(), 2);
+            assert_eq!(t.with_bindings[0].name.node, "a");
+            assert_eq!(t.with_bindings[1].name.node, "b");
         } else {
             panic!("Expected Test, got {:?}", module.items[0].node);
         }
