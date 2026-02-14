@@ -3,8 +3,6 @@
 
 ## Medium Priority — Trace / HTML report
 
-- **`VarDecl` with pattern destructuring not traced (`c_stmt.rs:850-860`)**: Only `Pattern::Binding` declarations get `stmt_start`/`stmt_end`. Tuple patterns (`let (a, b) = get_pair()`) and wildcard patterns are invisible in the trace. [added: 2026-02-14]
-
 - **Crash-resilient report generation**: If the test binary crashes (segfault in unsafe code), `atexit` handlers don't run and the trace file is truncated. `parse_trace_file` silently produces a partial report. Should warn when `test_start` events have no matching `test_end`, indicating a probable crash. [added: 2026-02-14]
 
 - **`generate_c` has 11 parameters (`codegen/mod.rs:197`)**: Trace-related params (`trace`, `trace_filename`) plus `strip_asserts`, `overflow_wrap`, test filters, etc. should be bundled into a `CodegenOptions` struct. [added: 2026-02-14]

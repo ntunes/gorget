@@ -835,14 +835,28 @@ impl CodegenContext<'_> {
                 self.maybe_register_droppable(&escaped, &type_.node, emitter);
             }
             Pattern::Wildcard => {
+                if self.trace {
+                    let vars = self.collect_expr_vars(&[&value.node]);
+                    self.emit_stmt_start(span, &vars, emitter);
+                }
                 let val = self.gen_expr(value);
                 emitter.emit_line(&format!("(void){val};"));
+                if self.trace {
+                    self.emit_stmt_end(emitter);
+                }
             }
             _ => {
+                if self.trace {
+                    let vars = self.collect_expr_vars(&[&value.node]);
+                    self.emit_stmt_start(span, &vars, emitter);
+                }
                 let c_type = self.resolve_decl_type(type_, value, None);
                 let val = self.gen_expr(value);
                 let decl = c_types::c_declare(&c_type, "__pat");
                 emitter.emit_line(&format!("/* pattern decl */ {decl} = {val};"));
+                if self.trace {
+                    self.emit_stmt_end(emitter);
+                }
             }
         }
     }
