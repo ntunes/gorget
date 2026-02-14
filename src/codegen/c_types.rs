@@ -301,6 +301,28 @@ fn primitive_to_gorget(prim: PrimitiveType) -> &'static str {
     }
 }
 
+/// Check if a C type is suitable for variable substitution in trace reports.
+/// Only primitive scalar types (int, float, bool, char, string) are traceable;
+/// structs, enums, arrays, and void are not.
+pub fn is_traceable_for_vars(c_type: &str) -> bool {
+    matches!(
+        c_type,
+        "int64_t"
+            | "int8_t"
+            | "int16_t"
+            | "int32_t"
+            | "uint64_t"
+            | "uint8_t"
+            | "uint16_t"
+            | "uint32_t"
+            | "double"
+            | "float"
+            | "bool"
+            | "const char*"
+            | "char"
+    )
+}
+
 /// Return the trace runtime formatter function name for a given C type.
 /// Used to emit `__gorget_trace_val_TYPE(fp, expr)` calls.
 pub fn trace_formatter_for_c_type(c_type: &str) -> &'static str {
