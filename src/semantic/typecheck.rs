@@ -10,6 +10,21 @@ use super::scope::{DefKind, ScopeKind, ScopeTable};
 use super::traits::TraitRegistry;
 use super::types::{self, ResolvedType, TypeTable};
 
+/// Return the valid (min, max) range for an integer primitive type.
+fn int_range(prim: &PrimitiveType) -> Option<(i128, i128)> {
+    match prim {
+        PrimitiveType::Int8 => Some((-128, 127)),
+        PrimitiveType::Int16 => Some((-32768, 32767)),
+        PrimitiveType::Int32 => Some((-2_147_483_648, 2_147_483_647)),
+        PrimitiveType::Int | PrimitiveType::Int64 => Some((-9_223_372_036_854_775_808, 9_223_372_036_854_775_807)),
+        PrimitiveType::Uint8 => Some((0, 255)),
+        PrimitiveType::Uint16 => Some((0, 65535)),
+        PrimitiveType::Uint32 => Some((0, 4_294_967_295)),
+        PrimitiveType::Uint | PrimitiveType::Uint64 => Some((0, 18_446_744_073_709_551_615)),
+        _ => None, // float, bool, char, string — not integer types
+    }
+}
+
 /// Type checker with bidirectional inference.
 struct TypeChecker<'a> {
     scopes: &'a mut ScopeTable,
@@ -32,6 +47,8 @@ struct TypeChecker<'a> {
     expr_types: FxHashMap<Span, TypeId>,
     /// The self type of the current equip block (if any).
     current_self_type: Option<TypeId>,
+    /// Declared type hint for integer literal coercion (e.g., uint8 x = 5).
+    decl_type_hint: Option<TypeId>,
 }
 
 impl<'a> TypeChecker<'a> {
@@ -58,6 +75,7 @@ impl<'a> TypeChecker<'a> {
             implicit_it_type: None,
             expr_types: FxHashMap::default(),
             current_self_type: None,
+            decl_type_hint: None,
         }
     }
 
@@ -250,8 +268,26 @@ impl<'a> TypeChecker<'a> {
 
     fn infer_expr(&mut self, expr: &Spanned<Expr>) -> TypeId {
         match &expr.node {
-            Expr::IntLiteral(_) => {
-                // Default to int; could be constrained by context
+            Expr::IntLiteral(n) => {
+                if let Some(hint_id) = self.decl_type_hint {
+                    if let ResolvedType::Primitive(prim) = self.types.get(hint_id).clone() {
+                        if let Some((min, max)) = int_range(&prim) {
+                            let val = *n as i128;
+                            if val < min || val > max {
+                                self.error(
+                                    SemanticErrorKind::ValueOutOfRange {
+                                        value: val,
+                                        type_name: format!("{prim:?}").to_lowercase(),
+                                        min,
+                                        max,
+                                    },
+                                    expr.span,
+                                );
+                            }
+                            return hint_id; // coerce literal to declared type
+                        }
+                    }
+                }
                 self.types.int_id
             }
             Expr::FloatLiteral(_) => self.types.float_id,
@@ -346,12 +382,45 @@ impl<'a> TypeChecker<'a> {
             }
 
             Expr::UnaryOp { op, operand } => {
-                let operand_type = self.infer_expr(operand);
                 match op {
-                    UnaryOp::Neg => operand_type, // same numeric type
-                    UnaryOp::Not => self.types.bool_id,
-                    UnaryOp::BitNot => operand_type, // same integer type
-                    UnaryOp::Deref => operand_type, // deref is ownership, checked later
+                    UnaryOp::Neg => {
+                        // Special case: -IntLiteral with a type hint — check the negated value
+                        if let Expr::IntLiteral(n) = &operand.node {
+                            if let Some(hint_id) = self.decl_type_hint {
+                                if let ResolvedType::Primitive(prim) = self.types.get(hint_id).clone() {
+                                    if let Some((min, max)) = int_range(&prim) {
+                                        let val = -(*n as i128);
+                                        if val < min || val > max {
+                                            self.error(
+                                                SemanticErrorKind::ValueOutOfRange {
+                                                    value: val,
+                                                    type_name: format!("{prim:?}").to_lowercase(),
+                                                    min,
+                                                    max,
+                                                },
+                                                expr.span,
+                                            );
+                                        }
+                                        return hint_id;
+                                    }
+                                }
+                            }
+                        }
+                        let operand_type = self.infer_expr(operand);
+                        operand_type
+                    }
+                    UnaryOp::Not => {
+                        self.infer_expr(operand);
+                        self.types.bool_id
+                    }
+                    UnaryOp::BitNot => {
+                        let operand_type = self.infer_expr(operand);
+                        operand_type
+                    }
+                    UnaryOp::Deref => {
+                        let operand_type = self.infer_expr(operand);
+                        operand_type
+                    }
                 }
             }
 
@@ -439,7 +508,10 @@ impl<'a> TypeChecker<'a> {
                                 );
                             }
                             for (arg, &param_type) in args.iter().zip(params.iter()) {
+                                let prev_hint = self.decl_type_hint;
+                                self.decl_type_hint = Some(param_type);
                                 let arg_type = self.infer_expr(&arg.node.value);
+                                self.decl_type_hint = prev_hint;
                                 self.unify(param_type, arg_type, arg.span);
                             }
                         }
@@ -963,7 +1035,21 @@ impl<'a> TypeChecker<'a> {
             Stmt::VarDecl {
                 type_, pattern, value, ..
             } => {
+                // Resolve declared type first so we can set the hint for literal coercion
+                let declared_type = match &type_.node {
+                    Type::Inferred => None,
+                    _ => super::types::ast_type_to_resolved(
+                        &type_.node,
+                        type_.span,
+                        self.scopes,
+                        self.types,
+                    ).ok(),
+                };
+
+                let prev_hint = self.decl_type_hint;
+                self.decl_type_hint = declared_type;
                 let value_type = self.infer_expr(value);
+                self.decl_type_hint = prev_hint;
 
                 let resolved_type = match &type_.node {
                     Type::Inferred => {
@@ -976,13 +1062,7 @@ impl<'a> TypeChecker<'a> {
                         }
                     }
                     _ => {
-                        // Explicit type — check value matches
-                        if let Ok(declared_type) = super::types::ast_type_to_resolved(
-                            &type_.node,
-                            type_.span,
-                            self.scopes,
-                            self.types,
-                        ) {
+                        if let Some(declared_type) = declared_type {
                             // Allow assigning array literals to collection types
                             // (e.g. Vector[int] v = [1, 2, 3])
                             if !self.is_collection_assignment(declared_type, value_type) {
@@ -1011,19 +1091,28 @@ impl<'a> TypeChecker<'a> {
 
             Stmt::Assign { target, value } => {
                 let target_type = self.infer_expr(target);
+                let prev_hint = self.decl_type_hint;
+                self.decl_type_hint = Some(target_type);
                 let value_type = self.infer_expr(value);
+                self.decl_type_hint = prev_hint;
                 self.unify(target_type, value_type, value.span);
             }
 
             Stmt::CompoundAssign { target, value, .. } => {
                 let target_type = self.infer_expr(target);
+                let prev_hint = self.decl_type_hint;
+                self.decl_type_hint = Some(target_type);
                 let value_type = self.infer_expr(value);
+                self.decl_type_hint = prev_hint;
                 self.unify(target_type, value_type, value.span);
             }
 
             Stmt::Return(expr) => {
                 if let Some(expr) = expr {
+                    let prev_hint = self.decl_type_hint;
+                    self.decl_type_hint = self.current_return_type;
                     let expr_type = self.infer_expr(expr);
+                    self.decl_type_hint = prev_hint;
                     if let Some(ret_type) = self.current_return_type {
                         self.unify(ret_type, expr_type, expr.span);
                     }
@@ -1626,7 +1715,12 @@ impl<'a> TypeChecker<'a> {
                     }
                     satisfied[pos] = true;
                     // Type-check this arg against the correct param
+                    let prev_hint = self.decl_type_hint;
+                    if pos < param_types.len() {
+                        self.decl_type_hint = Some(param_types[pos]);
+                    }
                     let arg_type = self.infer_expr(&arg.node.value);
+                    self.decl_type_hint = prev_hint;
                     if pos < param_types.len() {
                         self.unify(param_types[pos], arg_type, arg.span);
                     }
@@ -1645,7 +1739,12 @@ impl<'a> TypeChecker<'a> {
                 }
                 if i < param_names.len() {
                     satisfied[i] = true;
+                    let prev_hint = self.decl_type_hint;
+                    if i < param_types.len() {
+                        self.decl_type_hint = Some(param_types[i]);
+                    }
                     let arg_type = self.infer_expr(&arg.node.value);
+                    self.decl_type_hint = prev_hint;
                     if i < param_types.len() {
                         self.unify(param_types[i], arg_type, arg.span);
                     }
@@ -2649,6 +2748,71 @@ void main():
                 super::SemanticErrorKind::UnknownDirective { .. }
             )),
             "unexpected UnknownDirective error: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn int_literal_range_uint8_overflow() {
+        let errors = check("void main():\n    uint8 x = 256\n");
+        assert!(
+            errors.iter().any(|e| matches!(
+                &e.kind,
+                super::SemanticErrorKind::ValueOutOfRange { value: 256, .. }
+            )),
+            "expected ValueOutOfRange for uint8 = 256, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn int_literal_range_int8_overflow() {
+        let errors = check("void main():\n    int8 x = 128\n");
+        assert!(
+            errors.iter().any(|e| matches!(
+                &e.kind,
+                super::SemanticErrorKind::ValueOutOfRange { value: 128, .. }
+            )),
+            "expected ValueOutOfRange for int8 = 128, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn int_literal_range_int8_neg_overflow() {
+        let errors = check("void main():\n    int8 x = -129\n");
+        assert!(
+            errors.iter().any(|e| matches!(
+                &e.kind,
+                super::SemanticErrorKind::ValueOutOfRange { value: -129, .. }
+            )),
+            "expected ValueOutOfRange for int8 = -129, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn int_literal_range_uint8_negative() {
+        let errors = check("void main():\n    uint8 x = -1\n");
+        assert!(
+            errors.iter().any(|e| matches!(
+                &e.kind,
+                super::SemanticErrorKind::ValueOutOfRange { value: -1, .. }
+            )),
+            "expected ValueOutOfRange for uint8 = -1, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn int_literal_range_valid_no_error() {
+        let errors = check("void main():\n    uint8 a = 255\n    int8 b = -128\n    uint16 c = 0\n");
+        assert!(
+            !errors.iter().any(|e| matches!(
+                &e.kind,
+                super::SemanticErrorKind::ValueOutOfRange { .. }
+            )),
+            "unexpected ValueOutOfRange error: {:?}",
             errors
         );
     }

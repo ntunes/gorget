@@ -1,5 +1,8 @@
 # TODO
 
+## Medium Priority — Type safety
+
+- **For-loop range bounds validation**: `for n in 0..256` with a `uint8` loop variable silently overflows. The loop variable's declared type should constrain the range bounds. Also, codegen hardcodes `int64_t` for range loop variables (`c_stmt.rs:1210`) — should use the declared type. [added: 2026-02-14]
 
 ## Medium Priority — Trace / HTML report
 

@@ -140,6 +140,14 @@ pub enum SemanticErrorKind {
 
     /// Duplicate suite setup or teardown block.
     DuplicateSuiteBlock { kind: String },
+
+    /// Integer literal value doesn't fit in the declared type.
+    ValueOutOfRange {
+        value: i128,
+        type_name: String,
+        min: i128,
+        max: i128,
+    },
 }
 
 impl std::fmt::Display for SemanticError {
@@ -308,6 +316,9 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::DuplicateSuiteBlock { kind } => {
                 write!(f, "duplicate `suite {kind}` block")
+            }
+            SemanticErrorKind::ValueOutOfRange { value, type_name, min, max } => {
+                write!(f, "value {value} is out of range for type {type_name} (valid range: {min}..={max})")
             }
         }
     }

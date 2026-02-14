@@ -417,6 +417,20 @@ fn type_casts() {
 }
 
 #[test]
+fn int_range() {
+    run_gg(
+        "int_range.gg",
+        "\
+255
+0
+-128
+127
+65535
+-32768",
+    );
+}
+
+#[test]
 fn match_advanced() {
     run_gg(
         "match_advanced.gg",

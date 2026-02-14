@@ -1,0 +1,14 @@
+void main():
+    # Valid assignments — these should compile and run
+    uint8 a = 255
+    uint8 b = 0
+    int8 c = -128
+    int8 d = 127
+    uint16 e = 65535
+    int16 f = -32768
+    print("{a}")
+    print("{b}")
+    print("{c}")
+    print("{d}")
+    print("{e}")
+    print("{f}")
