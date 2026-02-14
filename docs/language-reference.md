@@ -1058,6 +1058,23 @@ op = "+" | "-" | "*" | "/" | "%" | "==" | "!=" | "<" | ">"
 
 Arithmetic operators require matching numeric types. Comparison operators produce `bool`. Logical operators require `bool` operands.
 
+The `+` and `+=` operators also work on strings, producing a new concatenated string:
+
+```gorget
+str greeting = "hello" + " " + "world"   # "hello world"
+str s = "foo"
+s += "bar"                                # "foobar"
+```
+
+For building strings from many parts, prefer collecting into a `Vector[str]` and using `join` (§15.2):
+
+```gorget
+Vector[str] parts = Vector[str]()
+parts.push("hello")
+parts.push("world")
+str result = " ".join(parts)   # "hello world"
+```
+
 The `in` operator tests membership in a range or collection:
 
 ```gorget
@@ -1711,6 +1728,19 @@ int x = 42
 print("The answer is {x}")
 print("Math: {2 + 2}")
 print("Escaped brace: {{literal}}")
+```
+
+### 14.1 String Concatenation
+
+The `+` operator concatenates two strings and returns a new string. The `+=` operator appends in place. See also §7.5.
+
+```gorget
+str a = "hello"
+str b = a + " world"     # "hello world"
+a += "!"                  # "hello!"
+
+# Chaining works left-to-right
+str full = "a" + "b" + "c"   # "abc"
 ```
 
 ---
