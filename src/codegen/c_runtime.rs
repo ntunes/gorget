@@ -241,6 +241,24 @@ static inline void gorget_panic(const char* msg) {
     fprintf(stderr, "gorget: panic: %s\n", msg);
     exit(1);
 }
+
+// ── Cleanup stack (survives longjmp) ─────────────────────────
+typedef void (*__gorget_cleanup_fn)(void*);
+typedef struct { __gorget_cleanup_fn fn; void* ptr; } __gorget_cleanup_entry;
+static __gorget_cleanup_entry __gorget_cleanup[256];
+static int __gorget_cleanup_top = 0;
+
+static inline void __gorget_cleanup_push(__gorget_cleanup_fn fn, void* ptr) {
+    if (__gorget_cleanup_top < 256)
+        __gorget_cleanup[__gorget_cleanup_top++] =
+            (__gorget_cleanup_entry){fn, ptr};
+}
+
+static inline void __gorget_cleanup_run(int mark) {
+    for (int i = __gorget_cleanup_top - 1; i >= mark; i--)
+        __gorget_cleanup[i].fn(__gorget_cleanup[i].ptr);
+    __gorget_cleanup_top = mark;
+}
 "#;
 
 /// Everything after the panic helper — checked arithmetic, collections, etc.

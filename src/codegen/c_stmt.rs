@@ -113,7 +113,9 @@ impl CodegenContext<'_> {
     }
 
     /// Check if a declared type needs drop and register it if so.
-    fn maybe_register_droppable(&mut self, var_name: &str, ty: &Type) {
+    /// When `in_test_body` is true, also emits a `__gorget_cleanup_push` call
+    /// so that longjmp-based test failure can still run cleanup.
+    fn maybe_register_droppable(&mut self, var_name: &str, ty: &Type, emitter: &mut CEmitter) {
         match ty {
             // Box[T] — if T is a trait, register TraitObjFree (free .data field)
             Type::Named { name, generic_args }
@@ -135,23 +137,44 @@ impl CodegenContext<'_> {
                 };
                 if is_trait_obj {
                     self.register_droppable(var_name, DropAction::TraitObjFree);
+                    if self.in_test_body {
+                        emitter.emit_line(&format!(
+                            "__gorget_cleanup_push(free, (void*){var_name}.data);"
+                        ));
+                    }
                 } else {
                     self.register_droppable(var_name, DropAction::BoxFree);
+                    if self.in_test_body {
+                        emitter.emit_line(&format!(
+                            "__gorget_cleanup_push(free, (void*){var_name});"
+                        ));
+                    }
                 }
             }
             // File → auto-close on scope exit
             Type::Named { name, generic_args } if name.node == "File" && generic_args.is_empty() => {
                 self.register_droppable(var_name, DropAction::FileClose);
+                if self.in_test_body {
+                    emitter.emit_line(&format!(
+                        "__gorget_cleanup_push((__gorget_cleanup_fn)gorget_file_close, (void*)&{var_name});"
+                    ));
+                }
             }
             // User-defined struct with Drop impl
             Type::Named { name, generic_args } if generic_args.is_empty() => {
                 if self.traits.has_trait_impl_by_name(&name.node, "Drop") {
+                    let drop_fn = c_mangle::mangle_trait_method("Drop", &name.node, "drop");
                     self.register_droppable(
                         var_name,
                         DropAction::UserDrop {
                             type_name: name.node.clone(),
                         },
                     );
+                    if self.in_test_body {
+                        emitter.emit_line(&format!(
+                            "__gorget_cleanup_push((__gorget_cleanup_fn){drop_fn}, (void*)&{var_name});"
+                        ));
+                    }
                 }
             }
             _ => {}
@@ -572,7 +595,7 @@ impl CodegenContext<'_> {
                 emitter.emit_line(&format!("{const_prefix}{decl} = {val};"));
 
                 // Register droppable variable for RAII cleanup
-                self.maybe_register_droppable(&escaped, &type_.node);
+                self.maybe_register_droppable(&escaped, &type_.node, emitter);
             }
             Pattern::Wildcard => {
                 let val = self.gen_expr(value);

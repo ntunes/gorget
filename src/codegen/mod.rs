@@ -161,6 +161,8 @@ pub struct CodegenContext<'a> {
     pub is_test_module: bool,
     /// Tags to filter which tests run (empty = run all).
     pub test_tag_filter: Vec<String>,
+    /// True while generating code inside a `test` block body (for cleanup registration).
+    pub in_test_body: bool,
 }
 
 /// Generate C source code from a parsed and analyzed Gorget module.
@@ -227,6 +229,7 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, strip_asserts: boo
         function_names,
         is_test_module,
         test_tag_filter: test_tags.to_vec(),
+        in_test_body: false,
     };
 
     let mut emitter = CEmitter::new();

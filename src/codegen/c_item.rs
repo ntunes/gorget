@@ -2392,13 +2392,18 @@ static inline void {mangled}__free({mangled}* m) {{
                 emitter.indent();
                 emitter.emit_line("__gorget_in_test = 1;");
                 emitter.emit_line("__gorget_test_fail_msg = NULL;");
+                emitter.emit_line("int __cleanup_mark = __gorget_cleanup_top;");
                 emitter.emit_line("if (setjmp(__gorget_test_jmp) == 0) {");
                 emitter.indent();
+                self.in_test_body = true;
                 self.push_drop_scope(DropScopeKind::Function);
                 self.gen_block(&t.body, emitter);
                 self.pop_drop_scope(emitter);
+                self.in_test_body = false;
+                emitter.emit_line("__gorget_cleanup_top = __cleanup_mark;");
                 emitter.dedent();
                 emitter.emit_line("}");
+                emitter.emit_line("__gorget_cleanup_run(__cleanup_mark);");
                 emitter.emit_line("__gorget_in_test = 0;");
                 emitter.emit_line("if (!__gorget_test_fail_msg) {");
                 emitter.indent();

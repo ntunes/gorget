@@ -2492,3 +2492,12 @@ fn test_process() {
         true,
     );
 }
+
+#[test]
+fn test_cleanup() {
+    run_gg_test(
+        "test_cleanup.gg",
+        &["dropping alpha", "dropping beta", "1 passed, 1 failed"],
+        false,
+    );
+}

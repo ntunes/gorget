@@ -1,0 +1,18 @@
+from std.collections import Box
+
+struct Resource:
+    str name
+
+equip Resource with Drop:
+    void drop(self):
+        str n = self.name
+        print("dropping {n}")
+
+test "cleanup on failure":
+    Resource r = Resource("alpha")
+    Box[int] b = Box(42)
+    assert 1 == 2
+
+test "cleanup on success":
+    Resource r = Resource("beta")
+    print("ok")
