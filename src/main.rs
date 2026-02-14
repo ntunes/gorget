@@ -134,9 +134,9 @@ fn try_build(
         .and_then(|s| s.to_str())
         .unwrap_or("output");
 
-    // Build trace filename: <stem>.trace.jsonl (resolved to absolute path later)
+    // Build trace filename: always next to the source file (not in output_dir)
     let trace_filename = if trace {
-        let trace_path = dir.join(format!("{stem}.trace.jsonl"));
+        let trace_path = default_dir.join(format!("{stem}.trace.jsonl"));
         let trace_path = std::path::absolute(&trace_path).unwrap_or(trace_path);
         trace_path.display().to_string()
     } else {
@@ -716,7 +716,11 @@ fn main() {
             }
             // --report html implies --trace (unless --no-trace is explicit)
             let trace = if report_html && !no_trace { true } else { trace };
-            let exe_path = build(filename, &source, false, false, false, false, trace, no_trace, true, &test_tags, &test_exclude_tags, test_name_filter.as_deref(), None);
+            let tmp_dir = tempfile::tempdir().unwrap_or_else(|e| {
+                eprintln!("Failed to create temp directory: {e}");
+                process::exit(1);
+            });
+            let exe_path = build(filename, &source, false, false, false, false, trace, no_trace, true, &test_tags, &test_exclude_tags, test_name_filter.as_deref(), Some(tmp_dir.path()));
             let status = Command::new(&exe_path)
                 .status()
                 .unwrap_or_else(|e| {
@@ -726,10 +730,10 @@ fn main() {
             // Generate HTML report if requested
             if report_html && trace {
                 let input_path = Path::new(filename);
-                let dir = input_path.parent().unwrap_or(Path::new("."));
+                let source_dir = input_path.parent().unwrap_or(Path::new("."));
                 let stem = input_path.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
-                let trace_path = dir.join(format!("{stem}.trace.jsonl"));
-                let report_path = dir.join(format!("{stem}.report.html"));
+                let trace_path = source_dir.join(format!("{stem}.trace.jsonl"));
+                let report_path = source_dir.join(format!("{stem}.report.html"));
                 if trace_path.exists() {
                     gorget::report::generate_html_report(&trace_path, &report_path)
                         .unwrap_or_else(|e| {
@@ -738,6 +742,7 @@ fn main() {
                     println!("Report: {}", report_path.display());
                 }
             }
+            // tmp_dir is dropped here, cleaning up .c, binary, and trace
             process::exit(status.code().unwrap_or(1));
         }
         "fmt" => {
