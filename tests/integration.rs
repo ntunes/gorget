@@ -2249,7 +2249,7 @@ fn trace_directive() {
         .expect("Failed to read trace file");
     let lines: Vec<&str> = trace_content.lines().collect();
 
-    assert_eq!(lines.len(), 6, "Should have 6 trace lines (3 calls + 3 returns)");
+    assert_eq!(lines.len(), 8, "Should have 8 trace lines (3 calls + branch + 3 returns + let)");
 
     // Verify first call
     assert!(lines[0].contains(r#""type":"call""#), "First line should be a call");
@@ -2263,12 +2263,20 @@ fn trace_directive() {
     assert!(lines[2].contains(r#""n":1"#), "Third call should have n=1");
     assert!(lines[2].contains(r#""depth":2"#), "Third call at depth 2");
 
-    // Verify returns
-    assert!(lines[3].contains(r#""type":"return""#), "Line 4 should be a return");
-    assert!(lines[3].contains(r#""value":1"#), "First return value should be 1");
-    assert!(lines[3].contains(r#""depth":2"#), "First return at depth 2");
-    assert!(lines[5].contains(r#""value":6"#), "Last return value should be 6");
-    assert!(lines[5].contains(r#""depth":0"#), "Last return at depth 0");
+    // Verify branch event (if n <= 1 taken for n=1)
+    assert!(lines[3].contains(r#""type":"branch""#), "Line 4 should be a branch");
+    assert!(lines[3].contains(r#""kind":"if""#), "Branch should be 'if'");
+
+    // Verify returns (shifted by 1 due to branch event)
+    assert!(lines[4].contains(r#""type":"return""#), "Line 5 should be a return");
+    assert!(lines[4].contains(r#""value":1"#), "First return value should be 1");
+    assert!(lines[4].contains(r#""depth":2"#), "First return at depth 2");
+    assert!(lines[6].contains(r#""value":6"#), "Second-to-last return value should be 6");
+    assert!(lines[6].contains(r#""depth":0"#), "Final return at depth 0");
+
+    // Verify statement-level let trace
+    assert!(lines[7].contains(r#""type":"stmt""#), "Last line should be a stmt");
+    assert!(lines[7].contains(r#""kind":"let""#), "Stmt should be 'let'");
 
     // 4. Clean up
     let _ = std::fs::remove_file(&c_path);

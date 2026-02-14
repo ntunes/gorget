@@ -10,6 +10,16 @@ pub enum TraceEvent {
     Call { function: String, args: String, depth: i32 },
     Return { function: String, value: String, depth: i32 },
     Loop { kind: String, detail: String, depth: i32 },
+    Stmt { kind: String, name: String, value: String, depth: i32 },
+    Branch { kind: String, depth: i32 },
+}
+
+// ── Tree structure ───────────────────────────────────────────
+
+#[derive(Debug)]
+struct TraceNode {
+    event: TraceEvent,
+    children: Vec<TraceNode>,
 }
 
 // ── Trace parser (hand-rolled, no serde) ─────────────────────
@@ -183,6 +193,16 @@ fn parse_trace_line(line: &str) -> Option<TraceEvent> {
             format!("iter {iter}")
         };
         Some(TraceEvent::Loop { kind, detail, depth })
+    } else if line.contains("\"type\":\"stmt\"") {
+        let kind = extract_str(line, "kind").unwrap_or_else(|| "stmt".to_string());
+        let name = extract_str(line, "name").unwrap_or_default();
+        let value = extract_value(line);
+        let depth = extract_int(line, "depth").unwrap_or(0) as i32;
+        Some(TraceEvent::Stmt { kind, name, value, depth })
+    } else if line.contains("\"type\":\"branch\"") {
+        let kind = extract_str(line, "kind").unwrap_or_else(|| "if".to_string());
+        let depth = extract_int(line, "depth").unwrap_or(0) as i32;
+        Some(TraceEvent::Branch { kind, depth })
     } else {
         None
     }
@@ -195,13 +215,120 @@ fn parse_trace_file(path: &Path) -> Result<Vec<TraceEvent>, String> {
     Ok(events)
 }
 
+// ── Tree builder ─────────────────────────────────────────────
+
+/// Get the depth of an event (returns -1 for events without depth).
+fn event_depth(event: &TraceEvent) -> i32 {
+    match event {
+        TraceEvent::Call { depth, .. }
+        | TraceEvent::Return { depth, .. }
+        | TraceEvent::Loop { depth, .. }
+        | TraceEvent::Stmt { depth, .. }
+        | TraceEvent::Branch { depth, .. } => *depth,
+        _ => -1,
+    }
+}
+
+/// Build a tree of TraceNodes from a flat list of events.
+///
+/// Call/Return pairs form parent-child relationships: everything between
+/// a Call and its matching Return becomes a child of the Call node.
+/// Loop events become expandable nodes: events until the next Loop at the
+/// same depth (or end of call scope) become children.
+fn build_tree(events: Vec<TraceEvent>) -> Vec<TraceNode> {
+    // Stack frames: (opener event or None for root, depth, is_loop, children)
+    let mut stack: Vec<(Option<TraceEvent>, i32, bool, Vec<TraceNode>)> =
+        vec![(None, -1, false, Vec::new())];
+
+    for event in events {
+        let ed = event_depth(&event);
+        let is_loop_event = matches!(&event, TraceEvent::Loop { .. });
+
+        // Close loop frames that should end before this event.
+        // A loop frame closes when:
+        //   - A new Loop arrives at the same depth (new iteration)
+        //   - Any event arrives at a lower depth (left the loop scope)
+        while stack.len() > 1 {
+            let (_, frame_depth, is_loop, _) = stack.last().unwrap();
+            if !is_loop {
+                break;
+            }
+            let should_close =
+                ed < *frame_depth || (ed == *frame_depth && is_loop_event);
+            if !should_close {
+                break;
+            }
+            let (opener, _, _, children) = stack.pop().unwrap();
+            if let Some(ev) = opener {
+                stack.last_mut().unwrap().3.push(TraceNode {
+                    event: ev,
+                    children,
+                });
+            }
+        }
+
+        // Process the event itself.
+        match &event {
+            TraceEvent::Call { .. } => {
+                let d = ed;
+                stack.push((Some(event), d, false, Vec::new()));
+            }
+            TraceEvent::Return { .. } => {
+                if stack.len() > 1 {
+                    let (opener, _, _, mut children) = stack.pop().unwrap();
+                    // Add Return as last child of the Call
+                    children.push(TraceNode {
+                        event,
+                        children: Vec::new(),
+                    });
+                    if let Some(call_ev) = opener {
+                        stack.last_mut().unwrap().3.push(TraceNode {
+                            event: call_ev,
+                            children,
+                        });
+                    }
+                } else {
+                    // Orphan return — add as leaf
+                    stack.last_mut().unwrap().3.push(TraceNode {
+                        event,
+                        children: Vec::new(),
+                    });
+                }
+            }
+            TraceEvent::Loop { .. } => {
+                let d = ed;
+                stack.push((Some(event), d, true, Vec::new()));
+            }
+            _ => {
+                stack.last_mut().unwrap().3.push(TraceNode {
+                    event,
+                    children: Vec::new(),
+                });
+            }
+        }
+    }
+
+    // Drain remaining unclosed frames.
+    while stack.len() > 1 {
+        let (opener, _, _, children) = stack.pop().unwrap();
+        if let Some(ev) = opener {
+            stack.last_mut().unwrap().3.push(TraceNode {
+                event: ev,
+                children,
+            });
+        }
+    }
+
+    stack.pop().map(|(_, _, _, c)| c).unwrap_or_default()
+}
+
 // ── Report builder ───────────────────────────────────────────
 
 struct TestResult {
     name: String,
     status: String,
     duration_ms: i64,
-    events: Vec<TraceEvent>,
+    tree: Vec<TraceNode>,
 }
 
 struct ReportData {
@@ -223,11 +350,12 @@ fn build_report(events: Vec<TraceEvent>) -> ReportData {
                 current_events.clear();
             }
             TraceEvent::TestEnd { name, status, duration_ms } => {
+                let tree = build_tree(std::mem::take(&mut current_events));
                 tests.push(TestResult {
                     name: name.clone(),
                     status: status.clone(),
                     duration_ms: *duration_ms,
-                    events: std::mem::take(&mut current_events),
+                    tree,
                 });
                 current_name = None;
             }
@@ -260,50 +388,113 @@ fn html_escape(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
-fn render_event_html(event: &TraceEvent) -> String {
+/// Render the label for a single event (without tree chrome).
+fn render_node_label(event: &TraceEvent) -> String {
     match event {
-        TraceEvent::Call { function, args, depth } => {
+        TraceEvent::Call { function, args, .. } => {
             let args_display = if args.is_empty() {
-                String::new()
+                "()".to_string()
             } else {
                 format!("({})", html_escape(args))
             };
             format!(
-                "<div class=\"trace-event call\" style=\"padding-left:{}px\">\
-                 <span class=\"event-icon\">&#x2192;</span> \
-                 <span class=\"fn-name\">{}</span>{}</div>\n",
-                depth * 20,
+                "<span class=\"event-icon call-icon\">&#x2192;</span> \
+                 <span class=\"fn-name\">{}</span>{}",
                 html_escape(function),
                 args_display,
             )
         }
-        TraceEvent::Return { function, value, depth } => {
+        TraceEvent::Return { function, value, .. } => {
             let val_display = if value == "void" || value.is_empty() {
                 String::new()
             } else {
                 format!(" <span class=\"ret-value\">&rarr; {}</span>", html_escape(value))
             };
             format!(
-                "<div class=\"trace-event return\" style=\"padding-left:{}px\">\
-                 <span class=\"event-icon\">&#x2190;</span> \
-                 <span class=\"fn-name\">{}</span>{}</div>\n",
-                depth * 20,
+                "<span class=\"event-icon return-icon\">&#x2190;</span> \
+                 <span class=\"fn-name\">{}</span>{}",
                 html_escape(function),
                 val_display,
             )
         }
-        TraceEvent::Loop { kind, detail, depth } => {
+        TraceEvent::Loop { kind, detail, .. } => {
             format!(
-                "<div class=\"trace-event loop\" style=\"padding-left:{}px\">\
-                 <span class=\"event-icon\">&#x21BB;</span> \
-                 {} {}</div>\n",
-                depth * 20,
+                "<span class=\"event-icon loop-icon\">&#x21BB;</span> \
+                 <span class=\"loop-kw\">{}</span> {}",
                 html_escape(kind),
                 html_escape(detail),
             )
         }
+        TraceEvent::Stmt { kind, name, value, .. } => {
+            if kind == "assert" {
+                "<span class=\"event-icon stmt-icon\">&#x2714;</span> \
+                 <span class=\"stmt-kw\">assert</span>"
+                    .to_string()
+            } else if kind == "let" {
+                format!(
+                    "<span class=\"event-icon stmt-icon\">=</span> \
+                     <span class=\"stmt-kw\">let</span> \
+                     <span class=\"var-name\">{}</span> = \
+                     <span class=\"lit-value\">{}</span>",
+                    html_escape(name),
+                    html_escape(value),
+                )
+            } else {
+                // assign
+                format!(
+                    "<span class=\"event-icon stmt-icon\">=</span> \
+                     <span class=\"var-name\">{}</span> = \
+                     <span class=\"lit-value\">{}</span>",
+                    html_escape(name),
+                    html_escape(value),
+                )
+            }
+        }
+        TraceEvent::Branch { kind, .. } => {
+            format!(
+                "<span class=\"event-icon branch-icon\">&#x2387;</span> \
+                 <span class=\"branch-kw\">{}</span>",
+                html_escape(kind),
+            )
+        }
         _ => String::new(),
     }
+}
+
+/// Recursively render a tree of TraceNodes as HTML.
+/// `id_counter` is used to generate unique IDs for expandable nodes.
+fn render_tree_html(nodes: &[TraceNode], id_counter: &mut usize) -> String {
+    let mut html = String::new();
+    for node in nodes {
+        let has_children = !node.children.is_empty();
+        let is_expandable = has_children
+            && matches!(
+                &node.event,
+                TraceEvent::Call { .. } | TraceEvent::Loop { .. }
+            );
+
+        if is_expandable {
+            let id = *id_counter;
+            *id_counter += 1;
+            html.push_str(&format!(
+                "<div class=\"tree-row expandable\" onclick=\"ttoggle({id})\">\
+                 <span class=\"tree-toggle\" id=\"tbtn-{id}\">&#x25B6;</span> \
+                 {}</div>\n",
+                render_node_label(&node.event),
+            ));
+            html.push_str(&format!(
+                "<div class=\"tree-children\" id=\"tc-{id}\">\n",
+            ));
+            html.push_str(&render_tree_html(&node.children, id_counter));
+            html.push_str("</div>\n");
+        } else {
+            html.push_str(&format!(
+                "<div class=\"tree-row leaf\">{}</div>\n",
+                render_node_label(&node.event),
+            ));
+        }
+    }
+    html
 }
 
 pub fn generate_html_report(trace_path: &Path, output_path: &Path) -> Result<(), String> {
@@ -346,6 +537,9 @@ pub fn generate_html_report(trace_path: &Path, output_path: &Path) -> Result<(),
     html.push_str("</div>\n");
     html.push_str("</div>\n");
 
+    // Global tree-node counter for unique IDs
+    let mut tree_id_counter: usize = 0;
+
     // Test table
     html.push_str("<div class=\"test-list\">\n");
     for (i, test) in report.tests.iter().enumerate() {
@@ -353,7 +547,7 @@ pub fn generate_html_report(trace_path: &Path, output_path: &Path) -> Result<(),
         let status_class = if is_pass { "status-pass" } else { "status-fail" };
         let status_label = if is_pass { "PASS" } else { "FAIL" };
         let status_icon = if is_pass { "&#x2713;" } else { "&#x2717;" };
-        let has_events = !test.events.is_empty();
+        let has_events = !test.tree.is_empty();
 
         html.push_str(&format!(
             "<div class=\"test-row {}\">\n",
@@ -377,14 +571,12 @@ pub fn generate_html_report(trace_path: &Path, output_path: &Path) -> Result<(),
         }
         html.push_str("\n</div>\n");
 
-        // Expandable trace detail
+        // Expandable trace detail (tree-structured)
         if has_events {
             html.push_str(&format!(
                 "<div class=\"trace-detail\" id=\"detail-{i}\">\n",
             ));
-            for event in &test.events {
-                html.push_str(&render_event_html(event));
-            }
+            html.push_str(&render_tree_html(&test.tree, &mut tree_id_counter));
             html.push_str("</div>\n");
         }
 
@@ -454,13 +646,31 @@ h1 { font-size: 1.5rem; margin-bottom: 8px; color: #fff; }
     font-size: 0.8rem; line-height: 1.6;
 }
 .trace-detail.open { display: block; }
-.trace-event { white-space: nowrap; }
+/* Tree structure */
+.tree-row { white-space: nowrap; padding: 1px 0; }
+.tree-row.expandable { cursor: pointer; }
+.tree-row.expandable:hover { background: rgba(255,255,255,0.03); }
+.tree-row.leaf { padding-left: 18px; }
+.tree-toggle {
+    display: inline-block; width: 14px; font-size: 0.6rem; color: #666;
+    transition: transform 0.15s; text-align: center; margin-right: 2px;
+}
+.tree-toggle.open { transform: rotate(90deg); }
+.tree-children { display: none; padding-left: 20px; }
+.tree-children.open { display: block; }
 .event-icon { display: inline-block; width: 16px; text-align: center; }
-.trace-event.call .event-icon { color: #64b5f6; }
-.trace-event.return .event-icon { color: #81c784; }
-.trace-event.loop .event-icon { color: #ffb74d; }
+.call-icon { color: #64b5f6; }
+.return-icon { color: #81c784; }
+.loop-icon { color: #ffb74d; }
+.stmt-icon { color: #90a4ae; }
+.branch-icon { color: #ba68c8; }
 .fn-name { color: #ce93d8; }
 .ret-value { color: #aed581; }
+.loop-kw { color: #ffb74d; font-weight: bold; }
+.stmt-kw { color: #90a4ae; }
+.var-name { color: #80cbc4; }
+.lit-value { color: #fff176; }
+.branch-kw { color: #ba68c8; font-weight: bold; }
 "#;
 
 // ── Inline JS ────────────────────────────────────────────────
@@ -473,6 +683,15 @@ function toggle(i) {
         detail.classList.toggle('open');
         if (btn) btn.classList.toggle('open');
     }
+}
+function ttoggle(id) {
+    var el = document.getElementById('tc-' + id);
+    var btn = document.getElementById('tbtn-' + id);
+    if (el) {
+        el.classList.toggle('open');
+        if (btn) btn.classList.toggle('open');
+    }
+    event.stopPropagation();
 }
 "#;
 
@@ -583,6 +802,143 @@ mod tests {
     }
 
     #[test]
+    fn parse_stmt_event() {
+        let line = r#"{"type":"stmt","kind":"let","name":"x","value":42,"depth":1}"#;
+        let event = parse_trace_line(line).unwrap();
+        match event {
+            TraceEvent::Stmt { kind, name, value, depth } => {
+                assert_eq!(kind, "let");
+                assert_eq!(name, "x");
+                assert_eq!(value, "42");
+                assert_eq!(depth, 1);
+            }
+            _ => panic!("expected Stmt"),
+        }
+    }
+
+    #[test]
+    fn parse_stmt_assign() {
+        let line = r#"{"type":"stmt","kind":"assign","name":"total","value":15,"depth":1}"#;
+        let event = parse_trace_line(line).unwrap();
+        match event {
+            TraceEvent::Stmt { kind, name, value, depth } => {
+                assert_eq!(kind, "assign");
+                assert_eq!(name, "total");
+                assert_eq!(value, "15");
+                assert_eq!(depth, 1);
+            }
+            _ => panic!("expected Stmt"),
+        }
+    }
+
+    #[test]
+    fn parse_stmt_assert() {
+        let line = r#"{"type":"stmt","kind":"assert","depth":0}"#;
+        let event = parse_trace_line(line).unwrap();
+        match event {
+            TraceEvent::Stmt { kind, depth, .. } => {
+                assert_eq!(kind, "assert");
+                assert_eq!(depth, 0);
+            }
+            _ => panic!("expected Stmt"),
+        }
+    }
+
+    #[test]
+    fn parse_branch_event() {
+        let line = r#"{"type":"branch","kind":"if","depth":1}"#;
+        let event = parse_trace_line(line).unwrap();
+        match event {
+            TraceEvent::Branch { kind, depth } => {
+                assert_eq!(kind, "if");
+                assert_eq!(depth, 1);
+            }
+            _ => panic!("expected Branch"),
+        }
+    }
+
+    #[test]
+    fn parse_branch_else() {
+        let line = r#"{"type":"branch","kind":"else","depth":2}"#;
+        let event = parse_trace_line(line).unwrap();
+        match event {
+            TraceEvent::Branch { kind, depth } => {
+                assert_eq!(kind, "else");
+                assert_eq!(depth, 2);
+            }
+            _ => panic!("expected Branch"),
+        }
+    }
+
+    #[test]
+    fn build_tree_call_return_pair() {
+        let events = vec![
+            TraceEvent::Call { function: "add".into(), args: "a=1".into(), depth: 0 },
+            TraceEvent::Stmt { kind: "let".into(), name: "r".into(), value: "3".into(), depth: 1 },
+            TraceEvent::Return { function: "add".into(), value: "3".into(), depth: 0 },
+        ];
+        let tree = build_tree(events);
+        // Should produce one Call node with two children: Stmt + Return
+        assert_eq!(tree.len(), 1);
+        assert!(matches!(&tree[0].event, TraceEvent::Call { function, .. } if function == "add"));
+        assert_eq!(tree[0].children.len(), 2);
+        assert!(matches!(&tree[0].children[0].event, TraceEvent::Stmt { kind, .. } if kind == "let"));
+        assert!(matches!(&tree[0].children[1].event, TraceEvent::Return { .. }));
+    }
+
+    #[test]
+    fn build_tree_nested_calls() {
+        let events = vec![
+            TraceEvent::Call { function: "outer".into(), args: String::new(), depth: 0 },
+            TraceEvent::Call { function: "inner".into(), args: String::new(), depth: 1 },
+            TraceEvent::Return { function: "inner".into(), value: "1".into(), depth: 1 },
+            TraceEvent::Return { function: "outer".into(), value: "2".into(), depth: 0 },
+        ];
+        let tree = build_tree(events);
+        assert_eq!(tree.len(), 1); // outer
+        assert_eq!(tree[0].children.len(), 2); // inner call node + outer return
+        assert!(matches!(&tree[0].children[0].event, TraceEvent::Call { function, .. } if function == "inner"));
+        assert_eq!(tree[0].children[0].children.len(), 1); // inner return
+    }
+
+    #[test]
+    fn build_tree_loop_groups_children() {
+        let events = vec![
+            TraceEvent::Call { function: "sum".into(), args: String::new(), depth: 0 },
+            TraceEvent::Stmt { kind: "let".into(), name: "t".into(), value: "0".into(), depth: 1 },
+            TraceEvent::Loop { kind: "for".into(), detail: "i=1".into(), depth: 1 },
+            TraceEvent::Stmt { kind: "assign".into(), name: "t".into(), value: "1".into(), depth: 1 },
+            TraceEvent::Loop { kind: "for".into(), detail: "i=2".into(), depth: 1 },
+            TraceEvent::Stmt { kind: "assign".into(), name: "t".into(), value: "3".into(), depth: 1 },
+            TraceEvent::Return { function: "sum".into(), value: "3".into(), depth: 0 },
+        ];
+        let tree = build_tree(events);
+        // Should be: Call(sum) with children: [let, Loop(i=1, [assign]), Loop(i=2, [assign]), Return]
+        assert_eq!(tree.len(), 1);
+        let call_children = &tree[0].children;
+        assert_eq!(call_children.len(), 4); // let + loop1 + loop2 + return
+        // Loop 1 should have one child (the assign)
+        assert!(matches!(&call_children[1].event, TraceEvent::Loop { detail, .. } if detail == "i=1"));
+        assert_eq!(call_children[1].children.len(), 1);
+        // Loop 2 should have one child (the assign)
+        assert!(matches!(&call_children[2].event, TraceEvent::Loop { detail, .. } if detail == "i=2"));
+        assert_eq!(call_children[2].children.len(), 1);
+    }
+
+    #[test]
+    fn build_tree_flat_stmts() {
+        // Events without calls should remain flat
+        let events = vec![
+            TraceEvent::Stmt { kind: "assert".into(), name: String::new(), value: String::new(), depth: 0 },
+            TraceEvent::Stmt { kind: "assert".into(), name: String::new(), value: String::new(), depth: 0 },
+        ];
+        let tree = build_tree(events);
+        assert_eq!(tree.len(), 2);
+        assert!(tree[0].children.is_empty());
+        assert!(tree[1].children.is_empty());
+    }
+
+    #[test]
     fn build_report_groups_by_test() {
         let events = vec![
             TraceEvent::TestStart { name: "test_a".to_string() },
@@ -597,8 +953,8 @@ mod tests {
         assert_eq!(report.total_passed, 1);
         assert_eq!(report.total_failed, 1);
         assert_eq!(report.total_duration_ms, 3);
-        assert_eq!(report.tests[0].events.len(), 2); // call + return
-        assert_eq!(report.tests[1].events.len(), 0);
+        assert_eq!(report.tests[0].tree.len(), 1); // one Call node (with Return as child)
+        assert_eq!(report.tests[1].tree.len(), 0);
     }
 
     #[test]

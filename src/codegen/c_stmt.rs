@@ -112,6 +112,37 @@ impl CodegenContext<'_> {
         );
     }
 
+    /// Emit a trace "assign" event for a target expression, if tracing is on
+    /// and the target is a simple identifier.
+    fn emit_trace_assign(&self, target: &Spanned<Expr>, emitter: &mut CEmitter) {
+        if !self.trace {
+            return;
+        }
+        if let Expr::Identifier(name) = &target.node {
+            let escaped = c_mangle::escape_keyword(name);
+            let s = format!(
+                r#"fprintf(__gorget_trace_fp, "{{\"type\":\"stmt\",\"kind\":\"assign\",\"name\":\"{name}\",\"value\":");"#
+            );
+            emitter.emit_line(&s);
+            emitter.emit_line(&format!(
+                "_Generic(({escaped}), \
+                 int64_t: __gorget_trace_val_int, \
+                 long: __gorget_trace_val_int, \
+                 double: __gorget_trace_val_float, \
+                 float: __gorget_trace_val_float, \
+                 _Bool: __gorget_trace_val_bool, \
+                 char: __gorget_trace_val_char, \
+                 const char*: __gorget_trace_val_str, \
+                 char*: __gorget_trace_val_str, \
+                 default: __gorget_trace_val_int\
+                 )(__gorget_trace_fp, {escaped});"
+            ));
+            emitter.emit_line(
+                r#"fprintf(__gorget_trace_fp, ",\"depth\":%d}\n", __gorget_trace_depth);"#
+            );
+        }
+    }
+
     /// Check if a declared type needs drop and register it if so.
     /// When `in_test_body` is true, also emits a `__gorget_cleanup_push` call
     /// so that longjmp-based test failure can still run cleanup.
@@ -203,6 +234,7 @@ impl CodegenContext<'_> {
                 let t = self.gen_expr(target);
                 let v = self.gen_expr(value);
                 emitter.emit_line(&format!("{t} = {v};"));
+                self.emit_trace_assign(target, emitter);
             }
 
             Stmt::CompoundAssign { target, op, value } => {
@@ -213,6 +245,7 @@ impl CodegenContext<'_> {
                         let t = self.gen_expr(target);
                         let v = self.gen_expr(value);
                         emitter.emit_line(&format!("{t} = gorget_str_concat({t}, {v});"));
+                        self.emit_trace_assign(target, emitter);
                         return;
                     }
                 }
@@ -230,6 +263,7 @@ impl CodegenContext<'_> {
                     let c_op = compound_op_to_c(*op);
                     emitter.emit_line(&format!("{t} {c_op} {v};"));
                 }
+                self.emit_trace_assign(target, emitter);
             }
 
             Stmt::Return(expr) => {
@@ -293,6 +327,11 @@ impl CodegenContext<'_> {
                 let cond = self.gen_expr(condition);
                 emitter.emit_line(&format!("if ({cond}) {{"));
                 emitter.indent();
+                if self.trace {
+                    emitter.emit_line(
+                        r#"fprintf(__gorget_trace_fp, "{\"type\":\"branch\",\"kind\":\"if\",\"depth\":%d}\n", __gorget_trace_depth);"#
+                    );
+                }
                 self.gen_block(then_body, emitter);
                 emitter.dedent();
 
@@ -300,6 +339,11 @@ impl CodegenContext<'_> {
                     let ec = self.gen_expr(elif_cond);
                     emitter.emit_line(&format!("}} else if ({ec}) {{"));
                     emitter.indent();
+                    if self.trace {
+                        emitter.emit_line(
+                            r#"fprintf(__gorget_trace_fp, "{\"type\":\"branch\",\"kind\":\"elif\",\"depth\":%d}\n", __gorget_trace_depth);"#
+                        );
+                    }
                     self.gen_block(elif_body, emitter);
                     emitter.dedent();
                 }
@@ -307,6 +351,11 @@ impl CodegenContext<'_> {
                 if let Some(else_body) = else_body {
                     emitter.emit_line("} else {");
                     emitter.indent();
+                    if self.trace {
+                        emitter.emit_line(
+                            r#"fprintf(__gorget_trace_fp, "{\"type\":\"branch\",\"kind\":\"else\",\"depth\":%d}\n", __gorget_trace_depth);"#
+                        );
+                    }
                     self.gen_block(else_body, emitter);
                     emitter.dedent();
                 }
@@ -433,6 +482,11 @@ impl CodegenContext<'_> {
 
             Stmt::Assert { condition, message } => {
                 if !self.strip_asserts {
+                    if self.trace {
+                        emitter.emit_line(
+                            r#"fprintf(__gorget_trace_fp, "{\"type\":\"stmt\",\"kind\":\"assert\",\"depth\":%d}\n", __gorget_trace_depth);"#
+                        );
+                    }
                     let cond = self.gen_expr(condition);
                     let msg = match message {
                         Some(m) => self.gen_expr(m),
@@ -593,6 +647,30 @@ impl CodegenContext<'_> {
                 self.decl_type_hint = prev_hint;
                 let decl = c_types::c_declare(&c_type, &escaped);
                 emitter.emit_line(&format!("{const_prefix}{decl} = {val};"));
+
+                // Trace: emit let event after declaration so the variable is live
+                if self.trace {
+                    let s = format!(
+                        r#"fprintf(__gorget_trace_fp, "{{\"type\":\"stmt\",\"kind\":\"let\",\"name\":\"{name}\",\"value\":");"#
+                    );
+                    emitter.emit_line(&s);
+                    emitter.emit_line(&format!(
+                        "_Generic(({escaped}), \
+                         int64_t: __gorget_trace_val_int, \
+                         long: __gorget_trace_val_int, \
+                         double: __gorget_trace_val_float, \
+                         float: __gorget_trace_val_float, \
+                         _Bool: __gorget_trace_val_bool, \
+                         char: __gorget_trace_val_char, \
+                         const char*: __gorget_trace_val_str, \
+                         char*: __gorget_trace_val_str, \
+                         default: __gorget_trace_val_int\
+                         )(__gorget_trace_fp, {escaped});"
+                    ));
+                    emitter.emit_line(
+                        r#"fprintf(__gorget_trace_fp, ",\"depth\":%d}\n", __gorget_trace_depth);"#
+                    );
+                }
 
                 // Register droppable variable for RAII cleanup
                 self.maybe_register_droppable(&escaped, &type_.node, emitter);
