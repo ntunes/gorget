@@ -1,8 +1,5 @@
 # TODO
 
-## High Priority — Language completeness
-- Real example program: a small but complete CLI tool or parser that exercises the language end-to-end [added: 2026-02-13]
-
 
 ## High Priority — Trace / HTML report
 

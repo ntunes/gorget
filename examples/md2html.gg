@@ -1,0 +1,493 @@
+from std.fs import read_file, write_file
+from std.os import args
+from std.collections import Vector
+
+str escape_html(str text):
+    str r = text.replace("&", "&amp;")
+    r = r.replace("<", "&lt;")
+    r = r.replace(">", "&gt;")
+    r = r.replace("\"", "&quot;")
+    return r
+
+str render_inline(str text):
+    Vector[str] parts = Vector[str]()
+    int i = 0
+    int n = text.len()
+    int seg_start = 0
+    while i < n:
+        str c = text.substring(i, i + 1)
+        if c == "`":
+            if seg_start < i:
+                parts.push(escape_html(text.substring(seg_start, i)))
+            int close = text.substring(i + 1, n).index_of("`")
+            if close < 0:
+                parts.push("`")
+                seg_start = i + 1
+                i = i + 1
+                continue
+            str code = text.substring(i + 1, i + 1 + close)
+            parts.push("<code>" + escape_html(code) + "</code>")
+            i = i + 1 + close + 1
+            seg_start = i
+            continue
+        if c == "*" and i + 1 < n and text.substring(i + 1, i + 2) == "*":
+            if seg_start < i:
+                parts.push(escape_html(text.substring(seg_start, i)))
+            int close = text.substring(i + 2, n).index_of("**")
+            if close < 0:
+                parts.push("**")
+                seg_start = i + 2
+                i = i + 2
+                continue
+            str bold = text.substring(i + 2, i + 2 + close)
+            parts.push("<strong>" + render_inline(bold) + "</strong>")
+            i = i + 2 + close + 2
+            seg_start = i
+            continue
+        if c == "*":
+            if seg_start < i:
+                parts.push(escape_html(text.substring(seg_start, i)))
+            int close = text.substring(i + 1, n).index_of("*")
+            if close < 0:
+                parts.push("*")
+                seg_start = i + 1
+                i = i + 1
+                continue
+            str em = text.substring(i + 1, i + 1 + close)
+            parts.push("<em>" + render_inline(em) + "</em>")
+            i = i + 1 + close + 1
+            seg_start = i
+            continue
+        if c == "[":
+            int close_bracket = text.substring(i + 1, n).index_of("]")
+            if close_bracket >= 0:
+                int abs_cb = i + 1 + close_bracket
+                if abs_cb + 1 < n and text.substring(abs_cb + 1, abs_cb + 2) == "(":
+                    int close_paren = text.substring(abs_cb + 2, n).index_of(")")
+                    if close_paren >= 0:
+                        if seg_start < i:
+                            parts.push(escape_html(text.substring(seg_start, i)))
+                        str link_text = text.substring(i + 1, abs_cb)
+                        str url = text.substring(abs_cb + 2, abs_cb + 2 + close_paren)
+                        parts.push("<a href=\"" + escape_html(url) + "\">" + render_inline(link_text) + "</a>")
+                        i = abs_cb + 2 + close_paren + 1
+                        seg_start = i
+                        continue
+        i = i + 1
+    if seg_start < n:
+        parts.push(escape_html(text.substring(seg_start, n)))
+    return "".join(parts)
+
+bool is_table_separator(str line):
+    str t = line.trim()
+    if not t.starts_with("|"):
+        return false
+    int j = 0
+    while j < t.len():
+        str ch = t.substring(j, j + 1)
+        if ch != "|" and ch != "-" and ch != ":" and ch != " ":
+            return false
+        j = j + 1
+    return t.contains("-")
+
+Vector[str] split_table_cells(str line):
+    str t = line.trim()
+    if t.starts_with("|"):
+        t = t.substring(1, t.len())
+    if t.ends_with("|"):
+        t = t.substring(0, t.len() - 1)
+    Vector[str] raw = t.split("|")
+    Vector[str] cells = Vector[str]()
+    int j = 0
+    while j < raw.len():
+        str cell = raw.get(j)
+        cells.push(cell.trim())
+        j = j + 1
+    return cells
+
+Vector[str] parse_alignments(str sep_line):
+    Vector[str] cells = split_table_cells(sep_line)
+    Vector[str] aligns = Vector[str]()
+    int j = 0
+    while j < cells.len():
+        str c = cells.get(j)
+        str ct = c.trim()
+        bool left_colon = ct.starts_with(":")
+        bool right_colon = ct.ends_with(":")
+        if left_colon and right_colon:
+            aligns.push("center")
+        elif right_colon:
+            aligns.push("right")
+        else:
+            aligns.push("left")
+        j = j + 1
+    return aligns
+
+str table_cell(str tag, str content, str align):
+    if align == "left":
+        return "<" + tag + ">" + render_inline(content) + "</" + tag + ">"
+    return "<" + tag + " style=\"text-align: " + align + "\">" + render_inline(content) + "</" + tag + ">"
+
+(str, int) parse_table(Vector[str] lines, int start):
+    Vector[str] out = Vector[str]()
+    str sep = lines.get(start + 1)
+    Vector[str] aligns = parse_alignments(sep)
+    str hdr_line = lines.get(start)
+    Vector[str] headers = split_table_cells(hdr_line)
+    out.push("<table>")
+    out.push("<thead><tr>")
+    int h = 0
+    while h < headers.len():
+        str al = "left"
+        if h < aligns.len():
+            al = aligns.get(h)
+        str hcell = headers.get(h)
+        out.push(table_cell("th", hcell, al))
+        h = h + 1
+    out.push("</tr></thead>")
+    out.push("<tbody>")
+    int row = start + 2
+    while row < lines.len():
+        str rline = lines.get(row)
+        if not rline.contains("|"):
+            break
+        Vector[str] cells = split_table_cells(rline)
+        out.push("<tr>")
+        int ci = 0
+        while ci < cells.len():
+            str al = "left"
+            if ci < aligns.len():
+                al = aligns.get(ci)
+            str dcell = cells.get(ci)
+            out.push(table_cell("td", dcell, al))
+            ci = ci + 1
+        out.push("</tr>")
+        row = row + 1
+    out.push("</tbody></table>")
+    str html = "\n".join(out)
+    int consumed = row - start
+    return (html, consumed)
+
+str flush_paragraph(Vector[str] para_lines):
+    if para_lines.is_empty():
+        return ""
+    str text = " ".join(para_lines)
+    return "<p>" + render_inline(text) + "</p>"
+
+bool is_hr_line(str line):
+    str t = line.trim()
+    if t.len() < 3:
+        return false
+    str first = t.substring(0, 1)
+    if first != "-" and first != "*" and first != "_":
+        return false
+    int j = 0
+    while j < t.len():
+        str ch = t.substring(j, j + 1)
+        if ch != first and ch != " ":
+            return false
+        j = j + 1
+    return true
+
+bool is_digit_str(str c):
+    if c == "0":
+        return true
+    if c == "1":
+        return true
+    if c == "2":
+        return true
+    if c == "3":
+        return true
+    if c == "4":
+        return true
+    if c == "5":
+        return true
+    if c == "6":
+        return true
+    if c == "7":
+        return true
+    if c == "8":
+        return true
+    if c == "9":
+        return true
+    return false
+
+bool all_digits(str s):
+    if s.is_empty():
+        return false
+    int j = 0
+    while j < s.len():
+        str ch = s.substring(j, j + 1)
+        if not is_digit_str(ch):
+            return false
+        j = j + 1
+    return true
+
+str level_str(int level):
+    if level == 1:
+        return "1"
+    if level == 2:
+        return "2"
+    if level == 3:
+        return "3"
+    if level == 4:
+        return "4"
+    if level == 5:
+        return "5"
+    return "6"
+
+str convert(str markdown):
+    Vector[str] lines = markdown.split("\n")
+    Vector[str] out = Vector[str]()
+    Vector[str] para_lines = Vector[str]()
+    bool in_code = false
+    str code_lang = ""
+    Vector[str] code_lines = Vector[str]()
+    bool in_ul = false
+    bool in_ol = false
+    int i = 0
+    while i < lines.len():
+        str line = lines.get(i)
+        if in_code:
+            str trimmed = line.trim()
+            if trimmed.starts_with("```"):
+                if code_lang.is_empty():
+                    out.push("<pre><code>" + escape_html("\n".join(code_lines)) + "</code></pre>")
+                else:
+                    out.push("<pre><code class=\"language-" + code_lang + "\">" + escape_html("\n".join(code_lines)) + "</code></pre>")
+                in_code = false
+                code_lang = ""
+                code_lines = Vector[str]()
+            else:
+                code_lines.push(line)
+            i = i + 1
+            continue
+        if line.starts_with("```"):
+            str p = flush_paragraph(para_lines)
+            if not p.is_empty():
+                out.push(p)
+            para_lines = Vector[str]()
+            if in_ul:
+                out.push("</ul>")
+                in_ul = false
+            if in_ol:
+                out.push("</ol>")
+                in_ol = false
+            in_code = true
+            code_lang = line.substring(3, line.len()).trim()
+            i = i + 1
+            continue
+        str trimmed = line.trim()
+        if trimmed.is_empty():
+            str p = flush_paragraph(para_lines)
+            if not p.is_empty():
+                out.push(p)
+            para_lines = Vector[str]()
+            if in_ul:
+                out.push("</ul>")
+                in_ul = false
+            if in_ol:
+                out.push("</ol>")
+                in_ol = false
+            i = i + 1
+            continue
+        if is_hr_line(line) and not line.starts_with("|"):
+            str p = flush_paragraph(para_lines)
+            if not p.is_empty():
+                out.push(p)
+            para_lines = Vector[str]()
+            if in_ul:
+                out.push("</ul>")
+                in_ul = false
+            if in_ol:
+                out.push("</ol>")
+                in_ol = false
+            out.push("<hr>")
+            i = i + 1
+            continue
+        if line.starts_with("#"):
+            str p = flush_paragraph(para_lines)
+            if not p.is_empty():
+                out.push(p)
+            para_lines = Vector[str]()
+            if in_ul:
+                out.push("</ul>")
+                in_ul = false
+            if in_ol:
+                out.push("</ol>")
+                in_ol = false
+            int level = 0
+            while level < line.len() and line.substring(level, level + 1) == "#":
+                level = level + 1
+            if level > 6:
+                level = 6
+            str heading = line.substring(level, line.len()).trim()
+            str lvl = level_str(level)
+            out.push("<h" + lvl + ">" + render_inline(heading) + "</h" + lvl + ">")
+            i = i + 1
+            continue
+        if line.contains("|") and i + 1 < lines.len():
+            str next_line = lines.get(i + 1)
+            if is_table_separator(next_line):
+                str p = flush_paragraph(para_lines)
+                if not p.is_empty():
+                    out.push(p)
+                para_lines = Vector[str]()
+                if in_ul:
+                    out.push("</ul>")
+                    in_ul = false
+                if in_ol:
+                    out.push("</ol>")
+                    in_ol = false
+                (str, int) result = parse_table(lines, i)
+                out.push(result._0)
+                i = i + result._1
+                continue
+        if line.starts_with("- "):
+            str p = flush_paragraph(para_lines)
+            if not p.is_empty():
+                out.push(p)
+            para_lines = Vector[str]()
+            if in_ol:
+                out.push("</ol>")
+                in_ol = false
+            if not in_ul:
+                out.push("<ul>")
+                in_ul = true
+            str item = line.substring(2, line.len())
+            out.push("<li>" + render_inline(item) + "</li>")
+            i = i + 1
+            continue
+        if line.len() >= 3:
+            str first_ch = line.substring(0, 1)
+            if is_digit_str(first_ch):
+                int dot_pos = line.index_of(". ")
+                if dot_pos > 0:
+                    str before_dot = line.substring(0, dot_pos)
+                    if all_digits(before_dot):
+                        str p = flush_paragraph(para_lines)
+                        if not p.is_empty():
+                            out.push(p)
+                        para_lines = Vector[str]()
+                        if in_ul:
+                            out.push("</ul>")
+                            in_ul = false
+                        if not in_ol:
+                            out.push("<ol>")
+                            in_ol = true
+                        str item = line.substring(dot_pos + 2, line.len())
+                        out.push("<li>" + render_inline(item) + "</li>")
+                        i = i + 1
+                        continue
+        if line.starts_with("> "):
+            str p = flush_paragraph(para_lines)
+            if not p.is_empty():
+                out.push(p)
+            para_lines = Vector[str]()
+            if in_ul:
+                out.push("</ul>")
+                in_ul = false
+            if in_ol:
+                out.push("</ol>")
+                in_ol = false
+            str quote_text = line.substring(2, line.len())
+            out.push("<blockquote><p>" + render_inline(quote_text) + "</p></blockquote>")
+            i = i + 1
+            continue
+        if in_ul:
+            out.push("</ul>")
+            in_ul = false
+        if in_ol:
+            out.push("</ol>")
+            in_ol = false
+        para_lines.push(line)
+        i = i + 1
+    str p = flush_paragraph(para_lines)
+    if not p.is_empty():
+        out.push(p)
+    if in_ul:
+        out.push("</ul>")
+    if in_ol:
+        out.push("</ol>")
+    if in_code:
+        out.push("<pre><code>" + escape_html("\n".join(code_lines)) + "</code></pre>")
+    return "\n".join(out)
+
+void main():
+    Vector[str] cli = args()
+    if cli.len() < 2:
+        print("Usage: md2html <input.md> [output.html]")
+        print("  Converts Markdown to HTML")
+    else:
+        str input_path = cli.get(1)
+        str markdown = read_file(input_path)
+        str html = convert(markdown)
+        if cli.len() >= 3:
+            str out_path = cli.get(2)
+            write_file(out_path, html)
+            print("Wrote {out_path}")
+        else:
+            print(html)
+
+test "escape_html handles entities":
+    assert escape_html("<b>R&D</b>") == "&lt;b&gt;R&amp;D&lt;/b&gt;"
+    assert escape_html("a\"b") == "a&quot;b"
+    assert escape_html("plain") == "plain"
+
+test "render_inline bold":
+    assert render_inline("a **bold** b") == "a <strong>bold</strong> b"
+
+test "render_inline italic":
+    assert render_inline("an *italic* word") == "an <em>italic</em> word"
+
+test "render_inline code":
+    assert render_inline("use `fmt` here") == "use <code>fmt</code> here"
+
+test "render_inline link":
+    assert render_inline("[Go](https://go.dev)") == "<a href=\"https://go.dev\">Go</a>"
+
+test "convert headings":
+    assert convert("# Title") == "<h1>Title</h1>"
+    assert convert("## Sub") == "<h2>Sub</h2>"
+    assert convert("### Third") == "<h3>Third</h3>"
+
+test "convert paragraph":
+    str result = convert("Hello world")
+    assert result == "<p>Hello world</p>"
+
+test "convert code block":
+    str md = "```python\nprint(1)\n```"
+    str html = convert(md)
+    assert html.contains("<pre><code class=\"language-python\">")
+    assert html.contains("print(1)")
+
+test "convert unordered list":
+    str md = "- one\n- two\n- three"
+    str html = convert(md)
+    assert html.contains("<ul>")
+    assert html.contains("<li>one</li>")
+    assert html.contains("</ul>")
+
+test "convert ordered list":
+    str md = "1. first\n2. second"
+    str html = convert(md)
+    assert html.contains("<ol>")
+    assert html.contains("<li>first</li>")
+    assert html.contains("</ol>")
+
+test "convert table":
+    str md = "| A | B |\n|---|---|\n| 1 | 2 |"
+    str html = convert(md)
+    assert html.contains("<table>")
+    assert html.contains("<th>A</th>")
+    assert html.contains("<td>1</td>")
+    assert html.contains("</table>")
+
+test "convert horizontal rule":
+    str html = convert("---")
+    assert html == "<hr>"
+
+test "convert blockquote":
+    str html = convert("> Note this")
+    assert html.contains("<blockquote>")
+    assert html.contains("Note this")
