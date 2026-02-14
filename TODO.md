@@ -3,8 +3,6 @@
 
 ## Medium Priority — Trace / HTML report
 
-- **Inconsistent return event format**: Void-function implicit returns (`c_item.rs:482`) emit `"value":null`, expression-body returns (`c_item.rs:511-523`) emit a typed `"value"` field, and explicit `return` statements (`c_stmt.rs:89-91`) emit no `value` field at all. The report parser ignores the field entirely. Either commit to capturing return values and displaying them, or remove the `value` field from all return events for consistency. [added: 2026-02-14]
-
 - **`VarDecl` with pattern destructuring not traced (`c_stmt.rs:850-860`)**: Only `Pattern::Binding` declarations get `stmt_start`/`stmt_end`. Tuple patterns (`let (a, b) = get_pair()`) and wildcard patterns are invisible in the trace. [added: 2026-02-14]
 
 - **Crash-resilient report generation**: If the test binary crashes (segfault in unsafe code), `atexit` handlers don't run and the trace file is truncated. `parse_trace_file` silently produces a partial report. Should warn when `test_start` events have no matching `test_end`, indicating a probable crash. [added: 2026-02-14]

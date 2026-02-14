@@ -477,11 +477,7 @@ impl CodegenContext<'_> {
                 // Trace implicit return for void functions (and main)
                 if self.trace && !is_main {
                     if matches!(f.return_type.node, Type::Primitive(PrimitiveType::Void)) {
-                        emitter.emit_line("__gorget_trace_depth--;");
-                        let s = format!(
-                            r#"fprintf(__gorget_trace_fp, "{{\"type\":\"return\",\"fn\":\"{gorget_name}\",\"value\":null,\"depth\":%d}}\n", __gorget_trace_depth);"#
-                        );
-                        emitter.emit_line(&s);
+                        self.emit_trace_return(emitter);
                     }
                 }
 
@@ -504,24 +500,8 @@ impl CodegenContext<'_> {
                 let e = self.gen_expr(expr);
 
                 if self.trace {
-                    let ret_c_type = c_types::ast_type_to_c(&f.return_type.node, self.scopes);
-                    let formatter = c_types::trace_formatter_for_c_type(&ret_c_type);
                     emitter.emit_line(&format!("__typeof__({e}) __trace_ret = {e};"));
-                    emitter.emit_line("__gorget_trace_depth--;");
-                    let s = format!(
-                        r#"fprintf(__gorget_trace_fp, "{{\"type\":\"return\",\"fn\":\"{gorget_name}\",\"value\":");"#
-                    );
-                    emitter.emit_line(&s);
-                    if formatter == "__gorget_trace_val_void" {
-                        emitter.emit_line(r#"fprintf(__gorget_trace_fp, "null");"#);
-                    } else {
-                        emitter.emit_line(&format!(
-                            "{formatter}(__gorget_trace_fp, __trace_ret);"
-                        ));
-                    }
-                    emitter.emit_line(
-                        r#"fprintf(__gorget_trace_fp, ",\"depth\":%d}\n", __gorget_trace_depth);"#
-                    );
+                    self.emit_trace_return(emitter);
                     emitter.emit_line("return __trace_ret;");
                 } else {
                     emitter.emit_line(&format!("return {e};"));

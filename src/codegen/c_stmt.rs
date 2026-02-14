@@ -83,7 +83,7 @@ impl CodegenContext<'_> {
 
     /// Emit a structural trace "return" event that closes the function's Call frame.
     /// This is purely for tree-builder nesting; the visual return is shown by stmt_start.
-    fn emit_trace_return(&self, emitter: &mut CEmitter) {
+    pub(super) fn emit_trace_return(&self, emitter: &mut CEmitter) {
         let fn_name = self.current_function_gorget_name.as_deref().unwrap_or("?");
         emitter.emit_line("__gorget_trace_depth--;");
         emitter.emit_line(&format!(
