@@ -2242,6 +2242,7 @@ value     = IDENT ;
 | `directive strip-asserts`          | `--strip-asserts`     | Remove all `assert` statements from build |
 | `directive overflow=wrap`          | `--overflow=wrap`     | Enable wrapping arithmetic (no overflow panic) |
 | `directive immutable-by-default`   | *(none)*              | Make plain variables immutable; use `mutable` to opt in |
+| `directive trace`                  | `--trace`             | Enable execution tracing for testing      |
 
 #### Immutable-by-Default
 
@@ -2257,7 +2258,7 @@ The `mutable` keyword can also precede `auto`: `mutable auto x = compute()`.
 
 Without the directive, all variables are mutable by default (backwards compatible with existing code).
 
-**Note:** `const` assignment is always rejected regardless of the directive.
+**Note:** `const` assignment is always rejected regardless of the directive. This directive is recommended for safety-critical projects where mutation should be explicit.
 
 **Interaction with CLI flags:** Source directives and CLI flags are merged so
 that either can enable an option. However, if the CLI explicitly contradicts a
@@ -2272,6 +2273,9 @@ per-file options without editing source code.
 | `directive overflow=wrap` | *(none)*              | wrapping         |
 | *(none)*                  | `--overflow=wrap`     | wrapping         |
 | `directive overflow=wrap` | `--overflow=checked`  | checked (panic)  |
+| `directive trace`         | *(none)*              | tracing enabled  |
+| *(none)*                  | `--trace`             | tracing enabled  |
+| `directive trace`         | `--no-trace`          | tracing disabled |
 
 ---
 
@@ -2287,6 +2291,9 @@ The Gorget compiler is invoked as `gg` with the following commands:
 | `gg build <file>`  | Compile to native binary                 |
 | `gg run <file>`    | Compile and execute                      |
 | `gg test <file>`   | Compile and run tests                    |
+| `gg fmt <file>`    | Format source code (prints to stdout; use shell redirection to save) |
+| `gg report <file>` | Generate HTML report from trace file     |
+| `gg`               | Launch interactive REPL for experimenting with Gorget code |
 
 **CLI flags:**
 
@@ -2296,6 +2303,9 @@ The Gorget compiler is invoked as `gg` with the following commands:
 | `--no-strip-asserts` | Keep asserts even if source has `directive strip-asserts`|
 | `--overflow=wrap`    | Enable wrapping arithmetic (no overflow panic)          |
 | `--overflow=checked` | Force checked arithmetic even if source says `wrap`     |
+| `--trace`            | Enable tracing for test execution                       |
+| `--no-trace`         | Disable tracing even if source has `directive trace`   |
+| `--report html`      | Generate HTML report after testing (implies `--trace`) |
 | `--tag <name>`       | Only run tests matching this tag (repeatable)           |
 | `--exclude-tag <name>` | Skip tests with this tag (repeatable; exclusion wins) |
 | `--filter <substr>`  | Only run tests whose name contains `<substr>`           |
@@ -2426,6 +2436,8 @@ gg test --report html tests/test_basic.gg   # auto-enables --trace, produces .re
 gg report test_basic.trace.jsonl             # from an existing trace file
 gg report test_basic.trace.jsonl --output custom.html  # custom output path
 ```
+
+**Usage:** `gg report <trace.jsonl> [--output <path>]`
 
 The report shows a pass/fail summary with a pass-rate bar, a test table with status badges and durations, and expandable per-test function call traces. The HTML file is self-contained (inline CSS and JS) and works offline.
 

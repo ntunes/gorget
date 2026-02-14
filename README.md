@@ -208,7 +208,50 @@ Copy types (int, float, bool) pass freely without `!`. See [`examples/ownership.
 | `gg build <file>` | Compile to native binary |
 | `gg run <file>` | Build and run in one step |
 
+### CLI Flags
+
+**Compilation flags:**
+- `--strip-asserts` — Remove all `assert` statements
+- `--no-strip-asserts` — Keep asserts even if source has `directive strip-asserts`
+- `--overflow=wrap` — Enable wrapping arithmetic (no overflow panic)
+- `--overflow=checked` — Force checked arithmetic even if source says `wrap`
+
+**Testing flags:**
+- `--trace` — Enable tracing for test execution
+- `--no-trace` — Disable tracing even if source has `directive trace`
+- `--report html` — Generate HTML report after testing (implies `--trace`)
+- `--tag <name>` — Only run tests matching this tag (repeatable)
+- `--exclude-tag <name>` — Skip tests with this tag (repeatable; exclusion wins)
+- `--filter <substr>` — Only run tests whose name contains `<substr>`
+
 ## Testing
+
+Gorget has a built-in test framework with advanced features:
+
+```bash
+# Run all tests in a file
+gg test my_tests.gg
+
+# Run specific tests
+gg test my_tests.gg --filter "fibonacci"
+gg test my_tests.gg --tag "slow" --exclude-tag "integration"
+
+# Generate HTML report with execution traces
+gg test my_tests.gg --report html
+
+# Generate trace file (for later report generation)
+gg test my_tests.gg --trace
+gg report my_tests.trace.jsonl  # Generate HTML from trace
+```
+
+Test files use `test` blocks and support:
+- `@test` attributes with tagging
+- `@should_panic` for expected failures
+- Suite setup/teardown with `suite setup:` and `suite teardown:`
+- Resource management with `with` bindings
+- HTML reports with expandable execution traces
+
+## Development Testing
 
 ```bash
 cargo test --lib                                    # 249 unit tests
