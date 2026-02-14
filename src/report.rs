@@ -315,6 +315,17 @@ fn build_report(events: Vec<TraceEvent>) -> ReportData {
     for event in events {
         match &event {
             TraceEvent::TestStart { name } => {
+                // Flush any in-flight test that never got a TestEnd (probable crash)
+                if let Some(prev_name) = current_name.take() {
+                    eprintln!("warning: test '{}' has no test_end event (probable crash)", prev_name);
+                    let tree = build_tree(std::mem::take(&mut current_events));
+                    tests.push(TestResult {
+                        name: prev_name,
+                        status: "crashed".to_string(),
+                        duration_ms: 0,
+                        tree,
+                    });
+                }
                 current_name = Some(name.clone());
                 current_events.clear();
             }
@@ -334,6 +345,18 @@ fn build_report(events: Vec<TraceEvent>) -> ReportData {
                 }
             }
         }
+    }
+
+    // Flush final in-flight test that never got a TestEnd (probable crash)
+    if let Some(prev_name) = current_name.take() {
+        eprintln!("warning: test '{}' has no test_end event (probable crash)", prev_name);
+        let tree = build_tree(std::mem::take(&mut current_events));
+        tests.push(TestResult {
+            name: prev_name,
+            status: "crashed".to_string(),
+            duration_ms: 0,
+            tree,
+        });
     }
 
     let total_passed = tests.iter().filter(|t| t.status == "pass").count();
@@ -513,10 +536,13 @@ pub fn generate_html_report(trace_path: &Path, output_path: &Path) -> Result<(),
     // Test table
     html.push_str("<div class=\"test-list\">\n");
     for (i, test) in report.tests.iter().enumerate() {
-        let is_pass = test.status == "pass";
-        let status_class = if is_pass { "status-pass" } else { "status-fail" };
-        let status_label = if is_pass { "PASS" } else { "FAIL" };
-        let status_icon = if is_pass { "&#x2713;" } else { "&#x2717;" };
+        let (status_class, status_label, status_icon) = if test.status == "pass" {
+            ("status-pass", "PASS", "&#x2713;")
+        } else if test.status == "crashed" {
+            ("status-crashed", "CRASHED", "&#x1F4A5;")
+        } else {
+            ("status-fail", "FAIL", "&#x2717;")
+        };
         let has_events = !test.tree.is_empty();
 
         html.push_str(&format!(
@@ -593,6 +619,7 @@ h1 { font-size: 1.5rem; margin-bottom: 8px; color: #fff; }
 }
 .test-row.status-pass { border-left-color: #4caf50; }
 .test-row.status-fail { border-left-color: #f44336; }
+.test-row.status-crashed { border-left-color: #ff9800; }
 .test-header {
     display: flex; align-items: center; gap: 12px; padding: 10px 16px;
     cursor: pointer; user-select: none;
@@ -604,6 +631,7 @@ h1 { font-size: 1.5rem; margin-bottom: 8px; color: #fff; }
 }
 .status-badge.status-pass { background: #1b3a1b; color: #4caf50; }
 .status-badge.status-fail { background: #3a1b1b; color: #f44336; }
+.status-badge.status-crashed { background: #3a2e1b; color: #ff9800; }
 .test-name { flex: 1; }
 .test-duration { color: #888; font-size: 0.85rem; font-variant-numeric: tabular-nums; }
 .expand-btn {
@@ -1017,5 +1045,46 @@ mod tests {
         let html = render_tree_html(&tree, &mut counter, 0);
         assert!(html.contains("subst-text"), "should contain substituted text div");
         assert!(html.contains("return 5 + 1"), "should contain substituted value");
+    }
+
+    #[test]
+    fn build_report_crashed_test() {
+        // Simulate a crash: test_start with body events but no test_end,
+        // followed by a complete test.
+        let events = vec![
+            TraceEvent::TestStart { name: "crashes".to_string() },
+            TraceEvent::Call { function: "boom".to_string(), args: Value::Null, depth: 0 },
+            // No TestEnd — binary crashed here
+            TraceEvent::TestStart { name: "ok_test".to_string() },
+            TraceEvent::TestEnd { name: "ok_test".to_string(), status: "pass".to_string(), duration_ms: 5 },
+        ];
+        let report = build_report(events);
+        assert_eq!(report.tests.len(), 2);
+        // First test should be marked as crashed
+        assert_eq!(report.tests[0].name, "crashes");
+        assert_eq!(report.tests[0].status, "crashed");
+        assert_eq!(report.tests[0].duration_ms, 0);
+        assert_eq!(report.tests[0].tree.len(), 1); // the Call node
+        // Second test should be normal
+        assert_eq!(report.tests[1].name, "ok_test");
+        assert_eq!(report.tests[1].status, "pass");
+        // Crashed counts as failed
+        assert_eq!(report.total_passed, 1);
+        assert_eq!(report.total_failed, 1);
+    }
+
+    #[test]
+    fn build_report_crashed_final_test() {
+        // Simulate a crash on the last test (no subsequent test_start)
+        let events = vec![
+            TraceEvent::TestStart { name: "last_test".to_string() },
+            TraceEvent::Call { function: "segfault".to_string(), args: Value::Null, depth: 0 },
+        ];
+        let report = build_report(events);
+        assert_eq!(report.tests.len(), 1);
+        assert_eq!(report.tests[0].name, "last_test");
+        assert_eq!(report.tests[0].status, "crashed");
+        assert_eq!(report.total_passed, 0);
+        assert_eq!(report.total_failed, 1);
     }
 }

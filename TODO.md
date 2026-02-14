@@ -6,8 +6,6 @@
 
 ## Medium Priority — Trace / HTML report
 
-- **Crash-resilient report generation**: If the test binary crashes (segfault in unsafe code), `atexit` handlers don't run and the trace file is truncated. `parse_trace_file` silently produces a partial report. Should warn when `test_start` events have no matching `test_end`, indicating a probable crash. [added: 2026-02-14]
-
 - **`generate_c` has 11 parameters (`codegen/mod.rs:197`)**: Trace-related params (`trace`, `trace_filename`) plus `strip_asserts`, `overflow_wrap`, test filters, etc. should be bundled into a `CodegenOptions` struct. [added: 2026-02-14]
 
 ## Low Priority — Trace / HTML report
