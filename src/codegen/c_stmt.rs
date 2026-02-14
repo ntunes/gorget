@@ -91,6 +91,16 @@ impl CodegenContext<'_> {
         ));
     }
 
+    /// Return the C type to use for `__ret_tmp`. Prefers the known function return
+    /// type (avoids `__typeof__` on string literals producing `char[N]` instead of
+    /// `const char*`). Falls back to `__typeof__(expr)` if return type is unknown.
+    fn ret_tmp_type(&self, expr: &str) -> String {
+        match &self.current_function_return_c_type {
+            Some(t) => t.clone(),
+            None => format!("__typeof__({expr})"),
+        }
+    }
+
     /// Walk an expression AST collecting `Expr::Identifier` references suitable
     /// for variable substitution in trace output. Returns deduplicated
     /// `(gorget_name, c_name, formatter_fn)` triples for traceable variables.
@@ -354,7 +364,8 @@ impl CodegenContext<'_> {
                             self.emit_stmt_start(span, &vars, emitter);
                         }
                         let e = self.gen_expr(expr);
-                        emitter.emit_line(&format!("__typeof__({e}) __ret_tmp = {e};"));
+                        let ret_type = self.ret_tmp_type(&e);
+                        emitter.emit_line(&format!("{ret_type} __ret_tmp = {e};"));
                         if self.trace {
                             self.emit_stmt_end(emitter);
                         }
@@ -379,7 +390,8 @@ impl CodegenContext<'_> {
                         let vars = self.collect_expr_vars(&[&expr.node]);
                         self.emit_stmt_start(span, &vars, emitter);
                         let e = self.gen_expr(expr);
-                        emitter.emit_line(&format!("__typeof__({e}) __ret_tmp = {e};"));
+                        let ret_type = self.ret_tmp_type(&e);
+                        emitter.emit_line(&format!("{ret_type} __ret_tmp = {e};"));
                         self.emit_stmt_end(emitter);
                         self.emit_trace_return(emitter);
                         emitter.emit_line("return __ret_tmp;");

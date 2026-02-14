@@ -1,7 +1,6 @@
 # TODO
 
 ## High Priority — Bugs
-- Trace return with `__typeof__` on string literals causes UB: stack array copy of string struct via `__typeof__` in return trace macro. Needs a different approach for string values (e.g., emit the string pointer directly). [added: 2026-02-14]
 - Trace source text `%%` bug: `c_string_escape` doubles `%` for printf format strings, but source text is passed to `__gorget_trace_json_str` (which uses `fputc`, not printf). So `a % b` appears as `a %% b` in trace output and HTML reports. Fix: don't apply `%%` escaping for trace source strings, or use a separate escape function. [added: 2026-02-14]
 
 ## High Priority — Language completeness
