@@ -7,7 +7,6 @@
 - Real example program: a small but complete CLI tool or parser that exercises the language end-to-end [added: 2026-02-13]
 
 ## Medium Priority — Built-in type methods (batch 2)
-- Vector: `.index_of(x)`, `.insert(i, x)`, `.extend(other)`, `.slice(i, j)`, `.any(fn)`, `.all(fn)` [added: 2026-02-14]
 - String: `.removeprefix(s)`, `.removesuffix(s)` [added: 2026-02-14]
 - String: `.pad_left(n, char?)`, `.pad_right(n, char?)` [added: 2026-02-14]
 - Char: `.to_upper()`, `.to_lower()`, `.is_upper()`, `.is_lower()` [added: 2026-02-14]

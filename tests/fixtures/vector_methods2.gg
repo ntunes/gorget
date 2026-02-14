@@ -1,0 +1,43 @@
+from std.collections import Vector
+
+void main():
+    Vector[int] v = Vector[int]()
+    v.push(10)
+    v.push(20)
+    v.push(30)
+    v.push(40)
+
+    # index_of
+    print("{v.index_of(20)}")
+    print("{v.index_of(99)}")
+
+    # insert
+    v.insert(1, 15)
+    print("{v.get(1)}")
+    print("{v.len()}")
+
+    # extend
+    Vector[int] other = Vector[int]()
+    other.push(50)
+    other.push(60)
+    v.extend(other)
+    print("{v.len()}")
+    print("{v.get(6)}")
+
+    # slice
+    Vector[int] s = v.slice(0, 3)
+    print("{s.len()}")
+    print("{s.get(0)}")
+    print("{s.get(2)}")
+
+    # any
+    bool has_big = v.any((int x): x > 50)
+    print("{has_big}")
+    bool has_neg = v.any((int x): x < 0)
+    print("{has_neg}")
+
+    # all
+    bool all_pos = v.all((int x): x > 0)
+    print("{all_pos}")
+    bool all_small = v.all((int x): x < 30)
+    print("{all_small}")

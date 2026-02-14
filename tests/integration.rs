@@ -2452,6 +2452,27 @@ fn vector_sort() {
 }
 
 #[test]
+fn vector_methods2() {
+    run_gg(
+        "vector_methods2.gg",
+        "\
+1
+-1
+15
+5
+7
+60
+3
+10
+20
+true
+false
+true
+false",
+    );
+}
+
+#[test]
 fn dict_keys_values() {
     run_gg(
         "dict_keys_values.gg",

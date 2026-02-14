@@ -454,6 +454,45 @@ static inline GorgetArray gorget_array_with_capacity(size_t elem_size, size_t ca
     return arr;
 }
 
+static inline int64_t gorget_array_index_of(const GorgetArray* a, const void* needle) {
+    for (size_t i = 0; i < a->len; i++) {
+        if (memcmp((char*)a->data + i * a->elem_size, needle, a->elem_size) == 0) return (int64_t)i;
+    }
+    return -1;
+}
+
+static inline void gorget_array_insert(GorgetArray* arr, size_t index, const void* elem) {
+    if (index > arr->len) {
+        fprintf(stderr, "gorget: panic: insert index out of bounds: index %zu, length %zu\n", index, arr->len);
+        exit(1);
+    }
+    if (arr->len >= arr->cap) {
+        size_t new_cap = arr->cap == 0 ? 8 : arr->cap * 2;
+        arr->data = realloc(arr->data, new_cap * arr->elem_size);
+        arr->cap = new_cap;
+    }
+    if (index < arr->len) {
+        memmove((char*)arr->data + (index + 1) * arr->elem_size,
+                (char*)arr->data + index * arr->elem_size,
+                (arr->len - index) * arr->elem_size);
+    }
+    memcpy((char*)arr->data + index * arr->elem_size, elem, arr->elem_size);
+    arr->len++;
+}
+
+static inline void gorget_array_extend(GorgetArray* dst, const GorgetArray* src) {
+    if (src->len == 0) return;
+    size_t needed = dst->len + src->len;
+    if (needed > dst->cap) {
+        size_t new_cap = dst->cap == 0 ? 8 : dst->cap;
+        while (new_cap < needed) new_cap *= 2;
+        dst->data = realloc(dst->data, new_cap * dst->elem_size);
+        dst->cap = new_cap;
+    }
+    memcpy((char*)dst->data + dst->len * dst->elem_size, src->data, src->len * src->elem_size);
+    dst->len = needed;
+}
+
 static inline GorgetArray gorget_array_slice(const GorgetArray* arr, int64_t start, int64_t end) {
     if (start < 0 || end < 0 || (size_t)start > arr->len || (size_t)end > arr->len || start > end) {
         fprintf(stderr, "gorget: panic: vector slice out of bounds: [%" PRId64 "..%" PRId64 "], length %zu\n", start, end, arr->len);

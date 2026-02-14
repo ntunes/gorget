@@ -1545,6 +1545,60 @@ impl CodegenContext<'_> {
             "reverse" => {
                 format!("gorget_array_reverse({recv_ref})")
             }
+            "index_of" => {
+                let arg = args.first()
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "0".to_string());
+                format!("({{ {elem_type} __needle = {arg}; gorget_array_index_of({recv_ref}, &__needle); }})")
+            }
+            "insert" => {
+                let idx = args.first()
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "0".to_string());
+                let val = args.get(1)
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "0".to_string());
+                format!("({{ {elem_type} __ins_val = {val}; gorget_array_insert({recv_ref}, (size_t)({idx}), &__ins_val); }})")
+            }
+            "extend" => {
+                let arg = self.gen_expr(&args[0].node.value);
+                format!("({{ GorgetArray __ext_src = {arg}; gorget_array_extend({recv_ref}, &__ext_src); }})")
+            }
+            "slice" => {
+                let start = args.first()
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "0".to_string());
+                let end = args.get(1)
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "0".to_string());
+                format!("gorget_array_slice({recv_ref}, {start}, {end})")
+            }
+            "any" => {
+                let closure_fn = self.gen_expr(&args[0].node.value);
+                self.patch_last_closure_return_type("bool");
+                format!(
+                    "({{ GorgetArray __any_src = {recv}; \
+                    bool __any_result = false; \
+                    for (size_t __any_i = 0; __any_i < __any_src.len; __any_i++) {{ \
+                        {elem_type} __any_elem = GORGET_ARRAY_AT({elem_type}, __any_src, __any_i); \
+                        if ({closure_fn}(__any_elem)) {{ __any_result = true; break; }} \
+                    }} \
+                    __any_result; }})"
+                )
+            }
+            "all" => {
+                let closure_fn = self.gen_expr(&args[0].node.value);
+                self.patch_last_closure_return_type("bool");
+                format!(
+                    "({{ GorgetArray __all_src = {recv}; \
+                    bool __all_result = true; \
+                    for (size_t __all_i = 0; __all_i < __all_src.len; __all_i++) {{ \
+                        {elem_type} __all_elem = GORGET_ARRAY_AT({elem_type}, __all_src, __all_i); \
+                        if (!{closure_fn}(__all_elem)) {{ __all_result = false; break; }} \
+                    }} \
+                    __all_result; }})"
+                )
+            }
             "filter" => {
                 let closure_fn = self.gen_expr(&args[0].node.value);
                 self.patch_last_closure_return_type("bool");
@@ -3287,9 +3341,9 @@ impl CodegenContext<'_> {
         // are mangled (e.g. "GorgetMap__int64_t__int64_t").
         if receiver_type == "GorgetArray" {
             return match method {
-                "len" | "get" | "pop" => Some(self.types.int_id),
-                "contains" => Some(self.types.bool_id),
-                "sort" | "reverse" => Some(self.types.void_id),
+                "len" | "get" | "pop" | "index_of" => Some(self.types.int_id),
+                "contains" | "any" | "all" => Some(self.types.bool_id),
+                "sort" | "reverse" | "insert" | "extend" => Some(self.types.void_id),
                 _ => None,
             };
         }
