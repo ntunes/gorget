@@ -2739,3 +2739,117 @@ fn test_timing_in_output() {
         true,
     );
 }
+
+// ── Report tests ─────────────────────────────────────────────
+
+#[test]
+fn test_report_subcommand() {
+    // 1. Run `gg test --trace` to produce a trace file
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures/test_basic.gg");
+    let dir = fixture_path.parent().unwrap();
+    let trace_path = dir.join("test_basic.trace.jsonl");
+    let report_path = dir.join("test_basic.report.html");
+    let c_path = dir.join("test_basic.c");
+    let exe_path = dir.join("test_basic");
+
+    // Clean up any leftover files
+    let _ = std::fs::remove_file(&trace_path);
+    let _ = std::fs::remove_file(&report_path);
+
+    let run = Command::new(env!("CARGO"))
+        .args(["run", "--quiet", "--", "test", "--trace"])
+        .arg(&fixture_path)
+        .output()
+        .expect("failed to run gg test --trace");
+
+    assert!(
+        run.status.success(),
+        "gg test --trace failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr),
+    );
+    assert!(trace_path.exists(), "Trace file should exist after gg test --trace");
+
+    // 2. Run `gg report` on the trace file
+    let report_run = Command::new(env!("CARGO"))
+        .args(["run", "--quiet", "--", "report"])
+        .arg(&trace_path)
+        .output()
+        .expect("failed to run gg report");
+
+    assert!(
+        report_run.status.success(),
+        "gg report failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&report_run.stdout),
+        String::from_utf8_lossy(&report_run.stderr),
+    );
+
+    // 3. Verify report exists and contains expected content
+    assert!(report_path.exists(), "report.html should exist after gg report");
+
+    let html = std::fs::read_to_string(&report_path).expect("Failed to read report");
+    assert!(html.contains("Test Report"), "Report should contain title");
+    assert!(html.contains("addition works"), "Report should contain test name");
+    assert!(html.contains("string equality"), "Report should contain test name");
+    assert!(html.contains("boolean logic"), "Report should contain test name");
+    assert!(html.contains("PASS"), "Report should contain PASS status");
+    assert!(html.contains("3 passed"), "Report should show 3 passed");
+    assert!(html.contains("0 failed"), "Report should show 0 failed");
+
+    let stdout = String::from_utf8_lossy(&report_run.stdout);
+    assert!(stdout.contains("Report:"), "Should print report path");
+
+    // Clean up
+    let _ = std::fs::remove_file(&trace_path);
+    let _ = std::fs::remove_file(&report_path);
+    let _ = std::fs::remove_file(&c_path);
+    let _ = std::fs::remove_file(&exe_path);
+}
+
+#[test]
+fn test_report_flag_on_test() {
+    // Run `gg test --report html` — should auto-enable trace and produce both files
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures/test_basic.gg");
+    let dir = fixture_path.parent().unwrap();
+    let trace_path = dir.join("test_basic.trace.jsonl");
+    let report_path = dir.join("test_basic.report.html");
+    let c_path = dir.join("test_basic.c");
+    let exe_path = dir.join("test_basic");
+
+    // Clean up any leftover files
+    let _ = std::fs::remove_file(&trace_path);
+    let _ = std::fs::remove_file(&report_path);
+
+    let run = Command::new(env!("CARGO"))
+        .args(["run", "--quiet", "--", "test", "--report", "html"])
+        .arg(&fixture_path)
+        .output()
+        .expect("failed to run gg test --report html");
+
+    assert!(
+        run.status.success(),
+        "gg test --report html failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr),
+    );
+
+    // Both trace and report should exist
+    assert!(trace_path.exists(), "Trace file should be auto-created by --report html");
+    assert!(report_path.exists(), "Report file should be created by --report html");
+
+    let html = std::fs::read_to_string(&report_path).expect("Failed to read report");
+    assert!(html.contains("Test Report"), "Report should contain title");
+    assert!(html.contains("PASS"), "Report should contain PASS status");
+    assert!(html.contains("3 passed"), "Report should show 3 passed");
+
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert!(stdout.contains("Report:"), "Should print report path");
+
+    // Clean up
+    let _ = std::fs::remove_file(&trace_path);
+    let _ = std::fs::remove_file(&report_path);
+    let _ = std::fs::remove_file(&c_path);
+    let _ = std::fs::remove_file(&exe_path);
+}

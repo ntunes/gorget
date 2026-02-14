@@ -2357,6 +2357,18 @@ The `--trace` flag works with `gg test` to produce a JSONL trace file (`<name>.t
 
 Enable with `gg test --trace <file>` or `directive trace` in the source file. `--no-trace` overrides both.
 
+#### HTML Report
+
+Generate a self-contained HTML report from trace data:
+
+```bash
+gg test --report html tests/test_basic.gg   # auto-enables --trace, produces .report.html
+gg report test_basic.trace.jsonl             # from an existing trace file
+gg report test_basic.trace.jsonl --output custom.html  # custom output path
+```
+
+The report shows a pass/fail summary with a pass-rate bar, a test table with status badges and durations, and expandable per-test function call traces. The HTML file is self-contained (inline CSS and JS) and works offline.
+
 ### 18.8 Process Testing
 
 ```gorget

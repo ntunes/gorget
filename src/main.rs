@@ -464,7 +464,7 @@ fn main() {
         println!("       gg <command> <file.gg>     Run a compiler command");
         println!("       gg                         Interactive REPL");
         println!("       gg --version               Print version");
-        println!("Commands: lex, parse, check, build, run, fmt");
+        println!("Commands: lex, parse, check, build, run, fmt, test, report");
         return;
     }
 
@@ -494,12 +494,56 @@ fn main() {
         process::exit(status.code().unwrap_or(1));
     }
 
+    // `gg report <file>.trace.jsonl` — generate HTML report from trace
+    if args[1] == "report" {
+        if args.len() < 3 {
+            eprintln!("Usage: gg report <file.trace.jsonl> [--output <path>]");
+            process::exit(1);
+        }
+        let trace_file = args.iter().skip(2).find(|a| !a.starts_with("--")).unwrap_or_else(|| {
+            eprintln!("Usage: gg report <file.trace.jsonl> [--output <path>]");
+            process::exit(1);
+        });
+        let trace_path = Path::new(trace_file);
+        // Parse optional --output
+        let output_path = {
+            let mut out: Option<PathBuf> = None;
+            let mut i = 2;
+            while i < args.len() {
+                if args[i] == "--output" && i + 1 < args.len() {
+                    out = Some(PathBuf::from(&args[i + 1]));
+                    i += 2;
+                } else if args[i].starts_with("--output=") {
+                    out = Some(PathBuf::from(&args[i]["--output=".len()..]));
+                    i += 1;
+                } else {
+                    i += 1;
+                }
+            }
+            out.unwrap_or_else(|| {
+                // Default: <stem>.report.html in the same directory
+                let stem = trace_path.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
+                // Strip .trace suffix if present (e.g. "test_basic.trace" -> "test_basic")
+                let stem = stem.strip_suffix(".trace").unwrap_or(stem);
+                let dir = trace_path.parent().unwrap_or(Path::new("."));
+                dir.join(format!("{stem}.report.html"))
+            })
+        };
+        gorget::report::generate_html_report(trace_path, &output_path)
+            .unwrap_or_else(|e| {
+                eprintln!("{e}");
+                process::exit(1);
+            });
+        println!("Report: {}", output_path.display());
+        return;
+    }
+
     if args.len() < 3 {
         eprintln!("Usage: gg <file.gg>              Run a script");
         eprintln!("       gg <command> <file.gg>     Run a compiler command");
         eprintln!("       gg                         Interactive REPL");
         eprintln!("       gg --version               Print version");
-        eprintln!("Commands: lex, parse, check, build, run, fmt");
+        eprintln!("Commands: lex, parse, check, build, run, fmt, test, report");
         process::exit(1);
     }
 
@@ -510,10 +554,31 @@ fn main() {
     let overflow_checked = args.iter().any(|a| a == "--overflow=checked");
     let trace = args.iter().any(|a| a == "--trace");
     let no_trace = args.iter().any(|a| a == "--no-trace");
-    let filename = args.iter().skip(2).find(|a| !a.starts_with("--")).unwrap_or_else(|| {
-        eprintln!("Usage: gg <command> <file.gg>");
-        process::exit(1);
-    });
+    // Find positional filename, skipping values of known flag pairs
+    let filename = {
+        let flags_with_values = ["--tag", "--exclude-tag", "--filter", "--report", "--output"];
+        let mut skip_next = false;
+        let mut found = None;
+        for arg in args.iter().skip(2) {
+            if skip_next {
+                skip_next = false;
+                continue;
+            }
+            if flags_with_values.contains(&arg.as_str()) {
+                skip_next = true;
+                continue;
+            }
+            if arg.starts_with("--") {
+                continue;
+            }
+            found = Some(arg);
+            break;
+        }
+        found.unwrap_or_else(|| {
+            eprintln!("Usage: gg <command> <file.gg>");
+            process::exit(1);
+        })
+    };
 
     let source = match fs::read_to_string(filename) {
         Ok(s) => s,
@@ -592,10 +657,11 @@ fn main() {
             process::exit(status.code().unwrap_or(1));
         }
         "test" => {
-            // Collect --tag values
+            // Collect --tag, --exclude-tag, --filter, --report values
             let mut test_tags = Vec::new();
             let mut test_exclude_tags = Vec::new();
             let mut test_name_filter: Option<String> = None;
+            let mut report_html = false;
             let mut i = 0;
             while i < args.len() {
                 if args[i] == "--tag" && i + 1 < args.len() {
@@ -616,10 +682,18 @@ fn main() {
                 } else if args[i].starts_with("--filter=") {
                     test_name_filter = Some(args[i]["--filter=".len()..].to_string());
                     i += 1;
+                } else if args[i] == "--report" && i + 1 < args.len() && args[i + 1] == "html" {
+                    report_html = true;
+                    i += 2;
+                } else if args[i] == "--report=html" {
+                    report_html = true;
+                    i += 1;
                 } else {
                     i += 1;
                 }
             }
+            // --report html implies --trace (unless --no-trace is explicit)
+            let trace = if report_html && !no_trace { true } else { trace };
             let exe_path = build(filename, &source, false, false, false, false, trace, no_trace, true, &test_tags, &test_exclude_tags, test_name_filter.as_deref());
             let status = Command::new(&exe_path)
                 .status()
@@ -627,6 +701,21 @@ fn main() {
                     eprintln!("Failed to execute {}: {e}", exe_path.display());
                     process::exit(1);
                 });
+            // Generate HTML report if requested
+            if report_html && trace {
+                let input_path = Path::new(filename);
+                let dir = input_path.parent().unwrap_or(Path::new("."));
+                let stem = input_path.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
+                let trace_path = dir.join(format!("{stem}.trace.jsonl"));
+                let report_path = dir.join(format!("{stem}.report.html"));
+                if trace_path.exists() {
+                    gorget::report::generate_html_report(&trace_path, &report_path)
+                        .unwrap_or_else(|e| {
+                            eprintln!("Report generation failed: {e}");
+                        });
+                    println!("Report: {}", report_path.display());
+                }
+            }
             process::exit(status.code().unwrap_or(1));
         }
         "fmt" => {
@@ -643,7 +732,7 @@ fn main() {
         }
         _ => {
             eprintln!("Unknown command: {command}");
-            eprintln!("Commands: lex, parse, check, build, run, test, fmt");
+            eprintln!("Commands: lex, parse, check, build, run, test, fmt, report");
             process::exit(1);
         }
     }

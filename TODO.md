@@ -15,9 +15,6 @@
 ## Medium Priority — Stdlib gaps
 - `std.fs`: `mkdir`, `rmdir`, `rename`, `copy_file`, `file_size`, `is_dir` [added: 2026-02-14]
 
-## Medium Priority — Reporting (Phase 3)
-- HTML report generation — Robot Framework-style `report.html` from trace JSONL. Test pass/fail summary page, expandable execution trace per test (function calls, return values). `gg test --report html` flag. [added: 2026-02-14]
-
 ## Medium Priority — General-purpose I/O Libraries (Phase 4)
 - SSH library (`std.net.ssh`) — `Session` struct, `.run(cmd) -> str`, `.close()`, automatic teardown. C backend via libssh2 or popen("ssh ..."). [added: 2026-02-14]
 - HTTP client library (`std.net.http`) — `Client` struct, `.get()`, `.post()`, response status/body. C backend via libcurl or minimal HTTP client. [added: 2026-02-14]
