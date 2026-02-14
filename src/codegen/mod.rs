@@ -185,11 +185,12 @@ impl CodegenContext<'_> {
 }
 
 /// Escape a string for embedding in a C string literal.
+/// Note: does NOT double `%` — callers pass the result to `__gorget_trace_json_str`
+/// (which uses `fputc`), not to `fprintf` format strings.
 pub fn c_string_escape(s: &str) -> String {
     s.replace('\\', "\\\\")
         .replace('"', "\\\"")
         .replace('\n', "\\n")
-        .replace('%', "%%")
 }
 
 /// Generate C source code from a parsed and analyzed Gorget module.
