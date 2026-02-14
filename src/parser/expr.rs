@@ -258,7 +258,7 @@ impl Parser {
             // Unary not
             Token::Keyword(Keyword::Not) => {
                 self.advance();
-                let operand = self.parse_expr_bp(14)?; // high precedence
+                let operand = self.parse_expr_bp(20)?; // high precedence
                 let end = operand.span;
                 Ok(Spanned::new(
                     Expr::UnaryOp {
@@ -272,7 +272,7 @@ impl Parser {
             // Unary negation
             Token::Minus => {
                 self.advance();
-                let operand = self.parse_expr_bp(23)?;
+                let operand = self.parse_expr_bp(33)?;
                 let end = operand.span;
                 Ok(Spanned::new(
                     Expr::UnaryOp {
@@ -286,7 +286,7 @@ impl Parser {
             // Dereference
             Token::Star => {
                 self.advance();
-                let operand = self.parse_expr_bp(23)?;
+                let operand = self.parse_expr_bp(33)?;
                 let end = operand.span;
                 Ok(Spanned::new(
                     Expr::Deref {
@@ -303,7 +303,7 @@ impl Parser {
                 if self.check(&Token::LParen) {
                     return self.parse_closure(true, false, start);
                 }
-                let operand = self.parse_expr_bp(23)?;
+                let operand = self.parse_expr_bp(33)?;
                 let end = operand.span;
                 Ok(Spanned::new(
                     Expr::Move {
@@ -313,10 +313,24 @@ impl Parser {
                 ))
             }
 
+            // Bitwise NOT
+            Token::Tilde => {
+                self.advance();
+                let operand = self.parse_expr_bp(33)?;
+                let end = operand.span;
+                Ok(Spanned::new(
+                    Expr::UnaryOp {
+                        op: UnaryOp::BitNot,
+                        operand: Box::new(operand),
+                    },
+                    start.merge(end),
+                ))
+            }
+
             // Mutable borrow (& or mutable keyword)
             Token::Ampersand | Token::Keyword(Keyword::Mutable) => {
                 self.advance();
-                let operand = self.parse_expr_bp(23)?;
+                let operand = self.parse_expr_bp(33)?;
                 let end = operand.span;
                 Ok(Spanned::new(
                     Expr::MutableBorrow {
@@ -469,7 +483,8 @@ impl Parser {
             // Assignment operators are handled as statements, not expressions
             Token::Eq | Token::PlusEq | Token::MinusEq | Token::StarEq | Token::SlashEq
             | Token::PercentEq | Token::PlusPercentEq | Token::MinusPercentEq
-            | Token::StarPercentEq => {
+            | Token::StarPercentEq | Token::AmpersandEq | Token::PipeEq
+            | Token::CaretEq | Token::LtLtEq | Token::GtGtEq => {
                 return None;
             }
 
@@ -494,19 +509,40 @@ impl Parser {
                 op: InfixOp::Binary(BinaryOp::And),
             },
 
+            // Bitwise OR
+            Token::Pipe => InfixBP {
+                left: 9,
+                right: 10,
+                op: InfixOp::Binary(BinaryOp::BitOr),
+            },
+
+            // Bitwise XOR
+            Token::Caret => InfixBP {
+                left: 11,
+                right: 12,
+                op: InfixOp::Binary(BinaryOp::BitXor),
+            },
+
+            // Bitwise AND
+            Token::Ampersand => InfixBP {
+                left: 13,
+                right: 14,
+                op: InfixOp::Binary(BinaryOp::BitAnd),
+            },
+
             // is / is not
             Token::Keyword(Keyword::Is) => {
                 // Check for "is not"
                 if matches!(self.peek_ahead(1), Token::Keyword(Keyword::Not)) {
                     InfixBP {
-                        left: 9,
-                        right: 10,
+                        left: 15,
+                        right: 16,
                         op: InfixOp::IsNot,
                     }
                 } else {
                     InfixBP {
-                        left: 9,
-                        right: 10,
+                        left: 15,
+                        right: 16,
                         op: InfixOp::Is,
                     }
                 }
@@ -514,94 +550,106 @@ impl Parser {
 
             // Comparison
             Token::EqEq => InfixBP {
-                left: 11,
-                right: 12,
+                left: 17,
+                right: 18,
                 op: InfixOp::Binary(BinaryOp::Eq),
             },
             Token::BangEq => InfixBP {
-                left: 11,
-                right: 12,
+                left: 17,
+                right: 18,
                 op: InfixOp::Binary(BinaryOp::Neq),
             },
             Token::Lt => InfixBP {
-                left: 13,
-                right: 14,
+                left: 19,
+                right: 20,
                 op: InfixOp::Binary(BinaryOp::Lt),
             },
             Token::Gt => InfixBP {
-                left: 13,
-                right: 14,
+                left: 19,
+                right: 20,
                 op: InfixOp::Binary(BinaryOp::Gt),
             },
             Token::LtEq => InfixBP {
-                left: 13,
-                right: 14,
+                left: 19,
+                right: 20,
                 op: InfixOp::Binary(BinaryOp::LtEq),
             },
             Token::GtEq => InfixBP {
-                left: 13,
-                right: 14,
+                left: 19,
+                right: 20,
                 op: InfixOp::Binary(BinaryOp::GtEq),
             },
 
             // in
             Token::Keyword(Keyword::In) => InfixBP {
-                left: 15,
-                right: 16,
+                left: 21,
+                right: 22,
                 op: InfixOp::Binary(BinaryOp::In),
             },
 
             // Range
             Token::DotDot | Token::DotDotEq => return None, // handled specially
 
+            // Shifts
+            Token::LtLt => InfixBP {
+                left: 25,
+                right: 26,
+                op: InfixOp::Binary(BinaryOp::Shl),
+            },
+            Token::GtGt => InfixBP {
+                left: 25,
+                right: 26,
+                op: InfixOp::Binary(BinaryOp::Shr),
+            },
+
             // Additive
             Token::Plus => InfixBP {
-                left: 19,
-                right: 20,
+                left: 27,
+                right: 28,
                 op: InfixOp::Binary(BinaryOp::Add),
             },
             Token::Minus => InfixBP {
-                left: 19,
-                right: 20,
+                left: 27,
+                right: 28,
                 op: InfixOp::Binary(BinaryOp::Sub),
             },
             Token::PlusPercent => InfixBP {
-                left: 19,
-                right: 20,
+                left: 27,
+                right: 28,
                 op: InfixOp::Binary(BinaryOp::AddWrap),
             },
             Token::MinusPercent => InfixBP {
-                left: 19,
-                right: 20,
+                left: 27,
+                right: 28,
                 op: InfixOp::Binary(BinaryOp::SubWrap),
             },
 
             // Multiplicative
             Token::Star => InfixBP {
-                left: 21,
-                right: 22,
+                left: 29,
+                right: 30,
                 op: InfixOp::Binary(BinaryOp::Mul),
             },
             Token::StarPercent => InfixBP {
-                left: 21,
-                right: 22,
+                left: 29,
+                right: 30,
                 op: InfixOp::Binary(BinaryOp::MulWrap),
             },
             Token::Slash => InfixBP {
-                left: 21,
-                right: 22,
+                left: 29,
+                right: 30,
                 op: InfixOp::Binary(BinaryOp::Div),
             },
             Token::Percent => InfixBP {
-                left: 21,
-                right: 22,
+                left: 29,
+                right: 30,
                 op: InfixOp::Binary(BinaryOp::Mod),
             },
 
             // as (cast)
             Token::Keyword(Keyword::As) => InfixBP {
-                left: 23,
-                right: 24,
+                left: 31,
+                right: 32,
                 op: InfixOp::As,
             },
 
@@ -689,17 +737,17 @@ impl Parser {
     fn postfix_bp(&self) -> Option<u8> {
         match self.peek() {
             // Field access, method call
-            Token::Dot => Some(25),
+            Token::Dot => Some(35),
             // Optional chaining
-            Token::QuestionDot => Some(25),
+            Token::QuestionDot => Some(35),
             // Index
-            Token::LBracket => Some(25),
+            Token::LBracket => Some(35),
             // Function call
-            Token::LParen => Some(25),
+            Token::LParen => Some(35),
             // Try operator
-            Token::Question => Some(24),
+            Token::Question => Some(34),
             // Range operators
-            Token::DotDot | Token::DotDotEq => Some(17),
+            Token::DotDot | Token::DotDotEq => Some(23),
             _ => None,
         }
     }
@@ -867,7 +915,7 @@ impl Parser {
             Token::DotDot => {
                 self.advance();
                 let end_expr = if self.is_expr_start() {
-                    Some(Box::new(self.parse_expr_bp(18)?))
+                    Some(Box::new(self.parse_expr_bp(24)?))
                 } else {
                     None
                 };
@@ -884,7 +932,7 @@ impl Parser {
 
             Token::DotDotEq => {
                 self.advance();
-                let end_expr = self.parse_expr_bp(18)?;
+                let end_expr = self.parse_expr_bp(24)?;
                 let end = end_expr.span;
                 Ok(Spanned::new(
                     Expr::Range {
@@ -1457,6 +1505,7 @@ impl Parser {
                 | Token::Star
                 | Token::Bang
                 | Token::Ampersand
+                | Token::Tilde
                 | Token::Keyword(Keyword::True)
                 | Token::Keyword(Keyword::False)
                 | Token::Keyword(Keyword::None)

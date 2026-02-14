@@ -1760,6 +1760,11 @@ fn compound_op_to_c(op: BinaryOp) -> &'static str {
         BinaryOp::Mul | BinaryOp::MulWrap => "*=",
         BinaryOp::Div => "/=",
         BinaryOp::Mod => "%=",
+        BinaryOp::BitAnd => "&=",
+        BinaryOp::BitOr => "|=",
+        BinaryOp::BitXor => "^=",
+        BinaryOp::Shl => "<<=",
+        BinaryOp::Shr => ">>=",
         _ => "/* ?? */=",
     }
 }

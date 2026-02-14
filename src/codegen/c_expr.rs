@@ -89,6 +89,7 @@ impl CodegenContext<'_> {
                 match op {
                     UnaryOp::Neg => format!("(-{inner})"),
                     UnaryOp::Not => format!("(!{inner})"),
+                    UnaryOp::BitNot => format!("(~{inner})"),
                     UnaryOp::Deref => format!("(*{inner})"),
                 }
             }
@@ -4575,6 +4576,11 @@ fn binary_op_to_c(op: BinaryOp) -> &'static str {
         BinaryOp::GtEq => ">=",
         BinaryOp::And => "&&",
         BinaryOp::Or => "||",
+        BinaryOp::BitAnd => "&",
+        BinaryOp::BitOr => "|",
+        BinaryOp::BitXor => "^",
+        BinaryOp::Shl => "<<",
+        BinaryOp::Shr => ">>",
         BinaryOp::In => panic!("`in` as a binary expression is not yet implemented in codegen")
     }
 }

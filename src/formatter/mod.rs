@@ -1476,6 +1476,11 @@ fn binary_op_str(op: BinaryOp) -> &'static str {
         BinaryOp::GtEq => ">=",
         BinaryOp::And => "and",
         BinaryOp::Or => "or",
+        BinaryOp::BitAnd => "&",
+        BinaryOp::BitOr => "|",
+        BinaryOp::BitXor => "^",
+        BinaryOp::Shl => "<<",
+        BinaryOp::Shr => ">>",
         BinaryOp::In => "in",
     }
 }
@@ -1490,6 +1495,11 @@ fn compound_op_str(op: BinaryOp) -> &'static str {
         BinaryOp::AddWrap => "+%=",
         BinaryOp::SubWrap => "-%=",
         BinaryOp::MulWrap => "*%=",
+        BinaryOp::BitAnd => "&=",
+        BinaryOp::BitOr => "|=",
+        BinaryOp::BitXor => "^=",
+        BinaryOp::Shl => "<<=",
+        BinaryOp::Shr => ">>=",
         _ => "=",
     }
 }
@@ -1498,6 +1508,7 @@ fn unary_op_str(op: UnaryOp) -> &'static str {
     match op {
         UnaryOp::Neg => "-",
         UnaryOp::Not => "not ",
+        UnaryOp::BitNot => "~",
         UnaryOp::Deref => "*",
     }
 }

@@ -350,6 +350,7 @@ impl<'a> TypeChecker<'a> {
                 match op {
                     UnaryOp::Neg => operand_type, // same numeric type
                     UnaryOp::Not => self.types.bool_id,
+                    UnaryOp::BitNot => operand_type, // same integer type
                     UnaryOp::Deref => operand_type, // deref is ownership, checked later
                 }
             }
@@ -380,6 +381,11 @@ impl<'a> TypeChecker<'a> {
                     // Arithmetic operators — result is same type
                     BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod
                     | BinaryOp::AddWrap | BinaryOp::SubWrap | BinaryOp::MulWrap => {
+                        self.unify(left_type, right_type, expr.span)
+                    }
+                    // Bitwise operators — result is same type
+                    BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor
+                    | BinaryOp::Shl | BinaryOp::Shr => {
                         self.unify(left_type, right_type, expr.span)
                     }
                 }

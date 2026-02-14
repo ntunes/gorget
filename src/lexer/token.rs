@@ -61,6 +61,20 @@ pub enum RawToken {
     MinusPercent,
     #[token("*%")]
     StarPercent,
+    #[token("<<=")]
+    LtLtEq,
+    #[token(">>=")]
+    GtGtEq,
+    #[token("<<")]
+    LtLt,
+    #[token(">>")]
+    GtGt,
+    #[token("&=")]
+    AmpersandEq,
+    #[token("|=")]
+    PipeEq,
+    #[token("^=")]
+    CaretEq,
 
     // ── Single-char operators & delimiters ────────────────────
     #[token("+")]
@@ -107,6 +121,10 @@ pub enum RawToken {
     At,
     #[token("|")]
     Pipe,
+    #[token("^")]
+    Caret,
+    #[token("~")]
+    Tilde,
     #[token("_")]
     Underscore,
 
@@ -168,6 +186,15 @@ impl fmt::Display for RawToken {
             RawToken::Ampersand => write!(f, "'&'"),
             RawToken::At => write!(f, "'@'"),
             RawToken::Pipe => write!(f, "'|'"),
+            RawToken::Caret => write!(f, "'^'"),
+            RawToken::Tilde => write!(f, "'~'"),
+            RawToken::LtLt => write!(f, "'<<'"),
+            RawToken::GtGt => write!(f, "'>>'"),
+            RawToken::LtLtEq => write!(f, "'<<='"),
+            RawToken::GtGtEq => write!(f, "'>>='"),
+            RawToken::AmpersandEq => write!(f, "'&='"),
+            RawToken::PipeEq => write!(f, "'|='"),
+            RawToken::CaretEq => write!(f, "'^='"),
             RawToken::Underscore => write!(f, "'_'"),
             RawToken::Newline => write!(f, "newline"),
             RawToken::Identifier => write!(f, "identifier"),
@@ -517,6 +544,8 @@ pub enum Token {
     Bang,
     Ampersand,
     Pipe,
+    Caret,
+    Tilde,
     Dot,
     Question,
     At,
@@ -527,6 +556,13 @@ pub enum Token {
     BangEq,
     LtEq,
     GtEq,
+    LtLt,
+    GtGt,
+    LtLtEq,
+    GtGtEq,
+    AmpersandEq,
+    PipeEq,
+    CaretEq,
     PlusEq,
     MinusEq,
     StarEq,
@@ -592,6 +628,8 @@ impl fmt::Display for Token {
             Token::Bang => write!(f, "'!'"),
             Token::Ampersand => write!(f, "'&'"),
             Token::Pipe => write!(f, "'|'"),
+            Token::Caret => write!(f, "'^'"),
+            Token::Tilde => write!(f, "'~'"),
             Token::Dot => write!(f, "'.'"),
             Token::Question => write!(f, "'?'"),
             Token::At => write!(f, "'@'"),
@@ -600,6 +638,13 @@ impl fmt::Display for Token {
             Token::BangEq => write!(f, "'!='"),
             Token::LtEq => write!(f, "'<='"),
             Token::GtEq => write!(f, "'>='"),
+            Token::LtLt => write!(f, "'<<'"),
+            Token::GtGt => write!(f, "'>>'"),
+            Token::LtLtEq => write!(f, "'<<='"),
+            Token::GtGtEq => write!(f, "'>>='"),
+            Token::AmpersandEq => write!(f, "'&='"),
+            Token::PipeEq => write!(f, "'|='"),
+            Token::CaretEq => write!(f, "'^='"),
             Token::PlusEq => write!(f, "'+='"),
             Token::MinusEq => write!(f, "'-='"),
             Token::StarEq => write!(f, "'*='"),

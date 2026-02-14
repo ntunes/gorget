@@ -604,6 +604,7 @@ pub struct CallArg {
 pub enum UnaryOp {
     Neg,
     Not,
+    BitNot,
     Deref,
 }
 
@@ -617,6 +618,11 @@ pub enum BinaryOp {
     AddWrap,
     SubWrap,
     MulWrap,
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    Shr,
     Eq,
     Neq,
     Lt,

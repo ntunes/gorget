@@ -1,0 +1,27 @@
+void main():
+    # Basic bitwise operations
+    print("{5 & 3}")
+    print("{5 | 3}")
+    print("{5 ^ 3}")
+    print("{~0}")
+    print("{1 << 4}")
+    print("{16 >> 2}")
+
+    # Compound assignment
+    int x = 255
+    x &= 15
+    print("{x}")
+    x |= 48
+    print("{x}")
+    x ^= 33
+    print("{x}")
+    x <<= 2
+    print("{x}")
+    x >>= 3
+    print("{x}")
+
+    # Precedence: bitwise AND binds tighter than OR
+    print("{3 | 4 & 6}")
+
+    # Combining with arithmetic
+    print("{1 << 3 + 1}")

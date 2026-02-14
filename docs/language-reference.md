@@ -252,6 +252,17 @@ Type: `Option[T]` for some inferred `T`.
 | `/`    | Division        |
 | `%`    | Modulo          |
 
+**Bitwise:**
+
+| Symbol | Name            |
+|--------|-----------------|
+| `&`    | Bitwise AND     |
+| `\|`   | Bitwise OR      |
+| `^`    | Bitwise XOR     |
+| `~`    | Bitwise NOT     |
+| `<<`   | Left shift      |
+| `>>`   | Right shift     |
+
 **Comparison:**
 
 | Symbol | Name               |
@@ -306,6 +317,11 @@ Both operator and keyword forms are equivalent and may be used interchangeably.
 | `*=`   | Multiply-assign    |
 | `/=`   | Divide-assign      |
 | `%=`   | Modulo-assign      |
+| `&=`   | Bitwise AND-assign |
+| `\|=`  | Bitwise OR-assign  |
+| `^=`   | Bitwise XOR-assign |
+| `<<=`  | Left shift-assign  |
+| `>>=`  | Right shift-assign |
 
 **Delimiters:**
 
@@ -819,12 +835,15 @@ s = "world"          # s is live again
 ### 6.3 Compound Assignment
 
 ```ebnf
-compound_assign_stmt = expr ( "+=" | "-=" | "*=" | "/=" | "%=" ) expr NEWLINE ;
+compound_assign_stmt = expr ( "+=" | "-=" | "*=" | "/=" | "%="
+                            | "&=" | "|=" | "^=" | "<<=" | ">>=" ) expr NEWLINE ;
 ```
 
 ```gorget
 x += 1
 total *= factor
+x &= 0xFF
+x <<= 4
 ```
 
 ### 6.4 Expression Statements
@@ -1014,14 +1033,18 @@ From lowest to highest precedence:
 | 1          | `or`                         | Left          |
 | 2          | `and`                        | Left          |
 | 3          | `not`                        | Unary (prefix)|
-| 4          | `==` `!=` `<` `>` `<=` `>=` `is` `in` | Non-associative |
-| 5          | `??`                         | Left          |
-| 6          | `..` `..=`                   | Non-associative |
-| 7          | `+` `-`                      | Left          |
-| 8          | `*` `/` `%`                  | Left          |
-| 9          | Unary `-` `!` `&` `*`       | Unary (prefix)|
-| 10         | `?.` `.` `()` `[]`           | Left          |
-| 11         | Atoms (literals, identifiers, grouped expressions) | — |
+| 4          | `\|` (bitwise OR)            | Left          |
+| 5          | `^` (bitwise XOR)            | Left          |
+| 6          | `&` (bitwise AND)            | Left          |
+| 7          | `==` `!=` `<` `>` `<=` `>=` `is` `in` | Non-associative |
+| 8          | `??`                         | Left          |
+| 9          | `..` `..=`                   | Non-associative |
+| 10         | `<<` `>>`                    | Left          |
+| 11         | `+` `-`                      | Left          |
+| 12         | `*` `/` `%`                  | Left          |
+| 13         | Unary `-` `~` `!` `&` `*`   | Unary (prefix)|
+| 14         | `?.` `.` `()` `[]`           | Left          |
+| 15         | Atoms (literals, identifiers, grouped expressions) | — |
 
 ### 7.2 Literals
 
@@ -1039,13 +1062,14 @@ An identifier resolves to a variable, function, type, or constant in scope. A pa
 ### 7.4 Unary Operators
 
 ```ebnf
-unary_expr = ( "-" | "not" | "*" ) expr ;
+unary_expr = ( "-" | "not" | "~" | "*" ) expr ;
 ```
 
 | Operator | Name        | Operand type     | Result type      |
 |----------|-------------|------------------|------------------|
 | `-`      | Negation    | Numeric          | Same as operand  |
 | `not`    | Logical NOT | `bool`           | `bool`           |
+| `~`      | Bitwise NOT | Integer          | Same as operand  |
 | `*`      | Dereference | Pointer/smart ptr | Inner type      |
 
 ### 7.5 Binary Operators
@@ -1053,10 +1077,11 @@ unary_expr = ( "-" | "not" | "*" ) expr ;
 ```ebnf
 binary_expr = expr op expr ;
 op = "+" | "-" | "*" | "/" | "%" | "==" | "!=" | "<" | ">"
-   | "<=" | ">=" | "and" | "or" | "in" ;
+   | "<=" | ">=" | "and" | "or" | "in"
+   | "&" | "|" | "^" | "<<" | ">>" ;
 ```
 
-Arithmetic operators require matching numeric types. Comparison operators produce `bool`. Logical operators require `bool` operands.
+Arithmetic operators require matching numeric types. Comparison operators produce `bool`. Logical operators require `bool` operands. Bitwise operators require matching integer types and produce the same type.
 
 The `+` and `+=` operators also work on strings, producing a new concatenated string:
 
@@ -2590,7 +2615,8 @@ statement = var_decl | expr_stmt | assign_stmt | compound_assign_stmt
 var_decl            = [ "const" ] ( type | "auto" ) pattern "=" expr NEWLINE ;
 expr_stmt           = expr NEWLINE ;
 assign_stmt         = expr "=" expr NEWLINE ;
-compound_assign_stmt = expr ( "+=" | "-=" | "*=" | "/=" | "%=" ) expr NEWLINE ;
+compound_assign_stmt = expr ( "+=" | "-=" | "*=" | "/=" | "%="
+                            | "&=" | "|=" | "^=" | "<<=" | ">>=" ) expr NEWLINE ;
 return_stmt         = "return" [ expr ] NEWLINE ;
 throw_stmt          = "throw" expr NEWLINE ;
 break_stmt          = "break" [ expr ] NEWLINE ;
