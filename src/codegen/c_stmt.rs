@@ -113,6 +113,27 @@ impl CodegenContext<'_> {
         result
     }
 
+    /// Look up trace info for a single variable by name.
+    /// Returns `(gorget_name, c_name, formatter)` if the variable is traceable.
+    fn lookup_var_trace_info(&self, name: &str) -> Option<(String, String, &'static str)> {
+        let def_id = self.scopes.lookup_by_name_anywhere(name)?;
+        let def = self.scopes.get_def(def_id);
+        match def.kind {
+            crate::semantic::scope::DefKind::Variable
+            | crate::semantic::scope::DefKind::Const => {}
+            _ => return None,
+        }
+        let type_id = def.type_id?;
+        let c_type = c_types::type_id_to_c(type_id, self.types, self.scopes);
+        if c_types::is_traceable_for_vars(&c_type) {
+            let formatter = c_types::trace_formatter_for_c_type(&c_type);
+            let c_name = c_mangle::escape_keyword(name);
+            Some((name.to_string(), c_name, formatter))
+        } else {
+            None
+        }
+    }
+
     /// Recursively walk an expression, collecting identifier references.
     /// `is_callee` is true when we're visiting the callee position of a Call.
     fn walk_expr_for_vars(
@@ -224,6 +245,28 @@ impl CodegenContext<'_> {
         emitter.emit_line("__gorget_trace_depth--;");
         emitter.emit_line(
             r#"fprintf(__gorget_trace_fp, "{\"type\":\"stmt_end\",\"depth\":%d}\n", __gorget_trace_depth);"#
+        );
+    }
+
+    /// Emit a stmt_end trace event with a result variable value.
+    fn emit_stmt_end_with_result(
+        &self,
+        result_info: &(String, String, &str),
+        emitter: &mut CEmitter,
+    ) {
+        let (gorget_name, c_name, formatter) = result_info;
+        emitter.emit_line("__gorget_trace_depth--;");
+        emitter.emit_line(
+            r#"fprintf(__gorget_trace_fp, "{\"type\":\"stmt_end\",\"vars\":{");"#
+        );
+        emitter.emit_line(&format!(
+            r#"fprintf(__gorget_trace_fp, "\"{gorget_name}\":");"#
+        ));
+        emitter.emit_line(&format!(
+            "{formatter}(__gorget_trace_fp, {c_name});"
+        ));
+        emitter.emit_line(
+            r#"fprintf(__gorget_trace_fp, "},\"depth\":%d}\n", __gorget_trace_depth);"#
         );
     }
 
@@ -372,15 +415,26 @@ impl CodegenContext<'_> {
             }
 
             Stmt::Assign { target, value } => {
-                if self.trace {
+                let result_info = if self.trace {
                     let vars = self.collect_expr_vars(&[&target.node, &value.node]);
                     self.emit_stmt_start(span, &vars, emitter);
-                }
+                    if let Expr::Identifier(name) = &target.node {
+                        self.lookup_var_trace_info(name)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
                 let t = self.gen_expr(target);
                 let v = self.gen_expr(value);
                 emitter.emit_line(&format!("{t} = {v};"));
                 if self.trace {
-                    self.emit_stmt_end(emitter);
+                    if let Some(ref ri) = result_info {
+                        self.emit_stmt_end_with_result(ri, emitter);
+                    } else {
+                        self.emit_stmt_end(emitter);
+                    }
                 }
             }
 
@@ -725,10 +779,13 @@ impl CodegenContext<'_> {
                 let escaped = c_mangle::escape_keyword(name);
                 let const_prefix = if is_const { "const " } else { "" };
 
-                if self.trace {
+                let result_info = if self.trace {
                     let vars = self.collect_expr_vars(&[&value.node]);
                     self.emit_stmt_start(span, &vars, emitter);
-                }
+                    self.lookup_var_trace_info(name)
+                } else {
+                    None
+                };
 
                 // Special handling for trait object construction:
                 // Box[dynamic Trait] x = Box.new(ConcreteType(...))
@@ -747,7 +804,11 @@ impl CodegenContext<'_> {
                         "{const_prefix}{trait_obj_type} {escaped} = {{ .data = (void*)__box_{escaped}, .vtable = &{vtable_instance} }};"
                     ));
                     if self.trace {
-                        self.emit_stmt_end(emitter);
+                        if let Some(ref ri) = result_info {
+                            self.emit_stmt_end_with_result(ri, emitter);
+                        } else {
+                            self.emit_stmt_end(emitter);
+                        }
                     }
                     return;
                 }
@@ -776,7 +837,11 @@ impl CodegenContext<'_> {
                             elems.join(", ")
                         ));
                         if self.trace {
-                            self.emit_stmt_end(emitter);
+                            if let Some(ref ri) = result_info {
+                                self.emit_stmt_end_with_result(ri, emitter);
+                            } else {
+                                self.emit_stmt_end(emitter);
+                            }
                         }
                         return;
                     }
@@ -800,7 +865,11 @@ impl CodegenContext<'_> {
                         ));
                     }
                     if self.trace {
-                        self.emit_stmt_end(emitter);
+                        if let Some(ref ri) = result_info {
+                            self.emit_stmt_end_with_result(ri, emitter);
+                        } else {
+                            self.emit_stmt_end(emitter);
+                        }
                     }
                     return;
                 }
@@ -818,7 +887,11 @@ impl CodegenContext<'_> {
                         elems.join(", ")
                     ));
                     if self.trace {
-                        self.emit_stmt_end(emitter);
+                        if let Some(ref ri) = result_info {
+                            self.emit_stmt_end_with_result(ri, emitter);
+                        } else {
+                            self.emit_stmt_end(emitter);
+                        }
                     }
                     return;
                 }
@@ -836,7 +909,11 @@ impl CodegenContext<'_> {
                 emitter.emit_line(&format!("{const_prefix}{decl} = {val};"));
 
                 if self.trace {
-                    self.emit_stmt_end(emitter);
+                    if let Some(ref ri) = result_info {
+                        self.emit_stmt_end_with_result(ri, emitter);
+                    } else {
+                        self.emit_stmt_end(emitter);
+                    }
                 }
 
                 // Register droppable variable for RAII cleanup

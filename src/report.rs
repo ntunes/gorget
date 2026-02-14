@@ -12,7 +12,7 @@ pub enum TraceEvent {
     Return { function: String, depth: i32 },
     Loop { kind: String, detail: String, depth: i32 },
     StmtStart { src: String, vars: Value, depth: i32 },
-    StmtEnd { depth: i32 },
+    StmtEnd { depth: i32, vars: Value },
     Branch { kind: String, depth: i32, src: String, vars: Value },
 }
 
@@ -22,6 +22,7 @@ pub enum TraceEvent {
 struct TraceNode {
     event: TraceEvent,
     children: Vec<TraceNode>,
+    result_vars: Option<Value>,
 }
 
 // ── Trace parser ─────────────────────────────────────────────
@@ -117,6 +118,18 @@ fn substitute_vars(src: &str, vars: &Value) -> Option<String> {
     if changed { Some(result) } else { None }
 }
 
+/// Substitute the assigned value into an assignment statement.
+/// Given source like `auto result = factorial(3)` and vars `{"result": 6}`,
+/// produces `auto result = 6`.
+fn substitute_result(src: &str, result_vars: &Value) -> Option<String> {
+    let obj = result_vars.as_object()?;
+    let (_name, value) = obj.iter().next()?;
+    let formatted = format_json_value(value);
+    let eq_pos = src.find(" = ")?;
+    let result = format!("{} = {}", &src[..eq_pos], formatted);
+    if result == *src { None } else { Some(result) }
+}
+
 fn parse_trace_line(line: &str) -> Option<TraceEvent> {
     let line = line.trim();
     if line.is_empty() || !line.starts_with('{') {
@@ -169,7 +182,8 @@ fn parse_trace_line(line: &str) -> Option<TraceEvent> {
         }
         "stmt_end" | "assert_end" => {
             let depth = obj["depth"].as_i64().unwrap_or(0) as i32;
-            Some(TraceEvent::StmtEnd { depth })
+            let vars = obj.get("vars").cloned().unwrap_or(Value::Null);
+            Some(TraceEvent::StmtEnd { depth, vars })
         }
         "branch" => {
             let kind = obj["kind"].as_str().unwrap_or("if").to_string();
@@ -256,6 +270,7 @@ fn build_tree(events: Vec<TraceEvent>) -> Vec<TraceNode> {
                 stack.last_mut().unwrap().3.push(TraceNode {
                     event: ev,
                     children,
+                    result_vars: None,
                 });
             }
         }
@@ -270,9 +285,15 @@ fn build_tree(events: Vec<TraceEvent>) -> Vec<TraceNode> {
                 if stack.len() > 1 {
                     let (opener, _, _, children) = stack.pop().unwrap();
                     if let Some(opener_ev) = opener {
+                        let result_vars = if let TraceEvent::StmtEnd { vars, .. } = &event {
+                            if vars.is_null() { None } else { Some(vars.clone()) }
+                        } else {
+                            None
+                        };
                         stack.last_mut().unwrap().3.push(TraceNode {
                             event: opener_ev,
                             children,
+                            result_vars,
                         });
                     }
                 }
@@ -289,6 +310,7 @@ fn build_tree(events: Vec<TraceEvent>) -> Vec<TraceNode> {
                 stack.last_mut().unwrap().3.push(TraceNode {
                     event,
                     children: Vec::new(),
+                    result_vars: None,
                 });
             }
         }
@@ -301,6 +323,7 @@ fn build_tree(events: Vec<TraceEvent>) -> Vec<TraceNode> {
             stack.last_mut().unwrap().3.push(TraceNode {
                 event: ev,
                 children,
+                result_vars: None,
             });
         }
     }
@@ -483,9 +506,16 @@ fn render_tree_html(nodes: &[TraceNode], id_counter: &mut usize, depth: usize) -
     for node in nodes {
         let has_children = !node.children.is_empty();
         let subst = node_substitution(&node.event);
+        let result_subst = node.result_vars.as_ref().and_then(|rv| {
+            if let TraceEvent::StmtStart { src, .. } = &node.event {
+                substitute_result(src, rv)
+            } else {
+                None
+            }
+        });
 
         // A node is expandable if it has children OR a variable substitution
-        let is_expandable = (has_children || subst.is_some())
+        let is_expandable = (has_children || subst.is_some() || result_subst.is_some())
             && matches!(
                 &node.event,
                 TraceEvent::Call { .. }
@@ -510,6 +540,12 @@ fn render_tree_html(nodes: &[TraceNode], id_counter: &mut usize, depth: usize) -
                 html.push_str(&format!(
                     "<div class=\"subst-text\" style=\"padding-left:{label_pad}ch\">{}</div>\n",
                     html_escape(subst_text),
+                ));
+            }
+            if let Some(ref result_text) = result_subst {
+                html.push_str(&format!(
+                    "<div class=\"subst-text\" style=\"padding-left:{label_pad}ch\">{}</div>\n",
+                    html_escape(result_text),
                 ));
             }
             html.push_str(&render_tree_html(&node.children, id_counter, depth + 1));
@@ -885,7 +921,7 @@ mod tests {
     fn parse_stmt_end_event() {
         let line = r#"{"type":"stmt_end","depth":0}"#;
         let event = parse_trace_line(line).unwrap();
-        assert!(matches!(event, TraceEvent::StmtEnd { depth: 0 }));
+        assert!(matches!(event, TraceEvent::StmtEnd { depth: 0, .. }));
     }
 
     #[test]
@@ -948,7 +984,7 @@ mod tests {
         let events = vec![
             TraceEvent::Call { function: "add".into(), args: json!({"a": 1}), depth: 0 },
             TraceEvent::StmtStart { src: "auto r = 3".into(), vars: Value::Null, depth: 1 },
-            TraceEvent::StmtEnd { depth: 1 },
+            TraceEvent::StmtEnd { depth: 1, vars: Value::Null },
             TraceEvent::Return { function: "add".into(), depth: 0 },
         ];
         let tree = build_tree(events);
@@ -978,13 +1014,13 @@ mod tests {
         let events = vec![
             TraceEvent::Call { function: "sum".into(), args: Value::Null, depth: 0 },
             TraceEvent::StmtStart { src: "auto t = 0".into(), vars: Value::Null, depth: 1 },
-            TraceEvent::StmtEnd { depth: 1 },
+            TraceEvent::StmtEnd { depth: 1, vars: Value::Null },
             TraceEvent::Loop { kind: "for".into(), detail: "i=1".into(), depth: 1 },
             TraceEvent::StmtStart { src: "t = t + i".into(), vars: Value::Null, depth: 1 },
-            TraceEvent::StmtEnd { depth: 1 },
+            TraceEvent::StmtEnd { depth: 1, vars: Value::Null },
             TraceEvent::Loop { kind: "for".into(), detail: "i=2".into(), depth: 1 },
             TraceEvent::StmtStart { src: "t = t + i".into(), vars: Value::Null, depth: 1 },
-            TraceEvent::StmtEnd { depth: 1 },
+            TraceEvent::StmtEnd { depth: 1, vars: Value::Null },
             TraceEvent::Return { function: "sum".into(), depth: 0 },
         ];
         let tree = build_tree(events);
@@ -1004,9 +1040,9 @@ mod tests {
         // stmt_start/stmt_end pairs without inner calls produce leaf nodes
         let events = vec![
             TraceEvent::StmtStart { src: "assert 1 == 1".into(), vars: Value::Null, depth: 0 },
-            TraceEvent::StmtEnd { depth: 0 },
+            TraceEvent::StmtEnd { depth: 0, vars: Value::Null },
             TraceEvent::StmtStart { src: "assert 2 == 2".into(), vars: Value::Null, depth: 0 },
-            TraceEvent::StmtEnd { depth: 0 },
+            TraceEvent::StmtEnd { depth: 0, vars: Value::Null },
         ];
         let tree = build_tree(events);
         assert_eq!(tree.len(), 2);
@@ -1021,7 +1057,7 @@ mod tests {
             TraceEvent::StmtStart { src: "auto x = add(1, 2)".into(), vars: Value::Null, depth: 0 },
             TraceEvent::Call { function: "add".into(), args: json!({"a": 1, "b": 2}), depth: 1 },
             TraceEvent::Return { function: "add".into(), depth: 1 },
-            TraceEvent::StmtEnd { depth: 0 },
+            TraceEvent::StmtEnd { depth: 0, vars: Value::Null },
         ];
         let tree = build_tree(events);
         assert_eq!(tree.len(), 1); // one StmtStart node
@@ -1122,7 +1158,7 @@ mod tests {
         // A StmtStart with vars but no children should still be expandable in the rendered HTML
         let events = vec![
             TraceEvent::StmtStart { src: "return n + 1".into(), vars: json!({"n": 5}), depth: 0 },
-            TraceEvent::StmtEnd { depth: 0 },
+            TraceEvent::StmtEnd { depth: 0, vars: Value::Null },
         ];
         let tree = build_tree(events);
         assert_eq!(tree.len(), 1);
@@ -1180,7 +1216,7 @@ mod tests {
         let events = vec![
             TraceEvent::Call { function: "main".to_string(), args: Value::Null, depth: 0 },
             TraceEvent::StmtStart { src: "auto x = 1".into(), vars: Value::Null, depth: 1 },
-            TraceEvent::StmtEnd { depth: 1 },
+            TraceEvent::StmtEnd { depth: 1, vars: Value::Null },
             TraceEvent::Return { function: "main".to_string(), depth: 0 },
         ];
         let report = build_report(events);
@@ -1232,5 +1268,67 @@ mod tests {
         // Both {var} interpolation and bare var in the same source
         let result = substitute_vars(r#"print("{x} is " + x)"#, &json!({"x": 42}));
         assert_eq!(result, Some(r#"print("42 is " + 42)"#.to_string()));
+    }
+
+    #[test]
+    fn substitute_result_simple() {
+        let result = substitute_result("auto result = factorial(3)", &json!({"result": 6}));
+        assert_eq!(result, Some("auto result = 6".to_string()));
+    }
+
+    #[test]
+    fn substitute_result_not_traceable() {
+        // When the RHS would be the same as source, returns None
+        let result = substitute_result("auto result = 6", &json!({"result": 6}));
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn substitute_result_string() {
+        let result = substitute_result(r#"auto name = get_name()"#, &json!({"name": "Alice"}));
+        assert_eq!(result, Some(r#"auto name = "Alice""#.to_string()));
+    }
+
+    #[test]
+    fn substitute_result_no_eq() {
+        // Source without " = " returns None
+        let result = substitute_result("print(x)", &json!({"x": 1}));
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn build_tree_stmt_with_result_vars() {
+        // StmtEnd with vars should flow through tree builder into TraceNode.result_vars
+        let events = vec![
+            TraceEvent::StmtStart { src: "auto result = factorial(3)".into(), vars: Value::Null, depth: 0 },
+            TraceEvent::Call { function: "factorial".into(), args: json!({"n": 3}), depth: 1 },
+            TraceEvent::Return { function: "factorial".into(), depth: 1 },
+            TraceEvent::StmtEnd { depth: 0, vars: json!({"result": 6}) },
+        ];
+        let tree = build_tree(events);
+        assert_eq!(tree.len(), 1);
+        // The StmtStart node should have result_vars
+        assert!(tree[0].result_vars.is_some());
+        assert_eq!(tree[0].result_vars.as_ref().unwrap(), &json!({"result": 6}));
+        // Render and check for the result substitution line
+        let mut counter = 0;
+        let html = render_tree_html(&tree, &mut counter, 0);
+        assert!(html.contains("auto result = 6"), "should contain result substitution: {html}");
+        // Should have two subst-text divs is unlikely here since vars is Null, but result_subst should appear
+        let subst_count = html.matches("subst-text").count();
+        assert!(subst_count >= 1, "should have at least one subst-text div: {html}");
+    }
+
+    #[test]
+    fn parse_stmt_end_with_vars() {
+        let line = r#"{"type":"stmt_end","vars":{"result":6},"depth":0}"#;
+        let event = parse_trace_line(line).unwrap();
+        match event {
+            TraceEvent::StmtEnd { depth, vars } => {
+                assert_eq!(depth, 0);
+                assert_eq!(vars, json!({"result": 6}));
+            }
+            _ => panic!("expected StmtEnd"),
+        }
     }
 }
