@@ -1,0 +1,22 @@
+from std.collections import Dict, Vector
+
+void main():
+    Dict[str, int] d1 = Dict[str, int]()
+    d1.put("a", 1)
+    d1.put("b", 2)
+
+    Dict[str, int] d2 = Dict[str, int]()
+    d2.put("b", 20)
+    d2.put("c", 30)
+
+    d1.update(d2)
+    print("{d1.len()}")
+    print("{d1.get("a")}")
+    print("{d1.get("b")}")
+    print("{d1.get("c")}")
+
+    # get_or
+    int val = d1.get_or("a", 0)
+    print("{val}")
+    int missing = d1.get_or("z", 99)
+    print("{missing}")

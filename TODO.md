@@ -6,13 +6,6 @@
 ## High Priority — Language completeness
 - Real example program: a small but complete CLI tool or parser that exercises the language end-to-end [added: 2026-02-13]
 
-## Medium Priority — Built-in type methods (batch 2)
-- String: `.removeprefix(s)`, `.removesuffix(s)` [added: 2026-02-14]
-- String: `.pad_left(n, char?)`, `.pad_right(n, char?)` [added: 2026-02-14]
-- Char: `.to_upper()`, `.to_lower()`, `.is_upper()`, `.is_lower()` [added: 2026-02-14]
-- Option/Result: `.expect(msg)` [added: 2026-02-14]
-- Dict: `.update(other)`, `.get_or(key, default)` [added: 2026-02-14]
-- Set: `.is_subset(other)`, `.is_superset(other)` [added: 2026-02-14]
 
 ## Medium Priority — Stdlib gaps
 - `std.fs`: `mkdir`, `rmdir`, `rename`, `copy_file`, `file_size`, `is_dir` [added: 2026-02-14]

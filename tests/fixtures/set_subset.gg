@@ -1,0 +1,31 @@
+from std.collections import Set
+
+void main():
+    Set[int] a = Set[int]()
+    a.add(1)
+    a.add(2)
+    a.add(3)
+
+    Set[int] b = Set[int]()
+    b.add(1)
+    b.add(2)
+
+    Set[int] c = Set[int]()
+    c.add(1)
+    c.add(2)
+    c.add(3)
+    c.add(4)
+
+    # b is subset of a
+    print("{b.is_subset(a)}")
+    # a is not subset of b
+    print("{a.is_subset(b)}")
+    # a is subset of itself
+    print("{a.is_subset(c)}")
+
+    # a is superset of b
+    print("{a.is_superset(b)}")
+    # b is not superset of a
+    print("{b.is_superset(a)}")
+    # c is superset of a
+    print("{c.is_superset(a)}")

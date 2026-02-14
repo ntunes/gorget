@@ -248,6 +248,62 @@ static inline int64_t gorget_string_count(const char* s, const char* needle) {
     return count;
 }
 
+static inline const char* gorget_string_removeprefix(const char* s, const char* prefix) {
+    size_t slen = strlen(s), plen = strlen(prefix);
+    if (plen <= slen && memcmp(s, prefix, plen) == 0) {
+        size_t rlen = slen - plen;
+        char* out = (char*)malloc(rlen + 1);
+        memcpy(out, s + plen, rlen + 1);
+        return out;
+    }
+    char* out = (char*)malloc(slen + 1);
+    memcpy(out, s, slen + 1);
+    return out;
+}
+
+static inline const char* gorget_string_removesuffix(const char* s, const char* suffix) {
+    size_t slen = strlen(s), xlen = strlen(suffix);
+    if (xlen <= slen && memcmp(s + slen - xlen, suffix, xlen) == 0) {
+        size_t rlen = slen - xlen;
+        char* out = (char*)malloc(rlen + 1);
+        memcpy(out, s, rlen);
+        out[rlen] = '\0';
+        return out;
+    }
+    char* out = (char*)malloc(slen + 1);
+    memcpy(out, s, slen + 1);
+    return out;
+}
+
+static inline const char* gorget_string_pad_left(const char* s, int64_t width, char fill) {
+    size_t slen = strlen(s);
+    if ((int64_t)slen >= width) {
+        char* out = (char*)malloc(slen + 1);
+        memcpy(out, s, slen + 1);
+        return out;
+    }
+    size_t pad = (size_t)width - slen;
+    char* out = (char*)malloc((size_t)width + 1);
+    memset(out, fill, pad);
+    memcpy(out + pad, s, slen + 1);
+    return out;
+}
+
+static inline const char* gorget_string_pad_right(const char* s, int64_t width, char fill) {
+    size_t slen = strlen(s);
+    if ((int64_t)slen >= width) {
+        char* out = (char*)malloc(slen + 1);
+        memcpy(out, s, slen + 1);
+        return out;
+    }
+    size_t pad = (size_t)width - slen;
+    char* out = (char*)malloc((size_t)width + 1);
+    memcpy(out, s, slen);
+    memset(out + slen, fill, pad);
+    out[(size_t)width] = '\0';
+    return out;
+}
+
 static inline const char* gorget_string_repeat(const char* s, int64_t n) {
     if (n <= 0) {
         char* empty = (char*)malloc(1);

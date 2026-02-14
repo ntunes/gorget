@@ -1113,7 +1113,7 @@ impl CodegenContext<'_> {
             );
 
         let is_char = c_type.as_deref() == Some("char")
-            && matches!(method_name, "is_alpha" | "is_digit" | "is_alphanumeric" | "is_whitespace");
+            && matches!(method_name, "is_alpha" | "is_digit" | "is_alphanumeric" | "is_whitespace" | "to_upper" | "to_lower" | "is_upper" | "is_lower");
 
         let is_primitive_hashable = !is_vector && !is_map && !is_set && !is_string
             && !is_option && !is_result && !is_box && !is_file && !is_iterator
@@ -1134,14 +1134,23 @@ impl CodegenContext<'_> {
         let needs_temp = !is_lvalue(&receiver.node);
 
         if is_char {
-            let c_func = match method_name {
-                "is_alpha" => "isalpha",
-                "is_digit" => "isdigit",
-                "is_alphanumeric" => "isalnum",
-                "is_whitespace" => "isspace",
+            return match method_name {
+                "is_alpha" | "is_digit" | "is_alphanumeric" | "is_whitespace" | "is_upper" | "is_lower" => {
+                    let c_func = match method_name {
+                        "is_alpha" => "isalpha",
+                        "is_digit" => "isdigit",
+                        "is_alphanumeric" => "isalnum",
+                        "is_whitespace" => "isspace",
+                        "is_upper" => "isupper",
+                        "is_lower" => "islower",
+                        _ => unreachable!(),
+                    };
+                    Some(format!("((bool){c_func}((int)({recv})))"))
+                }
+                "to_upper" => Some(format!("((char)toupper((int)({recv})))")),
+                "to_lower" => Some(format!("((char)tolower((int)({recv})))")),
                 _ => unreachable!(),
             };
-            return Some(format!("((bool){c_func}((int)({recv})))"));
         }
         if is_primitive_hashable {
             return Some(format!(
@@ -1844,6 +1853,31 @@ impl CodegenContext<'_> {
                     __di_result; }})"
                 )
             }
+            "update" => {
+                let arg = self.gen_expr(&args[0].node.value);
+                let (key_type, val_type) = self.infer_map_kv_types(receiver);
+                format!(
+                    "({{ {mangled}* __du_dst = {recv_ref}; {mangled} __du_src = {arg}; \
+                    for (size_t __du_i = 0; __du_i < __du_src.cap; __du_i++) {{ \
+                        if (__du_src.states[__du_i] != 1) continue; \
+                        {key_type} __du_k = __du_src.keys[__du_i]; \
+                        {val_type} __du_v = __du_src.values[__du_i]; \
+                        {mangled}__put(__du_dst, __du_k, __du_v); \
+                    }} }})"
+                )
+            }
+            "get_or" => {
+                let key = args.first()
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "0".to_string());
+                let default = args.get(1)
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "0".to_string());
+                let (_key_type, val_type) = self.infer_map_kv_types(receiver);
+                format!(
+                    "({{ {val_type}* __dgo_ptr = {mangled}__get_ptr({recv_ref}, {key}); __dgo_ptr ? *__dgo_ptr : {default}; }})"
+                )
+            }
             "filter" => {
                 let (key_type, val_type) = self.infer_map_kv_types(receiver);
                 let closure_fn = self.gen_expr(&args[0].node.value);
@@ -1981,6 +2015,34 @@ impl CodegenContext<'_> {
                         if (!gorget_set_contains(&__sd_other, &__sd_elem)) {{ gorget_set_add(&__sd_result, &__sd_elem); }} \
                     }} \
                     __sd_result; }})"
+                )
+            }
+            "is_subset" => {
+                let elem_type = self.infer_vector_elem_type(receiver);
+                let arg = self.gen_expr(&args[0].node.value);
+                format!(
+                    "({{ GorgetSet __ssub_self = {recv}; GorgetSet __ssub_other = {arg}; \
+                    bool __ssub_result = true; \
+                    for (size_t __ssub_i = 0; __ssub_i < __ssub_self.cap; __ssub_i++) {{ \
+                        if (__ssub_self.states[__ssub_i] != 1) continue; \
+                        {elem_type} __ssub_elem = *({elem_type}*)((char*)__ssub_self.keys + __ssub_i * __ssub_self.key_size); \
+                        if (!gorget_set_contains(&__ssub_other, &__ssub_elem)) {{ __ssub_result = false; break; }} \
+                    }} \
+                    __ssub_result; }})"
+                )
+            }
+            "is_superset" => {
+                let elem_type = self.infer_vector_elem_type(receiver);
+                let arg = self.gen_expr(&args[0].node.value);
+                format!(
+                    "({{ GorgetSet __ssup_self = {recv}; GorgetSet __ssup_other = {arg}; \
+                    bool __ssup_result = true; \
+                    for (size_t __ssup_i = 0; __ssup_i < __ssup_other.cap; __ssup_i++) {{ \
+                        if (__ssup_other.states[__ssup_i] != 1) continue; \
+                        {elem_type} __ssup_elem = *({elem_type}*)((char*)__ssup_other.keys + __ssup_i * __ssup_other.key_size); \
+                        if (!gorget_set_contains(&__ssup_self, &__ssup_elem)) {{ __ssup_result = false; break; }} \
+                    }} \
+                    __ssup_result; }})"
                 )
             }
             "filter" => {
@@ -2152,6 +2214,36 @@ impl CodegenContext<'_> {
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "gorget_array_new(sizeof(const char*))".to_string());
                 Some(format!("gorget_string_join({recv}, {arg})"))
+            }
+            "removeprefix" => {
+                let arg = args.first()
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "\"\"".to_string());
+                Some(format!("gorget_string_removeprefix({recv}, {arg})"))
+            }
+            "removesuffix" => {
+                let arg = args.first()
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "\"\"".to_string());
+                Some(format!("gorget_string_removesuffix({recv}, {arg})"))
+            }
+            "pad_left" => {
+                let width = args.first()
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "0".to_string());
+                let fill = args.get(1)
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "' '".to_string());
+                Some(format!("gorget_string_pad_left({recv}, {width}, {fill})"))
+            }
+            "pad_right" => {
+                let width = args.first()
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "0".to_string());
+                let fill = args.get(1)
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "' '".to_string());
+                Some(format!("gorget_string_pad_right({recv}, {width}, {fill})"))
             }
             _ => None, // Not a known string method — fall through
         }
@@ -2327,6 +2419,12 @@ impl CodegenContext<'_> {
             "unwrap" => {
                 format!("({{ {mangled} __opt = {recv}; if (__opt.tag == {tag_none}) {{ fprintf(stderr, \"unwrap called on None\\n\"); exit(1); }} __opt.data.Some._0; }})")
             }
+            "expect" => {
+                let msg = args.first()
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "\"expect failed\"".to_string());
+                format!("({{ {mangled} __opt = {recv}; if (__opt.tag == {tag_none}) {{ fprintf(stderr, \"%s\\n\", {msg}); exit(1); }} __opt.data.Some._0; }})")
+            }
             "unwrap_or" => {
                 let default = args.first()
                     .map(|a| self.gen_expr(&a.node.value))
@@ -2404,6 +2502,12 @@ impl CodegenContext<'_> {
         match method_name {
             "unwrap" => {
                 format!("({{ {mangled} __res = {recv}; if (__res.tag == {tag_error}) {{ fprintf(stderr, \"unwrap called on Error\\n\"); exit(1); }} __res.data.Ok._0; }})")
+            }
+            "expect" => {
+                let msg = args.first()
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "\"expect failed\"".to_string());
+                format!("({{ {mangled} __res = {recv}; if (__res.tag == {tag_error}) {{ fprintf(stderr, \"%s\\n\", {msg}); exit(1); }} __res.data.Ok._0; }})")
             }
             "unwrap_or" => {
                 let default = args.first()
@@ -3357,7 +3461,7 @@ impl CodegenContext<'_> {
         if receiver_type.starts_with("GorgetSet") {
             return match method {
                 "len" => Some(self.types.int_id),
-                "contains" => Some(self.types.bool_id),
+                "contains" | "is_subset" | "is_superset" => Some(self.types.bool_id),
                 _ => None,
             };
         }
@@ -3366,7 +3470,7 @@ impl CodegenContext<'_> {
             ("const char*", "contains" | "starts_with" | "ends_with" | "is_empty") => {
                 Some(self.types.bool_id)
             }
-            ("const char*", "trim" | "strip" | "lstrip" | "rstrip" | "to_upper" | "to_lower" | "replace" | "substring" | "repeat" | "join") => {
+            ("const char*", "trim" | "strip" | "lstrip" | "rstrip" | "to_upper" | "to_lower" | "replace" | "substring" | "repeat" | "join" | "removeprefix" | "removesuffix" | "pad_left" | "pad_right") => {
                 Some(self.types.string_id)
             }
             ("const char*", "char_at") => Some(self.types.char_id),
@@ -3376,8 +3480,11 @@ impl CodegenContext<'_> {
                 "double" | "float" | "bool" | "char32_t",
                 "hash",
             ) => Some(self.types.int_id),
-            ("char" | "char32_t", "is_alpha" | "is_digit" | "is_alphanumeric" | "is_whitespace") => {
+            ("char" | "char32_t", "is_alpha" | "is_digit" | "is_alphanumeric" | "is_whitespace" | "is_upper" | "is_lower") => {
                 Some(self.types.bool_id)
+            }
+            ("char", "to_upper" | "to_lower") => {
+                Some(self.types.char_id)
             }
             _ => None,
         }

@@ -1,0 +1,18 @@
+void main():
+    char c1 = 'a'
+    char c2 = 'Z'
+    char c3 = '5'
+
+    # to_upper / to_lower
+    print("{c1.to_upper()}")
+    print("{c2.to_lower()}")
+
+    # is_upper / is_lower
+    print("{c1.is_upper()}")
+    print("{c1.is_lower()}")
+    print("{c2.is_upper()}")
+    print("{c2.is_lower()}")
+
+    # digits are neither upper nor lower
+    print("{c3.is_upper()}")
+    print("{c3.is_lower()}")

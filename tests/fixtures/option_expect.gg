@@ -1,0 +1,8 @@
+void main():
+    Option[int] some_val = Some(42)
+    int x = some_val.expect("should have a value")
+    print("{x}")
+
+    Result[int, str] ok_val = Ok(100)
+    int y = ok_val.expect("should be ok")
+    print("{y}")

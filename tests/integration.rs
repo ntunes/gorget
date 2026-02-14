@@ -2524,6 +2524,77 @@ a-b-c",
     );
 }
 
+#[test]
+fn string_methods3() {
+    run_gg(
+        "string_methods3.gg",
+        "\
+world
+hello world
+config
+config.toml
+00042
+42
+42
+hi...
+hi",
+    );
+}
+
+#[test]
+fn char_methods2() {
+    run_gg(
+        "char_methods2.gg",
+        "\
+A
+z
+false
+true
+true
+false
+false
+false",
+    );
+}
+
+#[test]
+fn option_expect() {
+    run_gg(
+        "option_expect.gg",
+        "\
+42
+100",
+    );
+}
+
+#[test]
+fn dict_update() {
+    run_gg(
+        "dict_update.gg",
+        "\
+3
+1
+20
+30
+1
+99",
+    );
+}
+
+#[test]
+fn set_subset() {
+    run_gg(
+        "set_subset.gg",
+        "\
+true
+false
+true
+true
+false
+true",
+    );
+}
+
 // ─── Test Framework Integration Tests ────────────────────────
 
 /// Run `gg test` on a fixture, assert stdout contains expected, and check exit code.

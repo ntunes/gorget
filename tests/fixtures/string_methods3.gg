@@ -1,0 +1,21 @@
+void main():
+    # removeprefix
+    str s1 = "hello world"
+    print(s1.removeprefix("hello "))
+    print(s1.removeprefix("xyz"))
+
+    # removesuffix
+    str s2 = "config.toml"
+    print(s2.removesuffix(".toml"))
+    print(s2.removesuffix(".json"))
+
+    # pad_left
+    str s3 = "42"
+    print(s3.pad_left(5, '0'))
+    print(s3.pad_left(2, '0'))
+    print(s3.pad_left(1, '0'))
+
+    # pad_right
+    str s4 = "hi"
+    print(s4.pad_right(5, '.'))
+    print(s4.pad_right(2, '.'))

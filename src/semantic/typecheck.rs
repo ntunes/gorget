@@ -1760,8 +1760,8 @@ impl<'a> TypeChecker<'a> {
                 _ => None,
             },
             "Dict" | "HashMap" | "Map" => match method {
-                "put" => Some(self.types.void_id),
-                "get" => Some(val_type()),
+                "put" | "update" => Some(self.types.void_id),
+                "get" | "get_or" => Some(val_type()),
                 "contains" => Some(self.types.bool_id),
                 "len" => Some(self.types.int_id),
                 "remove" => Some(self.types.bool_id),
@@ -1796,7 +1796,7 @@ impl<'a> TypeChecker<'a> {
             },
             "Set" | "HashSet" => match method {
                 "add" => Some(self.types.void_id),
-                "contains" => Some(self.types.bool_id),
+                "contains" | "is_subset" | "is_superset" => Some(self.types.bool_id),
                 "len" => Some(self.types.int_id),
                 "remove" => Some(self.types.bool_id),
                 "clear" => Some(self.types.void_id),
@@ -1807,7 +1807,7 @@ impl<'a> TypeChecker<'a> {
             "str" | "String" => match method {
                 "len" | "hash" | "index_of" | "count" => Some(self.types.int_id),
                 "contains" | "starts_with" | "ends_with" | "is_empty" => Some(self.types.bool_id),
-                "trim" | "strip" | "lstrip" | "rstrip" | "to_upper" | "to_lower" | "replace" | "substring" | "repeat" | "join" => Some(self.types.string_id),
+                "trim" | "strip" | "lstrip" | "rstrip" | "to_upper" | "to_lower" | "replace" | "substring" | "repeat" | "join" | "removeprefix" | "removesuffix" | "pad_left" | "pad_right" => Some(self.types.string_id),
                 "char_at" => Some(self.types.char_id),
                 "split" => {
                     // Return Vector[str]
@@ -1820,12 +1820,12 @@ impl<'a> TypeChecker<'a> {
                 _ => None,
             },
             "Option" => match method {
-                "unwrap" | "unwrap_or" => Some(elem_type()),
+                "unwrap" | "unwrap_or" | "expect" => Some(elem_type()),
                 "is_some" | "is_none" => Some(self.types.bool_id),
                 _ => None,
             },
             "Result" => match method {
-                "unwrap" | "unwrap_or" => Some(elem_type()),
+                "unwrap" | "unwrap_or" | "expect" => Some(elem_type()),
                 "is_ok" | "is_err" => Some(self.types.bool_id),
                 _ => None,
             },
