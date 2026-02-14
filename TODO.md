@@ -6,8 +6,6 @@
 
 ## Low Priority — Trace / HTML report
 
-- **No trace for non-test mode**: `gg run --trace` produces a trace file but `gg report` expects `test_start`/`test_end` framing. Events outside test boundaries are silently dropped, producing an empty report. Either support a non-test trace view or document the limitation. [added: 2026-02-14]
-
 - **fprintf performance in hot loops**: Each trace event produces many small `fprintf` calls (e.g. `stmt_start` with 3 vars = ~9 calls). Consider `setvbuf` with a large buffer on `__gorget_trace_fp`, or batch events in a memory buffer and flush periodically. [added: 2026-02-14]
 
 - **HTML report: no keyboard/accessibility**: Tree nodes use `<span>` with `onclick` — not focusable, no `aria-*` attributes, no `tabindex`. The global `event` variable in `ttoggle()` is deprecated. Buttons should be `<button>` elements with keyboard handlers. [added: 2026-02-14]

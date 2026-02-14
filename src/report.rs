@@ -305,12 +305,14 @@ struct ReportData {
     total_passed: usize,
     total_failed: usize,
     total_duration_ms: i64,
+    is_trace_mode: bool,
 }
 
 fn build_report(events: Vec<TraceEvent>) -> ReportData {
     let mut tests = Vec::new();
     let mut current_name: Option<String> = None;
     let mut current_events: Vec<TraceEvent> = Vec::new();
+    let mut orphan_events: Vec<TraceEvent> = Vec::new();
 
     for event in events {
         match &event {
@@ -342,6 +344,8 @@ fn build_report(events: Vec<TraceEvent>) -> ReportData {
             _ => {
                 if current_name.is_some() {
                     current_events.push(event);
+                } else {
+                    orphan_events.push(event);
                 }
             }
         }
@@ -359,8 +363,20 @@ fn build_report(events: Vec<TraceEvent>) -> ReportData {
         });
     }
 
+    // If no test boundaries were found but we have events, wrap them as a trace
+    let is_trace_mode = tests.is_empty() && !orphan_events.is_empty();
+    if is_trace_mode {
+        let tree = build_tree(orphan_events);
+        tests.push(TestResult {
+            name: "Program Trace".to_string(),
+            status: "trace".to_string(),
+            duration_ms: 0,
+            tree,
+        });
+    }
+
     let total_passed = tests.iter().filter(|t| t.status == "pass").count();
-    let total_failed = tests.iter().filter(|t| t.status != "pass").count();
+    let total_failed = tests.iter().filter(|t| t.status != "pass" && t.status != "trace").count();
     let total_duration_ms = tests.iter().map(|t| t.duration_ms).sum();
 
     ReportData {
@@ -368,6 +384,7 @@ fn build_report(events: Vec<TraceEvent>) -> ReportData {
         total_passed,
         total_failed,
         total_duration_ms,
+        is_trace_mode,
     }
 }
 
@@ -504,32 +521,43 @@ pub fn generate_html_report(trace_path: &Path, output_path: &Path) -> Result<(),
 
     // Header
     html.push_str("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n");
-    html.push_str("<title>Gorget Test Report</title>\n");
+    if report.is_trace_mode {
+        html.push_str("<title>Gorget Trace Report</title>\n");
+    } else {
+        html.push_str("<title>Gorget Test Report</title>\n");
+    }
     html.push_str("<style>\n");
     html.push_str(REPORT_CSS);
     html.push_str("</style>\n</head>\n<body>\n");
 
     // Summary
     html.push_str("<div class=\"report-header\">\n");
-    html.push_str("<h1>Test Report <button class=\"theme-toggle\" onclick=\"toggleTheme()\" \
-                   title=\"Toggle light/dark mode\" aria-label=\"Toggle light/dark mode\"\
-                   id=\"theme-btn\"></button></h1>\n");
-    html.push_str(&format!(
-        "<div class=\"summary\">\
-         <span class=\"pass-count\">{} passed</span>, \
-         <span class=\"fail-count\">{} failed</span> \
-         &mdash; {:.0}% &mdash; {}ms total</div>\n",
-        report.total_passed, report.total_failed, pass_pct, report.total_duration_ms,
-    ));
+    if report.is_trace_mode {
+        html.push_str("<h1>Trace Report <button class=\"theme-toggle\" onclick=\"toggleTheme()\" \
+                       title=\"Toggle light/dark mode\" aria-label=\"Toggle light/dark mode\"\
+                       id=\"theme-btn\"></button></h1>\n");
+        html.push_str("<div class=\"summary\">Program execution trace</div>\n");
+    } else {
+        html.push_str("<h1>Test Report <button class=\"theme-toggle\" onclick=\"toggleTheme()\" \
+                       title=\"Toggle light/dark mode\" aria-label=\"Toggle light/dark mode\"\
+                       id=\"theme-btn\"></button></h1>\n");
+        html.push_str(&format!(
+            "<div class=\"summary\">\
+             <span class=\"pass-count\">{} passed</span>, \
+             <span class=\"fail-count\">{} failed</span> \
+             &mdash; {:.0}% &mdash; {}ms total</div>\n",
+            report.total_passed, report.total_failed, pass_pct, report.total_duration_ms,
+        ));
 
-    // Pass rate bar
-    html.push_str("<div class=\"bar-container\">\n");
-    html.push_str(&format!(
-        "<div class=\"bar-fill{}\" style=\"width:{:.1}%\"></div>\n",
-        if report.total_failed > 0 { " bar-has-fail" } else { "" },
-        pass_pct,
-    ));
-    html.push_str("</div>\n");
+        // Pass rate bar
+        html.push_str("<div class=\"bar-container\">\n");
+        html.push_str(&format!(
+            "<div class=\"bar-fill{}\" style=\"width:{:.1}%\"></div>\n",
+            if report.total_failed > 0 { " bar-has-fail" } else { "" },
+            pass_pct,
+        ));
+        html.push_str("</div>\n");
+    }
     html.push_str("</div>\n");
 
     // Global tree-node counter for unique IDs
@@ -542,6 +570,8 @@ pub fn generate_html_report(trace_path: &Path, output_path: &Path) -> Result<(),
             ("status-pass", "PASS", "&#x2713;")
         } else if test.status == "crashed" {
             ("status-crashed", "CRASHED", "&#x1F4A5;")
+        } else if test.status == "trace" {
+            ("status-trace", "TRACE", "&#x1F50D;")
         } else {
             ("status-fail", "FAIL", "&#x2717;")
         };
@@ -563,16 +593,18 @@ pub fn generate_html_report(trace_path: &Path, output_path: &Path) -> Result<(),
             test.duration_ms,
         ));
         if has_events {
+            let open_class = if report.is_trace_mode { " open" } else { "" };
             html.push_str(&format!(
-                " <span class=\"expand-btn\" id=\"btn-{i}\">&#x25B6;</span>",
+                " <span class=\"expand-btn{open_class}\" id=\"btn-{i}\">&#x25B6;</span>",
             ));
         }
         html.push_str("\n</div>\n");
 
         // Expandable trace detail (tree-structured)
         if has_events {
+            let open_class = if report.is_trace_mode { " open" } else { "" };
             html.push_str(&format!(
-                "<div class=\"trace-detail\" id=\"detail-{i}\">\n",
+                "<div class=\"trace-detail{open_class}\" id=\"detail-{i}\">\n",
             ));
             html.push_str(&render_tree_html(&test.tree, &mut tree_id_counter, 0));
             html.push_str("</div>\n");
@@ -622,6 +654,7 @@ h1 { font-size: 1.5rem; margin-bottom: 8px; color: #fff; display: flex; align-it
 .test-row.status-pass { border-left-color: #4caf50; }
 .test-row.status-fail { border-left-color: #f44336; }
 .test-row.status-crashed { border-left-color: #ff9800; }
+.test-row.status-trace { border-left-color: #42a5f5; }
 .test-header {
     display: flex; align-items: center; gap: 12px; padding: 10px 16px;
     cursor: pointer; user-select: none;
@@ -634,6 +667,7 @@ h1 { font-size: 1.5rem; margin-bottom: 8px; color: #fff; display: flex; align-it
 .status-badge.status-pass { background: #1b3a1b; color: #4caf50; }
 .status-badge.status-fail { background: #3a1b1b; color: #f44336; }
 .status-badge.status-crashed { background: #3a2e1b; color: #ff9800; }
+.status-badge.status-trace { background: #1b2a3a; color: #42a5f5; }
 .test-name { flex: 1; }
 .test-duration { color: #888; font-size: 0.85rem; font-variant-numeric: tabular-nums; }
 .expand-btn {
@@ -680,6 +714,7 @@ body.light .source-text { color: #222; }
 body.light .status-badge.status-pass { background: #e8f5e9; color: #2e7d32; }
 body.light .status-badge.status-fail { background: #ffebee; color: #c62828; }
 body.light .status-badge.status-crashed { background: #fff3e0; color: #e65100; }
+body.light .status-badge.status-trace { background: #e3f2fd; color: #1565c0; }
 .theme-toggle {
     background: none; border: 1px solid #555; border-radius: 4px;
     color: inherit; cursor: pointer; font-size: 1.1rem; padding: 2px 8px;
@@ -1120,5 +1155,51 @@ mod tests {
         assert_eq!(report.tests[0].status, "crashed");
         assert_eq!(report.total_passed, 0);
         assert_eq!(report.total_failed, 1);
+    }
+
+    #[test]
+    fn build_report_trace_mode() {
+        // Events with no test boundaries → trace mode
+        let events = vec![
+            TraceEvent::Call { function: "main".to_string(), args: Value::Null, depth: 0 },
+            TraceEvent::StmtStart { src: "auto x = 1".into(), vars: Value::Null, depth: 1 },
+            TraceEvent::StmtEnd { depth: 1 },
+            TraceEvent::Return { function: "main".to_string(), depth: 0 },
+        ];
+        let report = build_report(events);
+        assert!(report.is_trace_mode);
+        assert_eq!(report.tests.len(), 1);
+        assert_eq!(report.tests[0].name, "Program Trace");
+        assert_eq!(report.tests[0].status, "trace");
+        assert!(!report.tests[0].tree.is_empty());
+        assert_eq!(report.total_passed, 0);
+        assert_eq!(report.total_failed, 0);
+    }
+
+    #[test]
+    fn build_report_empty_trace() {
+        // No events at all → not trace mode, no entries
+        let events: Vec<TraceEvent> = vec![];
+        let report = build_report(events);
+        assert!(!report.is_trace_mode);
+        assert_eq!(report.tests.len(), 0);
+    }
+
+    #[test]
+    fn build_report_test_mode_unchanged() {
+        // Events with test boundaries → normal test mode
+        let events = vec![
+            TraceEvent::TestStart { name: "my_test".to_string() },
+            TraceEvent::Call { function: "foo".to_string(), args: Value::Null, depth: 0 },
+            TraceEvent::Return { function: "foo".to_string(), depth: 0 },
+            TraceEvent::TestEnd { name: "my_test".to_string(), status: "pass".to_string(), duration_ms: 5 },
+        ];
+        let report = build_report(events);
+        assert!(!report.is_trace_mode);
+        assert_eq!(report.tests.len(), 1);
+        assert_eq!(report.tests[0].name, "my_test");
+        assert_eq!(report.tests[0].status, "pass");
+        assert_eq!(report.total_passed, 1);
+        assert_eq!(report.total_failed, 0);
     }
 }
