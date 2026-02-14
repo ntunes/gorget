@@ -620,7 +620,7 @@ fn main() {
                     i += 1;
                 }
             }
-            let exe_path = build(filename, &source, false, false, false, false, false, false, true, &test_tags, &test_exclude_tags, test_name_filter.as_deref());
+            let exe_path = build(filename, &source, false, false, false, false, trace, no_trace, true, &test_tags, &test_exclude_tags, test_name_filter.as_deref());
             let status = Command::new(&exe_path)
                 .status()
                 .unwrap_or_else(|e| {

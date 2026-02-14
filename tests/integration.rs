@@ -2368,6 +2368,62 @@ fn trace_no_trace_flag() {
 }
 
 #[test]
+fn trace_in_test_mode() {
+    // Test --trace flag works with gg test
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures/test_basic.gg");
+    let dir = fixture_path.parent().unwrap();
+    let trace_path = dir.join("test_basic.trace.jsonl");
+
+    // Run with gg test --trace
+    let run = Command::new(env!("CARGO"))
+        .args(["run", "--quiet", "--", "test", "--trace"])
+        .arg(&fixture_path)
+        .output()
+        .expect("failed to run cargo");
+
+    assert!(
+        run.status.success(),
+        "gg test --trace failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr),
+    );
+
+    // Trace file should exist
+    assert!(trace_path.exists(), "Trace file should be created with --trace in test mode");
+
+    let trace_content = std::fs::read_to_string(&trace_path)
+        .expect("Failed to read trace file");
+    let lines: Vec<&str> = trace_content.lines().collect();
+
+    // Should contain test_start and test_end events for each test
+    let test_starts: Vec<&&str> = lines.iter().filter(|l| l.contains(r#""type":"test_start""#)).collect();
+    let test_ends: Vec<&&str> = lines.iter().filter(|l| l.contains(r#""type":"test_end""#)).collect();
+
+    assert_eq!(test_starts.len(), 3, "Should have 3 test_start events (one per test)");
+    assert_eq!(test_ends.len(), 3, "Should have 3 test_end events (one per test)");
+
+    // Verify test names appear in events
+    assert!(test_starts[0].contains(r#""name":"addition works""#), "First test_start should be 'addition works'");
+    assert!(test_starts[1].contains(r#""name":"string equality""#), "Second test_start should be 'string equality'");
+    assert!(test_starts[2].contains(r#""name":"boolean logic""#), "Third test_start should be 'boolean logic'");
+
+    // Verify test_end events have pass status and duration
+    for end_line in &test_ends {
+        assert!(end_line.contains(r#""status":"pass""#), "All tests should pass: {end_line}");
+        assert!(end_line.contains(r#""duration_ms":"#), "test_end should include duration: {end_line}");
+    }
+
+    // Verify ordering: each test_start is followed by its test_end
+    assert!(test_ends[0].contains(r#""name":"addition works""#), "First test_end should be 'addition works'");
+    assert!(test_ends[1].contains(r#""name":"string equality""#), "Second test_end should be 'string equality'");
+    assert!(test_ends[2].contains(r#""name":"boolean logic""#), "Third test_end should be 'boolean logic'");
+
+    // Clean up
+    let _ = std::fs::remove_file(&trace_path);
+}
+
+#[test]
 fn string_methods2() {
     run_gg(
         "string_methods2.gg",

@@ -2395,6 +2395,12 @@ static inline void {mangled}__free({mangled}* m) {{
         emitter.emit_line("int main(int argc, char** argv) {");
         emitter.indent();
         emitter.emit_line("gorget_init_args(argc, argv);");
+        if self.trace {
+            let trace_path = self.trace_filename.replace('\\', "\\\\").replace('"', "\\\"");
+            emitter.emit_line(&format!(
+                "__gorget_trace_init(\"{trace_path}\");"
+            ));
+        }
         emitter.emit_line("int __test_passed = 0, __test_failed = 0;");
         emitter.emit_line("struct timespec __total_start, __total_end;");
         emitter.emit_line("clock_gettime(CLOCK_MONOTONIC, &__total_start);");
@@ -2432,6 +2438,11 @@ static inline void {mangled}__free({mangled}* m) {{
                     .and_then(|a| a.node.args.first())
                     .and_then(|arg| if let crate::parser::ast::AttributeArg::StringLiteral(s) = arg { Some(s.as_str()) } else { None });
 
+                if self.trace {
+                    emitter.emit_line(&format!(
+                        "fprintf(__gorget_trace_fp, \"{{\\\"type\\\":\\\"test_start\\\",\\\"name\\\":\\\"{escaped_name}\\\"}}\\n\");"
+                    ));
+                }
                 emitter.emit_line(&format!("printf(\"  test: {escaped_name} ... \");"));
                 emitter.emit_line("fflush(stdout);");
                 emitter.emit_line("{");
@@ -2491,6 +2502,21 @@ static inline void {mangled}__free({mangled}* m) {{
                 emitter.emit_line("long __t_ms = (__t_end.tv_sec - __t_start.tv_sec) * 1000 + (__t_end.tv_nsec - __t_start.tv_nsec) / 1000000;");
 
                 // Pass/fail logic (inverted for @should_panic)
+                let trace_pass = if self.trace {
+                    format!(
+                        "fprintf(__gorget_trace_fp, \"{{\\\"type\\\":\\\"test_end\\\",\\\"name\\\":\\\"{escaped_name}\\\",\\\"status\\\":\\\"pass\\\",\\\"duration_ms\\\":%ld}}\\n\", __t_ms);"
+                    )
+                } else {
+                    String::new()
+                };
+                let trace_fail = if self.trace {
+                    format!(
+                        "fprintf(__gorget_trace_fp, \"{{\\\"type\\\":\\\"test_end\\\",\\\"name\\\":\\\"{escaped_name}\\\",\\\"status\\\":\\\"fail\\\",\\\"duration_ms\\\":%ld}}\\n\", __t_ms);"
+                    )
+                } else {
+                    String::new()
+                };
+
                 if should_panic {
                     if let Some(msg) = expected_msg {
                         let escaped_msg = msg.replace('\\', "\\\\").replace('"', "\\\"");
@@ -2499,11 +2525,13 @@ static inline void {mangled}__free({mangled}* m) {{
                         ));
                         emitter.indent();
                         emitter.emit_line("__test_passed++;");
+                        if self.trace { emitter.emit_line(&trace_pass); }
                         emitter.emit_line("printf(\"PASS (%ldms)\\n\", __t_ms);");
                         emitter.dedent();
                         emitter.emit_line("} else if (__gorget_test_fail_msg) {");
                         emitter.indent();
                         emitter.emit_line("__test_failed++;");
+                        if self.trace { emitter.emit_line(&trace_fail); }
                         emitter.emit_line(&format!(
                             "printf(\"FAIL: expected panic containing \\\"{escaped_msg}\\\", got: %s (%ldms)\\n\", __gorget_test_fail_msg, __t_ms);"
                         ));
@@ -2511,6 +2539,7 @@ static inline void {mangled}__free({mangled}* m) {{
                         emitter.emit_line("} else {");
                         emitter.indent();
                         emitter.emit_line("__test_failed++;");
+                        if self.trace { emitter.emit_line(&trace_fail); }
                         emitter.emit_line("printf(\"FAIL: expected panic but test passed (%ldms)\\n\", __t_ms);");
                         emitter.dedent();
                         emitter.emit_line("}");
@@ -2518,11 +2547,13 @@ static inline void {mangled}__free({mangled}* m) {{
                         emitter.emit_line("if (__gorget_test_fail_msg) {");
                         emitter.indent();
                         emitter.emit_line("__test_passed++;");
+                        if self.trace { emitter.emit_line(&trace_pass); }
                         emitter.emit_line("printf(\"PASS (%ldms)\\n\", __t_ms);");
                         emitter.dedent();
                         emitter.emit_line("} else {");
                         emitter.indent();
                         emitter.emit_line("__test_failed++;");
+                        if self.trace { emitter.emit_line(&trace_fail); }
                         emitter.emit_line("printf(\"FAIL: expected panic but test passed (%ldms)\\n\", __t_ms);");
                         emitter.dedent();
                         emitter.emit_line("}");
@@ -2531,11 +2562,13 @@ static inline void {mangled}__free({mangled}* m) {{
                     emitter.emit_line("if (!__gorget_test_fail_msg) {");
                     emitter.indent();
                     emitter.emit_line("__test_passed++;");
+                    if self.trace { emitter.emit_line(&trace_pass); }
                     emitter.emit_line("printf(\"PASS (%ldms)\\n\", __t_ms);");
                     emitter.dedent();
                     emitter.emit_line("} else {");
                     emitter.indent();
                     emitter.emit_line("__test_failed++;");
+                    if self.trace { emitter.emit_line(&trace_fail); }
                     emitter.emit_line("printf(\"FAIL: %s (%ldms)\\n\", __gorget_test_fail_msg, __t_ms);");
                     emitter.dedent();
                     emitter.emit_line("}");

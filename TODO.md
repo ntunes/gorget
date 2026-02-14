@@ -5,7 +5,6 @@
 - Real example program: a small but complete CLI tool or parser that exercises the language end-to-end [added: 2026-02-13]
 
 ## Medium Priority — Reporting (Phase 3)
-- `--trace` integration for test runs — trace each test execution to JSONL. Per-test trace events: `test_start`, `test_end` with status/duration. Leverages existing `directive trace` infrastructure. [added: 2026-02-14]
 - HTML report generation — Robot Framework-style `report.html` from trace JSONL. Test pass/fail summary page, expandable execution trace per test (function calls, return values). `gg test --report html` flag. [added: 2026-02-14]
 
 ## Medium Priority — General-purpose I/O Libraries (Phase 4)

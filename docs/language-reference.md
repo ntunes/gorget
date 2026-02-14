@@ -2338,7 +2338,26 @@ Running 3 tests...
 2 passed, 1 failed (1ms)
 ```
 
-### 18.7 Process Testing
+### 18.7 Trace Output
+
+The `--trace` flag works with `gg test` to produce a JSONL trace file (`<name>.trace.jsonl`) containing test-specific events interleaved with function-level trace events:
+
+```jsonl
+{"type":"test_start","name":"addition works"}
+{"type":"call","fn":"add","args":{"a":1,"b":2},"depth":0}
+{"type":"return","fn":"add","value":3,"depth":0}
+{"type":"test_end","name":"addition works","status":"pass","duration_ms":0}
+{"type":"test_start","name":"string equality"}
+{"type":"test_end","name":"string equality","status":"pass","duration_ms":0}
+```
+
+- `test_start` — emitted before each test begins execution.
+- `test_end` — emitted after each test completes, with `"status":"pass"` or `"status":"fail"` and `"duration_ms"`.
+- Function-level `call`/`return`/`loop` events appear between the start and end markers for each test.
+
+Enable with `gg test --trace <file>` or `directive trace` in the source file. `--no-trace` overrides both.
+
+### 18.8 Process Testing
 
 ```gorget
 from std.process import exec_output, exec
@@ -2355,7 +2374,7 @@ test "exec returns exit code":
 
 `ExecResult` has fields: `output: str`, `errors: str`, `exit_code: int`.
 
-### 18.8 Coexisting with `main()`
+### 18.9 Coexisting with `main()`
 
 Test blocks and `main()` can coexist in the same file. The command determines which entry point is used:
 
@@ -2375,7 +2394,7 @@ void main():
 
 Semantic analysis (type checking, name resolution) runs on all code regardless of command, so a broken test will be caught during `gg build`.
 
-### 18.9 Constraints
+### 18.10 Constraints
 
 - At most one `suite setup` and one `suite teardown` per file.
 
