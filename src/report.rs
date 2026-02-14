@@ -511,7 +511,9 @@ pub fn generate_html_report(trace_path: &Path, output_path: &Path) -> Result<(),
 
     // Summary
     html.push_str("<div class=\"report-header\">\n");
-    html.push_str("<h1>Test Report</h1>\n");
+    html.push_str("<h1>Test Report <button class=\"theme-toggle\" onclick=\"toggleTheme()\" \
+                   title=\"Toggle light/dark mode\" aria-label=\"Toggle light/dark mode\"\
+                   id=\"theme-btn\"></button></h1>\n");
     html.push_str(&format!(
         "<div class=\"summary\">\
          <span class=\"pass-count\">{} passed</span>, \
@@ -600,7 +602,7 @@ body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     background: #1a1a2e; color: #e0e0e0; padding: 24px; max-width: 900px; margin: 0 auto;
 }
-h1 { font-size: 1.5rem; margin-bottom: 8px; color: #fff; }
+h1 { font-size: 1.5rem; margin-bottom: 8px; color: #fff; display: flex; align-items: center; }
 .report-header { margin-bottom: 24px; }
 .summary { font-size: 1.1rem; margin-bottom: 12px; }
 .pass-count { color: #4caf50; font-weight: bold; }
@@ -611,7 +613,7 @@ h1 { font-size: 1.5rem; margin-bottom: 8px; color: #fff; }
 .bar-fill {
     background: #4caf50; height: 100%; border-radius: 4px; transition: width 0.3s;
 }
-.bar-has-fail { background: linear-gradient(90deg, #4caf50 0%, #4caf50 100%); }
+.bar-has-fail { background: #f44336; }
 .test-list { display: flex; flex-direction: column; gap: 2px; }
 .test-row {
     background: #16213e; border-radius: 6px; overflow: hidden;
@@ -648,7 +650,6 @@ h1 { font-size: 1.5rem; margin-bottom: 8px; color: #fff; }
 .tree-row { white-space: nowrap; padding: 1px 0; }
 .tree-row.expandable { cursor: pointer; }
 .tree-row.expandable:hover { background: rgba(255,255,255,0.03); }
-.tree-row.leaf { }
 .tree-toggle {
     display: inline-block; width: 2ch; color: #666;
     transition: transform 0.15s; text-align: center;
@@ -664,11 +665,44 @@ h1 { font-size: 1.5rem; margin-bottom: 8px; color: #fff; }
     font-style: italic; color: #666; padding: 1px 0;
     font-family: "SFMono-Regular", Consolas, monospace;
 }
+body.light { background: #fff; color: #222; }
+body.light h1 { color: #111; }
+body.light .bar-container { background: #e0e0e0; }
+body.light .test-row { background: #f5f5f5; }
+body.light .test-header:hover { background: #eaeaea; }
+body.light .trace-detail { background: #fafafa; border-top-color: #ddd; }
+body.light .tree-row.expandable:hover { background: rgba(0,0,0,0.04); }
+body.light .test-duration, body.light .tree-toggle, body.light .subst-text { color: #888; }
+body.light .fn-name { color: #7b1fa2; }
+body.light .loop-kw { color: #e65100; }
+body.light .branch-kw { color: #6a1b9a; }
+body.light .source-text { color: #222; }
+body.light .status-badge.status-pass { background: #e8f5e9; color: #2e7d32; }
+body.light .status-badge.status-fail { background: #ffebee; color: #c62828; }
+body.light .status-badge.status-crashed { background: #fff3e0; color: #e65100; }
+.theme-toggle {
+    background: none; border: 1px solid #555; border-radius: 4px;
+    color: inherit; cursor: pointer; font-size: 1.1rem; padding: 2px 8px;
+    line-height: 1; margin-left: auto;
+}
+.theme-toggle:hover { border-color: #999; }
 "#;
 
 // ── Inline JS ────────────────────────────────────────────────
 
 const REPORT_JS: &str = r#"
+(function() {
+    var light = window.matchMedia('(prefers-color-scheme: light)').matches;
+    if (light) document.body.classList.add('light');
+    var btn = document.getElementById('theme-btn');
+    if (btn) btn.textContent = light ? '\u2600' : '\u263D';
+})();
+function toggleTheme() {
+    var b = document.body, btn = document.getElementById('theme-btn');
+    b.classList.toggle('light');
+    var isLight = b.classList.contains('light');
+    if (btn) btn.textContent = isLight ? '\u2600' : '\u263D';
+}
 function toggle(i) {
     var detail = document.getElementById('detail-' + i);
     var btn = document.getElementById('btn-' + i);

@@ -18,8 +18,6 @@
 
 - **HTML report: no timing breakdown per function**: Call/return pairs contain the data to compute cumulative time per function, but the report doesn't surface it. [added: 2026-02-14]
 
-- **HTML report: dead CSS rules and dark-theme-only**: `.bar-has-fail` applies a solid-green gradient identical to `.bar-fill` (leftover from a split-bar attempt). `.tree-row.leaf {}` is empty. No light-mode support — consider `prefers-color-scheme` media queries. [added: 2026-02-14]
-
 - **`build_tree` silently absorbs malformed events (`report.rs:383-466`)**: Depth jumps (0→3 without intermediates) get silently absorbed. Unmatched `Return`/`StmtEnd` against the root frame are dropped with no warning. Should at minimum log a diagnostic. [added: 2026-02-14]
 
 ## Medium Priority — Stdlib gaps
