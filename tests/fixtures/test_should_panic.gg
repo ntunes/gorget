@@ -1,0 +1,10 @@
+@should_panic
+test "assert fails as expected":
+    assert 1 == 2
+
+@should_panic("left == right")
+test "assert with message match":
+    assert 1 == 2
+
+test "normal test passes":
+    assert true

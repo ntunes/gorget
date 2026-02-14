@@ -79,6 +79,8 @@ fn try_build(
     no_trace: bool,
     test_mode: bool,
     test_tags: &[String],
+    test_exclude_tags: &[String],
+    test_name_filter: Option<&str>,
 ) -> Result<PathBuf, String> {
     let mut parser = Parser::new(source);
     let module = parser.parse_module();
@@ -140,7 +142,7 @@ fn try_build(
     };
 
     // Generate C code
-    let c_code = gorget::codegen::generate_c(&module, &result, strip_asserts, overflow_wrap, trace, &trace_filename, test_mode, test_tags);
+    let c_code = gorget::codegen::generate_c(&module, &result, strip_asserts, overflow_wrap, trace, &trace_filename, test_mode, test_tags, test_exclude_tags, test_name_filter);
     let c_path = dir.join(format!("{stem}.c"));
     // Canonicalize to an absolute path so Command::new() doesn't search $PATH.
     // For a bare filename like "hello.gg", dir is "." and exe_path would be "hello",
@@ -198,8 +200,10 @@ fn build(
     no_trace: bool,
     test_mode: bool,
     test_tags: &[String],
+    test_exclude_tags: &[String],
+    test_name_filter: Option<&str>,
 ) -> PathBuf {
-    try_build(filename, source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, test_mode, test_tags)
+    try_build(filename, source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, test_mode, test_tags, test_exclude_tags, test_name_filter)
         .unwrap_or_else(|e| {
             eprintln!("{e}");
             process::exit(1);
@@ -396,7 +400,7 @@ fn run_repl() {
         let gg_path_str = gg_path.display().to_string();
 
         // Try to build
-        match try_build(&gg_path_str, &source, false, false, false, false, false, false, false, &[]) {
+        match try_build(&gg_path_str, &source, false, false, false, false, false, false, false, &[], &[], None) {
             Err(e) => {
                 eprintln!("{e}");
                 // Don't update buffers on error
@@ -480,7 +484,7 @@ fn main() {
         let overflow_checked = args.iter().any(|a| a == "--overflow=checked");
         let trace = args.iter().any(|a| a == "--trace");
         let no_trace = args.iter().any(|a| a == "--no-trace");
-        let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[]);
+        let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None);
         let status = Command::new(&exe_path)
             .status()
             .unwrap_or_else(|e| {
@@ -574,11 +578,11 @@ fn main() {
             }
         }
         "build" => {
-            let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[]);
+            let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None);
             println!("Built: {}", exe_path.display());
         }
         "run" => {
-            let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[]);
+            let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None);
             let status = Command::new(&exe_path)
                 .status()
                 .unwrap_or_else(|e| {
@@ -590,6 +594,8 @@ fn main() {
         "test" => {
             // Collect --tag values
             let mut test_tags = Vec::new();
+            let mut test_exclude_tags = Vec::new();
+            let mut test_name_filter: Option<String> = None;
             let mut i = 0;
             while i < args.len() {
                 if args[i] == "--tag" && i + 1 < args.len() {
@@ -598,11 +604,23 @@ fn main() {
                 } else if args[i].starts_with("--tag=") {
                     test_tags.push(args[i]["--tag=".len()..].to_string());
                     i += 1;
+                } else if args[i] == "--exclude-tag" && i + 1 < args.len() {
+                    test_exclude_tags.push(args[i + 1].clone());
+                    i += 2;
+                } else if args[i].starts_with("--exclude-tag=") {
+                    test_exclude_tags.push(args[i]["--exclude-tag=".len()..].to_string());
+                    i += 1;
+                } else if args[i] == "--filter" && i + 1 < args.len() {
+                    test_name_filter = Some(args[i + 1].clone());
+                    i += 2;
+                } else if args[i].starts_with("--filter=") {
+                    test_name_filter = Some(args[i]["--filter=".len()..].to_string());
+                    i += 1;
                 } else {
                     i += 1;
                 }
             }
-            let exe_path = build(filename, &source, false, false, false, false, false, false, true, &test_tags);
+            let exe_path = build(filename, &source, false, false, false, false, false, false, true, &test_tags, &test_exclude_tags, test_name_filter.as_deref());
             let status = Command::new(&exe_path)
                 .status()
                 .unwrap_or_else(|e| {

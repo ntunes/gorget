@@ -1,11 +1,5 @@
 # TODO
 
-## High Priority — Test Framework Enhancements (Phase 2)
-- `--filter` name-based test filtering — `gg test file.gg --filter "fibonacci"` runs only tests whose name contains the substring. Complement to existing `--tag` attribute-based filtering. [added: 2026-02-14]
-- `--exclude-tag` flag — `gg test file.gg --exclude-tag slow` skips tests tagged "slow". Complement to existing `--tag` inclusion filter. If both `--tag` and `--exclude-tag` are specified, exclusion wins. [added: 2026-02-14]
-- Console reporter improvements — per-test duration (milliseconds), test count header (`Running N tests...`). [added: 2026-02-14]
-- `should_panic` test attribute — `test "division by zero" should_panic:` expects a panic. Inverts pass/fail logic: test passes if gorget_panic is called. [added: 2026-02-14]
-
 ## High Priority — Language completeness
 - String method `.strip()` (alias for `.trim()` or strip-prefix/suffix variant) [added: 2026-02-13]
 - Vector higher-order methods: `.map()`, `.filter()`, `.reduce()` [added: 2026-02-13]

@@ -2339,32 +2339,66 @@ static inline void {mangled}__free({mangled}* m) {{
 
     // ─── Test Runner ────────────────────────────────────────────
 
-    /// Check whether a test definition matches the tag filter.
-    fn test_matches_tag(&self, test: &crate::parser::ast::TestDef) -> bool {
-        if self.test_tag_filter.is_empty() {
-            return true; // No filter — run all tests
+    /// Check whether a test definition should run based on name filter,
+    /// exclude-tag, and include-tag filters.
+    fn should_run_test(&self, test: &crate::parser::ast::TestDef) -> bool {
+        // Name filter: skip if test name doesn't contain substring
+        if let Some(ref filter) = self.test_name_filter {
+            if !test.name.node.contains(filter.as_str()) {
+                return false;
+            }
         }
-        for attr in &test.attributes {
-            if attr.node.name.node == "tag" {
-                for arg in &attr.node.args {
-                    if let crate::parser::ast::AttributeArg::StringLiteral(s) = arg {
-                        if self.test_tag_filter.contains(s) {
-                            return true;
+        // Exclusion wins: if any tag is excluded, skip
+        if !self.test_exclude_tags.is_empty() {
+            for attr in &test.attributes {
+                if attr.node.name.node == "tag" {
+                    for arg in &attr.node.args {
+                        if let crate::parser::ast::AttributeArg::StringLiteral(s) = arg {
+                            if self.test_exclude_tags.contains(s) {
+                                return false;
+                            }
                         }
                     }
                 }
             }
         }
-        false
+        // Inclusion: if --tag was specified, only run matching tests
+        if !self.test_tag_filter.is_empty() {
+            for attr in &test.attributes {
+                if attr.node.name.node == "tag" {
+                    for arg in &attr.node.args {
+                        if let crate::parser::ast::AttributeArg::StringLiteral(s) = arg {
+                            if self.test_tag_filter.contains(s) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+        true
     }
 
     /// Emit the test runner `main()` function for test modules.
     pub fn emit_test_runner_main(&mut self, module: &crate::parser::ast::Module, emitter: &mut CEmitter) {
+        // Pre-count matching tests at compile time
+        let test_count = module.items.iter().filter(|item| {
+            if let Item::Test(t) = &item.node {
+                self.should_run_test(t)
+            } else {
+                false
+            }
+        }).count();
+
         emitter.emit_line("// ── Test Runner ──");
         emitter.emit_line("int main(int argc, char** argv) {");
         emitter.indent();
         emitter.emit_line("gorget_init_args(argc, argv);");
         emitter.emit_line("int __test_passed = 0, __test_failed = 0;");
+        emitter.emit_line("struct timespec __total_start, __total_end;");
+        emitter.emit_line("clock_gettime(CLOCK_MONOTONIC, &__total_start);");
+        emitter.emit_line(&format!("printf(\"Running {test_count} tests...\\n\");"));
         emitter.blank_line();
 
         // Suite setup (inlined)
@@ -2385,11 +2419,19 @@ static inline void {mangled}__free({mangled}* m) {{
         // Each test
         for item in &module.items {
             if let Item::Test(t) = &item.node {
-                if !self.test_matches_tag(t) {
+                if !self.should_run_test(t) {
                     continue;
                 }
                 let test_name = &t.name.node;
                 let escaped_name = test_name.replace('\\', "\\\\").replace('"', "\\\"");
+
+                // Detect @should_panic attribute
+                let should_panic = t.attributes.iter().any(|a| a.node.name.node == "should_panic");
+                let expected_msg: Option<&str> = t.attributes.iter()
+                    .find(|a| a.node.name.node == "should_panic")
+                    .and_then(|a| a.node.args.first())
+                    .and_then(|arg| if let crate::parser::ast::AttributeArg::StringLiteral(s) = arg { Some(s.as_str()) } else { None });
+
                 emitter.emit_line(&format!("printf(\"  test: {escaped_name} ... \");"));
                 emitter.emit_line("fflush(stdout);");
                 emitter.emit_line("{");
@@ -2397,6 +2439,11 @@ static inline void {mangled}__free({mangled}* m) {{
                 emitter.emit_line("__gorget_in_test = 1;");
                 emitter.emit_line("__gorget_test_fail_msg = NULL;");
                 emitter.emit_line("int __cleanup_mark = __gorget_cleanup_top;");
+
+                // Timing start
+                emitter.emit_line("struct timespec __t_start, __t_end;");
+                emitter.emit_line("clock_gettime(CLOCK_MONOTONIC, &__t_start);");
+
                 emitter.emit_line("if (setjmp(__gorget_test_jmp) == 0) {");
                 emitter.indent();
                 self.in_test_body = true;
@@ -2406,7 +2453,6 @@ static inline void {mangled}__free({mangled}* m) {{
                 for binding in &t.with_bindings {
                     let val = self.gen_expr(&binding.expr);
                     let escaped = c_mangle::escape_keyword(&binding.name.node);
-                    // Resolve C type from semantic TypeId, falling back to expression inference
                     let c_type = if let Some(def_id) = self.scopes.lookup_by_name_anywhere(&binding.name.node) {
                         let def = self.scopes.get_def(def_id);
                         if let Some(type_id) = def.type_id {
@@ -2419,7 +2465,6 @@ static inline void {mangled}__free({mangled}* m) {{
                     };
                     let decl = c_types::c_declare(&c_type, &escaped);
                     emitter.emit_line(&format!("{decl} = {val};"));
-                    // Register for Drop cleanup (struct with Drop trait)
                     if self.traits.has_trait_impl_by_name(&c_type, "Drop") {
                         let drop_fn = c_mangle::mangle_trait_method("Drop", &c_type, "drop");
                         self.register_droppable(
@@ -2440,17 +2485,62 @@ static inline void {mangled}__free({mangled}* m) {{
                 emitter.emit_line("}");
                 emitter.emit_line("__gorget_cleanup_run(__cleanup_mark);");
                 emitter.emit_line("__gorget_in_test = 0;");
-                emitter.emit_line("if (!__gorget_test_fail_msg) {");
-                emitter.indent();
-                emitter.emit_line("__test_passed++;");
-                emitter.emit_line("printf(\"PASS\\n\");");
-                emitter.dedent();
-                emitter.emit_line("} else {");
-                emitter.indent();
-                emitter.emit_line("__test_failed++;");
-                emitter.emit_line("printf(\"FAIL: %s\\n\", __gorget_test_fail_msg);");
-                emitter.dedent();
-                emitter.emit_line("}");
+
+                // Timing end
+                emitter.emit_line("clock_gettime(CLOCK_MONOTONIC, &__t_end);");
+                emitter.emit_line("long __t_ms = (__t_end.tv_sec - __t_start.tv_sec) * 1000 + (__t_end.tv_nsec - __t_start.tv_nsec) / 1000000;");
+
+                // Pass/fail logic (inverted for @should_panic)
+                if should_panic {
+                    if let Some(msg) = expected_msg {
+                        let escaped_msg = msg.replace('\\', "\\\\").replace('"', "\\\"");
+                        emitter.emit_line(&format!(
+                            "if (__gorget_test_fail_msg && strstr(__gorget_test_fail_msg, \"{escaped_msg}\")) {{"
+                        ));
+                        emitter.indent();
+                        emitter.emit_line("__test_passed++;");
+                        emitter.emit_line("printf(\"PASS (%ldms)\\n\", __t_ms);");
+                        emitter.dedent();
+                        emitter.emit_line("} else if (__gorget_test_fail_msg) {");
+                        emitter.indent();
+                        emitter.emit_line("__test_failed++;");
+                        emitter.emit_line(&format!(
+                            "printf(\"FAIL: expected panic containing \\\"{escaped_msg}\\\", got: %s (%ldms)\\n\", __gorget_test_fail_msg, __t_ms);"
+                        ));
+                        emitter.dedent();
+                        emitter.emit_line("} else {");
+                        emitter.indent();
+                        emitter.emit_line("__test_failed++;");
+                        emitter.emit_line("printf(\"FAIL: expected panic but test passed (%ldms)\\n\", __t_ms);");
+                        emitter.dedent();
+                        emitter.emit_line("}");
+                    } else {
+                        emitter.emit_line("if (__gorget_test_fail_msg) {");
+                        emitter.indent();
+                        emitter.emit_line("__test_passed++;");
+                        emitter.emit_line("printf(\"PASS (%ldms)\\n\", __t_ms);");
+                        emitter.dedent();
+                        emitter.emit_line("} else {");
+                        emitter.indent();
+                        emitter.emit_line("__test_failed++;");
+                        emitter.emit_line("printf(\"FAIL: expected panic but test passed (%ldms)\\n\", __t_ms);");
+                        emitter.dedent();
+                        emitter.emit_line("}");
+                    }
+                } else {
+                    emitter.emit_line("if (!__gorget_test_fail_msg) {");
+                    emitter.indent();
+                    emitter.emit_line("__test_passed++;");
+                    emitter.emit_line("printf(\"PASS (%ldms)\\n\", __t_ms);");
+                    emitter.dedent();
+                    emitter.emit_line("} else {");
+                    emitter.indent();
+                    emitter.emit_line("__test_failed++;");
+                    emitter.emit_line("printf(\"FAIL: %s (%ldms)\\n\", __gorget_test_fail_msg, __t_ms);");
+                    emitter.dedent();
+                    emitter.emit_line("}");
+                }
+
                 emitter.dedent();
                 emitter.emit_line("}");
                 emitter.blank_line();
@@ -2472,7 +2562,9 @@ static inline void {mangled}__free({mangled}* m) {{
             }
         }
 
-        emitter.emit_line("printf(\"\\n%d passed, %d failed\\n\", __test_passed, __test_failed);");
+        emitter.emit_line("clock_gettime(CLOCK_MONOTONIC, &__total_end);");
+        emitter.emit_line("long __total_ms = (__total_end.tv_sec - __total_start.tv_sec) * 1000 + (__total_end.tv_nsec - __total_start.tv_nsec) / 1000000;");
+        emitter.emit_line("printf(\"\\n%d passed, %d failed (%ldms)\\n\", __test_passed, __test_failed, __total_ms);");
         emitter.emit_line("return __test_failed > 0 ? 1 : 0;");
         emitter.dedent();
         emitter.emit_line("}");

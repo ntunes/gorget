@@ -161,12 +161,16 @@ pub struct CodegenContext<'a> {
     pub is_test_module: bool,
     /// Tags to filter which tests run (empty = run all).
     pub test_tag_filter: Vec<String>,
+    /// Tags to exclude from test runs (exclusion wins over inclusion).
+    pub test_exclude_tags: Vec<String>,
+    /// Substring filter for test names (only tests whose name contains this string run).
+    pub test_name_filter: Option<String>,
     /// True while generating code inside a `test` block body (for cleanup registration).
     pub in_test_body: bool,
 }
 
 /// Generate C source code from a parsed and analyzed Gorget module.
-pub fn generate_c(module: &Module, analysis: &AnalysisResult, strip_asserts: bool, overflow_wrap: bool, trace: bool, trace_filename: &str, test_mode: bool, test_tags: &[String]) -> String {
+pub fn generate_c(module: &Module, analysis: &AnalysisResult, strip_asserts: bool, overflow_wrap: bool, trace: bool, trace_filename: &str, test_mode: bool, test_tags: &[String], test_exclude_tags: &[String], test_name_filter: Option<&str>) -> String {
     let mut field_type_names = FxHashMap::default();
     for item in &module.items {
         if let Item::Struct(s) = &item.node {
@@ -229,6 +233,8 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, strip_asserts: boo
         function_names,
         is_test_module,
         test_tag_filter: test_tags.to_vec(),
+        test_exclude_tags: test_exclude_tags.to_vec(),
+        test_name_filter: test_name_filter.map(|s| s.to_string()),
         in_test_body: false,
     };
 
@@ -338,7 +344,7 @@ mod tests {
             result.errors
         );
 
-        generate_c(&module, &result, false, false, false, "", false, &[])
+        generate_c(&module, &result, false, false, false, "", false, &[], &[], None)
     }
 
     #[test]

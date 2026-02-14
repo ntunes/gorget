@@ -2392,6 +2392,18 @@ fn run_gg_test_with_tags(
     expected_fragments: &[&str],
     expect_success: bool,
 ) {
+    run_gg_test_with_flags(fixture, tags, &[], None, expected_fragments, expect_success);
+}
+
+/// Run `gg test` with optional `--tag`, `--exclude-tag`, and `--filter` flags.
+fn run_gg_test_with_flags(
+    fixture: &str,
+    tags: &[&str],
+    exclude_tags: &[&str],
+    filter: Option<&str>,
+    expected_fragments: &[&str],
+    expect_success: bool,
+) {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fixture_path = manifest_dir.join("tests/fixtures").join(fixture);
 
@@ -2406,12 +2418,20 @@ fn run_gg_test_with_tags(
     let c_path = dir.join(format!("{stem}.c"));
     let exe_path = dir.join(stem);
 
-    // Build args: cargo run -- test <fixture> [--tag <tag>]...
+    // Build args: cargo run -- test <fixture> [--tag <tag>]... [--exclude-tag <tag>]... [--filter <substr>]
     let mut args: Vec<&str> = vec!["run", "--quiet", "--", "test"];
     args.push(fixture_path.to_str().unwrap());
     for tag in tags {
         args.push("--tag");
         args.push(tag);
+    }
+    for tag in exclude_tags {
+        args.push("--exclude-tag");
+        args.push(tag);
+    }
+    if let Some(f) = filter {
+        args.push("--filter");
+        args.push(f);
     }
 
     let output = Command::new(env!("CARGO"))
@@ -2529,6 +2549,68 @@ fn test_coexist_test_mode() {
     run_gg_test(
         "test_coexist.gg",
         &["2 passed, 0 failed"],
+        true,
+    );
+}
+
+#[test]
+fn test_filter_by_name() {
+    // --filter should only run tests whose name contains the substring
+    run_gg_test_with_flags(
+        "test_coexist.gg",
+        &[], &[], Some("double works"),
+        &["Running 1 tests", "1 passed, 0 failed", "double works"],
+        true,
+    );
+}
+
+#[test]
+fn test_exclude_tag() {
+    // --exclude-tag should skip tests with the excluded tag
+    run_gg_test_with_flags(
+        "test_tags.gg",
+        &[], &["slow"], None,
+        &["Running 2 tests", "2 passed, 0 failed", "smoke test", "untagged test"],
+        true,
+    );
+}
+
+#[test]
+fn test_exclude_tag_wins_over_include() {
+    // --exclude-tag wins: if a tag is both included and excluded, test is skipped
+    run_gg_test_with_flags(
+        "test_tags.gg",
+        &["smoke"], &["smoke"], None,
+        &["Running 0 tests", "0 passed, 0 failed"],
+        true,
+    );
+}
+
+#[test]
+fn test_should_panic() {
+    run_gg_test(
+        "test_should_panic.gg",
+        &["Running 3 tests", "3 passed, 0 failed", "PASS"],
+        true,
+    );
+}
+
+#[test]
+fn test_running_count_header() {
+    // All test outputs should include "Running N tests..." header
+    run_gg_test(
+        "test_basic.gg",
+        &["Running 3 tests", "3 passed, 0 failed"],
+        true,
+    );
+}
+
+#[test]
+fn test_timing_in_output() {
+    // Test output should include timing in ms
+    run_gg_test(
+        "test_basic.gg",
+        &["PASS (", "ms)"],
         true,
     );
 }

@@ -2234,6 +2234,8 @@ The Gorget compiler is invoked as `gg` with the following commands:
 | `--overflow=wrap`    | Enable wrapping arithmetic (no overflow panic)          |
 | `--overflow=checked` | Force checked arithmetic even if source says `wrap`     |
 | `--tag <name>`       | Only run tests matching this tag (repeatable)           |
+| `--exclude-tag <name>` | Skip tests with this tag (repeatable; exclusion wins) |
+| `--filter <substr>`  | Only run tests whose name contains `<substr>`           |
 
 ---
 
@@ -2298,7 +2300,42 @@ test "long computation":
 
 Run only tagged tests: `gg test file.gg --tag smoke`. Multiple `--tag` flags select tests matching any tag.
 
-### 18.4 Process Testing
+Exclude tagged tests: `gg test file.gg --exclude-tag slow`. If a test's tag is both included (`--tag`) and excluded (`--exclude-tag`), exclusion wins.
+
+### 18.4 Name Filtering
+
+Filter tests by name substring: `gg test file.gg --filter "fibonacci"`. Only tests whose name contains the substring will run. Can be combined with `--tag` and `--exclude-tag`.
+
+### 18.5 `@should_panic`
+
+Tests can be marked to expect a panic:
+
+```gorget
+@should_panic
+test "assert fails as expected":
+    assert 1 == 2
+
+@should_panic("left == right")
+test "assert with message match":
+    assert 1 == 2
+```
+
+A `@should_panic` test passes if the test body panics (e.g., via a failed assertion or runtime error). If a string argument is provided, the panic message must contain that substring for the test to pass.
+
+### 18.6 Console Output
+
+Test output includes a count header and per-test timing:
+
+```
+Running 3 tests...
+  test: addition works ... PASS (0ms)
+  test: string equality ... PASS (1ms)
+  test: edge case ... FAIL: assertion failed (0ms)
+
+2 passed, 1 failed (1ms)
+```
+
+### 18.7 Process Testing
 
 ```gorget
 from std.process import exec_output, exec
@@ -2315,7 +2352,7 @@ test "exec returns exit code":
 
 `ExecResult` has fields: `output: str`, `errors: str`, `exit_code: int`.
 
-### 18.5 Coexisting with `main()`
+### 18.8 Coexisting with `main()`
 
 Test blocks and `main()` can coexist in the same file. The command determines which entry point is used:
 
@@ -2335,7 +2372,7 @@ void main():
 
 Semantic analysis (type checking, name resolution) runs on all code regardless of command, so a broken test will be caught during `gg build`.
 
-### 18.6 Constraints
+### 18.9 Constraints
 
 - At most one `suite setup` and one `suite teardown` per file.
 
