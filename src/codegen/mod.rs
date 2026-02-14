@@ -193,8 +193,37 @@ pub fn c_string_escape(s: &str) -> String {
         .replace('\n', "\\n")
 }
 
+/// Configuration options for C code generation.
+pub struct CodegenOptions {
+    pub strip_asserts: bool,
+    pub overflow_wrap: bool,
+    pub trace: bool,
+    pub trace_filename: String,
+    pub test_mode: bool,
+    pub test_tags: Vec<String>,
+    pub test_exclude_tags: Vec<String>,
+    pub test_name_filter: Option<String>,
+    pub source_text: String,
+}
+
+impl Default for CodegenOptions {
+    fn default() -> Self {
+        Self {
+            strip_asserts: false,
+            overflow_wrap: false,
+            trace: false,
+            trace_filename: String::new(),
+            test_mode: false,
+            test_tags: Vec::new(),
+            test_exclude_tags: Vec::new(),
+            test_name_filter: None,
+            source_text: String::new(),
+        }
+    }
+}
+
 /// Generate C source code from a parsed and analyzed Gorget module.
-pub fn generate_c(module: &Module, analysis: &AnalysisResult, strip_asserts: bool, overflow_wrap: bool, trace: bool, trace_filename: &str, test_mode: bool, test_tags: &[String], test_exclude_tags: &[String], test_name_filter: Option<&str>, source_text: &str) -> String {
+pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptions) -> String {
     let mut field_type_names = FxHashMap::default();
     for item in &module.items {
         if let Item::Struct(s) = &item.node {
@@ -219,7 +248,7 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, strip_asserts: boo
         }
     }
 
-    let is_test_module = test_mode;
+    let is_test_module = opts.test_mode;
 
     let mut ctx = CodegenContext {
         scopes: &analysis.scopes,
@@ -243,11 +272,11 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, strip_asserts: boo
         decl_type_hint: None,
         drop_scopes: Vec::new(),
         type_subs: Vec::new(),
-        strip_asserts,
-        overflow_wrap,
-        trace,
+        strip_asserts: opts.strip_asserts,
+        overflow_wrap: opts.overflow_wrap,
+        trace: opts.trace,
         current_function_gorget_name: None,
-        trace_filename: trace_filename.to_string(),
+        trace_filename: opts.trace_filename,
         expr_types: &analysis.expr_types,
         current_function_return_c_type: None,
         try_counter: 0,
@@ -256,11 +285,11 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, strip_asserts: boo
         pointer_params: HashSet::new(),
         function_names,
         is_test_module,
-        test_tag_filter: test_tags.to_vec(),
-        test_exclude_tags: test_exclude_tags.to_vec(),
-        test_name_filter: test_name_filter.map(|s| s.to_string()),
+        test_tag_filter: opts.test_tags,
+        test_exclude_tags: opts.test_exclude_tags,
+        test_name_filter: opts.test_name_filter,
         in_test_body: false,
-        source_text: source_text.to_string(),
+        source_text: opts.source_text,
     };
 
     let mut emitter = CEmitter::new();
@@ -386,7 +415,7 @@ mod tests {
             result.errors
         );
 
-        generate_c(&module, &result, false, false, false, "", false, &[], &[], None, source)
+        generate_c(&module, &result, CodegenOptions { source_text: source.to_string(), ..CodegenOptions::default() })
     }
 
     #[test]

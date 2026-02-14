@@ -142,7 +142,17 @@ fn try_build(
     };
 
     // Generate C code
-    let c_code = gorget::codegen::generate_c(&module, &result, strip_asserts, overflow_wrap, trace, &trace_filename, test_mode, test_tags, test_exclude_tags, test_name_filter, source);
+    let c_code = gorget::codegen::generate_c(&module, &result, gorget::codegen::CodegenOptions {
+        strip_asserts,
+        overflow_wrap,
+        trace,
+        trace_filename,
+        test_mode,
+        test_tags: test_tags.to_vec(),
+        test_exclude_tags: test_exclude_tags.to_vec(),
+        test_name_filter: test_name_filter.map(|s| s.to_string()),
+        source_text: source.to_string(),
+    });
     let c_path = dir.join(format!("{stem}.c"));
     // Canonicalize to an absolute path so Command::new() doesn't search $PATH.
     // For a bare filename like "hello.gg", dir is "." and exe_path would be "hello",

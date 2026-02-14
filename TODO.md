@@ -4,10 +4,6 @@
 
 - **For-loop range bounds validation**: `for n in 0..256` with a `uint8` loop variable silently overflows. The loop variable's declared type should constrain the range bounds. Also, codegen hardcodes `int64_t` for range loop variables (`c_stmt.rs:1210`) — should use the declared type. [added: 2026-02-14]
 
-## Medium Priority — Trace / HTML report
-
-- **`generate_c` has 11 parameters (`codegen/mod.rs:197`)**: Trace-related params (`trace`, `trace_filename`) plus `strip_asserts`, `overflow_wrap`, test filters, etc. should be bundled into a `CodegenOptions` struct. [added: 2026-02-14]
-
 ## Low Priority — Trace / HTML report
 
 - **No trace for non-test mode**: `gg run --trace` produces a trace file but `gg report` expects `test_start`/`test_end` framing. Events outside test boundaries are silently dropped, producing an empty report. Either support a non-test trace view or document the limitation. [added: 2026-02-14]
