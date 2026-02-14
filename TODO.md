@@ -1,5 +1,8 @@
 # TODO
 
+## High Priority — Bugs
+- Trace return with `__typeof__` on string literals causes UB: stack array copy of string struct via `__typeof__` in return trace macro. Needs a different approach for string values (e.g., emit the string pointer directly). [added: 2026-02-14]
+
 ## High Priority — Language completeness
 - Real example program: a small but complete CLI tool or parser that exercises the language end-to-end [added: 2026-02-13]
 

@@ -1,0 +1,56 @@
+int factorial(int n):
+    if n <= 1:
+        return 1
+    return n * factorial(n - 1)
+
+int fibonacci(int n):
+    if n <= 1:
+        return n
+    return fibonacci(n - 1) + fibonacci(n - 2)
+
+int gcd(int a, int b):
+    if b == 0:
+        return a
+    return gcd(b, a % b)
+
+int sum_range(int lo, int hi):
+    auto total = 0
+    for i in lo..hi:
+        total = total + i
+    return total
+
+int classify(int n):
+    if n < 0:
+        return -1
+    elif n == 0:
+        return 0
+    else:
+        return 1
+
+test "factorial computes correctly":
+    assert factorial(1) == 1
+    assert factorial(5) == 120
+    assert factorial(6) == 720
+
+test "fibonacci sequence":
+    assert fibonacci(0) == 0
+    assert fibonacci(1) == 1
+    assert fibonacci(5) == 5
+    assert fibonacci(7) == 13
+
+test "gcd finds greatest common divisor":
+    assert gcd(12, 8) == 4
+    assert gcd(100, 75) == 25
+    assert gcd(17, 13) == 1
+
+test "sum of ranges":
+    assert sum_range(1, 6) == 15
+    assert sum_range(0, 11) == 55
+
+test "classify integers":
+    auto neg = classify(-5)
+    assert neg == -1
+    auto zero = classify(0)
+    assert zero == 0
+    auto pos = classify(42)
+    assert pos == 1

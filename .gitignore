@@ -1,2 +1,6 @@
 .DS_Store
 /target
+tests/fixtures/test_traced
+tests/fixtures/test_traced.c
+tests/fixtures/test_traced.trace.jsonl
+tests/fixtures/test_traced.report.html

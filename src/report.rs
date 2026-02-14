@@ -10,8 +10,10 @@ pub enum TraceEvent {
     Call { function: String, args: String, depth: i32 },
     Return { function: String, value: String, depth: i32 },
     Loop { kind: String, detail: String, depth: i32 },
-    Stmt { kind: String, name: String, value: String, depth: i32 },
-    Branch { kind: String, depth: i32 },
+    Stmt { kind: String, name: String, value: String, depth: i32, src: String },
+    Branch { kind: String, depth: i32, src: String },
+    AssertStart { src: String, depth: i32 },
+    AssertEnd { depth: i32 },
 }
 
 // ── Tree structure ───────────────────────────────────────────
@@ -193,16 +195,25 @@ fn parse_trace_line(line: &str) -> Option<TraceEvent> {
             format!("iter {iter}")
         };
         Some(TraceEvent::Loop { kind, detail, depth })
+    } else if line.contains("\"type\":\"assert_start\"") {
+        let src = extract_str(line, "src").unwrap_or_default();
+        let depth = extract_int(line, "depth").unwrap_or(0) as i32;
+        Some(TraceEvent::AssertStart { src, depth })
+    } else if line.contains("\"type\":\"assert_end\"") {
+        let depth = extract_int(line, "depth").unwrap_or(0) as i32;
+        Some(TraceEvent::AssertEnd { depth })
     } else if line.contains("\"type\":\"stmt\"") {
         let kind = extract_str(line, "kind").unwrap_or_else(|| "stmt".to_string());
         let name = extract_str(line, "name").unwrap_or_default();
         let value = extract_value(line);
         let depth = extract_int(line, "depth").unwrap_or(0) as i32;
-        Some(TraceEvent::Stmt { kind, name, value, depth })
+        let src = extract_str(line, "src").unwrap_or_default();
+        Some(TraceEvent::Stmt { kind, name, value, depth, src })
     } else if line.contains("\"type\":\"branch\"") {
         let kind = extract_str(line, "kind").unwrap_or_else(|| "if".to_string());
         let depth = extract_int(line, "depth").unwrap_or(0) as i32;
-        Some(TraceEvent::Branch { kind, depth })
+        let src = extract_str(line, "src").unwrap_or_default();
+        Some(TraceEvent::Branch { kind, depth, src })
     } else {
         None
     }
@@ -224,7 +235,9 @@ fn event_depth(event: &TraceEvent) -> i32 {
         | TraceEvent::Return { depth, .. }
         | TraceEvent::Loop { depth, .. }
         | TraceEvent::Stmt { depth, .. }
-        | TraceEvent::Branch { depth, .. } => *depth,
+        | TraceEvent::Branch { depth, .. }
+        | TraceEvent::AssertStart { depth, .. }
+        | TraceEvent::AssertEnd { depth, .. } => *depth,
         _ => -1,
     }
 }
@@ -269,7 +282,7 @@ fn build_tree(events: Vec<TraceEvent>) -> Vec<TraceNode> {
 
         // Process the event itself.
         match &event {
-            TraceEvent::Call { .. } => {
+            TraceEvent::Call { .. } | TraceEvent::AssertStart { .. } => {
                 let d = ed;
                 stack.push((Some(event), d, false, Vec::new()));
             }
@@ -289,6 +302,26 @@ fn build_tree(events: Vec<TraceEvent>) -> Vec<TraceNode> {
                     }
                 } else {
                     // Orphan return — add as leaf
+                    stack.last_mut().unwrap().3.push(TraceNode {
+                        event,
+                        children: Vec::new(),
+                    });
+                }
+            }
+            TraceEvent::AssertEnd { .. } => {
+                if stack.len() > 1 {
+                    let (opener, _, _, mut children) = stack.pop().unwrap();
+                    children.push(TraceNode {
+                        event,
+                        children: Vec::new(),
+                    });
+                    if let Some(assert_ev) = opener {
+                        stack.last_mut().unwrap().3.push(TraceNode {
+                            event: assert_ev,
+                            children,
+                        });
+                    }
+                } else {
                     stack.last_mut().unwrap().3.push(TraceNode {
                         event,
                         children: Vec::new(),
@@ -425,11 +458,13 @@ fn render_node_label(event: &TraceEvent) -> String {
                 html_escape(detail),
             )
         }
-        TraceEvent::Stmt { kind, name, value, .. } => {
-            if kind == "assert" {
-                "<span class=\"event-icon stmt-icon\">&#x2714;</span> \
-                 <span class=\"stmt-kw\">assert</span>"
-                    .to_string()
+        TraceEvent::Stmt { kind, name, value, src, .. } => {
+            if !src.is_empty() {
+                format!(
+                    "<span class=\"event-icon stmt-icon\">=</span> \
+                     <span class=\"source-text\">{}</span>",
+                    html_escape(src),
+                )
             } else if kind == "let" {
                 format!(
                     "<span class=\"event-icon stmt-icon\">=</span> \
@@ -450,13 +485,35 @@ fn render_node_label(event: &TraceEvent) -> String {
                 )
             }
         }
-        TraceEvent::Branch { kind, .. } => {
-            format!(
-                "<span class=\"event-icon branch-icon\">&#x2387;</span> \
-                 <span class=\"branch-kw\">{}</span>",
-                html_escape(kind),
-            )
+        TraceEvent::Branch { kind, src, .. } => {
+            if !src.is_empty() {
+                format!(
+                    "<span class=\"event-icon branch-icon\">&#x2387;</span> \
+                     <span class=\"source-text\">{}</span>",
+                    html_escape(src),
+                )
+            } else {
+                format!(
+                    "<span class=\"event-icon branch-icon\">&#x2387;</span> \
+                     <span class=\"branch-kw\">{}</span>",
+                    html_escape(kind),
+                )
+            }
         }
+        TraceEvent::AssertStart { src, .. } => {
+            if !src.is_empty() {
+                format!(
+                    "<span class=\"event-icon assert-icon\">&#x2714;</span> \
+                     <span class=\"source-text\">{}</span>",
+                    html_escape(src),
+                )
+            } else {
+                "<span class=\"event-icon assert-icon\">&#x2714;</span> \
+                 <span class=\"stmt-kw\">assert</span>"
+                    .to_string()
+            }
+        }
+        TraceEvent::AssertEnd { .. } => String::new(),
         _ => String::new(),
     }
 }
@@ -470,7 +527,7 @@ fn render_tree_html(nodes: &[TraceNode], id_counter: &mut usize) -> String {
         let is_expandable = has_children
             && matches!(
                 &node.event,
-                TraceEvent::Call { .. } | TraceEvent::Loop { .. }
+                TraceEvent::Call { .. } | TraceEvent::Loop { .. } | TraceEvent::AssertStart { .. }
             );
 
         if is_expandable {
@@ -671,6 +728,8 @@ h1 { font-size: 1.5rem; margin-bottom: 8px; color: #fff; }
 .var-name { color: #80cbc4; }
 .lit-value { color: #fff176; }
 .branch-kw { color: #ba68c8; font-weight: bold; }
+.assert-icon { color: #66bb6a; }
+.source-text { color: #e0e0e0; font-family: "SFMono-Regular", Consolas, monospace; }
 "#;
 
 // ── Inline JS ────────────────────────────────────────────────
@@ -806,11 +865,12 @@ mod tests {
         let line = r#"{"type":"stmt","kind":"let","name":"x","value":42,"depth":1}"#;
         let event = parse_trace_line(line).unwrap();
         match event {
-            TraceEvent::Stmt { kind, name, value, depth } => {
+            TraceEvent::Stmt { kind, name, value, depth, src } => {
                 assert_eq!(kind, "let");
                 assert_eq!(name, "x");
                 assert_eq!(value, "42");
                 assert_eq!(depth, 1);
+                assert_eq!(src, "");
             }
             _ => panic!("expected Stmt"),
         }
@@ -821,7 +881,7 @@ mod tests {
         let line = r#"{"type":"stmt","kind":"assign","name":"total","value":15,"depth":1}"#;
         let event = parse_trace_line(line).unwrap();
         match event {
-            TraceEvent::Stmt { kind, name, value, depth } => {
+            TraceEvent::Stmt { kind, name, value, depth, .. } => {
                 assert_eq!(kind, "assign");
                 assert_eq!(name, "total");
                 assert_eq!(value, "15");
@@ -832,13 +892,14 @@ mod tests {
     }
 
     #[test]
-    fn parse_stmt_assert() {
-        let line = r#"{"type":"stmt","kind":"assert","depth":0}"#;
+    fn parse_stmt_with_src() {
+        let line = r#"{"type":"stmt","kind":"let","name":"x","src":"auto x = 42","value":42,"depth":1}"#;
         let event = parse_trace_line(line).unwrap();
         match event {
-            TraceEvent::Stmt { kind, depth, .. } => {
-                assert_eq!(kind, "assert");
-                assert_eq!(depth, 0);
+            TraceEvent::Stmt { kind, src, depth, .. } => {
+                assert_eq!(kind, "let");
+                assert_eq!(src, "auto x = 42");
+                assert_eq!(depth, 1);
             }
             _ => panic!("expected Stmt"),
         }
@@ -849,8 +910,23 @@ mod tests {
         let line = r#"{"type":"branch","kind":"if","depth":1}"#;
         let event = parse_trace_line(line).unwrap();
         match event {
-            TraceEvent::Branch { kind, depth } => {
+            TraceEvent::Branch { kind, depth, src } => {
                 assert_eq!(kind, "if");
+                assert_eq!(depth, 1);
+                assert_eq!(src, "");
+            }
+            _ => panic!("expected Branch"),
+        }
+    }
+
+    #[test]
+    fn parse_branch_with_src() {
+        let line = r#"{"type":"branch","kind":"if","src":"if n <= 1","depth":1}"#;
+        let event = parse_trace_line(line).unwrap();
+        match event {
+            TraceEvent::Branch { kind, depth, src } => {
+                assert_eq!(kind, "if");
+                assert_eq!(src, "if n <= 1");
                 assert_eq!(depth, 1);
             }
             _ => panic!("expected Branch"),
@@ -862,7 +938,7 @@ mod tests {
         let line = r#"{"type":"branch","kind":"else","depth":2}"#;
         let event = parse_trace_line(line).unwrap();
         match event {
-            TraceEvent::Branch { kind, depth } => {
+            TraceEvent::Branch { kind, depth, .. } => {
                 assert_eq!(kind, "else");
                 assert_eq!(depth, 2);
             }
@@ -871,10 +947,23 @@ mod tests {
     }
 
     #[test]
+    fn parse_assert_start_event() {
+        let line = r#"{"type":"assert_start","src":"assert factorial(5) == 120","depth":0}"#;
+        let event = parse_trace_line(line).unwrap();
+        match event {
+            TraceEvent::AssertStart { src, depth } => {
+                assert_eq!(src, "assert factorial(5) == 120");
+                assert_eq!(depth, 0);
+            }
+            _ => panic!("expected AssertStart"),
+        }
+    }
+
+    #[test]
     fn build_tree_call_return_pair() {
         let events = vec![
             TraceEvent::Call { function: "add".into(), args: "a=1".into(), depth: 0 },
-            TraceEvent::Stmt { kind: "let".into(), name: "r".into(), value: "3".into(), depth: 1 },
+            TraceEvent::Stmt { kind: "let".into(), name: "r".into(), value: "3".into(), depth: 1, src: String::new() },
             TraceEvent::Return { function: "add".into(), value: "3".into(), depth: 0 },
         ];
         let tree = build_tree(events);
@@ -905,11 +994,11 @@ mod tests {
     fn build_tree_loop_groups_children() {
         let events = vec![
             TraceEvent::Call { function: "sum".into(), args: String::new(), depth: 0 },
-            TraceEvent::Stmt { kind: "let".into(), name: "t".into(), value: "0".into(), depth: 1 },
+            TraceEvent::Stmt { kind: "let".into(), name: "t".into(), value: "0".into(), depth: 1, src: String::new() },
             TraceEvent::Loop { kind: "for".into(), detail: "i=1".into(), depth: 1 },
-            TraceEvent::Stmt { kind: "assign".into(), name: "t".into(), value: "1".into(), depth: 1 },
+            TraceEvent::Stmt { kind: "assign".into(), name: "t".into(), value: "1".into(), depth: 1, src: String::new() },
             TraceEvent::Loop { kind: "for".into(), detail: "i=2".into(), depth: 1 },
-            TraceEvent::Stmt { kind: "assign".into(), name: "t".into(), value: "3".into(), depth: 1 },
+            TraceEvent::Stmt { kind: "assign".into(), name: "t".into(), value: "3".into(), depth: 1, src: String::new() },
             TraceEvent::Return { function: "sum".into(), value: "3".into(), depth: 0 },
         ];
         let tree = build_tree(events);
@@ -929,13 +1018,34 @@ mod tests {
     fn build_tree_flat_stmts() {
         // Events without calls should remain flat
         let events = vec![
-            TraceEvent::Stmt { kind: "assert".into(), name: String::new(), value: String::new(), depth: 0 },
-            TraceEvent::Stmt { kind: "assert".into(), name: String::new(), value: String::new(), depth: 0 },
+            TraceEvent::Stmt { kind: "assert".into(), name: String::new(), value: String::new(), depth: 0, src: String::new() },
+            TraceEvent::Stmt { kind: "assert".into(), name: String::new(), value: String::new(), depth: 0, src: String::new() },
         ];
         let tree = build_tree(events);
         assert_eq!(tree.len(), 2);
         assert!(tree[0].children.is_empty());
         assert!(tree[1].children.is_empty());
+    }
+
+    #[test]
+    fn build_tree_assert_expandable() {
+        // assert_start/assert_end should bracket a call, producing an expandable tree node
+        let events = vec![
+            TraceEvent::AssertStart { src: "assert add(1, 2) == 3".into(), depth: 0 },
+            TraceEvent::Call { function: "add".into(), args: "a=1, b=2".into(), depth: 1 },
+            TraceEvent::Return { function: "add".into(), value: "3".into(), depth: 1 },
+            TraceEvent::AssertEnd { depth: 0 },
+        ];
+        let tree = build_tree(events);
+        assert_eq!(tree.len(), 1); // one AssertStart node
+        assert!(matches!(&tree[0].event, TraceEvent::AssertStart { src, .. } if src == "assert add(1, 2) == 3"));
+        // Children: Call (with Return child), AssertEnd
+        assert_eq!(tree[0].children.len(), 2);
+        assert!(matches!(&tree[0].children[0].event, TraceEvent::Call { .. }));
+        assert!(matches!(&tree[0].children[1].event, TraceEvent::AssertEnd { .. }));
+        // The Call should have a Return child
+        assert_eq!(tree[0].children[0].children.len(), 1);
+        assert!(matches!(&tree[0].children[0].children[0].event, TraceEvent::Return { .. }));
     }
 
     #[test]

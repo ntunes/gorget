@@ -167,10 +167,32 @@ pub struct CodegenContext<'a> {
     pub test_name_filter: Option<String>,
     /// True while generating code inside a `test` block body (for cleanup registration).
     pub in_test_body: bool,
+    /// Original Gorget source text, used to extract verbatim source lines for trace events.
+    pub source_text: String,
+}
+
+impl CodegenContext<'_> {
+    /// Extract the first line of source at the given span, trimmed.
+    pub fn source_line(&self, span: Span) -> String {
+        if span == Span::dummy() || span.start >= self.source_text.len() {
+            return String::new();
+        }
+        let end = span.end.min(self.source_text.len());
+        let slice = &self.source_text[span.start..end];
+        let line = slice.lines().next().unwrap_or("");
+        line.trim().trim_end_matches(':').trim().to_string()
+    }
+}
+
+/// Escape a string for embedding in a C string literal.
+pub fn c_string_escape(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
 }
 
 /// Generate C source code from a parsed and analyzed Gorget module.
-pub fn generate_c(module: &Module, analysis: &AnalysisResult, strip_asserts: bool, overflow_wrap: bool, trace: bool, trace_filename: &str, test_mode: bool, test_tags: &[String], test_exclude_tags: &[String], test_name_filter: Option<&str>) -> String {
+pub fn generate_c(module: &Module, analysis: &AnalysisResult, strip_asserts: bool, overflow_wrap: bool, trace: bool, trace_filename: &str, test_mode: bool, test_tags: &[String], test_exclude_tags: &[String], test_name_filter: Option<&str>, source_text: &str) -> String {
     let mut field_type_names = FxHashMap::default();
     for item in &module.items {
         if let Item::Struct(s) = &item.node {
@@ -236,6 +258,7 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, strip_asserts: boo
         test_exclude_tags: test_exclude_tags.to_vec(),
         test_name_filter: test_name_filter.map(|s| s.to_string()),
         in_test_body: false,
+        source_text: source_text.to_string(),
     };
 
     let mut emitter = CEmitter::new();
@@ -361,7 +384,7 @@ mod tests {
             result.errors
         );
 
-        generate_c(&module, &result, false, false, false, "", false, &[], &[], None)
+        generate_c(&module, &result, false, false, false, "", false, &[], &[], None, source)
     }
 
     #[test]

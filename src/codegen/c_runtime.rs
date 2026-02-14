@@ -1146,6 +1146,18 @@ static void __gorget_trace_init(const char* path) {
     atexit(__gorget_trace_close);
 }
 
+static void __gorget_trace_json_str(FILE* fp, const char* s) {
+    while (*s) {
+        switch (*s) {
+            case '"':  fputs("\\\"", fp); break;
+            case '\\': fputs("\\\\", fp); break;
+            case '\n': fputs("\\n", fp); break;
+            default:   fputc(*s, fp);
+        }
+        s++;
+    }
+}
+
 static void __gorget_trace_val_int(FILE* fp, int64_t v) { fprintf(fp, "%" PRId64, v); }
 static void __gorget_trace_val_float(FILE* fp, double v) { fprintf(fp, "%g", v); }
 static void __gorget_trace_val_bool(FILE* fp, bool v) { fprintf(fp, v ? "true" : "false"); }

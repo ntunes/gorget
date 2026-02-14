@@ -1,9 +1,10 @@
 /// Statement codegen: convert Gorget statements to C statements.
 use crate::parser::ast::{BinaryOp, Block, Expr, Pattern, Stmt, Type};
-use crate::span::Spanned;
+use crate::span::{Span, Spanned};
 
 use super::c_emitter::CEmitter;
 use super::c_mangle;
+use super::c_string_escape;
 use super::c_types;
 use super::{CodegenContext, DropAction, DropEntry, DropScopeKind};
 
@@ -11,7 +12,7 @@ impl CodegenContext<'_> {
     /// Generate C code for a block of statements.
     pub fn gen_block(&mut self, block: &Block, emitter: &mut CEmitter) {
         for stmt in &block.stmts {
-            self.gen_stmt(&stmt.node, emitter);
+            self.gen_stmt(&stmt.node, stmt.span, emitter);
         }
     }
 
@@ -114,16 +115,23 @@ impl CodegenContext<'_> {
 
     /// Emit a trace "assign" event for a target expression, if tracing is on
     /// and the target is a simple identifier.
-    fn emit_trace_assign(&self, target: &Spanned<Expr>, emitter: &mut CEmitter) {
+    fn emit_trace_assign(&self, target: &Spanned<Expr>, stmt_span: Span, emitter: &mut CEmitter) {
         if !self.trace {
             return;
         }
         if let Expr::Identifier(name) = &target.node {
             let escaped = c_mangle::escape_keyword(name);
+            let src = c_string_escape(&self.source_line(stmt_span));
             let s = format!(
-                r#"fprintf(__gorget_trace_fp, "{{\"type\":\"stmt\",\"kind\":\"assign\",\"name\":\"{name}\",\"value\":");"#
+                r#"fprintf(__gorget_trace_fp, "{{\"type\":\"stmt\",\"kind\":\"assign\",\"name\":\"{name}\",\"src\":\"");"#
             );
             emitter.emit_line(&s);
+            emitter.emit_line(&format!(
+                r#"__gorget_trace_json_str(__gorget_trace_fp, "{src}");"#
+            ));
+            emitter.emit_line(
+                r#"fprintf(__gorget_trace_fp, "\",\"value\":");"#
+            );
             emitter.emit_line(&format!(
                 "_Generic(({escaped}), \
                  int64_t: __gorget_trace_val_int, \
@@ -213,7 +221,7 @@ impl CodegenContext<'_> {
     }
 
     /// Generate C code for a single statement.
-    pub fn gen_stmt(&mut self, stmt: &Stmt, emitter: &mut CEmitter) {
+    pub fn gen_stmt(&mut self, stmt: &Stmt, span: Span, emitter: &mut CEmitter) {
         match stmt {
             Stmt::VarDecl {
                 is_const,
@@ -222,7 +230,7 @@ impl CodegenContext<'_> {
                 value,
                 ..
             } => {
-                self.gen_var_decl(*is_const, type_, pattern, value, emitter);
+                self.gen_var_decl(*is_const, type_, pattern, value, span, emitter);
             }
 
             Stmt::Expr(expr) => {
@@ -234,7 +242,7 @@ impl CodegenContext<'_> {
                 let t = self.gen_expr(target);
                 let v = self.gen_expr(value);
                 emitter.emit_line(&format!("{t} = {v};"));
-                self.emit_trace_assign(target, emitter);
+                self.emit_trace_assign(target, span, emitter);
             }
 
             Stmt::CompoundAssign { target, op, value } => {
@@ -245,7 +253,7 @@ impl CodegenContext<'_> {
                         let t = self.gen_expr(target);
                         let v = self.gen_expr(value);
                         emitter.emit_line(&format!("{t} = gorget_str_concat({t}, {v});"));
-                        self.emit_trace_assign(target, emitter);
+                        self.emit_trace_assign(target, span, emitter);
                         return;
                     }
                 }
@@ -263,7 +271,7 @@ impl CodegenContext<'_> {
                     let c_op = compound_op_to_c(*op);
                     emitter.emit_line(&format!("{t} {c_op} {v};"));
                 }
-                self.emit_trace_assign(target, emitter);
+                self.emit_trace_assign(target, span, emitter);
             }
 
             Stmt::Return(expr) => {
@@ -328,8 +336,15 @@ impl CodegenContext<'_> {
                 emitter.emit_line(&format!("if ({cond}) {{"));
                 emitter.indent();
                 if self.trace {
+                    let src = c_string_escape(&format!("if {}", self.source_line(condition.span)));
                     emitter.emit_line(
-                        r#"fprintf(__gorget_trace_fp, "{\"type\":\"branch\",\"kind\":\"if\",\"depth\":%d}\n", __gorget_trace_depth);"#
+                        r#"fprintf(__gorget_trace_fp, "{\"type\":\"branch\",\"kind\":\"if\",\"src\":\"");"#
+                    );
+                    emitter.emit_line(&format!(
+                        r#"__gorget_trace_json_str(__gorget_trace_fp, "{src}");"#
+                    ));
+                    emitter.emit_line(
+                        r#"fprintf(__gorget_trace_fp, "\",\"depth\":%d}\n", __gorget_trace_depth);"#
                     );
                 }
                 self.gen_block(then_body, emitter);
@@ -340,8 +355,15 @@ impl CodegenContext<'_> {
                     emitter.emit_line(&format!("}} else if ({ec}) {{"));
                     emitter.indent();
                     if self.trace {
+                        let src = c_string_escape(&format!("elif {}", self.source_line(elif_cond.span)));
                         emitter.emit_line(
-                            r#"fprintf(__gorget_trace_fp, "{\"type\":\"branch\",\"kind\":\"elif\",\"depth\":%d}\n", __gorget_trace_depth);"#
+                            r#"fprintf(__gorget_trace_fp, "{\"type\":\"branch\",\"kind\":\"elif\",\"src\":\"");"#
+                        );
+                        emitter.emit_line(&format!(
+                            r#"__gorget_trace_json_str(__gorget_trace_fp, "{src}");"#
+                        ));
+                        emitter.emit_line(
+                            r#"fprintf(__gorget_trace_fp, "\",\"depth\":%d}\n", __gorget_trace_depth);"#
                         );
                     }
                     self.gen_block(elif_body, emitter);
@@ -353,7 +375,7 @@ impl CodegenContext<'_> {
                     emitter.indent();
                     if self.trace {
                         emitter.emit_line(
-                            r#"fprintf(__gorget_trace_fp, "{\"type\":\"branch\",\"kind\":\"else\",\"depth\":%d}\n", __gorget_trace_depth);"#
+                            r#"fprintf(__gorget_trace_fp, "{\"type\":\"branch\",\"kind\":\"else\",\"src\":\"else\",\"depth\":%d}\n", __gorget_trace_depth);"#
                         );
                     }
                     self.gen_block(else_body, emitter);
@@ -483,17 +505,42 @@ impl CodegenContext<'_> {
             Stmt::Assert { condition, message } => {
                 if !self.strip_asserts {
                     if self.trace {
+                        let src = c_string_escape(&self.source_line(span));
+                        emitter.emit_line("{");
+                        emitter.indent();
                         emitter.emit_line(
-                            r#"fprintf(__gorget_trace_fp, "{\"type\":\"stmt\",\"kind\":\"assert\",\"depth\":%d}\n", __gorget_trace_depth);"#
+                            r#"fprintf(__gorget_trace_fp, "{\"type\":\"assert_start\",\"src\":\"");"#
                         );
+                        emitter.emit_line(&format!(
+                            r#"__gorget_trace_json_str(__gorget_trace_fp, "{src}");"#
+                        ));
+                        emitter.emit_line(
+                            r#"fprintf(__gorget_trace_fp, "\",\"depth\":%d}\n", __gorget_trace_depth);"#
+                        );
+                        emitter.emit_line("__gorget_trace_depth++;");
+                        let cond = self.gen_expr(condition);
+                        let msg = match message {
+                            Some(m) => self.gen_expr(m),
+                            None => self.gen_assert_diagnostic(condition)
+                                .unwrap_or_else(|| "\"assertion failed\"".to_string()),
+                        };
+                        emitter.emit_line(&format!("_Bool __assert_cond = ({cond});"));
+                        emitter.emit_line("__gorget_trace_depth--;");
+                        emitter.emit_line(
+                            r#"fprintf(__gorget_trace_fp, "{\"type\":\"assert_end\",\"depth\":%d}\n", __gorget_trace_depth);"#
+                        );
+                        emitter.emit_line(&format!("if (!__assert_cond) gorget_panic({msg});"));
+                        emitter.dedent();
+                        emitter.emit_line("}");
+                    } else {
+                        let cond = self.gen_expr(condition);
+                        let msg = match message {
+                            Some(m) => self.gen_expr(m),
+                            None => self.gen_assert_diagnostic(condition)
+                                .unwrap_or_else(|| "\"assertion failed\"".to_string()),
+                        };
+                        emitter.emit_line(&format!("if (!({cond})) gorget_panic({msg});"));
                     }
-                    let cond = self.gen_expr(condition);
-                    let msg = match message {
-                        Some(m) => self.gen_expr(m),
-                        None => self.gen_assert_diagnostic(condition)
-                            .unwrap_or_else(|| "\"assertion failed\"".to_string()),
-                    };
-                    emitter.emit_line(&format!("if (!({cond})) gorget_panic({msg});"));
                 }
             }
 
@@ -548,6 +595,7 @@ impl CodegenContext<'_> {
         type_: &Spanned<Type>,
         pattern: &Spanned<Pattern>,
         value: &Spanned<Expr>,
+        span: Span,
         emitter: &mut CEmitter,
     ) {
         match &pattern.node {
@@ -650,10 +698,17 @@ impl CodegenContext<'_> {
 
                 // Trace: emit let event after declaration so the variable is live
                 if self.trace {
+                    let src = c_string_escape(&self.source_line(span));
                     let s = format!(
-                        r#"fprintf(__gorget_trace_fp, "{{\"type\":\"stmt\",\"kind\":\"let\",\"name\":\"{name}\",\"value\":");"#
+                        r#"fprintf(__gorget_trace_fp, "{{\"type\":\"stmt\",\"kind\":\"let\",\"name\":\"{name}\",\"src\":\"");"#
                     );
                     emitter.emit_line(&s);
+                    emitter.emit_line(&format!(
+                        r#"__gorget_trace_json_str(__gorget_trace_fp, "{src}");"#
+                    ));
+                    emitter.emit_line(
+                        r#"fprintf(__gorget_trace_fp, "\",\"value\":");"#
+                    );
                     emitter.emit_line(&format!(
                         "_Generic(({escaped}), \
                          int64_t: __gorget_trace_val_int, \
@@ -1427,12 +1482,12 @@ impl CodegenContext<'_> {
     /// since those breaks target the inner loop.
     fn gen_block_with_break_flag(&mut self, block: &Block, flag: &str, emitter: &mut CEmitter) {
         for stmt in &block.stmts {
-            self.gen_stmt_with_break_flag(&stmt.node, flag, emitter);
+            self.gen_stmt_with_break_flag(&stmt.node, stmt.span, flag, emitter);
         }
     }
 
     /// Emit a single statement, instrumenting any `break` with the flag.
-    fn gen_stmt_with_break_flag(&mut self, stmt: &Stmt, flag: &str, emitter: &mut CEmitter) {
+    fn gen_stmt_with_break_flag(&mut self, stmt: &Stmt, span: Span, flag: &str, emitter: &mut CEmitter) {
         match stmt {
             Stmt::Break(_) => {
                 emitter.emit_line(&format!("{flag} = true;"));
@@ -1538,7 +1593,7 @@ impl CodegenContext<'_> {
             }
             // Do NOT recurse into inner loops — break inside them
             // targets the inner loop, not our outer for/else or while/else.
-            _ => self.gen_stmt(stmt, emitter),
+            _ => self.gen_stmt(stmt, span, emitter),
         }
     }
 
