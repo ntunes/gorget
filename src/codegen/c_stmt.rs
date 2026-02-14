@@ -413,7 +413,8 @@ impl CodegenContext<'_> {
                     let cond = self.gen_expr(condition);
                     let msg = match message {
                         Some(m) => self.gen_expr(m),
-                        None => "\"assertion failed\"".to_string(),
+                        None => self.gen_assert_diagnostic(condition)
+                            .unwrap_or_else(|| "\"assertion failed\"".to_string()),
                     };
                     emitter.emit_line(&format!("if (!({cond})) gorget_panic({msg});"));
                 }
@@ -423,6 +424,44 @@ impl CodegenContext<'_> {
                 // Nested items handled during top-level pass
             }
         }
+    }
+
+    /// Map comparison operators to their textual representation.
+    fn comparison_op_str(op: &BinaryOp) -> Option<&'static str> {
+        match op {
+            BinaryOp::Eq => Some("=="),
+            BinaryOp::Neq => Some("!="),
+            BinaryOp::Lt => Some("<"),
+            BinaryOp::Gt => Some(">"),
+            BinaryOp::LtEq => Some("<="),
+            BinaryOp::GtEq => Some(">="),
+            _ => None,
+        }
+    }
+
+    /// Generate a rich diagnostic message for assert failures on comparisons.
+    /// Returns `Some(gorget_format(...))` if the condition is a comparison with
+    /// formattable operands, or `None` to fall back to the default message.
+    fn gen_assert_diagnostic(&mut self, condition: &Spanned<Expr>) -> Option<String> {
+        let (left, op, right) = match &condition.node {
+            Expr::BinaryOp { left, op, right } => (left, op, right),
+            _ => return None,
+        };
+
+        let op_str = Self::comparison_op_str(op)?;
+
+        let left_tid = self.resolve_expr_type_id(left)?;
+        let right_tid = self.resolve_expr_type_id(right)?;
+
+        let left_c = self.gen_expr(left);
+        let right_c = self.gen_expr(right);
+
+        let (left_fmt, left_arg) = self.format_for_type_id(left_tid, &left_c);
+        let (right_fmt, right_arg) = self.format_for_type_id(right_tid, &right_c);
+
+        Some(format!(
+            "gorget_format(\"assertion failed: left {op_str} right\\n  left:  {left_fmt}\\n  right: {right_fmt}\", {left_arg}, {right_arg})"
+        ))
     }
 
     /// Generate a variable declaration.

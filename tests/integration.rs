@@ -2460,7 +2460,7 @@ fn test_basic() {
 fn test_failure() {
     run_gg_test(
         "test_failure.gg",
-        &["1 passed, 1 failed", "FAIL: assertion failed"],
+        &["1 passed, 1 failed", "FAIL: assertion failed: left == right", "left:  1", "right: 2"],
         false,
     );
 }

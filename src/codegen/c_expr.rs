@@ -3042,7 +3042,7 @@ impl CodegenContext<'_> {
     }
 
     /// Get printf format + expression for a given TypeId.
-    fn format_for_type_id(
+    pub(super) fn format_for_type_id(
         &mut self,
         type_id: crate::semantic::ids::TypeId,
         expr: &str,
