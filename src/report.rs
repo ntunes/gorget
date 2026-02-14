@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::Path;
+use serde_json::Value;
 
 // ── Trace event types ────────────────────────────────────────
 
@@ -7,12 +8,12 @@ use std::path::Path;
 pub enum TraceEvent {
     TestStart { name: String },
     TestEnd { name: String, status: String, duration_ms: i64 },
-    Call { function: String, args: String, depth: i32 },
+    Call { function: String, args: Value, depth: i32 },
     Return { function: String, depth: i32 },
     Loop { kind: String, detail: String, depth: i32 },
-    StmtStart { src: String, vars: String, depth: i32 },
+    StmtStart { src: String, vars: Value, depth: i32 },
     StmtEnd { depth: i32 },
-    Branch { kind: String, depth: i32, src: String, vars: String },
+    Branch { kind: String, depth: i32, src: String, vars: Value },
 }
 
 // ── Tree structure ───────────────────────────────────────────
@@ -23,266 +24,80 @@ struct TraceNode {
     children: Vec<TraceNode>,
 }
 
-// ── Trace parser (hand-rolled, no serde) ─────────────────────
+// ── Trace parser ─────────────────────────────────────────────
 
-/// Extract a JSON string value for a given key from a line.
-/// e.g. extract_str(line, "name") on `"name":"foo"` returns Some("foo").
-fn extract_str(line: &str, key: &str) -> Option<String> {
-    let needle = format!("\"{}\":\"", key);
-    let start = line.find(&needle)? + needle.len();
-    let rest = &line[start..];
-    // Find the closing quote, handling escaped quotes
-    let mut end = 0;
-    let bytes = rest.as_bytes();
-    while end < bytes.len() {
-        if bytes[end] == b'\\' {
-            end += 2; // skip escaped char
-        } else if bytes[end] == b'"' {
-            break;
-        } else {
-            end += 1;
-        }
-    }
-    Some(unescape_json_str(&rest[..end]))
-}
-
-/// Extract a JSON integer value for a given key.
-fn extract_int(line: &str, key: &str) -> Option<i64> {
-    // Try "key": (with colon and possible space)
-    let needle = format!("\"{}\":", key);
-    let start = line.find(&needle)? + needle.len();
-    let rest = line[start..].trim_start();
-    // Parse digits (possibly negative)
-    let end = rest.find(|c: char| !c.is_ascii_digit() && c != '-').unwrap_or(rest.len());
-    rest[..end].parse().ok()
-}
-
-/// Extract the args object as a raw string representation.
-fn extract_args(line: &str) -> String {
-    let needle = "\"args\":{";
-    let Some(start) = line.find(needle) else { return String::new() };
-    let start = start + needle.len();
-    let rest = &line[start..];
-    // Find matching closing brace (simple — args don't contain nested objects)
-    let end = rest.find('}').unwrap_or(rest.len());
-    let raw = &rest[..end];
-    // Convert JSON key-value pairs to readable format: "a":1,"b":"hi" -> a=1, b="hi"
-    if raw.is_empty() {
-        return String::new();
-    }
-    let mut result = String::new();
-    let mut chars = raw.chars().peekable();
-    while chars.peek().is_some() {
-        // Skip leading quote for key
-        if chars.peek() == Some(&'"') {
-            chars.next();
-        }
-        // Read key
-        let key: String = chars.by_ref().take_while(|&c| c != '"').collect();
-        // Skip colon
-        if chars.peek() == Some(&':') {
-            chars.next();
-        }
-        if !result.is_empty() {
-            result.push_str(", ");
-        }
-        result.push_str(&key);
-        result.push('=');
-        // Read value until comma or end
-        let mut val = String::new();
-        let mut in_str = false;
-        while let Some(&c) = chars.peek() {
-            if c == '"' {
-                in_str = !in_str;
-                val.push(c);
-                chars.next();
-            } else if c == '\\' && in_str {
-                val.push(c);
-                chars.next();
-                if let Some(&esc) = chars.peek() {
-                    val.push(esc);
-                    chars.next();
-                }
-            } else if c == ',' && !in_str {
-                chars.next();
-                break;
-            } else {
-                val.push(c);
-                chars.next();
-            }
-        }
-        result.push_str(&val);
-    }
-    result
-}
-
-/// Extract the value field (can be a number, string, bool, or null).
-fn extract_value(line: &str) -> String {
-    let needle = "\"value\":";
-    let Some(start) = line.find(needle) else { return String::new() };
-    let start = start + needle.len();
-    let rest = &line[start..];
-    if rest.starts_with('"') {
-        // String value
-        extract_str(line, "value").unwrap_or_default()
-    } else if rest.starts_with("null") {
-        "void".to_string()
-    } else if rest.starts_with("true") {
-        "true".to_string()
-    } else if rest.starts_with("false") {
-        "false".to_string()
-    } else {
-        // Numeric
-        let end = rest.find(|c: char| !c.is_ascii_digit() && c != '-' && c != '.').unwrap_or(rest.len());
-        rest[..end].to_string()
+/// Format a JSON value for display: null → "void", strings quoted, numbers/bools as-is.
+fn format_json_value(v: &Value) -> String {
+    match v {
+        Value::Null => "void".to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Number(n) => n.to_string(),
+        Value::String(s) => format!("\"{s}\""),
+        _ => v.to_string(),
     }
 }
 
-/// Extract the raw content of the "vars":{...} object from a trace line.
-/// Returns the key-value content between the braces (e.g. `"n":5,"m":3`).
-fn extract_vars_raw(line: &str) -> String {
-    let needle = "\"vars\":{";
-    let Some(start) = line.find(needle) else { return String::new() };
-    let start = start + needle.len();
-    let rest = &line[start..];
-    let end = rest.find('}').unwrap_or(rest.len());
-    rest[..end].to_string()
+/// Format a JSON object as comma-separated key=value pairs for display.
+/// e.g. {"a":1,"b":"hi"} → "a=1, b=\"hi\""
+fn format_object_as_pairs(v: &Value) -> String {
+    let Some(obj) = v.as_object() else { return String::new() };
+    obj.iter()
+        .map(|(k, v)| format!("{k}={}", format_json_value(v)))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
-/// Parse vars raw JSON content into (name, value) pairs.
-/// Input format: `"n":5,"m":3` or `"name":"Alice"`.
-fn parse_vars_pairs(raw: &str) -> Vec<(String, String)> {
-    if raw.is_empty() {
-        return Vec::new();
-    }
-    let mut result = Vec::new();
-    let mut chars = raw.chars().peekable();
-    while chars.peek().is_some() {
-        // Skip leading quote for key
-        if chars.peek() == Some(&'"') {
-            chars.next();
-        }
-        // Read key
-        let key: String = chars.by_ref().take_while(|&c| c != '"').collect();
-        // Skip colon
-        if chars.peek() == Some(&':') {
-            chars.next();
-        }
-        // Read value until comma or end
-        let mut val = String::new();
-        let mut in_str = false;
-        while let Some(&c) = chars.peek() {
-            if c == '"' {
-                in_str = !in_str;
-                chars.next();
-                if !in_str {
-                    // Just closed a string — val already has the content
-                    break;
-                }
-                // Opening quote — don't add to val
-            } else if c == '\\' && in_str {
-                chars.next();
-                if let Some(&esc) = chars.peek() {
-                    match esc {
-                        'n' => val.push('\n'),
-                        't' => val.push('\t'),
-                        '\\' => val.push('\\'),
-                        '"' => val.push('"'),
-                        other => { val.push('\\'); val.push(other); }
-                    }
-                    chars.next();
-                }
-            } else if c == ',' && !in_str {
-                chars.next();
-                break;
-            } else {
-                val.push(c);
-                chars.next();
-            }
-        }
-        if !key.is_empty() {
-            // For string values, wrap in quotes for display
-            if val.contains(|c: char| !c.is_ascii_digit() && c != '-' && c != '.')
-                && val != "true"
-                && val != "false"
-                && val != "null"
-                && !val.starts_with('\'')
-            {
-                result.push((key, format!("\"{}\"", val)));
-            } else {
-                result.push((key, val));
-            }
-        }
-    }
-    result
-}
-
-/// Substitute variable names with their values in source text using word-boundary matching.
+/// Substitute variable names with their runtime values in source text.
+/// Uses word-boundary matching to avoid replacing inside longer identifiers.
 /// Returns `Some(substituted)` if any substitution occurred, `None` otherwise.
-fn substitute_vars(src: &str, vars_raw: &str) -> Option<String> {
-    let pairs = parse_vars_pairs(vars_raw);
-    if pairs.is_empty() {
-        return None;
-    }
+fn substitute_vars(src: &str, vars: &Value) -> Option<String> {
+    let obj = match vars.as_object() {
+        Some(m) if !m.is_empty() => m,
+        _ => return None,
+    };
+
+    let pairs: Vec<(&str, String)> = obj
+        .iter()
+        .map(|(k, v)| (k.as_str(), format_json_value(v)))
+        .collect();
 
     let mut result = src.to_string();
     let mut changed = false;
 
     for (name, value) in &pairs {
         let mut new_result = String::with_capacity(result.len());
-        let name_bytes = name.as_bytes();
-        let result_bytes = result.as_bytes();
-        let mut i = 0;
+        let mut chars = result.char_indices().peekable();
 
-        while i < result_bytes.len() {
-            if i + name_bytes.len() <= result_bytes.len()
-                && &result_bytes[i..i + name_bytes.len()] == name_bytes
-            {
+        while let Some((i, c)) = chars.next() {
+            if result[i..].starts_with(name) {
                 // Check word boundary before
                 let before_ok = i == 0 || {
-                    let c = result_bytes[i - 1];
-                    !c.is_ascii_alphanumeric() && c != b'_'
+                    let prev = result[..i].chars().next_back().unwrap();
+                    !prev.is_alphanumeric() && prev != '_'
                 };
                 // Check word boundary after
-                let after_ok = i + name_bytes.len() >= result_bytes.len() || {
-                    let c = result_bytes[i + name_bytes.len()];
-                    !c.is_ascii_alphanumeric() && c != b'_'
+                let after_pos = i + name.len();
+                let after_ok = after_pos >= result.len() || {
+                    let next = result[after_pos..].chars().next().unwrap();
+                    !next.is_alphanumeric() && next != '_'
                 };
 
                 if before_ok && after_ok {
                     new_result.push_str(value);
-                    i += name_bytes.len();
+                    // Skip remaining chars of the matched name
+                    while chars.peek().is_some_and(|&(j, _)| j < after_pos) {
+                        chars.next();
+                    }
                     changed = true;
                     continue;
                 }
             }
-            new_result.push(result_bytes[i] as char);
-            i += 1;
+            new_result.push(c);
         }
         result = new_result;
     }
 
     if changed { Some(result) } else { None }
-}
-
-fn unescape_json_str(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    let mut chars = s.chars();
-    while let Some(c) = chars.next() {
-        if c == '\\' {
-            match chars.next() {
-                Some('n') => result.push('\n'),
-                Some('t') => result.push('\t'),
-                Some('\\') => result.push('\\'),
-                Some('"') => result.push('"'),
-                Some(other) => { result.push('\\'); result.push(other); }
-                None => result.push('\\'),
-            }
-        } else {
-            result.push(c);
-        }
-    }
-    result
 }
 
 fn parse_trace_line(line: &str) -> Option<TraceEvent> {
@@ -291,51 +106,62 @@ fn parse_trace_line(line: &str) -> Option<TraceEvent> {
         return None;
     }
 
-    if line.contains("\"type\":\"test_start\"") {
-        let name = extract_str(line, "name")?;
-        Some(TraceEvent::TestStart { name })
-    } else if line.contains("\"type\":\"test_end\"") {
-        let name = extract_str(line, "name")?;
-        let status = extract_str(line, "status").unwrap_or_else(|| "unknown".to_string());
-        let duration_ms = extract_int(line, "duration_ms").unwrap_or(0);
-        Some(TraceEvent::TestEnd { name, status, duration_ms })
-    } else if line.contains("\"type\":\"call\"") {
-        let function = extract_str(line, "fn")?;
-        let args = extract_args(line);
-        let depth = extract_int(line, "depth").unwrap_or(0) as i32;
-        Some(TraceEvent::Call { function, args, depth })
-    } else if line.contains("\"type\":\"return\"") {
-        let function = extract_str(line, "fn")?;
-        let depth = extract_int(line, "depth").unwrap_or(0) as i32;
-        Some(TraceEvent::Return { function, depth })
-    } else if line.contains("\"type\":\"loop\"") {
-        let kind = extract_str(line, "kind").unwrap_or_else(|| "loop".to_string());
-        let depth = extract_int(line, "depth").unwrap_or(0) as i32;
-        let detail = if kind == "for" {
-            let var = extract_str(line, "var").unwrap_or_default();
-            let value = extract_value(line);
-            format!("{var}={value}")
-        } else {
-            let iter = extract_int(line, "iter").unwrap_or(0);
-            format!("iter {iter}")
-        };
-        Some(TraceEvent::Loop { kind, detail, depth })
-    } else if line.contains("\"type\":\"stmt_start\"") || line.contains("\"type\":\"assert_start\"") {
-        let src = extract_str(line, "src").unwrap_or_default();
-        let vars = extract_vars_raw(line);
-        let depth = extract_int(line, "depth").unwrap_or(0) as i32;
-        Some(TraceEvent::StmtStart { src, vars, depth })
-    } else if line.contains("\"type\":\"stmt_end\"") || line.contains("\"type\":\"assert_end\"") {
-        let depth = extract_int(line, "depth").unwrap_or(0) as i32;
-        Some(TraceEvent::StmtEnd { depth })
-    } else if line.contains("\"type\":\"branch\"") {
-        let kind = extract_str(line, "kind").unwrap_or_else(|| "if".to_string());
-        let depth = extract_int(line, "depth").unwrap_or(0) as i32;
-        let src = extract_str(line, "src").unwrap_or_default();
-        let vars = extract_vars_raw(line);
-        Some(TraceEvent::Branch { kind, depth, src, vars })
-    } else {
-        None
+    let obj: Value = serde_json::from_str(line).ok()?;
+    let typ = obj["type"].as_str()?;
+
+    match typ {
+        "test_start" => {
+            let name = obj["name"].as_str()?.to_string();
+            Some(TraceEvent::TestStart { name })
+        }
+        "test_end" => {
+            let name = obj["name"].as_str()?.to_string();
+            let status = obj["status"].as_str().unwrap_or("unknown").to_string();
+            let duration_ms = obj["duration_ms"].as_i64().unwrap_or(0);
+            Some(TraceEvent::TestEnd { name, status, duration_ms })
+        }
+        "call" => {
+            let function = obj["fn"].as_str()?.to_string();
+            let args = obj.get("args").cloned().unwrap_or(Value::Null);
+            let depth = obj["depth"].as_i64().unwrap_or(0) as i32;
+            Some(TraceEvent::Call { function, args, depth })
+        }
+        "return" => {
+            let function = obj["fn"].as_str()?.to_string();
+            let depth = obj["depth"].as_i64().unwrap_or(0) as i32;
+            Some(TraceEvent::Return { function, depth })
+        }
+        "loop" => {
+            let kind = obj["kind"].as_str().unwrap_or("loop").to_string();
+            let depth = obj["depth"].as_i64().unwrap_or(0) as i32;
+            let detail = if kind == "for" {
+                let var = obj["var"].as_str().unwrap_or_default();
+                let value = format_json_value(&obj["value"]);
+                format!("{var}={value}")
+            } else {
+                let iter = obj["iter"].as_i64().unwrap_or(0);
+                format!("iter {iter}")
+            };
+            Some(TraceEvent::Loop { kind, detail, depth })
+        }
+        "stmt_start" | "assert_start" => {
+            let src = obj["src"].as_str().unwrap_or_default().to_string();
+            let vars = obj.get("vars").cloned().unwrap_or(Value::Null);
+            let depth = obj["depth"].as_i64().unwrap_or(0) as i32;
+            Some(TraceEvent::StmtStart { src, vars, depth })
+        }
+        "stmt_end" | "assert_end" => {
+            let depth = obj["depth"].as_i64().unwrap_or(0) as i32;
+            Some(TraceEvent::StmtEnd { depth })
+        }
+        "branch" => {
+            let kind = obj["kind"].as_str().unwrap_or("if").to_string();
+            let depth = obj["depth"].as_i64().unwrap_or(0) as i32;
+            let src = obj["src"].as_str().unwrap_or_default().to_string();
+            let vars = obj.get("vars").cloned().unwrap_or(Value::Null);
+            Some(TraceEvent::Branch { kind, depth, src, vars })
+        }
+        _ => None,
     }
 }
 
@@ -535,10 +361,12 @@ fn html_escape(s: &str) -> String {
 fn render_node_label(event: &TraceEvent) -> String {
     match event {
         TraceEvent::Call { function, args, .. } => {
-            let args_display = if args.is_empty() {
+            let is_empty = args.is_null()
+                || args.as_object().map_or(true, |m| m.is_empty());
+            let args_display = if is_empty {
                 "()".to_string()
             } else {
-                format!("({})", html_escape(args))
+                format!("({})", html_escape(&format_object_as_pairs(args)))
             };
             format!(
                 "<span class=\"fn-name\">{}</span>{}",
@@ -581,12 +409,8 @@ fn render_node_label(event: &TraceEvent) -> String {
 /// Compute variable substitution text for a node, if applicable.
 fn node_substitution(event: &TraceEvent) -> Option<String> {
     match event {
-        TraceEvent::StmtStart { src, vars, .. } if !vars.is_empty() => {
-            substitute_vars(src, vars)
-        }
-        TraceEvent::Branch { src, vars, .. } if !vars.is_empty() => {
-            substitute_vars(src, vars)
-        }
+        TraceEvent::StmtStart { src, vars, .. } => substitute_vars(src, vars),
+        TraceEvent::Branch { src, vars, .. } => substitute_vars(src, vars),
         _ => None,
     }
 }
@@ -841,6 +665,7 @@ function ttoggle(id) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn parse_test_start() {
@@ -873,7 +698,7 @@ mod tests {
         match event {
             TraceEvent::Call { function, args, depth } => {
                 assert_eq!(function, "factorial");
-                assert!(args.contains("n=3"));
+                assert_eq!(args, json!({"n": 3}));
                 assert_eq!(depth, 0);
             }
             _ => panic!("expected Call"),
@@ -1007,8 +832,8 @@ mod tests {
     #[test]
     fn build_tree_call_return_pair() {
         let events = vec![
-            TraceEvent::Call { function: "add".into(), args: "a=1".into(), depth: 0 },
-            TraceEvent::StmtStart { src: "auto r = 3".into(), vars: String::new(), depth: 1 },
+            TraceEvent::Call { function: "add".into(), args: json!({"a": 1}), depth: 0 },
+            TraceEvent::StmtStart { src: "auto r = 3".into(), vars: Value::Null, depth: 1 },
             TraceEvent::StmtEnd { depth: 1 },
             TraceEvent::Return { function: "add".into(), depth: 0 },
         ];
@@ -1023,8 +848,8 @@ mod tests {
     #[test]
     fn build_tree_nested_calls() {
         let events = vec![
-            TraceEvent::Call { function: "outer".into(), args: String::new(), depth: 0 },
-            TraceEvent::Call { function: "inner".into(), args: String::new(), depth: 1 },
+            TraceEvent::Call { function: "outer".into(), args: Value::Null, depth: 0 },
+            TraceEvent::Call { function: "inner".into(), args: Value::Null, depth: 1 },
             TraceEvent::Return { function: "inner".into(), depth: 1 },
             TraceEvent::Return { function: "outer".into(), depth: 0 },
         ];
@@ -1037,14 +862,14 @@ mod tests {
     #[test]
     fn build_tree_loop_groups_children() {
         let events = vec![
-            TraceEvent::Call { function: "sum".into(), args: String::new(), depth: 0 },
-            TraceEvent::StmtStart { src: "auto t = 0".into(), vars: String::new(), depth: 1 },
+            TraceEvent::Call { function: "sum".into(), args: Value::Null, depth: 0 },
+            TraceEvent::StmtStart { src: "auto t = 0".into(), vars: Value::Null, depth: 1 },
             TraceEvent::StmtEnd { depth: 1 },
             TraceEvent::Loop { kind: "for".into(), detail: "i=1".into(), depth: 1 },
-            TraceEvent::StmtStart { src: "t = t + i".into(), vars: String::new(), depth: 1 },
+            TraceEvent::StmtStart { src: "t = t + i".into(), vars: Value::Null, depth: 1 },
             TraceEvent::StmtEnd { depth: 1 },
             TraceEvent::Loop { kind: "for".into(), detail: "i=2".into(), depth: 1 },
-            TraceEvent::StmtStart { src: "t = t + i".into(), vars: String::new(), depth: 1 },
+            TraceEvent::StmtStart { src: "t = t + i".into(), vars: Value::Null, depth: 1 },
             TraceEvent::StmtEnd { depth: 1 },
             TraceEvent::Return { function: "sum".into(), depth: 0 },
         ];
@@ -1064,9 +889,9 @@ mod tests {
     fn build_tree_flat_stmts() {
         // stmt_start/stmt_end pairs without inner calls produce leaf nodes
         let events = vec![
-            TraceEvent::StmtStart { src: "assert 1 == 1".into(), vars: String::new(), depth: 0 },
+            TraceEvent::StmtStart { src: "assert 1 == 1".into(), vars: Value::Null, depth: 0 },
             TraceEvent::StmtEnd { depth: 0 },
-            TraceEvent::StmtStart { src: "assert 2 == 2".into(), vars: String::new(), depth: 0 },
+            TraceEvent::StmtStart { src: "assert 2 == 2".into(), vars: Value::Null, depth: 0 },
             TraceEvent::StmtEnd { depth: 0 },
         ];
         let tree = build_tree(events);
@@ -1079,8 +904,8 @@ mod tests {
     fn build_tree_stmt_brackets_call() {
         // stmt_start/stmt_end should bracket a call, producing an expandable tree node
         let events = vec![
-            TraceEvent::StmtStart { src: "auto x = add(1, 2)".into(), vars: String::new(), depth: 0 },
-            TraceEvent::Call { function: "add".into(), args: "a=1, b=2".into(), depth: 1 },
+            TraceEvent::StmtStart { src: "auto x = add(1, 2)".into(), vars: Value::Null, depth: 0 },
+            TraceEvent::Call { function: "add".into(), args: json!({"a": 1, "b": 2}), depth: 1 },
             TraceEvent::Return { function: "add".into(), depth: 1 },
             TraceEvent::StmtEnd { depth: 0 },
         ];
@@ -1096,7 +921,7 @@ mod tests {
     fn build_report_groups_by_test() {
         let events = vec![
             TraceEvent::TestStart { name: "test_a".to_string() },
-            TraceEvent::Call { function: "add".to_string(), args: "a=1, b=2".to_string(), depth: 0 },
+            TraceEvent::Call { function: "add".to_string(), args: json!({"a": 1, "b": 2}), depth: 0 },
             TraceEvent::Return { function: "add".to_string(), depth: 0 },
             TraceEvent::TestEnd { name: "test_a".to_string(), status: "pass".to_string(), duration_ms: 1 },
             TraceEvent::TestStart { name: "test_b".to_string() },
@@ -1112,22 +937,6 @@ mod tests {
     }
 
     #[test]
-    fn extract_args_parses_correctly() {
-        let line = r#"{"type":"call","fn":"add","args":{"a":1,"b":2},"depth":0}"#;
-        let args = extract_args(line);
-        assert!(args.contains("a=1"));
-        assert!(args.contains("b=2"));
-    }
-
-    #[test]
-    fn extract_args_with_string_value() {
-        let line = r#"{"type":"call","fn":"greet","args":{"name":"Alice"},"depth":0}"#;
-        let args = extract_args(line);
-        assert!(args.contains("name="));
-        assert!(args.contains("Alice"));
-    }
-
-    #[test]
     fn html_escape_works() {
         assert_eq!(html_escape("<b>test</b>"), "&lt;b&gt;test&lt;/b&gt;");
         assert_eq!(html_escape("a & b"), "a &amp; b");
@@ -1140,7 +949,7 @@ mod tests {
         match event {
             TraceEvent::StmtStart { src, vars, depth } => {
                 assert_eq!(src, "return fibonacci(n - 1) + fibonacci(n - 2)");
-                assert_eq!(vars, r#""n":5"#);
+                assert_eq!(vars, json!({"n": 5}));
                 assert_eq!(depth, 1);
             }
             _ => panic!("expected StmtStart"),
@@ -1155,7 +964,7 @@ mod tests {
             TraceEvent::Branch { kind, src, vars, depth } => {
                 assert_eq!(kind, "if");
                 assert_eq!(src, "if n <= 1");
-                assert_eq!(vars, r#""n":5"#);
+                assert_eq!(vars, json!({"n": 5}));
                 assert_eq!(depth, 2);
             }
             _ => panic!("expected Branch"),
@@ -1164,33 +973,33 @@ mod tests {
 
     #[test]
     fn substitute_simple() {
-        let result = substitute_vars("return fibonacci(n - 1) + fibonacci(n - 2)", r#""n":5"#);
+        let result = substitute_vars("return fibonacci(n - 1) + fibonacci(n - 2)", &json!({"n": 5}));
         assert_eq!(result, Some("return fibonacci(5 - 1) + fibonacci(5 - 2)".to_string()));
     }
 
     #[test]
     fn substitute_word_boundary() {
         // Should NOT replace "n" inside "name" or "fn"
-        let result = substitute_vars("name + fn(n)", r#""n":3"#);
+        let result = substitute_vars("name + fn(n)", &json!({"n": 3}));
         assert_eq!(result, Some("name + fn(3)".to_string()));
     }
 
     #[test]
     fn substitute_no_change() {
         // Variable not present in source
-        let result = substitute_vars("return 42", r#""x":10"#);
+        let result = substitute_vars("return 42", &json!({"x": 10}));
         assert_eq!(result, None);
     }
 
     #[test]
     fn substitute_multiple_vars() {
-        let result = substitute_vars("a + b", r#""a":1,"b":2"#);
+        let result = substitute_vars("a + b", &json!({"a": 1, "b": 2}));
         assert_eq!(result, Some("1 + 2".to_string()));
     }
 
     #[test]
     fn substitute_bool_var() {
-        let result = substitute_vars("if flag", r#""flag":true"#);
+        let result = substitute_vars("if flag", &json!({"flag": true}));
         assert_eq!(result, Some("if true".to_string()));
     }
 
@@ -1198,7 +1007,7 @@ mod tests {
     fn build_tree_stmt_with_subst() {
         // A StmtStart with vars but no children should still be expandable in the rendered HTML
         let events = vec![
-            TraceEvent::StmtStart { src: "return n + 1".into(), vars: r#""n":5"#.into(), depth: 0 },
+            TraceEvent::StmtStart { src: "return n + 1".into(), vars: json!({"n": 5}), depth: 0 },
             TraceEvent::StmtEnd { depth: 0 },
         ];
         let tree = build_tree(events);

@@ -1,19 +1,11 @@
 # TODO
 
 
-## High Priority — Trace / HTML report
-
-- **Fragile hand-rolled JSON parser in `src/report.rs`**: The ~300-line parser (`extract_str`, `extract_int`, `extract_args`, `extract_vars_raw`, `parse_vars_pairs`) uses naive string scanning that will break on nested objects, values containing key-like substrings, or any non-trivial JSON. `extract_args` assumes no nested `{}` in args. `parse_vars_pairs` uses a heuristic to guess if values are strings. `extract_args` and `parse_vars_pairs` are near-duplicate state machines. Either switch to `serde_json` or consolidate into a single robust extractor. [added: 2026-02-14]
-
-- **`Stmt::Expr` not traced (`c_stmt.rs:304-307`)**: Bare expression statements (e.g. `print("hello")`, standalone function calls) get zero trace instrumentation — no `stmt_start`/`stmt_end` wrapper. This creates gaps in the execution timeline where a function call event appears with no enclosing statement. [added: 2026-02-14]
-
 ## Medium Priority — Trace / HTML report
 
 - **Duplicated branch trace emission (`c_stmt.rs:439-506`)**: The trace code for `if`, `elif`, and `else` branches is copy-pasted ~60 lines each, differing only in the `kind` field. Extract into a helper like `emit_branch_trace(kind, condition_span, condition_expr, emitter)`. Same duplication exists for while-loop trace between the `while-else` and plain `while` paths. [added: 2026-02-14]
 
 - **Inconsistent return event format**: Void-function implicit returns (`c_item.rs:482`) emit `"value":null`, expression-body returns (`c_item.rs:511-523`) emit a typed `"value"` field, and explicit `return` statements (`c_stmt.rs:89-91`) emit no `value` field at all. The report parser ignores the field entirely. Either commit to capturing return values and displaying them, or remove the `value` field from all return events for consistency. [added: 2026-02-14]
-
-- **Non-ASCII bug in `substitute_vars` (`report.rs:234-261`)**: Variable substitution indexes by byte position and reconstructs with `result_bytes[i] as char`, which truncates any byte > 127. Source lines with unicode (accented comments, unicode string literals) will produce corrupted substitution text. Needs proper UTF-8 handling via `char_indices()` or similar. [added: 2026-02-14]
 
 - **`VarDecl` with pattern destructuring not traced (`c_stmt.rs:850-860`)**: Only `Pattern::Binding` declarations get `stmt_start`/`stmt_end`. Tuple patterns (`let (a, b) = get_pair()`) and wildcard patterns are invisible in the trace. [added: 2026-02-14]
 

@@ -302,8 +302,15 @@ impl CodegenContext<'_> {
             }
 
             Stmt::Expr(expr) => {
+                if self.trace {
+                    let vars = self.collect_expr_vars(&[&expr.node]);
+                    self.emit_stmt_start(span, &vars, emitter);
+                }
                 let e = self.gen_expr(expr);
                 emitter.emit_line(&format!("{e};"));
+                if self.trace {
+                    self.emit_stmt_end(emitter);
+                }
             }
 
             Stmt::Assign { target, value } => {
