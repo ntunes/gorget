@@ -1895,6 +1895,10 @@ The following methods are available on built-in types without any import.
 | `split(delim)` | `str → Vector[str]` | Split into parts by delimiter |
 | `join(parts)` | `Vector[str] → str` | Join strings with receiver as separator |
 | `repeat(n)` | `int → str` | Repeat string `n` times |
+| `removeprefix(prefix)` | `str → str` | Remove `prefix` if present, otherwise return unchanged |
+| `removesuffix(suffix)` | `str → str` | Remove `suffix` if present, otherwise return unchanged |
+| `pad_left(n, char)` | `int, char → str` | Left-pad to width `n` with fill character |
+| `pad_right(n, char)` | `int, char → str` | Right-pad to width `n` with fill character |
 | `hash()` | `→ int` | Hash value |
 
 **`char`** — Character methods
@@ -1905,6 +1909,10 @@ The following methods are available on built-in types without any import.
 | `is_digit()` | `→ bool` | True if ASCII digit |
 | `is_alphanumeric()` | `→ bool` | True if alphabetic or digit |
 | `is_whitespace()` | `→ bool` | True if whitespace |
+| `is_upper()` | `→ bool` | True if uppercase letter |
+| `is_lower()` | `→ bool` | True if lowercase letter |
+| `to_upper()` | `→ char` | Convert to uppercase |
+| `to_lower()` | `→ char` | Convert to lowercase |
 
 **`Vector[T]`** — Dynamic array
 
@@ -1917,10 +1925,20 @@ The following methods are available on built-in types without any import.
 | `remove(index)` | `int → T` | Remove element at index, shifting subsequent elements |
 | `len()` | `→ int` | Number of elements |
 | `is_empty()` | `→ bool` | True if length is zero |
+| `contains(item)` | `T → bool` | True if element exists (by value) |
+| `index_of(item)` | `T → int` | Index of first match, or `-1` |
+| `insert(index, item)` | `int, T → void` | Insert element at index, shifting subsequent elements |
+| `extend(other)` | `Vector[T] → void` | Append all elements from another vector |
+| `slice(start, end)` | `int, int → Vector[T]` | New vector from elements `[start, end)` |
 | `clear()` | `→ void` | Remove all elements |
 | `reserve(n)` | `int → void` | Pre-allocate capacity for at least `n` elements |
-| `filter(pred)` | `T(T) → bool → Vector[T]` | Elements satisfying predicate |
-| `map(f)` | `T(T) → U → Vector[U]` | Apply function to each element |
+| `sort()` | `→ void` | Sort elements in place (ascending) |
+| `sorted()` | `→ Vector[T]` | Return a new sorted copy |
+| `reverse()` | `→ void` | Reverse elements in place |
+| `any(pred)` | `(T) → bool → bool` | True if any element satisfies predicate |
+| `all(pred)` | `(T) → bool → bool` | True if all elements satisfy predicate |
+| `filter(pred)` | `(T) → bool → Vector[T]` | Elements satisfying predicate |
+| `map(f)` | `(T) → U → Vector[U]` | Apply function to each element |
 | `fold(init, f)` | `U, (U, T) → U → U` | Left fold with initial value |
 | `reduce(f)` | `(T, T) → T → T` | Reduce without initial value |
 
@@ -1935,6 +1953,11 @@ The following methods are available on built-in types without any import.
 | `len()` | `→ int` | Number of entries |
 | `is_empty()` | `→ bool` | True if length is zero |
 | `clear()` | `→ void` | Remove all entries |
+| `get_or(key, default)` | `K, V → V` | Get value for key, or return `default` |
+| `update(other)` | `Dict[K, V] → void` | Merge all entries from `other` (overwrites existing keys) |
+| `keys()` | `→ Vector[K]` | All keys as a vector |
+| `values()` | `→ Vector[V]` | All values as a vector |
+| `items()` | `→ Vector[(K, V)]` | All key-value pairs as a vector of tuples |
 | `filter(pred)` | `(K, V) → bool → Dict[K, V]` | Entries satisfying predicate |
 | `fold(init, f)` | `U, (U, K, V) → U → U` | Left fold over entries |
 
@@ -1948,7 +1971,12 @@ The following methods are available on built-in types without any import.
 | `len()` | `→ int` | Number of elements |
 | `is_empty()` | `→ bool` | True if length is zero |
 | `clear()` | `→ void` | Remove all elements |
-| `filter(pred)` | `T(T) → bool → Set[T]` | Elements satisfying predicate |
+| `union(other)` | `Set[T] → Set[T]` | New set with elements from both |
+| `intersection(other)` | `Set[T] → Set[T]` | New set with elements in both |
+| `difference(other)` | `Set[T] → Set[T]` | New set with elements in self but not `other` |
+| `is_subset(other)` | `Set[T] → bool` | True if all elements are in `other` |
+| `is_superset(other)` | `Set[T] → bool` | True if `other`'s elements are all in self |
+| `filter(pred)` | `(T) → bool → Set[T]` | Elements satisfying predicate |
 | `fold(init, f)` | `U, (U, T) → U → U` | Left fold over elements |
 
 **`Option[T]`** — Optional value
@@ -1956,6 +1984,7 @@ The following methods are available on built-in types without any import.
 | Method | Signature | Description |
 |---|---|---|
 | `unwrap()` | `→ T` | Extract value (panics if `None`) |
+| `expect(msg)` | `str → T` | Extract value (panics with `msg` if `None`) |
 | `unwrap_or(default)` | `T → T` | Extract value or return default |
 | `is_some()` | `→ bool` | True if `Some` |
 | `is_none()` | `→ bool` | True if `None` |
@@ -1968,6 +1997,7 @@ The following methods are available on built-in types without any import.
 | Method | Signature | Description |
 |---|---|---|
 | `unwrap()` | `→ T` | Extract value (panics if `Error`) |
+| `expect(msg)` | `str → T` | Extract value (panics with `msg` if `Error`) |
 | `unwrap_or(default)` | `T → T` | Extract value or return default |
 | `is_ok()` | `→ bool` | True if `Ok` |
 | `is_err()` | `→ bool` | True if `Error` |
