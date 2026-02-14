@@ -1732,121 +1732,141 @@ The following functions are available without import:
 | `type`        | `String(any)`           | Runtime type name               |
 | `panic`       | `Never(String)`         | Abort with message              |
 
-### 15.1 Standard Library Modules
+### 15.1 Built-in Traits
 
-The following functions are available via `import`:
+The compiler automatically registers the following core traits. They cannot be redefined but any user type may implement them via equip blocks (§5.5). Implementing a built-in trait unlocks the corresponding compiler feature.
 
-**`std.fs`** — File system
+| Trait | Required Method | Returns | Compiler Feature |
+|---|---|---|---|
+| `Displayable` | `str display(self)` | `str` | String interpolation, `print()` |
+| `Equatable` | `bool eq(self, Self other)` | `bool` | `==` and `!=` operators |
+| `Hashable` | `int hash(self)` | `int` | `Dict` keys, `Set` elements |
+| `Cloneable` | `Self clone(self)` | `Self` | Deep copying |
+| `Drop` | `void drop(!self)` | `void` | Auto-cleanup on scope exit, `with` statement (§6.14) |
+| `Iterator[T]` | `Option[T] next(&self)` | `Option[T]` | `for` loop desugaring (§6.11) |
 
-| Function | Signature | Description |
-|---|---|---|
-| `read_file` | `str(str)` | Read entire file to string |
-| `write_file` | `void(str, str)` | Write string to file |
-| `append_file` | `void(str, str)` | Append string to file |
-| `file_exists` | `bool(str)` | Check if file exists |
-| `delete_file` | `bool(str)` | Delete a file |
+#### Displayable
 
-**`std.path`** — Path manipulation
+Enables string interpolation (`"{value}"`) and `print()` for user-defined types. Without this trait, using a non-primitive type in interpolation is a compile-time error (`NonPrintableInterpolation`).
 
-| Function | Signature | Description |
-|---|---|---|
-| `path_join` | `str(str, str)` | Join two path segments |
-| `path_parent` | `str(str)` | Parent directory |
-| `path_basename` | `str(str)` | File name component |
-| `path_extension` | `str(str)` | File extension |
-| `path_stem` | `str(str)` | File name without extension |
+```gorget
+struct Point:
+    float x
+    float y
 
-**`std.os`** — Operating system
+equip Point with Displayable:
+    str display(self):
+        return "({self.x}, {self.y})"
 
-| Function | Signature | Description |
-|---|---|---|
-| `exec` | `int(str)` | Run a shell command, return exit code |
-| `exit` | `void(int)` | Exit with status code |
-| `getenv` | `str(str)` | Get environment variable |
-| `setenv` | `void(str, str)` | Set environment variable |
-| `getcwd` | `str()` | Current working directory |
-| `platform` | `str()` | OS name: `"macos"`, `"linux"`, `"windows"`, `"freebsd"` |
-| `args` | `Vector[str]()` | CLI arguments |
-| `readdir` | `Vector[str](str)` | List directory entries |
+Point p = Point(3.0, 4.0)
+print("{p}")  # prints: (3.0, 4.0)
+```
 
-**`std.conv`** — Type conversions
+#### Equatable
 
-| Function | Signature | Description |
-|---|---|---|
-| `ord` | `int(char)` | Character to integer code point |
-| `chr` | `char(int)` | Integer code point to character |
-| `parse_int` | `int(str)` | Parse string as integer |
-| `parse_float` | `float(str)` | Parse string as float |
-| `int_to_str` | `str(int)` | Integer to string |
-| `float_to_str` | `str(float)` | Float to string (compact format) |
-| `bool_to_str` | `str(bool)` | Bool to `"true"` or `"false"` |
-| `char_to_str` | `str(char)` | Single character to string |
+Enables `==` and `!=` operators for user-defined types. The `Self` parameter refers to the implementing type.
 
-**`std.io`** — I/O
+```gorget
+equip Point with Equatable:
+    bool eq(self, Point other):
+        return self.x == other.x and self.y == other.y
 
-| Name | Signature | Description |
-|---|---|---|
-| `stderr` | `File` | Standard error stream |
-| `stdout` | `File` | Standard output stream |
-| `getchar` | `int()` | Read one byte from stdin (-1 on EOF) |
-| `term_cols` | `int()` | Terminal width in columns |
-| `term_rows` | `int()` | Terminal height in rows |
-| `input` | `str(str)` | Print prompt, read a line from stdin |
-| `readline` | `str()` | Read a line from stdin (no prompt) |
+if p1 == p2:
+    print("equal")
+```
 
-**`std.random`** — Random numbers
+#### Hashable
 
-| Function | Signature | Description |
-|---|---|---|
-| `rand` | `int()` | Random integer |
-| `seed` | `void(int)` | Seed the random number generator |
-| `rand_range` | `int(int, int)` | Random integer in `[lo, hi)` |
+Required for types used as `Dict` keys or `Set` elements. Should return a consistent integer hash.
 
-**`std.time`** — Time
+```gorget
+equip Point with Hashable:
+    int hash(self):
+        return self.x * 31 + self.y
 
-| Function | Signature | Description |
-|---|---|---|
-| `time` | `int()` | Current Unix timestamp in seconds |
-| `time_ms` | `int()` | Current time in milliseconds |
-| `sleep_ms` | `void(int)` | Sleep for milliseconds |
+Set[Point] points = {}
+points.add(Point(1.0, 2.0))
+```
 
-**`std.math`** — Math
+#### Cloneable
 
-| Function | Signature | Description |
-|---|---|---|
-| `abs` | `int(int)` | Absolute value (integer) |
-| `min` | `int(int, int)` | Minimum of two integers |
-| `max` | `int(int, int)` | Maximum of two integers |
-| `sqrt` | `float(float)` | Square root |
-| `pow` | `float(float, float)` | Exponentiation |
-| `floor` | `float(float)` | Round down |
-| `ceil` | `float(float)` | Round up |
-| `round` | `float(float)` | Round to nearest |
-| `log` | `float(float)` | Natural logarithm |
-| `log2` | `float(float)` | Base-2 logarithm |
-| `log10` | `float(float)` | Base-10 logarithm |
-| `sin` | `float(float)` | Sine |
-| `cos` | `float(float)` | Cosine |
-| `tan` | `float(float)` | Tangent |
-| `asin` | `float(float)` | Arcsine |
-| `acos` | `float(float)` | Arccosine |
-| `atan` | `float(float)` | Arctangent |
-| `atan2` | `float(float, float)` | Two-argument arctangent |
-| `fabs` | `float(float)` | Absolute value (float) |
-| `fmin` | `float(float, float)` | Minimum of two floats |
-| `fmax` | `float(float, float)` | Maximum of two floats |
+Enables deep copying of values. The return type `Self` resolves to the implementing type.
 
-**`std.fmt`** — Formatting
+```gorget
+equip Point with Cloneable:
+    Point clone(self):
+        return Point(self.x, self.y)
 
-Re-exports the `Displayable` trait and `format` builtin for discoverability. Both are available in the prelude without an explicit import.
+Point copy = p.clone()
+```
 
-**`std.test.process`** — Test process execution
+#### Drop
 
-| Name | Signature | Description |
-|---|---|---|
-| `ProcessResult` | struct | Result of a process: `output: str`, `errors: str`, `exit_code: int` |
-| `run` | `int(str)` | Run a shell command, return exit code |
-| `run_output` | `ProcessResult(str)` | Run a command, capture stdout and exit code |
+Provides deterministic cleanup. The `drop` method is called automatically when a value goes out of scope, and is invoked by the `with` statement (§6.14). The `!self` parameter means `drop` takes ownership of the value (move semantics).
+
+```gorget
+struct Connection:
+    int fd
+
+equip Connection with Drop:
+    void drop(!self):
+        close_fd(self.fd)
+
+with Connection(open_fd("db")) as conn:
+    conn.query("SELECT 1")
+# conn.drop() called automatically here
+```
+
+#### Iterator[T]
+
+Enables `for` loop iteration (§6.11). The type parameter `T` is the element type. The `&self` parameter means `next` takes a mutable borrow, allowing the iterator to advance its internal state.
+
+```gorget
+struct Counter:
+    int current
+    int max
+
+equip Counter with Iterator[int]:
+    Option[int] next(&self):
+        if self.current < self.max:
+            int val = self.current
+            self.current = self.current + 1
+            return Some(val)
+        return None()
+
+for i in Counter(0, 5):
+    print("{i}")  # prints 0 through 4
+```
+
+#### Trait Features
+
+**Default method implementations.** Trait methods may include a body, providing a default that implementors can override (§5.4):
+
+```gorget
+trait Greetable:
+    str name(self)
+    str greet(self):
+        return "Hello, {self.name()}!"
+
+equip Person with Greetable:
+    str name(self):
+        return self.first_name
+    # greet() uses the default implementation
+```
+
+**Trait inheritance.** The `extends` keyword declares supertrait requirements. A type implementing a child trait must also implement all parent traits. The child's vtable includes parent method slots.
+
+```gorget
+trait Animal extends Displayable:
+    str sound(self)
+```
+
+**Delegation via field.** The `via` clause on equip blocks auto-forwards unimplemented trait methods through a struct field (§5.5):
+
+```gorget
+equip Wrapper with Displayable via inner:
+    pass  # display() forwarded to self.inner.display()
+```
 
 ### 15.2 Built-in Type Methods
 
@@ -1966,6 +1986,122 @@ The following methods are available on built-in types without any import.
 | `read_all()` | `→ str` | Read entire file contents |
 | `write(data)` | `str → void` | Write string to file |
 | `close()` | `→ void` | Close the file handle |
+
+### 15.3 Standard Library Modules
+
+The following functions are available via `import`:
+
+**`std.fs`** — File system
+
+| Function | Signature | Description |
+|---|---|---|
+| `read_file` | `str(str)` | Read entire file to string |
+| `write_file` | `void(str, str)` | Write string to file |
+| `append_file` | `void(str, str)` | Append string to file |
+| `file_exists` | `bool(str)` | Check if file exists |
+| `delete_file` | `bool(str)` | Delete a file |
+
+**`std.path`** — Path manipulation
+
+| Function | Signature | Description |
+|---|---|---|
+| `path_join` | `str(str, str)` | Join two path segments |
+| `path_parent` | `str(str)` | Parent directory |
+| `path_basename` | `str(str)` | File name component |
+| `path_extension` | `str(str)` | File extension |
+| `path_stem` | `str(str)` | File name without extension |
+
+**`std.os`** — Operating system
+
+| Function | Signature | Description |
+|---|---|---|
+| `exec` | `int(str)` | Run a shell command, return exit code |
+| `exit` | `void(int)` | Exit with status code |
+| `getenv` | `str(str)` | Get environment variable |
+| `setenv` | `void(str, str)` | Set environment variable |
+| `getcwd` | `str()` | Current working directory |
+| `platform` | `str()` | OS name: `"macos"`, `"linux"`, `"windows"`, `"freebsd"` |
+| `args` | `Vector[str]()` | CLI arguments |
+| `readdir` | `Vector[str](str)` | List directory entries |
+
+**`std.conv`** — Type conversions
+
+| Function | Signature | Description |
+|---|---|---|
+| `ord` | `int(char)` | Character to integer code point |
+| `chr` | `char(int)` | Integer code point to character |
+| `parse_int` | `int(str)` | Parse string as integer |
+| `parse_float` | `float(str)` | Parse string as float |
+| `int_to_str` | `str(int)` | Integer to string |
+| `float_to_str` | `str(float)` | Float to string (compact format) |
+| `bool_to_str` | `str(bool)` | Bool to `"true"` or `"false"` |
+| `char_to_str` | `str(char)` | Single character to string |
+
+**`std.io`** — I/O
+
+| Name | Signature | Description |
+|---|---|---|
+| `stderr` | `File` | Standard error stream |
+| `stdout` | `File` | Standard output stream |
+| `getchar` | `int()` | Read one byte from stdin (-1 on EOF) |
+| `term_cols` | `int()` | Terminal width in columns |
+| `term_rows` | `int()` | Terminal height in rows |
+| `input` | `str(str)` | Print prompt, read a line from stdin |
+| `readline` | `str()` | Read a line from stdin (no prompt) |
+
+**`std.random`** — Random numbers
+
+| Function | Signature | Description |
+|---|---|---|
+| `rand` | `int()` | Random integer |
+| `seed` | `void(int)` | Seed the random number generator |
+| `rand_range` | `int(int, int)` | Random integer in `[lo, hi)` |
+
+**`std.time`** — Time
+
+| Function | Signature | Description |
+|---|---|---|
+| `time` | `int()` | Current Unix timestamp in seconds |
+| `time_ms` | `int()` | Current time in milliseconds |
+| `sleep_ms` | `void(int)` | Sleep for milliseconds |
+
+**`std.math`** — Math
+
+| Function | Signature | Description |
+|---|---|---|
+| `abs` | `int(int)` | Absolute value (integer) |
+| `min` | `int(int, int)` | Minimum of two integers |
+| `max` | `int(int, int)` | Maximum of two integers |
+| `sqrt` | `float(float)` | Square root |
+| `pow` | `float(float, float)` | Exponentiation |
+| `floor` | `float(float)` | Round down |
+| `ceil` | `float(float)` | Round up |
+| `round` | `float(float)` | Round to nearest |
+| `log` | `float(float)` | Natural logarithm |
+| `log2` | `float(float)` | Base-2 logarithm |
+| `log10` | `float(float)` | Base-10 logarithm |
+| `sin` | `float(float)` | Sine |
+| `cos` | `float(float)` | Cosine |
+| `tan` | `float(float)` | Tangent |
+| `asin` | `float(float)` | Arcsine |
+| `acos` | `float(float)` | Arccosine |
+| `atan` | `float(float)` | Arctangent |
+| `atan2` | `float(float, float)` | Two-argument arctangent |
+| `fabs` | `float(float)` | Absolute value (float) |
+| `fmin` | `float(float, float)` | Minimum of two floats |
+| `fmax` | `float(float, float)` | Maximum of two floats |
+
+**`std.fmt`** — Formatting
+
+Re-exports the `Displayable` trait and `format` builtin for discoverability. Both are available in the prelude without an explicit import.
+
+**`std.test.process`** — Test process execution
+
+| Name | Signature | Description |
+|---|---|---|
+| `ProcessResult` | struct | Result of a process: `output: str`, `errors: str`, `exit_code: int` |
+| `run` | `int(str)` | Run a shell command, return exit code |
+| `run_output` | `ProcessResult(str)` | Run a command, capture stdout and exit code |
 
 ---
 
