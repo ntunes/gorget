@@ -22,8 +22,6 @@
 
 - **`build_tree` silently absorbs malformed events (`report.rs:383-466`)**: Depth jumps (0→3 without intermediates) get silently absorbed. Unmatched `Return`/`StmtEnd` against the root frame are dropped with no warning. Should at minimum log a diagnostic. [added: 2026-02-14]
 
-- **Broken doc comments in `c_item.rs:551,560`**: Lines start with `/ ` instead of `// ` — appears to be a typo where one `/` was lost. [added: 2026-02-14]
-
 ## Medium Priority — Stdlib gaps
 - `std.fs`: `mkdir`, `rmdir`, `rename`, `copy_file`, `file_size`, `is_dir` [added: 2026-02-14]
 
