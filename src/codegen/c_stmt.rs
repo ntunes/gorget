@@ -83,11 +83,12 @@ impl CodegenContext<'_> {
 
     /// Emit a trace "return" event. If `expr_var` is Some, it's the C variable
     /// holding the return value; if None, this is a void return.
-    fn emit_trace_return(&self, expr_var: Option<&str>, emitter: &mut CEmitter) {
+    fn emit_trace_return(&self, expr_var: Option<&str>, stmt_span: Span, emitter: &mut CEmitter) {
         let fn_name = self.current_function_gorget_name.as_deref().unwrap_or("?");
+        let src = c_string_escape(&self.source_line(stmt_span));
         emitter.emit_line("__gorget_trace_depth--;");
         let s = format!(
-            r#"fprintf(__gorget_trace_fp, "{{\"type\":\"return\",\"fn\":\"{fn_name}\",\"value\":");"#
+            r#"fprintf(__gorget_trace_fp, "{{\"type\":\"return\",\"fn\":\"{fn_name}\",\"src\":\"{src}\",\"value\":");"#
         );
         emitter.emit_line(&s);
         if let Some(var) = expr_var {
@@ -281,13 +282,13 @@ impl CodegenContext<'_> {
                         emitter.emit_line(&format!("__typeof__({e}) __ret_tmp = {e};"));
                         self.emit_cleanup_to(DropScopeKind::Function, emitter);
                         if self.trace {
-                            self.emit_trace_return(Some("__ret_tmp"), emitter);
+                            self.emit_trace_return(Some("__ret_tmp"), span, emitter);
                         }
                         emitter.emit_line("return __ret_tmp;");
                     } else {
                         self.emit_cleanup_to(DropScopeKind::Function, emitter);
                         if self.trace {
-                            self.emit_trace_return(None, emitter);
+                            self.emit_trace_return(None, span, emitter);
                         }
                         emitter.emit_line("return;");
                     }
@@ -295,14 +296,14 @@ impl CodegenContext<'_> {
                     let e = self.gen_expr(expr);
                     if self.trace {
                         emitter.emit_line(&format!("__typeof__({e}) __ret_tmp = {e};"));
-                        self.emit_trace_return(Some("__ret_tmp"), emitter);
+                        self.emit_trace_return(Some("__ret_tmp"), span, emitter);
                         emitter.emit_line("return __ret_tmp;");
                     } else {
                         emitter.emit_line(&format!("return {e};"));
                     }
                 } else {
                     if self.trace {
-                        self.emit_trace_return(None, emitter);
+                        self.emit_trace_return(None, span, emitter);
                     }
                     emitter.emit_line("return;");
                 }

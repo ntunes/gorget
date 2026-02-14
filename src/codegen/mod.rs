@@ -189,6 +189,7 @@ pub fn c_string_escape(s: &str) -> String {
     s.replace('\\', "\\\\")
         .replace('"', "\\\"")
         .replace('\n', "\\n")
+        .replace('%', "%%")
 }
 
 /// Generate C source code from a parsed and analyzed Gorget module.

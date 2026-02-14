@@ -8,7 +8,7 @@ pub enum TraceEvent {
     TestStart { name: String },
     TestEnd { name: String, status: String, duration_ms: i64 },
     Call { function: String, args: String, depth: i32 },
-    Return { function: String, value: String, depth: i32 },
+    Return { function: String, value: String, depth: i32, src: String },
     Loop { kind: String, detail: String, depth: i32 },
     Stmt { kind: String, name: String, value: String, depth: i32, src: String },
     Branch { kind: String, depth: i32, src: String },
@@ -182,7 +182,8 @@ fn parse_trace_line(line: &str) -> Option<TraceEvent> {
         let function = extract_str(line, "fn")?;
         let value = extract_value(line);
         let depth = extract_int(line, "depth").unwrap_or(0) as i32;
-        Some(TraceEvent::Return { function, value, depth })
+        let src = extract_str(line, "src").unwrap_or_default();
+        Some(TraceEvent::Return { function, value, depth, src })
     } else if line.contains("\"type\":\"loop\"") {
         let kind = extract_str(line, "kind").unwrap_or_else(|| "loop".to_string());
         let depth = extract_int(line, "depth").unwrap_or(0) as i32;
@@ -431,29 +432,39 @@ fn render_node_label(event: &TraceEvent) -> String {
                 format!("({})", html_escape(args))
             };
             format!(
-                "<span class=\"event-icon call-icon\">&#x2192;</span> \
-                 <span class=\"fn-name\">{}</span>{}",
+                "<span class=\"fn-name\">{}</span>{}",
                 html_escape(function),
                 args_display,
             )
         }
-        TraceEvent::Return { function, value, .. } => {
-            let val_display = if value == "void" || value.is_empty() {
-                String::new()
+        TraceEvent::Return { function, value, src, .. } => {
+            if !src.is_empty() {
+                let val_display = if value == "void" || value.is_empty() {
+                    String::new()
+                } else {
+                    format!(" <span class=\"ret-value\">[= {}]</span>", html_escape(value))
+                };
+                format!(
+                    "<span class=\"source-text\">{}</span>{}",
+                    html_escape(src),
+                    val_display,
+                )
             } else {
-                format!(" <span class=\"ret-value\">&rarr; {}</span>", html_escape(value))
-            };
-            format!(
-                "<span class=\"event-icon return-icon\">&#x2190;</span> \
-                 <span class=\"fn-name\">{}</span>{}",
-                html_escape(function),
-                val_display,
-            )
+                let val_display = if value == "void" || value.is_empty() {
+                    String::new()
+                } else {
+                    format!(" <span class=\"ret-value\">&rarr; {}</span>", html_escape(value))
+                };
+                format!(
+                    "<span class=\"fn-name\">{}</span>{}",
+                    html_escape(function),
+                    val_display,
+                )
+            }
         }
         TraceEvent::Loop { kind, detail, .. } => {
             format!(
-                "<span class=\"event-icon loop-icon\">&#x21BB;</span> \
-                 <span class=\"loop-kw\">{}</span> {}",
+                "<span class=\"loop-kw\">{}</span> {}",
                 html_escape(kind),
                 html_escape(detail),
             )
@@ -461,14 +472,12 @@ fn render_node_label(event: &TraceEvent) -> String {
         TraceEvent::Stmt { kind, name, value, src, .. } => {
             if !src.is_empty() {
                 format!(
-                    "<span class=\"event-icon stmt-icon\">=</span> \
-                     <span class=\"source-text\">{}</span>",
+                    "<span class=\"source-text\">{}</span>",
                     html_escape(src),
                 )
             } else if kind == "let" {
                 format!(
-                    "<span class=\"event-icon stmt-icon\">=</span> \
-                     <span class=\"stmt-kw\">let</span> \
+                    "<span class=\"stmt-kw\">let</span> \
                      <span class=\"var-name\">{}</span> = \
                      <span class=\"lit-value\">{}</span>",
                     html_escape(name),
@@ -477,8 +486,7 @@ fn render_node_label(event: &TraceEvent) -> String {
             } else {
                 // assign
                 format!(
-                    "<span class=\"event-icon stmt-icon\">=</span> \
-                     <span class=\"var-name\">{}</span> = \
+                    "<span class=\"var-name\">{}</span> = \
                      <span class=\"lit-value\">{}</span>",
                     html_escape(name),
                     html_escape(value),
@@ -488,14 +496,12 @@ fn render_node_label(event: &TraceEvent) -> String {
         TraceEvent::Branch { kind, src, .. } => {
             if !src.is_empty() {
                 format!(
-                    "<span class=\"event-icon branch-icon\">&#x2387;</span> \
-                     <span class=\"source-text\">{}</span>",
+                    "<span class=\"source-text\">{}</span>",
                     html_escape(src),
                 )
             } else {
                 format!(
-                    "<span class=\"event-icon branch-icon\">&#x2387;</span> \
-                     <span class=\"branch-kw\">{}</span>",
+                    "<span class=\"branch-kw\">{}</span>",
                     html_escape(kind),
                 )
             }
@@ -503,13 +509,11 @@ fn render_node_label(event: &TraceEvent) -> String {
         TraceEvent::AssertStart { src, .. } => {
             if !src.is_empty() {
                 format!(
-                    "<span class=\"event-icon assert-icon\">&#x2714;</span> \
-                     <span class=\"source-text\">{}</span>",
+                    "<span class=\"source-text\">{}</span>",
                     html_escape(src),
                 )
             } else {
-                "<span class=\"event-icon assert-icon\">&#x2714;</span> \
-                 <span class=\"stmt-kw\">assert</span>"
+                "<span class=\"stmt-kw\">assert</span>"
                     .to_string()
             }
         }
@@ -715,12 +719,6 @@ h1 { font-size: 1.5rem; margin-bottom: 8px; color: #fff; }
 .tree-toggle.open { transform: rotate(90deg); }
 .tree-children { display: none; padding-left: 20px; }
 .tree-children.open { display: block; }
-.event-icon { display: inline-block; width: 16px; text-align: center; }
-.call-icon { color: #64b5f6; }
-.return-icon { color: #81c784; }
-.loop-icon { color: #ffb74d; }
-.stmt-icon { color: #90a4ae; }
-.branch-icon { color: #ba68c8; }
 .fn-name { color: #ce93d8; }
 .ret-value { color: #aed581; }
 .loop-kw { color: #ffb74d; font-weight: bold; }
@@ -728,7 +726,6 @@ h1 { font-size: 1.5rem; margin-bottom: 8px; color: #fff; }
 .var-name { color: #80cbc4; }
 .lit-value { color: #fff176; }
 .branch-kw { color: #ba68c8; font-weight: bold; }
-.assert-icon { color: #66bb6a; }
 .source-text { color: #e0e0e0; font-family: "SFMono-Regular", Consolas, monospace; }
 "#;
 
@@ -803,7 +800,7 @@ mod tests {
         let line = r#"{"type":"return","fn":"factorial","value":6,"depth":0}"#;
         let event = parse_trace_line(line).unwrap();
         match event {
-            TraceEvent::Return { function, value, depth } => {
+            TraceEvent::Return { function, value, depth, .. } => {
                 assert_eq!(function, "factorial");
                 assert_eq!(value, "6");
                 assert_eq!(depth, 0);
@@ -964,7 +961,7 @@ mod tests {
         let events = vec![
             TraceEvent::Call { function: "add".into(), args: "a=1".into(), depth: 0 },
             TraceEvent::Stmt { kind: "let".into(), name: "r".into(), value: "3".into(), depth: 1, src: String::new() },
-            TraceEvent::Return { function: "add".into(), value: "3".into(), depth: 0 },
+            TraceEvent::Return { function: "add".into(), value: "3".into(), depth: 0, src: String::new() },
         ];
         let tree = build_tree(events);
         // Should produce one Call node with two children: Stmt + Return
@@ -980,8 +977,8 @@ mod tests {
         let events = vec![
             TraceEvent::Call { function: "outer".into(), args: String::new(), depth: 0 },
             TraceEvent::Call { function: "inner".into(), args: String::new(), depth: 1 },
-            TraceEvent::Return { function: "inner".into(), value: "1".into(), depth: 1 },
-            TraceEvent::Return { function: "outer".into(), value: "2".into(), depth: 0 },
+            TraceEvent::Return { function: "inner".into(), value: "1".into(), depth: 1, src: String::new() },
+            TraceEvent::Return { function: "outer".into(), value: "2".into(), depth: 0, src: String::new() },
         ];
         let tree = build_tree(events);
         assert_eq!(tree.len(), 1); // outer
@@ -999,7 +996,7 @@ mod tests {
             TraceEvent::Stmt { kind: "assign".into(), name: "t".into(), value: "1".into(), depth: 1, src: String::new() },
             TraceEvent::Loop { kind: "for".into(), detail: "i=2".into(), depth: 1 },
             TraceEvent::Stmt { kind: "assign".into(), name: "t".into(), value: "3".into(), depth: 1, src: String::new() },
-            TraceEvent::Return { function: "sum".into(), value: "3".into(), depth: 0 },
+            TraceEvent::Return { function: "sum".into(), value: "3".into(), depth: 0, src: String::new() },
         ];
         let tree = build_tree(events);
         // Should be: Call(sum) with children: [let, Loop(i=1, [assign]), Loop(i=2, [assign]), Return]
@@ -1033,7 +1030,7 @@ mod tests {
         let events = vec![
             TraceEvent::AssertStart { src: "assert add(1, 2) == 3".into(), depth: 0 },
             TraceEvent::Call { function: "add".into(), args: "a=1, b=2".into(), depth: 1 },
-            TraceEvent::Return { function: "add".into(), value: "3".into(), depth: 1 },
+            TraceEvent::Return { function: "add".into(), value: "3".into(), depth: 1, src: String::new() },
             TraceEvent::AssertEnd { depth: 0 },
         ];
         let tree = build_tree(events);
@@ -1053,7 +1050,7 @@ mod tests {
         let events = vec![
             TraceEvent::TestStart { name: "test_a".to_string() },
             TraceEvent::Call { function: "add".to_string(), args: "a=1, b=2".to_string(), depth: 0 },
-            TraceEvent::Return { function: "add".to_string(), value: "3".to_string(), depth: 0 },
+            TraceEvent::Return { function: "add".to_string(), value: "3".to_string(), depth: 0, src: String::new() },
             TraceEvent::TestEnd { name: "test_a".to_string(), status: "pass".to_string(), duration_ms: 1 },
             TraceEvent::TestStart { name: "test_b".to_string() },
             TraceEvent::TestEnd { name: "test_b".to_string(), status: "fail".to_string(), duration_ms: 2 },
