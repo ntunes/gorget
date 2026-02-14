@@ -81,6 +81,7 @@ fn try_build(
     test_tags: &[String],
     test_exclude_tags: &[String],
     test_name_filter: Option<&str>,
+    output_dir: Option<&Path>,
 ) -> Result<PathBuf, String> {
     let mut parser = Parser::new(source);
     let module = parser.parse_module();
@@ -126,7 +127,8 @@ fn try_build(
 
     // Determine output paths
     let input_path = Path::new(filename);
-    let dir = input_path.parent().unwrap_or(Path::new("."));
+    let default_dir = input_path.parent().unwrap_or(Path::new("."));
+    let dir = output_dir.unwrap_or(default_dir);
     let stem = input_path
         .file_stem()
         .and_then(|s| s.to_str())
@@ -212,8 +214,9 @@ fn build(
     test_tags: &[String],
     test_exclude_tags: &[String],
     test_name_filter: Option<&str>,
+    output_dir: Option<&Path>,
 ) -> PathBuf {
-    try_build(filename, source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, test_mode, test_tags, test_exclude_tags, test_name_filter)
+    try_build(filename, source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, test_mode, test_tags, test_exclude_tags, test_name_filter, output_dir)
         .unwrap_or_else(|e| {
             eprintln!("{e}");
             process::exit(1);
@@ -410,7 +413,7 @@ fn run_repl() {
         let gg_path_str = gg_path.display().to_string();
 
         // Try to build
-        match try_build(&gg_path_str, &source, false, false, false, false, false, false, false, &[], &[], None) {
+        match try_build(&gg_path_str, &source, false, false, false, false, false, false, false, &[], &[], None, Some(&tmp_dir)) {
             Err(e) => {
                 eprintln!("{e}");
                 // Don't update buffers on error
@@ -494,7 +497,11 @@ fn main() {
         let overflow_checked = args.iter().any(|a| a == "--overflow=checked");
         let trace = args.iter().any(|a| a == "--trace");
         let no_trace = args.iter().any(|a| a == "--no-trace");
-        let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None);
+        let tmp_dir = tempfile::tempdir().unwrap_or_else(|e| {
+            eprintln!("Failed to create temp directory: {e}");
+            process::exit(1);
+        });
+        let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, Some(tmp_dir.path()));
         let status = Command::new(&exe_path)
             .status()
             .unwrap_or_else(|e| {
@@ -653,17 +660,22 @@ fn main() {
             }
         }
         "build" => {
-            let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None);
+            let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, None);
             println!("Built: {}", exe_path.display());
         }
         "run" => {
-            let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None);
+            let tmp_dir = tempfile::tempdir().unwrap_or_else(|e| {
+                eprintln!("Failed to create temp directory: {e}");
+                process::exit(1);
+            });
+            let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, Some(tmp_dir.path()));
             let status = Command::new(&exe_path)
                 .status()
                 .unwrap_or_else(|e| {
                     eprintln!("Failed to execute {}: {e}", exe_path.display());
                     process::exit(1);
                 });
+            // tmp_dir is dropped here, cleaning up .c and binary
             process::exit(status.code().unwrap_or(1));
         }
         "test" => {
@@ -704,7 +716,7 @@ fn main() {
             }
             // --report html implies --trace (unless --no-trace is explicit)
             let trace = if report_html && !no_trace { true } else { trace };
-            let exe_path = build(filename, &source, false, false, false, false, trace, no_trace, true, &test_tags, &test_exclude_tags, test_name_filter.as_deref());
+            let exe_path = build(filename, &source, false, false, false, false, trace, no_trace, true, &test_tags, &test_exclude_tags, test_name_filter.as_deref(), None);
             let status = Command::new(&exe_path)
                 .status()
                 .unwrap_or_else(|e| {

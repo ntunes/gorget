@@ -98,6 +98,7 @@ dependencies = [
  "pretty_assertions",
  "rustc-hash",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
