@@ -2424,6 +2424,67 @@ fn trace_in_test_mode() {
 }
 
 #[test]
+fn vector_sort() {
+    run_gg(
+        "vector_sort.gg",
+        "\
+1
+1
+3
+4
+5
+3
+2
+1
+2
+5
+8
+5",
+    );
+}
+
+#[test]
+fn dict_keys_values() {
+    run_gg(
+        "dict_keys_values.gg",
+        "\
+alice
+bob
+carol
+25
+30
+35
+90
+3",
+    );
+}
+
+#[test]
+fn dict_items() {
+    run_gg(
+        "dict_items.gg",
+        "\
+3
+60",
+    );
+}
+
+#[test]
+fn set_operations() {
+    run_gg(
+        "set_operations.gg",
+        "\
+6
+2
+has 3
+has 4
+2
+has 1
+has 2",
+    );
+}
+
+#[test]
 fn string_methods2() {
     run_gg(
         "string_methods2.gg",

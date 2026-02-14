@@ -9,6 +9,19 @@ use super::c_mangle;
 use super::c_types;
 use super::CodegenContext;
 
+/// Map a C element type to its qsort comparator function name.
+fn sort_comparator_for_type(elem_type: &str) -> &'static str {
+    match elem_type {
+        "int64_t" | "int32_t" | "int16_t" | "int8_t" => "__gorget_cmp_i64",
+        "uint64_t" | "uint32_t" | "uint16_t" | "uint8_t" => "__gorget_cmp_i64",
+        "double" | "float" => "__gorget_cmp_f64",
+        "const char*" => "__gorget_cmp_str",
+        "char" => "__gorget_cmp_char",
+        "bool" => "__gorget_cmp_bool",
+        _ => "__gorget_cmp_i64", // fallback
+    }
+}
+
 /// Check if an expression is a C lvalue (can take its address directly).
 fn is_lvalue(expr: &Expr) -> bool {
     match expr {
@@ -1510,6 +1523,28 @@ impl CodegenContext<'_> {
                     .unwrap_or_else(|| "0".to_string());
                 format!("gorget_array_reserve({recv_ref}, (size_t)({arg}))")
             }
+            "sort" => {
+                let cmp = sort_comparator_for_type(&elem_type);
+                format!("({{ qsort({recv}.data, {recv}.len, sizeof({elem_type}), {cmp}); }})")
+            }
+            "sorted" => {
+                let cmp = sort_comparator_for_type(&elem_type);
+                format!(
+                    "({{ GorgetArray __sorted_src = {recv}; \
+                    GorgetArray __sorted_dst = gorget_array_new(sizeof({elem_type})); \
+                    if (__sorted_src.len > 0) {{ \
+                        __sorted_dst.data = malloc(__sorted_src.len * sizeof({elem_type})); \
+                        memcpy(__sorted_dst.data, __sorted_src.data, __sorted_src.len * sizeof({elem_type})); \
+                        __sorted_dst.len = __sorted_src.len; \
+                        __sorted_dst.cap = __sorted_src.len; \
+                    }} \
+                    qsort(__sorted_dst.data, __sorted_dst.len, sizeof({elem_type}), {cmp}); \
+                    __sorted_dst; }})"
+                )
+            }
+            "reverse" => {
+                format!("gorget_array_reverse({recv_ref})")
+            }
             "filter" => {
                 let closure_fn = self.gen_expr(&args[0].node.value);
                 self.patch_last_closure_return_type("bool");
@@ -1715,6 +1750,46 @@ impl CodegenContext<'_> {
             "is_empty" => {
                 format!("({recv}.count == 0)")
             }
+            "keys" => {
+                let (key_type, _val_type) = self.infer_map_kv_types(receiver);
+                format!(
+                    "({{ {mangled} __dk_src = {recv}; \
+                    GorgetArray __dk_result = gorget_array_new(sizeof({key_type})); \
+                    for (size_t __dk_i = 0; __dk_i < __dk_src.cap; __dk_i++) {{ \
+                        if (__dk_src.states[__dk_i] != 1) continue; \
+                        {key_type} __dk_k = __dk_src.keys[__dk_i]; \
+                        gorget_array_push(&__dk_result, &__dk_k); \
+                    }} \
+                    __dk_result; }})"
+                )
+            }
+            "values" => {
+                let (_key_type, val_type) = self.infer_map_kv_types(receiver);
+                format!(
+                    "({{ {mangled} __dv_src = {recv}; \
+                    GorgetArray __dv_result = gorget_array_new(sizeof({val_type})); \
+                    for (size_t __dv_i = 0; __dv_i < __dv_src.cap; __dv_i++) {{ \
+                        if (__dv_src.states[__dv_i] != 1) continue; \
+                        {val_type} __dv_v = __dv_src.values[__dv_i]; \
+                        gorget_array_push(&__dv_result, &__dv_v); \
+                    }} \
+                    __dv_result; }})"
+                )
+            }
+            "items" => {
+                let (key_type, val_type) = self.infer_map_kv_types(receiver);
+                let tuple_name = self.register_tuple_typedef(&[key_type.clone(), val_type.clone()]);
+                format!(
+                    "({{ {mangled} __di_src = {recv}; \
+                    GorgetArray __di_result = gorget_array_new(sizeof({tuple_name})); \
+                    for (size_t __di_i = 0; __di_i < __di_src.cap; __di_i++) {{ \
+                        if (__di_src.states[__di_i] != 1) continue; \
+                        {tuple_name} __di_item = ({tuple_name}){{ __di_src.keys[__di_i], __di_src.values[__di_i] }}; \
+                        gorget_array_push(&__di_result, &__di_item); \
+                    }} \
+                    __di_result; }})"
+                )
+            }
             "filter" => {
                 let (key_type, val_type) = self.infer_map_kv_types(receiver);
                 let closure_fn = self.gen_expr(&args[0].node.value);
@@ -1806,6 +1881,53 @@ impl CodegenContext<'_> {
             }
             "is_empty" => {
                 format!("(gorget_set_len({recv_ref}) == 0)")
+            }
+            "union" => {
+                let elem_type = self.infer_vector_elem_type(receiver);
+                let arg = self.gen_expr(&args[0].node.value);
+                format!(
+                    "({{ GorgetSet __su_self = {recv}; GorgetSet __su_other = {arg}; \
+                    GorgetSet __su_result = gorget_set_new(sizeof({elem_type})); \
+                    for (size_t __su_i = 0; __su_i < __su_self.cap; __su_i++) {{ \
+                        if (__su_self.states[__su_i] != 1) continue; \
+                        {elem_type} __su_elem = *({elem_type}*)((char*)__su_self.keys + __su_i * __su_self.key_size); \
+                        gorget_set_add(&__su_result, &__su_elem); \
+                    }} \
+                    for (size_t __su_j = 0; __su_j < __su_other.cap; __su_j++) {{ \
+                        if (__su_other.states[__su_j] != 1) continue; \
+                        {elem_type} __su_elem2 = *({elem_type}*)((char*)__su_other.keys + __su_j * __su_other.key_size); \
+                        gorget_set_add(&__su_result, &__su_elem2); \
+                    }} \
+                    __su_result; }})"
+                )
+            }
+            "intersection" => {
+                let elem_type = self.infer_vector_elem_type(receiver);
+                let arg = self.gen_expr(&args[0].node.value);
+                format!(
+                    "({{ GorgetSet __si_self = {recv}; GorgetSet __si_other = {arg}; \
+                    GorgetSet __si_result = gorget_set_new(sizeof({elem_type})); \
+                    for (size_t __si_i = 0; __si_i < __si_self.cap; __si_i++) {{ \
+                        if (__si_self.states[__si_i] != 1) continue; \
+                        {elem_type} __si_elem = *({elem_type}*)((char*)__si_self.keys + __si_i * __si_self.key_size); \
+                        if (gorget_set_contains(&__si_other, &__si_elem)) {{ gorget_set_add(&__si_result, &__si_elem); }} \
+                    }} \
+                    __si_result; }})"
+                )
+            }
+            "difference" => {
+                let elem_type = self.infer_vector_elem_type(receiver);
+                let arg = self.gen_expr(&args[0].node.value);
+                format!(
+                    "({{ GorgetSet __sd_self = {recv}; GorgetSet __sd_other = {arg}; \
+                    GorgetSet __sd_result = gorget_set_new(sizeof({elem_type})); \
+                    for (size_t __sd_i = 0; __sd_i < __sd_self.cap; __sd_i++) {{ \
+                        if (__sd_self.states[__sd_i] != 1) continue; \
+                        {elem_type} __sd_elem = *({elem_type}*)((char*)__sd_self.keys + __sd_i * __sd_self.key_size); \
+                        if (!gorget_set_contains(&__sd_other, &__sd_elem)) {{ gorget_set_add(&__sd_result, &__sd_elem); }} \
+                    }} \
+                    __sd_result; }})"
+                )
             }
             "filter" => {
                 // Set elem type is the first generic type arg, same as Vector
@@ -3166,6 +3288,8 @@ impl CodegenContext<'_> {
         if receiver_type == "GorgetArray" {
             return match method {
                 "len" | "get" | "pop" => Some(self.types.int_id),
+                "contains" => Some(self.types.bool_id),
+                "sort" | "reverse" => Some(self.types.void_id),
                 _ => None,
             };
         }

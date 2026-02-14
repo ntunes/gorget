@@ -1,0 +1,28 @@
+from std.collections import Dict, Vector
+
+void main():
+    Dict[str, int] ages = Dict[str, int]()
+    ages.put("alice", 30)
+    ages.put("bob", 25)
+    ages.put("carol", 35)
+
+    # keys
+    Vector[str] ks = ages.keys()
+    ks.sort()
+    int i = 0
+    while i < ks.len():
+        str k = ks.get(i)
+        print(k)
+        i = i + 1
+
+    # values (sorted for deterministic output)
+    Vector[int] vs = ages.values()
+    vs.sort()
+    print("{vs.get(0)}")
+    print("{vs.get(1)}")
+    print("{vs.get(2)}")
+
+    # items length
+    int total = ages.fold(0, (int acc, str k, int v): acc + v)
+    print("{total}")
+    print("{ks.len()}")

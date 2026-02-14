@@ -275,6 +275,7 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, strip_asserts: boo
 
     // 2b. Tuple typedefs (after forward declarations, before type definitions)
     ctx.emit_tuple_typedefs(&mut emitter);
+    let tuple_count_before_codegen = ctx.tuple_typedefs.len();
 
     // 2c. Emit monomorphized generic type definitions (structs/enums only)
     //     These must appear before regular type definitions so that structs
@@ -296,27 +297,43 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, strip_asserts: boo
     // 5. Function definitions (closures are collected during this pass)
     ctx.emit_function_definitions(module, &mut emitter);
 
-    // 6. Emit lifted closures (env structs + functions) — these were
+    // 6. Emit lifted closures and late-registered tuple typedefs — these were
     //    collected during expression codegen in step 5. We insert them
     //    before main by re-emitting into a separate buffer and splicing.
-    if !ctx.lifted_closures.is_empty() {
-        let mut closure_buf = CEmitter::new();
-        closure_buf.emit_line("// ── Lifted Closures ──");
-        ctx.emit_lifted_closures(&mut closure_buf);
-        closure_buf.blank_line();
-        // The closures need to appear before the function definitions, so
-        // we prepend them. Since they reference types already declared, this
-        // is safe. We insert just before "// ── Function Definitions ──".
+    let has_late_tuples = ctx.tuple_typedefs.len() > tuple_count_before_codegen;
+    if !ctx.lifted_closures.is_empty() || has_late_tuples {
+        let mut splice_buf = CEmitter::new();
+        // Emit any tuple typedefs registered during codegen (e.g. Dict.items())
+        if has_late_tuples {
+            splice_buf.emit_line("// ── Late Tuple Typedefs ──");
+            for (name, field_types) in ctx.tuple_typedefs[tuple_count_before_codegen..].iter() {
+                let fields: Vec<String> = field_types
+                    .iter()
+                    .enumerate()
+                    .map(|(i, t)| format!("{t} _{i};"))
+                    .collect();
+                splice_buf.emit_line(&format!(
+                    "typedef struct {{ {} }} {name};",
+                    fields.join(" ")
+                ));
+            }
+        }
+        if !ctx.lifted_closures.is_empty() {
+            splice_buf.emit_line("// ── Lifted Closures ──");
+            ctx.emit_lifted_closures(&mut splice_buf);
+        }
+        splice_buf.blank_line();
+        // Insert just before "// ── Function Definitions ──".
         let output = emitter.finish();
         let marker = "// ── Function Definitions ──";
         if let Some(pos) = output.find(marker) {
             let mut combined = String::with_capacity(output.len() + 512);
             combined.push_str(&output[..pos]);
-            combined.push_str(&closure_buf.finish());
+            combined.push_str(&splice_buf.finish());
             combined.push_str(&output[pos..]);
             return combined;
         }
-        return output + &closure_buf.finish();
+        return output + &splice_buf.finish();
     }
 
     emitter.finish()

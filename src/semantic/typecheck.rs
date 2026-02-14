@@ -1754,8 +1754,10 @@ impl<'a> TypeChecker<'a> {
                 "pop" | "get" | "remove" => Some(elem_type()),
                 "set" => Some(self.types.void_id),
                 "len" => Some(self.types.int_id),
-                "clear" | "reserve" => Some(self.types.void_id),
+                "clear" | "reserve" | "sort" | "reverse" => Some(self.types.void_id),
                 "is_empty" => Some(self.types.bool_id),
+                "contains" => Some(self.types.bool_id),
+                "sorted" => Some(receiver_type),
                 _ => None,
             },
             "Dict" | "HashMap" | "Map" => match method {
@@ -1766,6 +1768,31 @@ impl<'a> TypeChecker<'a> {
                 "remove" => Some(self.types.bool_id),
                 "clear" => Some(self.types.void_id),
                 "is_empty" => Some(self.types.bool_id),
+                "keys" => {
+                    // Return Vector[K]
+                    if let Some(vec_def_id) = self.scopes.lookup("Vector") {
+                        Some(self.types.insert(ResolvedType::Generic(vec_def_id, vec![elem_type()])))
+                    } else {
+                        Some(self.types.int_id)
+                    }
+                }
+                "values" => {
+                    // Return Vector[V]
+                    if let Some(vec_def_id) = self.scopes.lookup("Vector") {
+                        Some(self.types.insert(ResolvedType::Generic(vec_def_id, vec![val_type()])))
+                    } else {
+                        Some(self.types.int_id)
+                    }
+                }
+                "items" => {
+                    // Return Vector[(K,V)]
+                    let tuple_tid = self.types.insert(ResolvedType::Tuple(vec![elem_type(), val_type()]));
+                    if let Some(vec_def_id) = self.scopes.lookup("Vector") {
+                        Some(self.types.insert(ResolvedType::Generic(vec_def_id, vec![tuple_tid])))
+                    } else {
+                        Some(self.types.int_id)
+                    }
+                }
                 _ => None,
             },
             "Set" | "HashSet" => match method {
@@ -1775,6 +1802,7 @@ impl<'a> TypeChecker<'a> {
                 "remove" => Some(self.types.bool_id),
                 "clear" => Some(self.types.void_id),
                 "is_empty" => Some(self.types.bool_id),
+                "union" | "intersection" | "difference" => Some(receiver_type),
                 _ => None,
             },
             "str" | "String" => match method {

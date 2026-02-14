@@ -1,0 +1,38 @@
+from std.collections import Vector
+
+void main():
+    # sort integers
+    Vector[int] nums = Vector[int]()
+    nums.push(3)
+    nums.push(1)
+    nums.push(4)
+    nums.push(1)
+    nums.push(5)
+    nums.sort()
+    print("{nums.get(0)}")
+    print("{nums.get(1)}")
+    print("{nums.get(2)}")
+    print("{nums.get(3)}")
+    print("{nums.get(4)}")
+
+    # reverse
+    Vector[int] v = Vector[int]()
+    v.push(1)
+    v.push(2)
+    v.push(3)
+    v.reverse()
+    print("{v.get(0)}")
+    print("{v.get(1)}")
+    print("{v.get(2)}")
+
+    # sorted (returns new copy)
+    Vector[int] orig = Vector[int]()
+    orig.push(5)
+    orig.push(2)
+    orig.push(8)
+    Vector[int] s = orig.sorted()
+    print("{s.get(0)}")
+    print("{s.get(1)}")
+    print("{s.get(2)}")
+    # original unchanged
+    print("{orig.get(0)}")

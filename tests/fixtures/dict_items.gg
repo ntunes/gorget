@@ -1,0 +1,18 @@
+from std.collections import Dict, Vector
+
+void main():
+    Dict[int, int] m = Dict[int, int]()
+    m.put(1, 10)
+    m.put(2, 20)
+    m.put(3, 30)
+
+    auto items = m.items()
+    print("{items.len()}")
+
+    int total = 0
+    int i = 0
+    while i < items.len():
+        auto item = items.get(i)
+        total = total + item._1
+        i = i + 1
+    print("{total}")
