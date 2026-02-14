@@ -42,6 +42,15 @@
 ## Low Priority — Long-term design changes
 - **Rust-model closures**: embed captures inside the closure struct (not a separate env allocation). Each closure becomes a unique anonymous type; polymorphic dispatch via `Fn`/`FnMut`/`FnOnce` traits + monomorphization, `dyn Fn` for trait objects. Eliminates the env pointer indirection and makes closure lifetime identical to the closure value's lifetime. Depends on: closure traits, monomorphization of closure types, trait object support for closures. [added: 2026-02-13]
 
+### Future: Fixture System
+- **Evolutionary path**: suite setup/teardown (done) → `with` clause for per-test resources (Phase 2) → fixture injection (long-term). Each stage builds on the previous; fixtures are the final generalization where named, composable, scoped resources are injected into test signatures automatically. [added: 2026-02-14]
+- **Design questions to resolve**:
+  - *Yield semantics*: pytest fixtures use `yield` for co-located setup/teardown. In a C-targeting language without coroutines, alternatives include Drop-based teardown (leverage existing cleanup stack), explicit `setup`/`teardown` blocks within the fixture definition, or a callback/closure pattern.
+  - *Keyword choice*: `fixture` as a new keyword is the most explicit option. `equip` was considered and rejected — it's the wrong abstraction (`equip` means "implement a trait for a type", not "inject a dependency into a test").
+  - *Scope model*: pytest supports `function`, `class`, `module`, `session` scopes. Gorget could start with `test` (per-test) and `suite` (per-suite) scopes, matching existing setup/teardown granularity.
+  - *Composability*: fixtures that depend on other fixtures (fixture graphs). Requires a resolution/ordering pass at compile time.
+  - *Drop-based vs explicit teardown*: if a fixture's type implements Drop, teardown is automatic. Otherwise, need explicit teardown logic — possibly via the same `with`-style cleanup stack used by the `with` clause.
+
 ## Low Priority — Native backend (LLVM, QBE, or cranelift — after language stabilizes)
 - (no items yet — depends on earlier phases)
 
