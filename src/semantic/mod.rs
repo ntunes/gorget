@@ -104,16 +104,6 @@ pub fn analyze(module: &mut Module) -> AnalysisResult {
 
     // Validate test blocks
     {
-        let has_tests = module.items.iter().any(|i| matches!(&i.node, Item::Test(_)));
-        let has_main = module.items.iter().any(|i| matches!(&i.node, Item::Function(f) if f.name.node == "main"));
-        if has_tests && has_main {
-            if let Some(item) = module.items.iter().find(|i| matches!(&i.node, Item::Function(f) if f.name.node == "main")) {
-                errors.push(SemanticError {
-                    kind: SemanticErrorKind::TestMainConflict,
-                    span: item.span,
-                });
-            }
-        }
         let mut seen_setup = false;
         let mut seen_teardown = false;
         for item in &module.items {

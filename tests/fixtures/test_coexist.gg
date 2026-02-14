@@ -1,0 +1,12 @@
+int double(int x):
+    return x * 2
+
+test "double works":
+    assert double(3) == 6
+    assert double(0) == 0
+
+test "double negative":
+    assert double(-5) == -10
+
+void main():
+    print("{double(21)}")

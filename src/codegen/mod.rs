@@ -166,7 +166,7 @@ pub struct CodegenContext<'a> {
 }
 
 /// Generate C source code from a parsed and analyzed Gorget module.
-pub fn generate_c(module: &Module, analysis: &AnalysisResult, strip_asserts: bool, overflow_wrap: bool, trace: bool, trace_filename: &str, test_tags: &[String]) -> String {
+pub fn generate_c(module: &Module, analysis: &AnalysisResult, strip_asserts: bool, overflow_wrap: bool, trace: bool, trace_filename: &str, test_mode: bool, test_tags: &[String]) -> String {
     let mut field_type_names = FxHashMap::default();
     for item in &module.items {
         if let Item::Struct(s) = &item.node {
@@ -191,7 +191,7 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, strip_asserts: boo
         }
     }
 
-    let is_test_module = module.items.iter().any(|i| matches!(&i.node, Item::Test(_)));
+    let is_test_module = test_mode;
 
     let mut ctx = CodegenContext {
         scopes: &analysis.scopes,
@@ -338,7 +338,7 @@ mod tests {
             result.errors
         );
 
-        generate_c(&module, &result, false, false, false, "", &[])
+        generate_c(&module, &result, false, false, false, "", false, &[])
     }
 
     #[test]

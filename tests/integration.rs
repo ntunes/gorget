@@ -2516,3 +2516,19 @@ fn test_with_clause() {
         false,
     );
 }
+
+#[test]
+fn test_coexist_build_mode() {
+    // gg build/run should use main(), ignore test blocks
+    run_gg("test_coexist.gg", "42");
+}
+
+#[test]
+fn test_coexist_test_mode() {
+    // gg test should run tests, ignore main()
+    run_gg_test(
+        "test_coexist.gg",
+        &["2 passed, 0 failed"],
+        true,
+    );
+}

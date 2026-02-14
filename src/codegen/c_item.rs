@@ -313,6 +313,10 @@ impl CodegenContext<'_> {
                 Item::Function(f) => {
                     // Skip stdlib synthetic defs (Declaration body + dummy span)
                     if f.span != crate::span::Span::dummy() {
+                        // In test mode, skip user's main() — the test runner provides main()
+                        if self.is_test_module && f.name.node == "main" {
+                            continue;
+                        }
                         self.emit_function_def(f, None, emitter);
                     }
                 }

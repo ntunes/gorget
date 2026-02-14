@@ -138,9 +138,6 @@ pub enum SemanticErrorKind {
     /// `via` field's type does not implement the target trait.
     ViaFieldTypeMissingTrait { field: String, field_type: String, trait_: String },
 
-    /// Test blocks cannot coexist with a `main()` function.
-    TestMainConflict,
-
     /// Duplicate suite setup or teardown block.
     DuplicateSuiteBlock { kind: String },
 }
@@ -308,9 +305,6 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::ViaFieldTypeMissingTrait { field, field_type, trait_ } => {
                 write!(f, "`via` field `{field}` of type `{field_type}` does not implement trait `{trait_}`")
-            }
-            SemanticErrorKind::TestMainConflict => {
-                write!(f, "test blocks cannot coexist with a `main()` function")
             }
             SemanticErrorKind::DuplicateSuiteBlock { kind } => {
                 write!(f, "duplicate `suite {kind}` block")

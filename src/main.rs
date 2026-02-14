@@ -77,6 +77,7 @@ fn try_build(
     overflow_checked: bool,
     trace: bool,
     no_trace: bool,
+    test_mode: bool,
     test_tags: &[String],
 ) -> Result<PathBuf, String> {
     let mut parser = Parser::new(source);
@@ -139,7 +140,7 @@ fn try_build(
     };
 
     // Generate C code
-    let c_code = gorget::codegen::generate_c(&module, &result, strip_asserts, overflow_wrap, trace, &trace_filename, test_tags);
+    let c_code = gorget::codegen::generate_c(&module, &result, strip_asserts, overflow_wrap, trace, &trace_filename, test_mode, test_tags);
     let c_path = dir.join(format!("{stem}.c"));
     // Canonicalize to an absolute path so Command::new() doesn't search $PATH.
     // For a bare filename like "hello.gg", dir is "." and exe_path would be "hello",
@@ -195,9 +196,10 @@ fn build(
     overflow_checked: bool,
     trace: bool,
     no_trace: bool,
+    test_mode: bool,
     test_tags: &[String],
 ) -> PathBuf {
-    try_build(filename, source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, test_tags)
+    try_build(filename, source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, test_mode, test_tags)
         .unwrap_or_else(|e| {
             eprintln!("{e}");
             process::exit(1);
@@ -394,7 +396,7 @@ fn run_repl() {
         let gg_path_str = gg_path.display().to_string();
 
         // Try to build
-        match try_build(&gg_path_str, &source, false, false, false, false, false, false, &[]) {
+        match try_build(&gg_path_str, &source, false, false, false, false, false, false, false, &[]) {
             Err(e) => {
                 eprintln!("{e}");
                 // Don't update buffers on error
@@ -478,7 +480,7 @@ fn main() {
         let overflow_checked = args.iter().any(|a| a == "--overflow=checked");
         let trace = args.iter().any(|a| a == "--trace");
         let no_trace = args.iter().any(|a| a == "--no-trace");
-        let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, &[]);
+        let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[]);
         let status = Command::new(&exe_path)
             .status()
             .unwrap_or_else(|e| {
@@ -572,11 +574,11 @@ fn main() {
             }
         }
         "build" => {
-            let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, &[]);
+            let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[]);
             println!("Built: {}", exe_path.display());
         }
         "run" => {
-            let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, &[]);
+            let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[]);
             let status = Command::new(&exe_path)
                 .status()
                 .unwrap_or_else(|e| {
@@ -600,7 +602,7 @@ fn main() {
                     i += 1;
                 }
             }
-            let exe_path = build(filename, &source, false, false, false, false, false, false, &test_tags);
+            let exe_path = build(filename, &source, false, false, false, false, false, false, true, &test_tags);
             let status = Command::new(&exe_path)
                 .status()
                 .unwrap_or_else(|e| {

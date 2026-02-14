@@ -2180,9 +2180,28 @@ test "run returns exit code":
 
 `ProcessResult` has fields: `output: str`, `errors: str`, `exit_code: int`.
 
-### 18.5 Constraints
+### 18.5 Coexisting with `main()`
 
-- A file cannot have both `test` blocks and a `main()` function.
+Test blocks and `main()` can coexist in the same file. The command determines which entry point is used:
+
+- `gg build` / `gg run` — compiles `main()`, ignores test blocks entirely (no test code in the binary)
+- `gg test` — compiles the test runner, ignores `main()`
+
+```gorget
+int double(int x):
+    return x * 2
+
+test "double works":
+    assert double(3) == 6
+
+void main():
+    print("{double(21)}")
+```
+
+Semantic analysis (type checking, name resolution) runs on all code regardless of command, so a broken test will be caught during `gg build`.
+
+### 18.6 Constraints
+
 - At most one `suite setup` and one `suite teardown` per file.
 
 ---
