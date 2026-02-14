@@ -6,13 +6,17 @@
 
 ## High
 
-- **Rust-model closures**: Escaping closures (returned from functions, stored in structs) are currently UB because the env is stack-allocated. Embed captures inside the closure struct so lifetime matches the value. Depends on: closure traits (`Fn`/`FnMut`/`FnOnce`), monomorphization of closure types, trait object support for closures. Unblocks: callbacks, event handlers, builder patterns, any higher-order API that stores closures. [added: 2026-02-13]
+- **Closures step 1 — Heap-allocate escaping closures**: Fix the current UB where env structs are stack-allocated via C99 compound literals (`(ClosureEnv_N){...}`), causing dangling pointers when closures escape their creating scope (returned from functions or stored in structs). **Fix:** Add escape analysis in `gen_closure_expr()` (`c_expr.rs:3533`). If a closure escapes (returned, stored in a struct field, passed to a function that stores it), `malloc` the env instead of using a compound literal. Add a `GorgetClosure_free()` helper or ref-count wrapper. Non-escaping closures keep stack allocation for zero overhead. **Key files:** `c_expr.rs` (gen_closure_expr, compound literal at ~line 3620), `c_runtime.rs` (GorgetClosure typedef), `c_item.rs` (emit_lifted_closures). **No dependencies** — can be done standalone. Unblocks: returning closures, storing closures in structs, callbacks, event handlers. [added: 2026-02-14]
 
 - **HTTP client library (`std.net.http`)**: `Client` struct, `.get()`, `.post()`, response status/body. C backend via libcurl or minimal HTTP client. Unblocks: API consumption, web scraping, webhook integration, downloading resources. [added: 2026-02-14]
 
 - **Package management (`gg new`, `gg add`, `gg update`)**: Project scaffolding, dependency resolution, registry. Unblocks: code reuse across projects, ecosystem growth. [added: 2026-02-10]
 
 ## Medium
+
+- **Closures step 2 — Fn/FnMut/FnOnce closure traits**: Define built-in traits `Fn[Args -> Ret]`, `FnMut[Args -> Ret]`, `FnOnce[Args -> Ret]` with a `call` method. The compiler auto-implements the appropriate trait based on capture mode: `ByValue` + no mutation → `Fn`, `ByMutRef` → `FnMut`, move semantics (future) → `FnOnce`. Currently `CaptureMode` (`codegen/mod.rs`) has `ByValue` and `ByMutRef`; this step adds the trait-level classification. **Key design:** Whether these are real traits in the trait registry or compiler-magic marker traits. Gorget's `equip` system could work: `equip Fn[int -> int] for ClosureType_N`. **Depends on:** nothing (but benefits from step 1 for escaping closures). Unblocks: generic functions accepting closures (`fn apply[F: Fn[int -> int]](f: F)`), step 3 (embedded captures), step 4 (trait objects). [added: 2026-02-14]
+
+- **Closures step 3 — Embed captures in closure struct**: Replace the current two-pointer `GorgetClosure { void* fn_ptr; void* env; }` with per-closure structs that embed captures directly: `struct Closure_N { RetType (*fn_ptr)(Closure_N*, args...); field1; field2; ... }`. This makes closures monomorphized types whose size and layout are known at compile time. The closure function receives `self` instead of `void* env`, eliminating the unsafe cast. **Key files:** `c_runtime.rs` (remove generic GorgetClosure), `c_item.rs:886` (emit_lifted_closures — generate per-closure struct typedefs), `c_expr.rs:863` (closure invocation — pass closure struct pointer instead of env). **Depends on:** step 2 (Fn traits, so each closure struct can implement its trait). Unblocks: type-safe closure passing, proper monomorphization, step 4 (trait objects need known struct layout). [added: 2026-02-14]
 
 - **For-loop range bounds validation**: `for n in 0..256` with a `uint8` loop variable silently overflows. Codegen hardcodes `int64_t` for range loop variables (`c_stmt.rs:1210`) — should use the declared type. [added: 2026-02-14]
 
@@ -23,6 +27,8 @@
 - **Fixture system for tests**: suite setup/teardown (done) → `with` clause (done) → fixture injection. Named, composable, scoped resources injected into test signatures. Design questions: yield semantics (Drop-based vs explicit teardown), scope model (test/suite), composability (fixture graphs). [added: 2026-02-14]
 
 ## Low
+
+- **Closures step 4 — `dyn Fn` / `Box[Fn]` trait objects for closures**: Allow closures to be type-erased via trait objects: `auto callback: dyn Fn[int -> int] = my_closure`. Requires a vtable with the `call` method pointer. `Box[dyn Fn[int -> int]]` provides owned, heap-allocated trait objects. **Implementation:** Generate a vtable struct with `call` function pointer for each Fn trait instantiation. `dyn Fn` is a fat pointer `{ void* data; VTable* vtable; }`. Calling through `dyn Fn` does `vtable->call(data, args...)`. **Depends on:** step 2 (Fn traits) + step 3 (embedded captures, so the data pointer points to a self-contained struct). Unblocks: heterogeneous closure collections (`Vector[dyn Fn[int -> int]]`), callback registries, event handler maps, strategy pattern. [added: 2026-02-14]
 
 - **`gg info` command**: show fields, methods, traits, memory layout for a type. [added: 2026-02-10]
 
