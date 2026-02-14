@@ -219,6 +219,56 @@ impl CodegenContext<'_> {
         );
     }
 
+    /// Emit a branch trace event (if/elif/else taken).
+    fn emit_branch_trace(
+        &self,
+        kind: &str,
+        src: &str,
+        vars: &[(String, String, &str)],
+        emitter: &mut CEmitter,
+    ) {
+        emitter.emit_line(&format!(
+            r#"fprintf(__gorget_trace_fp, "{{\"type\":\"branch\",\"kind\":\"{kind}\",\"src\":\"");"#
+        ));
+        emitter.emit_line(&format!(
+            r#"__gorget_trace_json_str(__gorget_trace_fp, "{src}");"#
+        ));
+        if vars.is_empty() {
+            emitter.emit_line(
+                r#"fprintf(__gorget_trace_fp, "\",\"depth\":%d}\n", __gorget_trace_depth);"#
+            );
+        } else {
+            emitter.emit_line(
+                r#"fprintf(__gorget_trace_fp, "\",\"vars\":{");"#
+            );
+            for (i, (gorget_name, c_name, formatter)) in vars.iter().enumerate() {
+                let comma = if i > 0 { "," } else { "" };
+                emitter.emit_line(&format!(
+                    r#"fprintf(__gorget_trace_fp, "{comma}\"{gorget_name}\":");"#
+                ));
+                emitter.emit_line(&format!(
+                    "{formatter}(__gorget_trace_fp, {c_name});"
+                ));
+            }
+            emitter.emit_line(
+                r#"fprintf(__gorget_trace_fp, "},\"depth\":%d}\n", __gorget_trace_depth);"#
+            );
+        }
+    }
+
+    /// Emit a while-loop iteration trace event.
+    fn emit_while_iter_trace(&self, iter_var: &str, emitter: &mut CEmitter) {
+        emitter.emit_line(
+            r#"fprintf(__gorget_trace_fp, "{\"type\":\"loop\",\"kind\":\"while\",\"iter\":");"#
+        );
+        emitter.emit_line(&format!(
+            "__gorget_trace_val_int(__gorget_trace_fp, {iter_var}++);"
+        ));
+        emitter.emit_line(
+            r#"fprintf(__gorget_trace_fp, ",\"depth\":%d}\n", __gorget_trace_depth);"#
+        );
+    }
+
     /// Check if a declared type needs drop and register it if so.
     /// When `in_test_body` is true, also emits a `__gorget_cleanup_push` call
     /// so that longjmp-based test failure can still run cleanup.
@@ -446,33 +496,7 @@ impl CodegenContext<'_> {
                 if self.trace {
                     let src = c_string_escape(&format!("if {}", self.source_line(condition.span)));
                     let vars = self.collect_expr_vars(&[&condition.node]);
-                    emitter.emit_line(
-                        r#"fprintf(__gorget_trace_fp, "{\"type\":\"branch\",\"kind\":\"if\",\"src\":\"");"#
-                    );
-                    emitter.emit_line(&format!(
-                        r#"__gorget_trace_json_str(__gorget_trace_fp, "{src}");"#
-                    ));
-                    if vars.is_empty() {
-                        emitter.emit_line(
-                            r#"fprintf(__gorget_trace_fp, "\",\"depth\":%d}\n", __gorget_trace_depth);"#
-                        );
-                    } else {
-                        emitter.emit_line(
-                            r#"fprintf(__gorget_trace_fp, "\",\"vars\":{");"#
-                        );
-                        for (i, (gorget_name, c_name, formatter)) in vars.iter().enumerate() {
-                            let comma = if i > 0 { "," } else { "" };
-                            emitter.emit_line(&format!(
-                                r#"fprintf(__gorget_trace_fp, "{comma}\"{gorget_name}\":");"#
-                            ));
-                            emitter.emit_line(&format!(
-                                "{formatter}(__gorget_trace_fp, {c_name});"
-                            ));
-                        }
-                        emitter.emit_line(
-                            r#"fprintf(__gorget_trace_fp, "},\"depth\":%d}\n", __gorget_trace_depth);"#
-                        );
-                    }
+                    self.emit_branch_trace("if", &src, &vars, emitter);
                 }
                 self.gen_block(then_body, emitter);
                 emitter.dedent();
@@ -484,33 +508,7 @@ impl CodegenContext<'_> {
                     if self.trace {
                         let src = c_string_escape(&format!("elif {}", self.source_line(elif_cond.span)));
                         let vars = self.collect_expr_vars(&[&elif_cond.node]);
-                        emitter.emit_line(
-                            r#"fprintf(__gorget_trace_fp, "{\"type\":\"branch\",\"kind\":\"elif\",\"src\":\"");"#
-                        );
-                        emitter.emit_line(&format!(
-                            r#"__gorget_trace_json_str(__gorget_trace_fp, "{src}");"#
-                        ));
-                        if vars.is_empty() {
-                            emitter.emit_line(
-                                r#"fprintf(__gorget_trace_fp, "\",\"depth\":%d}\n", __gorget_trace_depth);"#
-                            );
-                        } else {
-                            emitter.emit_line(
-                                r#"fprintf(__gorget_trace_fp, "\",\"vars\":{");"#
-                            );
-                            for (i, (gorget_name, c_name, formatter)) in vars.iter().enumerate() {
-                                let comma = if i > 0 { "," } else { "" };
-                                emitter.emit_line(&format!(
-                                    r#"fprintf(__gorget_trace_fp, "{comma}\"{gorget_name}\":");"#
-                                ));
-                                emitter.emit_line(&format!(
-                                    "{formatter}(__gorget_trace_fp, {c_name});"
-                                ));
-                            }
-                            emitter.emit_line(
-                                r#"fprintf(__gorget_trace_fp, "},\"depth\":%d}\n", __gorget_trace_depth);"#
-                            );
-                        }
+                        self.emit_branch_trace("elif", &src, &vars, emitter);
                     }
                     self.gen_block(elif_body, emitter);
                     emitter.dedent();
@@ -520,9 +518,7 @@ impl CodegenContext<'_> {
                     emitter.emit_line("} else {");
                     emitter.indent();
                     if self.trace {
-                        emitter.emit_line(
-                            r#"fprintf(__gorget_trace_fp, "{\"type\":\"branch\",\"kind\":\"else\",\"src\":\"else\",\"depth\":%d}\n", __gorget_trace_depth);"#
-                        );
+                        self.emit_branch_trace("else", "else", &[], emitter);
                     }
                     self.gen_block(else_body, emitter);
                     emitter.dedent();
@@ -552,15 +548,7 @@ impl CodegenContext<'_> {
                     emitter.indent();
                     self.push_drop_scope(DropScopeKind::Loop);
                     if let Some(ref ti) = trace_iter {
-                        emitter.emit_line(
-                            r#"fprintf(__gorget_trace_fp, "{\"type\":\"loop\",\"kind\":\"while\",\"iter\":");"#
-                        );
-                        emitter.emit_line(&format!(
-                            "__gorget_trace_val_int(__gorget_trace_fp, {ti}++);"
-                        ));
-                        emitter.emit_line(
-                            r#"fprintf(__gorget_trace_fp, ",\"depth\":%d}\n", __gorget_trace_depth);"#
-                        );
+                        self.emit_while_iter_trace(ti, emitter);
                     }
                     self.gen_block_with_break_flag(body, &flag, emitter);
                     self.pop_drop_scope(emitter);
@@ -576,15 +564,7 @@ impl CodegenContext<'_> {
                     emitter.indent();
                     self.push_drop_scope(DropScopeKind::Loop);
                     if let Some(ref ti) = trace_iter {
-                        emitter.emit_line(
-                            r#"fprintf(__gorget_trace_fp, "{\"type\":\"loop\",\"kind\":\"while\",\"iter\":");"#
-                        );
-                        emitter.emit_line(&format!(
-                            "__gorget_trace_val_int(__gorget_trace_fp, {ti}++);"
-                        ));
-                        emitter.emit_line(
-                            r#"fprintf(__gorget_trace_fp, ",\"depth\":%d}\n", __gorget_trace_depth);"#
-                        );
+                        self.emit_while_iter_trace(ti, emitter);
                     }
                     self.gen_block(body, emitter);
                     self.pop_drop_scope(emitter);
