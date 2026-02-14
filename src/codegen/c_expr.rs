@@ -736,17 +736,11 @@ impl CodegenContext<'_> {
                             return format!("gorget_{name}({a}, {b})");
                         }
                     }
-                    // std.test.process
-                    "run" => {
+                    // std.process
+                    "exec_output" => {
                         if let Some(arg) = args.first() {
                             let cmd = self.gen_expr(&arg.node.value);
-                            return format!("gorget_test_run({cmd})");
-                        }
-                    }
-                    "run_output" => {
-                        if let Some(arg) = args.first() {
-                            let cmd = self.gen_expr(&arg.node.value);
-                            return format!("gorget_test_run_output({cmd})");
+                            return format!("gorget_exec_output({cmd})");
                         }
                     }
                     _ => {}

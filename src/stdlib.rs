@@ -15,8 +15,7 @@ pub fn is_stdlib_module(segments: &[String]) -> bool {
         return false;
     }
     match segments.len() {
-        2 => matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv" | "io" | "random" | "time" | "collections" | "math" | "fmt"),
-        3 => segments[1] == "test" && segments[2] == "process",
+        2 => matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv" | "io" | "random" | "time" | "collections" | "math" | "fmt" | "process"),
         _ => false,
     }
 }
@@ -38,10 +37,7 @@ pub fn generate_stdlib_module(segments: &[String]) -> Option<Module> {
             "collections" => Some(gen_collections_module()),
             "math" => Some(gen_math_module()),
             "fmt" => Some(gen_fmt_module()),
-            _ => None,
-        },
-        3 => match (segments[1].as_str(), segments[2].as_str()) {
-            ("test", "process") => Some(gen_test_process_module()),
+            "process" => Some(gen_process_module()),
             _ => None,
         },
         _ => None,
@@ -72,7 +68,6 @@ fn gen_path_module() -> Module {
 
 fn gen_os_module() -> Module {
     make_module(vec![
-        decl_fn("exec", &[("cmd", ty_str())], ty_int()),
         decl_fn("exit", &[("code", ty_int())], ty_void()),
         decl_fn("getenv", &[("name", ty_str())], ty_str()),
         decl_fn("setenv", &[("name", ty_str()), ("value", ty_str())], ty_void()),
@@ -185,15 +180,15 @@ fn gen_fmt_module() -> Module {
     make_module(vec![])
 }
 
-fn gen_test_process_module() -> Module {
-    let process_result_type = Type::Named {
-        name: Spanned::dummy("ProcessResult".to_string()),
+fn gen_process_module() -> Module {
+    let exec_result_type = Type::Named {
+        name: Spanned::dummy("ExecResult".to_string()),
         generic_args: vec![],
     };
     let struct_def = StructDef {
         attributes: vec![],
         visibility: Visibility::Public,
-        name: Spanned::dummy("ProcessResult".to_string()),
+        name: Spanned::dummy("ExecResult".to_string()),
         generic_params: None,
         fields: vec![
             Spanned::dummy(FieldDef {
@@ -217,8 +212,8 @@ fn gen_test_process_module() -> Module {
     };
     let items = vec![
         Spanned::dummy(Item::Struct(struct_def)),
-        Spanned::dummy(Item::Function(decl_fn("run", &[("cmd", ty_str())], ty_int()))),
-        Spanned::dummy(Item::Function(decl_fn("run_output", &[("cmd", ty_str())], process_result_type))),
+        Spanned::dummy(Item::Function(decl_fn("exec", &[("cmd", ty_str())], ty_int()))),
+        Spanned::dummy(Item::Function(decl_fn("exec_output", &[("cmd", ty_str())], exec_result_type))),
     ];
     Module {
         items,
@@ -360,8 +355,8 @@ mod tests {
         assert!(is_stdlib_module(&["std".into(), "time".into()]));
         assert!(is_stdlib_module(&["std".into(), "math".into()]));
         assert!(is_stdlib_module(&["std".into(), "fmt".into()]));
-        assert!(is_stdlib_module(&["std".into(), "test".into(), "process".into()]));
-        assert!(!is_stdlib_module(&["std".into(), "test".into(), "unknown".into()]));
+        assert!(is_stdlib_module(&["std".into(), "process".into()]));
+        assert!(!is_stdlib_module(&["std".into(), "test".into(), "process".into()]));
         assert!(!is_stdlib_module(&["std".into(), "foo".into()]));
         assert!(!is_stdlib_module(&["foo".into(), "fs".into()]));
         assert!(!is_stdlib_module(&["std".into()]));

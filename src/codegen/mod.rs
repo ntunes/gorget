@@ -251,12 +251,12 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, strip_asserts: boo
     // 1b. Runtime core (checked arithmetic, collections, etc.)
     emitter.emit(c_runtime::RUNTIME_CORE);
 
-    // 1c. Test process runtime (when std.test.process is imported)
-    let has_test_process = module.items.iter().any(|i| {
-        matches!(&i.node, Item::Struct(s) if s.name.node == "ProcessResult" && s.span == crate::span::Span::dummy())
+    // 1c. Process runtime (when std.process is imported)
+    let has_process = module.items.iter().any(|i| {
+        matches!(&i.node, Item::Struct(s) if s.name.node == "ExecResult" && s.span == crate::span::Span::dummy())
     });
-    if has_test_process {
-        emitter.emit(c_runtime::TEST_PROCESS_RUNTIME);
+    if has_process {
+        emitter.emit(c_runtime::PROCESS_RUNTIME);
     }
 
     // 1d. Trace runtime (only when trace is enabled)

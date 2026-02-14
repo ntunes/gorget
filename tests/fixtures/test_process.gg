@@ -1,10 +1,10 @@
-from std.test.process import run_output, run
+from std.process import exec_output, exec
 
 test "echo captures stdout":
-    auto result = run_output("echo hello")
+    auto result = exec_output("echo hello")
     assert result.exit_code == 0
     assert result.output == "hello\n"
 
-test "run returns exit code":
-    auto code = run("true")
+test "exec returns exit code":
+    auto code = exec("true")
     assert code == 0

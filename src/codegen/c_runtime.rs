@@ -890,17 +890,6 @@ static inline GorgetArray gorget_args(void) {
     return arr;
 }
 
-// ── exec ─────────────────────────────────────────────────────
-static inline int64_t gorget_exec(const char* cmd) {
-    int status = system(cmd);
-    if (status == -1) return -1;
-    #ifdef _WIN32
-    return (int64_t)status;
-    #else
-    return WIFEXITED(status) ? (int64_t)WEXITSTATUS(status) : (int64_t)-1;
-    #endif
-}
-
 // ── parse_int ────────────────────────────────────────────────
 static inline int64_t gorget_parse_int(const char* s) {
     char* endptr;
@@ -1094,23 +1083,27 @@ static void __gorget_trace_val_void(FILE* fp) { (void)fp; }
 
 "#;
 
-/// C runtime for std.test.process — popen-based command execution.
-pub const TEST_PROCESS_RUNTIME: &str = r#"
-// ── std.test.process runtime ──────────────────────────────────
-typedef struct ProcessResult {
+/// C runtime for std.process — process execution (exec, exec_output).
+pub const PROCESS_RUNTIME: &str = r#"
+// ── std.process runtime ──────────────────────────────────────
+static inline int64_t gorget_exec(const char* cmd) {
+    int status = system(cmd);
+    if (status == -1) return -1;
+    #ifdef _WIN32
+    return (int64_t)status;
+    #else
+    return WIFEXITED(status) ? (int64_t)WEXITSTATUS(status) : (int64_t)-1;
+    #endif
+}
+
+typedef struct ExecResult {
     const char* output;
     const char* errors;
     int64_t exit_code;
-} ProcessResult;
+} ExecResult;
 
-static inline int64_t gorget_test_run(const char* cmd) {
-    int status = system(cmd);
-    if (WIFEXITED(status)) return (int64_t)WEXITSTATUS(status);
-    return -1;
-}
-
-static inline ProcessResult gorget_test_run_output(const char* cmd) {
-    ProcessResult result;
+static inline ExecResult gorget_exec_output(const char* cmd) {
+    ExecResult result;
     result.errors = "";
 
     // Capture stdout via popen

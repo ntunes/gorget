@@ -2015,7 +2015,6 @@ The following functions are available via `import`:
 
 | Function | Signature | Description |
 |---|---|---|
-| `exec` | `int(str)` | Run a shell command, return exit code |
 | `exit` | `void(int)` | Exit with status code |
 | `getenv` | `str(str)` | Get environment variable |
 | `setenv` | `void(str, str)` | Set environment variable |
@@ -2095,13 +2094,13 @@ The following functions are available via `import`:
 
 Re-exports the `Displayable` trait and `format` builtin for discoverability. Both are available in the prelude without an explicit import.
 
-**`std.test.process`** — Test process execution
+**`std.process`** — Process execution
 
 | Name | Signature | Description |
 |---|---|---|
-| `ProcessResult` | struct | Result of a process: `output: str`, `errors: str`, `exit_code: int` |
-| `run` | `int(str)` | Run a shell command, return exit code |
-| `run_output` | `ProcessResult(str)` | Run a command, capture stdout and exit code |
+| `ExecResult` | struct | Result of a process: `output: str`, `errors: str`, `exit_code: int` |
+| `exec` | `int(str)` | Run a shell command, return exit code |
+| `exec_output` | `ExecResult(str)` | Run a command, capture stdout and exit code |
 
 ---
 
@@ -2302,19 +2301,19 @@ Run only tagged tests: `gg test file.gg --tag smoke`. Multiple `--tag` flags sel
 ### 18.4 Process Testing
 
 ```gorget
-from std.test.process import run_output, run
+from std.process import exec_output, exec
 
 test "echo captures stdout":
-    auto result = run_output("echo hello")
+    auto result = exec_output("echo hello")
     assert result.exit_code == 0
     assert result.output == "hello\n"
 
-test "run returns exit code":
-    auto code = run("true")
+test "exec returns exit code":
+    auto code = exec("true")
     assert code == 0
 ```
 
-`ProcessResult` has fields: `output: str`, `errors: str`, `exit_code: int`.
+`ExecResult` has fields: `output: str`, `errors: str`, `exit_code: int`.
 
 ### 18.5 Coexisting with `main()`
 

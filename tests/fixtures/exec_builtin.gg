@@ -1,4 +1,5 @@
-from std.os import exec, getenv
+from std.process import exec
+from std.os import getenv
 
 void main():
     auto code = exec("echo hello > /dev/null")
