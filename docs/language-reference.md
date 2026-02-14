@@ -1886,6 +1886,9 @@ The following methods are available on built-in types without any import.
 | `char_at(index)` | `int → char` | Character at byte index (panics if out of bounds) |
 | `substring(start, end)` | `int, int → str` | Substring from `start` to `end` (panics if out of bounds) |
 | `trim()` | `→ str` | Strip leading and trailing whitespace |
+| `strip(chars?)` | `str? → str` | Strip chars (or whitespace) from both ends |
+| `lstrip(chars?)` | `str? → str` | Strip chars (or whitespace) from left |
+| `rstrip(chars?)` | `str? → str` | Strip chars (or whitespace) from right |
 | `to_upper()` | `→ str` | Convert to uppercase |
 | `to_lower()` | `→ str` | Convert to lowercase |
 | `replace(old, new)` | `str, str → str` | Replace all occurrences of `old` with `new` |

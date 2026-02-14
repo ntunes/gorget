@@ -1218,6 +1218,14 @@ Hello, Gorget!
 }
 
 #[test]
+fn string_strip() {
+    run_gg(
+        "string_strip.gg",
+        "hello\nhello  \n  hello\nhello\nhelloxyy\nxxyhello\n\n[]\nhello",
+    );
+}
+
+#[test]
 fn string_indexing() {
     run_gg(
         "string_indexing.gg",

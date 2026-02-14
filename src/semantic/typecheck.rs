@@ -1780,7 +1780,7 @@ impl<'a> TypeChecker<'a> {
             "str" | "String" => match method {
                 "len" | "hash" | "index_of" | "count" => Some(self.types.int_id),
                 "contains" | "starts_with" | "ends_with" | "is_empty" => Some(self.types.bool_id),
-                "trim" | "to_upper" | "to_lower" | "replace" | "substring" | "repeat" | "join" => Some(self.types.string_id),
+                "trim" | "strip" | "lstrip" | "rstrip" | "to_upper" | "to_lower" | "replace" | "substring" | "repeat" | "join" => Some(self.types.string_id),
                 "char_at" => Some(self.types.char_id),
                 "split" => {
                     // Return Vector[str]

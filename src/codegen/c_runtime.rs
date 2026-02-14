@@ -111,6 +111,55 @@ static inline const char* gorget_string_trim(const char* s) {
     return out;
 }
 
+static inline const char* gorget_string_lstrip_ws(const char* s) {
+    while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r') s++;
+    char* out = (char*)malloc(strlen(s) + 1);
+    strcpy(out, s);
+    return out;
+}
+
+static inline const char* gorget_string_rstrip_ws(const char* s) {
+    size_t len = strlen(s);
+    while (len > 0 && (s[len-1] == ' ' || s[len-1] == '\t' || s[len-1] == '\n' || s[len-1] == '\r')) len--;
+    char* out = (char*)malloc(len + 1);
+    memcpy(out, s, len);
+    out[len] = '\0';
+    return out;
+}
+
+static inline bool gorget_char_in_set(char c, const char* chars) {
+    for (const char* p = chars; *p; p++) {
+        if (*p == c) return true;
+    }
+    return false;
+}
+
+static inline const char* gorget_string_strip(const char* s, const char* chars) {
+    while (*s && gorget_char_in_set(*s, chars)) s++;
+    size_t len = strlen(s);
+    while (len > 0 && gorget_char_in_set(s[len-1], chars)) len--;
+    char* out = (char*)malloc(len + 1);
+    memcpy(out, s, len);
+    out[len] = '\0';
+    return out;
+}
+
+static inline const char* gorget_string_lstrip(const char* s, const char* chars) {
+    while (*s && gorget_char_in_set(*s, chars)) s++;
+    char* out = (char*)malloc(strlen(s) + 1);
+    strcpy(out, s);
+    return out;
+}
+
+static inline const char* gorget_string_rstrip(const char* s, const char* chars) {
+    size_t len = strlen(s);
+    while (len > 0 && gorget_char_in_set(s[len-1], chars)) len--;
+    char* out = (char*)malloc(len + 1);
+    memcpy(out, s, len);
+    out[len] = '\0';
+    return out;
+}
+
 static inline const char* gorget_string_to_upper(const char* s) {
     size_t len = strlen(s);
     char* out = (char*)malloc(len + 1);

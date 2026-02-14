@@ -1886,6 +1886,30 @@ impl CodegenContext<'_> {
             "trim" => {
                 Some(format!("gorget_string_trim({recv})"))
             }
+            "strip" => {
+                if let Some(arg) = args.first() {
+                    let arg = self.gen_expr(&arg.node.value);
+                    Some(format!("gorget_string_strip({recv}, {arg})"))
+                } else {
+                    Some(format!("gorget_string_trim({recv})"))
+                }
+            }
+            "lstrip" => {
+                if let Some(arg) = args.first() {
+                    let arg = self.gen_expr(&arg.node.value);
+                    Some(format!("gorget_string_lstrip({recv}, {arg})"))
+                } else {
+                    Some(format!("gorget_string_lstrip_ws({recv})"))
+                }
+            }
+            "rstrip" => {
+                if let Some(arg) = args.first() {
+                    let arg = self.gen_expr(&arg.node.value);
+                    Some(format!("gorget_string_rstrip({recv}, {arg})"))
+                } else {
+                    Some(format!("gorget_string_rstrip_ws({recv})"))
+                }
+            }
             "to_upper" => {
                 Some(format!("gorget_string_to_upper({recv})"))
             }
@@ -3164,7 +3188,7 @@ impl CodegenContext<'_> {
             ("const char*", "contains" | "starts_with" | "ends_with" | "is_empty") => {
                 Some(self.types.bool_id)
             }
-            ("const char*", "trim" | "to_upper" | "to_lower" | "replace" | "substring" | "repeat" | "join") => {
+            ("const char*", "trim" | "strip" | "lstrip" | "rstrip" | "to_upper" | "to_lower" | "replace" | "substring" | "repeat" | "join") => {
                 Some(self.types.string_id)
             }
             ("const char*", "char_at") => Some(self.types.char_id),

@@ -1,7 +1,6 @@
 # TODO
 
 ## High Priority — Language completeness
-- String method `.strip()` (alias for `.trim()` or strip-prefix/suffix variant) [added: 2026-02-13]
 - Vector higher-order methods: `.map()`, `.filter()`, `.reduce()` [added: 2026-02-13]
 - Real example program: a small but complete CLI tool or parser that exercises the language end-to-end [added: 2026-02-13]
 

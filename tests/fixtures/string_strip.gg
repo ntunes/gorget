@@ -1,0 +1,32 @@
+void main():
+    # strip() with no args — whitespace
+    auto s1 = "  hello  "
+    print(s1.strip())
+
+    # lstrip() with no args — whitespace
+    print(s1.lstrip())
+
+    # rstrip() with no args — whitespace
+    print(s1.rstrip())
+
+    # strip(chars) — character set
+    auto s2 = "xxyhelloxyy"
+    print(s2.strip("xy"))
+
+    # lstrip(chars) — character set
+    print(s2.lstrip("xy"))
+
+    # rstrip(chars) — character set
+    print(s2.rstrip("xy"))
+
+    # edge case: empty string
+    auto s3 = ""
+    print(s3.strip())
+
+    # edge case: all whitespace
+    auto s4 = "   "
+    print("[{s4.strip()}]")
+
+    # edge case: no matching chars
+    auto s5 = "hello"
+    print(s5.strip("xyz"))
