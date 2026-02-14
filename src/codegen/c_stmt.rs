@@ -174,6 +174,14 @@ impl CodegenContext<'_> {
             Expr::FieldAccess { object, .. } => {
                 self.walk_expr_for_vars(&object.node, false, seen, out);
             }
+            Expr::StringLiteral(s) => {
+                for seg in &s.segments {
+                    if let crate::lexer::token::StringSegment::Interpolation(name) = seg {
+                        let fake = Expr::Identifier(name.clone());
+                        self.walk_expr_for_vars(&fake, false, seen, out);
+                    }
+                }
+            }
             _ => {}
         }
     }

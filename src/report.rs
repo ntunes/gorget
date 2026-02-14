@@ -83,10 +83,27 @@ fn substitute_vars(src: &str, vars: &Value) -> Option<String> {
                 };
 
                 if before_ok && after_ok {
-                    new_result.push_str(value);
-                    // Skip remaining chars of the matched name
-                    while chars.peek().is_some_and(|&(j, _)| j < after_pos) {
-                        chars.next();
+                    // Check for {var} interpolation syntax: if preceded by '{' and followed by '}'
+                    // replace the whole {var} (including braces) with just the value.
+                    let is_interpolation = i > 0
+                        && result[..i].ends_with('{')
+                        && after_pos < result.len()
+                        && result[after_pos..].starts_with('}');
+                    if is_interpolation {
+                        // Remove the '{' we already pushed
+                        new_result.pop();
+                        new_result.push_str(value);
+                        // Skip remaining chars of the matched name + closing '}'
+                        let skip_to = after_pos + 1;
+                        while chars.peek().is_some_and(|&(j, _)| j < skip_to) {
+                            chars.next();
+                        }
+                    } else {
+                        new_result.push_str(value);
+                        // Skip remaining chars of the matched name
+                        while chars.peek().is_some_and(|&(j, _)| j < after_pos) {
+                            chars.next();
+                        }
                     }
                     changed = true;
                     continue;
@@ -1201,5 +1218,19 @@ mod tests {
         assert_eq!(report.tests[0].status, "pass");
         assert_eq!(report.total_passed, 1);
         assert_eq!(report.total_failed, 0);
+    }
+
+    #[test]
+    fn substitute_interpolation() {
+        // {result} in a print statement should replace braces too
+        let result = substitute_vars(r#"print("{result}")"#, &json!({"result": 6}));
+        assert_eq!(result, Some(r#"print("6")"#.to_string()));
+    }
+
+    #[test]
+    fn substitute_mixed_interpolation_and_vars() {
+        // Both {var} interpolation and bare var in the same source
+        let result = substitute_vars(r#"print("{x} is " + x)"#, &json!({"x": 42}));
+        assert_eq!(result, Some(r#"print("42 is " + 42)"#.to_string()));
     }
 }
