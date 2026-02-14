@@ -1,8 +1,24 @@
 # TODO
 
 ## High Priority — Language completeness
-- Vector higher-order methods: `.map()`, `.filter()`, `.reduce()` [added: 2026-02-13]
 - Real example program: a small but complete CLI tool or parser that exercises the language end-to-end [added: 2026-02-13]
+
+## High Priority — Built-in type methods
+- Vector: `.sort()`, `.reverse()`, `.contains(x)` [added: 2026-02-14]
+- Dict: `.keys()`, `.values()`, `.items()` [added: 2026-02-14]
+- Set: `.union(other)`, `.intersection(other)`, `.difference(other)` [added: 2026-02-14]
+
+## Medium Priority — Built-in type methods (batch 2)
+- Vector: `.index_of(x)`, `.insert(i, x)`, `.extend(other)`, `.slice(i, j)`, `.any(fn)`, `.all(fn)` [added: 2026-02-14]
+- String: `.removeprefix(s)`, `.removesuffix(s)` [added: 2026-02-14]
+- String: `.pad_left(n, char?)`, `.pad_right(n, char?)` [added: 2026-02-14]
+- Char: `.to_upper()`, `.to_lower()`, `.is_upper()`, `.is_lower()` [added: 2026-02-14]
+- Option/Result: `.expect(msg)` [added: 2026-02-14]
+- Dict: `.update(other)`, `.get_or(key, default)` [added: 2026-02-14]
+- Set: `.is_subset(other)`, `.is_superset(other)` [added: 2026-02-14]
+
+## Medium Priority — Stdlib gaps
+- `std.fs`: `mkdir`, `rmdir`, `rename`, `copy_file`, `file_size`, `is_dir` [added: 2026-02-14]
 
 ## Medium Priority — Reporting (Phase 3)
 - HTML report generation — Robot Framework-style `report.html` from trace JSONL. Test pass/fail summary page, expandable execution trace per test (function calls, return values). `gg test --report html` flag. [added: 2026-02-14]
@@ -23,6 +39,13 @@
 - `with` clause on suite directive — `directive test_suite "name" with Resource(...) as r:` for suite-level resource management. [added: 2026-02-14]
 - `directive test_suite "name"` — suite naming for report grouping. [added: 2026-02-14]
 - Table-driven test support — subtesting/sub-case reporting (for-loops already work for the basic case). [added: 2026-02-14]
+
+## Low Priority — API consistency revisit
+- Review `trim()` vs `strip()` overlap — consider deprecating one for consistency [added: 2026-02-14]
+- Evaluate Python `in` operator support for collections (currently have `.contains()` only) [added: 2026-02-14]
+- String method naming audit: Python names (`upper`/`lower`/`startswith`) vs current (`to_upper`/`to_lower`/`starts_with`) — pick a consistent convention [added: 2026-02-14]
+- Evaluate whether `str.is_alpha()`/`is_digit()`/`is_alnum()` should exist on `str` (currently only on `char`) [added: 2026-02-14]
+- Review `Vector.get(i)` vs indexing syntax `v[i]` overlap [added: 2026-02-14]
 
 ## Low Priority — Showcase examples
 - `DenseStore[T]` / archetype ECS storage: needs Default trait for generic slot initialization [added: 2026-02-13]
