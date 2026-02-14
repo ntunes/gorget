@@ -2206,6 +2206,21 @@ hello123");
 }
 
 #[test]
+fn fs_ops() {
+    run_gg("fs_ops.gg", "\
+true
+true
+false
+5
+-1
+true
+true
+true
+true
+true");
+}
+
+#[test]
 fn time_stdlib() {
     run_gg("time_stdlib.gg", "\
 time_ms_ok

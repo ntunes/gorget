@@ -1,0 +1,36 @@
+from std.fs import mkdir, rmdir, rename, copy_file, file_size, is_dir, write_file, file_exists, delete_file
+
+void main():
+    # mkdir
+    bool ok = mkdir("/tmp/gorget_fs_test_dir")
+    print(ok)
+
+    # is_dir on existing directory
+    print(is_dir("/tmp/gorget_fs_test_dir"))
+
+    # is_dir on non-existent path
+    print(is_dir("/tmp/gorget_fs_test_nonexistent"))
+
+    # write a file and check file_size
+    write_file("/tmp/gorget_fs_test_dir/hello.txt", "hello")
+    int sz = file_size("/tmp/gorget_fs_test_dir/hello.txt")
+    print(sz)
+
+    # file_size on non-existent file
+    print(file_size("/tmp/gorget_fs_test_nonexistent.txt"))
+
+    # copy_file
+    bool copied = copy_file("/tmp/gorget_fs_test_dir/hello.txt", "/tmp/gorget_fs_test_dir/hello_copy.txt")
+    print(copied)
+    print(file_exists("/tmp/gorget_fs_test_dir/hello_copy.txt"))
+
+    # rename
+    bool renamed = rename("/tmp/gorget_fs_test_dir/hello_copy.txt", "/tmp/gorget_fs_test_dir/hello_renamed.txt")
+    print(renamed)
+    print(file_exists("/tmp/gorget_fs_test_dir/hello_renamed.txt"))
+
+    # cleanup
+    delete_file("/tmp/gorget_fs_test_dir/hello.txt")
+    delete_file("/tmp/gorget_fs_test_dir/hello_renamed.txt")
+    bool removed = rmdir("/tmp/gorget_fs_test_dir")
+    print(removed)

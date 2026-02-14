@@ -20,9 +20,6 @@
 
 - **`build_tree` silently absorbs malformed events (`report.rs:383-466`)**: Depth jumps (0→3 without intermediates) get silently absorbed. Unmatched `Return`/`StmtEnd` against the root frame are dropped with no warning. Should at minimum log a diagnostic. [added: 2026-02-14]
 
-## Medium Priority — Stdlib gaps
-- `std.fs`: `mkdir`, `rmdir`, `rename`, `copy_file`, `file_size`, `is_dir` [added: 2026-02-14]
-
 ## Medium Priority — General-purpose I/O Libraries (Phase 4)
 - SSH library (`std.net.ssh`) — `Session` struct, `.run(cmd) -> str`, `.close()`, automatic teardown. C backend via libssh2 or popen("ssh ..."). [added: 2026-02-14]
 - HTTP client library (`std.net.http`) — `Client` struct, `.get()`, `.post()`, response status/body. C backend via libcurl or minimal HTTP client. [added: 2026-02-14]

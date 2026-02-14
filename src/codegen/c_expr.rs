@@ -565,6 +565,44 @@ impl CodegenContext<'_> {
                             return format!("gorget_delete_file({path})");
                         }
                     }
+                    "mkdir" => {
+                        if let Some(arg) = args.first() {
+                            let path = self.gen_expr(&arg.node.value);
+                            return format!("gorget_mkdir({path})");
+                        }
+                    }
+                    "rmdir" => {
+                        if let Some(arg) = args.first() {
+                            let path = self.gen_expr(&arg.node.value);
+                            return format!("gorget_rmdir({path})");
+                        }
+                    }
+                    "rename" => {
+                        if args.len() >= 2 {
+                            let old = self.gen_expr(&args[0].node.value);
+                            let new = self.gen_expr(&args[1].node.value);
+                            return format!("gorget_rename({old}, {new})");
+                        }
+                    }
+                    "copy_file" => {
+                        if args.len() >= 2 {
+                            let src = self.gen_expr(&args[0].node.value);
+                            let dst = self.gen_expr(&args[1].node.value);
+                            return format!("gorget_copy_file({src}, {dst})");
+                        }
+                    }
+                    "file_size" => {
+                        if let Some(arg) = args.first() {
+                            let path = self.gen_expr(&arg.node.value);
+                            return format!("gorget_file_size({path})");
+                        }
+                    }
+                    "is_dir" => {
+                        if let Some(arg) = args.first() {
+                            let path = self.gen_expr(&arg.node.value);
+                            return format!("gorget_is_dir({path})");
+                        }
+                    }
                     "path_parent" => {
                         if let Some(arg) = args.first() {
                             let p = self.gen_expr(&arg.node.value);

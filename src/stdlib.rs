@@ -53,6 +53,12 @@ fn gen_fs_module() -> Module {
         decl_fn("append_file", &[("path", ty_str()), ("content", ty_str())], ty_void()),
         decl_fn("file_exists", &[("path", ty_str())], ty_bool()),
         decl_fn("delete_file", &[("path", ty_str())], ty_bool()),
+        decl_fn("mkdir", &[("path", ty_str())], ty_bool()),
+        decl_fn("rmdir", &[("path", ty_str())], ty_bool()),
+        decl_fn("rename", &[("old_path", ty_str()), ("new_path", ty_str())], ty_bool()),
+        decl_fn("copy_file", &[("src", ty_str()), ("dst", ty_str())], ty_bool()),
+        decl_fn("file_size", &[("path", ty_str())], ty_int()),
+        decl_fn("is_dir", &[("path", ty_str())], ty_bool()),
     ])
 }
 
@@ -365,7 +371,7 @@ mod tests {
     #[test]
     fn generate_fs() {
         let m = generate_stdlib_module(&["std".into(), "fs".into()]).unwrap();
-        assert_eq!(m.items.len(), 5);
+        assert_eq!(m.items.len(), 11);
         let names: Vec<_> = m.items.iter().map(|i| match &i.node {
             Item::Function(f) => f.name.node.clone(),
             _ => panic!("expected function"),
@@ -375,6 +381,12 @@ mod tests {
         assert!(names.contains(&"append_file".to_string()));
         assert!(names.contains(&"file_exists".to_string()));
         assert!(names.contains(&"delete_file".to_string()));
+        assert!(names.contains(&"mkdir".to_string()));
+        assert!(names.contains(&"rmdir".to_string()));
+        assert!(names.contains(&"rename".to_string()));
+        assert!(names.contains(&"copy_file".to_string()));
+        assert!(names.contains(&"file_size".to_string()));
+        assert!(names.contains(&"is_dir".to_string()));
     }
 
     #[test]
