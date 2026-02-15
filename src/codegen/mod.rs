@@ -222,8 +222,14 @@ impl Default for CodegenOptions {
     }
 }
 
+/// Output from C code generation, including the C source and metadata.
+pub struct CodegenOutput {
+    pub c_code: String,
+    pub needs_sdl: bool,
+}
+
 /// Generate C source code from a parsed and analyzed Gorget module.
-pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptions) -> String {
+pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptions) -> CodegenOutput {
     let mut field_type_names = FxHashMap::default();
     for item in &module.items {
         if let Item::Struct(s) = &item.node {
@@ -319,7 +325,15 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
         emitter.emit(c_runtime::PROCESS_RUNTIME);
     }
 
-    // 1d. Trace runtime (only when trace is enabled)
+    // 1d. SDL2 runtime (when std.sdl is imported)
+    let has_sdl = module.items.iter().any(|i| {
+        matches!(&i.node, Item::Struct(s) if s.name.node == "SDLWindow" && s.span == crate::span::Span::dummy())
+    });
+    if has_sdl {
+        emitter.emit(c_runtime::SDL_RUNTIME);
+    }
+
+    // 1e. Trace runtime (only when trace is enabled)
     if ctx.trace {
         emitter.emit(c_runtime::TRACE_RUNTIME);
     }
@@ -385,12 +399,12 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
             combined.push_str(&output[..pos]);
             combined.push_str(&splice_buf.finish());
             combined.push_str(&output[pos..]);
-            return combined;
+            return CodegenOutput { c_code: combined, needs_sdl: has_sdl };
         }
-        return output + &splice_buf.finish();
+        return CodegenOutput { c_code: output + &splice_buf.finish(), needs_sdl: has_sdl };
     }
 
-    emitter.finish()
+    CodegenOutput { c_code: emitter.finish(), needs_sdl: has_sdl }
 }
 
 #[cfg(test)]
@@ -415,7 +429,7 @@ mod tests {
             result.errors
         );
 
-        generate_c(&module, &result, CodegenOptions { source_text: source.to_string(), ..CodegenOptions::default() })
+        generate_c(&module, &result, CodegenOptions { source_text: source.to_string(), ..CodegenOptions::default() }).c_code
     }
 
     #[test]

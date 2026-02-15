@@ -647,8 +647,11 @@ impl CodegenContext<'_> {
         (ret_type, func_name, params)
     }
 
-    /// Emit a const declaration.
+    /// Emit a const declaration. Skip stdlib consts (dummy span).
     fn emit_const_decl(&mut self, c: &ConstDecl, emitter: &mut CEmitter) {
+        if c.span == crate::span::Span::dummy() {
+            return; // stdlib const — codegen maps directly to C runtime constants
+        }
         let c_type = c_types::ast_type_to_c(&c.type_.node, self.scopes);
         let name = c_mangle::escape_keyword(&c.name.node);
         let val = self.gen_expr(&c.value);

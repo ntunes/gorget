@@ -69,6 +69,16 @@ pub fn ast_type_to_c(ty: &crate::parser::ast::Type, scopes: &ScopeTable) -> Stri
                 }
             } else if name.node == "File" {
                 return "GorgetFile".to_string();
+            } else if name.node == "SDLWindow" {
+                return "GorgetSDLWindow".to_string();
+            } else if name.node == "SDLRenderer" {
+                return "GorgetSDLRenderer".to_string();
+            } else if name.node == "SDLTexture" {
+                return "GorgetSDLTexture".to_string();
+            } else if name.node == "SDLFont" {
+                return "GorgetSDLFont".to_string();
+            } else if name.node == "SDLEvent" {
+                return "GorgetSDLEvent".to_string();
             } else {
                 name.node.clone()
             }
@@ -187,6 +197,11 @@ pub(super) fn def_name_to_c(def_id: DefId, scopes: &ScopeTable) -> String {
     let name = scopes.get_def(def_id).name.clone();
     match name.as_str() {
         "File" => "GorgetFile".to_string(),
+        "SDLWindow" => "GorgetSDLWindow".to_string(),
+        "SDLRenderer" => "GorgetSDLRenderer".to_string(),
+        "SDLTexture" => "GorgetSDLTexture".to_string(),
+        "SDLFont" => "GorgetSDLFont".to_string(),
+        "SDLEvent" => "GorgetSDLEvent".to_string(),
         _ => name,
     }
 }

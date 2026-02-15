@@ -55,6 +55,10 @@ impl CodegenContext<'_> {
                 if (name == "stderr" || name == "stdout") && self.is_stdlib_static(name) {
                     return name.clone();
                 }
+                // SDL constants → GORGET_ prefixed C constants
+                if self.is_stdlib_const(name) {
+                    return format!("GORGET_{name}");
+                }
                 // Top-level functions get `gg_` prefix to avoid C library collisions
                 if self.function_names.contains(name.as_str()) {
                     return c_mangle::escape_function(name);
@@ -795,6 +799,207 @@ impl CodegenContext<'_> {
                             return format!("gorget_exec_output({cmd})");
                         }
                     }
+                    // std.sdl — lifecycle
+                    "sdl_init" => {
+                        let flags = if let Some(a) = args.first() { self.gen_expr(&a.node.value) } else { "0".to_string() };
+                        return format!("gorget_sdl_init({flags})");
+                    }
+                    "sdl_quit" => return "gorget_sdl_quit()".to_string(),
+                    // std.sdl — window
+                    "sdl_create_window" => {
+                        if args.len() >= 4 {
+                            let title = self.gen_expr(&args[0].node.value);
+                            let w = self.gen_expr(&args[1].node.value);
+                            let h = self.gen_expr(&args[2].node.value);
+                            let flags = self.gen_expr(&args[3].node.value);
+                            return format!("gorget_sdl_create_window({title}, {w}, {h}, {flags})");
+                        }
+                    }
+                    "sdl_destroy_window" => {
+                        if let Some(a) = args.first() {
+                            let win = self.gen_expr(&a.node.value);
+                            return format!("gorget_sdl_destroy_window({win})");
+                        }
+                    }
+                    "sdl_get_window_width" | "sdl_get_window_height" => {
+                        if let Some(a) = args.first() {
+                            let win = self.gen_expr(&a.node.value);
+                            return format!("gorget_{name}({win})");
+                        }
+                    }
+                    // std.sdl — renderer
+                    "sdl_create_renderer" => {
+                        if args.len() >= 2 {
+                            let win = self.gen_expr(&args[0].node.value);
+                            let flags = self.gen_expr(&args[1].node.value);
+                            return format!("gorget_sdl_create_renderer({win}, {flags})");
+                        }
+                    }
+                    "sdl_destroy_renderer" => {
+                        if let Some(a) = args.first() {
+                            let r = self.gen_expr(&a.node.value);
+                            return format!("gorget_sdl_destroy_renderer({r})");
+                        }
+                    }
+                    "sdl_set_draw_color" => {
+                        if args.len() >= 5 {
+                            let r = self.gen_expr(&args[0].node.value);
+                            let red = self.gen_expr(&args[1].node.value);
+                            let green = self.gen_expr(&args[2].node.value);
+                            let blue = self.gen_expr(&args[3].node.value);
+                            let alpha = self.gen_expr(&args[4].node.value);
+                            return format!("gorget_sdl_set_draw_color({r}, {red}, {green}, {blue}, {alpha})");
+                        }
+                    }
+                    "sdl_clear" | "sdl_present" => {
+                        if let Some(a) = args.first() {
+                            let r = self.gen_expr(&a.node.value);
+                            return format!("gorget_{name}({r})");
+                        }
+                    }
+                    "sdl_draw_rect" | "sdl_fill_rect" => {
+                        if args.len() >= 5 {
+                            let r = self.gen_expr(&args[0].node.value);
+                            let x = self.gen_expr(&args[1].node.value);
+                            let y = self.gen_expr(&args[2].node.value);
+                            let w = self.gen_expr(&args[3].node.value);
+                            let h = self.gen_expr(&args[4].node.value);
+                            return format!("gorget_{name}({r}, {x}, {y}, {w}, {h})");
+                        }
+                    }
+                    // std.sdl — drawing
+                    "sdl_draw_line" => {
+                        if args.len() >= 5 {
+                            let r = self.gen_expr(&args[0].node.value);
+                            let x1 = self.gen_expr(&args[1].node.value);
+                            let y1 = self.gen_expr(&args[2].node.value);
+                            let x2 = self.gen_expr(&args[3].node.value);
+                            let y2 = self.gen_expr(&args[4].node.value);
+                            return format!("gorget_sdl_draw_line({r}, {x1}, {y1}, {x2}, {y2})");
+                        }
+                    }
+                    "sdl_draw_point" => {
+                        if args.len() >= 3 {
+                            let r = self.gen_expr(&args[0].node.value);
+                            let x = self.gen_expr(&args[1].node.value);
+                            let y = self.gen_expr(&args[2].node.value);
+                            return format!("gorget_sdl_draw_point({r}, {x}, {y})");
+                        }
+                    }
+                    "sdl_set_blend_mode" => {
+                        if args.len() >= 2 {
+                            let r = self.gen_expr(&args[0].node.value);
+                            let mode = self.gen_expr(&args[1].node.value);
+                            return format!("gorget_sdl_set_blend_mode({r}, {mode})");
+                        }
+                    }
+                    // std.sdl — textures
+                    "sdl_load_texture" => {
+                        if args.len() >= 2 {
+                            let r = self.gen_expr(&args[0].node.value);
+                            let path = self.gen_expr(&args[1].node.value);
+                            return format!("gorget_sdl_load_texture({r}, {path})");
+                        }
+                    }
+                    "sdl_destroy_texture" => {
+                        if let Some(a) = args.first() {
+                            let t = self.gen_expr(&a.node.value);
+                            return format!("gorget_sdl_destroy_texture({t})");
+                        }
+                    }
+                    "sdl_render_texture" => {
+                        if args.len() >= 4 {
+                            let r = self.gen_expr(&args[0].node.value);
+                            let t = self.gen_expr(&args[1].node.value);
+                            let x = self.gen_expr(&args[2].node.value);
+                            let y = self.gen_expr(&args[3].node.value);
+                            return format!("gorget_sdl_render_texture({r}, {t}, {x}, {y})");
+                        }
+                    }
+                    "sdl_render_texture_sized" => {
+                        if args.len() >= 6 {
+                            let r = self.gen_expr(&args[0].node.value);
+                            let t = self.gen_expr(&args[1].node.value);
+                            let x = self.gen_expr(&args[2].node.value);
+                            let y = self.gen_expr(&args[3].node.value);
+                            let w = self.gen_expr(&args[4].node.value);
+                            let h = self.gen_expr(&args[5].node.value);
+                            return format!("gorget_sdl_render_texture_sized({r}, {t}, {x}, {y}, {w}, {h})");
+                        }
+                    }
+                    "sdl_texture_width" | "sdl_texture_height" => {
+                        if let Some(a) = args.first() {
+                            let t = self.gen_expr(&a.node.value);
+                            return format!("gorget_{name}({t})");
+                        }
+                    }
+                    "sdl_set_texture_alpha" => {
+                        if args.len() >= 2 {
+                            let t = self.gen_expr(&args[0].node.value);
+                            let alpha = self.gen_expr(&args[1].node.value);
+                            return format!("gorget_sdl_set_texture_alpha({t}, {alpha})");
+                        }
+                    }
+                    // std.sdl — text
+                    "sdl_load_font" => {
+                        if args.len() >= 2 {
+                            let path = self.gen_expr(&args[0].node.value);
+                            let size = self.gen_expr(&args[1].node.value);
+                            return format!("gorget_sdl_load_font({path}, {size})");
+                        }
+                    }
+                    "sdl_close_font" => {
+                        if let Some(a) = args.first() {
+                            let f = self.gen_expr(&a.node.value);
+                            return format!("gorget_sdl_close_font({f})");
+                        }
+                    }
+                    "sdl_render_text" => {
+                        if args.len() >= 6 {
+                            let r = self.gen_expr(&args[0].node.value);
+                            let f = self.gen_expr(&args[1].node.value);
+                            let text = self.gen_expr(&args[2].node.value);
+                            let red = self.gen_expr(&args[3].node.value);
+                            let green = self.gen_expr(&args[4].node.value);
+                            let blue = self.gen_expr(&args[5].node.value);
+                            return format!("gorget_sdl_render_text({r}, {f}, {text}, {red}, {green}, {blue})");
+                        }
+                    }
+                    "sdl_draw_text" => {
+                        if args.len() >= 8 {
+                            let r = self.gen_expr(&args[0].node.value);
+                            let f = self.gen_expr(&args[1].node.value);
+                            let text = self.gen_expr(&args[2].node.value);
+                            let x = self.gen_expr(&args[3].node.value);
+                            let y = self.gen_expr(&args[4].node.value);
+                            let red = self.gen_expr(&args[5].node.value);
+                            let green = self.gen_expr(&args[6].node.value);
+                            let blue = self.gen_expr(&args[7].node.value);
+                            return format!("gorget_sdl_draw_text({r}, {f}, {text}, {x}, {y}, {red}, {green}, {blue})");
+                        }
+                    }
+                    "sdl_text_width" | "sdl_text_height" => {
+                        if args.len() >= 2 {
+                            let f = self.gen_expr(&args[0].node.value);
+                            let text = self.gen_expr(&args[1].node.value);
+                            return format!("gorget_{name}({f}, {text})");
+                        }
+                    }
+                    // std.sdl — events
+                    "sdl_poll_event" => return "gorget_sdl_poll_event()".to_string(),
+                    "sdl_has_event" => return "gorget_sdl_has_event()".to_string(),
+                    // std.sdl — timing
+                    "sdl_delay" => {
+                        if let Some(a) = args.first() {
+                            let ms = self.gen_expr(&a.node.value);
+                            return format!("gorget_sdl_delay({ms})");
+                        }
+                    }
+                    "sdl_get_ticks" => return "gorget_sdl_get_ticks()".to_string(),
+                    "sdl_get_performance_counter" => return "gorget_sdl_get_performance_counter()".to_string(),
+                    // std.sdl — screen info
+                    "sdl_get_display_width" => return "gorget_sdl_get_display_width()".to_string(),
+                    "sdl_get_display_height" => return "gorget_sdl_get_display_height()".to_string(),
                     _ => {}
                 }
             }
@@ -3016,6 +3221,16 @@ impl CodegenContext<'_> {
             .map(|did| {
                 let def = self.scopes.get_def(did);
                 def.kind == DefKind::Static && def.span == crate::span::Span::dummy()
+            })
+            .unwrap_or(false)
+    }
+
+    fn is_stdlib_const(&self, name: &str) -> bool {
+        self.scopes
+            .lookup(name)
+            .map(|did| {
+                let def = self.scopes.get_def(did);
+                def.kind == DefKind::Const && def.span == crate::span::Span::dummy()
             })
             .unwrap_or(false)
     }

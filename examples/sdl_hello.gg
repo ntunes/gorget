@@ -1,0 +1,41 @@
+from std.sdl import sdl_init, sdl_create_window, sdl_create_renderer
+from std.sdl import sdl_set_draw_color, sdl_clear, sdl_present, sdl_fill_rect
+from std.sdl import sdl_poll_event, sdl_delay, sdl_quit, sdl_destroy_renderer, sdl_destroy_window
+from std.sdl import SDL_INIT_VIDEO, SDL_QUIT, SDL_KEYDOWN, SDLK_ESCAPE
+
+void main():
+    sdl_init(SDL_INIT_VIDEO)
+    auto win = sdl_create_window("Hello Gorget", 800, 600, 0)
+    auto ren = sdl_create_renderer(win, 0)
+
+    auto running = true
+    auto x = 100
+    while running:
+        auto event = sdl_poll_event()
+        if event.event_type == SDL_QUIT:
+            running = false
+        if event.event_type == SDL_KEYDOWN:
+            if event.key_code == SDLK_ESCAPE:
+                running = false
+
+        # Clear screen to black
+        sdl_set_draw_color(ren, 0, 0, 0, 255)
+        sdl_clear(ren)
+
+        # Draw a red rectangle that moves across the screen
+        sdl_set_draw_color(ren, 255, 0, 0, 255)
+        sdl_fill_rect(ren, x, 200, 50, 50)
+
+        # Draw a green rectangle
+        sdl_set_draw_color(ren, 0, 255, 0, 255)
+        sdl_fill_rect(ren, 400, 300, 100, 80)
+
+        sdl_present(ren)
+        sdl_delay(16)
+        x = x + 1
+        if x > 750:
+            x = 0
+
+    sdl_destroy_renderer(ren)
+    sdl_destroy_window(win)
+    sdl_quit()

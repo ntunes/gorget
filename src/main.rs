@@ -144,7 +144,7 @@ fn try_build(
     };
 
     // Generate C code
-    let c_code = gorget::codegen::generate_c(&module, &result, gorget::codegen::CodegenOptions {
+    let codegen_output = gorget::codegen::generate_c(&module, &result, gorget::codegen::CodegenOptions {
         strip_asserts,
         overflow_wrap,
         trace,
@@ -155,6 +155,8 @@ fn try_build(
         test_name_filter: test_name_filter.map(|s| s.to_string()),
         source_text: source.to_string(),
     });
+    let c_code = codegen_output.c_code;
+    let needs_sdl = codegen_output.needs_sdl;
     let c_path = dir.join(format!("{stem}.c"));
     // Canonicalize to an absolute path so Command::new() doesn't search $PATH.
     // For a bare filename like "hello.gg", dir is "." and exe_path would be "hello",
@@ -180,19 +182,61 @@ fn try_build(
     if overflow_wrap {
         cc_cmd.arg("-fwrapv");
     }
-    let status = cc_cmd
+    cc_cmd
         .arg("-o")
         .arg(&exe_path)
         .arg(&c_path)
-        .arg("-lm")
-        .status();
+        .arg("-lm");
+
+    // Add SDL2 linker flags when std.sdl is imported
+    if needs_sdl {
+        // Try pkg-config first for proper include/lib paths
+        let pkg_ok = Command::new("pkg-config")
+            .args(["--cflags", "--libs", "sdl2", "SDL2_image", "SDL2_ttf"])
+            .output()
+            .ok()
+            .and_then(|o| {
+                if o.status.success() {
+                    Some(String::from_utf8_lossy(&o.stdout).to_string())
+                } else {
+                    None
+                }
+            });
+        if let Some(flags) = pkg_ok {
+            for flag in flags.split_whitespace() {
+                cc_cmd.arg(flag);
+            }
+        } else {
+            // Fall back to manual flags
+            cc_cmd.args(["-lSDL2", "-lSDL2_image", "-lSDL2_ttf"]);
+            // macOS Homebrew paths
+            #[cfg(target_os = "macos")]
+            {
+                cc_cmd.arg("-I/opt/homebrew/include");
+                cc_cmd.arg("-L/opt/homebrew/lib");
+                cc_cmd.arg("-I/usr/local/include");
+                cc_cmd.arg("-L/usr/local/lib");
+            }
+        }
+    }
+
+    let status = cc_cmd.status();
 
     match status {
         Ok(s) if s.success() => Ok(exe_path),
-        Ok(s) => Err(format!(
-            "C compiler exited with: {s}\nGenerated C file: {}",
-            c_path.display()
-        )),
+        Ok(s) => {
+            let mut msg = format!(
+                "C compiler exited with: {s}\nGenerated C file: {}",
+                c_path.display()
+            );
+            if needs_sdl {
+                msg.push_str("\n\nHint: This program uses std.sdl which requires SDL2 development libraries.");
+                msg.push_str("\nInstall them with:");
+                msg.push_str("\n  macOS:   brew install sdl2 sdl2_image sdl2_ttf");
+                msg.push_str("\n  Ubuntu:  apt install libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev");
+            }
+            Err(msg)
+        }
         Err(e) => Err(format!(
             "Failed to run C compiler '{cc}': {e}\nGenerated C file: {}",
             c_path.display()
