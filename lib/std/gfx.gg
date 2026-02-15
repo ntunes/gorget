@@ -1,0 +1,119 @@
+# std.gfx — High-level 2D graphics for Gorget
+#
+# This module wraps std.sdl to provide a simple, Gorget-idiomatic API
+# for 2D drawing. For event handling, import std.sdl directly.
+
+from std.sdl import sdl_init, sdl_quit, SDL_INIT_VIDEO
+from std.sdl import sdl_create_window, sdl_destroy_window, SDL_WINDOW_SHOWN
+from std.sdl import sdl_create_renderer, sdl_destroy_renderer
+from std.sdl import SDL_RENDERER_ACCELERATED, SDL_RENDERER_PRESENTVSYNC
+from std.sdl import sdl_set_draw_color, sdl_clear, sdl_present
+from std.sdl import sdl_fill_rect, sdl_draw_rect
+from std.sdl import sdl_draw_line, sdl_draw_point
+from std.sdl import sdl_get_window_width, sdl_get_window_height
+from std.sdl import sdl_delay, sdl_get_ticks
+from std.sdl import SDLWindow, SDLRenderer
+
+# ── Types ─────────────────────────────────────────────────────
+
+struct Color:
+    int r
+    int g
+    int b
+    int a
+
+struct Canvas:
+    SDLWindow win
+    SDLRenderer ren
+
+# ── Window management ─────────────────────────────────────────
+
+Canvas gfx_open(str title, int w, int h):
+    sdl_init(SDL_INIT_VIDEO)
+    auto win = sdl_create_window(title, w, h, SDL_WINDOW_SHOWN)
+    auto ren = sdl_create_renderer(win, SDL_RENDERER_ACCELERATED)
+    return Canvas(win, ren)
+
+void gfx_close(Canvas c):
+    sdl_destroy_renderer(c.ren)
+    sdl_destroy_window(c.win)
+    sdl_quit()
+
+int gfx_width(Canvas c):
+    return sdl_get_window_width(c.win)
+
+int gfx_height(Canvas c):
+    return sdl_get_window_height(c.win)
+
+# ── Drawing ───────────────────────────────────────────────────
+
+void gfx_clear(Canvas c, Color color):
+    sdl_set_draw_color(c.ren, color.r, color.g, color.b, color.a)
+    sdl_clear(c.ren)
+
+void gfx_present(Canvas c):
+    sdl_present(c.ren)
+
+void gfx_fill_rect(Canvas c, int x, int y, int w, int h, Color color):
+    sdl_set_draw_color(c.ren, color.r, color.g, color.b, color.a)
+    sdl_fill_rect(c.ren, x, y, w, h)
+
+void gfx_draw_rect(Canvas c, int x, int y, int w, int h, Color color):
+    sdl_set_draw_color(c.ren, color.r, color.g, color.b, color.a)
+    sdl_draw_rect(c.ren, x, y, w, h)
+
+void gfx_draw_line(Canvas c, int x1, int y1, int x2, int y2, Color color):
+    sdl_set_draw_color(c.ren, color.r, color.g, color.b, color.a)
+    sdl_draw_line(c.ren, x1, y1, x2, y2)
+
+void gfx_draw_point(Canvas c, int x, int y, Color color):
+    sdl_set_draw_color(c.ren, color.r, color.g, color.b, color.a)
+    sdl_draw_point(c.ren, x, y)
+
+# ── Circles (midpoint algorithm, implemented in pure Gorget) ──
+
+void gfx_draw_circle(Canvas c, int cx, int cy, int radius, Color color):
+    sdl_set_draw_color(c.ren, color.r, color.g, color.b, color.a)
+    int x = radius
+    int y = 0
+    int d = 1 - x
+    while x >= y:
+        sdl_draw_point(c.ren, cx + x, cy + y)
+        sdl_draw_point(c.ren, cx - x, cy + y)
+        sdl_draw_point(c.ren, cx + x, cy - y)
+        sdl_draw_point(c.ren, cx - x, cy - y)
+        sdl_draw_point(c.ren, cx + y, cy + x)
+        sdl_draw_point(c.ren, cx - y, cy + x)
+        sdl_draw_point(c.ren, cx + y, cy - x)
+        sdl_draw_point(c.ren, cx - y, cy - x)
+        y = y + 1
+        if d < 0:
+            d = d + 2 * y + 1
+        else:
+            x = x - 1
+            d = d + 2 * (y - x) + 1
+
+void gfx_fill_circle(Canvas c, int cx, int cy, int radius, Color color):
+    sdl_set_draw_color(c.ren, color.r, color.g, color.b, color.a)
+    int x = radius
+    int y = 0
+    int d = 1 - x
+    while x >= y:
+        sdl_draw_line(c.ren, cx - x, cy + y, cx + x, cy + y)
+        sdl_draw_line(c.ren, cx - x, cy - y, cx + x, cy - y)
+        sdl_draw_line(c.ren, cx - y, cy + x, cx + y, cy + x)
+        sdl_draw_line(c.ren, cx - y, cy - x, cx + y, cy - x)
+        y = y + 1
+        if d < 0:
+            d = d + 2 * y + 1
+        else:
+            x = x - 1
+            d = d + 2 * (y - x) + 1
+
+# ── Timing ────────────────────────────────────────────────────
+
+void gfx_delay(int ms):
+    sdl_delay(ms)
+
+int gfx_ticks():
+    return sdl_get_ticks()

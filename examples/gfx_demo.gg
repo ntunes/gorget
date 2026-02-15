@@ -1,0 +1,79 @@
+# gfx_demo.gg — std.gfx example
+#
+# A bouncing ball with a trail, showcasing the high-level graphics API.
+# Run: gg run examples/gfx_demo.gg
+
+from std.gfx import Canvas, Color, gfx_open, gfx_close
+from std.gfx import gfx_clear, gfx_present, gfx_fill_rect
+from std.gfx import gfx_draw_rect, gfx_draw_line, gfx_fill_circle
+from std.gfx import gfx_delay, gfx_width, gfx_height
+from std.sdl import sdl_poll_event, SDL_QUIT, SDL_KEYDOWN, SDLK_ESCAPE
+
+void main():
+    auto canvas = gfx_open("Gorget GFX Demo", 800, 600)
+
+    auto black = Color(0, 0, 0, 255)
+    auto white = Color(255, 255, 255, 255)
+    auto red = Color(220, 50, 50, 255)
+    auto green = Color(50, 200, 80, 255)
+    auto blue = Color(60, 120, 220, 255)
+    auto gray = Color(40, 40, 40, 255)
+
+    # Ball state
+    int bx = 400
+    int by = 300
+    int dx = 3
+    int dy = 2
+    int radius = 20
+
+    auto running = true
+    while running:
+        # Poll events
+        auto event = sdl_poll_event()
+        if event.event_type == SDL_QUIT:
+            running = false
+        if event.event_type == SDL_KEYDOWN:
+            if event.key_code == SDLK_ESCAPE:
+                running = false
+
+        # Move ball
+        bx = bx + dx
+        by = by + dy
+
+        # Bounce off walls
+        int w = gfx_width(canvas)
+        int h = gfx_height(canvas)
+        if bx - radius < 0:
+            bx = radius
+            dx = 0 - dx
+        if bx + radius > w:
+            bx = w - radius
+            dx = 0 - dx
+        if by - radius < 0:
+            by = radius
+            dy = 0 - dy
+        if by + radius > h:
+            by = h - radius
+            dy = 0 - dy
+
+        # Draw
+        gfx_clear(canvas, black)
+
+        # Border
+        gfx_draw_rect(canvas, 5, 5, w - 10, h - 10, gray)
+
+        # Cross-hairs
+        gfx_draw_line(canvas, w / 2, 0, w / 2, h, gray)
+        gfx_draw_line(canvas, 0, h / 2, w, h / 2, gray)
+
+        # Ball
+        gfx_fill_circle(canvas, bx, by, radius, red)
+
+        # HUD rectangles
+        gfx_fill_rect(canvas, 10, 10, 100, 30, green)
+        gfx_fill_rect(canvas, w - 110, 10, 100, 30, blue)
+
+        gfx_present(canvas)
+        gfx_delay(16)
+
+    gfx_close(canvas)

@@ -325,7 +325,7 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
         emitter.emit(c_runtime::PROCESS_RUNTIME);
     }
 
-    // 1d. SDL2 runtime (when std.sdl is imported)
+    // 1d. SDL2 runtime (when std.sdl is imported, directly or via std.gfx)
     let has_sdl = module.items.iter().any(|i| {
         matches!(&i.node, Item::Struct(s) if s.name.node == "SDLWindow" && s.span == crate::span::Span::dummy())
     });

@@ -155,9 +155,37 @@ impl ModuleLoader {
             if self.loaded.contains(&virtual_path) {
                 return Ok(());
             }
+
+            // Try synthetic (compiler-generated) module first
             if let Some(module) = crate::stdlib::generate_stdlib_module(segments) {
                 self.loaded.insert(virtual_path.clone());
                 results.push((virtual_path, String::new(), module));
+                return Ok(());
+            }
+
+            // Try file-based stdlib module (real .gg source embedded in binary)
+            if let Some(source) = crate::stdlib::stdlib_module_source(segments) {
+                let mut parser = Parser::new(source);
+                let module = parser.parse_module();
+                assert!(
+                    parser.errors.is_empty(),
+                    "parse errors in embedded stdlib module {}: {:?}",
+                    segments.join("."),
+                    parser.errors
+                );
+
+                self.loaded.insert(virtual_path.clone());
+                self.load_stack.push(virtual_path.clone());
+
+                // Recurse into this module's imports (e.g. std.gfx imports std.sdl)
+                let imports = extract_imports(&module);
+                results.push((virtual_path.clone(), source.to_string(), module));
+
+                for (segs, _span) in imports {
+                    self.load_recursive(base_dir, &segs, results)?;
+                }
+
+                self.load_stack.pop();
                 return Ok(());
             }
         }

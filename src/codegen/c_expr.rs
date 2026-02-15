@@ -276,8 +276,12 @@ impl CodegenContext<'_> {
             Expr::StructLiteral { name, args } => {
                 let field_exprs: Vec<String> = args.iter().map(|a| self.gen_expr(a)).collect();
                 let fields_str = field_exprs.join(", ");
-                let type_name = &name.node;
-                format!("({type_name}){{{fields_str}}}")
+                let c_name = if let Some(def_id) = self.scopes.lookup(&name.node) {
+                    c_types::def_name_to_c(def_id, self.scopes)
+                } else {
+                    name.node.clone()
+                };
+                format!("({c_name}){{{fields_str}}}")
             }
 
             Expr::ArrayLiteral(elements) => {
@@ -1024,7 +1028,8 @@ impl CodegenContext<'_> {
                     let field_exprs: Vec<String> =
                         args.iter().map(|a| self.gen_expr(&a.node.value)).collect();
                     let fields = field_exprs.join(", ");
-                    return format!("({name}){{{fields}}}");
+                    let c_name = c_types::def_name_to_c(def_id, self.scopes);
+                    return format!("({c_name}){{{fields}}}");
                 }
                 // Check for enum variant constructor
                 if def.kind == crate::semantic::scope::DefKind::Variant {

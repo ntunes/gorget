@@ -15,7 +15,7 @@ pub fn is_stdlib_module(segments: &[String]) -> bool {
         return false;
     }
     match segments.len() {
-        2 => matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv" | "io" | "random" | "time" | "collections" | "math" | "fmt" | "process" | "sdl"),
+        2 => matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv" | "io" | "random" | "time" | "collections" | "math" | "fmt" | "process" | "sdl" | "gfx"),
         _ => false,
     }
 }
@@ -39,6 +39,7 @@ pub fn generate_stdlib_module(segments: &[String]) -> Option<Module> {
             "fmt" => Some(gen_fmt_module()),
             "process" => Some(gen_process_module()),
             "sdl" => Some(gen_sdl_module()),
+            "gfx" => None, // file-based module — loaded via stdlib_module_source()
             _ => None,
         },
         _ => None,
@@ -487,6 +488,21 @@ fn gen_sdl_module() -> Module {
     }
 }
 
+// ─── File-based stdlib modules ──────────────────────────────
+
+/// Get embedded source for file-based stdlib modules.
+/// These are real `.gg` files compiled into the binary, parsed and loaded
+/// by the module loader (including recursive import resolution).
+pub fn stdlib_module_source(segments: &[String]) -> Option<&'static str> {
+    if segments.first().map(|s| s.as_str()) != Some("std") {
+        return None;
+    }
+    match segments.get(1).map(|s| s.as_str()) {
+        Some("gfx") => Some(include_str!("../lib/std/gfx.gg")),
+        _ => None,
+    }
+}
+
 // ─── Helpers ────────────────────────────────────────────────
 
 fn make_module(fns: Vec<FunctionDef>) -> Module {
@@ -674,6 +690,54 @@ mod tests {
     #[test]
     fn generate_unknown_returns_none() {
         assert!(generate_stdlib_module(&["std".into(), "foo".into()]).is_none());
+    }
+
+    #[test]
+    fn is_stdlib_gfx() {
+        assert!(is_stdlib_module(&["std".into(), "gfx".into()]));
+    }
+
+    #[test]
+    fn generate_gfx_returns_none() {
+        // std.gfx is file-based, not synthetic — generate returns None
+        assert!(generate_stdlib_module(&["std".into(), "gfx".into()]).is_none());
+    }
+
+    #[test]
+    fn gfx_module_source_exists() {
+        let source = stdlib_module_source(&["std".into(), "gfx".into()]);
+        assert!(source.is_some());
+        let src = source.unwrap();
+        assert!(src.contains("struct Canvas"));
+        assert!(src.contains("struct Color"));
+        assert!(src.contains("gfx_open"));
+        assert!(src.contains("gfx_close"));
+        assert!(src.contains("gfx_fill_circle"));
+    }
+
+    #[test]
+    fn gfx_source_parses() {
+        let source = stdlib_module_source(&["std".into(), "gfx".into()]).unwrap();
+        let mut parser = crate::parser::Parser::new(source);
+        let module = parser.parse_module();
+        assert!(parser.errors.is_empty(), "gfx.gg parse errors: {:?}", parser.errors);
+
+        // Collect item names
+        let mut struct_names = vec![];
+        let mut fn_names = vec![];
+        for item in &module.items {
+            match &item.node {
+                Item::Struct(s) => struct_names.push(s.name.node.clone()),
+                Item::Function(f) => fn_names.push(f.name.node.clone()),
+                _ => {}
+            }
+        }
+
+        assert!(struct_names.contains(&"Canvas".to_string()));
+        assert!(struct_names.contains(&"Color".to_string()));
+        assert!(fn_names.contains(&"gfx_open".to_string()));
+        assert!(fn_names.contains(&"gfx_draw_circle".to_string()));
+        assert!(fn_names.contains(&"gfx_fill_circle".to_string()));
     }
 
     #[test]
