@@ -1,0 +1,52 @@
+from std.bytes import bytes_from_str, bytes_to_str, bytes_from_hex, bytes_to_hex
+from std.bytes import bytes_write_u32_be, bytes_read_u32_be
+from std.bytes import bytes_write_u16_be, bytes_read_u16_be
+from std.bytes import bytes_concat, bytes_slice, random_bytes
+
+void main():
+    # str → bytes → str roundtrip
+    Vector[uint8] b = bytes_from_str("Hello")
+    print("{b.len()}")
+    str s = bytes_to_str(b)
+    print(s)
+
+    # hex roundtrip
+    Vector[uint8] h = bytes_from_hex("48656c6c6f")
+    str hs = bytes_to_str(h)
+    print(hs)
+
+    # bytes_to_hex
+    str hex = bytes_to_hex(h)
+    print(hex)
+
+    # big-endian u32 read/write
+    Vector[uint8] buf = bytes_from_hex("00000000aabbccdd")
+    bytes_write_u32_be(buf, 0, 305419896)
+    int val = bytes_read_u32_be(buf, 0)
+    print("{val}")
+
+    # read the second u32
+    int val2 = bytes_read_u32_be(buf, 4)
+    print("{val2}")
+
+    # big-endian u16 read/write
+    Vector[uint8] buf16 = bytes_from_hex("00001234")
+    bytes_write_u16_be(buf16, 0, 4660)
+    int v16 = bytes_read_u16_be(buf16, 0)
+    print("{v16}")
+
+    # concat
+    Vector[uint8] a = bytes_from_str("Hello")
+    Vector[uint8] c = bytes_from_str(" World")
+    Vector[uint8] cat = bytes_concat(a, c)
+    print(bytes_to_str(cat))
+
+    # slice
+    Vector[uint8] sl = bytes_slice(cat, 0, 5)
+    print(bytes_to_str(sl))
+
+    # random_bytes produces correct length
+    Vector[uint8] r = random_bytes(16)
+    print("{r.len()}")
+
+    print("done")

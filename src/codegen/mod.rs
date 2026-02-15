@@ -235,6 +235,7 @@ pub struct CodegenOutput {
     pub c_code: String,
     pub needs_sdl: bool,
     pub needs_http: bool,
+    pub needs_crypto: bool,
 }
 
 /// Generate C source code from a parsed and analyzed Gorget module.
@@ -358,7 +359,35 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
         emitter.emit(c_runtime::HTTP_RUNTIME);
     }
 
-    // 1f. SDL2 runtime (when std.sdl is imported, directly or via std.gfx)
+    // 1f. Crypto runtime (when std.crypto is imported)
+    let has_crypto = module.items.iter().any(|i| {
+        matches!(&i.node, Item::Struct(s) if s.name.node == "CipherContext" && s.span == crate::span::Span::dummy())
+    });
+    if has_crypto {
+        emitter.emit(c_runtime::CRYPTO_RUNTIME);
+    }
+
+    // 1g. Socket runtime (when std.net.socket is imported)
+    let has_socket = module.items.iter().any(|i| {
+        matches!(&i.node, Item::Struct(s) if s.name.node == "Socket" && s.span == crate::span::Span::dummy())
+    });
+    if has_socket {
+        emitter.emit(c_runtime::SOCKET_RUNTIME);
+    }
+
+    // 1g. Bytes runtime (when std.bytes is imported)
+    let has_bytes = module.items.iter().any(|i| {
+        if let Item::Function(f) = &i.node {
+            f.name.node == "bytes_from_str" && f.span == crate::span::Span::dummy()
+        } else {
+            false
+        }
+    });
+    if has_bytes {
+        emitter.emit(c_runtime::BYTES_RUNTIME);
+    }
+
+    // 1g. SDL2 runtime (when std.sdl is imported, directly or via std.gfx)
     let has_sdl = module.items.iter().any(|i| {
         matches!(&i.node, Item::Struct(s) if s.name.node == "SDLWindow" && s.span == crate::span::Span::dummy())
     });
@@ -432,12 +461,12 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
             combined.push_str(&output[..pos]);
             combined.push_str(&splice_buf.finish());
             combined.push_str(&output[pos..]);
-            return CodegenOutput { c_code: combined, needs_sdl: has_sdl, needs_http: has_http };
+            return CodegenOutput { c_code: combined, needs_sdl: has_sdl, needs_http: has_http, needs_crypto: has_crypto };
         }
-        return CodegenOutput { c_code: output + &splice_buf.finish(), needs_sdl: has_sdl, needs_http: has_http };
+        return CodegenOutput { c_code: output + &splice_buf.finish(), needs_sdl: has_sdl, needs_http: has_http, needs_crypto: has_crypto };
     }
 
-    CodegenOutput { c_code: emitter.finish(), needs_sdl: has_sdl, needs_http: has_http }
+    CodegenOutput { c_code: emitter.finish(), needs_sdl: has_sdl, needs_http: has_http, needs_crypto: has_crypto }
 }
 
 #[cfg(test)]

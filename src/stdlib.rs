@@ -16,8 +16,9 @@ pub fn is_stdlib_module(segments: &[String]) -> bool {
         return false;
     }
     match segments.len() {
-        2 => matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv" | "io" | "random" | "time" | "collections" | "math" | "fmt" | "process" | "sdl" | "gfx" | "ecs" | "json"),
-        3 => segments[1] == "http" && segments[2] == "client",
+        2 => matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv" | "io" | "random" | "time" | "collections" | "math" | "fmt" | "process" | "sdl" | "gfx" | "ecs" | "json" | "bytes" | "crypto" | "ssh"),
+        3 => (segments[1] == "http" && segments[2] == "client")
+            || (segments[1] == "net" && segments[2] == "socket"),
         _ => false,
     }
 }
@@ -42,11 +43,15 @@ pub fn generate_stdlib_module(segments: &[String]) -> Option<Module> {
             "process" => Some(gen_process_module()),
             "sdl" => Some(gen_sdl_module()),
             "json" => Some(gen_json_module()),
+            "bytes" => Some(gen_bytes_module()),
+            "crypto" => Some(gen_crypto_module()),
             "gfx" => None, // file-based module — loaded via stdlib_module_source()
             "ecs" => None, // file-based module — loaded via stdlib_module_source()
+            "ssh" => None, // file-based module — loaded via stdlib_module_source()
             _ => None,
         },
         3 if segments[1] == "http" && segments[2] == "client" => Some(gen_http_client_module()),
+        3 if segments[1] == "net" && segments[2] == "socket" => Some(gen_socket_module()),
         _ => None,
     }
 }
@@ -505,6 +510,7 @@ pub fn stdlib_module_source(segments: &[String]) -> Option<&'static str> {
     match segments.get(1).map(|s| s.as_str()) {
         Some("gfx") => Some(include_str!("../lib/std/gfx.gg")),
         Some("ecs") => Some(include_str!("../lib/std/ecs.gg")),
+        Some("ssh") => Some(include_str!("../lib/std/ssh.gg")),
         _ => None,
     }
 }
@@ -581,6 +587,17 @@ fn ty_vector_str() -> Type {
     }
 }
 
+fn ty_uint8() -> Type {
+    Type::Primitive(PrimitiveType::Uint8)
+}
+
+fn ty_vector_uint8() -> Type {
+    Type::Named {
+        name: Spanned::dummy("Vector".to_string()),
+        generic_args: vec![Spanned::dummy(ty_uint8())],
+    }
+}
+
 fn ty_json_value() -> Type {
     Type::Named {
         name: Spanned::dummy("JsonValue".to_string()),
@@ -652,6 +669,100 @@ fn decl_fn_with_defaults(
         doc_comment: None,
         span: Span::dummy(),
     }
+}
+
+// ─── std.crypto ─────────────────────────────────────────────
+
+fn gen_crypto_module() -> Module {
+    let ty_cipher = || Type::Named {
+        name: Spanned::dummy("CipherContext".to_string()),
+        generic_args: vec![],
+    };
+    let ty_bignum = || Type::Named {
+        name: Spanned::dummy("BigNum".to_string()),
+        generic_args: vec![],
+    };
+    let ty_rsakey = || Type::Named {
+        name: Spanned::dummy("RSAKey".to_string()),
+        generic_args: vec![],
+    };
+
+    let mut items: Vec<Spanned<Item>> = Vec::new();
+
+    // Opaque structs
+    items.push(opaque_struct("CipherContext"));
+    items.push(opaque_struct("BigNum"));
+    items.push(opaque_struct("RSAKey"));
+
+    // Free functions
+    let fns = vec![
+        // Hashing
+        decl_fn("crypto_sha256", &[("data", ty_vector_uint8())], ty_vector_uint8()),
+        decl_fn("crypto_sha1", &[("data", ty_vector_uint8())], ty_vector_uint8()),
+        // HMAC
+        decl_fn("crypto_hmac", &[("algo", ty_str()), ("key", ty_vector_uint8()), ("data", ty_vector_uint8())], ty_vector_uint8()),
+        // AES-CTR
+        decl_fn("crypto_aes_ctr_new", &[("key", ty_vector_uint8()), ("iv", ty_vector_uint8())], ty_cipher()),
+        // BigNum
+        decl_fn("crypto_bn_from_bytes", &[("data", ty_vector_uint8())], ty_bignum()),
+        decl_fn("crypto_bn_to_bytes", &[("bn", ty_bignum())], ty_vector_uint8()),
+        decl_fn("crypto_bn_mod_exp", &[("base", ty_bignum()), ("exp", ty_bignum()), ("modulus", ty_bignum())], ty_bignum()),
+        // RSA
+        decl_fn("crypto_rsa_load_public", &[("key_bytes", ty_vector_uint8())], ty_result(ty_rsakey(), ty_str())),
+        decl_fn("crypto_rsa_verify", &[("key", ty_rsakey()), ("data", ty_vector_uint8()), ("sig", ty_vector_uint8())], ty_bool()),
+        // Random
+        decl_fn("crypto_random_bytes", &[("n", ty_int())], ty_vector_uint8()),
+    ];
+    for f in fns {
+        items.push(Spanned::dummy(Item::Function(f)));
+    }
+
+    Module {
+        items,
+        span: Span::dummy(),
+    }
+}
+
+// ─── std.net.socket ─────────────────────────────────────────
+
+fn gen_socket_module() -> Module {
+    let ty_socket = || Type::Named {
+        name: Spanned::dummy("Socket".to_string()),
+        generic_args: vec![],
+    };
+
+    let mut items: Vec<Spanned<Item>> = Vec::new();
+
+    // Opaque struct: Socket
+    items.push(opaque_struct("Socket"));
+
+    // Free function: socket_connect(host, port) -> Result[Socket, str]
+    items.push(Spanned::dummy(Item::Function(
+        decl_fn("socket_connect", &[("host", ty_str()), ("port", ty_int())], ty_result(ty_socket(), ty_str())),
+    )));
+
+    Module {
+        items,
+        span: Span::dummy(),
+    }
+}
+
+// ─── std.bytes ──────────────────────────────────────────────
+
+fn gen_bytes_module() -> Module {
+    make_module(vec![
+        decl_fn("bytes_from_str", &[("s", ty_str())], ty_vector_uint8()),
+        decl_fn("bytes_to_str", &[("b", ty_vector_uint8())], ty_str()),
+        decl_fn("bytes_from_hex", &[("hex", ty_str())], ty_vector_uint8()),
+        decl_fn("bytes_to_hex", &[("b", ty_vector_uint8())], ty_str()),
+        decl_fn("bytes_write_u32_be", &[("b", ty_vector_uint8()), ("offset", ty_int()), ("value", ty_int())], ty_void()),
+        decl_fn("bytes_read_u32_be", &[("b", ty_vector_uint8()), ("offset", ty_int())], ty_int()),
+        decl_fn("bytes_write_u16_be", &[("b", ty_vector_uint8()), ("offset", ty_int()), ("value", ty_int())], ty_void()),
+        decl_fn("bytes_read_u16_be", &[("b", ty_vector_uint8()), ("offset", ty_int())], ty_int()),
+        decl_fn("bytes_concat", &[("a", ty_vector_uint8()), ("b", ty_vector_uint8())], ty_vector_uint8()),
+        decl_fn("bytes_slice", &[("b", ty_vector_uint8()), ("start", ty_int()), ("end", ty_int())], ty_vector_uint8()),
+        decl_fn("random_bytes", &[("n", ty_int())], ty_vector_uint8()),
+    ])
 }
 
 // ─── std.json ───────────────────────────────────────────────
@@ -737,6 +848,7 @@ mod tests {
         assert!(is_stdlib_module(&["std".into(), "sdl".into()]));
         assert!(is_stdlib_module(&["std".into(), "ecs".into()]));
         assert!(is_stdlib_module(&["std".into(), "json".into()]));
+        assert!(is_stdlib_module(&["std".into(), "bytes".into()]));
         assert!(is_stdlib_module(&["std".into(), "http".into(), "client".into()]));
         assert!(!is_stdlib_module(&["std".into(), "test".into(), "process".into()]));
         assert!(!is_stdlib_module(&["std".into(), "foo".into()]));
@@ -985,6 +1097,134 @@ mod tests {
             assert!(field_names.contains(&"key_code".to_string()));
             assert!(field_names.contains(&"mouse_x".to_string()));
         }
+    }
+
+    #[test]
+    fn is_stdlib_ssh() {
+        assert!(is_stdlib_module(&["std".into(), "ssh".into()]));
+    }
+
+    #[test]
+    fn generate_ssh_returns_none() {
+        // std.ssh is file-based, not synthetic — generate returns None
+        assert!(generate_stdlib_module(&["std".into(), "ssh".into()]).is_none());
+    }
+
+    #[test]
+    fn ssh_module_source_exists() {
+        let source = stdlib_module_source(&["std".into(), "ssh".into()]);
+        assert!(source.is_some());
+        let src = source.unwrap();
+        assert!(src.contains("struct Session"));
+        assert!(src.contains("struct CommandResult"));
+        assert!(src.contains("ssh_connect"));
+        assert!(src.contains("channel_exec"));
+    }
+
+    #[test]
+    fn ssh_source_parses() {
+        let source = stdlib_module_source(&["std".into(), "ssh".into()]).unwrap();
+        let mut parser = crate::parser::Parser::new(source);
+        let module = parser.parse_module();
+        assert!(parser.errors.is_empty(), "ssh.gg parse errors: {:?}", parser.errors);
+
+        let mut struct_names = vec![];
+        let mut fn_names = vec![];
+        let mut equip_count = 0;
+        for item in &module.items {
+            match &item.node {
+                Item::Struct(s) => struct_names.push(s.name.node.clone()),
+                Item::Function(f) => fn_names.push(f.name.node.clone()),
+                Item::Equip(_) => equip_count += 1,
+                _ => {}
+            }
+        }
+
+        assert!(struct_names.contains(&"Session".to_string()));
+        assert!(struct_names.contains(&"CommandResult".to_string()));
+        assert!(fn_names.contains(&"ssh_connect".to_string()));
+        assert!(fn_names.contains(&"send_packet".to_string()));
+        assert!(fn_names.contains(&"read_packet".to_string()));
+        assert_eq!(equip_count, 1);
+    }
+
+    #[test]
+    fn is_stdlib_crypto() {
+        assert!(is_stdlib_module(&["std".into(), "crypto".into()]));
+    }
+
+    #[test]
+    fn generate_crypto() {
+        let m = generate_stdlib_module(&["std".into(), "crypto".into()]).unwrap();
+        let mut struct_names = vec![];
+        let mut fn_names = vec![];
+        for item in &m.items {
+            match &item.node {
+                Item::Struct(s) => struct_names.push(s.name.node.clone()),
+                Item::Function(f) => fn_names.push(f.name.node.clone()),
+                _ => {}
+            }
+        }
+        assert!(struct_names.contains(&"CipherContext".to_string()));
+        assert!(struct_names.contains(&"BigNum".to_string()));
+        assert!(struct_names.contains(&"RSAKey".to_string()));
+        assert!(fn_names.contains(&"crypto_sha256".to_string()));
+        assert!(fn_names.contains(&"crypto_sha1".to_string()));
+        assert!(fn_names.contains(&"crypto_hmac".to_string()));
+        assert!(fn_names.contains(&"crypto_aes_ctr_new".to_string()));
+        assert!(fn_names.contains(&"crypto_bn_from_bytes".to_string()));
+        assert!(fn_names.contains(&"crypto_bn_to_bytes".to_string()));
+        assert!(fn_names.contains(&"crypto_bn_mod_exp".to_string()));
+        assert!(fn_names.contains(&"crypto_rsa_load_public".to_string()));
+        assert!(fn_names.contains(&"crypto_rsa_verify".to_string()));
+        assert!(fn_names.contains(&"crypto_random_bytes".to_string()));
+    }
+
+    #[test]
+    fn is_stdlib_net_socket() {
+        assert!(is_stdlib_module(&["std".into(), "net".into(), "socket".into()]));
+    }
+
+    #[test]
+    fn generate_socket() {
+        let m = generate_stdlib_module(&["std".into(), "net".into(), "socket".into()]).unwrap();
+        let mut struct_names = vec![];
+        let mut fn_names = vec![];
+        for item in &m.items {
+            match &item.node {
+                Item::Struct(s) => struct_names.push(s.name.node.clone()),
+                Item::Function(f) => fn_names.push(f.name.node.clone()),
+                _ => {}
+            }
+        }
+        assert!(struct_names.contains(&"Socket".to_string()));
+        assert!(fn_names.contains(&"socket_connect".to_string()));
+    }
+
+    #[test]
+    fn is_stdlib_bytes() {
+        assert!(is_stdlib_module(&["std".into(), "bytes".into()]));
+    }
+
+    #[test]
+    fn generate_bytes() {
+        let m = generate_stdlib_module(&["std".into(), "bytes".into()]).unwrap();
+        let mut fn_names = vec![];
+        for item in &m.items {
+            match &item.node {
+                Item::Function(f) => fn_names.push(f.name.node.clone()),
+                _ => {}
+            }
+        }
+        assert!(fn_names.contains(&"bytes_from_str".to_string()));
+        assert!(fn_names.contains(&"bytes_to_str".to_string()));
+        assert!(fn_names.contains(&"bytes_from_hex".to_string()));
+        assert!(fn_names.contains(&"bytes_to_hex".to_string()));
+        assert!(fn_names.contains(&"bytes_write_u32_be".to_string()));
+        assert!(fn_names.contains(&"bytes_read_u32_be".to_string()));
+        assert!(fn_names.contains(&"bytes_concat".to_string()));
+        assert!(fn_names.contains(&"bytes_slice".to_string()));
+        assert!(fn_names.contains(&"random_bytes".to_string()));
     }
 
     #[test]

@@ -1063,6 +1063,11 @@ impl CodegenContext<'_> {
                 let decl = c_types::c_declare(&c_type, &escaped);
                 emitter.emit_line(&format!("{const_prefix}{decl} = {val};"));
 
+                // Track explicitly-typed Vector variables so is_vector_expr recognizes them
+                if c_type == "GorgetArray" {
+                    self.vector_vars.insert(escaped.clone());
+                }
+
                 if self.trace {
                     if let Some(ref ri) = result_info {
                         self.emit_stmt_end_with_result(ri, emitter);

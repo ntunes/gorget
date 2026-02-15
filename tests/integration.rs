@@ -3142,3 +3142,46 @@ fn test_report_flag_on_test() {
     let _ = std::fs::remove_file(&c_path);
     let _ = std::fs::remove_file(&exe_path);
 }
+
+#[test]
+fn crypto_hash() {
+    run_gg(
+        "crypto_hash.gg",
+        "\
+2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
+aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d
+32
+aes roundtrip ok
+32
+done",
+    );
+}
+
+#[test]
+fn socket_connect() {
+    run_gg(
+        "socket_connect.gg",
+        "\
+error handled
+done",
+    );
+}
+
+#[test]
+fn bytes_ops() {
+    run_gg(
+        "bytes_ops.gg",
+        "\
+5
+Hello
+Hello
+48656c6c6f
+305419896
+2864434397
+4660
+Hello World
+Hello
+16
+done",
+    );
+}

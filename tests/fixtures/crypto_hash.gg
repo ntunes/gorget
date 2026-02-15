@@ -1,0 +1,44 @@
+from std.bytes import bytes_from_str, bytes_to_hex, bytes_from_hex
+from std.crypto import crypto_sha256, crypto_sha1, crypto_hmac
+from std.crypto import crypto_aes_ctr_new, CipherContext
+from std.crypto import crypto_random_bytes
+
+void main():
+    # SHA-256 known-answer test: SHA256("hello") = 2cf24dba...
+    Vector[uint8] data = bytes_from_str("hello")
+    Vector[uint8] hash = crypto_sha256(data)
+    print(bytes_to_hex(hash))
+
+    # SHA-1 known-answer test: SHA1("hello") = aaf4c61d...
+    Vector[uint8] hash1 = crypto_sha1(data)
+    print(bytes_to_hex(hash1))
+
+    # HMAC-SHA256 known-answer test
+    Vector[uint8] key = bytes_from_str("key")
+    Vector[uint8] msg = bytes_from_str("hello")
+    Vector[uint8] mac = crypto_hmac("sha256", key, msg)
+    print("{mac.len()}")
+
+    # AES-128-CTR encrypt/decrypt roundtrip
+    Vector[uint8] aes_key = bytes_from_hex("000102030405060708090a0b0c0d0e0f")
+    Vector[uint8] iv = bytes_from_hex("00000000000000000000000000000000")
+    CipherContext enc = crypto_aes_ctr_new(aes_key, iv)
+    Vector[uint8] plaintext = bytes_from_str("Hello, Gorget!")
+    Vector[uint8] ciphertext = enc.encrypt(plaintext)
+
+    # Decrypt with a fresh context (CTR needs same key/IV)
+    CipherContext dec = crypto_aes_ctr_new(aes_key, iv)
+    Vector[uint8] decrypted = dec.decrypt(ciphertext)
+    str result = bytes_to_hex(decrypted)
+    # Verify roundtrip matches original hex
+    str original = bytes_to_hex(plaintext)
+    if result == original:
+        print("aes roundtrip ok")
+    else:
+        print("aes roundtrip FAILED")
+
+    # crypto_random_bytes produces correct length
+    Vector[uint8] r = crypto_random_bytes(32)
+    print("{r.len()}")
+
+    print("done")

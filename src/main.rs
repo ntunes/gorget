@@ -158,6 +158,7 @@ fn try_build(
     let c_code = codegen_output.c_code;
     let needs_sdl = codegen_output.needs_sdl;
     let needs_http = codegen_output.needs_http;
+    let needs_crypto = codegen_output.needs_crypto;
     let c_path = dir.join(format!("{stem}.c"));
     // Canonicalize to an absolute path so Command::new() doesn't search $PATH.
     // For a bare filename like "hello.gg", dir is "." and exe_path would be "hello",
@@ -250,6 +251,36 @@ fn try_build(
         }
     }
 
+    // Add OpenSSL linker flags when std.crypto is imported
+    if needs_crypto {
+        let pkg_ok = Command::new("pkg-config")
+            .args(["--cflags", "--libs", "openssl"])
+            .output()
+            .ok()
+            .and_then(|o| {
+                if o.status.success() {
+                    Some(String::from_utf8_lossy(&o.stdout).to_string())
+                } else {
+                    None
+                }
+            });
+        if let Some(flags) = pkg_ok {
+            for flag in flags.split_whitespace() {
+                cc_cmd.arg(flag);
+            }
+        } else {
+            cc_cmd.arg("-lssl");
+            cc_cmd.arg("-lcrypto");
+            #[cfg(target_os = "macos")]
+            {
+                cc_cmd.arg("-I/opt/homebrew/include");
+                cc_cmd.arg("-L/opt/homebrew/lib");
+                cc_cmd.arg("-I/usr/local/include");
+                cc_cmd.arg("-L/usr/local/lib");
+            }
+        }
+    }
+
     let status = cc_cmd.status();
 
     match status {
@@ -270,6 +301,12 @@ fn try_build(
                 msg.push_str("\nInstall with:");
                 msg.push_str("\n  macOS:   brew install curl");
                 msg.push_str("\n  Ubuntu:  apt install libcurl4-openssl-dev");
+            }
+            if needs_crypto {
+                msg.push_str("\n\nHint: This program uses std.crypto which requires OpenSSL.");
+                msg.push_str("\nInstall with:");
+                msg.push_str("\n  macOS:   brew install openssl");
+                msg.push_str("\n  Ubuntu:  apt install libssl-dev");
             }
             Err(msg)
         }

@@ -1105,6 +1105,172 @@ impl CodegenContext<'_> {
                         }
                     }
                     "json_null" => return "gorget_json_null()".to_string(),
+                    // std.crypto
+                    "crypto_sha256" => {
+                        if let Some(arg) = args.first() {
+                            let data = self.gen_expr(&arg.node.value);
+                            return format!("gorget_crypto_sha256(&{data})");
+                        }
+                    }
+                    "crypto_sha1" => {
+                        if let Some(arg) = args.first() {
+                            let data = self.gen_expr(&arg.node.value);
+                            return format!("gorget_crypto_sha1(&{data})");
+                        }
+                    }
+                    "crypto_hmac" => {
+                        if args.len() >= 3 {
+                            let algo = self.gen_expr(&args[0].node.value);
+                            let key = self.gen_expr(&args[1].node.value);
+                            let data = self.gen_expr(&args[2].node.value);
+                            return format!("gorget_crypto_hmac({algo}, &{key}, &{data})");
+                        }
+                    }
+                    "crypto_aes_ctr_new" => {
+                        if args.len() >= 2 {
+                            let key = self.gen_expr(&args[0].node.value);
+                            let iv = self.gen_expr(&args[1].node.value);
+                            return format!("gorget_crypto_aes_ctr_new(&{key}, &{iv})");
+                        }
+                    }
+                    "crypto_bn_from_bytes" => {
+                        if let Some(arg) = args.first() {
+                            let data = self.gen_expr(&arg.node.value);
+                            return format!("gorget_crypto_bn_from_bytes(&{data})");
+                        }
+                    }
+                    "crypto_bn_to_bytes" => {
+                        if let Some(arg) = args.first() {
+                            let bn = self.gen_expr(&arg.node.value);
+                            return format!("gorget_crypto_bn_to_bytes(&{bn})");
+                        }
+                    }
+                    "crypto_bn_mod_exp" => {
+                        if args.len() >= 3 {
+                            let base = self.gen_expr(&args[0].node.value);
+                            let exp = self.gen_expr(&args[1].node.value);
+                            let modulus = self.gen_expr(&args[2].node.value);
+                            return format!("gorget_crypto_bn_mod_exp(&{base}, &{exp}, &{modulus})");
+                        }
+                    }
+                    "crypto_rsa_load_public" => {
+                        if let Some(arg) = args.first() {
+                            let kb = self.gen_expr(&arg.node.value);
+                            let result_type = c_mangle::mangle_generic("Result", &["GorgetRSAKey".into(), "const char*".into()]);
+                            let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
+                            let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
+                            return format!(
+                                "({{ GorgetRSAKey __rk = gorget_crypto_rsa_load_public(&{kb}); \
+                                const char* __re = gorget_crypto_last_error(); \
+                                __re ? {err_ctor}(__re) : {ok_ctor}(__rk); }})"
+                            );
+                        }
+                    }
+                    "crypto_rsa_verify" => {
+                        if args.len() >= 3 {
+                            let key = self.gen_expr(&args[0].node.value);
+                            let data = self.gen_expr(&args[1].node.value);
+                            let sig = self.gen_expr(&args[2].node.value);
+                            return format!("gorget_crypto_rsa_verify(&{key}, &{data}, &{sig})");
+                        }
+                    }
+                    "crypto_random_bytes" => {
+                        if let Some(arg) = args.first() {
+                            let n = self.gen_expr(&arg.node.value);
+                            return format!("gorget_crypto_random_bytes({n})");
+                        }
+                    }
+                    // std.net.socket
+                    "socket_connect" => {
+                        if args.len() >= 2 {
+                            let host = self.gen_expr(&args[0].node.value);
+                            let port = self.gen_expr(&args[1].node.value);
+                            let result_type = c_mangle::mangle_generic("Result", &["GorgetSocket".into(), "const char*".into()]);
+                            let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
+                            let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
+                            return format!(
+                                "({{ GorgetSocket __sk = gorget_socket_connect({host}, {port}); \
+                                const char* __se = gorget_socket_last_error(); \
+                                __se ? {err_ctor}(__se) : {ok_ctor}(__sk); }})"
+                            );
+                        }
+                    }
+                    // std.bytes
+                    "bytes_from_str" => {
+                        if let Some(arg) = args.first() {
+                            let s = self.gen_expr(&arg.node.value);
+                            return format!("gorget_bytes_from_str({s})");
+                        }
+                    }
+                    "bytes_to_str" => {
+                        if let Some(arg) = args.first() {
+                            let b = self.gen_expr(&arg.node.value);
+                            return format!("gorget_bytes_to_str(&{b})");
+                        }
+                    }
+                    "bytes_from_hex" => {
+                        if let Some(arg) = args.first() {
+                            let s = self.gen_expr(&arg.node.value);
+                            return format!("gorget_bytes_from_hex({s})");
+                        }
+                    }
+                    "bytes_to_hex" => {
+                        if let Some(arg) = args.first() {
+                            let b = self.gen_expr(&arg.node.value);
+                            return format!("gorget_bytes_to_hex(&{b})");
+                        }
+                    }
+                    "bytes_write_u32_be" => {
+                        if args.len() >= 3 {
+                            let b = self.gen_expr(&args[0].node.value);
+                            let offset = self.gen_expr(&args[1].node.value);
+                            let value = self.gen_expr(&args[2].node.value);
+                            return format!("gorget_bytes_write_u32_be(&{b}, {offset}, {value})");
+                        }
+                    }
+                    "bytes_read_u32_be" => {
+                        if args.len() >= 2 {
+                            let b = self.gen_expr(&args[0].node.value);
+                            let offset = self.gen_expr(&args[1].node.value);
+                            return format!("gorget_bytes_read_u32_be(&{b}, {offset})");
+                        }
+                    }
+                    "bytes_write_u16_be" => {
+                        if args.len() >= 3 {
+                            let b = self.gen_expr(&args[0].node.value);
+                            let offset = self.gen_expr(&args[1].node.value);
+                            let value = self.gen_expr(&args[2].node.value);
+                            return format!("gorget_bytes_write_u16_be(&{b}, {offset}, {value})");
+                        }
+                    }
+                    "bytes_read_u16_be" => {
+                        if args.len() >= 2 {
+                            let b = self.gen_expr(&args[0].node.value);
+                            let offset = self.gen_expr(&args[1].node.value);
+                            return format!("gorget_bytes_read_u16_be(&{b}, {offset})");
+                        }
+                    }
+                    "bytes_concat" => {
+                        if args.len() >= 2 {
+                            let a = self.gen_expr(&args[0].node.value);
+                            let b = self.gen_expr(&args[1].node.value);
+                            return format!("gorget_bytes_concat(&{a}, &{b})");
+                        }
+                    }
+                    "bytes_slice" => {
+                        if args.len() >= 3 {
+                            let b = self.gen_expr(&args[0].node.value);
+                            let start = self.gen_expr(&args[1].node.value);
+                            let end = self.gen_expr(&args[2].node.value);
+                            return format!("gorget_bytes_slice(&{b}, {start}, {end})");
+                        }
+                    }
+                    "random_bytes" => {
+                        if let Some(arg) = args.first() {
+                            let n = self.gen_expr(&arg.node.value);
+                            return format!("gorget_random_bytes({n})");
+                        }
+                    }
                     // std.http.client
                     "get" | "post" | "put" | "delete" | "patch" | "head" => {
                         let method = name.as_str();
@@ -1493,9 +1659,11 @@ impl CodegenContext<'_> {
         let is_json = type_name == "JsonValue" || c_type.as_deref() == Some("GorgetJsonValue");
         let is_http_response = type_name == "Response" || c_type.as_deref() == Some("GorgetHttpResponse");
         let is_http_client = type_name == "Client" || c_type.as_deref() == Some("GorgetHttpClient");
+        let is_socket = type_name == "Socket" || c_type.as_deref() == Some("GorgetSocket");
+        let is_cipher = type_name == "CipherContext" || c_type.as_deref() == Some("GorgetCipherContext");
         let is_iterator = !is_vector && !is_map && !is_set && !is_string
             && !is_option && !is_result && !is_box && !is_file
-            && !is_json && !is_http_response && !is_http_client
+            && !is_json && !is_http_response && !is_http_client && !is_socket && !is_cipher
             && matches!(method_name, "collect" | "filter" | "map" | "fold")
             && self.traits.impls.iter().any(|i|
                 i.self_type_name == type_name && i.trait_name.as_deref() == Some("Iterator")
@@ -1515,7 +1683,7 @@ impl CodegenContext<'_> {
                 "bool" | "char32_t"
             ));
 
-        if !is_vector && !is_map && !is_set && !is_string && !is_option && !is_result && !is_box && !is_file && !is_json && !is_http_response && !is_http_client && !is_iterator && !is_primitive_hashable && !is_char {
+        if !is_vector && !is_map && !is_set && !is_string && !is_option && !is_result && !is_box && !is_file && !is_json && !is_http_response && !is_http_client && !is_socket && !is_cipher && !is_iterator && !is_primitive_hashable && !is_char {
             return None;
         }
 
@@ -1581,6 +1749,12 @@ impl CodegenContext<'_> {
         }
         if is_http_client {
             return Some(self.gen_http_client_method(&recv, method_name, args, needs_temp));
+        }
+        if is_socket {
+            return Some(self.gen_socket_method(&recv, method_name, args, needs_temp));
+        }
+        if is_cipher {
+            return Some(self.gen_cipher_method(&recv, method_name, args, needs_temp));
         }
 
         None
@@ -2930,6 +3104,86 @@ impl CodegenContext<'_> {
         }
     }
 
+    fn gen_socket_method(
+        &mut self,
+        recv: &str,
+        method_name: &str,
+        args: &[Spanned<crate::parser::ast::CallArg>],
+        needs_temp: bool,
+    ) -> String {
+        let recv_ref = if needs_temp {
+            format!("({{ __typeof__({recv}) __tmp = {recv}; &__tmp; }})")
+        } else {
+            format!("&{recv}")
+        };
+        match method_name {
+            "read" => {
+                let n = if let Some(a) = args.first() { self.gen_expr(&a.node.value) } else { "1024".into() };
+                format!("gorget_socket_read({recv_ref}, {n})")
+            }
+            "read_exact" => {
+                let n = if let Some(a) = args.first() { self.gen_expr(&a.node.value) } else { "0".into() };
+                format!("gorget_socket_read_exact({recv_ref}, {n})")
+            }
+            "write" => {
+                if let Some(a) = args.first() {
+                    let data = self.gen_expr(&a.node.value);
+                    format!("gorget_socket_write({recv_ref}, &{data})")
+                } else {
+                    "/* socket.write() missing arg */".into()
+                }
+            }
+            "write_str" => {
+                if let Some(a) = args.first() {
+                    let s = self.gen_expr(&a.node.value);
+                    format!("gorget_socket_write_str({recv_ref}, {s})")
+                } else {
+                    "/* socket.write_str() missing arg */".into()
+                }
+            }
+            "read_line" => format!("gorget_socket_read_line({recv_ref})"),
+            "set_timeout" => {
+                let ms = if let Some(a) = args.first() { self.gen_expr(&a.node.value) } else { "0".into() };
+                format!("gorget_socket_set_timeout({recv_ref}, {ms})")
+            }
+            "close" => format!("gorget_socket_close({recv_ref})"),
+            _ => format!("/* unknown Socket method: {method_name} */"),
+        }
+    }
+
+    fn gen_cipher_method(
+        &mut self,
+        recv: &str,
+        method_name: &str,
+        args: &[Spanned<crate::parser::ast::CallArg>],
+        needs_temp: bool,
+    ) -> String {
+        let recv_ref = if needs_temp {
+            format!("({{ __typeof__({recv}) __tmp = {recv}; &__tmp; }})")
+        } else {
+            format!("&{recv}")
+        };
+        match method_name {
+            "encrypt" => {
+                if let Some(a) = args.first() {
+                    let data = self.gen_expr(&a.node.value);
+                    format!("gorget_cipher_encrypt({recv_ref}, &{data})")
+                } else {
+                    "/* cipher.encrypt() missing arg */".into()
+                }
+            }
+            "decrypt" => {
+                if let Some(a) = args.first() {
+                    let data = self.gen_expr(&a.node.value);
+                    format!("gorget_cipher_decrypt({recv_ref}, &{data})")
+                } else {
+                    "/* cipher.decrypt() missing arg */".into()
+                }
+            }
+            _ => format!("/* unknown CipherContext method: {method_name} */"),
+        }
+    }
+
     /// Infer the inner C type for a Box allocation.
     /// Uses `decl_type_hint` to extract T from `Box[T]`, falling back to the argument's inferred type.
     fn box_inner_c_type(&mut self, arg_expr: &Spanned<Expr>) -> String {
@@ -3481,6 +3735,20 @@ impl CodegenContext<'_> {
                 if recv_type == "Client" {
                     return match method.node.as_str() {
                         "get" | "post" | "put" | "delete" | "patch" | "head" => "Result",
+                        _ => "Unknown",
+                    }.to_string();
+                }
+                if recv_type == "Socket" {
+                    return match method.node.as_str() {
+                        "read" | "read_exact" => "Vector",
+                        "read_line" => "str",
+                        "write" | "write_str" => "int",
+                        _ => "Unknown",
+                    }.to_string();
+                }
+                if recv_type == "CipherContext" {
+                    return match method.node.as_str() {
+                        "encrypt" | "decrypt" => "Vector",
                         _ => "Unknown",
                     }.to_string();
                 }

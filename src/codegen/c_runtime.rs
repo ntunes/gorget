@@ -2153,3 +2153,493 @@ static inline GorgetHttpResponse gorget_http_client_request(
 }
 
 "#;
+
+// ── std.crypto runtime ──────────────────────────────────────
+pub const CRYPTO_RUNTIME: &str = r#"
+// ── Crypto Wrappers (std.crypto) ────────────────────────────
+#include <openssl/evp.h>
+#include <openssl/hmac.h>
+#include <openssl/bn.h>
+#include <openssl/rand.h>
+#include <openssl/rsa.h>
+#include <openssl/pem.h>
+#include <openssl/err.h>
+
+// Opaque types wrapping OpenSSL handles
+typedef struct {
+    EVP_CIPHER_CTX* ctx;
+} GorgetCipherContext;
+
+typedef struct {
+    BIGNUM* bn;
+} GorgetBigNum;
+
+typedef struct {
+    EVP_PKEY* pkey;
+} GorgetRSAKey;
+
+// SHA-256 one-shot hash
+static GorgetArray gorget_crypto_sha256(const GorgetArray* data) {
+    GorgetArray out = gorget_array_new(sizeof(uint8_t));
+    out.data = malloc(32);
+    out.cap = 32;
+    out.len = 32;
+    unsigned int md_len = 32;
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
+    EVP_DigestUpdate(ctx, data->data, data->len);
+    EVP_DigestFinal_ex(ctx, (unsigned char*)out.data, &md_len);
+    EVP_MD_CTX_free(ctx);
+    return out;
+}
+
+// SHA-1 one-shot hash
+static GorgetArray gorget_crypto_sha1(const GorgetArray* data) {
+    GorgetArray out = gorget_array_new(sizeof(uint8_t));
+    out.data = malloc(20);
+    out.cap = 20;
+    out.len = 20;
+    unsigned int md_len = 20;
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    EVP_DigestInit_ex(ctx, EVP_sha1(), NULL);
+    EVP_DigestUpdate(ctx, data->data, data->len);
+    EVP_DigestFinal_ex(ctx, (unsigned char*)out.data, &md_len);
+    EVP_MD_CTX_free(ctx);
+    return out;
+}
+
+// HMAC (supports "sha256" and "sha1")
+static GorgetArray gorget_crypto_hmac(const char* algo, const GorgetArray* key, const GorgetArray* data) {
+    const EVP_MD* md = NULL;
+    if (strcmp(algo, "sha256") == 0) md = EVP_sha256();
+    else if (strcmp(algo, "sha1") == 0) md = EVP_sha1();
+    else {
+        fprintf(stderr, "gorget: panic: unsupported HMAC algorithm: %s\n", algo);
+        exit(1);
+    }
+
+    GorgetArray out = gorget_array_new(sizeof(uint8_t));
+    unsigned int md_len = (unsigned int)EVP_MD_size(md);
+    out.data = malloc(md_len);
+    out.cap = md_len;
+    out.len = md_len;
+
+    unsigned char* result = HMAC(md,
+        key->data, (int)key->len,
+        (unsigned char*)data->data, data->len,
+        (unsigned char*)out.data, &md_len);
+    (void)result;
+    out.len = md_len;
+    return out;
+}
+
+// AES-128-CTR cipher context
+static GorgetCipherContext gorget_crypto_aes_ctr_new(const GorgetArray* key, const GorgetArray* iv) {
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    const EVP_CIPHER* cipher = NULL;
+    if (key->len == 16) cipher = EVP_aes_128_ctr();
+    else if (key->len == 24) cipher = EVP_aes_192_ctr();
+    else if (key->len == 32) cipher = EVP_aes_256_ctr();
+    else {
+        fprintf(stderr, "gorget: panic: AES key must be 16, 24, or 32 bytes (got %zu)\n", key->len);
+        exit(1);
+    }
+    EVP_EncryptInit_ex(ctx, cipher, NULL, (unsigned char*)key->data, (unsigned char*)iv->data);
+    return (GorgetCipherContext){ctx};
+}
+
+// AES-CTR encrypt (CTR mode: encrypt == decrypt)
+static GorgetArray gorget_cipher_encrypt(GorgetCipherContext* c, const GorgetArray* plaintext) {
+    GorgetArray out = gorget_array_new(sizeof(uint8_t));
+    int out_len = (int)plaintext->len + 16;
+    out.data = malloc((size_t)out_len);
+    out.cap = (size_t)out_len;
+    EVP_EncryptUpdate(c->ctx, (unsigned char*)out.data, &out_len,
+        (unsigned char*)plaintext->data, (int)plaintext->len);
+    out.len = (size_t)out_len;
+    return out;
+}
+
+// AES-CTR decrypt (same as encrypt for CTR mode)
+static GorgetArray gorget_cipher_decrypt(GorgetCipherContext* c, const GorgetArray* ciphertext) {
+    return gorget_cipher_encrypt(c, ciphertext);
+}
+
+// BigNum from bytes (big-endian unsigned)
+static GorgetBigNum gorget_crypto_bn_from_bytes(const GorgetArray* data) {
+    BIGNUM* bn = BN_bin2bn((unsigned char*)data->data, (int)data->len, NULL);
+    return (GorgetBigNum){bn};
+}
+
+// BigNum to bytes (big-endian unsigned)
+static GorgetArray gorget_crypto_bn_to_bytes(const GorgetBigNum* bn) {
+    int n = BN_num_bytes(bn->bn);
+    GorgetArray out = gorget_array_new(sizeof(uint8_t));
+    out.data = malloc((size_t)n);
+    out.cap = (size_t)n;
+    out.len = (size_t)n;
+    BN_bn2bin(bn->bn, (unsigned char*)out.data);
+    return out;
+}
+
+// Modular exponentiation: base^exp mod modulus
+static GorgetBigNum gorget_crypto_bn_mod_exp(const GorgetBigNum* base, const GorgetBigNum* exp, const GorgetBigNum* modulus) {
+    BIGNUM* result = BN_new();
+    BN_CTX* ctx = BN_CTX_new();
+    BN_mod_exp(result, base->bn, exp->bn, modulus->bn, ctx);
+    BN_CTX_free(ctx);
+    return (GorgetBigNum){result};
+}
+
+// Load RSA public key from DER-encoded bytes
+static const char* __gorget_crypto_last_error = NULL;
+
+static GorgetRSAKey gorget_crypto_rsa_load_public(const GorgetArray* key_bytes) {
+    __gorget_crypto_last_error = NULL;
+    const unsigned char* p = (const unsigned char*)key_bytes->data;
+    EVP_PKEY* pkey = d2i_PUBKEY(NULL, &p, (long)key_bytes->len);
+    if (!pkey) {
+        __gorget_crypto_last_error = "failed to load RSA public key";
+        return (GorgetRSAKey){NULL};
+    }
+    return (GorgetRSAKey){pkey};
+}
+
+static const char* gorget_crypto_last_error(void) {
+    return __gorget_crypto_last_error;
+}
+
+// RSA signature verification (PKCS#1 v1.5 with SHA-256)
+static bool gorget_crypto_rsa_verify(const GorgetRSAKey* key, const GorgetArray* data, const GorgetArray* sig) {
+    if (!key->pkey) return false;
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    EVP_DigestVerifyInit(ctx, NULL, EVP_sha256(), NULL, key->pkey);
+    EVP_DigestVerifyUpdate(ctx, data->data, data->len);
+    int ok = EVP_DigestVerifyFinal(ctx, (unsigned char*)sig->data, sig->len);
+    EVP_MD_CTX_free(ctx);
+    return ok == 1;
+}
+
+// Cryptographically secure random bytes (via OpenSSL RAND)
+static GorgetArray gorget_crypto_random_bytes(int64_t n) {
+    GorgetArray out = gorget_array_new(sizeof(uint8_t));
+    if (n <= 0) return out;
+    out.data = malloc((size_t)n);
+    out.cap = (size_t)n;
+    out.len = (size_t)n;
+    if (RAND_bytes((unsigned char*)out.data, (int)n) != 1) {
+        fprintf(stderr, "gorget: panic: RAND_bytes failed\n");
+        exit(1);
+    }
+    return out;
+}
+
+"#;
+
+// ── std.net.socket runtime ───────────────────────────────────
+pub const SOCKET_RUNTIME: &str = r#"
+// ── TCP Socket (std.net.socket) ─────────────────────────────
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netdb.h>
+#include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
+
+typedef struct {
+    int fd;
+} GorgetSocket;
+
+// Connect to host:port, returning a socket fd or -1 on error
+static const char* __gorget_socket_last_error = NULL;
+
+static GorgetSocket gorget_socket_connect(const char* host, int64_t port) {
+    __gorget_socket_last_error = NULL;
+    char port_str[16];
+    snprintf(port_str, sizeof(port_str), "%lld", (long long)port);
+
+    struct addrinfo hints, *res, *rp;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+
+    int err = getaddrinfo(host, port_str, &hints, &res);
+    if (err != 0) {
+        __gorget_socket_last_error = gai_strerror(err);
+        return (GorgetSocket){-1};
+    }
+
+    int fd = -1;
+    for (rp = res; rp != NULL; rp = rp->ai_next) {
+        fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+        if (fd < 0) continue;
+        if (connect(fd, rp->ai_addr, rp->ai_addrlen) == 0) break;
+        close(fd);
+        fd = -1;
+    }
+    freeaddrinfo(res);
+
+    if (fd < 0) {
+        __gorget_socket_last_error = strerror(errno);
+        return (GorgetSocket){-1};
+    }
+    return (GorgetSocket){fd};
+}
+
+static const char* gorget_socket_last_error(void) {
+    return __gorget_socket_last_error;
+}
+
+// Read up to n bytes; returns a GorgetArray of uint8
+static GorgetArray gorget_socket_read(GorgetSocket* sock, int64_t n) {
+    GorgetArray arr = gorget_array_new(sizeof(uint8_t));
+    if (n <= 0 || sock->fd < 0) return arr;
+    uint8_t* buf = (uint8_t*)malloc((size_t)n);
+    ssize_t got = recv(sock->fd, buf, (size_t)n, 0);
+    if (got > 0) {
+        arr.data = buf;
+        arr.len = (size_t)got;
+        arr.cap = (size_t)n;
+    } else {
+        free(buf);
+    }
+    return arr;
+}
+
+// Read exactly n bytes (loops until complete or error)
+static GorgetArray gorget_socket_read_exact(GorgetSocket* sock, int64_t n) {
+    GorgetArray arr = gorget_array_new(sizeof(uint8_t));
+    if (n <= 0 || sock->fd < 0) return arr;
+    uint8_t* buf = (uint8_t*)malloc((size_t)n);
+    size_t total = 0;
+    while (total < (size_t)n) {
+        ssize_t got = recv(sock->fd, buf + total, (size_t)n - total, 0);
+        if (got <= 0) break;
+        total += (size_t)got;
+    }
+    if (total == (size_t)n) {
+        arr.data = buf;
+        arr.len = (size_t)n;
+        arr.cap = (size_t)n;
+    } else {
+        free(buf);
+    }
+    return arr;
+}
+
+// Write all bytes (loops until complete)
+static int64_t gorget_socket_write(GorgetSocket* sock, const GorgetArray* data) {
+    if (sock->fd < 0 || data->len == 0) return 0;
+    size_t total = 0;
+    while (total < data->len) {
+        ssize_t sent = send(sock->fd, (uint8_t*)data->data + total, data->len - total, 0);
+        if (sent <= 0) return -1;
+        total += (size_t)sent;
+    }
+    return (int64_t)total;
+}
+
+// Write a str (convenience for text protocols)
+static int64_t gorget_socket_write_str(GorgetSocket* sock, const char* s) {
+    if (sock->fd < 0 || !s) return 0;
+    size_t len = strlen(s);
+    size_t total = 0;
+    while (total < len) {
+        ssize_t sent = send(sock->fd, s + total, len - total, 0);
+        if (sent <= 0) return -1;
+        total += (size_t)sent;
+    }
+    return (int64_t)total;
+}
+
+// Read until \n, return as str (for text protocols like SSH banner)
+static const char* gorget_socket_read_line(GorgetSocket* sock) {
+    if (sock->fd < 0) return "";
+    size_t cap = 256, len = 0;
+    char* buf = (char*)malloc(cap);
+    while (1) {
+        char c;
+        ssize_t got = recv(sock->fd, &c, 1, 0);
+        if (got <= 0) break;
+        if (len + 1 >= cap) {
+            cap *= 2;
+            buf = (char*)realloc(buf, cap);
+        }
+        buf[len++] = c;
+        if (c == '\n') break;
+    }
+    buf[len] = '\0';
+    // Strip trailing \r\n
+    while (len > 0 && (buf[len-1] == '\n' || buf[len-1] == '\r')) {
+        buf[--len] = '\0';
+    }
+    return buf;
+}
+
+// Set socket timeout in milliseconds
+static void gorget_socket_set_timeout(GorgetSocket* sock, int64_t ms) {
+    if (sock->fd < 0) return;
+    struct timeval tv;
+    tv.tv_sec = ms / 1000;
+    tv.tv_usec = (ms % 1000) * 1000;
+    setsockopt(sock->fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(sock->fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+}
+
+// Close the socket
+static void gorget_socket_close(GorgetSocket* sock) {
+    if (sock->fd >= 0) {
+        close(sock->fd);
+        sock->fd = -1;
+    }
+}
+
+"#;
+
+// ── std.bytes runtime ───────────────────────────────────────
+pub const BYTES_RUNTIME: &str = r#"
+// ── Byte Buffer Helpers (std.bytes) ─────────────────────────
+
+// Convert a str to Vector[uint8]
+static inline GorgetArray gorget_bytes_from_str(const char* s) {
+    GorgetArray arr = gorget_array_new(sizeof(uint8_t));
+    if (s) {
+        size_t len = strlen(s);
+        for (size_t i = 0; i < len; i++) {
+            uint8_t b = (uint8_t)s[i];
+            gorget_array_push(&arr, &b);
+        }
+    }
+    return arr;
+}
+
+// Convert Vector[uint8] to a null-terminated str
+static inline const char* gorget_bytes_to_str(const GorgetArray* arr) {
+    size_t len = arr->len;
+    char* s = (char*)malloc(len + 1);
+    if (len > 0) memcpy(s, arr->data, len);
+    s[len] = '\0';
+    return s;
+}
+
+// Convert a hex string to Vector[uint8]
+static inline GorgetArray gorget_bytes_from_hex(const char* hex) {
+    GorgetArray arr = gorget_array_new(sizeof(uint8_t));
+    if (!hex) return arr;
+    size_t len = strlen(hex);
+    for (size_t i = 0; i + 1 < len; i += 2) {
+        char buf[3] = { hex[i], hex[i+1], '\0' };
+        uint8_t b = (uint8_t)strtoul(buf, NULL, 16);
+        gorget_array_push(&arr, &b);
+    }
+    return arr;
+}
+
+// Write a big-endian uint32 at offset into Vector[uint8]
+static inline void gorget_bytes_write_u32_be(GorgetArray* arr, int64_t offset, int64_t value) {
+    if (offset < 0 || (size_t)(offset + 4) > arr->len) {
+        fprintf(stderr, "gorget: panic: bytes_write_u32_be: offset %lld out of bounds (len %zu)\n", (long long)offset, arr->len);
+        exit(1);
+    }
+    uint8_t* p = (uint8_t*)arr->data + offset;
+    uint32_t v = (uint32_t)value;
+    p[0] = (v >> 24) & 0xFF;
+    p[1] = (v >> 16) & 0xFF;
+    p[2] = (v >> 8) & 0xFF;
+    p[3] = v & 0xFF;
+}
+
+// Read a big-endian uint32 from offset in Vector[uint8]
+static inline int64_t gorget_bytes_read_u32_be(const GorgetArray* arr, int64_t offset) {
+    if (offset < 0 || (size_t)(offset + 4) > arr->len) {
+        fprintf(stderr, "gorget: panic: bytes_read_u32_be: offset %lld out of bounds (len %zu)\n", (long long)offset, arr->len);
+        exit(1);
+    }
+    const uint8_t* p = (const uint8_t*)arr->data + offset;
+    return (int64_t)(((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3]);
+}
+
+// Concatenate two Vector[uint8]
+static inline GorgetArray gorget_bytes_concat(const GorgetArray* a, const GorgetArray* b) {
+    GorgetArray arr = gorget_array_new(sizeof(uint8_t));
+    size_t total = a->len + b->len;
+    if (total > 0) {
+        arr.data = malloc(total * sizeof(uint8_t));
+        arr.cap = total;
+        if (a->len > 0) memcpy(arr.data, a->data, a->len);
+        if (b->len > 0) memcpy((uint8_t*)arr.data + a->len, b->data, b->len);
+        arr.len = total;
+    }
+    return arr;
+}
+
+// Slice a Vector[uint8] from start to end (exclusive)
+static inline GorgetArray gorget_bytes_slice(const GorgetArray* arr, int64_t start, int64_t end) {
+    GorgetArray out = gorget_array_new(sizeof(uint8_t));
+    if (start < 0) start = 0;
+    if (end > (int64_t)arr->len) end = (int64_t)arr->len;
+    if (start >= end) return out;
+    size_t count = (size_t)(end - start);
+    out.data = malloc(count * sizeof(uint8_t));
+    out.cap = count;
+    memcpy(out.data, (uint8_t*)arr->data + start, count);
+    out.len = count;
+    return out;
+}
+
+// Generate random bytes using /dev/urandom
+static inline GorgetArray gorget_random_bytes(int64_t n) {
+    GorgetArray arr = gorget_array_new(sizeof(uint8_t));
+    if (n <= 0) return arr;
+    arr.data = malloc((size_t)n);
+    arr.cap = (size_t)n;
+    arr.len = (size_t)n;
+    FILE* f = fopen("/dev/urandom", "rb");
+    if (!f) {
+        fprintf(stderr, "gorget: panic: cannot open /dev/urandom\n");
+        exit(1);
+    }
+    if (fread(arr.data, 1, (size_t)n, f) != (size_t)n) {
+        fprintf(stderr, "gorget: panic: short read from /dev/urandom\n");
+        fclose(f);
+        exit(1);
+    }
+    fclose(f);
+    return arr;
+}
+
+// Write a big-endian uint16 at offset
+static inline void gorget_bytes_write_u16_be(GorgetArray* arr, int64_t offset, int64_t value) {
+    if (offset < 0 || (size_t)(offset + 2) > arr->len) {
+        fprintf(stderr, "gorget: panic: bytes_write_u16_be: offset %lld out of bounds (len %zu)\n", (long long)offset, arr->len);
+        exit(1);
+    }
+    uint8_t* p = (uint8_t*)arr->data + offset;
+    uint16_t v = (uint16_t)value;
+    p[0] = (v >> 8) & 0xFF;
+    p[1] = v & 0xFF;
+}
+
+// Read a big-endian uint16 from offset
+static inline int64_t gorget_bytes_read_u16_be(const GorgetArray* arr, int64_t offset) {
+    if (offset < 0 || (size_t)(offset + 2) > arr->len) {
+        fprintf(stderr, "gorget: panic: bytes_read_u16_be: offset %lld out of bounds (len %zu)\n", (long long)offset, arr->len);
+        exit(1);
+    }
+    const uint8_t* p = (const uint8_t*)arr->data + offset;
+    return (int64_t)(((uint16_t)p[0] << 8) | (uint16_t)p[1]);
+}
+
+// Convert Vector[uint8] to hex string
+static inline const char* gorget_bytes_to_hex(const GorgetArray* arr) {
+    size_t len = arr->len;
+    char* s = (char*)malloc(len * 2 + 1);
+    for (size_t i = 0; i < len; i++) {
+        sprintf(s + i * 2, "%02x", ((uint8_t*)arr->data)[i]);
+    }
+    s[len * 2] = '\0';
+    return s;
+}
+
+"#;

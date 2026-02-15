@@ -1,0 +1,551 @@
+# std.ssh — SSH2 protocol implementation in pure Gorget
+#
+# Implements RFC 4253 (SSH Transport), RFC 4252 (Authentication),
+# RFC 4254 (Connection Protocol) on top of std.net.socket and std.crypto.
+#
+# MVP scope:
+#   - Key exchange: diffie-hellman-group14-sha256
+#   - Cipher: aes128-ctr
+#   - MAC: hmac-sha2-256
+#   - Auth: password
+#   - Channel: session (command execution)
+
+from std.collections import Vector
+from std.net.socket import Socket, socket_connect
+from std.bytes import bytes_from_str, bytes_to_str, bytes_from_hex
+from std.bytes import bytes_write_u32_be, bytes_read_u32_be
+from std.bytes import bytes_concat, bytes_slice, random_bytes
+from std.crypto import crypto_sha256, crypto_hmac
+from std.crypto import crypto_aes_ctr_new, CipherContext
+from std.crypto import crypto_bn_from_bytes, crypto_bn_to_bytes, crypto_bn_mod_exp, BigNum
+from std.fs import read_file, file_exists
+from std.os import getenv
+from std.path import path_join
+from std.conv import parse_int
+
+# ── Public types ─────────────────────────────────────────────
+
+struct CommandResult:
+    str stdout
+    str stderr
+    int exit_code
+
+struct Session:
+    Socket sock
+    Vector[uint8] session_id
+    CipherContext enc_cipher
+    CipherContext dec_cipher
+    Vector[uint8] enc_mac_key
+    Vector[uint8] dec_mac_key
+    int send_seq
+    int recv_seq
+    bool encrypted
+
+# ── SSH config parsing ─────────────────────────────────────
+
+struct SshConfig:
+    str hostname
+    int port
+    str user
+
+# Parse ~/.ssh/config and return resolved settings for the given host.
+# Supports Host, HostName, Port, User directives.
+# Wildcard Host * matches all hosts (used for defaults).
+SshConfig parse_ssh_config(str host, int default_port, str default_user):
+    str hostname = host
+    int port = default_port
+    str user = default_user
+
+    str home = getenv("HOME")
+    if home == "":
+        return SshConfig(hostname, port, user)
+
+    str config_path = path_join(home, ".ssh/config")
+    if not file_exists(config_path):
+        return SshConfig(hostname, port, user)
+
+    str content = read_file(config_path)
+    Vector[str] lines = content.split("\n")
+
+    # Track whether the current Host block matches our target
+    bool in_matching_block = false
+
+    int i = 0
+    while i < lines.len():
+        str line = lines.get(i)
+        str trimmed = line.trim()
+
+        # Skip empty lines and comments
+        if trimmed == "":
+            i = i + 1
+            continue
+        if trimmed.starts_with("#"):
+            i = i + 1
+            continue
+
+        # Split on first whitespace (or =)
+        str normalized = trimmed.replace("=", " ")
+        Vector[str] parts = normalized.split(" ")
+        if parts.len() < 2:
+            i = i + 1
+            continue
+
+        str key = parts.get(0)
+        str value = parts.get(1)
+
+        if key == "Host":
+            # Check if this Host block matches our target
+            # Support exact match and wildcard "*"
+            in_matching_block = false
+            int j = 1
+            while j < parts.len():
+                str pattern = parts.get(j)
+                if pattern == "":
+                    j = j + 1
+                    continue
+                if pattern == host:
+                    in_matching_block = true
+                if pattern == "*":
+                    in_matching_block = true
+                j = j + 1
+        else:
+            if in_matching_block:
+                if key == "HostName":
+                    hostname = value
+                else:
+                    if key == "Port":
+                        port = parse_int(value)
+                    else:
+                        if key == "User":
+                            user = value
+
+        i = i + 1
+
+    return SshConfig(hostname, port, user)
+
+# ── SSH message type constants ───────────────────────────────
+
+const int SSH_MSG_DISCONNECT = 1
+const int SSH_MSG_IGNORE = 2
+const int SSH_MSG_KEXINIT = 20
+const int SSH_MSG_NEWKEYS = 21
+const int SSH_MSG_KEXDH_INIT = 30
+const int SSH_MSG_KEXDH_REPLY = 31
+const int SSH_MSG_USERAUTH_REQUEST = 50
+const int SSH_MSG_USERAUTH_FAILURE = 51
+const int SSH_MSG_USERAUTH_SUCCESS = 52
+const int SSH_MSG_CHANNEL_OPEN = 90
+const int SSH_MSG_CHANNEL_OPEN_CONFIRMATION = 91
+const int SSH_MSG_CHANNEL_WINDOW_ADJUST = 93
+const int SSH_MSG_CHANNEL_DATA = 94
+const int SSH_MSG_CHANNEL_EOF = 96
+const int SSH_MSG_CHANNEL_CLOSE = 97
+const int SSH_MSG_CHANNEL_REQUEST = 98
+const int SSH_MSG_CHANNEL_SUCCESS = 99
+const int SSH_MSG_CHANNEL_FAILURE = 100
+
+# ── Helpers ──────────────────────────────────────────────────
+
+# Build a name-list payload (comma-separated string as SSH binary)
+Vector[uint8] make_name_list(str names):
+    Vector[uint8] data = bytes_from_str(names)
+    Vector[uint8] buf = bytes_from_hex("00000000")
+    bytes_write_u32_be(buf, 0, data.len())
+    return bytes_concat(buf, data)
+
+# Build a uint32 payload
+Vector[uint8] make_u32(int value):
+    Vector[uint8] buf = bytes_from_hex("00000000")
+    bytes_write_u32_be(buf, 0, value)
+    return buf
+
+# Build an SSH mpint from a BigNum (RFC 4251 section 5)
+Vector[uint8] make_mpint(BigNum bn):
+    Vector[uint8] raw = crypto_bn_to_bytes(bn)
+    # If high bit is set, prepend a zero byte
+    Vector[uint8] data = raw
+    if raw.len() > 0:
+        uint8 first = raw.get(0)
+        if first >= 128:
+            Vector[uint8] zero = bytes_from_hex("00")
+            data = bytes_concat(zero, raw)
+    Vector[uint8] len_buf = make_u32(data.len())
+    return bytes_concat(len_buf, data)
+
+# Parse an mpint from a payload at an offset
+BigNum parse_mpint(Vector[uint8] payload, int offset):
+    int len = bytes_read_u32_be(payload, offset)
+    Vector[uint8] data = bytes_slice(payload, offset + 4, offset + 4 + len)
+    return crypto_bn_from_bytes(data)
+
+# Parse a string from payload at offset, return as Vector[uint8]
+Vector[uint8] parse_string(Vector[uint8] payload, int offset):
+    int len = bytes_read_u32_be(payload, offset)
+    return bytes_slice(payload, offset + 4, offset + 4 + len)
+
+# Get the DH Group 14 prime (RFC 3526, 2048-bit MODP)
+Vector[uint8] dh_group14_prime():
+    return bytes_from_hex("FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7EDEE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3DC2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F83655D23DCA3AD961C62F356208552BB9ED529077096966D670C354E4ABC9804F1746C08CA18217C32905E462E36CE3BE39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9DE2BCBF6955817183995497CEA956AE515D2261898FA051015728E5A8AACAA68FFFFFFFFFFFFFFFF")
+
+# Helper to derive a key: HASH(K || H || letter || session_id)
+Vector[uint8] derive_key(Vector[uint8] k_mpint, Vector[uint8] h, str letter, Vector[uint8] session_id):
+    Vector[uint8] input = bytes_concat(k_mpint, h)
+    input = bytes_concat(input, bytes_from_str(letter))
+    input = bytes_concat(input, session_id)
+    return crypto_sha256(input)
+
+# ── Packet framing (RFC 4253 section 6) ─────────────────────
+
+# Send a packet (handles padding, optional encryption + MAC)
+void send_packet(Session &session, Vector[uint8] payload):
+    int block_size = 16
+    # packet_length(4) + padding_length(1) + payload + padding
+    int min_packet = 5 + payload.len()
+    int pad_len = block_size - (min_packet % block_size)
+    if pad_len < 4:
+        pad_len = pad_len + block_size
+    int packet_len = 1 + payload.len() + pad_len
+
+    Vector[uint8] packet = make_u32(packet_len)
+    # Build 1-byte padding length
+    Vector[uint8] pad_byte_buf = bytes_from_hex("00000000")
+    bytes_write_u32_be(pad_byte_buf, 0, pad_len)
+    Vector[uint8] pad_len_byte = bytes_slice(pad_byte_buf, 3, 4)
+    packet = bytes_concat(packet, pad_len_byte)
+    packet = bytes_concat(packet, payload)
+    Vector[uint8] padding = random_bytes(pad_len)
+    packet = bytes_concat(packet, padding)
+
+    if session.encrypted:
+        # Compute MAC over sequence number + unencrypted packet
+        Vector[uint8] seq_buf = make_u32(session.send_seq)
+        Vector[uint8] mac_data = bytes_concat(seq_buf, packet)
+        Vector[uint8] mac = crypto_hmac("sha256", session.enc_mac_key, mac_data)
+        # Encrypt the packet (not the MAC)
+        Vector[uint8] enc_data = session.enc_cipher.encrypt(packet)
+        Vector[uint8] wire = bytes_concat(enc_data, mac)
+        session.sock.write(wire)
+    else:
+        session.sock.write(packet)
+    session.send_seq = session.send_seq + 1
+
+# Read a packet (handles decryption + MAC verification)
+Vector[uint8] read_packet(Session &session):
+    if session.encrypted:
+        # Read first block to get packet length
+        Vector[uint8] first_block = session.sock.read_exact(16)
+        Vector[uint8] decrypted_first = session.dec_cipher.decrypt(first_block)
+        int packet_len = bytes_read_u32_be(decrypted_first, 0)
+
+        # Read remaining encrypted data
+        int remaining = packet_len - 12
+        Vector[uint8] rest = bytes_from_hex("")
+        if remaining > 0:
+            Vector[uint8] enc_rest = session.sock.read_exact(remaining)
+            rest = session.dec_cipher.decrypt(enc_rest)
+
+        # Read MAC (32 bytes for hmac-sha2-256)
+        Vector[uint8] mac_received = session.sock.read_exact(32)
+
+        # Reconstruct unencrypted packet for MAC verification
+        Vector[uint8] unenc_packet = bytes_concat(decrypted_first, rest)
+
+        # Verify MAC
+        Vector[uint8] seq_buf = make_u32(session.recv_seq)
+        Vector[uint8] mac_data = bytes_concat(seq_buf, unenc_packet)
+        Vector[uint8] mac_expected = crypto_hmac("sha256", session.dec_mac_key, mac_data)
+
+        # Extract payload (skip packet_length(4) + padding_length(1), trim padding)
+        uint8 pad_len_val = unenc_packet.get(4)
+        int pad_len = pad_len_val
+        int payload_len = packet_len - 1 - pad_len
+        Vector[uint8] payload = bytes_slice(unenc_packet, 5, 5 + payload_len)
+        session.recv_seq = session.recv_seq + 1
+        return payload
+    else:
+        # Unencrypted: read 4-byte length, then rest
+        Vector[uint8] len_buf = session.sock.read_exact(4)
+        int packet_len = bytes_read_u32_be(len_buf, 0)
+        Vector[uint8] packet_data = session.sock.read_exact(packet_len)
+        uint8 pad_len_val = packet_data.get(0)
+        int pad_len = pad_len_val
+        int payload_len = packet_len - 1 - pad_len
+        Vector[uint8] payload = bytes_slice(packet_data, 1, 1 + payload_len)
+        session.recv_seq = session.recv_seq + 1
+        return payload
+
+# ── Version exchange ─────────────────────────────────────────
+
+str version_exchange(Socket &sock):
+    sock.write_str("SSH-2.0-Gorget_1.0\r\n")
+    str server_version = sock.read_line()
+    return server_version
+
+# ── Key Exchange ─────────────────────────────────────────────
+
+# Our KEX_INIT proposal
+Vector[uint8] build_kexinit():
+    # Message type byte (20 = KEXINIT)
+    Vector[uint8] msg = bytes_from_hex("14")
+
+    # 16 bytes of cookie
+    Vector[uint8] cookie = random_bytes(16)
+    msg = bytes_concat(msg, cookie)
+
+    # Algorithm lists
+    msg = bytes_concat(msg, make_name_list("diffie-hellman-group14-sha256"))
+    msg = bytes_concat(msg, make_name_list("ssh-rsa"))
+    msg = bytes_concat(msg, make_name_list("aes128-ctr"))
+    msg = bytes_concat(msg, make_name_list("aes128-ctr"))
+    msg = bytes_concat(msg, make_name_list("hmac-sha2-256"))
+    msg = bytes_concat(msg, make_name_list("hmac-sha2-256"))
+    msg = bytes_concat(msg, make_name_list("none"))
+    msg = bytes_concat(msg, make_name_list("none"))
+    msg = bytes_concat(msg, make_name_list(""))
+    msg = bytes_concat(msg, make_name_list(""))
+    # first_kex_packet_follows (false) + reserved
+    msg = bytes_concat(msg, bytes_from_hex("0000000000"))
+
+    return msg
+
+void kex_dh_group14(Session &session, str client_version, str server_version, Vector[uint8] client_kexinit, Vector[uint8] server_kexinit):
+    Vector[uint8] prime_bytes = dh_group14_prime()
+    BigNum p = crypto_bn_from_bytes(prime_bytes)
+    Vector[uint8] g_bytes = bytes_from_hex("02")
+    BigNum g = crypto_bn_from_bytes(g_bytes)
+
+    # Generate private key x (random 256 bits)
+    Vector[uint8] x_bytes = random_bytes(32)
+    BigNum x = crypto_bn_from_bytes(x_bytes)
+
+    # Compute e = g^x mod p
+    BigNum e = crypto_bn_mod_exp(g, x, p)
+
+    # Send KEXDH_INIT with e
+    Vector[uint8] dh_init = bytes_from_hex("1e")
+    dh_init = bytes_concat(dh_init, make_mpint(e))
+    send_packet(session, dh_init)
+
+    # Read KEXDH_REPLY
+    Vector[uint8] reply = read_packet(session)
+
+    # Parse: K_S (host key), f (server public), signature
+    int off = 1
+    int ks_len = bytes_read_u32_be(reply, off)
+    Vector[uint8] k_s = bytes_slice(reply, off, off + 4 + ks_len)
+    off = off + 4 + ks_len
+
+    BigNum f = parse_mpint(reply, off)
+    int f_len = bytes_read_u32_be(reply, off)
+    off = off + 4 + f_len
+
+    int sig_len = bytes_read_u32_be(reply, off)
+    Vector[uint8] sig_blob = bytes_slice(reply, off + 4, off + 4 + sig_len)
+    off = off + 4 + sig_len
+
+    # Compute shared secret K = f^x mod p
+    BigNum shared_k = crypto_bn_mod_exp(f, x, p)
+
+    # Compute exchange hash H (RFC 4253 section 8)
+    Vector[uint8] hash_input = bytes_from_hex("")
+    # V_C (client version string)
+    hash_input = bytes_concat(hash_input, make_name_list(client_version))
+    # V_S (server version string)
+    hash_input = bytes_concat(hash_input, make_name_list(server_version))
+    # I_C (client KEXINIT payload)
+    Vector[uint8] ci_len = make_u32(client_kexinit.len())
+    hash_input = bytes_concat(hash_input, ci_len)
+    hash_input = bytes_concat(hash_input, client_kexinit)
+    # I_S (server KEXINIT payload)
+    Vector[uint8] si_len = make_u32(server_kexinit.len())
+    hash_input = bytes_concat(hash_input, si_len)
+    hash_input = bytes_concat(hash_input, server_kexinit)
+    # K_S (host key blob)
+    hash_input = bytes_concat(hash_input, k_s)
+    # e (client public)
+    hash_input = bytes_concat(hash_input, make_mpint(e))
+    # f (server public)
+    hash_input = bytes_concat(hash_input, make_mpint(f))
+    # K (shared secret as mpint)
+    hash_input = bytes_concat(hash_input, make_mpint(shared_k))
+
+    Vector[uint8] exchange_hash = crypto_sha256(hash_input)
+
+    # Session ID is the first exchange hash
+    session.session_id = exchange_hash
+
+    # Send NEWKEYS
+    Vector[uint8] newkeys = bytes_from_hex("15")
+    send_packet(session, newkeys)
+
+    # Read NEWKEYS from server
+    Vector[uint8] server_newkeys = read_packet(session)
+
+    # Derive keys (RFC 4253 section 7.2)
+    Vector[uint8] k_mpint = make_mpint(shared_k)
+
+    Vector[uint8] iv_cs = derive_key(k_mpint, exchange_hash, "A", session.session_id)
+    Vector[uint8] iv_sc = derive_key(k_mpint, exchange_hash, "B", session.session_id)
+    Vector[uint8] enc_key_cs = derive_key(k_mpint, exchange_hash, "C", session.session_id)
+    Vector[uint8] enc_key_sc = derive_key(k_mpint, exchange_hash, "D", session.session_id)
+    Vector[uint8] mac_key_cs = derive_key(k_mpint, exchange_hash, "E", session.session_id)
+    Vector[uint8] mac_key_sc = derive_key(k_mpint, exchange_hash, "F", session.session_id)
+
+    # AES-128-CTR uses 16-byte keys and IVs
+    Vector[uint8] enc_key_16 = bytes_slice(enc_key_cs, 0, 16)
+    Vector[uint8] dec_key_16 = bytes_slice(enc_key_sc, 0, 16)
+    Vector[uint8] enc_iv_16 = bytes_slice(iv_cs, 0, 16)
+    Vector[uint8] dec_iv_16 = bytes_slice(iv_sc, 0, 16)
+
+    session.enc_cipher = crypto_aes_ctr_new(enc_key_16, enc_iv_16)
+    session.dec_cipher = crypto_aes_ctr_new(dec_key_16, dec_iv_16)
+    session.enc_mac_key = mac_key_cs
+    session.dec_mac_key = mac_key_sc
+    session.encrypted = true
+
+# ── Authentication ───────────────────────────────────────────
+
+void auth_password(Session &session, str user, str password):
+    # Service request: ssh-userauth
+    Vector[uint8] svc = bytes_from_hex("05")
+    svc = bytes_concat(svc, make_name_list("ssh-userauth"))
+    send_packet(session, svc)
+
+    # Read service accept
+    Vector[uint8] svc_reply = read_packet(session)
+
+    # Password auth request
+    Vector[uint8] auth_msg = bytes_from_hex("32")
+    auth_msg = bytes_concat(auth_msg, make_name_list(user))
+    auth_msg = bytes_concat(auth_msg, make_name_list("ssh-connection"))
+    auth_msg = bytes_concat(auth_msg, make_name_list("password"))
+    auth_msg = bytes_concat(auth_msg, bytes_from_hex("00"))
+    auth_msg = bytes_concat(auth_msg, make_name_list(password))
+    send_packet(session, auth_msg)
+
+    # Read auth response
+    Vector[uint8] auth_reply = read_packet(session)
+    uint8 auth_type = auth_reply.get(0)
+    if auth_type == SSH_MSG_USERAUTH_FAILURE:
+        print("SSH authentication failed")
+
+# ── Channel operations ───────────────────────────────────────
+
+CommandResult channel_exec(Session &session, str cmd):
+    # Open a session channel
+    Vector[uint8] open_msg = bytes_from_hex("5a")
+    open_msg = bytes_concat(open_msg, make_name_list("session"))
+    open_msg = bytes_concat(open_msg, make_u32(0))
+    open_msg = bytes_concat(open_msg, make_u32(2097152))
+    open_msg = bytes_concat(open_msg, make_u32(32768))
+    send_packet(session, open_msg)
+
+    # Read channel open confirmation
+    Vector[uint8] confirm = read_packet(session)
+    int remote_channel = bytes_read_u32_be(confirm, 1)
+
+    # Send exec request
+    Vector[uint8] exec_msg = bytes_from_hex("62")
+    exec_msg = bytes_concat(exec_msg, make_u32(remote_channel))
+    exec_msg = bytes_concat(exec_msg, make_name_list("exec"))
+    exec_msg = bytes_concat(exec_msg, bytes_from_hex("01"))
+    exec_msg = bytes_concat(exec_msg, make_name_list(cmd))
+    send_packet(session, exec_msg)
+
+    # Read channel data until EOF/close
+    Vector[uint8] stdout_data = bytes_from_hex("")
+    int exit_code = -1
+    bool done = false
+
+    while not done:
+        Vector[uint8] msg = read_packet(session)
+        if msg.len() == 0:
+            done = true
+        else:
+            uint8 msg_type = msg.get(0)
+            if msg_type == SSH_MSG_CHANNEL_DATA:
+                # channel_data: skip recipient(4) + string_length(4)
+                int data_len = bytes_read_u32_be(msg, 5)
+                Vector[uint8] chunk = bytes_slice(msg, 9, 9 + data_len)
+                stdout_data = bytes_concat(stdout_data, chunk)
+            else:
+                if msg_type == SSH_MSG_CHANNEL_REQUEST:
+                    # Check for exit-status
+                    int req_name_len = bytes_read_u32_be(msg, 5)
+                    Vector[uint8] req_name = bytes_slice(msg, 9, 9 + req_name_len)
+                    str req_str = bytes_to_str(req_name)
+                    if req_str == "exit-status":
+                        exit_code = bytes_read_u32_be(msg, 9 + req_name_len + 1)
+                else:
+                    if msg_type == SSH_MSG_CHANNEL_EOF:
+                        pass
+                    else:
+                        if msg_type == SSH_MSG_CHANNEL_CLOSE:
+                            # Send channel close back
+                            Vector[uint8] close_msg = bytes_from_hex("61")
+                            close_msg = bytes_concat(close_msg, make_u32(remote_channel))
+                            send_packet(session, close_msg)
+                            done = true
+
+    str stdout_str = bytes_to_str(stdout_data)
+    return CommandResult(stdout_str, "", exit_code)
+
+# ── Public API ───────────────────────────────────────────────
+
+equip Session:
+    CommandResult run(&self, str cmd):
+        return channel_exec(self, cmd)
+
+    void close(&self):
+        # Send disconnect
+        Vector[uint8] disc = bytes_from_hex("01")
+        disc = bytes_concat(disc, make_u32(11))
+        disc = bytes_concat(disc, make_name_list("bye"))
+        disc = bytes_concat(disc, make_name_list(""))
+        send_packet(self, disc)
+        self.sock.close()
+
+Result[Session, str] ssh_connect(str host, int port, str user, str password):
+    # Resolve connection parameters via ~/.ssh/config
+    SshConfig config = parse_ssh_config(host, port, user)
+    str resolved_host = config.hostname
+    int resolved_port = config.port
+    str resolved_user = config.user
+
+    # Caller-provided user/port override config only if they differ from defaults
+    # (port 22 and empty user are treated as "use config value")
+    if port != 22:
+        resolved_port = port
+    if user != "":
+        resolved_user = user
+
+    Result[Socket, str] sock_result = socket_connect(resolved_host, resolved_port)
+    if sock_result.is_err():
+        return Error("connection failed")
+
+    Socket sock = sock_result.unwrap()
+
+    # Dummy cipher/keys for pre-encryption phase
+    Vector[uint8] dummy_key = bytes_from_hex("00000000000000000000000000000000")
+    Vector[uint8] dummy_iv = bytes_from_hex("00000000000000000000000000000000")
+
+    Session session = Session(sock, bytes_from_hex(""), crypto_aes_ctr_new(dummy_key, dummy_iv), crypto_aes_ctr_new(dummy_key, dummy_iv), bytes_from_hex(""), bytes_from_hex(""), 0, 0, false)
+
+    # Version exchange
+    str server_version = version_exchange(session.sock)
+    str client_version = "SSH-2.0-Gorget_1.0"
+
+    # Send our KEXINIT
+    Vector[uint8] client_kexinit = build_kexinit()
+    send_packet(session, client_kexinit)
+
+    # Read server KEXINIT
+    Vector[uint8] server_kexinit = read_packet(session)
+
+    # Key exchange
+    kex_dh_group14(session, client_version, server_version, client_kexinit, server_kexinit)
+
+    # Authenticate
+    auth_password(session, resolved_user, password)
+
+    return Ok(session)
