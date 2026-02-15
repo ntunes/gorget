@@ -78,6 +78,116 @@ impl CodegenContext<'_> {
                 let drop_fn = c_mangle::mangle_trait_method("Drop", type_name, "drop");
                 emitter.emit_line(&format!("{drop_fn}(&{});", entry.var_name));
             }
+            DropAction::ClosureEnvFree => {
+                emitter.emit_line(&format!("free({}.env);", entry.var_name));
+            }
+        }
+    }
+
+    /// Remove all drop entries for `var_name` across all scopes.
+    /// Used to transfer ownership of a closure env when returning it.
+    pub fn remove_droppable(&mut self, var_name: &str) {
+        for (_kind, entries) in &mut self.drop_scopes {
+            entries.retain(|e| e.var_name != var_name);
+        }
+    }
+
+    /// Scan a function body's statements for closure variables that escape
+    /// (are returned). Returns the set of variable names whose closure envs
+    /// should be heap-allocated.
+    pub fn scan_escaping_closures(&self, block: &Block) -> std::collections::HashSet<String> {
+        let mut closure_candidates = std::collections::HashSet::new();
+        let mut escaping = std::collections::HashSet::new();
+
+        for stmt in &block.stmts {
+            match &stmt.node {
+                // auto f = (params): body  →  candidate if it has captures
+                Stmt::VarDecl { pattern, value, .. } => {
+                    if let Pattern::Binding(name) = &pattern.node {
+                        if let Expr::Closure { params, body, .. } = &value.node {
+                            let bound: std::collections::HashSet<&str> =
+                                params.iter().map(|p| p.node.name.node.as_str()).collect();
+                            let captures = self.collect_free_vars_readonly(&body.node, &bound);
+                            if !captures.is_empty() {
+                                closure_candidates.insert(name.clone());
+                            }
+                        }
+                    }
+                }
+                // return f  where f is a closure candidate  →  escaping
+                Stmt::Return(Some(expr)) => {
+                    if let Expr::Identifier(name) = &expr.node {
+                        if closure_candidates.contains(name) {
+                            escaping.insert(name.clone());
+                        }
+                    }
+                    // return (params): body  →  inline closure literal in return
+                    if matches!(&expr.node, Expr::Closure { .. }) {
+                        // Mark with a sentinel so the return handler knows
+                        escaping.insert("__inline_return_closure__".to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        escaping
+    }
+
+    /// Read-only version of collect_free_vars that doesn't need &mut self.
+    /// Returns non-empty if the closure captures variables.
+    fn collect_free_vars_readonly(
+        &self,
+        expr: &Expr,
+        bound: &std::collections::HashSet<&str>,
+    ) -> Vec<String> {
+        let mut free = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        self.walk_free_vars_readonly(expr, bound, &mut seen, &mut free);
+        free
+    }
+
+    fn walk_free_vars_readonly(
+        &self,
+        expr: &Expr,
+        bound: &std::collections::HashSet<&str>,
+        seen: &mut std::collections::HashSet<String>,
+        free: &mut Vec<String>,
+    ) {
+        match expr {
+            Expr::Identifier(name) if !bound.contains(name.as_str()) && name != "self" => {
+                let is_global = self.scopes.is_global_def(name);
+                if !is_global && seen.insert(name.clone()) {
+                    free.push(name.clone());
+                }
+            }
+            Expr::BinaryOp { left, right, .. } => {
+                self.walk_free_vars_readonly(&left.node, bound, seen, free);
+                self.walk_free_vars_readonly(&right.node, bound, seen, free);
+            }
+            Expr::UnaryOp { operand, .. } => {
+                self.walk_free_vars_readonly(&operand.node, bound, seen, free);
+            }
+            Expr::Call { callee, args, .. } => {
+                self.walk_free_vars_readonly(&callee.node, bound, seen, free);
+                for arg in args {
+                    self.walk_free_vars_readonly(&arg.node.value.node, bound, seen, free);
+                }
+            }
+            Expr::MethodCall { receiver, args, .. } => {
+                self.walk_free_vars_readonly(&receiver.node, bound, seen, free);
+                for arg in args {
+                    self.walk_free_vars_readonly(&arg.node.value.node, bound, seen, free);
+                }
+            }
+            Expr::FieldAccess { object, .. } => {
+                self.walk_free_vars_readonly(&object.node, bound, seen, free);
+            }
+            Expr::Index { object, index } => {
+                self.walk_free_vars_readonly(&object.node, bound, seen, free);
+                self.walk_free_vars_readonly(&index.node, bound, seen, free);
+            }
+            _ => {}
         }
     }
 
@@ -476,6 +586,21 @@ impl CodegenContext<'_> {
             }
 
             Stmt::Return(expr) => {
+                // Transfer ownership: if returning an escaping closure var,
+                // remove its ClosureEnvFree drop entry so cleanup doesn't free
+                // the env we're about to return.
+                if let Some(expr) = expr {
+                    if let Expr::Identifier(name) = &expr.node {
+                        if self.escaping_closure_vars.contains(name) {
+                            self.remove_droppable(&c_mangle::escape_keyword(name));
+                        }
+                    }
+                    // Inline closure literal in return: heap-allocate it
+                    if matches!(&expr.node, Expr::Closure { .. }) {
+                        self.closure_heap_alloc = true;
+                    }
+                }
+
                 if self.has_droppable_entries() {
                     if let Some(expr) = expr {
                         if self.trace {
@@ -483,6 +608,7 @@ impl CodegenContext<'_> {
                             self.emit_stmt_start(span, &vars, emitter);
                         }
                         let e = self.gen_expr(expr);
+                        self.closure_heap_alloc = false;
                         let ret_type = self.ret_tmp_type(&e);
                         emitter.emit_line(&format!("{ret_type} __ret_tmp = {e};"));
                         if self.trace {
@@ -509,6 +635,7 @@ impl CodegenContext<'_> {
                         let vars = self.collect_expr_vars(&[&expr.node]);
                         self.emit_stmt_start(span, &vars, emitter);
                         let e = self.gen_expr(expr);
+                        self.closure_heap_alloc = false;
                         let ret_type = self.ret_tmp_type(&e);
                         emitter.emit_line(&format!("{ret_type} __ret_tmp = {e};"));
                         self.emit_stmt_end(emitter);
@@ -516,6 +643,7 @@ impl CodegenContext<'_> {
                         emitter.emit_line("return __ret_tmp;");
                     } else {
                         let e = self.gen_expr(expr);
+                        self.closure_heap_alloc = false;
                         emitter.emit_line(&format!("return {e};"));
                     }
                 } else {
@@ -897,14 +1025,21 @@ impl CodegenContext<'_> {
                 }
 
                 let c_type = self.resolve_decl_type(type_, value, Some(name));
+                let is_escaping_closure = c_type == "GorgetClosure"
+                    && self.escaping_closure_vars.contains(name);
                 if c_type == "GorgetClosure" {
                     self.closure_vars.insert(escaped.clone());
+                }
+                // Set heap-alloc flag for escaping closures
+                if is_escaping_closure {
+                    self.closure_heap_alloc = true;
                 }
                 // Set type hint for unit variant constructors like None()
                 let prev_hint = self.decl_type_hint.clone();
                 self.decl_type_hint = Some(type_.node.clone());
                 let val = self.gen_expr(value);
                 self.decl_type_hint = prev_hint;
+                self.closure_heap_alloc = false;
                 let decl = c_types::c_declare(&c_type, &escaped);
                 emitter.emit_line(&format!("{const_prefix}{decl} = {val};"));
 
@@ -917,7 +1052,11 @@ impl CodegenContext<'_> {
                 }
 
                 // Register droppable variable for RAII cleanup
-                self.maybe_register_droppable(&escaped, &type_.node, emitter);
+                if is_escaping_closure {
+                    self.register_droppable(&escaped, DropAction::ClosureEnvFree);
+                } else {
+                    self.maybe_register_droppable(&escaped, &type_.node, emitter);
+                }
             }
             Pattern::Wildcard => {
                 if self.trace {
@@ -970,7 +1109,13 @@ impl CodegenContext<'_> {
                     if let Some(def_id) = self.scopes.lookup_by_name_anywhere(name) {
                         let def = self.scopes.get_def(def_id);
                         if let Some(type_id) = def.type_id {
-                            return c_types::type_id_to_c(type_id, self.types, self.scopes);
+                            let c_type = c_types::type_id_to_c(type_id, self.types, self.scopes);
+                            // Function types from calls that return closures should
+                            // be stored as GorgetClosure (the actual C return type).
+                            if c_type.contains("(*)") && matches!(&value.node, Expr::Call { .. }) {
+                                return "GorgetClosure".to_string();
+                            }
+                            return c_type;
                         }
                     }
                 }

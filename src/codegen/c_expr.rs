@@ -3839,9 +3839,25 @@ impl CodegenContext<'_> {
         self.lifted_closures.push(lifted);
 
         // At the creation site: emit a bare function pointer (no captures)
-        // or stack-allocate env via compound literal and create GorgetClosure.
+        // or allocate env and create GorgetClosure.
         if captures.is_empty() {
             fn_name
+        } else if self.closure_heap_alloc {
+            // Heap-allocate env for escaping closures (returned from function).
+            // Uses a GCC statement expression to malloc, init, and return the closure.
+            let fields: Vec<String> = captures
+                .iter()
+                .map(|(cap_name, _, mode)| match mode {
+                    CaptureMode::ByMutRef => format!(".{cap_name} = &{cap_name}"),
+                    CaptureMode::ByValue => format!(".{cap_name} = {cap_name}"),
+                })
+                .collect();
+            let field_init = fields.join(", ");
+            format!(
+                "({{ {env_name}* __heap_env = ({env_name}*)malloc(sizeof({env_name})); \
+                *__heap_env = ({env_name}){{{field_init}}}; \
+                (GorgetClosure){{.fn_ptr = (void*){fn_name}, .env = (void*)__heap_env}}; }})"
+            )
         } else {
             // C99 compound literal: the env struct has automatic storage duration
             // tied to the enclosing block, so no malloc/free needed. The env lives

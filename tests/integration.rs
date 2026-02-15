@@ -252,6 +252,15 @@ closures");
 }
 
 #[test]
+fn closure_escape() {
+    run_gg("closure_escape.gg", "\
+15
+8
+21
+12");
+}
+
+#[test]
 fn dynamic_dispatch() {
     run_gg("dynamic_dispatch.gg", "hello\nhola\nhello\nhola");
 }

@@ -67,6 +67,8 @@ pub enum DropAction {
     FileClose,
     /// Drop_for_T__drop(&var) for user-defined Drop
     UserDrop { type_name: String },
+    /// free(var.env) for heap-allocated closure environments
+    ClosureEnvFree,
 }
 
 /// How a closure captures a variable from its enclosing scope.
@@ -117,6 +119,10 @@ pub struct CodegenContext<'a> {
     pub generic_equip_templates: FxHashMap<String, Vec<EquipBlock>>,
     /// Variables declared with GorgetClosure type (need fn_ptr dispatch on call).
     pub closure_vars: HashSet<String>,
+    /// Variables whose closure environments should be heap-allocated (they escape their scope).
+    pub escaping_closure_vars: HashSet<String>,
+    /// Flag set during gen_expr for a VarDecl/return whose closure should heap-allocate its env.
+    pub closure_heap_alloc: bool,
     /// Registered tuple typedefs: (mangled_name, field_c_types).
     pub tuple_typedefs: Vec<(String, Vec<String>)>,
     /// Hint for the declared type in a VarDecl, used to resolve unit variant
@@ -274,6 +280,8 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
         generic_fn_templates: FxHashMap::default(),
         generic_equip_templates: FxHashMap::default(),
         closure_vars: HashSet::new(),
+        escaping_closure_vars: HashSet::new(),
+        closure_heap_alloc: false,
         tuple_typedefs: Vec::new(),
         decl_type_hint: None,
         drop_scopes: Vec::new(),

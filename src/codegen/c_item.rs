@@ -402,11 +402,11 @@ impl CodegenContext<'_> {
         // Track whether this function throws
         self.current_function_throws = f.throws.is_some();
 
-        // Track return type for Result-based ? codegen
+        // Track return type for Result-based ? codegen and ret_tmp_type
         self.current_function_return_c_type = if is_main {
             None
         } else {
-            Some(c_types::ast_type_to_c(&f.return_type.node, self.scopes))
+            Some(ret_type.clone())
         };
 
         // Track mutable borrow params as pointer params for body codegen.
@@ -469,7 +469,12 @@ impl CodegenContext<'_> {
                     self.emit_trace_entry(f, &gorget_name, emitter);
                 }
 
+                // Pre-scan for escaping closures (returned from this function)
+                let escaping = self.scan_escaping_closures(block);
+                self.escaping_closure_vars = escaping;
+
                 self.gen_block(block, emitter);
+                self.escaping_closure_vars.clear();
                 self.pop_drop_scope(emitter);
 
                 self.decl_type_hint = prev_hint;
@@ -584,6 +589,10 @@ impl CodegenContext<'_> {
             } else {
                 c_types::ast_type_to_c(&f.return_type.node, self.scopes)
             }
+        } else if matches!(f.return_type.node, Type::Function { .. }) {
+            // Function types as return values use GorgetClosure (supports both
+            // capturing and non-capturing closures).
+            "GorgetClosure".to_string()
         } else {
             c_types::ast_type_to_c(&f.return_type.node, self.scopes)
         };
