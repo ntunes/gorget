@@ -771,6 +771,11 @@ fn modules_auto() {
 }
 
 #[test]
+fn modules_pkg() {
+    run_gg_dir("modules_pkg", "main.gg", "hello world");
+}
+
+#[test]
 fn vector_methods() {
     run_gg(
         "vector_methods.gg",

@@ -6,7 +6,7 @@
 
 ## High
 
-- **Package management (`gg new`, `gg add`, `gg update`)**: Project scaffolding, dependency resolution, registry. Unblocks: code reuse across projects, ecosystem growth. [added: 2026-02-10]
+(none)
 
 ## Medium
 
@@ -25,6 +25,8 @@
 - **Fixture system for tests**: suite setup/teardown (done) → `with` clause (done) → fixture injection. Named, composable, scoped resources injected into test signatures. Design questions: yield semantics (Drop-based vs explicit teardown), scope model (test/suite), composability (fixture graphs). [added: 2026-02-14]
 
 ## Low
+
+- **Package management phase 2 (`gg update`, registry)**: Semver-aware resolution, central registry, `gg publish`, workspaces. [added: 2026-02-15]
 
 - **Closures step 4 — `dyn Fn` / `Box[Fn]` trait objects for closures**: Allow closures to be type-erased via trait objects: `auto callback: dyn Fn[int -> int] = my_closure`. Requires a vtable with the `call` method pointer. `Box[dyn Fn[int -> int]]` provides owned, heap-allocated trait objects. **Implementation:** Generate a vtable struct with `call` function pointer for each Fn trait instantiation. `dyn Fn` is a fat pointer `{ void* data; VTable* vtable; }`. Calling through `dyn Fn` does `vtable->call(data, args...)`. **Depends on:** step 2 (Fn traits) + step 3 (embedded captures, so the data pointer points to a self-contained struct). Unblocks: heterogeneous closure collections (`Vector[dyn Fn[int -> int]]`), callback registries, event handler maps, strategy pattern. [added: 2026-02-14]
 

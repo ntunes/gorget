@@ -1,0 +1,4 @@
+from greeter import hello
+
+void main():
+    hello("world")

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -58,6 +58,8 @@ impl fmt::Display for LoadError {
 pub struct ModuleLoader {
     loaded: HashSet<PathBuf>,
     load_stack: Vec<PathBuf>,
+    /// Package name → source directory, populated from resolved dependencies.
+    dep_paths: HashMap<String, PathBuf>,
 }
 
 /// Map a dotted import path to a filesystem path.
@@ -102,6 +104,16 @@ impl ModuleLoader {
         Self {
             loaded: HashSet::new(),
             load_stack: Vec::new(),
+            dep_paths: HashMap::new(),
+        }
+    }
+
+    /// Create a loader with package dependency paths.
+    pub fn with_dep_paths(dep_paths: HashMap<String, PathBuf>) -> Self {
+        Self {
+            loaded: HashSet::new(),
+            load_stack: Vec::new(),
+            dep_paths,
         }
     }
 
@@ -190,7 +202,32 @@ impl ModuleLoader {
             }
         }
 
+        // Try local filesystem first
         let file_path = resolve_import_path(base_dir, segments);
+
+        // If the local file doesn't exist, try package dependencies.
+        // The first segment of the import is the package name (e.g. `import mylib`
+        // or `from mylib import foo`).
+        let file_path = if !file_path.exists() {
+            if let Some(dep_dir) = segments.first().and_then(|name| self.dep_paths.get(name.as_str())) {
+                if segments.len() == 1 {
+                    // `import mylib` → look for `<dep_dir>/<mylib>.gg`
+                    let pkg_file = dep_dir.join(format!("{}.gg", segments[0]));
+                    if pkg_file.exists() {
+                        pkg_file
+                    } else {
+                        file_path
+                    }
+                } else {
+                    // `from mylib.sub import X` → resolve sub-path within dep dir
+                    resolve_import_path(dep_dir, &segments[1..])
+                }
+            } else {
+                file_path
+            }
+        } else {
+            file_path
+        };
 
         let canonical = file_path.canonicalize().map_err(|e| LoadError::Io {
             path: file_path.clone(),

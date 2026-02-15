@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::io::{self, BufRead, Write};
@@ -7,17 +8,23 @@ use std::process::{self, Command};
 use gorget::errors::ErrorReporter;
 use gorget::lexer::Lexer;
 use gorget::loader::{self, ModuleLoader};
+use gorget::manifest::{self, DepSpec, Manifest};
 use gorget::parser::ast::{Item, Module};
 use gorget::parser::Parser;
+use gorget::resolver;
 
 /// Load imported modules and merge them into a single module.
-fn load_imports(filename: &str, source: &str, module: gorget::parser::ast::Module) -> gorget::parser::ast::Module {
+fn load_imports(filename: &str, source: &str, module: gorget::parser::ast::Module, dep_paths: HashMap<String, PathBuf>) -> gorget::parser::ast::Module {
     let input_path = Path::new(filename).canonicalize().unwrap_or_else(|e| {
         eprintln!("Error resolving path {filename}: {e}");
         process::exit(1);
     });
 
-    let mut ml = ModuleLoader::new();
+    let mut ml = if dep_paths.is_empty() {
+        ModuleLoader::new()
+    } else {
+        ModuleLoader::with_dep_paths(dep_paths)
+    };
     let modules = ml
         .load_all(&input_path, source.to_string(), module)
         .unwrap_or_else(|e| {
@@ -46,6 +53,31 @@ fn load_imports(filename: &str, source: &str, module: gorget::parser::ast::Modul
         });
 
     loader::merge_modules(modules)
+}
+
+/// Resolve package dependencies for a source file, returning dep_paths.
+/// Looks for gorget.toml by walking up from the source file's directory.
+fn resolve_deps_for_file(filename: &str) -> HashMap<String, PathBuf> {
+    let input_path = Path::new(filename);
+    let start_dir = input_path.parent().unwrap_or(Path::new("."));
+
+    if let Some(project_root) = manifest::find_project_root(start_dir) {
+        let manifest_path = project_root.join("gorget.toml");
+        if let Ok(manifest) = Manifest::from_path(&manifest_path) {
+            if !manifest.dependencies.is_empty() {
+                match resolver::resolve(&project_root, &manifest) {
+                    Ok(lockfile) => {
+                        return resolver::build_dep_paths(&lockfile, &project_root);
+                    }
+                    Err(e) => {
+                        eprintln!("Warning: dependency resolution failed: {e}");
+                    }
+                }
+            }
+        }
+    }
+
+    HashMap::new()
 }
 
 /// Extract directive flags from a parsed module.
@@ -82,6 +114,7 @@ fn try_build(
     test_exclude_tags: &[String],
     test_name_filter: Option<&str>,
     output_dir: Option<&Path>,
+    dep_paths: HashMap<String, PathBuf>,
 ) -> Result<PathBuf, String> {
     let mut parser = Parser::new(source);
     let module = parser.parse_module();
@@ -95,7 +128,7 @@ fn try_build(
     }
 
     // Load imported modules recursively and merge
-    let mut module = load_imports(filename, source, module);
+    let mut module = load_imports(filename, source, module, dep_paths);
 
     // Merge source directives with CLI flags.
     let (dir_strip, dir_overflow, dir_trace) = extract_directives(&module);
@@ -332,8 +365,9 @@ fn build(
     test_exclude_tags: &[String],
     test_name_filter: Option<&str>,
     output_dir: Option<&Path>,
+    dep_paths: HashMap<String, PathBuf>,
 ) -> PathBuf {
-    try_build(filename, source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, test_mode, test_tags, test_exclude_tags, test_name_filter, output_dir)
+    try_build(filename, source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, test_mode, test_tags, test_exclude_tags, test_name_filter, output_dir, dep_paths)
         .unwrap_or_else(|e| {
             eprintln!("{e}");
             process::exit(1);
@@ -530,7 +564,7 @@ fn run_repl() {
         let gg_path_str = gg_path.display().to_string();
 
         // Try to build
-        match try_build(&gg_path_str, &source, false, false, false, false, false, false, false, &[], &[], None, Some(&tmp_dir)) {
+        match try_build(&gg_path_str, &source, false, false, false, false, false, false, false, &[], &[], None, Some(&tmp_dir), HashMap::new()) {
             Err(e) => {
                 eprintln!("{e}");
                 // Don't update buffers on error
@@ -573,6 +607,189 @@ fn run_repl() {
     let _ = fs::remove_dir_all(&tmp_dir);
 }
 
+// ══════════════════════════════════════════════════════════════
+// Package management commands
+// ══════════════════════════════════════════════════════════════
+
+/// `gg init` — initialize a new Gorget project in the current directory.
+fn cmd_init() {
+    let cwd = env::current_dir().unwrap_or_else(|e| {
+        eprintln!("Cannot determine current directory: {e}");
+        process::exit(1);
+    });
+
+    let manifest_path = cwd.join("gorget.toml");
+    if manifest_path.exists() {
+        eprintln!("gorget.toml already exists");
+        process::exit(1);
+    }
+
+    let name = cwd
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("my-project")
+        .to_string();
+
+    let manifest = Manifest::new(&name);
+    manifest.save(&manifest_path).unwrap_or_else(|e| {
+        eprintln!("Error writing gorget.toml: {e}");
+        process::exit(1);
+    });
+    println!("Created gorget.toml");
+
+    // Create main.gg if it doesn't exist
+    let main_path = cwd.join("main.gg");
+    if !main_path.exists() {
+        fs::write(&main_path, "void main():\n    print(\"hello\")\n").unwrap_or_else(|e| {
+            eprintln!("Error writing main.gg: {e}");
+            process::exit(1);
+        });
+        println!("Created main.gg");
+    }
+
+    // Create .gitignore if it doesn't exist
+    let gitignore_path = cwd.join(".gitignore");
+    if !gitignore_path.exists() {
+        fs::write(&gitignore_path, "# Build artifacts\n*.c\n*.o\n/target/\n").unwrap_or_else(|e| {
+            eprintln!("Error writing .gitignore: {e}");
+            process::exit(1);
+        });
+        println!("Created .gitignore");
+    }
+}
+
+/// `gg new <name>` — create a new project directory and initialize it.
+fn cmd_new(name: &str) {
+    let project_dir = PathBuf::from(name);
+    if project_dir.exists() {
+        eprintln!("Directory '{name}' already exists");
+        process::exit(1);
+    }
+
+    fs::create_dir_all(&project_dir).unwrap_or_else(|e| {
+        eprintln!("Cannot create directory '{name}': {e}");
+        process::exit(1);
+    });
+
+    // Change to the new directory and run init
+    env::set_current_dir(&project_dir).unwrap_or_else(|e| {
+        eprintln!("Cannot enter directory '{name}': {e}");
+        process::exit(1);
+    });
+
+    cmd_init();
+    println!("Created project '{name}'");
+}
+
+/// `gg add <name> --git <url> [--tag <tag>] [--branch <branch>]`
+/// `gg add <name> --path <dir>`
+fn cmd_add(args: &[String]) {
+    let name = &args[0];
+    let mut git_url: Option<String> = None;
+    let mut tag: Option<String> = None;
+    let mut branch: Option<String> = None;
+    let mut dep_path: Option<PathBuf> = None;
+
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--git" if i + 1 < args.len() => {
+                git_url = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--tag" if i + 1 < args.len() => {
+                tag = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--branch" if i + 1 < args.len() => {
+                branch = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--path" if i + 1 < args.len() => {
+                dep_path = Some(PathBuf::from(&args[i + 1]));
+                i += 2;
+            }
+            other => {
+                eprintln!("Unknown flag: {other}");
+                process::exit(1);
+            }
+        }
+    }
+
+    let spec = if let Some(path) = dep_path {
+        DepSpec::Path { path }
+    } else if let Some(git) = git_url {
+        DepSpec::Git {
+            git,
+            tag,
+            branch,
+            rev: None,
+        }
+    } else {
+        eprintln!("Must specify --git <url> or --path <dir>");
+        process::exit(1);
+    };
+
+    let cwd = env::current_dir().unwrap_or_else(|e| {
+        eprintln!("Cannot determine current directory: {e}");
+        process::exit(1);
+    });
+
+    let manifest_path = cwd.join("gorget.toml");
+    let mut manifest = Manifest::from_path(&manifest_path).unwrap_or_else(|e| {
+        eprintln!("Error reading gorget.toml: {e}");
+        process::exit(1);
+    });
+
+    manifest.dependencies.insert(name.clone(), spec);
+    manifest.save(&manifest_path).unwrap_or_else(|e| {
+        eprintln!("Error writing gorget.toml: {e}");
+        process::exit(1);
+    });
+
+    // Resolve to update lockfile and fetch
+    match resolver::resolve(&cwd, &manifest) {
+        Ok(_) => println!("Added '{name}'"),
+        Err(e) => {
+            eprintln!("Error resolving dependency '{name}': {e}");
+            process::exit(1);
+        }
+    }
+}
+
+/// `gg remove <name>` — remove a dependency.
+fn cmd_remove(name: &str) {
+    let cwd = env::current_dir().unwrap_or_else(|e| {
+        eprintln!("Cannot determine current directory: {e}");
+        process::exit(1);
+    });
+
+    let manifest_path = cwd.join("gorget.toml");
+    let mut manifest = Manifest::from_path(&manifest_path).unwrap_or_else(|e| {
+        eprintln!("Error reading gorget.toml: {e}");
+        process::exit(1);
+    });
+
+    if manifest.dependencies.remove(name).is_none() {
+        eprintln!("Dependency '{name}' not found in gorget.toml");
+        process::exit(1);
+    }
+
+    manifest.save(&manifest_path).unwrap_or_else(|e| {
+        eprintln!("Error writing gorget.toml: {e}");
+        process::exit(1);
+    });
+
+    // Re-resolve to update lockfile
+    match resolver::resolve(&cwd, &manifest) {
+        Ok(_) => println!("Removed '{name}'"),
+        Err(e) => {
+            eprintln!("Error updating lockfile: {e}");
+            process::exit(1);
+        }
+    }
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
 
@@ -594,7 +811,9 @@ fn main() {
         println!("       gg <command> <file.gg>     Run a compiler command");
         println!("       gg                         Interactive REPL");
         println!("       gg --version               Print version");
-        println!("Commands: lex, parse, check, build, run, fmt, test, report");
+        println!();
+        println!("Compiler commands: lex, parse, check, build, run, fmt, test, report");
+        println!("Package commands:  init, new, add, remove");
         return;
     }
 
@@ -614,11 +833,12 @@ fn main() {
         let overflow_checked = args.iter().any(|a| a == "--overflow=checked");
         let trace = args.iter().any(|a| a == "--trace");
         let no_trace = args.iter().any(|a| a == "--no-trace");
+        let dep_paths = resolve_deps_for_file(filename);
         let tmp_dir = tempfile::tempdir().unwrap_or_else(|e| {
             eprintln!("Failed to create temp directory: {e}");
             process::exit(1);
         });
-        let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, Some(tmp_dir.path()));
+        let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, Some(tmp_dir.path()), dep_paths);
         let status = Command::new(&exe_path)
             .status()
             .unwrap_or_else(|e| {
@@ -672,12 +892,53 @@ fn main() {
         return;
     }
 
+    // ── Package management commands ────────────────────────────
+
+    // `gg init`
+    if args[1] == "init" {
+        cmd_init();
+        return;
+    }
+
+    // `gg new <name>`
+    if args[1] == "new" {
+        if args.len() < 3 {
+            eprintln!("Usage: gg new <name>");
+            process::exit(1);
+        }
+        cmd_new(&args[2]);
+        return;
+    }
+
+    // `gg add <name> --git <url> [--tag <tag>] [--branch <branch>]`
+    // `gg add <name> --path <dir>`
+    if args[1] == "add" {
+        if args.len() < 4 {
+            eprintln!("Usage: gg add <name> --git <url> [--tag <tag>] [--branch <branch>]");
+            eprintln!("       gg add <name> --path <dir>");
+            process::exit(1);
+        }
+        cmd_add(&args[2..]);
+        return;
+    }
+
+    // `gg remove <name>`
+    if args[1] == "remove" {
+        if args.len() < 3 {
+            eprintln!("Usage: gg remove <name>");
+            process::exit(1);
+        }
+        cmd_remove(&args[2]);
+        return;
+    }
+
     if args.len() < 3 {
         eprintln!("Usage: gg <file.gg>              Run a script");
         eprintln!("       gg <command> <file.gg>     Run a compiler command");
         eprintln!("       gg                         Interactive REPL");
         eprintln!("       gg --version               Print version");
-        eprintln!("Commands: lex, parse, check, build, run, fmt, test, report");
+        eprintln!("Compiler commands: lex, parse, check, build, run, fmt, test, report");
+        eprintln!("Package commands:  init, new, add, remove");
         process::exit(1);
     }
 
@@ -761,7 +1022,8 @@ fn main() {
             }
 
             // Load imported modules recursively and merge
-            let mut module = load_imports(filename, &source, module);
+            let dep_paths = resolve_deps_for_file(filename);
+            let mut module = load_imports(filename, &source, module, dep_paths);
 
             let result = gorget::semantic::analyze(&mut module);
 
@@ -777,15 +1039,17 @@ fn main() {
             }
         }
         "build" => {
-            let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, None);
+            let dep_paths = resolve_deps_for_file(filename);
+            let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, None, dep_paths);
             println!("Built: {}", exe_path.display());
         }
         "run" => {
+            let dep_paths = resolve_deps_for_file(filename);
             let tmp_dir = tempfile::tempdir().unwrap_or_else(|e| {
                 eprintln!("Failed to create temp directory: {e}");
                 process::exit(1);
             });
-            let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, Some(tmp_dir.path()));
+            let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, Some(tmp_dir.path()), dep_paths);
             let status = Command::new(&exe_path)
                 .status()
                 .unwrap_or_else(|e| {
@@ -837,7 +1101,8 @@ fn main() {
                 eprintln!("Failed to create temp directory: {e}");
                 process::exit(1);
             });
-            let exe_path = build(filename, &source, false, false, false, false, trace, no_trace, true, &test_tags, &test_exclude_tags, test_name_filter.as_deref(), Some(tmp_dir.path()));
+            let dep_paths = resolve_deps_for_file(filename);
+            let exe_path = build(filename, &source, false, false, false, false, trace, no_trace, true, &test_tags, &test_exclude_tags, test_name_filter.as_deref(), Some(tmp_dir.path()), dep_paths);
             let status = Command::new(&exe_path)
                 .status()
                 .unwrap_or_else(|e| {
@@ -876,7 +1141,8 @@ fn main() {
         }
         _ => {
             eprintln!("Unknown command: {command}");
-            eprintln!("Commands: lex, parse, check, build, run, test, fmt, report");
+            eprintln!("Compiler commands: lex, parse, check, build, run, test, fmt, report");
+            eprintln!("Package commands:  init, new, add, remove");
             process::exit(1);
         }
     }
