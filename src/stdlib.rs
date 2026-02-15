@@ -595,6 +595,13 @@ fn ty_result(ok: Type, err: Type) -> Type {
     }
 }
 
+fn ty_dict_str_str() -> Type {
+    Type::Named {
+        name: Spanned::dummy("Dict".to_string()),
+        generic_args: vec![Spanned::dummy(ty_str()), Spanned::dummy(ty_str())],
+    }
+}
+
 fn ty_response() -> Type {
     Type::Named {
         name: Spanned::dummy("Response".to_string()),
@@ -694,6 +701,11 @@ fn gen_http_client_module() -> Module {
             &[
                 ("url", ty_str(), None),
                 ("body", ty_str(), Some(Expr::StringLiteral(StringLit { kind: StringKind::Normal, segments: vec![] }))),
+                ("headers", ty_dict_str_str(), Some(Expr::Call {
+                    callee: Box::new(Spanned::dummy(Expr::Identifier("Dict".into()))),
+                    generic_args: None,
+                    args: vec![],
+                })),
                 ("timeout", ty_int(), Some(Expr::IntLiteral(0))),
             ],
             ty_result(ty_response(), ty_str()),

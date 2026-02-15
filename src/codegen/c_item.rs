@@ -1440,9 +1440,9 @@ impl CodegenContext<'_> {
                  \x20   {key_type}* keys;\n\
                  \x20   {val_type}* values;\n\
                  \x20   uint8_t* states;\n\
-                 \x20   size_t* order;\n\
                  \x20   size_t count;\n\
                  \x20   size_t cap;\n\
+                 \x20   size_t* order;\n\
                  \x20   size_t order_len;\n\
                  \x20   size_t tombstones;\n\
                  }};\n\n"
@@ -1527,7 +1527,7 @@ impl CodegenContext<'_> {
         if ordered {
             emitter.emit(&format!(
                 "static inline {mangled} {mangled}__new(void) {{\n\
-                 \x20   return ({mangled}){{NULL, NULL, NULL, NULL, 0, 0, 0, 0}};\n\
+                 \x20   return ({mangled}){{NULL, NULL, NULL, 0, 0, NULL, 0, 0}};\n\
                  }}\n\n"
             ));
         } else {

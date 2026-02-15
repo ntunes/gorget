@@ -6,8 +6,6 @@
 
 ## High
 
-- **HTTP client headers support**: Free functions `get()`/`post()` etc. currently don't accept headers (removed due to Dict type complexity in codegen). Need to add headers parameter back, either by passing a `Dict[str,str]*` to the C runtime or by adding a header-string conversion step. The `Client` struct's `.header(k, v)` method works but only through the Client API. [added: 2026-02-15]
-
 - **Package management (`gg new`, `gg add`, `gg update`)**: Project scaffolding, dependency resolution, registry. Unblocks: code reuse across projects, ecosystem growth. [added: 2026-02-10]
 
 ## Medium

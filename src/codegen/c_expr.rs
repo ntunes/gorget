@@ -1100,14 +1100,23 @@ impl CodegenContext<'_> {
                     // std.http.client
                     "get" | "post" | "put" | "delete" | "patch" | "head" => {
                         let method = name.as_str();
-                        let url = if let Some(a) = args.first() { self.gen_expr(&a.node.value) } else { "\"\"".into() };
-                        let body = if args.len() > 1 { self.gen_expr(&args[1].node.value) } else { "\"\"".into() };
-                        let timeout = if args.len() > 2 { self.gen_expr(&args[2].node.value) } else { "0".into() };
+                        // Resolve named/default args: url, body, headers, timeout
+                        let resolved = self.resolve_call_args(callee, args);
+                        let url = resolved.first().cloned().unwrap_or_else(|| "\"\"".into());
+                        let body = resolved.get(1).cloned().unwrap_or_else(|| "\"\"".into());
+                        let headers_expr = resolved.get(2).cloned().unwrap_or_default();
+                        // Check if headers is the default empty Dict (count==0) → pass NULL
+                        let headers = if headers_expr.is_empty() || headers_expr.contains("__new()") {
+                            "NULL".into()
+                        } else {
+                            format!("(const GorgetStringMapView*)&{headers_expr}")
+                        };
+                        let timeout = resolved.get(3).cloned().unwrap_or_else(|| "0".into());
                         let result_type = c_mangle::mangle_generic("Result", &["GorgetHttpResponse".into(), "const char*".into()]);
                         let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
                         let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
                         return format!(
-                            "({{ GorgetHttpResponse __hr = gorget_http_{method}({url}, {body}, {timeout}); \
+                            "({{ GorgetHttpResponse __hr = gorget_http_{method}({url}, {body}, {headers}, {timeout}); \
                             const char* __he = gorget_http_last_error(); \
                             __he ? {err_ctor}(__he) : {ok_ctor}(__hr); }})"
                         );

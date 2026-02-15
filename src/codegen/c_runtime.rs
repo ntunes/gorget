@@ -1902,12 +1902,23 @@ static inline const char* gorget_http_last_error(void) {
     return e;
 }
 
+// Common view of Dict[str,str] and HashMap[str,str] for header iteration.
+// Both monomorphized map types share this field layout prefix:
+//   const char** keys; const char** values; uint8_t* states; size_t count; size_t cap;
+typedef struct {
+    const char** keys;
+    const char** values;
+    uint8_t* states;
+    size_t count;
+    size_t cap;
+} GorgetStringMapView;
+
 // Core HTTP request function
 static inline GorgetHttpResponse gorget_http_request(
     const char* method,
     const char* url,
     const char* body,
-    const GorgetMap* headers,
+    const GorgetStringMapView* headers,
     int64_t timeout_ms
 ) {
     __gorget_curl_ensure_init();
@@ -1951,13 +1962,13 @@ static inline GorgetHttpResponse gorget_http_request(
         curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, 0L);
     }
 
-    // Set headers
+    // Set headers from Dict[str,str] / HashMap[str,str] view
     struct curl_slist* header_list = NULL;
     if (headers && headers->count > 0) {
         for (size_t i = 0; i < headers->cap; i++) {
             if (headers->states[i] == 1) {
-                const char* key = *(const char**)((char*)headers->keys + i * headers->key_size);
-                const char* val = *(const char**)((char*)headers->values + i * headers->val_size);
+                const char* key = headers->keys[i];
+                const char* val = headers->values[i];
                 size_t hlen = strlen(key) + 2 + strlen(val) + 1;
                 char* header = (char*)malloc(hlen);
                 snprintf(header, hlen, "%s: %s", key, val);
@@ -1991,22 +2002,22 @@ static inline GorgetHttpResponse gorget_http_request(
 
 // ── Free functions (HTTP verbs) ──────────────────────────────
 
-static inline GorgetHttpResponse gorget_http_get(const char* url, const char* body, int64_t timeout) {
-    return gorget_http_request("GET", url, body, NULL, timeout);
+static inline GorgetHttpResponse gorget_http_get(const char* url, const char* body, const GorgetStringMapView* headers, int64_t timeout) {
+    return gorget_http_request("GET", url, body, headers, timeout);
 }
-static inline GorgetHttpResponse gorget_http_post(const char* url, const char* body, int64_t timeout) {
-    return gorget_http_request("POST", url, body, NULL, timeout);
+static inline GorgetHttpResponse gorget_http_post(const char* url, const char* body, const GorgetStringMapView* headers, int64_t timeout) {
+    return gorget_http_request("POST", url, body, headers, timeout);
 }
-static inline GorgetHttpResponse gorget_http_put(const char* url, const char* body, int64_t timeout) {
-    return gorget_http_request("PUT", url, body, NULL, timeout);
+static inline GorgetHttpResponse gorget_http_put(const char* url, const char* body, const GorgetStringMapView* headers, int64_t timeout) {
+    return gorget_http_request("PUT", url, body, headers, timeout);
 }
-static inline GorgetHttpResponse gorget_http_delete(const char* url, const char* body, int64_t timeout) {
-    return gorget_http_request("DELETE", url, body, NULL, timeout);
+static inline GorgetHttpResponse gorget_http_delete(const char* url, const char* body, const GorgetStringMapView* headers, int64_t timeout) {
+    return gorget_http_request("DELETE", url, body, headers, timeout);
 }
-static inline GorgetHttpResponse gorget_http_patch(const char* url, const char* body, int64_t timeout) {
-    return gorget_http_request("PATCH", url, body, NULL, timeout);
+static inline GorgetHttpResponse gorget_http_patch(const char* url, const char* body, const GorgetStringMapView* headers, int64_t timeout) {
+    return gorget_http_request("PATCH", url, body, headers, timeout);
 }
-static inline GorgetHttpResponse gorget_http_head(const char* url, const char* body, const GorgetMap* headers, int64_t timeout) {
+static inline GorgetHttpResponse gorget_http_head(const char* url, const char* body, const GorgetStringMapView* headers, int64_t timeout) {
     return gorget_http_request("HEAD", url, body, headers, timeout);
 }
 
@@ -2126,7 +2137,7 @@ static inline GorgetHttpResponse gorget_http_client_request(
     const char* url = __gorget_http_client_url(c, path);
     int64_t t = timeout > 0 ? timeout : c->timeout_ms;
     GorgetMap merged = __gorget_http_client_merge_headers(c, headers);
-    GorgetHttpResponse resp = gorget_http_request(method, url, body, &merged, t);
+    GorgetHttpResponse resp = gorget_http_request(method, url, body, (const GorgetStringMapView*)&merged, t);
     gorget_map_free(&merged);
     return resp;
 }
