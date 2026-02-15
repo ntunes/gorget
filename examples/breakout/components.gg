@@ -1,0 +1,11 @@
+struct Position:
+    int x
+    int y
+
+struct Size:
+    int w
+    int h
+
+struct Velocity:
+    int dx
+    int dy

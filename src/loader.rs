@@ -177,13 +177,13 @@ impl ModuleLoader {
                 self.loaded.insert(virtual_path.clone());
                 self.load_stack.push(virtual_path.clone());
 
-                // Recurse into this module's imports (e.g. std.gfx imports std.sdl)
+                // Recurse into this module's imports FIRST (post-order) so that
+                // dependency structs appear before the structs that use them.
                 let imports = extract_imports(&module);
-                results.push((virtual_path.clone(), source.to_string(), module));
-
                 for (segs, _span) in imports {
                     self.load_recursive(base_dir, &segs, results)?;
                 }
+                results.push((virtual_path.clone(), source.to_string(), module));
 
                 self.load_stack.pop();
                 return Ok(());
@@ -230,15 +230,15 @@ impl ModuleLoader {
         self.loaded.insert(canonical.clone());
         self.load_stack.push(canonical.clone());
 
-        // Collect imports from this module and recurse
+        // Collect imports from this module and recurse FIRST (post-order)
+        // so that dependency structs appear before the structs that use them.
         let imports = extract_imports(&module);
         let this_dir = canonical.parent().unwrap().to_path_buf();
-
-        results.push((canonical.clone(), source, module));
 
         for (segs, _span) in imports {
             self.load_recursive(&this_dir, &segs, results)?;
         }
+        results.push((canonical.clone(), source, module));
 
         self.load_stack.pop();
         Ok(())

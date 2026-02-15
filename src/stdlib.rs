@@ -15,7 +15,7 @@ pub fn is_stdlib_module(segments: &[String]) -> bool {
         return false;
     }
     match segments.len() {
-        2 => matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv" | "io" | "random" | "time" | "collections" | "math" | "fmt" | "process" | "sdl" | "gfx"),
+        2 => matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv" | "io" | "random" | "time" | "collections" | "math" | "fmt" | "process" | "sdl" | "gfx" | "ecs"),
         _ => false,
     }
 }
@@ -40,6 +40,7 @@ pub fn generate_stdlib_module(segments: &[String]) -> Option<Module> {
             "process" => Some(gen_process_module()),
             "sdl" => Some(gen_sdl_module()),
             "gfx" => None, // file-based module — loaded via stdlib_module_source()
+            "ecs" => None, // file-based module — loaded via stdlib_module_source()
             _ => None,
         },
         _ => None,
@@ -499,6 +500,7 @@ pub fn stdlib_module_source(segments: &[String]) -> Option<&'static str> {
     }
     match segments.get(1).map(|s| s.as_str()) {
         Some("gfx") => Some(include_str!("../lib/std/gfx.gg")),
+        Some("ecs") => Some(include_str!("../lib/std/ecs.gg")),
         _ => None,
     }
 }
@@ -592,6 +594,7 @@ mod tests {
         assert!(is_stdlib_module(&["std".into(), "fmt".into()]));
         assert!(is_stdlib_module(&["std".into(), "process".into()]));
         assert!(is_stdlib_module(&["std".into(), "sdl".into()]));
+        assert!(is_stdlib_module(&["std".into(), "ecs".into()]));
         assert!(!is_stdlib_module(&["std".into(), "test".into(), "process".into()]));
         assert!(!is_stdlib_module(&["std".into(), "foo".into()]));
         assert!(!is_stdlib_module(&["foo".into(), "fs".into()]));
@@ -738,6 +741,50 @@ mod tests {
         assert!(fn_names.contains(&"gfx_open".to_string()));
         assert!(fn_names.contains(&"gfx_draw_circle".to_string()));
         assert!(fn_names.contains(&"gfx_fill_circle".to_string()));
+    }
+
+    #[test]
+    fn is_stdlib_ecs() {
+        assert!(is_stdlib_module(&["std".into(), "ecs".into()]));
+    }
+
+    #[test]
+    fn generate_ecs_returns_none() {
+        // std.ecs is file-based, not synthetic — generate returns None
+        assert!(generate_stdlib_module(&["std".into(), "ecs".into()]).is_none());
+    }
+
+    #[test]
+    fn ecs_module_source_exists() {
+        let source = stdlib_module_source(&["std".into(), "ecs".into()]);
+        assert!(source.is_some());
+        let src = source.unwrap();
+        assert!(src.contains("struct EntityPool"));
+        assert!(src.contains("struct SparseSet"));
+        assert!(src.contains("equip EntityPool"));
+        assert!(src.contains("equip SparseSet"));
+    }
+
+    #[test]
+    fn ecs_source_parses() {
+        let source = stdlib_module_source(&["std".into(), "ecs".into()]).unwrap();
+        let mut parser = crate::parser::Parser::new(source);
+        let module = parser.parse_module();
+        assert!(parser.errors.is_empty(), "ecs.gg parse errors: {:?}", parser.errors);
+
+        let mut struct_names = vec![];
+        let mut equip_count = 0;
+        for item in &module.items {
+            match &item.node {
+                Item::Struct(s) => struct_names.push(s.name.node.clone()),
+                Item::Equip(_) => equip_count += 1,
+                _ => {}
+            }
+        }
+
+        assert!(struct_names.contains(&"EntityPool".to_string()));
+        assert!(struct_names.contains(&"SparseSet".to_string()));
+        assert_eq!(equip_count, 2);
     }
 
     #[test]

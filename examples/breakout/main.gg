@@ -1,0 +1,56 @@
+from std.gfx import Canvas, Color, gfx_open, gfx_close, gfx_clear, gfx_present, gfx_delay
+from std.sdl import sdl_poll_event, sdl_has_event, SDL_QUIT, SDL_KEYDOWN, SDL_KEYUP
+from std.sdl import SDLK_LEFT, SDLK_RIGHT, SDLK_ESCAPE
+from world import BreakoutWorld, new_world
+
+void main():
+    auto canvas = gfx_open("Gorget Breakout", 800, 600)
+    auto world = new_world()
+    world.spawn_paddle()
+    world.spawn_ball()
+    world.spawn_blocks()
+
+    bool key_left = false
+    bool key_right = false
+    auto black = Color(0, 0, 0, 255)
+
+    auto running = true
+    while running:
+        # Drain event queue
+        while sdl_has_event():
+            auto event = sdl_poll_event()
+            if event.event_type == SDL_QUIT:
+                running = false
+            if event.event_type == SDL_KEYDOWN:
+                if event.key_code == SDLK_LEFT:
+                    key_left = true
+                if event.key_code == SDLK_RIGHT:
+                    key_right = true
+                if event.key_code == SDLK_ESCAPE:
+                    running = false
+            if event.event_type == SDL_KEYUP:
+                if event.key_code == SDLK_LEFT:
+                    key_left = false
+                if event.key_code == SDLK_RIGHT:
+                    key_right = false
+
+        if world.is_over():
+            running = false
+
+        world.input_system(key_left, key_right)
+        world.physics_system()
+        world.collision_system()
+        world.check_win()
+
+        gfx_clear(canvas, black)
+        world.render_system(canvas)
+        gfx_present(canvas)
+        gfx_delay(16)
+
+    int score = world.get_score()
+    if world.won():
+        print("You win! Score: {score}")
+    else:
+        print("Game over! Score: {score}")
+
+    gfx_close(canvas)

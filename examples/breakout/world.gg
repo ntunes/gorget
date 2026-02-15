@@ -1,0 +1,192 @@
+from std.collections import Vector
+from std.ecs import EntityPool, SparseSet
+from std.gfx import Canvas, Color, gfx_fill_rect
+from components import Position, Size, Velocity
+
+struct BreakoutWorld:
+    EntityPool entities
+    SparseSet[Position] positions
+    SparseSet[Size] sizes
+    SparseSet[Velocity] velocities
+    SparseSet[Color] colors
+    SparseSet[bool] blocks
+    int paddle_id
+    int ball_id
+    int score
+    bool game_over
+    bool game_won
+
+Color row_color(int row):
+    if row == 0:
+        return Color(220, 50, 50, 255)
+    if row == 1:
+        return Color(240, 150, 50, 255)
+    if row == 2:
+        return Color(240, 220, 50, 255)
+    if row == 3:
+        return Color(50, 200, 80, 255)
+    return Color(50, 200, 220, 255)
+
+bool aabb_overlap(int x1, int y1, int w1, int h1, int x2, int y2, int w2, int h2):
+    if x1 + w1 <= x2:
+        return false
+    if x2 + w2 <= x1:
+        return false
+    if y1 + h1 <= y2:
+        return false
+    if y2 + h2 <= y1:
+        return false
+    return true
+
+equip BreakoutWorld:
+    void spawn_paddle(&self):
+        int id = self.entities.create()
+        self.paddle_id = id
+        self.positions.insert(id, Position(350, 560))
+        self.sizes.insert(id, Size(100, 15))
+        self.colors.insert(id, Color(255, 255, 255, 255))
+
+    void spawn_ball(&self):
+        int id = self.entities.create()
+        self.ball_id = id
+        self.positions.insert(id, Position(395, 540))
+        self.sizes.insert(id, Size(10, 10))
+        self.velocities.insert(id, Velocity(3, -4))
+        self.colors.insert(id, Color(255, 255, 255, 255))
+
+    void spawn_blocks(&self):
+        for row in 0..5:
+            Color color = row_color(row)
+            for col in 0..10:
+                int id = self.entities.create()
+                int x = 14 + col * 78
+                int y = 50 + row * 26
+                self.positions.insert(id, Position(x, y))
+                self.sizes.insert(id, Size(70, 20))
+                self.colors.insert(id, color)
+                self.blocks.insert(id, true)
+
+    void input_system(&self, bool key_left, bool key_right):
+        Position pos = self.positions.get(self.paddle_id)
+        Size size = self.sizes.get(self.paddle_id)
+        if key_left and pos.x > 0:
+            pos.x = pos.x - 8
+            if pos.x < 0:
+                pos.x = 0
+        if key_right and pos.x + size.w < 800:
+            pos.x = pos.x + 8
+            if pos.x + size.w > 800:
+                pos.x = 800 - size.w
+        self.positions.set(self.paddle_id, pos)
+
+    void physics_system(&self):
+        Position pos = self.positions.get(self.ball_id)
+        Size size = self.sizes.get(self.ball_id)
+        Velocity vel = self.velocities.get(self.ball_id)
+        pos.x = pos.x + vel.dx
+        pos.y = pos.y + vel.dy
+        # Left wall
+        if pos.x < 0:
+            pos.x = 0
+            vel.dx = 0 - vel.dx
+        # Right wall
+        if pos.x + size.w > 800:
+            pos.x = 800 - size.w
+            vel.dx = 0 - vel.dx
+        # Top wall
+        if pos.y < 0:
+            pos.y = 0
+            vel.dy = 0 - vel.dy
+        # Bottom — game over
+        if pos.y + size.h > 600:
+            self.game_over = true
+        self.positions.set(self.ball_id, pos)
+        self.velocities.set(self.ball_id, vel)
+
+    void collision_system(&self):
+        Position bpos = self.positions.get(self.ball_id)
+        Size bsize = self.sizes.get(self.ball_id)
+        Velocity vel = self.velocities.get(self.ball_id)
+        # Ball vs paddle
+        Position ppos = self.positions.get(self.paddle_id)
+        Size psize = self.sizes.get(self.paddle_id)
+        if aabb_overlap(bpos.x, bpos.y, bsize.w, bsize.h, ppos.x, ppos.y, psize.w, psize.h):
+            bpos.y = ppos.y - bsize.h
+            int ball_cx = bpos.x + bsize.w / 2
+            int paddle_cx = ppos.x + psize.w / 2
+            int offset = ball_cx - paddle_cx
+            vel.dx = offset / 10
+            if vel.dx == 0:
+                if offset >= 0:
+                    vel.dx = 1
+                else:
+                    vel.dx = 0 - 1
+            if vel.dy > 0:
+                vel.dy = 0 - vel.dy
+        # Ball vs blocks
+        bool bounced = false
+        for i in 0..self.blocks.len():
+            int eid = self.blocks.entity_at(i)
+            bool alive = self.blocks.data_at(i)
+            if alive:
+                Position bp = self.positions.get(eid)
+                Size bs = self.sizes.get(eid)
+                if aabb_overlap(bpos.x, bpos.y, bsize.w, bsize.h, bp.x, bp.y, bs.w, bs.h):
+                    self.blocks.set(eid, false)
+                    self.score = self.score + 10
+                    if bounced == false:
+                        vel.dy = 0 - vel.dy
+                        bounced = true
+        self.positions.set(self.ball_id, bpos)
+        self.velocities.set(self.ball_id, vel)
+
+    void render_system(self, Canvas canvas):
+        # Draw blocks
+        for i in 0..self.blocks.len():
+            int eid = self.blocks.entity_at(i)
+            bool alive = self.blocks.data_at(i)
+            if alive:
+                Position pos = self.positions.get(eid)
+                Size size = self.sizes.get(eid)
+                Color color = self.colors.get(eid)
+                gfx_fill_rect(canvas, pos.x, pos.y, size.w, size.h, color)
+        # Draw paddle
+        Position ppos = self.positions.get(self.paddle_id)
+        Size psize = self.sizes.get(self.paddle_id)
+        Color pcol = self.colors.get(self.paddle_id)
+        gfx_fill_rect(canvas, ppos.x, ppos.y, psize.w, psize.h, pcol)
+        # Draw ball
+        Position bpos = self.positions.get(self.ball_id)
+        Size bsize = self.sizes.get(self.ball_id)
+        Color bcol = self.colors.get(self.ball_id)
+        gfx_fill_rect(canvas, bpos.x, bpos.y, bsize.w, bsize.h, bcol)
+
+    int alive_count(self):
+        int n = 0
+        for i in 0..self.blocks.len():
+            bool alive = self.blocks.data_at(i)
+            if alive:
+                n = n + 1
+        return n
+
+    void check_win(&self):
+        if self.alive_count() == 0:
+            self.game_won = true
+
+    bool is_over(self):
+        return self.game_over or self.game_won
+
+    int get_score(self):
+        return self.score
+
+    bool won(self):
+        return self.game_won
+
+BreakoutWorld new_world():
+    EntityPool pool = EntityPool(0, Vector[int]())
+    SparseSet[Position] positions = SparseSet[Position](Vector[int](), Vector[int](), Vector[Position](), 0)
+    SparseSet[Size] sizes = SparseSet[Size](Vector[int](), Vector[int](), Vector[Size](), 0)
+    SparseSet[Velocity] velocities = SparseSet[Velocity](Vector[int](), Vector[int](), Vector[Velocity](), 0)
+    SparseSet[Color] colors = SparseSet[Color](Vector[int](), Vector[int](), Vector[Color](), 0)
+    SparseSet[bool] blocks = SparseSet[bool](Vector[int](), Vector[int](), Vector[bool](), 0)
+    return BreakoutWorld(pool, positions, sizes, velocities, colors, blocks, 0, 0, 0, false, false)
