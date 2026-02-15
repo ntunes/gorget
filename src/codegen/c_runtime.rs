@@ -1672,3 +1672,463 @@ static inline ExecResult gorget_exec_output(const char* cmd) {
     return result;
 }
 "#;
+
+/// Vendored cJSON header (MIT license).
+pub const CJSON_H: &str = include_str!("../../vendor/cJSON/cJSON.h");
+
+/// Vendored cJSON implementation (MIT license).
+pub const CJSON_C: &str = include_str!("../../vendor/cJSON/cJSON.c");
+
+/// C runtime for std.json — JSON parsing/creation via cJSON.
+pub const JSON_RUNTIME: &str = r#"
+// ── std.json runtime ─────────────────────────────────────────
+
+// Opaque wrapper around cJSON*
+typedef struct { cJSON* ptr; } GorgetJsonValue;
+
+// Thread-local error string for json_parse / json_stringify
+static __thread const char* __gorget_json_error = NULL;
+
+static inline const char* gorget_json_last_error(void) {
+    const char* e = __gorget_json_error;
+    __gorget_json_error = NULL;
+    return e;
+}
+
+// ── Free functions ───────────────────────────────────────────
+
+static inline GorgetJsonValue gorget_json_parse(const char* s) {
+    cJSON* root = cJSON_Parse(s);
+    if (!root) {
+        const char* err = cJSON_GetErrorPtr();
+        if (err) {
+            size_t len = strlen(err);
+            if (len > 80) len = 80;
+            char* msg = (char*)malloc(len + 32);
+            snprintf(msg, len + 32, "JSON parse error near: %.80s", err);
+            __gorget_json_error = msg;
+        } else {
+            __gorget_json_error = "JSON parse error";
+        }
+        return (GorgetJsonValue){NULL};
+    }
+    return (GorgetJsonValue){root};
+}
+
+static inline const char* gorget_json_stringify(GorgetJsonValue val) {
+    if (!val.ptr) {
+        __gorget_json_error = "cannot stringify null JsonValue";
+        return NULL;
+    }
+    char* s = cJSON_PrintUnformatted(val.ptr);
+    if (!s) {
+        __gorget_json_error = "JSON stringify failed";
+        return NULL;
+    }
+    // cJSON uses malloc, so the string is already heap-allocated
+    return s;
+}
+
+static inline GorgetJsonValue gorget_json_object(void) {
+    return (GorgetJsonValue){cJSON_CreateObject()};
+}
+
+static inline GorgetJsonValue gorget_json_array(void) {
+    return (GorgetJsonValue){cJSON_CreateArray()};
+}
+
+static inline GorgetJsonValue gorget_json_string(const char* s) {
+    return (GorgetJsonValue){cJSON_CreateString(s)};
+}
+
+static inline GorgetJsonValue gorget_json_number(int64_t n) {
+    return (GorgetJsonValue){cJSON_CreateNumber((double)n)};
+}
+
+static inline GorgetJsonValue gorget_json_float(double x) {
+    return (GorgetJsonValue){cJSON_CreateNumber(x)};
+}
+
+static inline GorgetJsonValue gorget_json_bool(bool b) {
+    return (GorgetJsonValue){cJSON_CreateBool(b)};
+}
+
+static inline GorgetJsonValue gorget_json_null(void) {
+    return (GorgetJsonValue){cJSON_CreateNull()};
+}
+
+// ── Method functions ─────────────────────────────────────────
+
+static inline GorgetJsonValue gorget_json_get(GorgetJsonValue val, const char* key) {
+    if (!val.ptr || !cJSON_IsObject(val.ptr)) return (GorgetJsonValue){NULL};
+    cJSON* item = cJSON_GetObjectItemCaseSensitive(val.ptr, key);
+    return (GorgetJsonValue){item}; // NULL if missing — null sentinel
+}
+
+static inline GorgetJsonValue gorget_json_at(GorgetJsonValue val, int64_t index) {
+    if (!val.ptr || !cJSON_IsArray(val.ptr)) return (GorgetJsonValue){NULL};
+    int size = cJSON_GetArraySize(val.ptr);
+    if (index < 0 || index >= size) return (GorgetJsonValue){NULL};
+    cJSON* item = cJSON_GetArrayItem(val.ptr, (int)index);
+    return (GorgetJsonValue){item};
+}
+
+static inline const char* gorget_json_as_string(GorgetJsonValue val) {
+    if (!val.ptr || !cJSON_IsString(val.ptr)) return "";
+    const char* s = cJSON_GetStringValue(val.ptr);
+    return s ? s : "";
+}
+
+static inline int64_t gorget_json_as_int(GorgetJsonValue val) {
+    if (!val.ptr || !cJSON_IsNumber(val.ptr)) return 0;
+    return (int64_t)val.ptr->valuedouble;
+}
+
+static inline double gorget_json_as_float(GorgetJsonValue val) {
+    if (!val.ptr || !cJSON_IsNumber(val.ptr)) return 0.0;
+    return val.ptr->valuedouble;
+}
+
+static inline bool gorget_json_as_bool(GorgetJsonValue val) {
+    if (!val.ptr) return false;
+    if (cJSON_IsBool(val.ptr)) return cJSON_IsTrue(val.ptr);
+    return false;
+}
+
+static inline bool gorget_json_is_null(GorgetJsonValue val) {
+    return !val.ptr || cJSON_IsNull(val.ptr);
+}
+
+static inline bool gorget_json_is_object(GorgetJsonValue val) {
+    return val.ptr && cJSON_IsObject(val.ptr);
+}
+
+static inline bool gorget_json_is_array(GorgetJsonValue val) {
+    return val.ptr && cJSON_IsArray(val.ptr);
+}
+
+static inline bool gorget_json_is_string(GorgetJsonValue val) {
+    return val.ptr && cJSON_IsString(val.ptr);
+}
+
+static inline bool gorget_json_is_number(GorgetJsonValue val) {
+    return val.ptr && cJSON_IsNumber(val.ptr);
+}
+
+static inline bool gorget_json_is_bool(GorgetJsonValue val) {
+    return val.ptr && cJSON_IsBool(val.ptr);
+}
+
+static inline int64_t gorget_json_len(GorgetJsonValue val) {
+    if (!val.ptr || !cJSON_IsArray(val.ptr)) return 0;
+    return (int64_t)cJSON_GetArraySize(val.ptr);
+}
+
+static inline void gorget_json_set(GorgetJsonValue obj, const char* key, GorgetJsonValue val) {
+    if (!obj.ptr || !cJSON_IsObject(obj.ptr) || !val.ptr) return;
+    // If key exists, replace; otherwise add
+    if (cJSON_HasObjectItem(obj.ptr, key)) {
+        cJSON_ReplaceItemInObjectCaseSensitive(obj.ptr, key, cJSON_Duplicate(val.ptr, 1));
+    } else {
+        cJSON_AddItemToObject(obj.ptr, key, cJSON_Duplicate(val.ptr, 1));
+    }
+}
+
+static inline void gorget_json_push(GorgetJsonValue arr, GorgetJsonValue val) {
+    if (!arr.ptr || !cJSON_IsArray(arr.ptr) || !val.ptr) return;
+    cJSON_AddItemToArray(arr.ptr, cJSON_Duplicate(val.ptr, 1));
+}
+
+"#;
+
+/// C runtime for std.http.client — HTTP requests via libcurl.
+pub const HTTP_RUNTIME: &str = r#"
+// ── std.http.client runtime ──────────────────────────────────
+#include <curl/curl.h>
+
+// Response struct
+typedef struct {
+    int64_t status_code;
+    char* body;
+    size_t body_len;
+    char* headers_raw;
+    size_t headers_len;
+} GorgetHttpResponse;
+
+// Client struct
+typedef struct {
+    char* base_url;
+    GorgetMap default_headers;  // key_size=sizeof(char*), val_size=sizeof(char*)
+    int64_t timeout_ms;
+} GorgetHttpClient;
+
+// curl global init (lazy, once)
+static int __gorget_curl_initialized = 0;
+static inline void __gorget_curl_ensure_init(void) {
+    if (!__gorget_curl_initialized) {
+        curl_global_init(CURL_GLOBAL_DEFAULT);
+        __gorget_curl_initialized = 1;
+    }
+}
+
+// Write callback for response body
+static size_t __gorget_curl_write_cb(void* data, size_t size, size_t nmemb, void* userp) {
+    size_t total = size * nmemb;
+    char** buf = (char**)userp;
+    size_t old_len = *buf ? strlen(*buf) : 0;
+    *buf = (char*)realloc(*buf, old_len + total + 1);
+    memcpy(*buf + old_len, data, total);
+    (*buf)[old_len + total] = '\0';
+    return total;
+}
+
+// Write callback for response headers
+static size_t __gorget_curl_header_cb(void* data, size_t size, size_t nmemb, void* userp) {
+    size_t total = size * nmemb;
+    char** buf = (char**)userp;
+    size_t old_len = *buf ? strlen(*buf) : 0;
+    *buf = (char*)realloc(*buf, old_len + total + 1);
+    memcpy(*buf + old_len, data, total);
+    (*buf)[old_len + total] = '\0';
+    return total;
+}
+
+// Thread-local error for HTTP functions
+static __thread const char* __gorget_http_error = NULL;
+
+static inline const char* gorget_http_last_error(void) {
+    const char* e = __gorget_http_error;
+    __gorget_http_error = NULL;
+    return e;
+}
+
+// Core HTTP request function
+static inline GorgetHttpResponse gorget_http_request(
+    const char* method,
+    const char* url,
+    const char* body,
+    const GorgetMap* headers,
+    int64_t timeout_ms
+) {
+    __gorget_curl_ensure_init();
+    GorgetHttpResponse resp = {0, NULL, 0, NULL, 0};
+
+    CURL* curl = curl_easy_init();
+    if (!curl) {
+        __gorget_http_error = "failed to initialize curl";
+        return resp;
+    }
+
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, __gorget_curl_write_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &resp.body);
+    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, __gorget_curl_header_cb);
+    curl_easy_setopt(curl, CURLOPT_HEADERDATA, &resp.headers_raw);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+
+    if (timeout_ms > 0) {
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, (long)timeout_ms);
+    }
+
+    // Set method
+    if (strcmp(method, "POST") == 0) {
+        curl_easy_setopt(curl, CURLOPT_POST, 1L);
+    } else if (strcmp(method, "PUT") == 0) {
+        curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "PUT");
+    } else if (strcmp(method, "DELETE") == 0) {
+        curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "DELETE");
+    } else if (strcmp(method, "PATCH") == 0) {
+        curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "PATCH");
+    } else if (strcmp(method, "HEAD") == 0) {
+        curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
+    }
+
+    // Set body
+    if (body && body[0] != '\0') {
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
+    } else if (strcmp(method, "POST") == 0) {
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, "");
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, 0L);
+    }
+
+    // Set headers
+    struct curl_slist* header_list = NULL;
+    if (headers && headers->count > 0) {
+        for (size_t i = 0; i < headers->cap; i++) {
+            if (headers->states[i] == 1) {
+                const char* key = *(const char**)((char*)headers->keys + i * headers->key_size);
+                const char* val = *(const char**)((char*)headers->values + i * headers->val_size);
+                size_t hlen = strlen(key) + 2 + strlen(val) + 1;
+                char* header = (char*)malloc(hlen);
+                snprintf(header, hlen, "%s: %s", key, val);
+                header_list = curl_slist_append(header_list, header);
+                free(header);
+            }
+        }
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, header_list);
+    }
+
+    CURLcode res = curl_easy_perform(curl);
+    if (res != CURLE_OK) {
+        char* msg = (char*)malloc(256);
+        snprintf(msg, 256, "HTTP request failed: %s", curl_easy_strerror(res));
+        __gorget_http_error = msg;
+        curl_slist_free_all(header_list);
+        curl_easy_cleanup(curl);
+        return resp;
+    }
+
+    long status;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+    resp.status_code = (int64_t)status;
+    resp.body_len = resp.body ? strlen(resp.body) : 0;
+    resp.headers_len = resp.headers_raw ? strlen(resp.headers_raw) : 0;
+
+    curl_slist_free_all(header_list);
+    curl_easy_cleanup(curl);
+    return resp;
+}
+
+// ── Free functions (HTTP verbs) ──────────────────────────────
+
+static inline GorgetHttpResponse gorget_http_get(const char* url, const char* body, int64_t timeout) {
+    return gorget_http_request("GET", url, body, NULL, timeout);
+}
+static inline GorgetHttpResponse gorget_http_post(const char* url, const char* body, int64_t timeout) {
+    return gorget_http_request("POST", url, body, NULL, timeout);
+}
+static inline GorgetHttpResponse gorget_http_put(const char* url, const char* body, int64_t timeout) {
+    return gorget_http_request("PUT", url, body, NULL, timeout);
+}
+static inline GorgetHttpResponse gorget_http_delete(const char* url, const char* body, int64_t timeout) {
+    return gorget_http_request("DELETE", url, body, NULL, timeout);
+}
+static inline GorgetHttpResponse gorget_http_patch(const char* url, const char* body, int64_t timeout) {
+    return gorget_http_request("PATCH", url, body, NULL, timeout);
+}
+static inline GorgetHttpResponse gorget_http_head(const char* url, const char* body, const GorgetMap* headers, int64_t timeout) {
+    return gorget_http_request("HEAD", url, body, headers, timeout);
+}
+
+// ── Response methods ─────────────────────────────────────────
+
+static inline int64_t gorget_http_response_status(const GorgetHttpResponse* r) {
+    return r->status_code;
+}
+
+static inline const char* gorget_http_response_body(const GorgetHttpResponse* r) {
+    return r->body ? r->body : "";
+}
+
+static inline const char* gorget_http_response_header(const GorgetHttpResponse* r, const char* key) {
+    if (!r->headers_raw) return "";
+    // Search raw headers for "Key: Value\r\n"
+    size_t key_len = strlen(key);
+    const char* p = r->headers_raw;
+    while (*p) {
+        // Case-insensitive header name match
+        if (strncasecmp(p, key, key_len) == 0 && p[key_len] == ':') {
+            const char* val = p + key_len + 1;
+            while (*val == ' ') val++;
+            // Find end of line
+            const char* end = val;
+            while (*end && *end != '\r' && *end != '\n') end++;
+            size_t vlen = (size_t)(end - val);
+            char* result = (char*)malloc(vlen + 1);
+            memcpy(result, val, vlen);
+            result[vlen] = '\0';
+            return result;
+        }
+        // Skip to next line
+        while (*p && *p != '\n') p++;
+        if (*p) p++;
+    }
+    return "";
+}
+
+static inline GorgetJsonValue gorget_http_response_json(const GorgetHttpResponse* r) {
+    const char* body = r->body ? r->body : "";
+    return gorget_json_parse(body);
+}
+
+// ── Client ───────────────────────────────────────────────────
+
+static inline GorgetHttpClient gorget_http_client_new(void) {
+    GorgetHttpClient c;
+    c.base_url = NULL;
+    c.default_headers = gorget_map_new(sizeof(const char*), sizeof(const char*));
+    c.timeout_ms = 0;
+    return c;
+}
+
+static inline void gorget_http_client_set_base_url(GorgetHttpClient* c, const char* url) {
+    free(c->base_url);
+    c->base_url = (char*)malloc(strlen(url) + 1);
+    strcpy(c->base_url, url);
+}
+
+static inline void gorget_http_client_set_header(GorgetHttpClient* c, const char* key, const char* val) {
+    gorget_map_put(&c->default_headers, &key, &val);
+}
+
+static inline void gorget_http_client_set_timeout(GorgetHttpClient* c, int64_t ms) {
+    c->timeout_ms = ms;
+}
+
+// Build full URL from client base_url + path
+static inline const char* __gorget_http_client_url(const GorgetHttpClient* c, const char* path) {
+    if (!c->base_url || c->base_url[0] == '\0') return path;
+    size_t blen = strlen(c->base_url);
+    size_t plen = strlen(path);
+    // Strip trailing slash from base, leading slash from path
+    while (blen > 0 && c->base_url[blen - 1] == '/') blen--;
+    while (plen > 0 && path[0] == '/') { path++; plen--; }
+    char* url = (char*)malloc(blen + 1 + plen + 1);
+    memcpy(url, c->base_url, blen);
+    url[blen] = '/';
+    memcpy(url + blen + 1, path, plen);
+    url[blen + 1 + plen] = '\0';
+    return url;
+}
+
+// Merge client default headers with per-request headers
+static inline GorgetMap __gorget_http_client_merge_headers(const GorgetHttpClient* c, const GorgetMap* req_headers) {
+    GorgetMap merged = gorget_map_new(sizeof(const char*), sizeof(const char*));
+    // Copy default headers
+    for (size_t i = 0; i < c->default_headers.cap; i++) {
+        if (c->default_headers.states[i] == 1) {
+            const void* k = (const char*)c->default_headers.keys + i * c->default_headers.key_size;
+            const void* v = (const char*)c->default_headers.values + i * c->default_headers.val_size;
+            gorget_map_put(&merged, k, v);
+        }
+    }
+    // Override with request headers
+    if (req_headers) {
+        for (size_t i = 0; i < req_headers->cap; i++) {
+            if (req_headers->states[i] == 1) {
+                const void* k = (const char*)req_headers->keys + i * req_headers->key_size;
+                const void* v = (const char*)req_headers->values + i * req_headers->val_size;
+                gorget_map_put(&merged, k, v);
+            }
+        }
+    }
+    return merged;
+}
+
+static inline GorgetHttpResponse gorget_http_client_request(
+    const GorgetHttpClient* c,
+    const char* method,
+    const char* path,
+    const char* body,
+    const GorgetMap* headers,
+    int64_t timeout
+) {
+    const char* url = __gorget_http_client_url(c, path);
+    int64_t t = timeout > 0 ? timeout : c->timeout_ms;
+    GorgetMap merged = __gorget_http_client_merge_headers(c, headers);
+    GorgetHttpResponse resp = gorget_http_request(method, url, body, &merged, t);
+    gorget_map_free(&merged);
+    return resp;
+}
+
+"#;

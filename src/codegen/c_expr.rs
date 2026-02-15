@@ -1043,6 +1043,75 @@ impl CodegenContext<'_> {
                     // std.sdl — screen info
                     "sdl_get_display_width" => return "gorget_sdl_get_display_width()".to_string(),
                     "sdl_get_display_height" => return "gorget_sdl_get_display_height()".to_string(),
+                    // std.json
+                    "json_parse" => {
+                        if let Some(arg) = args.first() {
+                            let s = self.gen_expr(&arg.node.value);
+                            let result_type = c_mangle::mangle_generic("Result", &["GorgetJsonValue".into(), "const char*".into()]);
+                            let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
+                            let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
+                            return format!(
+                                "({{ GorgetJsonValue __jv = gorget_json_parse({s}); \
+                                const char* __je = gorget_json_last_error(); \
+                                __je ? {err_ctor}(__je) : {ok_ctor}(__jv); }})"
+                            );
+                        }
+                    }
+                    "json_stringify" => {
+                        if let Some(arg) = args.first() {
+                            let v = self.gen_expr(&arg.node.value);
+                            let result_type = c_mangle::mangle_generic("Result", &["const char*".into(), "const char*".into()]);
+                            let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
+                            let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
+                            return format!(
+                                "({{ const char* __js = gorget_json_stringify({v}); \
+                                const char* __je = gorget_json_last_error(); \
+                                __je ? {err_ctor}(__je) : {ok_ctor}(__js); }})"
+                            );
+                        }
+                    }
+                    "json_object" => return "gorget_json_object()".to_string(),
+                    "json_array" => return "gorget_json_array()".to_string(),
+                    "json_string" => {
+                        if let Some(arg) = args.first() {
+                            let s = self.gen_expr(&arg.node.value);
+                            return format!("gorget_json_string({s})");
+                        }
+                    }
+                    "json_number" => {
+                        if let Some(arg) = args.first() {
+                            let n = self.gen_expr(&arg.node.value);
+                            return format!("gorget_json_number({n})");
+                        }
+                    }
+                    "json_float" => {
+                        if let Some(arg) = args.first() {
+                            let x = self.gen_expr(&arg.node.value);
+                            return format!("gorget_json_float({x})");
+                        }
+                    }
+                    "json_bool" => {
+                        if let Some(arg) = args.first() {
+                            let b = self.gen_expr(&arg.node.value);
+                            return format!("gorget_json_bool({b})");
+                        }
+                    }
+                    "json_null" => return "gorget_json_null()".to_string(),
+                    // std.http.client
+                    "get" | "post" | "put" | "delete" | "patch" | "head" => {
+                        let method = name.as_str();
+                        let url = if let Some(a) = args.first() { self.gen_expr(&a.node.value) } else { "\"\"".into() };
+                        let body = if args.len() > 1 { self.gen_expr(&args[1].node.value) } else { "\"\"".into() };
+                        let timeout = if args.len() > 2 { self.gen_expr(&args[2].node.value) } else { "0".into() };
+                        let result_type = c_mangle::mangle_generic("Result", &["GorgetHttpResponse".into(), "const char*".into()]);
+                        let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
+                        let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
+                        return format!(
+                            "({{ GorgetHttpResponse __hr = gorget_http_{method}({url}, {body}, {timeout}); \
+                            const char* __he = gorget_http_last_error(); \
+                            __he ? {err_ctor}(__he) : {ok_ctor}(__hr); }})"
+                        );
+                    }
                     _ => {}
                 }
             }
@@ -1055,6 +1124,16 @@ impl CodegenContext<'_> {
                     return format!(
                         "({{ {inner_type}* __box_tmp = ({inner_type}*)malloc(sizeof({inner_type})); *__box_tmp = {inner}; __box_tmp; }})"
                     );
+                }
+            }
+
+            // Client() constructor → gorget_http_client_new()
+            if name == "Client" && args.is_empty() {
+                if let Some(did) = self.scopes.lookup("Client") {
+                    let def = self.scopes.get_def(did);
+                    if def.kind == DefKind::Struct && def.span == crate::span::Span::dummy() {
+                        return "gorget_http_client_new()".to_string();
+                    }
                 }
             }
 
@@ -1393,8 +1472,12 @@ impl CodegenContext<'_> {
         let is_result = type_name == "Result";
         let is_box = type_name == "Box";
         let is_file = type_name == "File" || c_type.as_deref() == Some("GorgetFile");
+        let is_json = type_name == "JsonValue" || c_type.as_deref() == Some("GorgetJsonValue");
+        let is_http_response = type_name == "Response" || c_type.as_deref() == Some("GorgetHttpResponse");
+        let is_http_client = type_name == "Client" || c_type.as_deref() == Some("GorgetHttpClient");
         let is_iterator = !is_vector && !is_map && !is_set && !is_string
             && !is_option && !is_result && !is_box && !is_file
+            && !is_json && !is_http_response && !is_http_client
             && matches!(method_name, "collect" | "filter" | "map" | "fold")
             && self.traits.impls.iter().any(|i|
                 i.self_type_name == type_name && i.trait_name.as_deref() == Some("Iterator")
@@ -1414,7 +1497,7 @@ impl CodegenContext<'_> {
                 "bool" | "char32_t"
             ));
 
-        if !is_vector && !is_map && !is_set && !is_string && !is_option && !is_result && !is_box && !is_file && !is_iterator && !is_primitive_hashable && !is_char {
+        if !is_vector && !is_map && !is_set && !is_string && !is_option && !is_result && !is_box && !is_file && !is_json && !is_http_response && !is_http_client && !is_iterator && !is_primitive_hashable && !is_char {
             return None;
         }
 
@@ -1471,6 +1554,15 @@ impl CodegenContext<'_> {
         }
         if is_file {
             return Some(self.gen_file_method(&recv, method_name, args, needs_temp));
+        }
+        if is_json {
+            return Some(self.gen_json_method(&recv, method_name, args, needs_temp));
+        }
+        if is_http_response {
+            return Some(self.gen_http_response_method(&recv, method_name, args, needs_temp));
+        }
+        if is_http_client {
+            return Some(self.gen_http_client_method(&recv, method_name, args, needs_temp));
         }
 
         None
@@ -2664,6 +2756,157 @@ impl CodegenContext<'_> {
         }
     }
 
+    /// Generate code for a method call on a JsonValue receiver.
+    fn gen_json_method(
+        &mut self,
+        recv: &str,
+        method_name: &str,
+        args: &[Spanned<crate::parser::ast::CallArg>],
+        _needs_temp: bool,
+    ) -> String {
+        match method_name {
+            "get" => {
+                if let Some(arg) = args.first() {
+                    let key = self.gen_expr(&arg.node.value);
+                    format!("gorget_json_get({recv}, {key})")
+                } else {
+                    "/* json.get() missing arg */".into()
+                }
+            }
+            "at" => {
+                if let Some(arg) = args.first() {
+                    let idx = self.gen_expr(&arg.node.value);
+                    format!("gorget_json_at({recv}, {idx})")
+                } else {
+                    "/* json.at() missing arg */".into()
+                }
+            }
+            "as_string" => format!("gorget_json_as_string({recv})"),
+            "as_int" => format!("gorget_json_as_int({recv})"),
+            "as_float" => format!("gorget_json_as_float({recv})"),
+            "as_bool" => format!("gorget_json_as_bool({recv})"),
+            "is_null" => format!("gorget_json_is_null({recv})"),
+            "is_object" => format!("gorget_json_is_object({recv})"),
+            "is_array" => format!("gorget_json_is_array({recv})"),
+            "is_string" => format!("gorget_json_is_string({recv})"),
+            "is_number" => format!("gorget_json_is_number({recv})"),
+            "is_bool" => format!("gorget_json_is_bool({recv})"),
+            "len" => format!("gorget_json_len({recv})"),
+            "set" => {
+                if args.len() >= 2 {
+                    let key = self.gen_expr(&args[0].node.value);
+                    let val = self.gen_expr(&args[1].node.value);
+                    format!("gorget_json_set({recv}, {key}, {val})")
+                } else {
+                    "/* json.set() missing args */".into()
+                }
+            }
+            "push" => {
+                if let Some(arg) = args.first() {
+                    let val = self.gen_expr(&arg.node.value);
+                    format!("gorget_json_push({recv}, {val})")
+                } else {
+                    "/* json.push() missing arg */".into()
+                }
+            }
+            _ => format!("/* unknown JsonValue method: {method_name} */"),
+        }
+    }
+
+    /// Generate code for a method call on an HTTP Response receiver.
+    fn gen_http_response_method(
+        &mut self,
+        recv: &str,
+        method_name: &str,
+        args: &[Spanned<crate::parser::ast::CallArg>],
+        needs_temp: bool,
+    ) -> String {
+        let recv_ref = if needs_temp {
+            format!("({{ __typeof__({recv}) __tmp = {recv}; &__tmp; }})")
+        } else {
+            format!("&{recv}")
+        };
+        match method_name {
+            "status" => format!("gorget_http_response_status({recv_ref})"),
+            "body" => format!("gorget_http_response_body({recv_ref})"),
+            "header" => {
+                if let Some(arg) = args.first() {
+                    let key = self.gen_expr(&arg.node.value);
+                    format!("gorget_http_response_header({recv_ref}, {key})")
+                } else {
+                    "/* response.header() missing arg */".into()
+                }
+            }
+            "json" => {
+                let result_type = c_mangle::mangle_generic("Result", &["GorgetJsonValue".into(), "const char*".into()]);
+                let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
+                let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
+                format!(
+                    "({{ GorgetJsonValue __jv = gorget_http_response_json({recv_ref}); \
+                    const char* __je = gorget_json_last_error(); \
+                    __je ? {err_ctor}(__je) : {ok_ctor}(__jv); }})"
+                )
+            }
+            _ => format!("/* unknown Response method: {method_name} */"),
+        }
+    }
+
+    /// Generate code for a method call on an HTTP Client receiver.
+    fn gen_http_client_method(
+        &mut self,
+        recv: &str,
+        method_name: &str,
+        args: &[Spanned<crate::parser::ast::CallArg>],
+        needs_temp: bool,
+    ) -> String {
+        let recv_ref = if needs_temp {
+            format!("({{ __typeof__({recv}) __tmp = {recv}; &__tmp; }})")
+        } else {
+            format!("&{recv}")
+        };
+        match method_name {
+            "base_url" => {
+                if let Some(arg) = args.first() {
+                    let url = self.gen_expr(&arg.node.value);
+                    format!("gorget_http_client_set_base_url({recv_ref}, {url})")
+                } else {
+                    "/* client.base_url() missing arg */".into()
+                }
+            }
+            "header" => {
+                if args.len() >= 2 {
+                    let k = self.gen_expr(&args[0].node.value);
+                    let v = self.gen_expr(&args[1].node.value);
+                    format!("gorget_http_client_set_header({recv_ref}, {k}, {v})")
+                } else {
+                    "/* client.header() missing args */".into()
+                }
+            }
+            "timeout" => {
+                if let Some(arg) = args.first() {
+                    let ms = self.gen_expr(&arg.node.value);
+                    format!("gorget_http_client_set_timeout({recv_ref}, {ms})")
+                } else {
+                    "/* client.timeout() missing arg */".into()
+                }
+            }
+            "get" | "post" | "put" | "delete" | "patch" | "head" => {
+                let method = method_name;
+                let path = if let Some(a) = args.first() { self.gen_expr(&a.node.value) } else { "\"\"".into() };
+                let body = if args.len() > 1 { self.gen_expr(&args[1].node.value) } else { "\"\"".into() };
+                let result_type = c_mangle::mangle_generic("Result", &["GorgetHttpResponse".into(), "const char*".into()]);
+                let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
+                let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
+                format!(
+                    "({{ GorgetHttpResponse __hr = gorget_http_client_request({recv_ref}, \"{method}\", {path}, {body}); \
+                    const char* __he = gorget_http_last_error(); \
+                    __he ? {err_ctor}(__he) : {ok_ctor}(__hr); }})"
+                )
+            }
+            _ => format!("/* unknown Client method: {method_name} */"),
+        }
+    }
+
     /// Infer the inner C type for a Box allocation.
     /// Uses `decl_type_hint` to extract T from `Box[T]`, falling back to the argument's inferred type.
     fn box_inner_c_type(&mut self, arg_expr: &Spanned<Expr>) -> String {
@@ -3191,6 +3434,32 @@ impl CodegenContext<'_> {
                 let recv_type = self.infer_receiver_type(receiver);
                 if recv_type == "Unknown" {
                     return "Unknown".to_string();
+                }
+                // Builtin method return types for stdlib types
+                if recv_type == "JsonValue" {
+                    return match method.node.as_str() {
+                        "get" | "at" => "JsonValue",
+                        "as_string" => "str",
+                        "as_int" | "len" => "int",
+                        "as_float" => "float",
+                        "as_bool" | "is_null" | "is_object" | "is_array"
+                        | "is_string" | "is_number" | "is_bool" => "bool",
+                        _ => "Unknown",
+                    }.to_string();
+                }
+                if recv_type == "Response" {
+                    return match method.node.as_str() {
+                        "status" => "int",
+                        "body" | "header" => "str",
+                        "json" => "Result",
+                        _ => "Unknown",
+                    }.to_string();
+                }
+                if recv_type == "Client" {
+                    return match method.node.as_str() {
+                        "get" | "post" | "put" | "delete" | "patch" | "head" => "Result",
+                        _ => "Unknown",
+                    }.to_string();
                 }
                 // Look up method return type in trait registry (inherent + trait impls)
                 for impl_info in &self.traits.impls {

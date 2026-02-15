@@ -6,6 +6,7 @@
 ///
 /// All synthetic defs use `Span::dummy()`, which distinguishes them from
 /// user-defined code and enables the `is_stdlib_call()` guard in codegen.
+use crate::lexer::token::{StringKind, StringLit};
 use crate::parser::ast::*;
 use crate::span::{Span, Spanned};
 
@@ -15,7 +16,8 @@ pub fn is_stdlib_module(segments: &[String]) -> bool {
         return false;
     }
     match segments.len() {
-        2 => matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv" | "io" | "random" | "time" | "collections" | "math" | "fmt" | "process" | "sdl" | "gfx" | "ecs"),
+        2 => matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv" | "io" | "random" | "time" | "collections" | "math" | "fmt" | "process" | "sdl" | "gfx" | "ecs" | "json"),
+        3 => segments[1] == "http" && segments[2] == "client",
         _ => false,
     }
 }
@@ -39,10 +41,12 @@ pub fn generate_stdlib_module(segments: &[String]) -> Option<Module> {
             "fmt" => Some(gen_fmt_module()),
             "process" => Some(gen_process_module()),
             "sdl" => Some(gen_sdl_module()),
+            "json" => Some(gen_json_module()),
             "gfx" => None, // file-based module — loaded via stdlib_module_source()
             "ecs" => None, // file-based module — loaded via stdlib_module_source()
             _ => None,
         },
+        3 if segments[1] == "http" && segments[2] == "client" => Some(gen_http_client_module()),
         _ => None,
     }
 }
@@ -577,6 +581,131 @@ fn ty_vector_str() -> Type {
     }
 }
 
+fn ty_json_value() -> Type {
+    Type::Named {
+        name: Spanned::dummy("JsonValue".to_string()),
+        generic_args: vec![],
+    }
+}
+
+fn ty_result(ok: Type, err: Type) -> Type {
+    Type::Named {
+        name: Spanned::dummy("Result".to_string()),
+        generic_args: vec![Spanned::dummy(ok), Spanned::dummy(err)],
+    }
+}
+
+fn ty_response() -> Type {
+    Type::Named {
+        name: Spanned::dummy("Response".to_string()),
+        generic_args: vec![],
+    }
+}
+
+
+fn opaque_struct(name: &str) -> Spanned<Item> {
+    Spanned::dummy(Item::Struct(StructDef {
+        attributes: vec![],
+        visibility: Visibility::Public,
+        name: Spanned::dummy(name.to_string()),
+        generic_params: None,
+        fields: vec![],
+        doc_comment: None,
+        span: Span::dummy(),
+    }))
+}
+
+fn decl_fn_with_defaults(
+    name: &str,
+    params: &[(&str, Type, Option<Expr>)],
+    ret: Type,
+) -> FunctionDef {
+    FunctionDef {
+        attributes: Vec::new(),
+        visibility: Visibility::Public,
+        qualifiers: FunctionQualifiers::default(),
+        return_type: Spanned::dummy(ret),
+        name: Spanned::dummy(name.to_string()),
+        generic_params: None,
+        params: params
+            .iter()
+            .map(|(pname, pty, default)| {
+                Spanned::dummy(Param {
+                    type_: Spanned::dummy(pty.clone()),
+                    ownership: Ownership::Borrow,
+                    name: Spanned::dummy(pname.to_string()),
+                    default: default.as_ref().map(|d| Spanned::dummy(d.clone())),
+                    is_live: false,
+                })
+            })
+            .collect(),
+        throws: None,
+        where_clause: None,
+        body: FunctionBody::Declaration,
+        doc_comment: None,
+        span: Span::dummy(),
+    }
+}
+
+// ─── std.json ───────────────────────────────────────────────
+
+fn gen_json_module() -> Module {
+    let mut items: Vec<Spanned<Item>> = Vec::new();
+
+    // Opaque struct: JsonValue
+    items.push(opaque_struct("JsonValue"));
+
+    // Free functions
+    let fns = vec![
+        decl_fn("json_parse", &[("s", ty_str())], ty_result(ty_json_value(), ty_str())),
+        decl_fn("json_stringify", &[("val", ty_json_value())], ty_result(ty_str(), ty_str())),
+        decl_fn("json_object", &[], ty_json_value()),
+        decl_fn("json_array", &[], ty_json_value()),
+        decl_fn("json_string", &[("s", ty_str())], ty_json_value()),
+        decl_fn("json_number", &[("n", ty_int())], ty_json_value()),
+        decl_fn("json_float", &[("x", ty_float())], ty_json_value()),
+        decl_fn("json_bool", &[("b", ty_bool())], ty_json_value()),
+        decl_fn("json_null", &[], ty_json_value()),
+    ];
+    for f in fns {
+        items.push(Spanned::dummy(Item::Function(f)));
+    }
+
+    Module {
+        items,
+        span: Span::dummy(),
+    }
+}
+
+// ─── std.http.client ────────────────────────────────────────
+
+fn gen_http_client_module() -> Module {
+    let mut items: Vec<Spanned<Item>> = Vec::new();
+
+    // Opaque structs
+    items.push(opaque_struct("Response"));
+    items.push(opaque_struct("Client"));
+
+    // HTTP verb functions with default params
+    let http_verbs = ["get", "post", "put", "delete", "patch", "head"];
+    for verb in &http_verbs {
+        items.push(Spanned::dummy(Item::Function(decl_fn_with_defaults(
+            verb,
+            &[
+                ("url", ty_str(), None),
+                ("body", ty_str(), Some(Expr::StringLiteral(StringLit { kind: StringKind::Normal, segments: vec![] }))),
+                ("timeout", ty_int(), Some(Expr::IntLiteral(0))),
+            ],
+            ty_result(ty_response(), ty_str()),
+        ))));
+    }
+
+    Module {
+        items,
+        span: Span::dummy(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -595,6 +724,8 @@ mod tests {
         assert!(is_stdlib_module(&["std".into(), "process".into()]));
         assert!(is_stdlib_module(&["std".into(), "sdl".into()]));
         assert!(is_stdlib_module(&["std".into(), "ecs".into()]));
+        assert!(is_stdlib_module(&["std".into(), "json".into()]));
+        assert!(is_stdlib_module(&["std".into(), "http".into(), "client".into()]));
         assert!(!is_stdlib_module(&["std".into(), "test".into(), "process".into()]));
         assert!(!is_stdlib_module(&["std".into(), "foo".into()]));
         assert!(!is_stdlib_module(&["foo".into(), "fs".into()]));
@@ -842,5 +973,61 @@ mod tests {
             assert!(field_names.contains(&"key_code".to_string()));
             assert!(field_names.contains(&"mouse_x".to_string()));
         }
+    }
+
+    #[test]
+    fn is_stdlib_json() {
+        assert!(is_stdlib_module(&["std".into(), "json".into()]));
+    }
+
+    #[test]
+    fn generate_json() {
+        let m = generate_stdlib_module(&["std".into(), "json".into()]).unwrap();
+        let mut struct_names = vec![];
+        let mut fn_names = vec![];
+        for item in &m.items {
+            match &item.node {
+                Item::Struct(s) => struct_names.push(s.name.node.clone()),
+                Item::Function(f) => fn_names.push(f.name.node.clone()),
+                _ => {}
+            }
+        }
+        assert!(struct_names.contains(&"JsonValue".to_string()));
+        assert!(fn_names.contains(&"json_parse".to_string()));
+        assert!(fn_names.contains(&"json_stringify".to_string()));
+        assert!(fn_names.contains(&"json_object".to_string()));
+        assert!(fn_names.contains(&"json_array".to_string()));
+        assert!(fn_names.contains(&"json_string".to_string()));
+        assert!(fn_names.contains(&"json_number".to_string()));
+        assert!(fn_names.contains(&"json_float".to_string()));
+        assert!(fn_names.contains(&"json_bool".to_string()));
+        assert!(fn_names.contains(&"json_null".to_string()));
+    }
+
+    #[test]
+    fn is_stdlib_http_client() {
+        assert!(is_stdlib_module(&["std".into(), "http".into(), "client".into()]));
+    }
+
+    #[test]
+    fn generate_http_client() {
+        let m = generate_stdlib_module(&["std".into(), "http".into(), "client".into()]).unwrap();
+        let mut struct_names = vec![];
+        let mut fn_names = vec![];
+        for item in &m.items {
+            match &item.node {
+                Item::Struct(s) => struct_names.push(s.name.node.clone()),
+                Item::Function(f) => fn_names.push(f.name.node.clone()),
+                _ => {}
+            }
+        }
+        assert!(struct_names.contains(&"Response".to_string()));
+        assert!(struct_names.contains(&"Client".to_string()));
+        assert!(fn_names.contains(&"get".to_string()));
+        assert!(fn_names.contains(&"post".to_string()));
+        assert!(fn_names.contains(&"put".to_string()));
+        assert!(fn_names.contains(&"delete".to_string()));
+        assert!(fn_names.contains(&"patch".to_string()));
+        assert!(fn_names.contains(&"head".to_string()));
     }
 }

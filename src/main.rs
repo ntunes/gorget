@@ -157,6 +157,7 @@ fn try_build(
     });
     let c_code = codegen_output.c_code;
     let needs_sdl = codegen_output.needs_sdl;
+    let needs_http = codegen_output.needs_http;
     let c_path = dir.join(format!("{stem}.c"));
     // Canonicalize to an absolute path so Command::new() doesn't search $PATH.
     // For a bare filename like "hello.gg", dir is "." and exe_path would be "hello",
@@ -220,6 +221,35 @@ fn try_build(
         }
     }
 
+    // Add libcurl linker flags when std.http.client is imported
+    if needs_http {
+        let pkg_ok = Command::new("pkg-config")
+            .args(["--cflags", "--libs", "libcurl"])
+            .output()
+            .ok()
+            .and_then(|o| {
+                if o.status.success() {
+                    Some(String::from_utf8_lossy(&o.stdout).to_string())
+                } else {
+                    None
+                }
+            });
+        if let Some(flags) = pkg_ok {
+            for flag in flags.split_whitespace() {
+                cc_cmd.arg(flag);
+            }
+        } else {
+            cc_cmd.arg("-lcurl");
+            #[cfg(target_os = "macos")]
+            {
+                cc_cmd.arg("-I/opt/homebrew/include");
+                cc_cmd.arg("-L/opt/homebrew/lib");
+                cc_cmd.arg("-I/usr/local/include");
+                cc_cmd.arg("-L/usr/local/lib");
+            }
+        }
+    }
+
     let status = cc_cmd.status();
 
     match status {
@@ -234,6 +264,12 @@ fn try_build(
                 msg.push_str("\nInstall them with:");
                 msg.push_str("\n  macOS:   brew install sdl2 sdl2_image sdl2_ttf");
                 msg.push_str("\n  Ubuntu:  apt install libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev");
+            }
+            if needs_http {
+                msg.push_str("\n\nHint: This program uses std.http.client which requires libcurl.");
+                msg.push_str("\nInstall with:");
+                msg.push_str("\n  macOS:   brew install curl");
+                msg.push_str("\n  Ubuntu:  apt install libcurl4-openssl-dev");
             }
             Err(msg)
         }

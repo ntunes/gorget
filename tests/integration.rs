@@ -1692,6 +1692,28 @@ fn mutable_borrow_params() {
 }
 
 #[test]
+fn json_parse() {
+    run_gg(
+        "json_parse.gg",
+        r#"Alice
+30
+true
+true
+false
+10
+20
+30
+3
+true
+{"greeting":"hello","count":42,"flag":false}
+true
+0
+true
+done"#,
+    );
+}
+
+#[test]
 fn fmt_idempotent() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fixtures_dir = manifest_dir.join("tests/fixtures");

@@ -232,6 +232,7 @@ impl Default for CodegenOptions {
 pub struct CodegenOutput {
     pub c_code: String,
     pub needs_sdl: bool,
+    pub needs_http: bool,
 }
 
 /// Generate C source code from a parsed and analyzed Gorget module.
@@ -333,7 +334,28 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
         emitter.emit(c_runtime::PROCESS_RUNTIME);
     }
 
-    // 1d. SDL2 runtime (when std.sdl is imported, directly or via std.gfx)
+    // 1d. JSON runtime (when std.json is imported)
+    let has_json = module.items.iter().any(|i| {
+        matches!(&i.node, Item::Struct(s) if s.name.node == "JsonValue" && s.span == crate::span::Span::dummy())
+    });
+    if has_json {
+        // Emit vendored cJSON source inline (strip #include "cJSON.h" since we inline the header)
+        emitter.emit("// ── Vendored cJSON (MIT) ──\n");
+        emitter.emit(c_runtime::CJSON_H);
+        let cjson_c = c_runtime::CJSON_C.replace("#include \"cJSON.h\"", "/* cJSON.h already inlined above */");
+        emitter.emit(&cjson_c);
+        emitter.emit(c_runtime::JSON_RUNTIME);
+    }
+
+    // 1e. HTTP runtime (when std.http.client is imported) — must come after JSON
+    let has_http = module.items.iter().any(|i| {
+        matches!(&i.node, Item::Struct(s) if s.name.node == "Response" && s.span == crate::span::Span::dummy())
+    });
+    if has_http {
+        emitter.emit(c_runtime::HTTP_RUNTIME);
+    }
+
+    // 1f. SDL2 runtime (when std.sdl is imported, directly or via std.gfx)
     let has_sdl = module.items.iter().any(|i| {
         matches!(&i.node, Item::Struct(s) if s.name.node == "SDLWindow" && s.span == crate::span::Span::dummy())
     });
@@ -407,12 +429,12 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
             combined.push_str(&output[..pos]);
             combined.push_str(&splice_buf.finish());
             combined.push_str(&output[pos..]);
-            return CodegenOutput { c_code: combined, needs_sdl: has_sdl };
+            return CodegenOutput { c_code: combined, needs_sdl: has_sdl, needs_http: has_http };
         }
-        return CodegenOutput { c_code: output + &splice_buf.finish(), needs_sdl: has_sdl };
+        return CodegenOutput { c_code: output + &splice_buf.finish(), needs_sdl: has_sdl, needs_http: has_http };
     }
 
-    CodegenOutput { c_code: emitter.finish(), needs_sdl: has_sdl }
+    CodegenOutput { c_code: emitter.finish(), needs_sdl: has_sdl, needs_http: has_http }
 }
 
 #[cfg(test)]
