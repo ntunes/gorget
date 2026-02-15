@@ -2197,6 +2197,22 @@ impl CodegenContext<'_> {
                     "({{ {val_type}* __dgo_ptr = {mangled}__get_ptr({recv_ref}, {key}); __dgo_ptr ? *__dgo_ptr : {default}; }})"
                 )
             }
+            "get_or_put" => {
+                let key = args.first()
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "0".to_string());
+                let default = args.get(1)
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "0".to_string());
+                let (key_type, val_type) = self.infer_map_kv_types(receiver);
+                format!(
+                    "({{ {val_type}* __gop_ptr = {mangled}__get_ptr({recv_ref}, {key}); \
+                    if (!__gop_ptr) {{ {key_type} __gop_k = {key}; {val_type} __gop_v = {default}; \
+                    {mangled}__put({recv_ref}, __gop_k, __gop_v); \
+                    __gop_ptr = {mangled}__get_ptr({recv_ref}, __gop_k); }} \
+                    *__gop_ptr; }})"
+                )
+            }
             "filter" => {
                 let (key_type, val_type) = self.infer_map_kv_types(receiver);
                 let closure_fn = self.gen_expr(&args[0].node.value);

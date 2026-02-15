@@ -2037,6 +2037,7 @@ Iteration, `keys()`, `values()`, and `items()` all return entries in insertion o
 | `is_empty()` | `→ bool` | True if length is zero |
 | `clear()` | `→ void` | Remove all entries |
 | `get_or(key, default)` | `K, V → V` | Get value for key, or return `default` |
+| `get_or_put(key, default)` | `K, V → V` | Get value for key, or insert `default` and return it |
 | `update(other)` | `Dict[K, V] → void` | Merge all entries from `other` (overwrites existing keys) |
 | `keys()` | `→ Vector[K]` | All keys in insertion order |
 | `values()` | `→ Vector[V]` | All values in insertion order |
@@ -2058,6 +2059,7 @@ Same API as `Dict` but does not preserve insertion order. Use when order is irre
 | `is_empty()` | `→ bool` | True if length is zero |
 | `clear()` | `→ void` | Remove all entries |
 | `get_or(key, default)` | `K, V → V` | Get value for key, or return `default` |
+| `get_or_put(key, default)` | `K, V → V` | Get value for key, or insert `default` and return it |
 | `update(other)` | `HashMap[K, V] → void` | Merge all entries from `other` |
 | `keys()` | `→ Vector[K]` | All keys (unordered) |
 | `values()` | `→ Vector[V]` | All values (unordered) |

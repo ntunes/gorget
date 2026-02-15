@@ -2606,6 +2606,22 @@ fn dict_subscript() {
 }
 
 #[test]
+fn dict_get_or_put() {
+    run_gg(
+        "dict_get_or_put.gg",
+        "\
+1
+1
+42
+42
+3
+2
+2
+1",
+    );
+}
+
+#[test]
 fn set_operations() {
     run_gg(
         "set_operations.gg",

@@ -1,0 +1,27 @@
+from std.collections import Dict
+
+void main():
+    auto d = {"a": 1, "b": 2}
+
+    # Existing key — returns existing value, no insert
+    int v1 = d.get_or_put("a", 99)
+    print("{v1}")
+    print("{d["a"]}")
+
+    # Missing key — inserts default, returns it
+    int v2 = d.get_or_put("c", 42)
+    print("{v2}")
+    print("{d["c"]}")
+    print("{d.len()}")
+
+    # Accumulator pattern with int keys
+    auto counts = Dict[int, int]()
+    int i = 0
+    while i < 5:
+        int prev = counts.get_or_put(i % 3, 0)
+        counts[i % 3] = prev + 1
+        i = i + 1
+    # keys 0,1,2,0,1 → {0:2, 1:2, 2:1}
+    print("{counts[0]}")
+    print("{counts[1]}")
+    print("{counts[2]}")

@@ -1906,7 +1906,7 @@ impl<'a> TypeChecker<'a> {
             },
             "Dict" | "HashMap" => match method {
                 "put" | "update" => Some(self.types.void_id),
-                "get" | "get_or" => Some(val_type()),
+                "get" | "get_or" | "get_or_put" => Some(val_type()),
                 "contains" => Some(self.types.bool_id),
                 "len" => Some(self.types.int_id),
                 "remove" => Some(self.types.bool_id),
