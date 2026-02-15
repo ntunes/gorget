@@ -1,0 +1,24 @@
+from std.collections import Dict
+
+void main():
+    auto d = {"x": 10, "y": 20}
+
+    # Subscript read
+    print("{d["x"]}")
+    print("{d["y"]}")
+
+    # Subscript write (update existing)
+    d["x"] = 99
+    print("{d["x"]}")
+
+    # Subscript write (insert new)
+    d["z"] = 30
+    print("{d["z"]}")
+    print("{d.len()}")
+
+    # Integer dict subscript
+    auto nums = {1: 100, 2: 200}
+    nums[3] = 300
+    print("{nums[1]}")
+    print("{nums[3]}")
+    print("{nums.len()}")

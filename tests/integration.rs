@@ -2575,6 +2575,37 @@ fn dict_tombstone_stress() {
 }
 
 #[test]
+fn dict_literal() {
+    run_gg(
+        "dict_literal.gg",
+        "\
+3
+30
+25
+35
+0
+200
+3",
+    );
+}
+
+#[test]
+fn dict_subscript() {
+    run_gg(
+        "dict_subscript.gg",
+        "\
+10
+20
+99
+30
+3
+100
+300
+3",
+    );
+}
+
+#[test]
 fn set_operations() {
     run_gg(
         "set_operations.gg",

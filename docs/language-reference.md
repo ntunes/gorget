@@ -1385,6 +1385,32 @@ Vector[int] squares = [x * x for x in 0..10]
 Vector[int] evens = [x for x in 0..100 if x % 2 == 0]
 ```
 
+#### Dict Literal
+
+```ebnf
+dict_literal = "{" [ expr ":" expr { "," expr ":" expr } [ "," ] ] "}" ;
+```
+
+```gorget
+auto ages = {"alice": 30, "bob": 25, "carol": 35}
+Dict[str, int] empty = {}
+```
+
+Dict literals create a `Dict[K, V]` (insertion-order-preserving). Types are inferred from the first key-value pair. Empty dict literals require a type annotation.
+
+#### Dict Subscript Access
+
+Dicts and HashMaps support subscript read and write with `d[key]` syntax:
+
+```gorget
+auto d = {"x": 10, "y": 20}
+print("{d["x"]}")      # read: 10
+d["x"] = 99            # write (update)
+d["z"] = 30            # write (insert)
+```
+
+Reading a missing key aborts with a `KeyError`. Use `.get_or(key, default)` for safe access.
+
 #### Dict Comprehension
 
 ```ebnf
@@ -2663,7 +2689,7 @@ expr = literal | IDENTIFIER | path_expr | unary_expr | binary_expr
      | move_expr | mut_borrow_expr | deref_expr | as_expr | is_expr
      | if_expr | match_expr | do_expr | closure | implicit_closure
      | list_comp | dict_comp | set_comp
-     | array_literal | tuple_literal | struct_literal
+     | array_literal | tuple_literal | dict_literal | struct_literal
      | await_expr | spawn_expr | "self" | "it" | "(" expr ")" ;
 
 (* ── Patterns ── *)

@@ -547,6 +547,7 @@ pub enum Expr {
     // ── Collection literals ──
     ArrayLiteral(Vec<Spanned<Expr>>),
     TupleLiteral(Vec<Spanned<Expr>>),
+    DictLiteral(Vec<(Spanned<Expr>, Spanned<Expr>)>),
 
     // ── Struct construction ──
     StructLiteral {

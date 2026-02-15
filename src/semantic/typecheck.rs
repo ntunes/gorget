@@ -718,7 +718,23 @@ impl<'a> TypeChecker<'a> {
                             elem_tid
                         }
                     } else {
-                        self.types.error_id // element type requires more info
+                        // Check for Dict[K,V] / HashMap[K,V] indexing
+                        let map_info = if let ResolvedType::Generic(def_id, args) = self.types.get(resolved_obj) {
+                            let name = self.scopes.get_def(*def_id).name.clone();
+                            if matches!(name.as_str(), "Dict" | "HashMap") && args.len() >= 2 {
+                                Some((args[0], args[1]))
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        };
+                        if let Some((key_tid, val_tid)) = map_info {
+                            self.unify(index_type, key_tid, index.span);
+                            val_tid
+                        } else {
+                            self.types.error_id
+                        }
                     }
                 }
             }
@@ -984,6 +1000,30 @@ impl<'a> TypeChecker<'a> {
                 let elem_types: Vec<TypeId> =
                     elements.iter().map(|e| self.infer_expr(e)).collect();
                 self.types.insert(ResolvedType::Tuple(elem_types))
+            }
+
+            Expr::DictLiteral(pairs) => {
+                if pairs.is_empty() {
+                    // Empty dict literal — try to infer from declaration hint
+                    if let Some(hint_id) = self.decl_type_hint {
+                        return hint_id;
+                    }
+                    return self.types.error_id;
+                }
+                let key_type = self.infer_expr(&pairs[0].0);
+                let val_type = self.infer_expr(&pairs[0].1);
+                for (k, v) in &pairs[1..] {
+                    let kt = self.infer_expr(k);
+                    let vt = self.infer_expr(v);
+                    self.unify(key_type, kt, k.span);
+                    self.unify(val_type, vt, v.span);
+                }
+                // Build Dict[K, V] type
+                if let Some(dict_def_id) = self.scopes.lookup("Dict") {
+                    self.types.insert(ResolvedType::Generic(dict_def_id, vec![key_type, val_type]))
+                } else {
+                    self.types.error_id
+                }
             }
 
             Expr::StructLiteral { name, args } => {

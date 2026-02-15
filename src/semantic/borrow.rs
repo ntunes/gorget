@@ -470,6 +470,13 @@ impl<'a> BorrowChecker<'a> {
                 }
             }
 
+            Expr::DictLiteral(pairs) => {
+                for (k, v) in pairs {
+                    self.check_expr(k);
+                    self.check_expr(v);
+                }
+            }
+
             Expr::StructLiteral { args, .. } => {
                 for arg in args {
                     self.check_expr(arg);

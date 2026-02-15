@@ -525,6 +525,24 @@ impl CodegenContext<'_> {
             }
 
             Stmt::Assign { target, value } => {
+                // Dict/HashMap subscript write: d[key] = value → __put(&d, key, value)
+                if let Expr::Index { object, index } = &target.node {
+                    if self.is_gorget_map_expr(object) {
+                        if self.trace {
+                            let vars = self.collect_expr_vars(&[&target.node, &value.node]);
+                            self.emit_stmt_start(span, &vars, emitter);
+                        }
+                        let obj = self.gen_expr(object);
+                        let idx = self.gen_expr(index);
+                        let val = self.gen_expr(value);
+                        let mangled = self.infer_map_mangled(object);
+                        emitter.emit_line(&format!("{mangled}__put(&{obj}, {idx}, {val});"));
+                        if self.trace {
+                            self.emit_stmt_end(emitter);
+                        }
+                        return;
+                    }
+                }
                 let result_info = if self.trace {
                     let vars = self.collect_expr_vars(&[&target.node, &value.node]);
                     self.emit_stmt_start(span, &vars, emitter);
@@ -1188,6 +1206,23 @@ impl CodegenContext<'_> {
                 "int64_t".to_string()
             }
             Expr::StructLiteral { name, .. } => name.node.clone(),
+            Expr::DictLiteral(pairs) => {
+                if pairs.is_empty() {
+                    if let Some(crate::parser::ast::Type::Named { name, generic_args }) = self.decl_type_hint.as_ref() {
+                        if matches!(name.node.as_str(), "Dict" | "HashMap") && generic_args.len() >= 2 {
+                            let key_c = self.type_to_c(&generic_args[0].node);
+                            let val_c = self.type_to_c(&generic_args[1].node);
+                            let base = if name.node == "Dict" { "GorgetDict" } else { "GorgetMap" };
+                            return c_mangle::mangle_generic(base, &[key_c, val_c]);
+                        }
+                    }
+                    c_mangle::mangle_generic("GorgetDict", &["int64_t".to_string(), "int64_t".to_string()])
+                } else {
+                    let key_c = self.infer_c_type_from_expr(&pairs[0].0.node);
+                    let val_c = self.infer_c_type_from_expr(&pairs[0].1.node);
+                    c_mangle::mangle_generic("GorgetDict", &[key_c, val_c])
+                }
+            }
             Expr::TupleLiteral(elements) => {
                 let c_field_types: Vec<String> = elements
                     .iter()
@@ -1324,7 +1359,7 @@ impl CodegenContext<'_> {
     }
 
     /// Check if an iterable expression resolves to a GorgetMap (Dict) type.
-    fn is_gorget_map_expr(&mut self, expr: &Spanned<Expr>) -> bool {
+    pub(super) fn is_gorget_map_expr(&mut self, expr: &Spanned<Expr>) -> bool {
         if let Some(tid) = self.resolve_expr_type_id(expr) {
             if let crate::semantic::types::ResolvedType::Generic(def_id, _) = self.types.get(tid) {
                 let def_name = &self.scopes.get_def(*def_id).name;

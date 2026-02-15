@@ -73,6 +73,9 @@ fn contains_it(expr: &Spanned<Expr>) -> bool {
         Expr::ArrayLiteral(elems) | Expr::TupleLiteral(elems) => {
             elems.iter().any(contains_it)
         }
+        Expr::DictLiteral(pairs) => {
+            pairs.iter().any(|(k, v)| contains_it(k) || contains_it(v))
+        }
         Expr::StructLiteral { args, .. } => args.iter().any(contains_it),
 
         // Comprehensions — these introduce their own bindings, but `it`
@@ -1212,9 +1215,8 @@ impl Parser {
         if self.check(&Token::RBrace) {
             self.advance();
             let end = self.previous_span();
-            // Empty braces — could be empty dict or set. Default to empty array for now.
             return Ok(Spanned::new(
-                Expr::ArrayLiteral(Vec::new()),
+                Expr::DictLiteral(Vec::new()),
                 start.merge(end),
             ));
         }
@@ -1253,12 +1255,8 @@ impl Parser {
                 ));
             }
 
-            // Regular dict literal — just parse remaining key:value pairs
-            // For now, represent as array of tuples
-            let mut pairs = vec![Spanned::new(
-                Expr::TupleLiteral(vec![first, value]),
-                start,
-            )];
+            // Regular dict literal: {k: v, k: v, ...}
+            let mut pairs = vec![(first, value)];
             while self.match_token(&Token::Comma) {
                 if self.check(&Token::RBrace) {
                     break;
@@ -1266,12 +1264,11 @@ impl Parser {
                 let k = self.parse_expr()?;
                 self.expect(&Token::Colon)?;
                 let v = self.parse_expr()?;
-                let span = k.span.merge(v.span);
-                pairs.push(Spanned::new(Expr::TupleLiteral(vec![k, v]), span));
+                pairs.push((k, v));
             }
             self.expect(&Token::RBrace)?;
             let end = self.previous_span();
-            return Ok(Spanned::new(Expr::ArrayLiteral(pairs), start.merge(end)));
+            return Ok(Spanned::new(Expr::DictLiteral(pairs), start.merge(end)));
         }
 
         // Check for set comprehension: {expr for x in iter}

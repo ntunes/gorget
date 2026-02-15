@@ -247,6 +247,15 @@ impl CodegenContext<'_> {
                         let elem_type = self.infer_vector_elem_type(object);
                         format!("GORGET_ARRAY_AT({elem_type}, {obj}, {idx})")
                     }
+                } else if self.is_gorget_map_expr(object) {
+                    let idx = self.gen_expr(index);
+                    let mangled = self.infer_map_mangled(object);
+                    let (_, val_type) = self.infer_map_kv_types(object);
+                    format!(
+                        "({{ {val_type}* __gp = {mangled}__get_ptr(&{obj}, {idx}); \
+                        if (!__gp) {{ fprintf(stderr, \"KeyError: key not found\\n\"); abort(); }} \
+                        *__gp; }})"
+                    )
                 } else {
                     let idx = self.gen_expr(index);
                     format!("{obj}[{idx}]")
@@ -287,6 +296,36 @@ impl CodegenContext<'_> {
             Expr::ArrayLiteral(elements) => {
                 let elems: Vec<String> = elements.iter().map(|e| self.gen_expr(e)).collect();
                 format!("{{{}}}", elems.join(", "))
+            }
+
+            Expr::DictLiteral(pairs) => {
+                if pairs.is_empty() {
+                    // Empty dict literal — infer K/V from decl_type_hint (AST Type)
+                    if let Some(crate::parser::ast::Type::Named { name, generic_args }) = self.decl_type_hint.as_ref() {
+                        if matches!(name.node.as_str(), "Dict" | "HashMap") && generic_args.len() >= 2 {
+                            let key_c = self.type_to_c(&generic_args[0].node);
+                            let val_c = self.type_to_c(&generic_args[1].node);
+                            let ordered = name.node == "Dict";
+                            let base = if ordered { "GorgetDict" } else { "GorgetMap" };
+                            let mangled = self.register_generic(base, &[key_c, val_c], super::GenericInstanceKind::Map { ordered });
+                            return format!("{mangled}__new()");
+                        }
+                    }
+                    // Fallback: can't infer, emit empty Dict[int64_t, int64_t]
+                    let mangled = self.register_generic("GorgetDict", &["int64_t".to_string(), "int64_t".to_string()], super::GenericInstanceKind::Map { ordered: true });
+                    format!("{mangled}__new()")
+                } else {
+                    let key_type = self.infer_c_type_from_expr(&pairs[0].0.node);
+                    let val_type = self.infer_c_type_from_expr(&pairs[0].1.node);
+                    let mangled = self.register_generic("GorgetDict", &[key_type.clone(), val_type.clone()], super::GenericInstanceKind::Map { ordered: true });
+                    let mut puts = String::new();
+                    for (k, v) in pairs {
+                        let kc = self.gen_expr(k);
+                        let vc = self.gen_expr(v);
+                        puts.push_str(&format!("{mangled}__put(&__dl, {kc}, {vc}); "));
+                    }
+                    format!("({{ {mangled} __dl = {mangled}__new(); {puts}__dl; }})")
+                }
             }
 
             Expr::TupleLiteral(elements) => {
@@ -1566,9 +1605,14 @@ impl CodegenContext<'_> {
                 None
             }
             Expr::Index { object, .. } => {
-                // For Vector[T] indexing, return the element type T
                 if let Some(tid) = self.resolve_expr_type_id(object) {
-                    if let crate::semantic::types::ResolvedType::Generic(_, args) = self.types.get(tid) {
+                    if let crate::semantic::types::ResolvedType::Generic(def_id, args) = self.types.get(tid) {
+                        let def_name = self.scopes.get_def(*def_id).name.clone();
+                        if matches!(def_name.as_str(), "Dict" | "HashMap") && args.len() >= 2 {
+                            // Dict[K,V] / HashMap[K,V] indexing → return V
+                            return Some(args[1]);
+                        }
+                        // Vector[T] indexing → return T
                         if let Some(&elem_tid) = args.first() {
                             return Some(elem_tid);
                         }
@@ -1681,7 +1725,7 @@ impl CodegenContext<'_> {
     }
 
     /// Compute the mangled GorgetMap name for a Dict receiver.
-    fn infer_map_mangled(&mut self, receiver: &Spanned<Expr>) -> String {
+    pub(super) fn infer_map_mangled(&mut self, receiver: &Spanned<Expr>) -> String {
         let (key_type, val_type) = self.infer_map_kv_types(receiver);
         let base = if self.is_ordered_map_expr(receiver) { "GorgetDict" } else { "GorgetMap" };
         c_mangle::mangle_generic(base, &[key_type, val_type])

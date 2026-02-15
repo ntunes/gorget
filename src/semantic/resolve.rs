@@ -952,6 +952,13 @@ fn resolve_expr(
             }
         }
 
+        Expr::DictLiteral(pairs) => {
+            for (k, v) in pairs {
+                resolve_expr(k, scopes, errors, resolution_map);
+                resolve_expr(v, scopes, errors, resolution_map);
+            }
+        }
+
         Expr::StructLiteral { name, args } => {
             // Resolve struct name
             match scopes.lookup(&name.node) {

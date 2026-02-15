@@ -1132,6 +1132,18 @@ impl CodegenContext<'_> {
                 self.scan_expr_for_generics(object);
                 self.scan_expr_for_generics(index);
             }
+            Expr::DictLiteral(pairs) => {
+                if !pairs.is_empty() {
+                    let key_c = self.infer_c_type_from_expr(&pairs[0].0.node);
+                    let val_c = self.infer_c_type_from_expr(&pairs[0].1.node);
+                    self.register_generic("GorgetDict", &[key_c, val_c], super::GenericInstanceKind::Map { ordered: true });
+                    for (k, v) in pairs {
+                        self.scan_expr_for_generics(k);
+                        self.scan_expr_for_generics(v);
+                    }
+                }
+                // Empty dict: registration happens via decl_type_hint or type annotation
+            }
             _ => {}
         }
     }

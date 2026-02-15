@@ -1312,6 +1312,18 @@ impl Formatter {
                 }
                 self.emitter.write(")");
             }
+            Expr::DictLiteral(pairs) => {
+                self.emitter.write("{");
+                for (i, (k, v)) in pairs.iter().enumerate() {
+                    if i > 0 {
+                        self.emitter.write(", ");
+                    }
+                    self.format_expr(k);
+                    self.emitter.write(": ");
+                    self.format_expr(v);
+                }
+                self.emitter.write("}");
+            }
             Expr::StructLiteral { name, args } => {
                 self.emitter.write(&name.node);
                 self.emitter.write("(");
