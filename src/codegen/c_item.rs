@@ -1344,7 +1344,7 @@ impl CodegenContext<'_> {
                     }
                 }
                 super::GenericInstanceKind::Map { ordered } => {
-                    self.emit_monomorphized_map(&inst.c_type_args, &inst.mangled_name, ordered, emitter);
+                    self.emit_map_struct_def(&inst.c_type_args, &inst.mangled_name, ordered, emitter);
                 }
                 _ => {}
             }
@@ -1393,15 +1393,58 @@ impl CodegenContext<'_> {
                         self.emit_monomorphized_function(&template, &inst.c_type_args, &inst.mangled_name, emitter);
                     }
                 }
-                _ => {}
+                super::GenericInstanceKind::Map { ordered } => {
+                    self.emit_map_functions(&inst.c_type_args, &inst.mangled_name, ordered, emitter);
+                }
             }
         }
     }
 
-    /// Emit a monomorphized map struct and its inline functions.
-    /// When `ordered` is true (Dict), the struct has extra `order`/`order_len` fields
-    /// that preserve insertion order. When false (HashMap), it's an unordered hash table.
-    fn emit_monomorphized_map(
+    /// Emit only the struct definition for a monomorphized map (Dict or HashMap).
+    /// Called in phase 1 (type definitions), before user-defined types that may
+    /// reference this map are fully defined.
+    fn emit_map_struct_def(
+        &self,
+        c_type_args: &[String],
+        mangled: &str,
+        ordered: bool,
+        emitter: &mut CEmitter,
+    ) {
+        let key_type = c_type_args.first().map(|s| s.as_str()).unwrap_or("int64_t");
+        let val_type = c_type_args.get(1).map(|s| s.as_str()).unwrap_or("int64_t");
+
+        if ordered {
+            emitter.emit(&format!(
+                "typedef struct {mangled} {mangled};\n\
+                 struct {mangled} {{\n\
+                 \x20   {key_type}* keys;\n\
+                 \x20   {val_type}* values;\n\
+                 \x20   uint8_t* states;\n\
+                 \x20   size_t count;\n\
+                 \x20   size_t cap;\n\
+                 \x20   size_t* order;\n\
+                 \x20   size_t order_len;\n\
+                 \x20   size_t tombstones;\n\
+                 }};\n\n"
+            ));
+        } else {
+            emitter.emit(&format!(
+                "typedef struct {mangled} {mangled};\n\
+                 struct {mangled} {{\n\
+                 \x20   {key_type}* keys;\n\
+                 \x20   {val_type}* values;\n\
+                 \x20   uint8_t* states;\n\
+                 \x20   size_t count;\n\
+                 \x20   size_t cap;\n\
+                 }};\n\n"
+            ));
+        }
+    }
+
+    /// Emit inline functions for a monomorphized map (Dict or HashMap).
+    /// Called in phase 2 (method definitions), after all type definitions are
+    /// complete so that `sizeof(ValueType)` is valid even for recursive types.
+    fn emit_map_functions(
         &self,
         c_type_args: &[String],
         mangled: &str,
@@ -1431,34 +1474,6 @@ impl CodegenContext<'_> {
         let hash_old = hash_expr("old_keys[i]");
         let eq_put = eq_expr("m->keys[idx]", "key");
         let eq_get = eq_expr("m->keys[idx]", "key");
-
-        // ── Struct definition ──
-        if ordered {
-            emitter.emit(&format!(
-                "typedef struct {mangled} {mangled};\n\
-                 struct {mangled} {{\n\
-                 \x20   {key_type}* keys;\n\
-                 \x20   {val_type}* values;\n\
-                 \x20   uint8_t* states;\n\
-                 \x20   size_t count;\n\
-                 \x20   size_t cap;\n\
-                 \x20   size_t* order;\n\
-                 \x20   size_t order_len;\n\
-                 \x20   size_t tombstones;\n\
-                 }};\n\n"
-            ));
-        } else {
-            emitter.emit(&format!(
-                "typedef struct {mangled} {mangled};\n\
-                 struct {mangled} {{\n\
-                 \x20   {key_type}* keys;\n\
-                 \x20   {val_type}* values;\n\
-                 \x20   uint8_t* states;\n\
-                 \x20   size_t count;\n\
-                 \x20   size_t cap;\n\
-                 }};\n\n"
-            ));
-        }
 
         // ── __grow ──
         if ordered {

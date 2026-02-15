@@ -1692,6 +1692,20 @@ fn mutable_borrow_params() {
 }
 
 #[test]
+fn recursive_enum() {
+    run_gg(
+        "recursive_enum.gg",
+        "object with 4 keys\n\
+         name = Alice\n\
+         tags has 2 items\n\
+         first = a\n\
+         active = true\n\
+         null ok\n\
+         done",
+    );
+}
+
+#[test]
 fn json_parse() {
     run_gg(
         "json_parse.gg",

@@ -1,0 +1,56 @@
+from std.collections import Vector, Dict
+
+enum Json:
+    Null
+    Bool(bool)
+    Number(float)
+    Str(str)
+    Arr(Vector[Json])
+    Obj(Dict[str, Json])
+
+void main():
+    # Build {"name": "Alice", "tags": ["a", "b"], "active": true}
+    Vector[Json] tags = Vector[Json]()
+    tags.push(Str("a"))
+    tags.push(Str("b"))
+
+    Dict[str, Json] obj = Dict[str, Json]()
+    obj.put("name", Str("Alice"))
+    obj.put("tags", Arr(tags))
+    obj.put("active", Bool(true))
+    obj.put("nothing", Null())
+
+    Json root = Obj(obj)
+
+    match root:
+        case Obj(d):
+            print("object with {d.len()} keys")
+            match d["name"]:
+                case Str(s):
+                    print("name = {s}")
+                else:
+                    print("unexpected")
+            match d["tags"]:
+                case Arr(arr):
+                    print("tags has {arr.len()} items")
+                    match arr.get(0):
+                        case Str(s):
+                            print("first = {s}")
+                        else:
+                            print("unexpected")
+                else:
+                    print("unexpected")
+            match d["active"]:
+                case Bool(b):
+                    print("active = {b}")
+                else:
+                    print("unexpected")
+            match d["nothing"]:
+                case Null():
+                    print("null ok")
+                else:
+                    print("unexpected")
+        else:
+            print("unexpected")
+
+    print("done")
