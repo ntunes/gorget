@@ -550,6 +550,16 @@ static inline void gorget_array_extend(GorgetArray* dst, const GorgetArray* src)
     dst->len = needed;
 }
 
+static inline GorgetArray gorget_array_clone(const GorgetArray* src) {
+    GorgetArray dst = gorget_array_new(src->elem_size);
+    if (src->len > 0) {
+        gorget_array_reserve(&dst, src->len);
+        memcpy(dst.data, src->data, src->len * src->elem_size);
+        dst.len = src->len;
+    }
+    return dst;
+}
+
 static inline GorgetArray gorget_array_slice(const GorgetArray* arr, int64_t start, int64_t end) {
     if (start < 0 || end < 0 || (size_t)start > arr->len || (size_t)end > arr->len || start > end) {
         fprintf(stderr, "gorget: panic: vector slice out of bounds: [%" PRId64 "..%" PRId64 "], length %zu\n", start, end, arr->len);

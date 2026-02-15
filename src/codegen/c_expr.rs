@@ -146,6 +146,14 @@ impl CodegenContext<'_> {
                         }
                     }
                 }
+                // Vector concatenation: vec + vec → clone left, extend with right
+                if *op == BinaryOp::Add && self.is_vector_expr(left) {
+                    let l = self.gen_expr(left);
+                    let r = self.gen_expr(right);
+                    return format!(
+                        "({{ GorgetArray __cat = gorget_array_clone(&{l}); gorget_array_extend(&__cat, &{r}); __cat; }})"
+                    );
+                }
                 let l = self.gen_expr(left);
                 let r = self.gen_expr(right);
                 let c_op = binary_op_to_c(*op);
@@ -1470,7 +1478,8 @@ impl CodegenContext<'_> {
         let c_type = self.infer_receiver_c_type(receiver);
 
         let is_vector = matches!(type_name.as_str(), "Vector" | "List" | "Array")
-            || c_type.as_deref() == Some("GorgetArray");
+            || c_type.as_deref() == Some("GorgetArray")
+            || self.is_vector_expr(receiver);
         let is_map = matches!(type_name.as_str(), "Dict" | "HashMap")
             || c_type.as_deref().map_or(false, |t| t.starts_with("GorgetMap__") || t.starts_with("GorgetDict__"));
         let is_set = matches!(type_name.as_str(), "Set" | "HashSet")
@@ -1584,7 +1593,8 @@ impl CodegenContext<'_> {
         let c_type = self.infer_receiver_c_type(collection);
 
         let is_vector = matches!(type_name.as_str(), "Vector" | "List" | "Array")
-            || c_type.as_deref() == Some("GorgetArray");
+            || c_type.as_deref() == Some("GorgetArray")
+            || self.is_vector_expr(collection);
         let is_map = matches!(type_name.as_str(), "Dict" | "HashMap")
             || c_type.as_deref().map_or(false, |t| t.starts_with("GorgetMap__") || t.starts_with("GorgetDict__"));
         let is_set = matches!(type_name.as_str(), "Set" | "HashSet")
@@ -1805,6 +1815,10 @@ impl CodegenContext<'_> {
                 if let Some(&elem_tid) = args.first() {
                     return c_types::type_id_to_c(elem_tid, self.types, self.scopes);
                 }
+            }
+            // Auto-promoted array literals: ResolvedType::Array(elem_tid, _)
+            if let crate::semantic::types::ResolvedType::Array(elem_tid, _) = self.types.get(tid) {
+                return c_types::type_id_to_c(*elem_tid, self.types, self.scopes);
             }
         }
         // Fallback for field access: extract elem type from the AST type annotation
@@ -3637,6 +3651,12 @@ impl CodegenContext<'_> {
         let type_name = self.infer_receiver_type(expr);
         if matches!(type_name.as_str(), "Vector" | "List" | "Array") {
             return true;
+        }
+        // Check if variable was auto-promoted from array literal to GorgetArray
+        if let Expr::Identifier(name) = &expr.node {
+            if self.vector_vars.contains(&crate::codegen::c_mangle::escape_keyword(name)) {
+                return true;
+            }
         }
         let c_type = self.infer_receiver_c_type(expr);
         c_type.as_deref() == Some("GorgetArray")

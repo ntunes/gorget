@@ -2530,6 +2530,36 @@ false",
 }
 
 #[test]
+fn vector_literal() {
+    run_gg(
+        "vector_literal.gg",
+        "\
+4
+10
+40
+99
+179
+found",
+    );
+}
+
+#[test]
+fn vector_concat() {
+    run_gg(
+        "vector_concat.gg",
+        "\
+5
+1
+2
+3
+4
+5
+3
+2",
+    );
+}
+
+#[test]
 fn dict_keys_values() {
     run_gg(
         "dict_keys_values.gg",

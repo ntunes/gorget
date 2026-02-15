@@ -1,0 +1,14 @@
+from std.collections import Vector
+
+void main():
+    Vector[int] a = [1, 2, 3]
+    Vector[int] b = [4, 5]
+
+    auto c = a + b
+    print("{c.len()}")
+    for x in c:
+        print("{x}")
+
+    # Originals unchanged
+    print("{a.len()}")
+    print("{b.len()}")

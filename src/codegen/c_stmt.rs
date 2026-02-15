@@ -966,17 +966,10 @@ impl CodegenContext<'_> {
                         Type::Named { name, generic_args } if !generic_args.is_empty()
                             && matches!(name.node.as_str(), "Vector" | "List" | "Array" | "Set" | "Dict" | "HashMap" | "Map")
                     );
-                    if !is_collection_type {
-                        let elem_type = match &type_.node {
-                            Type::Inferred => {
-                                if let Some(first) = elements.first() {
-                                    self.infer_c_type_from_expr(&first.node)
-                                } else {
-                                    "int64_t".to_string()
-                                }
-                            }
-                            _ => self.type_to_c(&type_.node),
-                        };
+                    let is_auto = matches!(&type_.node, Type::Inferred);
+                    if !is_collection_type && !is_auto {
+                        // Explicit array type (e.g. int[3] arr = [1, 2, 3]) → C array
+                        let elem_type = self.type_to_c(&type_.node);
                         let elems: Vec<String> = elements.iter().map(|e| self.gen_expr(e)).collect();
                         emitter.emit_line(&format!(
                             "{const_prefix}{elem_type} {escaped}[] = {{{}}};",
@@ -991,8 +984,14 @@ impl CodegenContext<'_> {
                         }
                         return;
                     }
-                    // Collection type with array literal: create a GorgetArray and push elements
-                    let elem_type = if let Type::Named { generic_args, .. } = &type_.node {
+                    // Collection type or auto with array literal: create a GorgetArray and push elements
+                    let elem_type = if is_auto {
+                        if let Some(first) = elements.first() {
+                            self.infer_c_type_from_expr(&first.node)
+                        } else {
+                            "int64_t".to_string()
+                        }
+                    } else if let Type::Named { generic_args, .. } = &type_.node {
                         if let Some(first_arg) = generic_args.first() {
                             self.type_to_c(&first_arg.node)
                         } else {
@@ -1009,6 +1008,9 @@ impl CodegenContext<'_> {
                         emitter.emit_line(&format!(
                             "{{ {elem_type} __tmp = {val}; gorget_array_push(&{escaped}, &__tmp); }}"
                         ));
+                    }
+                    if is_auto {
+                        self.vector_vars.insert(escaped.clone());
                     }
                     if self.trace {
                         if let Some(ref ri) = result_info {
@@ -1351,7 +1353,15 @@ impl CodegenContext<'_> {
     fn is_gorget_array_expr(&mut self, expr: &Spanned<Expr>) -> bool {
         if let Some(tid) = self.resolve_expr_type_id(expr) {
             let c_type = c_types::type_id_to_c(tid, self.types, self.scopes);
-            return c_type == "GorgetArray";
+            if c_type == "GorgetArray" {
+                return true;
+            }
+        }
+        // Check if variable was auto-promoted from array literal to GorgetArray
+        if let Expr::Identifier(name) = &expr.node {
+            if self.vector_vars.contains(&crate::codegen::c_mangle::escape_keyword(name)) {
+                return true;
+            }
         }
         // Also check inferred type as fallback
         let c_type = self.infer_c_type_from_expr(&expr.node);

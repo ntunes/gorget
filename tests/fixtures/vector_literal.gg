@@ -1,0 +1,24 @@
+void main():
+    auto v = [10, 20, 30]
+
+    # Methods work on auto-promoted vectors
+    v.push(40)
+    print("{v.len()}")
+
+    # Subscript read
+    print("{v[0]}")
+    print("{v[3]}")
+
+    # Subscript write
+    v[1] = 99
+    print("{v[1]}")
+
+    # For-loop iteration
+    auto total = 0
+    for x in v:
+        total = total + x
+    print("{total}")
+
+    # in operator
+    if 99 in v:
+        print("found")

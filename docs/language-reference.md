@@ -246,7 +246,7 @@ Type: `Option[T]` for some inferred `T`.
 
 | Symbol | Name            |
 |--------|-----------------|
-| `+`    | Addition        |
+| `+`    | Addition / String concat / Vector concat |
 | `-`    | Subtraction / Negation |
 | `*`    | Multiplication / Dereference |
 | `/`    | Division        |
@@ -387,10 +387,11 @@ int x = pair.0
 array_type = type "[" const_expr "]" ;
 ```
 
-A fixed-size, homogeneous sequence. Size must be a compile-time constant.
+A fixed-size, homogeneous sequence. Size must be a compile-time constant. Use this only when you need a fixed C-level array; for dynamic lists, use `auto` with an array literal to get a `Vector[T]`.
 
 ```gorget
-int[5] arr = [1, 2, 3, 4, 5]
+int[5] arr = [1, 2, 3, 4, 5]   # fixed C array
+auto v = [1, 2, 3, 4, 5]       # Vector[int] — dynamic, supports push/pop/etc.
 ```
 
 #### Slices
@@ -1100,6 +1101,14 @@ parts.push("world")
 str result = " ".join(parts)   # "hello world"
 ```
 
+The `+` operator on Vectors produces a new concatenated Vector without modifying the originals:
+
+```gorget
+auto a = [1, 2, 3]
+auto b = [4, 5]
+auto c = a + b   # [1, 2, 3, 4, 5]
+```
+
 The `in` operator tests membership in a range or collection:
 
 ```gorget
@@ -1438,7 +1447,21 @@ array_literal = "[" [ expr { "," expr } [ "," ] ] "]" ;
 tuple_literal = "(" expr "," expr { "," expr } [ "," ] ")" ;
 ```
 
-Array literals produce `Vector[T]` or fixed arrays depending on context. Tuple literals produce tuple types.
+Array literals with an inferred type (`auto`) produce a `Vector[T]` (dynamic array). With an explicit fixed-size array type (e.g. `int[3]`), they produce a C-level fixed array.
+
+```gorget
+auto v = [1, 2, 3]       # Vector[int] — supports push, pop, len, etc.
+int[3] a = [1, 2, 3]     # Fixed C array — no dynamic methods
+Vector[int] w = [4, 5]   # Explicit Vector type also works
+```
+
+Vectors support concatenation with the `+` operator, which returns a new Vector without modifying the originals:
+
+```gorget
+auto combined = v + w     # [1, 2, 3, 4, 5]
+```
+
+Tuple literals produce tuple types.
 
 ### 7.24 Struct Literals
 
