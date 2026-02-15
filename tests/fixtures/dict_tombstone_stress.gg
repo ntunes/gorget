@@ -1,0 +1,31 @@
+from std.collections import Dict
+
+void main():
+    Dict[int, int] d = Dict[int, int]()
+
+    # Fill to near grow threshold, then delete most, then re-insert many new keys.
+    # Without tombstone-aware grow, this would exhaust empty slots and loop forever.
+    int i = 0
+    while i < 12:
+        d.put(i, i * 10)
+        i = i + 1
+
+    # Remove 11 of the 12 entries (creates 11 tombstones)
+    i = 0
+    while i < 11:
+        d.remove(i)
+        i = i + 1
+
+    # Now: 1 live + 11 tombstones + 4 empty (cap=16)
+    # Insert 20 new keys — must trigger grow to avoid infinite loop
+    i = 100
+    while i < 120:
+        d.put(i, i)
+        i = i + 1
+
+    # 21 live entries total (key 11 + keys 100..119)
+    print("{d.len()}")
+
+    # Verify key 11 survived and a new key works
+    print("{d.get(11)}")
+    print("{d.get(105)}")

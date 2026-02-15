@@ -2564,6 +2564,17 @@ false
 }
 
 #[test]
+fn dict_tombstone_stress() {
+    run_gg(
+        "dict_tombstone_stress.gg",
+        "\
+21
+110
+105",
+    );
+}
+
+#[test]
 fn set_operations() {
     run_gg(
         "set_operations.gg",

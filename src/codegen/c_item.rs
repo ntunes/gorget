@@ -1432,6 +1432,7 @@ impl CodegenContext<'_> {
                  \x20   size_t count;\n\
                  \x20   size_t cap;\n\
                  \x20   size_t order_len;\n\
+                 \x20   size_t tombstones;\n\
                  }};\n\n"
             ));
         } else {
@@ -1464,6 +1465,7 @@ impl CodegenContext<'_> {
     m->cap = new_cap;
     m->count = 0;
     m->order_len = 0;
+    m->tombstones = 0;
     for (size_t oi = 0; oi < old_order_len; oi++) {{
         size_t i = old_order[oi];
         if (old_states[i] != 1) continue;
@@ -1513,7 +1515,7 @@ impl CodegenContext<'_> {
         if ordered {
             emitter.emit(&format!(
                 "static inline {mangled} {mangled}__new(void) {{\n\
-                 \x20   return ({mangled}){{NULL, NULL, NULL, NULL, 0, 0, 0}};\n\
+                 \x20   return ({mangled}){{NULL, NULL, NULL, NULL, 0, 0, 0, 0}};\n\
                  }}\n\n"
             ));
         } else {
@@ -1530,7 +1532,7 @@ impl CodegenContext<'_> {
         // correctly skipped during iteration, preventing double-reporting of keys.
         if ordered {
             emitter.emit(&format!(r#"static inline void {mangled}__put({mangled}* m, {key_type} key, {val_type} value) {{
-    if (m->cap == 0 || m->count * 4 >= m->cap * 3) {{ {mangled}__grow(m); }}
+    if (m->cap == 0 || (m->count + m->tombstones) * 4 >= m->cap * 3) {{ {mangled}__grow(m); }}
     uint64_t h = {hash_key};
     size_t idx = (size_t)(h % m->cap);
     for (size_t __probes = 0; __probes < m->cap; __probes++) {{
@@ -1605,8 +1607,28 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
 
 "#));
 
-        // ── __remove (identical for both — tombstone marks slot, order array skips on iteration) ──
-        emitter.emit(&format!(r#"static inline bool {mangled}__remove({mangled}* m, {key_type} key) {{
+        // ── __remove ──
+        if ordered {
+            emitter.emit(&format!(r#"static inline bool {mangled}__remove({mangled}* m, {key_type} key) {{
+    if (m->cap == 0) return false;
+    uint64_t h = {hash_key};
+    size_t idx = (size_t)(h % m->cap);
+    for (size_t __probes = 0; __probes < m->cap; __probes++) {{
+        if (m->states[idx] == 0) return false;
+        if (m->states[idx] == 1 && {eq_get}) {{
+            m->states[idx] = 2;
+            m->count--;
+            m->tombstones++;
+            return true;
+        }}
+        idx = (idx + 1) % m->cap;
+    }}
+    return false;
+}}
+
+"#));
+        } else {
+            emitter.emit(&format!(r#"static inline bool {mangled}__remove({mangled}* m, {key_type} key) {{
     if (m->cap == 0) return false;
     uint64_t h = {hash_key};
     size_t idx = (size_t)(h % m->cap);
@@ -1623,6 +1645,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
 }}
 
 "#));
+        }
 
         // ── __clear ──
         if ordered {
@@ -1631,6 +1654,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                  \x20   if (m->states) memset(m->states, 0, m->cap);\n\
                  \x20   m->count = 0;\n\
                  \x20   m->order_len = 0;\n\
+                 \x20   m->tombstones = 0;\n\
                  }}\n\n"
             ));
         } else {
@@ -1648,7 +1672,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                 "static inline void {mangled}__free({mangled}* m) {{\n\
                  \x20   free(m->keys); free(m->values); free(m->states); free(m->order);\n\
                  \x20   m->keys = NULL; m->values = NULL; m->states = NULL; m->order = NULL;\n\
-                 \x20   m->count = 0; m->cap = 0; m->order_len = 0;\n\
+                 \x20   m->count = 0; m->cap = 0; m->order_len = 0; m->tombstones = 0;\n\
                  }}\n\n"
             ));
         } else {
