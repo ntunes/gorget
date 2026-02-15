@@ -233,7 +233,7 @@ fn gen_process_module() -> Module {
 fn gen_collections_module() -> Module {
     let type_defs: Vec<(&str, usize)> = vec![
         ("Vector", 1), ("List", 1), ("Array", 1),   // [T]
-        ("Dict", 2), ("HashMap", 2), ("Map", 2),     // [K, V]
+        ("Dict", 2), ("HashMap", 2),                   // [K, V]
         ("Set", 1), ("HashSet", 1),                   // [T]
         ("Box", 1),                                    // [T]
         ("File", 0),                                   // no generics
@@ -678,7 +678,7 @@ mod tests {
     #[test]
     fn generate_collections() {
         let m = generate_stdlib_module(&["std".into(), "collections".into()]).unwrap();
-        assert_eq!(m.items.len(), 10);
+        assert_eq!(m.items.len(), 9);
         let names: Vec<_> = m.items.iter().map(|i| match &i.node {
             Item::Struct(s) => s.name.node.clone(),
             _ => panic!("expected struct"),

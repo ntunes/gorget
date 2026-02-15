@@ -36,7 +36,14 @@ pub fn ast_type_to_c(ty: &crate::parser::ast::Type, scopes: &ScopeTable) -> Stri
                 match name.node.as_str() {
                     "Vector" | "List" | "Array" => "GorgetArray".to_string(),
                     "Set" => "GorgetSet".to_string(),
-                    "Dict" | "Map" | "HashMap" => {
+                    "Dict" => {
+                        let c_args: Vec<String> = generic_args
+                            .iter()
+                            .map(|a| ast_type_to_c(&a.node, scopes))
+                            .collect();
+                        super::c_mangle::mangle_generic("GorgetDict", &c_args)
+                    }
+                    "HashMap" => {
                         let c_args: Vec<String> = generic_args
                             .iter()
                             .map(|a| ast_type_to_c(&a.node, scopes))
@@ -161,7 +168,14 @@ pub fn type_id_to_c(type_id: TypeId, types: &TypeTable, scopes: &ScopeTable) -> 
             match base.as_str() {
                 "Vector" | "List" | "Array" => "GorgetArray".to_string(),
                 "Set" => "GorgetSet".to_string(),
-                "Dict" | "Map" | "HashMap" => {
+                "Dict" => {
+                    let c_args: Vec<String> = args
+                        .iter()
+                        .map(|tid| type_id_to_c(*tid, types, scopes))
+                        .collect();
+                    super::c_mangle::mangle_generic("GorgetDict", &c_args)
+                }
+                "HashMap" => {
                     let c_args: Vec<String> = args
                         .iter()
                         .map(|tid| type_id_to_c(*tid, types, scopes))

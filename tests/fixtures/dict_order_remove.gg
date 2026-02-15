@@ -1,0 +1,27 @@
+from std.collections import Dict, Vector
+
+void main():
+    Dict[int, int] d = Dict[int, int]()
+    d.put(1, 10)
+    d.put(2, 20)
+    d.put(3, 30)
+
+    # Remove middle key
+    d.remove(2)
+
+    # Re-insert at end
+    d.put(2, 99)
+
+    # Keys should be: 1, 3, 2 (re-inserted at end)
+    Vector[int] ks = d.keys()
+    int i = 0
+    while i < ks.len():
+        print("{ks.get(i)}")
+        i = i + 1
+
+    # Values should be: 10, 30, 99
+    Vector[int] vs = d.values()
+    i = 0
+    while i < vs.len():
+        print("{vs.get(i)}")
+        i = i + 1

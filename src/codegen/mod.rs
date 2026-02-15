@@ -39,7 +39,7 @@ pub enum GenericInstanceKind {
     Struct,
     Enum,
     Function,
-    Map,
+    Map { ordered: bool },
 }
 
 /// The kind of drop scope, determining when cleanup runs.
@@ -862,7 +862,7 @@ void main():
             ],
         };
         let result = c_types::ast_type_to_c(&ty, &scopes);
-        assert_eq!(result, "GorgetMap__int64_t__int64_t");
+        assert_eq!(result, "GorgetDict__int64_t__int64_t");
     }
 
     #[test]
@@ -885,8 +885,8 @@ void main():
 ";
         let c_code = compile_to_c(source);
         assert!(!c_code.contains("/* TODO"));
-        assert!(c_code.contains("GorgetMap__int64_t__int64_t__new"));
-        assert!(c_code.contains("GorgetMap__int64_t__int64_t__put"));
+        assert!(c_code.contains("GorgetDict__int64_t__int64_t__new"));
+        assert!(c_code.contains("GorgetDict__int64_t__int64_t__put"));
     }
 
     #[test]

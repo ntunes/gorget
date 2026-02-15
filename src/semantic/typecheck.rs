@@ -1501,7 +1501,7 @@ impl<'a> TypeChecker<'a> {
         let value_resolved = self.resolve_type(value);
         if let ResolvedType::Generic(def_id, _) = self.types.get(declared_resolved) {
             let name = &self.scopes.get_def(*def_id).name;
-            if matches!(name.as_str(), "Vector" | "List" | "Array" | "Dict" | "HashMap" | "Map" | "Set" | "HashSet") {
+            if matches!(name.as_str(), "Vector" | "List" | "Array" | "Dict" | "HashMap" | "Set" | "HashSet") {
                 // Allow any value type (array literal, comprehension, constructor call)
                 return matches!(self.types.get(value_resolved),
                     ResolvedType::Array(_, _) | ResolvedType::Error
@@ -1605,12 +1605,12 @@ impl<'a> TypeChecker<'a> {
             }
 
             // --- Dict higher-order methods ---
-            ("Dict" | "HashMap" | "Map", "filter") => {
+            ("Dict" | "HashMap", "filter") => {
                 // (K, V) -> bool, returns Dict[K,V]
                 let _ = self.infer_expr(&args.first()?.node.value);
                 Some(receiver_type)
             }
-            ("Dict" | "HashMap" | "Map", "fold") => {
+            ("Dict" | "HashMap", "fold") => {
                 // args: initial_value, closure (U, K, V) -> U — returns U
                 let init_type = self.infer_expr(&args.first()?.node.value);
                 let _ = args.get(1).map(|a| self.infer_expr(&a.node.value));
@@ -1864,7 +1864,7 @@ impl<'a> TypeChecker<'a> {
                 "sorted" | "slice" => Some(receiver_type),
                 _ => None,
             },
-            "Dict" | "HashMap" | "Map" => match method {
+            "Dict" | "HashMap" => match method {
                 "put" | "update" => Some(self.types.void_id),
                 "get" | "get_or" => Some(val_type()),
                 "contains" => Some(self.types.bool_id),

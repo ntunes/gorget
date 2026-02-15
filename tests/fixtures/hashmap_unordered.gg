@@ -1,0 +1,23 @@
+from std.collections import HashMap
+
+void main():
+    HashMap[int, int] m = HashMap[int, int]()
+    m.put(10, 100)
+    m.put(20, 200)
+    m.put(30, 300)
+
+    # Basic operations
+    print("{m.len()}")
+    print("{m.get(10)}")
+    print("{m.get(20)}")
+    print("{m.get(30)}")
+    print("{m.contains(10)}")
+    print("{m.contains(99)}")
+
+    # Remove
+    m.remove(20)
+    print("{m.len()}")
+
+    # Fold (order-independent sum)
+    int total = m.fold(0, (int acc, int k, int v): acc + v)
+    print("{total}")

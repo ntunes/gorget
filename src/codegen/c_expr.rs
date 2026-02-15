@@ -1344,8 +1344,8 @@ impl CodegenContext<'_> {
 
         let is_vector = matches!(type_name.as_str(), "Vector" | "List" | "Array")
             || c_type.as_deref() == Some("GorgetArray");
-        let is_map = matches!(type_name.as_str(), "Dict" | "HashMap" | "Map")
-            || c_type.as_deref().map_or(false, |t| t.starts_with("GorgetMap__"));
+        let is_map = matches!(type_name.as_str(), "Dict" | "HashMap")
+            || c_type.as_deref().map_or(false, |t| t.starts_with("GorgetMap__") || t.starts_with("GorgetDict__"));
         let is_set = matches!(type_name.as_str(), "Set" | "HashSet")
             || c_type.as_deref() == Some("GorgetSet");
         let is_string = matches!(type_name.as_str(), "str" | "String")
@@ -1445,8 +1445,8 @@ impl CodegenContext<'_> {
 
         let is_vector = matches!(type_name.as_str(), "Vector" | "List" | "Array")
             || c_type.as_deref() == Some("GorgetArray");
-        let is_map = matches!(type_name.as_str(), "Dict" | "HashMap" | "Map")
-            || c_type.as_deref().map_or(false, |t| t.starts_with("GorgetMap__"));
+        let is_map = matches!(type_name.as_str(), "Dict" | "HashMap")
+            || c_type.as_deref().map_or(false, |t| t.starts_with("GorgetMap__") || t.starts_with("GorgetDict__"));
         let is_set = matches!(type_name.as_str(), "Set" | "HashSet")
             || c_type.as_deref() == Some("GorgetSet");
         let is_string = matches!(type_name.as_str(), "str" | "String")
@@ -1467,7 +1467,8 @@ impl CodegenContext<'_> {
             format!("({{ {elem_type} __needle = {elem}; gorget_array_contains({coll_ref}, &__needle, sizeof({elem_type})); }})")
         } else if is_map {
             let (key_type, val_type) = self.infer_map_kv_types(collection);
-            let mangled = c_mangle::mangle_generic("GorgetMap", &[key_type, val_type]);
+            let base = if self.is_ordered_map_expr(collection) { "GorgetDict" } else { "GorgetMap" };
+            let mangled = c_mangle::mangle_generic(base, &[key_type, val_type]);
             format!("{mangled}__contains({coll_ref}, {elem})")
         } else if is_set {
             let elem_type = self.infer_c_type_from_expr(&needle.node);
@@ -1682,7 +1683,8 @@ impl CodegenContext<'_> {
     /// Compute the mangled GorgetMap name for a Dict receiver.
     fn infer_map_mangled(&mut self, receiver: &Spanned<Expr>) -> String {
         let (key_type, val_type) = self.infer_map_kv_types(receiver);
-        c_mangle::mangle_generic("GorgetMap", &[key_type, val_type])
+        let base = if self.is_ordered_map_expr(receiver) { "GorgetDict" } else { "GorgetMap" };
+        c_mangle::mangle_generic(base, &[key_type, val_type])
     }
 
     /// Infer the key and value C types for a Map receiver from its TypeId.
@@ -2018,11 +2020,35 @@ impl CodegenContext<'_> {
         receiver: &Spanned<Expr>,
         needs_temp: bool,
     ) -> String {
+        let ordered = self.is_ordered_map_expr(receiver);
         let mangled = self.infer_map_mangled(receiver);
         let recv_ref = if needs_temp {
             format!("({{ __typeof__({recv}) __recv = {recv}; &__recv; }})")
         } else {
             format!("&{recv}")
+        };
+
+        // Helper: generate a for-loop header + body-index for ordered vs unordered maps.
+        // For ordered: `for (oi = 0; oi < src.order_len; oi++) { idx = src.order[oi]; if states[idx]!=1 continue; ...`
+        // For unordered: `for (idx = 0; idx < src.cap; idx++) { if states[idx]!=1 continue; ...`
+        let iter_loop = |prefix: &str, src: &str, ordered: bool| -> (String, String) {
+            if ordered {
+                let oi = format!("__{prefix}_oi");
+                let idx = format!("__{prefix}_i");
+                let head = format!(
+                    "for (size_t {oi} = 0; {oi} < {src}.order_len; {oi}++) {{ \
+                     size_t {idx} = {src}.order[{oi}]; \
+                     if ({src}.states[{idx}] != 1) continue; "
+                );
+                (head, idx)
+            } else {
+                let idx = format!("__{prefix}_i");
+                let head = format!(
+                    "for (size_t {idx} = 0; {idx} < {src}.cap; {idx}++) {{ \
+                     if ({src}.states[{idx}] != 1) continue; "
+                );
+                (head, idx)
+            }
         };
 
         match method_name {
@@ -2064,12 +2090,12 @@ impl CodegenContext<'_> {
             }
             "keys" => {
                 let (key_type, _val_type) = self.infer_map_kv_types(receiver);
+                let (loop_head, idx) = iter_loop("dk", "__dk_src", ordered);
                 format!(
                     "({{ {mangled} __dk_src = {recv}; \
                     GorgetArray __dk_result = gorget_array_new(sizeof({key_type})); \
-                    for (size_t __dk_i = 0; __dk_i < __dk_src.cap; __dk_i++) {{ \
-                        if (__dk_src.states[__dk_i] != 1) continue; \
-                        {key_type} __dk_k = __dk_src.keys[__dk_i]; \
+                    {loop_head}\
+                        {key_type} __dk_k = __dk_src.keys[{idx}]; \
                         gorget_array_push(&__dk_result, &__dk_k); \
                     }} \
                     __dk_result; }})"
@@ -2077,12 +2103,12 @@ impl CodegenContext<'_> {
             }
             "values" => {
                 let (_key_type, val_type) = self.infer_map_kv_types(receiver);
+                let (loop_head, idx) = iter_loop("dv", "__dv_src", ordered);
                 format!(
                     "({{ {mangled} __dv_src = {recv}; \
                     GorgetArray __dv_result = gorget_array_new(sizeof({val_type})); \
-                    for (size_t __dv_i = 0; __dv_i < __dv_src.cap; __dv_i++) {{ \
-                        if (__dv_src.states[__dv_i] != 1) continue; \
-                        {val_type} __dv_v = __dv_src.values[__dv_i]; \
+                    {loop_head}\
+                        {val_type} __dv_v = __dv_src.values[{idx}]; \
                         gorget_array_push(&__dv_result, &__dv_v); \
                     }} \
                     __dv_result; }})"
@@ -2091,12 +2117,12 @@ impl CodegenContext<'_> {
             "items" => {
                 let (key_type, val_type) = self.infer_map_kv_types(receiver);
                 let tuple_name = self.register_tuple_typedef(&[key_type.clone(), val_type.clone()]);
+                let (loop_head, idx) = iter_loop("di", "__di_src", ordered);
                 format!(
                     "({{ {mangled} __di_src = {recv}; \
                     GorgetArray __di_result = gorget_array_new(sizeof({tuple_name})); \
-                    for (size_t __di_i = 0; __di_i < __di_src.cap; __di_i++) {{ \
-                        if (__di_src.states[__di_i] != 1) continue; \
-                        {tuple_name} __di_item = ({tuple_name}){{ __di_src.keys[__di_i], __di_src.values[__di_i] }}; \
+                    {loop_head}\
+                        {tuple_name} __di_item = ({tuple_name}){{ __di_src.keys[{idx}], __di_src.values[{idx}] }}; \
                         gorget_array_push(&__di_result, &__di_item); \
                     }} \
                     __di_result; }})"
@@ -2105,12 +2131,12 @@ impl CodegenContext<'_> {
             "update" => {
                 let arg = self.gen_expr(&args[0].node.value);
                 let (key_type, val_type) = self.infer_map_kv_types(receiver);
+                let (loop_head, idx) = iter_loop("du", "__du_src", ordered);
                 format!(
                     "({{ {mangled}* __du_dst = {recv_ref}; {mangled} __du_src = {arg}; \
-                    for (size_t __du_i = 0; __du_i < __du_src.cap; __du_i++) {{ \
-                        if (__du_src.states[__du_i] != 1) continue; \
-                        {key_type} __du_k = __du_src.keys[__du_i]; \
-                        {val_type} __du_v = __du_src.values[__du_i]; \
+                    {loop_head}\
+                        {key_type} __du_k = __du_src.keys[{idx}]; \
+                        {val_type} __du_v = __du_src.values[{idx}]; \
                         {mangled}__put(__du_dst, __du_k, __du_v); \
                     }} }})"
                 )
@@ -2131,13 +2157,13 @@ impl CodegenContext<'_> {
                 let (key_type, val_type) = self.infer_map_kv_types(receiver);
                 let closure_fn = self.gen_expr(&args[0].node.value);
                 self.patch_last_closure_return_type("bool");
+                let (loop_head, idx) = iter_loop("dfilt", "__dfilt_src", ordered);
                 format!(
                     "({{ {mangled} __dfilt_src = {recv}; \
                     {mangled} __dfilt_result = {mangled}__new(); \
-                    for (size_t __dfilt_i = 0; __dfilt_i < __dfilt_src.cap; __dfilt_i++) {{ \
-                        if (__dfilt_src.states[__dfilt_i] != 1) continue; \
-                        {key_type} __dfilt_k = __dfilt_src.keys[__dfilt_i]; \
-                        {val_type} __dfilt_v = __dfilt_src.values[__dfilt_i]; \
+                    {loop_head}\
+                        {key_type} __dfilt_k = __dfilt_src.keys[{idx}]; \
+                        {val_type} __dfilt_v = __dfilt_src.values[{idx}]; \
                         if ({closure_fn}(__dfilt_k, __dfilt_v)) {{ {mangled}__put(&__dfilt_result, __dfilt_k, __dfilt_v); }} \
                     }} \
                     __dfilt_result; }})"
@@ -2149,13 +2175,13 @@ impl CodegenContext<'_> {
                 let init_c_type = self.infer_c_type_from_expr(&args[0].node.value.node);
                 let closure_fn = self.gen_expr(&args[1].node.value);
                 self.patch_last_closure_return_type(&init_c_type);
+                let (loop_head, idx) = iter_loop("dfold", "__dfold_src", ordered);
                 format!(
                     "({{ {mangled} __dfold_src = {recv}; \
                     {init_c_type} __dfold_acc = {init}; \
-                    for (size_t __dfold_i = 0; __dfold_i < __dfold_src.cap; __dfold_i++) {{ \
-                        if (__dfold_src.states[__dfold_i] != 1) continue; \
-                        {key_type} __dfold_k = __dfold_src.keys[__dfold_i]; \
-                        {val_type} __dfold_v = __dfold_src.values[__dfold_i]; \
+                    {loop_head}\
+                        {key_type} __dfold_k = __dfold_src.keys[{idx}]; \
+                        {val_type} __dfold_v = __dfold_src.values[{idx}]; \
                         __dfold_acc = {closure_fn}(__dfold_acc, __dfold_k, __dfold_v); \
                     }} \
                     __dfold_acc; }})"
@@ -2895,9 +2921,14 @@ impl CodegenContext<'_> {
                 }
                 return format!("gorget_array_new({elem_size})");
             }
-            "Dict" | "HashMap" | "Map" => {
+            "Dict" => {
+                let mangled = c_mangle::mangle_generic("GorgetDict", &c_type_args);
+                self.register_generic("GorgetDict", &c_type_args, super::GenericInstanceKind::Map { ordered: true });
+                return format!("{mangled}__new()");
+            }
+            "HashMap" => {
                 let mangled = c_mangle::mangle_generic("GorgetMap", &c_type_args);
-                self.register_generic("GorgetMap", &c_type_args, super::GenericInstanceKind::Map);
+                self.register_generic("GorgetMap", &c_type_args, super::GenericInstanceKind::Map { ordered: false });
                 return format!("{mangled}__new()");
             }
             "Set" | "HashSet" => {
@@ -4362,8 +4393,8 @@ impl CodegenContext<'_> {
         let val_expr = self.gen_expr(value);
         let key_type = self.infer_c_type_from_expr(&key.node);
         let val_type = self.infer_c_type_from_expr(&value.node);
-        let mangled = c_mangle::mangle_generic("GorgetMap", &[key_type.clone(), val_type.clone()]);
-        self.register_generic("GorgetMap", &[key_type.clone(), val_type.clone()], super::GenericInstanceKind::Map);
+        let mangled = c_mangle::mangle_generic("GorgetDict", &[key_type.clone(), val_type.clone()]);
+        self.register_generic("GorgetDict", &[key_type.clone(), val_type.clone()], super::GenericInstanceKind::Map { ordered: true });
         let var_name = variables
             .first()
             .map(|v| c_mangle::escape_keyword(&v.node))

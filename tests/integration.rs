@@ -2515,8 +2515,8 @@ fn dict_keys_values() {
 alice
 bob
 carol
-25
 30
+25
 35
 90
 3",
@@ -2530,6 +2530,36 @@ fn dict_items() {
         "\
 3
 60",
+    );
+}
+
+#[test]
+fn dict_order_remove() {
+    run_gg(
+        "dict_order_remove.gg",
+        "\
+1
+3
+2
+10
+30
+99",
+    );
+}
+
+#[test]
+fn hashmap_unordered() {
+    run_gg(
+        "hashmap_unordered.gg",
+        "\
+3
+100
+200
+300
+true
+false
+2
+400",
     );
 }
 

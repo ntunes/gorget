@@ -471,7 +471,7 @@ auto name = "hello"  # inferred as String
 - `String`
 - All structs
 - All enums
-- Collections (`Vector`, `HashMap`, etc.)
+- Collections (`Vector`, `Dict`, `HashMap`, etc.)
 
 ---
 
@@ -707,7 +707,7 @@ Creates an alternative name for an existing type. The alias is interchangeable w
 
 ```gorget
 type Callback = int(int, int)
-type StringMap[V] = HashMap[String, V]
+type StringMap[V] = Dict[String, V]
 ```
 
 ### 5.8 Newtypes
@@ -1392,7 +1392,7 @@ dict_comp = "{" expr ":" expr "for" variables "in" expr [ "if" expr ] "}" ;
 ```
 
 ```gorget
-HashMap[String, int] lengths = {s: s.len() for s in words}
+Dict[String, int] lengths = {s: s.len() for s in words}
 ```
 
 #### Set Comprehension
@@ -1997,7 +1997,9 @@ The following methods are available on built-in types without any import.
 | `fold(init, f)` | `U, (U, T) → U → U` | Left fold with initial value |
 | `reduce(f)` | `(T, T) → T → T` | Reduce without initial value |
 
-**`Dict[K, V]`** — Hash map
+**`Dict[K, V]`** — Ordered hash map (insertion-order preserving, like Python 3.7+ `dict`)
+
+Iteration, `keys()`, `values()`, and `items()` all return entries in insertion order. Removing a key and re-inserting it places it at the end.
 
 | Method | Signature | Description |
 |---|---|---|
@@ -2010,10 +2012,31 @@ The following methods are available on built-in types without any import.
 | `clear()` | `→ void` | Remove all entries |
 | `get_or(key, default)` | `K, V → V` | Get value for key, or return `default` |
 | `update(other)` | `Dict[K, V] → void` | Merge all entries from `other` (overwrites existing keys) |
-| `keys()` | `→ Vector[K]` | All keys as a vector |
-| `values()` | `→ Vector[V]` | All values as a vector |
-| `items()` | `→ Vector[(K, V)]` | All key-value pairs as a vector of tuples |
+| `keys()` | `→ Vector[K]` | All keys in insertion order |
+| `values()` | `→ Vector[V]` | All values in insertion order |
+| `items()` | `→ Vector[(K, V)]` | All key-value pairs in insertion order |
 | `filter(pred)` | `(K, V) → bool → Dict[K, V]` | Entries satisfying predicate |
+| `fold(init, f)` | `U, (U, K, V) → U → U` | Left fold over entries |
+
+**`HashMap[K, V]`** — Unordered hash map
+
+Same API as `Dict` but does not preserve insertion order. Use when order is irrelevant and maximum performance is desired.
+
+| Method | Signature | Description |
+|---|---|---|
+| `put(key, value)` | `K, V → void` | Insert or update a key-value pair |
+| `get(key)` | `K → V` | Get value for key (panics if missing) |
+| `contains(key)` | `K → bool` | True if key exists |
+| `remove(key)` | `K → bool` | Remove key, return whether it existed |
+| `len()` | `→ int` | Number of entries |
+| `is_empty()` | `→ bool` | True if length is zero |
+| `clear()` | `→ void` | Remove all entries |
+| `get_or(key, default)` | `K, V → V` | Get value for key, or return `default` |
+| `update(other)` | `HashMap[K, V] → void` | Merge all entries from `other` |
+| `keys()` | `→ Vector[K]` | All keys (unordered) |
+| `values()` | `→ Vector[V]` | All values (unordered) |
+| `items()` | `→ Vector[(K, V)]` | All key-value pairs (unordered) |
+| `filter(pred)` | `(K, V) → bool → HashMap[K, V]` | Entries satisfying predicate |
 | `fold(init, f)` | `U, (U, K, V) → U → U` | Left fold over entries |
 
 **`Set[T]`** — Hash set

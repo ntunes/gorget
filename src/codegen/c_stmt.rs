@@ -1328,7 +1328,18 @@ impl CodegenContext<'_> {
         if let Some(tid) = self.resolve_expr_type_id(expr) {
             if let crate::semantic::types::ResolvedType::Generic(def_id, _) = self.types.get(tid) {
                 let def_name = &self.scopes.get_def(*def_id).name;
-                return matches!(def_name.as_str(), "Dict" | "HashMap" | "Map");
+                return matches!(def_name.as_str(), "Dict" | "HashMap");
+            }
+        }
+        false
+    }
+
+    /// Check if a map expression is an ordered Dict (vs unordered HashMap).
+    pub(super) fn is_ordered_map_expr(&mut self, expr: &Spanned<Expr>) -> bool {
+        if let Some(tid) = self.resolve_expr_type_id(expr) {
+            if let crate::semantic::types::ResolvedType::Generic(def_id, _) = self.types.get(tid) {
+                let def_name = &self.scopes.get_def(*def_id).name;
+                return def_name == "Dict";
             }
         }
         false
@@ -1481,14 +1492,25 @@ impl CodegenContext<'_> {
                 "{elem_type} {var_name} = GORGET_ARRAY_AT({elem_type}, {iter}, {idx});"
             ));
         } else if self.is_gorget_map_expr(iterable) {
+            let ordered = self.is_ordered_map_expr(iterable);
             let iter = self.gen_expr(iterable);
             let idx = emitter.fresh_temp();
             let (key_type, val_type) = self.infer_map_kv_types(iterable);
-            emitter.emit_line(&format!(
-                "for (size_t {idx} = 0; {idx} < {iter}.cap; {idx}++) {{"
-            ));
-            emitter.indent();
-            emitter.emit_line(&format!("if ({iter}.states[{idx}] != 1) continue;"));
+            if ordered {
+                let oi = emitter.fresh_temp();
+                emitter.emit_line(&format!(
+                    "for (size_t {oi} = 0; {oi} < {iter}.order_len; {oi}++) {{"
+                ));
+                emitter.indent();
+                emitter.emit_line(&format!("size_t {idx} = {iter}.order[{oi}];"));
+                emitter.emit_line(&format!("if ({iter}.states[{idx}] != 1) continue;"));
+            } else {
+                emitter.emit_line(&format!(
+                    "for (size_t {idx} = 0; {idx} < {iter}.cap; {idx}++) {{"
+                ));
+                emitter.indent();
+                emitter.emit_line(&format!("if ({iter}.states[{idx}] != 1) continue;"));
+            }
             if !has_else { self.push_drop_scope(DropScopeKind::Loop); }
             if let Pattern::Tuple(elems) = &pattern.node {
                 let k_name = match &elems[0].node {

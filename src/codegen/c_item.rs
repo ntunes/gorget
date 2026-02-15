@@ -1081,8 +1081,11 @@ impl CodegenContext<'_> {
                         .collect();
                     if let Expr::Identifier(name) = &callee.node {
                         match name.as_str() {
-                            "Dict" | "Map" | "HashMap" => {
-                                self.register_generic("GorgetMap", &c_type_args, super::GenericInstanceKind::Map);
+                            "Dict" => {
+                                self.register_generic("GorgetDict", &c_type_args, super::GenericInstanceKind::Map { ordered: true });
+                            }
+                            "HashMap" => {
+                                self.register_generic("GorgetMap", &c_type_args, super::GenericInstanceKind::Map { ordered: false });
                             }
                             _ => {
                                 let kind = if self.generic_struct_templates.contains_key(name) {
@@ -1138,12 +1141,19 @@ impl CodegenContext<'_> {
             if !generic_args.is_empty() {
                 match name.node.as_str() {
                     "Vector" | "List" | "Array" | "Set" => {}
-                    "Dict" | "Map" | "HashMap" => {
+                    "Dict" => {
                         let c_args: Vec<String> = generic_args
                             .iter()
                             .map(|a| c_types::ast_type_to_c(&a.node, self.scopes))
                             .collect();
-                        self.register_generic("GorgetMap", &c_args, super::GenericInstanceKind::Map);
+                        self.register_generic("GorgetDict", &c_args, super::GenericInstanceKind::Map { ordered: true });
+                    }
+                    "HashMap" => {
+                        let c_args: Vec<String> = generic_args
+                            .iter()
+                            .map(|a| c_types::ast_type_to_c(&a.node, self.scopes))
+                            .collect();
+                        self.register_generic("GorgetMap", &c_args, super::GenericInstanceKind::Map { ordered: false });
                     }
                     _ => {
                         let c_args: Vec<String> = generic_args
@@ -1286,7 +1296,7 @@ impl CodegenContext<'_> {
     pub fn emit_generic_type_definitions(&mut self, emitter: &mut CEmitter) {
         let has_types = self.generic_instances.iter().any(|i| matches!(
             i.kind,
-            super::GenericInstanceKind::Struct | super::GenericInstanceKind::Enum | super::GenericInstanceKind::Map
+            super::GenericInstanceKind::Struct | super::GenericInstanceKind::Enum | super::GenericInstanceKind::Map { .. }
         ));
         if !has_types {
             return;
@@ -1321,8 +1331,8 @@ impl CodegenContext<'_> {
                         self.emit_monomorphized_enum(&template, &inst.c_type_args, &inst.mangled_name, emitter);
                     }
                 }
-                super::GenericInstanceKind::Map => {
-                    self.emit_monomorphized_map(&inst.c_type_args, &inst.mangled_name, emitter);
+                super::GenericInstanceKind::Map { ordered } => {
+                    self.emit_monomorphized_map(&inst.c_type_args, &inst.mangled_name, ordered, emitter);
                 }
                 _ => {}
             }
@@ -1376,11 +1386,14 @@ impl CodegenContext<'_> {
         }
     }
 
-    /// Emit a monomorphized map (Dict) struct and its inline functions.
+    /// Emit a monomorphized map struct and its inline functions.
+    /// When `ordered` is true (Dict), the struct has extra `order`/`order_len` fields
+    /// that preserve insertion order. When false (HashMap), it's an unordered hash table.
     fn emit_monomorphized_map(
         &self,
         c_type_args: &[String],
         mangled: &str,
+        ordered: bool,
         emitter: &mut CEmitter,
     ) {
         let key_type = c_type_args.first().map(|s| s.as_str()).unwrap_or("int64_t");
@@ -1407,16 +1420,68 @@ impl CodegenContext<'_> {
         let eq_put = eq_expr("m->keys[idx]", "key");
         let eq_get = eq_expr("m->keys[idx]", "key");
 
-        emitter.emit(&format!(r#"typedef struct {mangled} {mangled};
-struct {mangled} {{
-    {key_type}* keys;
-    {val_type}* values;
-    uint8_t* states;
-    size_t count;
-    size_t cap;
-}};
+        // ── Struct definition ──
+        if ordered {
+            emitter.emit(&format!(
+                "typedef struct {mangled} {mangled};\n\
+                 struct {mangled} {{\n\
+                 \x20   {key_type}* keys;\n\
+                 \x20   {val_type}* values;\n\
+                 \x20   uint8_t* states;\n\
+                 \x20   size_t* order;\n\
+                 \x20   size_t count;\n\
+                 \x20   size_t cap;\n\
+                 \x20   size_t order_len;\n\
+                 }};\n\n"
+            ));
+        } else {
+            emitter.emit(&format!(
+                "typedef struct {mangled} {mangled};\n\
+                 struct {mangled} {{\n\
+                 \x20   {key_type}* keys;\n\
+                 \x20   {val_type}* values;\n\
+                 \x20   uint8_t* states;\n\
+                 \x20   size_t count;\n\
+                 \x20   size_t cap;\n\
+                 }};\n\n"
+            ));
+        }
 
-static inline void {mangled}__grow({mangled}* m) {{
+        // ── __grow ──
+        if ordered {
+            emitter.emit(&format!(r#"static inline void {mangled}__grow({mangled}* m) {{
+    size_t old_cap = m->cap;
+    {key_type}* old_keys = m->keys;
+    {val_type}* old_values = m->values;
+    uint8_t* old_states = m->states;
+    size_t* old_order = m->order;
+    size_t old_order_len = m->order_len;
+    size_t new_cap = old_cap == 0 ? 16 : old_cap * 2;
+    m->keys = ({key_type}*)calloc(new_cap, sizeof({key_type}));
+    m->values = ({val_type}*)calloc(new_cap, sizeof({val_type}));
+    m->states = (uint8_t*)calloc(new_cap, 1);
+    m->order = (size_t*)calloc(new_cap, sizeof(size_t));
+    m->cap = new_cap;
+    m->count = 0;
+    m->order_len = 0;
+    for (size_t oi = 0; oi < old_order_len; oi++) {{
+        size_t i = old_order[oi];
+        if (old_states[i] != 1) continue;
+        uint64_t h = {hash_old};
+        size_t idx = (size_t)(h % new_cap);
+        while (m->states[idx] != 0) {{ idx = (idx + 1) % new_cap; }}
+        m->keys[idx] = old_keys[i];
+        m->values[idx] = old_values[i];
+        m->states[idx] = 1;
+        m->order[m->order_len++] = idx;
+        m->count++;
+    }}
+    free(old_keys); free(old_values); free(old_states); free(old_order);
+}}
+
+"#));
+        } else {
+            emitter.emit(&format!(r#"static inline void {mangled}__grow({mangled}* m) {{
     size_t old_cap = m->cap;
     {key_type}* old_keys = m->keys;
     {val_type}* old_values = m->values;
@@ -1441,11 +1506,53 @@ static inline void {mangled}__grow({mangled}* m) {{
     free(old_keys); free(old_values); free(old_states);
 }}
 
-static inline {mangled} {mangled}__new(void) {{
-    return ({mangled}){{NULL, NULL, NULL, 0, 0}};
+"#));
+        }
+
+        // ── __new ──
+        if ordered {
+            emitter.emit(&format!(
+                "static inline {mangled} {mangled}__new(void) {{\n\
+                 \x20   return ({mangled}){{NULL, NULL, NULL, NULL, 0, 0, 0}};\n\
+                 }}\n\n"
+            ));
+        } else {
+            emitter.emit(&format!(
+                "static inline {mangled} {mangled}__new(void) {{\n\
+                 \x20   return ({mangled}){{NULL, NULL, NULL, 0, 0}};\n\
+                 }}\n\n"
+            ));
+        }
+
+        // ── __put ──
+        // Ordered mode: new keys always go into empty slots (never reuse tombstones).
+        // This ensures stale order-array entries pointing to tombstoned slots are
+        // correctly skipped during iteration, preventing double-reporting of keys.
+        if ordered {
+            emitter.emit(&format!(r#"static inline void {mangled}__put({mangled}* m, {key_type} key, {val_type} value) {{
+    if (m->cap == 0 || m->count * 4 >= m->cap * 3) {{ {mangled}__grow(m); }}
+    uint64_t h = {hash_key};
+    size_t idx = (size_t)(h % m->cap);
+    for (size_t __probes = 0; __probes < m->cap; __probes++) {{
+        if (m->states[idx] == 0) {{
+            m->keys[idx] = key;
+            m->values[idx] = value;
+            m->states[idx] = 1;
+            m->count++;
+            m->order[m->order_len++] = idx;
+            return;
+        }}
+        if (m->states[idx] == 1 && {eq_put}) {{
+            m->values[idx] = value;
+            return;
+        }}
+        idx = (idx + 1) % m->cap;
+    }}
 }}
 
-static inline void {mangled}__put({mangled}* m, {key_type} key, {val_type} value) {{
+"#));
+        } else {
+            emitter.emit(&format!(r#"static inline void {mangled}__put({mangled}* m, {key_type} key, {val_type} value) {{
     if (m->cap == 0 || m->count * 4 >= m->cap * 3) {{ {mangled}__grow(m); }}
     uint64_t h = {hash_key};
     size_t idx = (size_t)(h % m->cap);
@@ -1474,7 +1581,11 @@ static inline void {mangled}__put({mangled}* m, {key_type} key, {val_type} value
     }}
 }}
 
-static inline {val_type}* {mangled}__get_ptr({mangled}* m, {key_type} key) {{
+"#));
+        }
+
+        // ── __get_ptr, __contains (identical for both) ──
+        emitter.emit(&format!(r#"static inline {val_type}* {mangled}__get_ptr({mangled}* m, {key_type} key) {{
     if (m->cap == 0) return NULL;
     uint64_t h = {hash_key};
     size_t idx = (size_t)(h % m->cap);
@@ -1492,7 +1603,10 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
     return {mangled}__get_ptr(m, key) != NULL;
 }}
 
-static inline bool {mangled}__remove({mangled}* m, {key_type} key) {{
+"#));
+
+        // ── __remove (identical for both — tombstone marks slot, order array skips on iteration) ──
+        emitter.emit(&format!(r#"static inline bool {mangled}__remove({mangled}* m, {key_type} key) {{
     if (m->cap == 0) return false;
     uint64_t h = {hash_key};
     size_t idx = (size_t)(h % m->cap);
@@ -1508,18 +1622,44 @@ static inline bool {mangled}__remove({mangled}* m, {key_type} key) {{
     return false;
 }}
 
-static inline void {mangled}__clear({mangled}* m) {{
-    if (m->states) memset(m->states, 0, m->cap);
-    m->count = 0;
-}}
-
-static inline void {mangled}__free({mangled}* m) {{
-    free(m->keys); free(m->values); free(m->states);
-    m->keys = NULL; m->values = NULL; m->states = NULL;
-    m->count = 0; m->cap = 0;
-}}
-
 "#));
+
+        // ── __clear ──
+        if ordered {
+            emitter.emit(&format!(
+                "static inline void {mangled}__clear({mangled}* m) {{\n\
+                 \x20   if (m->states) memset(m->states, 0, m->cap);\n\
+                 \x20   m->count = 0;\n\
+                 \x20   m->order_len = 0;\n\
+                 }}\n\n"
+            ));
+        } else {
+            emitter.emit(&format!(
+                "static inline void {mangled}__clear({mangled}* m) {{\n\
+                 \x20   if (m->states) memset(m->states, 0, m->cap);\n\
+                 \x20   m->count = 0;\n\
+                 }}\n\n"
+            ));
+        }
+
+        // ── __free ──
+        if ordered {
+            emitter.emit(&format!(
+                "static inline void {mangled}__free({mangled}* m) {{\n\
+                 \x20   free(m->keys); free(m->values); free(m->states); free(m->order);\n\
+                 \x20   m->keys = NULL; m->values = NULL; m->states = NULL; m->order = NULL;\n\
+                 \x20   m->count = 0; m->cap = 0; m->order_len = 0;\n\
+                 }}\n\n"
+            ));
+        } else {
+            emitter.emit(&format!(
+                "static inline void {mangled}__free({mangled}* m) {{\n\
+                 \x20   free(m->keys); free(m->values); free(m->states);\n\
+                 \x20   m->keys = NULL; m->values = NULL; m->states = NULL;\n\
+                 \x20   m->count = 0; m->cap = 0;\n\
+                 }}\n\n"
+            ));
+        }
     }
 
     /// Emit a monomorphized struct definition.
@@ -1752,7 +1892,8 @@ static inline void {mangled}__free({mangled}* m) {{
                 match name.node.as_str() {
                     "Vector" | "List" | "Array" => "GorgetArray".to_string(),
                     "Set" => "GorgetSet".to_string(),
-                    "Dict" | "Map" | "HashMap" => c_mangle::mangle_generic("GorgetMap", &c_args),
+                    "Dict" => c_mangle::mangle_generic("GorgetDict", &c_args),
+                    "HashMap" => c_mangle::mangle_generic("GorgetMap", &c_args),
                     _ => c_mangle::mangle_generic(&name.node, &c_args),
                 }
             }
@@ -1767,12 +1908,19 @@ static inline void {mangled}__free({mangled}* m) {{
             if !generic_args.is_empty() {
                 match name.node.as_str() {
                     "Vector" | "List" | "Array" | "Set" => {}
-                    "Dict" | "Map" | "HashMap" => {
+                    "Dict" => {
                         let c_args: Vec<String> = generic_args
                             .iter()
                             .map(|a| c_types::ast_type_to_c(&a.node, self.scopes))
                             .collect();
-                        self.register_generic("GorgetMap", &c_args, super::GenericInstanceKind::Map);
+                        self.register_generic("GorgetDict", &c_args, super::GenericInstanceKind::Map { ordered: true });
+                    }
+                    "HashMap" => {
+                        let c_args: Vec<String> = generic_args
+                            .iter()
+                            .map(|a| c_types::ast_type_to_c(&a.node, self.scopes))
+                            .collect();
+                        self.register_generic("GorgetMap", &c_args, super::GenericInstanceKind::Map { ordered: false });
                     }
                     _ => {
                         let c_args: Vec<String> = generic_args

@@ -5,10 +5,14 @@ void main():
     ages.put("alice", 30)
     ages.put("bob", 25)
     ages.put("carol", 35)
+
+    # Iterate k,v pairs — insertion order preserved
     int total = 0
     for (k, v) in ages:
         total = total + v
     print("{total}")
+
+    # Iterate keys only — insertion order preserved
     int count = 0
     for k in ages:
         count = count + 1
