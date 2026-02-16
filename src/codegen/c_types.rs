@@ -196,6 +196,12 @@ pub fn type_id_to_c(type_id: TypeId, types: &TypeTable, scopes: &ScopeTable) -> 
                     super::c_mangle::mangle_generic("GorgetMap", &c_args)
                 }
                 "Box" if args.len() == 1 => {
+                    // Check if the inner type is a trait object (Box[Trait] → TraitObj)
+                    let inner_resolved = types.get(args[0]);
+                    if let ResolvedType::TraitObject(trait_def_id) = inner_resolved {
+                        let name = def_name_to_c(*trait_def_id, scopes);
+                        return super::c_mangle::mangle_trait_obj(&name);
+                    }
                     let inner = type_id_to_c(args[0], types, scopes);
                     format!("{inner}*")
                 }

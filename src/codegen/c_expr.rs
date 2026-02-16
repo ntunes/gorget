@@ -284,7 +284,7 @@ impl CodegenContext<'_> {
                     let (_, val_type) = self.infer_map_kv_types(object);
                     format!(
                         "({{ {val_type}* __gp = {mangled}__get_ptr(&{obj}, {idx}); \
-                        if (!__gp) {{ fprintf(stderr, \"KeyError: key not found\\n\"); abort(); }} \
+                        if (!__gp) gorget_panic(\"key not found in map\"); \
                         *__gp; }})"
                     )
                 } else {
@@ -2294,6 +2294,7 @@ impl CodegenContext<'_> {
                 self.patch_last_closure_return_type(&elem_type);
                 format!(
                     "({{ GorgetArray __red_src = {recv}; \
+                    if (__red_src.len == 0) gorget_panic(\"reduce() called on empty array\"); \
                     {elem_type} __red_acc = GORGET_ARRAY_AT({elem_type}, __red_src, 0); \
                     for (size_t __red_i = 1; __red_i < __red_src.len; __red_i++) {{ \
                         {elem_type} __red_elem = GORGET_ARRAY_AT({elem_type}, __red_src, __red_i); \
@@ -2452,7 +2453,11 @@ impl CodegenContext<'_> {
                 let key = args.first()
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "0".to_string());
-                format!("*{mangled}__get_ptr({recv_ref}, {key})")
+                let (_key_type, val_type) = self.infer_map_kv_types(receiver);
+                format!(
+                    "({{ {val_type}* __gp = {mangled}__get_ptr({recv_ref}, {key}); \
+                    if (!__gp) gorget_panic(\"key not found in map\"); *__gp; }})"
+                )
             }
             "contains" => {
                 let key = args.first()
@@ -4494,11 +4499,15 @@ impl CodegenContext<'_> {
             self.detect_mutations(&body.node, &param_names)
         };
 
-        // Build captures with modes
+        // Build captures with modes.
+        // For escaping closures (heap-allocated env), force all captures to ByValue
+        // to prevent use-after-free: ByMutRef stores a pointer to the caller's
+        // stack variable, which is invalid after the function returns.
+        let force_by_value = self.closure_heap_alloc;
         let captures: Vec<(String, String, CaptureMode)> = free_vars
             .into_iter()
             .map(|(name, ty)| {
-                let mode = if mutated.contains(&name) {
+                let mode = if !force_by_value && mutated.contains(&name) {
                     CaptureMode::ByMutRef
                 } else {
                     CaptureMode::ByValue

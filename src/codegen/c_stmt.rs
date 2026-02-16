@@ -68,7 +68,15 @@ impl CodegenContext<'_> {
             DropAction::BoxFree => {
                 emitter.emit_line(&format!("free({});", entry.var_name));
             }
-            DropAction::TraitObjFree => {
+            DropAction::TraitObjFree { has_drop } => {
+                // If the trait's vtable has a `drop` slot (trait extends Drop),
+                // dispatch it through the vtable before freeing the data.
+                if *has_drop {
+                    emitter.emit_line(&format!(
+                        "{var}.vtable->drop({var}.data);",
+                        var = entry.var_name
+                    ));
+                }
                 emitter.emit_line(&format!("free({}.data);", entry.var_name));
             }
             DropAction::FileClose => {
@@ -85,6 +93,29 @@ impl CodegenContext<'_> {
                 emitter.emit_line(&format!("free({}.env);", entry.var_name));
             }
         }
+    }
+
+    /// Check if a trait (by name) has a `drop` method, either directly or
+    /// inherited from a parent trait (i.e. the trait extends Drop).
+    fn trait_has_drop_in_hierarchy(&self, trait_name: &str) -> bool {
+        for ti in self.traits.traits.values() {
+            if ti.name == trait_name {
+                // Check own methods
+                if ti.methods.contains_key("drop") {
+                    return true;
+                }
+                // Check parent traits
+                for &parent_def_id in &ti.extends {
+                    if let Some(parent_info) = self.traits.traits.get(&parent_def_id) {
+                        if parent_info.name == "Drop" || parent_info.methods.contains_key("drop") {
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            }
+        }
+        false
     }
 
     /// Remove all drop entries for `var_name` across all scopes.
@@ -473,7 +504,14 @@ impl CodegenContext<'_> {
                     false
                 };
                 if is_trait_obj {
-                    self.register_droppable(var_name, DropAction::TraitObjFree);
+                    let has_drop = if let Some(Type::Named { name: inner, .. }) =
+                        generic_args.first().map(|a| &a.node)
+                    {
+                        self.trait_has_drop_in_hierarchy(&inner.node)
+                    } else {
+                        false
+                    };
+                    self.register_droppable(var_name, DropAction::TraitObjFree { has_drop });
                     if self.in_test_body {
                         emitter.emit_line(&format!(
                             "__gorget_cleanup_push(free, (void*){var_name}.data);"

@@ -6,7 +6,15 @@
 
 ## High
 
-(none)
+- **Type substitution scoping unsound for nested generics**: `type_subs: Vec<(String, String)>` is a flat list with no scope isolation. Nested generics like `Pair[Pair[int, int], str]` can have inner substitutions overwrite outer ones. Use a stack or scoped map keyed by param name + depth. (`mod.rs:139`) [added: 2026-02-16]
+
+- **Closure return type patched after codegen**: `patch_last_closure_return_type` modifies already-generated lifted closure code. If the patch doesn't apply cleanly, the closure has a wrong return type. (`c_expr.rs:2225, 2238`) [added: 2026-02-16]
+
+- **Generic equip blocks incomplete**: Generic equip blocks (`equip Foo[T] with Trait`) are skipped in declarations, definitions, and vtable emission. If `discover_generic_usages` misses an instantiation, it's silently omitted. (`c_item.rs:335, 424, 936`) [added: 2026-02-16]
+
+- **String coercion leaks GorgetString wrapper**: `GorgetString` coerced to `const char*` by taking `.data` orphans the wrapper struct (capacity, length) — the malloc'd wrapper leaks. (`c_stmt.rs:1124-1127`) [added: 2026-02-16]
+
+- **`format_for_c_type` silently casts structs to int**: Unknown types in string interpolation default to `(long long)` cast, corrupting the value. Should error on non-formattable types. (`c_types.rs:284`) [added: 2026-02-16]
 
 ## Medium
 
@@ -22,6 +30,8 @@
 - **String interpolation only works in print() context**: `"{n}"` outside of `print()` generates literal `"%s"` instead of formatting the value. Stdlib modules must use explicit `int_to_str()`, `float_to_str()`, `char_to_str()` etc. [added: 2026-02-16]
 
 - **For-loop range bounds validation**: `for n in 0..256` with a `uint8` loop variable silently overflows. Codegen hardcodes `int64_t` for range loop variables (`c_stmt.rs:1210`) — should use the declared type. [added: 2026-02-14]
+
+- **Codegen panics instead of semantic errors**: Several codegen paths panic on invalid input that should be caught earlier — string interpolation of non-primitive types (`c_expr.rs:4348`), `in` operator fallthrough (`c_expr.rs:5551`). Move these checks to semantic analysis or use `unreachable!()`. [added: 2026-02-16]
 
 - **Basic orphan rule**: equip block must be in the module that defines the trait or the type. Prevents incoherent trait implementations across modules. [added: 2026-02-10]
 
@@ -39,6 +49,22 @@
 - **Package management phase 2 (`gg update`, registry)**: Semver-aware resolution, central registry, `gg publish`, workspaces. [added: 2026-02-15]
 
 - **Closures step 4 — `dyn Fn` / `Box[Fn]` trait objects for closures**: Allow closures to be type-erased via trait objects: `auto callback: dyn Fn[int -> int] = my_closure`. Requires a vtable with the `call` method pointer. `Box[dyn Fn[int -> int]]` provides owned, heap-allocated trait objects. **Implementation:** Generate a vtable struct with `call` function pointer for each Fn trait instantiation. `dyn Fn` is a fat pointer `{ void* data; VTable* vtable; }`. Calling through `dyn Fn` does `vtable->call(data, args...)`. **Depends on:** step 2 (Fn traits) + step 3 (embedded captures, so the data pointer points to a self-contained struct). Unblocks: heterogeneous closure collections (`Vector[dyn Fn[int -> int]]`), callback registries, event handler maps, strategy pattern. [added: 2026-02-14]
+
+- **Split `c_expr.rs` into sub-modules**: At 5,585 lines it's the largest file in the codebase. Extract closures (~500 lines), string interpolation (~300 lines), collection method dispatch (~800 lines), and stdlib call handling (~400 lines) into focused sub-modules. [added: 2026-02-16]
+
+- **Consolidate type inference functions**: 6+ scattered inference functions (`infer_c_type_from_expr`, `infer_receiver_type`, `infer_receiver_c_type`, `infer_receiver_mangled_type`, `infer_vector_elem_type`, `infer_closure_body_c_type`) with no caching and redundant re-computation. Consolidate into a single type resolver module. [added: 2026-02-16]
+
+- **Extract `CodegenContext` sub-contexts**: 40+ fields mixing tracing, closures, generics, ownership, and test mode. Extract `ClosureContext`, `TraceContext`, `TestContext` for single-responsibility. [added: 2026-02-16]
+
+- **Data-driven stdlib call dispatch**: ~400-line match block in `c_expr.rs:900-1302` where each arm follows the same pattern (extract args, format C call). Replace with a table of (name, arity, C template). [added: 2026-02-16]
+
+- **Deduplicate `is_stdlib_*` functions**: `is_stdlib_call`, `is_stdlib_static`, `is_stdlib_const` (`c_expr.rs:3881-3909`) are nearly identical, differing only in `DefKind`. One generic `is_stdlib_item(DefKind)` helper. [added: 2026-02-16]
+
+- **Deduplicate `trait_defs` collection**: Same `HashMap<String, &TraitDef>` built identically in `emit_function_definitions` and `emit_vtable_instances` (`c_item.rs:402-407, 926-930`). Factor into module-level helper. [added: 2026-02-16]
+
+- **Deduplicate Result constructor pattern**: Same `mangle_generic("Result", ...) + mangle_variant("Ok"/"Error")` pattern repeated 3+ times for HTTP, Socket, RSA (`c_expr.rs:1152-1158, 1184-1190, 1294-1300`). Extract `gen_result_binding()`. [added: 2026-02-16]
+
+- **Inconsistent string type checking**: `is_string_expr()` exists but isn't used everywhere. Some places check `resolve_expr_type_id`, others check `Expr::StringLiteral` (`c_expr.rs:136-139, 165-167, 1804`). Unify. [added: 2026-02-16]
 
 - **`gg info` command**: show fields, methods, traits, memory layout for a type. [added: 2026-02-10]
 
@@ -64,6 +90,12 @@
 
 - **`directive implicit-auto`**: Python-style implicit variable declarations (`x = 1` instead of `auto x = 1`). Trade-off: more Pythonic but typos silently create new variables. [added: 2026-02-11]
 
+- **Topological sort silent fallback for cycles**: `c_item.rs:166-172` comment says "cycles — shouldn't happen" but code silently handles them. Should `debug_assert!` or warn. [added: 2026-02-16]
+
+- **Silent catch-all in `scan_stmt_for_generics`**: `_ => {}` at `c_stmt.rs:1177` silently ignores unhandled statement types without documenting which are intentionally excluded. [added: 2026-02-16]
+
+- **`c_runtime.rs` monolithic string constant**: 2,505-line single string constant is hard to navigate and edit. Split into separate const blocks or `.c` files. [added: 2026-02-16]
+
 ## Best Effort
 
 - **API consistency**: review `trim()` vs `strip()` overlap; string method naming audit (Python `upper`/`lower`/`startswith` vs current `to_upper`/`to_lower`/`starts_with`); evaluate `str.is_alpha()`/`is_digit()` on `str` (currently only on `char`); review `Vector.get(i)` vs `v[i]` overlap. [added: 2026-02-14]
@@ -73,5 +105,11 @@
 - **HTML report: keyboard/accessibility**: tree nodes use `<span>` with `onclick` — not focusable, no `aria-*`, no `tabindex`. Should use `<button>` elements. [added: 2026-02-14]
 
 - **Showcase examples**: `DenseStore[T]` / archetype ECS (needs Default trait); type erasure / `any` type; ECS query builder (needs variadic generics); `examples/collections/` generic Stack[T]. [added: 2026-02-12]
+
+- **Consistent C code emission style**: `c_item.rs` uses `emitter.emit_line()` with proper indentation, `c_expr.rs` uses long `format!()` strings with embedded `\n`. Statement expression formatting varies across `c_expr.rs:42, 125, 184, 275`. Standardize on emitter usage. [added: 2026-02-16]
+
+- **VTable method slot duplication**: `emit_vtable_method_slot()` and the vtable instance assignment loop (`c_item.rs:852-877, 962-993`) reconstruct the same logic independently. Reuse slot generation. [added: 2026-02-16]
+
+- **Generic instance registration duplicated**: Dict/HashMap registration appears twice in `c_item.rs:1191-1207` and `c_item.rs:1263-1276`. [added: 2026-02-16]
 
 - **Native backend**: LLVM, QBE, or cranelift — after language stabilizes. [added: 2026-02-10]
