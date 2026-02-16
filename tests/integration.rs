@@ -895,6 +895,20 @@ fn nested_generics() {
 }
 
 #[test]
+fn generic_struct_methods() {
+    run_gg(
+        "generic_struct_methods.gg",
+        "\
+42
+hello
+42
+10
+world
+99",
+    );
+}
+
+#[test]
 fn option_methods() {
     run_gg(
         "option_methods.gg",

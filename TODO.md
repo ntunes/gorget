@@ -6,7 +6,6 @@
 
 ## High
 
-- **Type substitution scoping unsound for nested generics**: `type_subs: Vec<(String, String)>` is a flat list with no scope isolation. Nested generics like `Pair[Pair[int, int], str]` can have inner substitutions overwrite outer ones. Use a stack or scoped map keyed by param name + depth. (`mod.rs:139`) [added: 2026-02-16]
 
 - **Closure return type patched after codegen**: `patch_last_closure_return_type` modifies already-generated lifted closure code. If the patch doesn't apply cleanly, the closure has a wrong return type. (`c_expr_methods.rs:1198`) [added: 2026-02-16]
 
@@ -15,6 +14,8 @@
 - **String coercion leaks GorgetString wrapper**: `GorgetString` coerced to `const char*` by taking `.data` orphans the wrapper struct (capacity, length) — the malloc'd wrapper leaks. (`c_stmt.rs:1124-1127`) [added: 2026-02-16]
 
 - **`format_for_c_type` silently casts structs to int**: Unknown types in string interpolation default to `(long long)` cast, corrupting the value. Should error on non-formattable types. (`c_types.rs:284`) [added: 2026-02-16]
+
+- **Method calls in generic function bodies use wrong mangled name**: Inside monomorphized generic functions, `infer_receiver_mangled_type` fails because the semantic type arg resolves to `Error` instead of `Defined(GenericParam)`. E.g., `c.get()` where `c: Container[T]` emits `Container__/*error*/int64_t__get` instead of `Container__int64_t__get`. The `type_id_to_c_substituted` fallback produces garbage. (`c_expr_call.rs:1050, c_expr_generic.rs:375`) [added: 2026-02-16]
 
 ## Medium
 

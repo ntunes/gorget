@@ -2532,7 +2532,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         emitter.emit_line(&format!("{ret_type} {func_name}({params});"));
 
         // Activate substitutions and self type for body codegen
-        self.type_subs = subs;
+        let prev_subs = std::mem::replace(&mut self.type_subs, subs);
         let prev_self_type = self.current_self_type.take();
         self.current_self_type = Some(mangled_type_name.to_string());
 
@@ -2570,7 +2570,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
             FunctionBody::Declaration => {}
         }
 
-        self.type_subs.clear();
+        self.type_subs = prev_subs;
         self.current_self_type = prev_self_type;
         self.pointer_params = prev_pointer_params;
     }

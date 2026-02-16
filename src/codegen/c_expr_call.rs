@@ -1044,13 +1044,13 @@ impl CodegenContext<'_> {
         };
         // Try to figure out the receiver type for mangling
         let type_name = self.infer_receiver_type(receiver);
+        // Use mangled name for generic types (e.g., Pair[int] → Pair__int64_t)
+        let mangled_type = self.infer_receiver_mangled_type(receiver);
         // Check if this method comes from a trait impl (not inherent)
         let mangled = if let Some(trait_name) = self.find_trait_for_method(&type_name, method_name) {
-            // Use mangled name for generic types (e.g., Pair[int] → Pair__int64_t)
-            let mangled_type = self.infer_receiver_mangled_type(receiver);
             c_mangle::mangle_trait_method(&trait_name, &mangled_type, method_name)
         } else {
-            c_mangle::mangle_method(&type_name, method_name)
+            c_mangle::mangle_method(&mangled_type, method_name)
         };
 
         // For non-lvalue receivers (e.g. function calls), we can't take `&recv`

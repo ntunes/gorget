@@ -1,0 +1,45 @@
+struct Container[T]:
+    T value
+
+equip Container[T]:
+    T get(self):
+        return self.value
+
+    Container[T] wrap(self):
+        return Container[T](self.value)
+
+struct Pair[A, B]:
+    A first
+    B second
+
+equip Pair[A, B]:
+    A get_first(self):
+        return self.first
+
+    B get_second(self):
+        return self.second
+
+void main():
+    # Basic generic struct method calls
+    Container[int] c1 = Container[int](42)
+    print("{c1.get()}")
+
+    Container[str] c2 = Container[str]("hello")
+    str s1 = c2.get()
+    print("{s1}")
+
+    # Wrap returns a new Container of the same type
+    Container[int] c3 = c1.wrap()
+    print("{c3.get()}")
+
+    # Pair with two different type args
+    Pair[int, str] p = Pair[int, str](10, "world")
+    print("{p.get_first()}")
+    str s2 = p.get_second()
+    print("{s2}")
+
+    # Nested: Container[Container[int]]
+    Container[int] inner = Container[int](99)
+    Container[Container[int]] outer = Container[Container[int]](inner)
+    Container[int] got_inner = outer.get()
+    print("{got_inner.get()}")
