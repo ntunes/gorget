@@ -40,6 +40,8 @@ struct Session:
     int send_seq
     int recv_seq
     bool encrypted
+    int channel_id
+    bool channel_open
 
 # ── SSH config parsing ─────────────────────────────────────
 
@@ -161,14 +163,13 @@ Vector[uint8] make_u32(int value):
 
 # Build an SSH mpint from a BigNum (RFC 4251 section 5)
 Vector[uint8] make_mpint(BigNum bn):
-    Vector[uint8] raw = crypto_bn_to_bytes(bn)
+    Vector[uint8] data = crypto_bn_to_bytes(bn)
     # If high bit is set, prepend a zero byte
-    Vector[uint8] data = raw
-    if raw.len() > 0:
-        uint8 first = raw.get(0)
+    if data.len() > 0:
+        uint8 first = data.get(0)
         if first >= 128:
             Vector[uint8] zero = bytes_from_hex("00")
-            data = bytes_concat(zero, raw)
+            data = bytes_concat(zero, data)
     Vector[uint8] len_buf = make_u32(data.len())
     return bytes_concat(len_buf, data)
 
@@ -371,9 +372,6 @@ void kex_dh_group14(Session &session, str client_version, str server_version, Ve
 
     Vector[uint8] exchange_hash = crypto_sha256(hash_input)
 
-    # Session ID is the first exchange hash
-    session.session_id = exchange_hash
-
     # Send NEWKEYS
     Vector[uint8] newkeys = bytes_from_hex("15")
     send_packet(session, newkeys)
@@ -382,14 +380,18 @@ void kex_dh_group14(Session &session, str client_version, str server_version, Ve
     Vector[uint8] server_newkeys = read_packet(session)
 
     # Derive keys (RFC 4253 section 7.2)
+    # Use exchange_hash as both H and session_id (they're the same for the first exchange)
     Vector[uint8] k_mpint = make_mpint(shared_k)
 
-    Vector[uint8] iv_cs = derive_key(k_mpint, exchange_hash, "A", session.session_id)
-    Vector[uint8] iv_sc = derive_key(k_mpint, exchange_hash, "B", session.session_id)
-    Vector[uint8] enc_key_cs = derive_key(k_mpint, exchange_hash, "C", session.session_id)
-    Vector[uint8] enc_key_sc = derive_key(k_mpint, exchange_hash, "D", session.session_id)
-    Vector[uint8] mac_key_cs = derive_key(k_mpint, exchange_hash, "E", session.session_id)
-    Vector[uint8] mac_key_sc = derive_key(k_mpint, exchange_hash, "F", session.session_id)
+    Vector[uint8] iv_cs = derive_key(k_mpint, exchange_hash, "A", exchange_hash)
+    Vector[uint8] iv_sc = derive_key(k_mpint, exchange_hash, "B", exchange_hash)
+    Vector[uint8] enc_key_cs = derive_key(k_mpint, exchange_hash, "C", exchange_hash)
+    Vector[uint8] enc_key_sc = derive_key(k_mpint, exchange_hash, "D", exchange_hash)
+    Vector[uint8] mac_key_cs = derive_key(k_mpint, exchange_hash, "E", exchange_hash)
+    Vector[uint8] mac_key_sc = derive_key(k_mpint, exchange_hash, "F", exchange_hash)
+
+    # Session ID is the first exchange hash
+    session.session_id = !exchange_hash
 
     # AES-128-CTR uses 16-byte keys and IVs
     Vector[uint8] enc_key_16 = bytes_slice(enc_key_cs, 0, 16)
@@ -399,8 +401,8 @@ void kex_dh_group14(Session &session, str client_version, str server_version, Ve
 
     session.enc_cipher = crypto_aes_ctr_new(enc_key_16, enc_iv_16)
     session.dec_cipher = crypto_aes_ctr_new(dec_key_16, dec_iv_16)
-    session.enc_mac_key = mac_key_cs
-    session.dec_mac_key = mac_key_sc
+    session.enc_mac_key = !mac_key_cs
+    session.dec_mac_key = !mac_key_sc
     session.encrypted = true
 
 # ── Authentication ───────────────────────────────────────────
@@ -490,13 +492,114 @@ CommandResult channel_exec(Session &session, str cmd):
     str stdout_str = bytes_to_str(stdout_data)
     return CommandResult(stdout_str, "", exit_code)
 
+# ── Interactive channel operations ───────────────────────────
+
+# Open a session channel and return the remote channel ID
+int channel_open_session(Session &session):
+    Vector[uint8] open_msg = bytes_from_hex("5a")
+    open_msg = bytes_concat(open_msg, make_name_list("session"))
+    open_msg = bytes_concat(open_msg, make_u32(0))
+    open_msg = bytes_concat(open_msg, make_u32(2097152))
+    open_msg = bytes_concat(open_msg, make_u32(32768))
+    send_packet(session, open_msg)
+
+    Vector[uint8] confirm = read_packet(session)
+    int remote_channel = bytes_read_u32_be(confirm, 1)
+    return remote_channel
+
+# Request a subsystem on an open channel
+void channel_request_subsystem(Session &session, int remote_channel, str subsystem_name):
+    Vector[uint8] msg = bytes_from_hex("62")
+    msg = bytes_concat(msg, make_u32(remote_channel))
+    msg = bytes_concat(msg, make_name_list("subsystem"))
+    msg = bytes_concat(msg, bytes_from_hex("01"))
+    msg = bytes_concat(msg, make_name_list(subsystem_name))
+    send_packet(session, msg)
+
+# Send data over an open channel
+void channel_write_data(Session &session, int remote_channel, str data):
+    Vector[uint8] msg = bytes_from_hex("5e")
+    msg = bytes_concat(msg, make_u32(remote_channel))
+    msg = bytes_concat(msg, make_name_list(data))
+    send_packet(session, msg)
+
+# Read from channel until delimiter found, return accumulated data including delimiter
+str channel_read_until(Session &session, str delimiter):
+    str buffer = ""
+    bool done = false
+
+    while not done:
+        Vector[uint8] msg = read_packet(session)
+        if msg.len() == 0:
+            done = true
+        else:
+            uint8 msg_type = msg.get(0)
+            if msg_type == SSH_MSG_CHANNEL_DATA:
+                int data_len = bytes_read_u32_be(msg, 5)
+                Vector[uint8] chunk = bytes_slice(msg, 9, 9 + data_len)
+                buffer = buffer + bytes_to_str(chunk)
+                # Send window adjust to keep receiving data
+                Vector[uint8] adj = bytes_from_hex("5d")
+                adj = bytes_concat(adj, make_u32(session.channel_id))
+                adj = bytes_concat(adj, make_u32(data_len))
+                send_packet(session, adj)
+                if buffer.contains(delimiter):
+                    done = true
+            else:
+                if msg_type == SSH_MSG_CHANNEL_WINDOW_ADJUST:
+                    pass
+                else:
+                    if msg_type == SSH_MSG_CHANNEL_EOF:
+                        done = true
+                    else:
+                        if msg_type == SSH_MSG_CHANNEL_CLOSE:
+                            done = true
+
+    return buffer
+
 # ── Public API ───────────────────────────────────────────────
 
 equip Session:
     CommandResult run(&self, str cmd):
         return channel_exec(self, cmd)
 
+    Result[bool, str] open_subsystem(&self, str name):
+        int remote = channel_open_session(self)
+        self.channel_id = remote
+        channel_request_subsystem(self, remote, name)
+        # Wait for CHANNEL_SUCCESS or CHANNEL_FAILURE (skip WINDOW_ADJUST)
+        bool waiting = true
+        while waiting:
+            Vector[uint8] reply = read_packet(self)
+            uint8 reply_type = reply.get(0)
+            if reply_type == SSH_MSG_CHANNEL_SUCCESS:
+                self.channel_open = true
+                return Ok(true)
+            else:
+                if reply_type == SSH_MSG_CHANNEL_FAILURE:
+                    return Error("subsystem request failed")
+                else:
+                    if reply_type == SSH_MSG_CHANNEL_WINDOW_ADJUST:
+                        pass
+        return Error("unexpected end of stream")
+
+    void write_data(&self, str data):
+        channel_write_data(self, self.channel_id, data)
+
+    str read_until(&self, str delimiter):
+        return channel_read_until(self, delimiter)
+
+    void close_channel(&self):
+        if self.channel_open:
+            Vector[uint8] close_msg = bytes_from_hex("61")
+            close_msg = bytes_concat(close_msg, make_u32(self.channel_id))
+            send_packet(self, close_msg)
+            self.channel_open = false
+
     void close(&self):
+        # Close any open channel first
+        if self.channel_open:
+            self.close_channel()
         # Send disconnect
         Vector[uint8] disc = bytes_from_hex("01")
         disc = bytes_concat(disc, make_u32(11))
@@ -529,7 +632,7 @@ Result[Session, str] ssh_connect(str host, int port, str user, str password):
     Vector[uint8] dummy_key = bytes_from_hex("00000000000000000000000000000000")
     Vector[uint8] dummy_iv = bytes_from_hex("00000000000000000000000000000000")
 
-    Session session = Session(sock, bytes_from_hex(""), crypto_aes_ctr_new(dummy_key, dummy_iv), crypto_aes_ctr_new(dummy_key, dummy_iv), bytes_from_hex(""), bytes_from_hex(""), 0, 0, false)
+    Session session = Session(sock, bytes_from_hex(""), crypto_aes_ctr_new(dummy_key, dummy_iv), crypto_aes_ctr_new(dummy_key, dummy_iv), bytes_from_hex(""), bytes_from_hex(""), 0, 0, false, 0, false)
 
     # Version exchange
     str server_version = version_exchange(session.sock)

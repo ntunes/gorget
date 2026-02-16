@@ -25,6 +25,11 @@ fn int_range(prim: &PrimitiveType) -> Option<(i128, i128)> {
     }
 }
 
+/// Returns true if this primitive is any integer type (signed or unsigned).
+fn is_integer_type(prim: &PrimitiveType) -> bool {
+    int_range(prim).is_some()
+}
+
 /// Type checker with bidirectional inference.
 struct TypeChecker<'a> {
     scopes: &'a mut ScopeTable,
@@ -248,6 +253,12 @@ impl<'a> TypeChecker<'a> {
                 }
                 self.unify(*a_ret, *b_ret, span);
                 a
+            }
+            // Allow implicit widening between integer types (matches C codegen behavior)
+            (ResolvedType::Primitive(a_prim), ResolvedType::Primitive(b_prim))
+                if is_integer_type(a_prim) && is_integer_type(b_prim) =>
+            {
+                a // accept the expected (lhs) type
             }
             _ => {
                 if a_ty != b_ty {

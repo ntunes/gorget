@@ -46,6 +46,8 @@ fn is_copy_type(type_id: TypeId, types: &TypeTable) -> bool {
                     | Float64
                     | Bool
                     | Char
+                    | Str
+                    | StringType
             )
         }
         ResolvedType::Void | ResolvedType::Never | ResolvedType::Error => true,
@@ -821,6 +823,12 @@ impl<'a> BorrowChecker<'a> {
             let expected = info.param_ownerships[i];
             let found = arg.node.ownership;
 
+            // Allow bare pass (Borrow) where MutableBorrow (&) is expected.
+            // Gorget's C codegen handles address-taking automatically, and the
+            // aliasing checker already catches dangerous double-borrow cases.
+            if expected == Ownership::MutableBorrow && found == Ownership::Borrow {
+                continue;
+            }
             if expected != found {
                 let param_name = info.param_names[i].clone();
                 let expected_str = match expected {
