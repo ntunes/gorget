@@ -1711,6 +1711,42 @@ fn recursive_enum() {
 }
 
 #[test]
+fn toml_parse() {
+    run_gg(
+        "toml_parse.gg",
+        "\
+TOML Example
+42
+3.140000
+true
+localhost
+8080
+server.pem
+3
+80
+8080
+prod
+2
+apple
+banana
+255
+63
+10
+1000
+Tom
+Preston
+true
+true
+true
+true
+true
+error caught
+99
+done",
+    );
+}
+
+#[test]
 fn json_parse() {
     run_gg(
         "json_parse.gg",

@@ -1,0 +1,121 @@
+from std.toml import TomlValue, toml_parse, toml_stringify, toml_stringify_value
+
+void main():
+    # ── Test 1: Basic key-value pairs ───────────────────────
+    str toml_basic = "title = \"TOML Example\"\ncount = 42\npi = 3.14\nenabled = true"
+    Result[TomlValue, str] parsed_basic = toml_parse(toml_basic)
+    match parsed_basic:
+        case Ok(doc1):
+            print(doc1.get("title").as_str())
+            int count_val = doc1.get("count").as_int()
+            float pi_val = doc1.get("pi").as_float()
+            bool enabled_val = doc1.get("enabled").as_bool()
+            print("{count_val}")
+            print("{pi_val}")
+            print("{enabled_val}")
+        case Error(err1):
+            print(err1)
+
+    # ── Test 2: Nested tables ──────────────────────────────
+    str toml_nested = "[server]\nhost = \"localhost\"\nport = 8080\n\n[server.tls]\ncert = \"server.pem\""
+    Result[TomlValue, str] parsed_nested = toml_parse(toml_nested)
+    match parsed_nested:
+        case Ok(doc2):
+            print(doc2.get("server").get("host").as_str())
+            int port_val = doc2.get("server").get("port").as_int()
+            print("{port_val}")
+            print(doc2.get("server").get("tls").get("cert").as_str())
+        case Error(err2):
+            print(err2)
+
+    # ── Test 3: Arrays ─────────────────────────────────────
+    str toml_arr = "ports = [80, 443, 8080]\ntags = [\"web\", \"prod\"]"
+    Result[TomlValue, str] parsed_arr = toml_parse(toml_arr)
+    match parsed_arr:
+        case Ok(doc3):
+            int ports_len = doc3.get("ports").len()
+            int port_first = doc3.get("ports").at(0).as_int()
+            int port_last = doc3.get("ports").at(2).as_int()
+            print("{ports_len}")
+            print("{port_first}")
+            print("{port_last}")
+            print(doc3.get("tags").at(1).as_str())
+        case Error(err3):
+            print(err3)
+
+    # ── Test 4: Array of tables ────────────────────────────
+    str toml_aot = "[[fruits]]\nname = \"apple\"\n\n[[fruits]]\nname = \"banana\""
+    Result[TomlValue, str] parsed_aot = toml_parse(toml_aot)
+    match parsed_aot:
+        case Ok(doc4):
+            int fruits_len = doc4.get("fruits").len()
+            print("{fruits_len}")
+            print(doc4.get("fruits").at(0).get("name").as_str())
+            print(doc4.get("fruits").at(1).get("name").as_str())
+        case Error(err4):
+            print(err4)
+
+    # ── Test 5: Integers with prefixes ─────────────────────
+    str toml_ints = "hex = 0xFF\noct = 0o77\nbin = 0b1010\nsep = 1_000"
+    Result[TomlValue, str] parsed_ints = toml_parse(toml_ints)
+    match parsed_ints:
+        case Ok(doc5):
+            int hex_val = doc5.get("hex").as_int()
+            int oct_val = doc5.get("oct").as_int()
+            int bin_val = doc5.get("bin").as_int()
+            int sep_val = doc5.get("sep").as_int()
+            print("{hex_val}")
+            print("{oct_val}")
+            print("{bin_val}")
+            print("{sep_val}")
+        case Error(err5):
+            print(err5)
+
+    # ── Test 6: Dotted keys ────────────────────────────────
+    str toml_dotted = "name.first = \"Tom\"\nname.last = \"Preston\""
+    Result[TomlValue, str] parsed_dotted = toml_parse(toml_dotted)
+    match parsed_dotted:
+        case Ok(doc6):
+            print(doc6.get("name").get("first").as_str())
+            print(doc6.get("name").get("last").as_str())
+        case Error(err6):
+            print(err6)
+
+    # ── Test 7: Type checks ───────────────────────────────
+    str toml_types = "s = \"hello\"\nn = 5\nf = 2.5\nb = false"
+    Result[TomlValue, str] parsed_types = toml_parse(toml_types)
+    match parsed_types:
+        case Ok(doc7):
+            bool is_str = doc7.get("s").is_string()
+            bool is_int = doc7.get("n").is_int()
+            bool is_flt = doc7.get("f").is_float()
+            bool is_bln = doc7.get("b").is_bool()
+            bool is_tbl = doc7.is_table()
+            print("{is_str}")
+            print("{is_int}")
+            print("{is_flt}")
+            print("{is_bln}")
+            print("{is_tbl}")
+        case Error(err7):
+            print(err7)
+
+    # ── Test 8: Error handling ─────────────────────────────
+    str toml_bad = "key = "
+    Result[TomlValue, str] parsed_bad = toml_parse(toml_bad)
+    match parsed_bad:
+        case Ok(doc8):
+            print("should not reach here")
+        case Error(err8):
+            print("error caught")
+
+    # ── Test 9: Comments ───────────────────────────────────
+    str toml_comments = "# This is a comment\nval = 99 # inline comment"
+    Result[TomlValue, str] parsed_comments = toml_parse(toml_comments)
+    match parsed_comments:
+        case Ok(doc9):
+            int comment_val = doc9.get("val").as_int()
+            print("{comment_val}")
+        case Error(err9):
+            print(err9)
+
+    print("done")

@@ -16,7 +16,7 @@ pub fn is_stdlib_module(segments: &[String]) -> bool {
         return false;
     }
     match segments.len() {
-        2 => matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv" | "io" | "random" | "time" | "collections" | "math" | "fmt" | "process" | "sdl" | "gfx" | "ecs" | "json" | "bytes" | "crypto" | "ssh"),
+        2 => matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv" | "io" | "random" | "time" | "collections" | "math" | "fmt" | "process" | "sdl" | "gfx" | "ecs" | "json" | "toml" | "bytes" | "crypto" | "ssh"),
         3 => (segments[1] == "http" && segments[2] == "client")
             || (segments[1] == "net" && segments[2] == "socket"),
         _ => false,
@@ -43,6 +43,7 @@ pub fn generate_stdlib_module(segments: &[String]) -> Option<Module> {
             "process" => Some(gen_process_module()),
             "sdl" => Some(gen_sdl_module()),
             "json" => None, // file-based module — loaded via stdlib_module_source()
+            "toml" => None, // file-based module — loaded via stdlib_module_source()
             "bytes" => Some(gen_bytes_module()),
             "crypto" => Some(gen_crypto_module()),
             "gfx" => None, // file-based module — loaded via stdlib_module_source()
@@ -512,6 +513,7 @@ pub fn stdlib_module_source(segments: &[String]) -> Option<&'static str> {
         Some("ecs") => Some(include_str!("../lib/std/ecs.gg")),
         Some("ssh") => Some(include_str!("../lib/std/ssh.gg")),
         Some("json") => Some(include_str!("../lib/std/json.gg")),
+        Some("toml") => Some(include_str!("../lib/std/toml.gg")),
         _ => None,
     }
 }
@@ -1241,6 +1243,57 @@ mod tests {
         assert!(fn_names.contains(&"json_stringify".to_string()));
         assert!(fn_names.contains(&"json_pretty".to_string()));
         assert_eq!(equip_count, 2); // equip JsonParser + equip Json
+    }
+
+    #[test]
+    fn is_stdlib_toml() {
+        assert!(is_stdlib_module(&["std".into(), "toml".into()]));
+    }
+
+    #[test]
+    fn generate_toml_returns_none() {
+        assert!(generate_stdlib_module(&["std".into(), "toml".into()]).is_none());
+    }
+
+    #[test]
+    fn toml_module_source_exists() {
+        let source = stdlib_module_source(&["std".into(), "toml".into()]);
+        assert!(source.is_some());
+        let src = source.unwrap();
+        assert!(src.contains("enum TomlValue"));
+        assert!(src.contains("toml_parse"));
+        assert!(src.contains("toml_stringify"));
+        assert!(src.contains("equip TomlValue"));
+        assert!(src.contains("Arr(Vector[TomlValue])"));
+        assert!(src.contains("Tbl(Dict[str, TomlValue])"));
+    }
+
+    #[test]
+    fn toml_source_parses() {
+        let source = stdlib_module_source(&["std".into(), "toml".into()]).unwrap();
+        let mut parser = crate::parser::Parser::new(source);
+        let module = parser.parse_module();
+        assert!(parser.errors.is_empty(), "toml.gg parse errors: {:?}", parser.errors);
+
+        let mut enum_names = vec![];
+        let mut struct_names = vec![];
+        let mut fn_names = vec![];
+        let mut equip_count = 0;
+        for item in &module.items {
+            match &item.node {
+                Item::Enum(e) => enum_names.push(e.name.node.clone()),
+                Item::Struct(s) => struct_names.push(s.name.node.clone()),
+                Item::Function(f) => fn_names.push(f.name.node.clone()),
+                Item::Equip(_) => equip_count += 1,
+                _ => {}
+            }
+        }
+
+        assert!(enum_names.contains(&"TomlValue".to_string()));
+        assert!(struct_names.contains(&"TomlParser".to_string()));
+        assert!(fn_names.contains(&"toml_parse".to_string()));
+        assert!(fn_names.contains(&"toml_stringify".to_string()));
+        assert_eq!(equip_count, 2); // equip TomlParser + equip TomlValue
     }
 
     #[test]

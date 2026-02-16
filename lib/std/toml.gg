@@ -1,0 +1,951 @@
+# std.toml — Pure Gorget TOML v1.0 parser
+#
+# Provides a recursive-descent TOML parser, serializer, and accessor methods.
+# No C dependencies — uses only Gorget standard library.
+#
+# Architecture: two-phase parsing.
+# Phase 1: Collect flat sections (path + key-value Dict per section).
+# Phase 2: Assemble nested tree bottom-up via recursion.
+# This avoids Gorget's value-type Dict aliasing (copying metadata on extract).
+
+from std.collections import Vector, Dict
+from std.conv import parse_int, parse_float, int_to_str, float_to_str, bool_to_str, char_to_str
+
+# ── TOML value type ─────────────────────────────────────────
+
+enum TomlValue:
+    Str(str)
+    Int(int)
+    Float(float)
+    Bool(bool)
+    DateTime(str)
+    Arr(Vector[TomlValue])
+    Tbl(Dict[str, TomlValue])
+
+# ── Section collection ──────────────────────────────────────
+# Each [table] or [[array-of-tables]] header starts a new section.
+# Root-level key-value pairs belong to section with empty path.
+
+struct TomlSection:
+    Vector[str] sec_path
+    Dict[str, TomlValue] sec_data
+    bool sec_is_aot
+
+# ── Internal parser ─────────────────────────────────────────
+
+struct TomlParser:
+    str source
+    int pos
+    str err
+    Vector[TomlSection] sections
+    int current_sec
+
+equip TomlParser:
+    bool failed(self) = self.err != ""
+
+    void fail(&self, str msg):
+        if self.err == "":
+            self.err = moving msg
+
+    char peek(self):
+        if self.pos < self.source.len():
+            return self.source[self.pos]
+        return '\0'
+
+    bool at_end(self) = self.pos >= self.source.len()
+
+    void skip_ws(&self):
+        while self.pos < self.source.len():
+            char ch = self.source[self.pos]
+            if ch == ' ' or ch == '\t':
+                self.pos = self.pos + 1
+            else:
+                return
+
+    void skip_ws_and_newlines(&self):
+        while self.pos < self.source.len():
+            char ch = self.source[self.pos]
+            if ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r':
+                self.pos = self.pos + 1
+            elif ch == '#':
+                self.skip_comment()
+            else:
+                return
+
+    void skip_comment(&self):
+        while self.pos < self.source.len() and self.source[self.pos] != '\n':
+            self.pos = self.pos + 1
+
+    void skip_to_newline(&self):
+        self.skip_ws()
+        if self.pos < self.source.len():
+            char ch = self.source[self.pos]
+            if ch == '#':
+                self.skip_comment()
+            if self.pos < self.source.len() and self.source[self.pos] == '\n':
+                self.pos = self.pos + 1
+            elif self.pos < self.source.len() and self.source[self.pos] == '\r':
+                self.pos = self.pos + 1
+                if self.pos < self.source.len() and self.source[self.pos] == '\n':
+                    self.pos = self.pos + 1
+
+    # ── Key parsing ─────────────────────────────────────────
+
+    str parse_bare_key(&self):
+        int start = self.pos
+        while self.pos < self.source.len():
+            char ch = self.source[self.pos]
+            if ch >= 'a' and ch <= 'z':
+                self.pos = self.pos + 1
+            elif ch >= 'A' and ch <= 'Z':
+                self.pos = self.pos + 1
+            elif ch >= '0' and ch <= '9':
+                self.pos = self.pos + 1
+            elif ch == '-' or ch == '_':
+                self.pos = self.pos + 1
+            else:
+                break
+        if self.pos == start:
+            self.fail("expected key")
+            return ""
+        return self.source[start..self.pos]
+
+    str parse_key_part(&self):
+        if self.pos >= self.source.len():
+            self.fail("expected key")
+            return ""
+        char ch = self.source[self.pos]
+        if ch == '"':
+            return self.parse_basic_string()
+        elif ch == '\'':
+            return self.parse_literal_string()
+        return self.parse_bare_key()
+
+    Vector[str] parse_key(&self):
+        Vector[str] parts = Vector[str]()
+        str first_part = self.parse_key_part()
+        if self.failed():
+            return parts
+        parts.push(first_part)
+        while self.pos < self.source.len() and self.source[self.pos] == '.':
+            self.pos = self.pos + 1
+            str next_part = self.parse_key_part()
+            if self.failed():
+                return parts
+            parts.push(next_part)
+        return parts
+
+    # ── String parsing ──────────────────────────────────────
+
+    str parse_basic_string(&self):
+        # Skip opening "
+        self.pos = self.pos + 1
+        # Check for multi-line """
+        if self.pos + 1 < self.source.len() and self.source[self.pos] == '"' and self.source[self.pos + 1] == '"':
+            self.pos = self.pos + 2
+            return self.parse_ml_basic_string()
+        str toml_result = ""
+        while self.pos < self.source.len():
+            char ch = self.source[self.pos]
+            if ch == '"':
+                self.pos = self.pos + 1
+                return toml_result
+            elif ch == '\\':
+                toml_result = toml_result + self.parse_escape()
+            else:
+                toml_result = toml_result + char_to_str(ch)
+                self.pos = self.pos + 1
+        self.fail("unterminated basic string")
+        return ""
+
+    str parse_ml_basic_string(&self):
+        # Skip optional first newline after """
+        if self.pos < self.source.len() and self.source[self.pos] == '\n':
+            self.pos = self.pos + 1
+        elif self.pos + 1 < self.source.len() and self.source[self.pos] == '\r' and self.source[self.pos + 1] == '\n':
+            self.pos = self.pos + 2
+        str toml_result = ""
+        while self.pos < self.source.len():
+            if self.pos + 2 < self.source.len() and self.source[self.pos] == '"' and self.source[self.pos + 1] == '"' and self.source[self.pos + 2] == '"':
+                self.pos = self.pos + 3
+                return toml_result
+            char ch = self.source[self.pos]
+            if ch == '\\':
+                self.pos = self.pos + 1
+                if self.pos < self.source.len():
+                    char next_ch = self.source[self.pos]
+                    if next_ch == '\n' or next_ch == '\r':
+                        self.skip_ws_and_newlines()
+                    else:
+                        self.pos = self.pos - 1
+                        toml_result = toml_result + self.parse_escape()
+                else:
+                    self.fail("unterminated escape in multi-line string")
+                    return ""
+            else:
+                toml_result = toml_result + char_to_str(ch)
+                self.pos = self.pos + 1
+        self.fail("unterminated multi-line basic string")
+        return ""
+
+    str parse_escape(&self):
+        self.pos = self.pos + 1
+        if self.pos >= self.source.len():
+            self.fail("unterminated escape sequence")
+            return ""
+        char esc = self.source[self.pos]
+        self.pos = self.pos + 1
+        if esc == '"':
+            return "\""
+        elif esc == '\\':
+            return "\\"
+        elif esc == 'n':
+            return "\n"
+        elif esc == 't':
+            return "\t"
+        elif esc == 'r':
+            return "\r"
+        elif esc == 'b':
+            return "\b"
+        elif esc == 'f':
+            return "\f"
+        elif esc == 'u' or esc == 'U':
+            int hex_len = 4
+            if esc == 'U':
+                hex_len = 8
+            int hex_count = 0
+            while hex_count < hex_len and self.pos < self.source.len():
+                self.pos = self.pos + 1
+                hex_count = hex_count + 1
+            return "?"
+        self.fail("invalid escape sequence")
+        return ""
+
+    str parse_literal_string(&self):
+        self.pos = self.pos + 1
+        if self.pos + 1 < self.source.len() and self.source[self.pos] == '\'' and self.source[self.pos + 1] == '\'':
+            self.pos = self.pos + 2
+            return self.parse_ml_literal_string()
+        str toml_result = ""
+        while self.pos < self.source.len():
+            char ch = self.source[self.pos]
+            if ch == '\'':
+                self.pos = self.pos + 1
+                return toml_result
+            toml_result = toml_result + char_to_str(ch)
+            self.pos = self.pos + 1
+        self.fail("unterminated literal string")
+        return ""
+
+    str parse_ml_literal_string(&self):
+        if self.pos < self.source.len() and self.source[self.pos] == '\n':
+            self.pos = self.pos + 1
+        elif self.pos + 1 < self.source.len() and self.source[self.pos] == '\r' and self.source[self.pos + 1] == '\n':
+            self.pos = self.pos + 2
+        str toml_result = ""
+        while self.pos < self.source.len():
+            if self.pos + 2 < self.source.len() and self.source[self.pos] == '\'' and self.source[self.pos + 1] == '\'' and self.source[self.pos + 2] == '\'':
+                self.pos = self.pos + 3
+                return toml_result
+            toml_result = toml_result + char_to_str(self.source[self.pos])
+            self.pos = self.pos + 1
+        self.fail("unterminated multi-line literal string")
+        return ""
+
+    # ── Value parsing ───────────────────────────────────────
+
+    TomlValue parse_value(&self):
+        if self.failed():
+            return Str("")
+        self.skip_ws()
+        if self.at_end():
+            self.fail("unexpected end of input")
+            return Str("")
+        char ch = self.peek()
+        if ch == '"':
+            str sv = self.parse_basic_string()
+            return Str(sv)
+        elif ch == '\'':
+            str sv = self.parse_literal_string()
+            return Str(sv)
+        elif ch == 't' or ch == 'f':
+            return self.parse_bool()
+        elif ch == '[':
+            return self.parse_array()
+        elif ch == '{':
+            return self.parse_inline_table()
+        elif ch == 'i' or ch == 'n':
+            return self.parse_special_float()
+        return self.parse_number_or_date()
+
+    TomlValue parse_bool(&self):
+        if self.pos + 4 <= self.source.len() and self.source[self.pos..self.pos + 4] == "true":
+            self.pos = self.pos + 4
+            return Bool(true)
+        if self.pos + 5 <= self.source.len() and self.source[self.pos..self.pos + 5] == "false":
+            self.pos = self.pos + 5
+            return Bool(false)
+        self.fail("expected boolean")
+        return Str("")
+
+    TomlValue parse_special_float(&self):
+        if self.pos + 3 <= self.source.len() and self.source[self.pos..self.pos + 3] == "inf":
+            self.pos = self.pos + 3
+            return Float(1.0 / 0.0)
+        if self.pos + 3 <= self.source.len() and self.source[self.pos..self.pos + 3] == "nan":
+            self.pos = self.pos + 3
+            return Float(0.0 / 0.0)
+        self.fail("unexpected keyword")
+        return Str("")
+
+    TomlValue parse_array(&self):
+        self.pos = self.pos + 1
+        Vector[TomlValue] elems = Vector[TomlValue]()
+        self.skip_ws_and_newlines()
+        if self.pos < self.source.len() and self.source[self.pos] == ']':
+            self.pos = self.pos + 1
+            return Arr(elems)
+        while self.pos < self.source.len():
+            self.skip_ws_and_newlines()
+            TomlValue elem = self.parse_value()
+            if self.failed():
+                return Str("")
+            elems.push(elem)
+            self.skip_ws_and_newlines()
+            if self.pos >= self.source.len():
+                self.fail("unterminated array")
+                return Str("")
+            if self.source[self.pos] == ',':
+                self.pos = self.pos + 1
+                self.skip_ws_and_newlines()
+                if self.pos < self.source.len() and self.source[self.pos] == ']':
+                    self.pos = self.pos + 1
+                    return Arr(elems)
+            elif self.source[self.pos] == ']':
+                self.pos = self.pos + 1
+                return Arr(elems)
+            else:
+                self.fail("expected ',' or ']' in array")
+                return Str("")
+        self.fail("unterminated array")
+        return Str("")
+
+    TomlValue parse_inline_table(&self):
+        self.pos = self.pos + 1
+        Dict[str, TomlValue] tbl = Dict[str, TomlValue]()
+        self.skip_ws()
+        if self.pos < self.source.len() and self.source[self.pos] == '}':
+            self.pos = self.pos + 1
+            return Tbl(tbl)
+        while self.pos < self.source.len():
+            self.skip_ws()
+            Vector[str] key_parts = self.parse_key()
+            if self.failed():
+                return Str("")
+            self.skip_ws()
+            if self.pos >= self.source.len() or self.source[self.pos] != '=':
+                self.fail("expected '=' after key in inline table")
+                return Str("")
+            self.pos = self.pos + 1
+            self.skip_ws()
+            TomlValue tbl_val = self.parse_value()
+            if self.failed():
+                return Str("")
+            # For inline tables, dotted keys create nested tables inline
+            if key_parts.len() == 1:
+                tbl.put(key_parts.get(0), tbl_val)
+            else:
+                # Build nested structure for dotted key in inline table
+                TomlValue nested = toml_wrap_dotted(key_parts, 0, tbl_val)
+                tbl.put(key_parts.get(0), nested)
+            self.skip_ws()
+            if self.pos >= self.source.len():
+                self.fail("unterminated inline table")
+                return Str("")
+            if self.source[self.pos] == ',':
+                self.pos = self.pos + 1
+            elif self.source[self.pos] == '}':
+                self.pos = self.pos + 1
+                return Tbl(tbl)
+            else:
+                self.fail("expected ',' or '}' in inline table")
+                return Str("")
+        self.fail("unterminated inline table")
+        return Str("")
+
+    # ── Number / date-time parsing ──────────────────────────
+
+    TomlValue parse_number_or_date(&self):
+        int start = self.pos
+        bool is_negative = false
+        if self.pos < self.source.len() and self.source[self.pos] == '-':
+            is_negative = true
+            self.pos = self.pos + 1
+        elif self.pos < self.source.len() and self.source[self.pos] == '+':
+            self.pos = self.pos + 1
+        # Check for hex/oct/bin prefixes
+        if self.pos + 1 < self.source.len() and self.source[self.pos] == '0':
+            char num_prefix = self.source[self.pos + 1]
+            if num_prefix == 'x' or num_prefix == 'o' or num_prefix == 'b':
+                return self.parse_prefixed_int(start, is_negative, num_prefix)
+        # Scan digits
+        bool has_dot = false
+        bool has_exp = false
+        bool could_be_date = false
+        while self.pos < self.source.len():
+            char ch = self.source[self.pos]
+            if ch >= '0' and ch <= '9':
+                self.pos = self.pos + 1
+            elif ch == '_':
+                self.pos = self.pos + 1
+            elif ch == '.':
+                has_dot = true
+                self.pos = self.pos + 1
+            elif ch == 'e' or ch == 'E':
+                has_exp = true
+                self.pos = self.pos + 1
+                if self.pos < self.source.len():
+                    char sign_ch = self.source[self.pos]
+                    if sign_ch == '+' or sign_ch == '-':
+                        self.pos = self.pos + 1
+            elif ch == '-' or ch == ':' or ch == 'T' or ch == 'Z':
+                could_be_date = true
+                self.pos = self.pos + 1
+            elif ch == '+':
+                could_be_date = true
+                self.pos = self.pos + 1
+            else:
+                break
+        str num_text = self.source[start..self.pos]
+        if could_be_date:
+            return DateTime(num_text)
+        str cleaned = toml_strip_underscores(num_text)
+        if has_dot or has_exp:
+            float fv = parse_float(cleaned)
+            return Float(fv)
+        int iv = parse_int(cleaned)
+        return Int(iv)
+
+    TomlValue parse_prefixed_int(&self, int start, bool is_negative, char num_prefix):
+        self.pos = self.pos + 2
+        int val = 0
+        int base = 16
+        if num_prefix == 'o':
+            base = 8
+        elif num_prefix == 'b':
+            base = 2
+        bool has_digits = false
+        while self.pos < self.source.len():
+            char ch = self.source[self.pos]
+            if ch == '_':
+                self.pos = self.pos + 1
+            elif ch >= '0' and ch <= '9':
+                int digit = ch as int - '0' as int
+                if digit >= base:
+                    break
+                val = val * base + digit
+                self.pos = self.pos + 1
+                has_digits = true
+            elif ch >= 'a' and ch <= 'f' and base == 16:
+                val = val * 16 + (ch as int - 'a' as int + 10)
+                self.pos = self.pos + 1
+                has_digits = true
+            elif ch >= 'A' and ch <= 'F' and base == 16:
+                val = val * 16 + (ch as int - 'A' as int + 10)
+                self.pos = self.pos + 1
+                has_digits = true
+            else:
+                break
+        if not has_digits:
+            self.fail("expected digits after prefix")
+            return Int(0)
+        if is_negative:
+            val = 0 - val
+        return Int(val)
+
+    # ── Section-based key-value storage ─────────────────────
+
+    void add_kv(&self, Vector[str] key_parts, TomlValue toml_val):
+        # For dotted keys like a.b.c = val, we store key "a" → wrap_dotted
+        # For simple keys, store directly in current section
+        TomlSection cur = self.sections.get(self.current_sec)
+        Dict[str, TomlValue] sd = cur.sec_data
+        if key_parts.len() == 1:
+            sd.put(key_parts.get(0), toml_val)
+        else:
+            # Build nested value for dotted key
+            str top_key = key_parts.get(0)
+            TomlValue wrapped = toml_wrap_dotted(key_parts, 1, toml_val)
+            if sd.contains(top_key):
+                # Merge with existing table (e.g. name.first + name.last)
+                Dict[str, TomlValue] wd = toml_extract_tbl(wrapped)
+                Dict[str, TomlValue] merged = toml_merge_into(sd[top_key], wd)
+                sd.put(top_key, Tbl(merged))
+            else:
+                sd.put(top_key, wrapped)
+        TomlSection updated = TomlSection(cur.sec_path, sd, cur.sec_is_aot)
+        self.sections.set(self.current_sec, updated)
+
+    void start_section(&self, Vector[str] hdr_path, bool is_aot):
+        Dict[str, TomlValue] new_data = Dict[str, TomlValue]()
+        TomlSection new_sec = TomlSection(hdr_path, new_data, is_aot)
+        self.sections.push(new_sec)
+        self.current_sec = self.sections.len() - 1
+
+    # ── Top-level document parsing ──────────────────────────
+
+    void parse_document(&self):
+        self.skip_ws_and_newlines()
+        while self.pos < self.source.len() and not self.failed():
+            char ch = self.source[self.pos]
+            if ch == '#':
+                self.skip_comment()
+                self.skip_ws_and_newlines()
+            elif ch == '[':
+                self.parse_table_header()
+                self.skip_ws_and_newlines()
+            elif ch == '\n' or ch == '\r':
+                self.pos = self.pos + 1
+            else:
+                Vector[str] kv_key = self.parse_key()
+                if self.failed():
+                    return
+                self.skip_ws()
+                if self.pos >= self.source.len() or self.source[self.pos] != '=':
+                    self.fail("expected '=' after key")
+                    return
+                self.pos = self.pos + 1
+                self.skip_ws()
+                TomlValue kv_val = self.parse_value()
+                if self.failed():
+                    return
+                self.add_kv(kv_key, kv_val)
+                self.skip_to_newline()
+                self.skip_ws_and_newlines()
+
+    void parse_table_header(&self):
+        self.pos = self.pos + 1
+        bool is_array_table = false
+        if self.pos < self.source.len() and self.source[self.pos] == '[':
+            is_array_table = true
+            self.pos = self.pos + 1
+        self.skip_ws()
+        Vector[str] hdr_key = self.parse_key()
+        if self.failed():
+            return
+        self.skip_ws()
+        if self.pos >= self.source.len() or self.source[self.pos] != ']':
+            self.fail("expected ']' in table header")
+            return
+        self.pos = self.pos + 1
+        if is_array_table:
+            if self.pos >= self.source.len() or self.source[self.pos] != ']':
+                self.fail("expected ']]' in array-of-tables header")
+                return
+            self.pos = self.pos + 1
+        self.start_section(hdr_key, is_array_table)
+        self.skip_to_newline()
+
+# ── Helper free functions ───────────────────────────────────
+
+TomlValue toml_wrap_dotted(Vector[str] key_parts, int from_idx, TomlValue leaf_val):
+    # Wraps a value in nested Tbl() wrappers for dotted key parts[from_idx..]
+    if from_idx >= key_parts.len() - 1:
+        # Last part — just wrap key → val
+        Dict[str, TomlValue] leaf_tbl = Dict[str, TomlValue]()
+        leaf_tbl.put(key_parts.get(key_parts.len() - 1), leaf_val)
+        return Tbl(leaf_tbl)
+    # Recurse: inner = wrap_dotted(parts, from_idx+1, val)
+    TomlValue inner = toml_wrap_dotted(key_parts, from_idx + 1, leaf_val)
+    Dict[str, TomlValue] outer = Dict[str, TomlValue]()
+    outer.put(key_parts.get(from_idx), inner)
+    return Tbl(outer)
+
+str toml_strip_underscores(str txt):
+    str cleaned = ""
+    int ti = 0
+    while ti < txt.len():
+        char tc = txt[ti]
+        if tc != '_':
+            cleaned = cleaned + char_to_str(tc)
+        ti = ti + 1
+    return cleaned
+
+# ── Phase 2: Assemble tree from sections ────────────────────
+
+TomlValue toml_assemble(Vector[TomlSection] secs):
+    # Build nested Dict tree from flat sections.
+    # Each section has a path (e.g. ["server", "tls"]) and a local Dict.
+    # We assemble bottom-up: create the root Dict, then place each section's
+    # entries at the correct path using recursive wrapping.
+    Dict[str, TomlValue] root = Dict[str, TomlValue]()
+    int si = 0
+    while si < secs.len():
+        TomlSection sec = secs.get(si)
+        if sec.sec_path.len() == 0:
+            # Root section — copy entries directly
+            Dict[str, TomlValue] sd = sec.sec_data
+            Vector[str] rk = sd.keys()
+            int ri = 0
+            while ri < rk.len():
+                str rkey = rk.get(ri)
+                root.put(rkey, sd[rkey])
+                ri = ri + 1
+        else:
+            if sec.sec_is_aot:
+                # Array of tables — wrap entries in Tbl, collect into array
+                toml_place_aot(&root, sec.sec_path, sec.sec_data)
+            else:
+                # Regular table — wrap and place
+                toml_place_table(&root, sec.sec_path, 0, sec.sec_data)
+        si = si + 1
+    return Tbl(root)
+
+void toml_place_table(Dict[str, TomlValue] &root, Vector[str] tpath, int idx, Dict[str, TomlValue] sec_data):
+    if idx == tpath.len() - 1:
+        # Place at this level
+        str final_key = tpath.get(idx)
+        if root.contains(final_key):
+            # Merge into existing table — entries from sec_data into existing
+            # Since we can't modify nested Dict in-place, we rebuild
+            TomlValue existing = root[final_key]
+            Dict[str, TomlValue] merged = toml_merge_into(existing, sec_data)
+            root.put(final_key, Tbl(merged))
+        else:
+            root.put(final_key, Tbl(sec_data))
+        return
+    # Need to navigate deeper — extract, recurse, put back
+    str nav_key = tpath.get(idx)
+    if root.contains(nav_key):
+        TomlValue existing = root[nav_key]
+        Dict[str, TomlValue] sub = toml_extract_tbl(existing)
+        toml_place_table(&sub, tpath, idx + 1, sec_data)
+        root.put(nav_key, Tbl(sub))
+    else:
+        Dict[str, TomlValue] fresh = Dict[str, TomlValue]()
+        toml_place_table(&fresh, tpath, idx + 1, sec_data)
+        root.put(nav_key, Tbl(fresh))
+
+void toml_place_aot(Dict[str, TomlValue] &root, Vector[str] tpath, Dict[str, TomlValue] sec_data):
+    if tpath.len() == 1:
+        str aot_key = tpath.get(0)
+        if root.contains(aot_key):
+            # Append to existing array
+            TomlValue existing = root[aot_key]
+            Vector[TomlValue] arr = toml_extract_arr(existing)
+            arr.push(Tbl(sec_data))
+            root.put(aot_key, Arr(arr))
+        else:
+            Vector[TomlValue] new_arr = Vector[TomlValue]()
+            new_arr.push(Tbl(sec_data))
+            root.put(aot_key, Arr(new_arr))
+        return
+    # Navigate to parent, recurse
+    str nav_key = tpath.get(0)
+    Vector[str] rest_path = toml_subpath(tpath, 1)
+    if root.contains(nav_key):
+        TomlValue existing = root[nav_key]
+        Dict[str, TomlValue] sub = toml_extract_tbl(existing)
+        toml_place_aot(&sub, rest_path, sec_data)
+        root.put(nav_key, Tbl(sub))
+    else:
+        Dict[str, TomlValue] fresh = Dict[str, TomlValue]()
+        toml_place_aot(&fresh, rest_path, sec_data)
+        root.put(nav_key, Tbl(fresh))
+
+Dict[str, TomlValue] toml_extract_tbl(TomlValue tv):
+    match tv:
+        case Tbl(td):
+            return td
+        else:
+            return Dict[str, TomlValue]()
+
+Vector[TomlValue] toml_extract_arr(TomlValue tv):
+    match tv:
+        case Arr(ad):
+            return ad
+        else:
+            return Vector[TomlValue]()
+
+Dict[str, TomlValue] toml_merge_into(TomlValue existing, Dict[str, TomlValue] new_data):
+    Dict[str, TomlValue] base = toml_extract_tbl(existing)
+    Vector[str] nk = new_data.keys()
+    int ni = 0
+    while ni < nk.len():
+        str nkey = nk.get(ni)
+        base.put(nkey, new_data[nkey])
+        ni = ni + 1
+    return base
+
+Vector[str] toml_subpath(Vector[str] full_path, int from_idx):
+    Vector[str] sub = Vector[str]()
+    int si = from_idx
+    while si < full_path.len():
+        sub.push(full_path.get(si))
+        si = si + 1
+    return sub
+
+# ── Public API ──────────────────────────────────────────────
+
+Result[TomlValue, str] toml_parse(str input):
+    Vector[TomlSection] secs = Vector[TomlSection]()
+    Dict[str, TomlValue] root_data = Dict[str, TomlValue]()
+    Vector[str] root_path = Vector[str]()
+    TomlSection root_sec = TomlSection(root_path, root_data, false)
+    secs.push(root_sec)
+    TomlParser tp = TomlParser(input, 0, "", secs, 0)
+    tp.parse_document()
+    if tp.failed():
+        return Error(tp.err)
+    return Ok(toml_assemble(tp.sections))
+
+# ── Serialization ───────────────────────────────────────────
+
+str toml_escape_string(str sv):
+    str toml_out = "\""
+    int si = 0
+    while si < sv.len():
+        char sc = sv[si]
+        if sc == '"':
+            toml_out = toml_out + "\\\""
+        elif sc == '\\':
+            toml_out = toml_out + "\\\\"
+        elif sc == '\n':
+            toml_out = toml_out + "\\n"
+        elif sc == '\t':
+            toml_out = toml_out + "\\t"
+        elif sc == '\r':
+            toml_out = toml_out + "\\r"
+        else:
+            toml_out = toml_out + char_to_str(sc)
+        si = si + 1
+    return toml_out + "\""
+
+str toml_stringify_value(TomlValue tv):
+    match tv:
+        case Str(sv):
+            return toml_escape_string(sv)
+        case Int(iv):
+            return int_to_str(iv)
+        case Float(fv):
+            return float_to_str(fv)
+        case Bool(bv):
+            if bv:
+                return "true"
+            return "false"
+        case DateTime(dv):
+            return dv
+        case Arr(av):
+            if av.len() == 0:
+                return "[]"
+            str arr_out = "["
+            int ai = 0
+            while ai < av.len():
+                if ai > 0:
+                    arr_out = arr_out + ", "
+                arr_out = arr_out + toml_stringify_value(av.get(ai))
+                ai = ai + 1
+            return arr_out + "]"
+        case Tbl(tv_tbl):
+            if tv_tbl.len() == 0:
+                return "{}"
+            Vector[str] tbl_keys = tv_tbl.keys()
+            str tbl_out = "{"
+            int ti = 0
+            while ti < tbl_keys.len():
+                if ti > 0:
+                    tbl_out = tbl_out + ", "
+                str tk = tbl_keys.get(ti)
+                tbl_out = tbl_out + tk + " = " + toml_stringify_value(tv_tbl[tk])
+                ti = ti + 1
+            return tbl_out + "}"
+
+str toml_stringify_section(str sec_prefix, Dict[str, TomlValue] tbl):
+    str sec_out = ""
+    Vector[str] sec_keys = tbl.keys()
+    # First pass: simple key-value pairs (not sub-tables or array-of-tables)
+    int si = 0
+    while si < sec_keys.len():
+        str sk1 = sec_keys.get(si)
+        TomlValue sv1 = tbl[sk1]
+        bool skip_val = toml_is_subtable(sv1)
+        if not skip_val:
+            sec_out = sec_out + sk1 + " = " + toml_stringify_value(sv1) + "\n"
+        si = si + 1
+    # Second pass: sub-tables and arrays-of-tables
+    si = 0
+    while si < sec_keys.len():
+        str sk2 = sec_keys.get(si)
+        TomlValue sv2 = tbl[sk2]
+        str child_prefix = sk2
+        if sec_prefix != "":
+            child_prefix = sec_prefix + "." + sk2
+        match sv2:
+            case Tbl(stbl2):
+                sec_out = sec_out + "\n[" + child_prefix + "]\n"
+                sec_out = sec_out + toml_stringify_section(child_prefix, stbl2)
+            case Arr(elems2):
+                if toml_is_aot_arr(elems2):
+                    sec_out = sec_out + toml_stringify_aot(child_prefix, elems2)
+            else:
+                pass
+        si = si + 1
+    return sec_out
+
+bool toml_is_subtable(TomlValue tv):
+    match tv:
+        case Tbl(td):
+            return true
+        case Arr(ad):
+            return toml_is_aot_arr(ad)
+        else:
+            return false
+
+bool toml_is_aot_arr(Vector[TomlValue] items):
+    if items.len() == 0:
+        return false
+    TomlValue first = items.get(0)
+    match first:
+        case Tbl(ft):
+            return true
+        else:
+            return false
+
+str toml_stringify_aot(str aot_prefix, Vector[TomlValue] aot_items):
+    str aot_out = ""
+    int aoti = 0
+    while aoti < aot_items.len():
+        TomlValue aot_elem = aot_items.get(aoti)
+        match aot_elem:
+            case Tbl(aot_tbl):
+                aot_out = aot_out + "\n[[" + aot_prefix + "]]\n"
+                aot_out = aot_out + toml_stringify_section(aot_prefix, aot_tbl)
+            else:
+                pass
+        aoti = aoti + 1
+    return aot_out
+
+str toml_stringify(TomlValue tv):
+    match tv:
+        case Tbl(root_tbl):
+            return toml_stringify_section("", root_tbl)
+        else:
+            return toml_stringify_value(tv)
+
+# ── Accessor methods ────────────────────────────────────────
+
+equip TomlValue:
+    TomlValue get(self, str key):
+        match self:
+            case Tbl(tbl_data):
+                if tbl_data.contains(key):
+                    return tbl_data[key]
+                return Str("")
+            else:
+                return Str("")
+
+    TomlValue at(self, int index):
+        match self:
+            case Arr(arr_data):
+                if index >= 0 and index < arr_data.len():
+                    return arr_data.get(index)
+                return Str("")
+            else:
+                return Str("")
+
+    str as_str(self):
+        match self:
+            case Str(sv):
+                return sv
+            case DateTime(dv):
+                return dv
+            else:
+                return ""
+
+    int as_int(self):
+        match self:
+            case Int(iv):
+                return iv
+            else:
+                return 0
+
+    float as_float(self):
+        match self:
+            case Float(fv):
+                return fv
+            case Int(iv):
+                return iv as float
+            else:
+                return 0.0
+
+    bool as_bool(self):
+        match self:
+            case Bool(bv):
+                return bv
+            else:
+                return false
+
+    bool is_table(self):
+        match self:
+            case Tbl(td):
+                return true
+            else:
+                return false
+
+    bool is_array(self):
+        match self:
+            case Arr(ad):
+                return true
+            else:
+                return false
+
+    bool is_string(self):
+        match self:
+            case Str(sv):
+                return true
+            else:
+                return false
+
+    bool is_int(self):
+        match self:
+            case Int(iv):
+                return true
+            else:
+                return false
+
+    bool is_float(self):
+        match self:
+            case Float(fv):
+                return true
+            else:
+                return false
+
+    bool is_bool(self):
+        match self:
+            case Bool(bv):
+                return true
+            else:
+                return false
+
+    bool is_datetime(self):
+        match self:
+            case DateTime(dv):
+                return true
+            else:
+                return false
+
+    int len(self):
+        match self:
+            case Arr(ad):
+                return ad.len()
+            case Tbl(td):
+                return td.len()
+            else:
+                return 0
+
+    Vector[str] keys(self):
+        match self:
+            case Tbl(td):
+                return td.keys()
+            else:
+                return Vector[str]()
