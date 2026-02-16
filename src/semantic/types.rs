@@ -35,6 +35,9 @@ pub enum ResolvedType {
     /// Trait object: Box[Trait] → automatic vtable dispatch
     TraitObject(DefId),
 
+    /// Callable trait type: Fn[int(int)] → wraps the inner Function type
+    FnTrait(TypeId),
+
     /// Type variable for inference: ?T0, ?T1, ...
     Var(u32),
 
@@ -192,6 +195,7 @@ impl TypeTable {
                 format!("{}({})", self.display(*return_type), params.join(", "))
             }
             ResolvedType::TraitObject(_) => "<trait object>".into(),
+            ResolvedType::FnTrait(inner) => format!("Fn[{}]", self.display(*inner)),
             ResolvedType::Var(n) => format!("?T{n}"),
             ResolvedType::Error => "<error>".into(),
             ResolvedType::Void => "void".into(),
@@ -211,6 +215,18 @@ pub fn ast_type_to_resolved(
         ast::Type::Primitive(prim) => Ok(types.primitive_id(*prim)),
 
         ast::Type::Named { name, generic_args } => {
+            // Fn[sig] — compiler-magic callable type
+            if name.node == "Fn" && generic_args.len() == 1 {
+                let inner = ast_type_to_resolved(&generic_args[0].node, generic_args[0].span, scopes, types)?;
+                if matches!(types.get(inner), ResolvedType::Function { .. }) {
+                    return Ok(types.insert(ResolvedType::FnTrait(inner)));
+                }
+                return Err(SemanticError {
+                    kind: SemanticErrorKind::InvalidFnTraitArg,
+                    span: generic_args[0].span,
+                });
+            }
+
             // Look up the name in the scope table
             match scopes.lookup(&name.node) {
                 Some(def_id) => {

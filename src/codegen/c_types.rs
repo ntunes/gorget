@@ -51,6 +51,7 @@ pub fn ast_type_to_c(ty: &crate::parser::ast::Type, scopes: &ScopeTable) -> Stri
                             .collect();
                         super::c_mangle::mangle_generic("GorgetMap", &c_args)
                     }
+                    "Fn" if generic_args.len() == 1 => "GorgetClosure".to_string(),
                     "Box" if generic_args.len() == 1 => {
                         // Box[Trait] → Trait_TraitObj (automatic dispatch)
                         if let crate::parser::ast::Type::Named { name: inner_name, generic_args: inner_args } = &generic_args[0].node {
@@ -218,6 +219,7 @@ pub fn type_id_to_c(type_id: TypeId, types: &TypeTable, scopes: &ScopeTable) -> 
             let name = def_name_to_c(*def_id, scopes);
             super::c_mangle::mangle_trait_obj(&name)
         }
+        ResolvedType::FnTrait(_) => "GorgetClosure".to_string(),
         ResolvedType::Var(_) => {
             // Type variable should not escape inference
             "/* type var */ void*".to_string()

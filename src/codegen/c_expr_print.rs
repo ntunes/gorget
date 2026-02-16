@@ -390,6 +390,7 @@ impl CodegenContext<'_> {
             | ResolvedType::Tuple(_)
             | ResolvedType::Function { .. }
             | ResolvedType::TraitObject(_)
+            | ResolvedType::FnTrait(_)
             | ResolvedType::Slice(_) => {
                 panic!("non-primitive type cannot be used in string interpolation")
             }

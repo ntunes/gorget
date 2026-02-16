@@ -804,13 +804,21 @@ impl CodegenContext<'_> {
             if self.closure_vars.contains(escaped_name.as_str()) {
                 let arg_exprs: Vec<String> =
                     args.iter().map(|a| self.gen_expr(&a.node.value)).collect();
-                let arg_types: Vec<String> = args
-                    .iter()
-                    .map(|a| self.infer_c_type_from_expr(&a.node.value.node))
-                    .collect();
-                let mut cast_params = vec!["void*".to_string()];
-                cast_params.extend(arg_types);
-                let cast = format!("int64_t (*)({})", cast_params.join(", "));
+                let cast = if let Some((param_types, ret)) = self.fn_type_signatures.get(&escaped_name) {
+                    // Fn[sig]-typed: use declared signature for precise cast
+                    let mut cp = vec!["void*".to_string()];
+                    cp.extend(param_types.clone());
+                    format!("{ret} (*)({})", cp.join(", "))
+                } else {
+                    // Legacy GorgetClosure: infer from arguments
+                    let arg_types: Vec<String> = args
+                        .iter()
+                        .map(|a| self.infer_c_type_from_expr(&a.node.value.node))
+                        .collect();
+                    let mut cp = vec!["void*".to_string()];
+                    cp.extend(arg_types);
+                    format!("int64_t (*)({})", cp.join(", "))
+                };
                 let mut call_args = vec![format!("{escaped_name}.env")];
                 call_args.extend(arg_exprs);
                 return format!("(({cast})({escaped_name}.fn_ptr))({})", call_args.join(", "));
@@ -887,6 +895,40 @@ impl CodegenContext<'_> {
         expr
     }
 
+    /// Coerce a bare function pointer / function name to GorgetClosure when the
+    /// parameter expects Fn[sig]. Already-GorgetClosure values pass through unchanged.
+    /// Coerce a bare function pointer / function name to GorgetClosure when the
+    /// parameter expects Fn[sig]. Already-GorgetClosure values pass through unchanged.
+    pub(super) fn coerce_arg_to_fn(
+        &mut self,
+        expr: String,
+        _arg_expr: &Spanned<Expr>,
+        param_type_id: Option<crate::semantic::ids::TypeId>,
+    ) -> String {
+        if let Some(ptid) = param_type_id {
+            if matches!(self.types.get(ptid), crate::semantic::types::ResolvedType::FnTrait(_)) {
+                // Already a GorgetClosure variable — pass through
+                if self.closure_vars.contains(expr.as_str()) {
+                    return expr;
+                }
+                // Already a GorgetClosure compound literal (e.g. capturing closure) — pass through
+                if expr.starts_with("(GorgetClosure)") {
+                    return expr;
+                }
+                // For non-capturing closure functions, use the _fn adapter
+                // which has the void* env_ptr first param for ABI compatibility.
+                let fn_ptr = if expr.starts_with("__gorget_closure_") {
+                    format!("{expr}_fn")
+                } else {
+                    expr
+                };
+                // Wrap bare function pointer / function name into GorgetClosure
+                return format!("(GorgetClosure){{.fn_ptr = (void*){fn_ptr}, .env = NULL}}");
+            }
+        }
+        expr
+    }
+
     /// Wrap a generated expression with `&` if the call arg has MutableBorrow ownership.
     /// Uses `addr_of` to handle rvalue expressions safely via temp vars.
     pub(super) fn wrap_borrow_arg(&self, expr: String, ast_expr: &Expr, ownership: crate::parser::ast::Ownership) -> String {
@@ -925,7 +967,9 @@ impl CodegenContext<'_> {
                 .unwrap_or_default();
             return args.iter().enumerate().map(|(i, a)| {
                 let expr = self.gen_expr(&a.node.value);
-                let expr = self.coerce_arg_to_str(expr, &a.node.value, param_type_ids.get(i).copied().flatten());
+                let ptid = param_type_ids.get(i).copied().flatten();
+                let expr = self.coerce_arg_to_str(expr, &a.node.value, ptid);
+                let expr = self.coerce_arg_to_fn(expr, &a.node.value, ptid);
                 self.wrap_borrow_arg(expr, &a.node.value.node, a.node.ownership)
             }).collect();
         }

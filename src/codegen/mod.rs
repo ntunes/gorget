@@ -129,6 +129,9 @@ pub struct CodegenContext<'a> {
     pub generic_equip_templates: FxHashMap<String, Vec<EquipBlock>>,
     /// Variables declared with GorgetClosure type (need fn_ptr dispatch on call).
     pub closure_vars: HashSet<String>,
+    /// For Fn[sig]-typed variables: maps var name → (param_c_types, return_c_type).
+    /// Used for correct fn_ptr cast in GorgetClosure dispatch.
+    pub fn_type_signatures: FxHashMap<String, (Vec<String>, String)>,
     /// Variables whose auto-inferred array literal was promoted to GorgetArray (Vector).
     pub vector_vars: HashSet<String>,
     /// Variables whose closure environments should be heap-allocated (they escape their scope).
@@ -341,6 +344,7 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
         generic_fn_templates: FxHashMap::default(),
         generic_equip_templates: FxHashMap::default(),
         closure_vars: HashSet::new(),
+        fn_type_signatures: FxHashMap::default(),
         vector_vars: HashSet::new(),
         escaping_closure_vars: HashSet::new(),
         closure_heap_alloc: false,

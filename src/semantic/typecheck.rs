@@ -254,6 +254,23 @@ impl<'a> TypeChecker<'a> {
                 self.unify(*a_ret, *b_ret, span);
                 a
             }
+            // FnTrait ↔ FnTrait: unify inner function types
+            (ResolvedType::FnTrait(a_inner), ResolvedType::FnTrait(b_inner)) => {
+                let (a_inner, b_inner) = (*a_inner, *b_inner);
+                self.unify(a_inner, b_inner, span);
+                a
+            }
+            // FnTrait ↔ Function: auto-coerce function pointer to callable
+            (ResolvedType::FnTrait(inner), ResolvedType::Function { .. }) => {
+                let inner = *inner;
+                self.unify(inner, b, span);
+                a
+            }
+            (ResolvedType::Function { .. }, ResolvedType::FnTrait(inner)) => {
+                let inner = *inner;
+                self.unify(a, inner, span);
+                b
+            }
             // Allow implicit widening between integer types (matches C codegen behavior)
             (ResolvedType::Primitive(a_prim), ResolvedType::Primitive(b_prim))
                 if is_integer_type(a_prim) && is_integer_type(b_prim) =>
@@ -532,6 +549,33 @@ impl<'a> TypeChecker<'a> {
                             }
                         }
                         return_type
+                    }
+                    ResolvedType::FnTrait(inner) => {
+                        // Fn[sig]-typed callable — extract Function from inner
+                        if let ResolvedType::Function { params, return_type } = self.types.get(inner).clone() {
+                            if args.len() != params.len() {
+                                self.error(
+                                    SemanticErrorKind::WrongArgCount {
+                                        expected: params.len(),
+                                        found: args.len(),
+                                    },
+                                    expr.span,
+                                );
+                            }
+                            for (arg, &param_type) in args.iter().zip(params.iter()) {
+                                let prev_hint = self.decl_type_hint;
+                                self.decl_type_hint = Some(param_type);
+                                let arg_type = self.infer_expr(&arg.node.value);
+                                self.decl_type_hint = prev_hint;
+                                self.unify(param_type, arg_type, arg.span);
+                            }
+                            return_type
+                        } else {
+                            for arg in args {
+                                self.infer_expr(&arg.node.value);
+                            }
+                            self.types.error_id
+                        }
                     }
                     ResolvedType::Error => {
                         // Check if callee is a struct/newtype constructor

@@ -141,6 +141,9 @@ pub enum SemanticErrorKind {
     /// Duplicate suite setup or teardown block.
     DuplicateSuiteBlock { kind: String },
 
+    /// Fn[...] requires a function type argument.
+    InvalidFnTraitArg,
+
     /// Integer literal value doesn't fit in the declared type.
     ValueOutOfRange {
         value: i128,
@@ -316,6 +319,9 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::DuplicateSuiteBlock { kind } => {
                 write!(f, "duplicate `suite {kind}` block")
+            }
+            SemanticErrorKind::InvalidFnTraitArg => {
+                write!(f, "Fn[...] requires a function type argument, e.g. Fn[int(int)]")
             }
             SemanticErrorKind::ValueOutOfRange { value, type_name, min, max } => {
                 write!(f, "value {value} is out of range for type {type_name} (valid range: {min}..={max})")

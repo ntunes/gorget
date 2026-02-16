@@ -1245,6 +1245,18 @@ impl CodegenContext<'_> {
                     && self.escaping_closure_vars.contains(name);
                 if c_type == "GorgetClosure" {
                     self.closure_vars.insert(escaped.clone());
+                    // For Fn[sig]-typed VarDecl, extract signature for dispatch
+                    if let Type::Named { name: fn_name, generic_args } = &type_.node {
+                        if fn_name.node == "Fn" && generic_args.len() == 1 {
+                            if let Type::Function { return_type: fn_ret, params: fn_params } = &generic_args[0].node {
+                                let ret_c = super::c_types::ast_type_to_c(&fn_ret.node, self.scopes);
+                                let param_c: Vec<String> = fn_params.iter()
+                                    .map(|p| super::c_types::ast_type_to_c(&p.node, self.scopes))
+                                    .collect();
+                                self.fn_type_signatures.insert(escaped.clone(), (param_c, ret_c));
+                            }
+                        }
+                    }
                 }
                 // Set heap-alloc flag for escaping closures
                 if is_escaping_closure {
@@ -1256,6 +1268,26 @@ impl CodegenContext<'_> {
                 let val = self.gen_expr(value);
                 self.decl_type_hint = prev_hint;
                 self.closure_heap_alloc = false;
+                // Coerce non-capturing closure to GorgetClosure for Fn[sig]-typed vars only.
+                // Check for explicit Fn[...] declared type (not just any GorgetClosure).
+                let is_fn_trait_decl = matches!(&type_.node, Type::Named { name, generic_args }
+                    if name.node == "Fn" && !generic_args.is_empty());
+                let val = if is_fn_trait_decl && !val.starts_with("(GorgetClosure)") {
+                    let val_type = self.infer_c_type_from_expr(&value.node);
+                    if val_type != "GorgetClosure" {
+                        // Use the _fn adapter for non-capturing closure functions
+                        let fn_ptr = if val.starts_with("__gorget_closure_") {
+                            format!("{val}_fn")
+                        } else {
+                            val
+                        };
+                        format!("(GorgetClosure){{.fn_ptr = (void*){fn_ptr}, .env = NULL}}")
+                    } else {
+                        val
+                    }
+                } else {
+                    val
+                };
                 // Coerce between String and str at declaration
                 let val = if c_type == "const char*" {
                     let val_type = self.infer_c_type_from_expr(&value.node);

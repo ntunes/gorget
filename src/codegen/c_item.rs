@@ -510,6 +510,9 @@ impl CodegenContext<'_> {
 
         // Track mutable borrow params as pointer params for body codegen.
         let prev_pointer_params = std::mem::take(&mut self.pointer_params);
+        // Save/restore closure_vars and fn_type_signatures for Fn-typed params.
+        let prev_closure_vars = self.closure_vars.clone();
+        let prev_fn_type_sigs = self.fn_type_signatures.clone();
         for param in &f.params {
             if param.node.name.node == "self" {
                 continue;
@@ -517,6 +520,21 @@ impl CodegenContext<'_> {
             if matches!(param.node.ownership, Ownership::MutableBorrow) {
                 self.pointer_params
                     .insert(c_mangle::escape_keyword(&param.node.name.node));
+            }
+            // Detect Fn[sig]-typed params — register for closure dispatch
+            if let Type::Named { name, generic_args } = &param.node.type_.node {
+                if name.node == "Fn" && generic_args.len() == 1 {
+                    let escaped = c_mangle::escape_keyword(&param.node.name.node);
+                    self.closure_vars.insert(escaped.clone());
+                    // Extract signature from the function type generic arg
+                    if let Type::Function { return_type, params: fn_params } = &generic_args[0].node {
+                        let ret_c = c_types::ast_type_to_c(&return_type.node, self.scopes);
+                        let param_c: Vec<String> = fn_params.iter()
+                            .map(|p| c_types::ast_type_to_c(&p.node, self.scopes))
+                            .collect();
+                        self.fn_type_signatures.insert(escaped, (param_c, ret_c));
+                    }
+                }
             }
         }
 
@@ -630,6 +648,8 @@ impl CodegenContext<'_> {
         self.current_function_gorget_name = prev_gorget_name;
 
         self.pointer_params = prev_pointer_params;
+        self.closure_vars = prev_closure_vars;
+        self.fn_type_signatures = prev_fn_type_sigs;
         self.current_function_scope = prev_function_scope;
     }
 
@@ -1146,6 +1166,34 @@ impl CodegenContext<'_> {
             emitter.dedent();
             emitter.emit_line("}");
             emitter.blank_line();
+
+            // For non-capturing closures, emit an ABI-compatible adapter with
+            // void* env param (ignored) so it can be used inside GorgetClosure
+            // dispatch when wrapped for Fn[sig] parameters.
+            if closure.captures.is_empty() {
+                let adapter_name = format!("{fn_name}_fn");
+                let mut adapter_params = vec!["void* __env_ptr".to_string()];
+                for (p_name, p_type) in &closure.params {
+                    adapter_params.push(c_types::c_declare(p_type, p_name));
+                }
+                let adapter_params_str = adapter_params.join(", ");
+                let arg_names: Vec<&str> = closure.params.iter().map(|(n, _)| n.as_str()).collect();
+                let call = format!("{fn_name}({})", arg_names.join(", "));
+                emitter.emit_line(&format!(
+                    "static inline {} {adapter_name}({adapter_params_str}) {{",
+                    closure.return_type
+                ));
+                emitter.indent();
+                emitter.emit_line("(void)__env_ptr;");
+                if closure.return_type == "void" {
+                    emitter.emit_line(&format!("{call};"));
+                } else {
+                    emitter.emit_line(&format!("return {call};"));
+                }
+                emitter.dedent();
+                emitter.emit_line("}");
+                emitter.blank_line();
+            }
         }
     }
 

@@ -261,6 +261,15 @@ fn closure_escape() {
 }
 
 #[test]
+fn fn_trait() {
+    run_gg("fn_trait.gg", "\
+10
+21
+12
+done");
+}
+
+#[test]
 fn dynamic_dispatch() {
     run_gg("dynamic_dispatch.gg", "hello\nhola\nhello\nhola");
 }
