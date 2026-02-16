@@ -1,6 +1,12 @@
 /// C code generation backend for the Gorget compiler.
 pub mod c_emitter;
 pub mod c_expr;
+pub mod c_expr_call;
+pub mod c_expr_closure;
+pub mod c_expr_generic;
+pub mod c_expr_methods;
+pub mod c_expr_pattern;
+pub mod c_expr_print;
 pub mod c_item;
 pub mod c_mangle;
 pub mod c_runtime;
