@@ -148,6 +148,21 @@ impl TypeTable {
         self.insert(ResolvedType::Var(var_id))
     }
 
+    /// Collect all generic type instantiations for monomorphization.
+    /// Returns (base_def_id, type_arg_ids) for each `ResolvedType::Generic` entry.
+    pub fn collect_generic_instantiations(&self) -> Vec<(DefId, Vec<TypeId>)> {
+        self.types
+            .iter()
+            .filter_map(|ty| {
+                if let ResolvedType::Generic(def_id, args) = ty {
+                    Some((*def_id, args.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
     /// Format a type as a human-readable string for error messages.
     pub fn display(&self, id: TypeId) -> String {
         match self.get(id) {

@@ -1371,7 +1371,7 @@ impl CodegenContext<'_> {
                 // Fall back to expression-based inference
                 self.infer_c_type_from_expr(&value.node)
             }
-            _ => self.type_to_c_with_registration(&type_.node),
+            _ => self.type_to_c(&type_.node),
         }
     }
 
