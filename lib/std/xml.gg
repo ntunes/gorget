@@ -1,0 +1,409 @@
+# std.xml — Pure Gorget XML parser
+#
+# Provides a recursive-descent XML parser, serializer, and accessor methods.
+# No C dependencies — uses only Gorget standard library.
+#
+# Scope: elements, attributes, text content, entity refs, self-closing tags,
+# comment skipping. No namespaces, DTD, CDATA, or processing instructions.
+
+from std.collections import Vector, Dict
+from std.conv import int_to_str, char_to_str
+
+# ── XML node types ─────────────────────────────────────────
+# Element(tag_name, attributes, child_nodes) | Text(content)
+
+enum XmlNode:
+    Element(str, Dict[str, str], Vector[XmlNode])
+    Text(str)
+
+# ── Entity decoding / encoding ─────────────────────────────
+
+str xml_decode_entities(str raw):
+    str decoded = ""
+    int ei = 0
+    while ei < raw.len():
+        char ec = raw[ei]
+        if ec == '&':
+            int semi_pos = ei + 1
+            while semi_pos < raw.len() and raw[semi_pos] != ';':
+                semi_pos = semi_pos + 1
+            if semi_pos < raw.len():
+                str entity_name = raw[ei + 1..semi_pos]
+                if entity_name == "amp":
+                    decoded = decoded + "&"
+                    ei = semi_pos + 1
+                elif entity_name == "lt":
+                    decoded = decoded + "<"
+                    ei = semi_pos + 1
+                elif entity_name == "gt":
+                    decoded = decoded + ">"
+                    ei = semi_pos + 1
+                elif entity_name == "quot":
+                    decoded = decoded + "\""
+                    ei = semi_pos + 1
+                elif entity_name == "apos":
+                    decoded = decoded + "'"
+                    ei = semi_pos + 1
+                else:
+                    decoded = decoded + "&"
+                    ei = ei + 1
+            else:
+                decoded = decoded + "&"
+                ei = ei + 1
+        else:
+            decoded = decoded + char_to_str(ec)
+            ei = ei + 1
+    return decoded
+
+str xml_encode_text(str raw_text):
+    str encoded = ""
+    int ti = 0
+    while ti < raw_text.len():
+        char tc = raw_text[ti]
+        if tc == '&':
+            encoded = encoded + "&amp;"
+        elif tc == '<':
+            encoded = encoded + "&lt;"
+        elif tc == '>':
+            encoded = encoded + "&gt;"
+        else:
+            encoded = encoded + char_to_str(tc)
+        ti = ti + 1
+    return encoded
+
+str xml_encode_attr(str raw_attr):
+    str encoded = ""
+    int ai = 0
+    while ai < raw_attr.len():
+        char ac = raw_attr[ai]
+        if ac == '&':
+            encoded = encoded + "&amp;"
+        elif ac == '<':
+            encoded = encoded + "&lt;"
+        elif ac == '>':
+            encoded = encoded + "&gt;"
+        elif ac == '"':
+            encoded = encoded + "&quot;"
+        elif ac == '\'':
+            encoded = encoded + "&apos;"
+        else:
+            encoded = encoded + char_to_str(ac)
+        ai = ai + 1
+    return encoded
+
+# ── Internal parser ────────────────────────────────────────
+
+struct XmlParser:
+    str xml_input
+    int pos
+    str err
+
+equip XmlParser:
+    bool failed(self) = self.err != ""
+
+    void fail(&self, str msg):
+        if self.err == "":
+            self.err = moving msg
+
+    char peek(self):
+        if self.pos < self.xml_input.len():
+            return self.xml_input[self.pos]
+        return '\0'
+
+    void advance(&self):
+        if self.pos < self.xml_input.len():
+            self.pos = self.pos + 1
+
+    void skip_ws(&self):
+        while self.pos < self.xml_input.len():
+            char wc = self.xml_input[self.pos]
+            if wc == ' ' or wc == '\t' or wc == '\n' or wc == '\r':
+                self.pos = self.pos + 1
+            else:
+                return
+
+    bool starts_with_at(self, str prefix):
+        int plen = prefix.len()
+        if self.pos + plen > self.xml_input.len():
+            return false
+        return self.xml_input[self.pos..self.pos + plen] == prefix
+
+    void consume_str(&self, str expected):
+        int elen = expected.len()
+        if self.pos + elen > self.xml_input.len():
+            str cs_err = "expected " + expected
+            self.fail(cs_err)
+            return
+        if self.xml_input[self.pos..self.pos + elen] != expected:
+            str cs_err = "expected " + expected
+            self.fail(cs_err)
+            return
+        self.pos = self.pos + elen
+
+    # ── Tag name parsing ────────────────────────────────────
+
+    str parse_tag_name(&self):
+        int start = self.pos
+        while self.pos < self.xml_input.len():
+            char tc = self.xml_input[self.pos]
+            if tc >= 'a' and tc <= 'z':
+                self.pos = self.pos + 1
+            elif tc >= 'A' and tc <= 'Z':
+                self.pos = self.pos + 1
+            elif tc >= '0' and tc <= '9':
+                self.pos = self.pos + 1
+            elif tc == '_' or tc == ':' or tc == '.' or tc == '-':
+                self.pos = self.pos + 1
+            else:
+                break
+        if self.pos == start:
+            self.fail("expected tag name")
+            return ""
+        return self.xml_input[start..self.pos]
+
+    # ── Attribute parsing ───────────────────────────────────
+
+    str parse_attr_value(&self):
+        if self.pos >= self.xml_input.len():
+            self.fail("expected attribute value")
+            return ""
+        char quote_ch = self.xml_input[self.pos]
+        if quote_ch != '"' and quote_ch != '\'':
+            self.fail("expected quote in attribute value")
+            return ""
+        self.pos = self.pos + 1
+        str attr_val = ""
+        while self.pos < self.xml_input.len():
+            char vc = self.xml_input[self.pos]
+            if vc == quote_ch:
+                self.pos = self.pos + 1
+                return xml_decode_entities(attr_val)
+            attr_val = attr_val + char_to_str(vc)
+            self.pos = self.pos + 1
+        self.fail("unterminated attribute value")
+        return ""
+
+    Dict[str, str] parse_attributes(&self):
+        Dict[str, str] attr_map = Dict[str, str]()
+        while self.pos < self.xml_input.len():
+            self.skip_ws()
+            if self.pos >= self.xml_input.len():
+                break
+            char ac = self.xml_input[self.pos]
+            if ac == '>' or ac == '/' or ac == '?':
+                break
+            str attr_key = self.parse_tag_name()
+            if self.failed():
+                return attr_map
+            self.skip_ws()
+            self.consume_str("=")
+            if self.failed():
+                return attr_map
+            self.skip_ws()
+            str attr_value = self.parse_attr_value()
+            if self.failed():
+                return attr_map
+            attr_map.put(attr_key, attr_value)
+        return attr_map
+
+    # ── Comment handling ────────────────────────────────────
+
+    void skip_comment(&self):
+        while self.pos < self.xml_input.len():
+            if self.starts_with_at("-->"):
+                self.pos = self.pos + 3
+                return
+            self.pos = self.pos + 1
+        self.fail("unterminated comment")
+
+    # ── Node parsing ────────────────────────────────────────
+
+    XmlNode parse_text(&self):
+        str text_val = ""
+        while self.pos < self.xml_input.len():
+            char xc = self.xml_input[self.pos]
+            if xc == '<':
+                break
+            text_val = text_val + char_to_str(xc)
+            self.pos = self.pos + 1
+        return Text(xml_decode_entities(text_val))
+
+    XmlNode parse_element(&self):
+        # Consume '<'
+        self.pos = self.pos + 1
+        str elem_tag = self.parse_tag_name()
+        if self.failed():
+            return Text("")
+        Dict[str, str] elem_attrs = self.parse_attributes()
+        if self.failed():
+            return Text("")
+        self.skip_ws()
+        # Self-closing tag?
+        if self.starts_with_at("/>"):
+            self.pos = self.pos + 2
+            return Element(elem_tag, elem_attrs, Vector[XmlNode]())
+        # Consume '>'
+        if self.pos >= self.xml_input.len() or self.xml_input[self.pos] != '>':
+            self.fail("expected >")
+            return Text("")
+        self.pos = self.pos + 1
+        # Parse children
+        Vector[XmlNode] child_list = Vector[XmlNode]()
+        while self.pos < self.xml_input.len():
+            if self.starts_with_at("</"):
+                break
+            XmlNode child_nd = self.parse_node()
+            if self.failed():
+                return Text("")
+            match child_nd:
+                case Text(xtv):
+                    if xtv != "":
+                        child_list.push(child_nd)
+                case Element(xtag, xattr_dict, xkids):
+                    child_list.push(child_nd)
+        # Consume closing tag </tag_name>
+        self.consume_str("</")
+        if self.failed():
+            return Text("")
+        str close_tag = self.parse_tag_name()
+        if self.failed():
+            return Text("")
+        if close_tag != elem_tag:
+            str tag_err = "mismatched closing tag: expected " + elem_tag + " got " + close_tag
+            self.fail(tag_err)
+            return Text("")
+        self.skip_ws()
+        if self.pos >= self.xml_input.len() or self.xml_input[self.pos] != '>':
+            self.fail("expected > in closing tag")
+            return Text("")
+        self.pos = self.pos + 1
+        return Element(elem_tag, elem_attrs, child_list)
+
+    XmlNode parse_node(&self):
+        if self.failed():
+            return Text("")
+        if self.pos >= self.xml_input.len():
+            return Text("")
+        if self.xml_input[self.pos] != '<':
+            return self.parse_text()
+        # Check for comment <!--
+        if self.starts_with_at("<!--"):
+            self.pos = self.pos + 4
+            self.skip_comment()
+            return self.parse_node()
+        # Check for XML declaration <?xml ... ?>
+        if self.starts_with_at("<?"):
+            self.pos = self.pos + 2
+            while self.pos < self.xml_input.len():
+                if self.starts_with_at("?>"):
+                    self.pos = self.pos + 2
+                    break
+                self.pos = self.pos + 1
+            return self.parse_node()
+        # Regular element
+        return self.parse_element()
+
+# ── Public API ─────────────────────────────────────────────
+
+Result[XmlNode, str] xml_parse(str xml_src):
+    XmlParser xp = XmlParser(xml_src, 0, "")
+    xp.skip_ws()
+    XmlNode root_node = xp.parse_node()
+    if xp.failed():
+        return Error(xp.err)
+    return Ok(root_node)
+
+# ── Serialization ──────────────────────────────────────────
+
+str xml_stringify_node(XmlNode nd, Dict[str, str] nd_attrs, Vector[XmlNode] nd_kids, str nd_tag):
+    str xml_out = "<" + nd_tag
+    Vector[str] attr_keys = nd_attrs.keys()
+    int ki = 0
+    while ki < attr_keys.len():
+        str akey = attr_keys.get(ki)
+        str aval = nd_attrs[akey]
+        xml_out = xml_out + " " + akey + "=\"" + xml_encode_attr(aval) + "\""
+        ki = ki + 1
+    if nd_kids.len() == 0:
+        return xml_out + "/>"
+    xml_out = xml_out + ">"
+    int ci = 0
+    while ci < nd_kids.len():
+        XmlNode xml_child = nd_kids.get(ci)
+        xml_out = xml_out + xml_stringify(xml_child)
+        ci = ci + 1
+    xml_out = xml_out + "</" + nd_tag + ">"
+    return xml_out
+
+str xml_stringify(XmlNode nd):
+    match nd:
+        case Text(xtv):
+            return xml_encode_text(xtv)
+        case Element(xtag, xattr_dict, xkids):
+            return xml_stringify_node(nd, xattr_dict, xkids, xtag)
+
+# ── Accessor methods ───────────────────────────────────────
+
+equip XmlNode:
+    str tag(self):
+        match self:
+            case Element(xtag, xattr_dict, xkids):
+                return xtag
+            else:
+                return ""
+
+    str attr(self, str key):
+        match self:
+            case Element(xtag, xattr_dict, xkids):
+                if xattr_dict.contains(key):
+                    return xattr_dict[key]
+                return ""
+            else:
+                return ""
+
+    Vector[XmlNode] children(self):
+        match self:
+            case Element(xtag, xattr_dict, xkids):
+                return xkids
+            else:
+                return Vector[XmlNode]()
+
+    str text(self):
+        match self:
+            case Text(xtv):
+                return xtv
+            case Element(xtag, xattr_dict, xkids):
+                str combined = ""
+                int ti = 0
+                while ti < xkids.len():
+                    XmlNode child_nd = xkids.get(ti)
+                    combined = combined + child_nd.text()
+                    ti = ti + 1
+                return combined
+
+    XmlNode find(self, str find_tag):
+        match self:
+            case Element(xtag, xattr_dict, xkids):
+                int fi = 0
+                while fi < xkids.len():
+                    XmlNode found_nd = xkids.get(fi)
+                    if found_nd.tag() == find_tag:
+                        return found_nd
+                    fi = fi + 1
+                return Text("")
+            else:
+                return Text("")
+
+    Vector[XmlNode] find_all(self, str find_tag):
+        Vector[XmlNode] xml_matches = Vector[XmlNode]()
+        match self:
+            case Element(xtag, xattr_dict, xkids):
+                int fi = 0
+                while fi < xkids.len():
+                    XmlNode found_nd = xkids.get(fi)
+                    if found_nd.tag() == find_tag:
+                        xml_matches.push(found_nd)
+                    fi = fi + 1
+            else:
+                pass
+        return xml_matches

@@ -1770,6 +1770,33 @@ done",
 }
 
 #[test]
+fn xml_parse() {
+    run_gg(
+        "xml_parse.gg",
+        "\
+greeting
+Hello
+Alice
+30
+2
+two
+br
+0
+a & b < c
+x&y
+data
+2
+a
+b
+<root><child/></root>
+hello world
+val
+true
+done",
+    );
+}
+
+#[test]
 fn json_parse() {
     run_gg(
         "json_parse.gg",

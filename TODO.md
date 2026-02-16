@@ -31,7 +31,6 @@
 
   1. **std.yaml** — YAML 1.2 (JSON schema) parser. Value enum: `enum YamlValue: Null, Bool(bool), Int(int), Float(float), Str(str), Seq(Vector[YamlValue]), Map(Dict[str, YamlValue])`. MVP scope: block mappings, block sequences, flow mappings `{}`, flow sequences `[]`, quoted and plain scalars, `#` comments, `---` document markers. Skip: anchors/aliases, tags, multi-document streams, complex keys. Free functions: `yaml_parse(str) -> Result[YamlValue, str]`, `yaml_stringify(YamlValue) -> str`. File: `lib/std/yaml.gg`. YAML's indentation sensitivity makes this the hardest parser.
 
-  4. **std.xml** — Minimal XML parser. Value enum: `enum XmlNode: Element(str, Dict[str, str], Vector[XmlNode]), Text(str)`. Scope: elements, attributes (quoted values), text content, basic entity refs (`&amp;` `&lt;` `&gt;` `&quot;` `&apos;`), self-closing tags, `<!-- comments -->` (skipped). No namespaces, DTD, CDATA, or processing instructions. Free functions: `xml_parse(str) -> Result[XmlNode, str]`, `xml_stringify(XmlNode) -> str`. Methods: `.tag()`, `.attr(key)`, `.children()`, `.text()`, `.find(tag)`, `.find_all(tag)`. File: `lib/std/xml.gg`.
 
 - **Fixture system for tests**: suite setup/teardown (done) → `with` clause (done) → fixture injection. Named, composable, scoped resources injected into test signatures. Design questions: yield semantics (Drop-based vs explicit teardown), scope model (test/suite), composability (fixture graphs). [added: 2026-02-14]
 

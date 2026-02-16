@@ -1,0 +1,70 @@
+from std.xml import XmlNode, xml_parse, xml_stringify
+from std.collections import Vector, Dict
+
+void main():
+    # Simple element with text
+    XmlNode n1 = xml_parse("<greeting>Hello</greeting>").unwrap()
+    print(n1.tag())
+    print(n1.text())
+
+    # Attributes and self-closing
+    XmlNode n2 = xml_parse("<person name=\"Alice\" age=\"30\"/>").unwrap()
+    print(n2.attr("name"))
+    print(n2.attr("age"))
+
+    # Nested elements
+    XmlNode n3 = xml_parse("<root><a>one</a><b>two</b></root>").unwrap()
+    Vector[XmlNode] n3_kids = n3.children()
+    int kid_count = n3_kids.len()
+    print("{kid_count}")
+    XmlNode n3_b = n3.find("b")
+    print(n3_b.text())
+
+    # Self-closing has 0 children
+    XmlNode n4 = xml_parse("<br/>").unwrap()
+    print(n4.tag())
+    Vector[XmlNode] n4_kids = n4.children()
+    int br_kids = n4_kids.len()
+    print("{br_kids}")
+
+    # Entity refs in text
+    XmlNode n5 = xml_parse("<msg>a &amp; b &lt; c</msg>").unwrap()
+    print(n5.text())
+
+    # Entity refs in attributes
+    XmlNode n6 = xml_parse("<tag val=\"x&amp;y\"/>").unwrap()
+    print(n6.attr("val"))
+
+    # Comments are skipped
+    XmlNode n7 = xml_parse("<!-- skip --><data>ok</data>").unwrap()
+    print(n7.tag())
+
+    # find_all
+    XmlNode n8 = xml_parse("<list><item>a</item><item>b</item><other>c</other></list>").unwrap()
+    Vector[XmlNode] found_items = n8.find_all("item")
+    int found_count = found_items.len()
+    print("{found_count}")
+    XmlNode item0 = found_items.get(0)
+    print(item0.text())
+    XmlNode item1 = found_items.get(1)
+    print(item1.text())
+
+    # xml_stringify round-trip
+    XmlNode n9 = xml_parse("<root><child/></root>").unwrap()
+    str xml_str = xml_stringify(n9)
+    print(xml_str)
+
+    # Nested text concatenation
+    XmlNode n10 = xml_parse("<p>hello <b>world</b></p>").unwrap()
+    print(n10.text())
+
+    # Single-quoted attribute
+    XmlNode n11 = xml_parse("<tag attr='val'/>").unwrap()
+    print(n11.attr("attr"))
+
+    # Parse error
+    Result[XmlNode, str] bad_result = xml_parse("<unclosed>")
+    bool is_err = bad_result.is_err()
+    print("{is_err}")
+
+    print("done")

@@ -16,7 +16,7 @@ pub fn is_stdlib_module(segments: &[String]) -> bool {
         return false;
     }
     match segments.len() {
-        2 => matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv" | "io" | "random" | "time" | "collections" | "math" | "fmt" | "process" | "sdl" | "gfx" | "ecs" | "json" | "toml" | "bytes" | "crypto" | "ssh"),
+        2 => matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv" | "io" | "random" | "time" | "collections" | "math" | "fmt" | "process" | "sdl" | "gfx" | "ecs" | "json" | "toml" | "xml" | "bytes" | "crypto" | "ssh"),
         3 => (segments[1] == "http" && segments[2] == "client")
             || (segments[1] == "net" && segments[2] == "socket"),
         _ => false,
@@ -44,6 +44,7 @@ pub fn generate_stdlib_module(segments: &[String]) -> Option<Module> {
             "sdl" => Some(gen_sdl_module()),
             "json" => None, // file-based module — loaded via stdlib_module_source()
             "toml" => None, // file-based module — loaded via stdlib_module_source()
+            "xml" => None,  // file-based module — loaded via stdlib_module_source()
             "bytes" => Some(gen_bytes_module()),
             "crypto" => Some(gen_crypto_module()),
             "gfx" => None, // file-based module — loaded via stdlib_module_source()
@@ -514,6 +515,7 @@ pub fn stdlib_module_source(segments: &[String]) -> Option<&'static str> {
         Some("ssh") => Some(include_str!("../lib/std/ssh.gg")),
         Some("json") => Some(include_str!("../lib/std/json.gg")),
         Some("toml") => Some(include_str!("../lib/std/toml.gg")),
+        Some("xml") => Some(include_str!("../lib/std/xml.gg")),
         _ => None,
     }
 }
@@ -1298,6 +1300,57 @@ mod tests {
         assert!(fn_names.contains(&"toml_parse".to_string()));
         assert!(fn_names.contains(&"toml_stringify".to_string()));
         assert_eq!(equip_count, 2); // equip TomlParser + equip TomlValue
+    }
+
+    #[test]
+    fn is_stdlib_xml() {
+        assert!(is_stdlib_module(&["std".into(), "xml".into()]));
+    }
+
+    #[test]
+    fn generate_xml_returns_none() {
+        // std.xml is file-based, not synthetic — generate returns None
+        assert!(generate_stdlib_module(&["std".into(), "xml".into()]).is_none());
+    }
+
+    #[test]
+    fn xml_module_source_exists() {
+        let source = stdlib_module_source(&["std".into(), "xml".into()]);
+        assert!(source.is_some());
+        let src = source.unwrap();
+        assert!(src.contains("enum XmlNode"));
+        assert!(src.contains("xml_parse"));
+        assert!(src.contains("xml_stringify"));
+        assert!(src.contains("equip XmlNode"));
+        assert!(src.contains("equip XmlParser"));
+    }
+
+    #[test]
+    fn xml_source_parses() {
+        let source = stdlib_module_source(&["std".into(), "xml".into()]).unwrap();
+        let mut parser = crate::parser::Parser::new(source);
+        let module = parser.parse_module();
+        assert!(parser.errors.is_empty(), "xml.gg parse errors: {:?}", parser.errors);
+
+        let mut enum_names = vec![];
+        let mut struct_names = vec![];
+        let mut fn_names = vec![];
+        let mut equip_count = 0;
+        for item in &module.items {
+            match &item.node {
+                Item::Enum(e) => enum_names.push(e.name.node.clone()),
+                Item::Struct(s) => struct_names.push(s.name.node.clone()),
+                Item::Function(f) => fn_names.push(f.name.node.clone()),
+                Item::Equip(_) => equip_count += 1,
+                _ => {}
+            }
+        }
+
+        assert!(enum_names.contains(&"XmlNode".to_string()));
+        assert!(struct_names.contains(&"XmlParser".to_string()));
+        assert!(fn_names.contains(&"xml_parse".to_string()));
+        assert!(fn_names.contains(&"xml_stringify".to_string()));
+        assert_eq!(equip_count, 2); // equip XmlParser + equip XmlNode
     }
 
     #[test]
