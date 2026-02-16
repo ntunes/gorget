@@ -708,7 +708,7 @@ impl CodegenContext<'_> {
                         .map(|a| self.infer_c_type_from_expr(&a.node.value.node))
                         .unwrap_or_default();
                     let rhs = if arg_type == "GorgetString" {
-                        format!("{arg}.data")
+                        self.coerce_string_to_str(&arg)
                     } else {
                         arg
                     };

@@ -141,8 +141,8 @@ impl CodegenContext<'_> {
                         // Coerce GorgetString operands to .data for strcmp
                         let l_type = self.infer_c_type_from_expr(&left.node);
                         let r_type = self.infer_c_type_from_expr(&right.node);
-                        let l_str = if l_type == "GorgetString" { format!("{l}.data") } else { l };
-                        let r_str = if r_type == "GorgetString" { format!("{r}.data") } else { r };
+                        let l_str = if l_type == "GorgetString" { self.coerce_string_to_str(&l) } else { l };
+                        let r_str = if r_type == "GorgetString" { self.coerce_string_to_str(&r) } else { r };
                         return if *op == BinaryOp::Neq {
                             format!("(strcmp({l_str}, {r_str}) != 0)")
                         } else {
@@ -162,8 +162,8 @@ impl CodegenContext<'_> {
                         // Coerce both operands to const char*
                         let l_type = self.infer_c_type_from_expr(&left.node);
                         let r_type = self.infer_c_type_from_expr(&right.node);
-                        let l_str = if l_type == "GorgetString" { format!("{l}.data") } else { l };
-                        let r_str = if r_type == "GorgetString" { format!("{r}.data") } else { r };
+                        let l_str = if l_type == "GorgetString" { self.coerce_string_to_str(&l) } else { l };
+                        let r_str = if r_type == "GorgetString" { self.coerce_string_to_str(&r) } else { r };
                         return format!("gorget_string_from_concat({l_str}, {r_str})");
                     }
                 }

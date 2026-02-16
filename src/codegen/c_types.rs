@@ -286,6 +286,7 @@ pub fn format_for_c_type(c_type: &str, expr: &str) -> (String, String) {
         "bool" => ("%s".to_string(), format!("{expr} ? \"true\" : \"false\"")),
         "char" => ("%c".to_string(), expr.to_string()),
         "const char*" => ("%s".to_string(), expr.to_string()),
+        // TODO: leaks for temporary GorgetString — free function, no access to CodegenContext
         "GorgetString" => ("%s".to_string(), format!("{expr}.data")),
         _ => ("%lld".to_string(), format!("(long long){expr}")),
     }

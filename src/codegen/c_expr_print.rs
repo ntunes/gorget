@@ -353,7 +353,7 @@ impl CodegenContext<'_> {
                     PrimitiveType::Uint | PrimitiveType::Uint64 => {
                         format!("(unsigned long long){expr}")
                     }
-                    PrimitiveType::StringType => format!("{expr}.data"),
+                    PrimitiveType::StringType => self.coerce_string_to_str(expr),
                     _ => expr.to_string(),
                 };
                 (fmt.to_string(), arg)

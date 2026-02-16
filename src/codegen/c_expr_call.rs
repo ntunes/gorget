@@ -877,7 +877,7 @@ impl CodegenContext<'_> {
         if let Some(ptid) = param_type_id {
             // String arg → str param: coerce via .data
             if arg_type == "GorgetString" && ptid == self.types.string_id {
-                return format!("{expr}.data");
+                return self.coerce_string_to_str(&expr);
             }
             // str arg → String param: wrap with gorget_string_new
             if arg_type == "const char*" && ptid == self.types.owned_string_id {
@@ -1185,7 +1185,7 @@ impl CodegenContext<'_> {
         if is_string {
             // Coerce GorgetString receiver to const char* for str methods
             let str_recv = if c_type.as_deref() == Some("GorgetString") {
-                format!("{recv}.data")
+                self.coerce_string_to_str(&recv)
             } else {
                 recv.clone()
             };
@@ -1260,7 +1260,7 @@ impl CodegenContext<'_> {
         } else if is_string {
             // Coerce GorgetString to const char* for strstr
             let coll_str = if c_type.as_deref() == Some("GorgetString") {
-                format!("{coll}.data")
+                self.coerce_string_to_str(&coll)
             } else {
                 coll.clone()
             };

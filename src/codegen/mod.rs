@@ -165,6 +165,11 @@ pub struct CodegenContext<'a> {
     pub current_function_return_c_type: Option<String>,
     /// Counter for unique `__try_rN` temp variable names in Result `?` codegen.
     pub try_counter: usize,
+    /// Counter for unique `__strtmp_N` temp variable names for GorgetString-to-str coercion.
+    pub string_temp_counter: usize,
+    /// Pending GorgetString temporaries: (temp_name, gorget_string_expr).
+    /// Flushed before the containing statement to materialize + register for cleanup.
+    pub string_temps: Vec<(String, String)>,
     /// Map from (struct_name, field_name) → AST Type, used to resolve field types
     /// in `infer_receiver_type` for FieldAccess expressions.
     pub field_type_names: FxHashMap<(String, String), Type>,
@@ -352,6 +357,8 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
         expr_types: &analysis.expr_types,
         current_function_return_c_type: None,
         try_counter: 0,
+        string_temp_counter: 0,
+        string_temps: Vec::new(),
         field_type_names,
         mutable_captures: HashSet::new(),
         pointer_params: HashSet::new(),

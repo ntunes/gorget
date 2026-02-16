@@ -95,6 +95,60 @@ impl CodegenContext<'_> {
         }
     }
 
+    /// Coerce a GorgetString C expression to `const char*`.
+    ///
+    /// If the expression is a named variable, field access, or dereference
+    /// (already managed by the drop system), we simply return `expr.data`.
+    ///
+    /// If it's a function call result (temporary), we generate a named temp
+    /// variable and register it in `string_temps` for materialization before
+    /// the containing statement.
+    ///
+    /// Heuristic: an expression is a function call if it contains `(` but
+    /// does NOT start with `(` (which would be a dereference, cast, or
+    /// parenthesized expression).
+    pub fn coerce_string_to_str(&mut self, expr: &str) -> String {
+        let is_func_call = expr.contains('(') && !expr.starts_with('(');
+        if !is_func_call {
+            return format!("{expr}.data");
+        }
+        // Temporary expression — materialize to avoid leaking the GorgetString wrapper
+        let id = self.string_temp_counter;
+        self.string_temp_counter += 1;
+        let temp_name = format!("__strtmp_{id}");
+        self.string_temps.push((temp_name.clone(), expr.to_string()));
+        format!("{temp_name}.data")
+    }
+
+    /// Flush pending GorgetString temporaries: emit declarations before the
+    /// containing statement. Returns the temp names so the caller can emit
+    /// inline cleanup after the statement.
+    ///
+    /// Does NOT register in the drop scope — temps are short-lived and freed
+    /// inline by the statement handler. This avoids scope mismatches when
+    /// statements are inside nested C blocks (if/for/match bodies).
+    pub fn flush_string_temps(&mut self, emitter: &mut CEmitter) -> Vec<String> {
+        let temps: Vec<(String, String)> = self.string_temps.drain(..).collect();
+        let names: Vec<String> = temps.iter().map(|(n, _)| n.clone()).collect();
+        for (name, expr) in temps {
+            emitter.emit_line(&format!("GorgetString {name} = {expr};"));
+        }
+        names
+    }
+
+    /// Drain pending string temps without emitting declarations.
+    /// Returns (name, expr) pairs for the caller to handle manually.
+    fn flush_string_temps_no_emit(&mut self) -> Vec<(String, String)> {
+        self.string_temps.drain(..).collect()
+    }
+
+    /// Emit gorget_string_free for a list of temp names (inline cleanup).
+    fn emit_string_temp_frees(names: &[String], emitter: &mut CEmitter) {
+        for name in names.iter().rev() {
+            emitter.emit_line(&format!("gorget_string_free(&{name});"));
+        }
+    }
+
     /// Check if a trait (by name) has a `drop` method, either directly or
     /// inherited from a parent trait (i.e. the trait extends Drop).
     fn trait_has_drop_in_hierarchy(&self, trait_name: &str) -> bool {
@@ -584,7 +638,9 @@ impl CodegenContext<'_> {
                     self.emit_stmt_start(span, &vars, emitter);
                 }
                 let e = self.gen_expr(expr);
+                let str_temps = self.flush_string_temps(emitter);
                 emitter.emit_line(&format!("{e};"));
+                Self::emit_string_temp_frees(&str_temps, emitter);
                 if self.trace {
                     self.emit_stmt_end(emitter);
                 }
@@ -632,7 +688,9 @@ impl CodegenContext<'_> {
                 } else {
                     v
                 };
+                let str_temps = self.flush_string_temps(emitter);
                 emitter.emit_line(&format!("{t} = {v};"));
+                Self::emit_string_temp_frees(&str_temps, emitter);
                 if self.trace {
                     if let Some(ref ri) = result_info {
                         self.emit_stmt_end_with_result(ri, emitter);
@@ -656,11 +714,13 @@ impl CodegenContext<'_> {
                         // Coerce rhs to const char* if it's a GorgetString
                         let rhs_type = self.infer_c_type_from_expr(&value.node);
                         let rhs = if rhs_type == "GorgetString" {
-                            format!("{v}.data")
+                            self.coerce_string_to_str(&v)
                         } else {
                             v
                         };
+                        let str_temps = self.flush_string_temps(emitter);
                         emitter.emit_line(&format!("gorget_string_append(&{t}, {rhs});"));
+                        Self::emit_string_temp_frees(&str_temps, emitter);
                         if self.trace {
                             self.emit_stmt_end(emitter);
                         }
@@ -723,8 +783,10 @@ impl CodegenContext<'_> {
                         let e = self.gen_expr(expr);
                         let e = self.coerce_return_value(e, &expr.node);
                         self.closure_heap_alloc = false;
+                        let str_temps = self.flush_string_temps(emitter);
                         let ret_type = self.ret_tmp_type(&e);
                         emitter.emit_line(&format!("{ret_type} __ret_tmp = {e};"));
+                        Self::emit_string_temp_frees(&str_temps, emitter);
                         if self.trace {
                             self.emit_stmt_end(emitter);
                         }
@@ -745,21 +807,26 @@ impl CodegenContext<'_> {
                         emitter.emit_line("return;");
                     }
                 } else if let Some(expr) = expr {
-                    if self.trace {
+                    let is_trace = self.trace;
+                    if is_trace {
                         let vars = self.collect_expr_vars(&[&expr.node]);
                         self.emit_stmt_start(span, &vars, emitter);
-                        let e = self.gen_expr(expr);
-                        let e = self.coerce_return_value(e, &expr.node);
-                        self.closure_heap_alloc = false;
+                    }
+                    let e = self.gen_expr(expr);
+                    let e = self.coerce_return_value(e, &expr.node);
+                    self.closure_heap_alloc = false;
+                    let str_temps = self.flush_string_temps(emitter);
+                    if !str_temps.is_empty() || is_trace {
+                        // Need __ret_tmp to free temps before returning
                         let ret_type = self.ret_tmp_type(&e);
                         emitter.emit_line(&format!("{ret_type} __ret_tmp = {e};"));
-                        self.emit_stmt_end(emitter);
-                        self.emit_trace_return(emitter);
+                        Self::emit_string_temp_frees(&str_temps, emitter);
+                        if is_trace {
+                            self.emit_stmt_end(emitter);
+                            self.emit_trace_return(emitter);
+                        }
                         emitter.emit_line("return __ret_tmp;");
                     } else {
-                        let e = self.gen_expr(expr);
-                        let e = self.coerce_return_value(e, &expr.node);
-                        self.closure_heap_alloc = false;
                         emitter.emit_line(&format!("return {e};"));
                     }
                 } else {
@@ -797,6 +864,7 @@ impl CodegenContext<'_> {
                 else_body,
             } => {
                 let cond = self.gen_expr(condition);
+                let cond_temps = self.flush_string_temps(emitter);
                 emitter.emit_line(&format!("if ({cond}) {{"));
                 emitter.indent();
                 if self.trace {
@@ -809,15 +877,38 @@ impl CodegenContext<'_> {
 
                 for (elif_cond, elif_body) in elif_branches {
                     let ec = self.gen_expr(elif_cond);
-                    emitter.emit_line(&format!("}} else if ({ec}) {{"));
-                    emitter.indent();
-                    if self.trace {
-                        let src = c_string_escape(&format!("elif {}", self.source_line(elif_cond.span)));
-                        let vars = self.collect_expr_vars(&[&elif_cond.node]);
-                        self.emit_branch_trace("elif", &src, &vars, emitter);
+                    let elif_temps = self.flush_string_temps_no_emit();
+                    if elif_temps.is_empty() {
+                        emitter.emit_line(&format!("}} else if ({ec}) {{"));
+                        emitter.indent();
+                        if self.trace {
+                            let src = c_string_escape(&format!("elif {}", self.source_line(elif_cond.span)));
+                            let vars = self.collect_expr_vars(&[&elif_cond.node]);
+                            self.emit_branch_trace("elif", &src, &vars, emitter);
+                        }
+                        self.gen_block(elif_body, emitter);
+                        emitter.dedent();
+                    } else {
+                        // Temps need declaration before the condition — wrap in else block
+                        emitter.emit_line("} else {");
+                        emitter.indent();
+                        for (name, expr) in &elif_temps {
+                            emitter.emit_line(&format!("GorgetString {name} = {expr};"));
+                        }
+                        emitter.emit_line(&format!("if ({ec}) {{"));
+                        emitter.indent();
+                        if self.trace {
+                            let src = c_string_escape(&format!("elif {}", self.source_line(elif_cond.span)));
+                            let vars = self.collect_expr_vars(&[&elif_cond.node]);
+                            self.emit_branch_trace("elif", &src, &vars, emitter);
+                        }
+                        self.gen_block(elif_body, emitter);
+                        emitter.dedent();
+                        emitter.emit_line("}");
+                        let names: Vec<String> = elif_temps.iter().map(|(n, _)| n.clone()).collect();
+                        Self::emit_string_temp_frees(&names, emitter);
+                        emitter.dedent();
                     }
-                    self.gen_block(elif_body, emitter);
-                    emitter.dedent();
                 }
 
                 if let Some(else_body) = else_body {
@@ -831,6 +922,7 @@ impl CodegenContext<'_> {
                 }
 
                 emitter.emit_line("}");
+                Self::emit_string_temp_frees(&cond_temps, emitter);
             }
 
             Stmt::While {
@@ -909,8 +1001,10 @@ impl CodegenContext<'_> {
 
             Stmt::Throw(expr) => {
                 let e = self.gen_expr(expr);
+                let str_temps = self.flush_string_temps(emitter);
                 // str maps to const char* in all cases — pass directly
                 emitter.emit_line(&format!("GORGET_THROW({e}, 1);"));
+                Self::emit_string_temp_frees(&str_temps, emitter);
             }
 
             Stmt::With { bindings, body } => {
@@ -947,7 +1041,9 @@ impl CodegenContext<'_> {
                             None => self.gen_assert_diagnostic(condition)
                                 .unwrap_or_else(|| "\"assertion failed\"".to_string()),
                         };
+                        let str_temps = self.flush_string_temps(emitter);
                         emitter.emit_line(&format!("_Bool __assert_cond = ({cond});"));
+                        Self::emit_string_temp_frees(&str_temps, emitter);
                         self.emit_stmt_end(emitter);
                         emitter.emit_line(&format!("if (!__assert_cond) gorget_panic({msg});"));
                         emitter.dedent();
@@ -959,7 +1055,9 @@ impl CodegenContext<'_> {
                             None => self.gen_assert_diagnostic(condition)
                                 .unwrap_or_else(|| "\"assertion failed\"".to_string()),
                         };
+                        let str_temps = self.flush_string_temps(emitter);
                         emitter.emit_line(&format!("if (!({cond})) gorget_panic({msg});"));
+                        Self::emit_string_temp_frees(&str_temps, emitter);
                     }
                 }
             }
@@ -1176,8 +1274,10 @@ impl CodegenContext<'_> {
                 } else {
                     val
                 };
+                let str_temps = self.flush_string_temps(emitter);
                 let decl = c_types::c_declare(&c_type, &escaped);
                 emitter.emit_line(&format!("{const_prefix}{decl} = {val};"));
+                Self::emit_string_temp_frees(&str_temps, emitter);
 
                 // Track explicitly-typed Vector variables so is_vector_expr recognizes them
                 if c_type == "GorgetArray" {
@@ -1829,6 +1929,7 @@ impl CodegenContext<'_> {
         emitter: &mut CEmitter,
     ) {
         let scrut_expr = self.gen_expr(scrutinee);
+        let scrut_temps = self.flush_string_temps(emitter);
 
         // Always evaluate scrutinee into a temp to avoid double-evaluation.
         // When the scrutinee is `self` inside a method body, `self` is a pointer
@@ -1900,6 +2001,7 @@ impl CodegenContext<'_> {
         if !arms.is_empty() || else_arm.is_some() {
             emitter.emit_line("}");
         }
+        Self::emit_string_temp_frees(&scrut_temps, emitter);
     }
 
     /// Convert a pattern to a C boolean condition (for if-else chain).
