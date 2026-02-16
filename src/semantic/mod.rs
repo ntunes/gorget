@@ -102,6 +102,16 @@ pub fn analyze(module: &mut Module) -> AnalysisResult {
                         });
                     }
                 }
+                "hot-reload" => {
+                    if d.value.is_some() {
+                        errors.push(SemanticError {
+                            kind: SemanticErrorKind::UnknownDirective {
+                                name: format!("hot-reload={}", d.value.as_deref().unwrap()),
+                            },
+                            span: d.span,
+                        });
+                    }
+                }
                 _ => {
                     errors.push(SemanticError {
                         kind: SemanticErrorKind::UnknownDirective {

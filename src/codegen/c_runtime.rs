@@ -2503,3 +2503,119 @@ static inline const char* gorget_bytes_to_hex(const GorgetArray* arr) {
 }
 
 "#;
+
+pub const HOT_RELOAD_RUNTIME: &str = r#"
+// ── Hot Reload Runtime ──────────────────────────────────────────
+#include <dlfcn.h>
+#include <sys/stat.h>
+
+#ifdef __APPLE__
+#include <sys/event.h>
+#include <fcntl.h>
+#define GORGET_DYLIB_EXT ".dylib"
+#else
+#define GORGET_DYLIB_EXT ".so"
+#endif
+
+typedef struct {
+    void* handle;
+    void* init;
+    void* tick;
+    void* reload;
+    uint64_t state_hash;
+} GorgetGuestModule;
+
+static GorgetGuestModule gorget_hot_load(const char* path) {
+    GorgetGuestModule m = {0};
+    m.handle = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    if (!m.handle) {
+        fprintf(stderr, "[hot-reload] dlopen failed: %s\n", dlerror());
+        return m;
+    }
+    m.init = dlsym(m.handle, "gorget_guest_init");
+    m.tick = dlsym(m.handle, "gorget_guest_tick");
+    m.reload = dlsym(m.handle, "gorget_guest_reload");
+    uint64_t* hash_ptr = (uint64_t*)dlsym(m.handle, "GORGET_STATE_HASH");
+    m.state_hash = hash_ptr ? *hash_ptr : 0;
+    return m;
+}
+
+static void gorget_hot_unload(GorgetGuestModule* m) {
+    if (m->handle) {
+        dlclose(m->handle);
+        m->handle = NULL;
+    }
+}
+
+// ── File watcher (kqueue on macOS) ──────────────────────────────
+#ifdef __APPLE__
+
+typedef struct {
+    int kq;
+    int* fds;
+    int fd_count;
+} GorgetFileWatcher;
+
+static GorgetFileWatcher gorget_hot_watch_init(const char** paths, int count) {
+    GorgetFileWatcher w = {0};
+    w.kq = kqueue();
+    if (w.kq < 0) {
+        fprintf(stderr, "[hot-reload] kqueue() failed\n");
+        return w;
+    }
+    w.fds = (int*)malloc(sizeof(int) * count);
+    w.fd_count = 0;
+    for (int i = 0; i < count; i++) {
+        int fd = open(paths[i], O_EVTONLY);
+        if (fd < 0) {
+            fprintf(stderr, "[hot-reload] Cannot watch '%s'\n", paths[i]);
+            continue;
+        }
+        struct kevent ev;
+        EV_SET(&ev, fd, EVFILT_VNODE, EV_ADD | EV_CLEAR,
+               NOTE_WRITE | NOTE_RENAME | NOTE_DELETE, 0, NULL);
+        kevent(w.kq, &ev, 1, NULL, 0, NULL);
+        w.fds[w.fd_count++] = fd;
+    }
+    return w;
+}
+
+static bool gorget_hot_watch_check(GorgetFileWatcher* w) {
+    struct kevent ev;
+    struct timespec ts = {0, 0};  // non-blocking
+    int n = kevent(w->kq, NULL, 0, &ev, 1, &ts);
+    return n > 0;
+}
+
+static void gorget_hot_watch_close(GorgetFileWatcher* w) {
+    for (int i = 0; i < w->fd_count; i++) {
+        close(w->fds[i]);
+    }
+    free(w->fds);
+    close(w->kq);
+}
+
+#else
+// Linux stub — TODO: implement inotify watcher
+
+typedef struct {
+    int dummy;
+} GorgetFileWatcher;
+
+static GorgetFileWatcher gorget_hot_watch_init(const char** paths, int count) {
+    (void)paths; (void)count;
+    fprintf(stderr, "[hot-reload] File watching not yet implemented on Linux\n");
+    return (GorgetFileWatcher){0};
+}
+
+static bool gorget_hot_watch_check(GorgetFileWatcher* w) {
+    (void)w;
+    return false;
+}
+
+static void gorget_hot_watch_close(GorgetFileWatcher* w) {
+    (void)w;
+}
+#endif
+
+"#;

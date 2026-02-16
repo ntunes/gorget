@@ -238,6 +238,14 @@ pub struct CodegenOptions {
     pub test_exclude_tags: Vec<String>,
     pub test_name_filter: Option<String>,
     pub source_text: String,
+    /// When true, produce split host/guest output for hot code reload.
+    pub hot_reload: bool,
+    /// Source file paths to watch for changes (main + imports).
+    pub watch_paths: Vec<String>,
+    /// The path where the guest .dylib will be compiled to.
+    pub guest_lib_path: String,
+    /// The `gg` compiler command to recompile the guest.
+    pub recompile_cmd: String,
 }
 
 impl Default for CodegenOptions {
@@ -252,6 +260,10 @@ impl Default for CodegenOptions {
             test_exclude_tags: Vec::new(),
             test_name_filter: None,
             source_text: String::new(),
+            hot_reload: false,
+            watch_paths: Vec::new(),
+            guest_lib_path: String::new(),
+            recompile_cmd: String::new(),
         }
     }
 }
@@ -262,6 +274,10 @@ pub struct CodegenOutput {
     pub needs_sdl: bool,
     pub needs_http: bool,
     pub needs_crypto: bool,
+    /// Host C source for hot-reload mode (contains main loop + file watcher).
+    pub host_code: Option<String>,
+    /// Guest C source for hot-reload mode (contains user functions as shared lib).
+    pub guest_code: Option<String>,
 }
 
 /// Generate C source code from a parsed and analyzed Gorget module.
@@ -291,6 +307,12 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
     }
 
     let is_test_module = opts.test_mode;
+    let hot_reload = opts.hot_reload;
+    let hot_reload_opts = if hot_reload {
+        Some((opts.watch_paths.clone(), opts.guest_lib_path.clone(), opts.recompile_cmd.clone()))
+    } else {
+        None
+    };
 
     let mut ctx = CodegenContext {
         scopes: &analysis.scopes,
@@ -483,12 +505,376 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
             combined.push_str(&output[..pos]);
             combined.push_str(&splice_buf.finish());
             combined.push_str(&output[pos..]);
-            return CodegenOutput { c_code: combined, needs_sdl: has_sdl, needs_http: has_http, needs_crypto: has_crypto };
+            return CodegenOutput { c_code: combined, needs_sdl: has_sdl, needs_http: has_http, needs_crypto: has_crypto, host_code: None, guest_code: None };
         }
-        return CodegenOutput { c_code: output + &splice_buf.finish(), needs_sdl: has_sdl, needs_http: has_http, needs_crypto: has_crypto };
+        return CodegenOutput { c_code: output + &splice_buf.finish(), needs_sdl: has_sdl, needs_http: has_http, needs_crypto: has_crypto, host_code: None, guest_code: None };
     }
 
-    CodegenOutput { c_code: emitter.finish(), needs_sdl: has_sdl, needs_http: has_http, needs_crypto: has_crypto }
+    let mut output = CodegenOutput { c_code: emitter.finish(), needs_sdl: has_sdl, needs_http: has_http, needs_crypto: has_crypto, host_code: None, guest_code: None };
+
+    // Hot-reload: generate split host/guest C sources
+    if hot_reload {
+        if let Some((watch_paths, guest_lib_path, recompile_cmd)) = hot_reload_opts {
+            let hr_opts = CodegenOptions {
+                hot_reload: true,
+                watch_paths,
+                guest_lib_path,
+                recompile_cmd,
+                ..CodegenOptions::default()
+            };
+            let (host, guest) = generate_hot_reload_split(module, &output.c_code, has_sdl, &hr_opts);
+            output.host_code = Some(host);
+            output.guest_code = Some(guest);
+        }
+    }
+
+    output
+}
+
+/// Detect the State type from the `init()` function's return type in the module.
+fn find_state_type_name(module: &Module) -> Option<String> {
+    for item in &module.items {
+        if let Item::Function(f) = &item.node {
+            if f.name.node == "init" && f.span != Span::dummy() {
+                if let Type::Named { name, .. } = &f.return_type.node {
+                    return Some(name.node.clone());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Compute a FNV-1a hash of a string (for state layout change detection).
+fn fnv1a_hash(s: &str) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for b in s.bytes() {
+        hash ^= b as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+/// Compute the state hash string from a struct's fields.
+fn compute_state_hash(module: &Module, state_type_name: &str) -> u64 {
+    for item in &module.items {
+        if let Item::Struct(s) = &item.node {
+            if s.name.node == state_type_name {
+                let mut layout = String::new();
+                for field in &s.fields {
+                    let field_type = format!("{:?}", field.node.type_.node);
+                    let field_name = &field.node.name.node;
+                    layout.push_str(&format!("{field_type} {field_name};"));
+                }
+                return fnv1a_hash(&layout);
+            }
+        }
+    }
+    0
+}
+
+/// Collect init/tick/reload function signatures from the module.
+struct HotReloadFunctions {
+    /// init() extra params (beyond return type): list of (name, AST type)
+    init_extra_params: Vec<(String, Type)>,
+    /// tick() extra params (beyond State &state): list of (name, AST type)
+    tick_extra_params: Vec<(String, Type)>,
+    /// Whether reload() exists
+    has_reload: bool,
+    /// reload() extra params (beyond State &state)
+    reload_extra_params: Vec<(String, Type)>,
+}
+
+fn collect_hot_reload_functions(module: &Module) -> HotReloadFunctions {
+    let mut result = HotReloadFunctions {
+        init_extra_params: Vec::new(),
+        tick_extra_params: Vec::new(),
+        has_reload: false,
+        reload_extra_params: Vec::new(),
+    };
+
+    for item in &module.items {
+        if let Item::Function(f) = &item.node {
+            if f.span == Span::dummy() { continue; }
+            match f.name.node.as_str() {
+                "init" => {
+                    for p in &f.params {
+                        result.init_extra_params.push((
+                            p.node.name.node.clone(),
+                            p.node.type_.node.clone(),
+                        ));
+                    }
+                }
+                "tick" => {
+                    for p in &f.params {
+                        if p.node.name.node == "state" { continue; }
+                        result.tick_extra_params.push((
+                            p.node.name.node.clone(),
+                            p.node.type_.node.clone(),
+                        ));
+                    }
+                }
+                "reload" => {
+                    result.has_reload = true;
+                    for p in &f.params {
+                        if p.node.name.node == "state" { continue; }
+                        result.reload_extra_params.push((
+                            p.node.name.node.clone(),
+                            p.node.type_.node.clone(),
+                        ));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    result
+}
+
+/// Generate split host and guest C sources for hot-reload mode.
+fn generate_hot_reload_split(
+    module: &Module,
+    full_c_code: &str,
+    has_sdl: bool,
+    opts: &CodegenOptions,
+) -> (String, String) {
+    let state_type = find_state_type_name(module).unwrap_or_else(|| "State".to_string());
+    let state_hash = compute_state_hash(module, &state_type);
+    let hr_fns = collect_hot_reload_functions(module);
+
+    // ── Guest code ──
+    // The guest is the full program minus main(), plus exported wrappers and state hash.
+    let guest_code = generate_guest_code(full_c_code, &state_type, state_hash, &hr_fns);
+
+    // ── Host code ──
+    let host_code = generate_host_code(
+        full_c_code,
+        &state_type,
+        has_sdl,
+        &hr_fns,
+        opts,
+    );
+
+    (host_code, guest_code)
+}
+
+/// Generate the guest shared library C source.
+fn generate_guest_code(
+    full_c_code: &str,
+    state_type: &str,
+    state_hash: u64,
+    hr_fns: &HotReloadFunctions,
+) -> String {
+    let mut guest = String::with_capacity(full_c_code.len() + 1024);
+
+    // Remove main() from the full code — find "int main(" and strip to end of function
+    // Strategy: emit everything, but replace the main function with exported guest wrappers.
+    // We find "int main(int argc, char** argv) {" and remove through its matching close brace.
+    let main_marker = "int main(int argc, char** argv) {";
+    if let Some(main_pos) = full_c_code.find(main_marker) {
+        // Emit everything before main
+        guest.push_str(&full_c_code[..main_pos]);
+
+        // Skip past main's closing brace. Count braces to find the matching close.
+        let after_main = &full_c_code[main_pos..];
+        let mut brace_depth = 0;
+        let mut end_pos = 0;
+        for (i, ch) in after_main.char_indices() {
+            if ch == '{' { brace_depth += 1; }
+            if ch == '}' {
+                brace_depth -= 1;
+                if brace_depth == 0 {
+                    end_pos = i + 1;
+                    break;
+                }
+            }
+        }
+        // Skip the trailing newline after the closing brace
+        let remaining = &after_main[end_pos..];
+        let remaining = remaining.strip_prefix('\n').unwrap_or(remaining);
+        guest.push_str(remaining);
+    } else {
+        // No main() found — use as-is
+        guest.push_str(full_c_code);
+    }
+
+    // Emit state hash constant
+    guest.push_str(&format!(
+        "\n// ── Hot Reload Guest Exports ──\n\
+         const uint64_t GORGET_STATE_HASH = 0x{state_hash:016X}ULL;\n\n"
+    ));
+
+    // Emit exported wrapper for init()
+    let init_c_params: Vec<String> = hr_fns.init_extra_params.iter()
+        .map(|(name, _ty)| name.clone())
+        .collect();
+    let init_args = init_c_params.join(", ");
+    guest.push_str(&format!(
+        "__attribute__((visibility(\"default\")))\n\
+         {state_type} gorget_guest_init({}) {{\n\
+         \treturn gg_init({init_args});\n\
+         }}\n\n",
+        if hr_fns.init_extra_params.is_empty() {
+            "void".to_string()
+        } else {
+            // For simplicity, use the same signature that codegen produced
+            hr_fns.init_extra_params.iter()
+                .map(|(name, _)| format!("void* {name}"))  // placeholder — refined below
+                .collect::<Vec<_>>().join(", ")
+        }
+    ));
+
+    // Emit exported wrapper for tick()
+    guest.push_str(&format!(
+        "__attribute__((visibility(\"default\")))\n\
+         bool gorget_guest_tick({state_type}* state) {{\n\
+         \treturn gg_tick(state);\n\
+         }}\n\n"
+    ));
+
+    // Emit exported wrapper for reload() if present
+    if hr_fns.has_reload {
+        guest.push_str(&format!(
+            "__attribute__((visibility(\"default\")))\n\
+             void gorget_guest_reload({state_type}* state) {{\n\
+             \tgg_reload(state);\n\
+             }}\n\n"
+        ));
+    }
+
+    guest
+}
+
+/// Generate the host executable C source.
+fn generate_host_code(
+    full_c_code: &str,
+    state_type: &str,
+    has_sdl: bool,
+    _hr_fns: &HotReloadFunctions,
+    opts: &CodegenOptions,
+) -> String {
+    let mut host = String::with_capacity(4096);
+
+    // Emit the runtime preamble and type definitions from the full code
+    // (everything up to "// ── Function Definitions ──" gives us types + runtime)
+    let func_defs_marker = "// ── Function Definitions ──";
+    if let Some(pos) = full_c_code.find(func_defs_marker) {
+        host.push_str(&full_c_code[..pos]);
+    } else {
+        // Fallback: include whole runtime
+        host.push_str(c_runtime::RUNTIME_PREAMBLE);
+        host.push_str(c_runtime::PANIC_NORMAL);
+        host.push_str(c_runtime::RUNTIME_CORE);
+    }
+
+    // Add hot-reload runtime
+    host.push_str(c_runtime::HOT_RELOAD_RUNTIME);
+
+    // Add function typedefs for guest entry points
+    host.push_str(&format!(
+        "// ── Hot Reload Host ──\n\
+         typedef {state_type} (*gorget_init_fn_t)(void);\n\
+         typedef bool (*gorget_tick_fn_t)({state_type}*);\n\
+         typedef void (*gorget_reload_fn_t)({state_type}*);\n\n"
+    ));
+
+    // Generate main()
+    let guest_lib_path = if opts.guest_lib_path.is_empty() {
+        "guest".to_string()
+    } else {
+        opts.guest_lib_path.clone()
+    };
+    let recompile_cmd = if opts.recompile_cmd.is_empty() {
+        "gg build --shared".to_string()
+    } else {
+        opts.recompile_cmd.clone()
+    };
+
+    // Build watch paths array
+    let watch_paths_c: String = if opts.watch_paths.is_empty() {
+        "    const char* __watch_paths[] = {\".\"};\n    int __watch_count = 1;\n".to_string()
+    } else {
+        let mut s = String::from("    const char* __watch_paths[] = {");
+        for (i, p) in opts.watch_paths.iter().enumerate() {
+            if i > 0 { s.push_str(", "); }
+            s.push_str(&format!("\"{p}\""));
+        }
+        s.push_str("};\n");
+        s.push_str(&format!("    int __watch_count = {};\n", opts.watch_paths.len()));
+        s
+    };
+
+    let sdl_init = if has_sdl {
+        "    // TODO: SDL resource initialization (persistent across reloads)\n"
+    } else {
+        ""
+    };
+
+    host.push_str(&format!(
+        r#"int main(int argc, char** argv) {{
+    gorget_init_args(argc, argv);
+{sdl_init}
+    // Watch source files for changes
+{watch_paths_c}
+    GorgetFileWatcher __watcher = gorget_hot_watch_init(__watch_paths, __watch_count);
+
+    // Initial compile + load
+    if (system("{recompile_cmd}") != 0) {{
+        fprintf(stderr, "[hot-reload] Initial compilation failed\n");
+        return 1;
+    }}
+    GorgetGuestModule __guest = gorget_hot_load("./{guest_lib_path}" GORGET_DYLIB_EXT);
+    if (!__guest.handle) {{
+        fprintf(stderr, "[hot-reload] Failed to load guest module\n");
+        return 1;
+    }}
+
+    // Initialize state
+    gorget_init_fn_t __init_fn = (gorget_init_fn_t)__guest.init;
+    {state_type} __state = __init_fn();
+
+    // Main loop
+    while (1) {{
+        if (gorget_hot_watch_check(&__watcher)) {{
+            // Debounce: wait a moment for write to complete
+            usleep(50000);  // 50ms
+
+            fprintf(stderr, "[hot-reload] Recompiling...\n");
+            if (system("{recompile_cmd}") == 0) {{
+                GorgetGuestModule __new_guest = gorget_hot_load("./{guest_lib_path}" GORGET_DYLIB_EXT);
+                if (__new_guest.handle) {{
+                    if (__new_guest.state_hash != __guest.state_hash) {{
+                        fprintf(stderr, "[hot-reload] State layout changed — reinitializing\n");
+                        gorget_init_fn_t __new_init = (gorget_init_fn_t)__new_guest.init;
+                        __state = __new_init();
+                    }} else if (__new_guest.reload) {{
+                        gorget_reload_fn_t __reload_fn = (gorget_reload_fn_t)__new_guest.reload;
+                        __reload_fn(&__state);
+                    }}
+                    gorget_hot_unload(&__guest);
+                    __guest = __new_guest;
+                    fprintf(stderr, "[hot-reload] OK\n");
+                }} else {{
+                    fprintf(stderr, "[hot-reload] Load failed — keeping old code\n");
+                }}
+            }} else {{
+                fprintf(stderr, "[hot-reload] Compile error — keeping old code\n");
+            }}
+        }}
+
+        gorget_tick_fn_t __tick_fn = (gorget_tick_fn_t)__guest.tick;
+        if (!__tick_fn(&__state)) break;
+    }}
+
+    gorget_hot_unload(&__guest);
+    gorget_hot_watch_close(&__watcher);
+    return 0;
+}}
+"#
+    ));
+
+    host
 }
 
 #[cfg(test)]

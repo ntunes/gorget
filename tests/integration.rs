@@ -3291,3 +3291,59 @@ Hello
 done",
     );
 }
+
+#[test]
+fn hot_reload_basic() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures/hot_reload_basic.gg");
+    let dir = fixture_path.parent().unwrap();
+    let stem = "hot_reload_basic";
+
+    assert!(fixture_path.exists(), "Fixture not found: {}", fixture_path.display());
+
+    // 1. Build with --hot-reload
+    let build = Command::new(env!("CARGO"))
+        .args(["run", "--quiet", "--", "build", "--hot-reload"])
+        .arg(&fixture_path)
+        .output()
+        .expect("failed to run cargo");
+
+    assert!(
+        build.status.success(),
+        "Hot-reload build failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr),
+    );
+
+    // 2. Run the host binary (it dlopen's the guest and runs init/tick)
+    let exe_path = dir.join(stem);
+    let run = Command::new(&exe_path)
+        .current_dir(dir)
+        .output()
+        .expect("failed to execute hot-reload binary");
+
+    let stdout = String::from_utf8_lossy(&run.stdout);
+
+    // 3. Assert: init() creates State(0), tick() increments 3 times then exits
+    // The recompile step prints "Built shared library: ..." to stdout, followed by "1\n2\n3"
+    assert!(
+        stdout.contains("1\n2\n3"),
+        "Hot-reload output mismatch.\nExpected stdout to contain '1\\n2\\n3'.\nGot:\n{stdout}\nstderr:\n{}",
+        String::from_utf8_lossy(&run.stderr),
+    );
+
+    assert!(
+        run.status.success(),
+        "Hot-reload binary exited with error: {:?}\nstderr: {}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stderr),
+    );
+
+    // 4. Clean up generated files
+    let _ = std::fs::remove_file(dir.join(format!("{stem}_host.c")));
+    let _ = std::fs::remove_file(dir.join(format!("{stem}_guest.c")));
+    let _ = std::fs::remove_file(dir.join(format!("{stem}_guest.dylib")));
+    let _ = std::fs::remove_file(dir.join(format!("{stem}_guest.so")));
+    let _ = std::fs::remove_file(&exe_path);
+    let _ = std::fs::remove_file(dir.join(format!("{stem}.c")));
+}

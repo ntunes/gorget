@@ -1,0 +1,17 @@
+directive hot-reload
+
+struct State:
+    int counter
+
+State init():
+    return State(0)
+
+bool tick(State &state):
+    state.counter = state.counter + 1
+    print("{state.counter}")
+    if state.counter >= 3:
+        return false
+    return true
+
+void reload(State &state):
+    print("reloaded")

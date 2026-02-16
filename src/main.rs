@@ -80,26 +80,132 @@ fn resolve_deps_for_file(filename: &str) -> HashMap<String, PathBuf> {
     HashMap::new()
 }
 
+/// Directive flags extracted from the source module.
+struct DirectiveFlags {
+    strip_asserts: bool,
+    overflow_wrap: bool,
+    trace: bool,
+    hot_reload: bool,
+}
+
 /// Extract directive flags from a parsed module.
-fn extract_directives(module: &Module) -> (bool, bool, bool) {
-    let mut strip_asserts = false;
-    let mut overflow_wrap = false;
-    let mut trace = false;
+fn extract_directives(module: &Module) -> DirectiveFlags {
+    let mut flags = DirectiveFlags {
+        strip_asserts: false,
+        overflow_wrap: false,
+        trace: false,
+        hot_reload: false,
+    };
     for item in &module.items {
         if let Item::Directive(d) = &item.node {
             match d.name.as_str() {
-                "strip-asserts" => strip_asserts = true,
-                "overflow" if d.value.as_deref() == Some("wrap") => overflow_wrap = true,
-                "trace" => trace = true,
+                "strip-asserts" => flags.strip_asserts = true,
+                "overflow" if d.value.as_deref() == Some("wrap") => flags.overflow_wrap = true,
+                "trace" => flags.trace = true,
+                "hot-reload" => flags.hot_reload = true,
                 _ => {}
             }
         }
     }
-    (strip_asserts, overflow_wrap, trace)
+    flags
+}
+
+/// Add SDL2 linker flags to a cc command.
+fn add_sdl_flags(cmd: &mut Command, needs_sdl: bool) {
+    if !needs_sdl { return; }
+    let pkg_ok = Command::new("pkg-config")
+        .args(["--cflags", "--libs", "sdl2", "SDL2_image", "SDL2_ttf"])
+        .output()
+        .ok()
+        .and_then(|o| {
+            if o.status.success() {
+                Some(String::from_utf8_lossy(&o.stdout).to_string())
+            } else {
+                None
+            }
+        });
+    if let Some(flags) = pkg_ok {
+        for flag in flags.split_whitespace() {
+            cmd.arg(flag);
+        }
+    } else {
+        cmd.args(["-lSDL2", "-lSDL2_image", "-lSDL2_ttf"]);
+        #[cfg(target_os = "macos")]
+        {
+            cmd.arg("-I/opt/homebrew/include");
+            cmd.arg("-L/opt/homebrew/lib");
+            cmd.arg("-I/usr/local/include");
+            cmd.arg("-L/usr/local/lib");
+        }
+    }
+}
+
+/// Add libcurl linker flags to a cc command.
+fn add_http_flags(cmd: &mut Command, needs_http: bool) {
+    if !needs_http { return; }
+    let pkg_ok = Command::new("pkg-config")
+        .args(["--cflags", "--libs", "libcurl"])
+        .output()
+        .ok()
+        .and_then(|o| {
+            if o.status.success() {
+                Some(String::from_utf8_lossy(&o.stdout).to_string())
+            } else {
+                None
+            }
+        });
+    if let Some(flags) = pkg_ok {
+        for flag in flags.split_whitespace() {
+            cmd.arg(flag);
+        }
+    } else {
+        cmd.arg("-lcurl");
+        #[cfg(target_os = "macos")]
+        {
+            cmd.arg("-I/opt/homebrew/include");
+            cmd.arg("-L/opt/homebrew/lib");
+            cmd.arg("-I/usr/local/include");
+            cmd.arg("-L/usr/local/lib");
+        }
+    }
+}
+
+/// Add OpenSSL linker flags to a cc command.
+fn add_crypto_flags(cmd: &mut Command, needs_crypto: bool) {
+    if !needs_crypto { return; }
+    let pkg_ok = Command::new("pkg-config")
+        .args(["--cflags", "--libs", "openssl"])
+        .output()
+        .ok()
+        .and_then(|o| {
+            if o.status.success() {
+                Some(String::from_utf8_lossy(&o.stdout).to_string())
+            } else {
+                None
+            }
+        });
+    if let Some(flags) = pkg_ok {
+        for flag in flags.split_whitespace() {
+            cmd.arg(flag);
+        }
+    } else {
+        cmd.arg("-lssl");
+        cmd.arg("-lcrypto");
+        #[cfg(target_os = "macos")]
+        {
+            cmd.arg("-I/opt/homebrew/include");
+            cmd.arg("-L/opt/homebrew/lib");
+            cmd.arg("-I/usr/local/include");
+            cmd.arg("-L/usr/local/lib");
+        }
+    }
 }
 
 /// Build a .gg source file into a binary. Returns the path to the executable,
 /// or an error string if compilation fails.
+///
+/// `shared_output`: if Some, build as a shared library (.dylib/.so) at this path.
+/// `hot_reload_flag`: if true, force hot-reload mode even without `directive hot-reload`.
 fn try_build(
     filename: &str,
     source: &str,
@@ -115,6 +221,8 @@ fn try_build(
     test_name_filter: Option<&str>,
     output_dir: Option<&Path>,
     dep_paths: HashMap<String, PathBuf>,
+    shared_output: Option<&Path>,
+    hot_reload_flag: bool,
 ) -> Result<PathBuf, String> {
     let mut parser = Parser::new(source);
     let module = parser.parse_module();
@@ -131,22 +239,23 @@ fn try_build(
     let mut module = load_imports(filename, source, module, dep_paths);
 
     // Merge source directives with CLI flags.
-    let (dir_strip, dir_overflow, dir_trace) = extract_directives(&module);
+    let dir_flags = extract_directives(&module);
     let strip_asserts = if no_strip_asserts {
         false
     } else {
-        strip_asserts || dir_strip
+        strip_asserts || dir_flags.strip_asserts
     };
     let overflow_wrap = if overflow_checked {
         false
     } else {
-        overflow_wrap || dir_overflow
+        overflow_wrap || dir_flags.overflow_wrap
     };
     let trace = if no_trace {
         false
     } else {
-        trace || dir_trace
+        trace || dir_flags.trace
     };
+    let hot_reload = dir_flags.hot_reload || hot_reload_flag;
 
     let result = gorget::semantic::analyze(&mut module);
 
@@ -176,6 +285,24 @@ fn try_build(
         String::new()
     };
 
+    // Determine guest library name for hot-reload mode
+    let guest_lib_name = format!("{stem}_guest");
+    #[cfg(target_os = "macos")]
+    let dylib_ext = ".dylib";
+    #[cfg(not(target_os = "macos"))]
+    let dylib_ext = ".so";
+
+    // Compute the recompile command for hot-reload
+    let abs_filename = std::path::absolute(Path::new(filename))
+        .unwrap_or_else(|_| PathBuf::from(filename));
+    let guest_lib_file = format!("{guest_lib_name}{dylib_ext}");
+    let recompile_cmd = format!(
+        "{} build --shared {} -o {}",
+        std::env::current_exe().unwrap_or_else(|_| PathBuf::from("gg")).display(),
+        abs_filename.display(),
+        dir.join(&guest_lib_file).display(),
+    );
+
     // Generate C code
     let codegen_output = gorget::codegen::generate_c(&module, &result, gorget::codegen::CodegenOptions {
         strip_asserts,
@@ -187,6 +314,10 @@ fn try_build(
         test_exclude_tags: test_exclude_tags.to_vec(),
         test_name_filter: test_name_filter.map(|s| s.to_string()),
         source_text: source.to_string(),
+        hot_reload,
+        watch_paths: vec![abs_filename.display().to_string()],
+        guest_lib_path: guest_lib_name.clone(),
+        recompile_cmd: recompile_cmd.clone(),
     });
     let c_code = codegen_output.c_code;
     let needs_sdl = codegen_output.needs_sdl;
@@ -199,7 +330,116 @@ fn try_build(
     let exe_path = dir.join(stem);
     let exe_path = std::path::absolute(&exe_path).unwrap_or(exe_path);
 
-    // Write .c file
+    // ── --shared: build as shared library (highest priority) ──
+    if let Some(shared_path) = shared_output {
+        // For --shared, emit the guest code (if available) or the full code
+        let shared_c_code = codegen_output.guest_code.as_deref().unwrap_or(&c_code);
+        let shared_c_path = dir.join(format!("{stem}_guest.c"));
+        if let Err(e) = fs::write(&shared_c_path, shared_c_code) {
+            return Err(format!("Error writing {}: {e}", shared_c_path.display()));
+        }
+
+        let cc = env::var("CC").unwrap_or_else(|_| "cc".to_string());
+        let mut cc_cmd = Command::new(&cc);
+        cc_cmd
+            .arg("-std=c11")
+            .arg("-shared")
+            .arg("-fPIC")
+            .arg("-Wall")
+            .arg("-Wextra")
+            .arg("-Wno-unused-parameter")
+            .arg("-Wno-unused-variable")
+            .arg("-Wno-unused-function")
+            .arg("-o")
+            .arg(shared_path)
+            .arg(&shared_c_path)
+            .arg("-lm");
+        if overflow_wrap { cc_cmd.arg("-fwrapv"); }
+        add_sdl_flags(&mut cc_cmd, needs_sdl);
+        add_http_flags(&mut cc_cmd, needs_http);
+        add_crypto_flags(&mut cc_cmd, needs_crypto);
+
+        let status = cc_cmd.status();
+        return match status {
+            Ok(s) if s.success() => Ok(shared_path.to_path_buf()),
+            Ok(s) => Err(format!("Shared library compilation failed: {s}\nGenerated: {}", shared_c_path.display())),
+            Err(e) => Err(format!("Failed to run C compiler '{cc}': {e}")),
+        };
+    }
+
+    // ── Hot-reload two-phase build ──────────────────────────────
+    if hot_reload {
+        let host_code = codegen_output.host_code.as_deref().unwrap_or(&c_code);
+        let guest_code = codegen_output.guest_code.as_deref().unwrap_or(&c_code);
+
+        let host_c_path = dir.join(format!("{stem}_host.c"));
+        let guest_c_path = dir.join(format!("{stem}_guest.c"));
+        let guest_lib_path = dir.join(&guest_lib_file);
+
+        // Write host and guest C files
+        if let Err(e) = fs::write(&host_c_path, host_code) {
+            return Err(format!("Error writing {}: {e}", host_c_path.display()));
+        }
+        if let Err(e) = fs::write(&guest_c_path, guest_code) {
+            return Err(format!("Error writing {}: {e}", guest_c_path.display()));
+        }
+
+        let cc = env::var("CC").unwrap_or_else(|_| "cc".to_string());
+
+        // Phase 1: Compile guest as shared library
+        let mut guest_cmd = Command::new(&cc);
+        guest_cmd
+            .arg("-std=c11")
+            .arg("-shared")
+            .arg("-fPIC")
+            .arg("-Wall")
+            .arg("-Wextra")
+            .arg("-Wno-unused-parameter")
+            .arg("-Wno-unused-variable")
+            .arg("-Wno-unused-function")
+            .arg("-o")
+            .arg(&guest_lib_path)
+            .arg(&guest_c_path)
+            .arg("-lm");
+        if overflow_wrap { guest_cmd.arg("-fwrapv"); }
+        add_sdl_flags(&mut guest_cmd, needs_sdl);
+        add_http_flags(&mut guest_cmd, needs_http);
+        add_crypto_flags(&mut guest_cmd, needs_crypto);
+
+        let guest_status = guest_cmd.status();
+        match guest_status {
+            Ok(s) if s.success() => {}
+            Ok(s) => return Err(format!("Guest library compilation failed: {s}\nGenerated: {}", guest_c_path.display())),
+            Err(e) => return Err(format!("Failed to run C compiler '{cc}': {e}")),
+        }
+
+        // Phase 2: Compile host as executable
+        let mut host_cmd = Command::new(&cc);
+        host_cmd
+            .arg("-std=c11")
+            .arg("-Wall")
+            .arg("-Wextra")
+            .arg("-Wno-unused-parameter")
+            .arg("-Wno-unused-variable")
+            .arg("-Wno-unused-function")
+            .arg("-o")
+            .arg(&exe_path)
+            .arg(&host_c_path)
+            .arg("-lm");
+        if overflow_wrap { host_cmd.arg("-fwrapv"); }
+        add_sdl_flags(&mut host_cmd, needs_sdl);
+        add_http_flags(&mut host_cmd, needs_http);
+        add_crypto_flags(&mut host_cmd, needs_crypto);
+
+        let host_status = host_cmd.status();
+        return match host_status {
+            Ok(s) if s.success() => Ok(exe_path),
+            Ok(s) => Err(format!("Host compilation failed: {s}\nGenerated: {}", host_c_path.display())),
+            Err(e) => Err(format!("Failed to run C compiler '{cc}': {e}")),
+        };
+    }
+
+    // Write .c file (normal, non-hot-reload path)
     if let Err(e) = fs::write(&c_path, &c_code) {
         return Err(format!("Error writing {}: {e}", c_path.display()));
     }
@@ -223,96 +463,9 @@ fn try_build(
         .arg(&c_path)
         .arg("-lm");
 
-    // Add SDL2 linker flags when std.sdl is imported
-    if needs_sdl {
-        // Try pkg-config first for proper include/lib paths
-        let pkg_ok = Command::new("pkg-config")
-            .args(["--cflags", "--libs", "sdl2", "SDL2_image", "SDL2_ttf"])
-            .output()
-            .ok()
-            .and_then(|o| {
-                if o.status.success() {
-                    Some(String::from_utf8_lossy(&o.stdout).to_string())
-                } else {
-                    None
-                }
-            });
-        if let Some(flags) = pkg_ok {
-            for flag in flags.split_whitespace() {
-                cc_cmd.arg(flag);
-            }
-        } else {
-            // Fall back to manual flags
-            cc_cmd.args(["-lSDL2", "-lSDL2_image", "-lSDL2_ttf"]);
-            // macOS Homebrew paths
-            #[cfg(target_os = "macos")]
-            {
-                cc_cmd.arg("-I/opt/homebrew/include");
-                cc_cmd.arg("-L/opt/homebrew/lib");
-                cc_cmd.arg("-I/usr/local/include");
-                cc_cmd.arg("-L/usr/local/lib");
-            }
-        }
-    }
-
-    // Add libcurl linker flags when std.http.client is imported
-    if needs_http {
-        let pkg_ok = Command::new("pkg-config")
-            .args(["--cflags", "--libs", "libcurl"])
-            .output()
-            .ok()
-            .and_then(|o| {
-                if o.status.success() {
-                    Some(String::from_utf8_lossy(&o.stdout).to_string())
-                } else {
-                    None
-                }
-            });
-        if let Some(flags) = pkg_ok {
-            for flag in flags.split_whitespace() {
-                cc_cmd.arg(flag);
-            }
-        } else {
-            cc_cmd.arg("-lcurl");
-            #[cfg(target_os = "macos")]
-            {
-                cc_cmd.arg("-I/opt/homebrew/include");
-                cc_cmd.arg("-L/opt/homebrew/lib");
-                cc_cmd.arg("-I/usr/local/include");
-                cc_cmd.arg("-L/usr/local/lib");
-            }
-        }
-    }
-
-    // Add OpenSSL linker flags when std.crypto is imported
-    if needs_crypto {
-        let pkg_ok = Command::new("pkg-config")
-            .args(["--cflags", "--libs", "openssl"])
-            .output()
-            .ok()
-            .and_then(|o| {
-                if o.status.success() {
-                    Some(String::from_utf8_lossy(&o.stdout).to_string())
-                } else {
-                    None
-                }
-            });
-        if let Some(flags) = pkg_ok {
-            for flag in flags.split_whitespace() {
-                cc_cmd.arg(flag);
-            }
-        } else {
-            cc_cmd.arg("-lssl");
-            cc_cmd.arg("-lcrypto");
-            #[cfg(target_os = "macos")]
-            {
-                cc_cmd.arg("-I/opt/homebrew/include");
-                cc_cmd.arg("-L/opt/homebrew/lib");
-                cc_cmd.arg("-I/usr/local/include");
-                cc_cmd.arg("-L/usr/local/lib");
-            }
-        }
-    }
+    add_sdl_flags(&mut cc_cmd, needs_sdl);
+    add_http_flags(&mut cc_cmd, needs_http);
+    add_crypto_flags(&mut cc_cmd, needs_crypto);
 
     let status = cc_cmd.status();
 
@@ -367,7 +520,7 @@ fn build(
     output_dir: Option<&Path>,
     dep_paths: HashMap<String, PathBuf>,
 ) -> PathBuf {
-    try_build(filename, source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, test_mode, test_tags, test_exclude_tags, test_name_filter, output_dir, dep_paths)
+    try_build(filename, source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, test_mode, test_tags, test_exclude_tags, test_name_filter, output_dir, dep_paths, None, false)
         .unwrap_or_else(|e| {
             eprintln!("{e}");
             process::exit(1);
@@ -564,7 +717,7 @@ fn run_repl() {
         let gg_path_str = gg_path.display().to_string();
 
         // Try to build
-        match try_build(&gg_path_str, &source, false, false, false, false, false, false, false, &[], &[], None, Some(&tmp_dir), HashMap::new()) {
+        match try_build(&gg_path_str, &source, false, false, false, false, false, false, false, &[], &[], None, Some(&tmp_dir), HashMap::new(), None, false) {
             Err(e) => {
                 eprintln!("{e}");
                 // Don't update buffers on error
@@ -814,6 +967,10 @@ fn main() {
         println!();
         println!("Compiler commands: lex, parse, check, build, run, fmt, test, report");
         println!("Package commands:  init, new, add, remove");
+        println!();
+        println!("Build flags:");
+        println!("  --hot-reload            Enable hot code reload (builds host + guest .dylib)");
+        println!("  --shared [-o F]   Build as shared library (.dylib/.so)");
         return;
     }
 
@@ -949,9 +1106,25 @@ fn main() {
     let overflow_checked = args.iter().any(|a| a == "--overflow=checked");
     let trace = args.iter().any(|a| a == "--trace");
     let no_trace = args.iter().any(|a| a == "--no-trace");
+    let hot_reload_flag = args.iter().any(|a| a == "--hot-reload");
+    let shared_mode = args.iter().any(|a| a == "--shared");
+    // Parse -o <path> for shared output
+    let shared_output_path: Option<PathBuf> = {
+        let mut path = None;
+        let mut i = 0;
+        while i < args.len() {
+            if args[i] == "-o" && i + 1 < args.len() {
+                path = Some(PathBuf::from(&args[i + 1]));
+                i += 2;
+            } else {
+                i += 1;
+            }
+        }
+        path
+    };
     // Find positional filename, skipping values of known flag pairs
     let filename = {
-        let flags_with_values = ["--tag", "--exclude-tag", "--filter", "--report", "--output"];
+        let flags_with_values = ["--tag", "--exclude-tag", "--filter", "--report", "--output", "-o"];
         let mut skip_next = false;
         let mut found = None;
         for arg in args.iter().skip(2) {
@@ -1040,24 +1213,77 @@ fn main() {
         }
         "build" => {
             let dep_paths = resolve_deps_for_file(filename);
-            let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, None, dep_paths);
-            println!("Built: {}", exe_path.display());
+            if shared_mode {
+                // --shared: build as shared library
+                let default_shared_path = {
+                    let input_path = Path::new(filename);
+                    let dir = input_path.parent().unwrap_or(Path::new("."));
+                    let stem = input_path.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
+                    #[cfg(target_os = "macos")]
+                    let ext = ".dylib";
+                    #[cfg(not(target_os = "macos"))]
+                    let ext = ".so";
+                    dir.join(format!("{stem}_guest{ext}"))
+                };
+                let shared_path = shared_output_path.as_deref().unwrap_or(&default_shared_path);
+                let result = try_build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, None, dep_paths, Some(shared_path), false);
+                match result {
+                    Ok(p) => println!("Built shared library: {}", p.display()),
+                    Err(e) => {
+                        eprintln!("{e}");
+                        process::exit(1);
+                    }
+                }
+            } else if hot_reload_flag {
+                // --hot-reload: two-phase build (host + guest)
+                let result = try_build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, None, dep_paths, None, true);
+                match result {
+                    Ok(p) => println!("Built (hot-reload): {}", p.display()),
+                    Err(e) => {
+                        eprintln!("{e}");
+                        process::exit(1);
+                    }
+                }
+            } else {
+                let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, None, dep_paths);
+                println!("Built: {}", exe_path.display());
+            }
         }
         "run" => {
             let dep_paths = resolve_deps_for_file(filename);
-            let tmp_dir = tempfile::tempdir().unwrap_or_else(|e| {
-                eprintln!("Failed to create temp directory: {e}");
-                process::exit(1);
-            });
-            let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, Some(tmp_dir.path()), dep_paths);
-            let status = Command::new(&exe_path)
-                .status()
-                .unwrap_or_else(|e| {
-                    eprintln!("Failed to execute {}: {e}", exe_path.display());
+            if hot_reload_flag {
+                // --hot-reload: build with hot-reload and run
+                let result = try_build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, None, dep_paths, None, true);
+                match result {
+                    Ok(exe_path) => {
+                        let status = Command::new(&exe_path)
+                            .status()
+                            .unwrap_or_else(|e| {
+                                eprintln!("Failed to execute {}: {e}", exe_path.display());
+                                process::exit(1);
+                            });
+                        process::exit(status.code().unwrap_or(1));
+                    }
+                    Err(e) => {
+                        eprintln!("{e}");
+                        process::exit(1);
+                    }
+                }
+            } else {
+                let tmp_dir = tempfile::tempdir().unwrap_or_else(|e| {
+                    eprintln!("Failed to create temp directory: {e}");
                     process::exit(1);
                 });
-            // tmp_dir is dropped here, cleaning up .c and binary
-            process::exit(status.code().unwrap_or(1));
+                let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, Some(tmp_dir.path()), dep_paths);
+                let status = Command::new(&exe_path)
+                    .status()
+                    .unwrap_or_else(|e| {
+                        eprintln!("Failed to execute {}: {e}", exe_path.display());
+                        process::exit(1);
+                    });
+                // tmp_dir is dropped here, cleaning up .c and binary
+                process::exit(status.code().unwrap_or(1));
+            }
         }
         "test" => {
             // Collect --tag, --exclude-tag, --filter, --report values

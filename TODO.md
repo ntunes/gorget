@@ -18,6 +18,14 @@
 
 ## Medium
 
+- **Hot-reload: inotify file watching for Linux**: Current hot-reload file watcher is macOS-only (kqueue). Need `inotify` implementation in `HOT_RELOAD_RUNTIME` for Linux support. The Linux stub is in place, just needs implementation. [added: 2026-02-16]
+
+- **Hot-reload: multi-file watch**: When a hot-reloadable program imports other modules, all imported .gg files should be watched for changes (currently only watches the main file). Need to pass import file list from loader to codegen. [added: 2026-02-16]
+
+- **Hot-reload: state migration hooks**: Currently, State struct layout changes trigger full reinitialization via `init()`. Future: additive migration (fields added at end keep existing data), explicit migration hooks (`upgrade from v1 to v2`). [added: 2026-02-16]
+
+- **Hot-reload: trait objects / closures in State**: Trait object vtable pointers and closure function pointers become invalid after dlclose. The `reload()` hook can reconstruct them, but compiler-assisted fixup would be better. [added: 2026-02-16]
+
 - **Closures step 2 — Fn/FnMut/FnOnce closure traits**: Define built-in traits `Fn[Args -> Ret]`, `FnMut[Args -> Ret]`, `FnOnce[Args -> Ret]` with a `call` method. The compiler auto-implements the appropriate trait based on capture mode: `ByValue` + no mutation → `Fn`, `ByMutRef` → `FnMut`, move semantics (future) → `FnOnce`. Currently `CaptureMode` (`codegen/mod.rs`) has `ByValue` and `ByMutRef`; this step adds the trait-level classification. **Key design:** Whether these are real traits in the trait registry or compiler-magic marker traits. Gorget's `equip` system could work: `equip Fn[int -> int] for ClosureType_N`. **Depends on:** nothing (but benefits from step 1 for escaping closures). Unblocks: generic functions accepting closures (`fn apply[F: Fn[int -> int]](f: F)`), step 3 (embedded captures), step 4 (trait objects). [added: 2026-02-14]
 
 - **Closures step 3 — Embed captures in closure struct**: Replace the current two-pointer `GorgetClosure { void* fn_ptr; void* env; }` with per-closure structs that embed captures directly: `struct Closure_N { RetType (*fn_ptr)(Closure_N*, args...); field1; field2; ... }`. This makes closures monomorphized types whose size and layout are known at compile time. The closure function receives `self` instead of `void* env`, eliminating the unsafe cast. **Key files:** `c_runtime.rs` (remove generic GorgetClosure), `c_item.rs:886` (emit_lifted_closures — generate per-closure struct typedefs), `c_expr.rs:863` (closure invocation — pass closure struct pointer instead of env). **Depends on:** step 2 (Fn traits, so each closure struct can implement its trait). Unblocks: type-safe closure passing, proper monomorphization, step 4 (trait objects need known struct layout). [added: 2026-02-14]
