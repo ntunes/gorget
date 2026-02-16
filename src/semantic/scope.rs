@@ -171,6 +171,54 @@ impl ScopeTable {
         None
     }
 
+    /// Look up a name starting from a given scope, walking the parent chain.
+    pub fn lookup_from_scope(&self, scope_id: ScopeId, name: &str) -> Option<DefId> {
+        let mut sid = Some(scope_id);
+        while let Some(s) = sid {
+            let scope = &self.scopes[s.0 as usize];
+            if let Some(&def_id) = scope.names.get(name) {
+                return Some(def_id);
+            }
+            sid = scope.parent;
+        }
+        None
+    }
+
+    /// Look up a name within a function scope tree: searches the scope itself,
+    /// all descendant scopes, and all ancestor scopes. Returns the most recent
+    /// definition (highest DefId) whose scope is within the function tree.
+    pub fn lookup_within_function(&self, fn_scope_id: ScopeId, name: &str) -> Option<DefId> {
+        let mut best: Option<DefId> = None;
+        for (i, def) in self.definitions.iter().enumerate() {
+            if def.name == name
+                && matches!(
+                    def.kind,
+                    DefKind::Variable | DefKind::Const | DefKind::Function
+                )
+                && self.is_descendant_of(def.scope, fn_scope_id)
+            {
+                best = Some(DefId(i as u32));
+            }
+        }
+        // Also check ancestors (module scope, etc.)
+        if best.is_none() {
+            best = self.lookup_from_scope(fn_scope_id, name);
+        }
+        best
+    }
+
+    /// Check if `child` is `parent` or a descendant of `parent`.
+    fn is_descendant_of(&self, child: ScopeId, parent: ScopeId) -> bool {
+        let mut sid = Some(child);
+        while let Some(s) = sid {
+            if s == parent {
+                return true;
+            }
+            sid = self.scopes[s.0 as usize].parent;
+        }
+        false
+    }
+
     /// Look in a specific scope only (no parent chain walk).
     pub fn lookup_in_scope(&self, scope_id: ScopeId, name: &str) -> Option<DefId> {
         self.scopes[scope_id.0 as usize].names.get(name).copied()

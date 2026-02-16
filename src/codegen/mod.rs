@@ -179,9 +179,25 @@ pub struct CodegenContext<'a> {
     pub in_test_body: bool,
     /// Original Gorget source text, used to extract verbatim source lines for trace events.
     pub source_text: String,
+    /// The scope of the function currently being emitted, for scope-aware variable lookup.
+    pub current_function_scope: Option<crate::semantic::ids::ScopeId>,
+    /// Maps (function_name, span_start) → body scope id (for ALL functions including equip methods).
+    pub function_body_scopes: &'a FxHashMap<(String, usize), crate::semantic::ids::ScopeId>,
 }
 
 impl CodegenContext<'_> {
+    /// Scope-aware variable lookup: if we know the current function scope, search
+    /// within the function's scope tree (the scope itself, all descendants, and
+    /// ancestors). Falls back to `lookup_by_name_anywhere` when no function scope
+    /// is set.
+    pub fn scoped_lookup(&self, name: &str) -> Option<DefId> {
+        if let Some(scope_id) = self.current_function_scope {
+            self.scopes.lookup_within_function(scope_id, name)
+        } else {
+            self.scopes.lookup_by_name_anywhere(name)
+        }
+    }
+
     /// Extract the first line of source at the given span, trimmed.
     pub fn source_line(&self, span: Span) -> String {
         if span == Span::dummy() || span.start >= self.source_text.len() {
@@ -311,6 +327,8 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
         test_name_filter: opts.test_name_filter,
         in_test_body: false,
         source_text: opts.source_text,
+        current_function_scope: None,
+        function_body_scopes: &analysis.function_body_scopes,
     };
 
     let mut emitter = CEmitter::new();

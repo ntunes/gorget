@@ -55,6 +55,9 @@ pub struct ResolveContext {
     pub enum_variants: FxHashMap<DefId, EnumVariantInfo>,
     pub function_info: FxHashMap<DefId, FunctionInfo>,
     pub resolution_map: ResolutionMap,
+    /// Maps (function_name, span_start) → body scope id (for ALL functions including equip methods).
+    /// Composite key avoids span collisions between different source files.
+    pub function_body_scopes: FxHashMap<(String, usize), super::ids::ScopeId>,
 }
 
 impl ResolveContext {
@@ -64,6 +67,7 @@ impl ResolveContext {
             enum_variants: FxHashMap::default(),
             function_info: FxHashMap::default(),
             resolution_map: FxHashMap::default(),
+            function_body_scopes: FxHashMap::default(),
         }
     }
 }
@@ -352,11 +356,13 @@ pub fn resolve_bodies(
     scopes: &mut ScopeTable,
     types: &mut TypeTable,
     errors: &mut Vec<SemanticError>,
+    function_info: &mut FxHashMap<DefId, FunctionInfo>,
+    function_body_scopes: &mut FxHashMap<(String, usize), super::ids::ScopeId>,
 ) -> ResolutionMap {
     let mut resolution_map = ResolutionMap::default();
 
     for item in &module.items {
-        resolve_item_body(&item.node, scopes, types, errors, &mut resolution_map);
+        resolve_item_body(&item.node, scopes, types, errors, &mut resolution_map, function_info, function_body_scopes);
     }
 
     resolution_map
@@ -368,13 +374,15 @@ fn resolve_item_body(
     types: &mut TypeTable,
     errors: &mut Vec<SemanticError>,
     resolution_map: &mut ResolutionMap,
+    function_info: &mut FxHashMap<DefId, FunctionInfo>,
+    function_body_scopes: &mut FxHashMap<(String, usize), super::ids::ScopeId>,
 ) {
     match item {
         Item::Function(f) => {
-            resolve_function(f, scopes, types, errors, resolution_map);
+            resolve_function(f, scopes, types, errors, resolution_map, function_info, function_body_scopes);
         }
         Item::Equip(impl_block) => {
-            resolve_equip_block(impl_block, scopes, types, errors, resolution_map);
+            resolve_equip_block(impl_block, scopes, types, errors, resolution_map, function_info, function_body_scopes);
         }
         Item::ConstDecl(c) => {
             resolve_expr(&c.value, scopes, errors, resolution_map);
@@ -419,8 +427,21 @@ fn resolve_function(
     types: &mut TypeTable,
     errors: &mut Vec<SemanticError>,
     resolution_map: &mut ResolutionMap,
+    function_info: &mut FxHashMap<DefId, FunctionInfo>,
+    function_body_scopes: &mut FxHashMap<(String, usize), super::ids::ScopeId>,
 ) {
-    scopes.push_scope(super::scope::ScopeKind::Function);
+    let body_scope = scopes.push_scope(super::scope::ScopeKind::Function);
+
+    // Record the body scope for this function (used by codegen for scope-aware lookups).
+    // Keyed by (name, span_start) to avoid collisions between different source files.
+    function_body_scopes.insert((f.name.node.clone(), f.name.span.start), body_scope);
+
+    // Update the FunctionInfo with the actual body scope (was set to module scope during collection)
+    if let Some(def_id) = scopes.lookup_def_by_span(&f.name.node, f.name.span) {
+        if let Some(fi) = function_info.get_mut(&def_id) {
+            fi.scope_id = body_scope;
+        }
+    }
 
     // Define generic type params
     if let Some(generics) = &f.generic_params {
@@ -482,6 +503,8 @@ fn resolve_equip_block(
     types: &mut TypeTable,
     errors: &mut Vec<SemanticError>,
     resolution_map: &mut ResolutionMap,
+    function_info: &mut FxHashMap<DefId, FunctionInfo>,
+    function_body_scopes: &mut FxHashMap<(String, usize), super::ids::ScopeId>,
 ) {
     scopes.push_scope(super::scope::ScopeKind::EquipBlock { self_type: None });
 
@@ -500,7 +523,7 @@ fn resolve_equip_block(
 
     // Resolve each method
     for method in &impl_block.items {
-        resolve_function(&method.node, scopes, types, errors, resolution_map);
+        resolve_function(&method.node, scopes, types, errors, resolution_map, function_info, function_body_scopes);
     }
 
     scopes.pop_scope();
@@ -695,7 +718,7 @@ fn resolve_stmt(
             // Nested item definitions
             let mut ctx = ResolveContext::new();
             collect_item(item, Span::dummy(), scopes, types, errors, &mut ctx);
-            resolve_item_body(item, scopes, types, errors, resolution_map);
+            resolve_item_body(item, scopes, types, errors, resolution_map, &mut ctx.function_info, &mut ctx.function_body_scopes);
         }
     }
 }
@@ -1131,8 +1154,8 @@ mod tests {
         let mut scopes = ScopeTable::new();
         let mut types = TypeTable::new();
         let mut errors = Vec::new();
-        collect_top_level(&module, &mut scopes, &mut types, &mut errors);
-        let resolution_map = resolve_bodies(&module, &mut scopes, &mut types, &mut errors);
+        let mut ctx = collect_top_level(&module, &mut scopes, &mut types, &mut errors);
+        let resolution_map = resolve_bodies(&module, &mut scopes, &mut types, &mut errors, &mut ctx.function_info, &mut ctx.function_body_scopes);
         (scopes, types, resolution_map, errors)
     }
 

@@ -1,5 +1,5 @@
 /// Top-level item codegen: functions, structs, enums, impl blocks, const/static.
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use crate::parser::ast::*;
 use super::c_emitter::CEmitter;
 use super::c_mangle;
@@ -73,9 +73,9 @@ impl CodegenContext<'_> {
     pub fn emit_type_definitions(&self, module: &crate::parser::ast::Module, emitter: &mut CEmitter) {
         emitter.emit_line("// ── Type Definitions ──");
 
+        // Emit non-struct types first (enums, type aliases, newtypes, traits) in original order
         for item in &module.items {
             match &item.node {
-                Item::Struct(s) => self.emit_struct_def(s, emitter),
                 Item::Enum(e) => self.emit_enum_def(e, emitter),
                 Item::TypeAlias(a) => self.emit_type_alias(a, emitter),
                 Item::Newtype(nt) => self.emit_newtype(nt, emitter),
@@ -84,7 +84,106 @@ impl CodegenContext<'_> {
             }
         }
 
+        // Collect eligible struct defs and their indices for dependency analysis
+        let mut struct_defs: Vec<&StructDef> = Vec::new();
+        let mut name_to_idx: HashMap<String, usize> = HashMap::new();
+        for item in &module.items {
+            if let Item::Struct(s) = &item.node {
+                if s.generic_params.is_none() && s.span != crate::span::Span::dummy() {
+                    name_to_idx.insert(s.name.node.clone(), struct_defs.len());
+                    struct_defs.push(s);
+                }
+            }
+        }
+
+        // Build dependency graph: deps[i] = set of indices that struct i depends on
+        let n = struct_defs.len();
+        let mut deps: Vec<Vec<usize>> = vec![Vec::new(); n];
+        for (i, s) in struct_defs.iter().enumerate() {
+            let mut dep_names = Vec::new();
+            for field in &s.fields {
+                Self::collect_value_type_dep_names(&field.node.type_.node, &mut dep_names);
+            }
+            for dep_name in &dep_names {
+                if let Some(&j) = name_to_idx.get(dep_name) {
+                    if j != i {
+                        deps[i].push(j);
+                    }
+                }
+            }
+        }
+
+        // Topological sort (Kahn's algorithm)
+        let mut in_degree = vec![0usize; n];
+        for d in &deps {
+            for &j in d {
+                in_degree[j] += 1;
+            }
+        }
+        // Wait — in_degree here counts how many structs depend on j (reverse edges).
+        // For Kahn's we need in_degree[i] = number of i's dependencies = deps[i].len()
+        // and we process nodes with 0 dependencies first.
+        // Actually the edge direction matters: edge i→j means "i depends on j", so j
+        // must come before i. Kahn's on a DAG: in_degree[node] = number of incoming
+        // edges = number of nodes that must come before it = its dependency count.
+        let mut in_degree = vec![0usize; n];
+        for (i, d) in deps.iter().enumerate() {
+            in_degree[i] = d.len();
+        }
+
+        // Reverse adjacency: rev_deps[j] = list of i's that depend on j
+        let mut rev_deps: Vec<Vec<usize>> = vec![Vec::new(); n];
+        for (i, d) in deps.iter().enumerate() {
+            for &j in d {
+                rev_deps[j].push(i);
+            }
+        }
+
+        let mut queue: VecDeque<usize> = VecDeque::new();
+        for i in 0..n {
+            if in_degree[i] == 0 {
+                queue.push_back(i);
+            }
+        }
+
+        let mut sorted_indices: Vec<usize> = Vec::new();
+        while let Some(j) = queue.pop_front() {
+            sorted_indices.push(j);
+            for &i in &rev_deps[j] {
+                in_degree[i] -= 1;
+                if in_degree[i] == 0 {
+                    queue.push_back(i);
+                }
+            }
+        }
+
+        // Emit structs in topological order
+        for &idx in &sorted_indices {
+            self.emit_struct_def(struct_defs[idx], emitter);
+        }
+
+        // Emit any remaining structs (cycles — shouldn't happen but be safe)
+        if sorted_indices.len() < n {
+            let sorted_set: HashSet<usize> = sorted_indices.iter().copied().collect();
+            for i in 0..n {
+                if !sorted_set.contains(&i) {
+                    self.emit_struct_def(struct_defs[i], emitter);
+                }
+            }
+        }
+
         emitter.blank_line();
+    }
+
+    /// Collect named types that appear as by-value field types (dependencies for ordering).
+    /// Only non-generic Named types count — pointers, generics, etc. work with forward decls.
+    fn collect_value_type_dep_names(ty: &Type, out: &mut Vec<String>) {
+        match ty {
+            Type::Named { name, generic_args } if generic_args.is_empty() => {
+                out.push(name.node.clone());
+            }
+            _ => {}
+        }
     }
 
     /// Emit a struct definition.
@@ -421,6 +520,13 @@ impl CodegenContext<'_> {
             }
         }
 
+        // Set current function scope for scope-aware variable lookup.
+        let prev_function_scope = self.current_function_scope.take();
+        let scope_key = (f.name.node.clone(), f.name.span.start);
+        if let Some(&scope_id) = self.function_body_scopes.get(&scope_key) {
+            self.current_function_scope = Some(scope_id);
+        }
+
         // Compute the Gorget-display name for this function (used in trace output).
         let gorget_name = if let Some((type_name, _)) = method_info {
             format!("{}.{}", type_name, f.name.node)
@@ -524,6 +630,7 @@ impl CodegenContext<'_> {
         self.current_function_gorget_name = prev_gorget_name;
 
         self.pointer_params = prev_pointer_params;
+        self.current_function_scope = prev_function_scope;
     }
 
     /// Emit trace entry (call) instrumentation for a function.
@@ -2676,7 +2783,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                 for binding in &t.with_bindings {
                     let val = self.gen_expr(&binding.expr);
                     let escaped = c_mangle::escape_keyword(&binding.name.node);
-                    let c_type = if let Some(def_id) = self.scopes.lookup_by_name_anywhere(&binding.name.node) {
+                    let c_type = if let Some(def_id) = self.scoped_lookup(&binding.name.node) {
                         let def = self.scopes.get_def(def_id);
                         if let Some(type_id) = def.type_id {
                             c_types::type_id_to_c(type_id, self.types, self.scopes)

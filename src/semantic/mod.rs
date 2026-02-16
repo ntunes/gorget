@@ -32,6 +32,8 @@ pub struct AnalysisResult {
     pub function_info: FxHashMap<DefId, FunctionInfo>,
     /// Map from expression span to inferred TypeId (for Result-based `?` codegen).
     pub expr_types: FxHashMap<Span, TypeId>,
+    /// Maps (function_name, span_start) → body scope id (for ALL functions including equip methods).
+    pub function_body_scopes: FxHashMap<(String, usize), ids::ScopeId>,
 }
 
 /// Run all semantic analysis passes on a parsed module.
@@ -132,10 +134,10 @@ pub fn analyze(module: &mut Module) -> AnalysisResult {
     }
 
     // Pass 1: Collect top-level definitions
-    let resolve_ctx = resolve::collect_top_level(module, &mut scopes, &mut types, &mut errors);
+    let mut resolve_ctx = resolve::collect_top_level(module, &mut scopes, &mut types, &mut errors);
 
     // Pass 2: Resolve names in all bodies
-    let mut resolution_map = resolve::resolve_bodies(module, &mut scopes, &mut types, &mut errors);
+    let mut resolution_map = resolve::resolve_bodies(module, &mut scopes, &mut types, &mut errors, &mut resolve_ctx.function_info, &mut resolve_ctx.function_body_scopes);
     // Merge any resolutions collected during pass 1
     resolution_map.extend(resolve_ctx.resolution_map);
 
@@ -179,5 +181,6 @@ pub fn analyze(module: &mut Module) -> AnalysisResult {
         enum_variants: resolve_ctx.enum_variants,
         function_info: resolve_ctx.function_info,
         expr_types,
+        function_body_scopes: resolve_ctx.function_body_scopes,
     }
 }

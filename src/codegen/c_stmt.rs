@@ -245,7 +245,7 @@ impl CodegenContext<'_> {
     /// Look up trace info for a single variable by name.
     /// Returns `(gorget_name, c_name, formatter)` if the variable is traceable.
     fn lookup_var_trace_info(&self, name: &str) -> Option<(String, String, &'static str)> {
-        let def_id = self.scopes.lookup_by_name_anywhere(name)?;
+        let def_id = self.scoped_lookup(name)?;
         let def = self.scopes.get_def(def_id);
         match def.kind {
             crate::semantic::scope::DefKind::Variable
@@ -277,7 +277,7 @@ impl CodegenContext<'_> {
                 if is_callee || seen.contains(name) {
                     return;
                 }
-                if let Some(def_id) = self.scopes.lookup_by_name_anywhere(name) {
+                if let Some(def_id) = self.scoped_lookup(name) {
                     let def = self.scopes.get_def(def_id);
                     match def.kind {
                         crate::semantic::scope::DefKind::Variable
@@ -1217,7 +1217,7 @@ impl CodegenContext<'_> {
                 }
                 // First, check if the semantic analysis stored a resolved type
                 if let Some(name) = var_name {
-                    if let Some(def_id) = self.scopes.lookup_by_name_anywhere(name) {
+                    if let Some(def_id) = self.scoped_lookup(name) {
                         let def = self.scopes.get_def(def_id);
                         if let Some(type_id) = def.type_id {
                             let c_type = c_types::type_id_to_c(type_id, self.types, self.scopes);
@@ -1280,7 +1280,7 @@ impl CodegenContext<'_> {
                         "format" => return "const char*".to_string(),
                         _ => {}
                     }
-                    if let Some(def_id) = self.scopes.lookup_by_name_anywhere(name) {
+                    if let Some(def_id) = self.scoped_lookup(name) {
                         if let Some(func_info) = self.function_info.get(&def_id) {
                             if let Some(ret_type_id) = func_info.return_type_id {
                                 return c_types::type_id_to_c(ret_type_id, self.types, self.scopes);
@@ -1291,7 +1291,7 @@ impl CodegenContext<'_> {
                 "int64_t".to_string()
             }
             Expr::Identifier(name) => {
-                if let Some(def_id) = self.scopes.lookup_by_name_anywhere(name) {
+                if let Some(def_id) = self.scoped_lookup(name) {
                     let def = self.scopes.get_def(def_id);
                     if let Some(type_id) = def.type_id {
                         return c_types::type_id_to_c(type_id, self.types, self.scopes);

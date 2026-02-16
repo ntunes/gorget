@@ -1468,6 +1468,10 @@ impl CodegenContext<'_> {
     /// Uses `addr_of` to handle rvalue expressions safely via temp vars.
     fn wrap_borrow_arg(&self, expr: String, ast_expr: &Expr, ownership: crate::parser::ast::Ownership) -> String {
         if matches!(ownership, crate::parser::ast::Ownership::MutableBorrow) {
+            // self in equip methods is already a pointer — don't double-address
+            if matches!(ast_expr, Expr::SelfExpr) && self.current_self_type.is_some() {
+                return expr;
+            }
             addr_of(&expr, ast_expr)
         } else {
             expr
@@ -1588,8 +1592,7 @@ impl CodegenContext<'_> {
                 .filter(|did| self.scopes.get_def(**did).name == *name)
                 .map(|def_id| self.scopes.get_def(*def_id))
                 .or_else(|| {
-                    self.scopes
-                        .lookup_by_name_anywhere(name)
+                    self.scoped_lookup(name)
                         .map(|def_id| self.scopes.get_def(def_id))
                 })
                 .map_or(false, |def| {
@@ -1859,8 +1862,7 @@ impl CodegenContext<'_> {
                     .filter(|def_id| self.scopes.get_def(**def_id).name == *name)
                     .and_then(|def_id| self.scopes.get_def(*def_id).type_id)
                     .or_else(|| {
-                        self.scopes
-                            .lookup_by_name_anywhere(name)
+                        self.scoped_lookup(name)
                             .and_then(|def_id| self.scopes.get_def(def_id).type_id)
                     })
             }
@@ -1910,7 +1912,7 @@ impl CodegenContext<'_> {
                         .get(&callee.span.start)
                         .filter(|did| self.scopes.get_def(**did).name == *name)
                         .copied()
-                        .or_else(|| self.scopes.lookup_by_name_anywhere(name));
+                        .or_else(|| self.scoped_lookup(name));
                     if let Some(did) = def_id {
                         if let Some(fi) = self.function_info.get(&did) {
                             return fi.return_type_id;
@@ -3467,7 +3469,7 @@ impl CodegenContext<'_> {
                 }
             }
             // Fallback: search all scopes (codegen doesn't track current scope)
-            if let Some(def_id) = self.scopes.lookup_by_name_anywhere(name) {
+            if let Some(def_id) = self.scoped_lookup(name) {
                 let def = self.scopes.get_def(def_id);
                 if let Some(type_id) = def.type_id {
                     if let crate::semantic::types::ResolvedType::TraitObject(trait_def_id) =
@@ -3688,9 +3690,8 @@ impl CodegenContext<'_> {
                         .filter(|did| self.scopes.get_def(**did).name == *name)
                         .copied()
                         .or_else(|| {
-                            // lookup_by_name_anywhere only finds Variable/Const/Function,
-                            // so search all definitions for struct/newtype/variant/function
-                            self.scopes.lookup_by_name_anywhere(name)
+                            // Scope-aware fallback for Variable/Const/Function
+                            self.scoped_lookup(name)
                         })
                         .or_else(|| {
                             // Search struct_fields keys (which are DefIds of struct defs)
@@ -4163,7 +4164,7 @@ impl CodegenContext<'_> {
             } else {
                 escaped.clone()
             };
-            if let Some(def_id) = self.scopes.lookup_by_name_anywhere(base) {
+            if let Some(def_id) = self.scoped_lookup(base) {
                 let def = self.scopes.get_def(def_id);
                 if let Some(type_id) = def.type_id {
                     if let Some(resolved_id) = self.resolve_field_type(type_id, field_path) {
@@ -4179,7 +4180,7 @@ impl CodegenContext<'_> {
                 escaped.clone()
             };
             // Search all scopes for the variable (codegen doesn't track current scope)
-            if let Some(def_id) = self.scopes.lookup_by_name_anywhere(var_name) {
+            if let Some(def_id) = self.scoped_lookup(var_name) {
                 let def = self.scopes.get_def(def_id);
                 if let Some(type_id) = def.type_id {
                     return self.format_for_type_id(type_id, &c_expr);
@@ -4266,7 +4267,7 @@ impl CodegenContext<'_> {
                 _ => None,
             },
             Type::Named { name, generic_args } if generic_args.is_empty() => {
-                self.scopes.lookup_by_name_anywhere(&name.node)
+                self.scoped_lookup(&name.node)
                     .and_then(|def_id| {
                         let def = self.scopes.get_def(def_id);
                         def.type_id

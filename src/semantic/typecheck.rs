@@ -886,7 +886,7 @@ impl<'a> TypeChecker<'a> {
                 let mut result_type = self.fresh_type_var();
 
                 for arm in arms {
-                    self.assign_pattern_types(&arm.pattern.node, scrutinee_type);
+                    self.assign_pattern_types(&arm.pattern, scrutinee_type);
                     let arm_type = self.infer_expr(&arm.body);
                     result_type = self.unify(result_type, arm_type, arm.body.span);
                 }
@@ -1134,7 +1134,8 @@ impl<'a> TypeChecker<'a> {
                 // Write the resolved type back to the pattern binding's DefInfo
                 if let Some(type_id) = resolved_type {
                     if let Pattern::Binding(name) = &pattern.node {
-                        if let Some(def_id) = self.scopes.lookup_by_name_anywhere(name) {
+                        // Use span-based lookup to avoid cross-module name collisions
+                        if let Some(def_id) = self.scopes.lookup_def_by_span(name, pattern.span) {
                             self.scopes.get_def_mut(def_id).type_id = Some(type_id);
                         }
                     }
@@ -1205,7 +1206,8 @@ impl<'a> TypeChecker<'a> {
                 let resolved_iter = self.resolve_type(iter_type);
                 if resolved_iter == self.types.string_id {
                     if let Pattern::Binding(name) = &pattern.node {
-                        if let Some(def_id) = self.scopes.lookup_by_name_anywhere(name) {
+                        // Use span-based lookup to avoid cross-module name collisions
+                        if let Some(def_id) = self.scopes.lookup_def_by_span(name, pattern.span) {
                             self.scopes.get_def_mut(def_id).type_id = Some(self.types.char_id);
                         }
                     }
@@ -1261,7 +1263,7 @@ impl<'a> TypeChecker<'a> {
             } => {
                 let scrutinee_type = self.infer_expr(scrutinee);
                 for arm in arms {
-                    self.assign_pattern_types(&arm.pattern.node, scrutinee_type);
+                    self.assign_pattern_types(&arm.pattern, scrutinee_type);
                     if let Some(guard) = &arm.guard {
                         let gt = self.infer_expr(guard);
                         self.unify(gt, self.types.bool_id, guard.span);
@@ -1391,15 +1393,16 @@ impl<'a> TypeChecker<'a> {
     /// Assign type_ids to pattern-bound variables based on the scrutinee type.
     /// Called from match handlers so that destructured bindings (e.g. `case Error(e):`)
     /// get proper types for string interpolation and other uses.
-    fn assign_pattern_types(&mut self, pattern: &Pattern, scrutinee_type: TypeId) {
-        match pattern {
+    fn assign_pattern_types(&mut self, pattern: &Spanned<Pattern>, scrutinee_type: TypeId) {
+        match &pattern.node {
             Pattern::Binding(name) => {
                 // Skip if the name is a known variant (unit variant, not a real binding)
                 let is_variant = self.enum_variants.values().any(|info|
                     info.variants.iter().any(|(vn, _)| vn == name)
                 );
                 if !is_variant {
-                    if let Some(def_id) = self.scopes.lookup_by_name_anywhere(name) {
+                    // Use span-based lookup to avoid cross-module name collisions
+                    if let Some(def_id) = self.scopes.lookup_def_by_span(name, pattern.span) {
                         self.scopes.get_def_mut(def_id).type_id = Some(scrutinee_type);
                     }
                 }
@@ -1409,7 +1412,7 @@ impl<'a> TypeChecker<'a> {
                 let field_types = self.resolve_variant_field_types(scrutinee_type, variant_name);
                 for (i, field_pat) in fields.iter().enumerate() {
                     if let Some(&field_tid) = field_types.get(i) {
-                        self.assign_pattern_types(&field_pat.node, field_tid);
+                        self.assign_pattern_types(field_pat, field_tid);
                     }
                 }
             }
@@ -1418,14 +1421,14 @@ impl<'a> TypeChecker<'a> {
                 if let ResolvedType::Tuple(field_tids) = self.types.get(resolved).clone() {
                     for (i, elem) in elements.iter().enumerate() {
                         if let Some(&tid) = field_tids.get(i) {
-                            self.assign_pattern_types(&elem.node, tid);
+                            self.assign_pattern_types(elem, tid);
                         }
                     }
                 }
             }
             Pattern::Or(alts) => {
                 for alt in alts {
-                    self.assign_pattern_types(&alt.node, scrutinee_type);
+                    self.assign_pattern_types(alt, scrutinee_type);
                 }
             }
             _ => {} // Wildcard, Literal, Rest — no bindings

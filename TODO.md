@@ -18,7 +18,6 @@
 
 - **Restrict `str` from `&`/`!` parameter modes**: `str` is Copy and pointer-sized — always pass by value. Mutable/moving borrows are meaningless for an immutable view type. The borrow checker should reject `&str` and `!str` parameter modes. [added: 2026-02-16]
 
-- **Cross-module `lookup_by_name_anywhere` name collision**: When file-based stdlib modules (e.g. `json.gg`) are merged into the main module, variables in the imported code can shadow identically-named variables in user code via `lookup_by_name_anywhere`. This causes incorrect method dispatch (e.g. `arr` in user code maps to `arr` pattern variable in json.gg's match case, inferring Vector type). Current workaround: avoid common variable names (`arr`, `result`, `s`, etc.) in both stdlib modules and user code. Proper fix: scope-aware lookup in codegen. [added: 2026-02-16]
 
 - **String interpolation only works in print() context**: `"{n}"` outside of `print()` generates literal `"%s"` instead of formatting the value. Stdlib modules must use explicit `int_to_str()`, `float_to_str()`, `char_to_str()` etc. [added: 2026-02-16]
 
