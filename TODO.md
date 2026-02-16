@@ -8,7 +8,7 @@
 
 
 
-- **Generic equip blocks: declarations still skipped**: Generic equip blocks (`equip Foo[T] with Trait`) now emit vtable instances and default method bodies per-instantiation, but forward declarations are still skipped for generic equip methods (`c_item.rs:335`). Works because `emit_monomorphized_equip_method` emits its own prototype, but if any code references the function before step 3b, it would fail. Also, `discover_generic_usages` silently omits instantiations it doesn't discover. [updated: 2026-02-16]
+- **`discover_generic_usages` silently omits instantiations it doesn't discover**: If a generic type is only used in a context that `discover_generic_usages` doesn't traverse, the instantiation won't be emitted. [updated: 2026-02-16]
 
 
 - **`format_for_c_type` silently casts structs to int**: Unknown types in string interpolation default to `(long long)` cast, corrupting the value. Should error on non-formattable types. (`c_types.rs:284`) [added: 2026-02-16]

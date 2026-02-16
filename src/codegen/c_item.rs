@@ -1558,9 +1558,82 @@ impl CodegenContext<'_> {
         emitter.blank_line();
     }
 
+    /// Emit forward declarations (prototypes only) for all generic method and
+    /// function instantiations.  Called in the declarations section, before
+    /// vtable instances and before any function definitions, so that generic
+    /// equip methods can call non-generic functions (and vice-versa) without
+    /// ordering issues.
+    pub fn emit_generic_method_declarations(&self, module: &crate::parser::ast::Module, emitter: &mut CEmitter) {
+        let mut trait_defs: HashMap<String, &TraitDef> = HashMap::new();
+        for item in &module.items {
+            if let Item::Trait(t) = &item.node {
+                trait_defs.insert(t.name.node.clone(), t);
+            }
+        }
+        emitter.emit_line("// ── Generic Method Declarations ──");
+        for i in 0..self.generic_instances.len() {
+            let inst = &self.generic_instances[i];
+            match &inst.kind {
+                super::GenericInstanceKind::Struct | super::GenericInstanceKind::Enum => {
+                    let equip_blocks = self.generic_equip_templates
+                        .get(&inst.base_name)
+                        .cloned()
+                        .unwrap_or_default();
+                    let generic_params = self.generic_struct_templates
+                        .get(&inst.base_name)
+                        .and_then(|t| t.generic_params.clone())
+                        .or_else(|| {
+                            self.generic_enum_templates
+                                .get(&inst.base_name)
+                                .and_then(|t| t.generic_params.clone())
+                        });
+                    for equip_block in &equip_blocks {
+                        let trait_name = self.impl_trait_name(equip_block);
+                        // Prototypes for explicitly implemented methods
+                        for method in &equip_block.items {
+                            let (ret_type, func_name, params, _) = self.monomorphized_equip_signature(
+                                &method.node, generic_params.as_ref(), &inst.c_type_args,
+                                &inst.mangled_name, trait_name.as_deref(),
+                            );
+                            emitter.emit_line(&format!("{ret_type} {func_name}({params});"));
+                        }
+                        // Prototypes for default/inherited methods not overridden
+                        if let Some(tname) = &trait_name {
+                            if let Some(trait_def) = trait_defs.get(tname.as_str()) {
+                                let all_methods = self.collect_all_trait_methods(trait_def, &trait_defs);
+                                for (method, _) in &all_methods {
+                                    if !Self::equip_has_method(equip_block, &method.name.node) {
+                                        if !matches!(method.body, FunctionBody::Declaration) {
+                                            let (ret_type, func_name, params, _) = self.monomorphized_equip_signature(
+                                                method, generic_params.as_ref(), &inst.c_type_args,
+                                                &inst.mangled_name, Some(tname),
+                                            );
+                                            emitter.emit_line(&format!("{ret_type} {func_name}({params});"));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                super::GenericInstanceKind::Function => {
+                    let template = self.generic_fn_templates.get(&inst.base_name);
+                    if let Some(template) = template {
+                        let (ret_type, params, _) = self.monomorphized_function_signature(template, &inst.c_type_args);
+                        emitter.emit_line(&format!("{ret_type} {}({params});", inst.mangled_name));
+                    }
+                }
+                super::GenericInstanceKind::Map { .. } => {
+                    // Map functions use `static inline` — no forward declarations needed.
+                }
+            }
+        }
+        emitter.blank_line();
+    }
+
     /// Emit method definitions for generic instantiations (equip blocks + generic functions).
-    /// Must be called after regular type definitions so that method signatures
-    /// can reference user-defined types like Health by value.
+    /// Must be called after all declarations so that method bodies can reference
+    /// any function in the program.
     pub fn emit_generic_method_definitions(&mut self, module: &crate::parser::ast::Module, emitter: &mut CEmitter) {
         // Collect trait definitions for default method lookup
         let mut trait_defs: HashMap<String, &TraitDef> = HashMap::new();
@@ -2070,14 +2143,13 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         emitter.blank_line();
     }
 
-    /// Emit a monomorphized function definition (expression-body only for now).
-    fn emit_monomorphized_function(
-        &mut self,
+    /// Compute the C signature for a monomorphized generic function without emitting anything.
+    /// Returns `(ret_type, params, type_subs)`.
+    fn monomorphized_function_signature(
+        &self,
         template: &FunctionDef,
         c_type_args: &[String],
-        mangled: &str,
-        emitter: &mut CEmitter,
-    ) {
+    ) -> (String, String, Vec<(String, String)>) {
         let subs = self.build_type_substitutions(template.generic_params.as_ref(), c_type_args);
 
         let ret_type = self.substitute_type(&template.return_type.node, &subs);
@@ -2097,8 +2169,18 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
             params_vec.join(", ")
         };
 
-        // Emit prototype
-        emitter.emit_line(&format!("{ret_type} {mangled}({params});"));
+        (ret_type, params, subs)
+    }
+
+    /// Emit a monomorphized function definition.
+    fn emit_monomorphized_function(
+        &mut self,
+        template: &FunctionDef,
+        c_type_args: &[String],
+        mangled: &str,
+        emitter: &mut CEmitter,
+    ) {
+        let (ret_type, params, subs) = self.monomorphized_function_signature(template, c_type_args);
 
         // Activate type substitutions so that body codegen sees T → concrete type
         let prev_subs = std::mem::replace(&mut self.type_subs, subs);
@@ -2581,28 +2663,26 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         false
     }
 
-    /// Emit a monomorphized method from a generic equip block.
-    fn emit_monomorphized_equip_method(
-        &mut self,
+    /// Compute the C signature for a monomorphized equip method without emitting anything.
+    /// Returns `(ret_type, func_name, params, type_subs)`.
+    fn monomorphized_equip_signature(
+        &self,
         method: &FunctionDef,
         struct_generic_params: Option<&crate::span::Spanned<GenericParams>>,
         c_type_args: &[String],
         mangled_type_name: &str,
         trait_name: Option<&str>,
-        emitter: &mut CEmitter,
-    ) {
+    ) -> (String, String, String, Vec<(String, String)>) {
         let subs = self.build_type_substitutions(struct_generic_params, c_type_args);
 
         let ret_type = self.substitute_type(&method.return_type.node, &subs);
 
-        // Build function name
         let func_name = if let Some(tname) = trait_name {
             c_mangle::mangle_trait_method(tname, mangled_type_name, &method.name.node)
         } else {
             c_mangle::mangle_method(mangled_type_name, &method.name.node)
         };
 
-        // Build parameters
         let mut params_vec: Vec<String> = Vec::new();
         let self_param = method.params.iter().find(|p| p.node.name.node == "self");
         if let Some(sp) = self_param {
@@ -2634,8 +2714,22 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
             params_vec.join(", ")
         };
 
-        // Emit prototype
-        emitter.emit_line(&format!("{ret_type} {func_name}({params});"));
+        (ret_type, func_name, params, subs)
+    }
+
+    /// Emit a monomorphized method from a generic equip block.
+    fn emit_monomorphized_equip_method(
+        &mut self,
+        method: &FunctionDef,
+        struct_generic_params: Option<&crate::span::Spanned<GenericParams>>,
+        c_type_args: &[String],
+        mangled_type_name: &str,
+        trait_name: Option<&str>,
+        emitter: &mut CEmitter,
+    ) {
+        let (ret_type, func_name, params, subs) = self.monomorphized_equip_signature(
+            method, struct_generic_params, c_type_args, mangled_type_name, trait_name,
+        );
 
         // Activate substitutions and self type for body codegen
         let prev_subs = std::mem::replace(&mut self.type_subs, subs);

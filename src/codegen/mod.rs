@@ -471,16 +471,19 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
     // 3b. Remaining generic type definitions (Result, etc. that need user types)
     ctx.emit_generic_type_definitions_phase2(&mut emitter);
 
-    // 3b. Emit monomorphized generic method definitions
-    ctx.emit_generic_method_definitions(module, &mut emitter);
-
-    // 4. Function declarations
+    // 4. Function declarations (non-generic)
     ctx.emit_function_declarations(module, &mut emitter);
 
-    // 4b. Vtable instances (after function declarations, before definitions)
+    // 4a. Generic method/function forward declarations
+    ctx.emit_generic_method_declarations(module, &mut emitter);
+
+    // 4b. Vtable instances (all functions are now declared)
     ctx.emit_vtable_instances(module, &mut emitter);
 
-    // 5. Function definitions (closures are collected during this pass)
+    // 5. Generic method/function definitions
+    ctx.emit_generic_method_definitions(module, &mut emitter);
+
+    // 5b. Function definitions (closures are collected during this pass)
     ctx.emit_function_definitions(module, &mut emitter);
 
     // 6. Emit lifted closures and late-registered tuple typedefs — these were
