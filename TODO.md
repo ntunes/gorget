@@ -6,7 +6,7 @@
 
 ## High
 
-- **std.ssh C codegen issues**: `gg build` on programs importing std.ssh fails with C-level errors: (1) incomplete type for Session in Result[Session,str] (forward decl ordering), (2) `&gg_make_name_list(...)` takes address of rvalue (need temp var), (3) `(*session)` dereferences when pointer expected (codegen of `&session` params in file-based modules). These are pre-existing; ssh.gg was only verified at parse level. [added: 2026-02-15]
+(none)
 
 ## Medium
 

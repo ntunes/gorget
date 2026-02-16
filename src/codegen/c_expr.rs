@@ -28,7 +28,18 @@ fn is_lvalue(expr: &Expr) -> bool {
         Expr::Identifier(_) | Expr::SelfExpr => true,
         Expr::FieldAccess { object, .. } => is_lvalue(&object.node),
         Expr::TupleFieldAccess { object, .. } => is_lvalue(&object.node),
+        Expr::Index { object, .. } => is_lvalue(&object.node),
+        Expr::UnaryOp { op: UnaryOp::Deref, .. } => true,
         _ => false,
+    }
+}
+
+/// Generate `&expr` for lvalues, or a temp-var statement expression for rvalues.
+fn addr_of(c_expr: &str, ast_expr: &Expr) -> String {
+    if is_lvalue(ast_expr) {
+        format!("&{c_expr}")
+    } else {
+        format!("({{ __typeof__({c_expr}) __tmp = {c_expr}; &__tmp; }})")
     }
 }
 
@@ -1055,58 +1066,70 @@ impl CodegenContext<'_> {
                     "crypto_sha256" => {
                         if let Some(arg) = args.first() {
                             let data = self.gen_expr(&arg.node.value);
-                            return format!("gorget_crypto_sha256(&{data})");
+                            let data_addr = addr_of(&data, &arg.node.value.node);
+                            return format!("gorget_crypto_sha256({data_addr})");
                         }
                     }
                     "crypto_sha1" => {
                         if let Some(arg) = args.first() {
                             let data = self.gen_expr(&arg.node.value);
-                            return format!("gorget_crypto_sha1(&{data})");
+                            let data_addr = addr_of(&data, &arg.node.value.node);
+                            return format!("gorget_crypto_sha1({data_addr})");
                         }
                     }
                     "crypto_hmac" => {
                         if args.len() >= 3 {
                             let algo = self.gen_expr(&args[0].node.value);
                             let key = self.gen_expr(&args[1].node.value);
+                            let key_addr = addr_of(&key, &args[1].node.value.node);
                             let data = self.gen_expr(&args[2].node.value);
-                            return format!("gorget_crypto_hmac({algo}, &{key}, &{data})");
+                            let data_addr = addr_of(&data, &args[2].node.value.node);
+                            return format!("gorget_crypto_hmac({algo}, {key_addr}, {data_addr})");
                         }
                     }
                     "crypto_aes_ctr_new" => {
                         if args.len() >= 2 {
                             let key = self.gen_expr(&args[0].node.value);
+                            let key_addr = addr_of(&key, &args[0].node.value.node);
                             let iv = self.gen_expr(&args[1].node.value);
-                            return format!("gorget_crypto_aes_ctr_new(&{key}, &{iv})");
+                            let iv_addr = addr_of(&iv, &args[1].node.value.node);
+                            return format!("gorget_crypto_aes_ctr_new({key_addr}, {iv_addr})");
                         }
                     }
                     "crypto_bn_from_bytes" => {
                         if let Some(arg) = args.first() {
                             let data = self.gen_expr(&arg.node.value);
-                            return format!("gorget_crypto_bn_from_bytes(&{data})");
+                            let data_addr = addr_of(&data, &arg.node.value.node);
+                            return format!("gorget_crypto_bn_from_bytes({data_addr})");
                         }
                     }
                     "crypto_bn_to_bytes" => {
                         if let Some(arg) = args.first() {
                             let bn = self.gen_expr(&arg.node.value);
-                            return format!("gorget_crypto_bn_to_bytes(&{bn})");
+                            let bn_addr = addr_of(&bn, &arg.node.value.node);
+                            return format!("gorget_crypto_bn_to_bytes({bn_addr})");
                         }
                     }
                     "crypto_bn_mod_exp" => {
                         if args.len() >= 3 {
                             let base = self.gen_expr(&args[0].node.value);
+                            let base_addr = addr_of(&base, &args[0].node.value.node);
                             let exp = self.gen_expr(&args[1].node.value);
+                            let exp_addr = addr_of(&exp, &args[1].node.value.node);
                             let modulus = self.gen_expr(&args[2].node.value);
-                            return format!("gorget_crypto_bn_mod_exp(&{base}, &{exp}, &{modulus})");
+                            let mod_addr = addr_of(&modulus, &args[2].node.value.node);
+                            return format!("gorget_crypto_bn_mod_exp({base_addr}, {exp_addr}, {mod_addr})");
                         }
                     }
                     "crypto_rsa_load_public" => {
                         if let Some(arg) = args.first() {
                             let kb = self.gen_expr(&arg.node.value);
+                            let kb_addr = addr_of(&kb, &arg.node.value.node);
                             let result_type = c_mangle::mangle_generic("Result", &["GorgetRSAKey".into(), "const char*".into()]);
                             let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
                             let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
                             return format!(
-                                "({{ GorgetRSAKey __rk = gorget_crypto_rsa_load_public(&{kb}); \
+                                "({{ GorgetRSAKey __rk = gorget_crypto_rsa_load_public({kb_addr}); \
                                 const char* __re = gorget_crypto_last_error(); \
                                 __re ? {err_ctor}(__re) : {ok_ctor}(__rk); }})"
                             );
@@ -1115,9 +1138,12 @@ impl CodegenContext<'_> {
                     "crypto_rsa_verify" => {
                         if args.len() >= 3 {
                             let key = self.gen_expr(&args[0].node.value);
+                            let key_addr = addr_of(&key, &args[0].node.value.node);
                             let data = self.gen_expr(&args[1].node.value);
+                            let data_addr = addr_of(&data, &args[1].node.value.node);
                             let sig = self.gen_expr(&args[2].node.value);
-                            return format!("gorget_crypto_rsa_verify(&{key}, &{data}, &{sig})");
+                            let sig_addr = addr_of(&sig, &args[2].node.value.node);
+                            return format!("gorget_crypto_rsa_verify({key_addr}, {data_addr}, {sig_addr})");
                         }
                     }
                     "crypto_random_bytes" => {
@@ -1151,7 +1177,8 @@ impl CodegenContext<'_> {
                     "bytes_to_str" => {
                         if let Some(arg) = args.first() {
                             let b = self.gen_expr(&arg.node.value);
-                            return format!("gorget_bytes_to_str(&{b})");
+                            let b_addr = addr_of(&b, &arg.node.value.node);
+                            return format!("gorget_bytes_to_str({b_addr})");
                         }
                     }
                     "bytes_from_hex" => {
@@ -1163,52 +1190,60 @@ impl CodegenContext<'_> {
                     "bytes_to_hex" => {
                         if let Some(arg) = args.first() {
                             let b = self.gen_expr(&arg.node.value);
-                            return format!("gorget_bytes_to_hex(&{b})");
+                            let b_addr = addr_of(&b, &arg.node.value.node);
+                            return format!("gorget_bytes_to_hex({b_addr})");
                         }
                     }
                     "bytes_write_u32_be" => {
                         if args.len() >= 3 {
                             let b = self.gen_expr(&args[0].node.value);
+                            let b_addr = addr_of(&b, &args[0].node.value.node);
                             let offset = self.gen_expr(&args[1].node.value);
                             let value = self.gen_expr(&args[2].node.value);
-                            return format!("gorget_bytes_write_u32_be(&{b}, {offset}, {value})");
+                            return format!("gorget_bytes_write_u32_be({b_addr}, {offset}, {value})");
                         }
                     }
                     "bytes_read_u32_be" => {
                         if args.len() >= 2 {
                             let b = self.gen_expr(&args[0].node.value);
+                            let b_addr = addr_of(&b, &args[0].node.value.node);
                             let offset = self.gen_expr(&args[1].node.value);
-                            return format!("gorget_bytes_read_u32_be(&{b}, {offset})");
+                            return format!("gorget_bytes_read_u32_be({b_addr}, {offset})");
                         }
                     }
                     "bytes_write_u16_be" => {
                         if args.len() >= 3 {
                             let b = self.gen_expr(&args[0].node.value);
+                            let b_addr = addr_of(&b, &args[0].node.value.node);
                             let offset = self.gen_expr(&args[1].node.value);
                             let value = self.gen_expr(&args[2].node.value);
-                            return format!("gorget_bytes_write_u16_be(&{b}, {offset}, {value})");
+                            return format!("gorget_bytes_write_u16_be({b_addr}, {offset}, {value})");
                         }
                     }
                     "bytes_read_u16_be" => {
                         if args.len() >= 2 {
                             let b = self.gen_expr(&args[0].node.value);
+                            let b_addr = addr_of(&b, &args[0].node.value.node);
                             let offset = self.gen_expr(&args[1].node.value);
-                            return format!("gorget_bytes_read_u16_be(&{b}, {offset})");
+                            return format!("gorget_bytes_read_u16_be({b_addr}, {offset})");
                         }
                     }
                     "bytes_concat" => {
                         if args.len() >= 2 {
                             let a = self.gen_expr(&args[0].node.value);
+                            let a_addr = addr_of(&a, &args[0].node.value.node);
                             let b = self.gen_expr(&args[1].node.value);
-                            return format!("gorget_bytes_concat(&{a}, &{b})");
+                            let b_addr = addr_of(&b, &args[1].node.value.node);
+                            return format!("gorget_bytes_concat({a_addr}, {b_addr})");
                         }
                     }
                     "bytes_slice" => {
                         if args.len() >= 3 {
                             let b = self.gen_expr(&args[0].node.value);
+                            let b_addr = addr_of(&b, &args[0].node.value.node);
                             let start = self.gen_expr(&args[1].node.value);
                             let end = self.gen_expr(&args[2].node.value);
-                            return format!("gorget_bytes_slice(&{b}, {start}, {end})");
+                            return format!("gorget_bytes_slice({b_addr}, {start}, {end})");
                         }
                     }
                     "random_bytes" => {
@@ -1385,9 +1420,10 @@ impl CodegenContext<'_> {
     }
 
     /// Wrap a generated expression with `&` if the call arg has MutableBorrow ownership.
-    fn wrap_borrow_arg(&self, expr: String, ownership: crate::parser::ast::Ownership) -> String {
+    /// Uses `addr_of` to handle rvalue expressions safely via temp vars.
+    fn wrap_borrow_arg(&self, expr: String, ast_expr: &Expr, ownership: crate::parser::ast::Ownership) -> String {
         if matches!(ownership, crate::parser::ast::Ownership::MutableBorrow) {
-            format!("&{expr}")
+            addr_of(&expr, ast_expr)
         } else {
             expr
         }
@@ -1414,7 +1450,7 @@ impl CodegenContext<'_> {
             // Simple positional — wrap with & for MutableBorrow args
             return args.iter().map(|a| {
                 let expr = self.gen_expr(&a.node.value);
-                self.wrap_borrow_arg(expr, a.node.ownership)
+                self.wrap_borrow_arg(expr, &a.node.value.node, a.node.ownership)
             }).collect();
         }
 
@@ -1431,12 +1467,12 @@ impl CodegenContext<'_> {
             if let Some(ref name) = arg.node.name {
                 if let Some(pos) = param_names.iter().position(|pn| pn == &name.node) {
                     let expr = self.gen_expr(&arg.node.value);
-                    slots[pos] = Some(self.wrap_borrow_arg(expr, arg.node.ownership));
+                    slots[pos] = Some(self.wrap_borrow_arg(expr, &arg.node.value.node, arg.node.ownership));
                 }
             } else {
                 if positional_idx < slots.len() {
                     let expr = self.gen_expr(&arg.node.value);
-                    slots[positional_idx] = Some(self.wrap_borrow_arg(expr, arg.node.ownership));
+                    slots[positional_idx] = Some(self.wrap_borrow_arg(expr, &arg.node.value.node, arg.node.ownership));
                 }
                 positional_idx += 1;
             }
@@ -1552,7 +1588,7 @@ impl CodegenContext<'_> {
         if needs_temp {
             let arg_exprs: Vec<String> = args.iter().map(|a| {
                 let expr = self.gen_expr(&a.node.value);
-                self.wrap_borrow_arg(expr, a.node.ownership)
+                self.wrap_borrow_arg(expr, &a.node.value.node, a.node.ownership)
             }).collect();
             let mut call_args = format!("&__recv");
             for a in &arg_exprs {
@@ -1569,7 +1605,7 @@ impl CodegenContext<'_> {
             let mut all_args = vec![self_arg];
             for arg in args {
                 let expr = self.gen_expr(&arg.node.value);
-                all_args.push(self.wrap_borrow_arg(expr, arg.node.ownership));
+                all_args.push(self.wrap_borrow_arg(expr, &arg.node.value.node, arg.node.ownership));
             }
             format!("{mangled}({})", all_args.join(", "))
         }
@@ -3351,7 +3387,7 @@ impl CodegenContext<'_> {
                 let arg_exprs: Vec<String> =
                     args.iter().map(|a| {
                         let expr = self.gen_expr(&a.node.value);
-                        self.wrap_borrow_arg(expr, a.node.ownership)
+                        self.wrap_borrow_arg(expr, &a.node.value.node, a.node.ownership)
                     }).collect();
                 return format!("{full_mangled}({})", arg_exprs.join(", "));
             }
@@ -3415,7 +3451,7 @@ impl CodegenContext<'_> {
         self.register_generic(&base_name, &c_type_args, super::GenericInstanceKind::Function);
         let arg_exprs: Vec<String> = args.iter().map(|a| {
             let expr = self.gen_expr(&a.node.value);
-            self.wrap_borrow_arg(expr, a.node.ownership)
+            self.wrap_borrow_arg(expr, &a.node.value.node, a.node.ownership)
         }).collect();
         format!("{mangled}({})", arg_exprs.join(", "))
     }
@@ -3450,7 +3486,7 @@ impl CodegenContext<'_> {
         let mut all_args = vec![self_arg];
         for arg in args {
             let expr = self.gen_expr(&arg.node.value);
-            all_args.push(self.wrap_borrow_arg(expr, arg.node.ownership));
+            all_args.push(self.wrap_borrow_arg(expr, &arg.node.value.node, arg.node.ownership));
         }
         format!("{mangled}({})", all_args.join(", "))
     }
