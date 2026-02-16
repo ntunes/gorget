@@ -2,7 +2,9 @@
 
 ## Critical
 
-(none)
+- **SSH packet parsing has no bounds checks**: Offsets computed from untrusted wire data (`bytes_read_u32_be`) used directly in `bytes_slice` without verifying they fit within the buffer. A malformed packet with inflated length fields causes buffer overread. Every field-length read needs `if off + 4 + len > reply.len()` guard. (`ssh.gg:238-242, 335-341`) [added: 2026-02-16]
+
+- **HTTP Response type is opaque with no accessors**: `Response` struct declared as opaque (zero fields) with no equip block or helper functions, but `c_runtime.rs` already has `gorget_http_response_status()`, `gorget_http_response_body()`, `gorget_http_response_header()`. Users cannot use an HTTP response after receiving it. (`stdlib.rs:776`) [added: 2026-02-16]
 
 ## High
 
@@ -12,6 +14,14 @@
 
 
 - **`format_for_c_type` silently casts structs to int**: Unknown types in string interpolation default to `(long long)` cast, corrupting the value. Should error on non-formattable types. (`c_types.rs:284`) [added: 2026-02-16]
+
+- **Unicode escapes silently dropped in JSON and TOML parsers**: `\uXXXX` in JSON skips hex digits and produces empty string; TOML returns literal `"?"`. Silent data loss — `\u0041` should produce `'A'`. Either decode the codepoint or reject with an explicit error. (`json.gg:97-102`, `toml.gg:212-220`) [added: 2026-02-16]
+
+- **HTTP `Client` struct declared but unusable**: `Client` struct declared in synthetic stdlib alongside `Response` but has no constructor, no methods, no way to instantiate. Remove or complete. (`stdlib.rs:777`) [added: 2026-02-16]
+
+- **JSON/TOML accessors fail silently**: `get()`, `at()`, `as_int()` etc. return `Null()` or default values on type mismatch / missing keys with no way to distinguish "key absent" from "value is null." Need `has()`/`contains()` methods or `Result` return types. (`json.gg:350-458`, `toml.gg:837-951`) [added: 2026-02-16]
+
+- **Crypto module error handling is partial**: `crypto_rsa_load_public()` returns `Result[RSAKey, str]` but other fallible ops like `crypto_aes_ctr_new()` return bare types. C runtime has `gorget_crypto_last_error()` but no Gorget API exposes it. (`stdlib.rs:713`) [added: 2026-02-16]
 
 - **Method calls in generic function bodies use wrong mangled name**: Inside monomorphized generic functions, `infer_receiver_mangled_type` fails because the semantic type arg resolves to `Error` instead of `Defined(GenericParam)`. E.g., `c.get()` where `c: Container[T]` emits `Container__/*error*/int64_t__get` instead of `Container__int64_t__get`. The `type_id_to_c_substituted` fallback produces garbage. (`c_expr_call.rs:1050, c_expr_generic.rs:375`) [added: 2026-02-16]
 
@@ -41,6 +51,20 @@
 - **Codegen panics instead of semantic errors**: Several codegen paths panic on invalid input that should be caught earlier — string interpolation of non-primitive types (`c_expr_print.rs:394`), `in` operator fallthrough (`c_expr_call.rs:1225`). Move these checks to semantic analysis or use `unreachable!()`. [added: 2026-02-16]
 
 - **Basic orphan rule**: equip block must be in the module that defines the trait or the type. Prevents incoherent trait implementations across modules. [added: 2026-02-10]
+
+- **XML entity handling incomplete**: Only the 5 predefined entities decoded (`&amp;`, `&lt;`, `&gt;`, `&quot;`, `&apos;`). Numeric character references (`&#NNN;`, `&#xHH;`) and all other named entities silently pass through as literal `&`. (`xml.gg:26-52`) [added: 2026-02-16]
+
+- **No SDL/GFX error handling**: `sdl_create_window` and `sdl_create_renderer` can return null but return values are used directly without checks. Null window passed to `sdl_create_renderer` segfaults. (`gfx.gg:31-40`) [added: 2026-02-16]
+
+- **SSH Session initialization is fragile**: Constructor takes 11 positional arguments, several initialized with dummy values (`bytes_from_hex("")`, dummy crypto contexts). Error-prone — needs builder pattern or named-parameter constructor. (`ssh.gg:635`) [added: 2026-02-16]
+
+- **ECS `get()` has no bounds check**: Calls `self.sparse.get(id)` without checking `id < sparse.len()` while the adjacent `has()` method does check. Out-of-bounds panic for callers who forget `has()`. (`ecs.gg:74-76`) [added: 2026-02-16]
+
+- **Parameter ownership uniformly `Borrow` in synthetic modules**: Every function parameter declared `Ownership::Borrow` regardless of whether move semantics would be more appropriate for collections. Either document the design decision or add per-parameter ownership. (`stdlib.rs:549`) [added: 2026-02-16]
+
+- **Inconsistent function naming across synthetic stdlib modules**: Modules use different prefixing: `crypto_sha256()`, `bytes_from_str()`, `path_join()`, but HTTP uses bare `get()`/`post()`. Crypto has `crypto_random_bytes()` while bytes has `random_bytes()`. Adopt consistent `module_verb()` convention. (`stdlib.rs`) [added: 2026-02-16]
+
+- **Synthetic vs file-based module split is undocumented**: No comment explaining why some modules are synthetic (Rust-generated AST) vs file-based (parsed `.gg`). Contributors can't make the right choice when adding new modules. (`stdlib.rs:27-59`) [added: 2026-02-16]
 
 - **Operator overloading (via traits)**: Allow user-defined types to implement operators (`+`, `-`, `==`, `<`, `[]`, etc.) through trait equip blocks. [from roadmap, added: 2026-02-16]
 
@@ -105,6 +129,26 @@
 - **Incremental compilation**: Only recompile changed modules. [from roadmap, added: 2026-02-16]
 
 - **Async/await, concurrency, threads**: Not started. Requires runtime design (green threads vs OS threads, event loop). [from roadmap, added: 2026-02-16]
+
+- **`json_stringify` / `json_pretty_internal` duplicate logic**: Nearly identical functions — only difference is whitespace insertion. Merge into single `json_stringify_internal(Json, bool pretty, int indent)` helper. (`json.gg:257-343`) [added: 2026-02-16]
+
+- **TOML DateTime is just a raw string**: `DateTime` variants store unparsed text. Users can't extract year/month/day components. Document limitation or add a structured `TomlDateTime` type. (`toml.gg:21, 378-427`) [added: 2026-02-16]
+
+- **SSH hardcoded magic numbers**: Channel window size `2097152` and max packet size `32768` as bare literals. Should be named constants at module top. (`ssh.gg:441, 502`) [added: 2026-02-16]
+
+- **O(n²) string concatenation in XML stringifier**: `xml_out = xml_out + xml_stringify(child)` in loop creates quadratic allocation for large documents. Future `StringBuffer` type would fix this across stdlib. (`xml.gg:318-343`) [added: 2026-02-16]
+
+- **Variable naming collision risk in TOML module**: Variables like `toml_result`, `arr_out`, `tbl_out`, `sec_out` are short/generic enough to risk collisions with user code via `lookup_by_name_anywhere`. JSON and XML already use safer prefixed names. (`toml.gg`) [added: 2026-02-16]
+
+- **SDL local closure duplicates global `opaque_struct()`**: `gen_sdl_module()` defines its own `opaque_struct` closure identical to the global helper function. Just call the global one. (`stdlib.rs:291-303 vs 632`) [added: 2026-02-16]
+
+- **Missing math constants in stdlib**: Math module provides `sin`, `cos`, `sqrt` etc. but no `PI`, `E`, or `INFINITY` constants. Table-stakes for a math library. (`stdlib.rs` math module) [added: 2026-02-16]
+
+- **Missing little-endian byte helpers**: Only big-endian `bytes_read_u32_be` / `bytes_write_u32_be` provided. Little-endian variants expected for general-purpose bytes module. (`stdlib.rs` bytes module) [added: 2026-02-16]
+
+- **Vector/List/Array declared identically in collections module**: Three collection types declared with identical representations. Either an intentional alias system (document it) or placeholder for future differentiation. (`stdlib.rs:246`) [added: 2026-02-16]
+
+- **ECS `self` vs `&self` receiver inconsistency**: Mutating methods use `&self`, read-only use `self` — correct but surprising given Gorget convention. Needs doc comment explaining receiver semantics. (`ecs.gg`) [added: 2026-02-16]
 
 - **Serial port library (`std.io.serial`)**: `Port` struct, `.write()`, `.read_until()`, timeout support. C backend via termios/POSIX. [added: 2026-02-14]
 
