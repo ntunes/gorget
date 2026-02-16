@@ -431,13 +431,18 @@ fn resolve_function(
 
     // Define parameters (always mutable — can reassign params in function body)
     for param in &f.params {
-        if let Err(e) = scopes.define_with_mutability(
+        match scopes.define_with_mutability(
             param.node.name.node.clone(),
             DefKind::Variable,
             param.node.name.span,
             true,
         ) {
-            errors.push(e);
+            Ok(def_id) => {
+                scopes.get_def_mut(def_id).is_param = true;
+            }
+            Err(e) => {
+                errors.push(e);
+            }
         }
     }
 
@@ -882,7 +887,9 @@ fn resolve_expr(
         Expr::ImplicitClosure { body } => {
             scopes.push_scope(super::scope::ScopeKind::Function);
             // Define implicit `it` parameter
-            let _ = scopes.define("it".into(), DefKind::Variable, expr.span);
+            if let Ok(def_id) = scopes.define("it".into(), DefKind::Variable, expr.span) {
+                scopes.get_def_mut(def_id).is_param = true;
+            }
             resolve_expr(body, scopes, errors, resolution_map);
             scopes.pop_scope();
         }

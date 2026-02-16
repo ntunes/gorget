@@ -32,6 +32,8 @@ pub struct DefInfo {
     pub type_id: Option<TypeId>,
     /// Whether this variable was declared with `mutable` (only meaningful for Variable kind).
     pub is_mutable: bool,
+    /// Whether this variable is a function parameter (borrowed from caller, safe to re-bind).
+    pub is_param: bool,
 }
 
 /// A lexical scope.
@@ -123,6 +125,7 @@ impl ScopeTable {
                     scope: self.current,
                     type_id: None,
                     is_mutable,
+                    is_param: false,
                 });
                 self.scopes[self.current.0 as usize]
                     .names
@@ -147,6 +150,7 @@ impl ScopeTable {
             scope: self.current,
             type_id: None,
             is_mutable,
+            is_param: false,
         });
         self.scopes[self.current.0 as usize]
             .names

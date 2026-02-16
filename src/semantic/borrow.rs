@@ -46,8 +46,6 @@ fn is_copy_type(type_id: TypeId, types: &TypeTable) -> bool {
                     | Float64
                     | Bool
                     | Char
-                    | Str
-                    | StringType
             )
         }
         ResolvedType::Void | ResolvedType::Never | ResolvedType::Error => true,
@@ -731,8 +729,10 @@ impl<'a> BorrowChecker<'a> {
         if let Expr::Identifier(_) = &value.node {
             if let Some(&def_id) = self.resolution_map.get(&value.span.start) {
                 let def = self.scopes.get_def(def_id);
-                // Only check local variables, not functions/types/imports
-                if def.kind == DefKind::Variable {
+                // Only check local variables, not functions/types/imports.
+                // Skip parameters — they're borrowed from the caller, so
+                // re-binding them is just copying a pointer, not transferring ownership.
+                if def.kind == DefKind::Variable && !def.is_param {
                     if let Some(type_id) = def.type_id {
                         if !is_copy_type(type_id, self.types) {
                             self.error(
