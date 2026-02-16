@@ -142,8 +142,8 @@ impl CodegenContext<'_> {
                 format!("gorget_array_slice({recv_ref}, {start}, {end})")
             }
             "any" => {
+                self.closure_return_type_hint = Some("bool".to_string());
                 let closure_fn = self.gen_expr(&args[0].node.value);
-                self.patch_last_closure_return_type("bool");
                 format!(
                     "({{ GorgetArray __any_src = {recv}; \
                     bool __any_result = false; \
@@ -155,8 +155,8 @@ impl CodegenContext<'_> {
                 )
             }
             "all" => {
+                self.closure_return_type_hint = Some("bool".to_string());
                 let closure_fn = self.gen_expr(&args[0].node.value);
-                self.patch_last_closure_return_type("bool");
                 format!(
                     "({{ GorgetArray __all_src = {recv}; \
                     bool __all_result = true; \
@@ -168,8 +168,8 @@ impl CodegenContext<'_> {
                 )
             }
             "filter" => {
+                self.closure_return_type_hint = Some("bool".to_string());
                 let closure_fn = self.gen_expr(&args[0].node.value);
-                self.patch_last_closure_return_type("bool");
                 format!(
                     "({{ GorgetArray __filt_src = {recv}; \
                     GorgetArray __filt_result = gorget_array_new(sizeof({elem_type})); \
@@ -181,9 +181,9 @@ impl CodegenContext<'_> {
                 )
             }
             "map" => {
-                let closure_fn = self.gen_expr(&args[0].node.value);
                 let body_c_type = self.infer_closure_body_c_type(&args[0].node.value);
-                self.patch_last_closure_return_type(&body_c_type);
+                self.closure_return_type_hint = Some(body_c_type.clone());
+                let closure_fn = self.gen_expr(&args[0].node.value);
                 format!(
                     "({{ GorgetArray __map_src = {recv}; \
                     GorgetArray __map_result = gorget_array_new(sizeof({body_c_type})); \
@@ -198,8 +198,8 @@ impl CodegenContext<'_> {
             "fold" => {
                 let init = self.gen_expr(&args[0].node.value);
                 let init_c_type = self.infer_c_type_from_expr(&args[0].node.value.node);
+                self.closure_return_type_hint = Some(init_c_type.clone());
                 let closure_fn = self.gen_expr(&args[1].node.value);
-                self.patch_last_closure_return_type(&init_c_type);
                 format!(
                     "({{ GorgetArray __fold_src = {recv}; \
                     {init_c_type} __fold_acc = {init}; \
@@ -211,8 +211,8 @@ impl CodegenContext<'_> {
                 )
             }
             "reduce" => {
+                self.closure_return_type_hint = Some(elem_type.clone());
                 let closure_fn = self.gen_expr(&args[0].node.value);
-                self.patch_last_closure_return_type(&elem_type);
                 format!(
                     "({{ GorgetArray __red_src = {recv}; \
                     if (__red_src.len == 0) gorget_panic(\"reduce() called on empty array\"); \
@@ -268,8 +268,8 @@ impl CodegenContext<'_> {
                 )
             }
             "filter" => {
+                self.closure_return_type_hint = Some("bool".to_string());
                 let closure_fn = self.gen_expr(&args[0].node.value);
-                self.patch_last_closure_return_type("bool");
                 format!(
                     "({{ __typeof__({recv}) __it_recv = {recv}; \
                     GorgetArray __it_result = gorget_array_new(sizeof({elem_c_type})); \
@@ -283,9 +283,9 @@ impl CodegenContext<'_> {
                 )
             }
             "map" => {
-                let closure_fn = self.gen_expr(&args[0].node.value);
                 let body_c_type = self.infer_closure_body_c_type(&args[0].node.value);
-                self.patch_last_closure_return_type(&body_c_type);
+                self.closure_return_type_hint = Some(body_c_type.clone());
+                let closure_fn = self.gen_expr(&args[0].node.value);
                 format!(
                     "({{ __typeof__({recv}) __it_recv = {recv}; \
                     GorgetArray __it_result = gorget_array_new(sizeof({body_c_type})); \
@@ -302,8 +302,8 @@ impl CodegenContext<'_> {
             "fold" => {
                 let init = self.gen_expr(&args[0].node.value);
                 let init_c_type = self.infer_c_type_from_expr(&args[0].node.value.node);
+                self.closure_return_type_hint = Some(init_c_type.clone());
                 let closure_fn = self.gen_expr(&args[1].node.value);
-                self.patch_last_closure_return_type(&init_c_type);
                 format!(
                     "({{ __typeof__({recv}) __it_recv = {recv}; \
                     {init_c_type} __it_acc = {init}; \
@@ -484,8 +484,8 @@ impl CodegenContext<'_> {
             }
             "filter" => {
                 let (key_type, val_type) = self.infer_map_kv_types(receiver);
+                self.closure_return_type_hint = Some("bool".to_string());
                 let closure_fn = self.gen_expr(&args[0].node.value);
-                self.patch_last_closure_return_type("bool");
                 let (loop_head, idx) = iter_loop("dfilt", "__dfilt_src", ordered);
                 format!(
                     "({{ {mangled} __dfilt_src = {recv}; \
@@ -502,8 +502,8 @@ impl CodegenContext<'_> {
                 let (key_type, val_type) = self.infer_map_kv_types(receiver);
                 let init = self.gen_expr(&args[0].node.value);
                 let init_c_type = self.infer_c_type_from_expr(&args[0].node.value.node);
+                self.closure_return_type_hint = Some(init_c_type.clone());
                 let closure_fn = self.gen_expr(&args[1].node.value);
-                self.patch_last_closure_return_type(&init_c_type);
                 let (loop_head, idx) = iter_loop("dfold", "__dfold_src", ordered);
                 format!(
                     "({{ {mangled} __dfold_src = {recv}; \
@@ -652,8 +652,8 @@ impl CodegenContext<'_> {
             "filter" => {
                 // Set elem type is the first generic type arg, same as Vector
                 let elem_type = self.infer_vector_elem_type(receiver);
+                self.closure_return_type_hint = Some("bool".to_string());
                 let closure_fn = self.gen_expr(&args[0].node.value);
-                self.patch_last_closure_return_type("bool");
                 format!(
                     "({{ GorgetSet __sfilt_src = {recv}; \
                     GorgetSet __sfilt_result = gorget_set_new(sizeof({elem_type})); \
@@ -669,8 +669,8 @@ impl CodegenContext<'_> {
                 let elem_type = self.infer_vector_elem_type(receiver);
                 let init = self.gen_expr(&args[0].node.value);
                 let init_c_type = self.infer_c_type_from_expr(&args[0].node.value.node);
+                self.closure_return_type_hint = Some(init_c_type.clone());
                 let closure_fn = self.gen_expr(&args[1].node.value);
-                self.patch_last_closure_return_type(&init_c_type);
                 format!(
                     "({{ GorgetSet __sfold_src = {recv}; \
                     {init_c_type} __sfold_acc = {init}; \
@@ -1194,13 +1194,6 @@ impl CodegenContext<'_> {
         "int64_t".to_string()
     }
 
-    /// Patch the return type of the most recently lifted closure.
-    pub(super) fn patch_last_closure_return_type(&mut self, return_type: &str) {
-        if let Some(last) = self.lifted_closures.last_mut() {
-            last.return_type = return_type.to_string();
-        }
-    }
-
     /// Extract the C type args from a generic receiver expression.
     pub(super) fn infer_generic_type_args(&mut self, receiver: &Spanned<Expr>) -> Vec<String> {
         if let Some(tid) = self.resolve_expr_type_id(receiver) {
@@ -1257,11 +1250,10 @@ impl CodegenContext<'_> {
                 }
             }
             "map" => {
-                let closure_fn = self.gen_expr(&args[0].node.value);
                 // Determine closure body return C type for output Option type
                 let body_c_type = self.infer_closure_body_c_type(&args[0].node.value);
-                // Patch the lifted closure's return type
-                self.patch_last_closure_return_type(&body_c_type);
+                self.closure_return_type_hint = Some(body_c_type.clone());
+                let closure_fn = self.gen_expr(&args[0].node.value);
                 // Register output Option type (may be same as input for same-type map)
                 let output_mangled = self.register_generic("Option", &[body_c_type], super::GenericInstanceKind::Enum);
                 let ctor_some = c_mangle::mangle_variant(&output_mangled, "Some");
@@ -1274,9 +1266,8 @@ impl CodegenContext<'_> {
                 )
             }
             "and_then" => {
+                self.closure_return_type_hint = Some(mangled.clone());
                 let closure_fn = self.gen_expr(&args[0].node.value);
-                // Closure returns full Option type — patch return type
-                self.patch_last_closure_return_type(&mangled);
                 let ctor_none = c_mangle::mangle_variant(&mangled, "None");
                 format!(
                     "({{ {mangled} __opt = {recv}; {mangled} __result; \
@@ -1286,9 +1277,8 @@ impl CodegenContext<'_> {
                 )
             }
             "or_else" => {
+                self.closure_return_type_hint = Some(mangled.clone());
                 let closure_fn = self.gen_expr(&args[0].node.value);
-                // Closure returns full Option type — patch return type
-                self.patch_last_closure_return_type(&mangled);
                 format!(
                     "({{ {mangled} __opt = {recv}; (__opt.tag == {tag_some}) ? __opt : {closure_fn}(); }})"
                 )
@@ -1341,9 +1331,9 @@ impl CodegenContext<'_> {
                 }
             }
             "map" => {
-                let closure_fn = self.gen_expr(&args[0].node.value);
                 let body_c_type = self.infer_closure_body_c_type(&args[0].node.value);
-                self.patch_last_closure_return_type(&body_c_type);
+                self.closure_return_type_hint = Some(body_c_type.clone());
+                let closure_fn = self.gen_expr(&args[0].node.value);
                 // Result[T,E].map() -> Result[U,E]: need E type for output
                 let type_args = self.infer_generic_type_args(receiver);
                 let error_c_type = type_args.get(1).cloned().unwrap_or_else(|| "int64_t".to_string());
@@ -1358,8 +1348,8 @@ impl CodegenContext<'_> {
                 )
             }
             "and_then" => {
+                self.closure_return_type_hint = Some(mangled.clone());
                 let closure_fn = self.gen_expr(&args[0].node.value);
-                self.patch_last_closure_return_type(&mangled);
                 let ctor_error = c_mangle::mangle_variant(&mangled, "Error");
                 format!(
                     "({{ {mangled} __res = {recv}; {mangled} __result; \
@@ -1369,8 +1359,8 @@ impl CodegenContext<'_> {
                 )
             }
             "or_else" => {
+                self.closure_return_type_hint = Some(mangled.clone());
                 let closure_fn = self.gen_expr(&args[0].node.value);
-                self.patch_last_closure_return_type(&mangled);
                 format!(
                     "({{ {mangled} __res = {recv}; (__res.tag == {tag_ok}) ? __res : {closure_fn}(__res.data.Error._0); }})"
                 )

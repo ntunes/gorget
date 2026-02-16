@@ -7,7 +7,6 @@
 ## High
 
 
-- **Closure return type patched after codegen**: `patch_last_closure_return_type` modifies already-generated lifted closure code. If the patch doesn't apply cleanly, the closure has a wrong return type. (`c_expr_methods.rs:1198`) [added: 2026-02-16]
 
 - **Generic equip blocks incomplete**: Generic equip blocks (`equip Foo[T] with Trait`) are skipped in declarations, definitions, and vtable emission. If `discover_generic_usages` misses an instantiation, it's silently omitted. (`c_item.rs:335, 424, 936`) [added: 2026-02-16]
 

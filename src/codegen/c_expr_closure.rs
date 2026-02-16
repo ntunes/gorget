@@ -90,11 +90,13 @@ impl CodegenContext<'_> {
         // Restore previous mutable_captures (for nested closures)
         self.mutable_captures = prev_mutable;
 
+        let return_type = self.closure_return_type_hint.take()
+            .unwrap_or_else(|| self.infer_c_type_from_expr(&body.node));
         let lifted = LiftedClosure {
             id,
             captures: captures.clone(),
             params: closure_params,
-            return_type: self.infer_c_type_from_expr(&body.node),
+            return_type,
             body: body_expr,
         };
 
