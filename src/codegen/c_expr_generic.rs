@@ -180,9 +180,19 @@ impl CodegenContext<'_> {
     /// Check if a method on a type comes from a trait equip (not inherent impl).
     /// Returns the trait name if found, None if it's an inherent method.
     pub(super) fn find_trait_for_method(&mut self, type_name: &str, method_name: &str) -> Option<String> {
+        // For generic instantiations (e.g. "Wrapper__int64_t"), also try the base name
+        // ("Wrapper") since impls are registered under base names.
+        let base_name: Option<String> = self.generic_instances.iter()
+            .find(|i| i.mangled_name == type_name)
+            .map(|i| i.base_name.clone());
+        let mut names_to_check = vec![type_name.to_string()];
+        if let Some(ref base) = base_name {
+            names_to_check.push(base.clone());
+        }
+
         // First check if there's an inherent impl with this method — inherent wins
         for impl_info in &self.traits.impls {
-            if impl_info.self_type_name == type_name
+            if names_to_check.iter().any(|n| impl_info.self_type_name == n.as_str())
                 && impl_info.trait_.is_none()
                 && impl_info.methods.contains_key(method_name)
             {
@@ -191,7 +201,7 @@ impl CodegenContext<'_> {
         }
         // Then check trait impls
         for impl_info in &self.traits.impls {
-            if impl_info.self_type_name == type_name && impl_info.trait_.is_some() {
+            if names_to_check.iter().any(|n| impl_info.self_type_name == n.as_str()) && impl_info.trait_.is_some() {
                 // Check if the method is directly in the equip block
                 if impl_info.methods.contains_key(method_name) {
                     return impl_info.trait_name.clone();

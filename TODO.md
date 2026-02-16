@@ -8,7 +8,7 @@
 
 
 
-- **Generic equip blocks incomplete**: Generic equip blocks (`equip Foo[T] with Trait`) are skipped in declarations, definitions, and vtable emission. If `discover_generic_usages` misses an instantiation, it's silently omitted. (`c_item.rs:335, 424, 936`) [added: 2026-02-16]
+- **Generic equip blocks: declarations still skipped**: Generic equip blocks (`equip Foo[T] with Trait`) now emit vtable instances and default method bodies per-instantiation, but forward declarations are still skipped for generic equip methods (`c_item.rs:335`). Works because `emit_monomorphized_equip_method` emits its own prototype, but if any code references the function before step 3b, it would fail. Also, `discover_generic_usages` silently omits instantiations it doesn't discover. [updated: 2026-02-16]
 
 - **String coercion leaks GorgetString wrapper**: `GorgetString` coerced to `const char*` by taking `.data` orphans the wrapper struct (capacity, length) — the malloc'd wrapper leaks. (`c_stmt.rs:1124-1127`) [added: 2026-02-16]
 

@@ -1111,6 +1111,20 @@ fn trait_inherit_defaults() {
 }
 
 #[test]
+fn generic_trait_equip() {
+    run_gg(
+        "generic_trait_equip.gg",
+        "\
+42
+42
+7
+70
+7
+70",
+    );
+}
+
+#[test]
 fn file_io() {
     run_gg(
         "file_io.gg",

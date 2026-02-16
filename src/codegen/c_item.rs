@@ -997,6 +997,84 @@ impl CodegenContext<'_> {
                 emitter.blank_line();
             }
         }
+
+        // Emit vtable instances for generic equip blocks (per-instantiation)
+        for inst in &self.generic_instances {
+            match inst.kind {
+                super::GenericInstanceKind::Struct | super::GenericInstanceKind::Enum => {}
+                _ => continue,
+            }
+            let equip_blocks = match self.generic_equip_templates.get(&inst.base_name) {
+                Some(blocks) => blocks.clone(),
+                None => continue,
+            };
+            let generic_params = self.generic_struct_templates
+                .get(&inst.base_name)
+                .and_then(|t| t.generic_params.clone())
+                .or_else(|| {
+                    self.generic_enum_templates
+                        .get(&inst.base_name)
+                        .and_then(|t| t.generic_params.clone())
+                });
+            let subs = self.build_type_substitutions(generic_params.as_ref(), &inst.c_type_args);
+
+            for equip_block in &equip_blocks {
+                let Some(trait_ref) = &equip_block.trait_ else {
+                    continue;
+                };
+                let trait_name = match &trait_ref.trait_name.node {
+                    Type::Named { name, .. } => name.node.clone(),
+                    _ => continue,
+                };
+                let Some(trait_def) = trait_defs.get(&trait_name) else {
+                    continue;
+                };
+
+                let vtable_type = c_mangle::mangle_vtable_struct(&trait_name);
+                let vtable_instance = c_mangle::mangle_vtable_instance(&trait_name, &inst.mangled_name);
+
+                emitter.emit_line(&format!("static const {vtable_type} {vtable_instance} = {{"));
+                emitter.indent();
+
+                let all_methods = self.collect_all_trait_methods(trait_def, &trait_defs);
+
+                for (method, _defining_trait) in &all_methods {
+                    let method_name = &method.name.node;
+                    let impl_fn = c_mangle::mangle_trait_method(&trait_name, &inst.mangled_name, method_name);
+
+                    // Use substitute_type for return/param types (trait methods may reference generic params)
+                    let ret_type = self.substitute_type(&method.return_type.node, &subs);
+                    let mut cast_params = Vec::new();
+                    for param in &method.params {
+                        if param.node.name.node == "self" {
+                            match param.node.ownership {
+                                Ownership::MutableBorrow | Ownership::Move => {
+                                    cast_params.push("void*".to_string());
+                                }
+                                _ => {
+                                    cast_params.push("const void*".to_string());
+                                }
+                            }
+                        } else {
+                            cast_params.push(self.substitute_type(&param.node.type_.node, &subs));
+                        }
+                    }
+                    let cast_params_str = if cast_params.is_empty() {
+                        "void".to_string()
+                    } else {
+                        cast_params.join(", ")
+                    };
+
+                    emitter.emit_line(&format!(
+                        ".{method_name} = ({ret_type} (*)({cast_params_str})){impl_fn},"
+                    ));
+                }
+
+                emitter.dedent();
+                emitter.emit_line("};");
+                emitter.blank_line();
+            }
+        }
     }
 
     // ─── Lifted Closures ────────────────────────────────────
@@ -1483,7 +1561,14 @@ impl CodegenContext<'_> {
     /// Emit method definitions for generic instantiations (equip blocks + generic functions).
     /// Must be called after regular type definitions so that method signatures
     /// can reference user-defined types like Health by value.
-    pub fn emit_generic_method_definitions(&mut self, emitter: &mut CEmitter) {
+    pub fn emit_generic_method_definitions(&mut self, module: &crate::parser::ast::Module, emitter: &mut CEmitter) {
+        // Collect trait definitions for default method lookup
+        let mut trait_defs: HashMap<String, &TraitDef> = HashMap::new();
+        for item in &module.items {
+            if let Item::Trait(t) = &item.node {
+                trait_defs.insert(t.name.node.clone(), t);
+            }
+        }
         for i in 0..self.generic_instances.len() {
             let inst = self.generic_instances[i].clone();
             match inst.kind {
@@ -1503,6 +1588,7 @@ impl CodegenContext<'_> {
                         });
                     for equip_block in &equip_blocks {
                         let trait_name = self.impl_trait_name(&equip_block);
+                        // Emit explicitly implemented methods
                         for method in &equip_block.items {
                             self.emit_monomorphized_equip_method(
                                 &method.node,
@@ -1512,6 +1598,26 @@ impl CodegenContext<'_> {
                                 trait_name.as_deref(),
                                 emitter,
                             );
+                        }
+                        // Emit default/inherited method bodies not overridden
+                        if let Some(tname) = &trait_name {
+                            if let Some(trait_def) = trait_defs.get(tname.as_str()) {
+                                let all_methods = self.collect_all_trait_methods(trait_def, &trait_defs);
+                                for (method, _) in &all_methods {
+                                    if !Self::equip_has_method(&equip_block, &method.name.node) {
+                                        if !matches!(method.body, FunctionBody::Declaration) {
+                                            self.emit_monomorphized_equip_method(
+                                                method,
+                                                generic_params.as_ref(),
+                                                &inst.c_type_args,
+                                                &inst.mangled_name,
+                                                Some(tname),
+                                                emitter,
+                                            );
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }

@@ -465,7 +465,7 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
     ctx.emit_generic_type_definitions_phase2(&mut emitter);
 
     // 3b. Emit monomorphized generic method definitions
-    ctx.emit_generic_method_definitions(&mut emitter);
+    ctx.emit_generic_method_definitions(module, &mut emitter);
 
     // 4. Function declarations
     ctx.emit_function_declarations(module, &mut emitter);
