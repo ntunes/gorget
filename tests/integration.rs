@@ -1282,6 +1282,29 @@ hello world",
 }
 
 #[test]
+fn string_owned() {
+    run_gg(
+        "string_owned.gg",
+        "\
+hello
+0
+hello world
+hello world
+abcdef
+abcdef!
+0
+foobar
+hi there
+HELLO
+hi
+42
+3.14
+A
+11",
+    );
+}
+
+#[test]
 fn in_operator() {
     run_gg(
         "in_operator.gg",

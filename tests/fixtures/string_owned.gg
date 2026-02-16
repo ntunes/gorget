@@ -1,0 +1,62 @@
+from std.conv import int_to_str, float_to_str, char_to_str
+
+void main():
+    # String constructor
+    String s = String("hello")
+    print(s)
+
+    # String from empty
+    String empty = String()
+    print(empty.len())
+
+    # String concat returns String
+    String greeting = "hello" + " world"
+    print(greeting)
+
+    # Auto-coercion: String to str
+    str view = greeting.str()
+    print(view)
+
+    # String push
+    String builder = String("abc")
+    builder.push("def")
+    print(builder)
+
+    # String push_char
+    builder.push_char('!')
+    print(builder)
+
+    # String clear
+    builder.clear()
+    print(builder.len())
+
+    # str + str returns String
+    auto result = "foo" + "bar"
+    print(result)
+
+    # String += (in-place append)
+    String msg = String("hi")
+    msg += " there"
+    print(msg)
+
+    # String methods that return String
+    String src = String("hello")
+    String upper = src.to_upper()
+    print(upper)
+
+    str padded = "  hi  "
+    String trimmed = padded.trim()
+    print(trimmed)
+
+    # Conversion functions return String
+    String num = int_to_str(42)
+    print(num)
+
+    String flt = float_to_str(3.14)
+    print(flt)
+
+    String ch = char_to_str('A')
+    print(ch)
+
+    # String passed to function expecting str
+    print(greeting.len())

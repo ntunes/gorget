@@ -58,6 +58,7 @@ pub struct TypeTable {
     pub float_id: TypeId,
     pub char_id: TypeId,
     pub string_id: TypeId,
+    pub owned_string_id: TypeId,
     pub error_id: TypeId,
     pub never_id: TypeId,
 }
@@ -82,6 +83,9 @@ impl TypeTable {
         types.push(ResolvedType::Primitive(PrimitiveType::Char));
 
         let string_id = TypeId(types.len() as u32);
+        types.push(ResolvedType::Primitive(PrimitiveType::Str));
+
+        let owned_string_id = TypeId(types.len() as u32);
         types.push(ResolvedType::Primitive(PrimitiveType::StringType));
 
         let error_id = TypeId(types.len() as u32);
@@ -98,6 +102,7 @@ impl TypeTable {
             float_id,
             char_id,
             string_id,
+            owned_string_id,
             error_id,
             never_id,
         }
@@ -121,9 +126,9 @@ impl TypeTable {
             PrimitiveType::Int => self.int_id,
             PrimitiveType::Float => self.float_id,
             PrimitiveType::Char => self.char_id,
-            PrimitiveType::StringType => self.string_id,
+            PrimitiveType::Str => self.string_id,
+            PrimitiveType::StringType => self.owned_string_id,
             PrimitiveType::Void => self.void_id,
-            PrimitiveType::Str => self.string_id, // treat str as String for now
             other => {
                 // Other numeric variants - insert or find
                 let ty = ResolvedType::Primitive(other);
@@ -146,7 +151,11 @@ impl TypeTable {
     /// Format a type as a human-readable string for error messages.
     pub fn display(&self, id: TypeId) -> String {
         match self.get(id) {
-            ResolvedType::Primitive(p) => format!("{p:?}").to_lowercase(),
+            ResolvedType::Primitive(p) => match p {
+                PrimitiveType::StringType => "String".to_string(),
+                PrimitiveType::Str => "str".to_string(),
+                _ => format!("{p:?}").to_lowercase(),
+            },
             ResolvedType::Defined(_) => "<defined>".into(),
             ResolvedType::Generic(_, args) => {
                 let arg_strs: Vec<_> = args.iter().map(|a| self.display(*a)).collect();

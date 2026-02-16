@@ -133,28 +133,40 @@ impl CodegenContext<'_> {
                         };
                     }
                     // String Eq/Neq: use strcmp instead of pointer comparison
-                    let is_str = self.resolve_expr_type_id(left).map_or(false, |t| t == self.types.string_id)
-                        || self.resolve_expr_type_id(right).map_or(false, |t| t == self.types.string_id)
+                    let is_str = self.resolve_expr_type_id(left).map_or(false, |t| t == self.types.string_id || t == self.types.owned_string_id)
+                        || self.resolve_expr_type_id(right).map_or(false, |t| t == self.types.string_id || t == self.types.owned_string_id)
                         || matches!(&left.node, Expr::StringLiteral(_))
                         || matches!(&right.node, Expr::StringLiteral(_));
                     if is_str {
                         let l = self.gen_expr(left);
                         let r = self.gen_expr(right);
+                        // Coerce GorgetString operands to .data for strcmp
+                        let l_type = self.infer_c_type_from_expr(&left.node);
+                        let r_type = self.infer_c_type_from_expr(&right.node);
+                        let l_str = if l_type == "GorgetString" { format!("{l}.data") } else { l };
+                        let r_str = if r_type == "GorgetString" { format!("{r}.data") } else { r };
                         return if *op == BinaryOp::Neq {
-                            format!("(strcmp({l}, {r}) != 0)")
+                            format!("(strcmp({l_str}, {r_str}) != 0)")
                         } else {
-                            format!("(strcmp({l}, {r}) == 0)")
+                            format!("(strcmp({l_str}, {r_str}) == 0)")
                         };
                     }
                 }
-                // String concatenation: str + str → gorget_str_concat(a, b)
+                // String concatenation: str/String + str/String → GorgetString
                 if *op == BinaryOp::Add {
-                    if let Some(type_id) = self.resolve_expr_type_id(left) {
-                        if type_id == self.types.string_id {
-                            let l = self.gen_expr(left);
-                            let r = self.gen_expr(right);
-                            return format!("gorget_str_concat({l}, {r})");
-                        }
+                    let left_is_str = self.resolve_expr_type_id(left)
+                        .map_or(false, |t| t == self.types.string_id || t == self.types.owned_string_id);
+                    let right_is_str = self.resolve_expr_type_id(right)
+                        .map_or(false, |t| t == self.types.string_id || t == self.types.owned_string_id);
+                    if left_is_str || right_is_str {
+                        let l = self.gen_expr(left);
+                        let r = self.gen_expr(right);
+                        // Coerce both operands to const char*
+                        let l_type = self.infer_c_type_from_expr(&left.node);
+                        let r_type = self.infer_c_type_from_expr(&right.node);
+                        let l_str = if l_type == "GorgetString" { format!("{l}.data") } else { l };
+                        let r_str = if r_type == "GorgetString" { format!("{r}.data") } else { r };
+                        return format!("gorget_string_from_concat({l_str}, {r_str})");
                     }
                 }
                 // Vector concatenation: vec + vec → clone left, extend with right
@@ -593,6 +605,18 @@ impl CodegenContext<'_> {
             match name.as_str() {
                 "print" => return self.gen_print_call(args),
                 "format" => return self.gen_format_call(args),
+                "String" => {
+                    // String() → empty owned string, String(val) → owned copy
+                    if args.is_empty() {
+                        return "gorget_string_new(\"\")".to_string();
+                    }
+                    let arg = self.gen_expr(&args[0].node.value);
+                    let arg_type = self.infer_c_type_from_expr(&args[0].node.value.node);
+                    if arg_type == "GorgetString" {
+                        return format!("gorget_string_new({arg}.data)");
+                    }
+                    return format!("gorget_string_new({arg})");
+                }
                 "len" => {
                     if let Some(arg) = args.first() {
                         let a = self.gen_expr(&arg.node.value);
@@ -781,13 +805,13 @@ impl CodegenContext<'_> {
                     "int_to_str" => {
                         if let Some(arg) = args.first() {
                             let n = self.gen_expr(&arg.node.value);
-                            return format!("gorget_int_to_str({n})");
+                            return format!("gorget_string_new(gorget_int_to_str({n}))");
                         }
                     }
                     "float_to_str" => {
                         if let Some(arg) = args.first() {
                             let x = self.gen_expr(&arg.node.value);
-                            return format!("gorget_float_to_str({x})");
+                            return format!("gorget_string_new(gorget_float_to_str({x}))");
                         }
                     }
                     "bool_to_str" => {
@@ -799,7 +823,7 @@ impl CodegenContext<'_> {
                     "char_to_str" => {
                         if let Some(arg) = args.first() {
                             let c = self.gen_expr(&arg.node.value);
-                            return format!("gorget_char_to_str({c})");
+                            return format!("gorget_string_new(gorget_char_to_str({c}))");
                         }
                     }
                     "getenv" => {
@@ -1419,6 +1443,27 @@ impl CodegenContext<'_> {
         format!("{callee_str}({})", arg_exprs.join(", "))
     }
 
+    /// Coerce between GorgetString and const char* at function call sites.
+    fn coerce_arg_to_str(
+        &mut self,
+        expr: String,
+        arg_expr: &Spanned<Expr>,
+        param_type_id: Option<crate::semantic::ids::TypeId>,
+    ) -> String {
+        let arg_type = self.infer_c_type_from_expr(&arg_expr.node);
+        if let Some(ptid) = param_type_id {
+            // String arg → str param: coerce via .data
+            if arg_type == "GorgetString" && ptid == self.types.string_id {
+                return format!("{expr}.data");
+            }
+            // str arg → String param: wrap with gorget_string_new
+            if arg_type == "const char*" && ptid == self.types.owned_string_id {
+                return format!("gorget_string_new({expr})");
+            }
+        }
+        expr
+    }
+
     /// Wrap a generated expression with `&` if the call arg has MutableBorrow ownership.
     /// Uses `addr_of` to handle rvalue expressions safely via temp vars.
     fn wrap_borrow_arg(&self, expr: String, ast_expr: &Expr, ownership: crate::parser::ast::Ownership) -> String {
@@ -1447,9 +1492,13 @@ impl CodegenContext<'_> {
         let has_defaults = func_info.map_or(false, |fi| fi.param_defaults.iter().any(|d| d.is_some()));
 
         if (!has_named && !has_defaults) || func_info.is_none() {
-            // Simple positional — wrap with & for MutableBorrow args
-            return args.iter().map(|a| {
+            // Simple positional — wrap with & for MutableBorrow args, coerce String→str
+            let param_type_ids: Vec<Option<crate::semantic::ids::TypeId>> = func_info
+                .map(|fi| fi.param_type_ids.clone())
+                .unwrap_or_default();
+            return args.iter().enumerate().map(|(i, a)| {
                 let expr = self.gen_expr(&a.node.value);
+                let expr = self.coerce_arg_to_str(expr, &a.node.value, param_type_ids.get(i).copied().flatten());
                 self.wrap_borrow_arg(expr, &a.node.value.node, a.node.ownership)
             }).collect();
         }
@@ -1633,7 +1682,7 @@ impl CodegenContext<'_> {
         let is_set = matches!(type_name.as_str(), "Set" | "HashSet")
             || c_type.as_deref() == Some("GorgetSet");
         let is_string = matches!(type_name.as_str(), "str" | "String")
-            || matches!(c_type.as_deref(), Some("const char*"));
+            || matches!(c_type.as_deref(), Some("const char*") | Some("GorgetString"));
         let is_option = type_name == "Option";
         let is_result = type_name == "Result";
         let is_box = type_name == "Box";
@@ -1708,7 +1757,14 @@ impl CodegenContext<'_> {
             return Some(self.gen_set_method(&recv, method_name, args, receiver, needs_temp));
         }
         if is_string {
-            return self.gen_string_method(&recv, method_name, args, needs_temp);
+            // Coerce GorgetString receiver to const char* for str methods
+            let str_recv = if c_type.as_deref() == Some("GorgetString") {
+                format!("{recv}.data")
+            } else {
+                recv.clone()
+            };
+            let is_owned = c_type.as_deref() == Some("GorgetString");
+            return self.gen_string_method(&str_recv, method_name, args, needs_temp, is_owned);
         }
         if is_option {
             return Some(self.gen_option_method(&recv, method_name, args, receiver, needs_temp));
@@ -1752,7 +1808,7 @@ impl CodegenContext<'_> {
         let is_set = matches!(type_name.as_str(), "Set" | "HashSet")
             || c_type.as_deref() == Some("GorgetSet");
         let is_string = matches!(type_name.as_str(), "str" | "String")
-            || matches!(c_type.as_deref(), Some("const char*"));
+            || matches!(c_type.as_deref(), Some("const char*") | Some("GorgetString"));
 
         let coll = self.gen_expr(collection);
         let elem = self.gen_expr(needle);
@@ -1776,7 +1832,13 @@ impl CodegenContext<'_> {
             let elem_type = self.infer_c_type_from_expr(&needle.node);
             format!("({{ {elem_type} __needle = {elem}; gorget_set_contains({coll_ref}, &__needle); }})")
         } else if is_string {
-            format!("(strstr({coll}, {elem}) != NULL)")
+            // Coerce GorgetString to const char* for strstr
+            let coll_str = if c_type.as_deref() == Some("GorgetString") {
+                format!("{coll}.data")
+            } else {
+                coll.clone()
+            };
+            format!("(strstr({coll_str}, {elem}) != NULL)")
         } else {
             format!("/* unsupported `in` for type {type_name} */ false")
         }
@@ -1806,7 +1868,7 @@ impl CodegenContext<'_> {
             Expr::FloatLiteral(_) => Some(self.types.float_id),
             Expr::BoolLiteral(_) => Some(self.types.bool_id),
             Expr::StringLiteral(_) => Some(self.types.string_id),
-            Expr::BinaryOp { op, left, .. } => match op {
+            Expr::BinaryOp { op, left, right, .. } => match op {
                 BinaryOp::Eq
                 | BinaryOp::Neq
                 | BinaryOp::Lt
@@ -1816,6 +1878,18 @@ impl CodegenContext<'_> {
                 | BinaryOp::And
                 | BinaryOp::Or
                 | BinaryOp::In => Some(self.types.bool_id),
+                BinaryOp::Add => {
+                    // str/String + anything → String (owned)
+                    let left_is_str = self.resolve_expr_type_id(left)
+                        .map_or(false, |t| t == self.types.string_id || t == self.types.owned_string_id);
+                    let right_is_str = self.resolve_expr_type_id(right)
+                        .map_or(false, |t| t == self.types.string_id || t == self.types.owned_string_id);
+                    if left_is_str || right_is_str {
+                        Some(self.types.owned_string_id)
+                    } else {
+                        self.resolve_expr_type_id(left)
+                    }
+                }
                 _ => self.resolve_expr_type_id(left),
             },
             Expr::UnaryOp { operand, .. } => self.resolve_expr_type_id(operand),
@@ -2693,7 +2767,50 @@ impl CodegenContext<'_> {
         method_name: &str,
         args: &[Spanned<crate::parser::ast::CallArg>],
         needs_temp: bool,
+        is_owned: bool,
     ) -> Option<String> {
+        // String-specific methods (only on owned String / GorgetString)
+        if is_owned {
+            match method_name {
+                "push" => {
+                    let arg = args.first()
+                        .map(|a| self.gen_expr(&a.node.value))
+                        .unwrap_or_else(|| "\"\"".to_string());
+                    let arg_type = args.first()
+                        .map(|a| self.infer_c_type_from_expr(&a.node.value.node))
+                        .unwrap_or_default();
+                    let rhs = if arg_type == "GorgetString" {
+                        format!("{arg}.data")
+                    } else {
+                        arg
+                    };
+                    // recv is already .data, but we need the original var for &
+                    // Since recv = "var.data", we need the base: strip ".data"
+                    let base = recv.strip_suffix(".data").unwrap_or(recv);
+                    return Some(format!("gorget_string_append(&{base}, {rhs})"));
+                }
+                "push_char" => {
+                    let arg = args.first()
+                        .map(|a| self.gen_expr(&a.node.value))
+                        .unwrap_or_else(|| "'\\0'".to_string());
+                    let base = recv.strip_suffix(".data").unwrap_or(recv);
+                    return Some(format!("gorget_string_push_char(&{base}, {arg})"));
+                }
+                "str" => {
+                    // Explicit coercion to str: .data
+                    return Some(recv.to_string());
+                }
+                "clear" => {
+                    let base = recv.strip_suffix(".data").unwrap_or(recv);
+                    return Some(format!("({{ {base}.len = 0; if ({base}.data) {base}.data[0] = '\\0'; }})"));
+                }
+                "capacity" => {
+                    let base = recv.strip_suffix(".data").unwrap_or(recv);
+                    return Some(format!("(int64_t){base}.cap"));
+                }
+                _ => {} // Fall through to shared str methods
+            }
+        }
         match method_name {
             "len" => {
                 if needs_temp {
@@ -2724,37 +2841,37 @@ impl CodegenContext<'_> {
                 Some(format!("(strlen({recv}) == 0)"))
             }
             "trim" => {
-                Some(format!("gorget_string_trim({recv})"))
+                Some(format!("gorget_string_new(gorget_string_trim({recv}))"))
             }
             "strip" => {
                 if let Some(arg) = args.first() {
                     let arg = self.gen_expr(&arg.node.value);
-                    Some(format!("gorget_string_strip({recv}, {arg})"))
+                    Some(format!("gorget_string_new(gorget_string_strip({recv}, {arg}))"))
                 } else {
-                    Some(format!("gorget_string_trim({recv})"))
+                    Some(format!("gorget_string_new(gorget_string_trim({recv}))"))
                 }
             }
             "lstrip" => {
                 if let Some(arg) = args.first() {
                     let arg = self.gen_expr(&arg.node.value);
-                    Some(format!("gorget_string_lstrip({recv}, {arg})"))
+                    Some(format!("gorget_string_new(gorget_string_lstrip({recv}, {arg}))"))
                 } else {
-                    Some(format!("gorget_string_lstrip_ws({recv})"))
+                    Some(format!("gorget_string_new(gorget_string_lstrip_ws({recv}))"))
                 }
             }
             "rstrip" => {
                 if let Some(arg) = args.first() {
                     let arg = self.gen_expr(&arg.node.value);
-                    Some(format!("gorget_string_rstrip({recv}, {arg})"))
+                    Some(format!("gorget_string_new(gorget_string_rstrip({recv}, {arg}))"))
                 } else {
-                    Some(format!("gorget_string_rstrip_ws({recv})"))
+                    Some(format!("gorget_string_new(gorget_string_rstrip_ws({recv}))"))
                 }
             }
             "to_upper" => {
-                Some(format!("gorget_string_to_upper({recv})"))
+                Some(format!("gorget_string_new(gorget_string_to_upper({recv}))"))
             }
             "to_lower" => {
-                Some(format!("gorget_string_to_lower({recv})"))
+                Some(format!("gorget_string_new(gorget_string_to_lower({recv}))"))
             }
             "replace" => {
                 let old_arg = args.first()
@@ -2763,7 +2880,7 @@ impl CodegenContext<'_> {
                 let new_arg = args.get(1)
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "\"\"".to_string());
-                Some(format!("gorget_string_replace({recv}, {old_arg}, {new_arg})"))
+                Some(format!("gorget_string_new(gorget_string_replace({recv}, {old_arg}, {new_arg}))"))
             }
             "split" => {
                 let arg = args.first()
@@ -2785,7 +2902,7 @@ impl CodegenContext<'_> {
                 let end_arg = args.get(1)
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "0".to_string());
-                Some(format!("gorget_string_slice({recv}, {start_arg}, {end_arg})"))
+                Some(format!("gorget_string_new(gorget_string_slice({recv}, {start_arg}, {end_arg}))"))
             }
             "char_at" => {
                 let arg = args.first()
@@ -2809,25 +2926,25 @@ impl CodegenContext<'_> {
                 let arg = args.first()
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "0".to_string());
-                Some(format!("gorget_string_repeat({recv}, {arg})"))
+                Some(format!("gorget_string_new(gorget_string_repeat({recv}, {arg}))"))
             }
             "join" => {
                 let arg = args.first()
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "gorget_array_new(sizeof(const char*))".to_string());
-                Some(format!("gorget_string_join({recv}, {arg})"))
+                Some(format!("gorget_string_new(gorget_string_join({recv}, {arg}))"))
             }
             "removeprefix" => {
                 let arg = args.first()
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "\"\"".to_string());
-                Some(format!("gorget_string_removeprefix({recv}, {arg})"))
+                Some(format!("gorget_string_new(gorget_string_removeprefix({recv}, {arg}))"))
             }
             "removesuffix" => {
                 let arg = args.first()
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "\"\"".to_string());
-                Some(format!("gorget_string_removesuffix({recv}, {arg})"))
+                Some(format!("gorget_string_new(gorget_string_removesuffix({recv}, {arg}))"))
             }
             "pad_left" => {
                 let width = args.first()
@@ -2836,7 +2953,7 @@ impl CodegenContext<'_> {
                 let fill = args.get(1)
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "' '".to_string());
-                Some(format!("gorget_string_pad_left({recv}, {width}, {fill})"))
+                Some(format!("gorget_string_new(gorget_string_pad_left({recv}, {width}, {fill}))"))
             }
             "pad_right" => {
                 let width = args.first()
@@ -2845,7 +2962,7 @@ impl CodegenContext<'_> {
                 let fill = args.get(1)
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "' '".to_string());
-                Some(format!("gorget_string_pad_right({recv}, {width}, {fill})"))
+                Some(format!("gorget_string_new(gorget_string_pad_right({recv}, {width}, {fill}))"))
             }
             _ => None, // Not a known string method — fall through
         }
@@ -3795,19 +3912,19 @@ impl CodegenContext<'_> {
             Expr::StringLiteral(_) => true,
             Expr::Identifier(_) => {
                 let type_name = self.infer_receiver_type(expr);
-                if type_name == "str" {
+                if type_name == "str" || type_name == "String" {
                     return true;
                 }
                 let c_type = self.infer_receiver_c_type(expr);
-                matches!(c_type.as_deref(), Some("const char*"))
+                matches!(c_type.as_deref(), Some("const char*") | Some("GorgetString"))
             }
             Expr::MethodCall { .. } | Expr::Call { .. } => {
                 let c_type = self.infer_c_type_from_expr(&expr.node);
-                c_type == "const char*"
+                c_type == "const char*" || c_type == "GorgetString"
             }
             Expr::FieldAccess { .. } => {
                 let c_type = self.infer_c_type_from_expr(&expr.node);
-                c_type == "const char*"
+                c_type == "const char*" || c_type == "GorgetString"
             }
             Expr::Index { object, index } => {
                 // str[range] returns str
@@ -4143,7 +4260,8 @@ impl CodegenContext<'_> {
                 PrimitiveType::Float | PrimitiveType::Float64 => Some(self.types.float_id),
                 PrimitiveType::Bool => Some(self.types.bool_id),
                 PrimitiveType::Char => Some(self.types.char_id),
-                PrimitiveType::Str | PrimitiveType::StringType => Some(self.types.string_id),
+                PrimitiveType::Str => Some(self.types.string_id),
+                PrimitiveType::StringType => Some(self.types.owned_string_id),
                 PrimitiveType::Void => Some(self.types.void_id),
                 _ => None,
             },
@@ -4188,6 +4306,7 @@ impl CodegenContext<'_> {
                     PrimitiveType::Uint | PrimitiveType::Uint64 => {
                         format!("(unsigned long long){expr}")
                     }
+                    PrimitiveType::StringType => format!("{expr}.data"),
                     _ => expr.to_string(),
                 };
                 (fmt.to_string(), arg)
@@ -4284,13 +4403,26 @@ impl CodegenContext<'_> {
                 _ => None,
             };
         }
+        if receiver_type == "GorgetString" {
+            return match method {
+                "len" | "hash" | "index_of" | "count" | "capacity" => Some(self.types.int_id),
+                "contains" | "starts_with" | "ends_with" | "is_empty" => Some(self.types.bool_id),
+                "trim" | "strip" | "lstrip" | "rstrip" | "to_upper" | "to_lower" | "replace"
+                | "substring" | "repeat" | "join" | "removeprefix" | "removesuffix"
+                | "pad_left" | "pad_right" => Some(self.types.owned_string_id),
+                "str" => Some(self.types.string_id),
+                "char_at" => Some(self.types.char_id),
+                "push" | "push_char" | "clear" => Some(self.types.void_id),
+                _ => None,
+            };
+        }
         match (receiver_type, method) {
             ("const char*", "len" | "hash" | "index_of" | "count") => Some(self.types.int_id),
             ("const char*", "contains" | "starts_with" | "ends_with" | "is_empty") => {
                 Some(self.types.bool_id)
             }
             ("const char*", "trim" | "strip" | "lstrip" | "rstrip" | "to_upper" | "to_lower" | "replace" | "substring" | "repeat" | "join" | "removeprefix" | "removesuffix" | "pad_left" | "pad_right") => {
-                Some(self.types.string_id)
+                Some(self.types.owned_string_id)
             }
             ("const char*", "char_at") => Some(self.types.char_id),
             (

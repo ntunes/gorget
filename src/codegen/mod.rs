@@ -67,6 +67,8 @@ pub enum DropAction {
     FileClose,
     /// Drop_for_T__drop(&var) for user-defined Drop
     UserDrop { type_name: String },
+    /// gorget_string_free(&var) for owned String
+    StringFree,
     /// free(var.env) for heap-allocated closure environments
     ClosureEnvFree,
 }

@@ -260,6 +260,11 @@ impl<'a> TypeChecker<'a> {
             {
                 a // accept the expected (lhs) type
             }
+            // String→str coercion: String auto-coerces to str (owned → view)
+            (ResolvedType::Primitive(PrimitiveType::Str), ResolvedType::Primitive(PrimitiveType::StringType))
+            | (ResolvedType::Primitive(PrimitiveType::StringType), ResolvedType::Primitive(PrimitiveType::Str)) => {
+                a // accept the expected (lhs) type
+            }
             _ => {
                 if a_ty != b_ty {
                     self.error(

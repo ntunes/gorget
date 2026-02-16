@@ -23,7 +23,8 @@ pub fn primitive_to_c(prim: PrimitiveType) -> &'static str {
         PrimitiveType::Float32 => "float",
         PrimitiveType::Float64 => "double",
         PrimitiveType::Char => "char",
-        PrimitiveType::Str | PrimitiveType::StringType => "const char*",
+        PrimitiveType::Str => "const char*",
+        PrimitiveType::StringType => "GorgetString",
     }
 }
 
@@ -261,7 +262,8 @@ pub fn printf_format_for_primitive(prim: PrimitiveType) -> &'static str {
         PrimitiveType::Float | PrimitiveType::Float32 | PrimitiveType::Float64 => "%f",
         PrimitiveType::Bool => "%s",
         PrimitiveType::Char => "%c",
-        PrimitiveType::Str | PrimitiveType::StringType => "%s",
+        PrimitiveType::Str => "%s",
+        PrimitiveType::StringType => "%s",
         PrimitiveType::Void => "",
     }
 }
@@ -278,6 +280,7 @@ pub fn format_for_c_type(c_type: &str, expr: &str) -> (String, String) {
         "bool" => ("%s".to_string(), format!("{expr} ? \"true\" : \"false\"")),
         "char" => ("%c".to_string(), expr.to_string()),
         "const char*" => ("%s".to_string(), expr.to_string()),
+        "GorgetString" => ("%s".to_string(), format!("{expr}.data")),
         _ => ("%lld".to_string(), format!("(long long){expr}")),
     }
 }
@@ -344,7 +347,8 @@ fn primitive_to_gorget(prim: PrimitiveType) -> &'static str {
         PrimitiveType::Float | PrimitiveType::Float64 => "float",
         PrimitiveType::Float32 => "float32",
         PrimitiveType::Char => "char",
-        PrimitiveType::Str | PrimitiveType::StringType => "str",
+        PrimitiveType::Str => "str",
+        PrimitiveType::StringType => "String",
     }
 }
 
@@ -366,6 +370,7 @@ pub fn is_traceable_for_vars(c_type: &str) -> bool {
             | "float"
             | "bool"
             | "const char*"
+            | "GorgetString"
             | "char"
     )
 }
@@ -396,6 +401,7 @@ mod tests {
         assert_eq!(primitive_to_c(PrimitiveType::Float), "double");
         assert_eq!(primitive_to_c(PrimitiveType::Char), "char");
         assert_eq!(primitive_to_c(PrimitiveType::Str), "const char*");
+        assert_eq!(primitive_to_c(PrimitiveType::StringType), "GorgetString");
         assert_eq!(primitive_to_c(PrimitiveType::Void), "void");
         assert_eq!(primitive_to_c(PrimitiveType::Int8), "int8_t");
         assert_eq!(primitive_to_c(PrimitiveType::Uint64), "uint64_t");

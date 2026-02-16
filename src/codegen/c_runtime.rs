@@ -82,6 +82,38 @@ static inline const char* gorget_format(const char* fmt, ...) {
     return data;
 }
 
+static inline GorgetString gorget_string_from_concat(const char* a, const char* b) {
+    size_t la = strlen(a), lb = strlen(b);
+    size_t cap = la + lb + 1;
+    char* data = (char*)malloc(cap);
+    memcpy(data, a, la);
+    memcpy(data + la, b, lb + 1);
+    return (GorgetString){data, la + lb, cap};
+}
+
+static inline void gorget_string_append(GorgetString* s, const char* rhs) {
+    size_t rlen = strlen(rhs);
+    size_t new_len = s->len + rlen;
+    if (new_len + 1 > s->cap) {
+        size_t new_cap = (new_len + 1) * 2;
+        s->data = (char*)realloc(s->data, new_cap);
+        s->cap = new_cap;
+    }
+    memcpy(s->data + s->len, rhs, rlen + 1);
+    s->len = new_len;
+}
+
+static inline void gorget_string_push_char(GorgetString* s, char c) {
+    if (s->len + 2 > s->cap) {
+        size_t new_cap = (s->len + 2) * 2;
+        s->data = (char*)realloc(s->data, new_cap);
+        s->cap = new_cap;
+    }
+    s->data[s->len] = c;
+    s->len++;
+    s->data[s->len] = '\0';
+}
+
 // ── String concatenation ────────────────────────────────────
 static inline const char* gorget_str_concat(const char* a, const char* b) {
     size_t la = strlen(a), lb = strlen(b);

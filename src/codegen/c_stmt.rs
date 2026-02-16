@@ -78,6 +78,9 @@ impl CodegenContext<'_> {
                 let drop_fn = c_mangle::mangle_trait_method("Drop", type_name, "drop");
                 emitter.emit_line(&format!("{drop_fn}(&{});", entry.var_name));
             }
+            DropAction::StringFree => {
+                emitter.emit_line(&format!("gorget_string_free(&{});", entry.var_name));
+            }
             DropAction::ClosureEnvFree => {
                 emitter.emit_line(&format!("free({}.env);", entry.var_name));
             }
@@ -199,6 +202,22 @@ impl CodegenContext<'_> {
         emitter.emit_line(&format!(
             r#"fprintf(__gorget_trace_fp, "{{\"type\":\"return\",\"fn\":\"{fn_name}\",\"depth\":%d}}\n", __gorget_trace_depth);"#
         ));
+    }
+
+    /// Coerce a return value between GorgetString and const char* when the
+    /// function return type doesn't match the expression type.
+    fn coerce_return_value(&mut self, expr: String, ast_expr: &Expr) -> String {
+        let ret_type = self.current_function_return_c_type.clone();
+        if let Some(ret_type) = ret_type {
+            let val_type = self.infer_c_type_from_expr(ast_expr);
+            if ret_type == "const char*" && val_type == "GorgetString" {
+                return format!("{expr}.data");
+            }
+            if ret_type == "GorgetString" && val_type == "const char*" {
+                return format!("gorget_string_new({expr})");
+            }
+        }
+        expr
     }
 
     /// Return the C type to use for `__ret_tmp`. Prefers the known function return
@@ -495,6 +514,15 @@ impl CodegenContext<'_> {
                     }
                 }
             }
+            // String (owned) → gorget_string_free
+            Type::Primitive(crate::parser::ast::PrimitiveType::StringType) => {
+                self.register_droppable(var_name, DropAction::StringFree);
+                if self.in_test_body {
+                    emitter.emit_line(&format!(
+                        "__gorget_cleanup_push((__gorget_cleanup_fn)gorget_string_free, (void*)&{var_name});"
+                    ));
+                }
+            }
             _ => {}
         }
     }
@@ -556,6 +584,16 @@ impl CodegenContext<'_> {
                 };
                 let t = self.gen_expr(target);
                 let v = self.gen_expr(value);
+                // Coerce between String and str on assignment
+                let target_type = self.infer_c_type_from_expr(&target.node);
+                let val_type = self.infer_c_type_from_expr(&value.node);
+                let v = if target_type == "const char*" && val_type == "GorgetString" {
+                    format!("{v}.data")
+                } else if target_type == "GorgetString" && val_type == "const char*" {
+                    format!("gorget_string_new({v})")
+                } else {
+                    v
+                };
                 emitter.emit_line(&format!("{t} = {v};"));
                 if self.trace {
                     if let Some(ref ri) = result_info {
@@ -571,9 +609,25 @@ impl CodegenContext<'_> {
                     let vars = self.collect_expr_vars(&[&target.node, &value.node]);
                     self.emit_stmt_start(span, &vars, emitter);
                 }
-                // String +=: s = gorget_str_concat(s, rhs)
+                // String +=: in-place append for GorgetString, leaky concat for const char*
                 if *op == BinaryOp::Add {
                     let target_type = self.infer_c_type_from_expr(&target.node);
+                    if target_type == "GorgetString" {
+                        let t = self.gen_expr(target);
+                        let v = self.gen_expr(value);
+                        // Coerce rhs to const char* if it's a GorgetString
+                        let rhs_type = self.infer_c_type_from_expr(&value.node);
+                        let rhs = if rhs_type == "GorgetString" {
+                            format!("{v}.data")
+                        } else {
+                            v
+                        };
+                        emitter.emit_line(&format!("gorget_string_append(&{t}, {rhs});"));
+                        if self.trace {
+                            self.emit_stmt_end(emitter);
+                        }
+                        return;
+                    }
                     if target_type == "const char*" {
                         let t = self.gen_expr(target);
                         let v = self.gen_expr(value);
@@ -604,14 +658,17 @@ impl CodegenContext<'_> {
             }
 
             Stmt::Return(expr) => {
-                // Transfer ownership: if returning an escaping closure var,
-                // remove its ClosureEnvFree drop entry so cleanup doesn't free
-                // the env we're about to return.
+                // Transfer ownership: if returning a variable that has a drop
+                // registration, remove it so cleanup doesn't free the value
+                // we're about to return.
                 if let Some(expr) = expr {
                     if let Expr::Identifier(name) = &expr.node {
+                        let escaped = c_mangle::escape_keyword(name);
                         if self.escaping_closure_vars.contains(name) {
-                            self.remove_droppable(&c_mangle::escape_keyword(name));
+                            self.remove_droppable(&escaped);
                         }
+                        // Transfer ownership for returned String variables
+                        self.remove_droppable(&escaped);
                     }
                     // Inline closure literal in return: heap-allocate it
                     if matches!(&expr.node, Expr::Closure { .. }) {
@@ -626,6 +683,7 @@ impl CodegenContext<'_> {
                             self.emit_stmt_start(span, &vars, emitter);
                         }
                         let e = self.gen_expr(expr);
+                        let e = self.coerce_return_value(e, &expr.node);
                         self.closure_heap_alloc = false;
                         let ret_type = self.ret_tmp_type(&e);
                         emitter.emit_line(&format!("{ret_type} __ret_tmp = {e};"));
@@ -653,6 +711,7 @@ impl CodegenContext<'_> {
                         let vars = self.collect_expr_vars(&[&expr.node]);
                         self.emit_stmt_start(span, &vars, emitter);
                         let e = self.gen_expr(expr);
+                        let e = self.coerce_return_value(e, &expr.node);
                         self.closure_heap_alloc = false;
                         let ret_type = self.ret_tmp_type(&e);
                         emitter.emit_line(&format!("{ret_type} __ret_tmp = {e};"));
@@ -661,6 +720,7 @@ impl CodegenContext<'_> {
                         emitter.emit_line("return __ret_tmp;");
                     } else {
                         let e = self.gen_expr(expr);
+                        let e = self.coerce_return_value(e, &expr.node);
                         self.closure_heap_alloc = false;
                         emitter.emit_line(&format!("return {e};"));
                     }
@@ -1060,6 +1120,24 @@ impl CodegenContext<'_> {
                 let val = self.gen_expr(value);
                 self.decl_type_hint = prev_hint;
                 self.closure_heap_alloc = false;
+                // Coerce between String and str at declaration
+                let val = if c_type == "const char*" {
+                    let val_type = self.infer_c_type_from_expr(&value.node);
+                    if val_type == "GorgetString" {
+                        format!("{val}.data")
+                    } else {
+                        val
+                    }
+                } else if c_type == "GorgetString" {
+                    let val_type = self.infer_c_type_from_expr(&value.node);
+                    if val_type == "const char*" {
+                        format!("gorget_string_new({val})")
+                    } else {
+                        val
+                    }
+                } else {
+                    val
+                };
                 let decl = c_types::c_declare(&c_type, &escaped);
                 emitter.emit_line(&format!("{const_prefix}{decl} = {val};"));
 
@@ -1079,6 +1157,14 @@ impl CodegenContext<'_> {
                 // Register droppable variable for RAII cleanup
                 if is_escaping_closure {
                     self.register_droppable(&escaped, DropAction::ClosureEnvFree);
+                } else if c_type == "GorgetString" {
+                    // Auto-inferred String type needs drop registration
+                    self.register_droppable(&escaped, DropAction::StringFree);
+                    if self.in_test_body {
+                        emitter.emit_line(&format!(
+                            "__gorget_cleanup_push((__gorget_cleanup_fn)gorget_string_free, (void*)&{escaped});"
+                        ));
+                    }
                 } else {
                     self.maybe_register_droppable(&escaped, &type_.node, emitter);
                 }
@@ -1159,7 +1245,7 @@ impl CodegenContext<'_> {
             Expr::BoolLiteral(_) => "bool".to_string(),
             Expr::CharLiteral(_) => "char".to_string(),
             Expr::StringLiteral(_) => "const char*".to_string(),
-            Expr::BinaryOp { op, left, .. } => {
+            Expr::BinaryOp { op, left, right, .. } => {
                 use crate::parser::ast::BinaryOp;
                 match op {
                     BinaryOp::Eq
@@ -1171,6 +1257,17 @@ impl CodegenContext<'_> {
                     | BinaryOp::And
                     | BinaryOp::Or
                     | BinaryOp::In => "bool".to_string(),
+                    BinaryOp::Add => {
+                        let left_type = self.infer_c_type_from_expr(&left.node);
+                        if left_type == "const char*" || left_type == "GorgetString" {
+                            return "GorgetString".to_string();
+                        }
+                        let right_type = self.infer_c_type_from_expr(&right.node);
+                        if right_type == "const char*" || right_type == "GorgetString" {
+                            return "GorgetString".to_string();
+                        }
+                        left_type
+                    }
                     _ => self.infer_c_type_from_expr(&left.node),
                 }
             }

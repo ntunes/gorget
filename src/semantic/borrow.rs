@@ -27,16 +27,9 @@ type StateSnapshot = FxHashMap<DefId, VarState>;
 
 /// Returns true if a type is Copy (trivially copyable, no `!` needed).
 ///
-/// `str` (Str/StringType) is Copy because it is an immutable view type
-/// (`const char*` in C) that never owns heap memory. It only points to
-/// string literals (static data) or a future `String` type's buffer.
-/// When `String` (owned, growable, non-Copy) is added, `str + str` should
-/// return `String` instead of leaking a malloc'd buffer as it does today.
-///
-/// NOTE: Both Str and StringType map to `const char*` today — `str` and
-/// `String` are currently aliases. When the owned `String` type is added,
-/// `PrimitiveType::StringType` must be removed (String becomes a struct,
-/// not a primitive) and StringType removed from this list.
+/// `str` is Copy — an immutable view (`const char*`) that never owns memory.
+/// `String` (PrimitiveType::StringType) is non-Copy — it owns a heap buffer
+/// (GorgetString struct) and must be moved with `!`.
 fn is_copy_type(type_id: TypeId, types: &TypeTable) -> bool {
     match types.get(type_id) {
         ResolvedType::Primitive(prim) => {
@@ -58,7 +51,6 @@ fn is_copy_type(type_id: TypeId, types: &TypeTable) -> bool {
                     | Bool
                     | Char
                     | Str
-                    | StringType
             )
         }
         ResolvedType::Void | ResolvedType::Never | ResolvedType::Error => true,

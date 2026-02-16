@@ -103,10 +103,10 @@ fn gen_conv_module() -> Module {
         decl_fn("chr", &[("n", ty_int())], ty_char()),
         decl_fn("parse_int", &[("s", ty_str())], ty_int()),
         decl_fn("parse_float", &[("s", ty_str())], ty_float()),
-        decl_fn("int_to_str", &[("n", ty_int())], ty_str()),
-        decl_fn("float_to_str", &[("x", ty_float())], ty_str()),
+        decl_fn("int_to_str", &[("n", ty_int())], ty_string()),
+        decl_fn("float_to_str", &[("x", ty_float())], ty_string()),
         decl_fn("bool_to_str", &[("b", ty_bool())], ty_str()),
-        decl_fn("char_to_str", &[("c", ty_char())], ty_str()),
+        decl_fn("char_to_str", &[("c", ty_char())], ty_string()),
     ])
 }
 
@@ -561,6 +561,10 @@ fn decl_fn(name: &str, params: &[(&str, Type)], ret: Type) -> FunctionDef {
 
 fn ty_str() -> Type {
     Type::Primitive(PrimitiveType::Str)
+}
+
+fn ty_string() -> Type {
+    Type::Primitive(PrimitiveType::StringType)
 }
 
 fn ty_int() -> Type {

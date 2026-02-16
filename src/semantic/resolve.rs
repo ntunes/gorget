@@ -82,6 +82,8 @@ pub fn collect_top_level(
     for trait_name in &["Displayable", "Equatable", "Cloneable", "Hashable", "Drop", "Iterator"] {
         let _ = scopes.define(trait_name.to_string(), DefKind::Trait, Span::dummy());
     }
+    // Register String constructor as a built-in function.
+    let _ = scopes.define("String".to_string(), DefKind::Function, Span::dummy());
     // Register built-in Option[T] and Result[T,E] enum types with their variants.
     for (enum_name, variant_names) in &[
         ("Option", vec!["Some", "None"]),
@@ -164,6 +166,20 @@ fn collect_item(
                     let param_defaults: Vec<Option<Spanned<Expr>>> =
                         f.params.iter().map(|p| p.node.default.clone()).collect();
 
+                    let param_type_ids: Vec<Option<TypeId>> = f
+                        .params
+                        .iter()
+                        .map(|p| {
+                            types::ast_type_to_resolved(
+                                &p.node.type_.node,
+                                p.node.type_.span,
+                                scopes,
+                                types,
+                            )
+                            .ok()
+                        })
+                        .collect();
+
                     let generic_param_names = extract_generic_param_names(&f.generic_params);
                     let where_bounds = extract_where_bounds(&f.where_clause);
 
@@ -172,7 +188,7 @@ fn collect_item(
                         FunctionInfo {
                             def_id,
                             return_type_id: ret_type,
-                            param_type_ids: Vec::new(),
+                            param_type_ids,
                             param_ownerships,
                             param_names,
                             param_defaults,

@@ -414,6 +414,33 @@ impl Parser {
             // Identifiers and paths
             Token::Identifier(_) => self.parse_identifier_expr(),
 
+            // String constructor: String("hello") or String()
+            Token::Keyword(Keyword::StringType) if matches!(self.peek_ahead(1), Token::LParen) => {
+                self.advance();
+                self.advance(); // skip '('
+                let mut args = Vec::new();
+                while !self.check(&Token::RParen) && !self.at_end() {
+                    let arg = self.parse_call_arg()?;
+                    args.push(arg);
+                    if !self.check(&Token::RParen) {
+                        self.expect(&Token::Comma)?;
+                    }
+                }
+                self.expect(&Token::RParen)?;
+                let end = self.previous_span();
+                Ok(Spanned::new(
+                    Expr::Call {
+                        callee: Box::new(Spanned::new(
+                            Expr::Identifier("String".to_string()),
+                            start,
+                        )),
+                        generic_args: None,
+                        args,
+                    },
+                    start.merge(end),
+                ))
+            }
+
             // Named enum/type constructors: Some, Ok, Error
             Token::Keyword(Keyword::Some | Keyword::Ok | Keyword::Error) => {
                 let name_str = format!("{}", self.peek()).trim_matches('\'').to_string();
