@@ -1,0 +1,457 @@
+# std.json — Pure Gorget JSON parser
+#
+# Provides a recursive-descent JSON parser, serializer, and accessor methods.
+# No C dependencies — uses only Gorget standard library.
+
+from std.collections import Vector, Dict
+from std.conv import parse_int, parse_float, int_to_str, float_to_str, bool_to_str, char_to_str
+
+# ── JSON value type ──────────────────────────────────────────
+
+enum Json:
+    Null
+    Bool(bool)
+    Int(int)
+    Float(float)
+    Str(str)
+    Arr(Vector[Json])
+    Obj(Dict[str, Json])
+
+# ── Internal parser ──────────────────────────────────────────
+
+struct JsonParser:
+    str input
+    int pos
+    str err
+
+equip JsonParser:
+    bool failed(self) = self.err != ""
+
+    void fail(&self, str msg):
+        if self.err == "":
+            self.err = moving msg
+
+    void skip_whitespace(&self):
+        while self.pos < self.input.len():
+            char c = self.input[self.pos]
+            if c == ' ' or c == '\t' or c == '\n' or c == '\r':
+                self.pos = self.pos + 1
+            else:
+                return
+
+    Json parse_value(&self):
+        if self.failed():
+            return Null()
+        self.skip_whitespace()
+        if self.pos >= self.input.len():
+            self.fail("unexpected end of input")
+            return Null()
+        char c = self.input[self.pos]
+        if c == '"':
+            return self.parse_string_value()
+        if c == '{':
+            return self.parse_object()
+        if c == '[':
+            return self.parse_array()
+        if c == 't' or c == 'f' or c == 'n':
+            return self.parse_keyword()
+        if c == '-' or c >= '0' and c <= '9':
+            return self.parse_number()
+        self.fail("unexpected character")
+        return Null()
+
+    Json parse_string_value(&self):
+        str s = self.parse_string()
+        if self.failed():
+            return Null()
+        return Str(s)
+
+    str parse_string(&self):
+        # Skip opening quote
+        self.pos = self.pos + 1
+        str result = ""
+        while self.pos < self.input.len():
+            char c = self.input[self.pos]
+            if c == '"':
+                self.pos = self.pos + 1
+                return result
+            if c == '\\':
+                self.pos = self.pos + 1
+                if self.pos >= self.input.len():
+                    self.fail("unterminated string escape")
+                    return ""
+                char esc = self.input[self.pos]
+                self.pos = self.pos + 1
+                if esc == '"':
+                    result = result + "\""
+                elif esc == '\\':
+                    result = result + "\\"
+                elif esc == 'n':
+                    result = result + "\n"
+                elif esc == 't':
+                    result = result + "\t"
+                elif esc == 'r':
+                    result = result + "\r"
+                elif esc == '/':
+                    result = result + "/"
+                elif esc == 'u':
+                    # \uXXXX — skip hex digits (Unicode not fully decoded)
+                    int j = 0
+                    while j < 4 and self.pos < self.input.len():
+                        self.pos = self.pos + 1
+                        j = j + 1
+                else:
+                    result = result + "\\"
+                    result = result + char_to_str(esc)
+            else:
+                result = result + char_to_str(c)
+                self.pos = self.pos + 1
+        self.fail("unterminated string")
+        return ""
+
+    Json parse_number(&self):
+        int start = self.pos
+        bool is_float = false
+        # Optional minus
+        if self.pos < self.input.len() and self.input[self.pos] == '-':
+            self.pos = self.pos + 1
+        # Integer part
+        while self.pos < self.input.len() and self.input[self.pos] >= '0' and self.input[self.pos] <= '9':
+            self.pos = self.pos + 1
+        # Fractional part
+        if self.pos < self.input.len() and self.input[self.pos] == '.':
+            is_float = true
+            self.pos = self.pos + 1
+            while self.pos < self.input.len() and self.input[self.pos] >= '0' and self.input[self.pos] <= '9':
+                self.pos = self.pos + 1
+        # Exponent
+        if self.pos < self.input.len() and self.input[self.pos] == 'e' or self.pos < self.input.len() and self.input[self.pos] == 'E':
+            is_float = true
+            self.pos = self.pos + 1
+            if self.pos < self.input.len() and self.input[self.pos] == '+' or self.pos < self.input.len() and self.input[self.pos] == '-':
+                self.pos = self.pos + 1
+            while self.pos < self.input.len() and self.input[self.pos] >= '0' and self.input[self.pos] <= '9':
+                self.pos = self.pos + 1
+        str num_str = self.input[start..self.pos]
+        if is_float:
+            float f = parse_float(num_str)
+            return Float(f)
+        int n = parse_int(num_str)
+        return Int(n)
+
+    Json parse_array(&self):
+        # Skip '['
+        self.pos = self.pos + 1
+        self.skip_whitespace()
+        Vector[Json] items = Vector[Json]()
+        if self.pos < self.input.len() and self.input[self.pos] == ']':
+            self.pos = self.pos + 1
+            return Arr(items)
+        while self.pos < self.input.len():
+            Json val = self.parse_value()
+            if self.failed():
+                return Null()
+            items.push(val)
+            self.skip_whitespace()
+            if self.pos >= self.input.len():
+                self.fail("unterminated array")
+                return Null()
+            if self.input[self.pos] == ',':
+                self.pos = self.pos + 1
+            elif self.input[self.pos] == ']':
+                self.pos = self.pos + 1
+                return Arr(items)
+            else:
+                self.fail("expected ',' or ']' in array")
+                return Null()
+        self.fail("unterminated array")
+        return Null()
+
+    Json parse_object(&self):
+        # Skip '{'
+        self.pos = self.pos + 1
+        self.skip_whitespace()
+        Dict[str, Json] obj = Dict[str, Json]()
+        if self.pos < self.input.len() and self.input[self.pos] == '}':
+            self.pos = self.pos + 1
+            return Obj(obj)
+        while self.pos < self.input.len():
+            self.skip_whitespace()
+            if self.pos >= self.input.len() or self.input[self.pos] != '"':
+                self.fail("expected string key in object")
+                return Null()
+            str key = self.parse_string()
+            if self.failed():
+                return Null()
+            self.skip_whitespace()
+            if self.pos >= self.input.len() or self.input[self.pos] != ':':
+                self.fail("expected ':' after key")
+                return Null()
+            self.pos = self.pos + 1
+            Json val = self.parse_value()
+            if self.failed():
+                return Null()
+            obj.put(key, val)
+            self.skip_whitespace()
+            if self.pos >= self.input.len():
+                self.fail("unterminated object")
+                return Null()
+            if self.input[self.pos] == ',':
+                self.pos = self.pos + 1
+            elif self.input[self.pos] == '}':
+                self.pos = self.pos + 1
+                return Obj(obj)
+            else:
+                self.fail("expected ',' or '}' in object")
+                return Null()
+        self.fail("unterminated object")
+        return Null()
+
+    Json parse_keyword(&self):
+        if self.pos + 4 <= self.input.len() and self.input[self.pos..self.pos + 4] == "true":
+            self.pos = self.pos + 4
+            return Bool(true)
+        if self.pos + 5 <= self.input.len() and self.input[self.pos..self.pos + 5] == "false":
+            self.pos = self.pos + 5
+            return Bool(false)
+        if self.pos + 4 <= self.input.len() and self.input[self.pos..self.pos + 4] == "null":
+            self.pos = self.pos + 4
+            return Null()
+        self.fail("unexpected keyword")
+        return Null()
+
+# ── Public API ───────────────────────────────────────────────
+
+Result[Json, str] json_parse(str input):
+    JsonParser p = JsonParser(input, 0, "")
+    Json value = p.parse_value()
+    if p.failed():
+        return Error(p.err)
+    p.skip_whitespace()
+    if p.pos < p.input.len():
+        return Error("unexpected trailing content")
+    return Ok(value)
+
+# ── Serialization ────────────────────────────────────────────
+
+str json_escape_string(str s):
+    str result = "\""
+    int i = 0
+    while i < s.len():
+        char c = s[i]
+        if c == '"':
+            result = result + "\\\""
+        elif c == '\\':
+            result = result + "\\\\"
+        elif c == '\n':
+            result = result + "\\n"
+        elif c == '\t':
+            result = result + "\\t"
+        elif c == '\r':
+            result = result + "\\r"
+        else:
+            result = result + char_to_str(c)
+        i = i + 1
+    return result + "\""
+
+str json_stringify(Json value):
+    match value:
+        case Null():
+            return "null"
+        case Bool(b):
+            if b:
+                return "true"
+            return "false"
+        case Int(n):
+            return int_to_str(n)
+        case Float(f):
+            return float_to_str(f)
+        case Str(s):
+            return json_escape_string(s)
+        case Arr(items):
+            if items.len() == 0:
+                return "[]"
+            str json_result = "["
+            int idx = 0
+            while idx < items.len():
+                if idx > 0:
+                    json_result = json_result + ","
+                json_result = json_result + json_stringify(items.get(idx))
+                idx = idx + 1
+            return json_result + "]"
+        case Obj(obj_map):
+            if obj_map.len() == 0:
+                return "{}"
+            Vector[str] key_list = obj_map.keys()
+            str json_result = "{"
+            int idx = 0
+            while idx < key_list.len():
+                if idx > 0:
+                    json_result = json_result + ","
+                str key_str = key_list.get(idx)
+                json_result = json_result + json_escape_string(key_str) + ":" + json_stringify(obj_map[key_str])
+                idx = idx + 1
+            return json_result + "}"
+
+str json_make_indent(int depth):
+    str result = ""
+    int i = 0
+    while i < depth:
+        result = result + "  "
+        i = i + 1
+    return result
+
+str json_pretty_internal(Json value, int depth):
+    str indent = json_make_indent(depth)
+    str inner = json_make_indent(depth + 1)
+    match value:
+        case Null():
+            return "null"
+        case Bool(b):
+            if b:
+                return "true"
+            return "false"
+        case Int(n):
+            return int_to_str(n)
+        case Float(f):
+            return float_to_str(f)
+        case Str(s):
+            return json_escape_string(s)
+        case Arr(items):
+            if items.len() == 0:
+                return "[]"
+            str json_result = "[\n"
+            int idx = 0
+            while idx < items.len():
+                if idx > 0:
+                    json_result = json_result + ",\n"
+                json_result = json_result + inner + json_pretty_internal(items.get(idx), depth + 1)
+                idx = idx + 1
+            return json_result + "\n" + indent + "]"
+        case Obj(obj_map):
+            if obj_map.len() == 0:
+                return "{}"
+            Vector[str] key_list = obj_map.keys()
+            str json_result = "{\n"
+            int idx = 0
+            while idx < key_list.len():
+                if idx > 0:
+                    json_result = json_result + ",\n"
+                str key_str = key_list.get(idx)
+                json_result = json_result + inner + json_escape_string(key_str) + ": " + json_pretty_internal(obj_map[key_str], depth + 1)
+                idx = idx + 1
+            return json_result + "\n" + indent + "}"
+
+str json_pretty(Json value):
+    return json_pretty_internal(value, 0)
+
+# ── Accessor methods ─────────────────────────────────────────
+
+equip Json:
+    Json get(self, str key):
+        match self:
+            case Obj(d):
+                if d.contains(key):
+                    return d[key]
+                return Null()
+            else:
+                return Null()
+
+    Json at(self, int index):
+        match self:
+            case Arr(arr):
+                if index >= 0 and index < arr.len():
+                    return arr.get(index)
+                return Null()
+            else:
+                return Null()
+
+    str as_str(self):
+        match self:
+            case Str(s):
+                return s
+            else:
+                return ""
+
+    int as_int(self):
+        match self:
+            case Int(n):
+                return n
+            else:
+                return 0
+
+    float as_float(self):
+        match self:
+            case Float(f):
+                return f
+            case Int(n):
+                return n as float
+            else:
+                return 0.0
+
+    bool as_bool(self):
+        match self:
+            case Bool(b):
+                return b
+            else:
+                return false
+
+    bool is_null(self):
+        match self:
+            case Null():
+                return true
+            else:
+                return false
+
+    bool is_object(self):
+        match self:
+            case Obj(d):
+                return true
+            else:
+                return false
+
+    bool is_array(self):
+        match self:
+            case Arr(a):
+                return true
+            else:
+                return false
+
+    bool is_string(self):
+        match self:
+            case Str(s):
+                return true
+            else:
+                return false
+
+    bool is_number(self):
+        match self:
+            case Int(n):
+                return true
+            case Float(f):
+                return true
+            else:
+                return false
+
+    bool is_bool(self):
+        match self:
+            case Bool(b):
+                return true
+            else:
+                return false
+
+    int len(self):
+        match self:
+            case Arr(arr):
+                return arr.len()
+            case Obj(d):
+                return d.len()
+            else:
+                return 0
+
+    Vector[str] keys(self):
+        match self:
+            case Obj(d):
+                return d.keys()
+            else:
+                return Vector[str]()

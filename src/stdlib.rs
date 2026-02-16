@@ -42,7 +42,7 @@ pub fn generate_stdlib_module(segments: &[String]) -> Option<Module> {
             "fmt" => Some(gen_fmt_module()),
             "process" => Some(gen_process_module()),
             "sdl" => Some(gen_sdl_module()),
-            "json" => Some(gen_json_module()),
+            "json" => None, // file-based module — loaded via stdlib_module_source()
             "bytes" => Some(gen_bytes_module()),
             "crypto" => Some(gen_crypto_module()),
             "gfx" => None, // file-based module — loaded via stdlib_module_source()
@@ -511,6 +511,7 @@ pub fn stdlib_module_source(segments: &[String]) -> Option<&'static str> {
         Some("gfx") => Some(include_str!("../lib/std/gfx.gg")),
         Some("ecs") => Some(include_str!("../lib/std/ecs.gg")),
         Some("ssh") => Some(include_str!("../lib/std/ssh.gg")),
+        Some("json") => Some(include_str!("../lib/std/json.gg")),
         _ => None,
     }
 }
@@ -595,13 +596,6 @@ fn ty_vector_uint8() -> Type {
     Type::Named {
         name: Spanned::dummy("Vector".to_string()),
         generic_args: vec![Spanned::dummy(ty_uint8())],
-    }
-}
-
-fn ty_json_value() -> Type {
-    Type::Named {
-        name: Spanned::dummy("JsonValue".to_string()),
-        generic_args: vec![],
     }
 }
 
@@ -763,36 +757,6 @@ fn gen_bytes_module() -> Module {
         decl_fn("bytes_slice", &[("b", ty_vector_uint8()), ("start", ty_int()), ("end", ty_int())], ty_vector_uint8()),
         decl_fn("random_bytes", &[("n", ty_int())], ty_vector_uint8()),
     ])
-}
-
-// ─── std.json ───────────────────────────────────────────────
-
-fn gen_json_module() -> Module {
-    let mut items: Vec<Spanned<Item>> = Vec::new();
-
-    // Opaque struct: JsonValue
-    items.push(opaque_struct("JsonValue"));
-
-    // Free functions
-    let fns = vec![
-        decl_fn("json_parse", &[("s", ty_str())], ty_result(ty_json_value(), ty_str())),
-        decl_fn("json_stringify", &[("val", ty_json_value())], ty_result(ty_str(), ty_str())),
-        decl_fn("json_object", &[], ty_json_value()),
-        decl_fn("json_array", &[], ty_json_value()),
-        decl_fn("json_string", &[("s", ty_str())], ty_json_value()),
-        decl_fn("json_number", &[("n", ty_int())], ty_json_value()),
-        decl_fn("json_float", &[("x", ty_float())], ty_json_value()),
-        decl_fn("json_bool", &[("b", ty_bool())], ty_json_value()),
-        decl_fn("json_null", &[], ty_json_value()),
-    ];
-    for f in fns {
-        items.push(Spanned::dummy(Item::Function(f)));
-    }
-
-    Module {
-        items,
-        span: Span::dummy(),
-    }
 }
 
 // ─── std.http.client ────────────────────────────────────────
@@ -1233,27 +1197,50 @@ mod tests {
     }
 
     #[test]
-    fn generate_json() {
-        let m = generate_stdlib_module(&["std".into(), "json".into()]).unwrap();
+    fn generate_json_returns_none() {
+        // std.json is file-based, not synthetic — generate returns None
+        assert!(generate_stdlib_module(&["std".into(), "json".into()]).is_none());
+    }
+
+    #[test]
+    fn json_module_source_exists() {
+        let source = stdlib_module_source(&["std".into(), "json".into()]);
+        assert!(source.is_some());
+        let src = source.unwrap();
+        assert!(src.contains("enum Json"));
+        assert!(src.contains("json_parse"));
+        assert!(src.contains("json_stringify"));
+        assert!(src.contains("json_pretty"));
+        assert!(src.contains("equip Json"));
+    }
+
+    #[test]
+    fn json_source_parses() {
+        let source = stdlib_module_source(&["std".into(), "json".into()]).unwrap();
+        let mut parser = crate::parser::Parser::new(source);
+        let module = parser.parse_module();
+        assert!(parser.errors.is_empty(), "json.gg parse errors: {:?}", parser.errors);
+
+        let mut enum_names = vec![];
         let mut struct_names = vec![];
         let mut fn_names = vec![];
-        for item in &m.items {
+        let mut equip_count = 0;
+        for item in &module.items {
             match &item.node {
+                Item::Enum(e) => enum_names.push(e.name.node.clone()),
                 Item::Struct(s) => struct_names.push(s.name.node.clone()),
                 Item::Function(f) => fn_names.push(f.name.node.clone()),
+                Item::Equip(_) => equip_count += 1,
                 _ => {}
             }
         }
-        assert!(struct_names.contains(&"JsonValue".to_string()));
+
+        assert!(enum_names.contains(&"Json".to_string()));
+        assert!(struct_names.contains(&"JsonParser".to_string()));
         assert!(fn_names.contains(&"json_parse".to_string()));
         assert!(fn_names.contains(&"json_stringify".to_string()));
-        assert!(fn_names.contains(&"json_object".to_string()));
-        assert!(fn_names.contains(&"json_array".to_string()));
-        assert!(fn_names.contains(&"json_string".to_string()));
-        assert!(fn_names.contains(&"json_number".to_string()));
-        assert!(fn_names.contains(&"json_float".to_string()));
-        assert!(fn_names.contains(&"json_bool".to_string()));
-        assert!(fn_names.contains(&"json_null".to_string()));
+        assert!(fn_names.contains(&"json_pretty".to_string()));
+        assert_eq!(equip_count, 2); // equip JsonParser + equip Json
     }
 
     #[test]

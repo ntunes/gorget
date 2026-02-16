@@ -338,20 +338,7 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
         emitter.emit(c_runtime::PROCESS_RUNTIME);
     }
 
-    // 1d. JSON runtime (when std.json is imported)
-    let has_json = module.items.iter().any(|i| {
-        matches!(&i.node, Item::Struct(s) if s.name.node == "JsonValue" && s.span == crate::span::Span::dummy())
-    });
-    if has_json {
-        // Emit vendored cJSON source inline (strip #include "cJSON.h" since we inline the header)
-        emitter.emit("// ── Vendored cJSON (MIT) ──\n");
-        emitter.emit(c_runtime::CJSON_H);
-        let cjson_c = c_runtime::CJSON_C.replace("#include \"cJSON.h\"", "/* cJSON.h already inlined above */");
-        emitter.emit(&cjson_c);
-        emitter.emit(c_runtime::JSON_RUNTIME);
-    }
-
-    // 1e. HTTP runtime (when std.http.client is imported) — must come after JSON
+    // 1d. HTTP runtime (when std.http.client is imported)
     let has_http = module.items.iter().any(|i| {
         matches!(&i.node, Item::Struct(s) if s.name.node == "Response" && s.span == crate::span::Span::dummy())
     });
@@ -408,12 +395,19 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
     let tuple_count_before_codegen = ctx.tuple_typedefs.len();
 
     // 2c. Emit monomorphized generic type definitions (structs/enums only)
-    //     These must appear before regular type definitions so that structs
-    //     like World can use SparseSet__Health as a field type.
-    ctx.emit_generic_type_definitions(&mut emitter);
+    //     Split into two phases:
+    //     Phase 1: Collection types (Vector, Dict, etc.) that use pointers internally
+    //              and only need forward declarations of their type arguments.
+    //     Then regular type definitions (which may use these collections as fields).
+    //     Phase 2: Wrapper types (Result, etc.) that contain type args by value
+    //              and need their type arguments fully defined.
+    ctx.emit_generic_type_definitions_phase1(&mut emitter);
 
     // 3. Type definitions (structs, enums, type aliases, newtypes)
     ctx.emit_type_definitions(module, &mut emitter);
+
+    // 3b. Remaining generic type definitions (Result, etc. that need user types)
+    ctx.emit_generic_type_definitions_phase2(&mut emitter);
 
     // 3b. Emit monomorphized generic method definitions
     ctx.emit_generic_method_definitions(&mut emitter);

@@ -16,11 +16,23 @@
 
 - **ByMutRef captures in escaping closures**: `&count` captures still point to the caller's stack even when the env is heap-allocated (step 1). Needs boxing the captured variable itself — separate fix from env heap-allocation. [added: 2026-02-15]
 
+- **Cross-module `lookup_by_name_anywhere` name collision**: When file-based stdlib modules (e.g. `json.gg`) are merged into the main module, variables in the imported code can shadow identically-named variables in user code via `lookup_by_name_anywhere`. This causes incorrect method dispatch (e.g. `arr` in user code maps to `arr` pattern variable in json.gg's match case, inferring Vector type). Current workaround: avoid common variable names (`arr`, `result`, `s`, etc.) in both stdlib modules and user code. Proper fix: scope-aware lookup in codegen. [added: 2026-02-16]
+
+- **String interpolation only works in print() context**: `"{n}"` outside of `print()` generates literal `"%s"` instead of formatting the value. Stdlib modules must use explicit `int_to_str()`, `float_to_str()`, `char_to_str()` etc. [added: 2026-02-16]
+
 - **For-loop range bounds validation**: `for n in 0..256` with a `uint8` loop variable silently overflows. Codegen hardcodes `int64_t` for range loop variables (`c_stmt.rs:1210`) — should use the declared type. [added: 2026-02-14]
 
 - **Basic orphan rule**: equip block must be in the module that defines the trait or the type. Prevents incoherent trait implementations across modules. [added: 2026-02-10]
 
 - **SSH library enhancements**: Public key authentication (IdentityFile), host key verification against known_hosts, ProxyJump/ProxyCommand support from ssh_config. [added: 2026-02-15]
+
+- **Native data format parsers (pure Gorget)**: Replace vendored C libraries with pure `.gg` implementations. All use recursive enum value trees, recursive descent parsers, and `equip`-based method APIs. Implement in order: [added: 2026-02-15]
+
+  1. **std.toml** — TOML v1.0 parser. Value enum: `enum TomlValue: Str(str), Int(int), Float(float), Bool(bool), DateTime(str), Array(Vector[TomlValue]), Table(Dict[str, TomlValue])`. Parser handles: bare/quoted keys, dotted keys (`a.b.c`), basic/literal strings (single and multi-line), integers (dec/hex/oct/bin with `_` separators), floats (with `inf`/`nan`), booleans, offset date-times (stored as `str` for now), arrays, inline tables, `[table]` headers, `[[array-of-tables]]`. Free functions: `toml_parse(str) -> Result[TomlValue, str]`, `toml_stringify(TomlValue) -> str`. File: `lib/std/toml.gg`.
+
+  3. **std.yaml** — YAML 1.2 (JSON schema) parser. Value enum: `enum YamlValue: Null, Bool(bool), Int(int), Float(float), Str(str), Seq(Vector[YamlValue]), Map(Dict[str, YamlValue])`. MVP scope: block mappings, block sequences, flow mappings `{}`, flow sequences `[]`, quoted and plain scalars, `#` comments, `---` document markers. Skip: anchors/aliases, tags, multi-document streams, complex keys. Free functions: `yaml_parse(str) -> Result[YamlValue, str]`, `yaml_stringify(YamlValue) -> str`. File: `lib/std/yaml.gg`. YAML's indentation sensitivity makes this the hardest parser.
+
+  4. **std.xml** — Minimal XML parser. Value enum: `enum XmlNode: Element(str, Dict[str, str], Vector[XmlNode]), Text(str)`. Scope: elements, attributes (quoted values), text content, basic entity refs (`&amp;` `&lt;` `&gt;` `&quot;` `&apos;`), self-closing tags, `<!-- comments -->` (skipped). No namespaces, DTD, CDATA, or processing instructions. Free functions: `xml_parse(str) -> Result[XmlNode, str]`, `xml_stringify(XmlNode) -> str`. Methods: `.tag()`, `.attr(key)`, `.children()`, `.text()`, `.find(tag)`, `.find_all(tag)`. File: `lib/std/xml.gg`.
 
 - **Fixture system for tests**: suite setup/teardown (done) → `with` clause (done) → fixture injection. Named, composable, scoped resources injected into test signatures. Design questions: yield semantics (Drop-based vs explicit teardown), scope model (test/suite), composability (fixture graphs). [added: 2026-02-14]
 

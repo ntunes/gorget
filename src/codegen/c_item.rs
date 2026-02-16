@@ -1302,18 +1302,20 @@ impl CodegenContext<'_> {
         mangled
     }
 
-    /// Emit struct/enum definitions for generic instantiations.
+    /// Emit generic Struct and Map type definitions (phase 1).
+    /// These use pointer-based storage for type args, so they only need
+    /// forward declarations of user-defined types.
     /// Must be called before regular type definitions so that structs like World
     /// can use monomorphized generic types (e.g., SparseSet__Health) as fields.
-    pub fn emit_generic_type_definitions(&mut self, emitter: &mut CEmitter) {
+    pub fn emit_generic_type_definitions_phase1(&mut self, emitter: &mut CEmitter) {
         let has_types = self.generic_instances.iter().any(|i| matches!(
             i.kind,
-            super::GenericInstanceKind::Struct | super::GenericInstanceKind::Enum | super::GenericInstanceKind::Map { .. }
+            super::GenericInstanceKind::Struct | super::GenericInstanceKind::Map { .. }
         ));
         if !has_types {
             return;
         }
-        emitter.emit_line("// ── Generic Instantiations ──");
+        emitter.emit_line("// ── Generic Instantiations (Phase 1) ──");
         for i in 0..self.generic_instances.len() {
             let inst = self.generic_instances[i].clone();
             match inst.kind {
@@ -1337,16 +1339,35 @@ impl CodegenContext<'_> {
                         }
                     }
                 }
-                super::GenericInstanceKind::Enum => {
-                    let template = self.generic_enum_templates.get(&inst.base_name).cloned();
-                    if let Some(template) = template {
-                        self.emit_monomorphized_enum(&template, &inst.c_type_args, &inst.mangled_name, emitter);
-                    }
-                }
                 super::GenericInstanceKind::Map { ordered } => {
                     self.emit_map_struct_def(&inst.c_type_args, &inst.mangled_name, ordered, emitter);
                 }
                 _ => {}
+            }
+        }
+        emitter.blank_line();
+    }
+
+    /// Emit generic Enum type definitions (phase 2).
+    /// Generic enums like Result[Json, str] contain type args by value in
+    /// variant data, so they need user-defined types to be fully defined first.
+    /// Must be called after regular type definitions.
+    pub fn emit_generic_type_definitions_phase2(&mut self, emitter: &mut CEmitter) {
+        let has_enums = self.generic_instances.iter().any(|i| matches!(
+            i.kind,
+            super::GenericInstanceKind::Enum
+        ));
+        if !has_enums {
+            return;
+        }
+        emitter.emit_line("// ── Generic Instantiations (Phase 2) ──");
+        for i in 0..self.generic_instances.len() {
+            let inst = self.generic_instances[i].clone();
+            if let super::GenericInstanceKind::Enum = inst.kind {
+                let template = self.generic_enum_templates.get(&inst.base_name).cloned();
+                if let Some(template) = template {
+                    self.emit_monomorphized_enum(&template, &inst.c_type_args, &inst.mangled_name, emitter);
+                }
             }
         }
         emitter.blank_line();

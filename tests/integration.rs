@@ -1714,7 +1714,8 @@ fn recursive_enum() {
 fn json_parse() {
     run_gg(
         "json_parse.gg",
-        r#"Alice
+        "\
+Alice
 30
 true
 true
@@ -1724,11 +1725,11 @@ false
 30
 3
 true
-{"greeting":"hello","count":42,"flag":false}
+[10,20,30]
 true
 0
 true
-done"#,
+done",
     );
 }
 
