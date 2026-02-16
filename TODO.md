@@ -2,8 +2,6 @@
 
 ## Critical
 
-- **SSH packet parsing has no bounds checks**: Offsets computed from untrusted wire data (`bytes_read_u32_be`) used directly in `bytes_slice` without verifying they fit within the buffer. A malformed packet with inflated length fields causes buffer overread. Every field-length read needs `if off + 4 + len > reply.len()` guard. (`ssh.gg:238-242, 335-341`) [added: 2026-02-16]
-
 - **HTTP Response type is opaque with no accessors**: `Response` struct declared as opaque (zero fields) with no equip block or helper functions, but `c_runtime.rs` already has `gorget_http_response_status()`, `gorget_http_response_body()`, `gorget_http_response_header()`. Users cannot use an HTTP response after receiving it. (`stdlib.rs:776`) [added: 2026-02-16]
 
 ## High

@@ -19,7 +19,7 @@ from std.crypto import crypto_sha256, crypto_hmac
 from std.crypto import crypto_aes_ctr_new, CipherContext
 from std.crypto import crypto_bn_from_bytes, crypto_bn_to_bytes, crypto_bn_mod_exp, BigNum
 from std.fs import read_file, file_exists
-from std.os import getenv
+from std.os import getenv, exit
 from std.path import path_join
 from std.conv import parse_int
 
@@ -146,6 +146,13 @@ const int SSH_MSG_CHANNEL_REQUEST = 98
 const int SSH_MSG_CHANNEL_SUCCESS = 99
 const int SSH_MSG_CHANNEL_FAILURE = 100
 
+# ── Bounds-check helper ─────────────────────────────────────
+
+void ssh_check_len(Vector[uint8] buf, int required, str context):
+    if buf.len() < required:
+        print("ssh: protocol error: buffer too short in " + context)
+        exit(1)
+
 # ── Helpers ──────────────────────────────────────────────────
 
 # Build a name-list payload (comma-separated string as SSH binary)
@@ -175,13 +182,17 @@ Vector[uint8] make_mpint(BigNum bn):
 
 # Parse an mpint from a payload at an offset
 BigNum parse_mpint(Vector[uint8] payload, int offset):
+    ssh_check_len(payload, offset + 4, "parse_mpint length")
     int len = bytes_read_u32_be(payload, offset)
+    ssh_check_len(payload, offset + 4 + len, "parse_mpint data")
     Vector[uint8] data = bytes_slice(payload, offset + 4, offset + 4 + len)
     return crypto_bn_from_bytes(data)
 
 # Parse a string from payload at offset, return as Vector[uint8]
 Vector[uint8] parse_string(Vector[uint8] payload, int offset):
+    ssh_check_len(payload, offset + 4, "parse_string length")
     int len = bytes_read_u32_be(payload, offset)
+    ssh_check_len(payload, offset + 4 + len, "parse_string data")
     return bytes_slice(payload, offset + 4, offset + 4 + len)
 
 # Get the DH Group 14 prime (RFC 3526, 2048-bit MODP)
@@ -257,9 +268,14 @@ Vector[uint8] read_packet(Session &session):
         Vector[uint8] mac_expected = crypto_hmac("sha256", session.dec_mac_key, mac_data)
 
         # Extract payload (skip packet_length(4) + padding_length(1), trim padding)
+        ssh_check_len(unenc_packet, 5, "read_packet encrypted header")
         uint8 pad_len_val = unenc_packet.get(4)
         int pad_len = pad_len_val
         int payload_len = packet_len - 1 - pad_len
+        if payload_len < 0:
+            print("ssh: protocol error: negative payload length in read_packet (encrypted)")
+            exit(1)
+        ssh_check_len(unenc_packet, 5 + payload_len, "read_packet encrypted payload")
         Vector[uint8] payload = bytes_slice(unenc_packet, 5, 5 + payload_len)
         session.recv_seq = session.recv_seq + 1
         return payload
@@ -268,9 +284,14 @@ Vector[uint8] read_packet(Session &session):
         Vector[uint8] len_buf = session.sock.read_exact(4)
         int packet_len = bytes_read_u32_be(len_buf, 0)
         Vector[uint8] packet_data = session.sock.read_exact(packet_len)
+        ssh_check_len(packet_data, 1, "read_packet unencrypted header")
         uint8 pad_len_val = packet_data.get(0)
         int pad_len = pad_len_val
         int payload_len = packet_len - 1 - pad_len
+        if payload_len < 0:
+            print("ssh: protocol error: negative payload length in read_packet (unencrypted)")
+            exit(1)
+        ssh_check_len(packet_data, 1 + payload_len, "read_packet unencrypted payload")
         Vector[uint8] payload = bytes_slice(packet_data, 1, 1 + payload_len)
         session.recv_seq = session.recv_seq + 1
         return payload
@@ -332,7 +353,9 @@ void kex_dh_group14(Session &session, str client_version, str server_version, Ve
 
     # Parse: K_S (host key), f (server public), signature
     int off = 1
+    ssh_check_len(reply, off + 4, "kex_dh_group14 ks_len")
     int ks_len = bytes_read_u32_be(reply, off)
+    ssh_check_len(reply, off + 4 + ks_len, "kex_dh_group14 K_S data")
     Vector[uint8] k_s = bytes_slice(reply, off, off + 4 + ks_len)
     off = off + 4 + ks_len
 
@@ -340,7 +363,9 @@ void kex_dh_group14(Session &session, str client_version, str server_version, Ve
     int f_len = bytes_read_u32_be(reply, off)
     off = off + 4 + f_len
 
+    ssh_check_len(reply, off + 4, "kex_dh_group14 sig_len")
     int sig_len = bytes_read_u32_be(reply, off)
+    ssh_check_len(reply, off + 4 + sig_len, "kex_dh_group14 sig data")
     Vector[uint8] sig_blob = bytes_slice(reply, off + 4, off + 4 + sig_len)
     off = off + 4 + sig_len
 
@@ -427,6 +452,7 @@ void auth_password(Session &session, str user, str password):
 
     # Read auth response
     Vector[uint8] auth_reply = read_packet(&session)
+    ssh_check_len(auth_reply, 1, "auth_password reply")
     uint8 auth_type = auth_reply.get(0)
     if auth_type == SSH_MSG_USERAUTH_FAILURE:
         print("SSH authentication failed")
@@ -444,6 +470,7 @@ CommandResult channel_exec(Session &session, str cmd):
 
     # Read channel open confirmation
     Vector[uint8] confirm = read_packet(&session)
+    ssh_check_len(confirm, 5, "channel_exec confirm")
     int remote_channel = bytes_read_u32_be(confirm, 1)
 
     # Send exec request
@@ -464,19 +491,25 @@ CommandResult channel_exec(Session &session, str cmd):
         if msg.len() == 0:
             done = true
         else:
+            ssh_check_len(msg, 1, "channel_exec msg type")
             uint8 msg_type = msg.get(0)
             if msg_type == SSH_MSG_CHANNEL_DATA:
                 # channel_data: skip recipient(4) + string_length(4)
+                ssh_check_len(msg, 9, "channel_exec data header")
                 int data_len = bytes_read_u32_be(msg, 5)
+                ssh_check_len(msg, 9 + data_len, "channel_exec data payload")
                 Vector[uint8] chunk = bytes_slice(msg, 9, 9 + data_len)
                 stdout_data = bytes_concat(stdout_data, chunk)
             else:
                 if msg_type == SSH_MSG_CHANNEL_REQUEST:
                     # Check for exit-status
+                    ssh_check_len(msg, 9, "channel_exec request header")
                     int req_name_len = bytes_read_u32_be(msg, 5)
+                    ssh_check_len(msg, 9 + req_name_len, "channel_exec request name")
                     Vector[uint8] req_name = bytes_slice(msg, 9, 9 + req_name_len)
                     str req_str = bytes_to_str(req_name)
                     if req_str == "exit-status":
+                        ssh_check_len(msg, 9 + req_name_len + 1 + 4, "channel_exec exit-status")
                         exit_code = bytes_read_u32_be(msg, 9 + req_name_len + 1)
                 else:
                     if msg_type == SSH_MSG_CHANNEL_EOF:
@@ -504,6 +537,7 @@ int channel_open_session(Session &session):
     send_packet(&session, open_msg)
 
     Vector[uint8] confirm = read_packet(&session)
+    ssh_check_len(confirm, 5, "channel_open_session confirm")
     int remote_channel = bytes_read_u32_be(confirm, 1)
     return remote_channel
 
@@ -533,9 +567,12 @@ str channel_read_until(Session &session, str delimiter):
         if msg.len() == 0:
             done = true
         else:
+            ssh_check_len(msg, 1, "channel_read_until msg type")
             uint8 msg_type = msg.get(0)
             if msg_type == SSH_MSG_CHANNEL_DATA:
+                ssh_check_len(msg, 9, "channel_read_until data header")
                 int data_len = bytes_read_u32_be(msg, 5)
+                ssh_check_len(msg, 9 + data_len, "channel_read_until data payload")
                 Vector[uint8] chunk = bytes_slice(msg, 9, 9 + data_len)
                 buffer = buffer + bytes_to_str(chunk)
                 # Send window adjust to keep receiving data
@@ -571,6 +608,7 @@ equip Session:
         bool waiting = true
         while waiting:
             Vector[uint8] reply = read_packet(&self)
+            ssh_check_len(reply, 1, "open_subsystem reply")
             uint8 reply_type = reply.get(0)
             if reply_type == SSH_MSG_CHANNEL_SUCCESS:
                 self.channel_open = true
