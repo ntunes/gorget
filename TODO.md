@@ -42,6 +42,18 @@
 
 - **Basic orphan rule**: equip block must be in the module that defines the trait or the type. Prevents incoherent trait implementations across modules. [added: 2026-02-10]
 
+- **Operator overloading (via traits)**: Allow user-defined types to implement operators (`+`, `-`, `==`, `<`, `[]`, etc.) through trait equip blocks. [from roadmap, added: 2026-02-16]
+
+- **Struct destructuring**: Tuple destructuring works but struct destructuring does not. E.g., `auto Point { x, y } = point` or `case Point { x, y }:` in match. [from roadmap, added: 2026-02-16]
+
+- **Lifetime inference**: No lifetime system exists yet. Needed for references that outlive their scope, return references from functions, and store references in structs. [from roadmap, added: 2026-02-16]
+
+- **Const generics**: Partially parsed but not validated or monomorphized. E.g., `struct Array[T, N: int]`. [from roadmap, added: 2026-02-16]
+
+- **Smart pointers (Rc[T], Arc[T])**: `Box[Trait]` exists for trait objects but general reference-counted (`Rc[T]`) and atomic reference-counted (`Arc[T]`) pointers are missing. Also `Cell`, `RefCell`, `Mutex`. [from roadmap, added: 2026-02-16]
+
+- **Pattern-bound variable type inference in print**: Bindings from `case Error(e):` use `__typeof__()` for declaration but their TypeId isn't in the resolution map. `print("{e}")` defaults to `%lld` format. Workaround: use `print(e)` for non-int pattern-bound vars. [from codegen-notes, added: 2026-02-16]
+
 - **SSH library enhancements**: Public key authentication (IdentityFile), host key verification against known_hosts, ProxyJump/ProxyCommand support from ssh_config. [added: 2026-02-15]
 
 - **Native data format parsers (pure Gorget)**: Replace vendored C libraries with pure `.gg` implementations. All use recursive enum value trees, recursive descent parsers, and `equip`-based method APIs. Implement in order: [added: 2026-02-15]
@@ -71,6 +83,28 @@
 - **Inconsistent string type checking**: `is_string_expr()` exists but isn't used everywhere. Some places check `resolve_expr_type_id`, others check `Expr::StringLiteral` (`c_expr.rs:136-137`, `c_expr_generic.rs:454-475`). Unify. [added: 2026-02-16]
 
 - **`gg info` command**: show fields, methods, traits, memory layout for a type. [added: 2026-02-10]
+
+- **Byte strings (`b"..."`)**: Not yet parsed or supported. Needed for binary data handling. [from roadmap, added: 2026-02-16]
+
+- **Associated type validation**: Associated types are parsed but not validated or resolved in semantic analysis. [from roadmap, added: 2026-02-16]
+
+- **Const evaluation**: No compile-time expression evaluation. Needed for const declarations, array sizes, and const generics. [from roadmap, added: 2026-02-16]
+
+- **Conditional compilation (`@cfg`)**: Platform/feature-gated code blocks. [from roadmap, added: 2026-02-16]
+
+- **`gg fmt` (code formatter)**: Auto-formatter for `.gg` source files. [from roadmap, added: 2026-02-16]
+
+- **LSP server**: Language Server Protocol for IDE integration (completions, diagnostics, go-to-definition). [from roadmap, added: 2026-02-16]
+
+- **`gg doc` (documentation generator)**: Generate HTML docs from doc comments. [from roadmap, added: 2026-02-16]
+
+- **`--watch` mode**: `gg run --watch` and `gg test --watch` for recompile-and-rerun on file changes. [from roadmap, added: 2026-02-16]
+
+- **REPL**: Interactive read-eval-print loop for Gorget. [from roadmap, added: 2026-02-16]
+
+- **Incremental compilation**: Only recompile changed modules. [from roadmap, added: 2026-02-16]
+
+- **Async/await, concurrency, threads**: Not started. Requires runtime design (green threads vs OS threads, event loop). [from roadmap, added: 2026-02-16]
 
 - **Serial port library (`std.io.serial`)**: `Port` struct, `.write()`, `.read_until()`, timeout support. C backend via termios/POSIX. [added: 2026-02-14]
 
