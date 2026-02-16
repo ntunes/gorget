@@ -325,10 +325,10 @@ void kex_dh_group14(Session &session, str client_version, str server_version, Ve
     # Send KEXDH_INIT with e
     Vector[uint8] dh_init = bytes_from_hex("1e")
     dh_init = bytes_concat(dh_init, make_mpint(e))
-    send_packet(session, dh_init)
+    send_packet(&session, dh_init)
 
     # Read KEXDH_REPLY
-    Vector[uint8] reply = read_packet(session)
+    Vector[uint8] reply = read_packet(&session)
 
     # Parse: K_S (host key), f (server public), signature
     int off = 1
@@ -374,10 +374,10 @@ void kex_dh_group14(Session &session, str client_version, str server_version, Ve
 
     # Send NEWKEYS
     Vector[uint8] newkeys = bytes_from_hex("15")
-    send_packet(session, newkeys)
+    send_packet(&session, newkeys)
 
     # Read NEWKEYS from server
-    Vector[uint8] server_newkeys = read_packet(session)
+    Vector[uint8] server_newkeys = read_packet(&session)
 
     # Derive keys (RFC 4253 section 7.2)
     # Use exchange_hash as both H and session_id (they're the same for the first exchange)
@@ -411,10 +411,10 @@ void auth_password(Session &session, str user, str password):
     # Service request: ssh-userauth
     Vector[uint8] svc = bytes_from_hex("05")
     svc = bytes_concat(svc, make_name_list("ssh-userauth"))
-    send_packet(session, svc)
+    send_packet(&session, svc)
 
     # Read service accept
-    Vector[uint8] svc_reply = read_packet(session)
+    Vector[uint8] svc_reply = read_packet(&session)
 
     # Password auth request
     Vector[uint8] auth_msg = bytes_from_hex("32")
@@ -423,10 +423,10 @@ void auth_password(Session &session, str user, str password):
     auth_msg = bytes_concat(auth_msg, make_name_list("password"))
     auth_msg = bytes_concat(auth_msg, bytes_from_hex("00"))
     auth_msg = bytes_concat(auth_msg, make_name_list(password))
-    send_packet(session, auth_msg)
+    send_packet(&session, auth_msg)
 
     # Read auth response
-    Vector[uint8] auth_reply = read_packet(session)
+    Vector[uint8] auth_reply = read_packet(&session)
     uint8 auth_type = auth_reply.get(0)
     if auth_type == SSH_MSG_USERAUTH_FAILURE:
         print("SSH authentication failed")
@@ -440,10 +440,10 @@ CommandResult channel_exec(Session &session, str cmd):
     open_msg = bytes_concat(open_msg, make_u32(0))
     open_msg = bytes_concat(open_msg, make_u32(2097152))
     open_msg = bytes_concat(open_msg, make_u32(32768))
-    send_packet(session, open_msg)
+    send_packet(&session, open_msg)
 
     # Read channel open confirmation
-    Vector[uint8] confirm = read_packet(session)
+    Vector[uint8] confirm = read_packet(&session)
     int remote_channel = bytes_read_u32_be(confirm, 1)
 
     # Send exec request
@@ -452,7 +452,7 @@ CommandResult channel_exec(Session &session, str cmd):
     exec_msg = bytes_concat(exec_msg, make_name_list("exec"))
     exec_msg = bytes_concat(exec_msg, bytes_from_hex("01"))
     exec_msg = bytes_concat(exec_msg, make_name_list(cmd))
-    send_packet(session, exec_msg)
+    send_packet(&session, exec_msg)
 
     # Read channel data until EOF/close
     Vector[uint8] stdout_data = bytes_from_hex("")
@@ -460,7 +460,7 @@ CommandResult channel_exec(Session &session, str cmd):
     bool done = false
 
     while not done:
-        Vector[uint8] msg = read_packet(session)
+        Vector[uint8] msg = read_packet(&session)
         if msg.len() == 0:
             done = true
         else:
@@ -486,7 +486,7 @@ CommandResult channel_exec(Session &session, str cmd):
                             # Send channel close back
                             Vector[uint8] close_msg = bytes_from_hex("61")
                             close_msg = bytes_concat(close_msg, make_u32(remote_channel))
-                            send_packet(session, close_msg)
+                            send_packet(&session, close_msg)
                             done = true
 
     str stdout_str = bytes_to_str(stdout_data)
@@ -501,9 +501,9 @@ int channel_open_session(Session &session):
     open_msg = bytes_concat(open_msg, make_u32(0))
     open_msg = bytes_concat(open_msg, make_u32(2097152))
     open_msg = bytes_concat(open_msg, make_u32(32768))
-    send_packet(session, open_msg)
+    send_packet(&session, open_msg)
 
-    Vector[uint8] confirm = read_packet(session)
+    Vector[uint8] confirm = read_packet(&session)
     int remote_channel = bytes_read_u32_be(confirm, 1)
     return remote_channel
 
@@ -514,14 +514,14 @@ void channel_request_subsystem(Session &session, int remote_channel, str subsyst
     msg = bytes_concat(msg, make_name_list("subsystem"))
     msg = bytes_concat(msg, bytes_from_hex("01"))
     msg = bytes_concat(msg, make_name_list(subsystem_name))
-    send_packet(session, msg)
+    send_packet(&session, msg)
 
 # Send data over an open channel
 void channel_write_data(Session &session, int remote_channel, str data):
     Vector[uint8] msg = bytes_from_hex("5e")
     msg = bytes_concat(msg, make_u32(remote_channel))
     msg = bytes_concat(msg, make_name_list(data))
-    send_packet(session, msg)
+    send_packet(&session, msg)
 
 # Read from channel until delimiter found, return accumulated data including delimiter
 str channel_read_until(Session &session, str delimiter):
@@ -529,7 +529,7 @@ str channel_read_until(Session &session, str delimiter):
     bool done = false
 
     while not done:
-        Vector[uint8] msg = read_packet(session)
+        Vector[uint8] msg = read_packet(&session)
         if msg.len() == 0:
             done = true
         else:
@@ -542,7 +542,7 @@ str channel_read_until(Session &session, str delimiter):
                 Vector[uint8] adj = bytes_from_hex("5d")
                 adj = bytes_concat(adj, make_u32(session.channel_id))
                 adj = bytes_concat(adj, make_u32(data_len))
-                send_packet(session, adj)
+                send_packet(&session, adj)
                 if buffer.contains(delimiter):
                     done = true
             else:
@@ -561,16 +561,16 @@ str channel_read_until(Session &session, str delimiter):
 
 equip Session:
     CommandResult run(&self, str cmd):
-        return channel_exec(self, cmd)
+        return channel_exec(&self, cmd)
 
     Result[bool, str] open_subsystem(&self, str name):
-        int remote = channel_open_session(self)
+        int remote = channel_open_session(&self)
         self.channel_id = remote
-        channel_request_subsystem(self, remote, name)
+        channel_request_subsystem(&self, remote, name)
         # Wait for CHANNEL_SUCCESS or CHANNEL_FAILURE (skip WINDOW_ADJUST)
         bool waiting = true
         while waiting:
-            Vector[uint8] reply = read_packet(self)
+            Vector[uint8] reply = read_packet(&self)
             uint8 reply_type = reply.get(0)
             if reply_type == SSH_MSG_CHANNEL_SUCCESS:
                 self.channel_open = true
@@ -584,16 +584,16 @@ equip Session:
         return Error("unexpected end of stream")
 
     void write_data(&self, str data):
-        channel_write_data(self, self.channel_id, data)
+        channel_write_data(&self, self.channel_id, data)
 
     str read_until(&self, str delimiter):
-        return channel_read_until(self, delimiter)
+        return channel_read_until(&self, delimiter)
 
     void close_channel(&self):
         if self.channel_open:
             Vector[uint8] close_msg = bytes_from_hex("61")
             close_msg = bytes_concat(close_msg, make_u32(self.channel_id))
-            send_packet(self, close_msg)
+            send_packet(&self, close_msg)
             self.channel_open = false
 
     void close(&self):
@@ -605,7 +605,7 @@ equip Session:
         disc = bytes_concat(disc, make_u32(11))
         disc = bytes_concat(disc, make_name_list("bye"))
         disc = bytes_concat(disc, make_name_list(""))
-        send_packet(self, disc)
+        send_packet(&self, disc)
         self.sock.close()
 
 Result[Session, str] ssh_connect(str host, int port, str user, str password):
@@ -635,20 +635,20 @@ Result[Session, str] ssh_connect(str host, int port, str user, str password):
     Session session = Session(sock, bytes_from_hex(""), crypto_aes_ctr_new(dummy_key, dummy_iv), crypto_aes_ctr_new(dummy_key, dummy_iv), bytes_from_hex(""), bytes_from_hex(""), 0, 0, false, 0, false)
 
     # Version exchange
-    str server_version = version_exchange(session.sock)
+    str server_version = version_exchange(&session.sock)
     str client_version = "SSH-2.0-Gorget_1.0"
 
     # Send our KEXINIT
     Vector[uint8] client_kexinit = build_kexinit()
-    send_packet(session, client_kexinit)
+    send_packet(&session, client_kexinit)
 
     # Read server KEXINIT
-    Vector[uint8] server_kexinit = read_packet(session)
+    Vector[uint8] server_kexinit = read_packet(&session)
 
     # Key exchange
-    kex_dh_group14(session, client_version, server_version, client_kexinit, server_kexinit)
+    kex_dh_group14(&session, client_version, server_version, client_kexinit, server_kexinit)
 
     # Authenticate
-    auth_password(session, resolved_user, password)
+    auth_password(&session, resolved_user, password)
 
     return Ok(session)
