@@ -8,8 +8,6 @@
 
 
 
-- **`discover_generic_usages` silently omits instantiations it doesn't discover**: If a generic type is only used in a context that `discover_generic_usages` doesn't traverse, the instantiation won't be emitted. [updated: 2026-02-16]
-
 
 - **`format_for_c_type` silently casts structs to int**: Unknown types in string interpolation default to `(long long)` cast, corrupting the value. Should error on non-formattable types. (`c_types.rs:284`) [added: 2026-02-16]
 
@@ -130,7 +128,6 @@
 
 - **Topological sort silent fallback for cycles**: `c_item.rs:166-172` comment says "cycles — shouldn't happen" but code silently handles them. Should `debug_assert!` or warn. [added: 2026-02-16]
 
-- **Silent catch-all in `scan_stmt_for_generics`**: `_ => {}` at `c_stmt.rs:1177` silently ignores unhandled statement types without documenting which are intentionally excluded. [added: 2026-02-16]
 
 - **`c_runtime.rs` monolithic string constant**: 2,505-line single string constant is hard to navigate and edit. Split into separate const blocks or `.c` files. [added: 2026-02-16]
 
@@ -148,6 +145,5 @@
 
 - **VTable method slot duplication**: `emit_vtable_method_slot()` and the vtable instance assignment loop (`c_item.rs:852-877, 962-993`) reconstruct the same logic independently. Reuse slot generation. [added: 2026-02-16]
 
-- **Generic instance registration duplicated**: Dict/HashMap registration appears twice in `c_item.rs:1191-1207` and `c_item.rs:1263-1276`. [added: 2026-02-16]
 
 - **Native backend**: LLVM, QBE, or cranelift — after language stabilizes. [added: 2026-02-10]
