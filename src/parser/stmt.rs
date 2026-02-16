@@ -1,9 +1,30 @@
 use crate::lexer::token::{Keyword, Token};
-use crate::span::Spanned;
+use crate::span::{Span, Spanned};
 
 use super::ast::*;
 use super::Parser;
 use crate::errors::ParseError;
+
+fn make_var_decl(
+    is_const: bool,
+    is_mutable: bool,
+    type_: Spanned<Type>,
+    pattern: Spanned<Pattern>,
+    value: Spanned<Expr>,
+    start: Span,
+) -> Spanned<Stmt> {
+    let end = value.span;
+    Spanned::new(
+        Stmt::VarDecl {
+            is_const,
+            is_mutable,
+            type_,
+            pattern,
+            value,
+        },
+        start.merge(end),
+    )
+}
 
 impl Parser {
     /// Parse a statement.
@@ -352,19 +373,8 @@ impl Parser {
 
         self.expect(&Token::Eq)?;
         let value = self.parse_expr()?;
-        let end = value.span;
         self.consume_newline();
-
-        Ok(Spanned::new(
-            Stmt::VarDecl {
-                is_const: true,
-                is_mutable: false,
-                type_,
-                pattern,
-                value,
-            },
-            start.merge(end),
-        ))
+        Ok(make_var_decl(true, false, type_, pattern, value, start))
     }
 
     fn parse_auto_var_decl(&mut self) -> Result<Spanned<Stmt>, ParseError> {
@@ -375,157 +385,71 @@ impl Parser {
         let pattern = self.parse_binding_pattern()?;
         self.expect(&Token::Eq)?;
         let value = self.parse_expr()?;
-        let end = value.span;
         self.consume_newline();
-
-        Ok(Spanned::new(
-            Stmt::VarDecl {
-                is_const: false,
-                is_mutable: false,
-                type_,
-                pattern,
-                value,
-            },
-            start.merge(end),
-        ))
+        Ok(make_var_decl(false, false, type_, pattern, value, start))
     }
 
     /// Try to parse a declaration (type name = expr) or fall back to expression statement.
+    /// Handles: `type name = expr`, `mutable type name = expr`, `mutable auto name = expr`,
+    /// and ownership modifiers (`type &name = expr`, `type mutable name = expr`, etc.).
     fn parse_decl_or_expr_stmt(&mut self) -> Result<Spanned<Stmt>, ParseError> {
         let start = self.peek_span();
         let saved_pos = self.pos;
 
-        // Check for `mutable type name = expr` or `mutable auto name = expr` prefix syntax
-        if self.check_keyword(Keyword::Mutable) {
-            let mutable_pos = self.pos;
-            self.advance(); // consume `mutable`
+        // 1. Check for optional `mutable` prefix
+        let has_mutable_prefix = if self.check_keyword(Keyword::Mutable) {
+            self.advance();
+            true
+        } else {
+            false
+        };
 
-            // Try `mutable auto name = expr`
-            if self.check_keyword(Keyword::Auto) {
-                let auto_start = self.peek_span();
-                self.advance(); // consume `auto`
-                let type_ = Spanned::new(Type::Inferred, auto_start);
-                if let Token::Identifier(_) = self.peek() {
-                    let name = self.expect_identifier()?;
-                    if self.match_token(&Token::Eq) {
-                        let value = self.parse_expr()?;
-                        let end = value.span;
-                        self.consume_newline();
-                        return Ok(Spanned::new(
-                            Stmt::VarDecl {
-                                is_const: false,
-                                is_mutable: true,
-                                type_,
-                                pattern: Spanned::new(Pattern::Binding(name.node), name.span),
-                                value,
-                            },
-                            start.merge(end),
-                        ));
-                    }
-                }
-                // Not a declaration — backtrack past `mutable`
-                self.pos = mutable_pos;
-            } else {
-                // Try `mutable type name = expr`
-                match self.parse_type() {
-                    Ok(type_) => {
-                        if let Token::Identifier(_) = self.peek() {
-                            let name = self.expect_identifier()?;
-                            if self.match_token(&Token::Eq) {
-                                let value = self.parse_expr()?;
-                                let end = value.span;
-                                self.consume_newline();
-                                return Ok(Spanned::new(
-                                    Stmt::VarDecl {
-                                        is_const: false,
-                                        is_mutable: true,
-                                        type_,
-                                        pattern: Spanned::new(Pattern::Binding(name.node), name.span),
-                                        value,
-                                    },
-                                    start.merge(end),
-                                ));
-                            }
-                        }
-                        // Not a declaration — backtrack past `mutable`
-                        self.pos = mutable_pos;
-                    }
-                    Err(_) => {
-                        // Not a type after `mutable` — backtrack
-                        self.pos = mutable_pos;
-                    }
-                }
-            }
-        }
-
-        // Try to parse as a type followed by a name
-        match self.parse_type() {
-            Ok(type_) => {
-                // Check if the next token is an identifier (variable name)
-                if let Token::Identifier(_) = self.peek() {
-                    let name = self.expect_identifier()?;
-
-                    // Check what follows the name
-                    if self.match_token(&Token::Eq) {
-                        // Variable declaration: type name = expr
-                        let value = self.parse_expr()?;
-                        let end = value.span;
-                        self.consume_newline();
-                        return Ok(Spanned::new(
-                            Stmt::VarDecl {
-                                is_const: false,
-                                is_mutable: false,
-                                type_,
-                                pattern: Spanned::new(Pattern::Binding(name.node), name.span),
-                                value,
-                            },
-                            start.merge(end),
-                        ));
-                    }
-
-                    // Not a declaration — backtrack
+        // 2. Parse type (`auto` shorthand only valid after `mutable` prefix)
+        let type_ = if has_mutable_prefix && self.check_keyword(Keyword::Auto) {
+            let auto_start = self.peek_span();
+            self.advance();
+            Spanned::new(Type::Inferred, auto_start)
+        } else {
+            match self.parse_type() {
+                Ok(t) => t,
+                Err(_) => {
                     self.pos = saved_pos;
                     return self.parse_expr_or_assign_stmt();
                 }
-
-                // Check for ownership modifier: type &name, type !name, type mutable name, type moving name
-                if self.check(&Token::Ampersand) || self.check(&Token::Bang)
-                    || self.check_keyword(Keyword::Mutable) || self.check_keyword(Keyword::Moving) {
-                    let ownership_tok = self.advance();
-                    let is_mutable = matches!(ownership_tok.node, Token::Keyword(Keyword::Mutable));
-                    if let Token::Identifier(_) = self.peek() {
-                        let name = self.expect_identifier()?;
-                        if self.match_token(&Token::Eq) {
-                            let value = self.parse_expr()?;
-                            let end = value.span;
-                            self.consume_newline();
-                            return Ok(Spanned::new(
-                                Stmt::VarDecl {
-                                    is_const: false,
-                                    is_mutable,
-                                    type_,
-                                    pattern: Spanned::new(Pattern::Binding(name.node), name.span),
-                                    value,
-                                },
-                                start.merge(end),
-                            ));
-                        }
-                    }
-                    // Not a declaration — backtrack
-                    self.pos = saved_pos;
-                    return self.parse_expr_or_assign_stmt();
-                }
-
-                // Not followed by identifier — backtrack, parse as expression
-                self.pos = saved_pos;
-                self.parse_expr_or_assign_stmt()
             }
-            Err(_) => {
-                // Not a type — backtrack and parse as expression
-                self.pos = saved_pos;
-                self.parse_expr_or_assign_stmt()
-            }
+        };
+
+        // 3. Check for ownership modifier (only without mutable prefix)
+        let is_mutable = if !has_mutable_prefix
+            && (self.check(&Token::Ampersand)
+                || self.check(&Token::Bang)
+                || self.check_keyword(Keyword::Mutable)
+                || self.check_keyword(Keyword::Moving))
+        {
+            let ownership_tok = self.advance();
+            matches!(ownership_tok.node, Token::Keyword(Keyword::Mutable))
+        } else {
+            has_mutable_prefix
+        };
+
+        // 4. Expect identifier
+        if !matches!(self.peek(), Token::Identifier(_)) {
+            self.pos = saved_pos;
+            return self.parse_expr_or_assign_stmt();
         }
+        let name = self.expect_identifier()?;
+
+        // 5. Expect `=`
+        if !self.match_token(&Token::Eq) {
+            self.pos = saved_pos;
+            return self.parse_expr_or_assign_stmt();
+        }
+
+        // 6. Parse value and emit VarDecl
+        let value = self.parse_expr()?;
+        self.consume_newline();
+        let pattern = Spanned::new(Pattern::Binding(name.node), name.span);
+        Ok(make_var_decl(false, is_mutable, type_, pattern, value, start))
     }
 
     /// Parse an expression statement, assignment, or compound assignment.
@@ -618,19 +542,9 @@ impl Parser {
 
                 self.expect(&Token::Eq)?;
                 let value = self.parse_expr()?;
-                let end = value.span;
                 self.consume_newline();
-
-                return Ok(Spanned::new(
-                    Stmt::VarDecl {
-                        is_const: false,
-                        is_mutable,
-                        type_,
-                        pattern: Spanned::new(Pattern::Binding(name.node), name.span),
-                        value,
-                    },
-                    start.merge(end),
-                ));
+                let pattern = Spanned::new(Pattern::Binding(name.node), name.span);
+                return Ok(make_var_decl(false, is_mutable, type_, pattern, value, start));
             }
         }
 

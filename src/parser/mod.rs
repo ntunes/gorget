@@ -1090,13 +1090,17 @@ impl Parser {
         if self.name_first {
             // name-first: `const fn name(...)` or `const name: type = expr`
             if self.check_fn() {
-                let func = self.parse_function_def_name_first(
+                self.advance(); // consume `fn`
+                let name = self.expect_identifier()?;
+                let func = self.finish_function_def(
                     attributes,
                     visibility,
                     FunctionQualifiers {
                         is_const: true,
                         ..Default::default()
                     },
+                    None, // name-first: return type parsed after params
+                    name,
                     doc_comment,
                     start,
                 )?;
@@ -1126,14 +1130,14 @@ impl Parser {
 
         if self.check(&Token::LParen) {
             // It's a const function
-            let func = self.parse_function_def_after_name(
+            let func = self.finish_function_def(
                 attributes,
                 visibility,
                 FunctionQualifiers {
                     is_const: true,
                     ..Default::default()
                 },
-                type_,
+                Some(type_), // type-first: return type already parsed
                 name,
                 doc_comment,
                 start,
@@ -1183,120 +1187,44 @@ impl Parser {
             }
         }
 
-        if self.name_first {
-            return self.parse_function_def_name_first(
-                attributes, visibility, qualifiers, doc_comment, start,
-            );
-        }
+        // Branch: name-first (`fn name(params) -> ReturnType:`) vs type-first (`ReturnType name(params):`)
+        let (return_type, name) = if self.name_first {
+            // Consume `fn`
+            if self.check_fn() {
+                self.advance();
+            } else {
+                return Err(self.error_unexpected("'fn'"));
+            }
+            let name = self.expect_identifier()?;
+            (None, name) // return type parsed after params
+        } else {
+            let return_type = self.parse_type()?;
+            let name = self.expect_identifier()?;
+            (Some(return_type), name)
+        };
 
-        let return_type = self.parse_type()?;
-        let name = self.expect_identifier()?;
-
-        self.parse_function_def_after_name(
-            attributes,
-            visibility,
-            qualifiers,
-            return_type,
-            name,
-            doc_comment,
-            start,
+        self.finish_function_def(
+            attributes, visibility, qualifiers, return_type, name, doc_comment, start,
         )
     }
 
-    /// Parse a name-first function: `fn name(params) -> ReturnType:`
-    fn parse_function_def_name_first(
+    /// Shared suffix for function definition parsing. Handles generic params,
+    /// param list, optional return-type (`-> Type` for name-first), throws,
+    /// where clause, body, and FunctionDef construction.
+    ///
+    /// `return_type` is `None` for name-first (parses `-> Type` after params)
+    /// or `Some` for type-first (already parsed).
+    fn finish_function_def(
         &mut self,
         attributes: Vec<Spanned<Attribute>>,
         visibility: Visibility,
         qualifiers: FunctionQualifiers,
-        doc_comment: Option<String>,
-        start: Span,
-    ) -> Result<FunctionDef, ParseError> {
-        // Consume `fn`
-        if self.check_fn() {
-            self.advance();
-        } else {
-            return Err(self.error_unexpected("'fn'"));
-        }
-
-        let name = self.expect_identifier()?;
-
-        let generic_params = if self.check(&Token::LBracket) {
-            Some(self.parse_generic_params()?)
-        } else {
-            None
-        };
-
-        // Parse parameters
-        self.expect(&Token::LParen)?;
-        let params = self.parse_param_list()?;
-        self.expect(&Token::RParen)?;
-
-        // Parse return type: `-> type` or void if absent
-        let return_type = if self.check(&Token::Arrow) {
-            self.advance();
-            self.parse_type()?
-        } else {
-            Spanned::new(Type::Primitive(PrimitiveType::Void), self.peek_span())
-        };
-
-        // Parse throws clause
-        let throws = if self.match_keyword(Keyword::Throws) {
-            Some(self.parse_type()?)
-        } else {
-            None
-        };
-
-        // Parse where clause
-        let where_clause = if self.check_keyword(Keyword::Where) {
-            Some(self.parse_where_clause()?)
-        } else {
-            None
-        };
-
-        // Parse body
-        let body = if self.match_token(&Token::Eq) {
-            let expr = self.parse_expr()?;
-            self.consume_newline();
-            FunctionBody::Expression(Box::new(expr))
-        } else if self.check(&Token::Colon) {
-            FunctionBody::Block(self.parse_block()?)
-        } else {
-            self.consume_newline();
-            FunctionBody::Declaration
-        };
-
-        let end = self.previous_span();
-
-        Ok(FunctionDef {
-            attributes,
-            visibility,
-            qualifiers,
-            return_type,
-            name,
-            generic_params,
-            params,
-            throws,
-            where_clause,
-            body,
-            doc_comment,
-            span: start.merge(end),
-        })
-    }
-
-    fn parse_function_def_after_name(
-        &mut self,
-        attributes: Vec<Spanned<Attribute>>,
-        visibility: Visibility,
-        qualifiers: FunctionQualifiers,
-        return_type: Spanned<Type>,
+        return_type: Option<Spanned<Type>>,
         name: Spanned<String>,
         doc_comment: Option<String>,
         start: Span,
     ) -> Result<FunctionDef, ParseError> {
         let generic_params = if self.check(&Token::LBracket) {
-            // Need to disambiguate: is this generic params on the function name,
-            // or array indexing? In a function definition context, [ after name is generics.
             Some(self.parse_generic_params()?)
         } else {
             None
@@ -1306,6 +1234,19 @@ impl Parser {
         self.expect(&Token::LParen)?;
         let params = self.parse_param_list()?;
         self.expect(&Token::RParen)?;
+
+        // For name-first, parse `-> type` after params; for type-first, already have it
+        let return_type = match return_type {
+            Some(rt) => rt,
+            None => {
+                if self.check(&Token::Arrow) {
+                    self.advance();
+                    self.parse_type()?
+                } else {
+                    Spanned::new(Type::Primitive(PrimitiveType::Void), self.peek_span())
+                }
+            }
+        };
 
         // Parse throws clause
         let throws = if self.match_keyword(Keyword::Throws) {
@@ -1323,14 +1264,12 @@ impl Parser {
 
         // Parse body
         let body = if self.match_token(&Token::Eq) {
-            // Expression body: int double(int x) = x * 2
             let expr = self.parse_expr()?;
             self.consume_newline();
             FunctionBody::Expression(Box::new(expr))
         } else if self.check(&Token::Colon) {
             FunctionBody::Block(self.parse_block()?)
         } else {
-            // Declaration only (trait method without body)
             self.consume_newline();
             FunctionBody::Declaration
         };
