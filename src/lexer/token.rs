@@ -41,6 +41,8 @@ pub enum RawToken {
     GtEq,
     #[token("+=")]
     PlusEq,
+    #[token("->")]
+    Arrow,
     #[token("-=")]
     MinusEq,
     #[token("*=")]
@@ -154,6 +156,7 @@ impl fmt::Display for RawToken {
             RawToken::LtEq => write!(f, "'<='"),
             RawToken::GtEq => write!(f, "'>='"),
             RawToken::PlusEq => write!(f, "'+='"),
+            RawToken::Arrow => write!(f, "'->'"),
             RawToken::MinusEq => write!(f, "'-='"),
             RawToken::StarEq => write!(f, "'*='"),
             RawToken::SlashEq => write!(f, "'/='"),
@@ -564,6 +567,7 @@ pub enum Token {
     PipeEq,
     CaretEq,
     PlusEq,
+    Arrow,
     MinusEq,
     StarEq,
     SlashEq,
@@ -646,6 +650,7 @@ impl fmt::Display for Token {
             Token::PipeEq => write!(f, "'|='"),
             Token::CaretEq => write!(f, "'^='"),
             Token::PlusEq => write!(f, "'+='"),
+            Token::Arrow => write!(f, "'->'"),
             Token::MinusEq => write!(f, "'-='"),
             Token::StarEq => write!(f, "'*='"),
             Token::SlashEq => write!(f, "'/='"),

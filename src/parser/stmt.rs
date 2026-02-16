@@ -41,11 +41,14 @@ impl Parser {
             // const — could be variable declaration
             Token::Keyword(Keyword::Const) => self.parse_const_var_decl(),
 
-            // auto — type-inferred variable declaration
-            Token::Keyword(Keyword::Auto) => self.parse_auto_var_decl(),
+            // auto — type-inferred variable declaration (type-first only)
+            Token::Keyword(Keyword::Auto) if !self.name_first => self.parse_auto_var_decl(),
 
             // mutable — prefix for mutable variable declaration under immutable-by-default
-            Token::Keyword(Keyword::Mutable) => self.parse_decl_or_expr_stmt(),
+            Token::Keyword(Keyword::Mutable) if !self.name_first => self.parse_decl_or_expr_stmt(),
+
+            // In name-first mode: try name-first declaration before falling through
+            _ if self.name_first => self.parse_name_first_decl_or_expr_stmt(),
 
             // Type keyword starting a declaration or expression
             _ if self.is_type_start() => self.parse_decl_or_expr_stmt(),
@@ -328,8 +331,25 @@ impl Parser {
         let start = self.peek_span();
         self.expect_keyword(Keyword::Const)?;
 
-        let type_ = self.parse_type()?;
-        let pattern = self.parse_binding_pattern()?;
+        let (type_, pattern) = if self.name_first {
+            // name-first: `const name: type = expr`
+            let pattern = self.parse_binding_pattern()?;
+            self.expect(&Token::Colon)?;
+            let type_ = if self.check_keyword(Keyword::Auto) {
+                let auto_start = self.peek_span();
+                self.advance();
+                Spanned::new(Type::Inferred, auto_start)
+            } else {
+                self.parse_type()?
+            };
+            (type_, pattern)
+        } else {
+            // type-first: `const type name = expr`
+            let type_ = self.parse_type()?;
+            let pattern = self.parse_binding_pattern()?;
+            (type_, pattern)
+        };
+
         self.expect(&Token::Eq)?;
         let value = self.parse_expr()?;
         let end = value.span;
@@ -564,6 +584,59 @@ impl Parser {
         let end = expr.span;
         self.consume_newline();
         Ok(Spanned::new(Stmt::Expr(expr), start.merge(end)))
+    }
+
+    /// Parse a name-first declaration (`name: type = expr`, `mutable name: type = expr`)
+    /// or fall back to expression/assignment statement.
+    fn parse_name_first_decl_or_expr_stmt(&mut self) -> Result<Spanned<Stmt>, ParseError> {
+        let start = self.peek_span();
+        let saved_pos = self.pos;
+
+        // Check for optional `mutable` prefix
+        let is_mutable = if self.check_keyword(Keyword::Mutable) {
+            self.advance();
+            true
+        } else {
+            false
+        };
+
+        // Check for identifier followed by colon (name-first declaration)
+        if let Token::Identifier(_) = self.peek() {
+            let name = self.expect_identifier()?;
+
+            if self.check(&Token::Colon) {
+                self.advance(); // consume colon
+
+                // Parse the type (could be `auto` keyword)
+                let type_ = if self.check_keyword(Keyword::Auto) {
+                    let auto_start = self.peek_span();
+                    self.advance();
+                    Spanned::new(Type::Inferred, auto_start)
+                } else {
+                    self.parse_type()?
+                };
+
+                self.expect(&Token::Eq)?;
+                let value = self.parse_expr()?;
+                let end = value.span;
+                self.consume_newline();
+
+                return Ok(Spanned::new(
+                    Stmt::VarDecl {
+                        is_const: false,
+                        is_mutable,
+                        type_,
+                        pattern: Spanned::new(Pattern::Binding(name.node), name.span),
+                        value,
+                    },
+                    start.merge(end),
+                ));
+            }
+        }
+
+        // Not a name-first declaration — backtrack and parse as expression
+        self.pos = saved_pos;
+        self.parse_expr_or_assign_stmt()
     }
 
     /// Parse a simple binding pattern for variable declarations.

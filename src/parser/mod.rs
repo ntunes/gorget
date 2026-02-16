@@ -19,6 +19,8 @@ pub struct Parser {
     call_arg_depth: usize,
     /// Comments extracted from the token stream, for use by the formatter.
     pub comments: Vec<Spanned<String>>,
+    /// Whether `directive name-first` is active (Rust/Python-style declarations).
+    pub name_first: bool,
 }
 
 impl Parser {
@@ -46,7 +48,13 @@ impl Parser {
             errors: Vec::new(),
             call_arg_depth: 0,
             comments,
+            name_first: false,
         }
+    }
+
+    /// Check if the current token is `fn` (contextual keyword for name-first mode).
+    fn check_fn(&self) -> bool {
+        matches!(self.peek(), Token::Identifier(s) if s == "fn")
     }
 
     // ── Token Management ──────────────────────────────────────
@@ -283,7 +291,15 @@ impl Parser {
             }
 
             match self.parse_item() {
-                Ok(item) => items.push(item),
+                Ok(item) => {
+                    // Detect `directive name-first` and activate name-first mode
+                    if let Item::Directive(ref d) = item.node {
+                        if d.name == "name-first" {
+                            self.name_first = true;
+                        }
+                    }
+                    items.push(item);
+                }
                 Err(e) => {
                     self.errors.push(e);
                     let pos_before = self.pos;
@@ -420,7 +436,7 @@ impl Parser {
                 let span = start.merge(item_span);
                 Ok(Spanned::new(item, span))
             }
-            // Function definition (starts with return type or qualifiers)
+            // Function definition (starts with return type, qualifiers, or `fn` in name-first mode)
             _ => {
                 let func = self.parse_function_def(attributes, visibility, doc_comment)?;
                 let span = start.merge(func.span);
@@ -564,8 +580,16 @@ impl Parser {
             } else {
                 Visibility::Private
             };
-            let type_ = self.parse_type()?;
-            let field_name = self.expect_identifier()?;
+            let (type_, field_name) = if self.name_first {
+                let field_name = self.expect_identifier()?;
+                self.expect(&Token::Colon)?;
+                let type_ = self.parse_type()?;
+                (type_, field_name)
+            } else {
+                let type_ = self.parse_type()?;
+                let field_name = self.expect_identifier()?;
+                (type_, field_name)
+            };
             let field_end = self.previous_span();
             self.consume_newline();
 
@@ -1026,8 +1050,18 @@ impl Parser {
     fn parse_static_decl(&mut self, visibility: Visibility) -> Result<StaticDecl, ParseError> {
         let start = self.peek_span();
         self.expect_keyword(Keyword::Static)?;
-        let type_ = self.parse_type()?;
-        let name = self.expect_identifier()?;
+
+        let (type_, name) = if self.name_first {
+            let name = self.expect_identifier()?;
+            self.expect(&Token::Colon)?;
+            let type_ = self.parse_type()?;
+            (type_, name)
+        } else {
+            let type_ = self.parse_type()?;
+            let name = self.expect_identifier()?;
+            (type_, name)
+        };
+
         self.expect(&Token::Eq)?;
         let value = self.parse_expr()?;
         let end = self.previous_span();
@@ -1050,11 +1084,43 @@ impl Parser {
         visibility: Visibility,
         doc_comment: Option<String>,
     ) -> Result<Item, ParseError> {
-        // const int X = 5  →  ConstDecl
-        // const int factorial(int n):  →  FunctionDef with is_const
         let start = self.peek_span();
         self.expect_keyword(Keyword::Const)?;
 
+        if self.name_first {
+            // name-first: `const fn name(...)` or `const name: type = expr`
+            if self.check_fn() {
+                let func = self.parse_function_def_name_first(
+                    attributes,
+                    visibility,
+                    FunctionQualifiers {
+                        is_const: true,
+                        ..Default::default()
+                    },
+                    doc_comment,
+                    start,
+                )?;
+                return Ok(Item::Function(func));
+            }
+
+            let name = self.expect_identifier()?;
+            self.expect(&Token::Colon)?;
+            let type_ = self.parse_type()?;
+            self.expect(&Token::Eq)?;
+            let value = self.parse_expr()?;
+            let end = self.previous_span();
+            self.consume_newline();
+
+            return Ok(Item::ConstDecl(ConstDecl {
+                visibility,
+                type_,
+                name,
+                value,
+                span: start.merge(end),
+            }));
+        }
+
+        // Type-first: const int X = 5 or const int factorial(int n):
         let type_ = self.parse_type()?;
         let name = self.expect_identifier()?;
 
@@ -1117,6 +1183,12 @@ impl Parser {
             }
         }
 
+        if self.name_first {
+            return self.parse_function_def_name_first(
+                attributes, visibility, qualifiers, doc_comment, start,
+            );
+        }
+
         let return_type = self.parse_type()?;
         let name = self.expect_identifier()?;
 
@@ -1129,6 +1201,87 @@ impl Parser {
             doc_comment,
             start,
         )
+    }
+
+    /// Parse a name-first function: `fn name(params) -> ReturnType:`
+    fn parse_function_def_name_first(
+        &mut self,
+        attributes: Vec<Spanned<Attribute>>,
+        visibility: Visibility,
+        qualifiers: FunctionQualifiers,
+        doc_comment: Option<String>,
+        start: Span,
+    ) -> Result<FunctionDef, ParseError> {
+        // Consume `fn`
+        if self.check_fn() {
+            self.advance();
+        } else {
+            return Err(self.error_unexpected("'fn'"));
+        }
+
+        let name = self.expect_identifier()?;
+
+        let generic_params = if self.check(&Token::LBracket) {
+            Some(self.parse_generic_params()?)
+        } else {
+            None
+        };
+
+        // Parse parameters
+        self.expect(&Token::LParen)?;
+        let params = self.parse_param_list()?;
+        self.expect(&Token::RParen)?;
+
+        // Parse return type: `-> type` or void if absent
+        let return_type = if self.check(&Token::Arrow) {
+            self.advance();
+            self.parse_type()?
+        } else {
+            Spanned::new(Type::Primitive(PrimitiveType::Void), self.peek_span())
+        };
+
+        // Parse throws clause
+        let throws = if self.match_keyword(Keyword::Throws) {
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+
+        // Parse where clause
+        let where_clause = if self.check_keyword(Keyword::Where) {
+            Some(self.parse_where_clause()?)
+        } else {
+            None
+        };
+
+        // Parse body
+        let body = if self.match_token(&Token::Eq) {
+            let expr = self.parse_expr()?;
+            self.consume_newline();
+            FunctionBody::Expression(Box::new(expr))
+        } else if self.check(&Token::Colon) {
+            FunctionBody::Block(self.parse_block()?)
+        } else {
+            self.consume_newline();
+            FunctionBody::Declaration
+        };
+
+        let end = self.previous_span();
+
+        Ok(FunctionDef {
+            attributes,
+            visibility,
+            qualifiers,
+            return_type,
+            name,
+            generic_params,
+            params,
+            throws,
+            where_clause,
+            body,
+            doc_comment,
+            span: start.merge(end),
+        })
     }
 
     fn parse_function_def_after_name(
@@ -1270,12 +1423,20 @@ impl Parser {
             ));
         }
 
-        let type_ = self.parse_type()?;
-
-        // Check for ownership modifier on the name
-        let ownership = self.parse_ownership_modifier();
-
-        let name = self.expect_identifier()?;
+        let (type_, ownership, name) = if self.name_first {
+            // Name-first: [&|!]name: type
+            let ownership = self.parse_ownership_modifier();
+            let name = self.expect_identifier()?;
+            self.expect(&Token::Colon)?;
+            let type_ = self.parse_type()?;
+            (type_, ownership, name)
+        } else {
+            // Type-first: type [&|!]name
+            let type_ = self.parse_type()?;
+            let ownership = self.parse_ownership_modifier();
+            let name = self.expect_identifier()?;
+            (type_, ownership, name)
+        };
 
         // Default value
         let default = if self.match_token(&Token::Eq) {
@@ -1316,8 +1477,16 @@ impl Parser {
                     param_start.merge(end),
                 ));
             } else if self.match_keyword(Keyword::Const) {
-                let type_ = self.parse_type()?;
-                let name = self.expect_identifier()?;
+                let (type_, name) = if self.name_first {
+                    let name = self.expect_identifier()?;
+                    self.expect(&Token::Colon)?;
+                    let type_ = self.parse_type()?;
+                    (type_, name)
+                } else {
+                    let type_ = self.parse_type()?;
+                    let name = self.expect_identifier()?;
+                    (type_, name)
+                };
                 let end = self.previous_span();
                 params.push(Spanned::new(
                     GenericParam::Const { type_, name },
@@ -2569,5 +2738,95 @@ mod tests {
         assert_eq!(module.items.len(), 2);
         assert!(matches!(&module.items[0].node, Item::Test(_)));
         assert!(matches!(&module.items[1].node, Item::Test(_)));
+    }
+
+    // ── Name-first directive ────────────────────────────────────
+
+    #[test]
+    fn test_name_first_function() {
+        let module = parse("directive name-first\nfn add(a: int, b: int) -> int:\n    return a + b\n");
+        assert_eq!(module.items.len(), 2); // directive + function
+        if let Item::Function(ref f) = module.items[1].node {
+            assert_eq!(f.name.node, "add");
+            assert!(matches!(f.return_type.node, Type::Primitive(PrimitiveType::Int)));
+            assert_eq!(f.params.len(), 2);
+            assert_eq!(f.params[0].node.name.node, "a");
+            assert_eq!(f.params[1].node.name.node, "b");
+        } else {
+            panic!("Expected function");
+        }
+    }
+
+    #[test]
+    fn test_name_first_void_function() {
+        let module = parse("directive name-first\nfn main():\n    pass\n");
+        assert_eq!(module.items.len(), 2);
+        if let Item::Function(ref f) = module.items[1].node {
+            assert_eq!(f.name.node, "main");
+            assert!(matches!(f.return_type.node, Type::Primitive(PrimitiveType::Void)));
+        } else {
+            panic!("Expected function");
+        }
+    }
+
+    #[test]
+    fn test_name_first_struct() {
+        let module = parse("directive name-first\nstruct Point:\n    x: int\n    y: float\n");
+        assert_eq!(module.items.len(), 2);
+        if let Item::Struct(ref s) = module.items[1].node {
+            assert_eq!(s.name.node, "Point");
+            assert_eq!(s.fields.len(), 2);
+            assert_eq!(s.fields[0].node.name.node, "x");
+            assert_eq!(s.fields[1].node.name.node, "y");
+        } else {
+            panic!("Expected struct");
+        }
+    }
+
+    #[test]
+    fn test_name_first_var_decl() {
+        let module = parse("directive name-first\nfn main():\n    x: int = 5\n");
+        assert_eq!(module.items.len(), 2);
+        if let Item::Function(ref f) = module.items[1].node {
+            if let FunctionBody::Block(ref block) = f.body {
+                assert_eq!(block.stmts.len(), 1);
+                assert!(matches!(block.stmts[0].node, Stmt::VarDecl { .. }));
+            } else {
+                panic!("Expected block body");
+            }
+        } else {
+            panic!("Expected function");
+        }
+    }
+
+    #[test]
+    fn test_name_first_const_decl() {
+        let module = parse("directive name-first\nfn main():\n    const PI: float = 3.14\n");
+        assert_eq!(module.items.len(), 2);
+        if let Item::Function(ref f) = module.items[1].node {
+            if let FunctionBody::Block(ref block) = f.body {
+                if let Stmt::VarDecl { is_const, .. } = &block.stmts[0].node {
+                    assert!(is_const);
+                } else {
+                    panic!("Expected VarDecl");
+                }
+            } else {
+                panic!("Expected block body");
+            }
+        } else {
+            panic!("Expected function");
+        }
+    }
+
+    #[test]
+    fn test_name_first_expression_body() {
+        let module = parse("directive name-first\nfn double(x: int) -> int = x * 2\n");
+        assert_eq!(module.items.len(), 2);
+        if let Item::Function(ref f) = module.items[1].node {
+            assert_eq!(f.name.node, "double");
+            assert!(matches!(f.body, FunctionBody::Expression(_)));
+        } else {
+            panic!("Expected function");
+        }
     }
 }

@@ -82,6 +82,16 @@ pub fn analyze(module: &mut Module) -> AnalysisResult {
                         });
                     }
                 }
+                "name-first" => {
+                    if d.value.is_some() {
+                        errors.push(SemanticError {
+                            kind: SemanticErrorKind::UnknownDirective {
+                                name: format!("name-first={}", d.value.as_deref().unwrap()),
+                            },
+                            span: d.span,
+                        });
+                    }
+                }
                 "trace" => {
                     if d.value.is_some() {
                         errors.push(SemanticError {

@@ -3260,6 +3260,20 @@ done",
 }
 
 #[test]
+fn name_first() {
+    run_gg(
+        "name_first.gg",
+        "\
+7
+10
+3
+gorget
+1
+done",
+    );
+}
+
+#[test]
 fn bytes_ops() {
     run_gg(
         "bytes_ops.gg",

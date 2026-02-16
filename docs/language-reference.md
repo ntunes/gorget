@@ -2341,7 +2341,30 @@ value     = IDENT ;
 | `directive strip-asserts`          | `--strip-asserts`     | Remove all `assert` statements from build |
 | `directive overflow=wrap`          | `--overflow=wrap`     | Enable wrapping arithmetic (no overflow panic) |
 | `directive immutable-by-default`   | *(none)*              | Make plain variables immutable; use `mutable` to opt in |
+| `directive name-first`             | *(none)*              | Enable Rust/Python-style name-before-type declaration syntax |
 | `directive trace`                  | `--trace`             | Enable execution tracing for testing      |
+
+#### Name-First Syntax
+
+When `directive name-first` is present, all declarations use name-before-type syntax with `fn` for functions and `->` for return types:
+
+| Declaration       | Type-first (default)          | Name-first                        |
+|-------------------|-------------------------------|-----------------------------------|
+| Function          | `int add(int a, int b):`      | `fn add(a: int, b: int) -> int:`  |
+| Void function     | `void main():`                | `fn main():`                      |
+| Expression body   | `int double(int x) = x * 2`  | `fn double(x: int) -> int = x * 2`|
+| Variable          | `int x = 5`                   | `x: int = 5`                      |
+| Const variable    | `const int X = 5`             | `const X: int = 5`                |
+| Mutable variable  | `mutable int x = 5`          | `mutable x: int = 5`              |
+| Auto variable     | `auto x = expr`               | `x: auto = expr`                  |
+| Struct field       | `int x`                      | `x: int`                          |
+| Function param    | `int &x`                      | `&x: int`                         |
+| Closure param     | `(int x): expr`               | `(x: int): expr`                  |
+| Top-level const   | `const float PI = 3.14`      | `const PI: float = 3.14`          |
+| Static decl       | `static int COUNT = 0`       | `static COUNT: int = 0`           |
+| Generic const     | `[const int N]`               | `[const N: int]`                  |
+
+The directive is per-file — stdlib modules and other files without the directive continue using type-first syntax. The AST is identical regardless of syntax mode.
 
 #### Immutable-by-Default
 

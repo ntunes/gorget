@@ -69,6 +69,7 @@ pub struct Formatter {
     emitter: Emitter,
     comments: Vec<Spanned<String>>,
     comment_cursor: usize,
+    name_first: bool,
 }
 
 impl Formatter {
@@ -77,10 +78,20 @@ impl Formatter {
             emitter: Emitter::new(),
             comments,
             comment_cursor: 0,
+            name_first: false,
         }
     }
 
     pub fn format(mut self, module: &Module) -> String {
+        // Detect name-first directive
+        for item in &module.items {
+            if let Item::Directive(d) = &item.node {
+                if d.name == "name-first" {
+                    self.name_first = true;
+                    break;
+                }
+            }
+        }
         self.format_module(module);
         self.emit_remaining_comments();
         let mut result = self.emitter.finish();
@@ -238,15 +249,32 @@ impl Formatter {
         self.format_attributes(&f.attributes);
         self.format_visibility(&f.visibility);
         self.format_qualifiers(&f.qualifiers);
-        self.format_type(&f.return_type);
-        self.emitter.write(" ");
-        self.emitter.write(&f.name.node);
-        if let Some(ref gp) = f.generic_params {
-            self.format_generic_params(gp);
+        if self.name_first {
+            // name-first: `fn name[T](params) -> ReturnType:`
+            self.emitter.write("fn ");
+            self.emitter.write(&f.name.node);
+            if let Some(ref gp) = f.generic_params {
+                self.format_generic_params(gp);
+            }
+            self.emitter.write("(");
+            self.format_params(&f.params);
+            self.emitter.write(")");
+            if !matches!(f.return_type.node, Type::Primitive(PrimitiveType::Void)) {
+                self.emitter.write(" -> ");
+                self.format_type(&f.return_type);
+            }
+        } else {
+            // type-first: `ReturnType name(params)`
+            self.format_type(&f.return_type);
+            self.emitter.write(" ");
+            self.emitter.write(&f.name.node);
+            if let Some(ref gp) = f.generic_params {
+                self.format_generic_params(gp);
+            }
+            self.emitter.write("(");
+            self.format_params(&f.params);
+            self.emitter.write(")");
         }
-        self.emitter.write("(");
-        self.format_params(&f.params);
-        self.emitter.write(")");
         if let Some(ref throws) = f.throws {
             self.emitter.write(" throws ");
             self.format_type(throws);
@@ -305,9 +333,17 @@ impl Formatter {
             if field.node.visibility == Visibility::Public {
                 self.emitter.write("public ");
             }
-            self.format_type(&field.node.type_);
-            self.emitter.write(" ");
-            self.emitter.write(&field.node.name.node);
+            if self.name_first {
+                // name-first: `name: type`
+                self.emitter.write(&field.node.name.node);
+                self.emitter.write(": ");
+                self.format_type(&field.node.type_);
+            } else {
+                // type-first: `type name`
+                self.format_type(&field.node.type_);
+                self.emitter.write(" ");
+                self.emitter.write(&field.node.name.node);
+            }
             self.emitter.newline();
         }
         self.emitter.dedent();
@@ -487,9 +523,15 @@ impl Formatter {
     fn format_const_decl(&mut self, cd: &ConstDecl) {
         self.format_visibility(&cd.visibility);
         self.emitter.write("const ");
-        self.format_type(&cd.type_);
-        self.emitter.write(" ");
-        self.emitter.write(&cd.name.node);
+        if self.name_first {
+            self.emitter.write(&cd.name.node);
+            self.emitter.write(": ");
+            self.format_type(&cd.type_);
+        } else {
+            self.format_type(&cd.type_);
+            self.emitter.write(" ");
+            self.emitter.write(&cd.name.node);
+        }
         self.emitter.write(" = ");
         self.format_expr(&cd.value);
         self.emitter.newline();
@@ -498,9 +540,15 @@ impl Formatter {
     fn format_static_decl(&mut self, sd: &StaticDecl) {
         self.format_visibility(&sd.visibility);
         self.emitter.write("static ");
-        self.format_type(&sd.type_);
-        self.emitter.write(" ");
-        self.emitter.write(&sd.name.node);
+        if self.name_first {
+            self.emitter.write(&sd.name.node);
+            self.emitter.write(": ");
+            self.format_type(&sd.type_);
+        } else {
+            self.format_type(&sd.type_);
+            self.emitter.write(" ");
+            self.emitter.write(&sd.name.node);
+        }
         self.emitter.write(" = ");
         self.format_expr(&sd.value);
         self.emitter.newline();
@@ -538,9 +586,15 @@ impl Formatter {
                 }
                 GenericParam::Const { type_, name } => {
                     self.emitter.write("const ");
-                    self.format_type(type_);
-                    self.emitter.write(" ");
-                    self.emitter.write(&name.node);
+                    if self.name_first {
+                        self.emitter.write(&name.node);
+                        self.emitter.write(": ");
+                        self.format_type(type_);
+                    } else {
+                        self.format_type(type_);
+                        self.emitter.write(" ");
+                        self.emitter.write(&name.node);
+                    }
                 }
             }
         }
@@ -608,7 +662,7 @@ impl Formatter {
         if param.is_live {
             self.emitter.write("live ");
         }
-        // self parameter
+        // self parameter (same in both modes)
         if matches!(param.type_.node, Type::SelfType) {
             match param.ownership {
                 Ownership::Borrow => self.emitter.write("self"),
@@ -617,14 +671,27 @@ impl Formatter {
             }
             return;
         }
-        self.format_type(&param.type_);
-        self.emitter.write(" ");
-        match param.ownership {
-            Ownership::Borrow => {}
-            Ownership::MutableBorrow => self.emitter.write("&"),
-            Ownership::Move => self.emitter.write("!"),
+        if self.name_first {
+            // name-first: `[&|!]name: type`
+            match param.ownership {
+                Ownership::Borrow => {}
+                Ownership::MutableBorrow => self.emitter.write("&"),
+                Ownership::Move => self.emitter.write("!"),
+            }
+            self.emitter.write(&param.name.node);
+            self.emitter.write(": ");
+            self.format_type(&param.type_);
+        } else {
+            // type-first: `type [&|!]name`
+            self.format_type(&param.type_);
+            self.emitter.write(" ");
+            match param.ownership {
+                Ownership::Borrow => {}
+                Ownership::MutableBorrow => self.emitter.write("&"),
+                Ownership::Move => self.emitter.write("!"),
+            }
+            self.emitter.write(&param.name.node);
         }
-        self.emitter.write(&param.name.node);
         if let Some(ref default) = param.default {
             self.emitter.write(" = ");
             self.format_expr(default);
@@ -654,9 +721,17 @@ impl Formatter {
                 } else if *is_mutable {
                     self.emitter.write("mutable ");
                 }
-                self.format_type(type_);
-                self.emitter.write(" ");
-                self.format_pattern(pattern);
+                if self.name_first {
+                    // name-first: `name: type = expr`
+                    self.format_pattern(pattern);
+                    self.emitter.write(": ");
+                    self.format_type(type_);
+                } else {
+                    // type-first: `type name = expr`
+                    self.format_type(type_);
+                    self.emitter.write(" ");
+                    self.format_pattern(pattern);
+                }
                 self.emitter.write(" = ");
                 self.format_expr(value);
                 self.emitter.newline();
@@ -1390,16 +1465,31 @@ impl Formatter {
     }
 
     fn format_closure_param(&mut self, param: &ClosureParam) {
-        if let Some(ref ty) = param.type_ {
-            self.format_type(ty);
-            self.emitter.write(" ");
+        if self.name_first {
+            // name-first: `[&|!]name[: type]`
+            match param.ownership {
+                Ownership::Borrow => {}
+                Ownership::MutableBorrow => self.emitter.write("&"),
+                Ownership::Move => self.emitter.write("!"),
+            }
+            self.emitter.write(&param.name.node);
+            if let Some(ref ty) = param.type_ {
+                self.emitter.write(": ");
+                self.format_type(ty);
+            }
+        } else {
+            // type-first: `[type] [&|!]name`
+            if let Some(ref ty) = param.type_ {
+                self.format_type(ty);
+                self.emitter.write(" ");
+            }
+            match param.ownership {
+                Ownership::Borrow => {}
+                Ownership::MutableBorrow => self.emitter.write("&"),
+                Ownership::Move => self.emitter.write("!"),
+            }
+            self.emitter.write(&param.name.node);
         }
-        match param.ownership {
-            Ownership::Borrow => {}
-            Ownership::MutableBorrow => self.emitter.write("&"),
-            Ownership::Move => self.emitter.write("!"),
-        }
-        self.emitter.write(&param.name.node);
     }
 
     // ── String formatting ───────────────────────────────────
