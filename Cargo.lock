@@ -96,7 +96,7 @@ dependencies = [
 
 [[package]]
 name = "gorget"
-version = "1.1.2-alpha"
+version = "0.1.2-alpha"
 dependencies = [
  "codespan-reporting",
  "insta",
