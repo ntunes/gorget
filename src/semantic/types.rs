@@ -2,6 +2,8 @@ use crate::parser::ast::{self, PrimitiveType};
 use crate::span::Span;
 
 use super::errors::{SemanticError, SemanticErrorKind};
+use rustc_hash::FxHashSet;
+
 use super::ids::{DefId, TypeId};
 use super::scope::{DefKind, ScopeTable};
 
@@ -252,12 +254,15 @@ impl TypeTable {
 /// Reference types are views into data owned by something else — if the
 /// owner is dropped/moved, outstanding references become dangling.
 ///
-/// Currently: `str` (immutable pointer into String data) and `Slice[T]`.
-pub fn is_reference_type(type_id: TypeId, types: &TypeTable) -> bool {
-    matches!(
-        types.get(type_id),
-        ResolvedType::Primitive(PrimitiveType::Str) | ResolvedType::Slice(_)
-    )
+/// Includes: `str`, `Slice[T]`, and structs whose fields include reference types.
+pub fn is_reference_type(type_id: TypeId, types: &TypeTable, ref_type_structs: &FxHashSet<DefId>) -> bool {
+    match types.get(type_id) {
+        ResolvedType::Primitive(PrimitiveType::Str) => true,
+        ResolvedType::Slice(_) => true,
+        ResolvedType::Defined(def_id) => ref_type_structs.contains(def_id),
+        ResolvedType::Generic(def_id, _) => ref_type_structs.contains(def_id),
+        _ => false,
+    }
 }
 
 /// Convert an AST Type to a resolved TypeId.

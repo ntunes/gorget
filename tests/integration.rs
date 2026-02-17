@@ -3537,3 +3537,26 @@ fn lifetime_use_after_move_error() {
         "after source",
     );
 }
+
+#[test]
+fn lifetime_struct() {
+    run_gg(
+        "lifetime_struct.gg",
+        "\
+literal
+from param
+mixed
+literal
+from param
+mixed
+struct lifetime ok",
+    );
+}
+
+#[test]
+fn lifetime_struct_error() {
+    check_gg_fails(
+        "lifetime_struct_error.gg",
+        "after source",
+    );
+}

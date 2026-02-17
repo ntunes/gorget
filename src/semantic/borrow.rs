@@ -4,7 +4,7 @@ use crate::parser::ast::*;
 use crate::span::{Span, Spanned};
 
 use super::errors::{SemanticError, SemanticErrorKind};
-use super::ids::{DefId, TypeId};
+use super::ids::{DefId, ScopeId, TypeId};
 use super::resolve::{FunctionInfo, ResolutionMap};
 use super::scope::{DefKind, ScopeTable};
 use super::types::{self, ResolvedType, TypeTable};
@@ -118,6 +118,85 @@ fn is_copy_type(type_id: TypeId, types: &TypeTable) -> bool {
     }
 }
 
+// ─── Reference-Type Struct Detection ──────────────────────
+
+/// Check if an AST Type refers to a reference type: `str`, `Slice`, or a named
+/// type whose DefId is in `ref_structs`.
+fn is_ast_type_ref(ty: &Type, scopes: &ScopeTable, ref_structs: &FxHashSet<DefId>) -> bool {
+    match ty {
+        Type::Primitive(PrimitiveType::Str) => true,
+        Type::Slice { .. } => true,
+        Type::Named { name, .. } => {
+            // Search from module scope (scope 0) since struct defs are module-level.
+            // scopes.current may be at a nested scope after prior passes.
+            if let Some(def_id) = scopes.lookup_from_scope(ScopeId(0), &name.node) {
+                ref_structs.contains(&def_id)
+            } else {
+                false
+            }
+        }
+        _ => false,
+    }
+}
+
+/// Scan the module's struct definitions and compute which structs contain
+/// reference-type fields (directly or transitively). Returns their DefIds.
+fn compute_ref_type_structs(module: &Module, scopes: &ScopeTable) -> FxHashSet<DefId> {
+    // Collect all struct defs with their DefId and fields
+    let mut struct_infos: Vec<(DefId, &[Spanned<FieldDef>])> = Vec::new();
+    for item in &module.items {
+        if let Item::Struct(s) = &item.node {
+            if let Some(def_id) = scopes.lookup_from_scope(ScopeId(0), &s.name.node) {
+                struct_infos.push((def_id, &s.fields));
+            }
+        }
+    }
+
+    // Fixpoint iteration: keep adding structs until stable
+    let mut ref_structs = FxHashSet::default();
+    loop {
+        let prev_len = ref_structs.len();
+        for (def_id, fields) in &struct_infos {
+            if ref_structs.contains(def_id) {
+                continue;
+            }
+            for field in *fields {
+                if is_ast_type_ref(&field.node.type_.node, scopes, &ref_structs) {
+                    ref_structs.insert(*def_id);
+                    break;
+                }
+            }
+        }
+        if ref_structs.len() == prev_len {
+            break;
+        }
+    }
+    ref_structs
+}
+
+/// Build a per-struct map of which field indices are reference types.
+/// Used to select which struct literal args contribute to the borrow origin.
+fn compute_struct_field_ref_flags(
+    module: &Module,
+    scopes: &ScopeTable,
+    ref_type_structs: &FxHashSet<DefId>,
+) -> FxHashMap<DefId, Vec<bool>> {
+    let mut result = FxHashMap::default();
+    for item in &module.items {
+        if let Item::Struct(s) = &item.node {
+            if let Some(def_id) = scopes.lookup_from_scope(ScopeId(0), &s.name.node) {
+                if ref_type_structs.contains(&def_id) {
+                    let flags: Vec<bool> = s.fields.iter()
+                        .map(|f| is_ast_type_ref(&f.node.type_.node, scopes, ref_type_structs))
+                        .collect();
+                    result.insert(def_id, flags);
+                }
+            }
+        }
+    }
+    result
+}
+
 // ─── Borrow Checker ────────────────────────────────────────
 
 struct BorrowChecker<'a> {
@@ -133,9 +212,13 @@ struct BorrowChecker<'a> {
     /// Whether the file has `directive immutable-by-default`.
     immutable_by_default: bool,
     /// Expression type map from the type checker (for lifetime tracking).
-    /// Used in Phase 4+ for struct field type resolution.
-    #[allow(dead_code)]
     expr_types: &'a FxHashMap<Span, TypeId>,
+
+    // ── Struct borrowing state (Phase 4) ──
+    /// Structs that contain reference-type fields (directly or transitively).
+    ref_type_structs: FxHashSet<DefId>,
+    /// Per-struct field flags: true if that field's type is a reference type.
+    struct_field_ref_flags: FxHashMap<DefId, Vec<bool>>,
 
     // ── Lifetime inference state ──
     /// Origin of each reference-typed variable.
@@ -156,6 +239,8 @@ impl<'a> BorrowChecker<'a> {
         function_info: &'a FxHashMap<DefId, FunctionInfo>,
         immutable_by_default: bool,
         expr_types: &'a FxHashMap<Span, TypeId>,
+        ref_type_structs: FxHashSet<DefId>,
+        struct_field_ref_flags: FxHashMap<DefId, Vec<bool>>,
     ) -> Self {
         Self {
             scopes,
@@ -167,6 +252,8 @@ impl<'a> BorrowChecker<'a> {
             loop_depth: 0,
             immutable_by_default,
             expr_types,
+            ref_type_structs,
+            struct_field_ref_flags,
             var_origins: FxHashMap::default(),
             invalidated_origins: FxHashSet::default(),
             current_return_type_id: None,
@@ -254,7 +341,7 @@ impl<'a> BorrowChecker<'a> {
                     // from match arms) are views into existing data — not new local sources.
                     if def.kind == DefKind::Variable {
                         if let Some(type_id) = def.type_id {
-                            if !types::is_reference_type(type_id, self.types) {
+                            if !types::is_reference_type(type_id, self.types, &self.ref_type_structs) {
                                 return BorrowOrigin::Local(def_id);
                             }
                         } else {
@@ -312,15 +399,54 @@ impl<'a> BorrowChecker<'a> {
                 BorrowOrigin::Unknown
             }
 
+            // Struct literal: origin is the union of all reference-type field args
+            Expr::StructLiteral { name, args } => {
+                if let Some(def_id) = self.resolution_map.get(&name.span.start).copied()
+                    .or_else(|| self.scopes.lookup(&name.node))
+                {
+                    if let Some(ref_flags) = self.struct_field_ref_flags.get(&def_id) {
+                        let origins: Vec<BorrowOrigin> = args.iter()
+                            .zip(ref_flags.iter())
+                            .filter(|(_, is_ref)| **is_ref)
+                            .map(|(arg, _)| self.compute_expr_origin(arg))
+                            .filter(|o| !matches!(o, BorrowOrigin::Unknown))
+                            .collect();
+                        return match origins.len() {
+                            0 => BorrowOrigin::Unknown,
+                            1 => origins.into_iter().next().unwrap(),
+                            _ => BorrowOrigin::CallResult(origins),
+                        };
+                    }
+                }
+                BorrowOrigin::Unknown
+            }
+
             // Everything else: unknown (conservative)
             _ => BorrowOrigin::Unknown,
         }
     }
 
     /// Compute the origin of a function call result using callee's `return_borrows_from`.
+    /// Also handles struct constructor calls (Phase 4).
     fn compute_call_origin(&self, callee: &Spanned<Expr>, args: &[Spanned<CallArg>]) -> BorrowOrigin {
         let callee_def_id = self.resolve_callee_def_id(callee);
         if let Some(def_id) = callee_def_id {
+            // Phase 4: struct constructor call — compute origin from ref-type field args
+            if let Some(ref_flags) = self.struct_field_ref_flags.get(&def_id) {
+                let origins: Vec<BorrowOrigin> = args.iter()
+                    .zip(ref_flags.iter())
+                    .filter(|(_, is_ref)| **is_ref)
+                    .map(|(arg, _)| self.compute_expr_origin(&arg.node.value))
+                    .filter(|o| !matches!(o, BorrowOrigin::Unknown))
+                    .collect();
+                return match origins.len() {
+                    0 => BorrowOrigin::Unknown,
+                    1 => origins.into_iter().next().unwrap(),
+                    _ => BorrowOrigin::CallResult(origins),
+                };
+            }
+
+            // Regular function call: use return_borrows_from
             if let Some(info) = self.function_info.get(&def_id) {
                 if !info.return_borrows_from.is_empty() {
                     let origins: Vec<BorrowOrigin> = info.return_borrows_from.iter()
@@ -896,7 +1022,7 @@ impl<'a> BorrowChecker<'a> {
                     // Lifetime check: if the function returns a reference type,
                     // verify the return expression doesn't reference local data.
                     if let Some(ret_type_id) = self.current_return_type_id {
-                        if types::is_reference_type(ret_type_id, self.types) {
+                        if types::is_reference_type(ret_type_id, self.types, &self.ref_type_structs) {
                             let origin = self.compute_expr_origin(expr);
                             if origin.contains_local() {
                                 let local_names = origin.local_names(self.scopes);
@@ -1261,12 +1387,12 @@ impl<'a> BorrowChecker<'a> {
     fn is_var_reference_type(&self, def_id: DefId, type_annotation: Option<&Spanned<Type>>) -> bool {
         // Try the type annotation first (works even before type checking)
         if let Some(ann) = type_annotation {
-            return matches!(&ann.node, Type::Primitive(PrimitiveType::Str) | Type::Slice { .. });
+            return is_ast_type_ref(&ann.node, self.scopes, &self.ref_type_structs);
         }
         // Fall back to resolved type
         let def = self.scopes.get_def(def_id);
         if let Some(type_id) = def.type_id {
-            return types::is_reference_type(type_id, self.types);
+            return types::is_reference_type(type_id, self.types, &self.ref_type_structs);
         }
         false
     }
@@ -1294,7 +1420,7 @@ impl<'a> BorrowChecker<'a> {
                 self.current_param_def_ids.push((def_id, i));
 
                 // If this param is a reference type, track its origin as Param
-                let is_ref = matches!(&param.node.type_.node, Type::Primitive(PrimitiveType::Str) | Type::Slice { .. });
+                let is_ref = is_ast_type_ref(&param.node.type_.node, self.scopes, &self.ref_type_structs);
                 if is_ref {
                     self.var_origins.insert(def_id, BorrowOrigin::Param { param_index: i, def_id });
                 }
@@ -1308,7 +1434,7 @@ impl<'a> BorrowChecker<'a> {
             FunctionBody::Expression(expr) => {
                 // Expression-body functions: also validate dangling returns
                 if let Some(ret_type_id) = self.current_return_type_id {
-                    if types::is_reference_type(ret_type_id, self.types) {
+                    if types::is_reference_type(ret_type_id, self.types, &self.ref_type_structs) {
                         let origin = self.compute_expr_origin(expr);
                         if origin.contains_local() {
                             let local_names = origin.local_names(self.scopes);
@@ -1344,15 +1470,16 @@ fn compute_all_return_borrows(
     types: &TypeTable,
     resolution_map: &ResolutionMap,
     function_info: &mut FxHashMap<DefId, FunctionInfo>,
+    ref_type_structs: &FxHashSet<DefId>,
 ) {
     for item in &module.items {
         match &item.node {
             Item::Function(f) => {
-                compute_function_return_borrows(f, scopes, types, resolution_map, function_info);
+                compute_function_return_borrows(f, scopes, types, resolution_map, function_info, ref_type_structs);
             }
             Item::Equip(impl_block) => {
                 for method in &impl_block.items {
-                    compute_function_return_borrows(&method.node, scopes, types, resolution_map, function_info);
+                    compute_function_return_borrows(&method.node, scopes, types, resolution_map, function_info, ref_type_structs);
                 }
             }
             _ => {}
@@ -1366,6 +1493,7 @@ fn compute_function_return_borrows(
     types: &TypeTable,
     resolution_map: &ResolutionMap,
     function_info: &mut FxHashMap<DefId, FunctionInfo>,
+    ref_type_structs: &FxHashSet<DefId>,
 ) {
     let def_id = match scopes.lookup(&func.name.node) {
         Some(id) => id,
@@ -1378,7 +1506,7 @@ fn compute_function_return_borrows(
     };
 
     // Only relevant if the return type is a reference type
-    if !types::is_reference_type(ret_type_id, types) {
+    if !types::is_reference_type(ret_type_id, types, ref_type_structs) {
         return;
     }
 
@@ -1430,7 +1558,7 @@ fn compute_function_return_borrows(
             };
             let ref_param_indices: Vec<usize> = info.param_type_ids.iter()
                 .enumerate()
-                .filter(|(_, tid)| tid.map_or(false, |id| types::is_reference_type(id, types)))
+                .filter(|(_, tid)| tid.map_or(false, |id| types::is_reference_type(id, types, ref_type_structs)))
                 .map(|(i, _)| i)
                 .collect();
             if ref_param_indices.len() == 1 {
@@ -1455,7 +1583,7 @@ fn compute_function_return_borrows(
         };
         let ref_param_indices: Vec<usize> = info.param_type_ids.iter()
             .enumerate()
-            .filter(|(_, tid)| tid.map_or(false, |id| types::is_reference_type(id, types)))
+            .filter(|(_, tid)| tid.map_or(false, |id| types::is_reference_type(id, types, ref_type_structs)))
             .map(|(i, _)| i)
             .collect();
         if ref_param_indices.len() == 1 {
@@ -1518,6 +1646,14 @@ fn trace_expr_to_params(
             // self borrows from param index 0
             if param_names.contains_key("self") {
                 result.insert(0);
+            }
+        }
+
+        // Struct literal: trace all args conservatively (the function's return type
+        // is already known to be a reference type if we got here)
+        Expr::StructLiteral { args, .. } => {
+            for arg in args {
+                trace_expr_to_params(arg, param_names, resolution_map, scopes, result);
             }
         }
 
@@ -1592,11 +1728,18 @@ pub fn check_module(
     expr_types: &FxHashMap<Span, TypeId>,
     errors: &mut Vec<SemanticError>,
 ) {
+    // Phase 4: compute which structs have reference-type fields
+    let ref_type_structs = compute_ref_type_structs(module, scopes);
+    let struct_field_ref_flags = compute_struct_field_ref_flags(module, scopes, &ref_type_structs);
+
     // Pass 5a: compute return_borrows_from for each function
-    compute_all_return_borrows(module, scopes, types, resolution_map, function_info);
+    compute_all_return_borrows(module, scopes, types, resolution_map, function_info, &ref_type_structs);
 
     // Pass 5b: full borrow check with origin tracking
-    let mut checker = BorrowChecker::new(scopes, types, resolution_map, function_info, immutable_by_default, expr_types);
+    let mut checker = BorrowChecker::new(
+        scopes, types, resolution_map, function_info, immutable_by_default, expr_types,
+        ref_type_structs, struct_field_ref_flags,
+    );
 
     for item in &module.items {
         match &item.node {
@@ -2172,6 +2315,152 @@ void main():
         assert!(
             !has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { .. })),
             "unexpected UseAfterSourceMoved after reassignment: {:?}", errors
+        );
+    }
+
+    // ── Struct borrowing tests (Phase 4) ──
+
+    #[test]
+    fn struct_str_field_auto() {
+        // Struct with a str field assigned from param — no error
+        let source = "\
+struct View:
+    str name
+
+void main():
+    str s = \"hello\"
+    View v = View(s)
+    print(v.name)
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(
+                k,
+                SemanticErrorKind::UseAfterSourceMoved { .. }
+                    | SemanticErrorKind::DanglingReturn { .. }
+            )),
+            "unexpected error for struct with str field: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn struct_outlives_source() {
+        // Struct borrows from moved local → UseAfterSourceMoved
+        let source = "\
+struct View:
+    str name
+
+void consume(String !s):
+    pass
+
+void main():
+    String s = \"hello\"
+    View v = View(s)
+    consume(!s)
+    print(v.name)
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { name, source_name, .. }
+                if name == "v" && source_name == "s")),
+            "expected UseAfterSourceMoved for struct outliving its source, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn struct_from_literal_ok() {
+        // Struct with str field from string literal → no error (Static origin)
+        let source = "\
+struct View:
+    str name
+
+void main():
+    View v = View(\"hello\")
+    print(v.name)
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(
+                k,
+                SemanticErrorKind::UseAfterSourceMoved { .. }
+                    | SemanticErrorKind::DanglingReturn { .. }
+            )),
+            "unexpected error for struct with literal str field: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn struct_no_ref_fields_unaffected() {
+        // Struct without reference-type fields — no borrow tracking
+        let source = "\
+struct Point:
+    float x
+    float y
+
+void main():
+    Point p = Point(1.0, 2.0)
+    print(\"{p.x}\")
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(
+                k,
+                SemanticErrorKind::UseAfterSourceMoved { .. }
+                    | SemanticErrorKind::DanglingReturn { .. }
+            )),
+            "unexpected error for non-ref struct: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn struct_transitive_borrow() {
+        // Struct containing another struct with a ref field — transitive
+        let source = "\
+struct Inner:
+    str name
+
+struct Outer:
+    Inner inner
+
+void consume(String !s):
+    pass
+
+void main():
+    String s = \"hello\"
+    Inner i = Inner(s)
+    Outer o = Outer(i)
+    consume(!s)
+    print(o.inner.name)
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { .. })),
+            "expected UseAfterSourceMoved for transitive struct borrow, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn struct_mixed_fields() {
+        // Struct with both ref and non-ref fields — only ref field tracked
+        let source = "\
+struct Tagged:
+    str label
+    int count
+
+void consume(String !s):
+    pass
+
+void main():
+    String s = \"hello\"
+    Tagged t = Tagged(s, 42)
+    consume(!s)
+    print(t.label)
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { name, source_name, .. }
+                if name == "t" && source_name == "s")),
+            "expected UseAfterSourceMoved for struct with mixed fields, got: {:?}", errors
         );
     }
 }

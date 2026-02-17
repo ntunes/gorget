@@ -1,0 +1,13 @@
+# Lifetime error: struct borrows from a local String that gets moved
+
+struct View:
+    str name
+
+void consume(String !s):
+    pass
+
+void main():
+    String s = "hello"
+    View v = View(s)
+    consume(!s)
+    print(v.name)
