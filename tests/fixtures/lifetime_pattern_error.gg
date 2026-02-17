@@ -1,0 +1,14 @@
+# Lifetime error: str view source moved, used in match arm
+void consume(String !s):
+    pass
+
+void main():
+    String s = "hello"
+    str v = s
+    consume(!s)
+    int x = 1
+    match x:
+        case 1:
+            print(v)
+        case 2:
+            pass

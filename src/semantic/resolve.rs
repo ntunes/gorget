@@ -56,6 +56,8 @@ pub struct FunctionInfo {
     pub param_live_groups: Vec<Option<String>>,
     /// `where X outlives Y` bounds: `(longer_group, shorter_group)` pairs.
     pub outlives_bounds: Vec<(String, String)>,
+    /// Whether the function has a body (Block or Expression, not Declaration/Extern).
+    pub has_body: bool,
 }
 
 /// Shared context passed around during resolution.
@@ -227,6 +229,7 @@ fn collect_item(
                             param_is_live,
                             param_live_groups,
                             outlives_bounds,
+                            has_body: matches!(f.body, crate::parser::ast::FunctionBody::Block(_) | crate::parser::ast::FunctionBody::Expression(_)),
                         },
                     );
                 }

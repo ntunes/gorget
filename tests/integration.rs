@@ -3576,6 +3576,30 @@ fn lifetime_struct_error() {
 }
 
 #[test]
+fn lifetime_branch_error() {
+    check_gg_fails(
+        "lifetime_branch_error.gg",
+        "after source",
+    );
+}
+
+#[test]
+fn lifetime_pattern_error() {
+    check_gg_fails(
+        "lifetime_pattern_error.gg",
+        "after source",
+    );
+}
+
+#[test]
+fn lifetime_temporary_error() {
+    check_gg_fails(
+        "lifetime_temporary_error.gg",
+        "temporary",
+    );
+}
+
+#[test]
 fn lifetime_groups() {
     run_gg(
         "lifetime_groups.gg",

@@ -1,0 +1,12 @@
+# Lifetime error: str view used after source moved in one branch
+void consume(String !s):
+    pass
+
+void main():
+    String s = "hello"
+    str v = s
+    if true:
+        consume(!s)
+    else:
+        pass
+    print(v)

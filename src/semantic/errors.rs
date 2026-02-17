@@ -166,6 +166,9 @@ pub enum SemanticErrorKind {
     /// Bodyless function returning a reference type with no `live` params.
     MissingLiveAnnotation { func_name: String },
 
+    /// Binding a reference type to a temporary that will be immediately dropped.
+    TemporaryBorrow { name: String, callee: String },
+
     /// `where a outlives b` violated: group a's source was invalidated
     /// while group b's source is still alive.
     OutlivesViolation {
@@ -360,6 +363,9 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::MissingLiveAnnotation { func_name } => {
                 write!(f, "function `{func_name}` returns a reference type but has no `live` parameter annotations")
+            }
+            SemanticErrorKind::TemporaryBorrow { name, callee } => {
+                write!(f, "cannot bind `{name}` to temporary from `{callee}()` — value will be dropped")
             }
             SemanticErrorKind::OutlivesViolation { longer_group, shorter_group, longer_source, shorter_source } => {
                 write!(f, "borrow group `{longer_group}` must outlive `{shorter_group}`, but `{longer_source}` (group `{longer_group}`) was moved while `{shorter_source}` (group `{shorter_group}`) is still alive")

@@ -1,0 +1,7 @@
+# Lifetime error: binding str to temporary from function returning String
+String make_string():
+    return "hello"
+
+void main():
+    str v = make_string()
+    print(v)
