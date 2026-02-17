@@ -1,0 +1,37 @@
+struct NumberRange:
+    int start
+    int end_val
+
+struct NumberRangeIter:
+    int current
+    int end_val
+
+equip NumberRangeIter with Iterator[int]:
+    Option[int] next(&self):
+        if self.current >= self.end_val:
+            return None
+        int val = self.current
+        self.current = self.current + 1
+        return Some(val)
+
+equip NumberRange with Iterable[int]:
+    NumberRangeIter iter(&self):
+        return NumberRangeIter(self.start, self.end_val)
+
+void main():
+    NumberRange nums = NumberRange(1, 4)
+
+    # First iteration
+    for x in nums:
+        print("{x}")
+
+    # Second iteration over the same collection (proves fresh iterator)
+    for y in nums:
+        print("{y}")
+
+    # Empty iterable with for...else
+    NumberRange empty = NumberRange(5, 5)
+    for z in empty:
+        print("{z}")
+    else:
+        print("empty")

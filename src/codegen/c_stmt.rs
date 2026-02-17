@@ -1876,6 +1876,49 @@ impl CodegenContext<'_> {
         String::new()
     }
 
+    /// Check if an expression's type has an Iterable[T] trait implementation.
+    fn has_iterable_impl(&mut self, expr: &Spanned<Expr>) -> bool {
+        let type_name = self.infer_type_name_from_expr(expr);
+        if type_name.is_empty() {
+            return false;
+        }
+        self.traits.impls.iter().any(|i|
+            i.self_type_name == type_name && i.trait_name.as_deref() == Some("Iterable")
+        )
+    }
+
+    /// Get info for an Iterable[T] implementation: (elem_c_type, iter_c_type, iter_type_name).
+    fn get_iterable_iter_info(&mut self, expr: &Spanned<Expr>) -> (String, String, String) {
+        let type_name = self.infer_type_name_from_expr(expr);
+        for imp in &self.traits.impls {
+            if imp.self_type_name == type_name && imp.trait_name.as_deref() == Some("Iterable") {
+                // elem_c_type from the trait generic arg (e.g. int from Iterable[int])
+                let elem_c_type = imp.trait_generic_args.first()
+                    .map(|t| c_types::ast_type_to_c(t, self.scopes))
+                    .unwrap_or_else(|| "int64_t".to_string());
+                // iter type from the iter() method's return type
+                if let Some((_def_id, sig)) = imp.methods.get("iter") {
+                    let iter_type_name = match self.types.get(sig.return_type) {
+                        crate::semantic::types::ResolvedType::Defined(def_id) => {
+                            self.scopes.get_def(*def_id).name.clone()
+                        }
+                        crate::semantic::types::ResolvedType::Generic(def_id, _) => {
+                            self.scopes.get_def(*def_id).name.clone()
+                        }
+                        _ => String::new(),
+                    };
+                    let iter_c_type = if iter_type_name.is_empty() {
+                        "void".to_string()
+                    } else {
+                        iter_type_name.clone()
+                    };
+                    return (elem_c_type, iter_c_type, iter_type_name);
+                }
+            }
+        }
+        ("int64_t".to_string(), "void".to_string(), String::new())
+    }
+
     /// Check if an iterable expression has an Iterator[T] trait implementation.
     fn has_iterator_impl(&mut self, expr: &Spanned<Expr>) -> bool {
         let type_name = self.infer_type_name_from_expr(expr);
@@ -2032,6 +2075,24 @@ impl CodegenContext<'_> {
             emitter.emit_line(&format!(
                 "{elem_type} {var_name} = *({elem_type}*)((char*){iter}.keys + {idx} * {iter}.key_size);"
             ));
+        } else if self.has_iterable_impl(iterable) {
+            // Iterable[T]: call iter() to get a fresh iterator, then use Iterator protocol
+            let collection_expr = self.gen_expr(iterable);
+            let collection_type_name = self.infer_type_name_from_expr(iterable);
+            let (elem_c_type, iter_c_type, iter_type_name) = self.get_iterable_iter_info(iterable);
+            let iter_fn = c_mangle::mangle_trait_method("Iterable", &collection_type_name, "iter");
+            let option_mangled = self.register_generic("Option", &[elem_c_type.clone()], super::GenericInstanceKind::Enum);
+            let tag_none = c_mangle::mangle_tag(&option_mangled, "None");
+            let next_fn = c_mangle::mangle_trait_method("Iterator", &iter_type_name, "next");
+            let iter_tmp = emitter.fresh_temp();
+            let next_tmp = emitter.fresh_temp();
+            emitter.emit_line(&format!("{iter_c_type} {iter_tmp} = {iter_fn}(&{collection_expr});"));
+            emitter.emit_line("while (1) {");
+            emitter.indent();
+            if !has_else { self.push_drop_scope(DropScopeKind::Loop); }
+            emitter.emit_line(&format!("{option_mangled} {next_tmp} = {next_fn}(&{iter_tmp});"));
+            emitter.emit_line(&format!("if ({next_tmp}.tag == {tag_none}) break;"));
+            emitter.emit_line(&format!("{elem_c_type} {var_name} = {next_tmp}.data.Some._0;"));
         } else if self.has_iterator_impl(iterable) {
             let iter_expr = self.gen_expr(iterable);
             let type_name = self.infer_type_name_from_expr(iterable);

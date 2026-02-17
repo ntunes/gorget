@@ -213,6 +213,17 @@ fn register_builtin_traits(
             });
             m
         }),
+        // Iterable[T]: IterType iter(&self) — return type is placeholder (concrete from equip)
+        ("Iterable", {
+            let mut m = FxHashMap::default();
+            m.insert("iter".into(), FunctionSig {
+                params: vec![],
+                return_type: types.error_id, // placeholder — concrete iterator type from equip block
+                has_self: true,
+                self_ownership: Some(Ownership::Borrow),
+            });
+            m
+        }),
         // Add[Out]: Out add(self, Self rhs)
         ("Add", {
             let mut m = FxHashMap::default();
@@ -712,8 +723,8 @@ equip Circle with Drawable:
 ";
         let (registry, errors) = analyze(source);
         assert!(errors.is_empty(), "errors: {:?}", errors);
-        // 15 built-in traits + 1 user-defined trait
-        assert_eq!(registry.traits.len(), 16);
+        // 16 built-in traits + 1 user-defined trait
+        assert_eq!(registry.traits.len(), 17);
         assert_eq!(registry.impls.len(), 1);
         assert!(registry.impls[0].trait_.is_some());
     }
@@ -751,6 +762,7 @@ equip Circle with Drawable:
         assert!(trait_names.contains(&"Hashable"));
         assert!(trait_names.contains(&"Drop"));
         assert!(trait_names.contains(&"Iterator"));
+        assert!(trait_names.contains(&"Iterable"));
     }
 
     #[test]
@@ -774,6 +786,58 @@ equip Counter with Iterator[int]:
         // Check that trait_generic_args is populated
         let iter_impl = registry.impls.iter().find(|i| i.trait_name.as_deref() == Some("Iterator")).unwrap();
         assert_eq!(iter_impl.trait_generic_args.len(), 1);
+    }
+
+    #[test]
+    fn iterable_trait_impl() {
+        let source = "\
+struct NumberRange:
+    int start
+    int end_val
+
+struct NumberRangeIter:
+    int current
+    int end_val
+
+equip NumberRangeIter with Iterator[int]:
+    Option[int] next(&self):
+        if self.current >= self.end_val:
+            return None
+        int val = self.current
+        self.current = self.current + 1
+        return Some(val)
+
+equip NumberRange with Iterable[int]:
+    NumberRangeIter iter(&self):
+        return NumberRangeIter(self.start, self.end_val)
+";
+        let (registry, errors) = analyze(source);
+        assert!(errors.is_empty(), "errors: {:?}", errors);
+        assert!(registry.has_trait_impl_by_name("NumberRange", "Iterable"));
+        assert!(registry.has_trait_impl_by_name("NumberRangeIter", "Iterator"));
+        // Check that trait_generic_args is populated for Iterable
+        let iterable_impl = registry.impls.iter()
+            .find(|i| i.trait_name.as_deref() == Some("Iterable"))
+            .unwrap();
+        assert_eq!(iterable_impl.trait_generic_args.len(), 1);
+    }
+
+    #[test]
+    fn iterable_missing_iter_method() {
+        let source = "\
+struct MyCollection:
+    int size
+
+equip MyCollection with Iterable[int]:
+    int count(self):
+        return self.size
+";
+        let (_, errors) = analyze(source);
+        assert!(errors.iter().any(|e| matches!(
+            &e.kind,
+            SemanticErrorKind::MissingTraitMethod { trait_, method, .. }
+                if trait_ == "Iterable" && method == "iter"
+        )));
     }
 
     #[test]

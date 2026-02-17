@@ -1510,6 +1510,18 @@ fn iterator_trait() {
 }
 
 #[test]
+fn iterable_trait() {
+    run_gg("iterable.gg", "\
+1
+2
+3
+1
+2
+3
+empty");
+}
+
+#[test]
 fn iterator_adapters() {
     run_gg("iterator_adapters.gg", "\
 5
