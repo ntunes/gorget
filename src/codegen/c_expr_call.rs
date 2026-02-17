@@ -249,6 +249,12 @@ impl CodegenContext<'_> {
                             return format!("gorget_string_new(gorget_char_to_str({c}))");
                         }
                     }
+                    "codepoint_to_str" => {
+                        if let Some(arg) = args.first() {
+                            let cp = self.gen_expr(&arg.node.value);
+                            return format!("gorget_string_new(gorget_codepoint_to_utf8({cp}))");
+                        }
+                    }
                     "getenv" => {
                         if let Some(arg) = args.first() {
                             let name_expr = self.gen_expr(&arg.node.value);

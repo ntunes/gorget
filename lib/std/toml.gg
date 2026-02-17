@@ -9,7 +9,7 @@
 # This avoids Gorget's value-type Dict aliasing (copying metadata on extract).
 
 from std.collections import Vector, Dict
-from std.conv import parse_int, parse_float, int_to_str, float_to_str, bool_to_str, char_to_str
+from std.conv import parse_int, parse_float, int_to_str, float_to_str, bool_to_str, char_to_str, codepoint_to_str
 
 # ── TOML value type ─────────────────────────────────────────
 
@@ -210,14 +210,30 @@ equip TomlParser:
         elif esc == 'f':
             return "\f"
         elif esc == 'u' or esc == 'U':
-            int hex_len = 4
+            int toml_hex_len = 4
             if esc == 'U':
-                hex_len = 8
-            int hex_count = 0
-            while hex_count < hex_len and self.pos < self.source.len():
+                toml_hex_len = 8
+            int toml_uni_cp = 0
+            int toml_uni_cnt = 0
+            while toml_uni_cnt < toml_hex_len and self.pos < self.source.len():
+                char toml_uhc = self.source[self.pos]
+                int toml_uhv = -1
+                if toml_uhc >= '0' and toml_uhc <= '9':
+                    toml_uhv = toml_uhc as int - '0' as int
+                elif toml_uhc >= 'a' and toml_uhc <= 'f':
+                    toml_uhv = toml_uhc as int - 'a' as int + 10
+                elif toml_uhc >= 'A' and toml_uhc <= 'F':
+                    toml_uhv = toml_uhc as int - 'A' as int + 10
+                if toml_uhv < 0:
+                    self.fail("invalid hex digit in unicode escape")
+                    return ""
+                toml_uni_cp = toml_uni_cp * 16 + toml_uhv
                 self.pos = self.pos + 1
-                hex_count = hex_count + 1
-            return "?"
+                toml_uni_cnt = toml_uni_cnt + 1
+            if toml_uni_cnt < toml_hex_len:
+                self.fail("truncated unicode escape")
+                return ""
+            return codepoint_to_str(toml_uni_cp)
         self.fail("invalid escape sequence")
         return ""
 

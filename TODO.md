@@ -5,8 +5,6 @@
 
 
 
-- **Unicode escapes silently dropped in JSON and TOML parsers**: `\uXXXX` in JSON skips hex digits and produces empty string; TOML returns literal `"?"`. Silent data loss — `\u0041` should produce `'A'`. Either decode the codepoint or reject with an explicit error. (`json.gg:97-102`, `toml.gg:212-220`) [added: 2026-02-16]
-
 - **JSON/TOML accessors fail silently**: `get()`, `at()`, `as_int()` etc. return `Null()` or default values on type mismatch / missing keys with no way to distinguish "key absent" from "value is null." Need `has()`/`contains()` methods or `Result` return types. (`json.gg:350-458`, `toml.gg:837-951`) [added: 2026-02-16]
 
 - **Crypto module error handling is partial**: `crypto_rsa_load_public()` returns `Result[RSAKey, str]` but other fallible ops like `crypto_aes_ctr_new()` return bare types. C runtime has `gorget_crypto_last_error()` but no Gorget API exposes it. (`stdlib.rs:713`) [added: 2026-02-16]

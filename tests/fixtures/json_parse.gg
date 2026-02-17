@@ -44,4 +44,10 @@ void main():
     Result[Json, str] bad_result = json_parse("not json")
     bool is_err_val = bad_result.is_err()
     print("{is_err_val}")
+    # Unicode escapes
+    str json_uni = "[\"\\u0041\", \"\\u0048\\u0069\", \"\\u0041bc\"]"
+    Json parsed_uni = json_parse(json_uni).unwrap()
+    print(parsed_uni.at(0).as_str())
+    print(parsed_uni.at(1).as_str())
+    print(parsed_uni.at(2).as_str())
     print("done")

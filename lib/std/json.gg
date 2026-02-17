@@ -4,7 +4,7 @@
 # No C dependencies — uses only Gorget standard library.
 
 from std.collections import Vector, Dict
-from std.conv import parse_int, parse_float, int_to_str, float_to_str, bool_to_str, char_to_str
+from std.conv import parse_int, parse_float, int_to_str, float_to_str, bool_to_str, char_to_str, codepoint_to_str
 
 # ── JSON value type ──────────────────────────────────────────
 
@@ -95,11 +95,59 @@ equip JsonParser:
                 elif esc == '/':
                     result = result + "/"
                 elif esc == 'u':
-                    # \uXXXX — skip hex digits (Unicode not fully decoded)
-                    int j = 0
-                    while j < 4 and self.pos < self.input.len():
+                    int uni_cp = 0
+                    int uni_cnt = 0
+                    while uni_cnt < 4 and self.pos < self.input.len():
+                        char uni_hc = self.input[self.pos]
+                        int uni_hv = -1
+                        if uni_hc >= '0' and uni_hc <= '9':
+                            uni_hv = uni_hc as int - '0' as int
+                        elif uni_hc >= 'a' and uni_hc <= 'f':
+                            uni_hv = uni_hc as int - 'a' as int + 10
+                        elif uni_hc >= 'A' and uni_hc <= 'F':
+                            uni_hv = uni_hc as int - 'A' as int + 10
+                        if uni_hv < 0:
+                            self.fail("invalid hex digit in unicode escape")
+                            return ""
+                        uni_cp = uni_cp * 16 + uni_hv
                         self.pos = self.pos + 1
-                        j = j + 1
+                        uni_cnt = uni_cnt + 1
+                    if uni_cnt < 4:
+                        self.fail("truncated unicode escape")
+                        return ""
+                    # Handle UTF-16 surrogate pairs for codepoints > U+FFFF
+                    if uni_cp >= 55296 and uni_cp <= 56319:
+                        if self.pos + 1 < self.input.len() and self.input[self.pos] == '\\' and self.input[self.pos + 1] == 'u':
+                            self.pos = self.pos + 2
+                            int uni_low = 0
+                            int uni_lcnt = 0
+                            while uni_lcnt < 4 and self.pos < self.input.len():
+                                char uni_lhc = self.input[self.pos]
+                                int uni_lhv = -1
+                                if uni_lhc >= '0' and uni_lhc <= '9':
+                                    uni_lhv = uni_lhc as int - '0' as int
+                                elif uni_lhc >= 'a' and uni_lhc <= 'f':
+                                    uni_lhv = uni_lhc as int - 'a' as int + 10
+                                elif uni_lhc >= 'A' and uni_lhc <= 'F':
+                                    uni_lhv = uni_lhc as int - 'A' as int + 10
+                                if uni_lhv < 0:
+                                    self.fail("invalid hex digit in surrogate pair")
+                                    return ""
+                                uni_low = uni_low * 16 + uni_lhv
+                                self.pos = self.pos + 1
+                                uni_lcnt = uni_lcnt + 1
+                            if uni_low >= 56320 and uni_low <= 57343:
+                                uni_cp = 65536 + (uni_cp - 55296) * 1024 + (uni_low - 56320)
+                            else:
+                                self.fail("invalid low surrogate in unicode escape pair")
+                                return ""
+                        else:
+                            self.fail("missing low surrogate after high surrogate")
+                            return ""
+                    elif uni_cp >= 56320 and uni_cp <= 57343:
+                        self.fail("unexpected low surrogate")
+                        return ""
+                    result = result + codepoint_to_str(uni_cp)
                 else:
                     result = result + "\\"
                     result = result + char_to_str(esc)

@@ -1816,6 +1816,8 @@ true
 true
 error caught
 99
+A
+B
 done",
     );
 }
@@ -1866,6 +1868,9 @@ true
 true
 0
 true
+A
+Hi
+Abc
 done",
     );
 }

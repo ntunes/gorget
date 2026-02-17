@@ -118,4 +118,14 @@ void main():
         case Error(err9):
             print(err9)
 
+    # ── Test 10: Unicode escapes ─────────────────────────
+    str toml_uni = "alpha = \"\\u0041\"\nbeta = \"\\U00000042\""
+    Result[TomlValue, str] parsed_uni = toml_parse(toml_uni)
+    match parsed_uni:
+        case Ok(doc10):
+            print(doc10.get("alpha").as_str())
+            print(doc10.get("beta").as_str())
+        case Error(err10):
+            print(err10)
+
     print("done")
