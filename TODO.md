@@ -92,8 +92,6 @@
 
 - **`gg info` command**: show fields, methods, traits, memory layout for a type. [added: 2026-02-10]
 
-- **Byte strings (`b"..."`)**: Not yet parsed or supported. Needed for binary data handling. [from roadmap, added: 2026-02-16]
-
 - **Associated type validation**: Associated types are parsed but not validated or resolved in semantic analysis. [from roadmap, added: 2026-02-16]
 
 - **Const evaluation**: No compile-time expression evaluation. Needed for const declarations, array sizes, and const generics. [from roadmap, added: 2026-02-16]
