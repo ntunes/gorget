@@ -1,10 +1,14 @@
 from std.collections import Vector
 
 struct Counter:
+    int start
+    int max
+
+struct CounterIter:
     int current
     int max
 
-equip Counter with Iterator[int]:
+equip CounterIter with Iterator[int]:
     Option[int] next(&self):
         if self.current >= self.max:
             return None
@@ -12,15 +16,17 @@ equip Counter with Iterator[int]:
         self.current = self.current + 1
         return Some(val)
 
+equip Counter with Iterable[int]:
+    CounterIter iter(&self):
+        return CounterIter(self.start, self.max)
+
 void main():
     # collect: drain iterator into a Vector
-    Counter c1 = Counter(0, 5)
-    Vector[int] collected = c1.collect()
+    Vector[int] collected = Counter(0, 5).iter().collect()
     print("{collected.len()}")
 
     # filter: keep only even numbers
-    Counter c2 = Counter(0, 5)
-    Vector[int] evens = c2.filter((int x): x % 2 == 0)
+    Vector[int] evens = Counter(0, 5).iter().filter((int x): x % 2 == 0)
     print("{evens.len()}")
 
     # filter: verify values
@@ -31,17 +37,14 @@ void main():
     print("{collected.get(4)}")
 
     # map: double each element
-    Counter c3 = Counter(0, 5)
-    Vector[int] doubled = c3.map((int x): x * 2)
+    Vector[int] doubled = Counter(0, 5).iter().map((int x): x * 2)
     print("{doubled.get(0)}")
     print("{doubled.get(2)}")
 
     # fold: sum all elements
-    Counter c4 = Counter(0, 5)
-    int total = c4.fold(0, (int acc, int x): acc + x)
+    int total = Counter(0, 5).iter().fold(0, (int acc, int x): acc + x)
     print("{total}")
 
     # fold with non-zero init
-    Counter c5 = Counter(1, 4)
-    int total2 = c5.fold(100, (int acc, int x): acc + x)
+    int total2 = Counter(1, 4).iter().fold(100, (int acc, int x): acc + x)
     print("{total2}")

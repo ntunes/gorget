@@ -1147,7 +1147,8 @@ mod tests {
 
         assert!(struct_names.contains(&"EntityPool".to_string()));
         assert!(struct_names.contains(&"SparseSet".to_string()));
-        assert_eq!(equip_count, 2);
+        assert!(struct_names.contains(&"SparseSetIter".to_string()));
+        assert_eq!(equip_count, 4);
     }
 
     #[test]

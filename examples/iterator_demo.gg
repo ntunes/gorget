@@ -3,17 +3,26 @@
 from std.collections import Vector
 
 struct Range:
+    int start
+    int stop
+    int step
+
+struct RangeIter:
     int current
     int stop
     int step
 
-equip Range with Iterator[int]:
+equip RangeIter with Iterator[int]:
     Option[int] next(&self):
         if self.current >= self.stop:
             return None
         int val = self.current
         self.current = self.current + self.step
         return Some(val)
+
+equip Range with Iterable[int]:
+    RangeIter iter(&self):
+        return RangeIter(self.start, self.stop, self.step)
 
 struct FibIter:
     int a
@@ -39,8 +48,7 @@ void main():
         print("  {x}")
 
     # Collect evens from a range
-    Range r2 = Range(1, 20, 1)
-    Vector[int] evens = r2.filter((int x): x % 2 == 0)
+    Vector[int] evens = Range(1, 20, 1).iter().filter((int x): x % 2 == 0)
     print("Even numbers 1..20:")
     for e in evens:
         print("  {e}")
@@ -58,8 +66,7 @@ void main():
     print("Sum of first 20 Fibonacci numbers: {total}")
 
     # Map: square each element
-    Range r3 = Range(1, 6, 1)
-    Vector[int] squares = r3.map((int x): x * x)
+    Vector[int] squares = Range(1, 6, 1).iter().map((int x): x * x)
     print("Squares of 1..5:")
     for s in squares:
         print("  {s}")

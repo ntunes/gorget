@@ -1,8 +1,12 @@
 struct Counter:
+    int start
+    int max
+
+struct CounterIter:
     int current
     int max
 
-equip Counter with Iterator[int]:
+equip CounterIter with Iterator[int]:
     Option[int] next(&self):
         if self.current >= self.max:
             return None
@@ -10,11 +14,15 @@ equip Counter with Iterator[int]:
         self.current = self.current + 1
         return Some(val)
 
+equip Counter with Iterable[int]:
+    CounterIter iter(&self):
+        return CounterIter(self.start, self.max)
+
 void main():
     Counter c = Counter(0, 5)
     for x in c:
         print("{x}")
-    Counter c2 = Counter(10, 13)
+    CounterIter c2 = Counter(10, 13).iter()
     print("{c2.next().unwrap()}")
     print("{c2.next().unwrap()}")
     print("{c2.next().unwrap()}")

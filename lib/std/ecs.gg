@@ -87,3 +87,20 @@ equip SparseSet[T]:
 
     T data_at(self, int idx):
         return self.data.get(idx)
+
+struct SparseSetIter:
+    Vector[int] entity_ids
+    int idx
+    int count
+
+equip SparseSetIter with Iterator[int]:
+    Option[int] next(&self):
+        if self.idx >= self.count:
+            return None
+        int eid = self.entity_ids.get(self.idx)
+        self.idx = self.idx + 1
+        return Some(eid)
+
+equip SparseSet[T] with Iterable[int]:
+    SparseSetIter iter(&self):
+        return SparseSetIter(self.entity_ids, 0, self.count)

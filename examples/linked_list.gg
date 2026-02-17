@@ -1,9 +1,9 @@
-# Arena-backed Linked List with Iterator Support
+# Arena-backed Linked List with Iterable Support
 #
 # This example demonstrates:
 #   - Struct field access and mutation via &self
 #   - Parallel-array arena (no nested generics needed)
-#   - Iterator[T] trait implementation
+#   - Iterable[T] / Iterator[T] trait split
 #   - For-loop desugaring over custom types
 #   - Iterator adapters: .fold(), .map()
 #
@@ -19,6 +19,10 @@ struct LinkedList:
     Vector[int] nexts
     int head
     int len
+
+struct LinkedListIter:
+    Vector[int] values
+    Vector[int] nexts
     int cursor
 
 equip LinkedList:
@@ -30,7 +34,6 @@ equip LinkedList:
         self.nexts.push(self.head)
         self.head = idx
         self.len = self.len + 1
-        self.cursor = self.head
 
     # Return the number of elements.
     int length(self):
@@ -40,13 +43,8 @@ equip LinkedList:
     int peek(self):
         return self.values[self.head]
 
-    # Reset the iteration cursor back to the head.
-    # Call this before iterating again after a previous traversal.
-    void reset(&self):
-        self.cursor = self.head
-
-# Implement Iterator[int] so the list works with for-loops and adapters.
-equip LinkedList with Iterator[int]:
+# Iterator walks the linked list from head to tail.
+equip LinkedListIter with Iterator[int]:
     Option[int] next(&self):
         if self.cursor == -1:
             return None
@@ -54,9 +52,14 @@ equip LinkedList with Iterator[int]:
         self.cursor = self.nexts[self.cursor]
         return Some(val)
 
+# Iterable creates a fresh iterator each time.
+equip LinkedList with Iterable[int]:
+    LinkedListIter iter(&self):
+        return LinkedListIter(self.values, self.nexts, self.head)
+
 void main():
-    # Construct an empty list (head=-1, cursor=-1)
-    LinkedList list = LinkedList(Vector[int](), Vector[int](), -1, 0, -1)
+    # Construct an empty list (head=-1)
+    LinkedList list = LinkedList(Vector[int](), Vector[int](), -1, 0)
 
     # Build list: 10 -> 20 -> 30
     list.push_front(30)
@@ -66,18 +69,16 @@ void main():
     print(list.length())
     print(list.peek())
 
-    # Iterate with a for-loop (uses Iterator[int].next)
+    # Iterate with a for-loop (uses Iterable[int].iter → Iterator[int].next)
     for x in list:
         print(x)
 
     # Sum all elements using fold
-    list.reset()
-    int total = list.fold(0, (int acc, int x): acc + x)
+    int total = list.iter().fold(0, (int acc, int x): acc + x)
     print(total)
 
     # Double each element using map
-    list.reset()
-    Vector[int] doubled = list.map((int x): x * 2)
+    Vector[int] doubled = list.iter().map((int x): x * 2)
     print(doubled.get(0))
     print(doubled.get(1))
     print(doubled.get(2))
