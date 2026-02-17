@@ -1627,7 +1627,9 @@ hello world
 no interp
 42
 10 + 20 = 30
-HELLO",
+HELLO
+value is 99
+hello from gorget",
     );
 }
 

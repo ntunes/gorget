@@ -176,11 +176,11 @@ equip XmlParser:
     void consume_str(&self, str expected):
         int elen = expected.len()
         if self.pos + elen > self.xml_input.len():
-            str cs_err = "expected " + expected
+            str cs_err = "expected {expected}"
             self.fail(cs_err)
             return
         if self.xml_input[self.pos..self.pos + elen] != expected:
-            str cs_err = "expected " + expected
+            str cs_err = "expected {expected}"
             self.fail(cs_err)
             return
         self.pos = self.pos + elen
@@ -314,7 +314,7 @@ equip XmlParser:
         if self.failed():
             return Text("")
         if close_tag != elem_tag:
-            str tag_err = "mismatched closing tag: expected " + elem_tag + " got " + close_tag
+            str tag_err = "mismatched closing tag: expected {elem_tag} got {close_tag}"
             self.fail(tag_err)
             return Text("")
         self.skip_ws()

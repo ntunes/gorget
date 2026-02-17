@@ -131,7 +131,7 @@ impl CodegenContext<'_> {
     }
 
     /// Generate `gorget_format("fmt", args...)` from a StringLit.
-    fn gen_gorget_format_from_string_lit(&mut self, s: &StringLit) -> String {
+    pub(super) fn gen_gorget_format_from_string_lit(&mut self, s: &StringLit) -> String {
         let mut format_parts = Vec::new();
         let mut format_args = Vec::new();
 

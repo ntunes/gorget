@@ -23,3 +23,12 @@ void main():
     str hello = format("hello")
     str upper = hello.to_upper()
     print(upper)
+
+    # Interpolation in assignment (desugared to format)
+    int v = 99
+    str assigned = "value is {v}"
+    print(assigned)
+
+    # Interpolation in function argument
+    str who = "gorget"
+    print("hello " + "from {who}")

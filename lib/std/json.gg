@@ -329,9 +329,9 @@ str json_stringify(Json value):
             return json_result + "]"
         case Obj(obj_map):
             if obj_map.len() == 0:
-                return "{}"
+                return "\{\}"
             Vector[str] key_list = obj_map.keys()
-            str json_result = "{"
+            str json_result = "\{"
             int idx = 0
             while idx < key_list.len():
                 if idx > 0:
@@ -339,7 +339,7 @@ str json_stringify(Json value):
                 str key_str = key_list.get(idx)
                 json_result = json_result + json_escape_string(key_str) + ":" + json_stringify(obj_map[key_str])
                 idx = idx + 1
-            return json_result + "}"
+            return json_result + "\}"
 
 str json_make_indent(int depth):
     str result = ""
@@ -378,9 +378,9 @@ str json_pretty_internal(Json value, int depth):
             return json_result + "\n" + indent + "]"
         case Obj(obj_map):
             if obj_map.len() == 0:
-                return "{}"
+                return "\{\}"
             Vector[str] key_list = obj_map.keys()
-            str json_result = "{\n"
+            str json_result = "\{\n"
             int idx = 0
             while idx < key_list.len():
                 if idx > 0:
@@ -388,7 +388,7 @@ str json_pretty_internal(Json value, int depth):
                 str key_str = key_list.get(idx)
                 json_result = json_result + inner + json_escape_string(key_str) + ": " + json_pretty_internal(obj_map[key_str], depth + 1)
                 idx = idx + 1
-            return json_result + "\n" + indent + "}"
+            return json_result + "\n" + indent + "\}"
 
 str json_pretty(Json value):
     return json_pretty_internal(value, 0)

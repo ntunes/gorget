@@ -764,9 +764,9 @@ str toml_stringify_value(TomlValue tv):
             return arr_out + "]"
         case Tbl(tv_tbl):
             if tv_tbl.len() == 0:
-                return "{}"
+                return "\{\}"
             Vector[str] tbl_keys = tv_tbl.keys()
-            str tbl_out = "{"
+            str tbl_out = "\{"
             int ti = 0
             while ti < tbl_keys.len():
                 if ti > 0:
@@ -774,7 +774,7 @@ str toml_stringify_value(TomlValue tv):
                 str tk = tbl_keys.get(ti)
                 tbl_out = tbl_out + tk + " = " + toml_stringify_value(tv_tbl[tk])
                 ti = ti + 1
-            return tbl_out + "}"
+            return tbl_out + "\}"
 
 str toml_stringify_section(str sec_prefix, Dict[str, TomlValue] tbl):
     str sec_out = ""
