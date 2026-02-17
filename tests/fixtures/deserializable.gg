@@ -1,0 +1,84 @@
+import std.json
+from std.collections import Box
+
+@derive(Serializable, Deserializable)
+struct User:
+    str name
+    int age
+    bool active
+
+@derive(Serializable, Deserializable)
+enum Color:
+    Red
+    Green
+    Custom(int, int, int)
+
+@derive(Serializable, Deserializable)
+struct Profile:
+    str label
+    User user
+
+void main():
+    # Roundtrip: struct
+    User u1 = User("Alice", 30, true)
+    JsonSerializer js1 = JsonSerializer("")
+    Box[Serializer] ser1 = Box.new(js1)
+    u1.serialize(ser1)
+    str json1 = ser1.result()
+    Json j1 = json_parse(json1).unwrap()
+    JsonDeserializer jd1 = JsonDeserializer(j1, Vector[Json](), "")
+    Box[Deserializer] de1 = Box.new(jd1)
+    User u2 = deserialize_User(de1).unwrap()
+    JsonSerializer js1b = JsonSerializer("")
+    Box[Serializer] ser1b = Box.new(js1b)
+    u2.serialize(ser1b)
+    str r1 = ser1b.result()
+    print(r1)
+
+    # Roundtrip: enum unit variant
+    Color c1 = Red()
+    JsonSerializer js2 = JsonSerializer("")
+    Box[Serializer] ser2 = Box.new(js2)
+    c1.serialize(ser2)
+    str json2 = ser2.result()
+    Json j2 = json_parse(json2).unwrap()
+    JsonDeserializer jd2 = JsonDeserializer(j2, Vector[Json](), "")
+    Box[Deserializer] de2 = Box.new(jd2)
+    Color c2 = deserialize_Color(de2).unwrap()
+    JsonSerializer js2b = JsonSerializer("")
+    Box[Serializer] ser2b = Box.new(js2b)
+    c2.serialize(ser2b)
+    str r2 = ser2b.result()
+    print(r2)
+
+    # Roundtrip: enum data variant
+    Color c3 = Custom(255, 128, 0)
+    JsonSerializer js3 = JsonSerializer("")
+    Box[Serializer] ser3 = Box.new(js3)
+    c3.serialize(ser3)
+    str json3 = ser3.result()
+    Json j3 = json_parse(json3).unwrap()
+    JsonDeserializer jd3 = JsonDeserializer(j3, Vector[Json](), "")
+    Box[Deserializer] de3 = Box.new(jd3)
+    Color c4 = deserialize_Color(de3).unwrap()
+    JsonSerializer js3b = JsonSerializer("")
+    Box[Serializer] ser3b = Box.new(js3b)
+    c4.serialize(ser3b)
+    str r3 = ser3b.result()
+    print(r3)
+
+    # Roundtrip: nested struct
+    Profile p1 = Profile("admin", User("Bob", 25, false))
+    JsonSerializer js4 = JsonSerializer("")
+    Box[Serializer] ser4 = Box.new(js4)
+    p1.serialize(ser4)
+    str json4 = ser4.result()
+    Json j4 = json_parse(json4).unwrap()
+    JsonDeserializer jd4 = JsonDeserializer(j4, Vector[Json](), "")
+    Box[Deserializer] de4 = Box.new(jd4)
+    Profile p2 = deserialize_Profile(de4).unwrap()
+    JsonSerializer js4b = JsonSerializer("")
+    Box[Serializer] ser4b = Box.new(js4b)
+    p2.serialize(ser4b)
+    str r4 = ser4b.result()
+    print(r4)

@@ -36,6 +36,167 @@ trait Serializer:
 trait Serializable:
     void serialize(self, Box[Serializer] ser)
 
+# ── Deserialization traits ─────────────────────────────────
+
+trait Deserializer:
+    bool read_bool(&self)
+    int read_int(&self)
+    float read_float(&self)
+    str read_str(&self)
+    bool is_null(self)
+    bool is_string(self)
+    bool is_struct(self)
+    bool is_seq(self)
+    void begin_struct(&self)
+    bool has_field(self, str name)
+    void field(&self, str name)
+    void end_struct(&self)
+    int begin_seq(&self)
+    void elem(&self, int index)
+    void end_seq(&self)
+    bool has_error(self)
+    str error(self)
+
+struct JsonDeserializer:
+    Json de_current
+    Vector[Json] de_stack
+    str de_err
+
+equip JsonDeserializer with Deserializer:
+    bool read_bool(&self):
+        if self.de_err != "":
+            return false
+        match self.de_current:
+            case Bool(de_bval):
+                return de_bval
+            else:
+                self.de_err = "expected bool"
+                return false
+
+    int read_int(&self):
+        if self.de_err != "":
+            return 0
+        match self.de_current:
+            case Int(de_ival):
+                return de_ival
+            else:
+                self.de_err = "expected int"
+                return 0
+
+    float read_float(&self):
+        if self.de_err != "":
+            return 0.0
+        match self.de_current:
+            case Float(de_fval):
+                return de_fval
+            case Int(de_ival2):
+                return de_ival2 as float
+            else:
+                self.de_err = "expected float"
+                return 0.0
+
+    str read_str(&self):
+        if self.de_err != "":
+            return ""
+        match self.de_current:
+            case Str(de_sval):
+                return de_sval
+            else:
+                self.de_err = "expected string"
+                return ""
+
+    bool is_null(self):
+        match self.de_current:
+            case Null():
+                return true
+            else:
+                return false
+
+    bool is_string(self):
+        match self.de_current:
+            case Str(de_sv):
+                return true
+            else:
+                return false
+
+    bool is_struct(self):
+        match self.de_current:
+            case Obj(de_ov):
+                return true
+            else:
+                return false
+
+    bool is_seq(self):
+        match self.de_current:
+            case Arr(de_av):
+                return true
+            else:
+                return false
+
+    void begin_struct(&self):
+        if self.de_err != "":
+            return
+        if self.de_current.is_object():
+            self.de_stack.push(self.de_current)
+        else:
+            self.de_err = "expected object"
+
+    bool has_field(self, str name):
+        if self.de_stack.len() == 0:
+            return false
+        Json de_top = self.de_stack.get(self.de_stack.len() - 1)
+        return de_top.has(name)
+
+    void field(&self, str name):
+        if self.de_err != "":
+            return
+        if self.de_stack.len() == 0:
+            self.de_err = "no struct context"
+            return
+        Json de_top = self.de_stack.get(self.de_stack.len() - 1)
+        self.de_current = de_top.get(name)
+
+    void end_struct(&self):
+        if self.de_err != "":
+            return
+        if self.de_stack.len() == 0:
+            self.de_err = "no struct context to end"
+            return
+        self.de_current = self.de_stack.pop()
+
+    int begin_seq(&self):
+        if self.de_err != "":
+            return 0
+        if self.de_current.is_array():
+            int de_seq_len = self.de_current.len()
+            self.de_stack.push(self.de_current)
+            return de_seq_len
+        self.de_err = "expected array"
+        return 0
+
+    void elem(&self, int index):
+        if self.de_err != "":
+            return
+        if self.de_stack.len() == 0:
+            self.de_err = "no seq context"
+            return
+        Json de_top = self.de_stack.get(self.de_stack.len() - 1)
+        self.de_current = de_top.at(index)
+
+    void end_seq(&self):
+        if self.de_err != "":
+            return
+        if self.de_stack.len() == 0:
+            self.de_err = "no seq context to end"
+            return
+        self.de_current = self.de_stack.pop()
+
+    bool has_error(self):
+        return self.de_err != ""
+
+    str error(self):
+        return self.de_err
+
 # ── Internal parser ──────────────────────────────────────────
 
 struct JsonParser:

@@ -50,9 +50,9 @@ pub fn expand_derives(module: &mut Module, errors: &mut Vec<SemanticError>) {
 }
 
 const DERIVABLE_STRUCT_TRAITS: &[&str] =
-    &["Equatable", "Displayable", "Cloneable", "Hashable", "Serializable", "Default"];
+    &["Equatable", "Displayable", "Cloneable", "Hashable", "Serializable", "Default", "Deserializable"];
 const DERIVABLE_ENUM_TRAITS: &[&str] =
-    &["Equatable", "Displayable", "Cloneable", "Hashable", "Serializable"];
+    &["Equatable", "Displayable", "Cloneable", "Hashable", "Serializable", "Deserializable"];
 
 fn collect_struct_derives(
     s: &StructDef,
@@ -88,7 +88,7 @@ fn collect_struct_derives(
             .collect();
 
         let source = generate_struct_derive(type_name, &gs, &trait_name, &fields);
-        parse_and_collect_equip_blocks(&source, new_items);
+        parse_and_collect_derived_items(&source, new_items);
     }
 }
 
@@ -113,7 +113,7 @@ fn collect_enum_derives(
         }
 
         let source = generate_enum_derive(type_name, &gs, &trait_name, e);
-        parse_and_collect_equip_blocks(&source, new_items);
+        parse_and_collect_derived_items(&source, new_items);
     }
 }
 
@@ -193,6 +193,7 @@ fn generate_struct_derive(
         "Hashable" => generate_struct_hashable(type_name, gs, fields),
         "Serializable" => generate_struct_serializable(type_name, gs, fields),
         "Default" => generate_struct_default(type_name, gs, fields),
+        "Deserializable" => generate_struct_deserializable(type_name, gs, fields),
         _ => String::new(),
     }
 }
@@ -330,6 +331,135 @@ fn field_default_value(type_name: &str) -> String {
     }
 }
 
+
+fn generate_struct_deserializable(type_name: &str, gs: &str, fields: &[(&str, &str)]) -> String {
+    let mut body = String::new();
+    body.push_str("    de.begin_struct()\n");
+    for (name, ty) in fields {
+        body.push_str(&format!("    de.field(\"{name}\")\n"));
+        body.push_str(&format!("    {}\n", field_read_decl(name, ty)));
+    }
+    body.push_str("    de.end_struct()\n");
+    body.push_str("    if de.has_error():\n");
+    body.push_str("        return Error(de.error())\n");
+    let args: Vec<&str> = fields.iter().map(|(name, _)| *name).collect();
+    body.push_str(&format!(
+        "    return Ok({type_name}{gs}({}))\n",
+        args.join(", ")
+    ));
+
+    format!(
+        "Result[{type_name}{gs}, str] deserialize_{type_name}(Box[Deserializer] de):\n{body}"
+    )
+}
+
+/// Generate the deserializer read declaration for a single field based on its type.
+fn field_read_decl(name: &str, type_name: &str) -> String {
+    match type_name {
+        "int" => format!("int {name} = de.read_int()"),
+        "int8" | "int16" | "int32" | "int64" | "uint" | "uint8" | "uint16" | "uint32"
+        | "uint64" => {
+            format!(
+                "int {name}_raw = de.read_int()\n    {type_name} {name} = {name}_raw as {type_name}"
+            )
+        }
+        "float" => format!("float {name} = de.read_float()"),
+        "float32" | "float64" => {
+            format!(
+                "float {name}_raw = de.read_float()\n    {type_name} {name} = {name}_raw as {type_name}"
+            )
+        }
+        "bool" => format!("bool {name} = de.read_bool()"),
+        "str" | "String" => format!("str {name} = de.read_str()"),
+        "char" => {
+            format!("str {name}_raw = de.read_str()\n    char {name} = {name}_raw[0]")
+        }
+        _ => format!("{type_name} {name} = deserialize_{type_name}(de)?"),
+    }
+}
+
+fn generate_enum_deserializable(type_name: &str, gs: &str, e: &EnumDef) -> String {
+    // Separate unit variants from data variants
+    let mut unit_variants = Vec::new();
+    let mut data_variants = Vec::new();
+
+    for variant in &e.variants {
+        let vname = &variant.node.name.node;
+        match &variant.node.fields {
+            VariantFields::Unit => unit_variants.push(vname.as_str()),
+            VariantFields::Tuple(fields) => {
+                let field_types: Vec<&str> = fields
+                    .iter()
+                    .map(|f| {
+                        let ty = format_type(&f.node);
+                        Box::leak(ty.into_boxed_str()) as &str
+                    })
+                    .collect();
+                data_variants.push((vname.as_str(), field_types));
+            }
+        }
+    }
+
+    let mut body = String::new();
+
+    // Handle unit variants via is_string() check
+    if !unit_variants.is_empty() {
+        body.push_str("    if de.is_string():\n");
+        body.push_str("        str de_tag = de.read_str()\n");
+        for (i, vname) in unit_variants.iter().enumerate() {
+            if i == 0 {
+                body.push_str(&format!("        if de_tag == \"{vname}\":\n"));
+            } else {
+                body.push_str(&format!("        elif de_tag == \"{vname}\":\n"));
+            }
+            body.push_str(&format!("            return Ok({vname}())\n"));
+        }
+        if data_variants.is_empty() {
+            body.push_str("        return Error(\"unknown variant\")\n");
+        } else {
+            body.push_str("        return Error(\"unknown variant\")\n");
+        }
+    }
+
+    // Handle data variants via is_struct() + has_field()
+    if !data_variants.is_empty() {
+        body.push_str("    de.begin_struct()\n");
+        for (i, (vname, field_types)) in data_variants.iter().enumerate() {
+            let cond = if i == 0 { "if" } else { "elif" };
+            body.push_str(&format!("    {cond} de.has_field(\"{vname}\"):\n"));
+            body.push_str(&format!("        de.field(\"{vname}\")\n"));
+            body.push_str(&format!(
+                "        int de_seq_len = de.begin_seq()\n"
+            ));
+            for (fi, fty) in field_types.iter().enumerate() {
+                body.push_str(&format!("        de.elem({fi})\n"));
+                let var_name = format!("a{fi}");
+                body.push_str(&format!(
+                    "        {}\n",
+                    field_read_decl(&var_name, fty)
+                ));
+            }
+            body.push_str("        de.end_seq()\n");
+            body.push_str("        de.end_struct()\n");
+            body.push_str("        if de.has_error():\n");
+            body.push_str("            return Error(de.error())\n");
+            let args: Vec<String> =
+                (0..field_types.len()).map(|i| format!("a{i}")).collect();
+            body.push_str(&format!(
+                "        return Ok({vname}({}))\n",
+                args.join(", ")
+            ));
+        }
+        body.push_str("    de.end_struct()\n");
+    }
+
+    body.push_str("    return Error(\"unknown variant\")\n");
+
+    format!(
+        "Result[{type_name}{gs}, str] deserialize_{type_name}(Box[Deserializer] de):\n{body}"
+    )
+}
+
 // ── Enum derive generation ────────────────────────────────────
 
 fn generate_enum_derive(type_name: &str, gs: &str, trait_name: &str, e: &EnumDef) -> String {
@@ -339,6 +469,7 @@ fn generate_enum_derive(type_name: &str, gs: &str, trait_name: &str, e: &EnumDef
         "Cloneable" => generate_enum_cloneable(type_name, gs, e),
         "Hashable" => generate_enum_hashable(type_name, gs, e),
         "Serializable" => generate_enum_serializable(type_name, gs, e),
+        "Deserializable" => generate_enum_deserializable(type_name, gs, e),
         _ => String::new(),
     }
 }
@@ -595,8 +726,11 @@ fn generate_enum_serializable(type_name: &str, gs: &str, e: &EnumDef) -> String 
 
 // ── Parsing helper ────────────────────────────────────────────
 
-/// Parse a generated Gorget source string and extract all EquipBlock items.
-fn parse_and_collect_equip_blocks(source: &str, new_items: &mut Vec<Spanned<Item>>) {
+/// Parse a generated Gorget source string and extract EquipBlock and Function items.
+///
+/// Most derives generate equip blocks (trait implementations). `@derive(Deserializable)`
+/// generates free functions instead (since Gorget has no `Self` type in traits).
+fn parse_and_collect_derived_items(source: &str, new_items: &mut Vec<Spanned<Item>>) {
     let mut parser = Parser::new(source);
     let parsed = parser.parse_module();
 
@@ -609,7 +743,7 @@ fn parse_and_collect_equip_blocks(source: &str, new_items: &mut Vec<Spanned<Item
     }
 
     for item in parsed.items {
-        if matches!(&item.node, Item::Equip(_)) {
+        if matches!(&item.node, Item::Equip(_) | Item::Function(_)) {
             // Re-wrap with a dummy span so it doesn't point into the original source
             new_items.push(Spanned::new(item.node, Span::dummy()));
         }
@@ -1016,5 +1150,98 @@ void main():
         assert_eq!(field_default_value("str"), "\"\"");
         assert_eq!(field_default_value("String"), "String()");
         assert_eq!(field_default_value("Point"), "Point.default()");
+    }
+
+    #[test]
+    fn test_struct_deserializable() {
+        let src = generate_struct_deserializable("User", "", &[("name", "str"), ("age", "int")]);
+        assert!(src.contains("Result[User, str] deserialize_User(Box[Deserializer] de)"));
+        assert!(src.contains("de.begin_struct()"));
+        assert!(src.contains("de.field(\"name\")"));
+        assert!(src.contains("str name = de.read_str()"));
+        assert!(src.contains("de.field(\"age\")"));
+        assert!(src.contains("int age = de.read_int()"));
+        assert!(src.contains("de.end_struct()"));
+        assert!(src.contains("if de.has_error()"));
+        assert!(src.contains("return Error(de.error())"));
+        assert!(src.contains("return Ok(User(name, age))"));
+    }
+
+    #[test]
+    fn test_struct_deserializable_parses() {
+        let src = generate_struct_deserializable(
+            "Point",
+            "",
+            &[("x", "float"), ("y", "float"), ("label", "str")],
+        );
+        let mut parser = Parser::new(&src);
+        let module = parser.parse_module();
+        assert!(
+            parser.errors.is_empty(),
+            "parse errors: {:?}\nsource:\n{src}",
+            parser.errors
+        );
+        assert!(module.items.iter().any(|i| matches!(&i.node, Item::Function(_))));
+    }
+
+    #[test]
+    fn test_struct_deserializable_nested() {
+        let src = generate_struct_deserializable(
+            "Profile",
+            "",
+            &[("label", "str"), ("user", "User")],
+        );
+        assert!(src.contains("User user = deserialize_User(de)?"));
+    }
+
+    #[test]
+    fn test_field_read_decl() {
+        assert_eq!(field_read_decl("x", "int"), "int x = de.read_int()");
+        assert_eq!(field_read_decl("x", "float"), "float x = de.read_float()");
+        assert_eq!(field_read_decl("x", "bool"), "bool x = de.read_bool()");
+        assert_eq!(field_read_decl("x", "str"), "str x = de.read_str()");
+        assert_eq!(field_read_decl("x", "String"), "str x = de.read_str()");
+        assert_eq!(
+            field_read_decl("x", "char"),
+            "str x_raw = de.read_str()\n    char x = x_raw[0]"
+        );
+        assert_eq!(
+            field_read_decl("x", "int8"),
+            "int x_raw = de.read_int()\n    int8 x = x_raw as int8"
+        );
+        assert_eq!(
+            field_read_decl("x", "float32"),
+            "float x_raw = de.read_float()\n    float32 x = x_raw as float32"
+        );
+        assert_eq!(field_read_decl("x", "User"), "User x = deserialize_User(de)?");
+    }
+
+    #[test]
+    fn test_enum_deserializable_parses() {
+        let source = "\
+@derive(Deserializable)
+enum Color:
+    Red()
+    Green()
+    Custom(int, int, int)
+
+void main():
+    pass
+";
+        let mut parser = Parser::new(source);
+        let mut module = parser.parse_module();
+        assert!(parser.errors.is_empty(), "parse errors: {:?}", parser.errors);
+
+        let mut errors = Vec::new();
+        expand_derives(&mut module, &mut errors);
+        assert!(errors.is_empty(), "derive errors: {:?}", errors);
+
+        let fn_count = module
+            .items
+            .iter()
+            .filter(|i| matches!(&i.node, Item::Function(_)))
+            .count();
+        // main() + deserialize_Color
+        assert_eq!(fn_count, 2, "expected 2 functions (main + deserialize_Color)");
     }
 }

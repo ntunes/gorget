@@ -1394,10 +1394,13 @@ mod tests {
 
         assert!(enum_names.contains(&"Json".to_string()));
         assert!(struct_names.contains(&"JsonParser".to_string()));
+        assert!(struct_names.contains(&"JsonSerializer".to_string()));
+        assert!(struct_names.contains(&"JsonDeserializer".to_string()));
         assert!(fn_names.contains(&"json_parse".to_string()));
         assert!(fn_names.contains(&"json_stringify".to_string()));
         assert!(fn_names.contains(&"json_pretty".to_string()));
-        assert_eq!(equip_count, 3); // equip JsonParser + equip Json + equip JsonSerializer with Serializer
+        // equip JsonParser + equip Json + equip JsonSerializer with Serializer + equip JsonDeserializer with Deserializer
+        assert_eq!(equip_count, 4);
     }
 
     #[test]
