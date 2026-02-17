@@ -541,8 +541,8 @@ impl CodegenContext<'_> {
     /// Generate Result-based `?` operator: unwrap Ok or early-return Error.
     fn gen_result_try(&mut self, try_expr: &Spanned<Expr>, args: &[crate::semantic::ids::TypeId]) -> String {
         let inner = self.gen_expr(try_expr);
-        let t_c = c_types::type_id_to_c(args[0], self.types, self.scopes);
-        let e_c = c_types::type_id_to_c(args[1], self.types, self.scopes);
+        let t_c = self.type_id_to_c_substituted(args[0]);
+        let e_c = self.type_id_to_c_substituted(args[1]);
         let inner_mangled = c_mangle::mangle_generic("Result", &[t_c, e_c.clone()]);
         let tag_error = c_mangle::mangle_tag(&inner_mangled, "Error");
 
@@ -721,8 +721,30 @@ impl CodegenContext<'_> {
                 }
                 None
             }
+            Expr::CharLiteral(_) => Some(self.types.char_id),
+            Expr::StructLiteral { name, .. } => {
+                self.scoped_lookup(&name.node)
+                    .and_then(|did| self.scopes.get_def(did).type_id)
+            }
+            Expr::Block(block) | Expr::Do { body: block } => {
+                if let Some(last) = block.stmts.last() {
+                    if let crate::parser::ast::Stmt::Expr(e) = &last.node {
+                        return self.resolve_expr_type_id(e);
+                    }
+                }
+                None
+            }
             _ => None,
         }
+    }
+
+    /// Resolve an expression to its C type string, preferring TypeId-based resolution
+    /// with generic substitution, falling back to AST-based inference.
+    pub(super) fn resolve_expr_c_type(&mut self, expr: &Spanned<Expr>) -> String {
+        if let Some(tid) = self.resolve_expr_type_id(expr) {
+            return self.type_id_to_c_substituted(tid);
+        }
+        self.infer_c_type_from_expr(&expr.node)
     }
 
     /// Resolve the mangled C enum type name for a match scrutinee.
@@ -759,7 +781,17 @@ impl CodegenContext<'_> {
     /// Infer the C type of a receiver expression via the TypeId, if available.
     pub(super) fn infer_receiver_c_type(&mut self, expr: &Spanned<Expr>) -> Option<String> {
         if let Some(tid) = self.resolve_expr_type_id(expr) {
-            return Some(self.type_id_to_c_substituted(tid));
+            let result = self.type_id_to_c_substituted(tid);
+            if !result.contains("error") {
+                return Some(result);
+            }
+        }
+        // Fallback: check monomorphized parameter C types
+        if let Expr::Identifier(name) = &expr.node {
+            let escaped = c_mangle::escape_keyword(name);
+            if let Some((_, c_type)) = self.monomorphized_param_c_types.iter().find(|(n, _)| *n == escaped) {
+                return Some(c_type.clone());
+            }
         }
         if let Expr::FieldAccess { object, field } = &expr.node {
             let obj_type = self.infer_receiver_type(object);
@@ -778,12 +810,12 @@ impl CodegenContext<'_> {
         if let Some(tid) = self.resolve_expr_type_id(receiver) {
             if let crate::semantic::types::ResolvedType::Generic(_, args) = self.types.get(tid) {
                 if let Some(&elem_tid) = args.first() {
-                    return c_types::type_id_to_c(elem_tid, self.types, self.scopes);
+                    return self.type_id_to_c_substituted(elem_tid);
                 }
             }
             // Auto-promoted array literals: ResolvedType::Array(elem_tid, _)
             if let crate::semantic::types::ResolvedType::Array(elem_tid, _) = self.types.get(tid) {
-                return c_types::type_id_to_c(*elem_tid, self.types, self.scopes);
+                return self.type_id_to_c_substituted(*elem_tid);
             }
         }
         // Fallback for field access: extract elem type from the AST type annotation
@@ -816,8 +848,8 @@ impl CodegenContext<'_> {
         if let Some(tid) = self.resolve_expr_type_id(receiver) {
             if let crate::semantic::types::ResolvedType::Generic(_, args) = self.types.get(tid) {
                 if args.len() >= 2 {
-                    let key = c_types::type_id_to_c(args[0], self.types, self.scopes);
-                    let val = c_types::type_id_to_c(args[1], self.types, self.scopes);
+                    let key = self.type_id_to_c_substituted(args[0]);
+                    let val = self.type_id_to_c_substituted(args[1]);
                     return (key, val);
                 }
             }

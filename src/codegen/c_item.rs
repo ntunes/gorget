@@ -2368,9 +2368,21 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         let (ret_type, params, subs) = self.monomorphized_function_signature(template, c_type_args);
         let id_subs = self.build_type_id_substitutions(template.generic_params.as_ref(), c_type_args);
 
+        // Build param_c_types: substituted C type for each function parameter.
+        // Used as fallback in body codegen when TypeId-based resolution fails.
+        let param_c_types: Vec<(String, String)> = template.params.iter()
+            .filter(|p| p.node.name.node != "self")
+            .map(|p| {
+                let name = super::c_mangle::escape_keyword(&p.node.name.node);
+                let c_type = self.substitute_type(&p.node.type_.node, &subs);
+                (name, c_type)
+            })
+            .collect();
+
         // Activate type substitutions so that body codegen sees T → concrete type
         let prev_subs = std::mem::replace(&mut self.type_subs, subs);
         let prev_id_subs = std::mem::replace(&mut self.type_id_subs, id_subs);
+        let prev_param_c_types = std::mem::replace(&mut self.monomorphized_param_c_types, param_c_types);
 
         // Emit definition
         match &template.body {
@@ -2399,6 +2411,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         // Restore previous substitutions
         self.type_subs = prev_subs;
         self.type_id_subs = prev_id_subs;
+        self.monomorphized_param_c_types = prev_param_c_types;
     }
 
     /// Build a substitution map from generic param names to concrete C types.
@@ -2931,9 +2944,20 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         );
         let id_subs = self.build_type_id_substitutions(struct_generic_params, c_type_args);
 
+        // Build param_c_types for method parameters (excluding self)
+        let param_c_types: Vec<(String, String)> = method.params.iter()
+            .filter(|p| p.node.name.node != "self")
+            .map(|p| {
+                let name = super::c_mangle::escape_keyword(&p.node.name.node);
+                let c_type = self.substitute_type(&p.node.type_.node, &subs);
+                (name, c_type)
+            })
+            .collect();
+
         // Activate substitutions and self type for body codegen
         let prev_subs = std::mem::replace(&mut self.type_subs, subs);
         let prev_id_subs = std::mem::replace(&mut self.type_id_subs, id_subs);
+        let prev_param_c_types = std::mem::replace(&mut self.monomorphized_param_c_types, param_c_types);
         let prev_self_type = self.current_self_type.take();
         self.current_self_type = Some(mangled_type_name.to_string());
 
@@ -2973,6 +2997,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
 
         self.type_subs = prev_subs;
         self.type_id_subs = prev_id_subs;
+        self.monomorphized_param_c_types = prev_param_c_types;
         self.current_self_type = prev_self_type;
         self.pointer_params = prev_pointer_params;
     }

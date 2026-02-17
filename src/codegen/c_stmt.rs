@@ -1453,7 +1453,7 @@ impl CodegenContext<'_> {
                     if let Some(def_id) = self.scoped_lookup(name) {
                         if let Some(func_info) = self.function_info.get(&def_id) {
                             if let Some(ret_type_id) = func_info.return_type_id {
-                                return c_types::type_id_to_c(ret_type_id, self.types, self.scopes);
+                                return self.type_id_to_c_substituted(ret_type_id);
                             }
                         }
                     }
@@ -1464,7 +1464,7 @@ impl CodegenContext<'_> {
                 if let Some(def_id) = self.scoped_lookup(name) {
                     let def = self.scopes.get_def(def_id);
                     if let Some(type_id) = def.type_id {
-                        return c_types::type_id_to_c(type_id, self.types, self.scopes);
+                        return self.type_id_to_c_substituted(type_id);
                     }
                 }
                 "int64_t".to_string()
@@ -1512,14 +1512,14 @@ impl CodegenContext<'_> {
                     .as_deref()
                     .and_then(|rt| self.builtin_method_return_type(rt, &method.node))
                 {
-                    return c_types::type_id_to_c(tid, self.types, self.scopes);
+                    return self.type_id_to_c_substituted(tid);
                 }
                 let type_name = self.infer_receiver_type(receiver);
                 for impl_info in &self.traits.impls {
                     if impl_info.self_type_name == type_name {
                         if let Some((_def_id, sig)) = impl_info.methods.get(method.node.as_str())
                         {
-                            return c_types::type_id_to_c(sig.return_type, self.types, self.scopes);
+                            return self.type_id_to_c_substituted(sig.return_type);
                         }
                     }
                 }
@@ -1624,7 +1624,7 @@ impl CodegenContext<'_> {
     /// Check if an iterable expression resolves to a GorgetArray type.
     fn is_gorget_array_expr(&mut self, expr: &Spanned<Expr>) -> bool {
         if let Some(tid) = self.resolve_expr_type_id(expr) {
-            let c_type = c_types::type_id_to_c(tid, self.types, self.scopes);
+            let c_type = self.type_id_to_c_substituted(tid);
             if c_type == "GorgetArray" {
                 return true;
             }
@@ -1679,7 +1679,7 @@ impl CodegenContext<'_> {
         if let Some(tid) = self.resolve_expr_type_id(expr) {
             if let crate::semantic::types::ResolvedType::Generic(_, args) = self.types.get(tid) {
                 if let Some(&elem_tid) = args.first() {
-                    return super::c_types::type_id_to_c(elem_tid, self.types, self.scopes);
+                    return self.type_id_to_c_substituted(elem_tid);
                 }
             }
         }

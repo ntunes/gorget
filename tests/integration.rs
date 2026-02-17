@@ -918,6 +918,20 @@ world
 }
 
 #[test]
+fn generic_method_chain() {
+    run_gg(
+        "generic_method_chain.gg",
+        "\
+42
+hello
+42
+equal
+not equal
+10",
+    );
+}
+
+#[test]
 fn option_methods() {
     run_gg(
         "option_methods.gg",

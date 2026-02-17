@@ -400,16 +400,28 @@ impl CodegenContext<'_> {
             | ResolvedType::Slice(_) => {
                 panic!("non-primitive type cannot be used in string interpolation")
             }
-            ResolvedType::Error | ResolvedType::Never | ResolvedType::Var(_) => {
+            ResolvedType::Error => {
+                // In monomorphized contexts, Error often means an unresolved generic param.
+                // Try to substitute using the active type_id_subs.
+                if self.type_id_subs.len() == 1 {
+                    return self.format_for_type_id(self.type_id_subs[0].1, expr);
+                }
+                // Fallback: assume integer (matches legacy behavior for inline method calls
+                // like `print("{c.get()}")` where the return type can't be resolved).
+                ("%lld".to_string(), format!("(long long){expr}"))
+            }
+            ResolvedType::Never | ResolvedType::Var(_) => {
                 ("%lld".to_string(), format!("(long long){expr}"))
             }
         }
     }
 
     /// Convert a TypeId to a C type string, applying active type_subs for GenericParams.
+    /// Recursively substitutes GenericParam args nested inside Generic containers.
     /// Falls back to the standard `type_id_to_c` when no substitution applies.
     pub(super) fn type_id_to_c_substituted(&self, tid: crate::semantic::ids::TypeId) -> String {
         if !self.type_subs.is_empty() {
+            // Direct GenericParam → substitute
             if let crate::semantic::types::ResolvedType::Defined(def_id) = self.types.get(tid) {
                 let def = self.scopes.get_def(*def_id);
                 if def.kind == DefKind::GenericParam {
@@ -417,6 +429,33 @@ impl CodegenContext<'_> {
                         return c_type.clone();
                     }
                 }
+            }
+
+            // Generic with potentially-GenericParam args → recurse
+            if let crate::semantic::types::ResolvedType::Generic(def_id, args) = self.types.get(tid) {
+                let base = c_types::def_name_to_c(*def_id, self.scopes);
+                let c_args: Vec<String> = args.iter()
+                    .map(|a| self.type_id_to_c_substituted(*a))
+                    .collect();
+                return match base.as_str() {
+                    "Vector" | "List" | "Array" => "GorgetArray".to_string(),
+                    "Set" => "GorgetSet".to_string(),
+                    "Dict" => c_mangle::mangle_generic("GorgetDict", &c_args),
+                    "HashMap" => c_mangle::mangle_generic("GorgetMap", &c_args),
+                    "Box" if args.len() == 1 => {
+                        let inner_resolved = self.types.get(args[0]);
+                        if let crate::semantic::types::ResolvedType::TraitObject(trait_def_id) = inner_resolved {
+                            return c_mangle::mangle_trait_obj(&c_types::def_name_to_c(*trait_def_id, self.scopes));
+                        }
+                        format!("{}*", c_args[0])
+                    }
+                    _ => c_mangle::mangle_generic(&base, &c_args),
+                };
+            }
+
+            // Error with single type param → best-effort substitution
+            if matches!(self.types.get(tid), crate::semantic::types::ResolvedType::Error) && self.type_subs.len() == 1 {
+                return self.type_subs[0].1.clone();
             }
         }
         c_types::type_id_to_c(tid, self.types, self.scopes)

@@ -156,6 +156,10 @@ pub struct CodegenContext<'a> {
     /// function body codegen. Parallel to `type_subs` but preserves semantic info
     /// for rich formatting (Displayable dispatch, enum printing, etc.).
     pub type_id_subs: Vec<(String, TypeId)>,
+    /// Substituted C types for function parameters during monomorphized body codegen.
+    /// Maps parameter name → mangled C type (e.g., "p" → "Pair2__int64_t__const_char_ptr").
+    /// Used as a fallback when TypeId-based resolution produces Error for generic params.
+    pub monomorphized_param_c_types: Vec<(String, String)>,
     /// When true, `assert` statements are stripped from output (no code emitted).
     pub strip_asserts: bool,
     /// When true, integer overflow wraps silently instead of panicking.
@@ -358,6 +362,7 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
         closure_return_type_hint: None,
         type_subs: Vec::new(),
         type_id_subs: Vec::new(),
+        monomorphized_param_c_types: Vec::new(),
         strip_asserts: opts.strip_asserts,
         overflow_wrap: opts.overflow_wrap,
         trace: opts.trace,

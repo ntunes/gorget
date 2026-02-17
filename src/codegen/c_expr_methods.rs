@@ -1150,7 +1150,7 @@ impl CodegenContext<'_> {
         }
         // Use resolve_expr_type_id for reliable type resolution (uses resolution map)
         if let Some(type_id) = self.resolve_expr_type_id(arg_expr) {
-            return c_types::type_id_to_c(type_id, self.types, self.scopes);
+            return self.type_id_to_c_substituted(type_id);
         }
         // Fallback: infer from the argument expression
         self.infer_c_type_from_expr(&arg_expr.node)
@@ -1177,7 +1177,7 @@ impl CodegenContext<'_> {
             if let crate::semantic::types::ResolvedType::Generic(def_id, args) = self.types.get(tid) {
                 let base = self.scopes.get_def(*def_id).name.clone();
                 let c_args: Vec<String> = args.iter()
-                    .map(|&a| c_types::type_id_to_c(a, self.types, self.scopes))
+                    .map(|&a| self.type_id_to_c_substituted(a))
                     .collect();
                 return c_mangle::mangle_generic(&base, &c_args);
             }
@@ -1199,7 +1199,7 @@ impl CodegenContext<'_> {
         if let Some(tid) = self.resolve_expr_type_id(receiver) {
             if let crate::semantic::types::ResolvedType::Generic(_, args) = self.types.get(tid) {
                 return args.iter()
-                    .map(|&a| c_types::type_id_to_c(a, self.types, self.scopes))
+                    .map(|&a| self.type_id_to_c_substituted(a))
                     .collect();
             }
         }

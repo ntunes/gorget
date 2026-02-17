@@ -388,7 +388,20 @@ impl CodegenContext<'_> {
                     .iter()
                     .map(|tid| self.type_id_to_c_substituted(*tid))
                     .collect();
-                return c_mangle::mangle_generic(&base, &c_args);
+                let result = c_mangle::mangle_generic(&base, &c_args);
+                // If substitution produced clean results, use them.
+                // Otherwise fall through to AST-based resolution via monomorphized_param_c_types.
+                if !result.contains("error") {
+                    return result;
+                }
+            }
+        }
+        // Fallback: check monomorphized parameter C types (set during generic body codegen).
+        // This handles cases where TypeId-based resolution fails for multi-param generics.
+        if let Expr::Identifier(name) = &expr.node {
+            let escaped = c_mangle::escape_keyword(name);
+            if let Some((_, c_type)) = self.monomorphized_param_c_types.iter().find(|(n, _)| *n == escaped) {
+                return c_type.clone();
             }
         }
         self.infer_receiver_type(expr)

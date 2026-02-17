@@ -17,7 +17,6 @@
 
 - **Crypto module error handling is partial**: `crypto_rsa_load_public()` returns `Result[RSAKey, str]` but other fallible ops like `crypto_aes_ctr_new()` return bare types. C runtime has `gorget_crypto_last_error()` but no Gorget API exposes it. (`stdlib.rs:713`) [added: 2026-02-16]
 
-- **Method calls in generic function bodies use wrong mangled name**: Inside monomorphized generic functions, `infer_receiver_mangled_type` fails because the semantic type arg resolves to `Error` instead of `Defined(GenericParam)`. E.g., `c.get()` where `c: Container[T]` emits `Container__/*error*/int64_t__get` instead of `Container__int64_t__get`. The `type_id_to_c_substituted` fallback produces garbage. (`c_expr_call.rs:1050, c_expr_generic.rs:375`) [added: 2026-02-16]
 
 ## Medium
 
@@ -70,7 +69,7 @@
 
 - **Smart pointers (Rc[T], Arc[T])**: `Box[Trait]` exists for trait objects but general reference-counted (`Rc[T]`) and atomic reference-counted (`Arc[T]`) pointers are missing. Also `Cell`, `RefCell`, `Mutex`. [from roadmap, added: 2026-02-16]
 
-- **Pattern-bound variable type inference in print**: Bindings from `case Error(e):` use `__typeof__()` for declaration but their TypeId isn't in the resolution map. `print("{e}")` defaults to `%lld` format. Workaround: use `print(e)` for non-int pattern-bound vars. [from codegen-notes, added: 2026-02-16]
+- **Pattern-bound variable type inference in print**: Bindings from `case Error(e):` use `__typeof__()` for declaration but their TypeId isn't in the resolution map. `print("{e}")` defaults to `%lld` format outside monomorphized contexts (inside monomorphized contexts, single-param `type_id_subs` fallback now works). Workaround: use `print(e)` for non-int pattern-bound vars. [from codegen-notes, added: 2026-02-16, updated: 2026-02-17]
 
 - **SSH library enhancements**: Public key authentication (IdentityFile), host key verification against known_hosts, ProxyJump/ProxyCommand support from ssh_config. [added: 2026-02-15]
 

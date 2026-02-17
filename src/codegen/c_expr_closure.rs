@@ -39,7 +39,7 @@ impl CodegenContext<'_> {
                         self.scopes
                             .lookup_def_by_span(&p.node.name.node, p.node.name.span)
                             .and_then(|def_id| self.scopes.get_def(def_id).type_id)
-                            .map(|tid| c_types::type_id_to_c(tid, self.types, self.scopes))
+                            .map(|tid| self.type_id_to_c_substituted(tid))
                     })
                     .unwrap_or_else(|| "int64_t".to_string());
                 (name, ty)
