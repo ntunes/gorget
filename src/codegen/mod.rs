@@ -110,7 +110,7 @@ pub struct LiftedClosure {
 pub enum CallableKind {
     Callable,    // Callable[sig] — immutable access
     MutCallable, // MutCallable[sig] — mutable access
-    MoveCallable, // MoveCallable[sig] — consuming access
+    ConsumeCallable, // ConsumeCallable[sig] — consuming access
 }
 
 /// Info about a variable that holds a closure or callable trait object.

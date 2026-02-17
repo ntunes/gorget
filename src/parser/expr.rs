@@ -299,10 +299,10 @@ impl Parser {
                 ))
             }
 
-            // Move (! or moving keyword)
-            Token::Bang | Token::Keyword(Keyword::Moving) => {
+            // Move (! or consuming keyword)
+            Token::Bang | Token::Keyword(Keyword::Consuming) => {
                 self.advance();
-                // Check for move closure: !(params): or moving (params):
+                // Check for move closure: !(params): or consuming (params):
                 if self.check(&Token::LParen) {
                     return self.parse_closure(true, false, start);
                 }
@@ -1554,7 +1554,7 @@ impl Parser {
                 | Token::Keyword(Keyword::Spawn)
                 | Token::Keyword(Keyword::SelfLower)
                 | Token::Keyword(Keyword::It)
-                | Token::Keyword(Keyword::Moving)
+                | Token::Keyword(Keyword::Consuming)
                 | Token::Keyword(Keyword::Mutable)
         )
     }

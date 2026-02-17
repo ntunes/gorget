@@ -141,7 +141,7 @@ pub enum SemanticErrorKind {
     /// Duplicate suite setup or teardown block.
     DuplicateSuiteBlock { kind: String },
 
-    /// Callable/MutCallable/MoveCallable[...] requires a function type argument.
+    /// Callable/MutCallable/ConsumeCallable[...] requires a function type argument.
     InvalidFnTraitArg,
 
     /// Closure kind doesn't match the expected callable trait.
@@ -236,7 +236,7 @@ impl std::fmt::Display for SemanticError {
             SemanticErrorKind::MoveWithoutOperator { name } => {
                 write!(
                     f,
-                    "cannot copy `{name}`: non-Copy type requires `!` or `moving` to move"
+                    "cannot copy `{name}`: non-Copy type requires `!` or `consuming` to transfer"
                 )
             }
             SemanticErrorKind::BorrowConflict { name, detail } => {

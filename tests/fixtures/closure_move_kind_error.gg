@@ -1,4 +1,4 @@
-# Negative test: move closure assigned to MutCallable-typed variable should fail
+# Negative test: consuming closure assigned to MutCallable-typed variable should fail
 
 void main():
     int x = 42

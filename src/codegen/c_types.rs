@@ -51,15 +51,15 @@ pub fn ast_type_to_c(ty: &crate::parser::ast::Type, scopes: &ScopeTable) -> Stri
                             .collect();
                         super::c_mangle::mangle_generic("GorgetMap", &c_args)
                     }
-                    "Fn" | "Callable" | "FnMut" | "MutCallable" | "FnOnce" | "MoveCallable"
+                    "Callable" | "MutCallable" | "ConsumeCallable"
                         if generic_args.len() == 1 => "GorgetClosure".to_string(),
                     "Box" if generic_args.len() == 1 => {
-                        // Box[Callable[sig]] / Box[MutCallable[sig]] / Box[MoveCallable[sig]]
+                        // Box[Callable[sig]] / Box[MutCallable[sig]] / Box[ConsumeCallable[sig]]
                         if let crate::parser::ast::Type::Named { name: inner_name, generic_args: inner_args } = &generic_args[0].node {
                             let kind_prefix = match inner_name.node.as_str() {
-                                "Fn" | "Callable" => Some("Callable"),
-                                "FnMut" | "MutCallable" => Some("MutCallable"),
-                                "FnOnce" | "MoveCallable" => Some("MoveCallable"),
+                                "Callable" => Some("Callable"),
+                                "MutCallable" => Some("MutCallable"),
+                                "ConsumeCallable" => Some("ConsumeCallable"),
                                 _ => None,
                             };
                             if let Some(prefix) = kind_prefix {
@@ -241,13 +241,13 @@ pub fn type_id_to_c(type_id: TypeId, types: &TypeTable, scopes: &ScopeTable) -> 
         }
         ResolvedType::CallableTrait(_)
         | ResolvedType::MutCallableTrait(_)
-        | ResolvedType::MoveCallableTrait(_) => "GorgetClosure".to_string(),
+        | ResolvedType::ConsumeCallableTrait(_) => "GorgetClosure".to_string(),
         ResolvedType::BoxedCallable { kind, inner } => {
             // Box[Callable[sig]] → Callable__sig__TraitObj
             let kind_prefix = match kind {
                 crate::semantic::types::ClosureKind::Callable => "Callable",
                 crate::semantic::types::ClosureKind::MutCallable => "MutCallable",
-                crate::semantic::types::ClosureKind::MoveCallable => "MoveCallable",
+                crate::semantic::types::ClosureKind::ConsumeCallable => "ConsumeCallable",
             };
             if let ResolvedType::Function { params, return_type } = types.get(*inner) {
                 let ret_c = type_id_to_c(*return_type, types, scopes);

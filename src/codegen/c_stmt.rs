@@ -1176,7 +1176,7 @@ impl CodegenContext<'_> {
                             let callable_kind = match kind_prefix {
                                 "Callable" => super::CallableKind::Callable,
                                 "MutCallable" => super::CallableKind::MutCallable,
-                                _ => super::CallableKind::MoveCallable,
+                                _ => super::CallableKind::ConsumeCallable,
                             };
                             let sig = (callable_kind, param_c.clone(), ret_c.clone());
                             if !self.fn_trait_sigs.contains(&sig) {
@@ -1336,12 +1336,12 @@ impl CodegenContext<'_> {
                     && self.escaping_closure_vars.contains(name);
                 if c_type == "GorgetClosure" {
                     self.closure_vars.insert(escaped.clone());
-                    // For Callable/MutCallable/MoveCallable/Fn[sig]-typed VarDecl, extract signature
+                    // For Callable/MutCallable/ConsumeCallable-typed VarDecl, extract signature
                     if let Type::Named { name: fn_name, generic_args } = &type_.node {
                         let callable_kind = match fn_name.node.as_str() {
-                            "Fn" | "Callable" => Some(super::CallableKind::Callable),
-                            "FnMut" | "MutCallable" => Some(super::CallableKind::MutCallable),
-                            "FnOnce" | "MoveCallable" => Some(super::CallableKind::MoveCallable),
+                            "Callable" => Some(super::CallableKind::Callable),
+                            "MutCallable" => Some(super::CallableKind::MutCallable),
+                            "ConsumeCallable" => Some(super::CallableKind::ConsumeCallable),
                             _ => None,
                         };
                         if let Some(_kind) = callable_kind {
@@ -1367,9 +1367,9 @@ impl CodegenContext<'_> {
                 let val = self.gen_expr(value);
                 self.decl_type_hint = prev_hint;
                 self.closure_heap_alloc = false;
-                // Coerce non-capturing closure to GorgetClosure for Callable/Fn[sig]-typed vars only.
+                // Coerce non-capturing closure to GorgetClosure for Callable-typed vars only.
                 let is_fn_trait_decl = matches!(&type_.node, Type::Named { name, generic_args }
-                    if matches!(name.node.as_str(), "Fn" | "Callable" | "FnMut" | "MutCallable" | "FnOnce" | "MoveCallable")
+                    if matches!(name.node.as_str(), "Callable" | "MutCallable" | "ConsumeCallable")
                     && !generic_args.is_empty());
                 let val = if is_fn_trait_decl && !val.starts_with("(GorgetClosure)") {
                     let val_type = self.infer_c_type_from_expr(&value.node);
@@ -1720,7 +1720,7 @@ impl CodegenContext<'_> {
         Some((trait_name, concrete_type, inner_expr))
     }
 
-    /// Extract Box[Callable[sig]] / Box[MutCallable[sig]] / Box[MoveCallable[sig]] from an AST type.
+    /// Extract Box[Callable[sig]] / Box[MutCallable[sig]] / Box[ConsumeCallable[sig]] from an AST type.
     /// Returns (kind_prefix, return_type, params) if the type matches.
     fn extract_box_callable_type<'b>(
         type_: &'b Spanned<Type>,
@@ -1729,9 +1729,9 @@ impl CodegenContext<'_> {
             if name.node == "Box" && generic_args.len() == 1 {
                 if let Type::Named { name: inner_name, generic_args: inner_args } = &generic_args[0].node {
                     let kind_prefix = match inner_name.node.as_str() {
-                        "Fn" | "Callable" => Some("Callable"),
-                        "FnMut" | "MutCallable" => Some("MutCallable"),
-                        "FnOnce" | "MoveCallable" => Some("MoveCallable"),
+                        "Callable" => Some("Callable"),
+                        "MutCallable" => Some("MutCallable"),
+                        "ConsumeCallable" => Some("ConsumeCallable"),
                         _ => None,
                     };
                     if let Some(prefix) = kind_prefix {

@@ -103,7 +103,7 @@ equip XmlParser:
 
     void fail(&self, str msg):
         if self.err == "":
-            self.err = moving msg
+            self.err = consuming msg
 
     char peek(self):
         if self.pos < self.xml_input.len():

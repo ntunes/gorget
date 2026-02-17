@@ -18,11 +18,11 @@
 
 - **Hot-reload: trait objects / closures in State**: Trait object vtable pointers and closure function pointers become invalid after dlclose. The `reload()` hook can reconstruct them, but compiler-assisted fixup would be better. [added: 2026-02-16]
 
-- **FnOnce single-call enforcement**: `MoveCallable` closures should be invalidated after first call. Requires borrow checker integration to track consumption of closure values. [added: 2026-02-17]
+- **FnOnce single-call enforcement**: `ConsumeCallable` closures should be invalidated after first call. Requires borrow checker integration to track consumption of closure values. [added: 2026-02-17]
 
 - **ByMutRef captures in escaping closures**: `&count` captures still point to the caller's stack even when the env is heap-allocated (step 1). Needs boxing the captured variable itself — separate fix from env heap-allocation. [added: 2026-02-15]
 
-- **Restrict `str` from `&`/`!` parameter modes**: `str` is Copy and pointer-sized — always pass by value. Mutable/moving borrows are meaningless for an immutable view type. The borrow checker should reject `&str` and `!str` parameter modes. [added: 2026-02-16]
+- **Restrict `str` from `&`/`!` parameter modes**: `str` is Copy and pointer-sized — always pass by value. Mutable/consuming borrows are meaningless for an immutable view type. The borrow checker should reject `&str` and `!str` parameter modes. [added: 2026-02-16]
 
 
 - **String interpolation only works in print() context**: `"{n}"` outside of `print()` generates literal `"%s"` instead of formatting the value. Stdlib modules must use explicit `int_to_str()`, `float_to_str()`, `char_to_str()` etc. [added: 2026-02-16]

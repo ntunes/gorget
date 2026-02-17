@@ -29,7 +29,7 @@ equip JsonParser:
 
     void fail(&self, str msg):
         if self.err == "":
-            self.err = moving msg
+            self.err = consuming msg
 
     void skip_whitespace(&self):
         while self.pos < self.input.len():

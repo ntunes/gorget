@@ -6,7 +6,7 @@ use super::c_mangle;
 use super::c_types;
 use super::{CodegenContext, DropAction, DropScopeKind};
 
-/// Build a mangled name for a Callable/MutCallable/MoveCallable trait signature.
+/// Build a mangled name for a Callable/MutCallable/ConsumeCallable trait signature.
 /// E.g., Callable[int(int, float)] → "Callable__int64_t__int64_t__double"
 pub(super) fn callable_sig_name(prefix: &str, param_c_types: &[String], ret_c_type: &str) -> String {
     let ret_mangled = c_mangle::mangle_c_type(ret_c_type);
@@ -538,12 +538,12 @@ impl CodegenContext<'_> {
                 self.pointer_params
                     .insert(c_mangle::escape_keyword(&param.node.name.node));
             }
-            // Detect Callable/MutCallable/MoveCallable/Fn[sig]-typed params — register for closure dispatch
+            // Detect Callable/MutCallable/ConsumeCallable-typed params — register for closure dispatch
             if let Type::Named { name, generic_args } = &param.node.type_.node {
                 let callable_kind = match name.node.as_str() {
-                    "Fn" | "Callable" => Some(super::CallableKind::Callable),
-                    "FnMut" | "MutCallable" => Some(super::CallableKind::MutCallable),
-                    "FnOnce" | "MoveCallable" => Some(super::CallableKind::MoveCallable),
+                    "Callable" => Some(super::CallableKind::Callable),
+                    "MutCallable" => Some(super::CallableKind::MutCallable),
+                    "ConsumeCallable" => Some(super::CallableKind::ConsumeCallable),
                     _ => None,
                 };
                 if let Some(kind) = callable_kind {
@@ -1312,7 +1312,7 @@ impl CodegenContext<'_> {
         self.lifted_closures = closures;
     }
 
-    /// Emit Callable/MutCallable/MoveCallable vtable and trait object typedefs,
+    /// Emit Callable/MutCallable/ConsumeCallable vtable and trait object typedefs,
     /// plus vtable instances for each closure that needs them.
     fn emit_callable_vtables(&self, closures: &[super::LiftedClosure], emitter: &mut CEmitter) {
         if self.fn_trait_sigs.is_empty() {
@@ -1333,7 +1333,7 @@ impl CodegenContext<'_> {
             let kind_prefix = match kind {
                 super::CallableKind::Callable => "Callable",
                 super::CallableKind::MutCallable => "MutCallable",
-                super::CallableKind::MoveCallable => "MoveCallable",
+                super::CallableKind::ConsumeCallable => "ConsumeCallable",
             };
             let sig_name = callable_sig_name(kind_prefix, param_c_types, ret_c_type);
             let vtable_name = format!("{sig_name}__VTable");

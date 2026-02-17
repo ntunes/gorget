@@ -317,7 +317,7 @@ pub enum Keyword {
     RwLock,
 
     // Ownership keywords
-    Moving,
+    Consuming,
     Mutable,
 
     // Testing
@@ -414,7 +414,7 @@ impl Keyword {
             "RefCell" => Some(Keyword::RefCell),
             "Mutex" => Some(Keyword::Mutex),
             "RwLock" => Some(Keyword::RwLock),
-            "moving" => Some(Keyword::Moving),
+            "consuming" => Some(Keyword::Consuming),
             "mutable" => Some(Keyword::Mutable),
             "test" => Some(Keyword::Test),
             "suite" => Some(Keyword::Suite),
@@ -509,7 +509,7 @@ impl fmt::Display for Keyword {
             Keyword::RefCell => "RefCell",
             Keyword::Mutex => "Mutex",
             Keyword::RwLock => "RwLock",
-            Keyword::Moving => "moving",
+            Keyword::Consuming => "consuming",
             Keyword::Mutable => "mutable",
             Keyword::Test => "test",
             Keyword::Suite => "suite",

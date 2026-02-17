@@ -45,7 +45,7 @@ pub fn classify_closure_kind(
     body: &Spanned<Expr>,
 ) -> ClosureKind {
     if is_move {
-        return ClosureKind::MoveCallable;
+        return ClosureKind::ConsumeCallable;
     }
     let param_names: HashSet<String> = params.iter()
         .map(|p| p.node.name.node.clone())
@@ -399,9 +399,9 @@ impl<'a> TypeChecker<'a> {
                 let new_inner = self.resolve_type_deep(inner);
                 if new_inner == inner { base } else { self.types.insert(ResolvedType::MutCallableTrait(new_inner)) }
             }
-            ResolvedType::MoveCallableTrait(inner) => {
+            ResolvedType::ConsumeCallableTrait(inner) => {
                 let new_inner = self.resolve_type_deep(inner);
-                if new_inner == inner { base } else { self.types.insert(ResolvedType::MoveCallableTrait(new_inner)) }
+                if new_inner == inner { base } else { self.types.insert(ResolvedType::ConsumeCallableTrait(new_inner)) }
             }
             ResolvedType::BoxedCallable { kind, inner } => {
                 let new_inner = self.resolve_type_deep(inner);
@@ -526,22 +526,22 @@ impl<'a> TypeChecker<'a> {
             // Same-kind callable traits: unify inner function types
             (ResolvedType::CallableTrait(a_inner), ResolvedType::CallableTrait(b_inner))
             | (ResolvedType::MutCallableTrait(a_inner), ResolvedType::MutCallableTrait(b_inner))
-            | (ResolvedType::MoveCallableTrait(a_inner), ResolvedType::MoveCallableTrait(b_inner)) => {
+            | (ResolvedType::ConsumeCallableTrait(a_inner), ResolvedType::ConsumeCallableTrait(b_inner)) => {
                 let (a_inner, b_inner) = (*a_inner, *b_inner);
                 self.unify(a_inner, b_inner, span);
                 a
             }
-            // Callable hierarchy coercion: Callable → MutCallable → MoveCallable (upward OK)
+            // Callable hierarchy coercion: Callable → MutCallable → ConsumeCallable (upward OK)
             (ResolvedType::MutCallableTrait(a_inner), ResolvedType::CallableTrait(b_inner)) => {
                 let (a_inner, b_inner) = (*a_inner, *b_inner);
                 self.unify(a_inner, b_inner, span);
                 a // MutCallable accepts Callable
             }
-            (ResolvedType::MoveCallableTrait(a_inner), ResolvedType::CallableTrait(b_inner))
-            | (ResolvedType::MoveCallableTrait(a_inner), ResolvedType::MutCallableTrait(b_inner)) => {
+            (ResolvedType::ConsumeCallableTrait(a_inner), ResolvedType::CallableTrait(b_inner))
+            | (ResolvedType::ConsumeCallableTrait(a_inner), ResolvedType::MutCallableTrait(b_inner)) => {
                 let (a_inner, b_inner) = (*a_inner, *b_inner);
                 self.unify(a_inner, b_inner, span);
-                a // MoveCallable accepts Callable and MutCallable
+                a // ConsumeCallable accepts Callable and MutCallable
             }
             // BoxedCallable: same kind, unify inner types
             (ResolvedType::BoxedCallable { kind: a_kind, inner: a_inner },
@@ -557,7 +557,7 @@ impl<'a> TypeChecker<'a> {
             | (ResolvedType::BoxedCallable { inner: a_inner, .. },
                ResolvedType::MutCallableTrait(b_inner))
             | (ResolvedType::BoxedCallable { inner: a_inner, .. },
-               ResolvedType::MoveCallableTrait(b_inner)) => {
+               ResolvedType::ConsumeCallableTrait(b_inner)) => {
                 let (a_inner, b_inner) = (*a_inner, *b_inner);
                 self.unify(a_inner, b_inner, span);
                 a
@@ -572,14 +572,14 @@ impl<'a> TypeChecker<'a> {
             // Callable ↔ Function: auto-coerce function pointer to callable (any variant)
             (ResolvedType::CallableTrait(inner), ResolvedType::Function { .. })
             | (ResolvedType::MutCallableTrait(inner), ResolvedType::Function { .. })
-            | (ResolvedType::MoveCallableTrait(inner), ResolvedType::Function { .. }) => {
+            | (ResolvedType::ConsumeCallableTrait(inner), ResolvedType::Function { .. }) => {
                 let inner = *inner;
                 self.unify(inner, b, span);
                 a
             }
             (ResolvedType::Function { .. }, ResolvedType::CallableTrait(inner))
             | (ResolvedType::Function { .. }, ResolvedType::MutCallableTrait(inner))
-            | (ResolvedType::Function { .. }, ResolvedType::MoveCallableTrait(inner)) => {
+            | (ResolvedType::Function { .. }, ResolvedType::ConsumeCallableTrait(inner)) => {
                 let inner = *inner;
                 self.unify(a, inner, span);
                 b
@@ -866,7 +866,7 @@ impl<'a> TypeChecker<'a> {
                     }
                     ResolvedType::CallableTrait(inner)
                     | ResolvedType::MutCallableTrait(inner)
-                    | ResolvedType::MoveCallableTrait(inner)
+                    | ResolvedType::ConsumeCallableTrait(inner)
                     | ResolvedType::BoxedCallable { inner, .. } => {
                         // Callable[sig]-typed callable — extract Function from inner
                         if let ResolvedType::Function { params, return_type } = self.types.get(inner).clone() {
@@ -2520,7 +2520,7 @@ impl<'a> TypeChecker<'a> {
             let expected = match self.types.get(resolved) {
                 ResolvedType::CallableTrait(_) => ClosureKind::Callable,
                 ResolvedType::MutCallableTrait(_) => ClosureKind::MutCallable,
-                ResolvedType::MoveCallableTrait(_) => ClosureKind::MoveCallable,
+                ResolvedType::ConsumeCallableTrait(_) => ClosureKind::ConsumeCallable,
                 ResolvedType::BoxedCallable { kind, .. } => *kind,
                 _ => return,
             };

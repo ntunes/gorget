@@ -295,7 +295,7 @@ fn closure_kind_error() {
 fn closure_move_kind_error() {
     check_gg_fails(
         "closure_move_kind_error.gg",
-        "closure kind mismatch: expected `MutCallable`, found `MoveCallable`",
+        "closure kind mismatch: expected `MutCallable`, found `ConsumeCallable`",
     );
 }
 

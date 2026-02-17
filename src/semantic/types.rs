@@ -41,8 +41,8 @@ pub enum ResolvedType {
     /// Mutable callable trait type: MutCallable[int(int)]
     MutCallableTrait(TypeId),
 
-    /// Move callable trait type: MoveCallable[int(int)]
-    MoveCallableTrait(TypeId),
+    /// Consuming callable trait type: ConsumeCallable[int(int)]
+    ConsumeCallableTrait(TypeId),
 
     /// Boxed callable trait object: Box[Callable[int(int)]]
     BoxedCallable { kind: ClosureKind, inner: TypeId },
@@ -68,7 +68,7 @@ pub enum ClosureKind {
     /// May mutate captured variables.
     MutCallable,
     /// Consumes captured variables (move closure).
-    MoveCallable,
+    ConsumeCallable,
 }
 
 impl ClosureKind {
@@ -77,17 +77,17 @@ impl ClosureKind {
         match self {
             ClosureKind::Callable => "Callable",
             ClosureKind::MutCallable => "MutCallable",
-            ClosureKind::MoveCallable => "MoveCallable",
+            ClosureKind::ConsumeCallable => "ConsumeCallable",
         }
     }
 
     /// Returns true if `self` is compatible with `expected`.
-    /// Hierarchy: Callable → MutCallable → MoveCallable (upward coercion OK).
+    /// Hierarchy: Callable → MutCallable → ConsumeCallable (upward coercion OK).
     pub fn is_compatible_with(self, expected: Self) -> bool {
         match expected {
             ClosureKind::Callable => self == ClosureKind::Callable,
-            ClosureKind::MutCallable => self != ClosureKind::MoveCallable,
-            ClosureKind::MoveCallable => true,
+            ClosureKind::MutCallable => self != ClosureKind::ConsumeCallable,
+            ClosureKind::ConsumeCallable => true,
         }
     }
 }
@@ -238,7 +238,7 @@ impl TypeTable {
             ResolvedType::TraitObject(_) => "<trait object>".into(),
             ResolvedType::CallableTrait(inner) => format!("Callable[{}]", self.display(*inner)),
             ResolvedType::MutCallableTrait(inner) => format!("MutCallable[{}]", self.display(*inner)),
-            ResolvedType::MoveCallableTrait(inner) => format!("MoveCallable[{}]", self.display(*inner)),
+            ResolvedType::ConsumeCallableTrait(inner) => format!("ConsumeCallable[{}]", self.display(*inner)),
             ResolvedType::BoxedCallable { kind, inner } => format!("Box[{}[{}]]", kind.name(), self.display(*inner)),
             ResolvedType::Var(n) => format!("?T{n}"),
             ResolvedType::Error => "<error>".into(),
@@ -259,13 +259,12 @@ pub fn ast_type_to_resolved(
         ast::Type::Primitive(prim) => Ok(types.primitive_id(*prim)),
 
         ast::Type::Named { name, generic_args } => {
-            // Callable[sig] / MutCallable[sig] / MoveCallable[sig] — compiler-magic callable types
-            // Also accept legacy "Fn" as an alias for "Callable".
+            // Callable[sig] / MutCallable[sig] / ConsumeCallable[sig] — compiler-magic callable types
             if generic_args.len() == 1 {
                 let variant = match name.node.as_str() {
-                    "Callable" | "Fn" => Some(ResolvedType::CallableTrait as fn(TypeId) -> ResolvedType),
-                    "MutCallable" | "FnMut" => Some(ResolvedType::MutCallableTrait as fn(TypeId) -> ResolvedType),
-                    "MoveCallable" | "FnOnce" => Some(ResolvedType::MoveCallableTrait as fn(TypeId) -> ResolvedType),
+                    "Callable" => Some(ResolvedType::CallableTrait as fn(TypeId) -> ResolvedType),
+                    "MutCallable" => Some(ResolvedType::MutCallableTrait as fn(TypeId) -> ResolvedType),
+                    "ConsumeCallable" => Some(ResolvedType::ConsumeCallableTrait as fn(TypeId) -> ResolvedType),
                     _ => None,
                 };
                 if let Some(constructor) = variant {
@@ -317,7 +316,7 @@ pub fn ast_type_to_resolved(
                                             ));
                                         }
                                     }
-                                    // Box[Callable[sig]] / Box[MutCallable[sig]] / Box[MoveCallable[sig]]
+                                    // Box[Callable[sig]] / Box[MutCallable[sig]] / Box[ConsumeCallable[sig]]
                                     match types.get(resolved_args[0]).clone() {
                                         ResolvedType::CallableTrait(func_id) => {
                                             return Ok(types.insert(ResolvedType::BoxedCallable {
@@ -329,9 +328,9 @@ pub fn ast_type_to_resolved(
                                                 kind: ClosureKind::MutCallable, inner: func_id,
                                             }));
                                         }
-                                        ResolvedType::MoveCallableTrait(func_id) => {
+                                        ResolvedType::ConsumeCallableTrait(func_id) => {
                                             return Ok(types.insert(ResolvedType::BoxedCallable {
-                                                kind: ClosureKind::MoveCallable, inner: func_id,
+                                                kind: ClosureKind::ConsumeCallable, inner: func_id,
                                             }));
                                         }
                                         _ => {}

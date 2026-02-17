@@ -825,7 +825,7 @@ impl CodegenContext<'_> {
             if matches!(self.types.get(ptid),
                 crate::semantic::types::ResolvedType::CallableTrait(_)
                 | crate::semantic::types::ResolvedType::MutCallableTrait(_)
-                | crate::semantic::types::ResolvedType::MoveCallableTrait(_)
+                | crate::semantic::types::ResolvedType::ConsumeCallableTrait(_)
             ) {
                 // Already a GorgetClosure variable — pass through
                 if self.closure_vars.contains(expr.as_str()) {
@@ -846,7 +846,7 @@ impl CodegenContext<'_> {
                     let inner_id = match inner {
                         crate::semantic::types::ResolvedType::CallableTrait(id)
                         | crate::semantic::types::ResolvedType::MutCallableTrait(id)
-                        | crate::semantic::types::ResolvedType::MoveCallableTrait(id) => *id,
+                        | crate::semantic::types::ResolvedType::ConsumeCallableTrait(id) => *id,
                         _ => unreachable!(),
                     };
                     if let crate::semantic::types::ResolvedType::Function { params, return_type } =

@@ -1,4 +1,4 @@
-# Test Callable, MutCallable, and MoveCallable trait types
+# Test Callable, MutCallable, and ConsumeCallable trait types
 
 int apply(Callable[int(int)] f, int x):
     return f(x)
@@ -6,7 +6,7 @@ int apply(Callable[int(int)] f, int x):
 int apply_mut(MutCallable[int(int)] f, int x):
     return f(x)
 
-int apply_once(MoveCallable[int(int)] f, int x):
+int apply_once(ConsumeCallable[int(int)] f, int x):
     return f(x)
 
 void main():
@@ -33,7 +33,7 @@ void main():
     int r5 = apply_mut((n): n + offset, 7)
     print("{r5}")
 
-    # MoveCallable — accepts any closure (top of hierarchy)
+    # ConsumeCallable — accepts any closure (top of hierarchy)
     int r6 = apply_once((n): n * n, 6)
     print("{r6}")
 

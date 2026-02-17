@@ -424,7 +424,7 @@ impl Parser {
             && (self.check(&Token::Ampersand)
                 || self.check(&Token::Bang)
                 || self.check_keyword(Keyword::Mutable)
-                || self.check_keyword(Keyword::Moving))
+                || self.check_keyword(Keyword::Consuming))
         {
             let ownership_tok = self.advance();
             matches!(ownership_tok.node, Token::Keyword(Keyword::Mutable))

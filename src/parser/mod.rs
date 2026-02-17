@@ -161,12 +161,12 @@ impl Parser {
         }
     }
 
-    /// Parse an ownership modifier: `&`/`mutable` → MutableBorrow, `!`/`moving` → Move, else Borrow.
+    /// Parse an ownership modifier: `&`/`mutable` → MutableBorrow, `!`/`consuming` → Move, else Borrow.
     pub fn parse_ownership_modifier(&mut self) -> Ownership {
         if self.check(&Token::Ampersand) || self.check_keyword(Keyword::Mutable) {
             self.advance();
             Ownership::MutableBorrow
-        } else if self.check(&Token::Bang) || self.check_keyword(Keyword::Moving) {
+        } else if self.check(&Token::Bang) || self.check_keyword(Keyword::Consuming) {
             self.advance();
             Ownership::Move
         } else {
@@ -1379,10 +1379,10 @@ impl Parser {
                 start.merge(name_tok.span),
             ));
         }
-        if (self.check(&Token::Bang) || self.check_keyword(Keyword::Moving))
+        if (self.check(&Token::Bang) || self.check_keyword(Keyword::Consuming))
             && matches!(self.peek_ahead(1), Token::Keyword(Keyword::SelfLower))
         {
-            self.advance(); // skip ! or moving
+            self.advance(); // skip ! or consuming
             let name_tok = self.advance(); // self
             return Ok(Spanned::new(
                 Param {
@@ -1919,9 +1919,9 @@ mod tests {
     }
 
     #[test]
-    fn test_moving_self_param() {
-        // moving self should be equivalent to !self
-        let module = parse("equip Foo:\n    void c(moving self):\n        pass\n");
+    fn test_consuming_self_param() {
+        // consuming self should be equivalent to !self
+        let module = parse("equip Foo:\n    void c(consuming self):\n        pass\n");
         if let Item::Equip(ref imp) = module.items[0].node {
             let param = &imp.items[0].node.params[0].node;
             assert_eq!(param.ownership, Ownership::Move);
@@ -1931,9 +1931,9 @@ mod tests {
     }
 
     #[test]
-    fn test_moving_param() {
-        // moving keyword on regular param should be equivalent to !
-        let module = parse("void take(String moving s):\n    pass\n");
+    fn test_consuming_param() {
+        // consuming keyword on regular param should be equivalent to !
+        let module = parse("void take(String consuming s):\n    pass\n");
         if let Item::Function(ref f) = module.items[0].node {
             assert_eq!(f.params[0].node.ownership, Ownership::Move);
         } else {
