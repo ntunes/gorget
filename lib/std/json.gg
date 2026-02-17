@@ -3,7 +3,7 @@
 # Provides a recursive-descent JSON parser, serializer, and accessor methods.
 # No C dependencies — uses only Gorget standard library.
 
-from std.collections import Vector, Dict
+from std.collections import Vector, Dict, Box
 from std.conv import parse_int, parse_float, int_to_str, float_to_str, bool_to_str, char_to_str, codepoint_to_str
 
 # ── JSON value type ──────────────────────────────────────────
@@ -16,6 +16,25 @@ enum Json:
     Str(str)
     Arr(Vector[Json])
     Obj(Dict[str, Json])
+
+# ── Serialization traits ────────────────────────────────────
+
+trait Serializer:
+    void write_bool(&self, bool v)
+    void write_int(&self, int v)
+    void write_float(&self, float v)
+    void write_str(&self, str v)
+    void write_null(&self)
+    void begin_struct(&self, str name, int field_count)
+    void field(&self, str name, int index)
+    void end_struct(&self)
+    void begin_seq(&self, int len)
+    void elem(&self, int index)
+    void end_seq(&self)
+    str result(self)
+
+trait Serializable:
+    void serialize(self, Box[Serializer] ser)
 
 # ── Internal parser ──────────────────────────────────────────
 
@@ -517,3 +536,40 @@ equip Json:
                 return d.keys()
             else:
                 return Vector[str]()
+
+# ── JSON serializer ─────────────────────────────────────────
+
+struct JsonSerializer:
+    str ser_out
+
+equip JsonSerializer with Serializer:
+    void write_bool(&self, bool v):
+        if v:
+            self.ser_out = self.ser_out + "true"
+        else:
+            self.ser_out = self.ser_out + "false"
+    void write_int(&self, int v):
+        self.ser_out = self.ser_out + int_to_str(v)
+    void write_float(&self, float v):
+        self.ser_out = self.ser_out + float_to_str(v)
+    void write_str(&self, str v):
+        self.ser_out = self.ser_out + json_escape_string(v)
+    void write_null(&self):
+        self.ser_out = self.ser_out + "null"
+    void begin_struct(&self, str name, int field_count):
+        self.ser_out = self.ser_out + "\{"
+    void field(&self, str name, int index):
+        if index > 0:
+            self.ser_out = self.ser_out + ","
+        self.ser_out = self.ser_out + json_escape_string(name) + ":"
+    void end_struct(&self):
+        self.ser_out = self.ser_out + "\}"
+    void begin_seq(&self, int len):
+        self.ser_out = self.ser_out + "["
+    void elem(&self, int index):
+        if index > 0:
+            self.ser_out = self.ser_out + ","
+    void end_seq(&self):
+        self.ser_out = self.ser_out + "]"
+    str result(self):
+        return self.ser_out

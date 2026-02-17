@@ -11,6 +11,14 @@
 ## Medium
 
 
+- **`Deserializable` trait + `@derive(Deserializable)`**: Counterpart to `Serializable` for deserialization. `Deserializer` trait with `read_bool()`, `read_int()`, etc., plus `JsonDeserializer` backend. `@derive(Deserializable)` generates `equip` blocks. [added: 2026-02-17]
+
+- **Serializable: Vector/Option/Dict field support in derive**: Currently fields of these types fall through to `.serialize(ser)` which requires the collection type to implement `Serializable`. Need special-cased derive codegen for `Vector[T]` (emit `begin_seq`/`elem`/`end_seq` loop), `Option[T]` (emit value or `write_null`), `Dict[str,T]` (emit as struct). [added: 2026-02-17]
+
+- **`print()` format for trait object method return types**: `print(traitObj.method())` emits `%lld` format instead of inspecting the vtable method's return type to choose `%s`/`%lld`/`%f`. Workaround: store result in typed variable first. (`c_expr_print.rs`) [added: 2026-02-17]
+
+- **Extract serialization traits to `std.serialize` module**: When adding TOML/YAML serializers, move `Serializer` and `Serializable` traits to a shared `std.serialize` module. `std.json`, `std.toml`, `std.yaml` would each provide their own backend. [added: 2026-02-17]
+
 - **Hot-reload: inotify file watching for Linux**: Current hot-reload file watcher is macOS-only (kqueue). Need `inotify` implementation in `HOT_RELOAD_RUNTIME` for Linux support. The Linux stub is in place, just needs implementation. [added: 2026-02-16]
 
 - **Hot-reload: multi-file watch**: When a hot-reloadable program imports other modules, all imported .gg files should be watched for changes (currently only watches the main file). Need to pass import file list from loader to codegen. [added: 2026-02-16]

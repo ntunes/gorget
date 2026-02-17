@@ -1104,6 +1104,18 @@ hash ok",
 }
 
 #[test]
+fn serializable() {
+    run_gg(
+        "serializable.gg",
+        "\
+{\"name\":\"Alice\",\"age\":30,\"active\":true}
+\"Red\"
+{\"Custom\":[255,128,0]}
+{\"label\":\"admin\",\"user\":{\"name\":\"Bob\",\"age\":25,\"active\":false}}",
+    );
+}
+
+#[test]
 fn iter_for_else() {
     run_gg(
         "iter_for_else.gg",

@@ -49,8 +49,10 @@ pub fn expand_derives(module: &mut Module, errors: &mut Vec<SemanticError>) {
     module.items.extend(new_items);
 }
 
-const DERIVABLE_STRUCT_TRAITS: &[&str] = &["Equatable", "Displayable", "Cloneable", "Hashable"];
-const DERIVABLE_ENUM_TRAITS: &[&str] = &["Equatable", "Displayable", "Cloneable", "Hashable"];
+const DERIVABLE_STRUCT_TRAITS: &[&str] =
+    &["Equatable", "Displayable", "Cloneable", "Hashable", "Serializable"];
+const DERIVABLE_ENUM_TRAITS: &[&str] =
+    &["Equatable", "Displayable", "Cloneable", "Hashable", "Serializable"];
 
 fn collect_struct_derives(
     s: &StructDef,
@@ -189,6 +191,7 @@ fn generate_struct_derive(
         "Displayable" => generate_struct_displayable(type_name, gs, fields),
         "Cloneable" => generate_struct_cloneable(type_name, gs, fields),
         "Hashable" => generate_struct_hashable(type_name, gs, fields),
+        "Serializable" => generate_struct_serializable(type_name, gs, fields),
         _ => String::new(),
     }
 }
@@ -263,6 +266,46 @@ fn generate_struct_hashable(type_name: &str, gs: &str, fields: &[(&str, &str)]) 
     )
 }
 
+fn generate_struct_serializable(type_name: &str, gs: &str, fields: &[(&str, &str)]) -> String {
+    let gp = equip_generic_prefix(gs);
+    let mut body = String::new();
+    body.push_str(&format!(
+        "        ser.begin_struct(\"{type_name}\", {})\n",
+        fields.len()
+    ));
+    for (i, (name, ty)) in fields.iter().enumerate() {
+        body.push_str(&format!("        ser.field(\"{name}\", {i})\n"));
+        body.push_str(&format!(
+            "        {}\n",
+            field_write_call(&format!("self.{name}"), ty)
+        ));
+    }
+    body.push_str("        ser.end_struct()");
+
+    format!(
+        "equip {gp}{type_name}{gs} with Serializable:\n\
+         \x20   void serialize(self, Box[Serializer] ser):\n\
+         {body}\n"
+    )
+}
+
+/// Generate the serializer call for a single field expression based on its type.
+fn field_write_call(expr: &str, type_name: &str) -> String {
+    match type_name {
+        "int" => format!("ser.write_int({expr})"),
+        "int8" | "int16" | "int32" | "int64" | "uint" | "uint8" | "uint16" | "uint32"
+        | "uint64" => {
+            format!("ser.write_int({expr} as int)")
+        }
+        "float" => format!("ser.write_float({expr})"),
+        "float32" | "float64" => format!("ser.write_float({expr} as float)"),
+        "bool" => format!("ser.write_bool({expr})"),
+        "str" | "String" => format!("ser.write_str({expr})"),
+        "char" => format!("ser.write_str(char_to_str({expr}))"),
+        _ => format!("{expr}.serialize(ser)"),
+    }
+}
+
 // ── Enum derive generation ────────────────────────────────────
 
 fn generate_enum_derive(type_name: &str, gs: &str, trait_name: &str, e: &EnumDef) -> String {
@@ -271,6 +314,7 @@ fn generate_enum_derive(type_name: &str, gs: &str, trait_name: &str, e: &EnumDef
         "Displayable" => generate_enum_displayable(type_name, gs, e),
         "Cloneable" => generate_enum_cloneable(type_name, gs, e),
         "Hashable" => generate_enum_hashable(type_name, gs, e),
+        "Serializable" => generate_enum_serializable(type_name, gs, e),
         _ => String::new(),
     }
 }
@@ -451,6 +495,75 @@ fn generate_enum_hashable(type_name: &str, gs: &str, e: &EnumDef) -> String {
     format!(
         "equip {gp}{type_name}{gs} with Hashable:\n\
          \x20   int hash(self):\n\
+         \x20       match self:\n\
+         {arms}"
+    )
+}
+
+fn generate_enum_serializable(type_name: &str, gs: &str, e: &EnumDef) -> String {
+    let gp = equip_generic_prefix(gs);
+    let mut arms = String::new();
+
+    for variant in &e.variants {
+        let vname = &variant.node.name.node;
+        let field_count = match &variant.node.fields {
+            VariantFields::Unit => 0,
+            VariantFields::Tuple(fields) => fields.len(),
+        };
+
+        let bindings: Vec<String> = (0..field_count).map(|i| format!("a{i}")).collect();
+
+        let pattern = if field_count == 0 {
+            format!("{vname}()")
+        } else {
+            format!("{vname}({})", bindings.join(", "))
+        };
+
+        if field_count == 0 {
+            // Unit variant → serialize as a string
+            arms.push_str(&format!(
+                "            case {pattern}:\n\
+                 \x20               ser.write_str(\"{vname}\")\n"
+            ));
+        } else {
+            // Data variant → externally-tagged: {"VariantName": [field0, field1, ...]}
+            let field_types: Vec<&str> = match &variant.node.fields {
+                VariantFields::Tuple(fields) => {
+                    fields.iter().map(|f| {
+                        let ty = format_type(&f.node);
+                        Box::leak(ty.into_boxed_str()) as &str
+                    }).collect()
+                }
+                VariantFields::Unit => vec![],
+            };
+
+            let mut body = format!(
+                "                ser.begin_struct(\"{vname}\", 1)\n\
+                 \x20               ser.field(\"{vname}\", 0)\n\
+                 \x20               ser.begin_seq({field_count})\n"
+            );
+            for (i, binding) in bindings.iter().enumerate() {
+                body.push_str(&format!(
+                    "                ser.elem({i})\n\
+                     \x20               {}\n",
+                    field_write_call(binding, field_types[i])
+                ));
+            }
+            body.push_str(
+                "                ser.end_seq()\n\
+                 \x20               ser.end_struct()"
+            );
+
+            arms.push_str(&format!(
+                "            case {pattern}:\n\
+                 {body}\n"
+            ));
+        }
+    }
+
+    format!(
+        "equip {gp}{type_name}{gs} with Serializable:\n\
+         \x20   void serialize(self, Box[Serializer] ser):\n\
          \x20       match self:\n\
          {arms}"
     )
@@ -762,5 +875,77 @@ void main():
         let src = generate_struct_cloneable("Pair", "[T]", &[("first", "T"), ("second", "T")]);
         assert!(src.contains("equip [T] Pair[T] with Cloneable"));
         assert!(src.contains("Pair[T] clone(self)"));
+    }
+
+    #[test]
+    fn test_struct_serializable() {
+        let src = generate_struct_serializable("User", "", &[("name", "str"), ("age", "int")]);
+        assert!(src.contains("equip User with Serializable"));
+        assert!(src.contains("void serialize(self, Box[Serializer] ser)"));
+        assert!(src.contains("ser.begin_struct(\"User\", 2)"));
+        assert!(src.contains("ser.field(\"name\", 0)"));
+        assert!(src.contains("ser.write_str(self.name)"));
+        assert!(src.contains("ser.field(\"age\", 1)"));
+        assert!(src.contains("ser.write_int(self.age)"));
+        assert!(src.contains("ser.end_struct()"));
+    }
+
+    #[test]
+    fn test_struct_serializable_parses() {
+        let src = generate_struct_serializable(
+            "Point",
+            "",
+            &[("x", "float"), ("y", "float"), ("label", "str")],
+        );
+        let mut parser = Parser::new(&src);
+        let module = parser.parse_module();
+        assert!(
+            parser.errors.is_empty(),
+            "parse errors: {:?}\nsource:\n{src}",
+            parser.errors
+        );
+        assert!(module.items.iter().any(|i| matches!(&i.node, Item::Equip(_))));
+    }
+
+    #[test]
+    fn test_field_write_call() {
+        assert_eq!(field_write_call("self.x", "int"), "ser.write_int(self.x)");
+        assert_eq!(field_write_call("self.x", "float"), "ser.write_float(self.x)");
+        assert_eq!(field_write_call("self.x", "bool"), "ser.write_bool(self.x)");
+        assert_eq!(field_write_call("self.x", "str"), "ser.write_str(self.x)");
+        assert_eq!(field_write_call("self.x", "String"), "ser.write_str(self.x)");
+        assert_eq!(field_write_call("self.x", "char"), "ser.write_str(char_to_str(self.x))");
+        assert_eq!(field_write_call("self.x", "int8"), "ser.write_int(self.x as int)");
+        assert_eq!(field_write_call("self.x", "uint64"), "ser.write_int(self.x as int)");
+        assert_eq!(field_write_call("self.x", "float32"), "ser.write_float(self.x as float)");
+        assert_eq!(field_write_call("self.x", "User"), "self.x.serialize(ser)");
+    }
+
+    #[test]
+    fn test_enum_serializable_parses() {
+        let source = "\
+@derive(Serializable)
+enum Color:
+    Red()
+    Green()
+    Custom(int, int, int)
+
+void main():
+    pass
+";
+        let mut parser = Parser::new(source);
+        let mut module = parser.parse_module();
+        assert!(parser.errors.is_empty(), "parse errors: {:?}", parser.errors);
+
+        let mut errors = Vec::new();
+        expand_derives(&mut module, &mut errors);
+        assert!(errors.is_empty(), "derive errors: {:?}", errors);
+
+        let equip_count = module
+            .items
+            .iter()
+            .filter(|i| matches!(&i.node, Item::Equip(_)))
+            .count();
+        assert_eq!(equip_count, 1, "expected 1 equip block");
     }
 }

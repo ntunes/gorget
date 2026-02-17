@@ -1745,7 +1745,7 @@ impl CodegenContext<'_> {
             _ => None,
         }?;
 
-        // Infer the concrete type from the inner expression (struct constructor call)
+        // Infer the concrete type from the inner expression
         let concrete_type = match &inner_expr.node {
             Expr::Call { callee, .. } => {
                 if let Expr::Identifier(name) = &callee.node {
@@ -1755,7 +1755,12 @@ impl CodegenContext<'_> {
                 }
             }
             Expr::StructLiteral { name, .. } => Some(name.node.clone()),
-            _ => None,
+            _ => {
+                // Fallback: resolve the expression's type via the type system.
+                // Handles variables, field accesses, method calls, etc.
+                self.resolve_expr_type_id(inner_expr)
+                    .map(|tid| c_types::type_id_to_c(tid, self.types, self.scopes))
+            }
         }?;
 
         Some((trait_name, concrete_type, inner_expr))

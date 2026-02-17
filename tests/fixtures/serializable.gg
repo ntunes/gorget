@@ -1,0 +1,52 @@
+import std.json
+from std.collections import Box
+
+@derive(Serializable)
+struct User:
+    str name
+    int age
+    bool active
+
+@derive(Serializable)
+enum Color:
+    Red
+    Green
+    Custom(int, int, int)
+
+@derive(Serializable)
+struct Profile:
+    str label
+    User user
+
+void main():
+    # Struct serialization
+    User u = User("Alice", 30, true)
+    JsonSerializer js1 = JsonSerializer("")
+    Box[Serializer] ser1 = Box.new(js1)
+    u.serialize(ser1)
+    str r1 = ser1.result()
+    print(r1)
+
+    # Enum unit variant
+    Color c1 = Red()
+    JsonSerializer js2 = JsonSerializer("")
+    Box[Serializer] ser2 = Box.new(js2)
+    c1.serialize(ser2)
+    str r2 = ser2.result()
+    print(r2)
+
+    # Enum data variant
+    Color c2 = Custom(255, 128, 0)
+    JsonSerializer js3 = JsonSerializer("")
+    Box[Serializer] ser3 = Box.new(js3)
+    c2.serialize(ser3)
+    str r3 = ser3.result()
+    print(r3)
+
+    # Nested struct
+    Profile p = Profile("admin", User("Bob", 25, false))
+    JsonSerializer js4 = JsonSerializer("")
+    Box[Serializer] ser4 = Box.new(js4)
+    p.serialize(ser4)
+    str r4 = ser4.result()
+    print(r4)

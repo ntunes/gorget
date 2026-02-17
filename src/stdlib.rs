@@ -1397,7 +1397,7 @@ mod tests {
         assert!(fn_names.contains(&"json_parse".to_string()));
         assert!(fn_names.contains(&"json_stringify".to_string()));
         assert!(fn_names.contains(&"json_pretty".to_string()));
-        assert_eq!(equip_count, 2); // equip JsonParser + equip Json
+        assert_eq!(equip_count, 3); // equip JsonParser + equip Json + equip JsonSerializer with Serializer
     }
 
     #[test]
