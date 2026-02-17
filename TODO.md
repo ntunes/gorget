@@ -37,8 +37,6 @@
 
 - **ECS `get()` has no bounds check**: Calls `self.sparse.get(id)` without checking `id < sparse.len()` while the adjacent `has()` method does check. Out-of-bounds panic for callers who forget `has()`. (`ecs.gg:74-76`) [added: 2026-02-16]
 
-- **Parameter ownership uniformly `Borrow` in synthetic modules**: Every function parameter declared `Ownership::Borrow` regardless of whether move semantics would be more appropriate for collections. Either document the design decision or add per-parameter ownership. (`stdlib.rs:549`) [added: 2026-02-16]
-
 - **Inconsistent function naming across synthetic stdlib modules**: Modules use different prefixing: `crypto_sha256()`, `bytes_from_str()`, `path_join()`, but HTTP uses bare `get()`/`post()`. Crypto has `crypto_random_bytes()` while bytes has `random_bytes()`. Adopt consistent `module_verb()` convention. (`stdlib.rs`) [added: 2026-02-16]
 
 - **Synthetic vs file-based module split is undocumented**: No comment explaining why some modules are synthetic (Rust-generated AST) vs file-based (parsed `.gg`). Contributors can't make the right choice when adding new modules. (`stdlib.rs:27-59`) [added: 2026-02-16]

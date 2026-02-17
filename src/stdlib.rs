@@ -542,6 +542,11 @@ fn make_module(fns: Vec<FunctionDef>) -> Module {
     }
 }
 
+// All parameters in synthetic module declarations use Ownership::Borrow. This is
+// intentional: these are FFI boundaries where the C runtime never takes ownership
+// of the caller's data, so borrowing is always correct. Move semantics would force
+// callers to clone before calling (e.g., losing a Vector after hashing it). Method
+// receiver ownership (self vs &self) is set per-method via decl_method/extern_method.
 fn decl_fn(name: &str, params: &[(&str, Type)], ret: Type) -> FunctionDef {
     FunctionDef {
         attributes: Vec::new(),
