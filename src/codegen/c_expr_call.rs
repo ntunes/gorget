@@ -1026,6 +1026,10 @@ impl CodegenContext<'_> {
                 });
 
             if is_type {
+                // Default trait: Type.default() → inline zero or trait function call
+                if method_name == "default" {
+                    return self.gen_default_call(name);
+                }
                 let mangled = c_mangle::mangle_method(name, method_name);
                 let arg_exprs: Vec<String> =
                     args.iter().map(|a| self.gen_expr(&a.node.value)).collect();
@@ -1307,6 +1311,30 @@ impl CodegenContext<'_> {
             format!("(strstr({coll_str}, {elem}) != NULL)")
         } else {
             format!("/* unsupported `in` for type {type_name} */ false")
+        }
+    }
+
+    /// Generate inline default value for `Type.default()` calls.
+    fn gen_default_call(&mut self, type_name: &str) -> String {
+        match type_name {
+            "int" | "int64" => "((int64_t)0)".to_string(),
+            "int8" => "((int8_t)0)".to_string(),
+            "int16" => "((int16_t)0)".to_string(),
+            "int32" => "((int32_t)0)".to_string(),
+            "uint" | "uint64" => "((uint64_t)0)".to_string(),
+            "uint8" => "((uint8_t)0)".to_string(),
+            "uint16" => "((uint16_t)0)".to_string(),
+            "uint32" => "((uint32_t)0)".to_string(),
+            "float" | "float64" => "0.0".to_string(),
+            "float32" => "0.0f".to_string(),
+            "bool" => "false".to_string(),
+            "char" => "((char)0)".to_string(),
+            "str" => "\"\"".to_string(),
+            "String" => "gorget_string_new(\"\")".to_string(),
+            _ => {
+                let func = c_mangle::mangle_trait_method("Default", type_name, "default");
+                format!("{func}()")
+            }
         }
     }
 }

@@ -1104,6 +1104,22 @@ hash ok",
 }
 
 #[test]
+fn default_trait() {
+    run_gg(
+        "default_trait.gg",
+        "\
+0.000000
+0.000000
+0
+0
+false
+
+0.000000
+0",
+    );
+}
+
+#[test]
 fn serializable() {
     run_gg(
         "serializable.gg",

@@ -1,0 +1,38 @@
+# Default trait: zero/empty value construction
+
+@derive(Default)
+struct Point:
+    float x
+    float y
+
+@derive(Default)
+struct Config:
+    int width
+    int height
+    bool enabled
+    str name
+
+struct Nested:
+    Point origin
+    int count
+
+equip Nested with Default:
+    Nested default():
+        return Nested(Point.default(), 0)
+
+void main():
+    # Struct derive
+    Point p = Point.default()
+    print(p.x)
+    print(p.y)
+
+    Config c = Config.default()
+    print(c.width)
+    print(c.height)
+    print(c.enabled)
+    print(c.name)
+
+    # Manual equip
+    Nested n = Nested.default()
+    print(n.origin.x)
+    print(n.count)

@@ -50,7 +50,7 @@ pub fn expand_derives(module: &mut Module, errors: &mut Vec<SemanticError>) {
 }
 
 const DERIVABLE_STRUCT_TRAITS: &[&str] =
-    &["Equatable", "Displayable", "Cloneable", "Hashable", "Serializable"];
+    &["Equatable", "Displayable", "Cloneable", "Hashable", "Serializable", "Default"];
 const DERIVABLE_ENUM_TRAITS: &[&str] =
     &["Equatable", "Displayable", "Cloneable", "Hashable", "Serializable"];
 
@@ -192,6 +192,7 @@ fn generate_struct_derive(
         "Cloneable" => generate_struct_cloneable(type_name, gs, fields),
         "Hashable" => generate_struct_hashable(type_name, gs, fields),
         "Serializable" => generate_struct_serializable(type_name, gs, fields),
+        "Default" => generate_struct_default(type_name, gs, fields),
         _ => String::new(),
     }
 }
@@ -303,6 +304,29 @@ fn field_write_call(expr: &str, type_name: &str) -> String {
         "str" | "String" => format!("ser.write_str({expr})"),
         "char" => format!("ser.write_str(char_to_str({expr}))"),
         _ => format!("{expr}.serialize(ser)"),
+    }
+}
+
+fn generate_struct_default(type_name: &str, gs: &str, fields: &[(&str, &str)]) -> String {
+    let gp = equip_generic_prefix(gs);
+    let defaults: Vec<String> = fields.iter().map(|(_, ty)| field_default_value(ty)).collect();
+    let body = format!("        return {type_name}{gs}({})", defaults.join(", "));
+
+    format!(
+        "equip {gp}{type_name}{gs} with Default:\n    {type_name}{gs} default():\n{body}\n"
+    )
+}
+
+/// Generate the default value expression for a field type.
+fn field_default_value(type_name: &str) -> String {
+    match type_name {
+        "int" | "int8" | "int16" | "int32" | "int64" | "uint" | "uint8" | "uint16" | "uint32"
+        | "uint64" => "0".to_string(),
+        "float" | "float32" | "float64" => "0.0".to_string(),
+        "bool" => "false".to_string(),
+        "str" => "\"\"".to_string(),
+        "String" => "String()".to_string(),
+        other => format!("{other}.default()"),
     }
 }
 
@@ -947,5 +971,50 @@ void main():
             .filter(|i| matches!(&i.node, Item::Equip(_)))
             .count();
         assert_eq!(equip_count, 1, "expected 1 equip block");
+    }
+
+    #[test]
+    fn test_struct_default() {
+        let src = generate_struct_default("Point", "", &[("x", "float"), ("y", "float")]);
+        assert!(src.contains("equip Point with Default"));
+        assert!(src.contains("Point default()"));
+        assert!(src.contains("return Point(0.0, 0.0)"));
+    }
+
+    #[test]
+    fn test_struct_default_parses() {
+        let src =
+            generate_struct_default("Config", "", &[("w", "int"), ("on", "bool"), ("n", "str")]);
+        let mut parser = Parser::new(&src);
+        let module = parser.parse_module();
+        assert!(
+            parser.errors.is_empty(),
+            "parse errors: {:?}\nsource:\n{src}",
+            parser.errors
+        );
+        assert!(module
+            .items
+            .iter()
+            .any(|i| matches!(&i.node, Item::Equip(_))));
+    }
+
+    #[test]
+    fn test_struct_default_nested() {
+        let src =
+            generate_struct_default("Wrapper", "", &[("inner", "Point"), ("count", "int")]);
+        assert!(src.contains("Point.default()"));
+        assert!(src.contains(", 0)"));
+    }
+
+    #[test]
+    fn test_field_default_value() {
+        assert_eq!(field_default_value("int"), "0");
+        assert_eq!(field_default_value("uint8"), "0");
+        assert_eq!(field_default_value("float"), "0.0");
+        assert_eq!(field_default_value("float32"), "0.0");
+        assert_eq!(field_default_value("bool"), "false");
+        assert_eq!(field_default_value("str"), "\"\"");
+        assert_eq!(field_default_value("String"), "String()");
+        assert_eq!(field_default_value("Point"), "Point.default()");
     }
 }

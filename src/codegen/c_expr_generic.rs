@@ -54,6 +54,41 @@ impl CodegenContext<'_> {
             Expr::Path { segments } if segments.len() == 2 => {
                 let type_name = &segments[0].node;
                 let method_name = &segments[1].node;
+
+                // Default trait: Type[T].default()
+                if method_name == "default" {
+                    match type_name.as_str() {
+                        "Vector" | "List" | "Array" => {
+                            let elem_size = if c_type_args.is_empty() {
+                                "sizeof(int64_t)".to_string()
+                            } else {
+                                format!("sizeof({})", c_type_args[0])
+                            };
+                            return format!("gorget_array_new({elem_size})");
+                        }
+                        "Dict" => {
+                            let mangled = c_mangle::mangle_generic("GorgetDict", &c_type_args);
+                            self.register_generic("GorgetDict", &c_type_args, super::GenericInstanceKind::Map { ordered: true });
+                            return format!("{mangled}__new()");
+                        }
+                        "HashMap" => {
+                            let mangled = c_mangle::mangle_generic("GorgetMap", &c_type_args);
+                            self.register_generic("GorgetMap", &c_type_args, super::GenericInstanceKind::Map { ordered: false });
+                            return format!("{mangled}__new()");
+                        }
+                        "Option" => {
+                            let mangled = c_mangle::mangle_generic("Option", &c_type_args);
+                            self.register_generic("Option", &c_type_args, super::GenericInstanceKind::Enum);
+                            return format!("{}()", c_mangle::mangle_variant(&mangled, "None"));
+                        }
+                        _ => {
+                            let mangled_type = c_mangle::mangle_generic(type_name, &c_type_args);
+                            let func = c_mangle::mangle_trait_method("Default", &mangled_type, "default");
+                            return format!("{func}()");
+                        }
+                    }
+                }
+
                 let mangled = c_mangle::mangle_method(type_name, method_name);
                 let full_mangled = c_mangle::mangle_generic(&mangled, &c_type_args);
                 self.register_generic(&mangled, &c_type_args, super::GenericInstanceKind::Function);
