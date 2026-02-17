@@ -517,20 +517,64 @@ impl CodegenContext<'_> {
         c_type.as_deref() == Some("GorgetArray")
     }
 
-    /// If `expr` has a Defined (struct) type that implements Equatable, return the mangled type name.
+    /// If `expr` has a user-defined type that implements the given trait, return the mangled type name.
     /// For generic types like `Pair[int]`, returns `"Pair__int64_t"`.
-    pub(super) fn try_equatable_type(&mut self, expr: &Spanned<Expr>) -> Option<String> {
+    /// Excludes primitives and built-in collection types.
+    pub(super) fn try_operator_trait_type(&mut self, expr: &Spanned<Expr>, trait_name: &str) -> Option<String> {
         let type_name = self.infer_receiver_type(expr);
-        // Exclude primitives and builtins
+        // Exclude primitives and builtins — these have hardcoded codegen paths
         if matches!(type_name.as_str(), "Unknown" | "int" | "float" | "bool" | "str" | "char"
-            | "Vector" | "Dict" | "Set" | "Option" | "Result") {
+            | "String" | "Vector" | "Dict" | "HashMap" | "Set" | "HashSet" | "Option" | "Result") {
             return None;
         }
-        if self.traits.has_trait_impl_by_name(&type_name, "Equatable") {
-            // Use mangled name for generic types (e.g., Pair[int] → Pair__int64_t)
+        if self.traits.has_trait_impl_by_name(&type_name, trait_name) {
             Some(self.infer_receiver_mangled_type(expr))
         } else {
             None
+        }
+    }
+
+    /// If `expr` has a Defined (struct) type that implements Equatable, return the mangled type name.
+    /// For generic types like `Pair[int]`, returns `"Pair__int64_t"`.
+    pub(super) fn try_equatable_type(&mut self, expr: &Spanned<Expr>) -> Option<String> {
+        self.try_operator_trait_type(expr, "Equatable")
+    }
+
+    /// Generate a binary operator trait call: `Trait_for_Type__method(&left, right)`
+    /// Handles rvalue receivers via statement expression with temp variable.
+    pub(super) fn gen_binary_op_trait_call(
+        &mut self,
+        trait_name: &str,
+        method_name: &str,
+        type_name: &str,
+        left: &Spanned<Expr>,
+        right: &Spanned<Expr>,
+    ) -> String {
+        let l = self.gen_expr(left);
+        let r = self.gen_expr(right);
+        let mangled = c_mangle::mangle_trait_method(trait_name, type_name, method_name);
+        if !super::c_expr::is_lvalue(&left.node) {
+            format!("({{ __typeof__({l}) __recv = {l}; {mangled}(&__recv, {r}); }})")
+        } else {
+            format!("{mangled}(&{l}, {r})")
+        }
+    }
+
+    /// Generate a unary operator trait call: `Trait_for_Type__method(&operand)`
+    /// Handles rvalue receivers via statement expression with temp variable.
+    pub(super) fn gen_unary_op_trait_call(
+        &mut self,
+        trait_name: &str,
+        method_name: &str,
+        type_name: &str,
+        operand: &Spanned<Expr>,
+    ) -> String {
+        let inner = self.gen_expr(operand);
+        let mangled = c_mangle::mangle_trait_method(trait_name, type_name, method_name);
+        if !super::c_expr::is_lvalue(&operand.node) {
+            format!("({{ __typeof__({inner}) __recv = {inner}; {mangled}(&__recv); }})")
+        } else {
+            format!("{mangled}(&{inner})")
         }
     }
 }

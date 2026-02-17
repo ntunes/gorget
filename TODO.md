@@ -45,7 +45,6 @@
 
 - **Synthetic vs file-based module split is undocumented**: No comment explaining why some modules are synthetic (Rust-generated AST) vs file-based (parsed `.gg`). Contributors can't make the right choice when adding new modules. (`stdlib.rs:27-59`) [added: 2026-02-16]
 
-- **Operator overloading (via traits)**: Allow user-defined types to implement operators (`+`, `-`, `==`, `<`, `[]`, etc.) through trait equip blocks. [from roadmap, added: 2026-02-16]
 
 - **Struct destructuring**: Tuple destructuring works but struct destructuring does not. E.g., `auto Point { x, y } = point` or `case Point { x, y }:` in match. [from roadmap, added: 2026-02-16]
 

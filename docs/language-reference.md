@@ -1902,6 +1902,15 @@ The compiler automatically registers the following core traits. They cannot be r
 | `Cloneable` | `Self clone(self)` | `Self` | Deep copying |
 | `Drop` | `void drop(!self)` | `void` | Auto-cleanup on scope exit, `with` statement (§6.14) |
 | `Iterator[T]` | `Option[T] next(&self)` | `Option[T]` | `for` loop desugaring (§6.11) |
+| `Add[Out]` | `Out add(self, Self rhs)` | `Out` | `+` and `+=` operators |
+| `Sub[Out]` | `Out sub(self, Self rhs)` | `Out` | `-` and `-=` operators |
+| `Mul[Out]` | `Out mul(self, Self rhs)` | `Out` | `*` and `*=` operators |
+| `Div[Out]` | `Out div(self, Self rhs)` | `Out` | `/` and `/=` operators |
+| `Rem[Out]` | `Out rem(self, Self rhs)` | `Out` | `%` and `%=` operators |
+| `Neg[Out]` | `Out neg(self)` | `Out` | Unary `-` operator |
+| `Comparable` | `int compare(self, Self other)` | `int` | `<`, `>`, `<=`, `>=` operators |
+| `Index[K, V]` | `V get(self, K key)` | `V` | `a[k]` read access |
+| `IndexMut[K, V]` | `void set(&self, K key, V value)` | `void` | `a[k] = v` write access |
 
 #### Displayable
 
@@ -1995,6 +2004,84 @@ equip Counter with Iterator[int]:
 for i in Counter(0, 5):
     print("{i}")  # prints 0 through 4
 ```
+
+#### Operator Traits
+
+Operator traits enable user-defined types to use built-in operators. The `Out` type parameter controls the return type.
+
+**Arithmetic (`Add`, `Sub`, `Mul`, `Div`, `Rem`).** Each trait enables its corresponding binary operator and compound assignment (`+=`, `-=`, etc.).
+
+```gorget
+struct Vec2:
+    int x
+    int y
+
+equip Vec2 with Add[Vec2]:
+    Vec2 add(self, Vec2 rhs):
+        return Vec2(self.x + rhs.x, self.y + rhs.y)
+
+Vec2 c = Vec2(1, 2) + Vec2(3, 4)  # Vec2(4, 6)
+```
+
+Compound assignment desugars to the trait method: `v += Vec2(1, 0)` becomes `v = v.add(Vec2(1, 0))`.
+
+**Unary negation (`Neg`).** Enables the unary `-` operator.
+
+```gorget
+equip Vec2 with Neg[Vec2]:
+    Vec2 neg(self):
+        return Vec2(-self.x, -self.y)
+
+Vec2 v = -Vec2(3, 4)  # Vec2(-3, -4)
+```
+
+**Comparison (`Comparable`).** Enables `<`, `>`, `<=`, `>=` via a single `compare` method that returns negative, zero, or positive `int`.
+
+```gorget
+equip Vec2 with Comparable:
+    int compare(self, Vec2 other):
+        int m1 = self.x * self.x + self.y * self.y
+        int m2 = other.x * other.x + other.y * other.y
+        if m1 < m2:
+            return -1
+        elif m1 > m2:
+            return 1
+        return 0
+
+if a < b:
+    print("a is smaller")
+```
+
+Optionally, specific comparison methods (`lt`, `gt`, `lte`, `gte`) can be defined in the same equip block. If present, they take precedence over the derived `compare` behavior for that operator.
+
+**Indexing (`Index`, `IndexMut`).** Enable `a[k]` read and `a[k] = v` write syntax.
+
+```gorget
+struct Grid:
+    int a
+    int b
+
+equip Grid with Index[int, int]:
+    int get(self, int key):
+        if key == 0:
+            return self.a
+        return self.b
+
+equip Grid with IndexMut[int, int]:
+    void set(&self, int key, int value):
+        if key == 0:
+            self.a = value
+        else:
+            self.b = value
+
+Grid g = Grid(10, 20)
+print("{g[0]}")   # 10
+g[1] = 99
+```
+
+Note: `IndexMut.set` takes `&self` (mutable borrow) since it modifies the receiver.
+
+**Dispatch priority.** Operator traits only apply to user-defined types. Built-in operations (string concatenation, vector concat, primitive arithmetic, map indexing) take precedence and are unchanged.
 
 #### Trait Features
 

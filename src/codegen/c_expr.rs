@@ -98,6 +98,12 @@ impl CodegenContext<'_> {
             }
 
             Expr::UnaryOp { op, operand } => {
+                // Neg trait dispatch for user-defined types
+                if *op == UnaryOp::Neg {
+                    if let Some(type_name) = self.try_operator_trait_type(operand, "Neg") {
+                        return self.gen_unary_op_trait_call("Neg", "neg", &type_name, operand);
+                    }
+                }
                 let inner = self.gen_expr(operand);
                 match op {
                     UnaryOp::Neg => format!("(-{inner})"),
@@ -174,6 +180,47 @@ impl CodegenContext<'_> {
                     return format!(
                         "({{ GorgetArray __cat = gorget_array_clone(&{l}); gorget_array_extend(&__cat, &{r}); __cat; }})"
                     );
+                }
+                // Operator trait dispatch for user-defined types
+                if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod) {
+                    let (trait_name, method) = match op {
+                        BinaryOp::Add => ("Add", "add"),
+                        BinaryOp::Sub => ("Sub", "sub"),
+                        BinaryOp::Mul => ("Mul", "mul"),
+                        BinaryOp::Div => ("Div", "div"),
+                        BinaryOp::Mod => ("Rem", "rem"),
+                        _ => unreachable!(),
+                    };
+                    if let Some(type_name) = self.try_operator_trait_type(left, trait_name) {
+                        return self.gen_binary_op_trait_call(trait_name, method, &type_name, left, right);
+                    }
+                }
+                // Comparable trait dispatch for comparison operators
+                if matches!(op, BinaryOp::Lt | BinaryOp::Gt | BinaryOp::LtEq | BinaryOp::GtEq) {
+                    if let Some(type_name) = self.try_operator_trait_type(left, "Comparable") {
+                        // Check for specific override method first (lt, gt, lte, gte)
+                        let specific = match op {
+                            BinaryOp::Lt => "lt",
+                            BinaryOp::Gt => "gt",
+                            BinaryOp::LtEq => "lte",
+                            BinaryOp::GtEq => "gte",
+                            _ => unreachable!(),
+                        };
+                        let gorget_type = self.infer_receiver_type(left);
+                        if self.traits.has_method_for_type(&gorget_type, specific) {
+                            return self.gen_binary_op_trait_call("Comparable", specific, &type_name, left, right);
+                        }
+                        // Default: derive from compare() result compared to 0
+                        let compare_call = self.gen_binary_op_trait_call("Comparable", "compare", &type_name, left, right);
+                        let cmp = match op {
+                            BinaryOp::Lt => "< 0",
+                            BinaryOp::Gt => "> 0",
+                            BinaryOp::LtEq => "<= 0",
+                            BinaryOp::GtEq => ">= 0",
+                            _ => unreachable!(),
+                        };
+                        return format!("({compare_call} {cmp})");
+                    }
                 }
                 let l = self.gen_expr(left);
                 let r = self.gen_expr(right);
@@ -285,6 +332,14 @@ impl CodegenContext<'_> {
                         if (!__gp) gorget_panic(\"key not found in map\"); \
                         *__gp; }})"
                     )
+                } else if let Some(type_name) = self.try_operator_trait_type(object, "Index") {
+                    let idx = self.gen_expr(index);
+                    let mangled = c_mangle::mangle_trait_method("Index", &type_name, "get");
+                    if !is_lvalue(&object.node) {
+                        format!("({{ __typeof__({obj}) __recv = {obj}; {mangled}(&__recv, {idx}); }})")
+                    } else {
+                        format!("{mangled}(&{obj}, {idx})")
+                    }
                 } else {
                     let idx = self.gen_expr(index);
                     format!("{obj}[{idx}]")

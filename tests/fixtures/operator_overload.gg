@@ -1,0 +1,92 @@
+struct Vec2:
+    int x
+    int y
+
+equip Vec2 with Add[Vec2]:
+    Vec2 add(self, Vec2 rhs):
+        return Vec2(self.x + rhs.x, self.y + rhs.y)
+
+equip Vec2 with Sub[Vec2]:
+    Vec2 sub(self, Vec2 rhs):
+        return Vec2(self.x - rhs.x, self.y - rhs.y)
+
+equip Vec2 with Neg[Vec2]:
+    Vec2 neg(self):
+        return Vec2(-self.x, -self.y)
+
+equip Vec2 with Comparable:
+    int compare(self, Vec2 other):
+        int mag_self = self.x * self.x + self.y * self.y
+        int mag_other = other.x * other.x + other.y * other.y
+        if mag_self < mag_other:
+            return -1
+        elif mag_self > mag_other:
+            return 1
+        return 0
+
+struct Grid:
+    int a
+    int b
+    int c
+    int d
+
+equip Grid with Index[int, int]:
+    int get(self, int key):
+        if key == 0:
+            return self.a
+        elif key == 1:
+            return self.b
+        elif key == 2:
+            return self.c
+        return self.d
+
+equip Grid with IndexMut[int, int]:
+    void set(&self, int key, int value):
+        if key == 0:
+            self.a = value
+        elif key == 1:
+            self.b = value
+        elif key == 2:
+            self.c = value
+        else:
+            self.d = value
+
+void main():
+    Vec2 a = Vec2(1, 2)
+    Vec2 b = Vec2(3, 4)
+
+    # Add
+    Vec2 c = a + b
+    print("{c.x} {c.y}")
+
+    # Sub
+    Vec2 d = a - b
+    print("{d.x} {d.y}")
+
+    # Neg
+    Vec2 e = -a
+    print("{e.x} {e.y}")
+
+    # Compound assignment via Add
+    a += Vec2(10, 20)
+    print("{a.x} {a.y}")
+
+    # Comparable: derived from compare()
+    Vec2 small = Vec2(1, 0)
+    Vec2 big = Vec2(3, 4)
+    if small < big:
+        print("small < big")
+    if big > small:
+        print("big > small")
+    if small <= small:
+        print("small <= small")
+    if big >= small:
+        print("big >= small")
+
+    # Index read
+    Grid g = Grid(10, 20, 30, 40)
+    print("{g[0]} {g[1]} {g[2]} {g[3]}")
+
+    # IndexMut write
+    g[1] = 99
+    print("{g[1]}")

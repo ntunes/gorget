@@ -3483,3 +3483,21 @@ fn extern_ffi() {
 0",
     );
 }
+
+#[test]
+fn operator_overload() {
+    run_gg(
+        "operator_overload.gg",
+        "\
+4 6
+-2 -2
+-1 -2
+11 22
+small < big
+big > small
+small <= small
+big >= small
+10 20 30 40
+99",
+    );
+}

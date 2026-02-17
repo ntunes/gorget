@@ -664,6 +664,24 @@ impl CodegenContext<'_> {
                         }
                         return;
                     }
+                    // IndexMut trait dispatch: obj[key] = value → IndexMut_for_Type__set(&obj, key, value)
+                    if let Some(type_name) = self.try_operator_trait_type(object, "IndexMut") {
+                        if self.trace {
+                            let vars = self.collect_expr_vars(&[&target.node, &value.node]);
+                            self.emit_stmt_start(span, &vars, emitter);
+                        }
+                        let obj = self.gen_expr(object);
+                        let idx = self.gen_expr(index);
+                        let val = self.gen_expr(value);
+                        let mangled = c_mangle::mangle_trait_method("IndexMut", &type_name, "set");
+                        let str_temps = self.flush_string_temps(emitter);
+                        emitter.emit_line(&format!("{mangled}(&{obj}, {idx}, {val});"));
+                        Self::emit_string_temp_frees(&str_temps, emitter);
+                        if self.trace {
+                            self.emit_stmt_end(emitter);
+                        }
+                        return;
+                    }
                 }
                 let result_info = if self.trace {
                     let vars = self.collect_expr_vars(&[&target.node, &value.node]);
@@ -730,6 +748,28 @@ impl CodegenContext<'_> {
                         let t = self.gen_expr(target);
                         let v = self.gen_expr(value);
                         emitter.emit_line(&format!("{t} = gorget_str_concat({t}, {v});"));
+                        if self.trace {
+                            self.emit_stmt_end(emitter);
+                        }
+                        return;
+                    }
+                }
+                // Operator trait dispatch for compound assignment on user types
+                let trait_for_op = match op {
+                    BinaryOp::Add => Some(("Add", "add")),
+                    BinaryOp::Sub => Some(("Sub", "sub")),
+                    BinaryOp::Mul => Some(("Mul", "mul")),
+                    BinaryOp::Div => Some(("Div", "div")),
+                    BinaryOp::Mod => Some(("Rem", "rem")),
+                    _ => None,
+                };
+                if let Some((trait_name, method)) = trait_for_op {
+                    if let Some(type_name) = self.try_operator_trait_type(target, trait_name) {
+                        let t = self.gen_expr(target);
+                        let call = self.gen_binary_op_trait_call(trait_name, method, &type_name, target, value);
+                        let str_temps = self.flush_string_temps(emitter);
+                        emitter.emit_line(&format!("{t} = {call};"));
+                        Self::emit_string_temp_frees(&str_temps, emitter);
                         if self.trace {
                             self.emit_stmt_end(emitter);
                         }

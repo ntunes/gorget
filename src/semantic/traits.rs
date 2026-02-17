@@ -97,6 +97,14 @@ impl TraitRegistry {
                 && impl_info.trait_name.as_deref() == Some(trait_name)
         })
     }
+
+    /// Check if a type (by name) has a specific method in any equip block.
+    pub fn has_method_for_type(&self, type_name: &str, method_name: &str) -> bool {
+        self.impls.iter().any(|impl_info| {
+            impl_info.self_type_name == type_name
+                && impl_info.methods.contains_key(method_name)
+        })
+    }
 }
 
 /// Build the trait and impl registry from the module.
@@ -202,6 +210,105 @@ fn register_builtin_traits(
                 return_type: types.error_id, // placeholder — Option[T] depends on concrete T
                 has_self: true,
                 self_ownership: Some(Ownership::Borrow),
+            });
+            m
+        }),
+        // Add[Out]: Out add(self, Self rhs)
+        ("Add", {
+            let mut m = FxHashMap::default();
+            m.insert("add".into(), FunctionSig {
+                params: vec![types.error_id], // Self placeholder
+                return_type: types.error_id,  // Out placeholder
+                has_self: true,
+                self_ownership: None,
+            });
+            m
+        }),
+        // Sub[Out]: Out sub(self, Self rhs)
+        ("Sub", {
+            let mut m = FxHashMap::default();
+            m.insert("sub".into(), FunctionSig {
+                params: vec![types.error_id],
+                return_type: types.error_id,
+                has_self: true,
+                self_ownership: None,
+            });
+            m
+        }),
+        // Mul[Out]: Out mul(self, Self rhs)
+        ("Mul", {
+            let mut m = FxHashMap::default();
+            m.insert("mul".into(), FunctionSig {
+                params: vec![types.error_id],
+                return_type: types.error_id,
+                has_self: true,
+                self_ownership: None,
+            });
+            m
+        }),
+        // Div[Out]: Out div(self, Self rhs)
+        ("Div", {
+            let mut m = FxHashMap::default();
+            m.insert("div".into(), FunctionSig {
+                params: vec![types.error_id],
+                return_type: types.error_id,
+                has_self: true,
+                self_ownership: None,
+            });
+            m
+        }),
+        // Rem[Out]: Out rem(self, Self rhs)
+        ("Rem", {
+            let mut m = FxHashMap::default();
+            m.insert("rem".into(), FunctionSig {
+                params: vec![types.error_id],
+                return_type: types.error_id,
+                has_self: true,
+                self_ownership: None,
+            });
+            m
+        }),
+        // Neg[Out]: Out neg(self)
+        ("Neg", {
+            let mut m = FxHashMap::default();
+            m.insert("neg".into(), FunctionSig {
+                params: vec![],
+                return_type: types.error_id, // Out placeholder
+                has_self: true,
+                self_ownership: None,
+            });
+            m
+        }),
+        // Comparable: int compare(self, Self other)
+        ("Comparable", {
+            let mut m = FxHashMap::default();
+            m.insert("compare".into(), FunctionSig {
+                params: vec![types.error_id], // Self placeholder
+                return_type: types.int_id,
+                has_self: true,
+                self_ownership: None,
+            });
+            m
+        }),
+        // Index[K, V]: V get(self, K key)
+        ("Index", {
+            let mut m = FxHashMap::default();
+            m.insert("get".into(), FunctionSig {
+                params: vec![types.error_id], // K placeholder
+                return_type: types.error_id,  // V placeholder
+                has_self: true,
+                self_ownership: None,
+            });
+            m
+        }),
+        // IndexMut[K, V]: void set(&self, K key, V value)
+        ("IndexMut", {
+            let mut m = FxHashMap::default();
+            m.insert("set".into(), FunctionSig {
+                params: vec![types.error_id, types.error_id], // K, V placeholders
+                return_type: types.void_id,
+                has_self: true,
+                self_ownership: Some(Ownership::MutableBorrow),
             });
             m
         }),
@@ -605,8 +712,8 @@ equip Circle with Drawable:
 ";
         let (registry, errors) = analyze(source);
         assert!(errors.is_empty(), "errors: {:?}", errors);
-        // 6 built-in traits + 1 user-defined trait
-        assert_eq!(registry.traits.len(), 7);
+        // 15 built-in traits + 1 user-defined trait
+        assert_eq!(registry.traits.len(), 16);
         assert_eq!(registry.impls.len(), 1);
         assert!(registry.impls[0].trait_.is_some());
     }

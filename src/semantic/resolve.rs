@@ -83,7 +83,10 @@ pub fn collect_top_level(
 ) -> ResolveContext {
     let mut ctx = ResolveContext::new();
     // Register built-in core traits.
-    for trait_name in &["Displayable", "Equatable", "Cloneable", "Hashable", "Drop", "Iterator"] {
+    for trait_name in &[
+        "Displayable", "Equatable", "Cloneable", "Hashable", "Drop", "Iterator",
+        "Add", "Sub", "Mul", "Div", "Rem", "Neg", "Comparable", "Index", "IndexMut",
+    ] {
         let _ = scopes.define(trait_name.to_string(), DefKind::Trait, Span::dummy());
     }
     // Register String constructor as a built-in function.
