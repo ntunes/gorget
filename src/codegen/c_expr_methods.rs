@@ -930,21 +930,16 @@ impl CodegenContext<'_> {
         }
     }
 
-    /// Generate code for File instance method calls.
+    /// Generate code for File static constructor calls (open/create only).
+    /// Instance methods (read_all, write, close) are handled via extern dispatch.
     pub(super) fn gen_file_method(
         &mut self,
-        recv: &str,
+        _recv: &str,
         method_name: &str,
         args: &[Spanned<crate::parser::ast::CallArg>],
-        needs_temp: bool,
+        _needs_temp: bool,
     ) -> String {
-        let recv_ref = if needs_temp {
-            format!("({{ __typeof__({recv}) __tmp = {recv}; &__tmp; }})")
-        } else {
-            format!("&{recv}")
-        };
         match method_name {
-            // Static constructors (File.open / File.create)
             "open" => {
                 if let Some(arg) = args.first() {
                     let path_arg = self.gen_expr(&arg.node.value);
@@ -961,18 +956,7 @@ impl CodegenContext<'_> {
                     format!("/* File.create() missing arg */")
                 }
             }
-            // Instance methods
-            "read_all" => format!("gorget_file_read_all({recv_ref})"),
-            "write" => {
-                if let Some(arg) = args.first() {
-                    let content = self.gen_expr(&arg.node.value);
-                    format!("gorget_file_write({recv_ref}, {content})")
-                } else {
-                    format!("/* File.write() missing arg */")
-                }
-            }
-            "close" => format!("gorget_file_close({recv_ref})"),
-            _ => format!("/* unknown File method: {method_name} */"),
+            _ => format!("/* unknown File static method: {method_name} */"),
         }
     }
 
@@ -1008,85 +992,6 @@ impl CodegenContext<'_> {
         }
     }
 
-    pub(super) fn gen_socket_method(
-        &mut self,
-        recv: &str,
-        method_name: &str,
-        args: &[Spanned<crate::parser::ast::CallArg>],
-        needs_temp: bool,
-    ) -> String {
-        let recv_ref = if needs_temp {
-            format!("({{ __typeof__({recv}) __tmp = {recv}; &__tmp; }})")
-        } else {
-            format!("&{recv}")
-        };
-        match method_name {
-            "read" => {
-                let n = if let Some(a) = args.first() { self.gen_expr(&a.node.value) } else { "1024".into() };
-                format!("gorget_socket_read({recv_ref}, {n})")
-            }
-            "read_exact" => {
-                let n = if let Some(a) = args.first() { self.gen_expr(&a.node.value) } else { "0".into() };
-                format!("gorget_socket_read_exact({recv_ref}, {n})")
-            }
-            "write" => {
-                if let Some(a) = args.first() {
-                    let data = self.gen_expr(&a.node.value);
-                    format!("gorget_socket_write({recv_ref}, &{data})")
-                } else {
-                    "/* socket.write() missing arg */".into()
-                }
-            }
-            "write_str" => {
-                if let Some(a) = args.first() {
-                    let s = self.gen_expr(&a.node.value);
-                    format!("gorget_socket_write_str({recv_ref}, {s})")
-                } else {
-                    "/* socket.write_str() missing arg */".into()
-                }
-            }
-            "read_line" => format!("gorget_socket_read_line({recv_ref})"),
-            "set_timeout" => {
-                let ms = if let Some(a) = args.first() { self.gen_expr(&a.node.value) } else { "0".into() };
-                format!("gorget_socket_set_timeout({recv_ref}, {ms})")
-            }
-            "close" => format!("gorget_socket_close({recv_ref})"),
-            _ => format!("/* unknown Socket method: {method_name} */"),
-        }
-    }
-
-    pub(super) fn gen_cipher_method(
-        &mut self,
-        recv: &str,
-        method_name: &str,
-        args: &[Spanned<crate::parser::ast::CallArg>],
-        needs_temp: bool,
-    ) -> String {
-        let recv_ref = if needs_temp {
-            format!("({{ __typeof__({recv}) __tmp = {recv}; &__tmp; }})")
-        } else {
-            format!("&{recv}")
-        };
-        match method_name {
-            "encrypt" => {
-                if let Some(a) = args.first() {
-                    let data = self.gen_expr(&a.node.value);
-                    format!("gorget_cipher_encrypt({recv_ref}, &{data})")
-                } else {
-                    "/* cipher.encrypt() missing arg */".into()
-                }
-            }
-            "decrypt" => {
-                if let Some(a) = args.first() {
-                    let data = self.gen_expr(&a.node.value);
-                    format!("gorget_cipher_decrypt({recv_ref}, &{data})")
-                } else {
-                    "/* cipher.decrypt() missing arg */".into()
-                }
-            }
-            _ => format!("/* unknown CipherContext method: {method_name} */"),
-        }
-    }
 
     /// Infer the inner C type for a Box allocation.
     /// Uses `decl_type_hint` to extract T from `Box[T]`, falling back to the argument's inferred type.

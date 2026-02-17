@@ -515,65 +515,7 @@ impl CodegenContext<'_> {
                     // std.sdl — screen info
                     "sdl_get_display_width" => return "gorget_sdl_get_display_width()".to_string(),
                     "sdl_get_display_height" => return "gorget_sdl_get_display_height()".to_string(),
-                    // std.crypto
-                    "crypto_sha256" => {
-                        if let Some(arg) = args.first() {
-                            let data = self.gen_expr(&arg.node.value);
-                            let data_addr = addr_of(&data, &arg.node.value.node);
-                            return format!("gorget_crypto_sha256({data_addr})");
-                        }
-                    }
-                    "crypto_sha1" => {
-                        if let Some(arg) = args.first() {
-                            let data = self.gen_expr(&arg.node.value);
-                            let data_addr = addr_of(&data, &arg.node.value.node);
-                            return format!("gorget_crypto_sha1({data_addr})");
-                        }
-                    }
-                    "crypto_hmac" => {
-                        if args.len() >= 3 {
-                            let algo = self.gen_expr(&args[0].node.value);
-                            let key = self.gen_expr(&args[1].node.value);
-                            let key_addr = addr_of(&key, &args[1].node.value.node);
-                            let data = self.gen_expr(&args[2].node.value);
-                            let data_addr = addr_of(&data, &args[2].node.value.node);
-                            return format!("gorget_crypto_hmac({algo}, {key_addr}, {data_addr})");
-                        }
-                    }
-                    "crypto_aes_ctr_new" => {
-                        if args.len() >= 2 {
-                            let key = self.gen_expr(&args[0].node.value);
-                            let key_addr = addr_of(&key, &args[0].node.value.node);
-                            let iv = self.gen_expr(&args[1].node.value);
-                            let iv_addr = addr_of(&iv, &args[1].node.value.node);
-                            return format!("gorget_crypto_aes_ctr_new({key_addr}, {iv_addr})");
-                        }
-                    }
-                    "crypto_bn_from_bytes" => {
-                        if let Some(arg) = args.first() {
-                            let data = self.gen_expr(&arg.node.value);
-                            let data_addr = addr_of(&data, &arg.node.value.node);
-                            return format!("gorget_crypto_bn_from_bytes({data_addr})");
-                        }
-                    }
-                    "crypto_bn_to_bytes" => {
-                        if let Some(arg) = args.first() {
-                            let bn = self.gen_expr(&arg.node.value);
-                            let bn_addr = addr_of(&bn, &arg.node.value.node);
-                            return format!("gorget_crypto_bn_to_bytes({bn_addr})");
-                        }
-                    }
-                    "crypto_bn_mod_exp" => {
-                        if args.len() >= 3 {
-                            let base = self.gen_expr(&args[0].node.value);
-                            let base_addr = addr_of(&base, &args[0].node.value.node);
-                            let exp = self.gen_expr(&args[1].node.value);
-                            let exp_addr = addr_of(&exp, &args[1].node.value.node);
-                            let modulus = self.gen_expr(&args[2].node.value);
-                            let mod_addr = addr_of(&modulus, &args[2].node.value.node);
-                            return format!("gorget_crypto_bn_mod_exp({base_addr}, {exp_addr}, {mod_addr})");
-                        }
-                    }
+                    // std.crypto (only Result-wrapping functions stay hardcoded)
                     "crypto_rsa_load_public" => {
                         if let Some(arg) = args.first() {
                             let kb = self.gen_expr(&arg.node.value);
@@ -586,23 +528,6 @@ impl CodegenContext<'_> {
                                 const char* __re = gorget_crypto_last_error(); \
                                 __re ? {err_ctor}(__re) : {ok_ctor}(__rk); }})"
                             );
-                        }
-                    }
-                    "crypto_rsa_verify" => {
-                        if args.len() >= 3 {
-                            let key = self.gen_expr(&args[0].node.value);
-                            let key_addr = addr_of(&key, &args[0].node.value.node);
-                            let data = self.gen_expr(&args[1].node.value);
-                            let data_addr = addr_of(&data, &args[1].node.value.node);
-                            let sig = self.gen_expr(&args[2].node.value);
-                            let sig_addr = addr_of(&sig, &args[2].node.value.node);
-                            return format!("gorget_crypto_rsa_verify({key_addr}, {data_addr}, {sig_addr})");
-                        }
-                    }
-                    "crypto_random_bytes" => {
-                        if let Some(arg) = args.first() {
-                            let n = self.gen_expr(&arg.node.value);
-                            return format!("gorget_crypto_random_bytes({n})");
                         }
                     }
                     // std.net.socket
@@ -618,91 +543,6 @@ impl CodegenContext<'_> {
                                 const char* __se = gorget_socket_last_error(); \
                                 __se ? {err_ctor}(__se) : {ok_ctor}(__sk); }})"
                             );
-                        }
-                    }
-                    // std.bytes
-                    "bytes_from_str" => {
-                        if let Some(arg) = args.first() {
-                            let s = self.gen_expr(&arg.node.value);
-                            return format!("gorget_bytes_from_str({s})");
-                        }
-                    }
-                    "bytes_to_str" => {
-                        if let Some(arg) = args.first() {
-                            let b = self.gen_expr(&arg.node.value);
-                            let b_addr = addr_of(&b, &arg.node.value.node);
-                            return format!("gorget_bytes_to_str({b_addr})");
-                        }
-                    }
-                    "bytes_from_hex" => {
-                        if let Some(arg) = args.first() {
-                            let s = self.gen_expr(&arg.node.value);
-                            return format!("gorget_bytes_from_hex({s})");
-                        }
-                    }
-                    "bytes_to_hex" => {
-                        if let Some(arg) = args.first() {
-                            let b = self.gen_expr(&arg.node.value);
-                            let b_addr = addr_of(&b, &arg.node.value.node);
-                            return format!("gorget_bytes_to_hex({b_addr})");
-                        }
-                    }
-                    "bytes_write_u32_be" => {
-                        if args.len() >= 3 {
-                            let b = self.gen_expr(&args[0].node.value);
-                            let b_addr = addr_of(&b, &args[0].node.value.node);
-                            let offset = self.gen_expr(&args[1].node.value);
-                            let value = self.gen_expr(&args[2].node.value);
-                            return format!("gorget_bytes_write_u32_be({b_addr}, {offset}, {value})");
-                        }
-                    }
-                    "bytes_read_u32_be" => {
-                        if args.len() >= 2 {
-                            let b = self.gen_expr(&args[0].node.value);
-                            let b_addr = addr_of(&b, &args[0].node.value.node);
-                            let offset = self.gen_expr(&args[1].node.value);
-                            return format!("gorget_bytes_read_u32_be({b_addr}, {offset})");
-                        }
-                    }
-                    "bytes_write_u16_be" => {
-                        if args.len() >= 3 {
-                            let b = self.gen_expr(&args[0].node.value);
-                            let b_addr = addr_of(&b, &args[0].node.value.node);
-                            let offset = self.gen_expr(&args[1].node.value);
-                            let value = self.gen_expr(&args[2].node.value);
-                            return format!("gorget_bytes_write_u16_be({b_addr}, {offset}, {value})");
-                        }
-                    }
-                    "bytes_read_u16_be" => {
-                        if args.len() >= 2 {
-                            let b = self.gen_expr(&args[0].node.value);
-                            let b_addr = addr_of(&b, &args[0].node.value.node);
-                            let offset = self.gen_expr(&args[1].node.value);
-                            return format!("gorget_bytes_read_u16_be({b_addr}, {offset})");
-                        }
-                    }
-                    "bytes_concat" => {
-                        if args.len() >= 2 {
-                            let a = self.gen_expr(&args[0].node.value);
-                            let a_addr = addr_of(&a, &args[0].node.value.node);
-                            let b = self.gen_expr(&args[1].node.value);
-                            let b_addr = addr_of(&b, &args[1].node.value.node);
-                            return format!("gorget_bytes_concat({a_addr}, {b_addr})");
-                        }
-                    }
-                    "bytes_slice" => {
-                        if args.len() >= 3 {
-                            let b = self.gen_expr(&args[0].node.value);
-                            let b_addr = addr_of(&b, &args[0].node.value.node);
-                            let start = self.gen_expr(&args[1].node.value);
-                            let end = self.gen_expr(&args[2].node.value);
-                            return format!("gorget_bytes_slice({b_addr}, {start}, {end})");
-                        }
-                    }
-                    "random_bytes" => {
-                        if let Some(arg) = args.first() {
-                            let n = self.gen_expr(&arg.node.value);
-                            return format!("gorget_random_bytes({n})");
                         }
                     }
                     // std.http.client
@@ -876,9 +716,16 @@ impl CodegenContext<'_> {
 
         // Check extern free function bindings
         if let Expr::Identifier(name) = &callee.node {
-            if let Some(c_symbol) = self.extern_symbols.get(&("".to_string(), name.clone())).cloned() {
-                let arg_exprs = self.resolve_call_args(callee, args);
-                return format!("{c_symbol}({})", arg_exprs.join(", "));
+            if let Some(binding) = self.extern_symbols.get(&("".to_string(), name.clone())).cloned() {
+                let arg_exprs: Vec<String> = args.iter().enumerate().map(|(i, a)| {
+                    let expr = self.gen_expr(&a.node.value);
+                    if binding.params_need_ref.get(i) == Some(&true) {
+                        addr_of(&expr, &a.node.value.node)
+                    } else {
+                        expr
+                    }
+                }).collect();
+                return format!("{}({})", binding.c_symbol, arg_exprs.join(", "));
             }
         }
 
@@ -1091,7 +938,7 @@ impl CodegenContext<'_> {
         // Check if method has an extern binding (e.g. `extern int status(self) = "gorget_http_response_status"`)
         {
             let type_name = self.infer_receiver_type(receiver);
-            if let Some(c_symbol) = self.extern_symbols.get(&(type_name.clone(), method_name.to_string())).cloned() {
+            if let Some(binding) = self.extern_symbols.get(&(type_name.clone(), method_name.to_string())).cloned() {
                 let is_pointer_param = matches!(&receiver.node, Expr::Identifier(name) if self.pointer_params.contains(&c_mangle::escape_keyword(name)));
                 let is_self_ptr = (self.current_self_type.is_some() && matches!(receiver.node, Expr::SelfExpr))
                     || is_pointer_param;
@@ -1102,9 +949,17 @@ impl CodegenContext<'_> {
                 } else {
                     self.gen_expr(receiver)
                 };
+                let c_symbol = &binding.c_symbol;
                 let needs_temp = !is_lvalue(&receiver.node);
                 if needs_temp {
-                    let arg_exprs: Vec<String> = args.iter().map(|a| self.gen_expr(&a.node.value)).collect();
+                    let arg_exprs: Vec<String> = args.iter().enumerate().map(|(i, a)| {
+                        let expr = self.gen_expr(&a.node.value);
+                        if binding.params_need_ref.get(i) == Some(&true) {
+                            addr_of(&expr, &a.node.value.node)
+                        } else {
+                            expr
+                        }
+                    }).collect();
                     let mut call_args = String::from("&__recv");
                     for a in &arg_exprs {
                         call_args.push_str(", ");
@@ -1114,8 +969,13 @@ impl CodegenContext<'_> {
                 } else {
                     let self_arg = if is_self_ptr { recv.clone() } else { format!("&{recv}") };
                     let mut all_args = vec![self_arg];
-                    for arg in args {
-                        all_args.push(self.gen_expr(&arg.node.value));
+                    for (i, arg) in args.iter().enumerate() {
+                        let expr = self.gen_expr(&arg.node.value);
+                        if binding.params_need_ref.get(i) == Some(&true) {
+                            all_args.push(addr_of(&expr, &arg.node.value.node));
+                        } else {
+                            all_args.push(expr);
+                        }
                     }
                     return format!("{c_symbol}({})", all_args.join(", "));
                 }
@@ -1204,14 +1064,13 @@ impl CodegenContext<'_> {
         let is_option = type_name == "Option";
         let is_result = type_name == "Result";
         let is_box = type_name == "Box";
-        let is_file = type_name == "File" || c_type.as_deref() == Some("GorgetFile");
+        let is_file = (type_name == "File" || c_type.as_deref() == Some("GorgetFile"))
+            && matches!(method_name, "open" | "create");
         let is_http_client = (type_name == "Client" || c_type.as_deref() == Some("GorgetHttpClient"))
             && matches!(method_name, "get" | "post" | "put" | "delete" | "patch" | "head");
-        let is_socket = type_name == "Socket" || c_type.as_deref() == Some("GorgetSocket");
-        let is_cipher = type_name == "CipherContext" || c_type.as_deref() == Some("GorgetCipherContext");
         let is_iterator = !is_vector && !is_map && !is_set && !is_string
             && !is_option && !is_result && !is_box && !is_file
-            && !is_http_client && !is_socket && !is_cipher
+            && !is_http_client
             && matches!(method_name, "collect" | "filter" | "map" | "fold")
             && self.traits.impls.iter().any(|i|
                 i.self_type_name == type_name && i.trait_name.as_deref() == Some("Iterator")
@@ -1231,7 +1090,7 @@ impl CodegenContext<'_> {
                 "bool" | "char32_t"
             ));
 
-        if !is_vector && !is_map && !is_set && !is_string && !is_option && !is_result && !is_box && !is_file && !is_http_client && !is_socket && !is_cipher && !is_iterator && !is_primitive_hashable && !is_char {
+        if !is_vector && !is_map && !is_set && !is_string && !is_option && !is_result && !is_box && !is_file && !is_http_client && !is_iterator && !is_primitive_hashable && !is_char {
             return None;
         }
 
@@ -1298,12 +1157,6 @@ impl CodegenContext<'_> {
         }
         if is_http_client {
             return Some(self.gen_http_client_method(&recv, method_name, args, needs_temp));
-        }
-        if is_socket {
-            return Some(self.gen_socket_method(&recv, method_name, args, needs_temp));
-        }
-        if is_cipher {
-            return Some(self.gen_cipher_method(&recv, method_name, args, needs_temp));
         }
 
         None

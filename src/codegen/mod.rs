@@ -27,7 +27,7 @@ use crate::semantic::traits::TraitRegistry;
 use crate::semantic::AnalysisResult;
 use crate::span::Span;
 
-use crate::parser::ast::{EnumDef, EquipBlock, FunctionDef, Item, StructDef};
+use crate::parser::ast::{EnumDef, EquipBlock, FunctionBody, FunctionDef, Item, StructDef};
 use c_emitter::CEmitter;
 
 /// A registered generic instantiation.
@@ -101,6 +101,22 @@ pub struct LiftedClosure {
     pub return_type: String,
     /// The C expression body.
     pub body: String,
+}
+
+/// An extern function/method binding to a C symbol.
+#[derive(Clone)]
+pub struct ExternBinding {
+    pub c_symbol: String,
+    /// For each non-self parameter, whether to pass by reference (&addr_of).
+    /// True for struct types (Vector, Dict, opaque types), false for scalars/pointers.
+    pub params_need_ref: Vec<bool>,
+}
+
+/// Whether an AST type needs to be passed by reference (&) to the C runtime.
+/// Primitive types (int, str, bool, float, char, uintN) are scalars/pointers — no ref.
+/// Named types (Vector, Dict, Socket, BigNum, etc.) are C structs — need & wrapping.
+fn ast_type_needs_ref(ty: &Type) -> bool {
+    !matches!(ty, Type::Primitive(_))
 }
 
 /// Context threaded through all codegen functions.
@@ -192,9 +208,9 @@ pub struct CodegenContext<'a> {
     /// These are emitted as `Type*` pointers and need `(*name)` for reads and
     /// `name->field` for field access.
     pub pointer_params: HashSet<String>,
-    /// Maps (type_name, method_name) → C symbol for extern methods.
-    /// Maps ("", fn_name) → C symbol for extern free functions.
-    pub extern_symbols: FxHashMap<(String, String), String>,
+    /// Maps (type_name, method_name) → extern binding for extern methods.
+    /// Maps ("", fn_name) → extern binding for extern free functions.
+    pub extern_symbols: FxHashMap<(String, String), ExternBinding>,
     /// Top-level function names (not main, not methods) — these get a `gg_` prefix
     /// in C to avoid collisions with C library symbols.
     pub function_names: HashSet<String>,
@@ -330,12 +346,18 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
     }
 
     // Build extern symbol table from extern function/method declarations.
-    let mut extern_symbols: FxHashMap<(String, String), String> = FxHashMap::default();
+    let mut extern_symbols: FxHashMap<(String, String), ExternBinding> = FxHashMap::default();
     for item in &module.items {
         match &item.node {
             Item::Function(f) => {
-                if let crate::parser::ast::FunctionBody::Extern(sym) = &f.body {
-                    extern_symbols.insert(("".to_string(), f.name.node.clone()), sym.clone());
+                if let FunctionBody::Extern(sym) = &f.body {
+                    let params_need_ref: Vec<bool> = f.params.iter()
+                        .map(|p| ast_type_needs_ref(&p.node.type_.node))
+                        .collect();
+                    extern_symbols.insert(
+                        ("".to_string(), f.name.node.clone()),
+                        ExternBinding { c_symbol: sym.clone(), params_need_ref },
+                    );
                 }
             }
             Item::Equip(equip) => {
@@ -344,10 +366,15 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
                     _ => continue,
                 };
                 for method in &equip.items {
-                    if let crate::parser::ast::FunctionBody::Extern(sym) = &method.node.body {
+                    if let FunctionBody::Extern(sym) = &method.node.body {
+                        // Skip self param (index 0) — compute ref info for remaining params
+                        let params_need_ref: Vec<bool> = method.node.params.iter()
+                            .filter(|p| p.node.name.node != "self")
+                            .map(|p| ast_type_needs_ref(&p.node.type_.node))
+                            .collect();
                         extern_symbols.insert(
                             (type_name.clone(), method.node.name.node.clone()),
-                            sym.clone(),
+                            ExternBinding { c_symbol: sym.clone(), params_need_ref },
                         );
                     }
                 }

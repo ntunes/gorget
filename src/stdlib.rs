@@ -250,7 +250,7 @@ fn gen_collections_module() -> Module {
         ("Box", 1),                                    // [T]
         ("File", 0),                                   // no generics
     ];
-    let items = type_defs
+    let mut items: Vec<Spanned<Item>> = type_defs
         .into_iter()
         .map(|(name, n_params)| {
             Spanned::dummy(Item::Struct(StructDef {
@@ -283,6 +283,14 @@ fn gen_collections_module() -> Module {
             }))
         })
         .collect();
+
+    // File instance methods — extern bindings (open/create stay hardcoded as static constructors)
+    items.push(equip_block("File", vec![
+        extern_method("read_all", Ownership::MutableBorrow, &[], ty_str(), "gorget_file_read_all"),
+        extern_method("write", Ownership::MutableBorrow, &[("content", ty_str())], ty_void(), "gorget_file_write"),
+        extern_method("close", Ownership::MutableBorrow, &[], ty_void(), "gorget_file_close"),
+    ]));
+
     Module {
         items,
         span: Span::dummy(),
@@ -697,28 +705,34 @@ fn gen_crypto_module() -> Module {
     items.push(opaque_struct("BigNum"));
     items.push(opaque_struct("RSAKey"));
 
-    // Free functions
+    // Free functions — extern bindings (except crypto_rsa_load_public which has Result wrapping)
     let fns = vec![
         // Hashing
-        decl_fn("crypto_sha256", &[("data", ty_vector_uint8())], ty_vector_uint8()),
-        decl_fn("crypto_sha1", &[("data", ty_vector_uint8())], ty_vector_uint8()),
+        extern_fn("crypto_sha256", &[("data", ty_vector_uint8())], ty_vector_uint8(), "gorget_crypto_sha256"),
+        extern_fn("crypto_sha1", &[("data", ty_vector_uint8())], ty_vector_uint8(), "gorget_crypto_sha1"),
         // HMAC
-        decl_fn("crypto_hmac", &[("algo", ty_str()), ("key", ty_vector_uint8()), ("data", ty_vector_uint8())], ty_vector_uint8()),
+        extern_fn("crypto_hmac", &[("algo", ty_str()), ("key", ty_vector_uint8()), ("data", ty_vector_uint8())], ty_vector_uint8(), "gorget_crypto_hmac"),
         // AES-CTR
-        decl_fn("crypto_aes_ctr_new", &[("key", ty_vector_uint8()), ("iv", ty_vector_uint8())], ty_cipher()),
+        extern_fn("crypto_aes_ctr_new", &[("key", ty_vector_uint8()), ("iv", ty_vector_uint8())], ty_cipher(), "gorget_crypto_aes_ctr_new"),
         // BigNum
-        decl_fn("crypto_bn_from_bytes", &[("data", ty_vector_uint8())], ty_bignum()),
-        decl_fn("crypto_bn_to_bytes", &[("bn", ty_bignum())], ty_vector_uint8()),
-        decl_fn("crypto_bn_mod_exp", &[("base", ty_bignum()), ("exp", ty_bignum()), ("modulus", ty_bignum())], ty_bignum()),
-        // RSA
+        extern_fn("crypto_bn_from_bytes", &[("data", ty_vector_uint8())], ty_bignum(), "gorget_crypto_bn_from_bytes"),
+        extern_fn("crypto_bn_to_bytes", &[("bn", ty_bignum())], ty_vector_uint8(), "gorget_crypto_bn_to_bytes"),
+        extern_fn("crypto_bn_mod_exp", &[("base", ty_bignum()), ("exp", ty_bignum()), ("modulus", ty_bignum())], ty_bignum(), "gorget_crypto_bn_mod_exp"),
+        // RSA — crypto_rsa_load_public stays as Declaration (Result wrapping in codegen)
         decl_fn("crypto_rsa_load_public", &[("key_bytes", ty_vector_uint8())], ty_result(ty_rsakey(), ty_str())),
-        decl_fn("crypto_rsa_verify", &[("key", ty_rsakey()), ("data", ty_vector_uint8()), ("sig", ty_vector_uint8())], ty_bool()),
+        extern_fn("crypto_rsa_verify", &[("key", ty_rsakey()), ("data", ty_vector_uint8()), ("sig", ty_vector_uint8())], ty_bool(), "gorget_crypto_rsa_verify"),
         // Random
-        decl_fn("crypto_random_bytes", &[("n", ty_int())], ty_vector_uint8()),
+        extern_fn("crypto_random_bytes", &[("n", ty_int())], ty_vector_uint8(), "gorget_crypto_random_bytes"),
     ];
     for f in fns {
         items.push(Spanned::dummy(Item::Function(f)));
     }
+
+    // CipherContext methods — extern bindings
+    items.push(equip_block("CipherContext", vec![
+        extern_method("encrypt", Ownership::MutableBorrow, &[("data", ty_vector_uint8())], ty_vector_uint8(), "gorget_cipher_encrypt"),
+        extern_method("decrypt", Ownership::MutableBorrow, &[("data", ty_vector_uint8())], ty_vector_uint8(), "gorget_cipher_decrypt"),
+    ]));
 
     Module {
         items,
@@ -744,6 +758,17 @@ fn gen_socket_module() -> Module {
         decl_fn("socket_connect", &[("host", ty_str()), ("port", ty_int())], ty_result(ty_socket(), ty_str())),
     )));
 
+    // Socket methods — extern bindings
+    items.push(equip_block("Socket", vec![
+        extern_method("read", Ownership::MutableBorrow, &[("n", ty_int())], ty_vector_uint8(), "gorget_socket_read"),
+        extern_method("read_exact", Ownership::MutableBorrow, &[("n", ty_int())], ty_vector_uint8(), "gorget_socket_read_exact"),
+        extern_method("write", Ownership::MutableBorrow, &[("data", ty_vector_uint8())], ty_int(), "gorget_socket_write"),
+        extern_method("write_str", Ownership::MutableBorrow, &[("s", ty_str())], ty_int(), "gorget_socket_write_str"),
+        extern_method("read_line", Ownership::MutableBorrow, &[], ty_str(), "gorget_socket_read_line"),
+        extern_method("set_timeout", Ownership::MutableBorrow, &[("ms", ty_int())], ty_void(), "gorget_socket_set_timeout"),
+        extern_method("close", Ownership::MutableBorrow, &[], ty_void(), "gorget_socket_close"),
+    ]));
+
     Module {
         items,
         span: Span::dummy(),
@@ -754,21 +779,29 @@ fn gen_socket_module() -> Module {
 
 fn gen_bytes_module() -> Module {
     make_module(vec![
-        decl_fn("bytes_from_str", &[("s", ty_str())], ty_vector_uint8()),
-        decl_fn("bytes_to_str", &[("b", ty_vector_uint8())], ty_str()),
-        decl_fn("bytes_from_hex", &[("hex", ty_str())], ty_vector_uint8()),
-        decl_fn("bytes_to_hex", &[("b", ty_vector_uint8())], ty_str()),
-        decl_fn("bytes_write_u32_be", &[("b", ty_vector_uint8()), ("offset", ty_int()), ("value", ty_int())], ty_void()),
-        decl_fn("bytes_read_u32_be", &[("b", ty_vector_uint8()), ("offset", ty_int())], ty_int()),
-        decl_fn("bytes_write_u16_be", &[("b", ty_vector_uint8()), ("offset", ty_int()), ("value", ty_int())], ty_void()),
-        decl_fn("bytes_read_u16_be", &[("b", ty_vector_uint8()), ("offset", ty_int())], ty_int()),
-        decl_fn("bytes_concat", &[("a", ty_vector_uint8()), ("b", ty_vector_uint8())], ty_vector_uint8()),
-        decl_fn("bytes_slice", &[("b", ty_vector_uint8()), ("start", ty_int()), ("end", ty_int())], ty_vector_uint8()),
-        decl_fn("random_bytes", &[("n", ty_int())], ty_vector_uint8()),
+        extern_fn("bytes_from_str", &[("s", ty_str())], ty_vector_uint8(), "gorget_bytes_from_str"),
+        extern_fn("bytes_to_str", &[("b", ty_vector_uint8())], ty_str(), "gorget_bytes_to_str"),
+        extern_fn("bytes_from_hex", &[("hex", ty_str())], ty_vector_uint8(), "gorget_bytes_from_hex"),
+        extern_fn("bytes_to_hex", &[("b", ty_vector_uint8())], ty_str(), "gorget_bytes_to_hex"),
+        extern_fn("bytes_write_u32_be", &[("b", ty_vector_uint8()), ("offset", ty_int()), ("value", ty_int())], ty_void(), "gorget_bytes_write_u32_be"),
+        extern_fn("bytes_read_u32_be", &[("b", ty_vector_uint8()), ("offset", ty_int())], ty_int(), "gorget_bytes_read_u32_be"),
+        extern_fn("bytes_write_u16_be", &[("b", ty_vector_uint8()), ("offset", ty_int()), ("value", ty_int())], ty_void(), "gorget_bytes_write_u16_be"),
+        extern_fn("bytes_read_u16_be", &[("b", ty_vector_uint8()), ("offset", ty_int())], ty_int(), "gorget_bytes_read_u16_be"),
+        extern_fn("bytes_concat", &[("a", ty_vector_uint8()), ("b", ty_vector_uint8())], ty_vector_uint8(), "gorget_bytes_concat"),
+        extern_fn("bytes_slice", &[("b", ty_vector_uint8()), ("start", ty_int()), ("end", ty_int())], ty_vector_uint8(), "gorget_bytes_slice"),
+        extern_fn("random_bytes", &[("n", ty_int())], ty_vector_uint8(), "gorget_random_bytes"),
     ])
 }
 
 // ─── std.http.client ────────────────────────────────────────
+
+/// Build an extern free function declaration.
+/// The C symbol is called directly instead of going through hardcoded dispatch.
+fn extern_fn(name: &str, params: &[(&str, Type)], ret: Type, c_symbol: &str) -> FunctionDef {
+    let mut f = decl_fn(name, params, ret);
+    f.body = FunctionBody::Extern(c_symbol.to_string());
+    f
+}
 
 /// Build an extern method binding for an equip block (has `self` as first param).
 /// The C symbol is called directly instead of going through hardcoded dispatch.
@@ -996,16 +1029,19 @@ mod tests {
     #[test]
     fn generate_collections() {
         let m = generate_stdlib_module(&["std".into(), "collections".into()]).unwrap();
-        assert_eq!(m.items.len(), 9);
-        let names: Vec<_> = m.items.iter().map(|i| match &i.node {
-            Item::Struct(s) => s.name.node.clone(),
-            _ => panic!("expected struct"),
+        assert_eq!(m.items.len(), 10); // 9 structs + 1 File equip block
+        let names: Vec<_> = m.items.iter().filter_map(|i| match &i.node {
+            Item::Struct(s) => Some(s.name.node.clone()),
+            _ => None,
         }).collect();
         assert!(names.contains(&"Vector".to_string()));
         assert!(names.contains(&"Dict".to_string()));
         assert!(names.contains(&"Set".to_string()));
         assert!(names.contains(&"Box".to_string()));
         assert!(names.contains(&"File".to_string()));
+        // File equip block should have extern methods
+        let equip_count = m.items.iter().filter(|i| matches!(&i.node, Item::Equip(_))).count();
+        assert_eq!(equip_count, 1);
     }
 
     #[test]
@@ -1253,15 +1289,27 @@ mod tests {
         let m = generate_stdlib_module(&["std".into(), "net".into(), "socket".into()]).unwrap();
         let mut struct_names = vec![];
         let mut fn_names = vec![];
+        let mut equip_count = 0;
+        let mut equip_method_names: Vec<String> = vec![];
         for item in &m.items {
             match &item.node {
                 Item::Struct(s) => struct_names.push(s.name.node.clone()),
                 Item::Function(f) => fn_names.push(f.name.node.clone()),
+                Item::Equip(e) => {
+                    equip_count += 1;
+                    for method in &e.items {
+                        equip_method_names.push(method.node.name.node.clone());
+                    }
+                }
                 _ => {}
             }
         }
         assert!(struct_names.contains(&"Socket".to_string()));
         assert!(fn_names.contains(&"socket_connect".to_string()));
+        assert_eq!(equip_count, 1);
+        assert!(equip_method_names.contains(&"read".to_string()));
+        assert!(equip_method_names.contains(&"write".to_string()));
+        assert!(equip_method_names.contains(&"close".to_string()));
     }
 
     #[test]
@@ -1541,5 +1589,152 @@ mod tests {
             }
         }
         panic!("Client equip block not found");
+    }
+
+    #[test]
+    fn socket_methods_are_extern() {
+        let m = generate_stdlib_module(&["std".into(), "net".into(), "socket".into()]).unwrap();
+        for item in &m.items {
+            if let Item::Equip(eq) = &item.node {
+                if let Type::Named { name, .. } = &eq.type_.node {
+                    if name.node == "Socket" {
+                        let names: Vec<&str> =
+                            eq.items.iter().map(|m| m.node.name.node.as_str()).collect();
+                        assert_eq!(
+                            names,
+                            vec![
+                                "read",
+                                "read_exact",
+                                "write",
+                                "write_str",
+                                "read_line",
+                                "set_timeout",
+                                "close"
+                            ]
+                        );
+                        for method in &eq.items {
+                            assert!(
+                                matches!(method.node.body, FunctionBody::Extern(_)),
+                                "Socket.{} should be FunctionBody::Extern",
+                                method.node.name.node
+                            );
+                        }
+                        return;
+                    }
+                }
+            }
+        }
+        panic!("Socket equip block not found");
+    }
+
+    #[test]
+    fn cipher_methods_are_extern() {
+        let m = generate_stdlib_module(&["std".into(), "crypto".into()]).unwrap();
+        for item in &m.items {
+            if let Item::Equip(eq) = &item.node {
+                if let Type::Named { name, .. } = &eq.type_.node {
+                    if name.node == "CipherContext" {
+                        let names: Vec<&str> =
+                            eq.items.iter().map(|m| m.node.name.node.as_str()).collect();
+                        assert_eq!(names, vec!["encrypt", "decrypt"]);
+                        for method in &eq.items {
+                            assert!(
+                                matches!(method.node.body, FunctionBody::Extern(_)),
+                                "CipherContext.{} should be FunctionBody::Extern",
+                                method.node.name.node
+                            );
+                        }
+                        return;
+                    }
+                }
+            }
+        }
+        panic!("CipherContext equip block not found");
+    }
+
+    #[test]
+    fn file_methods_are_extern() {
+        let m = generate_stdlib_module(&["std".into(), "collections".into()]).unwrap();
+        for item in &m.items {
+            if let Item::Equip(eq) = &item.node {
+                if let Type::Named { name, .. } = &eq.type_.node {
+                    if name.node == "File" {
+                        let names: Vec<&str> =
+                            eq.items.iter().map(|m| m.node.name.node.as_str()).collect();
+                        assert_eq!(names, vec!["read_all", "write", "close"]);
+                        for method in &eq.items {
+                            assert!(
+                                matches!(method.node.body, FunctionBody::Extern(_)),
+                                "File.{} should be FunctionBody::Extern",
+                                method.node.name.node
+                            );
+                        }
+                        return;
+                    }
+                }
+            }
+        }
+        panic!("File equip block not found");
+    }
+
+    #[test]
+    fn crypto_free_functions_are_extern() {
+        let m = generate_stdlib_module(&["std".into(), "crypto".into()]).unwrap();
+        let extern_expected = [
+            "crypto_sha256",
+            "crypto_sha1",
+            "crypto_hmac",
+            "crypto_aes_ctr_new",
+            "crypto_bn_from_bytes",
+            "crypto_bn_to_bytes",
+            "crypto_bn_mod_exp",
+            "crypto_rsa_verify",
+            "crypto_random_bytes",
+        ];
+        for item in &m.items {
+            if let Item::Function(f) = &item.node {
+                let name = f.name.node.as_str();
+                if extern_expected.contains(&name) {
+                    assert!(
+                        matches!(f.body, FunctionBody::Extern(_)),
+                        "{name} should be FunctionBody::Extern"
+                    );
+                } else if name == "crypto_rsa_load_public" {
+                    assert!(
+                        matches!(f.body, FunctionBody::Declaration),
+                        "crypto_rsa_load_public should stay Declaration"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn bytes_free_functions_are_extern() {
+        let m = generate_stdlib_module(&["std".into(), "bytes".into()]).unwrap();
+        let extern_expected = [
+            "bytes_from_str",
+            "bytes_to_str",
+            "bytes_from_hex",
+            "bytes_to_hex",
+            "bytes_write_u32_be",
+            "bytes_read_u32_be",
+            "bytes_write_u16_be",
+            "bytes_read_u16_be",
+            "bytes_concat",
+            "bytes_slice",
+            "random_bytes",
+        ];
+        for item in &m.items {
+            if let Item::Function(f) = &item.node {
+                let name = f.name.node.as_str();
+                if extern_expected.contains(&name) {
+                    assert!(
+                        matches!(f.body, FunctionBody::Extern(_)),
+                        "{name} should be FunctionBody::Extern"
+                    );
+                }
+            }
+        }
     }
 }
