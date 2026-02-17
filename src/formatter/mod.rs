@@ -298,6 +298,10 @@ impl Formatter {
             FunctionBody::Declaration => {
                 self.emitter.newline();
             }
+            FunctionBody::Extern(sym) => {
+                self.emitter.write(&format!(" = \"{sym}\""));
+                self.emitter.newline();
+            }
         }
     }
 

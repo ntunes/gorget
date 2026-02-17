@@ -3398,3 +3398,14 @@ fn hot_reload_basic() {
     let _ = std::fs::remove_file(&exe_path);
     let _ = std::fs::remove_file(dir.join(format!("{stem}.c")));
 }
+
+#[test]
+fn extern_ffi() {
+    run_gg(
+        "extern_ffi.gg",
+        "\
+42
+5
+0",
+    );
+}

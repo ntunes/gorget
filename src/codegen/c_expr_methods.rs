@@ -976,34 +976,6 @@ impl CodegenContext<'_> {
         }
     }
 
-    /// Generate code for a method call on an HTTP Response receiver.
-    pub(super) fn gen_http_response_method(
-        &mut self,
-        recv: &str,
-        method_name: &str,
-        args: &[Spanned<crate::parser::ast::CallArg>],
-        needs_temp: bool,
-    ) -> String {
-        let recv_ref = if needs_temp {
-            format!("({{ __typeof__({recv}) __tmp = {recv}; &__tmp; }})")
-        } else {
-            format!("&{recv}")
-        };
-        match method_name {
-            "status" => format!("gorget_http_response_status({recv_ref})"),
-            "body" => format!("gorget_http_response_body({recv_ref})"),
-            "header" => {
-                if let Some(arg) = args.first() {
-                    let key = self.gen_expr(&arg.node.value);
-                    format!("gorget_http_response_header({recv_ref}, {key})")
-                } else {
-                    "/* response.header() missing arg */".into()
-                }
-            }
-            _ => format!("/* unknown Response method: {method_name} */"),
-        }
-    }
-
     /// Generate code for a method call on an HTTP Client receiver.
     pub(super) fn gen_http_client_method(
         &mut self,
@@ -1018,31 +990,7 @@ impl CodegenContext<'_> {
             format!("&{recv}")
         };
         match method_name {
-            "base_url" => {
-                if let Some(arg) = args.first() {
-                    let url = self.gen_expr(&arg.node.value);
-                    format!("gorget_http_client_set_base_url({recv_ref}, {url})")
-                } else {
-                    "/* client.base_url() missing arg */".into()
-                }
-            }
-            "header" => {
-                if args.len() >= 2 {
-                    let k = self.gen_expr(&args[0].node.value);
-                    let v = self.gen_expr(&args[1].node.value);
-                    format!("gorget_http_client_set_header({recv_ref}, {k}, {v})")
-                } else {
-                    "/* client.header() missing args */".into()
-                }
-            }
-            "timeout" => {
-                if let Some(arg) = args.first() {
-                    let ms = self.gen_expr(&arg.node.value);
-                    format!("gorget_http_client_set_timeout({recv_ref}, {ms})")
-                } else {
-                    "/* client.timeout() missing arg */".into()
-                }
-            }
+            // base_url, header, timeout are now handled by extern dispatch
             "get" | "post" | "put" | "delete" | "patch" | "head" => {
                 let method = method_name;
                 let path = if let Some(a) = args.first() { self.gen_expr(&a.node.value) } else { "\"\"".into() };

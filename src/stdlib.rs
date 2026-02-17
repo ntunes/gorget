@@ -769,6 +769,20 @@ fn gen_bytes_module() -> Module {
 
 // ─── std.http.client ────────────────────────────────────────
 
+/// Build an extern method binding for an equip block (has `self` as first param).
+/// The C symbol is called directly instead of going through hardcoded dispatch.
+fn extern_method(
+    name: &str,
+    self_ownership: Ownership,
+    extra_params: &[(&str, Type)],
+    ret: Type,
+    c_symbol: &str,
+) -> FunctionDef {
+    let mut f = decl_method(name, self_ownership, extra_params, ret);
+    f.body = FunctionBody::Extern(c_symbol.to_string());
+    f
+}
+
 /// Build a method declaration for an equip block (has `self` as first param).
 fn decl_method(
     name: &str,
@@ -831,18 +845,19 @@ fn gen_http_client_module() -> Module {
     items.push(opaque_struct("Response"));
     items.push(opaque_struct("Client"));
 
-    // Response methods: status(), body(), header(key)
+    // Response methods: status(), body(), header(key) — extern bindings
     items.push(equip_block("Response", vec![
-        decl_method("status", Ownership::Borrow, &[], ty_int()),
-        decl_method("body", Ownership::Borrow, &[], ty_str()),
-        decl_method("header", Ownership::Borrow, &[("key", ty_str())], ty_str()),
+        extern_method("status", Ownership::Borrow, &[], ty_int(), "gorget_http_response_status"),
+        extern_method("body", Ownership::Borrow, &[], ty_str(), "gorget_http_response_body"),
+        extern_method("header", Ownership::Borrow, &[("key", ty_str())], ty_str(), "gorget_http_response_header"),
     ]));
 
-    // Client methods: base_url(url), header(k, v), timeout(ms), get/post/put/delete/patch/head
+    // Client methods: simple property setters use extern bindings,
+    // HTTP verb methods (get/post/...) stay as Declaration (hardcoded Result wrapping in codegen)
     items.push(equip_block("Client", vec![
-        decl_method("base_url", Ownership::MutableBorrow, &[("url", ty_str())], ty_void()),
-        decl_method("header", Ownership::MutableBorrow, &[("key", ty_str()), ("value", ty_str())], ty_void()),
-        decl_method("timeout", Ownership::MutableBorrow, &[("ms", ty_int())], ty_void()),
+        extern_method("base_url", Ownership::MutableBorrow, &[("url", ty_str())], ty_void(), "gorget_http_client_set_base_url"),
+        extern_method("header", Ownership::MutableBorrow, &[("key", ty_str()), ("value", ty_str())], ty_void(), "gorget_http_client_set_header"),
+        extern_method("timeout", Ownership::MutableBorrow, &[("ms", ty_int())], ty_void(), "gorget_http_client_set_timeout"),
         decl_method("get", Ownership::Borrow, &[("path", ty_str())], ty_result(ty_response(), ty_str())),
         decl_method("post", Ownership::Borrow, &[("path", ty_str()), ("body", ty_str())], ty_result(ty_response(), ty_str())),
         decl_method("put", Ownership::Borrow, &[("path", ty_str()), ("body", ty_str())], ty_result(ty_response(), ty_str())),
@@ -1469,5 +1484,61 @@ mod tests {
         // Client methods
         assert!(equip_method_names.contains(&"base_url".to_string()));
         assert!(equip_method_names.contains(&"timeout".to_string()));
+    }
+
+    #[test]
+    fn http_response_methods_are_extern() {
+        let m = generate_stdlib_module(&["std".into(), "http".into(), "client".into()]).unwrap();
+        for item in &m.items {
+            if let Item::Equip(eq) = &item.node {
+                if let Type::Named { name, .. } = &eq.type_.node {
+                    if name.node == "Response" {
+                        for method in &eq.items {
+                            assert!(
+                                matches!(method.node.body, FunctionBody::Extern(_)),
+                                "Response.{} should be FunctionBody::Extern",
+                                method.node.name.node
+                            );
+                        }
+                        return;
+                    }
+                }
+            }
+        }
+        panic!("Response equip block not found");
+    }
+
+    #[test]
+    fn http_client_simple_methods_are_extern() {
+        let m = generate_stdlib_module(&["std".into(), "http".into(), "client".into()]).unwrap();
+        for item in &m.items {
+            if let Item::Equip(eq) = &item.node {
+                if let Type::Named { name, .. } = &eq.type_.node {
+                    if name.node == "Client" {
+                        for method in &eq.items {
+                            match method.node.name.node.as_str() {
+                                "base_url" | "header" | "timeout" => {
+                                    assert!(
+                                        matches!(method.node.body, FunctionBody::Extern(_)),
+                                        "Client.{} should be FunctionBody::Extern",
+                                        method.node.name.node
+                                    );
+                                }
+                                "get" | "post" | "put" | "delete" | "patch" | "head" => {
+                                    assert!(
+                                        matches!(method.node.body, FunctionBody::Declaration),
+                                        "Client.{} should be FunctionBody::Declaration",
+                                        method.node.name.node
+                                    );
+                                }
+                                _ => {}
+                            }
+                        }
+                        return;
+                    }
+                }
+            }
+        }
+        panic!("Client equip block not found");
     }
 }

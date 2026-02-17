@@ -932,7 +932,7 @@ impl<'a> BorrowChecker<'a> {
             FunctionBody::Expression(expr) => {
                 self.check_expr(expr);
             }
-            FunctionBody::Declaration => {}
+            FunctionBody::Declaration | FunctionBody::Extern(_) => {}
         }
     }
 }

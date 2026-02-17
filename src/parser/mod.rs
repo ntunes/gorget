@@ -405,9 +405,17 @@ impl Parser {
                 Ok(Spanned::new(Item::Newtype(nt), span))
             }
             Token::Keyword(Keyword::Extern) => {
-                let ext = self.parse_extern_block()?;
-                let span = start.merge(ext.span);
-                Ok(Spanned::new(Item::ExternBlock(ext), span))
+                // Peek ahead: if next token is a string literal, this is `extern "C": ...` block.
+                // Otherwise it's an `extern` function definition like `extern int abs(int x) = "abs"`.
+                if matches!(self.peek_ahead(1), Token::StringLiteral(_)) {
+                    let ext = self.parse_extern_block()?;
+                    let span = start.merge(ext.span);
+                    Ok(Spanned::new(Item::ExternBlock(ext), span))
+                } else {
+                    let func = self.parse_function_def(attributes, visibility, doc_comment)?;
+                    let span = start.merge(func.span);
+                    Ok(Spanned::new(Item::Function(func), span))
+                }
             }
             Token::Keyword(Keyword::Static) => {
                 let decl = self.parse_static_decl(visibility)?;
@@ -1103,6 +1111,7 @@ impl Parser {
                     name,
                     doc_comment,
                     start,
+                    false,
                 )?;
                 return Ok(Item::Function(func));
             }
@@ -1141,6 +1150,7 @@ impl Parser {
                 name,
                 doc_comment,
                 start,
+                false,
             )?;
             Ok(Item::Function(func))
         } else {
@@ -1169,6 +1179,9 @@ impl Parser {
         doc_comment: Option<String>,
     ) -> Result<FunctionDef, ParseError> {
         let start = self.peek_span();
+
+        // Check for `extern` qualifier (extern function binding)
+        let is_extern = self.match_keyword(Keyword::Extern);
 
         let mut qualifiers = FunctionQualifiers::default();
 
@@ -1204,7 +1217,7 @@ impl Parser {
         };
 
         self.finish_function_def(
-            attributes, visibility, qualifiers, return_type, name, doc_comment, start,
+            attributes, visibility, qualifiers, return_type, name, doc_comment, start, is_extern,
         )
     }
 
@@ -1223,6 +1236,7 @@ impl Parser {
         name: Spanned<String>,
         doc_comment: Option<String>,
         start: Span,
+        is_extern: bool,
     ) -> Result<FunctionDef, ParseError> {
         let generic_params = if self.check(&Token::LBracket) {
             Some(self.parse_generic_params()?)
@@ -1263,7 +1277,27 @@ impl Parser {
         };
 
         // Parse body
-        let body = if self.match_token(&Token::Eq) {
+        let body = if is_extern {
+            // Extern function: expect `= "c_symbol_name"`
+            self.expect(&Token::Eq)?;
+            if let Token::StringLiteral(s) = self.advance().node {
+                let symbol: String = s
+                    .segments
+                    .iter()
+                    .filter_map(|seg| {
+                        if let crate::lexer::token::StringSegment::Literal(l) = seg {
+                            Some(l.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                self.consume_newline();
+                FunctionBody::Extern(symbol)
+            } else {
+                return Err(self.error_unexpected("string literal for extern symbol"));
+            }
+        } else if self.match_token(&Token::Eq) {
             let expr = self.parse_expr()?;
             self.consume_newline();
             FunctionBody::Expression(Box::new(expr))
@@ -2767,5 +2801,56 @@ mod tests {
         } else {
             panic!("Expected function");
         }
+    }
+
+    // ── Extern function defs ──────────────────────────────────
+
+    #[test]
+    fn test_extern_function_def() {
+        let module = parse("extern int abs(int x) = \"abs\"\n");
+        assert_eq!(module.items.len(), 1);
+        if let Item::Function(ref f) = module.items[0].node {
+            assert_eq!(f.name.node, "abs");
+            if let FunctionBody::Extern(ref sym) = f.body {
+                assert_eq!(sym, "abs");
+            } else {
+                panic!("Expected FunctionBody::Extern, got {:?}", f.body);
+            }
+        } else {
+            panic!("Expected function");
+        }
+    }
+
+    #[test]
+    fn test_extern_method_in_equip() {
+        let source = "\
+struct Foo:
+    int x
+
+equip Foo:
+    extern int value(self) = \"foo_get_value\"
+";
+        let module = parse(source);
+        assert_eq!(module.items.len(), 2);
+        if let Item::Equip(ref eq) = module.items[1].node {
+            assert_eq!(eq.items.len(), 1);
+            let method = &eq.items[0].node;
+            assert_eq!(method.name.node, "value");
+            if let FunctionBody::Extern(ref sym) = method.body {
+                assert_eq!(sym, "foo_get_value");
+            } else {
+                panic!("Expected FunctionBody::Extern, got {:?}", method.body);
+            }
+        } else {
+            panic!("Expected equip block");
+        }
+    }
+
+    #[test]
+    fn test_extern_block_still_works() {
+        let source = "extern \"C\":\n    int printf(str fmt)\n";
+        let module = parse(source);
+        assert_eq!(module.items.len(), 1);
+        assert!(matches!(module.items[0].node, Item::ExternBlock(_)));
     }
 }

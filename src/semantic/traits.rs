@@ -241,7 +241,7 @@ fn collect_trait(
     for item in &trait_def.items {
         if let TraitItem::Method(method) = &item.node {
             let sig = build_function_sig(method, scopes, types);
-            let has_body = !matches!(method.body, FunctionBody::Declaration);
+            let has_body = !matches!(method.body, FunctionBody::Declaration | FunctionBody::Extern(_));
             has_default_body.insert(method.name.node.clone(), has_body);
             methods.insert(method.name.node.clone(), sig);
         }

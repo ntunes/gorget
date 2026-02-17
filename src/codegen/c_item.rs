@@ -389,6 +389,9 @@ impl CodegenContext<'_> {
         if f.generic_params.is_some() {
             return; // Generic template — emitted per-instantiation
         }
+        if matches!(f.body, FunctionBody::Extern(_)) {
+            return; // Extern binding — C runtime provides the symbol
+        }
         let (ret_type, func_name, params) = self.function_signature(f, method_info);
         emitter.emit_line(&format!("{ret_type} {func_name}({params});"));
     }
@@ -441,7 +444,7 @@ impl CodegenContext<'_> {
                             let all_methods = self.collect_all_trait_methods(trait_def, &trait_defs);
                             for (method, _) in &all_methods {
                                 if !Self::equip_has_method(impl_block, &method.name.node) {
-                                    if !matches!(method.body, FunctionBody::Declaration) {
+                                    if !matches!(method.body, FunctionBody::Declaration | FunctionBody::Extern(_)) {
                                         // Default method body — emit as-is
                                         self.emit_function_def(
                                             method,
@@ -640,7 +643,7 @@ impl CodegenContext<'_> {
                 emitter.emit_line("}");
                 emitter.blank_line();
             }
-            FunctionBody::Declaration => {
+            FunctionBody::Declaration | FunctionBody::Extern(_) => {
                 // External declaration — no body
             }
         }
@@ -1326,7 +1329,7 @@ impl CodegenContext<'_> {
         match &f.body {
             FunctionBody::Block(block) => self.scan_block_for_generic_calls(block),
             FunctionBody::Expression(expr) => self.scan_expr_for_generic_calls(expr),
-            FunctionBody::Declaration => {}
+            FunctionBody::Declaration | FunctionBody::Extern(_) => {}
         }
     }
 
@@ -1788,7 +1791,7 @@ impl CodegenContext<'_> {
                                 let all_methods = self.collect_all_trait_methods(trait_def, &trait_defs);
                                 for (method, _) in &all_methods {
                                     if !Self::equip_has_method(equip_block, &method.name.node) {
-                                        if !matches!(method.body, FunctionBody::Declaration) {
+                                        if !matches!(method.body, FunctionBody::Declaration | FunctionBody::Extern(_)) {
                                             let (ret_type, func_name, params, _) = self.monomorphized_equip_signature(
                                                 method, generic_params.as_ref(), &inst.c_type_args,
                                                 &inst.mangled_name, Some(tname),
@@ -1863,7 +1866,7 @@ impl CodegenContext<'_> {
                                 let all_methods = self.collect_all_trait_methods(trait_def, &trait_defs);
                                 for (method, _) in &all_methods {
                                     if !Self::equip_has_method(&equip_block, &method.name.node) {
-                                        if !matches!(method.body, FunctionBody::Declaration) {
+                                        if !matches!(method.body, FunctionBody::Declaration | FunctionBody::Extern(_)) {
                                             self.emit_monomorphized_equip_method(
                                                 method,
                                                 generic_params.as_ref(),
@@ -2403,7 +2406,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                 emitter.emit_line("}");
                 emitter.blank_line();
             }
-            FunctionBody::Declaration => {
+            FunctionBody::Declaration | FunctionBody::Extern(_) => {
                 // External declaration — no body
             }
         }
@@ -2579,7 +2582,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         match &f.body {
             FunctionBody::Block(block) => self.scan_block_for_tuples(block),
             FunctionBody::Expression(expr) => self.scan_expr_for_tuples(expr),
-            FunctionBody::Declaration => {}
+            FunctionBody::Declaration | FunctionBody::Extern(_) => {}
         }
     }
 
@@ -2992,7 +2995,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                 emitter.emit_line("}");
                 emitter.blank_line();
             }
-            FunctionBody::Declaration => {}
+            FunctionBody::Declaration | FunctionBody::Extern(_) => {}
         }
 
         self.type_subs = prev_subs;

@@ -1,0 +1,12 @@
+# Test extern function declarations binding to C symbols.
+
+extern int llabs_wrapper(int x) = "llabs"
+
+void main():
+    # llabs is the C stdlib's long long abs
+    int a = llabs_wrapper(42)
+    int b = llabs_wrapper(-5)
+    int c = llabs_wrapper(0)
+    print("{a}")
+    print("{b}")
+    print("{c}")

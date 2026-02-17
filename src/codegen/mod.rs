@@ -192,6 +192,9 @@ pub struct CodegenContext<'a> {
     /// These are emitted as `Type*` pointers and need `(*name)` for reads and
     /// `name->field` for field access.
     pub pointer_params: HashSet<String>,
+    /// Maps (type_name, method_name) → C symbol for extern methods.
+    /// Maps ("", fn_name) → C symbol for extern free functions.
+    pub extern_symbols: FxHashMap<(String, String), String>,
     /// Top-level function names (not main, not methods) — these get a `gg_` prefix
     /// in C to avoid collisions with C library symbols.
     pub function_names: HashSet<String>,
@@ -326,6 +329,33 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
         }
     }
 
+    // Build extern symbol table from extern function/method declarations.
+    let mut extern_symbols: FxHashMap<(String, String), String> = FxHashMap::default();
+    for item in &module.items {
+        match &item.node {
+            Item::Function(f) => {
+                if let crate::parser::ast::FunctionBody::Extern(sym) = &f.body {
+                    extern_symbols.insert(("".to_string(), f.name.node.clone()), sym.clone());
+                }
+            }
+            Item::Equip(equip) => {
+                let type_name = match &equip.type_.node {
+                    Type::Named { name, .. } => name.node.clone(),
+                    _ => continue,
+                };
+                for method in &equip.items {
+                    if let crate::parser::ast::FunctionBody::Extern(sym) = &method.node.body {
+                        extern_symbols.insert(
+                            (type_name.clone(), method.node.name.node.clone()),
+                            sym.clone(),
+                        );
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     let is_test_module = opts.test_mode;
     let hot_reload = opts.hot_reload;
     let hot_reload_opts = if hot_reload {
@@ -376,6 +406,7 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
         field_type_names,
         mutable_captures: HashSet::new(),
         pointer_params: HashSet::new(),
+        extern_symbols,
         function_names,
         is_test_module,
         test_tag_filter: opts.test_tags,

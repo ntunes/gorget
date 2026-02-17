@@ -101,6 +101,8 @@ pub enum FunctionBody {
     Block(Block),
     Expression(Box<Spanned<Expr>>),
     Declaration,
+    /// Extern binding: body is a C symbol name, e.g. `extern int abs(int x) = "abs"`
+    Extern(String),
 }
 
 #[derive(Debug, Clone)]

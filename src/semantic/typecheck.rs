@@ -2185,7 +2185,7 @@ impl<'a> TypeChecker<'a> {
                 let expr_type = self.infer_expr(expr);
                 self.unify(return_type, expr_type, expr.span);
             }
-            FunctionBody::Declaration => {}
+            FunctionBody::Declaration | FunctionBody::Extern(_) => {}
         }
 
         self.current_return_type = None;

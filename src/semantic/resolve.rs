@@ -491,7 +491,7 @@ fn resolve_function(
         FunctionBody::Expression(expr) => {
             resolve_expr(expr, scopes, errors, resolution_map);
         }
-        FunctionBody::Declaration => {}
+        FunctionBody::Declaration | FunctionBody::Extern(_) => {}
     }
 
     scopes.pop_scope();

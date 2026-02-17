@@ -868,6 +868,14 @@ impl CodegenContext<'_> {
             }
         }
 
+        // Check extern free function bindings
+        if let Expr::Identifier(name) = &callee.node {
+            if let Some(c_symbol) = self.extern_symbols.get(&("".to_string(), name.clone())).cloned() {
+                let arg_exprs = self.resolve_call_args(callee, args);
+                return format!("{c_symbol}({})", arg_exprs.join(", "));
+            }
+        }
+
         // General function call
         let callee_str = self.gen_expr(callee);
         let arg_exprs = self.resolve_call_args(callee, args);
@@ -1074,6 +1082,40 @@ impl CodegenContext<'_> {
             }
         }
 
+        // Check if method has an extern binding (e.g. `extern int status(self) = "gorget_http_response_status"`)
+        {
+            let type_name = self.infer_receiver_type(receiver);
+            if let Some(c_symbol) = self.extern_symbols.get(&(type_name.clone(), method_name.to_string())).cloned() {
+                let is_pointer_param = matches!(&receiver.node, Expr::Identifier(name) if self.pointer_params.contains(&c_mangle::escape_keyword(name)));
+                let is_self_ptr = (self.current_self_type.is_some() && matches!(receiver.node, Expr::SelfExpr))
+                    || is_pointer_param;
+                let recv = if is_pointer_param {
+                    if let Expr::Identifier(name) = &receiver.node {
+                        c_mangle::escape_keyword(name)
+                    } else { unreachable!() }
+                } else {
+                    self.gen_expr(receiver)
+                };
+                let needs_temp = !is_lvalue(&receiver.node);
+                if needs_temp {
+                    let arg_exprs: Vec<String> = args.iter().map(|a| self.gen_expr(&a.node.value)).collect();
+                    let mut call_args = String::from("&__recv");
+                    for a in &arg_exprs {
+                        call_args.push_str(", ");
+                        call_args.push_str(a);
+                    }
+                    return format!("({{ __typeof__({recv}) __recv = {recv}; {c_symbol}({call_args}); }})");
+                } else {
+                    let self_arg = if is_self_ptr { recv.clone() } else { format!("&{recv}") };
+                    let mut all_args = vec![self_arg];
+                    for arg in args {
+                        all_args.push(self.gen_expr(&arg.node.value));
+                    }
+                    return format!("{c_symbol}({})", all_args.join(", "));
+                }
+            }
+        }
+
         // Check if the receiver is a pointer param (already a pointer, pass directly).
         let is_pointer_param = matches!(&receiver.node, Expr::Identifier(name) if self.pointer_params.contains(&c_mangle::escape_keyword(name)));
         let recv = if is_pointer_param {
@@ -1157,13 +1199,13 @@ impl CodegenContext<'_> {
         let is_result = type_name == "Result";
         let is_box = type_name == "Box";
         let is_file = type_name == "File" || c_type.as_deref() == Some("GorgetFile");
-        let is_http_response = type_name == "Response" || c_type.as_deref() == Some("GorgetHttpResponse");
-        let is_http_client = type_name == "Client" || c_type.as_deref() == Some("GorgetHttpClient");
+        let is_http_client = (type_name == "Client" || c_type.as_deref() == Some("GorgetHttpClient"))
+            && matches!(method_name, "get" | "post" | "put" | "delete" | "patch" | "head");
         let is_socket = type_name == "Socket" || c_type.as_deref() == Some("GorgetSocket");
         let is_cipher = type_name == "CipherContext" || c_type.as_deref() == Some("GorgetCipherContext");
         let is_iterator = !is_vector && !is_map && !is_set && !is_string
             && !is_option && !is_result && !is_box && !is_file
-            && !is_http_response && !is_http_client && !is_socket && !is_cipher
+            && !is_http_client && !is_socket && !is_cipher
             && matches!(method_name, "collect" | "filter" | "map" | "fold")
             && self.traits.impls.iter().any(|i|
                 i.self_type_name == type_name && i.trait_name.as_deref() == Some("Iterator")
@@ -1183,7 +1225,7 @@ impl CodegenContext<'_> {
                 "bool" | "char32_t"
             ));
 
-        if !is_vector && !is_map && !is_set && !is_string && !is_option && !is_result && !is_box && !is_file && !is_http_response && !is_http_client && !is_socket && !is_cipher && !is_iterator && !is_primitive_hashable && !is_char {
+        if !is_vector && !is_map && !is_set && !is_string && !is_option && !is_result && !is_box && !is_file && !is_http_client && !is_socket && !is_cipher && !is_iterator && !is_primitive_hashable && !is_char {
             return None;
         }
 
@@ -1247,9 +1289,6 @@ impl CodegenContext<'_> {
         }
         if is_file {
             return Some(self.gen_file_method(&recv, method_name, args, needs_temp));
-        }
-        if is_http_response {
-            return Some(self.gen_http_response_method(&recv, method_name, args, needs_temp));
         }
         if is_http_client {
             return Some(self.gen_http_client_method(&recv, method_name, args, needs_temp));
