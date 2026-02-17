@@ -47,6 +47,11 @@ pub struct FunctionInfo {
     pub generic_param_names: Vec<String>,
     /// Where-clause bounds: `(param_name, [trait_name, ...])`.
     pub where_bounds: Vec<(String, Vec<String>)>,
+    /// Param indices whose data flows to the return value (lifetime inference).
+    /// Computed by borrow checker Pass 5a.
+    pub return_borrows_from: Vec<usize>,
+    /// Whether each param has the `live` keyword annotation.
+    pub param_is_live: Vec<bool>,
 }
 
 /// Shared context passed around during resolution.
@@ -195,6 +200,8 @@ fn collect_item(
 
                     let generic_param_names = extract_generic_param_names(&f.generic_params);
                     let where_bounds = extract_where_bounds(&f.where_clause);
+                    let param_is_live: Vec<bool> =
+                        f.params.iter().map(|p| p.node.is_live).collect();
 
                     ctx.function_info.insert(
                         def_id,
@@ -209,6 +216,8 @@ fn collect_item(
                             scope_id: scopes.current_scope(),
                             generic_param_names,
                             where_bounds,
+                            return_borrows_from: Vec::new(),
+                            param_is_live,
                         },
                     );
                 }

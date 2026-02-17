@@ -1,0 +1,4 @@
+# Lifetime error: returning a str view of a local String (would dangle)
+str bad():
+    String s = "hello"
+    return s

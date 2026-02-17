@@ -1,0 +1,9 @@
+# Lifetime error: using a str view after its String source was moved
+void consume(String !s):
+    pass
+
+void main():
+    String s = "hello"
+    str v = s
+    consume(!s)
+    print(v)

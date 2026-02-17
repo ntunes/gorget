@@ -177,7 +177,7 @@ pub fn analyze(module: &mut Module) -> AnalysisResult {
         &mut errors,
     );
 
-    // Pass 5: Borrow checking
+    // Pass 5: Borrow checking (two sub-passes: 5a computes return_borrows_from, 5b does full check)
     let immutable_by_default = module.items.iter().any(|item| {
         matches!(&item.node, Item::Directive(d) if d.name == "immutable-by-default")
     });
@@ -186,8 +186,9 @@ pub fn analyze(module: &mut Module) -> AnalysisResult {
         &scopes,
         &types,
         &resolution_map,
-        &resolve_ctx.function_info,
+        &mut resolve_ctx.function_info,
         immutable_by_default,
+        &expr_types,
         &mut errors,
     );
 

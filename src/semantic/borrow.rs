@@ -1,4 +1,4 @@
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::parser::ast::*;
 use crate::span::{Span, Spanned};
@@ -7,7 +7,7 @@ use super::errors::{SemanticError, SemanticErrorKind};
 use super::ids::{DefId, TypeId};
 use super::resolve::{FunctionInfo, ResolutionMap};
 use super::scope::{DefKind, ScopeTable};
-use super::types::{ResolvedType, TypeTable};
+use super::types::{self, ResolvedType, TypeTable};
 
 // ─── Variable State ────────────────────────────────────────
 
@@ -22,6 +22,61 @@ enum VarState {
 
 /// Snapshot of all variable states (for branching).
 type StateSnapshot = FxHashMap<DefId, VarState>;
+
+// ─── Borrow Origin ────────────────────────────────────────
+
+/// Tracks where a reference-typed value originated from.
+/// Used for lifetime inference: prevents returning references to locals
+/// and using references after their source is moved.
+#[derive(Debug, Clone)]
+enum BorrowOrigin {
+    /// String literal or global constant — always valid.
+    Static,
+    /// Function parameter — valid in caller's scope.
+    Param { #[allow(dead_code)] param_index: usize, def_id: DefId },
+    /// Local variable — scope-limited, can't escape the function.
+    Local(DefId),
+    /// Call result — inherits origins from callee's `return_borrows_from` args.
+    CallResult(Vec<BorrowOrigin>),
+    /// Conservative fallback — treated as potentially local in Phase 1,
+    /// refined to CallResult in Phase 2+ when callee info is available.
+    Unknown,
+}
+
+impl BorrowOrigin {
+    /// Returns true if this origin (or any nested origin) references a local.
+    fn contains_local(&self) -> bool {
+        match self {
+            BorrowOrigin::Local(_) => true,
+            BorrowOrigin::CallResult(origins) => origins.iter().any(|o| o.contains_local()),
+            _ => false,
+        }
+    }
+
+    /// Returns true if this origin (or any nested origin) references the given DefId.
+    fn references_def(&self, target: DefId) -> bool {
+        match self {
+            BorrowOrigin::Local(def_id) | BorrowOrigin::Param { def_id, .. } => *def_id == target,
+            BorrowOrigin::CallResult(origins) => origins.iter().any(|o| o.references_def(target)),
+            BorrowOrigin::Static | BorrowOrigin::Unknown => false,
+        }
+    }
+
+    /// Collect the names of all locals referenced by this origin.
+    fn local_names(&self, scopes: &ScopeTable) -> Vec<String> {
+        match self {
+            BorrowOrigin::Local(def_id) => vec![scopes.get_def(*def_id).name.clone()],
+            BorrowOrigin::CallResult(origins) => {
+                origins.iter().flat_map(|o| o.local_names(scopes)).collect()
+            }
+            _ => vec![],
+        }
+    }
+}
+
+/// Snapshot of origin tracking state (for branching). Used in Phase 6 hardening.
+#[allow(dead_code)]
+type OriginSnapshot = FxHashMap<DefId, BorrowOrigin>;
 
 // ─── Copy Type Detection ───────────────────────────────────
 
@@ -77,6 +132,20 @@ struct BorrowChecker<'a> {
     loop_depth: usize,
     /// Whether the file has `directive immutable-by-default`.
     immutable_by_default: bool,
+    /// Expression type map from the type checker (for lifetime tracking).
+    /// Used in Phase 4+ for struct field type resolution.
+    #[allow(dead_code)]
+    expr_types: &'a FxHashMap<Span, TypeId>,
+
+    // ── Lifetime inference state ──
+    /// Origin of each reference-typed variable.
+    var_origins: FxHashMap<DefId, BorrowOrigin>,
+    /// DefIds whose data has been moved (invalidated).
+    invalidated_origins: FxHashSet<DefId>,
+    /// Current function's return type (if it's a reference type).
+    current_return_type_id: Option<TypeId>,
+    /// Current function's param (DefId, param_index) pairs.
+    current_param_def_ids: Vec<(DefId, usize)>,
 }
 
 impl<'a> BorrowChecker<'a> {
@@ -86,6 +155,7 @@ impl<'a> BorrowChecker<'a> {
         resolution_map: &'a ResolutionMap,
         function_info: &'a FxHashMap<DefId, FunctionInfo>,
         immutable_by_default: bool,
+        expr_types: &'a FxHashMap<Span, TypeId>,
     ) -> Self {
         Self {
             scopes,
@@ -96,6 +166,11 @@ impl<'a> BorrowChecker<'a> {
             var_states: FxHashMap::default(),
             loop_depth: 0,
             immutable_by_default,
+            expr_types,
+            var_origins: FxHashMap::default(),
+            invalidated_origins: FxHashSet::default(),
+            current_return_type_id: None,
+            current_param_def_ids: Vec::new(),
         }
     }
 
@@ -109,6 +184,7 @@ impl<'a> BorrowChecker<'a> {
     }
 
     /// Check that a variable is usable (Live). Error if Moved.
+    /// Also checks if a reference-typed variable's source has been invalidated.
     fn check_use(&mut self, def_id: DefId, span: Span) {
         if let Some(VarState::Moved { moved_at }) = self.var_states.get(&def_id) {
             let name = self.scopes.get_def(def_id).name.clone();
@@ -119,7 +195,154 @@ impl<'a> BorrowChecker<'a> {
                 },
                 span,
             );
+            return;
         }
+
+        // Lifetime check: if this variable has a reference type, check that its
+        // source hasn't been moved/invalidated.
+        if let Some(origin) = self.var_origins.get(&def_id).cloned() {
+            for &invalidated_id in &self.invalidated_origins {
+                if origin.references_def(invalidated_id) {
+                    let name = self.scopes.get_def(def_id).name.clone();
+                    let source_name = self.scopes.get_def(invalidated_id).name.clone();
+                    // Find the span where the source was moved
+                    let moved_at = if let Some(VarState::Moved { moved_at }) = self.var_states.get(&invalidated_id) {
+                        *moved_at
+                    } else {
+                        span
+                    };
+                    self.error(
+                        SemanticErrorKind::UseAfterSourceMoved {
+                            name,
+                            source_name,
+                            moved_at,
+                        },
+                        span,
+                    );
+                    return;
+                }
+            }
+        }
+    }
+
+    // ─── Origin Tracking ──────────────────────────────────
+
+    /// Compute the borrow origin of an expression.
+    fn compute_expr_origin(&self, expr: &Spanned<Expr>) -> BorrowOrigin {
+        match &expr.node {
+            // String literals are always valid (static storage).
+            Expr::StringLiteral(_) => BorrowOrigin::Static,
+
+            Expr::Identifier(_) => {
+                if let Some(&def_id) = self.resolution_map.get(&expr.span.start) {
+                    let def = self.scopes.get_def(def_id);
+
+                    // Is it a parameter?
+                    if def.is_param {
+                        if let Some((_, idx)) = self.current_param_def_ids.iter().find(|(id, _)| *id == def_id) {
+                            return BorrowOrigin::Param { param_index: *idx, def_id };
+                        }
+                    }
+
+                    // Is it a local variable with a known origin?
+                    if let Some(origin) = self.var_origins.get(&def_id) {
+                        return origin.clone();
+                    }
+
+                    // Only mark as Local if this variable owns data (non-reference type).
+                    // Reference-type locals that aren't in var_origins (e.g. pattern bindings
+                    // from match arms) are views into existing data — not new local sources.
+                    if def.kind == DefKind::Variable {
+                        if let Some(type_id) = def.type_id {
+                            if !types::is_reference_type(type_id, self.types) {
+                                return BorrowOrigin::Local(def_id);
+                            }
+                        } else {
+                            // No type info — conservative: treat as local
+                            return BorrowOrigin::Local(def_id);
+                        }
+                    }
+                }
+                BorrowOrigin::Unknown
+            }
+
+            // Field access propagates from the object
+            Expr::FieldAccess { object, .. } | Expr::TupleFieldAccess { object, .. } => {
+                self.compute_expr_origin(object)
+            }
+
+            // Index/slice propagates from the container
+            Expr::Index { object, .. } => self.compute_expr_origin(object),
+
+            // Call/method call: use callee's return_borrows_from if available (Phase 2+)
+            Expr::Call { callee, args, .. } => {
+                self.compute_call_origin(callee, args)
+            }
+            Expr::MethodCall { receiver, method, args, .. } => {
+                self.compute_method_call_origin(receiver, method, args)
+            }
+
+            // If/Match expressions: union of branch origins (conservative)
+            Expr::If { then_branch, elif_branches, else_branch, .. } => {
+                let mut origins = vec![self.compute_expr_origin(then_branch)];
+                for (_, body) in elif_branches {
+                    origins.push(self.compute_expr_origin(body));
+                }
+                if let Some(else_br) = else_branch {
+                    origins.push(self.compute_expr_origin(else_br));
+                }
+                // Filter out non-meaningful origins
+                let meaningful: Vec<_> = origins.into_iter().filter(|o| !matches!(o, BorrowOrigin::Unknown)).collect();
+                if meaningful.is_empty() {
+                    BorrowOrigin::Unknown
+                } else if meaningful.len() == 1 {
+                    meaningful.into_iter().next().unwrap()
+                } else {
+                    BorrowOrigin::CallResult(meaningful)
+                }
+            }
+
+            Expr::Block(block) | Expr::Do { body: block } => {
+                // Origin comes from the last expression statement
+                if let Some(last) = block.stmts.last() {
+                    if let Stmt::Expr(e) = &last.node {
+                        return self.compute_expr_origin(e);
+                    }
+                }
+                BorrowOrigin::Unknown
+            }
+
+            // Everything else: unknown (conservative)
+            _ => BorrowOrigin::Unknown,
+        }
+    }
+
+    /// Compute the origin of a function call result using callee's `return_borrows_from`.
+    fn compute_call_origin(&self, callee: &Spanned<Expr>, args: &[Spanned<CallArg>]) -> BorrowOrigin {
+        let callee_def_id = self.resolve_callee_def_id(callee);
+        if let Some(def_id) = callee_def_id {
+            if let Some(info) = self.function_info.get(&def_id) {
+                if !info.return_borrows_from.is_empty() {
+                    let origins: Vec<BorrowOrigin> = info.return_borrows_from.iter()
+                        .filter_map(|&idx| args.get(idx).map(|a| self.compute_expr_origin(&a.node.value)))
+                        .collect();
+                    return if origins.len() == 1 {
+                        origins.into_iter().next().unwrap()
+                    } else {
+                        BorrowOrigin::CallResult(origins)
+                    };
+                }
+            }
+        }
+        BorrowOrigin::Unknown
+    }
+
+    /// Compute the origin of a method call result.
+    fn compute_method_call_origin(&self, receiver: &Spanned<Expr>, _method: &Spanned<String>, _args: &[Spanned<CallArg>]) -> BorrowOrigin {
+        // For methods, if the return borrows from self, propagate receiver's origin.
+        // For now, conservatively propagate the receiver's origin for any method
+        // returning a reference type. Phase 2's body analysis refines this.
+        self.compute_expr_origin(receiver)
     }
 
     /// Move a variable: mark as Moved. Error if already moved or inside a loop.
@@ -145,10 +368,41 @@ impl<'a> BorrowChecker<'a> {
         }
 
         self.var_states.insert(def_id, VarState::Moved { moved_at: span });
+        // Invalidate this def for lifetime tracking — any reference-typed variable
+        // whose origin chain includes this DefId becomes dangling.
+        self.invalidated_origins.insert(def_id);
     }
 
     fn save_state(&self) -> StateSnapshot {
         self.var_states.clone()
+    }
+
+    /// Save origin state for branching. Used in Phase 6 hardening.
+    #[allow(dead_code)]
+    fn save_origin_state(&self) -> (OriginSnapshot, FxHashSet<DefId>) {
+        (self.var_origins.clone(), self.invalidated_origins.clone())
+    }
+
+    /// Restore origin state for branching. Used in Phase 6 hardening.
+    #[allow(dead_code)]
+    fn restore_origin_state(&mut self, state: (OriginSnapshot, FxHashSet<DefId>)) {
+        self.var_origins = state.0;
+        self.invalidated_origins = state.1;
+    }
+
+    /// Merge origin states from two branches: union the invalidated sets.
+    /// Used in Phase 6 hardening.
+    #[allow(dead_code)]
+    fn merge_origin_states(&mut self, a: &(OriginSnapshot, FxHashSet<DefId>), b: &(OriginSnapshot, FxHashSet<DefId>)) {
+        // Union of origins (keep both)
+        let mut merged = a.0.clone();
+        for (def_id, origin) in &b.0 {
+            merged.entry(*def_id).or_insert_with(|| origin.clone());
+        }
+        // Union of invalidations (conservative: if moved in either branch, treat as invalidated)
+        let invalidated = a.1.union(&b.1).copied().collect();
+        self.var_origins = merged;
+        self.invalidated_origins = invalidated;
     }
 
     fn restore_state(&mut self, state: StateSnapshot) {
@@ -538,7 +792,7 @@ impl<'a> BorrowChecker<'a> {
     fn check_stmt(&mut self, stmt: &Spanned<Stmt>) {
         match &stmt.node {
             Stmt::VarDecl {
-                pattern, value, ..
+                pattern, value, type_, ..
             } => {
                 // Check the value expression
                 self.check_expr(value);
@@ -548,6 +802,17 @@ impl<'a> BorrowChecker<'a> {
 
                 // Mark new bindings as Live
                 self.mark_pattern_live(&pattern.node);
+
+                // Track origin for reference-typed variables
+                if let Pattern::Binding(name) = &pattern.node {
+                    if let Some(def_id) = self.find_def_by_name(name) {
+                        let is_ref = self.is_var_reference_type(def_id, Some(type_));
+                        if is_ref {
+                            let origin = self.compute_expr_origin(value);
+                            self.var_origins.insert(def_id, origin);
+                        }
+                    }
+                }
             }
 
             Stmt::Expr(expr) => {
@@ -581,6 +846,15 @@ impl<'a> BorrowChecker<'a> {
                             }
                             // Reassignment revives a moved variable
                             self.mark_live(def_id);
+                            // Also un-invalidate: if this variable was moved and
+                            // reassigned, it's no longer a dangling source.
+                            self.invalidated_origins.remove(&def_id);
+
+                            // Update origin tracking for reference-typed variables
+                            if self.var_origins.contains_key(&def_id) {
+                                let origin = self.compute_expr_origin(value);
+                                self.var_origins.insert(def_id, origin);
+                            }
                         }
                     }
                     // For field/index assignments, check the base object
@@ -618,6 +892,30 @@ impl<'a> BorrowChecker<'a> {
             Stmt::Return(expr) => {
                 if let Some(expr) = expr {
                     self.check_expr(expr);
+
+                    // Lifetime check: if the function returns a reference type,
+                    // verify the return expression doesn't reference local data.
+                    if let Some(ret_type_id) = self.current_return_type_id {
+                        if types::is_reference_type(ret_type_id, self.types) {
+                            let origin = self.compute_expr_origin(expr);
+                            if origin.contains_local() {
+                                let local_names = origin.local_names(self.scopes);
+                                let local_name = local_names.first().cloned().unwrap_or_else(|| "<local>".to_string());
+                                // Get a name for what's being returned
+                                let return_name = match &expr.node {
+                                    Expr::Identifier(n) => n.clone(),
+                                    _ => "<expression>".to_string(),
+                                };
+                                self.error(
+                                    SemanticErrorKind::DanglingReturn {
+                                        name: return_name,
+                                        local_name,
+                                    },
+                                    expr.span,
+                                );
+                            }
+                        }
+                    }
                 }
             }
 
@@ -959,16 +1257,76 @@ impl<'a> BorrowChecker<'a> {
         }
     }
 
+    /// Check if a variable is a reference type, using its type annotation or resolved type.
+    fn is_var_reference_type(&self, def_id: DefId, type_annotation: Option<&Spanned<Type>>) -> bool {
+        // Try the type annotation first (works even before type checking)
+        if let Some(ann) = type_annotation {
+            return matches!(&ann.node, Type::Primitive(PrimitiveType::Str) | Type::Slice { .. });
+        }
+        // Fall back to resolved type
+        let def = self.scopes.get_def(def_id);
+        if let Some(type_id) = def.type_id {
+            return types::is_reference_type(type_id, self.types);
+        }
+        false
+    }
+
     fn check_function(&mut self, func: &FunctionDef) {
         // Reset state for each function
         self.var_states.clear();
         self.loop_depth = 0;
+        self.var_origins.clear();
+        self.invalidated_origins.clear();
+        self.current_param_def_ids.clear();
+
+        // Set up return type for lifetime checking
+        if let Some(def_id) = self.scopes.lookup(&func.name.node) {
+            if let Some(info) = self.function_info.get(&def_id) {
+                self.current_return_type_id = info.return_type_id;
+            }
+        } else {
+            self.current_return_type_id = None;
+        }
+
+        // Set up param origins for lifetime tracking
+        for (i, param) in func.params.iter().enumerate() {
+            if let Some(def_id) = self.find_def_by_name(&param.node.name.node) {
+                self.current_param_def_ids.push((def_id, i));
+
+                // If this param is a reference type, track its origin as Param
+                let is_ref = matches!(&param.node.type_.node, Type::Primitive(PrimitiveType::Str) | Type::Slice { .. });
+                if is_ref {
+                    self.var_origins.insert(def_id, BorrowOrigin::Param { param_index: i, def_id });
+                }
+            }
+        }
 
         match &func.body {
             FunctionBody::Block(block) => {
                 self.check_block(block);
             }
             FunctionBody::Expression(expr) => {
+                // Expression-body functions: also validate dangling returns
+                if let Some(ret_type_id) = self.current_return_type_id {
+                    if types::is_reference_type(ret_type_id, self.types) {
+                        let origin = self.compute_expr_origin(expr);
+                        if origin.contains_local() {
+                            let local_names = origin.local_names(self.scopes);
+                            let local_name = local_names.first().cloned().unwrap_or_else(|| "<local>".to_string());
+                            let return_name = match &expr.node {
+                                Expr::Identifier(n) => n.clone(),
+                                _ => "<expression>".to_string(),
+                            };
+                            self.error(
+                                SemanticErrorKind::DanglingReturn {
+                                    name: return_name,
+                                    local_name,
+                                },
+                                expr.span,
+                            );
+                        }
+                    }
+                }
                 self.check_expr(expr);
             }
             FunctionBody::Declaration | FunctionBody::Extern(_) => {}
@@ -976,17 +1334,269 @@ impl<'a> BorrowChecker<'a> {
     }
 }
 
+// ─── Pass 5a: Compute return_borrows_from ─────────────────
+
+/// Compute `return_borrows_from` for each function by analyzing its body.
+/// This is a lightweight pre-pass before the main borrow check.
+fn compute_all_return_borrows(
+    module: &Module,
+    scopes: &ScopeTable,
+    types: &TypeTable,
+    resolution_map: &ResolutionMap,
+    function_info: &mut FxHashMap<DefId, FunctionInfo>,
+) {
+    for item in &module.items {
+        match &item.node {
+            Item::Function(f) => {
+                compute_function_return_borrows(f, scopes, types, resolution_map, function_info);
+            }
+            Item::Equip(impl_block) => {
+                for method in &impl_block.items {
+                    compute_function_return_borrows(&method.node, scopes, types, resolution_map, function_info);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn compute_function_return_borrows(
+    func: &FunctionDef,
+    scopes: &ScopeTable,
+    types: &TypeTable,
+    resolution_map: &ResolutionMap,
+    function_info: &mut FxHashMap<DefId, FunctionInfo>,
+) {
+    let def_id = match scopes.lookup(&func.name.node) {
+        Some(id) => id,
+        None => return,
+    };
+
+    let ret_type_id = match function_info.get(&def_id).and_then(|fi| fi.return_type_id) {
+        Some(id) => id,
+        None => return,
+    };
+
+    // Only relevant if the return type is a reference type
+    if !types::is_reference_type(ret_type_id, types) {
+        return;
+    }
+
+    // Phase 3: Check for explicit `live` annotations first (they override body analysis)
+    {
+        let info = match function_info.get(&def_id) {
+            Some(i) => i,
+            None => return,
+        };
+        let live_indices: Vec<usize> = info.param_is_live.iter()
+            .enumerate()
+            .filter(|(_, is_live)| **is_live)
+            .map(|(i, _)| i)
+            .collect();
+        if !live_indices.is_empty() {
+            if let Some(fi) = function_info.get_mut(&def_id) {
+                fi.return_borrows_from = live_indices;
+            }
+            return;
+        }
+    }
+
+    // Phase 2: Body analysis — trace return expressions back to params
+    // Build a map from param names to their indices for this function
+    let param_name_to_idx: FxHashMap<String, usize> = {
+        let info = match function_info.get(&def_id) {
+            Some(i) => i,
+            None => return,
+        };
+        info.param_names.iter().enumerate()
+            .map(|(i, name)| (name.clone(), i))
+            .collect()
+    };
+
+    let mut borrows_from = FxHashSet::default();
+
+    match &func.body {
+        FunctionBody::Expression(expr) => {
+            trace_expr_to_params(expr, &param_name_to_idx, resolution_map, scopes, &mut borrows_from);
+        }
+        FunctionBody::Block(block) => {
+            trace_block_returns_to_params(block, &param_name_to_idx, resolution_map, scopes, &mut borrows_from);
+        }
+        FunctionBody::Declaration | FunctionBody::Extern(_) => {
+            // No body — apply elision rules
+            let info = match function_info.get(&def_id) {
+                Some(i) => i,
+                None => return,
+            };
+            let ref_param_indices: Vec<usize> = info.param_type_ids.iter()
+                .enumerate()
+                .filter(|(_, tid)| tid.map_or(false, |id| types::is_reference_type(id, types)))
+                .map(|(i, _)| i)
+                .collect();
+            if ref_param_indices.len() == 1 {
+                borrows_from.insert(ref_param_indices[0]);
+            } else if !info.param_names.is_empty() && info.param_names[0] == "self" {
+                borrows_from.insert(0);
+            }
+        }
+    }
+
+    if !borrows_from.is_empty() {
+        let mut result: Vec<usize> = borrows_from.into_iter().collect();
+        result.sort();
+        if let Some(fi) = function_info.get_mut(&def_id) {
+            fi.return_borrows_from = result;
+        }
+    } else {
+        // Elision fallback for functions with bodies that didn't trace to any param
+        let info = match function_info.get(&def_id) {
+            Some(i) => i,
+            None => return,
+        };
+        let ref_param_indices: Vec<usize> = info.param_type_ids.iter()
+            .enumerate()
+            .filter(|(_, tid)| tid.map_or(false, |id| types::is_reference_type(id, types)))
+            .map(|(i, _)| i)
+            .collect();
+        if ref_param_indices.len() == 1 {
+            if let Some(fi) = function_info.get_mut(&def_id) {
+                fi.return_borrows_from = ref_param_indices;
+            }
+        } else if !info.param_names.is_empty() && info.param_names[0] == "self" {
+            // Method with &self — borrows from self
+            if let Some(fi) = function_info.get_mut(&def_id) {
+                fi.return_borrows_from = vec![0];
+            }
+        }
+    }
+}
+
+/// Trace a return expression back through variable assignments to find which params flow to it.
+fn trace_expr_to_params(
+    expr: &Spanned<Expr>,
+    param_names: &FxHashMap<String, usize>,
+    resolution_map: &ResolutionMap,
+    scopes: &ScopeTable,
+    result: &mut FxHashSet<usize>,
+) {
+    match &expr.node {
+        Expr::Identifier(name) => {
+            if let Some(&idx) = param_names.get(name) {
+                result.insert(idx);
+            }
+            // Note: doesn't trace through local variable assignments in this simple version.
+            // The full borrow checker (Pass 5b) handles transitive tracking via var_origins.
+        }
+
+        Expr::FieldAccess { object, .. } | Expr::TupleFieldAccess { object, .. } => {
+            trace_expr_to_params(object, param_names, resolution_map, scopes, result);
+        }
+
+        Expr::Index { object, .. } => {
+            trace_expr_to_params(object, param_names, resolution_map, scopes, result);
+        }
+
+        Expr::If { then_branch, elif_branches, else_branch, .. } => {
+            trace_expr_to_params(then_branch, param_names, resolution_map, scopes, result);
+            for (_, body) in elif_branches {
+                trace_expr_to_params(body, param_names, resolution_map, scopes, result);
+            }
+            if let Some(else_br) = else_branch {
+                trace_expr_to_params(else_br, param_names, resolution_map, scopes, result);
+            }
+        }
+
+        Expr::Block(block) | Expr::Do { body: block } => {
+            if let Some(last) = block.stmts.last() {
+                if let Stmt::Expr(e) = &last.node {
+                    trace_expr_to_params(e, param_names, resolution_map, scopes, result);
+                }
+            }
+        }
+
+        Expr::SelfExpr => {
+            // self borrows from param index 0
+            if param_names.contains_key("self") {
+                result.insert(0);
+            }
+        }
+
+        // Everything else: no param flow detected in this lightweight analysis
+        _ => {}
+    }
+}
+
+/// Walk a block looking for Return statements and trace them to params.
+fn trace_block_returns_to_params(
+    block: &Block,
+    param_names: &FxHashMap<String, usize>,
+    resolution_map: &ResolutionMap,
+    scopes: &ScopeTable,
+    result: &mut FxHashSet<usize>,
+) {
+    for stmt in &block.stmts {
+        trace_stmt_returns_to_params(&stmt.node, param_names, resolution_map, scopes, result);
+    }
+}
+
+fn trace_stmt_returns_to_params(
+    stmt: &Stmt,
+    param_names: &FxHashMap<String, usize>,
+    resolution_map: &ResolutionMap,
+    scopes: &ScopeTable,
+    result: &mut FxHashSet<usize>,
+) {
+    match stmt {
+        Stmt::Return(Some(expr)) => {
+            trace_expr_to_params(expr, param_names, resolution_map, scopes, result);
+        }
+        Stmt::If { then_body, elif_branches, else_body, .. } => {
+            trace_block_returns_to_params(then_body, param_names, resolution_map, scopes, result);
+            for (_, body) in elif_branches {
+                trace_block_returns_to_params(body, param_names, resolution_map, scopes, result);
+            }
+            if let Some(else_body) = else_body {
+                trace_block_returns_to_params(else_body, param_names, resolution_map, scopes, result);
+            }
+        }
+        Stmt::Match { arms, else_arm, .. } => {
+            for arm in arms {
+                if let Expr::Block(block) = &arm.body.node {
+                    trace_block_returns_to_params(block, param_names, resolution_map, scopes, result);
+                }
+            }
+            if let Some(else_arm) = else_arm {
+                trace_block_returns_to_params(else_arm, param_names, resolution_map, scopes, result);
+            }
+        }
+        Stmt::For { body, .. } | Stmt::While { body, .. } | Stmt::Loop { body } => {
+            trace_block_returns_to_params(body, param_names, resolution_map, scopes, result);
+        }
+        Stmt::With { body, .. } | Stmt::Unsafe { body } => {
+            trace_block_returns_to_params(body, param_names, resolution_map, scopes, result);
+        }
+        _ => {}
+    }
+}
+
+// ─── Pass 5b: Full Borrow Check ──────────────────────────────
+
 /// Run borrow checking on the entire module.
 pub fn check_module(
     module: &Module,
     scopes: &ScopeTable,
     types: &TypeTable,
     resolution_map: &ResolutionMap,
-    function_info: &FxHashMap<DefId, FunctionInfo>,
+    function_info: &mut FxHashMap<DefId, FunctionInfo>,
     immutable_by_default: bool,
+    expr_types: &FxHashMap<Span, TypeId>,
     errors: &mut Vec<SemanticError>,
 ) {
-    let mut checker = BorrowChecker::new(scopes, types, resolution_map, function_info, immutable_by_default);
+    // Pass 5a: compute return_borrows_from for each function
+    compute_all_return_borrows(module, scopes, types, resolution_map, function_info);
+
+    // Pass 5b: full borrow check with origin tracking
+    let mut checker = BorrowChecker::new(scopes, types, resolution_map, function_info, immutable_by_default, expr_types);
 
     for item in &module.items {
         match &item.node {
@@ -1001,6 +1611,8 @@ pub fn check_module(
             Item::Test(t) => {
                 checker.var_states.clear();
                 checker.loop_depth = 0;
+                checker.var_origins.clear();
+                checker.invalidated_origins.clear();
                 for binding in &t.with_bindings {
                     checker.check_expr(&binding.expr);
                 }
@@ -1009,11 +1621,15 @@ pub fn check_module(
             Item::SuiteSetup(s) => {
                 checker.var_states.clear();
                 checker.loop_depth = 0;
+                checker.var_origins.clear();
+                checker.invalidated_origins.clear();
                 checker.check_block(&s.body);
             }
             Item::SuiteTeardown(s) => {
                 checker.var_states.clear();
                 checker.loop_depth = 0;
+                checker.var_origins.clear();
+                checker.invalidated_origins.clear();
                 checker.check_block(&s.body);
             }
             _ => {}
@@ -1382,6 +1998,180 @@ void main():
         assert!(
             has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterMove { name, .. } if name == "s")),
             "expected UseAfterMove after conditional move, got: {:?}", errors
+        );
+    }
+
+    // ── Lifetime inference tests ──
+
+    #[test]
+    fn return_str_literal_ok() {
+        let source = "\
+str f() = \"hello\"
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::DanglingReturn { .. })),
+            "unexpected DanglingReturn for string literal: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn return_str_from_param_ok() {
+        let source = "\
+str f(str s) = s
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::DanglingReturn { .. })),
+            "unexpected DanglingReturn for param forwarding: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn return_str_from_local_string() {
+        let source = "\
+str f():
+    String s = \"hi\"
+    return s
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::DanglingReturn { name, local_name, .. }
+                if name == "s" && local_name == "s")),
+            "expected DanglingReturn for local String, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn use_str_after_string_moved() {
+        let source = "\
+void consume(String !s):
+    pass
+
+void main():
+    String s = \"hi\"
+    str v = s
+    consume(!s)
+    print(v)
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { name, source_name, .. }
+                if name == "v" && source_name == "s")),
+            "expected UseAfterSourceMoved for v after s moved, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn cross_function_borrow_ok() {
+        let source = "\
+str id(str s) = s
+
+void main():
+    print(id(\"hi\"))
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::DanglingReturn { .. })),
+            "unexpected DanglingReturn for cross-function borrow: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn cross_function_chain() {
+        let source = "\
+str f(str s) = s
+
+str g(str s) = f(s)
+
+void main():
+    print(g(\"hello\"))
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::DanglingReturn { .. })),
+            "unexpected DanglingReturn for chained cross-function borrow: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn cross_function_dangling() {
+        let source = "\
+str id(str s) = s
+
+void consume(String !s):
+    pass
+
+void main():
+    String s = \"hi\"
+    str v = id(s)
+    consume(!s)
+    print(v)
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { name, source_name, .. }
+                if name == "v" && source_name == "s")),
+            "expected UseAfterSourceMoved through cross-function call, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn live_param_explicit() {
+        let source = "\
+str first(live str a, str b) = a
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::DanglingReturn { .. })),
+            "unexpected DanglingReturn with live annotation: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn return_str_from_expression_body_local() {
+        // Expression-body function returning a local String → dangling
+        let source = "\
+str bad():
+    String s = \"hello\"
+    return s
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::DanglingReturn { .. })),
+            "expected DanglingReturn for expression-body returning local: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn str_from_param_through_local_ok() {
+        let source = "\
+str f(str s):
+    str local = s
+    return local
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::DanglingReturn { .. })),
+            "unexpected DanglingReturn for param forwarded through local: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn str_view_reassigned_ok() {
+        let source = "\
+void main():
+    String s = \"hello\"
+    str v = s
+    v = \"world\"
+    String t = !s
+    print(v)
+";
+        let errors = check(source);
+        // v was reassigned to a literal before s was moved — no error
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { .. })),
+            "unexpected UseAfterSourceMoved after reassignment: {:?}", errors
         );
     }
 }

@@ -3504,3 +3504,36 @@ big >= small
 99",
     );
 }
+
+#[test]
+fn lifetime_basic() {
+    run_gg(
+        "lifetime_basic.gg",
+        "\
+hello
+world
+a
+chained
+hello
+world
+forwarded
+live_a
+all lifetime checks passed",
+    );
+}
+
+#[test]
+fn lifetime_dangling_error() {
+    check_gg_fails(
+        "lifetime_dangling_error.gg",
+        "borrows from local variable",
+    );
+}
+
+#[test]
+fn lifetime_use_after_move_error() {
+    check_gg_fails(
+        "lifetime_use_after_move_error.gg",
+        "after source",
+    );
+}

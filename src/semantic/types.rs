@@ -248,6 +248,18 @@ impl TypeTable {
     }
 }
 
+/// Returns true if a type is a reference type that needs lifetime tracking.
+/// Reference types are views into data owned by something else — if the
+/// owner is dropped/moved, outstanding references become dangling.
+///
+/// Currently: `str` (immutable pointer into String data) and `Slice[T]`.
+pub fn is_reference_type(type_id: TypeId, types: &TypeTable) -> bool {
+    matches!(
+        types.get(type_id),
+        ResolvedType::Primitive(PrimitiveType::Str) | ResolvedType::Slice(_)
+    )
+}
+
 /// Convert an AST Type to a resolved TypeId.
 pub fn ast_type_to_resolved(
     ast_ty: &ast::Type,

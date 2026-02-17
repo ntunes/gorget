@@ -154,6 +154,17 @@ pub enum SemanticErrorKind {
         min: i128,
         max: i128,
     },
+
+    // ── Lifetime errors ──
+
+    /// Returning a reference to a local variable (would dangle after return).
+    DanglingReturn { name: String, local_name: String },
+
+    /// Using a reference-type variable after its source has been moved.
+    UseAfterSourceMoved { name: String, source_name: String, moved_at: Span },
+
+    /// Bodyless function returning a reference type with no `live` params.
+    MissingLiveAnnotation { func_name: String },
 }
 
 impl std::fmt::Display for SemanticError {
@@ -331,6 +342,15 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::ValueOutOfRange { value, type_name, min, max } => {
                 write!(f, "value {value} is out of range for type {type_name} (valid range: {min}..={max})")
+            }
+            SemanticErrorKind::DanglingReturn { name, local_name } => {
+                write!(f, "cannot return `{name}`: borrows from local variable `{local_name}` which will be dropped")
+            }
+            SemanticErrorKind::UseAfterSourceMoved { name, source_name, .. } => {
+                write!(f, "use of `{name}` after source `{source_name}` was moved")
+            }
+            SemanticErrorKind::MissingLiveAnnotation { func_name } => {
+                write!(f, "function `{func_name}` returns a reference type but has no `live` parameter annotations")
             }
         }
     }

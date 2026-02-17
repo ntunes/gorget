@@ -46,7 +46,7 @@
 
 - **Struct destructuring**: Tuple destructuring works but struct destructuring does not. E.g., `auto Point { x, y } = point` or `case Point { x, y }:` in match. [from roadmap, added: 2026-02-16]
 
-- **Lifetime inference**: No lifetime system exists yet. Needed for references that outlive their scope, return references from functions, and store references in structs. Design finalized: Tier 1 = auto-inference from function bodies (99%); Tier 2 = `live` keyword on params and struct fields (~1%); Tier 3 = `live(name)` named borrow groups + `where X outlives Y` bounds (rare). `life` keyword removed — `live` covers all cases. `outlives` keyword added. [from roadmap, added: 2026-02-16, updated: 2026-02-17]
+- **Lifetime inference Phase 4+: struct borrowing, named groups, hardening**: Phases 1–3 done (origin tracking, cross-function propagation, `live` annotations). Remaining: Phase 4 = automatic struct borrowing (structs with ref-type fields tracked automatically); Phase 5 = `live(name)` named borrow groups + `where X outlives Y` bounds; Phase 6 = hardening (branch merging, closures capturing refs, temporaries, pattern bindings). [from roadmap, added: 2026-02-16, updated: 2026-02-17]
 
 - **Const generics**: Partially parsed but not validated or monomorphized. E.g., `struct Array[T, N: int]`. [from roadmap, added: 2026-02-16]
 
