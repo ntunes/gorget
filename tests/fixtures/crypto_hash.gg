@@ -16,18 +16,21 @@ void main():
     # HMAC-SHA256 known-answer test
     Vector[uint8] key = bytes_from_str("key")
     Vector[uint8] msg = bytes_from_str("hello")
-    Vector[uint8] mac = crypto_hmac("sha256", key, msg)
+    Result[Vector[uint8], str] hmac_res = crypto_hmac("sha256", key, msg)
+    Vector[uint8] mac = hmac_res.unwrap()
     print("{mac.len()}")
 
     # AES-128-CTR encrypt/decrypt roundtrip
     Vector[uint8] aes_key = bytes_from_hex("000102030405060708090a0b0c0d0e0f")
     Vector[uint8] iv = bytes_from_hex("00000000000000000000000000000000")
-    CipherContext enc = crypto_aes_ctr_new(aes_key, iv)
+    Result[CipherContext, str] enc_res = crypto_aes_ctr_new(aes_key, iv)
+    CipherContext enc = enc_res.unwrap()
     Vector[uint8] plaintext = bytes_from_str("Hello, Gorget!")
     Vector[uint8] ciphertext = enc.encrypt(plaintext)
 
     # Decrypt with a fresh context (CTR needs same key/IV)
-    CipherContext dec = crypto_aes_ctr_new(aes_key, iv)
+    Result[CipherContext, str] dec_res = crypto_aes_ctr_new(aes_key, iv)
+    CipherContext dec = dec_res.unwrap()
     Vector[uint8] decrypted = dec.decrypt(ciphertext)
     str result = bytes_to_hex(decrypted)
     # Verify roundtrip matches original hex
@@ -38,7 +41,19 @@ void main():
         print("aes roundtrip FAILED")
 
     # crypto_random_bytes produces correct length
-    Vector[uint8] r = crypto_random_bytes(32)
+    Result[Vector[uint8], str] rand_res = crypto_random_bytes(32)
+    Vector[uint8] r = rand_res.unwrap()
     print("{r.len()}")
+
+    # Error path: invalid AES key size
+    Vector[uint8] bad_key = bytes_from_str("short")
+    Result[CipherContext, str] bad_aes = crypto_aes_ctr_new(bad_key, iv)
+    if bad_aes.is_err():
+        print("aes error ok")
+
+    # Error path: unsupported HMAC algorithm
+    Result[Vector[uint8], str] bad_hmac = crypto_hmac("md5", key, msg)
+    if bad_hmac.is_err():
+        print("hmac error ok")
 
     print("done")

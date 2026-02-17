@@ -88,6 +88,12 @@ pub fn collect_top_level(
     }
     // Register String constructor as a built-in function.
     let _ = scopes.define("String".to_string(), DefKind::Function, Span::dummy());
+    // Register built-in collection types as Import placeholders so they're always
+    // available for type resolution (e.g. Result[Vector[uint8], str] in synthetic modules).
+    // The real struct definitions from std.collections replace these when imported.
+    for type_name in &["Vector", "List", "Array", "Dict", "HashMap", "Set", "HashSet", "Box"] {
+        let _ = scopes.define(type_name.to_string(), DefKind::Import, Span::dummy());
+    }
     // Register built-in Option[T] and Result[T,E] enum types with their variants.
     for (enum_name, variant_names) in &[
         ("Option", vec!["Some", "None"]),

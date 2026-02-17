@@ -3314,6 +3314,8 @@ aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d
 32
 aes roundtrip ok
 32
+aes error ok
+hmac error ok
 done",
     );
 }

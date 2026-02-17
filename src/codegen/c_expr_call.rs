@@ -515,7 +515,7 @@ impl CodegenContext<'_> {
                     // std.sdl — screen info
                     "sdl_get_display_width" => return "gorget_sdl_get_display_width()".to_string(),
                     "sdl_get_display_height" => return "gorget_sdl_get_display_height()".to_string(),
-                    // std.crypto (only Result-wrapping functions stay hardcoded)
+                    // std.crypto (Result-wrapping functions stay hardcoded)
                     "crypto_rsa_load_public" => {
                         if let Some(arg) = args.first() {
                             let kb = self.gen_expr(&arg.node.value);
@@ -525,6 +525,52 @@ impl CodegenContext<'_> {
                             let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
                             return format!(
                                 "({{ GorgetRSAKey __rk = gorget_crypto_rsa_load_public({kb_addr}); \
+                                const char* __re = gorget_crypto_last_error(); \
+                                __re ? {err_ctor}(__re) : {ok_ctor}(__rk); }})"
+                            );
+                        }
+                    }
+                    "crypto_aes_ctr_new" => {
+                        if args.len() >= 2 {
+                            let key = self.gen_expr(&args[0].node.value);
+                            let iv = self.gen_expr(&args[1].node.value);
+                            let key_addr = addr_of(&key, &args[0].node.value.node);
+                            let iv_addr = addr_of(&iv, &args[1].node.value.node);
+                            let result_type = self.register_generic("Result", &["GorgetCipherContext".into(), "const char*".into()], super::GenericInstanceKind::Enum);
+                            let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
+                            let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
+                            return format!(
+                                "({{ GorgetCipherContext __rk = gorget_crypto_aes_ctr_new({key_addr}, {iv_addr}); \
+                                const char* __re = gorget_crypto_last_error(); \
+                                __re ? {err_ctor}(__re) : {ok_ctor}(__rk); }})"
+                            );
+                        }
+                    }
+                    "crypto_hmac" => {
+                        if args.len() >= 3 {
+                            let algo = self.gen_expr(&args[0].node.value);
+                            let key = self.gen_expr(&args[1].node.value);
+                            let data = self.gen_expr(&args[2].node.value);
+                            let key_addr = addr_of(&key, &args[1].node.value.node);
+                            let data_addr = addr_of(&data, &args[2].node.value.node);
+                            let result_type = self.register_generic("Result", &["GorgetArray".into(), "const char*".into()], super::GenericInstanceKind::Enum);
+                            let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
+                            let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
+                            return format!(
+                                "({{ GorgetArray __rk = gorget_crypto_hmac({algo}, {key_addr}, {data_addr}); \
+                                const char* __re = gorget_crypto_last_error(); \
+                                __re ? {err_ctor}(__re) : {ok_ctor}(__rk); }})"
+                            );
+                        }
+                    }
+                    "crypto_random_bytes" => {
+                        if let Some(arg) = args.first() {
+                            let n = self.gen_expr(&arg.node.value);
+                            let result_type = self.register_generic("Result", &["GorgetArray".into(), "const char*".into()], super::GenericInstanceKind::Enum);
+                            let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
+                            let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
+                            return format!(
+                                "({{ GorgetArray __rk = gorget_crypto_random_bytes({n}); \
                                 const char* __re = gorget_crypto_last_error(); \
                                 __re ? {err_ctor}(__re) : {ok_ctor}(__rk); }})"
                             );

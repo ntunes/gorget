@@ -705,15 +705,15 @@ fn gen_crypto_module() -> Module {
     items.push(opaque_struct("BigNum"));
     items.push(opaque_struct("RSAKey"));
 
-    // Free functions — extern bindings (except crypto_rsa_load_public which has Result wrapping)
+    // Free functions — extern bindings (except Result-wrapping functions which stay as Declaration)
     let fns = vec![
         // Hashing
         extern_fn("crypto_sha256", &[("data", ty_vector_uint8())], ty_vector_uint8(), "gorget_crypto_sha256"),
         extern_fn("crypto_sha1", &[("data", ty_vector_uint8())], ty_vector_uint8(), "gorget_crypto_sha1"),
-        // HMAC
-        extern_fn("crypto_hmac", &[("algo", ty_str()), ("key", ty_vector_uint8()), ("data", ty_vector_uint8())], ty_vector_uint8(), "gorget_crypto_hmac"),
-        // AES-CTR
-        extern_fn("crypto_aes_ctr_new", &[("key", ty_vector_uint8()), ("iv", ty_vector_uint8())], ty_cipher(), "gorget_crypto_aes_ctr_new"),
+        // HMAC — Result wrapping in codegen
+        decl_fn("crypto_hmac", &[("algo", ty_str()), ("key", ty_vector_uint8()), ("data", ty_vector_uint8())], ty_result(ty_vector_uint8(), ty_str())),
+        // AES-CTR — Result wrapping in codegen
+        decl_fn("crypto_aes_ctr_new", &[("key", ty_vector_uint8()), ("iv", ty_vector_uint8())], ty_result(ty_cipher(), ty_str())),
         // BigNum
         extern_fn("crypto_bn_from_bytes", &[("data", ty_vector_uint8())], ty_bignum(), "gorget_crypto_bn_from_bytes"),
         extern_fn("crypto_bn_to_bytes", &[("bn", ty_bignum())], ty_vector_uint8(), "gorget_crypto_bn_to_bytes"),
@@ -721,8 +721,8 @@ fn gen_crypto_module() -> Module {
         // RSA — crypto_rsa_load_public stays as Declaration (Result wrapping in codegen)
         decl_fn("crypto_rsa_load_public", &[("key_bytes", ty_vector_uint8())], ty_result(ty_rsakey(), ty_str())),
         extern_fn("crypto_rsa_verify", &[("key", ty_rsakey()), ("data", ty_vector_uint8()), ("sig", ty_vector_uint8())], ty_bool(), "gorget_crypto_rsa_verify"),
-        // Random
-        extern_fn("crypto_random_bytes", &[("n", ty_int())], ty_vector_uint8(), "gorget_crypto_random_bytes"),
+        // Random — Result wrapping in codegen
+        decl_fn("crypto_random_bytes", &[("n", ty_int())], ty_result(ty_vector_uint8(), ty_str())),
     ];
     for f in fns {
         items.push(Spanned::dummy(Item::Function(f)));
@@ -1683,12 +1683,15 @@ mod tests {
         let extern_expected = [
             "crypto_sha256",
             "crypto_sha1",
-            "crypto_hmac",
-            "crypto_aes_ctr_new",
             "crypto_bn_from_bytes",
             "crypto_bn_to_bytes",
             "crypto_bn_mod_exp",
             "crypto_rsa_verify",
+        ];
+        let decl_expected = [
+            "crypto_rsa_load_public",
+            "crypto_hmac",
+            "crypto_aes_ctr_new",
             "crypto_random_bytes",
         ];
         for item in &m.items {
@@ -1699,10 +1702,10 @@ mod tests {
                         matches!(f.body, FunctionBody::Extern(_)),
                         "{name} should be FunctionBody::Extern"
                     );
-                } else if name == "crypto_rsa_load_public" {
+                } else if decl_expected.contains(&name) {
                     assert!(
                         matches!(f.body, FunctionBody::Declaration),
-                        "crypto_rsa_load_public should stay Declaration"
+                        "{name} should be FunctionBody::Declaration (Result wrapping)"
                     );
                 }
             }

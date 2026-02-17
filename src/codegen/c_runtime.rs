@@ -2102,14 +2102,22 @@ static GorgetArray gorget_crypto_sha1(const GorgetArray* data) {
     return out;
 }
 
+// Crypto error infrastructure (used by Result-returning crypto functions)
+static const char* __gorget_crypto_last_error = NULL;
+
+static const char* gorget_crypto_last_error(void) {
+    return __gorget_crypto_last_error;
+}
+
 // HMAC (supports "sha256" and "sha1")
 static GorgetArray gorget_crypto_hmac(const char* algo, const GorgetArray* key, const GorgetArray* data) {
+    __gorget_crypto_last_error = NULL;
     const EVP_MD* md = NULL;
     if (strcmp(algo, "sha256") == 0) md = EVP_sha256();
     else if (strcmp(algo, "sha1") == 0) md = EVP_sha1();
     else {
-        fprintf(stderr, "gorget: panic: unsupported HMAC algorithm: %s\n", algo);
-        exit(1);
+        __gorget_crypto_last_error = "unsupported HMAC algorithm";
+        return gorget_array_new(sizeof(uint8_t));
     }
 
     GorgetArray out = gorget_array_new(sizeof(uint8_t));
@@ -2127,18 +2135,27 @@ static GorgetArray gorget_crypto_hmac(const char* algo, const GorgetArray* key, 
     return out;
 }
 
-// AES-128-CTR cipher context
+// AES-CTR cipher context
 static GorgetCipherContext gorget_crypto_aes_ctr_new(const GorgetArray* key, const GorgetArray* iv) {
-    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    __gorget_crypto_last_error = NULL;
     const EVP_CIPHER* cipher = NULL;
     if (key->len == 16) cipher = EVP_aes_128_ctr();
     else if (key->len == 24) cipher = EVP_aes_192_ctr();
     else if (key->len == 32) cipher = EVP_aes_256_ctr();
     else {
-        fprintf(stderr, "gorget: panic: AES key must be 16, 24, or 32 bytes (got %zu)\n", key->len);
-        exit(1);
+        __gorget_crypto_last_error = "AES key must be 16, 24, or 32 bytes";
+        return (GorgetCipherContext){NULL};
     }
-    EVP_EncryptInit_ex(ctx, cipher, NULL, (unsigned char*)key->data, (unsigned char*)iv->data);
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) {
+        __gorget_crypto_last_error = "failed to create cipher context";
+        return (GorgetCipherContext){NULL};
+    }
+    if (!EVP_EncryptInit_ex(ctx, cipher, NULL, (unsigned char*)key->data, (unsigned char*)iv->data)) {
+        EVP_CIPHER_CTX_free(ctx);
+        __gorget_crypto_last_error = "failed to initialize cipher";
+        return (GorgetCipherContext){NULL};
+    }
     return (GorgetCipherContext){ctx};
 }
 
@@ -2186,8 +2203,6 @@ static GorgetBigNum gorget_crypto_bn_mod_exp(const GorgetBigNum* base, const Gor
 }
 
 // Load RSA public key from DER-encoded bytes
-static const char* __gorget_crypto_last_error = NULL;
-
 static GorgetRSAKey gorget_crypto_rsa_load_public(const GorgetArray* key_bytes) {
     __gorget_crypto_last_error = NULL;
     const unsigned char* p = (const unsigned char*)key_bytes->data;
@@ -2197,10 +2212,6 @@ static GorgetRSAKey gorget_crypto_rsa_load_public(const GorgetArray* key_bytes) 
         return (GorgetRSAKey){NULL};
     }
     return (GorgetRSAKey){pkey};
-}
-
-static const char* gorget_crypto_last_error(void) {
-    return __gorget_crypto_last_error;
 }
 
 // RSA signature verification (PKCS#1 v1.5 with SHA-256)
@@ -2216,14 +2227,19 @@ static bool gorget_crypto_rsa_verify(const GorgetRSAKey* key, const GorgetArray*
 
 // Cryptographically secure random bytes (via OpenSSL RAND)
 static GorgetArray gorget_crypto_random_bytes(int64_t n) {
+    __gorget_crypto_last_error = NULL;
     GorgetArray out = gorget_array_new(sizeof(uint8_t));
     if (n <= 0) return out;
     out.data = malloc((size_t)n);
     out.cap = (size_t)n;
     out.len = (size_t)n;
     if (RAND_bytes((unsigned char*)out.data, (int)n) != 1) {
-        fprintf(stderr, "gorget: panic: RAND_bytes failed\n");
-        exit(1);
+        free(out.data);
+        out.data = NULL;
+        out.cap = 0;
+        out.len = 0;
+        __gorget_crypto_last_error = "RAND_bytes failed";
+        return out;
     }
     return out;
 }

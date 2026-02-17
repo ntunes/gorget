@@ -115,8 +115,11 @@ impl ScopeTable {
         let scope = &self.scopes[self.current.0 as usize];
         if let Some(&existing_id) = scope.names.get(&name) {
             let existing = &self.definitions[existing_id.0 as usize];
-            // Allow a real definition to replace an import placeholder
-            if existing.kind == DefKind::Import && kind != DefKind::Import {
+            // Allow a real definition to replace an import placeholder,
+            // or a real import to replace a built-in placeholder (dummy span).
+            if (existing.kind == DefKind::Import && kind != DefKind::Import)
+                || (existing.kind == DefKind::Import && existing.span == Span::dummy())
+            {
                 let def_id = DefId(self.definitions.len() as u32);
                 self.definitions.push(DefInfo {
                     name: name.clone(),

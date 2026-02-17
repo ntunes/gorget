@@ -6,7 +6,6 @@
 
 
 
-- **Crypto module error handling is partial**: `crypto_rsa_load_public()` returns `Result[RSAKey, str]` but other fallible ops like `crypto_aes_ctr_new()` return bare types. C runtime has `gorget_crypto_last_error()` but no Gorget API exposes it. (`stdlib.rs:713`) [added: 2026-02-16]
 
 
 ## Medium
