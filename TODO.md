@@ -5,7 +5,6 @@
 
 
 
-- **JSON/TOML accessors fail silently**: `get()`, `at()`, `as_int()` etc. return `Null()` or default values on type mismatch / missing keys with no way to distinguish "key absent" from "value is null." Need `has()`/`contains()` methods or `Result` return types. (`json.gg:350-458`, `toml.gg:837-951`) [added: 2026-02-16]
 
 - **Crypto module error handling is partial**: `crypto_rsa_load_public()` returns `Result[RSAKey, str]` but other fallible ops like `crypto_aes_ctr_new()` return bare types. C runtime has `gorget_crypto_last_error()` but no Gorget API exposes it. (`stdlib.rs:713`) [added: 2026-02-16]
 

@@ -396,6 +396,20 @@ str json_pretty(Json value):
 # ── Accessor methods ─────────────────────────────────────────
 
 equip Json:
+    bool has(self, str key):
+        match self:
+            case Obj(d):
+                return d.contains(key)
+            else:
+                return false
+
+    bool has_index(self, int index):
+        match self:
+            case Arr(arr):
+                return index >= 0 and index < arr.len()
+            else:
+                return false
+
     Json get(self, str key):
         match self:
             case Obj(d):

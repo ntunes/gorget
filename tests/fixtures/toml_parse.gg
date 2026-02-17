@@ -99,7 +99,29 @@ void main():
         case Error(err7):
             print(err7)
 
-    # ── Test 8: Error handling ─────────────────────────────
+    # ── Test 8: has() and has_index() ────────────────────────
+    str toml_has = "name = \"Alice\"\ncount = 0\n\n[data]\nitems = [10, 20]"
+    Result[TomlValue, str] parsed_has = toml_parse(toml_has)
+    match parsed_has:
+        case Ok(doc_has):
+            bool has_name = doc_has.has("name")
+            bool has_missing = doc_has.has("nope")
+            bool has_data = doc_has.has("data")
+            print("{has_name}")
+            print("{has_missing}")
+            print("{has_data}")
+            # has_index on array
+            bool has_i0 = doc_has.get("data").get("items").has_index(0)
+            bool has_i5 = doc_has.get("data").get("items").has_index(5)
+            print("{has_i0}")
+            print("{has_i5}")
+            # has on non-table returns false
+            bool has_on_str = doc_has.get("name").has("x")
+            print("{has_on_str}")
+        case Error(err_has):
+            print(err_has)
+
+    # ── Test 9: Error handling ──────────────────────────────
     str toml_bad = "key = "
     Result[TomlValue, str] parsed_bad = toml_parse(toml_bad)
     match parsed_bad:
@@ -108,7 +130,7 @@ void main():
         case Error(err8):
             print("error caught")
 
-    # ── Test 9: Comments ───────────────────────────────────
+    # ── Test 10: Comments ──────────────────────────────────
     str toml_comments = "# This is a comment\nval = 99 # inline comment"
     Result[TomlValue, str] parsed_comments = toml_parse(toml_comments)
     match parsed_comments:
@@ -118,7 +140,7 @@ void main():
         case Error(err9):
             print(err9)
 
-    # ── Test 10: Unicode escapes ─────────────────────────
+    # ── Test 11: Unicode escapes ─────────────────────────
     str toml_uni = "alpha = \"\\u0041\"\nbeta = \"\\U00000042\""
     Result[TomlValue, str] parsed_uni = toml_parse(toml_uni)
     match parsed_uni:

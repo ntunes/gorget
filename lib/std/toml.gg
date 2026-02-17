@@ -851,6 +851,20 @@ str toml_stringify(TomlValue tv):
 # ── Accessor methods ────────────────────────────────────────
 
 equip TomlValue:
+    bool has(self, str key):
+        match self:
+            case Tbl(tbl_data):
+                return tbl_data.contains(key)
+            else:
+                return false
+
+    bool has_index(self, int index):
+        match self:
+            case Arr(arr_data):
+                return index >= 0 and index < arr_data.len()
+            else:
+                return false
+
     TomlValue get(self, str key):
         match self:
             case Tbl(tbl_data):

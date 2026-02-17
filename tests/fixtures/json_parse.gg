@@ -40,6 +40,26 @@ void main():
     int zero_val = missing_val.as_int()
     print("{is_null_val}")
     print("{zero_val}")
+    # has() distinguishes missing keys from null values
+    Dict[str, Json] null_dict = Dict[str, Json]()
+    null_dict.put("present", Null())
+    Json null_obj = Obj(null_dict)
+    bool has_present = null_obj.has("present")
+    bool has_missing = null_obj.has("missing")
+    print("{has_present}")
+    print("{has_missing}")
+    # has_index() for arrays
+    bool has_idx0 = parsed_arr.has_index(0)
+    bool has_idx3 = parsed_arr.has_index(3)
+    bool has_neg = parsed_arr.has_index(-1)
+    print("{has_idx0}")
+    print("{has_idx3}")
+    print("{has_neg}")
+    # has/has_index on wrong types return false
+    bool has_on_str = Int(5).has("key")
+    bool has_idx_on_obj = parsed_obj.has_index(0)
+    print("{has_on_str}")
+    print("{has_idx_on_obj}")
     # Parse error
     Result[Json, str] bad_result = json_parse("not json")
     bool is_err_val = bad_result.is_err()

@@ -1814,6 +1814,12 @@ true
 true
 true
 true
+true
+false
+true
+true
+false
+false
 error caught
 99
 A
@@ -1867,6 +1873,13 @@ true
 [10,20,30]
 true
 0
+true
+false
+true
+false
+false
+false
+false
 true
 A
 Hi
