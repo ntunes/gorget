@@ -95,6 +95,12 @@ pub fn mangle_tuple(c_field_types: &[String]) -> String {
     format!("GorgetTuple_{}", mangled.join("_"))
 }
 
+/// Mangle a C type string into a valid C identifier fragment.
+/// Public version of sanitize_c_type for use in callable trait signature mangling.
+pub fn mangle_c_type(t: &str) -> String {
+    sanitize_c_type(t)
+}
+
 /// Sanitize a C type string for embedding in an identifier.
 fn sanitize_c_type(t: &str) -> String {
     t.replace("const ", "const_")

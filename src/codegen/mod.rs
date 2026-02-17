@@ -93,6 +93,8 @@ pub enum CaptureMode {
 /// A closure that has been lifted to a top-level function.
 pub struct LiftedClosure {
     pub id: usize,
+    /// The unique struct name for this closure (e.g., `__Closure_0`).
+    pub struct_name: String,
     /// Captured variable names, their C types, and capture mode.
     pub captures: Vec<(String, String, CaptureMode)>,
     /// Parameter names and their C types.
@@ -101,6 +103,31 @@ pub struct LiftedClosure {
     pub return_type: String,
     /// The C expression body.
     pub body: String,
+}
+
+/// The kind of callable trait (for vtable generation).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CallableKind {
+    Callable,    // Callable[sig] — immutable access
+    MutCallable, // MutCallable[sig] — mutable access
+    MoveCallable, // MoveCallable[sig] — consuming access
+}
+
+/// Info about a variable that holds a closure or callable trait object.
+#[derive(Clone)]
+pub enum ClosureVarInfo {
+    /// Concrete per-closure struct type — use direct call dispatch.
+    Concrete {
+        struct_name: String,
+        param_c_types: Vec<String>,
+        return_c_type: String,
+    },
+    /// Callable trait object — use vtable dispatch.
+    TraitObject {
+        param_c_types: Vec<String>,
+        return_c_type: String,
+        kind: CallableKind,
+    },
 }
 
 /// An extern function/method binding to a C symbol.
@@ -148,6 +175,12 @@ pub struct CodegenContext<'a> {
     /// For Fn[sig]-typed variables: maps var name → (param_c_types, return_c_type).
     /// Used for correct fn_ptr cast in GorgetClosure dispatch.
     pub fn_type_signatures: FxHashMap<String, (Vec<String>, String)>,
+    /// Per-closure-struct info: maps var name → ClosureVarInfo.
+    /// Tracks whether a variable is a concrete closure struct or a trait object.
+    pub closure_var_info: FxHashMap<String, ClosureVarInfo>,
+    /// Unique Fn-family signatures encountered, for vtable/TraitObj generation.
+    /// (kind, param_c_types, return_c_type)
+    pub fn_trait_sigs: Vec<(CallableKind, Vec<String>, String)>,
     /// Variables whose auto-inferred array literal was promoted to GorgetArray (Vector).
     pub vector_vars: HashSet<String>,
     /// Variables whose closure environments should be heap-allocated (they escape their scope).
@@ -410,6 +443,8 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
         generic_equip_templates: FxHashMap::default(),
         closure_vars: HashSet::new(),
         fn_type_signatures: FxHashMap::default(),
+        closure_var_info: FxHashMap::default(),
+        fn_trait_sigs: Vec::new(),
         vector_vars: HashSet::new(),
         escaping_closure_vars: HashSet::new(),
         closure_heap_alloc: false,

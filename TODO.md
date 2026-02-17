@@ -18,9 +18,7 @@
 
 - **Hot-reload: trait objects / closures in State**: Trait object vtable pointers and closure function pointers become invalid after dlclose. The `reload()` hook can reconstruct them, but compiler-assisted fixup would be better. [added: 2026-02-16]
 
-- **Closures step 2 — FnMut/FnOnce closure traits**: Define `FnMut[Args -> Ret]`, `FnOnce[Args -> Ret]` traits with `call` method. `Fn[sig]` is implemented as a compiler-magic callable type (see DONE.md). Auto-implement based on capture mode: `ByMutRef` → `FnMut`, move → `FnOnce`. Requires per-closure types from step 3 for proper trait dispatch. [updated: 2026-02-16]
-
-- **Closures step 3 — Embed captures in closure struct**: Replace the current two-pointer `GorgetClosure { void* fn_ptr; void* env; }` with per-closure structs that embed captures directly: `struct Closure_N { RetType (*fn_ptr)(Closure_N*, args...); field1; field2; ... }`. This makes closures monomorphized types whose size and layout are known at compile time. The closure function receives `self` instead of `void* env`, eliminating the unsafe cast. **Key files:** `c_runtime.rs` (remove generic GorgetClosure), `c_item.rs:886` (emit_lifted_closures — generate per-closure struct typedefs), `c_expr.rs:863` (closure invocation — pass closure struct pointer instead of env). **Depends on:** step 2 (Fn traits, so each closure struct can implement its trait). Unblocks: type-safe closure passing, proper monomorphization, step 4 (trait objects need known struct layout). [added: 2026-02-14]
+- **FnOnce single-call enforcement**: `MoveCallable` closures should be invalidated after first call. Requires borrow checker integration to track consumption of closure values. [added: 2026-02-17]
 
 - **ByMutRef captures in escaping closures**: `&count` captures still point to the caller's stack even when the env is heap-allocated (step 1). Needs boxing the captured variable itself — separate fix from env heap-allocation. [added: 2026-02-15]
 
@@ -74,7 +72,7 @@
 
 - **Package management phase 2 (`gg update`, registry)**: Semver-aware resolution, central registry, `gg publish`, workspaces. [added: 2026-02-15]
 
-- **Closures step 4 — `dyn Fn` / `Box[Fn]` trait objects for closures**: Allow closures to be type-erased via trait objects: `auto callback: dyn Fn[int -> int] = my_closure`. Requires a vtable with the `call` method pointer. `Box[dyn Fn[int -> int]]` provides owned, heap-allocated trait objects. **Implementation:** Generate a vtable struct with `call` function pointer for each Fn trait instantiation. `dyn Fn` is a fat pointer `{ void* data; VTable* vtable; }`. Calling through `dyn Fn` does `vtable->call(data, args...)`. **Depends on:** step 2 (Fn traits) + step 3 (embedded captures, so the data pointer points to a self-contained struct). Unblocks: heterogeneous closure collections (`Vector[dyn Fn[int -> int]]`), callback registries, event handler maps, strategy pattern. [added: 2026-02-14]
+- **Closures step 4 — `Box[Callable]` trait objects**: Per-closure structs and callable vtables are in place (steps 2+3 done). The existing `Box[Trait]` machinery should handle `Box[Callable[sig]]` with minimal work — verify and add test. Unblocks: heterogeneous closure collections, callback registries, event handler maps. [updated: 2026-02-17]
 
 - **Consolidate type inference functions**: 6+ scattered inference functions (`infer_c_type_from_expr`, `infer_receiver_type`, `infer_receiver_c_type`, `infer_receiver_mangled_type`, `infer_vector_elem_type`, `infer_closure_body_c_type`) with no caching and redundant re-computation. Consolidate into a single type resolver module. [added: 2026-02-16]
 

@@ -1,0 +1,6 @@
+# Negative test: move closure assigned to MutCallable-typed variable should fail
+
+void main():
+    int x = 42
+    MutCallable[int(int)] f = !(n): n + x
+    print("should not reach here")

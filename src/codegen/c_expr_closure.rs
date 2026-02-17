@@ -24,6 +24,7 @@ impl CodegenContext<'_> {
 
         let fn_name = c_mangle::mangle_closure(id);
         let env_name = c_mangle::mangle_closure_env(id);
+        let struct_name = format!("__Closure_{id}");
 
         // Build parameter list
         let closure_params: Vec<(String, String)> = params
@@ -94,6 +95,7 @@ impl CodegenContext<'_> {
             .unwrap_or_else(|| self.infer_c_type_from_expr(&body.node));
         let lifted = LiftedClosure {
             id,
+            struct_name: struct_name.clone(),
             captures: captures.clone(),
             params: closure_params,
             return_type,
@@ -102,13 +104,12 @@ impl CodegenContext<'_> {
 
         self.lifted_closures.push(lifted);
 
-        // At the creation site: emit a bare function pointer (no captures)
-        // or allocate env and create GorgetClosure.
+        // At the creation site: emit a bare function name (no captures)
+        // or instantiate the per-closure struct.
         if captures.is_empty() {
             fn_name
         } else if self.closure_heap_alloc {
-            // Heap-allocate env for escaping closures (returned from function).
-            // Uses a GCC statement expression to malloc, init, and return the closure.
+            // Heap-allocate closure struct for escaping closures (returned from function).
             let fields: Vec<String> = captures
                 .iter()
                 .map(|(cap_name, _, mode)| match mode {
@@ -117,15 +118,17 @@ impl CodegenContext<'_> {
                 })
                 .collect();
             let field_init = fields.join(", ");
+            // Also emit GorgetClosure for backward compat during transition — the
+            // per-closure struct is heap-allocated and wrapped in GorgetClosure.
             format!(
                 "({{ {env_name}* __heap_env = ({env_name}*)malloc(sizeof({env_name})); \
                 *__heap_env = ({env_name}){{{field_init}}}; \
                 (GorgetClosure){{.fn_ptr = (void*){fn_name}, .env = (void*)__heap_env}}; }})"
             )
         } else {
-            // C99 compound literal: the env struct has automatic storage duration
-            // tied to the enclosing block, so no malloc/free needed. The env lives
-            // on the stack as long as the closure variable's scope.
+            // Stack-allocated per-closure struct instance.
+            // Return as GorgetClosure for backward compat — callers that use the
+            // new per-closure dispatch will check closure_var_info for direct call.
             let fields: Vec<String> = captures
                 .iter()
                 .map(|(cap_name, _, mode)| match mode {

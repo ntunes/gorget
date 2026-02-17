@@ -1245,15 +1245,23 @@ impl CodegenContext<'_> {
                     && self.escaping_closure_vars.contains(name);
                 if c_type == "GorgetClosure" {
                     self.closure_vars.insert(escaped.clone());
-                    // For Fn[sig]-typed VarDecl, extract signature for dispatch
+                    // For Callable/MutCallable/MoveCallable/Fn[sig]-typed VarDecl, extract signature
                     if let Type::Named { name: fn_name, generic_args } = &type_.node {
-                        if fn_name.node == "Fn" && generic_args.len() == 1 {
-                            if let Type::Function { return_type: fn_ret, params: fn_params } = &generic_args[0].node {
-                                let ret_c = super::c_types::ast_type_to_c(&fn_ret.node, self.scopes);
-                                let param_c: Vec<String> = fn_params.iter()
-                                    .map(|p| super::c_types::ast_type_to_c(&p.node, self.scopes))
-                                    .collect();
-                                self.fn_type_signatures.insert(escaped.clone(), (param_c, ret_c));
+                        let callable_kind = match fn_name.node.as_str() {
+                            "Fn" | "Callable" => Some(super::CallableKind::Callable),
+                            "FnMut" | "MutCallable" => Some(super::CallableKind::MutCallable),
+                            "FnOnce" | "MoveCallable" => Some(super::CallableKind::MoveCallable),
+                            _ => None,
+                        };
+                        if let Some(_kind) = callable_kind {
+                            if generic_args.len() == 1 {
+                                if let Type::Function { return_type: fn_ret, params: fn_params } = &generic_args[0].node {
+                                    let ret_c = super::c_types::ast_type_to_c(&fn_ret.node, self.scopes);
+                                    let param_c: Vec<String> = fn_params.iter()
+                                        .map(|p| super::c_types::ast_type_to_c(&p.node, self.scopes))
+                                        .collect();
+                                    self.fn_type_signatures.insert(escaped.clone(), (param_c, ret_c));
+                                }
                             }
                         }
                     }
@@ -1268,10 +1276,10 @@ impl CodegenContext<'_> {
                 let val = self.gen_expr(value);
                 self.decl_type_hint = prev_hint;
                 self.closure_heap_alloc = false;
-                // Coerce non-capturing closure to GorgetClosure for Fn[sig]-typed vars only.
-                // Check for explicit Fn[...] declared type (not just any GorgetClosure).
+                // Coerce non-capturing closure to GorgetClosure for Callable/Fn[sig]-typed vars only.
                 let is_fn_trait_decl = matches!(&type_.node, Type::Named { name, generic_args }
-                    if name.node == "Fn" && !generic_args.is_empty());
+                    if matches!(name.node.as_str(), "Fn" | "Callable" | "FnMut" | "MutCallable" | "FnOnce" | "MoveCallable")
+                    && !generic_args.is_empty());
                 let val = if is_fn_trait_decl && !val.starts_with("(GorgetClosure)") {
                     let val_type = self.infer_c_type_from_expr(&value.node);
                     if val_type != "GorgetClosure" {

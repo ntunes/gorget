@@ -6,6 +6,20 @@ use super::c_mangle;
 use super::c_types;
 use super::{CodegenContext, DropAction, DropScopeKind};
 
+/// Build a mangled name for a Callable/MutCallable/MoveCallable trait signature.
+/// E.g., Callable[int(int, float)] → "Callable__int64_t__int64_t__double"
+fn callable_sig_name(prefix: &str, param_c_types: &[String], ret_c_type: &str) -> String {
+    let ret_mangled = c_mangle::mangle_c_type(ret_c_type);
+    let params_mangled: Vec<String> = param_c_types.iter()
+        .map(|t| c_mangle::mangle_c_type(t))
+        .collect();
+    if params_mangled.is_empty() {
+        format!("{prefix}__{ret_mangled}")
+    } else {
+        format!("{prefix}__{ret_mangled}__{}", params_mangled.join("__"))
+    }
+}
+
 impl CodegenContext<'_> {
     // ─── Forward Declarations ────────────────────────────────
 
@@ -524,18 +538,31 @@ impl CodegenContext<'_> {
                 self.pointer_params
                     .insert(c_mangle::escape_keyword(&param.node.name.node));
             }
-            // Detect Fn[sig]-typed params — register for closure dispatch
+            // Detect Callable/MutCallable/MoveCallable/Fn[sig]-typed params — register for closure dispatch
             if let Type::Named { name, generic_args } = &param.node.type_.node {
-                if name.node == "Fn" && generic_args.len() == 1 {
-                    let escaped = c_mangle::escape_keyword(&param.node.name.node);
-                    self.closure_vars.insert(escaped.clone());
-                    // Extract signature from the function type generic arg
-                    if let Type::Function { return_type, params: fn_params } = &generic_args[0].node {
-                        let ret_c = c_types::ast_type_to_c(&return_type.node, self.scopes);
-                        let param_c: Vec<String> = fn_params.iter()
-                            .map(|p| c_types::ast_type_to_c(&p.node, self.scopes))
-                            .collect();
-                        self.fn_type_signatures.insert(escaped, (param_c, ret_c));
+                let callable_kind = match name.node.as_str() {
+                    "Fn" | "Callable" => Some(super::CallableKind::Callable),
+                    "FnMut" | "MutCallable" => Some(super::CallableKind::MutCallable),
+                    "FnOnce" | "MoveCallable" => Some(super::CallableKind::MoveCallable),
+                    _ => None,
+                };
+                if let Some(kind) = callable_kind {
+                    if generic_args.len() == 1 {
+                        let escaped = c_mangle::escape_keyword(&param.node.name.node);
+                        self.closure_vars.insert(escaped.clone());
+                        // Extract signature from the function type generic arg
+                        if let Type::Function { return_type, params: fn_params } = &generic_args[0].node {
+                            let ret_c = c_types::ast_type_to_c(&return_type.node, self.scopes);
+                            let param_c: Vec<String> = fn_params.iter()
+                                .map(|p| c_types::ast_type_to_c(&p.node, self.scopes))
+                                .collect();
+                            self.fn_type_signatures.insert(escaped.clone(), (param_c.clone(), ret_c.clone()));
+                            // Register the signature for vtable generation
+                            let sig = (kind, param_c, ret_c);
+                            if !self.fn_trait_sigs.contains(&sig) {
+                                self.fn_trait_sigs.push(sig);
+                            }
+                        }
                     }
                 }
             }
@@ -1102,17 +1129,22 @@ impl CodegenContext<'_> {
 
     // ─── Lifted Closures ────────────────────────────────────
 
-    /// Emit all lifted closure environment structs and functions.
-    pub fn emit_lifted_closures(&self, emitter: &mut CEmitter) {
+    /// Emit all lifted closure structs, call functions, and vtable adapters.
+    pub fn emit_lifted_closures(&mut self, emitter: &mut CEmitter) {
         use super::CaptureMode;
 
-        for closure in self.lifted_closures.iter() {
+        // Take closures out to avoid borrow issues
+        let closures = std::mem::take(&mut self.lifted_closures);
+
+        for closure in closures.iter() {
             let env_name = super::c_mangle::mangle_closure_env(closure.id);
             let fn_name = super::c_mangle::mangle_closure(closure.id);
+            let struct_name = &closure.struct_name;
 
-            // Environment struct
+            // Per-closure struct typedef (replaces env struct)
+            // Non-capturing closures get an empty struct for vtable compatibility.
+            emitter.emit_line(&format!("typedef struct {{"));
             if !closure.captures.is_empty() {
-                emitter.emit_line(&format!("typedef struct {{"));
                 emitter.indent();
                 for (cap_name, cap_type, mode) in &closure.captures {
                     match mode {
@@ -1125,33 +1157,34 @@ impl CodegenContext<'_> {
                     }
                 }
                 emitter.dedent();
-                emitter.emit_line(&format!("}} {env_name};"));
-                emitter.blank_line();
+                // Also typedef the old env name as an alias for backward compat
+                emitter.emit_line(&format!("}} {struct_name};"));
+                emitter.emit_line(&format!("typedef {struct_name} {env_name};"));
+            } else {
+                emitter.indent();
+                emitter.emit_line("char __empty;");
+                emitter.dedent();
+                emitter.emit_line(&format!("}} {struct_name};"));
             }
+            emitter.blank_line();
 
-            // Closure function — include env param only for capturing closures
-            let mut params_vec: Vec<String> = Vec::new();
+            // Legacy closure function (void* __env_ptr) — still needed for GorgetClosure dispatch
             if !closure.captures.is_empty() {
+                let mut params_vec: Vec<String> = Vec::new();
                 params_vec.push("void* __env_ptr".to_string());
-            }
-            for (p_name, p_type) in &closure.params {
-                params_vec.push(c_types::c_declare(p_type, p_name));
-            }
-            let params_str = params_vec.join(", ");
+                for (p_name, p_type) in &closure.params {
+                    params_vec.push(c_types::c_declare(p_type, p_name));
+                }
+                let params_str = params_vec.join(", ");
 
-            emitter.emit_line(&format!(
-                "static inline {} {fn_name}({params_str}) {{",
-                closure.return_type
-            ));
-            emitter.indent();
-
-            // Unpack environment
-            if !closure.captures.is_empty() {
+                emitter.emit_line(&format!(
+                    "static inline {} {fn_name}({params_str}) {{",
+                    closure.return_type
+                ));
+                emitter.indent();
                 emitter.emit_line(&format!(
                     "{env_name}* __env = ({env_name}*)__env_ptr;"
                 ));
-                // Only unpack ByValue captures into local variables.
-                // ByMutRef captures are accessed via (*__env->NAME) in the body.
                 for (cap_name, cap_type, mode) in &closure.captures {
                     if *mode == CaptureMode::ByValue {
                         emitter.emit_line(&format!(
@@ -1159,20 +1192,93 @@ impl CodegenContext<'_> {
                         ));
                     }
                 }
-            }
-
-            if closure.return_type == "void" {
-                emitter.emit_line(&format!("{};", closure.body));
+                if closure.return_type == "void" {
+                    emitter.emit_line(&format!("{};", closure.body));
+                } else {
+                    emitter.emit_line(&format!("return {};", closure.body));
+                }
+                emitter.dedent();
+                emitter.emit_line("}");
+                emitter.blank_line();
             } else {
-                emitter.emit_line(&format!("return {};", closure.body));
-            }
-            emitter.dedent();
-            emitter.emit_line("}");
-            emitter.blank_line();
+                // Non-capturing: bare function (no env)
+                let mut params_vec: Vec<String> = Vec::new();
+                for (p_name, p_type) in &closure.params {
+                    params_vec.push(c_types::c_declare(p_type, p_name));
+                }
+                let params_str = if params_vec.is_empty() { "void".to_string() } else { params_vec.join(", ") };
 
-            // For non-capturing closures, emit an ABI-compatible adapter with
-            // void* env param (ignored) so it can be used inside GorgetClosure
-            // dispatch when wrapped for Fn[sig] parameters.
+                emitter.emit_line(&format!(
+                    "static inline {} {fn_name}({params_str}) {{",
+                    closure.return_type
+                ));
+                emitter.indent();
+                if closure.return_type == "void" {
+                    emitter.emit_line(&format!("{};", closure.body));
+                } else {
+                    emitter.emit_line(&format!("return {};", closure.body));
+                }
+                emitter.dedent();
+                emitter.emit_line("}");
+                emitter.blank_line();
+            }
+
+            // Typed __Closure_N__call function for vtable dispatch.
+            // Takes const void* self for Callable compatibility.
+            {
+                let call_name = format!("{struct_name}__call");
+                let mut call_params = vec!["const void* __self".to_string()];
+                for (p_name, p_type) in &closure.params {
+                    call_params.push(c_types::c_declare(p_type, p_name));
+                }
+                let call_params_str = call_params.join(", ");
+                emitter.emit_line(&format!(
+                    "static inline {} {call_name}({call_params_str}) {{",
+                    closure.return_type
+                ));
+                emitter.indent();
+
+                if !closure.captures.is_empty() {
+                    // Cast to non-const for ByMutRef captures (which store pointers).
+                    // Alias as __env so body expressions like (*__env->name) work.
+                    emitter.emit_line(&format!(
+                        "{struct_name}* __env = ({struct_name}*)__self;"
+                    ));
+                    for (cap_name, cap_type, mode) in &closure.captures {
+                        if *mode == CaptureMode::ByValue {
+                            emitter.emit_line(&format!(
+                                "{cap_type} {cap_name} = __env->{cap_name};"
+                            ));
+                        }
+                    }
+                } else {
+                    emitter.emit_line("(void)__self;");
+                }
+
+                if closure.return_type == "void" {
+                    // For non-capturing closures, call the bare function.
+                    // For capturing ones, inline the body (already unpacked captures).
+                    if closure.captures.is_empty() {
+                        let arg_names: Vec<&str> = closure.params.iter().map(|(n, _)| n.as_str()).collect();
+                        emitter.emit_line(&format!("{fn_name}({});", arg_names.join(", ")));
+                    } else {
+                        emitter.emit_line(&format!("{};", closure.body));
+                    }
+                } else {
+                    if closure.captures.is_empty() {
+                        let arg_names: Vec<&str> = closure.params.iter().map(|(n, _)| n.as_str()).collect();
+                        emitter.emit_line(&format!("return {fn_name}({});", arg_names.join(", ")));
+                    } else {
+                        emitter.emit_line(&format!("return {};", closure.body));
+                    }
+                }
+
+                emitter.dedent();
+                emitter.emit_line("}");
+                emitter.blank_line();
+            }
+
+            // Legacy adapter for non-capturing closures (void* env, ignored)
             if closure.captures.is_empty() {
                 let adapter_name = format!("{fn_name}_fn");
                 let mut adapter_params = vec!["void* __env_ptr".to_string()];
@@ -1197,6 +1303,77 @@ impl CodegenContext<'_> {
                 emitter.emit_line("}");
                 emitter.blank_line();
             }
+        }
+
+        // Emit Callable vtable types and instances for closures used with Callable[sig] params
+        self.emit_callable_vtables(&closures, emitter);
+
+        // Restore closures
+        self.lifted_closures = closures;
+    }
+
+    /// Emit Callable/MutCallable/MoveCallable vtable and trait object typedefs,
+    /// plus vtable instances for each closure that needs them.
+    fn emit_callable_vtables(&self, closures: &[super::LiftedClosure], emitter: &mut CEmitter) {
+        if self.fn_trait_sigs.is_empty() {
+            return;
+        }
+
+        // De-duplicate signatures
+        let mut seen_sigs: Vec<(super::CallableKind, Vec<String>, String)> = Vec::new();
+        for (kind, params, ret) in &self.fn_trait_sigs {
+            let entry = (*kind, params.clone(), ret.clone());
+            if !seen_sigs.contains(&entry) {
+                seen_sigs.push(entry);
+            }
+        }
+
+        emitter.emit_line("// ── Callable Trait Vtables ──");
+        for (kind, param_c_types, ret_c_type) in &seen_sigs {
+            let kind_prefix = match kind {
+                super::CallableKind::Callable => "Callable",
+                super::CallableKind::MutCallable => "MutCallable",
+                super::CallableKind::MoveCallable => "MoveCallable",
+            };
+            let sig_name = callable_sig_name(kind_prefix, param_c_types, ret_c_type);
+            let vtable_name = format!("{sig_name}__VTable");
+            let traitobj_name = format!("{sig_name}__TraitObj");
+
+            // VTable struct typedef — use const void* for all variants since
+            // mutability enforcement is at the Gorget semantic level, not C.
+            let self_ptr = "const void*";
+            let call_params: Vec<String> = std::iter::once(self_ptr.to_string())
+                .chain(param_c_types.iter().cloned())
+                .collect();
+            emitter.emit_line(&format!(
+                "typedef struct {{ {ret_c_type} (*call)({params}); }} {vtable_name};",
+                params = call_params.join(", ")
+            ));
+
+            // TraitObj struct typedef
+            emitter.emit_line(&format!(
+                "typedef struct {{ const void* data; const {vtable_name}* vtable; }} {traitobj_name};"
+            ));
+            emitter.blank_line();
+
+            // Emit vtable instances only for closures whose signature matches
+            for closure in closures {
+                let closure_params: Vec<String> = closure.params.iter()
+                    .map(|(_, t)| t.clone())
+                    .collect();
+                if &closure_params == param_c_types && closure.return_type == *ret_c_type {
+                    let struct_name = &closure.struct_name;
+                    let call_fn = format!("{struct_name}__call");
+                    let vtable_inst = format!("{sig_name}__{struct_name}__vtable");
+                    emitter.emit_line(&format!(
+                        "static const {vtable_name} {vtable_inst} = {{ .call = {call_fn} }};"
+                    ));
+                }
+            }
+
+            // Emit vtable instances for named functions used as Callable args
+            // (These would be registered separately if needed — for now, closures only)
+            emitter.blank_line();
         }
     }
 

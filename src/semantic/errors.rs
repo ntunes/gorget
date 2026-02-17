@@ -141,8 +141,11 @@ pub enum SemanticErrorKind {
     /// Duplicate suite setup or teardown block.
     DuplicateSuiteBlock { kind: String },
 
-    /// Fn[...] requires a function type argument.
+    /// Callable/MutCallable/MoveCallable[...] requires a function type argument.
     InvalidFnTraitArg,
+
+    /// Closure kind doesn't match the expected callable trait.
+    ClosureKindMismatch { expected: String, found: String },
 
     /// Integer literal value doesn't fit in the declared type.
     ValueOutOfRange {
@@ -321,7 +324,10 @@ impl std::fmt::Display for SemanticError {
                 write!(f, "duplicate `suite {kind}` block")
             }
             SemanticErrorKind::InvalidFnTraitArg => {
-                write!(f, "Fn[...] requires a function type argument, e.g. Fn[int(int)]")
+                write!(f, "Callable[...] requires a function type argument, e.g. Callable[int(int)]")
+            }
+            SemanticErrorKind::ClosureKindMismatch { expected, found } => {
+                write!(f, "closure kind mismatch: expected `{expected}`, found `{found}`")
             }
             SemanticErrorKind::ValueOutOfRange { value, type_name, min, max } => {
                 write!(f, "value {value} is out of range for type {type_name} (valid range: {min}..={max})")

@@ -270,6 +270,36 @@ done");
 }
 
 #[test]
+fn fn_mut_once() {
+    run_gg("fn_mut_once.gg", "\
+10
+21
+12
+15
+107
+36
+16
+18
+done");
+}
+
+#[test]
+fn closure_kind_error() {
+    check_gg_fails(
+        "closure_kind_error.gg",
+        "closure kind mismatch: expected `Callable`, found `MutCallable`",
+    );
+}
+
+#[test]
+fn closure_move_kind_error() {
+    check_gg_fails(
+        "closure_move_kind_error.gg",
+        "closure kind mismatch: expected `MutCallable`, found `MoveCallable`",
+    );
+}
+
+#[test]
 fn dynamic_dispatch() {
     run_gg("dynamic_dispatch.gg", "hello\nhola\nhello\nhola");
 }

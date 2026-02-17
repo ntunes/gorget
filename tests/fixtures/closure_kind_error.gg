@@ -1,0 +1,8 @@
+# Negative test: mutating closure assigned to Callable-typed variable should fail
+
+void main():
+    int count = 0
+    Callable[int(int)] f = (n):
+        count += n
+        count
+    print("should not reach here")

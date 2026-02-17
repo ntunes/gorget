@@ -35,8 +35,14 @@ pub enum ResolvedType {
     /// Trait object: Box[Trait] → automatic vtable dispatch
     TraitObject(DefId),
 
-    /// Callable trait type: Fn[int(int)] → wraps the inner Function type
-    FnTrait(TypeId),
+    /// Callable trait type: Callable[int(int)] → wraps the inner Function type
+    CallableTrait(TypeId),
+
+    /// Mutable callable trait type: MutCallable[int(int)]
+    MutCallableTrait(TypeId),
+
+    /// Move callable trait type: MoveCallable[int(int)]
+    MoveCallableTrait(TypeId),
 
     /// Type variable for inference: ?T0, ?T1, ...
     Var(u32),
@@ -49,6 +55,38 @@ pub enum ResolvedType {
 
     /// Never type (for diverging expressions like return/throw).
     Never,
+}
+
+/// Classification of a closure's capture behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClosureKind {
+    /// Pure / immutable captures only.
+    Callable,
+    /// May mutate captured variables.
+    MutCallable,
+    /// Consumes captured variables (move closure).
+    MoveCallable,
+}
+
+impl ClosureKind {
+    /// Human-readable name for error messages.
+    pub fn name(self) -> &'static str {
+        match self {
+            ClosureKind::Callable => "Callable",
+            ClosureKind::MutCallable => "MutCallable",
+            ClosureKind::MoveCallable => "MoveCallable",
+        }
+    }
+
+    /// Returns true if `self` is compatible with `expected`.
+    /// Hierarchy: Callable → MutCallable → MoveCallable (upward coercion OK).
+    pub fn is_compatible_with(self, expected: Self) -> bool {
+        match expected {
+            ClosureKind::Callable => self == ClosureKind::Callable,
+            ClosureKind::MutCallable => self != ClosureKind::MoveCallable,
+            ClosureKind::MoveCallable => true,
+        }
+    }
 }
 
 /// Stores all resolved types, indexed by TypeId.
@@ -195,7 +233,9 @@ impl TypeTable {
                 format!("{}({})", self.display(*return_type), params.join(", "))
             }
             ResolvedType::TraitObject(_) => "<trait object>".into(),
-            ResolvedType::FnTrait(inner) => format!("Fn[{}]", self.display(*inner)),
+            ResolvedType::CallableTrait(inner) => format!("Callable[{}]", self.display(*inner)),
+            ResolvedType::MutCallableTrait(inner) => format!("MutCallable[{}]", self.display(*inner)),
+            ResolvedType::MoveCallableTrait(inner) => format!("MoveCallable[{}]", self.display(*inner)),
             ResolvedType::Var(n) => format!("?T{n}"),
             ResolvedType::Error => "<error>".into(),
             ResolvedType::Void => "void".into(),
@@ -215,16 +255,25 @@ pub fn ast_type_to_resolved(
         ast::Type::Primitive(prim) => Ok(types.primitive_id(*prim)),
 
         ast::Type::Named { name, generic_args } => {
-            // Fn[sig] — compiler-magic callable type
-            if name.node == "Fn" && generic_args.len() == 1 {
-                let inner = ast_type_to_resolved(&generic_args[0].node, generic_args[0].span, scopes, types)?;
-                if matches!(types.get(inner), ResolvedType::Function { .. }) {
-                    return Ok(types.insert(ResolvedType::FnTrait(inner)));
+            // Callable[sig] / MutCallable[sig] / MoveCallable[sig] — compiler-magic callable types
+            // Also accept legacy "Fn" as an alias for "Callable".
+            if generic_args.len() == 1 {
+                let variant = match name.node.as_str() {
+                    "Callable" | "Fn" => Some(ResolvedType::CallableTrait as fn(TypeId) -> ResolvedType),
+                    "MutCallable" | "FnMut" => Some(ResolvedType::MutCallableTrait as fn(TypeId) -> ResolvedType),
+                    "MoveCallable" | "FnOnce" => Some(ResolvedType::MoveCallableTrait as fn(TypeId) -> ResolvedType),
+                    _ => None,
+                };
+                if let Some(constructor) = variant {
+                    let inner = ast_type_to_resolved(&generic_args[0].node, generic_args[0].span, scopes, types)?;
+                    if matches!(types.get(inner), ResolvedType::Function { .. }) {
+                        return Ok(types.insert(constructor(inner)));
+                    }
+                    return Err(SemanticError {
+                        kind: SemanticErrorKind::InvalidFnTraitArg,
+                        span: generic_args[0].span,
+                    });
                 }
-                return Err(SemanticError {
-                    kind: SemanticErrorKind::InvalidFnTraitArg,
-                    span: generic_args[0].span,
-                });
             }
 
             // Look up the name in the scope table

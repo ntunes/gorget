@@ -419,6 +419,47 @@ int(int, int) adder = add      # function that takes two ints, returns int
 void() callback = some_func    # function that takes nothing, returns void
 ```
 
+#### Callable Trait Types
+
+Callable trait types represent callable values — closures, function references, or callable objects — with type-safe dispatch through vtables. Three variants exist, forming a coercion hierarchy:
+
+```gorget
+Callable[int(int)]      # immutable: reads captures but cannot mutate them
+MutCallable[int(int)]   # mutable: may mutate captured variables
+MoveCallable[int(int)]  # consuming: takes ownership of captures (single use)
+```
+
+**Hierarchy coercion** (upward is OK, downward is an error):
+- `Callable` → `MutCallable` → `MoveCallable`
+- A `Callable` closure can be passed where `MutCallable` or `MoveCallable` is expected.
+- A `MutCallable` closure can be passed where `MoveCallable` is expected.
+
+**Usage as parameters:**
+
+```gorget
+int apply(Callable[int(int)] f, int x):
+    return f(x)
+
+int apply_mut(MutCallable[int(int)] f, int x):
+    return f(x)
+```
+
+**Usage as local variables:**
+
+```gorget
+Callable[int(int)] triple = (n): n * 3
+int result = triple(4)  # 12
+```
+
+**Closure kind auto-classification:**
+- No mutations to captures → `Callable`
+- Assigns to captures → `MutCallable`
+- Move closure (`!` or `moving` prefix) → `MoveCallable`
+
+Named functions and non-capturing closures are always `Callable` and coerce to any variant.
+
+> **Note:** `Fn[sig]`, `FnMut[sig]`, and `FnOnce[sig]` are accepted as aliases for backward compatibility.
+
 ### 4.3 Named Types
 
 ```ebnf

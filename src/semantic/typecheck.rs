@@ -30,6 +30,259 @@ fn is_integer_type(prim: &PrimitiveType) -> bool {
     int_range(prim).is_some()
 }
 
+// ══════════════════════════════════════════════════════════════
+// Closure kind classification
+// ══════════════════════════════════════════════════════════════
+
+use super::types::ClosureKind;
+use std::collections::HashSet;
+
+/// Classify a closure's kind based on its `is_move` flag and whether the body
+/// mutates captured (non-local) variables.
+pub fn classify_closure_kind(
+    is_move: bool,
+    params: &[Spanned<ClosureParam>],
+    body: &Spanned<Expr>,
+) -> ClosureKind {
+    if is_move {
+        return ClosureKind::MoveCallable;
+    }
+    let param_names: HashSet<String> = params.iter()
+        .map(|p| p.node.name.node.clone())
+        .collect();
+    if expr_mutates_captures(&body.node, &param_names) {
+        ClosureKind::MutCallable
+    } else {
+        ClosureKind::Callable
+    }
+}
+
+/// Extract the root identifier from a (possibly nested) lvalue expression.
+fn root_identifier(expr: &Expr) -> Option<&str> {
+    match expr {
+        Expr::Identifier(name) => Some(name.as_str()),
+        Expr::FieldAccess { object, .. } => root_identifier(&object.node),
+        Expr::Index { object, .. } => root_identifier(&object.node),
+        Expr::Deref { expr, .. } => root_identifier(&expr.node),
+        _ => None,
+    }
+}
+
+/// Returns true if `target` assigns to a non-local (captured) variable.
+fn is_capture_mutation(target: &Expr, locals: &HashSet<String>) -> bool {
+    if let Some(name) = root_identifier(target) {
+        !locals.contains(name)
+    } else {
+        false
+    }
+}
+
+/// Collect binding names from a pattern into the locals set.
+fn collect_pattern_bindings(pattern: &Pattern, locals: &mut HashSet<String>) {
+    match pattern {
+        Pattern::Binding(name) => { locals.insert(name.clone()); }
+        Pattern::Tuple(pats) => {
+            for p in pats { collect_pattern_bindings(&p.node, locals); }
+        }
+        Pattern::Constructor { fields, .. } => {
+            for f in fields { collect_pattern_bindings(&f.node, locals); }
+        }
+        Pattern::Or(pats) => {
+            for p in pats { collect_pattern_bindings(&p.node, locals); }
+        }
+        Pattern::Wildcard | Pattern::Literal(_) | Pattern::Rest => {}
+    }
+}
+
+/// Check if an expression tree contains mutations to captured variables.
+/// Does NOT recurse into nested closures (they have their own capture scope).
+fn expr_mutates_captures(expr: &Expr, locals: &HashSet<String>) -> bool {
+    match expr {
+        // Block — walk statements
+        Expr::Block(block) => block_mutates_captures(block, locals),
+        Expr::Do { body } => block_mutates_captures(body, locals),
+
+        // Branching — recurse into all sub-expressions
+        Expr::If { condition, then_branch, elif_branches, else_branch } => {
+            expr_mutates_captures(&condition.node, locals)
+            || expr_mutates_captures(&then_branch.node, locals)
+            || elif_branches.iter().any(|(c, b)|
+                expr_mutates_captures(&c.node, locals)
+                || expr_mutates_captures(&b.node, locals))
+            || else_branch.as_ref().map_or(false, |b| expr_mutates_captures(&b.node, locals))
+        }
+        Expr::Match { scrutinee, arms, else_arm } => {
+            expr_mutates_captures(&scrutinee.node, locals)
+            || arms.iter().any(|arm| expr_mutates_captures(&arm.body.node, locals))
+            || else_arm.as_ref().map_or(false, |b| expr_mutates_captures(&b.node, locals))
+        }
+
+        // Compound expressions — recurse into sub-expressions
+        Expr::BinaryOp { left, right, .. } => {
+            expr_mutates_captures(&left.node, locals)
+            || expr_mutates_captures(&right.node, locals)
+        }
+        Expr::UnaryOp { operand, .. } => expr_mutates_captures(&operand.node, locals),
+        Expr::Call { callee, args, .. } => {
+            expr_mutates_captures(&callee.node, locals)
+            || args.iter().any(|a| expr_mutates_captures(&a.node.value.node, locals))
+        }
+        Expr::MethodCall { receiver, args, .. } => {
+            expr_mutates_captures(&receiver.node, locals)
+            || args.iter().any(|a| expr_mutates_captures(&a.node.value.node, locals))
+        }
+        Expr::FieldAccess { object, .. } => expr_mutates_captures(&object.node, locals),
+        Expr::TupleFieldAccess { object, .. } => expr_mutates_captures(&object.node, locals),
+        Expr::Index { object, index } => {
+            expr_mutates_captures(&object.node, locals)
+            || expr_mutates_captures(&index.node, locals)
+        }
+        Expr::As { expr, .. } | Expr::Try { expr } | Expr::Move { expr }
+        | Expr::MutableBorrow { expr } | Expr::Deref { expr }
+        | Expr::Await { expr } | Expr::Spawn { expr } | Expr::TryCapture { expr } => {
+            expr_mutates_captures(&expr.node, locals)
+        }
+        Expr::TupleLiteral(elems) | Expr::ArrayLiteral(elems) => {
+            elems.iter().any(|e| expr_mutates_captures(&e.node, locals))
+        }
+        Expr::StructLiteral { args, .. } => {
+            args.iter().any(|a| expr_mutates_captures(&a.node, locals))
+        }
+        Expr::DictLiteral(entries) => {
+            entries.iter().any(|(k, v)|
+                expr_mutates_captures(&k.node, locals)
+                || expr_mutates_captures(&v.node, locals))
+        }
+        Expr::Range { start, end, .. } => {
+            start.as_ref().map_or(false, |e| expr_mutates_captures(&e.node, locals))
+            || end.as_ref().map_or(false, |e| expr_mutates_captures(&e.node, locals))
+        }
+        Expr::OptionalChain { object, .. } => expr_mutates_captures(&object.node, locals),
+        Expr::NilCoalescing { lhs, rhs } => {
+            expr_mutates_captures(&lhs.node, locals)
+            || expr_mutates_captures(&rhs.node, locals)
+        }
+        Expr::Is { expr, .. } => expr_mutates_captures(&expr.node, locals),
+        Expr::ListComprehension { expr: comp_expr, iterable, condition, .. } => {
+            expr_mutates_captures(&comp_expr.node, locals)
+            || expr_mutates_captures(&iterable.node, locals)
+            || condition.as_ref().map_or(false, |c| expr_mutates_captures(&c.node, locals))
+        }
+        Expr::DictComprehension { key, value, iterable, condition, .. } => {
+            expr_mutates_captures(&key.node, locals)
+            || expr_mutates_captures(&value.node, locals)
+            || expr_mutates_captures(&iterable.node, locals)
+            || condition.as_ref().map_or(false, |c| expr_mutates_captures(&c.node, locals))
+        }
+        Expr::SetComprehension { expr: comp_expr, iterable, condition, .. } => {
+            expr_mutates_captures(&comp_expr.node, locals)
+            || expr_mutates_captures(&iterable.node, locals)
+            || condition.as_ref().map_or(false, |c| expr_mutates_captures(&c.node, locals))
+        }
+
+        // Nested closures — do NOT recurse (separate capture scope)
+        Expr::Closure { .. } | Expr::ImplicitClosure { .. } => false,
+
+        // Leaf expressions — no mutations
+        Expr::Identifier(_) | Expr::SelfExpr | Expr::Path { .. } | Expr::It
+        | Expr::IntLiteral(_) | Expr::FloatLiteral(_) | Expr::BoolLiteral(_)
+        | Expr::CharLiteral(_) | Expr::StringLiteral(_) | Expr::NoneLiteral => false,
+    }
+}
+
+/// Check if a statement contains mutations to captured variables.
+fn stmt_mutates_captures(stmt: &Stmt, locals: &mut HashSet<String>) -> bool {
+    match stmt {
+        // Assignment — check if target is a capture
+        Stmt::Assign { target, value } => {
+            is_capture_mutation(&target.node, locals)
+            || expr_mutates_captures(&value.node, locals)
+        }
+        Stmt::CompoundAssign { target, value, .. } => {
+            is_capture_mutation(&target.node, locals)
+            || expr_mutates_captures(&value.node, locals)
+        }
+
+        // VarDecl — register the binding as local, then check initializer
+        Stmt::VarDecl { pattern, value, .. } => {
+            collect_pattern_bindings(&pattern.node, locals);
+            expr_mutates_captures(&value.node, locals)
+        }
+
+        // Expression statement
+        Stmt::Expr(expr) => expr_mutates_captures(&expr.node, locals),
+
+        // Control flow with blocks
+        Stmt::For { pattern, iterable, body, else_body, .. } => {
+            collect_pattern_bindings(&pattern.node, locals);
+            expr_mutates_captures(&iterable.node, locals)
+            || block_mutates_captures(body, locals)
+            || else_body.as_ref().map_or(false, |b| block_mutates_captures(b, locals))
+        }
+        Stmt::While { condition, body, else_body } => {
+            expr_mutates_captures(&condition.node, locals)
+            || block_mutates_captures(body, locals)
+            || else_body.as_ref().map_or(false, |b| block_mutates_captures(b, locals))
+        }
+        Stmt::Loop { body } => block_mutates_captures(body, locals),
+        Stmt::If { condition, then_body, elif_branches, else_body } => {
+            expr_mutates_captures(&condition.node, locals)
+            || block_mutates_captures(then_body, locals)
+            || elif_branches.iter().any(|(c, b)|
+                expr_mutates_captures(&c.node, locals)
+                || block_mutates_captures(b, locals))
+            || else_body.as_ref().map_or(false, |b| block_mutates_captures(b, locals))
+        }
+        Stmt::Match { scrutinee, arms, else_arm } => {
+            expr_mutates_captures(&scrutinee.node, locals)
+            || arms.iter().any(|arm| {
+                let mut arm_locals = locals.clone();
+                collect_pattern_bindings(&arm.pattern.node, &mut arm_locals);
+                arm.guard.as_ref().map_or(false, |g| expr_mutates_captures(&g.node, &arm_locals))
+                || expr_mutates_captures(&arm.body.node, &arm_locals)
+            })
+            || else_arm.as_ref().map_or(false, |b| block_mutates_captures(b, locals))
+        }
+        Stmt::With { bindings, body } => {
+            for b in bindings {
+                locals.insert(b.name.node.clone());
+            }
+            bindings.iter().any(|b| expr_mutates_captures(&b.expr.node, locals))
+            || block_mutates_captures(body, locals)
+        }
+        Stmt::Unsafe { body } => block_mutates_captures(body, locals),
+
+        // Return / throw — check the expression
+        Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+            expr_mutates_captures(&expr.node, locals)
+        }
+        Stmt::Break(Some(expr)) => expr_mutates_captures(&expr.node, locals),
+
+        // Assert — check condition and message
+        Stmt::Assert { condition, message } => {
+            expr_mutates_captures(&condition.node, locals)
+            || message.as_ref().map_or(false, |m| expr_mutates_captures(&m.node, locals))
+        }
+
+        // Leaf statements — no mutations
+        Stmt::Return(None) | Stmt::Break(None) | Stmt::Continue | Stmt::Pass => false,
+
+        // Nested items — skip (they define their own scope)
+        Stmt::Item(_) => false,
+    }
+}
+
+/// Check if a block contains mutations to captured variables.
+fn block_mutates_captures(block: &Block, locals: &HashSet<String>) -> bool {
+    let mut locals = locals.clone();
+    for stmt in &block.stmts {
+        if stmt_mutates_captures(&stmt.node, &mut locals) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Type checker with bidirectional inference.
 struct TypeChecker<'a> {
     scopes: &'a mut ScopeTable,
@@ -137,6 +390,18 @@ impl<'a> TypeChecker<'a> {
                         return_type: new_ret,
                     })
                 }
+            }
+            ResolvedType::CallableTrait(inner) => {
+                let new_inner = self.resolve_type_deep(inner);
+                if new_inner == inner { base } else { self.types.insert(ResolvedType::CallableTrait(new_inner)) }
+            }
+            ResolvedType::MutCallableTrait(inner) => {
+                let new_inner = self.resolve_type_deep(inner);
+                if new_inner == inner { base } else { self.types.insert(ResolvedType::MutCallableTrait(new_inner)) }
+            }
+            ResolvedType::MoveCallableTrait(inner) => {
+                let new_inner = self.resolve_type_deep(inner);
+                if new_inner == inner { base } else { self.types.insert(ResolvedType::MoveCallableTrait(new_inner)) }
             }
             _ => base,
         }
@@ -254,19 +519,37 @@ impl<'a> TypeChecker<'a> {
                 self.unify(*a_ret, *b_ret, span);
                 a
             }
-            // FnTrait ↔ FnTrait: unify inner function types
-            (ResolvedType::FnTrait(a_inner), ResolvedType::FnTrait(b_inner)) => {
+            // Same-kind callable traits: unify inner function types
+            (ResolvedType::CallableTrait(a_inner), ResolvedType::CallableTrait(b_inner))
+            | (ResolvedType::MutCallableTrait(a_inner), ResolvedType::MutCallableTrait(b_inner))
+            | (ResolvedType::MoveCallableTrait(a_inner), ResolvedType::MoveCallableTrait(b_inner)) => {
                 let (a_inner, b_inner) = (*a_inner, *b_inner);
                 self.unify(a_inner, b_inner, span);
                 a
             }
-            // FnTrait ↔ Function: auto-coerce function pointer to callable
-            (ResolvedType::FnTrait(inner), ResolvedType::Function { .. }) => {
+            // Callable hierarchy coercion: Callable → MutCallable → MoveCallable (upward OK)
+            (ResolvedType::MutCallableTrait(a_inner), ResolvedType::CallableTrait(b_inner)) => {
+                let (a_inner, b_inner) = (*a_inner, *b_inner);
+                self.unify(a_inner, b_inner, span);
+                a // MutCallable accepts Callable
+            }
+            (ResolvedType::MoveCallableTrait(a_inner), ResolvedType::CallableTrait(b_inner))
+            | (ResolvedType::MoveCallableTrait(a_inner), ResolvedType::MutCallableTrait(b_inner)) => {
+                let (a_inner, b_inner) = (*a_inner, *b_inner);
+                self.unify(a_inner, b_inner, span);
+                a // MoveCallable accepts Callable and MutCallable
+            }
+            // Callable ↔ Function: auto-coerce function pointer to callable (any variant)
+            (ResolvedType::CallableTrait(inner), ResolvedType::Function { .. })
+            | (ResolvedType::MutCallableTrait(inner), ResolvedType::Function { .. })
+            | (ResolvedType::MoveCallableTrait(inner), ResolvedType::Function { .. }) => {
                 let inner = *inner;
                 self.unify(inner, b, span);
                 a
             }
-            (ResolvedType::Function { .. }, ResolvedType::FnTrait(inner)) => {
+            (ResolvedType::Function { .. }, ResolvedType::CallableTrait(inner))
+            | (ResolvedType::Function { .. }, ResolvedType::MutCallableTrait(inner))
+            | (ResolvedType::Function { .. }, ResolvedType::MoveCallableTrait(inner)) => {
                 let inner = *inner;
                 self.unify(a, inner, span);
                 b
@@ -546,12 +829,15 @@ impl<'a> TypeChecker<'a> {
                                 let arg_type = self.infer_expr(&arg.node.value);
                                 self.decl_type_hint = prev_hint;
                                 self.unify(param_type, arg_type, arg.span);
+                                self.validate_closure_arg_kind(param_type, &arg.node.value);
                             }
                         }
                         return_type
                     }
-                    ResolvedType::FnTrait(inner) => {
-                        // Fn[sig]-typed callable — extract Function from inner
+                    ResolvedType::CallableTrait(inner)
+                    | ResolvedType::MutCallableTrait(inner)
+                    | ResolvedType::MoveCallableTrait(inner) => {
+                        // Callable[sig]-typed callable — extract Function from inner
                         if let ResolvedType::Function { params, return_type } = self.types.get(inner).clone() {
                             if args.len() != params.len() {
                                 self.error(
@@ -1168,6 +1454,7 @@ impl<'a> TypeChecker<'a> {
                             if !self.is_collection_assignment(declared_type, value_type) {
                                 self.unify(declared_type, value_type, value.span);
                             }
+                            self.validate_closure_arg_kind(declared_type, value);
                             Some(declared_type)
                         } else {
                             None
@@ -1826,6 +2113,7 @@ impl<'a> TypeChecker<'a> {
                     self.decl_type_hint = prev_hint;
                     if pos < param_types.len() {
                         self.unify(param_types[pos], arg_type, arg.span);
+                        self.validate_closure_arg_kind(param_types[pos], &arg.node.value);
                     }
                 } else {
                     self.error(
@@ -1850,6 +2138,7 @@ impl<'a> TypeChecker<'a> {
                     self.decl_type_hint = prev_hint;
                     if i < param_types.len() {
                         self.unify(param_types[i], arg_type, arg.span);
+                        self.validate_closure_arg_kind(param_types[i], &arg.node.value);
                     }
                 } else {
                     // Extra positional arg beyond param count
@@ -2190,6 +2479,30 @@ impl<'a> TypeChecker<'a> {
 
         self.current_return_type = None;
         self.current_function_throws = false;
+    }
+
+    /// If `arg_expr` is a closure and `param_type` is a Callable variant,
+    /// classify the closure's kind and validate compatibility.
+    fn validate_closure_arg_kind(&mut self, param_type: TypeId, arg_expr: &Spanned<Expr>) {
+        if let Expr::Closure { is_move, params: closure_params, body, .. } = &arg_expr.node {
+            let resolved = self.resolve_type(param_type);
+            let expected = match self.types.get(resolved) {
+                ResolvedType::CallableTrait(_) => ClosureKind::Callable,
+                ResolvedType::MutCallableTrait(_) => ClosureKind::MutCallable,
+                ResolvedType::MoveCallableTrait(_) => ClosureKind::MoveCallable,
+                _ => return,
+            };
+            let actual = classify_closure_kind(*is_move, closure_params, body);
+            if !actual.is_compatible_with(expected) {
+                self.error(
+                    SemanticErrorKind::ClosureKindMismatch {
+                        expected: expected.name().to_string(),
+                        found: actual.name().to_string(),
+                    },
+                    arg_expr.span,
+                );
+            }
+        }
     }
 }
 

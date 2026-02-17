@@ -813,7 +813,11 @@ impl CodegenContext<'_> {
         param_type_id: Option<crate::semantic::ids::TypeId>,
     ) -> String {
         if let Some(ptid) = param_type_id {
-            if matches!(self.types.get(ptid), crate::semantic::types::ResolvedType::FnTrait(_)) {
+            if matches!(self.types.get(ptid),
+                crate::semantic::types::ResolvedType::CallableTrait(_)
+                | crate::semantic::types::ResolvedType::MutCallableTrait(_)
+                | crate::semantic::types::ResolvedType::MoveCallableTrait(_)
+            ) {
                 // Already a GorgetClosure variable — pass through
                 if self.closure_vars.contains(expr.as_str()) {
                     return expr;
@@ -827,7 +831,46 @@ impl CodegenContext<'_> {
                 let fn_ptr = if expr.starts_with("__gorget_closure_") {
                     format!("{expr}_fn")
                 } else {
-                    expr
+                    // Named function — generate an adapter closure that wraps it
+                    // with the correct (void*, params...) ABI.
+                    let inner = &self.types.get(ptid);
+                    let inner_id = match inner {
+                        crate::semantic::types::ResolvedType::CallableTrait(id)
+                        | crate::semantic::types::ResolvedType::MutCallableTrait(id)
+                        | crate::semantic::types::ResolvedType::MoveCallableTrait(id) => *id,
+                        _ => unreachable!(),
+                    };
+                    if let crate::semantic::types::ResolvedType::Function { params, return_type } =
+                        self.types.get(inner_id).clone()
+                    {
+                        let id = self.closure_counter;
+                        self.closure_counter += 1;
+                        let struct_name = format!("__Closure_{id}");
+                        let fn_name = super::c_mangle::mangle_closure(id);
+
+                        let closure_params: Vec<(String, String)> = params.iter().enumerate()
+                            .map(|(i, tid)| {
+                                let c_type = super::c_types::type_id_to_c(*tid, self.types, self.scopes);
+                                (format!("__p{i}"), c_type)
+                            })
+                            .collect();
+                        let ret_type = super::c_types::type_id_to_c(return_type, self.types, self.scopes);
+                        let arg_names: Vec<&str> = closure_params.iter().map(|(n, _)| n.as_str()).collect();
+                        let call_expr = format!("{expr}({})", arg_names.join(", "));
+
+                        self.lifted_closures.push(super::LiftedClosure {
+                            id,
+                            struct_name,
+                            captures: vec![],
+                            params: closure_params,
+                            return_type: ret_type,
+                            body: call_expr,
+                        });
+
+                        format!("{fn_name}_fn")
+                    } else {
+                        expr
+                    }
                 };
                 // Wrap bare function pointer / function name into GorgetClosure
                 return format!("(GorgetClosure){{.fn_ptr = (void*){fn_ptr}, .env = NULL}}");
