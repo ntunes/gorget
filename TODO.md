@@ -31,8 +31,6 @@
 
 - **Basic orphan rule**: equip block must be in the module that defines the trait or the type. Prevents incoherent trait implementations across modules. [added: 2026-02-10]
 
-- **XML entity handling incomplete**: Only the 5 predefined entities decoded (`&amp;`, `&lt;`, `&gt;`, `&quot;`, `&apos;`). Numeric character references (`&#NNN;`, `&#xHH;`) and all other named entities silently pass through as literal `&`. (`xml.gg:26-52`) [added: 2026-02-16]
-
 - **No SDL/GFX error handling**: `sdl_create_window` and `sdl_create_renderer` can return null but return values are used directly without checks. Null window passed to `sdl_create_renderer` segfaults. (`gfx.gg:31-40`) [added: 2026-02-16]
 
 - **SSH Session initialization is fragile**: Constructor takes 11 positional arguments, several initialized with dummy values (`bytes_from_hex("")`, dummy crypto contexts). Error-prone — needs builder pattern or named-parameter constructor. (`ssh.gg:635`) [added: 2026-02-16]

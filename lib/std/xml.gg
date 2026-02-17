@@ -7,7 +7,7 @@
 # comment skipping. No namespaces, DTD, CDATA, or processing instructions.
 
 from std.collections import Vector, Dict
-from std.conv import int_to_str, char_to_str
+from std.conv import int_to_str, char_to_str, parse_int, chr
 
 # ── XML node types ─────────────────────────────────────────
 # Element(tag_name, attributes, child_nodes) | Text(content)
@@ -15,6 +15,28 @@ from std.conv import int_to_str, char_to_str
 enum XmlNode:
     Element(str, Dict[str, str], Vector[XmlNode])
     Text(str)
+
+# ── Hex parsing helper ────────────────────────────────────
+
+int xml_hex_to_int(str hex_str):
+    if hex_str.len() == 0:
+        return -1
+    int result = 0
+    int hi = 0
+    while hi < hex_str.len():
+        char hc = hex_str[hi]
+        int digit = -1
+        if hc >= '0' and hc <= '9':
+            digit = hc as int - '0' as int
+        elif hc >= 'a' and hc <= 'f':
+            digit = hc as int - 'a' as int + 10
+        elif hc >= 'A' and hc <= 'F':
+            digit = hc as int - 'A' as int + 10
+        if digit < 0:
+            return -1
+        result = result * 16 + digit
+        hi = hi + 1
+    return result
 
 # ── Entity decoding / encoding ─────────────────────────────
 
@@ -45,8 +67,31 @@ str xml_decode_entities(str raw):
                     decoded = decoded + "'"
                     ei = semi_pos + 1
                 else:
-                    decoded = decoded + "&"
-                    ei = ei + 1
+                    int nc_code = -1
+                    if entity_name.len() > 1:
+                        char en_first = entity_name[0]
+                        if en_first == '#':
+                            str ref_body = entity_name[1..entity_name.len()]
+                            if ref_body.len() > 1:
+                                char rb_first = ref_body[0]
+                                if rb_first == 'x' or rb_first == 'X':
+                                    nc_code = xml_hex_to_int(ref_body[1..ref_body.len()])
+                            if nc_code < 0 and ref_body.len() > 0:
+                                bool all_digits = true
+                                int di = 0
+                                while di < ref_body.len():
+                                    char dc = ref_body[di]
+                                    if dc < '0' or dc > '9':
+                                        all_digits = false
+                                    di = di + 1
+                                if all_digits:
+                                    nc_code = parse_int(ref_body)
+                    if nc_code > 0:
+                        decoded = decoded + char_to_str(chr(nc_code))
+                        ei = semi_pos + 1
+                    else:
+                        decoded = decoded + "&"
+                        ei = ei + 1
             else:
                 decoded = decoded + "&"
                 ei = ei + 1

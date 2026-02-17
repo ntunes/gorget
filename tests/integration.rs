@@ -1895,6 +1895,9 @@ b
 <root><child/></root>
 hello world
 val
+AB
+CD
+<b>
 true
 done",
     );

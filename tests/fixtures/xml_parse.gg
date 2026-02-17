@@ -62,6 +62,18 @@ void main():
     XmlNode n11 = xml_parse("<tag attr='val'/>").unwrap()
     print(n11.attr("attr"))
 
+    # Decimal numeric character references
+    XmlNode n12 = xml_parse("<msg>&#65;&#66;</msg>").unwrap()
+    print(n12.text())
+
+    # Hex numeric character references
+    XmlNode n13 = xml_parse("<msg>&#x43;&#x44;</msg>").unwrap()
+    print(n13.text())
+
+    # Mixed entities and numeric refs
+    XmlNode n14 = xml_parse("<msg>&#60;b&#62;</msg>").unwrap()
+    print(n14.text())
+
     # Parse error
     Result[XmlNode, str] bad_result = xml_parse("<unclosed>")
     bool is_err = bad_result.is_err()
