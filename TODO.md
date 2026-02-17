@@ -1,17 +1,11 @@
 # TODO
 
-## Critical
-
-- **HTTP Response type is opaque with no accessors**: `Response` struct declared as opaque (zero fields) with no equip block or helper functions, but `c_runtime.rs` already has `gorget_http_response_status()`, `gorget_http_response_body()`, `gorget_http_response_header()`. Users cannot use an HTTP response after receiving it. (`stdlib.rs:776`) [added: 2026-02-16]
-
 ## High
 
 
 
 
 - **Unicode escapes silently dropped in JSON and TOML parsers**: `\uXXXX` in JSON skips hex digits and produces empty string; TOML returns literal `"?"`. Silent data loss — `\u0041` should produce `'A'`. Either decode the codepoint or reject with an explicit error. (`json.gg:97-102`, `toml.gg:212-220`) [added: 2026-02-16]
-
-- **HTTP `Client` struct declared but unusable**: `Client` struct declared in synthetic stdlib alongside `Response` but has no constructor, no methods, no way to instantiate. Remove or complete. (`stdlib.rs:777`) [added: 2026-02-16]
 
 - **JSON/TOML accessors fail silently**: `get()`, `at()`, `as_int()` etc. return `Null()` or default values on type mismatch / missing keys with no way to distinguish "key absent" from "value is null." Need `has()`/`contains()` methods or `Result` return types. (`json.gg:350-458`, `toml.gg:837-951`) [added: 2026-02-16]
 

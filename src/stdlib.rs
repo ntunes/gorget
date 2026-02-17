@@ -769,12 +769,87 @@ fn gen_bytes_module() -> Module {
 
 // ─── std.http.client ────────────────────────────────────────
 
+/// Build a method declaration for an equip block (has `self` as first param).
+fn decl_method(
+    name: &str,
+    self_ownership: Ownership,
+    extra_params: &[(&str, Type)],
+    ret: Type,
+) -> FunctionDef {
+    let mut params = vec![Spanned::dummy(Param {
+        type_: Spanned::dummy(Type::SelfType),
+        ownership: self_ownership,
+        name: Spanned::dummy("self".to_string()),
+        default: None,
+        is_live: false,
+    })];
+    for (pname, pty) in extra_params {
+        params.push(Spanned::dummy(Param {
+            type_: Spanned::dummy(pty.clone()),
+            ownership: Ownership::Borrow,
+            name: Spanned::dummy(pname.to_string()),
+            default: None,
+            is_live: false,
+        }));
+    }
+    FunctionDef {
+        attributes: Vec::new(),
+        visibility: Visibility::Public,
+        qualifiers: FunctionQualifiers::default(),
+        return_type: Spanned::dummy(ret),
+        name: Spanned::dummy(name.to_string()),
+        generic_params: None,
+        params,
+        throws: None,
+        where_clause: None,
+        body: FunctionBody::Declaration,
+        doc_comment: None,
+        span: Span::dummy(),
+    }
+}
+
+/// Build an equip block (inherent, no trait).
+fn equip_block(type_name: &str, methods: Vec<FunctionDef>) -> Spanned<Item> {
+    Spanned::dummy(Item::Equip(EquipBlock {
+        generic_params: None,
+        trait_: None,
+        type_: Spanned::dummy(Type::Named {
+            name: Spanned::dummy(type_name.to_string()),
+            generic_args: vec![],
+        }),
+        via_field: None,
+        where_clause: None,
+        items: methods.into_iter().map(Spanned::dummy).collect(),
+        span: Span::dummy(),
+    }))
+}
+
 fn gen_http_client_module() -> Module {
     let mut items: Vec<Spanned<Item>> = Vec::new();
 
     // Opaque structs
     items.push(opaque_struct("Response"));
     items.push(opaque_struct("Client"));
+
+    // Response methods: status(), body(), header(key)
+    items.push(equip_block("Response", vec![
+        decl_method("status", Ownership::Borrow, &[], ty_int()),
+        decl_method("body", Ownership::Borrow, &[], ty_str()),
+        decl_method("header", Ownership::Borrow, &[("key", ty_str())], ty_str()),
+    ]));
+
+    // Client methods: base_url(url), header(k, v), timeout(ms), get/post/put/delete/patch/head
+    items.push(equip_block("Client", vec![
+        decl_method("base_url", Ownership::MutableBorrow, &[("url", ty_str())], ty_void()),
+        decl_method("header", Ownership::MutableBorrow, &[("key", ty_str()), ("value", ty_str())], ty_void()),
+        decl_method("timeout", Ownership::MutableBorrow, &[("ms", ty_int())], ty_void()),
+        decl_method("get", Ownership::Borrow, &[("path", ty_str())], ty_result(ty_response(), ty_str())),
+        decl_method("post", Ownership::Borrow, &[("path", ty_str()), ("body", ty_str())], ty_result(ty_response(), ty_str())),
+        decl_method("put", Ownership::Borrow, &[("path", ty_str()), ("body", ty_str())], ty_result(ty_response(), ty_str())),
+        decl_method("delete", Ownership::Borrow, &[("path", ty_str())], ty_result(ty_response(), ty_str())),
+        decl_method("patch", Ownership::Borrow, &[("path", ty_str()), ("body", ty_str())], ty_result(ty_response(), ty_str())),
+        decl_method("head", Ownership::Borrow, &[("path", ty_str())], ty_result(ty_response(), ty_str())),
+    ]));
 
     // HTTP verb functions with default params
     let http_verbs = ["get", "post", "put", "delete", "patch", "head"];
@@ -1363,10 +1438,18 @@ mod tests {
         let m = generate_stdlib_module(&["std".into(), "http".into(), "client".into()]).unwrap();
         let mut struct_names = vec![];
         let mut fn_names = vec![];
+        let mut equip_count = 0;
+        let mut equip_method_names: Vec<String> = vec![];
         for item in &m.items {
             match &item.node {
                 Item::Struct(s) => struct_names.push(s.name.node.clone()),
                 Item::Function(f) => fn_names.push(f.name.node.clone()),
+                Item::Equip(e) => {
+                    equip_count += 1;
+                    for method in &e.items {
+                        equip_method_names.push(method.node.name.node.clone());
+                    }
+                }
                 _ => {}
             }
         }
@@ -1378,5 +1461,13 @@ mod tests {
         assert!(fn_names.contains(&"delete".to_string()));
         assert!(fn_names.contains(&"patch".to_string()));
         assert!(fn_names.contains(&"head".to_string()));
+        // equip blocks for Response and Client
+        assert_eq!(equip_count, 2);
+        // Response methods
+        assert!(equip_method_names.contains(&"status".to_string()));
+        assert!(equip_method_names.contains(&"body".to_string()));
+        // Client methods
+        assert!(equip_method_names.contains(&"base_url".to_string()));
+        assert!(equip_method_names.contains(&"timeout".to_string()));
     }
 }
