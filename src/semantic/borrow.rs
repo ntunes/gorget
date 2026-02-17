@@ -356,6 +356,18 @@ impl<'a> BorrowChecker<'a> {
 
     // ─── Origin Tracking ──────────────────────────────────
 
+    /// Merge multiple origins: filter out Unknown, return single or CallResult union.
+    fn merge_origins(origins: Vec<BorrowOrigin>) -> BorrowOrigin {
+        let meaningful: Vec<_> = origins.into_iter()
+            .filter(|o| !matches!(o, BorrowOrigin::Unknown))
+            .collect();
+        match meaningful.len() {
+            0 => BorrowOrigin::Unknown,
+            1 => meaningful.into_iter().next().unwrap(),
+            _ => BorrowOrigin::CallResult(meaningful),
+        }
+    }
+
     /// Compute the borrow origin of an expression.
     fn compute_expr_origin(&self, expr: &Spanned<Expr>) -> BorrowOrigin {
         match &expr.node {
@@ -420,15 +432,17 @@ impl<'a> BorrowChecker<'a> {
                 if let Some(else_br) = else_branch {
                     origins.push(self.compute_expr_origin(else_br));
                 }
-                // Filter out non-meaningful origins
-                let meaningful: Vec<_> = origins.into_iter().filter(|o| !matches!(o, BorrowOrigin::Unknown)).collect();
-                if meaningful.is_empty() {
-                    BorrowOrigin::Unknown
-                } else if meaningful.len() == 1 {
-                    meaningful.into_iter().next().unwrap()
-                } else {
-                    BorrowOrigin::CallResult(meaningful)
+                Self::merge_origins(origins)
+            }
+
+            Expr::Match { arms, else_arm, .. } => {
+                let mut origins: Vec<_> = arms.iter()
+                    .map(|arm| self.compute_expr_origin(&arm.body))
+                    .collect();
+                if let Some(else_arm) = else_arm {
+                    origins.push(self.compute_expr_origin(else_arm));
                 }
+                Self::merge_origins(origins)
             }
 
             Expr::Block(block) | Expr::Do { body: block } => {
@@ -451,13 +465,8 @@ impl<'a> BorrowChecker<'a> {
                             .zip(ref_flags.iter())
                             .filter(|(_, is_ref)| **is_ref)
                             .map(|(arg, _)| self.compute_expr_origin(arg))
-                            .filter(|o| !matches!(o, BorrowOrigin::Unknown))
                             .collect();
-                        return match origins.len() {
-                            0 => BorrowOrigin::Unknown,
-                            1 => origins.into_iter().next().unwrap(),
-                            _ => BorrowOrigin::CallResult(origins),
-                        };
+                        return Self::merge_origins(origins);
                     }
                 }
                 BorrowOrigin::Unknown
@@ -469,13 +478,48 @@ impl<'a> BorrowChecker<'a> {
                     .map(|p| p.node.name.node.as_str()).collect();
                 let mut captured_origins = Vec::new();
                 self.collect_captured_ref_origins(body, &param_names, &mut captured_origins);
-                let meaningful: Vec<_> = captured_origins.into_iter()
-                    .filter(|o| !matches!(o, BorrowOrigin::Unknown))
+                Self::merge_origins(captured_origins)
+            }
+
+            // Transparent wrappers: propagate inner origin
+            Expr::Move { expr: inner }
+            | Expr::Deref { expr: inner }
+            | Expr::Try { expr: inner }
+            | Expr::TryCapture { expr: inner }
+            | Expr::As { expr: inner, .. } => {
+                self.compute_expr_origin(inner)
+            }
+
+            // NilCoalescing: either branch could provide the result
+            Expr::NilCoalescing { lhs, rhs } => {
+                let origins = vec![
+                    self.compute_expr_origin(lhs),
+                    self.compute_expr_origin(rhs),
+                ];
+                Self::merge_origins(origins)
+            }
+
+            // Collection literals: propagate element origins
+            Expr::ArrayLiteral(elems) | Expr::TupleLiteral(elems) => {
+                let origins: Vec<_> = elems.iter()
+                    .map(|e| self.compute_expr_origin(e))
                     .collect();
-                match meaningful.len() {
-                    0 => BorrowOrigin::Unknown,
-                    1 => meaningful.into_iter().next().unwrap(),
-                    _ => BorrowOrigin::CallResult(meaningful),
+                Self::merge_origins(origins)
+            }
+
+            Expr::DictLiteral(pairs) => {
+                let origins: Vec<_> = pairs.iter()
+                    .flat_map(|(k, v)| [self.compute_expr_origin(k), self.compute_expr_origin(v)])
+                    .collect();
+                Self::merge_origins(origins)
+            }
+
+            // Self in equip methods: param 0
+            Expr::SelfExpr => {
+                if let Some(&(def_id, idx)) = self.current_param_def_ids.first() {
+                    BorrowOrigin::Param { param_index: idx, def_id }
+                } else {
+                    BorrowOrigin::Unknown
                 }
             }
 
@@ -521,11 +565,7 @@ impl<'a> BorrowChecker<'a> {
                             }
                         })
                         .collect();
-                    return match origins.len() {
-                        0 => BorrowOrigin::Unknown,
-                        1 => origins.into_iter().next().unwrap(),
-                        _ => BorrowOrigin::CallResult(origins),
-                    };
+                    return Self::merge_origins(origins);
                 }
             }
         }
@@ -1687,6 +1727,43 @@ impl<'a> BorrowChecker<'a> {
             }
             Expr::OptionalChain { object, .. } => {
                 self.collect_captured_ref_origins(object, param_names, origins);
+            }
+            Expr::Match { scrutinee, arms, else_arm } => {
+                self.collect_captured_ref_origins(scrutinee, param_names, origins);
+                for arm in arms {
+                    self.collect_captured_ref_origins(&arm.body, param_names, origins);
+                }
+                if let Some(else_arm) = else_arm {
+                    self.collect_captured_ref_origins(else_arm, param_names, origins);
+                }
+            }
+            Expr::DictLiteral(pairs) => {
+                for (k, v) in pairs {
+                    self.collect_captured_ref_origins(k, param_names, origins);
+                    self.collect_captured_ref_origins(v, param_names, origins);
+                }
+            }
+            Expr::ListComprehension { expr: comp_expr, iterable, condition, .. } => {
+                self.collect_captured_ref_origins(iterable, param_names, origins);
+                self.collect_captured_ref_origins(comp_expr, param_names, origins);
+                if let Some(cond) = condition {
+                    self.collect_captured_ref_origins(cond, param_names, origins);
+                }
+            }
+            Expr::SetComprehension { expr: comp_expr, iterable, condition, .. } => {
+                self.collect_captured_ref_origins(iterable, param_names, origins);
+                self.collect_captured_ref_origins(comp_expr, param_names, origins);
+                if let Some(cond) = condition {
+                    self.collect_captured_ref_origins(cond, param_names, origins);
+                }
+            }
+            Expr::DictComprehension { key, value, iterable, condition, .. } => {
+                self.collect_captured_ref_origins(iterable, param_names, origins);
+                self.collect_captured_ref_origins(key, param_names, origins);
+                self.collect_captured_ref_origins(value, param_names, origins);
+                if let Some(cond) = condition {
+                    self.collect_captured_ref_origins(cond, param_names, origins);
+                }
             }
             _ => {} // Literals, SelfExpr, It, etc.
         }
@@ -3365,6 +3442,55 @@ void main():
                 SemanticErrorKind::UseAfterSourceMoved { .. }
                 | SemanticErrorKind::MoveInLoop { .. })),
             "unexpected error for loop with no move: {:?}", errors
+        );
+    }
+
+    // ── Phase 8: Origin completeness sweep ──
+
+    #[test]
+    fn match_expr_origin_use_after_move() {
+        // Match expression result borrows from source → move source → use result → error
+        let source = "\
+void consume(String !s):
+    pass
+
+void main():
+    String s = \"hello\"
+    str v = match 1:
+        case 1: s
+        case 2: s
+    consume(!s)
+    print(v)
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { name, source_name, .. }
+                if name == "v" && source_name == "s")),
+            "expected UseAfterSourceMoved for match expr origin, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn try_expr_origin_propagation() {
+        // str v = get_result()? borrows from param → move param source → use v → error
+        let source = "\
+str get_view(str s):
+    return s
+
+void consume(String !s):
+    pass
+
+void main():
+    String s = \"hello\"
+    str v = get_view(s)
+    consume(!s)
+    print(v)
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { name, source_name, .. }
+                if name == "v" && source_name == "s")),
+            "expected UseAfterSourceMoved for try expr origin propagation, got: {:?}", errors
         );
     }
 }
