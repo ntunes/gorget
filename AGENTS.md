@@ -37,6 +37,7 @@ cargo test               # all tests (use --test-threads=1 if integration tests 
 ## Language Syntax
 
 - Indentation-based blocks (Python-style)
+- Type-first declarations: `int x = 5`, `str name = "hello"`, `Vector[int] items = Vector[int]()`
 - Functions: `int add(int a, int b): return a + b`
 - Expression-body functions: `int double(int x) = x * 2`
 - Enum variants constructed as bare calls: `Red()` not `Color.Red()`
@@ -46,11 +47,15 @@ cargo test               # all tests (use --test-threads=1 if integration tests 
 - String interpolation: `print("{variable}")`
 - Match uses `case` keyword: `match x: case 1: ... else: ...`
 
+**Always use type-first native Gorget syntax** when generating code, writing plans, or providing examples. Write `int x = 5` not `x: int = 5` or `let x = 5`. Write `str greet(str name)` not `fn greet(name: str) -> str`.
+
 ## Solution Quality
 
 Always prefer sound, solid, and architecturally elegant solutions over quick fixes. This is a compiler — shortcuts compound into technical debt that becomes increasingly painful to unwind. When faced with a choice between a simpler approach and a more robust one, default to the solution that will age well. If the trade-off is unclear, discuss it: explain both approaches, compare their long-term implications, and ask before proceeding. A good solution implemented once is worth more than a fast solution revisited three times.
 
-Be infinitely resourceful. When a path is blocked, find another. When the obvious approach falls short, dig deeper — read more code, explore adjacent systems, study how other compilers solve the same problem. Exhaust every avenue before concluding something can't be done. Push on creativity: aim for generic, elegant solutions that solve entire classes of problems rather than patching individual symptoms. The best fix is the one that makes the next five bugs impossible.
+Push on creativity: aim for generic, elegant solutions that solve entire classes of problems rather than patching individual symptoms. The best fix is the one that makes the next five bugs impossible.
+
+Be infinitely resourceful, read code, search the web, innovate. When a path is blocked, find another. When the obvious approach falls short, dig deeper — read more code, explore adjacent systems, study how other compilers solve the same problem. Exhaust every avenue before concluding something can't be done.
 
 If you encounter code smells, structural weaknesses, or questionable patterns while exploring the codebase — even when unrelated to the current task — flag them. Don't hold back: recommending a significant refactor or a design change is welcome if it leads to a better codebase. Mention findings in your response and log anything non-trivial to `TODO.md` so it doesn't get forgotten.
 
