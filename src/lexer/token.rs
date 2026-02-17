@@ -291,7 +291,7 @@ pub enum Keyword {
     Where,
     Extends,
     Live,
-    Life,
+    Outlives,
 
     // Concurrency
     Async,
@@ -398,7 +398,7 @@ impl Keyword {
             "where" => Some(Keyword::Where),
             "extends" => Some(Keyword::Extends),
             "live" => Some(Keyword::Live),
-            "life" => Some(Keyword::Life),
+            "outlives" => Some(Keyword::Outlives),
             "async" => Some(Keyword::Async),
             "await" => Some(Keyword::Await),
             "spawn" => Some(Keyword::Spawn),
@@ -493,7 +493,7 @@ impl fmt::Display for Keyword {
             Keyword::Where => "where",
             Keyword::Extends => "extends",
             Keyword::Live => "live",
-            Keyword::Life => "life",
+            Keyword::Outlives => "outlives",
             Keyword::Async => "async",
             Keyword::Await => "await",
             Keyword::Spawn => "spawn",

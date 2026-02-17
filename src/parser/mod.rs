@@ -1442,7 +1442,7 @@ impl Parser {
         while !self.check(&Token::RBracket) && !self.at_end() {
             let param_start = self.peek_span();
 
-            if self.match_keyword(Keyword::Life) {
+            if self.match_keyword(Keyword::Live) {
                 let name = self.expect_identifier()?;
                 let end = self.previous_span();
                 params.push(Spanned::new(

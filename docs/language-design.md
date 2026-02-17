@@ -233,17 +233,30 @@ str process(live String &data):
 
 **Lifetime design tiers:**
 1. **Auto-inference** (99% of code) - compiler analyzes function body, no annotations needed
-2. **`live` keyword** (~1% of code) - mark parameters whose data the return value depends on
-3. **Explicit lifetime variables** (almost never) - `[life a]` for truly exotic cases:
+2. **`live` keyword on parameters** (~1% of code) - mark parameters whose data the return value depends on
+3. **`live` on struct fields + `outlives` bounds** (almost never) - for structs holding references and lifetime constraints
 
 ```gorget
-# Tier 3: Explicit lifetime variables (rare — e.g., self-referential structures)
-struct Parser[life a]:
-    str[a] input            # input has lifetime 'a'
+# Tier 2: Explicit on parameters (when compiler can't see the body)
+trait Container:
+    str get(live Container self, int index)
+
+# Tier 3: Struct with borrowed data (live on field)
+struct Parser:
+    live str source
     int position
 
-    str[a] remaining(self):
-        return self.input[self.position..]
+    str remaining(self):
+        return self.source[self.position..]
+
+# Tier 3: Multiple independent borrow sources (named groups)
+struct Merger:
+    live(left) str a
+    live(right) str b
+
+# Tier 3: Lifetime bounds
+str merge(live Merger m) where left outlives right:
+    ...
 ```
 
 ---
@@ -1383,7 +1396,7 @@ void main():
 
 | # | Question | Decision |
 |---|----------|----------|
-| 1 | **Lifetime syntax** | `live` keyword for explicit annotation; compiler auto-infers from function bodies (99% of code) |
+| 1 | **Lifetime syntax** | `live` keyword on params and struct fields; `outlives` for bounds; compiler auto-infers from function bodies (99% of code) |
 | 2 | **Implicit borrow at call sites?** | Yes — bare type = immutable borrow, no annotation needed |
 | 3 | **Expression-oriented blocks?** | Both — `return` for explicit early returns, last expression as implicit return value |
 | 4 | **Inheritance?** | None — composition via traits only |
@@ -2478,12 +2491,13 @@ type           = primitive_type | IDENT [ generic_args ]
                | type "(" [ type_list ] ")"  (* function type: int(int, int) *) ;
 generic_params = "[" generic_param { "," generic_param } "]" ;
 generic_param  = IDENT [ COLON trait_bound_list ]
-               | "life" IDENT
+               | "live" IDENT
                | "const" type IDENT ;
 generic_args   = "[" type { "," type } "]" ;
 where_clause   = "where" where_bound { "," where_bound } ;
 where_bound    = IDENT "is" trait_bound_list
-               | IDENT "has" field_bound { "," field_bound } ;
+               | IDENT "has" field_bound { "," field_bound }
+               | IDENT "outlives" IDENT ;
 trait_bound_list = trait_bound { "+" trait_bound } ;
 trait_bound    = IDENT [ "[" assoc_type_binding { "," assoc_type_binding } "]" ] ;
 assoc_type_binding = IDENT "=" type ;

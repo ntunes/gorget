@@ -585,7 +585,7 @@ impl Formatter {
             match &param.node {
                 GenericParam::Type(name) => self.emitter.write(&name.node),
                 GenericParam::Lifetime(name) => {
-                    self.emitter.write("life ");
+                    self.emitter.write("live ");
                     self.emitter.write(&name.node);
                 }
                 GenericParam::Const { type_, name } => {

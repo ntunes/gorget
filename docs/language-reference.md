@@ -122,7 +122,7 @@ with  as
 **Generic/constraint keywords:**
 
 ```
-where  extends  live  life
+where  extends  live  outlives
 ```
 
 **Concurrency keywords:**
@@ -599,6 +599,29 @@ The `live` keyword on a parameter indicates that the return value borrows from t
 
 ```gorget
 str get(live Container self, int index)
+```
+
+On struct fields, `live` marks fields that hold borrowed data. The struct cannot outlive the referenced data:
+
+```gorget
+struct Parser:
+    live str source
+    int position
+```
+
+Named borrow groups distinguish independent lifetimes in structs with multiple borrowed fields:
+
+```gorget
+struct Merger:
+    live(left) str a
+    live(right) str b
+```
+
+Use `where ... outlives ...` for lifetime bounds:
+
+```gorget
+str merge(live Merger m) where left outlives right:
+    ...
 ```
 
 ### 5.2 Structs
@@ -1749,14 +1772,14 @@ enum AppError:
 ```ebnf
 generic_params = "[" generic_param { "," generic_param } "]" ;
 generic_param  = IDENTIFIER
-               | "life" IDENTIFIER
+               | "live" IDENTIFIER
                | "const" type IDENTIFIER ;
 ```
 
 Types, functions, traits, and equip blocks may be parameterized:
 
 - **Type parameters:** `[T]`, `[T, U]`
-- **Lifetime parameters:** `[life a]` (for explicit lifetime annotation)
+- **Lifetime parameters:** `[live a]` (for named borrow groups on structs — see §5.1)
 - **Const parameters:** `[const int N]`
 
 ```gorget
@@ -2826,9 +2849,10 @@ attr_arg  = IDENTIFIER | STRING_LITERAL | IDENTIFIER "=" STRING_LITERAL ;
 
 (* ── Generics ── *)
 generic_params = "[" generic_param { "," generic_param } "]" ;
-generic_param  = IDENTIFIER | "life" IDENTIFIER | "const" type IDENTIFIER ;
+generic_param  = IDENTIFIER | "live" IDENTIFIER | "const" type IDENTIFIER ;
 where_clause   = "where" where_bound { "," where_bound } ;
-where_bound    = IDENTIFIER "is" trait_bound { "+" trait_bound } ;
+where_bound    = IDENTIFIER "is" trait_bound { "+" trait_bound }
+               | IDENTIFIER "outlives" IDENTIFIER ;
 trait_bound_list = trait_bound { "+" trait_bound } ;
 trait_bound    = IDENTIFIER [ "[" type_or_binding { "," type_or_binding } "]" ] ;
 
