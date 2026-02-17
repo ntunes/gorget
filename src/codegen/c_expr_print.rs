@@ -331,13 +331,19 @@ impl CodegenContext<'_> {
     ) -> (String, String) {
         use crate::semantic::types::ResolvedType;
 
-        // If the type is a generic param with an active substitution, resolve through it.
+        // If the type is a generic param with an active substitution, resolve through TypeId
+        // (preserves Displayable dispatch, enum/struct formatting, etc.).
         if let ResolvedType::Defined(def_id) = self.types.get(type_id) {
             let def = self.scopes.get_def(*def_id);
             if def.kind == DefKind::GenericParam {
                 let param_name = def.name.clone();
+                // Prefer type_id_subs (rich path) over type_subs (lossy C-string path)
+                if let Some(tid) = self.type_id_subs.iter().find(|(n, _)| *n == param_name).map(|(_, v)| *v) {
+                    return self.format_for_type_id(tid, expr);
+                }
+                // Fallback: if type_id_subs didn't have it (mangled generic), print type name
                 if let Some(c_type) = self.type_subs.iter().find(|(n, _)| *n == param_name).map(|(_, v)| v.clone()) {
-                    return c_types::format_for_c_type(&c_type, expr);
+                    return ("%s".to_string(), format!("\"<{c_type}>\""));
                 }
             }
         }

@@ -152,6 +152,10 @@ pub struct CodegenContext<'a> {
     /// Active generic type substitutions (param_name → C type) during monomorphized
     /// function body codegen. Empty outside of `emit_monomorphized_function`.
     pub type_subs: Vec<(String, String)>,
+    /// Active generic type substitutions (param_name → TypeId) during monomorphized
+    /// function body codegen. Parallel to `type_subs` but preserves semantic info
+    /// for rich formatting (Displayable dispatch, enum printing, etc.).
+    pub type_id_subs: Vec<(String, TypeId)>,
     /// When true, `assert` statements are stripped from output (no code emitted).
     pub strip_asserts: bool,
     /// When true, integer overflow wraps silently instead of panicking.
@@ -353,6 +357,7 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
         drop_scopes: Vec::new(),
         closure_return_type_hint: None,
         type_subs: Vec::new(),
+        type_id_subs: Vec::new(),
         strip_asserts: opts.strip_asserts,
         overflow_wrap: opts.overflow_wrap,
         trace: opts.trace,

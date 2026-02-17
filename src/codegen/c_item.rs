@@ -2366,9 +2366,11 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         emitter: &mut CEmitter,
     ) {
         let (ret_type, params, subs) = self.monomorphized_function_signature(template, c_type_args);
+        let id_subs = self.build_type_id_substitutions(template.generic_params.as_ref(), c_type_args);
 
         // Activate type substitutions so that body codegen sees T → concrete type
         let prev_subs = std::mem::replace(&mut self.type_subs, subs);
+        let prev_id_subs = std::mem::replace(&mut self.type_id_subs, id_subs);
 
         // Emit definition
         match &template.body {
@@ -2396,6 +2398,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
 
         // Restore previous substitutions
         self.type_subs = prev_subs;
+        self.type_id_subs = prev_id_subs;
     }
 
     /// Build a substitution map from generic param names to concrete C types.
@@ -2415,6 +2418,58 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
             }
         }
         subs
+    }
+
+    /// Build a parallel substitution map from generic param names to TypeIds.
+    /// Returns `None` entries for mangled/complex C types that can't be reverse-mapped.
+    fn build_type_id_substitutions(
+        &self,
+        generic_params: Option<&crate::span::Spanned<crate::parser::ast::GenericParams>>,
+        c_type_args: &[String],
+    ) -> Vec<(String, crate::semantic::ids::TypeId)> {
+        let mut subs = Vec::new();
+        if let Some(params) = generic_params {
+            for (i, param) in params.node.params.iter().enumerate() {
+                if let crate::parser::ast::GenericParam::Type(name) = &param.node {
+                    if let Some(c_type) = c_type_args.get(i) {
+                        if let Some(tid) = self.resolve_c_type_to_type_id(c_type) {
+                            subs.push((name.node.clone(), tid));
+                        }
+                    }
+                }
+            }
+        }
+        subs
+    }
+
+    /// Reverse-map a C type string to its semantic TypeId.
+    /// Returns `None` for mangled generic names or unknown types.
+    fn resolve_c_type_to_type_id(&self, c_type: &str) -> Option<crate::semantic::ids::TypeId> {
+        // Primitives
+        match c_type {
+            "int64_t" => return Some(self.types.int_id),
+            "double" => return Some(self.types.float_id),
+            "bool" => return Some(self.types.bool_id),
+            "char" => return Some(self.types.char_id),
+            "const char*" => return Some(self.types.string_id),
+            "GorgetString" => return Some(self.types.owned_string_id),
+            "void" => return Some(self.types.void_id),
+            "int8_t" | "int16_t" | "int32_t" | "uint64_t" | "uint8_t" | "uint16_t" | "uint32_t" | "float" => {
+                // Less common primitives — fall through to named lookup
+            }
+            _ => {}
+        }
+        // Named types (struct, enum, newtype): look up by name in scope
+        // Skip mangled names (contain "__") — these are complex generic instantiations
+        if !c_type.contains("__") && !c_type.contains('*') && !c_type.contains(' ') {
+            if let Some(def_id) = self.scopes.lookup(c_type) {
+                let def = self.scopes.get_def(def_id);
+                if let Some(tid) = def.type_id {
+                    return Some(tid);
+                }
+            }
+        }
+        None
     }
 
     /// Substitute type parameters in an AST Type, returning a C type string.
@@ -2874,9 +2929,11 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         let (ret_type, func_name, params, subs) = self.monomorphized_equip_signature(
             method, struct_generic_params, c_type_args, mangled_type_name, trait_name,
         );
+        let id_subs = self.build_type_id_substitutions(struct_generic_params, c_type_args);
 
         // Activate substitutions and self type for body codegen
         let prev_subs = std::mem::replace(&mut self.type_subs, subs);
+        let prev_id_subs = std::mem::replace(&mut self.type_id_subs, id_subs);
         let prev_self_type = self.current_self_type.take();
         self.current_self_type = Some(mangled_type_name.to_string());
 
@@ -2915,6 +2972,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         }
 
         self.type_subs = prev_subs;
+        self.type_id_subs = prev_id_subs;
         self.current_self_type = prev_self_type;
         self.pointer_params = prev_pointer_params;
     }

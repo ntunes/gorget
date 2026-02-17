@@ -9,8 +9,6 @@
 
 
 
-- **`format_for_c_type` silently casts structs to int**: Unknown types in string interpolation default to `(long long)` cast, corrupting the value. Should error on non-formattable types. (`c_types.rs:284`) [added: 2026-02-16]
-
 - **Unicode escapes silently dropped in JSON and TOML parsers**: `\uXXXX` in JSON skips hex digits and produces empty string; TOML returns literal `"?"`. Silent data loss — `\u0041` should produce `'A'`. Either decode the codepoint or reject with an explicit error. (`json.gg:97-102`, `toml.gg:212-220`) [added: 2026-02-16]
 
 - **HTTP `Client` struct declared but unusable**: `Client` struct declared in synthetic stdlib alongside `Response` but has no constructor, no methods, no way to instantiate. Remove or complete. (`stdlib.rs:777`) [added: 2026-02-16]
