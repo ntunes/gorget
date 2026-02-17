@@ -1,0 +1,12 @@
+# Lifetime error: method returning String bound to str (temporary borrow)
+struct Builder:
+    String data
+
+equip Builder:
+    String build(self):
+        return "result"
+
+void main():
+    Builder b = Builder("hello")
+    str v = b.build()
+    print(v)

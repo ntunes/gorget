@@ -1,0 +1,10 @@
+# Lifetime error: move in for-loop body, use ref after
+void consume(String !s):
+    pass
+
+void main():
+    String s = "hello"
+    str v = s
+    for i in 0..3:
+        consume(!s)
+    print(v)

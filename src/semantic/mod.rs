@@ -172,7 +172,7 @@ pub fn analyze(module: &mut Module) -> AnalysisResult {
         traits::build_registry(module, &scopes, &mut types, &resolution_map, &mut errors);
 
     // Pass 4: Type check everything
-    let expr_types = typecheck::check_module(
+    let (expr_types, method_resolutions) = typecheck::check_module(
         module,
         &mut scopes,
         &mut types,
@@ -195,6 +195,7 @@ pub fn analyze(module: &mut Module) -> AnalysisResult {
         &mut resolve_ctx.function_info,
         immutable_by_default,
         &expr_types,
+        &method_resolutions,
         &mut errors,
     );
 

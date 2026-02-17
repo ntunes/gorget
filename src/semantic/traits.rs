@@ -457,7 +457,7 @@ fn process_impl(
     // Collect methods
     let mut methods = FxHashMap::default();
     for method in &impl_block.items {
-        let method_def_id = scopes.lookup(&method.node.name.node);
+        let method_def_id = scopes.lookup_def_by_span(&method.node.name.node, method.node.name.span);
         let sig = build_function_sig(&method.node, scopes, types);
         let def_id = method_def_id.unwrap_or(DefId(0));
         methods.insert(method.node.name.node.clone(), (def_id, sig));

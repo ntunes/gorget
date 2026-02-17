@@ -331,8 +331,73 @@ fn collect_item(
             collect_import(import, scopes, errors);
         }
 
-        Item::Equip(_) => {
-            // Processed in Step 7 (trait registry)
+        Item::Equip(impl_block) => {
+            // Define equip method names in a temporary scope so they get unique DefIds
+            // and populate function_info (needed for borrow checker origin/temporary tracking).
+            scopes.push_scope(super::scope::ScopeKind::EquipBlock { self_type: None });
+            for method in &impl_block.items {
+                let f = &method.node;
+                match scopes.define(f.name.node.clone(), DefKind::Function, f.name.span) {
+                    Ok(def_id) => {
+                        let ret_type = types::ast_type_to_resolved(
+                            &f.return_type.node,
+                            f.return_type.span,
+                            scopes,
+                            types,
+                        )
+                        .ok();
+                        let param_ownerships: Vec<Ownership> =
+                            f.params.iter().map(|p| p.node.ownership).collect();
+                        let param_names: Vec<String> =
+                            f.params.iter().map(|p| p.node.name.node.clone()).collect();
+                        let param_defaults: Vec<Option<Spanned<Expr>>> =
+                            f.params.iter().map(|p| p.node.default.clone()).collect();
+                        let param_type_ids: Vec<Option<TypeId>> = f
+                            .params
+                            .iter()
+                            .map(|p| {
+                                types::ast_type_to_resolved(
+                                    &p.node.type_.node,
+                                    p.node.type_.span,
+                                    scopes,
+                                    types,
+                                )
+                                .ok()
+                            })
+                            .collect();
+                        let generic_param_names = extract_generic_param_names(&f.generic_params);
+                        let where_bounds = extract_where_bounds(&f.where_clause);
+                        let outlives_bounds = extract_outlives_bounds(&f.where_clause);
+                        let param_is_live: Vec<bool> =
+                            f.params.iter().map(|p| p.node.is_live).collect();
+                        let param_live_groups: Vec<Option<String>> =
+                            f.params.iter().map(|p| p.node.live_group.clone()).collect();
+
+                        ctx.function_info.insert(
+                            def_id,
+                            FunctionInfo {
+                                def_id,
+                                return_type_id: ret_type,
+                                param_type_ids,
+                                param_ownerships,
+                                param_names,
+                                param_defaults,
+                                throws: f.throws.is_some(),
+                                scope_id: scopes.current_scope(),
+                                generic_param_names,
+                                where_bounds,
+                                return_borrows_from: Vec::new(),
+                                param_is_live,
+                                param_live_groups,
+                                outlives_bounds,
+                                has_body: matches!(f.body, crate::parser::ast::FunctionBody::Block(_) | crate::parser::ast::FunctionBody::Expression(_)),
+                            },
+                        );
+                    }
+                    Err(e) => errors.push(e),
+                }
+            }
+            scopes.pop_scope();
         }
 
         Item::ExternBlock(ext) => {

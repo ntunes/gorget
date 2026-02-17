@@ -1,0 +1,12 @@
+# Positive test: method borrows from self, receiver stays alive
+struct Holder:
+    String name
+
+equip Holder:
+    str get_name(self):
+        return self.name
+
+void main():
+    Holder h = Holder("hello")
+    str v = h.get_name()
+    print(v)

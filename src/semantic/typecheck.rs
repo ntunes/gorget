@@ -303,6 +303,8 @@ struct TypeChecker<'a> {
     implicit_it_type: Option<TypeId>,
     /// Map from expression span to its inferred TypeId (used by codegen for Result-based `?`).
     expr_types: FxHashMap<Span, TypeId>,
+    /// Map from method call span start → DefId of resolved method (for borrow checker).
+    method_resolutions: FxHashMap<usize, DefId>,
     /// The self type of the current equip block (if any).
     current_self_type: Option<TypeId>,
     /// Declared type hint for integer literal coercion (e.g., uint8 x = 5).
@@ -332,6 +334,7 @@ impl<'a> TypeChecker<'a> {
             current_function_throws: false,
             implicit_it_type: None,
             expr_types: FxHashMap::default(),
+            method_resolutions: FxHashMap::default(),
             current_self_type: None,
             decl_type_hint: None,
         }
@@ -715,7 +718,7 @@ impl<'a> TypeChecker<'a> {
                         match def.kind {
                             DefKind::Enum => {
                                 // Could be an enum variant access: Option.None
-                                self.types.insert(ResolvedType::Defined(def_id))
+                                self.types.defined_id(def_id)
                             }
                             _ => def.type_id.unwrap_or(self.types.error_id),
                         }
@@ -925,7 +928,7 @@ impl<'a> TypeChecker<'a> {
                                         if def_name == "Box" && arg_types.len() == 1 {
                                             return self.types.insert(ResolvedType::Generic(def_id, arg_types));
                                         }
-                                        return self.types.insert(ResolvedType::Defined(def_id));
+                                        return self.types.defined_id(def_id);
                                     }
                                     _ => {}
                                 }
@@ -953,7 +956,7 @@ impl<'a> TypeChecker<'a> {
                                 if def_name == "Box" && arg_types.len() == 1 {
                                     return self.types.insert(ResolvedType::Generic(def_id, arg_types));
                                 }
-                                self.types.insert(ResolvedType::Defined(def_id))
+                                self.types.defined_id(def_id)
                             }
                             _ => {
                                 for arg in args {
@@ -974,7 +977,7 @@ impl<'a> TypeChecker<'a> {
                                         for arg in args {
                                             self.infer_expr(&arg.node.value);
                                         }
-                                        return self.types.insert(ResolvedType::Defined(def_id));
+                                        return self.types.defined_id(def_id);
                                     }
                                     DefKind::Function => {
                                         // Function without resolved type — just infer args
@@ -1005,9 +1008,10 @@ impl<'a> TypeChecker<'a> {
                 let resolved_receiver = self.resolve_type(receiver_type);
 
                 // Try to resolve method via trait registry
-                if let Some((_def_id, sig)) =
+                if let Some((def_id, sig)) =
                     self.traits.resolve_method(resolved_receiver, &method.node)
                 {
+                    self.method_resolutions.insert(method.span.start, *def_id);
                     let sig = sig.clone();
                     // Check argument count
                     if args.len() != sig.params.len() {
@@ -1429,7 +1433,7 @@ impl<'a> TypeChecker<'a> {
                             return self.types.insert(ResolvedType::Generic(def_id, type_ids));
                         }
                     }
-                    self.types.insert(ResolvedType::Defined(def_id))
+                    self.types.defined_id(def_id)
                 } else {
                     for arg in args {
                         self.infer_expr(arg);
@@ -2570,7 +2574,9 @@ fn ast_type_to_gorget_name(ty: &Type) -> Option<String> {
 }
 
 /// Run type checking on the entire module.
-/// Returns a map from expression spans to their inferred types (for Result-based `?` codegen).
+/// Returns (expr_types, method_resolutions):
+/// - expr_types: span → inferred TypeId (for Result-based `?` codegen)
+/// - method_resolutions: method span start → DefId (for borrow checker origin tracking)
 pub fn check_module(
     module: &Module,
     scopes: &mut ScopeTable,
@@ -2580,7 +2586,7 @@ pub fn check_module(
     function_info: &FxHashMap<DefId, FunctionInfo>,
     enum_variants: &FxHashMap<DefId, EnumVariantInfo>,
     errors: &mut Vec<SemanticError>,
-) -> FxHashMap<Span, TypeId> {
+) -> (FxHashMap<Span, TypeId>, FxHashMap<usize, DefId>) {
     let mut checker = TypeChecker::new(scopes, types, traits, resolution_map, function_info, enum_variants);
 
     // Pre-pass: register function signatures so callers can infer return types.
@@ -2693,7 +2699,7 @@ pub fn check_module(
     }
 
     errors.extend(checker.errors);
-    checker.expr_types
+    (checker.expr_types, checker.method_resolutions)
 }
 
 #[cfg(test)]

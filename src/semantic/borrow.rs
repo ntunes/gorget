@@ -261,6 +261,10 @@ struct BorrowChecker<'a> {
     /// Current function's param (DefId, param_index) pairs.
     current_param_def_ids: Vec<(DefId, usize)>,
 
+    // ── Method resolution (Phase 7) ──
+    /// Method span start → DefId (from typechecker, for origin/temporary tracking).
+    method_resolutions: &'a FxHashMap<usize, DefId>,
+
     // ── Outlives constraints (Phase 5) ──
     /// Active `where a outlives b` constraints from call sites.
     active_outlives: Vec<ActiveOutlives>,
@@ -274,6 +278,7 @@ impl<'a> BorrowChecker<'a> {
         function_info: &'a FxHashMap<DefId, FunctionInfo>,
         immutable_by_default: bool,
         expr_types: &'a FxHashMap<Span, TypeId>,
+        method_resolutions: &'a FxHashMap<usize, DefId>,
         ref_type_structs: FxHashSet<DefId>,
         struct_field_ref_flags: FxHashMap<DefId, Vec<bool>>,
     ) -> Self {
@@ -287,6 +292,7 @@ impl<'a> BorrowChecker<'a> {
             loop_depth: 0,
             immutable_by_default,
             expr_types,
+            method_resolutions,
             ref_type_structs,
             struct_field_ref_flags,
             var_origins: FxHashMap::default(),
@@ -500,11 +506,30 @@ impl<'a> BorrowChecker<'a> {
         BorrowOrigin::Unknown
     }
 
-    /// Compute the origin of a method call result.
-    fn compute_method_call_origin(&self, receiver: &Spanned<Expr>, _method: &Spanned<String>, _args: &[Spanned<CallArg>]) -> BorrowOrigin {
-        // For methods, if the return borrows from self, propagate receiver's origin.
-        // For now, conservatively propagate the receiver's origin for any method
-        // returning a reference type. Phase 2's body analysis refines this.
+    /// Compute the origin of a method call result using `return_borrows_from` data.
+    fn compute_method_call_origin(&self, receiver: &Spanned<Expr>, method: &Spanned<String>, args: &[Spanned<CallArg>]) -> BorrowOrigin {
+        if let Some(&def_id) = self.method_resolutions.get(&method.span.start) {
+            if let Some(info) = self.function_info.get(&def_id) {
+                if !info.return_borrows_from.is_empty() {
+                    // Methods have self as param 0: index 0 = receiver, N>0 = args[N-1]
+                    let origins: Vec<BorrowOrigin> = info.return_borrows_from.iter()
+                        .filter_map(|&idx| {
+                            if idx == 0 {
+                                Some(self.compute_expr_origin(receiver))
+                            } else {
+                                args.get(idx - 1).map(|a| self.compute_expr_origin(&a.node.value))
+                            }
+                        })
+                        .collect();
+                    return match origins.len() {
+                        0 => BorrowOrigin::Unknown,
+                        1 => origins.into_iter().next().unwrap(),
+                        _ => BorrowOrigin::CallResult(origins),
+                    };
+                }
+            }
+        }
+        // Fallback: conservatively propagate receiver origin
         self.compute_expr_origin(receiver)
     }
 
@@ -1059,10 +1084,12 @@ impl<'a> BorrowChecker<'a> {
 
                             // Phase 6: Detect binding a ref type to a temporary
                             if self.is_temporary_borrow(value) {
-                                let callee_name = if let Expr::Call { callee, .. } = &value.node {
-                                    Self::extract_callee_name(callee)
-                                } else {
-                                    "<unknown>".to_string()
+                                let callee_name = match &value.node {
+                                    Expr::Call { callee, .. } => Self::extract_callee_name(callee),
+                                    Expr::MethodCall { receiver, method, .. } => {
+                                        format!("{}.{}", Self::extract_receiver_name(receiver), method.node)
+                                    }
+                                    _ => "<unknown>".to_string(),
                                 };
                                 self.error(
                                     SemanticErrorKind::TemporaryBorrow {
@@ -1200,11 +1227,20 @@ impl<'a> BorrowChecker<'a> {
                 ..
             } => {
                 self.check_expr(iterable);
+                let before = self.save_branch_state();
                 self.loop_depth += 1;
                 self.check_block(body);
                 self.loop_depth -= 1;
+                let after_body = self.save_branch_state();
                 if let Some(else_body) = else_body {
+                    // for-else: else only runs if body never does (0 iterations)
+                    self.restore_branch_state(&before);
                     self.check_block(else_body);
+                    let after_else = self.save_branch_state();
+                    self.merge_branch_states(&[after_body, after_else]);
+                } else {
+                    // Body may execute 0+ times: merge pre-loop with post-body
+                    self.merge_branch_states(&[before, after_body]);
                 }
             }
 
@@ -1214,18 +1250,29 @@ impl<'a> BorrowChecker<'a> {
                 else_body,
             } => {
                 self.check_expr(condition);
+                let before = self.save_branch_state();
                 self.loop_depth += 1;
                 self.check_block(body);
                 self.loop_depth -= 1;
+                let after_body = self.save_branch_state();
                 if let Some(else_body) = else_body {
+                    self.restore_branch_state(&before);
                     self.check_block(else_body);
+                    let after_else = self.save_branch_state();
+                    self.merge_branch_states(&[after_body, after_else]);
+                } else {
+                    self.merge_branch_states(&[before, after_body]);
                 }
             }
 
             Stmt::Loop { body } => {
+                let before = self.save_branch_state();
                 self.loop_depth += 1;
                 self.check_block(body);
                 self.loop_depth -= 1;
+                let after_body = self.save_branch_state();
+                // Infinite loop, but break can exit: merge pre+post for break paths
+                self.merge_branch_states(&[before, after_body]);
             }
 
             Stmt::If {
@@ -1716,15 +1763,9 @@ impl<'a> BorrowChecker<'a> {
         }
     }
 
-    /// Check if a call expression returns a temporary (non-reference owning type) with
-    /// no `return_borrows_from`. Binding a reference type to such a value is an error
-    /// because the temporary will be dropped immediately.
-    fn is_temporary_borrow(&self, value: &Spanned<Expr>) -> bool {
-        let callee = match &value.node {
-            Expr::Call { callee, .. } => callee,
-            _ => return false,
-        };
-        let Some(def_id) = self.resolve_callee_def_id(callee) else { return false };
+    /// Check if a function returns a temporary (non-reference owning type) with
+    /// no `return_borrows_from`. Used by both Call and MethodCall detection.
+    fn is_temporary_from_function(&self, def_id: DefId) -> bool {
         let Some(info) = self.function_info.get(&def_id) else { return false };
         // Only check user-defined functions with bodies (not declarations/externs)
         if !info.has_body {
@@ -1741,6 +1782,23 @@ impl<'a> BorrowChecker<'a> {
             && info.return_borrows_from.is_empty()
     }
 
+    /// Check if a call/method-call expression returns a temporary.
+    /// Binding a reference type to such a value is an error
+    /// because the temporary will be dropped immediately.
+    fn is_temporary_borrow(&self, value: &Spanned<Expr>) -> bool {
+        match &value.node {
+            Expr::Call { callee, .. } => {
+                let Some(def_id) = self.resolve_callee_def_id(callee) else { return false };
+                self.is_temporary_from_function(def_id)
+            }
+            Expr::MethodCall { method, .. } => {
+                let Some(&def_id) = self.method_resolutions.get(&method.span.start) else { return false };
+                self.is_temporary_from_function(def_id)
+            }
+            _ => false,
+        }
+    }
+
     /// Extract the callee name from a Call expression (for error messages).
     fn extract_callee_name(callee: &Spanned<Expr>) -> String {
         match &callee.node {
@@ -1749,6 +1807,17 @@ impl<'a> BorrowChecker<'a> {
                 segments.iter().map(|s| s.node.as_str()).collect::<Vec<_>>().join(".")
             }
             _ => "<expression>".to_string(),
+        }
+    }
+
+    /// Extract a readable name from a method receiver expression (for error messages).
+    fn extract_receiver_name(receiver: &Spanned<Expr>) -> String {
+        match &receiver.node {
+            Expr::Identifier(name) => name.clone(),
+            Expr::FieldAccess { object, field } => {
+                format!("{}.{}", Self::extract_receiver_name(object), field.node)
+            }
+            _ => "<expr>".to_string(),
         }
     }
 
@@ -2102,6 +2171,7 @@ pub fn check_module(
     function_info: &mut FxHashMap<DefId, FunctionInfo>,
     immutable_by_default: bool,
     expr_types: &FxHashMap<Span, TypeId>,
+    method_resolutions: &FxHashMap<usize, DefId>,
     errors: &mut Vec<SemanticError>,
 ) {
     // Phase 4: compute which structs have reference-type fields
@@ -2114,7 +2184,7 @@ pub fn check_module(
     // Pass 5b: full borrow check with origin tracking
     let mut checker = BorrowChecker::new(
         scopes, types, resolution_map, function_info, immutable_by_default, expr_types,
-        ref_type_structs, struct_field_ref_flags,
+        method_resolutions, ref_type_structs, struct_field_ref_flags,
     );
 
     for item in &module.items {
@@ -3170,6 +3240,131 @@ void main():
             has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { name, source_name, .. }
                 if name == "v" && source_name == "s")),
             "expected UseAfterSourceMoved after match branch origin merge, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn method_origin_borrows_from_self() {
+        // Method returns str borrowing from self.field — no error when receiver is alive
+        let source = "\
+struct Holder:
+    String name
+
+equip Holder:
+    str get_name(self):
+        return self.name
+
+void main():
+    Holder h = Holder(\"hello\")
+    str v = h.get_name()
+    print(v)
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k,
+                SemanticErrorKind::UseAfterSourceMoved { .. }
+                | SemanticErrorKind::TemporaryBorrow { .. })),
+            "unexpected error for method borrowing from alive receiver: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn method_origin_use_after_source_moved() {
+        // Take str from method, move receiver, use str → UseAfterSourceMoved
+        let source = "\
+struct Holder:
+    String name
+
+equip Holder:
+    str get_name(self):
+        return self.name
+
+void consume(Holder !h):
+    pass
+
+void main():
+    Holder h = Holder(\"hello\")
+    str v = h.get_name()
+    consume(!h)
+    print(v)
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { name, source_name, .. }
+                if name == "v" && source_name == "h")),
+            "expected UseAfterSourceMoved for v after h moved, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn method_temporary_borrow() {
+        // str v = b.build() where build() returns String → TemporaryBorrow
+        let source = "\
+struct Builder:
+    String data
+
+equip Builder:
+    String build(self):
+        return !self.data
+
+void main():
+    Builder b = Builder(\"hello\")
+    str v = b.build()
+    print(v)
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::TemporaryBorrow { name, callee }
+                if name == "v" && callee == "b.build")),
+            "expected TemporaryBorrow for method returning String, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn loop_origin_merging_use_after_move() {
+        // Move source inside while body, use ref after loop → UseAfterSourceMoved
+        let source = "\
+void consume(String !s):
+    pass
+
+void main():
+    String s = \"hello\"
+    str v = s
+    int i = 0
+    while i < 3:
+        consume(!s)
+        i = i + 1
+    print(v)
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k,
+                SemanticErrorKind::UseAfterSourceMoved { name, source_name, .. }
+                    if name == "v" && source_name == "s"))
+            || has_error(&errors, |k| matches!(k, SemanticErrorKind::MoveInLoop { name } if name == "s")),
+            "expected UseAfterSourceMoved or MoveInLoop after loop origin merge, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn loop_origin_no_move_ok() {
+        // No move in loop → no error
+        let source = "\
+void main():
+    String s = \"hello\"
+    str v = s
+    int i = 0
+    while i < 3:
+        print(v)
+        i = i + 1
+    print(v)
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k,
+                SemanticErrorKind::UseAfterSourceMoved { .. }
+                | SemanticErrorKind::MoveInLoop { .. })),
+            "unexpected error for loop with no move: {:?}", errors
         );
     }
 }

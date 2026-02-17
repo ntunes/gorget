@@ -3646,3 +3646,35 @@ fn lifetime_groups_error() {
         "must outlive",
     );
 }
+
+#[test]
+fn lifetime_method() {
+    run_gg(
+        "lifetime_method.gg",
+        "hello",
+    );
+}
+
+#[test]
+fn lifetime_method_error() {
+    check_gg_fails(
+        "lifetime_method_error.gg",
+        "after source",
+    );
+}
+
+#[test]
+fn lifetime_method_temp_error() {
+    check_gg_fails(
+        "lifetime_method_temp_error.gg",
+        "temporary",
+    );
+}
+
+#[test]
+fn lifetime_loop_error() {
+    check_gg_fails(
+        "lifetime_loop_error.gg",
+        "cannot move",
+    );
+}

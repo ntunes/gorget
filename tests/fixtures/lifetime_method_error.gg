@@ -1,0 +1,16 @@
+# Lifetime error: method borrows from self, receiver moved, view used after
+struct Holder:
+    String name
+
+equip Holder:
+    str get_name(self):
+        return self.name
+
+void consume(Holder !h):
+    pass
+
+void main():
+    Holder h = Holder("hello")
+    str v = h.get_name()
+    consume(!h)
+    print(v)

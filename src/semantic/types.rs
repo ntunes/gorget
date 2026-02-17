@@ -2,7 +2,7 @@ use crate::parser::ast::{self, PrimitiveType};
 use crate::span::Span;
 
 use super::errors::{SemanticError, SemanticErrorKind};
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::ids::{DefId, TypeId};
 use super::scope::{DefKind, ScopeTable};
@@ -97,6 +97,8 @@ impl ClosureKind {
 /// Stores all resolved types, indexed by TypeId.
 pub struct TypeTable {
     types: Vec<ResolvedType>,
+    /// Cache for Defined(DefId) → TypeId deduplication.
+    defined_cache: FxHashMap<DefId, TypeId>,
     // Pre-allocated IDs for common types
     pub void_id: TypeId,
     pub bool_id: TypeId,
@@ -142,6 +144,7 @@ impl TypeTable {
 
         Self {
             types,
+            defined_cache: FxHashMap::default(),
             void_id,
             bool_id,
             int_id,
@@ -159,6 +162,17 @@ impl TypeTable {
         let id = TypeId(self.types.len() as u32);
         self.types.push(ty);
         id
+    }
+
+    /// Get or create a TypeId for `ResolvedType::Defined(def_id)`.
+    /// Ensures the same DefId always maps to the same TypeId.
+    pub fn defined_id(&mut self, def_id: DefId) -> TypeId {
+        if let Some(&tid) = self.defined_cache.get(&def_id) {
+            return tid;
+        }
+        let tid = self.insert(ResolvedType::Defined(def_id));
+        self.defined_cache.insert(def_id, tid);
+        tid
     }
 
     pub fn get(&self, id: TypeId) -> &ResolvedType {
@@ -309,12 +323,7 @@ pub fn ast_type_to_resolved(
                         | DefKind::GenericParam
                         | DefKind::Import => {
                             if generic_args.is_empty() {
-                                if def.kind == DefKind::GenericParam {
-                                    // Type parameter stays as Defined
-                                    Ok(types.insert(ResolvedType::Defined(def_id)))
-                                } else {
-                                    Ok(types.insert(ResolvedType::Defined(def_id)))
-                                }
+                                Ok(types.defined_id(def_id))
                             } else {
                                 let mut resolved_args = Vec::new();
                                 for arg in generic_args {
