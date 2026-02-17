@@ -1874,6 +1874,20 @@ impl CodegenContext<'_> {
                 return name.clone();
             }
         }
+        // Fallback for FieldAccess on generic types: ast_type_to_type_id can't resolve
+        // generic Named types like SparseSet[Health], so extract the base name directly
+        // from the AST type annotation in field_type_names.
+        if let Expr::FieldAccess { object, field } = &expr.node {
+            let obj_type = self.infer_receiver_type(object);
+            if obj_type != "Unknown" {
+                let key = (obj_type, field.node.clone());
+                if let Some(ast_type) = self.field_type_names.get(&key) {
+                    if let Type::Named { name, .. } = ast_type {
+                        return name.node.clone();
+                    }
+                }
+            }
+        }
         String::new()
     }
 
@@ -2079,9 +2093,11 @@ impl CodegenContext<'_> {
         } else if self.has_iterable_impl(iterable) {
             // Iterable[T]: call iter() to get a fresh iterator, then use Iterator protocol
             let collection_expr = self.gen_expr(iterable);
-            let collection_type_name = self.infer_type_name_from_expr(iterable);
+            // Use infer_receiver_type for the mangled name (e.g. "SparseSet__Health")
+            // since trait method functions are emitted per-monomorphization.
+            let collection_mangled = self.infer_receiver_type(iterable);
             let (elem_c_type, iter_c_type, iter_type_name) = self.get_iterable_iter_info(iterable);
-            let iter_fn = c_mangle::mangle_trait_method("Iterable", &collection_type_name, "iter");
+            let iter_fn = c_mangle::mangle_trait_method("Iterable", &collection_mangled, "iter");
             let option_mangled = self.register_generic("Option", &[elem_c_type.clone()], super::GenericInstanceKind::Enum);
             let tag_none = c_mangle::mangle_tag(&option_mangled, "None");
             let next_fn = c_mangle::mangle_trait_method("Iterator", &iter_type_name, "next");
@@ -2096,11 +2112,11 @@ impl CodegenContext<'_> {
             emitter.emit_line(&format!("{elem_c_type} {var_name} = {next_tmp}.data.Some._0;"));
         } else if self.has_iterator_impl(iterable) {
             let iter_expr = self.gen_expr(iterable);
-            let type_name = self.infer_type_name_from_expr(iterable);
+            let type_mangled = self.infer_receiver_type(iterable);
             let elem_c_type = self.get_iterator_elem_c_type(iterable);
             let option_mangled = self.register_generic("Option", &[elem_c_type.clone()], super::GenericInstanceKind::Enum);
             let tag_none = c_mangle::mangle_tag(&option_mangled, "None");
-            let next_fn = c_mangle::mangle_trait_method("Iterator", &type_name, "next");
+            let next_fn = c_mangle::mangle_trait_method("Iterator", &type_mangled, "next");
             let next_tmp = emitter.fresh_temp();
             emitter.emit_line("while (1) {");
             emitter.indent();

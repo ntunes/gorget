@@ -10,7 +10,6 @@
 
 ## Medium
 
-- **Iterable dispatch through generic field access**: `for eid in self.health:` where `health` is `SparseSet[Health]` (which implements `Iterable[int]`) falls through to C array iteration instead of Iterable dispatch. The `has_iterable_impl()` / `infer_type_name_from_expr()` chain doesn't resolve the trait implementation when accessed through FieldAccess on a generic type in an imported module. Works fine for local variables. Affects `examples/ecs/world.gg` — Pattern 1 loops kept as index-based (`for i in 0..self.health.len()`) until fixed. (`c_stmt.rs:has_iterable_impl`) [added: 2026-02-17]
 
 - **Hot-reload: inotify file watching for Linux**: Current hot-reload file watcher is macOS-only (kqueue). Need `inotify` implementation in `HOT_RELOAD_RUNTIME` for Linux support. The Linux stub is in place, just needs implementation. [added: 2026-02-16]
 

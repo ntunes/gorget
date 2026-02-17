@@ -41,9 +41,8 @@ equip World:
 
     int team_alive_count(self, int team):
         int n = 0
-        for i in 0..self.health.len():
-            int eid = self.health.entity_at(i)
-            Health h = self.health.data_at(i)
+        for eid in self.health:
+            Health h = self.health.get(eid)
             if h.hp > 0 and self.teams.get(eid) == team:
                 n = n + 1
         return n
@@ -88,18 +87,16 @@ equip World:
 
     void remove_dead(&self):
         Vector[int] dead = Vector[int]()
-        for i in 0..self.health.len():
-            Health h = self.health.data_at(i)
+        for eid in self.health:
+            Health h = self.health.get(eid)
             if h.hp <= 0:
-                int eid = self.health.entity_at(i)
                 dead.push(eid)
         for i in 0..dead.len():
             int id = dead.get(i)
             self.kill(id)
 
     void print_state(self):
-        for i in 0..self.health.len():
-            int eid = self.health.entity_at(i)
+        for eid in self.health:
             str name = self.names.get(eid)
-            Health h = self.health.data_at(i)
+            Health h = self.health.get(eid)
             print("{name}: {h.hp}/{h.max_hp} HP")
