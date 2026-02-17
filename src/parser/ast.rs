@@ -112,6 +112,8 @@ pub struct Param {
     pub name: Spanned<String>,
     pub default: Option<Spanned<Expr>>,
     pub is_live: bool,
+    /// Named borrow group: `live(a)` → `Some("a")`, bare `live` → `None`.
+    pub live_group: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -296,9 +298,17 @@ pub struct WhereClause {
 }
 
 #[derive(Debug, Clone)]
-pub struct WhereBound {
-    pub type_name: Spanned<String>,
-    pub bounds: Vec<Spanned<TraitBound>>,
+pub enum WhereBound {
+    /// `where T is Trait` — trait bound on a type parameter.
+    Trait {
+        type_name: Spanned<String>,
+        bounds: Vec<Spanned<TraitBound>>,
+    },
+    /// `where a outlives b` — borrow group ordering constraint.
+    Outlives {
+        longer: Spanned<String>,
+        shorter: Spanned<String>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -554,6 +564,7 @@ pub enum Expr {
     // ── Struct construction ──
     StructLiteral {
         name: Spanned<String>,
+        generic_args: Option<Vec<Spanned<Type>>>,
         args: Vec<Spanned<Expr>>,
     },
 

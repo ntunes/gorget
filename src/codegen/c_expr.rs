@@ -372,10 +372,36 @@ impl CodegenContext<'_> {
                 )
             }
 
-            Expr::StructLiteral { name, args } => {
+            Expr::StructLiteral { name, generic_args, args } => {
                 let field_exprs: Vec<String> = args.iter().map(|a| self.gen_expr(a)).collect();
                 let fields_str = field_exprs.join(", ");
-                let c_name = if let Some(def_id) = self.scopes.lookup(&name.node) {
+                let c_name = if let Some(ga) = generic_args {
+                    // Generic struct with explicit type args: use context-aware
+                    // type_to_c for substitution (handles T → int64_t in monomorphized bodies)
+                    let c_type_args: Vec<String> = ga.iter()
+                        .map(|t| self.type_to_c(&t.node))
+                        .collect();
+                    if self.generic_struct_templates.contains_key(&name.node) {
+                        self.register_generic(&name.node, &c_type_args, super::GenericInstanceKind::Struct)
+                    } else {
+                        c_mangle::mangle_generic(&name.node, &c_type_args)
+                    }
+                } else if self.generic_struct_templates.contains_key(&name.node) {
+                    // Generic struct without explicit type args (e.g. Box(42)):
+                    // infer type args from declaration type hint
+                    if let Some(crate::parser::ast::Type::Named { generic_args: hint_args, .. }) = &self.decl_type_hint {
+                        if !hint_args.is_empty() {
+                            let c_type_args: Vec<String> = hint_args.iter()
+                                .map(|t| self.type_to_c(&t.node))
+                                .collect();
+                            self.register_generic(&name.node, &c_type_args, super::GenericInstanceKind::Struct)
+                        } else {
+                            name.node.clone()
+                        }
+                    } else {
+                        name.node.clone()
+                    }
+                } else if let Some(def_id) = self.scopes.lookup(&name.node) {
                     c_types::def_name_to_c(def_id, self.scopes)
                 } else {
                     name.node.clone()

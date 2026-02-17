@@ -3574,3 +3574,23 @@ fn lifetime_struct_error() {
         "after source",
     );
 }
+
+#[test]
+fn lifetime_groups() {
+    run_gg(
+        "lifetime_groups.gg",
+        "\
+hello
+world
+done
+",
+    );
+}
+
+#[test]
+fn lifetime_groups_error() {
+    check_gg_fails(
+        "lifetime_groups_error.gg",
+        "must outlive",
+    );
+}

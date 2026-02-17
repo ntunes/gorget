@@ -72,6 +72,30 @@ impl BorrowOrigin {
             _ => vec![],
         }
     }
+
+    /// Collect all source DefIds referenced by this origin.
+    fn source_def_ids(&self) -> Vec<DefId> {
+        match self {
+            BorrowOrigin::Param { def_id, .. } | BorrowOrigin::Local(def_id) => vec![*def_id],
+            BorrowOrigin::CallResult(origins) => {
+                origins.iter().flat_map(|o| o.source_def_ids()).collect()
+            }
+            BorrowOrigin::Static | BorrowOrigin::Unknown => vec![],
+        }
+    }
+}
+
+/// Active outlives constraint from a call site with `where a outlives b`.
+/// Tracks the source DefIds for each group so we can detect violations when
+/// the "longer" group's source is invalidated while the "shorter" group's
+/// source is still alive.
+#[derive(Debug, Clone)]
+struct ActiveOutlives {
+    longer_group: String,
+    shorter_group: String,
+    longer_source_def_ids: Vec<DefId>,
+    shorter_source_def_ids: Vec<DefId>,
+    call_span: Span,
 }
 
 /// Snapshot of origin tracking state (for branching). Used in Phase 6 hardening.
@@ -229,6 +253,10 @@ struct BorrowChecker<'a> {
     current_return_type_id: Option<TypeId>,
     /// Current function's param (DefId, param_index) pairs.
     current_param_def_ids: Vec<(DefId, usize)>,
+
+    // ── Outlives constraints (Phase 5) ──
+    /// Active `where a outlives b` constraints from call sites.
+    active_outlives: Vec<ActiveOutlives>,
 }
 
 impl<'a> BorrowChecker<'a> {
@@ -258,6 +286,7 @@ impl<'a> BorrowChecker<'a> {
             invalidated_origins: FxHashSet::default(),
             current_return_type_id: None,
             current_param_def_ids: Vec::new(),
+            active_outlives: Vec::new(),
         }
     }
 
@@ -400,7 +429,7 @@ impl<'a> BorrowChecker<'a> {
             }
 
             // Struct literal: origin is the union of all reference-type field args
-            Expr::StructLiteral { name, args } => {
+            Expr::StructLiteral { name, args, .. } => {
                 if let Some(def_id) = self.resolution_map.get(&name.span.start).copied()
                     .or_else(|| self.scopes.lookup(&name.node))
                 {
@@ -427,26 +456,11 @@ impl<'a> BorrowChecker<'a> {
     }
 
     /// Compute the origin of a function call result using callee's `return_borrows_from`.
-    /// Also handles struct constructor calls (Phase 4).
+    /// Struct constructor calls are handled by `compute_expr_origin()` for `StructLiteral`
+    /// (struct calls are rewritten to StructLiteral by the post-resolution rewrite pass).
     fn compute_call_origin(&self, callee: &Spanned<Expr>, args: &[Spanned<CallArg>]) -> BorrowOrigin {
         let callee_def_id = self.resolve_callee_def_id(callee);
         if let Some(def_id) = callee_def_id {
-            // Phase 4: struct constructor call — compute origin from ref-type field args
-            if let Some(ref_flags) = self.struct_field_ref_flags.get(&def_id) {
-                let origins: Vec<BorrowOrigin> = args.iter()
-                    .zip(ref_flags.iter())
-                    .filter(|(_, is_ref)| **is_ref)
-                    .map(|(arg, _)| self.compute_expr_origin(&arg.node.value))
-                    .filter(|o| !matches!(o, BorrowOrigin::Unknown))
-                    .collect();
-                return match origins.len() {
-                    0 => BorrowOrigin::Unknown,
-                    1 => origins.into_iter().next().unwrap(),
-                    _ => BorrowOrigin::CallResult(origins),
-                };
-            }
-
-            // Regular function call: use return_borrows_from
             if let Some(info) = self.function_info.get(&def_id) {
                 if !info.return_borrows_from.is_empty() {
                     let origins: Vec<BorrowOrigin> = info.return_borrows_from.iter()
@@ -469,6 +483,95 @@ impl<'a> BorrowChecker<'a> {
         // For now, conservatively propagate the receiver's origin for any method
         // returning a reference type. Phase 2's body analysis refines this.
         self.compute_expr_origin(receiver)
+    }
+
+    /// Record outlives constraints for a call to a function with `where a outlives b` bounds.
+    /// Maps group names to actual argument origins via `param_live_groups`.
+    fn record_call_outlives(
+        &mut self,
+        callee: &Spanned<Expr>,
+        args: &[Spanned<CallArg>],
+        call_span: Span,
+    ) {
+        let callee_def_id = match self.resolve_callee_def_id(callee) {
+            Some(id) => id,
+            None => return,
+        };
+        let info = match self.function_info.get(&callee_def_id) {
+            Some(i) => i,
+            None => return,
+        };
+        if info.outlives_bounds.is_empty() {
+            return;
+        }
+
+        // Build group name → argument origin mapping
+        let mut group_origins: FxHashMap<String, Vec<DefId>> = FxHashMap::default();
+        for (i, group) in info.param_live_groups.iter().enumerate() {
+            if let Some(group_name) = group {
+                if let Some(arg) = args.get(i) {
+                    let origin = self.compute_expr_origin(&arg.node.value);
+                    group_origins
+                        .entry(group_name.clone())
+                        .or_default()
+                        .extend(origin.source_def_ids());
+                }
+            }
+        }
+
+        // Create ActiveOutlives entries for each bound
+        for (longer, shorter) in &info.outlives_bounds {
+            let longer_ids = group_origins.get(longer).cloned().unwrap_or_default();
+            let shorter_ids = group_origins.get(shorter).cloned().unwrap_or_default();
+            if !longer_ids.is_empty() || !shorter_ids.is_empty() {
+                self.active_outlives.push(ActiveOutlives {
+                    longer_group: longer.clone(),
+                    shorter_group: shorter.clone(),
+                    longer_source_def_ids: longer_ids,
+                    shorter_source_def_ids: shorter_ids,
+                    call_span,
+                });
+            }
+        }
+    }
+
+    /// Check outlives constraints when a variable is moved.
+    /// For `where a outlives b`: if the moved DefId is a source for group `a` ("longer"),
+    /// and any source for group `b` ("shorter") is not yet invalidated, that's a violation.
+    fn check_outlives_on_move(&mut self, moved_def_id: DefId, span: Span) {
+        let mut violations = Vec::new();
+
+        for constraint in &self.active_outlives {
+            // Check if the moved variable is a source for the "longer" group
+            if constraint.longer_source_def_ids.contains(&moved_def_id) {
+                // Check if any "shorter" group source is still alive
+                for &shorter_id in &constraint.shorter_source_def_ids {
+                    if !self.invalidated_origins.contains(&shorter_id) {
+                        let longer_name = self.scopes.get_def(moved_def_id).name.clone();
+                        let shorter_name = self.scopes.get_def(shorter_id).name.clone();
+                        violations.push((
+                            constraint.longer_group.clone(),
+                            constraint.shorter_group.clone(),
+                            longer_name,
+                            shorter_name,
+                            span,
+                        ));
+                    }
+                }
+            }
+        }
+
+        for (longer_group, shorter_group, longer_source, shorter_source, span) in violations {
+            self.error(
+                SemanticErrorKind::OutlivesViolation {
+                    longer_group,
+                    shorter_group,
+                    longer_source,
+                    shorter_source,
+                },
+                span,
+            );
+        }
     }
 
     /// Move a variable: mark as Moved. Error if already moved or inside a loop.
@@ -497,6 +600,10 @@ impl<'a> BorrowChecker<'a> {
         // Invalidate this def for lifetime tracking — any reference-typed variable
         // whose origin chain includes this DefId becomes dangling.
         self.invalidated_origins.insert(def_id);
+
+        // Phase 5: Check outlives constraints — if we're moving a "longer" group's source,
+        // check that all "shorter" group sources are already invalidated.
+        self.check_outlives_on_move(def_id, span);
     }
 
     fn save_state(&self) -> StateSnapshot {
@@ -685,6 +792,9 @@ impl<'a> BorrowChecker<'a> {
                         }
                     }
                 }
+
+                // Phase 5: Record outlives constraints from this call site
+                self.record_call_outlives(callee, args, expr.span);
             }
 
             Expr::MethodCall {
@@ -1404,6 +1514,7 @@ impl<'a> BorrowChecker<'a> {
         self.var_origins.clear();
         self.invalidated_origins.clear();
         self.current_param_def_ids.clear();
+        self.active_outlives.clear();
 
         // Set up return type for lifetime checking
         if let Some(def_id) = self.scopes.lookup(&func.name.node) {
@@ -1510,7 +1621,10 @@ fn compute_function_return_borrows(
         return;
     }
 
-    // Phase 3: Check for explicit `live` annotations first (they override body analysis)
+    // Phase 3: Check for explicit `live` annotations first (they override body analysis).
+    // Phase 5: If named groups are present (live(a), live(b)), fall through to body analysis
+    // to determine precisely which groups flow to the return — named groups enable more
+    // precise tracking than bare `live`.
     {
         let info = match function_info.get(&def_id) {
             Some(i) => i,
@@ -1521,12 +1635,15 @@ fn compute_function_return_borrows(
             .filter(|(_, is_live)| **is_live)
             .map(|(i, _)| i)
             .collect();
-        if !live_indices.is_empty() {
+        let has_named_groups = info.param_live_groups.iter().any(|g| g.is_some());
+        if !live_indices.is_empty() && !has_named_groups {
+            // Bare `live` (no group names): all live params → return_borrows_from
             if let Some(fi) = function_info.get_mut(&def_id) {
                 fi.return_borrows_from = live_indices;
             }
             return;
         }
+        // Named groups: fall through to body analysis for precision
     }
 
     // Phase 2: Body analysis — trace return expressions back to params
@@ -2461,6 +2578,91 @@ void main():
             has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { name, source_name, .. }
                 if name == "t" && source_name == "s")),
             "expected UseAfterSourceMoved for struct with mixed fields, got: {:?}", errors
+        );
+    }
+
+    // ── Phase 5: Named borrow groups + outlives ──
+
+    #[test]
+    fn named_groups_basic_ok() {
+        let source = "\
+str pick(live(a) str x, live(b) str y) where a outlives b:
+    return x
+
+void main():
+    String s1 = \"hello\"
+    String s2 = \"world\"
+    str r = pick(s1, s2)
+    print(r)
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::OutlivesViolation { .. })),
+            "expected no outlives violation, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn named_groups_shorter_moved_ok() {
+        // Moving the "shorter" group's source is fine — only "longer" must outlive "shorter"
+        let source = "\
+str pick(live(a) str x, live(b) str y) where a outlives b:
+    return x
+
+void main():
+    String s1 = \"hello\"
+    String s2 = \"world\"
+    str r = pick(s1, s2)
+    String moved = !s2
+    print(r)
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::OutlivesViolation { .. })),
+            "expected no outlives violation when shorter group moved, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn named_groups_outlives_violation() {
+        // Moving the "longer" group's source while the "shorter" group's source is alive
+        let source = "\
+str pick(live(a) str x, live(b) str y) where a outlives b:
+    return x
+
+void main():
+    String s1 = \"hello\"
+    String s2 = \"world\"
+    str r = pick(s1, s2)
+    String moved = !s1
+    print(s2)
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::OutlivesViolation { longer_group, .. }
+                if longer_group == "a")),
+            "expected OutlivesViolation for group a, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn bare_live_still_works() {
+        // Bare `live` (no group name) still works for backwards compat
+        let source = "\
+str view(live str s):
+    return s
+
+void main():
+    String s = \"hello\"
+    str v = view(s)
+    print(v)
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::OutlivesViolation { .. }
+                | SemanticErrorKind::UseAfterSourceMoved { .. }
+                | SemanticErrorKind::DanglingReturn { .. })),
+            "expected no errors for bare live, got: {:?}", errors
         );
     }
 }

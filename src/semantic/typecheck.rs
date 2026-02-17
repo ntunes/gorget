@@ -1403,7 +1403,7 @@ impl<'a> TypeChecker<'a> {
                 }
             }
 
-            Expr::StructLiteral { name, args } => {
+            Expr::StructLiteral { name, generic_args, args } => {
                 // Resolve struct type
                 if let Some(def_id) = self.resolve_name(name.span.start, &name.node) {
                     let def = self.scopes.get_def(def_id);
@@ -1417,6 +1417,17 @@ impl<'a> TypeChecker<'a> {
                     }
                     for arg in args {
                         self.infer_expr(arg);
+                    }
+                    // If generic args present, build Generic type
+                    if let Some(ga) = generic_args {
+                        let type_ids: Vec<TypeId> = ga.iter().filter_map(|t| {
+                            super::types::ast_type_to_resolved(
+                                &t.node, t.span, self.scopes, self.types,
+                            ).ok()
+                        }).collect();
+                        if !type_ids.is_empty() {
+                            return self.types.insert(ResolvedType::Generic(def_id, type_ids));
+                        }
                     }
                     self.types.insert(ResolvedType::Defined(def_id))
                 } else {

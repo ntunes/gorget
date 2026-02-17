@@ -1349,6 +1349,16 @@ impl Parser {
 
         let is_live = self.match_keyword(Keyword::Live);
 
+        // Parse optional borrow group name: `live(a)` → Some("a"), bare `live` → None
+        let live_group = if is_live && self.check(&Token::LParen) {
+            self.advance(); // skip (
+            let group_name = self.expect_identifier()?;
+            self.expect(&Token::RParen)?;
+            Some(group_name.node)
+        } else {
+            None
+        };
+
         // Handle self parameter: self, &self, !self
         if self.check_keyword(Keyword::SelfLower) {
             let name_tok = self.advance();
@@ -1359,6 +1369,7 @@ impl Parser {
                     name: Spanned::new("self".to_string(), name_tok.span),
                     default: None,
                     is_live,
+                    live_group: live_group.clone(),
                 },
                 start.merge(name_tok.span),
             ));
@@ -1375,6 +1386,7 @@ impl Parser {
                     name: Spanned::new("self".to_string(), name_tok.span),
                     default: None,
                     is_live,
+                    live_group: live_group.clone(),
                 },
                 start.merge(name_tok.span),
             ));
@@ -1391,6 +1403,7 @@ impl Parser {
                     name: Spanned::new("self".to_string(), name_tok.span),
                     default: None,
                     is_live,
+                    live_group: live_group.clone(),
                 },
                 start.merge(name_tok.span),
             ));
@@ -1427,6 +1440,7 @@ impl Parser {
                 name,
                 default,
                 is_live,
+                live_group,
             },
             start.merge(end),
         ))
@@ -1493,17 +1507,31 @@ impl Parser {
         loop {
             let bound_start = self.peek_span();
             let type_name = self.expect_identifier()?;
-            self.expect_keyword(Keyword::Is)?;
-            let trait_bounds = self.parse_trait_bound_list()?;
-            let bound_end = self.previous_span();
 
-            bounds.push(Spanned::new(
-                WhereBound {
-                    type_name,
-                    bounds: trait_bounds,
-                },
-                bound_start.merge(bound_end),
-            ));
+            if self.match_keyword(Keyword::Outlives) {
+                // `where a outlives b` — borrow group ordering constraint
+                let shorter = self.expect_identifier()?;
+                let bound_end = self.previous_span();
+                bounds.push(Spanned::new(
+                    WhereBound::Outlives {
+                        longer: type_name,
+                        shorter,
+                    },
+                    bound_start.merge(bound_end),
+                ));
+            } else {
+                // `where T is Trait` — trait bound
+                self.expect_keyword(Keyword::Is)?;
+                let trait_bounds = self.parse_trait_bound_list()?;
+                let bound_end = self.previous_span();
+                bounds.push(Spanned::new(
+                    WhereBound::Trait {
+                        type_name,
+                        bounds: trait_bounds,
+                    },
+                    bound_start.merge(bound_end),
+                ));
+            }
 
             if !self.match_token(&Token::Comma) {
                 break;
@@ -2852,5 +2880,54 @@ equip Foo:
         let module = parse(source);
         assert_eq!(module.items.len(), 1);
         assert!(matches!(module.items[0].node, Item::ExternBlock(_)));
+    }
+
+    #[test]
+    fn test_live_group_named() {
+        let source = "str pick(live(a) str x, live(b) str y) where a outlives b:\n    return x\n";
+        let module = parse(source);
+        if let Item::Function(f) = &module.items[0].node {
+            assert!(f.params[0].node.is_live);
+            assert_eq!(f.params[0].node.live_group.as_deref(), Some("a"));
+            assert!(f.params[1].node.is_live);
+            assert_eq!(f.params[1].node.live_group.as_deref(), Some("b"));
+            let wc = f.where_clause.as_ref().expect("where clause");
+            assert_eq!(wc.node.bounds.len(), 1);
+            match &wc.node.bounds[0].node {
+                WhereBound::Outlives { longer, shorter } => {
+                    assert_eq!(longer.node, "a");
+                    assert_eq!(shorter.node, "b");
+                }
+                _ => panic!("expected Outlives"),
+            }
+        } else {
+            panic!("expected function");
+        }
+    }
+
+    #[test]
+    fn test_live_bare_no_group() {
+        let source = "str view(live str s):\n    return s\n";
+        let module = parse(source);
+        if let Item::Function(f) = &module.items[0].node {
+            assert!(f.params[0].node.is_live);
+            assert!(f.params[0].node.live_group.is_none());
+        } else {
+            panic!("expected function");
+        }
+    }
+
+    #[test]
+    fn test_where_mixed_bounds() {
+        let source = "str pick[T](live(a) T x, live(b) T y) where T is Displayable, a outlives b:\n    return x\n";
+        let module = parse(source);
+        if let Item::Function(f) = &module.items[0].node {
+            let wc = f.where_clause.as_ref().expect("where clause");
+            assert_eq!(wc.node.bounds.len(), 2);
+            assert!(matches!(&wc.node.bounds[0].node, WhereBound::Trait { type_name, .. } if type_name.node == "T"));
+            assert!(matches!(&wc.node.bounds[1].node, WhereBound::Outlives { longer, shorter } if longer.node == "a" && shorter.node == "b"));
+        } else {
+            panic!("expected function");
+        }
     }
 }

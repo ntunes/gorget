@@ -1,0 +1,11 @@
+# Negative test: outlives violation — group a's source moved while group b's source is alive.
+
+str pick_first(live(a) str x, live(b) str y) where a outlives b:
+    return x
+
+void main():
+    String s1 = "hello"
+    String s2 = "world"
+    str r = pick_first(s1, s2)
+    String moved = !s1
+    print(s2)

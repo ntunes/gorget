@@ -611,13 +611,22 @@ impl Formatter {
             if i > 0 {
                 self.emitter.write(", ");
             }
-            self.emitter.write(&bound.node.type_name.node);
-            self.emitter.write(" is ");
-            for (j, tb) in bound.node.bounds.iter().enumerate() {
-                if j > 0 {
-                    self.emitter.write(" + ");
+            match &bound.node {
+                WhereBound::Trait { type_name, bounds } => {
+                    self.emitter.write(&type_name.node);
+                    self.emitter.write(" is ");
+                    for (j, tb) in bounds.iter().enumerate() {
+                        if j > 0 {
+                            self.emitter.write(" + ");
+                        }
+                        self.format_trait_bound(tb);
+                    }
                 }
-                self.format_trait_bound(tb);
+                WhereBound::Outlives { longer, shorter } => {
+                    self.emitter.write(&longer.node);
+                    self.emitter.write(" outlives ");
+                    self.emitter.write(&shorter.node);
+                }
             }
         }
     }
@@ -664,7 +673,13 @@ impl Formatter {
 
     fn format_param(&mut self, param: &Param) {
         if param.is_live {
-            self.emitter.write("live ");
+            if let Some(ref group) = param.live_group {
+                self.emitter.write("live(");
+                self.emitter.write(group);
+                self.emitter.write(") ");
+            } else {
+                self.emitter.write("live ");
+            }
         }
         // self parameter (same in both modes)
         if matches!(param.type_.node, Type::SelfType) {
@@ -1403,8 +1418,18 @@ impl Formatter {
                 }
                 self.emitter.write("}");
             }
-            Expr::StructLiteral { name, args } => {
+            Expr::StructLiteral { name, generic_args, args } => {
                 self.emitter.write(&name.node);
+                if let Some(ga) = generic_args {
+                    self.emitter.write("[");
+                    for (i, t) in ga.iter().enumerate() {
+                        if i > 0 {
+                            self.emitter.write(", ");
+                        }
+                        self.format_type(t);
+                    }
+                    self.emitter.write("]");
+                }
                 self.emitter.write("(");
                 for (i, arg) in args.iter().enumerate() {
                     if i > 0 {

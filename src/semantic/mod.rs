@@ -4,6 +4,7 @@ pub mod errors;
 pub mod ids;
 pub mod intern;
 pub mod resolve;
+pub mod rewrite;
 pub mod scope;
 pub mod traits;
 pub mod typecheck;
@@ -160,6 +161,11 @@ pub fn analyze(module: &mut Module) -> AnalysisResult {
     let mut resolution_map = resolve::resolve_bodies(module, &mut scopes, &mut types, &mut errors, &mut resolve_ctx.function_info, &mut resolve_ctx.function_body_scopes);
     // Merge any resolutions collected during pass 1
     resolution_map.extend(resolve_ctx.resolution_map);
+
+    // Pass 2.5: Rewrite struct constructor calls to StructLiteral nodes.
+    // After resolution we know which identifiers refer to structs, so we can
+    // convert Call { callee: Identifier("Foo"), .. } → StructLiteral { name: "Foo", .. }.
+    rewrite::rewrite_struct_calls(module, &resolution_map, &scopes);
 
     // Pass 3: Build trait/impl registry
     let trait_registry =

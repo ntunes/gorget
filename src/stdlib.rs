@@ -564,6 +564,7 @@ fn decl_fn(name: &str, params: &[(&str, Type)], ret: Type) -> FunctionDef {
                     name: Spanned::dummy(pname.to_string()),
                     default: None,
                     is_live: false,
+                    live_group: None,
                 })
             })
             .collect(),
@@ -676,6 +677,7 @@ fn decl_fn_with_defaults(
                     name: Spanned::dummy(pname.to_string()),
                     default: default.as_ref().map(|d| Spanned::dummy(d.clone())),
                     is_live: false,
+                    live_group: None,
                 })
             })
             .collect(),
@@ -835,6 +837,7 @@ fn decl_method(
         name: Spanned::dummy("self".to_string()),
         default: None,
         is_live: false,
+        live_group: None,
     })];
     for (pname, pty) in extra_params {
         params.push(Spanned::dummy(Param {
@@ -843,6 +846,7 @@ fn decl_method(
             name: Spanned::dummy(pname.to_string()),
             default: None,
             is_live: false,
+            live_group: None,
         }));
     }
     FunctionDef {

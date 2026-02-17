@@ -52,6 +52,10 @@ pub struct FunctionInfo {
     pub return_borrows_from: Vec<usize>,
     /// Whether each param has the `live` keyword annotation.
     pub param_is_live: Vec<bool>,
+    /// Named borrow group for each param: `live(a)` → `Some("a")`, bare `live` → `None`.
+    pub param_live_groups: Vec<Option<String>>,
+    /// `where X outlives Y` bounds: `(longer_group, shorter_group)` pairs.
+    pub outlives_bounds: Vec<(String, String)>,
 }
 
 /// Shared context passed around during resolution.
@@ -200,8 +204,11 @@ fn collect_item(
 
                     let generic_param_names = extract_generic_param_names(&f.generic_params);
                     let where_bounds = extract_where_bounds(&f.where_clause);
+                    let outlives_bounds = extract_outlives_bounds(&f.where_clause);
                     let param_is_live: Vec<bool> =
                         f.params.iter().map(|p| p.node.is_live).collect();
+                    let param_live_groups: Vec<Option<String>> =
+                        f.params.iter().map(|p| p.node.live_group.clone()).collect();
 
                     ctx.function_info.insert(
                         def_id,
@@ -218,6 +225,8 @@ fn collect_item(
                             where_bounds,
                             return_borrows_from: Vec::new(),
                             param_is_live,
+                            param_live_groups,
+                            outlives_bounds,
                         },
                     );
                 }
@@ -1023,7 +1032,7 @@ fn resolve_expr(
             }
         }
 
-        Expr::StructLiteral { name, args } => {
+        Expr::StructLiteral { name, args, .. } => {
             // Resolve struct name
             match scopes.lookup(&name.node) {
                 Some(def_id) => {
@@ -1116,7 +1125,8 @@ fn extract_generic_param_names(generics: &Option<Spanned<GenericParams>>) -> Vec
     }
 }
 
-/// Extract where-clause bounds as `(param_name, [trait_name, ...])`.
+/// Extract where-clause trait bounds as `(param_name, [trait_name, ...])`.
+/// Skips `Outlives` bounds (those are extracted separately).
 fn extract_where_bounds(
     where_clause: &Option<Spanned<WhereClause>>,
 ) -> Vec<(String, Vec<String>)> {
@@ -1125,15 +1135,34 @@ fn extract_where_bounds(
             .node
             .bounds
             .iter()
-            .map(|wb| {
-                let param = wb.node.type_name.node.clone();
-                let traits: Vec<String> = wb
-                    .node
-                    .bounds
-                    .iter()
-                    .map(|tb| tb.node.name.node.clone())
-                    .collect();
-                (param, traits)
+            .filter_map(|wb| match &wb.node {
+                WhereBound::Trait { type_name, bounds } => {
+                    let param = type_name.node.clone();
+                    let traits: Vec<String> =
+                        bounds.iter().map(|tb| tb.node.name.node.clone()).collect();
+                    Some((param, traits))
+                }
+                WhereBound::Outlives { .. } => None,
+            })
+            .collect(),
+        None => Vec::new(),
+    }
+}
+
+/// Extract `where X outlives Y` bounds as `(longer, shorter)` pairs.
+fn extract_outlives_bounds(
+    where_clause: &Option<Spanned<WhereClause>>,
+) -> Vec<(String, String)> {
+    match where_clause {
+        Some(wc) => wc
+            .node
+            .bounds
+            .iter()
+            .filter_map(|wb| match &wb.node {
+                WhereBound::Outlives { longer, shorter } => {
+                    Some((longer.node.clone(), shorter.node.clone()))
+                }
+                WhereBound::Trait { .. } => None,
             })
             .collect(),
         None => Vec::new(),

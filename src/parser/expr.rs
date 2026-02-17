@@ -77,6 +77,7 @@ fn contains_it(expr: &Spanned<Expr>) -> bool {
             pairs.iter().any(|(k, v)| contains_it(k) || contains_it(v))
         }
         Expr::StructLiteral { args, .. } => args.iter().any(contains_it),
+        // generic_args covered by ..
 
         // Comprehensions — these introduce their own bindings, but `it`
         // would still refer to the outer implicit closure if present.

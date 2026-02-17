@@ -551,7 +551,8 @@ function_def = { attribute } [ "public" ] [ qualifiers ]
 qualifiers    = { "async" | "const" | "static" | "unsafe" } ;
 return_type   = type | "void" ;
 param_list    = param { "," param } ;
-param         = type [ "&" | "!" | "mutable" | "consuming" ] IDENTIFIER [ "=" expr ] ;
+param         = [ "live" [ "(" IDENTIFIER ")" ] ]
+                type [ "&" | "!" | "mutable" | "consuming" ] IDENTIFIER [ "=" expr ] ;
 throws_clause = "throws" [ type ] ;
 block         = ":" NEWLINE INDENT { statement } DEDENT ;
 ```
@@ -601,6 +602,15 @@ The `live` keyword on a parameter indicates that the return value borrows from t
 str get(live Container self, int index)
 ```
 
+Named borrow groups on parameters distinguish independent lifetimes when a function takes multiple borrowed inputs. The compiler uses body analysis to determine which groups flow to the return value, so moving a non-return-contributing source doesn't trigger false positives:
+
+```gorget
+str pick_first(live(a) str x, live(b) str y) where a outlives b:
+    return x
+```
+
+The `where a outlives b` bound is enforced at call sites: if group `a`'s argument source is moved while group `b`'s source is still alive, the compiler emits an error.
+
 On struct fields, `live` marks fields that hold borrowed data. The struct cannot outlive the referenced data:
 
 ```gorget
@@ -609,19 +619,12 @@ struct Parser:
     int position
 ```
 
-Named borrow groups distinguish independent lifetimes in structs with multiple borrowed fields:
+Named borrow groups also work on struct fields to distinguish independent lifetimes:
 
 ```gorget
 struct Merger:
     live(left) str a
     live(right) str b
-```
-
-Use `where ... outlives ...` for lifetime bounds:
-
-```gorget
-str merge(live Merger m) where left outlives right:
-    ...
 ```
 
 ### 5.2 Structs
@@ -1807,11 +1810,12 @@ auto result = max[int](a, b)
 
 ```ebnf
 where_clause = "where" where_bound { "," where_bound } ;
-where_bound  = IDENTIFIER "is" trait_bound { "+" trait_bound } ;
+where_bound  = IDENTIFIER "is" trait_bound { "+" trait_bound }
+             | IDENTIFIER "outlives" IDENTIFIER ;
 trait_bound  = IDENTIFIER [ "[" type_or_binding { "," type_or_binding } "]" ] ;
 ```
 
-Constrain generic type parameters:
+Constrain generic type parameters or express borrow group ordering:
 
 ```gorget
 void print_all[T](Vector[T] items) where T is Displayable:
@@ -2795,7 +2799,8 @@ function_def = { attribute } [ "public" ] { qualifier }
 qualifier     = "async" | "const" | "static" | "unsafe" ;
 return_type   = type | "void" ;
 param_list    = param { "," param } ;
-param         = type [ "&" | "!" | "mutable" | "consuming" ] IDENTIFIER [ "=" expr ] ;
+param         = [ "live" [ "(" IDENTIFIER ")" ] ]
+                type [ "&" | "!" | "mutable" | "consuming" ] IDENTIFIER [ "=" expr ] ;
 throws_clause = "throws" [ type ] ;
 block         = ":" NEWLINE INDENT { statement } DEDENT ;
 

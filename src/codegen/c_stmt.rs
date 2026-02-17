@@ -1754,6 +1754,7 @@ impl CodegenContext<'_> {
                     None
                 }
             }
+            Expr::StructLiteral { name, .. } => Some(name.node.clone()),
             _ => None,
         }?;
 
