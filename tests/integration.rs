@@ -300,6 +300,21 @@ fn closure_move_kind_error() {
 }
 
 #[test]
+fn consume_callable_once() {
+    run_gg("consume_callable_once.gg", "10\n101\ndone");
+}
+
+#[test]
+fn consume_callable_once_error() {
+    check_gg_fails("consume_callable_once_error.gg", "moved more than once");
+}
+
+#[test]
+fn consume_callable_loop_error() {
+    check_gg_fails("consume_callable_loop_error.gg", "cannot move");
+}
+
+#[test]
 fn dynamic_dispatch() {
     run_gg("dynamic_dispatch.gg", "hello\nhola\nhello\nhola");
 }

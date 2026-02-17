@@ -1,0 +1,14 @@
+int apply_once(ConsumeCallable[int(int)] f, int x):
+    return f(x)
+
+void main():
+    # Direct call to ConsumeCallable local
+    ConsumeCallable[int(int)] doubler = !(n): n * 2
+    int r1 = doubler(5)
+    print("{r1}")
+
+    # Pass to function taking ConsumeCallable param (single call inside)
+    int r2 = apply_once((n): n + 100, 1)
+    print("{r2}")
+
+    print("done")

@@ -171,6 +171,27 @@ impl<'a> BorrowChecker<'a> {
         self.var_states = merged;
     }
 
+    /// Check if a DefId refers to a ConsumeCallable-typed variable.
+    fn is_consume_callable_var(&self, def_id: DefId) -> bool {
+        let def = self.scopes.get_def(def_id);
+        if def.kind != DefKind::Variable {
+            return false;
+        }
+        if let Some(type_id) = def.type_id {
+            match self.types.get(type_id) {
+                ResolvedType::ConsumeCallableTrait(_) => true,
+                ResolvedType::BoxedCallable { kind, .. }
+                    if *kind == super::types::ClosureKind::ConsumeCallable =>
+                {
+                    true
+                }
+                _ => false,
+            }
+        } else {
+            false
+        }
+    }
+
     // ─── Expression Walking ────────────────────────────────
 
     fn check_expr(&mut self, expr: &Spanned<Expr>) {
@@ -241,7 +262,25 @@ impl<'a> BorrowChecker<'a> {
             }
 
             Expr::Call { callee, args, .. } => {
-                self.check_expr(callee);
+                // If callee is a ConsumeCallable variable, the call consumes it
+                let consumed = if let Expr::Identifier(_) = &callee.node {
+                    if let Some(&def_id) = self.resolution_map.get(&callee.span.start) {
+                        if self.is_consume_callable_var(def_id) {
+                            self.check_move(def_id, expr.span);
+                            true
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+
+                if !consumed {
+                    self.check_expr(callee);
+                }
                 self.check_call_ownership(callee, args);
                 self.check_call_aliasing(args);
                 for arg in args {
@@ -1269,6 +1308,58 @@ void main():
         assert!(
             !has_error(&errors, |k| matches!(k, SemanticErrorKind::BorrowConflict { .. })),
             "unexpected BorrowConflict for double bare: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn consume_callable_double_call() {
+        let source = "\
+int apply_once(ConsumeCallable[int(int)] f, int x):
+    return f(x)
+
+void main():
+    ConsumeCallable[int(int)] f = !(n): n * 2
+    int r1 = f(5)
+    int r2 = f(10)
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::DoubleMove { name, .. } if name == "f")),
+            "expected DoubleMove for f, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn consume_callable_single_call_ok() {
+        let source = "\
+void main():
+    ConsumeCallable[int(int)] f = !(n): n * 2
+    int r = f(5)
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(
+                k,
+                SemanticErrorKind::DoubleMove { .. }
+                    | SemanticErrorKind::MoveInLoop { .. }
+                    | SemanticErrorKind::UseAfterMove { .. }
+            )),
+            "unexpected borrow errors for single ConsumeCallable call: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn consume_callable_loop_error() {
+        let source = "\
+void main():
+    ConsumeCallable[int(int)] f = !(n): n * 2
+    for i in 0..3:
+        int r = f(i)
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::MoveInLoop { name } if name == "f")),
+            "expected MoveInLoop for f, got: {:?}", errors
         );
     }
 

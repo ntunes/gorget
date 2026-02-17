@@ -1,0 +1,4 @@
+void main():
+    ConsumeCallable[int(int)] f = !(n): n * 2
+    for i in 0..3:
+        int r = f(i)

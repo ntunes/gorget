@@ -1,0 +1,4 @@
+void main():
+    ConsumeCallable[int(int)] f = !(n): n * 2
+    int r1 = f(5)
+    int r2 = f(10)
