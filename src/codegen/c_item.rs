@@ -8,7 +8,7 @@ use super::{CodegenContext, DropAction, DropScopeKind};
 
 /// Build a mangled name for a Callable/MutCallable/MoveCallable trait signature.
 /// E.g., Callable[int(int, float)] → "Callable__int64_t__int64_t__double"
-fn callable_sig_name(prefix: &str, param_c_types: &[String], ret_c_type: &str) -> String {
+pub(super) fn callable_sig_name(prefix: &str, param_c_types: &[String], ret_c_type: &str) -> String {
     let ret_mangled = c_mangle::mangle_c_type(ret_c_type);
     let params_mangled: Vec<String> = param_c_types.iter()
         .map(|t| c_mangle::mangle_c_type(t))

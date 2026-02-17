@@ -54,8 +54,27 @@ pub fn ast_type_to_c(ty: &crate::parser::ast::Type, scopes: &ScopeTable) -> Stri
                     "Fn" | "Callable" | "FnMut" | "MutCallable" | "FnOnce" | "MoveCallable"
                         if generic_args.len() == 1 => "GorgetClosure".to_string(),
                     "Box" if generic_args.len() == 1 => {
-                        // Box[Trait] → Trait_TraitObj (automatic dispatch)
+                        // Box[Callable[sig]] / Box[MutCallable[sig]] / Box[MoveCallable[sig]]
                         if let crate::parser::ast::Type::Named { name: inner_name, generic_args: inner_args } = &generic_args[0].node {
+                            let kind_prefix = match inner_name.node.as_str() {
+                                "Fn" | "Callable" => Some("Callable"),
+                                "FnMut" | "MutCallable" => Some("MutCallable"),
+                                "FnOnce" | "MoveCallable" => Some("MoveCallable"),
+                                _ => None,
+                            };
+                            if let Some(prefix) = kind_prefix {
+                                if inner_args.len() == 1 {
+                                    if let crate::parser::ast::Type::Function { return_type, params } = &inner_args[0].node {
+                                        let ret_c = ast_type_to_c(&return_type.node, scopes);
+                                        let param_c: Vec<String> = params.iter()
+                                            .map(|p| ast_type_to_c(&p.node, scopes))
+                                            .collect();
+                                        let sig_name = super::c_item::callable_sig_name(prefix, &param_c, &ret_c);
+                                        return format!("{sig_name}__TraitObj");
+                                    }
+                                }
+                            }
+                            // Box[Trait] → Trait_TraitObj (automatic dispatch)
                             if inner_args.is_empty() {
                                 if let Some(def_id) = scopes.lookup(&inner_name.node) {
                                     if scopes.get_def(def_id).kind == crate::semantic::scope::DefKind::Trait {
@@ -223,6 +242,24 @@ pub fn type_id_to_c(type_id: TypeId, types: &TypeTable, scopes: &ScopeTable) -> 
         ResolvedType::CallableTrait(_)
         | ResolvedType::MutCallableTrait(_)
         | ResolvedType::MoveCallableTrait(_) => "GorgetClosure".to_string(),
+        ResolvedType::BoxedCallable { kind, inner } => {
+            // Box[Callable[sig]] → Callable__sig__TraitObj
+            let kind_prefix = match kind {
+                crate::semantic::types::ClosureKind::Callable => "Callable",
+                crate::semantic::types::ClosureKind::MutCallable => "MutCallable",
+                crate::semantic::types::ClosureKind::MoveCallable => "MoveCallable",
+            };
+            if let ResolvedType::Function { params, return_type } = types.get(*inner) {
+                let ret_c = type_id_to_c(*return_type, types, scopes);
+                let param_c: Vec<String> = params.iter()
+                    .map(|p| type_id_to_c(*p, types, scopes))
+                    .collect();
+                let sig_name = super::c_item::callable_sig_name(kind_prefix, &param_c, &ret_c);
+                format!("{sig_name}__TraitObj")
+            } else {
+                "GorgetClosure".to_string()
+            }
+        }
         ResolvedType::Var(_) => {
             // Type variable should not escape inference
             "/* type var */ void*".to_string()

@@ -72,8 +72,6 @@
 
 - **Package management phase 2 (`gg update`, registry)**: Semver-aware resolution, central registry, `gg publish`, workspaces. [added: 2026-02-15]
 
-- **Closures step 4 — `Box[Callable]` trait objects**: Per-closure structs and callable vtables are in place (steps 2+3 done). The existing `Box[Trait]` machinery should handle `Box[Callable[sig]]` with minimal work — verify and add test. Unblocks: heterogeneous closure collections, callback registries, event handler maps. [updated: 2026-02-17]
-
 - **Consolidate type inference functions**: 6+ scattered inference functions (`infer_c_type_from_expr`, `infer_receiver_type`, `infer_receiver_c_type`, `infer_receiver_mangled_type`, `infer_vector_elem_type`, `infer_closure_body_c_type`) with no caching and redundant re-computation. Consolidate into a single type resolver module. [added: 2026-02-16]
 
 - **Extract `CodegenContext` sub-contexts**: 40+ fields mixing tracing, closures, generics, ownership, and test mode. Extract `ClosureContext`, `TraceContext`, `TestContext` for single-responsibility. [added: 2026-02-16]

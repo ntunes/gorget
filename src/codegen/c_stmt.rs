@@ -1129,6 +1129,97 @@ impl CodegenContext<'_> {
                     None
                 };
 
+                // Special handling for Box[Callable[sig]] construction
+                if let Some((kind_prefix, fn_ret, fn_params)) = Self::extract_box_callable_type(type_) {
+                    let ret_c = super::c_types::ast_type_to_c(&fn_ret.node, self.scopes);
+                    let param_c: Vec<String> = fn_params.iter()
+                        .map(|p| super::c_types::ast_type_to_c(&p.node, self.scopes))
+                        .collect();
+                    let sig_name = super::c_item::callable_sig_name(kind_prefix, &param_c, &ret_c);
+                    let traitobj_type = format!("{sig_name}__TraitObj");
+
+                    // Unwrap Box.new(closure) or accept bare closure (auto-boxing)
+                    let closure_expr = if let Expr::Call { callee, args: box_args, .. } = &value.node {
+                        // Call with Path callee: Box.new(x) parsed as Call { Path(["Box","new"]), [x] }
+                        if let Expr::Path { segments } = &callee.node {
+                            if segments.len() == 2 && segments[0].node == "Box" && segments[1].node == "new" {
+                                box_args.first().map(|a| &a.node.value)
+                            } else { None }
+                        // Call with Identifier callee: Box(x)
+                        } else if let Expr::Identifier(n) = &callee.node {
+                            if n == "Box" { box_args.first().map(|a| &a.node.value) } else { None }
+                        } else { None }
+                    } else if let Expr::MethodCall { receiver, method, args: mc_args, .. } = &value.node {
+                        // MethodCall: Box.new(x) parsed as MethodCall { Identifier("Box"), "new", [x] }
+                        if let Expr::Identifier(n) = &receiver.node {
+                            if n == "Box" && method.node == "new" {
+                                mc_args.first().map(|a| &a.node.value)
+                            } else { None }
+                        } else { None }
+                    } else {
+                        Some(value) // Auto-boxing: bare closure
+                    };
+
+                    if let Some(closure_val) = closure_expr {
+                        // Force heap-alloc for the closure so the env outlives the stack
+                        self.closure_heap_alloc = true;
+                        let val = self.gen_expr(closure_val);
+                        self.closure_heap_alloc = false;
+
+                        // Get the last-pushed lifted closure to determine struct name
+                        let closure_info = self.lifted_closures.last().map(|lc| {
+                            (lc.struct_name.clone(), lc.captures.is_empty())
+                        });
+                        if let Some((struct_name, is_non_capturing)) = closure_info {
+                            let vtable_inst = format!("{sig_name}__{struct_name}__vtable");
+                            // Register the sig for vtable emission
+                            let callable_kind = match kind_prefix {
+                                "Callable" => super::CallableKind::Callable,
+                                "MutCallable" => super::CallableKind::MutCallable,
+                                _ => super::CallableKind::MoveCallable,
+                            };
+                            let sig = (callable_kind, param_c.clone(), ret_c.clone());
+                            if !self.fn_trait_sigs.contains(&sig) {
+                                self.fn_trait_sigs.push(sig);
+                            }
+
+                            if is_non_capturing {
+                                // Non-capturing: env=NULL
+                                emitter.emit_line(&format!(
+                                    "{const_prefix}{traitobj_type} {escaped} = {{ .data = NULL, .vtable = &{vtable_inst} }};"
+                                ));
+                            } else {
+                                // Capturing: the GorgetClosure expression has a heap-alloc env
+                                // Extract env pointer from the GorgetClosure
+                                let tmp = format!("__box_closure_{escaped}");
+                                emitter.emit_line(&format!("GorgetClosure {tmp} = {val};"));
+                                emitter.emit_line(&format!(
+                                    "{const_prefix}{traitobj_type} {escaped} = {{ .data = {tmp}.env, .vtable = &{vtable_inst} }};"
+                                ));
+                            }
+
+                            // Register in closure_var_info for vtable dispatch
+                            self.closure_var_info.insert(escaped.clone(), super::ClosureVarInfo::TraitObject {
+                                param_c_types: param_c,
+                                return_c_type: ret_c,
+                                kind: callable_kind,
+                            });
+                        } else {
+                            // Fallback: shouldn't happen, but emit generic code
+                            emitter.emit_line(&format!("{const_prefix}{traitobj_type} {escaped} = {val};"));
+                        }
+
+                        if self.trace {
+                            if let Some(ref ri) = result_info {
+                                self.emit_stmt_end_with_result(ri, emitter);
+                            } else {
+                                self.emit_stmt_end(emitter);
+                            }
+                        }
+                        return;
+                    }
+                }
+
                 // Special handling for trait object construction:
                 // Box[dynamic Trait] x = Box.new(ConcreteType(...))
                 if let Some((trait_name, concrete_type, inner_expr)) =
@@ -1627,6 +1718,33 @@ impl CodegenContext<'_> {
         }?;
 
         Some((trait_name, concrete_type, inner_expr))
+    }
+
+    /// Extract Box[Callable[sig]] / Box[MutCallable[sig]] / Box[MoveCallable[sig]] from an AST type.
+    /// Returns (kind_prefix, return_type, params) if the type matches.
+    fn extract_box_callable_type<'b>(
+        type_: &'b Spanned<Type>,
+    ) -> Option<(&'static str, &'b Spanned<Type>, &'b [Spanned<Type>])> {
+        if let Type::Named { name, generic_args } = &type_.node {
+            if name.node == "Box" && generic_args.len() == 1 {
+                if let Type::Named { name: inner_name, generic_args: inner_args } = &generic_args[0].node {
+                    let kind_prefix = match inner_name.node.as_str() {
+                        "Fn" | "Callable" => Some("Callable"),
+                        "FnMut" | "MutCallable" => Some("MutCallable"),
+                        "FnOnce" | "MoveCallable" => Some("MoveCallable"),
+                        _ => None,
+                    };
+                    if let Some(prefix) = kind_prefix {
+                        if inner_args.len() == 1 {
+                            if let Type::Function { return_type, params } = &inner_args[0].node {
+                                return Some((prefix, return_type, params));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// Check if an iterable expression resolves to a GorgetArray type.

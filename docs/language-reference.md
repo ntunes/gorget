@@ -458,6 +458,21 @@ int result = triple(4)  # 12
 
 Named functions and non-capturing closures are always `Callable` and coerce to any variant.
 
+**Boxed callable trait objects:**
+
+`Box[Callable[sig]]` creates a heap-allocated, type-erased callable — enabling heterogeneous closure collections and callback storage:
+
+```gorget
+# Heap-allocated callable via Box.new
+Box[Callable[int(int)]] f = Box.new((n): n * 2)
+int r = f(5)  # 10
+
+# Auto-boxing: bare closure assigned to Box[Callable] is boxed automatically
+Box[Callable[int(int)]] g = (n): n + 100
+```
+
+`Box[MutCallable[sig]]` and `Box[MoveCallable[sig]]` work similarly for mutable and consuming closures.
+
 > **Note:** `Fn[sig]`, `FnMut[sig]`, and `FnOnce[sig]` are accepted as aliases for backward compatibility.
 
 ### 4.3 Named Types

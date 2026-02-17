@@ -691,8 +691,17 @@ impl CodegenContext<'_> {
                 }
             }
 
-            // Check if this is a GorgetClosure variable — dispatch through .fn_ptr
+            // Check if this is a boxed callable trait object — dispatch through vtable
             let escaped_name = c_mangle::escape_keyword(name);
+            if let Some(super::ClosureVarInfo::TraitObject { .. }) = self.closure_var_info.get(escaped_name.as_str()) {
+                let arg_exprs: Vec<String> =
+                    args.iter().map(|a| self.gen_expr(&a.node.value)).collect();
+                let mut call_args = vec![format!("{escaped_name}.data")];
+                call_args.extend(arg_exprs);
+                return format!("{escaped_name}.vtable->call({})", call_args.join(", "));
+            }
+
+            // Check if this is a GorgetClosure variable — dispatch through .fn_ptr
             if self.closure_vars.contains(escaped_name.as_str()) {
                 let arg_exprs: Vec<String> =
                     args.iter().map(|a| self.gen_expr(&a.node.value)).collect();

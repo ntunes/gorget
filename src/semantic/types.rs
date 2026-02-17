@@ -44,6 +44,9 @@ pub enum ResolvedType {
     /// Move callable trait type: MoveCallable[int(int)]
     MoveCallableTrait(TypeId),
 
+    /// Boxed callable trait object: Box[Callable[int(int)]]
+    BoxedCallable { kind: ClosureKind, inner: TypeId },
+
     /// Type variable for inference: ?T0, ?T1, ...
     Var(u32),
 
@@ -236,6 +239,7 @@ impl TypeTable {
             ResolvedType::CallableTrait(inner) => format!("Callable[{}]", self.display(*inner)),
             ResolvedType::MutCallableTrait(inner) => format!("MutCallable[{}]", self.display(*inner)),
             ResolvedType::MoveCallableTrait(inner) => format!("MoveCallable[{}]", self.display(*inner)),
+            ResolvedType::BoxedCallable { kind, inner } => format!("Box[{}[{}]]", kind.name(), self.display(*inner)),
             ResolvedType::Var(n) => format!("?T{n}"),
             ResolvedType::Error => "<error>".into(),
             ResolvedType::Void => "void".into(),
@@ -312,6 +316,25 @@ pub fn ast_type_to_resolved(
                                                 ResolvedType::TraitObject(inner_def_id),
                                             ));
                                         }
+                                    }
+                                    // Box[Callable[sig]] / Box[MutCallable[sig]] / Box[MoveCallable[sig]]
+                                    match types.get(resolved_args[0]).clone() {
+                                        ResolvedType::CallableTrait(func_id) => {
+                                            return Ok(types.insert(ResolvedType::BoxedCallable {
+                                                kind: ClosureKind::Callable, inner: func_id,
+                                            }));
+                                        }
+                                        ResolvedType::MutCallableTrait(func_id) => {
+                                            return Ok(types.insert(ResolvedType::BoxedCallable {
+                                                kind: ClosureKind::MutCallable, inner: func_id,
+                                            }));
+                                        }
+                                        ResolvedType::MoveCallableTrait(func_id) => {
+                                            return Ok(types.insert(ResolvedType::BoxedCallable {
+                                                kind: ClosureKind::MoveCallable, inner: func_id,
+                                            }));
+                                        }
+                                        _ => {}
                                     }
                                 }
                                 Ok(types

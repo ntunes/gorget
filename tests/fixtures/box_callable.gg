@@ -1,0 +1,21 @@
+int apply(Callable[int(int)] f, int x):
+    return f(x)
+
+void main():
+    # Box a non-capturing closure
+    Box[Callable[int(int)]] f1 = Box.new((n): n * 2)
+    int r1 = f1(5)
+    print("{r1}")
+
+    # Box a capturing closure
+    int factor = 3
+    Box[Callable[int(int)]] f2 = Box.new((n): n * factor)
+    int r2 = f2(7)
+    print("{r2}")
+
+    # Auto-boxing (direct assignment)
+    Box[Callable[int(int)]] f3 = (n): n + 100
+    int r3 = f3(1)
+    print("{r3}")
+
+    print("done")

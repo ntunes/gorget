@@ -3450,6 +3450,15 @@ fn hot_reload_basic() {
 }
 
 #[test]
+fn box_callable() {
+    run_gg("box_callable.gg", "\
+10
+21
+101
+done");
+}
+
+#[test]
 fn extern_ffi() {
     run_gg(
         "extern_ffi.gg",
