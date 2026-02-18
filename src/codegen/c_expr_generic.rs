@@ -394,6 +394,14 @@ impl CodegenContext<'_> {
                         _ => "Unknown",
                     }.to_string();
                 }
+                if recv_type == "TlsSocket" {
+                    return match method.node.as_str() {
+                        "read" | "read_exact" => "Vector",
+                        "read_line" => "str",
+                        "write" | "write_str" => "int",
+                        _ => "Unknown",
+                    }.to_string();
+                }
                 if recv_type == "CipherContext" {
                     return match method.node.as_str() {
                         "encrypt" | "decrypt" => "Vector",
@@ -428,6 +436,16 @@ impl CodegenContext<'_> {
                             return self.type_to_resolved_name(field_type);
                         }
                     }
+                }
+                "Unknown".to_string()
+            }
+            Expr::Index { object, index } => {
+                // String slice: str[range] → str; single index → char
+                if self.is_string_expr(object) {
+                    if matches!(&index.node, Expr::Range { .. }) {
+                        return "str".to_string();
+                    }
+                    return "char".to_string();
                 }
                 "Unknown".to_string()
             }

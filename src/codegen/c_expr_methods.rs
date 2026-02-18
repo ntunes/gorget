@@ -961,39 +961,6 @@ impl CodegenContext<'_> {
         }
     }
 
-    /// Generate code for a method call on an HTTP Client receiver.
-    pub(super) fn gen_http_client_method(
-        &mut self,
-        recv: &str,
-        method_name: &str,
-        args: &[Spanned<crate::parser::ast::CallArg>],
-        needs_temp: bool,
-    ) -> String {
-        let recv_ref = if needs_temp {
-            format!("({{ __typeof__({recv}) __tmp = {recv}; &__tmp; }})")
-        } else {
-            format!("&{recv}")
-        };
-        match method_name {
-            // base_url, header, timeout are now handled by extern dispatch
-            "get" | "post" | "put" | "delete" | "patch" | "head" => {
-                let method = method_name;
-                let path = if let Some(a) = args.first() { self.gen_expr(&a.node.value) } else { "\"\"".into() };
-                let body = if args.len() > 1 { self.gen_expr(&args[1].node.value) } else { "\"\"".into() };
-                let result_type = c_mangle::mangle_generic("Result", &["GorgetHttpResponse".into(), "const char*".into()]);
-                let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
-                let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
-                format!(
-                    "({{ GorgetHttpResponse __hr = gorget_http_client_request({recv_ref}, \"{method}\", {path}, {body}); \
-                    const char* __he = gorget_http_last_error(); \
-                    __he ? {err_ctor}(__he) : {ok_ctor}(__hr); }})"
-                )
-            }
-            _ => format!("/* unknown Client method: {method_name} */"),
-        }
-    }
-
-
     /// Infer the inner C type for a Box allocation.
     /// Uses `decl_type_hint` to extract T from `Box[T]`, falling back to the argument's inferred type.
     pub(super) fn box_inner_c_type(&mut self, arg_expr: &Spanned<Expr>) -> String {

@@ -6,7 +6,6 @@
 ///
 /// All synthetic defs use `Span::dummy()`, which distinguishes them from
 /// user-defined code and enables the `is_stdlib_call()` guard in codegen.
-use crate::lexer::token::{StringKind, StringLit};
 use crate::parser::ast::*;
 use crate::span::{Span, Spanned};
 
@@ -16,9 +15,8 @@ pub fn is_stdlib_module(segments: &[String]) -> bool {
         return false;
     }
     match segments.len() {
-        2 => matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv" | "io" | "random" | "time" | "collections" | "math" | "fmt" | "process" | "sdl" | "gfx" | "ecs" | "json" | "toml" | "xml" | "bytes" | "crypto" | "ssh"),
-        3 => (segments[1] == "http" && segments[2] == "client")
-            || (segments[1] == "net" && segments[2] == "socket"),
+        2 => matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv" | "io" | "random" | "time" | "collections" | "math" | "fmt" | "process" | "sdl" | "gfx" | "ecs" | "json" | "toml" | "xml" | "bytes" | "crypto" | "ssh" | "http"),
+        3 => segments[1] == "net" && matches!(segments[2].as_str(), "socket" | "tls"),
         _ => false,
     }
 }
@@ -50,10 +48,11 @@ pub fn generate_stdlib_module(segments: &[String]) -> Option<Module> {
             "gfx" => None, // file-based module — loaded via stdlib_module_source()
             "ecs" => None, // file-based module — loaded via stdlib_module_source()
             "ssh" => None, // file-based module — loaded via stdlib_module_source()
+            "http" => None, // file-based module — loaded via stdlib_module_source()
             _ => None,
         },
-        3 if segments[1] == "http" && segments[2] == "client" => Some(gen_http_client_module()),
         3 if segments[1] == "net" && segments[2] == "socket" => Some(gen_socket_module()),
+        3 if segments[1] == "net" && segments[2] == "tls" => Some(gen_tls_socket_module()),
         _ => None,
     }
 }
@@ -522,6 +521,7 @@ pub fn stdlib_module_source(segments: &[String]) -> Option<&'static str> {
         Some("gfx") => Some(include_str!("../lib/std/gfx.gg")),
         Some("ecs") => Some(include_str!("../lib/std/ecs.gg")),
         Some("ssh") => Some(include_str!("../lib/std/ssh.gg")),
+        Some("http") => Some(include_str!("../lib/std/http.gg")),
         Some("json") => Some(include_str!("../lib/std/json.gg")),
         Some("toml") => Some(include_str!("../lib/std/toml.gg")),
         Some("xml") => Some(include_str!("../lib/std/xml.gg")),
@@ -629,21 +629,6 @@ fn ty_result(ok: Type, err: Type) -> Type {
     }
 }
 
-fn ty_dict_str_str() -> Type {
-    Type::Named {
-        name: Spanned::dummy("Dict".to_string()),
-        generic_args: vec![Spanned::dummy(ty_str()), Spanned::dummy(ty_str())],
-    }
-}
-
-fn ty_response() -> Type {
-    Type::Named {
-        name: Spanned::dummy("Response".to_string()),
-        generic_args: vec![],
-    }
-}
-
-
 fn opaque_struct(name: &str) -> Spanned<Item> {
     Spanned::dummy(Item::Struct(StructDef {
         attributes: vec![],
@@ -654,39 +639,6 @@ fn opaque_struct(name: &str) -> Spanned<Item> {
         doc_comment: None,
         span: Span::dummy(),
     }))
-}
-
-fn decl_fn_with_defaults(
-    name: &str,
-    params: &[(&str, Type, Option<Expr>)],
-    ret: Type,
-) -> FunctionDef {
-    FunctionDef {
-        attributes: Vec::new(),
-        visibility: Visibility::Public,
-        qualifiers: FunctionQualifiers::default(),
-        return_type: Spanned::dummy(ret),
-        name: Spanned::dummy(name.to_string()),
-        generic_params: None,
-        params: params
-            .iter()
-            .map(|(pname, pty, default)| {
-                Spanned::dummy(Param {
-                    type_: Spanned::dummy(pty.clone()),
-                    ownership: Ownership::Borrow,
-                    name: Spanned::dummy(pname.to_string()),
-                    default: default.as_ref().map(|d| Spanned::dummy(d.clone())),
-                    is_live: false,
-                    live_group: None,
-                })
-            })
-            .collect(),
-        throws: None,
-        where_clause: None,
-        body: FunctionBody::Declaration,
-        doc_comment: None,
-        span: Span::dummy(),
-    }
 }
 
 // ─── std.crypto ─────────────────────────────────────────────
@@ -782,6 +734,40 @@ fn gen_socket_module() -> Module {
     }
 }
 
+// ─── std.net.tls ────────────────────────────────────────────
+
+fn gen_tls_socket_module() -> Module {
+    let ty_tls_socket = || Type::Named {
+        name: Spanned::dummy("TlsSocket".to_string()),
+        generic_args: vec![],
+    };
+
+    let mut items: Vec<Spanned<Item>> = Vec::new();
+
+    // Opaque struct: TlsSocket
+    items.push(opaque_struct("TlsSocket"));
+
+    // Free function: tls_connect(host, port) -> Result[TlsSocket, str]
+    items.push(Spanned::dummy(Item::Function(
+        decl_fn("tls_connect", &[("host", ty_str()), ("port", ty_int())], ty_result(ty_tls_socket(), ty_str())),
+    )));
+
+    // TlsSocket methods — extern bindings
+    items.push(equip_block("TlsSocket", vec![
+        extern_method("read", Ownership::MutableBorrow, &[("n", ty_int())], ty_vector_uint8(), "gorget_tls_read"),
+        extern_method("read_exact", Ownership::MutableBorrow, &[("n", ty_int())], ty_vector_uint8(), "gorget_tls_read_exact"),
+        extern_method("write", Ownership::MutableBorrow, &[("data", ty_vector_uint8())], ty_int(), "gorget_tls_write"),
+        extern_method("write_str", Ownership::MutableBorrow, &[("s", ty_str())], ty_int(), "gorget_tls_write_str"),
+        extern_method("read_line", Ownership::MutableBorrow, &[], ty_str(), "gorget_tls_read_line"),
+        extern_method("close", Ownership::MutableBorrow, &[], ty_void(), "gorget_tls_close"),
+    ]));
+
+    Module {
+        items,
+        span: Span::dummy(),
+    }
+}
+
 // ─── std.bytes ──────────────────────────────────────────────
 
 fn gen_bytes_module() -> Module {
@@ -800,7 +786,7 @@ fn gen_bytes_module() -> Module {
     ])
 }
 
-// ─── std.http.client ────────────────────────────────────────
+// ─── Helpers ────────────────────────────────────────────────
 
 /// Build an extern free function declaration.
 /// The C symbol is called directly instead of going through hardcoded dispatch.
@@ -881,58 +867,6 @@ fn equip_block(type_name: &str, methods: Vec<FunctionDef>) -> Spanned<Item> {
     }))
 }
 
-fn gen_http_client_module() -> Module {
-    let mut items: Vec<Spanned<Item>> = Vec::new();
-
-    // Opaque structs
-    items.push(opaque_struct("Response"));
-    items.push(opaque_struct("Client"));
-
-    // Response methods: status(), body(), header(key) — extern bindings
-    items.push(equip_block("Response", vec![
-        extern_method("status", Ownership::Borrow, &[], ty_int(), "gorget_http_response_status"),
-        extern_method("body", Ownership::Borrow, &[], ty_str(), "gorget_http_response_body"),
-        extern_method("header", Ownership::Borrow, &[("key", ty_str())], ty_str(), "gorget_http_response_header"),
-    ]));
-
-    // Client methods: simple property setters use extern bindings,
-    // HTTP verb methods (get/post/...) stay as Declaration (hardcoded Result wrapping in codegen)
-    items.push(equip_block("Client", vec![
-        extern_method("base_url", Ownership::MutableBorrow, &[("url", ty_str())], ty_void(), "gorget_http_client_set_base_url"),
-        extern_method("header", Ownership::MutableBorrow, &[("key", ty_str()), ("value", ty_str())], ty_void(), "gorget_http_client_set_header"),
-        extern_method("timeout", Ownership::MutableBorrow, &[("ms", ty_int())], ty_void(), "gorget_http_client_set_timeout"),
-        decl_method("get", Ownership::Borrow, &[("path", ty_str())], ty_result(ty_response(), ty_str())),
-        decl_method("post", Ownership::Borrow, &[("path", ty_str()), ("body", ty_str())], ty_result(ty_response(), ty_str())),
-        decl_method("put", Ownership::Borrow, &[("path", ty_str()), ("body", ty_str())], ty_result(ty_response(), ty_str())),
-        decl_method("delete", Ownership::Borrow, &[("path", ty_str())], ty_result(ty_response(), ty_str())),
-        decl_method("patch", Ownership::Borrow, &[("path", ty_str()), ("body", ty_str())], ty_result(ty_response(), ty_str())),
-        decl_method("head", Ownership::Borrow, &[("path", ty_str())], ty_result(ty_response(), ty_str())),
-    ]));
-
-    // HTTP verb functions with default params
-    let http_verbs = ["get", "post", "put", "delete", "patch", "head"];
-    for verb in &http_verbs {
-        items.push(Spanned::dummy(Item::Function(decl_fn_with_defaults(
-            verb,
-            &[
-                ("url", ty_str(), None),
-                ("body", ty_str(), Some(Expr::StringLiteral(StringLit { kind: StringKind::Normal, segments: vec![] }))),
-                ("headers", ty_dict_str_str(), Some(Expr::Call {
-                    callee: Box::new(Spanned::dummy(Expr::Identifier("Dict".into()))),
-                    generic_args: None,
-                    args: vec![],
-                })),
-                ("timeout", ty_int(), Some(Expr::IntLiteral(0))),
-            ],
-            ty_result(ty_response(), ty_str()),
-        ))));
-    }
-
-    Module {
-        items,
-        span: Span::dummy(),
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -954,7 +888,9 @@ mod tests {
         assert!(is_stdlib_module(&["std".into(), "ecs".into()]));
         assert!(is_stdlib_module(&["std".into(), "json".into()]));
         assert!(is_stdlib_module(&["std".into(), "bytes".into()]));
-        assert!(is_stdlib_module(&["std".into(), "http".into(), "client".into()]));
+        assert!(is_stdlib_module(&["std".into(), "http".into()]));
+        assert!(is_stdlib_module(&["std".into(), "net".into(), "tls".into()]));
+        assert!(!is_stdlib_module(&["std".into(), "http".into(), "client".into()]));
         assert!(!is_stdlib_module(&["std".into(), "test".into(), "process".into()]));
         assert!(!is_stdlib_module(&["std".into(), "foo".into()]));
         assert!(!is_stdlib_module(&["foo".into(), "fs".into()]));
@@ -1506,59 +1442,48 @@ mod tests {
     }
 
     #[test]
-    fn is_stdlib_http_client() {
-        assert!(is_stdlib_module(&["std".into(), "http".into(), "client".into()]));
-    }
-
-    #[test]
-    fn generate_http_client() {
-        let m = generate_stdlib_module(&["std".into(), "http".into(), "client".into()]).unwrap();
+    fn generate_tls_socket() {
+        let m = generate_stdlib_module(&["std".into(), "net".into(), "tls".into()]).unwrap();
         let mut struct_names = vec![];
         let mut fn_names = vec![];
         let mut equip_count = 0;
-        let mut equip_method_names: Vec<String> = vec![];
         for item in &m.items {
             match &item.node {
                 Item::Struct(s) => struct_names.push(s.name.node.clone()),
                 Item::Function(f) => fn_names.push(f.name.node.clone()),
-                Item::Equip(e) => {
-                    equip_count += 1;
-                    for method in &e.items {
-                        equip_method_names.push(method.node.name.node.clone());
-                    }
-                }
+                Item::Equip(_) => equip_count += 1,
                 _ => {}
             }
         }
-        assert!(struct_names.contains(&"Response".to_string()));
-        assert!(struct_names.contains(&"Client".to_string()));
-        assert!(fn_names.contains(&"get".to_string()));
-        assert!(fn_names.contains(&"post".to_string()));
-        assert!(fn_names.contains(&"put".to_string()));
-        assert!(fn_names.contains(&"delete".to_string()));
-        assert!(fn_names.contains(&"patch".to_string()));
-        assert!(fn_names.contains(&"head".to_string()));
-        // equip blocks for Response and Client
-        assert_eq!(equip_count, 2);
-        // Response methods
-        assert!(equip_method_names.contains(&"status".to_string()));
-        assert!(equip_method_names.contains(&"body".to_string()));
-        // Client methods
-        assert!(equip_method_names.contains(&"base_url".to_string()));
-        assert!(equip_method_names.contains(&"timeout".to_string()));
+        assert!(struct_names.contains(&"TlsSocket".to_string()));
+        assert!(fn_names.contains(&"tls_connect".to_string()));
+        assert_eq!(equip_count, 1);
     }
 
     #[test]
-    fn http_response_methods_are_extern() {
-        let m = generate_stdlib_module(&["std".into(), "http".into(), "client".into()]).unwrap();
+    fn tls_socket_methods_are_extern() {
+        let m = generate_stdlib_module(&["std".into(), "net".into(), "tls".into()]).unwrap();
         for item in &m.items {
             if let Item::Equip(eq) = &item.node {
                 if let Type::Named { name, .. } = &eq.type_.node {
-                    if name.node == "Response" {
+                    if name.node == "TlsSocket" {
+                        let names: Vec<&str> =
+                            eq.items.iter().map(|m| m.node.name.node.as_str()).collect();
+                        assert_eq!(
+                            names,
+                            vec![
+                                "read",
+                                "read_exact",
+                                "write",
+                                "write_str",
+                                "read_line",
+                                "close"
+                            ]
+                        );
                         for method in &eq.items {
                             assert!(
                                 matches!(method.node.body, FunctionBody::Extern(_)),
-                                "Response.{} should be FunctionBody::Extern",
+                                "TlsSocket.{} should be FunctionBody::Extern",
                                 method.node.name.node
                             );
                         }
@@ -1567,41 +1492,15 @@ mod tests {
                 }
             }
         }
-        panic!("Response equip block not found");
+        panic!("TlsSocket equip block not found");
     }
 
     #[test]
-    fn http_client_simple_methods_are_extern() {
-        let m = generate_stdlib_module(&["std".into(), "http".into(), "client".into()]).unwrap();
-        for item in &m.items {
-            if let Item::Equip(eq) = &item.node {
-                if let Type::Named { name, .. } = &eq.type_.node {
-                    if name.node == "Client" {
-                        for method in &eq.items {
-                            match method.node.name.node.as_str() {
-                                "base_url" | "header" | "timeout" => {
-                                    assert!(
-                                        matches!(method.node.body, FunctionBody::Extern(_)),
-                                        "Client.{} should be FunctionBody::Extern",
-                                        method.node.name.node
-                                    );
-                                }
-                                "get" | "post" | "put" | "delete" | "patch" | "head" => {
-                                    assert!(
-                                        matches!(method.node.body, FunctionBody::Declaration),
-                                        "Client.{} should be FunctionBody::Declaration",
-                                        method.node.name.node
-                                    );
-                                }
-                                _ => {}
-                            }
-                        }
-                        return;
-                    }
-                }
-            }
-        }
-        panic!("Client equip block not found");
+    fn http_is_file_based_module() {
+        // std.http is file-based, so generate_stdlib_module returns None
+        assert!(generate_stdlib_module(&["std".into(), "http".into()]).is_none());
+        // but stdlib_module_source returns the source
+        assert!(stdlib_module_source(&["std".into(), "http".into()]).is_some());
     }
 
     #[test]

@@ -355,7 +355,7 @@ impl Default for CodegenOptions {
 pub struct CodegenOutput {
     pub c_code: String,
     pub needs_sdl: bool,
-    pub needs_http: bool,
+    pub needs_tls: bool,
     pub needs_crypto: bool,
     /// Host C source for hot-reload mode (contains main loop + file watcher).
     pub host_code: Option<String>,
@@ -520,12 +520,12 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
         emitter.emit(c_runtime::PROCESS_RUNTIME);
     }
 
-    // 1d. HTTP runtime (when std.http.client is imported)
-    let has_http = module.items.iter().any(|i| {
-        matches!(&i.node, Item::Struct(s) if s.name.node == "Response" && s.span == crate::span::Span::dummy())
+    // 1d. TLS socket runtime (when std.net.tls is imported)
+    let has_tls = module.items.iter().any(|i| {
+        matches!(&i.node, Item::Struct(s) if s.name.node == "TlsSocket" && s.span == crate::span::Span::dummy())
     });
-    if has_http {
-        emitter.emit(c_runtime::HTTP_RUNTIME);
+    if has_tls {
+        emitter.emit(c_runtime::TLS_SOCKET_RUNTIME);
     }
 
     // 1f. Crypto runtime (when std.crypto is imported)
@@ -640,12 +640,12 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
             combined.push_str(&output[..pos]);
             combined.push_str(&splice_buf.finish());
             combined.push_str(&output[pos..]);
-            return CodegenOutput { c_code: combined, needs_sdl: has_sdl, needs_http: has_http, needs_crypto: has_crypto, host_code: None, guest_code: None };
+            return CodegenOutput { c_code: combined, needs_sdl: has_sdl, needs_tls: has_tls, needs_crypto: has_crypto, host_code: None, guest_code: None };
         }
-        return CodegenOutput { c_code: output + &splice_buf.finish(), needs_sdl: has_sdl, needs_http: has_http, needs_crypto: has_crypto, host_code: None, guest_code: None };
+        return CodegenOutput { c_code: output + &splice_buf.finish(), needs_sdl: has_sdl, needs_tls: has_tls, needs_crypto: has_crypto, host_code: None, guest_code: None };
     }
 
-    let mut output = CodegenOutput { c_code: emitter.finish(), needs_sdl: has_sdl, needs_http: has_http, needs_crypto: has_crypto, host_code: None, guest_code: None };
+    let mut output = CodegenOutput { c_code: emitter.finish(), needs_sdl: has_sdl, needs_tls: has_tls, needs_crypto: has_crypto, host_code: None, guest_code: None };
 
     // Hot-reload: generate split host/guest C sources
     if hot_reload {

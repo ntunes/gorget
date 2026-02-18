@@ -774,7 +774,7 @@ impl CodegenContext<'_> {
                 }
                 None
             }
-            Expr::Index { object, .. } => {
+            Expr::Index { object, index } => {
                 if let Some(tid) = self.resolve_expr_type_id(object) {
                     if let crate::semantic::types::ResolvedType::Generic(def_id, args) = self.types.get(tid) {
                         let def_name = self.scopes.get_def(*def_id).name.clone();
@@ -788,8 +788,11 @@ impl CodegenContext<'_> {
                         }
                     }
                 }
-                // For string indexing, return char
+                // String slicing with range → str; single index → char
                 if self.is_string_expr(object) {
+                    if matches!(&index.node, Expr::Range { .. }) {
+                        return Some(self.types.string_id);
+                    }
                     return Some(self.types.int_id); // char is printed as int
                 }
                 None

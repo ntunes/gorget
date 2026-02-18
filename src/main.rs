@@ -149,34 +149,10 @@ fn add_sdl_flags(cmd: &mut Command, needs_sdl: bool) {
     }
 }
 
-/// Add libcurl linker flags to a cc command.
-fn add_http_flags(cmd: &mut Command, needs_http: bool) {
-    if !needs_http { return; }
-    let pkg_ok = Command::new("pkg-config")
-        .args(["--cflags", "--libs", "libcurl"])
-        .output()
-        .ok()
-        .and_then(|o| {
-            if o.status.success() {
-                Some(String::from_utf8_lossy(&o.stdout).to_string())
-            } else {
-                None
-            }
-        });
-    if let Some(flags) = pkg_ok {
-        for flag in flags.split_whitespace() {
-            cmd.arg(flag);
-        }
-    } else {
-        cmd.arg("-lcurl");
-        #[cfg(target_os = "macos")]
-        {
-            cmd.arg("-I/opt/homebrew/include");
-            cmd.arg("-L/opt/homebrew/lib");
-            cmd.arg("-I/usr/local/include");
-            cmd.arg("-L/usr/local/lib");
-        }
-    }
+/// Add OpenSSL linker flags to a cc command (for std.net.tls or std.crypto).
+fn add_tls_flags(cmd: &mut Command, needs_tls: bool) {
+    if !needs_tls { return; }
+    add_crypto_flags(cmd, true);
 }
 
 /// Add OpenSSL linker flags to a cc command.
@@ -374,7 +350,7 @@ fn try_build(
     });
     let c_code = codegen_output.c_code;
     let needs_sdl = codegen_output.needs_sdl;
-    let needs_http = codegen_output.needs_http;
+    let needs_tls = codegen_output.needs_tls;
     let needs_crypto = codegen_output.needs_crypto;
     let c_path = dir.join(format!("{stem}.c"));
     // Canonicalize to an absolute path so Command::new() doesn't search $PATH.
@@ -409,7 +385,7 @@ fn try_build(
             .arg("-lm");
         if overflow_wrap { cc_cmd.arg("-fwrapv"); }
         add_sdl_flags(&mut cc_cmd, needs_sdl);
-        add_http_flags(&mut cc_cmd, needs_http);
+        add_tls_flags(&mut cc_cmd, needs_tls);
         add_crypto_flags(&mut cc_cmd, needs_crypto);
 
         let status = cc_cmd.status();
@@ -456,7 +432,7 @@ fn try_build(
             .arg("-lm");
         if overflow_wrap { guest_cmd.arg("-fwrapv"); }
         add_sdl_flags(&mut guest_cmd, needs_sdl);
-        add_http_flags(&mut guest_cmd, needs_http);
+        add_tls_flags(&mut guest_cmd, needs_tls);
         add_crypto_flags(&mut guest_cmd, needs_crypto);
 
         let guest_status = guest_cmd.status();
@@ -481,7 +457,7 @@ fn try_build(
             .arg("-lm");
         if overflow_wrap { host_cmd.arg("-fwrapv"); }
         add_sdl_flags(&mut host_cmd, needs_sdl);
-        add_http_flags(&mut host_cmd, needs_http);
+        add_tls_flags(&mut host_cmd, needs_tls);
         add_crypto_flags(&mut host_cmd, needs_crypto);
 
         let host_status = host_cmd.status();
@@ -517,7 +493,7 @@ fn try_build(
         .arg("-lm");
 
     add_sdl_flags(&mut cc_cmd, needs_sdl);
-    add_http_flags(&mut cc_cmd, needs_http);
+    add_tls_flags(&mut cc_cmd, needs_tls);
     add_crypto_flags(&mut cc_cmd, needs_crypto);
 
     let status = cc_cmd.status();
@@ -535,11 +511,11 @@ fn try_build(
                 msg.push_str("\n  macOS:   brew install sdl2 sdl2_image sdl2_ttf");
                 msg.push_str("\n  Ubuntu:  apt install libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev");
             }
-            if needs_http {
-                msg.push_str("\n\nHint: This program uses std.http.client which requires libcurl.");
+            if needs_tls {
+                msg.push_str("\n\nHint: This program uses std.net.tls which requires OpenSSL.");
                 msg.push_str("\nInstall with:");
-                msg.push_str("\n  macOS:   brew install curl");
-                msg.push_str("\n  Ubuntu:  apt install libcurl4-openssl-dev");
+                msg.push_str("\n  macOS:   brew install openssl");
+                msg.push_str("\n  Ubuntu:  apt install libssl-dev");
             }
             if needs_crypto {
                 msg.push_str("\n\nHint: This program uses std.crypto which requires OpenSSL.");

@@ -590,29 +590,20 @@ impl CodegenContext<'_> {
                             );
                         }
                     }
-                    // std.http.client
-                    "get" | "post" | "put" | "delete" | "patch" | "head" => {
-                        let method = name.as_str();
-                        // Resolve named/default args: url, body, headers, timeout
-                        let resolved = self.resolve_call_args(callee, args);
-                        let url = resolved.first().cloned().unwrap_or_else(|| "\"\"".into());
-                        let body = resolved.get(1).cloned().unwrap_or_else(|| "\"\"".into());
-                        let headers_expr = resolved.get(2).cloned().unwrap_or_default();
-                        // Check if headers is the default empty Dict (count==0) → pass NULL
-                        let headers = if headers_expr.is_empty() || headers_expr.contains("__new()") {
-                            "NULL".into()
-                        } else {
-                            format!("(const GorgetStringMapView*)&{headers_expr}")
-                        };
-                        let timeout = resolved.get(3).cloned().unwrap_or_else(|| "0".into());
-                        let result_type = c_mangle::mangle_generic("Result", &["GorgetHttpResponse".into(), "const char*".into()]);
-                        let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
-                        let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
-                        return format!(
-                            "({{ GorgetHttpResponse __hr = gorget_http_{method}({url}, {body}, {headers}, {timeout}); \
-                            const char* __he = gorget_http_last_error(); \
-                            __he ? {err_ctor}(__he) : {ok_ctor}(__hr); }})"
-                        );
+                    // std.net.tls
+                    "tls_connect" => {
+                        if args.len() >= 2 {
+                            let host = self.gen_expr(&args[0].node.value);
+                            let port = self.gen_expr(&args[1].node.value);
+                            let result_type = c_mangle::mangle_generic("Result", &["GorgetTlsSocket".into(), "const char*".into()]);
+                            let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
+                            let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
+                            return format!(
+                                "({{ GorgetTlsSocket __ts = gorget_tls_connect({host}, {port}); \
+                                const char* __te = gorget_tls_last_error(); \
+                                __te ? {err_ctor}(__te) : {ok_ctor}(__ts); }})"
+                            );
+                        }
                     }
                     _ => {}
                 }
@@ -626,16 +617,6 @@ impl CodegenContext<'_> {
                     return format!(
                         "({{ {inner_type}* __box_tmp = ({inner_type}*)malloc(sizeof({inner_type})); *__box_tmp = {inner}; __box_tmp; }})"
                     );
-                }
-            }
-
-            // Client() constructor → gorget_http_client_new()
-            if name == "Client" && args.is_empty() {
-                if let Some(did) = self.scopes.lookup("Client") {
-                    let def = self.scopes.get_def(did);
-                    if def.kind == DefKind::Struct && def.span == crate::span::Span::dummy() {
-                        return "gorget_http_client_new()".to_string();
-                    }
                 }
             }
 
@@ -1187,11 +1168,8 @@ impl CodegenContext<'_> {
         let is_box = type_name == "Box";
         let is_file = (type_name == "File" || c_type.as_deref() == Some("GorgetFile"))
             && matches!(method_name, "open" | "create");
-        let is_http_client = (type_name == "Client" || c_type.as_deref() == Some("GorgetHttpClient"))
-            && matches!(method_name, "get" | "post" | "put" | "delete" | "patch" | "head");
         let is_iterator = !is_vector && !is_map && !is_set && !is_string
             && !is_option && !is_result && !is_box && !is_file
-            && !is_http_client
             && matches!(method_name, "collect" | "filter" | "map" | "fold")
             && self.traits.impls.iter().any(|i|
                 i.self_type_name == type_name && i.trait_name.as_deref() == Some("Iterator")
@@ -1211,7 +1189,7 @@ impl CodegenContext<'_> {
                 "bool" | "char32_t"
             ));
 
-        if !is_vector && !is_map && !is_set && !is_string && !is_option && !is_result && !is_box && !is_file && !is_http_client && !is_iterator && !is_primitive_hashable && !is_char {
+        if !is_vector && !is_map && !is_set && !is_string && !is_option && !is_result && !is_box && !is_file && !is_iterator && !is_primitive_hashable && !is_char {
             return None;
         }
 
@@ -1276,10 +1254,6 @@ impl CodegenContext<'_> {
         if is_file {
             return Some(self.gen_file_method(&recv, method_name, args, needs_temp));
         }
-        if is_http_client {
-            return Some(self.gen_http_client_method(&recv, method_name, args, needs_temp));
-        }
-
         None
     }
 

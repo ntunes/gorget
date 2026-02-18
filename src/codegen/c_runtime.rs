@@ -1766,302 +1766,6 @@ static inline ExecResult gorget_exec_output(const char* cmd) {
 
 
 /// C runtime for std.http.client — HTTP requests via libcurl.
-pub const HTTP_RUNTIME: &str = r#"
-// ── std.http.client runtime ──────────────────────────────────
-#include <curl/curl.h>
-
-// Response struct
-typedef struct {
-    int64_t status_code;
-    char* body;
-    size_t body_len;
-    char* headers_raw;
-    size_t headers_len;
-} GorgetHttpResponse;
-
-// Client struct
-typedef struct {
-    char* base_url;
-    GorgetMap default_headers;  // key_size=sizeof(char*), val_size=sizeof(char*)
-    int64_t timeout_ms;
-} GorgetHttpClient;
-
-// curl global init (lazy, once)
-static int __gorget_curl_initialized = 0;
-static inline void __gorget_curl_ensure_init(void) {
-    if (!__gorget_curl_initialized) {
-        curl_global_init(CURL_GLOBAL_DEFAULT);
-        __gorget_curl_initialized = 1;
-    }
-}
-
-// Write callback for response body
-static size_t __gorget_curl_write_cb(void* data, size_t size, size_t nmemb, void* userp) {
-    size_t total = size * nmemb;
-    char** buf = (char**)userp;
-    size_t old_len = *buf ? strlen(*buf) : 0;
-    *buf = (char*)realloc(*buf, old_len + total + 1);
-    memcpy(*buf + old_len, data, total);
-    (*buf)[old_len + total] = '\0';
-    return total;
-}
-
-// Write callback for response headers
-static size_t __gorget_curl_header_cb(void* data, size_t size, size_t nmemb, void* userp) {
-    size_t total = size * nmemb;
-    char** buf = (char**)userp;
-    size_t old_len = *buf ? strlen(*buf) : 0;
-    *buf = (char*)realloc(*buf, old_len + total + 1);
-    memcpy(*buf + old_len, data, total);
-    (*buf)[old_len + total] = '\0';
-    return total;
-}
-
-// Thread-local error for HTTP functions
-static __thread const char* __gorget_http_error = NULL;
-
-static inline const char* gorget_http_last_error(void) {
-    const char* e = __gorget_http_error;
-    __gorget_http_error = NULL;
-    return e;
-}
-
-// Common view of Dict[str,str] and HashMap[str,str] for header iteration.
-// Both monomorphized map types share this field layout prefix:
-//   const char** keys; const char** values; uint8_t* states; size_t count; size_t cap;
-typedef struct {
-    const char** keys;
-    const char** values;
-    uint8_t* states;
-    size_t count;
-    size_t cap;
-} GorgetStringMapView;
-
-// Core HTTP request function
-static inline GorgetHttpResponse gorget_http_request(
-    const char* method,
-    const char* url,
-    const char* body,
-    const GorgetStringMapView* headers,
-    int64_t timeout_ms
-) {
-    __gorget_curl_ensure_init();
-    GorgetHttpResponse resp = {0, NULL, 0, NULL, 0};
-
-    CURL* curl = curl_easy_init();
-    if (!curl) {
-        __gorget_http_error = "failed to initialize curl";
-        return resp;
-    }
-
-    curl_easy_setopt(curl, CURLOPT_URL, url);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, __gorget_curl_write_cb);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &resp.body);
-    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, __gorget_curl_header_cb);
-    curl_easy_setopt(curl, CURLOPT_HEADERDATA, &resp.headers_raw);
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-
-    if (timeout_ms > 0) {
-        curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, (long)timeout_ms);
-    }
-
-    // Set method
-    if (strcmp(method, "POST") == 0) {
-        curl_easy_setopt(curl, CURLOPT_POST, 1L);
-    } else if (strcmp(method, "PUT") == 0) {
-        curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "PUT");
-    } else if (strcmp(method, "DELETE") == 0) {
-        curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "DELETE");
-    } else if (strcmp(method, "PATCH") == 0) {
-        curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "PATCH");
-    } else if (strcmp(method, "HEAD") == 0) {
-        curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
-    }
-
-    // Set body
-    if (body && body[0] != '\0') {
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
-    } else if (strcmp(method, "POST") == 0) {
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, "");
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, 0L);
-    }
-
-    // Set headers from Dict[str,str] / HashMap[str,str] view
-    struct curl_slist* header_list = NULL;
-    if (headers && headers->count > 0) {
-        for (size_t i = 0; i < headers->cap; i++) {
-            if (headers->states[i] == 1) {
-                const char* key = headers->keys[i];
-                const char* val = headers->values[i];
-                size_t hlen = strlen(key) + 2 + strlen(val) + 1;
-                char* header = (char*)malloc(hlen);
-                snprintf(header, hlen, "%s: %s", key, val);
-                header_list = curl_slist_append(header_list, header);
-                free(header);
-            }
-        }
-        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, header_list);
-    }
-
-    CURLcode res = curl_easy_perform(curl);
-    if (res != CURLE_OK) {
-        char* msg = (char*)malloc(256);
-        snprintf(msg, 256, "HTTP request failed: %s", curl_easy_strerror(res));
-        __gorget_http_error = msg;
-        curl_slist_free_all(header_list);
-        curl_easy_cleanup(curl);
-        return resp;
-    }
-
-    long status;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
-    resp.status_code = (int64_t)status;
-    resp.body_len = resp.body ? strlen(resp.body) : 0;
-    resp.headers_len = resp.headers_raw ? strlen(resp.headers_raw) : 0;
-
-    curl_slist_free_all(header_list);
-    curl_easy_cleanup(curl);
-    return resp;
-}
-
-// ── Free functions (HTTP verbs) ──────────────────────────────
-
-static inline GorgetHttpResponse gorget_http_get(const char* url, const char* body, const GorgetStringMapView* headers, int64_t timeout) {
-    return gorget_http_request("GET", url, body, headers, timeout);
-}
-static inline GorgetHttpResponse gorget_http_post(const char* url, const char* body, const GorgetStringMapView* headers, int64_t timeout) {
-    return gorget_http_request("POST", url, body, headers, timeout);
-}
-static inline GorgetHttpResponse gorget_http_put(const char* url, const char* body, const GorgetStringMapView* headers, int64_t timeout) {
-    return gorget_http_request("PUT", url, body, headers, timeout);
-}
-static inline GorgetHttpResponse gorget_http_delete(const char* url, const char* body, const GorgetStringMapView* headers, int64_t timeout) {
-    return gorget_http_request("DELETE", url, body, headers, timeout);
-}
-static inline GorgetHttpResponse gorget_http_patch(const char* url, const char* body, const GorgetStringMapView* headers, int64_t timeout) {
-    return gorget_http_request("PATCH", url, body, headers, timeout);
-}
-static inline GorgetHttpResponse gorget_http_head(const char* url, const char* body, const GorgetStringMapView* headers, int64_t timeout) {
-    return gorget_http_request("HEAD", url, body, headers, timeout);
-}
-
-// ── Response methods ─────────────────────────────────────────
-
-static inline int64_t gorget_http_response_status(const GorgetHttpResponse* r) {
-    return r->status_code;
-}
-
-static inline const char* gorget_http_response_body(const GorgetHttpResponse* r) {
-    return r->body ? r->body : "";
-}
-
-static inline const char* gorget_http_response_header(const GorgetHttpResponse* r, const char* key) {
-    if (!r->headers_raw) return "";
-    // Search raw headers for "Key: Value\r\n"
-    size_t key_len = strlen(key);
-    const char* p = r->headers_raw;
-    while (*p) {
-        // Case-insensitive header name match
-        if (strncasecmp(p, key, key_len) == 0 && p[key_len] == ':') {
-            const char* val = p + key_len + 1;
-            while (*val == ' ') val++;
-            // Find end of line
-            const char* end = val;
-            while (*end && *end != '\r' && *end != '\n') end++;
-            size_t vlen = (size_t)(end - val);
-            char* result = (char*)malloc(vlen + 1);
-            memcpy(result, val, vlen);
-            result[vlen] = '\0';
-            return result;
-        }
-        // Skip to next line
-        while (*p && *p != '\n') p++;
-        if (*p) p++;
-    }
-    return "";
-}
-
-// ── Client ───────────────────────────────────────────────────
-
-static inline GorgetHttpClient gorget_http_client_new(void) {
-    GorgetHttpClient c;
-    c.base_url = NULL;
-    c.default_headers = gorget_map_new(sizeof(const char*), sizeof(const char*));
-    c.timeout_ms = 0;
-    return c;
-}
-
-static inline void gorget_http_client_set_base_url(GorgetHttpClient* c, const char* url) {
-    free(c->base_url);
-    c->base_url = (char*)malloc(strlen(url) + 1);
-    strcpy(c->base_url, url);
-}
-
-static inline void gorget_http_client_set_header(GorgetHttpClient* c, const char* key, const char* val) {
-    gorget_map_put(&c->default_headers, &key, &val);
-}
-
-static inline void gorget_http_client_set_timeout(GorgetHttpClient* c, int64_t ms) {
-    c->timeout_ms = ms;
-}
-
-// Build full URL from client base_url + path
-static inline const char* __gorget_http_client_url(const GorgetHttpClient* c, const char* path) {
-    if (!c->base_url || c->base_url[0] == '\0') return path;
-    size_t blen = strlen(c->base_url);
-    size_t plen = strlen(path);
-    // Strip trailing slash from base, leading slash from path
-    while (blen > 0 && c->base_url[blen - 1] == '/') blen--;
-    while (plen > 0 && path[0] == '/') { path++; plen--; }
-    char* url = (char*)malloc(blen + 1 + plen + 1);
-    memcpy(url, c->base_url, blen);
-    url[blen] = '/';
-    memcpy(url + blen + 1, path, plen);
-    url[blen + 1 + plen] = '\0';
-    return url;
-}
-
-// Merge client default headers with per-request headers
-static inline GorgetMap __gorget_http_client_merge_headers(const GorgetHttpClient* c, const GorgetMap* req_headers) {
-    GorgetMap merged = gorget_map_new(sizeof(const char*), sizeof(const char*));
-    // Copy default headers
-    for (size_t i = 0; i < c->default_headers.cap; i++) {
-        if (c->default_headers.states[i] == 1) {
-            const void* k = (const char*)c->default_headers.keys + i * c->default_headers.key_size;
-            const void* v = (const char*)c->default_headers.values + i * c->default_headers.val_size;
-            gorget_map_put(&merged, k, v);
-        }
-    }
-    // Override with request headers
-    if (req_headers) {
-        for (size_t i = 0; i < req_headers->cap; i++) {
-            if (req_headers->states[i] == 1) {
-                const void* k = (const char*)req_headers->keys + i * req_headers->key_size;
-                const void* v = (const char*)req_headers->values + i * req_headers->val_size;
-                gorget_map_put(&merged, k, v);
-            }
-        }
-    }
-    return merged;
-}
-
-static inline GorgetHttpResponse gorget_http_client_request(
-    const GorgetHttpClient* c,
-    const char* method,
-    const char* path,
-    const char* body,
-    const GorgetMap* headers,
-    int64_t timeout
-) {
-    const char* url = __gorget_http_client_url(c, path);
-    int64_t t = timeout > 0 ? timeout : c->timeout_ms;
-    GorgetMap merged = __gorget_http_client_merge_headers(c, headers);
-    GorgetHttpResponse resp = gorget_http_request(method, url, body, (const GorgetStringMapView*)&merged, t);
-    gorget_map_free(&merged);
-    return resp;
-}
-
-"#;
 
 // ── std.crypto runtime ──────────────────────────────────────
 pub const CRYPTO_RUNTIME: &str = r#"
@@ -2415,6 +2119,202 @@ static void gorget_socket_set_timeout(GorgetSocket* sock, int64_t ms) {
 
 // Close the socket
 static void gorget_socket_close(GorgetSocket* sock) {
+    if (sock->fd >= 0) {
+        close(sock->fd);
+        sock->fd = -1;
+    }
+}
+
+"#;
+
+// ── std.net.tls runtime ─────────────────────────────────────
+pub const TLS_SOCKET_RUNTIME: &str = r#"
+// ── TLS Socket (std.net.tls) ────────────────────────────────
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netdb.h>
+#include <arpa/inet.h>
+#include <errno.h>
+
+typedef struct {
+    int fd;
+    SSL_CTX* ctx;
+    SSL* ssl;
+} GorgetTlsSocket;
+
+static const char* __gorget_tls_last_error = NULL;
+
+static GorgetTlsSocket gorget_tls_connect(const char* host, int64_t port) {
+    __gorget_tls_last_error = NULL;
+    GorgetTlsSocket sock = {-1, NULL, NULL};
+
+    // DNS resolution
+    char port_str[16];
+    snprintf(port_str, sizeof(port_str), "%lld", (long long)port);
+    struct addrinfo hints, *res, *rp;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    int err = getaddrinfo(host, port_str, &hints, &res);
+    if (err != 0) {
+        __gorget_tls_last_error = gai_strerror(err);
+        return sock;
+    }
+
+    // TCP connect
+    int fd = -1;
+    for (rp = res; rp != NULL; rp = rp->ai_next) {
+        fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+        if (fd < 0) continue;
+        if (connect(fd, rp->ai_addr, rp->ai_addrlen) == 0) break;
+        close(fd);
+        fd = -1;
+    }
+    freeaddrinfo(res);
+    if (fd < 0) {
+        __gorget_tls_last_error = "TCP connection failed";
+        return sock;
+    }
+
+    // SSL setup
+    SSL_CTX* ctx = SSL_CTX_new(TLS_client_method());
+    if (!ctx) {
+        close(fd);
+        __gorget_tls_last_error = "SSL_CTX_new failed";
+        return sock;
+    }
+    SSL_CTX_set_default_verify_paths(ctx);
+
+    SSL* ssl = SSL_new(ctx);
+    if (!ssl) {
+        SSL_CTX_free(ctx);
+        close(fd);
+        __gorget_tls_last_error = "SSL_new failed";
+        return sock;
+    }
+
+    SSL_set_fd(ssl, fd);
+    SSL_set_tlsext_host_name(ssl, host);  // SNI
+
+    if (SSL_connect(ssl) != 1) {
+        __gorget_tls_last_error = "TLS handshake failed";
+        SSL_free(ssl);
+        SSL_CTX_free(ctx);
+        close(fd);
+        return (GorgetTlsSocket){-1, NULL, NULL};
+    }
+
+    // Verify certificate
+    long verify_result = SSL_get_verify_result(ssl);
+    if (verify_result != X509_V_OK) {
+        __gorget_tls_last_error = X509_verify_cert_error_string(verify_result);
+        SSL_shutdown(ssl);
+        SSL_free(ssl);
+        SSL_CTX_free(ctx);
+        close(fd);
+        return (GorgetTlsSocket){-1, NULL, NULL};
+    }
+
+    return (GorgetTlsSocket){fd, ctx, ssl};
+}
+
+static const char* gorget_tls_last_error(void) {
+    return __gorget_tls_last_error;
+}
+
+static GorgetArray gorget_tls_read(GorgetTlsSocket* sock, int64_t n) {
+    GorgetArray arr = gorget_array_new(sizeof(uint8_t));
+    if (n <= 0 || !sock->ssl) return arr;
+    uint8_t* buf = (uint8_t*)malloc((size_t)n);
+    int got = SSL_read(sock->ssl, buf, (int)n);
+    if (got > 0) {
+        arr.data = buf;
+        arr.len = (size_t)got;
+        arr.cap = (size_t)n;
+    } else {
+        free(buf);
+    }
+    return arr;
+}
+
+static GorgetArray gorget_tls_read_exact(GorgetTlsSocket* sock, int64_t n) {
+    GorgetArray arr = gorget_array_new(sizeof(uint8_t));
+    if (n <= 0 || !sock->ssl) return arr;
+    uint8_t* buf = (uint8_t*)malloc((size_t)n);
+    size_t total = 0;
+    while (total < (size_t)n) {
+        int got = SSL_read(sock->ssl, buf + total, (int)((size_t)n - total));
+        if (got <= 0) break;
+        total += (size_t)got;
+    }
+    if (total == (size_t)n) {
+        arr.data = buf;
+        arr.len = (size_t)n;
+        arr.cap = (size_t)n;
+    } else {
+        free(buf);
+    }
+    return arr;
+}
+
+static int64_t gorget_tls_write(GorgetTlsSocket* sock, const GorgetArray* data) {
+    if (!sock->ssl || data->len == 0) return 0;
+    size_t total = 0;
+    while (total < data->len) {
+        int sent = SSL_write(sock->ssl, (uint8_t*)data->data + total, (int)(data->len - total));
+        if (sent <= 0) return -1;
+        total += (size_t)sent;
+    }
+    return (int64_t)total;
+}
+
+static int64_t gorget_tls_write_str(GorgetTlsSocket* sock, const char* s) {
+    if (!sock->ssl || !s) return 0;
+    size_t len = strlen(s);
+    size_t total = 0;
+    while (total < len) {
+        int sent = SSL_write(sock->ssl, s + total, (int)(len - total));
+        if (sent <= 0) return -1;
+        total += (size_t)sent;
+    }
+    return (int64_t)total;
+}
+
+static const char* gorget_tls_read_line(GorgetTlsSocket* sock) {
+    if (!sock->ssl) return "";
+    size_t cap = 256, len = 0;
+    char* buf = (char*)malloc(cap);
+    while (1) {
+        char c;
+        int got = SSL_read(sock->ssl, &c, 1);
+        if (got <= 0) break;
+        if (len + 1 >= cap) {
+            cap *= 2;
+            buf = (char*)realloc(buf, cap);
+        }
+        buf[len++] = c;
+        if (c == '\n') break;
+    }
+    buf[len] = '\0';
+    // Strip trailing \r\n
+    while (len > 0 && (buf[len-1] == '\n' || buf[len-1] == '\r')) {
+        buf[--len] = '\0';
+    }
+    return buf;
+}
+
+static void gorget_tls_close(GorgetTlsSocket* sock) {
+    if (sock->ssl) {
+        SSL_shutdown(sock->ssl);
+        SSL_free(sock->ssl);
+        sock->ssl = NULL;
+    }
+    if (sock->ctx) {
+        SSL_CTX_free(sock->ctx);
+        sock->ctx = NULL;
+    }
     if (sock->fd >= 0) {
         close(sock->fd);
         sock->fd = -1;

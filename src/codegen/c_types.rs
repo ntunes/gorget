@@ -108,12 +108,10 @@ pub fn ast_type_to_c(ty: &crate::parser::ast::Type, scopes: &ScopeTable) -> Stri
                 return "GorgetSDLFont".to_string();
             } else if name.node == "SDLEvent" {
                 return "GorgetSDLEvent".to_string();
-            } else if name.node == "Response" {
-                return "GorgetHttpResponse".to_string();
-            } else if name.node == "Client" {
-                return "GorgetHttpClient".to_string();
             } else if name.node == "Socket" {
                 return "GorgetSocket".to_string();
+            } else if name.node == "TlsSocket" {
+                return "GorgetTlsSocket".to_string();
             } else if name.node == "CipherContext" {
                 return "GorgetCipherContext".to_string();
             } else if name.node == "BigNum" {
@@ -277,9 +275,8 @@ pub(super) fn def_name_to_c(def_id: DefId, scopes: &ScopeTable) -> String {
         "SDLTexture" => "GorgetSDLTexture".to_string(),
         "SDLFont" => "GorgetSDLFont".to_string(),
         "SDLEvent" => "GorgetSDLEvent".to_string(),
-        "Response" => "GorgetHttpResponse".to_string(),
-        "Client" => "GorgetHttpClient".to_string(),
         "Socket" => "GorgetSocket".to_string(),
+        "TlsSocket" => "GorgetTlsSocket".to_string(),
         "CipherContext" => "GorgetCipherContext".to_string(),
         "BigNum" => "GorgetBigNum".to_string(),
         "RSAKey" => "GorgetRSAKey".to_string(),
