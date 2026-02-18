@@ -1,0 +1,20 @@
+# Test str→String coercion in struct constructors
+
+struct Holder:
+    String name
+
+struct Pair:
+    str label
+    String value
+
+void main():
+    # str literal → String field: should emit gorget_string_new()
+    Holder h = Holder("hello")
+    print(h.name)
+    print(h.name.len())
+
+    # Mixed: str field stays str, String field gets coerced
+    Pair p = Pair("label", "value")
+    print(p.label)
+    print(p.value)
+    print(p.value.len())

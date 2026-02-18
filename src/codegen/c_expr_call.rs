@@ -620,16 +620,47 @@ impl CodegenContext<'_> {
                 }
             }
 
-            // Check if this is a struct constructor
+            // Check if this is a struct/newtype constructor (struct calls are
+            // normally rewritten to Expr::StructLiteral by the rewrite pass,
+            // but newtypes still come through here).
             if let Some(def_id) = self.scopes.lookup(name) {
                 let def = self.scopes.get_def(def_id);
-                if def.kind == crate::semantic::scope::DefKind::Struct
-                    || def.kind == crate::semantic::scope::DefKind::Newtype
+                if def.kind == DefKind::Struct
+                    || def.kind == DefKind::Newtype
                 {
-                    let field_exprs: Vec<String> =
-                        args.iter().map(|a| self.gen_expr(&a.node.value)).collect();
-                    let fields = field_exprs.join(", ");
                     let c_name = c_types::def_name_to_c(def_id, self.scopes);
+                    let struct_name = def.name.clone();
+
+                    // Build per-field TypeIds for str↔String coercion.
+                    // For structs, field order comes from struct_fields;
+                    // for newtypes, single field named "value".
+                    let field_type_ids: Vec<Option<crate::semantic::ids::TypeId>> = {
+                        let field_names: Vec<String> = if def.kind == DefKind::Struct {
+                            self.struct_fields.get(&def_id)
+                                .map(|info| info.fields.iter().map(|(n, _)| n.clone()).collect())
+                                .unwrap_or_default()
+                        } else {
+                            vec!["value".to_string()]
+                        };
+                        field_names.iter().map(|fname| {
+                            let key = (struct_name.clone(), fname.clone());
+                            self.field_type_names.get(&key).and_then(|ast_type| {
+                                use crate::parser::ast::{Type, PrimitiveType};
+                                match ast_type {
+                                    Type::Primitive(PrimitiveType::Str) => Some(self.types.string_id),
+                                    Type::Primitive(PrimitiveType::StringType) => Some(self.types.owned_string_id),
+                                    _ => None,
+                                }
+                            })
+                        }).collect()
+                    };
+
+                    let field_exprs: Vec<String> = args.iter().enumerate().map(|(i, a)| {
+                        let expr = self.gen_expr(&a.node.value);
+                        let ptid = field_type_ids.get(i).copied().flatten();
+                        self.coerce_arg_to_str(expr, &a.node.value, ptid)
+                    }).collect();
+                    let fields = field_exprs.join(", ");
                     return format!("({c_name}){{{fields}}}");
                 }
                 // Check for enum variant constructor

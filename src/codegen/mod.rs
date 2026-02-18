@@ -376,6 +376,13 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
                 );
             }
         }
+        // Newtypes have a single "value" field — register it for constructor coercion
+        if let Item::Newtype(nt) = &item.node {
+            field_type_names.insert(
+                (nt.name.node.clone(), "value".to_string()),
+                nt.inner_type.node.clone(),
+            );
+        }
     }
 
     // Collect all top-level function names (except main) so codegen can

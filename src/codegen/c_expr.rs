@@ -1,6 +1,6 @@
 /// Expression codegen: convert Gorget expressions to C expression strings.
 use crate::lexer::token::{StringLit, StringSegment};
-use crate::parser::ast::{BinaryOp, Expr, Type, UnaryOp};
+use crate::parser::ast::{BinaryOp, Expr, PrimitiveType, Type, UnaryOp};
 use crate::span::Spanned;
 
 use super::c_mangle;
@@ -373,8 +373,6 @@ impl CodegenContext<'_> {
             }
 
             Expr::StructLiteral { name, generic_args, args } => {
-                let field_exprs: Vec<String> = args.iter().map(|a| self.gen_expr(a)).collect();
-                let fields_str = field_exprs.join(", ");
                 let c_name = if let Some(ga) = generic_args {
                     // Generic struct with explicit type args: use context-aware
                     // type_to_c for substitution (handles T → int64_t in monomorphized bodies)
@@ -406,6 +404,32 @@ impl CodegenContext<'_> {
                 } else {
                     name.node.clone()
                 };
+
+                // Build per-field TypeIds for str↔String coercion
+                let field_type_ids: Vec<Option<crate::semantic::ids::TypeId>> = {
+                    let struct_name = &name.node;
+                    let field_names: Vec<String> = self.scopes.lookup(struct_name)
+                        .and_then(|def_id| self.struct_fields.get(&def_id))
+                        .map(|info| info.fields.iter().map(|(n, _)| n.clone()).collect())
+                        .unwrap_or_default();
+                    field_names.iter().map(|fname| {
+                        let key = (struct_name.clone(), fname.clone());
+                        self.field_type_names.get(&key).and_then(|ast_type| {
+                            match ast_type {
+                                Type::Primitive(PrimitiveType::Str) => Some(self.types.string_id),
+                                Type::Primitive(PrimitiveType::StringType) => Some(self.types.owned_string_id),
+                                _ => None,
+                            }
+                        })
+                    }).collect()
+                };
+
+                let field_exprs: Vec<String> = args.iter().enumerate().map(|(i, a)| {
+                    let expr = self.gen_expr(a);
+                    let ptid = field_type_ids.get(i).copied().flatten();
+                    self.coerce_arg_to_str(expr, a, ptid)
+                }).collect();
+                let fields_str = field_exprs.join(", ");
                 format!("({c_name}){{{fields_str}}}")
             }
 

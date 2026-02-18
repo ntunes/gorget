@@ -1526,6 +1526,19 @@ A
 }
 
 #[test]
+fn struct_string_coerce() {
+    run_gg(
+        "struct_string_coerce.gg",
+        "\
+hello
+5
+label
+value
+5",
+    );
+}
+
+#[test]
 fn in_operator() {
     run_gg(
         "in_operator.gg",
