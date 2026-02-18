@@ -1285,6 +1285,19 @@ drop elem-b",
 }
 
 #[test]
+fn drop_fn_return_collection() {
+    run_gg(
+        "drop_fn_return_collection.gg",
+        "\
+2
+1
+1
+30
+done",
+    );
+}
+
+#[test]
 fn trait_defaults() {
     run_gg(
         "trait_defaults.gg",

@@ -1,0 +1,39 @@
+from std.collections import Vector, Dict
+
+Vector[int] make_nums():
+    Vector[int] v = Vector[int]()
+    v.push(10)
+    v.push(20)
+    return v
+
+Dict[str, int] make_scores():
+    Dict[str, int] d = Dict[str, int]()
+    d["alice"] = 100
+    return d
+
+int sum_vec(Vector[int] v):
+    int total = 0
+    int i = 0
+    while i < v.len():
+        total = total + v.get(i)
+        i = i + 1
+    return total
+
+void main():
+    # Function-returned Vector — buffer freed at scope exit
+    Vector[int] nums = make_nums()
+    print("{nums.len()}")
+
+    # Function-returned Dict — buffer freed at scope exit
+    Dict[str, int] scores = make_scores()
+    print("{scores.len()}")
+
+    # Method-returned Vector — .keys() returns fresh buffer
+    Vector[str] ks = scores.keys()
+    print("{ks.len()}")
+
+    # Chained: function return used then freed
+    int s = sum_vec(make_nums())
+    print("{s}")
+
+    print("done")

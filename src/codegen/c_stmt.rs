@@ -869,6 +869,38 @@ impl CodegenContext<'_> {
         }
     }
 
+    /// Does this expression produce a freshly-allocated collection (via function
+    /// or method call)? These get buffer-only drops (elements may be aliased).
+    /// Distinct from `is_owning_collection_init` which identifies constructors
+    /// that produce fully-owned collections eligible for element-level drops.
+    ///
+    /// For function calls (`Expr::Call`), any non-constructor call is accepted
+    /// since user functions that return collections typically construct them
+    /// internally (fresh buffer).
+    ///
+    /// For method calls (`Expr::MethodCall`), only a whitelist of methods known
+    /// to allocate fresh buffers is accepted. Methods like `.get()` and
+    /// `.unwrap()` return shallow copies sharing the source's buffer — those
+    /// must NOT get drops to avoid double-frees.
+    fn is_fresh_allocation_source(expr: &Expr) -> bool {
+        match expr {
+            Expr::Call { .. } => true,
+            Expr::MethodCall { method, .. } => {
+                matches!(method.node.as_str(),
+                    // Dict/HashMap → fresh Vector
+                    "keys" | "values" | "items" |
+                    // Collection → fresh collection of same/new type
+                    "filter" | "map" | "sorted" | "slice" |
+                    // str → fresh Vector[str]
+                    "split" |
+                    // Set → fresh Set
+                    "union" | "intersection" | "difference"
+                )
+            }
+            _ => false,
+        }
+    }
+
     /// Emit `__gorget_cleanup_push` calls for test-body mode.
     /// Handles leaf types directly; for StructDrop, emits per-field cleanup
     /// for known leaf types.
@@ -1847,12 +1879,27 @@ impl CodegenContext<'_> {
                     // double-frees from copies/field-access/function-returns).
                     // Non-collection drops (Box, File, user Drop, etc.) always register.
                     if let Some(action) = self.drop_action_for_type(&type_.node) {
-                        if !action.involves_collection() || Self::is_owning_collection_init(&value.node) {
+                        if !action.involves_collection() {
+                            // Non-collection: always register full drops
                             self.register_droppable(&escaped, action.clone());
                             if self.in_test_body {
                                 Self::emit_test_cleanup_for_action(&escaped, &action, emitter);
                             }
+                        } else if Self::is_owning_collection_init(&value.node) {
+                            // Constructor-initialized: full drops (elements uniquely owned)
+                            self.register_droppable(&escaped, action.clone());
+                            if self.in_test_body {
+                                Self::emit_test_cleanup_for_action(&escaped, &action, emitter);
+                            }
+                        } else if Self::is_fresh_allocation_source(&value.node) {
+                            // Function/method return: buffer-only (elements may be aliased)
+                            let buf_action = action.buffer_only();
+                            self.register_droppable(&escaped, buf_action.clone());
+                            if self.in_test_body {
+                                Self::emit_test_cleanup_for_action(&escaped, &buf_action, emitter);
+                            }
                         }
+                        // Otherwise: variable copy/field access — no drop (aliased buffer)
                     }
                 }
             }

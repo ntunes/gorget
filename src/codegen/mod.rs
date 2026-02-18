@@ -105,6 +105,33 @@ pub enum DropAction {
 }
 
 impl DropAction {
+    /// Returns a copy of this drop action with element/key/value drops stripped,
+    /// keeping only buffer-level cleanup. Used for function/method-returned
+    /// collections where elements may be aliased via shallow copies.
+    pub fn buffer_only(&self) -> DropAction {
+        match self {
+            DropAction::ArrayFree { .. } => DropAction::ArrayFree {
+                element_drop: None,
+                element_c_type: None,
+            },
+            DropAction::MapFree { mangled_name, .. } => DropAction::MapFree {
+                mangled_name: mangled_name.clone(),
+                key_drop: None,
+                value_drop: None,
+            },
+            DropAction::SetFree { .. } => DropAction::SetFree {
+                element_drop: None,
+                element_c_type: None,
+            },
+            DropAction::StructDrop { type_name, has_user_drop, field_drops } => DropAction::StructDrop {
+                type_name: type_name.clone(),
+                has_user_drop: *has_user_drop,
+                field_drops: field_drops.iter().map(|(n, a)| (n.clone(), a.buffer_only())).collect(),
+            },
+            other => other.clone(),
+        }
+    }
+
     /// Does this drop action involve collection buffer cleanup?
     /// Used to gate drop registration: collection drops are only safe for
     /// constructor-initialized variables (to avoid aliased-buffer double-frees).

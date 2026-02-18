@@ -2,8 +2,6 @@
 
 ## High
 
-- **Collection drops: expand to function-call-returned collections**: Currently, collection drops are only registered for constructor-initialized variables (`Vector[T]()`, `Dict[K,V]()`, etc.). Collections returned by function calls (e.g., `parse_key()`, `items.filter(pred)`) don't get drops — their buffers leak. Expanding requires either: (1) function call argument move-zeroing (zero the caller's copy after passing to a function that stores it), which needs parameter ownership mode tracking at call sites; or (2) last-use analysis to detect when a droppable variable's final use is a function argument. The TOML module's `start_section(hdr_key)` pattern (borrowing param that stores the value) is the canonical example — semantically incorrect but common. [added: 2026-02-18]
-
 - **Element drops for struct elements with collection fields**: Element-level collection drops (Phase 17) skip `StructDrop` elements whose field drops involve collection buffer frees (e.g., `Vector[TomlSection]` where `TomlSection` has Dict/Vector fields). Without field-level move-zeroing, shallow copies can alias inner collection buffers, causing use-after-free when element drops run. Fix requires: field-level move-zeroing (zero struct fields when they're moved out via field access), which needs per-field ownership tracking in codegen. The TOML module's `gg_toml_assemble(tp.sections)` pattern is the canonical example. [added: 2026-02-18]
 
 ## Medium
