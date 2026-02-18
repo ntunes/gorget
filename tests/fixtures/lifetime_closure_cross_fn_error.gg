@@ -1,0 +1,12 @@
+Callable[void()] make_printer(str v):
+    return (): print(v)
+
+void consume(String !s):
+    pass
+
+void main():
+    String s = "hello"
+    str v = s
+    auto f = make_printer(v)
+    consume(!s)
+    f()

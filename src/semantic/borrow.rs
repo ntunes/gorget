@@ -1145,10 +1145,13 @@ impl<'a> BorrowChecker<'a> {
                             }
                         }
 
-                        // Phase 9: Track origin for closure-valued variables.
-                        // Closures inherit the lifetime of captured ref-type data.
+                        // Phase 9+10: Track origin for callable-typed variables.
+                        // Covers both direct closures and callable values from function calls.
                         if !self.var_origins.contains_key(&def_id) {
-                            if matches!(&value.node, Expr::Closure { .. }) {
+                            let is_callable = self.scopes.get_def(def_id).type_id
+                                .map_or(false, |tid| types::is_callable_type(tid, self.types));
+                            // Also check expression form for `auto` vars where type_id may not be set
+                            if is_callable || matches!(&value.node, Expr::Closure { .. }) {
                                 let origin = self.compute_expr_origin(value);
                                 if !matches!(&origin, BorrowOrigin::Unknown) {
                                     self.var_origins.insert(def_id, origin);
@@ -1198,6 +1201,16 @@ impl<'a> BorrowChecker<'a> {
                             if self.var_origins.contains_key(&def_id) {
                                 let origin = self.compute_expr_origin(value);
                                 self.var_origins.insert(def_id, origin);
+                            } else {
+                                // Phase 10: Insert fresh origin for callable-typed reassignments
+                                let is_callable = self.scopes.get_def(def_id).type_id
+                                    .map_or(false, |tid| types::is_callable_type(tid, self.types));
+                                if is_callable || matches!(&value.node, Expr::Closure { .. }) {
+                                    let origin = self.compute_expr_origin(value);
+                                    if !matches!(&origin, BorrowOrigin::Unknown) {
+                                        self.var_origins.insert(def_id, origin);
+                                    }
+                                }
                             }
                         }
                     }
@@ -1452,9 +1465,11 @@ impl<'a> BorrowChecker<'a> {
             Pattern::Binding(name) => {
                 if let Some(def_id) = self.find_def_by_name(name) {
                     self.mark_live(def_id);
-                    // Only assign origin to reference-type bindings
+                    // Only assign origin to reference-type or callable-type bindings
                     if let Some(type_id) = self.scopes.get_def(def_id).type_id {
-                        if types::is_reference_type(type_id, self.types, &self.ref_type_structs) {
+                        if types::is_reference_type(type_id, self.types, &self.ref_type_structs)
+                            || types::is_callable_type(type_id, self.types)
+                        {
                             self.var_origins.insert(def_id, scrutinee_origin.clone());
                         }
                     }
@@ -1664,9 +1679,11 @@ impl<'a> BorrowChecker<'a> {
                 if let Some(&def_id) = self.resolution_map.get(&expr.span.start) {
                     let def = self.scopes.get_def(def_id);
                     if def.kind == DefKind::Variable {
-                        // Check if it's a reference type with a tracked origin
+                        // Check if it's a reference or callable type with a tracked origin
                         if let Some(type_id) = def.type_id {
-                            if types::is_reference_type(type_id, self.types, &self.ref_type_structs) {
+                            if types::is_reference_type(type_id, self.types, &self.ref_type_structs)
+                                || types::is_callable_type(type_id, self.types)
+                            {
                                 if let Some(origin) = self.var_origins.get(&def_id) {
                                     origins.push(origin.clone());
                                 }
@@ -2040,8 +2057,10 @@ fn compute_function_return_borrows(
         None => return,
     };
 
-    // Only relevant if the return type is a reference type
-    if !types::is_reference_type(ret_type_id, types, ref_type_structs) {
+    // Only relevant if the return type is a reference or callable type
+    if !types::is_reference_type(ret_type_id, types, ref_type_structs)
+        && !types::is_callable_type(ret_type_id, types)
+    {
         return;
     }
 
@@ -2099,7 +2118,9 @@ fn compute_function_return_borrows(
             };
             let ref_param_indices: Vec<usize> = info.param_type_ids.iter()
                 .enumerate()
-                .filter(|(_, tid)| tid.map_or(false, |id| types::is_reference_type(id, types, ref_type_structs)))
+                .filter(|(_, tid)| tid.map_or(false, |id|
+                    types::is_reference_type(id, types, ref_type_structs)
+                    || types::is_callable_type(id, types)))
                 .map(|(i, _)| i)
                 .collect();
             if ref_param_indices.len() == 1 {
@@ -2124,7 +2145,9 @@ fn compute_function_return_borrows(
         };
         let ref_param_indices: Vec<usize> = info.param_type_ids.iter()
             .enumerate()
-            .filter(|(_, tid)| tid.map_or(false, |id| types::is_reference_type(id, types, ref_type_structs)))
+            .filter(|(_, tid)| tid.map_or(false, |id|
+                types::is_reference_type(id, types, ref_type_structs)
+                || types::is_callable_type(id, types)))
             .map(|(i, _)| i)
             .collect();
         if ref_param_indices.len() == 1 {
@@ -2198,7 +2221,129 @@ fn trace_expr_to_params(
             }
         }
 
+        Expr::Closure { body, params, .. } => {
+            // Walk the closure body to find captured params from the enclosing function.
+            // Build a set of the closure's own parameter names to exclude them.
+            let closure_param_names: FxHashSet<&str> = params.iter()
+                .map(|p| p.node.name.node.as_str())
+                .collect();
+            trace_closure_body_to_params(body, param_names, &closure_param_names, result);
+        }
+
         // Everything else: no param flow detected in this lightweight analysis
+        _ => {}
+    }
+}
+
+/// Walk a closure body to find references to enclosing function params.
+fn trace_closure_body_to_params(
+    expr: &Spanned<Expr>,
+    outer_params: &FxHashMap<String, usize>,
+    closure_params: &FxHashSet<&str>,
+    result: &mut FxHashSet<usize>,
+) {
+    match &expr.node {
+        Expr::Identifier(name) => {
+            if !closure_params.contains(name.as_str()) {
+                if let Some(&idx) = outer_params.get(name) {
+                    result.insert(idx);
+                }
+            }
+        }
+        // Skip nested closures — they have their own capture scope
+        Expr::Closure { .. } | Expr::ImplicitClosure { .. } => {}
+        // Recurse into sub-expressions
+        Expr::BinaryOp { left, right, .. } => {
+            trace_closure_body_to_params(left, outer_params, closure_params, result);
+            trace_closure_body_to_params(right, outer_params, closure_params, result);
+        }
+        Expr::UnaryOp { operand, .. } | Expr::Move { expr: operand }
+        | Expr::MutableBorrow { expr: operand } | Expr::Deref { expr: operand }
+        | Expr::Try { expr: operand } | Expr::TryCapture { expr: operand }
+        | Expr::Await { expr: operand } | Expr::Spawn { expr: operand }
+        | Expr::As { expr: operand, .. } | Expr::Is { expr: operand, .. } => {
+            trace_closure_body_to_params(operand, outer_params, closure_params, result);
+        }
+        Expr::Call { callee, args, .. } => {
+            trace_closure_body_to_params(callee, outer_params, closure_params, result);
+            for arg in args {
+                trace_closure_body_to_params(&arg.node.value, outer_params, closure_params, result);
+            }
+        }
+        Expr::MethodCall { receiver, args, .. } => {
+            trace_closure_body_to_params(receiver, outer_params, closure_params, result);
+            for arg in args {
+                trace_closure_body_to_params(&arg.node.value, outer_params, closure_params, result);
+            }
+        }
+        Expr::FieldAccess { object, .. } | Expr::TupleFieldAccess { object, .. } => {
+            trace_closure_body_to_params(object, outer_params, closure_params, result);
+        }
+        Expr::Index { object, index } => {
+            trace_closure_body_to_params(object, outer_params, closure_params, result);
+            trace_closure_body_to_params(index, outer_params, closure_params, result);
+        }
+        Expr::If { condition, then_branch, elif_branches, else_branch } => {
+            trace_closure_body_to_params(condition, outer_params, closure_params, result);
+            trace_closure_body_to_params(then_branch, outer_params, closure_params, result);
+            for (cond, body) in elif_branches {
+                trace_closure_body_to_params(cond, outer_params, closure_params, result);
+                trace_closure_body_to_params(body, outer_params, closure_params, result);
+            }
+            if let Some(else_br) = else_branch {
+                trace_closure_body_to_params(else_br, outer_params, closure_params, result);
+            }
+        }
+        Expr::Block(block) | Expr::Do { body: block } => {
+            for stmt in &block.stmts {
+                trace_closure_body_stmts(&stmt.node, outer_params, closure_params, result);
+            }
+        }
+        Expr::StructLiteral { args, .. } => {
+            for arg in args {
+                trace_closure_body_to_params(arg, outer_params, closure_params, result);
+            }
+        }
+        Expr::ArrayLiteral(items) | Expr::TupleLiteral(items) => {
+            for item in items {
+                trace_closure_body_to_params(item, outer_params, closure_params, result);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Walk statements inside a closure body to find references to enclosing function params.
+fn trace_closure_body_stmts(
+    stmt: &Stmt,
+    outer_params: &FxHashMap<String, usize>,
+    closure_params: &FxHashSet<&str>,
+    result: &mut FxHashSet<usize>,
+) {
+    match stmt {
+        Stmt::Expr(expr) | Stmt::Return(Some(expr)) => {
+            trace_closure_body_to_params(expr, outer_params, closure_params, result);
+        }
+        Stmt::VarDecl { value, .. } => {
+            trace_closure_body_to_params(value, outer_params, closure_params, result);
+        }
+        Stmt::If { condition, then_body, elif_branches, else_body } => {
+            trace_closure_body_to_params(condition, outer_params, closure_params, result);
+            for s in &then_body.stmts {
+                trace_closure_body_stmts(&s.node, outer_params, closure_params, result);
+            }
+            for (cond, body) in elif_branches {
+                trace_closure_body_to_params(cond, outer_params, closure_params, result);
+                for s in &body.stmts {
+                    trace_closure_body_stmts(&s.node, outer_params, closure_params, result);
+                }
+            }
+            if let Some(else_body) = else_body {
+                for s in &else_body.stmts {
+                    trace_closure_body_stmts(&s.node, outer_params, closure_params, result);
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -3580,6 +3725,104 @@ void main():
             has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { name, source_name, .. }
                 if name == "v" && source_name == "s")),
             "expected UseAfterSourceMoved for try expr origin propagation, got: {:?}", errors
+        );
+    }
+
+    // ── Phase 10: Cross-function callable lifetime tracking ──
+
+    #[test]
+    fn cross_function_closure_source_moved() {
+        // Closure from function call borrows param → source moved → use closure → error
+        let source = "\
+Callable[void()] make_printer(str v):
+    return (): print(v)
+
+void consume(String !s):
+    pass
+
+void main():
+    String s = \"hello\"
+    str v = s
+    auto f = make_printer(v)
+    consume(!s)
+    f()
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { name, source_name, .. }
+                if name == "f" && source_name == "s")),
+            "expected UseAfterSourceMoved for cross-function closure, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn cross_function_closure_ok() {
+        // Closure from function call — source not moved → no error
+        let source = "\
+Callable[void()] make_printer(str v):
+    return (): print(v)
+
+void main():
+    String s = \"hello\"
+    str v = s
+    auto f = make_printer(v)
+    f()
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { .. })),
+            "expected no UseAfterSourceMoved, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn closure_reassignment_tracks_origin() {
+        // Reassigning a closure variable updates origin → source moved → error
+        let source = "\
+void consume(String !s):
+    pass
+
+void main():
+    String s = \"hello\"
+    str v = s
+    auto f = (): print(\"\")
+    f = (): print(v)
+    consume(!s)
+    f()
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { name, source_name, .. }
+                if name == "f" && source_name == "s")),
+            "expected UseAfterSourceMoved for closure reassignment, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn closure_pattern_binding_origin() {
+        // Match-binding a callable-type value propagates origin → source moved → error
+        let source = "\
+void consume(String !s):
+    pass
+
+Callable[void()] make_printer(str v):
+    return (): print(v)
+
+void main():
+    String s = \"hello\"
+    str v = s
+    auto c = make_printer(v)
+    int x = 1
+    match x:
+        case n:
+            consume(!s)
+            c()
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { name, source_name, .. }
+                if name == "c" && source_name == "s")),
+            "expected UseAfterSourceMoved for callable after source moved, got: {:?}", errors
         );
     }
 }

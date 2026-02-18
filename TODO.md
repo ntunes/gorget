@@ -30,7 +30,6 @@
 
 - **Hot-reload: trait objects / closures in State**: Trait object vtable pointers and closure function pointers become invalid after dlclose. The `reload()` hook can reconstruct them, but compiler-assisted fixup would be better. [added: 2026-02-16]
 
-- **Cross-function callable lifetime tracking**: Functions returning callable types don't get `return_borrows_from` computed (gated by `is_reference_type` in `compute_function_return_borrows`). Closures received from function calls (e.g., `auto f = make_closure(s)`) don't get tracked origins. Needs extending `compute_function_return_borrows` and adding `Expr::Closure` arm to `trace_expr_to_params`. [added: 2026-02-18]
 
 - **ByMutRef captures in escaping closures**: `&count` captures still point to the caller's stack even when the env is heap-allocated (step 1). Needs boxing the captured variable itself — separate fix from env heap-allocation. [added: 2026-02-15]
 

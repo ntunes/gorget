@@ -3730,3 +3730,11 @@ fn lifetime_closure_return_error() {
         "borrows from local variable",
     );
 }
+
+#[test]
+fn lifetime_closure_cross_fn_error() {
+    check_gg_fails(
+        "lifetime_closure_cross_fn_error.gg",
+        "after source",
+    );
+}
