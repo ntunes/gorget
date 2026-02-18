@@ -1,0 +1,30 @@
+# From[T] trait: type conversion
+
+@derive(From)
+struct Celsius:
+    float value
+
+@derive(From)
+struct UserId:
+    int id
+
+struct Pair:
+    int x
+    int y
+
+equip Pair with From[int]:
+    Pair from(int n):
+        return Pair(n, n)
+
+void main():
+    # Derived From (newtype)
+    Celsius c = Celsius.from(98.6)
+    print(c.value)
+
+    UserId u = UserId.from(42)
+    print(u.id)
+
+    # Manual equip From
+    Pair p = Pair.from(5)
+    print(p.x)
+    print(p.y)

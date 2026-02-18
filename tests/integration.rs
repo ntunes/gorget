@@ -1120,6 +1120,18 @@ false
 }
 
 #[test]
+fn from_trait() {
+    run_gg(
+        "from_trait.gg",
+        "\
+98.600000
+42
+5
+5",
+    );
+}
+
+#[test]
 fn serializable() {
     run_gg(
         "serializable.gg",

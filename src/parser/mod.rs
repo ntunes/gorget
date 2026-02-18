@@ -1212,7 +1212,9 @@ impl Parser {
             (None, name) // return type parsed after params
         } else {
             let return_type = self.parse_type()?;
-            let name = self.expect_identifier()?;
+            // Use expect_name() to allow keywords as function/method names
+            // (e.g., `from` in `equip Celsius with From[float]`).
+            let name = self.expect_name()?;
             (Some(return_type), name)
         };
 

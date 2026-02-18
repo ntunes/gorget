@@ -123,6 +123,9 @@ pub enum SemanticErrorKind {
     /// Trait cannot be derived for this type.
     UnderivableTrait { trait_name: String, type_name: String },
 
+    /// `@derive(From)` requires exactly one field (newtype pattern).
+    DeriveFromRequiresSingleField { type_name: String },
+
     /// Assignment to an immutable variable (under `directive immutable-by-default`).
     AssignmentToImmutable { name: String },
 
@@ -327,6 +330,9 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::UnderivableTrait { trait_name, type_name } => {
                 write!(f, "cannot derive `{trait_name}` for `{type_name}`")
+            }
+            SemanticErrorKind::DeriveFromRequiresSingleField { type_name } => {
+                write!(f, "`@derive(From)` on `{type_name}` requires exactly one field")
             }
             SemanticErrorKind::AssignmentToImmutable { name } => {
                 write!(f, "cannot assign to immutable variable `{name}` (add `mutable` to declaration)")

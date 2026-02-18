@@ -89,6 +89,16 @@ impl CodegenContext<'_> {
                     }
                 }
 
+                // From trait: Type[T].from(value) → From_for_Type__T__from(value)
+                if method_name == "from" {
+                    let mangled_type = c_mangle::mangle_generic(type_name, &c_type_args);
+                    let func = c_mangle::mangle_trait_method("From", &mangled_type, "from");
+                    self.register_generic(type_name, &c_type_args, super::GenericInstanceKind::Struct);
+                    let arg_exprs: Vec<String> =
+                        args.iter().map(|a| self.gen_expr(&a.node.value)).collect();
+                    return format!("{func}({})", arg_exprs.join(", "));
+                }
+
                 let mangled = c_mangle::mangle_method(type_name, method_name);
                 let full_mangled = c_mangle::mangle_generic(&mangled, &c_type_args);
                 self.register_generic(&mangled, &c_type_args, super::GenericInstanceKind::Function);

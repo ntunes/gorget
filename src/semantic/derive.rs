@@ -50,7 +50,7 @@ pub fn expand_derives(module: &mut Module, errors: &mut Vec<SemanticError>) {
 }
 
 const DERIVABLE_STRUCT_TRAITS: &[&str] =
-    &["Equatable", "Displayable", "Cloneable", "Hashable", "Serializable", "Default", "Deserializable"];
+    &["Equatable", "Displayable", "Cloneable", "Hashable", "Serializable", "Default", "Deserializable", "From"];
 const DERIVABLE_ENUM_TRAITS: &[&str] =
     &["Equatable", "Displayable", "Cloneable", "Hashable", "Serializable", "Deserializable"];
 
@@ -67,6 +67,16 @@ fn collect_struct_derives(
             errors.push(SemanticError {
                 kind: SemanticErrorKind::UnderivableTrait {
                     trait_name: trait_name.clone(),
+                    type_name: type_name.clone(),
+                },
+                span: s.span,
+            });
+            continue;
+        }
+
+        if trait_name == "From" && s.fields.len() != 1 {
+            errors.push(SemanticError {
+                kind: SemanticErrorKind::DeriveFromRequiresSingleField {
                     type_name: type_name.clone(),
                 },
                 span: s.span,
@@ -194,6 +204,7 @@ fn generate_struct_derive(
         "Serializable" => generate_struct_serializable(type_name, gs, fields),
         "Default" => generate_struct_default(type_name, gs, fields),
         "Deserializable" => generate_struct_deserializable(type_name, gs, fields),
+        "From" => generate_struct_from(type_name, gs, fields),
         _ => String::new(),
     }
 }
@@ -331,6 +342,16 @@ fn field_default_value(type_name: &str) -> String {
     }
 }
 
+
+fn generate_struct_from(type_name: &str, gs: &str, fields: &[(&str, &str)]) -> String {
+    let (_, field_type) = &fields[0];
+    let gp = equip_generic_prefix(gs);
+    format!(
+        "equip {gp}{type_name}{gs} with From[{field_type}]:\n    \
+         {type_name}{gs} from({field_type} value):\n        \
+         return {type_name}{gs}(value)\n"
+    )
+}
 
 fn generate_struct_deserializable(type_name: &str, gs: &str, fields: &[(&str, &str)]) -> String {
     let mut body = String::new();
@@ -1243,5 +1264,51 @@ void main():
             .count();
         // main() + deserialize_Color
         assert_eq!(fn_count, 2, "expected 2 functions (main + deserialize_Color)");
+    }
+
+    #[test]
+    fn test_struct_from() {
+        let src = generate_struct_from("Celsius", "", &[("value", "float")]);
+        assert!(src.contains("equip Celsius with From[float]"));
+        assert!(src.contains("Celsius from(float value)"));
+        assert!(src.contains("return Celsius(value)"));
+    }
+
+    #[test]
+    fn test_struct_from_parses() {
+        let src = generate_struct_from("UserId", "", &[("id", "int")]);
+        let mut parser = Parser::new(&src);
+        let module = parser.parse_module();
+        assert!(
+            parser.errors.is_empty(),
+            "parse errors: {:?}\nsource:\n{src}",
+            parser.errors
+        );
+        assert!(module.items.iter().any(|i| matches!(&i.node, Item::Equip(_))));
+    }
+
+    #[test]
+    fn test_derive_from_multi_field_error() {
+        let source = "\
+@derive(From)
+struct Pair:
+    int x
+    int y
+
+void main():
+    pass
+";
+        let mut parser = Parser::new(source);
+        let mut module = parser.parse_module();
+        assert!(parser.errors.is_empty());
+
+        let mut errors = Vec::new();
+        expand_derives(&mut module, &mut errors);
+        assert_eq!(errors.len(), 1);
+        assert!(matches!(
+            &errors[0].kind,
+            SemanticErrorKind::DeriveFromRequiresSingleField { type_name }
+            if type_name == "Pair"
+        ));
     }
 }

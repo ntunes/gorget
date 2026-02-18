@@ -334,6 +334,17 @@ fn register_builtin_traits(
             });
             m
         }),
+        // From[T]: Self from(T value) — static conversion, no self
+        ("From", {
+            let mut m = FxHashMap::default();
+            m.insert("from".into(), FunctionSig {
+                params: vec![types.error_id], // T placeholder
+                return_type: types.error_id,  // Self placeholder
+                has_self: false,
+                self_ownership: None,
+            });
+            m
+        }),
     ];
 
     for (name, methods) in builtin_traits {
@@ -734,8 +745,8 @@ equip Circle with Drawable:
 ";
         let (registry, errors) = analyze(source);
         assert!(errors.is_empty(), "errors: {:?}", errors);
-        // 17 built-in traits + 1 user-defined trait
-        assert_eq!(registry.traits.len(), 18);
+        // 18 built-in traits + 1 user-defined trait
+        assert_eq!(registry.traits.len(), 19);
         assert_eq!(registry.impls.len(), 1);
         assert!(registry.impls[0].trait_.is_some());
     }
