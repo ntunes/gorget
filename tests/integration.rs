@@ -3842,3 +3842,15 @@ fn measurable_trait() {
 42",
     );
 }
+
+#[test]
+fn print_trait_object() {
+    run_gg(
+        "print_trait_object.gg",
+        "\
+gear
+7
+3.140000
+true",
+    );
+}

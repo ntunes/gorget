@@ -14,7 +14,6 @@
 
 - **Serializable/Deserializable: Vector/Option/Dict field support in derive**: Currently fields of these types fall through to `.serialize(ser)` which requires the collection type to implement `Serializable`. Need special-cased derive codegen for `Vector[T]` (emit `begin_seq`/`elem`/`end_seq` loop), `Option[T]` (emit value or `write_null`), `Dict[str,T]` (emit as struct). [added: 2026-02-17]
 
-- **`print()` format for trait object method return types**: `print(traitObj.method())` emits `%lld` format instead of inspecting the vtable method's return type to choose `%s`/`%lld`/`%f`. Workaround: store result in typed variable first. (`c_expr_print.rs`) [added: 2026-02-17]
 
 - **Extract serialization traits to `std.serialize` module**: When adding TOML/YAML serializers, move `Serializer` and `Serializable` traits to a shared `std.serialize` module. `std.json`, `std.toml`, `std.yaml` would each provide their own backend. [added: 2026-02-17]
 

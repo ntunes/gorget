@@ -796,6 +796,24 @@ impl CodegenContext<'_> {
                         }
                     }
                 }
+                // Trait object receiver: look up method return type from trait definition
+                if let Some(trait_name) = self.resolve_trait_object_type(receiver) {
+                    if let Some(trait_def_id) = self.scoped_lookup(&trait_name) {
+                        if let Some(trait_info) = self.traits.traits.get(&trait_def_id) {
+                            if let Some(sig) = trait_info.methods.get(method.node.as_str()) {
+                                return Some(sig.return_type);
+                            }
+                            // Walk extends chain for inherited methods
+                            for &parent_id in &trait_info.extends {
+                                if let Some(parent_info) = self.traits.traits.get(&parent_id) {
+                                    if let Some(sig) = parent_info.methods.get(method.node.as_str()) {
+                                        return Some(sig.return_type);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 None
             }
             Expr::Index { object, index } => {
