@@ -251,6 +251,20 @@ impl CodegenContext<'_> {
                     }
                     "time" => return "gorget_time()".to_string(),
                     "time_ms" => return "gorget_time_ms()".to_string(),
+                    "format_time" => {
+                        if args.len() >= 2 {
+                            let epoch = self.gen_expr(&args[0].node.value);
+                            let fmt = self.gen_expr(&args[1].node.value);
+                            return format!("gorget_format_time({epoch}, {fmt})");
+                        }
+                    }
+                    "parse_time" => {
+                        if args.len() >= 2 {
+                            let s = self.gen_expr(&args[0].node.value);
+                            let fmt = self.gen_expr(&args[1].node.value);
+                            return format!("gorget_parse_time({s}, {fmt})");
+                        }
+                    }
                     "getchar" => return "gorget_getchar()".to_string(),
                     "readline" => return "gorget_readline()".to_string(),
                     "input" => {

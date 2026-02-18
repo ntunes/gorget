@@ -10,7 +10,7 @@ use crate::span::Spanned;
 
 use super::c_mangle;
 use super::c_types;
-use super::c_expr::escape_string;
+use super::c_expr::escape_printf_string;
 use super::CodegenContext;
 
 impl CodegenContext<'_> {
@@ -138,7 +138,7 @@ impl CodegenContext<'_> {
         for segment in &s.segments {
             match segment {
                 StringSegment::Literal(text) => {
-                    format_parts.push(escape_string(text));
+                    format_parts.push(escape_printf_string(text));
                 }
                 StringSegment::Interpolation(var_name) => {
                     let (fmt, arg_expr) = self.interpolation_format(var_name);
@@ -165,7 +165,7 @@ impl CodegenContext<'_> {
         for segment in &s.segments {
             match segment {
                 StringSegment::Literal(text) => {
-                    format_parts.push(escape_string(text));
+                    format_parts.push(escape_printf_string(text));
                 }
                 StringSegment::Interpolation(var_name) => {
                     // Determine the format specifier based on the variable's type

@@ -1277,6 +1277,24 @@ static inline int64_t gorget_time_ms(void) {
     clock_gettime(CLOCK_REALTIME, &ts);
     return (int64_t)ts.tv_sec * 1000 + (int64_t)(ts.tv_nsec / 1000000);
 }
+static inline const char* gorget_format_time(int64_t epoch, const char* fmt) {
+    time_t t = (time_t)epoch;
+    struct tm tm_buf;
+    localtime_r(&t, &tm_buf);
+    char buf[256];
+    size_t n = strftime(buf, sizeof(buf), fmt, &tm_buf);
+    char* out = (char*)malloc(n + 1);
+    memcpy(out, buf, n + 1);
+    return out;
+}
+static inline int64_t gorget_parse_time(const char* s, const char* fmt) {
+    struct tm tm_buf;
+    memset(&tm_buf, 0, sizeof(tm_buf));
+    tm_buf.tm_isdst = -1;
+    char* rest = strptime(s, fmt, &tm_buf);
+    if (rest == NULL) return INT64_C(-1);
+    return (int64_t)mktime(&tm_buf);
+}
 static inline int64_t gorget_term_cols(void) { struct winsize ws; if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1) return 80; return (int64_t)ws.ws_col; }
 static inline int64_t gorget_term_rows(void) { struct winsize ws; if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1) return 24; return (int64_t)ws.ws_row; }
 

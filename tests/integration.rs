@@ -3870,3 +3870,16 @@ gear
 true",
     );
 }
+
+#[test]
+fn time_format() {
+    run_gg(
+        "time_format.gg",
+        "\
+2026-01-15 12:30:00
+true
+-1
+2026-01-15
+12:30:00",
+    );
+}

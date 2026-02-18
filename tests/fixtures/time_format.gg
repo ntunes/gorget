@@ -1,0 +1,25 @@
+from std.time import time, format_time, parse_time
+
+void main():
+    # Format a known epoch: 2026-01-15 12:30:00 UTC
+    # mktime uses local time, so we test round-trip instead
+    int epoch = parse_time("2026-01-15 12:30:00", "%Y-%m-%d %H:%M:%S")
+    str formatted = format_time(epoch, "%Y-%m-%d %H:%M:%S")
+    print(formatted)
+
+    # Round-trip: parse then format should give back the same string
+    int epoch2 = parse_time(formatted, "%Y-%m-%d %H:%M:%S")
+    str formatted2 = format_time(epoch2, "%Y-%m-%d %H:%M:%S")
+    bool same = formatted == formatted2
+    print(same)
+
+    # parse_time returns -1 on failure
+    int bad = parse_time("not-a-date", "%Y-%m-%d")
+    print(bad)
+
+    # Format with different patterns
+    str date_only = format_time(epoch, "%Y-%m-%d")
+    print(date_only)
+
+    str time_only = format_time(epoch, "%H:%M:%S")
+    print(time_only)

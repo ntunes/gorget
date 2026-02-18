@@ -9,8 +9,6 @@
 ## Medium
 
 
-- **Date/time formatting**: Only `time()` (epoch seconds) and `time_ms()` exist — no way to produce human-readable timestamps. Need `format_time(int, str) -> str` (strftime wrapper) and `parse_time(str, str) -> int` at minimum. Blocks logging, scheduling, and any time-display code. (`stdlib.rs` time module) [added: 2026-02-18]
-
 - **`Into[T]` conversion trait**: Counterpart to `From[T]` requiring explicit type args (`value.into[Celsius]()`) or return-type inference. Adds complexity (equipping primitives, potential blanket impl pattern). [added: 2026-02-17]
 
 - **`TryInto[T]` conversion trait**: Fallible counterpart to `Into[T]`, same complexity issues (explicit type args or return-type inference). Track alongside `Into[T]`. [added: 2026-02-18]

@@ -166,6 +166,8 @@ fn gen_time_module() -> Module {
         decl_fn("time", &[], ty_int()),
         decl_fn("time_ms", &[], ty_int()),
         decl_fn("sleep_ms", &[("ms", ty_int())], ty_void()),
+        decl_fn("format_time", &[("epoch", ty_int()), ("fmt", ty_str())], ty_str()),
+        decl_fn("parse_time", &[("s", ty_str()), ("fmt", ty_str())], ty_int()),
     ])
 }
 
@@ -932,7 +934,7 @@ mod tests {
     #[test]
     fn generate_time() {
         let m = generate_stdlib_module(&["std".into(), "time".into()]).unwrap();
-        assert_eq!(m.items.len(), 3);
+        assert_eq!(m.items.len(), 5);
         let names: Vec<_> = m.items.iter().map(|i| match &i.node {
             Item::Function(f) => f.name.node.clone(),
             _ => panic!("expected function"),
@@ -940,6 +942,8 @@ mod tests {
         assert!(names.contains(&"time".to_string()));
         assert!(names.contains(&"sleep_ms".to_string()));
         assert!(names.contains(&"time_ms".to_string()));
+        assert!(names.contains(&"format_time".to_string()));
+        assert!(names.contains(&"parse_time".to_string()));
     }
 
     #[test]

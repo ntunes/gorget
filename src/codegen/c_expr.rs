@@ -1041,6 +1041,24 @@ pub(super) fn escape_string(s: &str) -> String {
             '\t' => result.push_str("\\t"),
             '\r' => result.push_str("\\r"),
             '\0' => result.push_str("\\0"),
+            c => result.push(c),
+        }
+    }
+    result
+}
+
+/// Escape a string for use inside a printf/fprintf format string.
+/// Same as escape_string but also doubles `%` to `%%`.
+pub(super) fn escape_printf_string(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '"' => result.push_str("\\\""),
+            '\\' => result.push_str("\\\\"),
+            '\n' => result.push_str("\\n"),
+            '\t' => result.push_str("\\t"),
+            '\r' => result.push_str("\\r"),
+            '\0' => result.push_str("\\0"),
             '%' => result.push_str("%%"),
             c => result.push(c),
         }
