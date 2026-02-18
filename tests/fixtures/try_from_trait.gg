@@ -1,0 +1,47 @@
+# TryFrom[T] trait: fallible type conversion
+
+@derive(TryFrom)
+struct Celsius:
+    float value
+
+struct Percentage:
+    int value
+
+equip Percentage with TryFrom[int]:
+    Result[Percentage, str] try_from(int n):
+        if n < 0:
+            return Error("negative")
+        if n > 100:
+            return Error("over 100")
+        return Ok(Percentage(n))
+
+void main():
+    # Derived TryFrom (newtype, always succeeds)
+    Result[Celsius, str] c = Celsius.try_from(98.6)
+    match c:
+        case Ok(val):
+            print(val.value)
+        case Error(e):
+            print(e)
+
+    # Manual equip TryFrom with validation
+    Result[Percentage, str] p1 = Percentage.try_from(50)
+    match p1:
+        case Ok(val):
+            print(val.value)
+        case Error(e):
+            print(e)
+
+    Result[Percentage, str] p2 = Percentage.try_from(150)
+    match p2:
+        case Ok(val):
+            print(val.value)
+        case Error(e):
+            print(e)
+
+    Result[Percentage, str] p3 = Percentage.try_from(-5)
+    match p3:
+        case Ok(val):
+            print(val.value)
+        case Error(e):
+            print(e)

@@ -1132,6 +1132,18 @@ fn from_trait() {
 }
 
 #[test]
+fn try_from_trait() {
+    run_gg(
+        "try_from_trait.gg",
+        "\
+98.600000
+50
+over 100
+negative",
+    );
+}
+
+#[test]
 fn serializable() {
     run_gg(
         "serializable.gg",

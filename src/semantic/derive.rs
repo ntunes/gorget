@@ -50,7 +50,7 @@ pub fn expand_derives(module: &mut Module, errors: &mut Vec<SemanticError>) {
 }
 
 const DERIVABLE_STRUCT_TRAITS: &[&str] =
-    &["Equatable", "Displayable", "Cloneable", "Hashable", "Serializable", "Default", "Deserializable", "From"];
+    &["Equatable", "Displayable", "Cloneable", "Hashable", "Serializable", "Default", "Deserializable", "From", "TryFrom"];
 const DERIVABLE_ENUM_TRAITS: &[&str] =
     &["Equatable", "Displayable", "Cloneable", "Hashable", "Serializable", "Deserializable"];
 
@@ -74,7 +74,7 @@ fn collect_struct_derives(
             continue;
         }
 
-        if trait_name == "From" && s.fields.len() != 1 {
+        if (trait_name == "From" || trait_name == "TryFrom") && s.fields.len() != 1 {
             errors.push(SemanticError {
                 kind: SemanticErrorKind::DeriveFromRequiresSingleField {
                     type_name: type_name.clone(),
@@ -205,6 +205,7 @@ fn generate_struct_derive(
         "Default" => generate_struct_default(type_name, gs, fields),
         "Deserializable" => generate_struct_deserializable(type_name, gs, fields),
         "From" => generate_struct_from(type_name, gs, fields),
+        "TryFrom" => generate_struct_try_from(type_name, gs, fields),
         _ => String::new(),
     }
 }
@@ -350,6 +351,16 @@ fn generate_struct_from(type_name: &str, gs: &str, fields: &[(&str, &str)]) -> S
         "equip {gp}{type_name}{gs} with From[{field_type}]:\n    \
          {type_name}{gs} from({field_type} value):\n        \
          return {type_name}{gs}(value)\n"
+    )
+}
+
+fn generate_struct_try_from(type_name: &str, gs: &str, fields: &[(&str, &str)]) -> String {
+    let (_, field_type) = &fields[0];
+    let gp = equip_generic_prefix(gs);
+    format!(
+        "equip {gp}{type_name}{gs} with TryFrom[{field_type}]:\n    \
+         Result[{type_name}{gs}, str] try_from({field_type} value):\n        \
+         return Ok({type_name}{gs}(value))\n"
     )
 }
 
@@ -1277,6 +1288,27 @@ void main():
     #[test]
     fn test_struct_from_parses() {
         let src = generate_struct_from("UserId", "", &[("id", "int")]);
+        let mut parser = Parser::new(&src);
+        let module = parser.parse_module();
+        assert!(
+            parser.errors.is_empty(),
+            "parse errors: {:?}\nsource:\n{src}",
+            parser.errors
+        );
+        assert!(module.items.iter().any(|i| matches!(&i.node, Item::Equip(_))));
+    }
+
+    #[test]
+    fn test_struct_try_from() {
+        let src = generate_struct_try_from("Celsius", "", &[("value", "float")]);
+        assert!(src.contains("equip Celsius with TryFrom[float]"));
+        assert!(src.contains("Result[Celsius, str] try_from(float value)"));
+        assert!(src.contains("return Ok(Celsius(value))"));
+    }
+
+    #[test]
+    fn test_struct_try_from_parses() {
+        let src = generate_struct_try_from("UserId", "", &[("id", "int")]);
         let mut parser = Parser::new(&src);
         let module = parser.parse_module();
         assert!(

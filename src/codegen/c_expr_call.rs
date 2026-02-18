@@ -1037,6 +1037,13 @@ impl CodegenContext<'_> {
                         args.iter().map(|a| self.gen_expr(&a.node.value)).collect();
                     return format!("{func}({})", arg_exprs.join(", "));
                 }
+                // TryFrom trait: Type.try_from(value) → TryFrom_for_Type__try_from(value)
+                if method_name == "try_from" {
+                    let func = c_mangle::mangle_trait_method("TryFrom", name, "try_from");
+                    let arg_exprs: Vec<String> =
+                        args.iter().map(|a| self.gen_expr(&a.node.value)).collect();
+                    return format!("{func}({})", arg_exprs.join(", "));
+                }
                 let mangled = c_mangle::mangle_method(name, method_name);
                 let arg_exprs: Vec<String> =
                     args.iter().map(|a| self.gen_expr(&a.node.value)).collect();

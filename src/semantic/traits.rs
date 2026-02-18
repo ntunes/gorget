@@ -345,6 +345,17 @@ fn register_builtin_traits(
             });
             m
         }),
+        // TryFrom[T]: Result[Self, str] try_from(T value) — fallible static conversion
+        ("TryFrom", {
+            let mut m = FxHashMap::default();
+            m.insert("try_from".into(), FunctionSig {
+                params: vec![types.error_id], // T placeholder
+                return_type: types.error_id,  // Result[Self, str] placeholder
+                has_self: false,
+                self_ownership: None,
+            });
+            m
+        }),
     ];
 
     for (name, methods) in builtin_traits {
@@ -745,8 +756,8 @@ equip Circle with Drawable:
 ";
         let (registry, errors) = analyze(source);
         assert!(errors.is_empty(), "errors: {:?}", errors);
-        // 18 built-in traits + 1 user-defined trait
-        assert_eq!(registry.traits.len(), 19);
+        // 19 built-in traits + 1 user-defined trait
+        assert_eq!(registry.traits.len(), 20);
         assert_eq!(registry.impls.len(), 1);
         assert!(registry.impls[0].trait_.is_some());
     }

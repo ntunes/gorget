@@ -12,6 +12,8 @@
 
 - **`Into[T]` conversion trait**: Counterpart to `From[T]` requiring explicit type args (`value.into[Celsius]()`) or return-type inference. Adds complexity (equipping primitives, potential blanket impl pattern). [added: 2026-02-17]
 
+- **`TryInto[T]` conversion trait**: Fallible counterpart to `Into[T]`, same complexity issues (explicit type args or return-type inference). Track alongside `Into[T]`. [added: 2026-02-18]
+
 - **Multiple `From` impls per type**: `From[int]` + `From[float]` on same type collides in mangling (`From_for_Type__from`). Needs discriminated mangling like `From__int64_t_for_Type__from`. [added: 2026-02-17]
 
 - **Serializable/Deserializable: Vector/Option/Dict field support in derive**: Currently fields of these types fall through to `.serialize(ser)` which requires the collection type to implement `Serializable`. Need special-cased derive codegen for `Vector[T]` (emit `begin_seq`/`elem`/`end_seq` loop), `Option[T]` (emit value or `write_null`), `Dict[str,T]` (emit as struct). [added: 2026-02-17]
