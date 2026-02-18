@@ -1,0 +1,32 @@
+struct Tracked:
+    str label
+
+equip Tracked with Drop:
+    void drop(!self):
+        str l = self.label
+        print("drop {l}")
+
+void main():
+    if true:
+        Tracked a = Tracked("if-var")
+    print("after if")
+
+    int n = 2
+    if n == 1:
+        Tracked b = Tracked("branch-1")
+    elif n == 2:
+        Tracked c = Tracked("branch-2")
+    print("after elif")
+
+    int x = 1
+    match x:
+        case 1:
+            Tracked d = Tracked("case-1")
+        case 2:
+            Tracked e = Tracked("case-2")
+    print("after match")
+
+    if true:
+        String s = String("conditional string")
+        print(s)
+    print("done")

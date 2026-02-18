@@ -53,6 +53,7 @@ pub enum GenericInstanceKind {
 pub enum DropScopeKind {
     Function,
     Loop,
+    Block,
 }
 
 /// A variable that needs cleanup when its scope exits.

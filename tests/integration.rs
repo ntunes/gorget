@@ -1243,6 +1243,22 @@ after move",
 }
 
 #[test]
+fn drop_block_scope() {
+    run_gg(
+        "drop_block_scope.gg",
+        "\
+drop if-var
+after if
+drop branch-2
+after elif
+drop case-1
+after match
+conditional string
+done",
+    );
+}
+
+#[test]
 fn trait_defaults() {
     run_gg(
         "trait_defaults.gg",

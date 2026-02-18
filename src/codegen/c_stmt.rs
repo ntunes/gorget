@@ -966,7 +966,9 @@ impl CodegenContext<'_> {
                     let vars = self.collect_expr_vars(&[&condition.node]);
                     self.emit_branch_trace("if", &src, &vars, emitter);
                 }
+                self.push_drop_scope(DropScopeKind::Block);
                 self.gen_block(then_body, emitter);
+                self.pop_drop_scope(emitter);
                 emitter.dedent();
 
                 for (elif_cond, elif_body) in elif_branches {
@@ -980,7 +982,9 @@ impl CodegenContext<'_> {
                             let vars = self.collect_expr_vars(&[&elif_cond.node]);
                             self.emit_branch_trace("elif", &src, &vars, emitter);
                         }
+                        self.push_drop_scope(DropScopeKind::Block);
                         self.gen_block(elif_body, emitter);
+                        self.pop_drop_scope(emitter);
                         emitter.dedent();
                     } else {
                         // Temps need declaration before the condition — wrap in else block
@@ -996,7 +1000,9 @@ impl CodegenContext<'_> {
                             let vars = self.collect_expr_vars(&[&elif_cond.node]);
                             self.emit_branch_trace("elif", &src, &vars, emitter);
                         }
+                        self.push_drop_scope(DropScopeKind::Block);
                         self.gen_block(elif_body, emitter);
+                        self.pop_drop_scope(emitter);
                         emitter.dedent();
                         emitter.emit_line("}");
                         let names: Vec<String> = elif_temps.iter().map(|(n, _)| n.clone()).collect();
@@ -1011,7 +1017,9 @@ impl CodegenContext<'_> {
                     if self.trace {
                         self.emit_branch_trace("else", "else", &[], emitter);
                     }
+                    self.push_drop_scope(DropScopeKind::Block);
                     self.gen_block(else_body, emitter);
+                    self.pop_drop_scope(emitter);
                     emitter.dedent();
                 }
 
@@ -1109,7 +1117,9 @@ impl CodegenContext<'_> {
                     let name = c_mangle::escape_keyword(&binding.name.node);
                     emitter.emit_line(&format!("/* with */ void* {name} = (void*)({e});"));
                 }
+                self.push_drop_scope(DropScopeKind::Block);
                 self.gen_block(body, emitter);
+                self.pop_drop_scope(emitter);
                 emitter.dedent();
                 emitter.emit_line("}");
             }
@@ -1117,7 +1127,9 @@ impl CodegenContext<'_> {
             Stmt::Unsafe { body } => {
                 emitter.emit_line("/* unsafe */ {");
                 emitter.indent();
+                self.push_drop_scope(DropScopeKind::Block);
                 self.gen_block(body, emitter);
+                self.pop_drop_scope(emitter);
                 emitter.dedent();
                 emitter.emit_line("}");
             }
@@ -2325,18 +2337,22 @@ impl CodegenContext<'_> {
             // If the arm body is a block, generate it as statements directly
             // (avoids wrapping in a GCC statement expression which can't handle
             // nested match/if statements that only contain returns).
+            self.push_drop_scope(DropScopeKind::Block);
             if let Expr::Block(block) = &arm.body.node {
                 self.gen_block(block, emitter);
             } else {
                 let body = self.gen_expr(&arm.body);
                 emitter.emit_line(&format!("{body};"));
             }
+            self.pop_drop_scope(emitter);
             emitter.dedent();
         }
         if let Some(else_body) = else_arm {
             emitter.emit_line("} else {");
             emitter.indent();
+            self.push_drop_scope(DropScopeKind::Block);
             self.gen_block(else_body, emitter);
+            self.pop_drop_scope(emitter);
             emitter.dedent();
         }
         if !arms.is_empty() || else_arm.is_some() {
@@ -2501,21 +2517,27 @@ impl CodegenContext<'_> {
                 let cond = self.gen_expr(condition);
                 emitter.emit_line(&format!("if ({cond}) {{"));
                 emitter.indent();
+                self.push_drop_scope(DropScopeKind::Block);
                 self.gen_block_with_break_flag(then_body, flag, emitter);
+                self.pop_drop_scope(emitter);
                 emitter.dedent();
 
                 for (elif_cond, elif_body) in elif_branches {
                     let ec = self.gen_expr(elif_cond);
                     emitter.emit_line(&format!("}} else if ({ec}) {{"));
                     emitter.indent();
+                    self.push_drop_scope(DropScopeKind::Block);
                     self.gen_block_with_break_flag(elif_body, flag, emitter);
+                    self.pop_drop_scope(emitter);
                     emitter.dedent();
                 }
 
                 if let Some(else_body) = else_body {
                     emitter.emit_line("} else {");
                     emitter.indent();
+                    self.push_drop_scope(DropScopeKind::Block);
                     self.gen_block_with_break_flag(else_body, flag, emitter);
+                    self.pop_drop_scope(emitter);
                     emitter.dedent();
                 }
 
@@ -2551,18 +2573,22 @@ impl CodegenContext<'_> {
                     emitter.indent();
                     self.emit_pattern_bindings(&arm.pattern.node, &tmp, emitter);
                     // If arm body is a block, recurse into it for break flag handling
+                    self.push_drop_scope(DropScopeKind::Block);
                     if let Expr::Block(block) = &arm.body.node {
                         self.gen_block_with_break_flag(block, flag, emitter);
                     } else {
                         let body = self.gen_expr(&arm.body);
                         emitter.emit_line(&format!("{body};"));
                     }
+                    self.pop_drop_scope(emitter);
                     emitter.dedent();
                 }
                 if let Some(else_body) = else_arm {
                     emitter.emit_line("} else {");
                     emitter.indent();
+                    self.push_drop_scope(DropScopeKind::Block);
                     self.gen_block_with_break_flag(else_body, flag, emitter);
+                    self.pop_drop_scope(emitter);
                     emitter.dedent();
                 }
                 if !arms.is_empty() || else_arm.is_some() {
@@ -2573,7 +2599,9 @@ impl CodegenContext<'_> {
             Stmt::Unsafe { body } => {
                 emitter.emit_line("/* unsafe */ {");
                 emitter.indent();
+                self.push_drop_scope(DropScopeKind::Block);
                 self.gen_block_with_break_flag(body, flag, emitter);
+                self.pop_drop_scope(emitter);
                 emitter.dedent();
                 emitter.emit_line("}");
             }
@@ -2585,7 +2613,9 @@ impl CodegenContext<'_> {
                     let name = c_mangle::escape_keyword(&binding.name.node);
                     emitter.emit_line(&format!("/* with */ void* {name} = (void*)({e});"));
                 }
+                self.push_drop_scope(DropScopeKind::Block);
                 self.gen_block_with_break_flag(body, flag, emitter);
+                self.pop_drop_scope(emitter);
                 emitter.dedent();
                 emitter.emit_line("}");
             }
