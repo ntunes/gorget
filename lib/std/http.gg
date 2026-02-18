@@ -112,9 +112,9 @@ str http_read_body_close(TlsSocket &http_conn):
             http_buf = bytes_concat(http_buf, http_chunk)
     return bytes_to_str(http_buf)
 
-# ── Core request function ───────────────────────────────────
+# ── Single-shot request (no redirect following) ───────────
 
-Result[HttpResponse, str] http_request(str http_method, str http_url, str http_body, Dict[str, str] http_hdrs):
+Result[HttpResponse, str] http_single(str http_method, str http_url, str http_body, Dict[str, str] http_hdrs):
     auto http_parsed = http_parse_url(http_url)
     str http_host = http_parsed._0
     int http_port = http_parsed._1
@@ -204,6 +204,60 @@ Result[HttpResponse, str] http_request(str http_method, str http_url, str http_b
 
     HttpResponse http_resp = HttpResponse(http_code, http_resp_body, http_resp_hdrs)
     return Ok(http_resp)
+
+# ── Core request function (follows redirects) ─────────────
+#
+# Redirect semantics:
+#   301, 302, 303 → change method to GET, drop body
+#   307, 308      → preserve original method and body
+#   Max 10 hops, then return error.
+
+Result[HttpResponse, str] http_request(str http_method, str http_url, str http_body, Dict[str, str] http_hdrs):
+    str http_cur_url = http_url
+    str http_cur_method = http_method
+    str http_cur_body = http_body
+    int http_redirects = 0
+
+    loop:
+        Result[HttpResponse, str] http_result = http_single(http_cur_method, http_cur_url, http_cur_body, http_hdrs)
+        if http_result.is_err():
+            return http_result
+
+        HttpResponse http_resp = http_result.unwrap()
+        int http_sc = http_resp.status_code
+
+        # Not a redirect — return as-is
+        bool http_is_redir = http_sc == 301 or http_sc == 302 or http_sc == 303 or http_sc == 307 or http_sc == 308
+        if not http_is_redir:
+            return Ok(http_resp)
+
+        # Too many redirects
+        http_redirects = http_redirects + 1
+        if http_redirects > 10:
+            return Error("too many redirects")
+
+        # Must have a Location header
+        Dict[str, str] http_redir_hdrs = http_resp.headers
+        if not http_redir_hdrs.contains("location"):
+            return Ok(http_resp)
+
+        str http_location = http_redir_hdrs["location"]
+
+        # Handle relative redirects (path-only)
+        if http_location.starts_with("/"):
+            auto http_orig = http_parse_url(http_cur_url)
+            str http_scheme = "https://"
+            if http_orig._1 == 80:
+                http_scheme = "http://"
+            http_location = http_scheme + http_orig._0 + http_location
+
+        http_cur_url = http_location
+
+        # 301/302/303: switch to GET, drop body
+        # 307/308: preserve method and body
+        if http_sc == 301 or http_sc == 302 or http_sc == 303:
+            http_cur_method = "GET"
+            http_cur_body = ""
 
 # ── Convenience functions ────────────────────────────────────
 

@@ -9,8 +9,6 @@
 ## Medium
 
 
-- **HTTP redirect following**: `http_request()` in `lib/std/http.gg` doesn't follow 301/302/303 redirects — returns the redirect response as-is. Most real-world URLs redirect at least once. Add optional redirect following (max 10 hops) with Location header parsing. (`lib/std/http.gg:117-206`) [added: 2026-02-18]
-
 - **Date/time formatting**: Only `time()` (epoch seconds) and `time_ms()` exist — no way to produce human-readable timestamps. Need `format_time(int, str) -> str` (strftime wrapper) and `parse_time(str, str) -> int` at minimum. Blocks logging, scheduling, and any time-display code. (`stdlib.rs` time module) [added: 2026-02-18]
 
 - **`Into[T]` conversion trait**: Counterpart to `From[T]` requiring explicit type args (`value.into[Celsius]()`) or return-type inference. Adds complexity (equipping primitives, potential blanket impl pattern). [added: 2026-02-17]
