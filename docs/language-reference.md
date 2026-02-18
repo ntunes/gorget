@@ -79,7 +79,7 @@ bool   char   str    String void   auto
 **Declaration keywords:**
 
 ```
-const  struct  enum  trait  equip  public  static  type  newtype
+const  struct  enum  trait  equip  public  static  type  newtype  directive
 ```
 
 **Control flow keywords:**
@@ -116,7 +116,7 @@ import  from
 **Resource/scope keywords:**
 
 ```
-with  as
+with  as  via
 ```
 
 **Generic/constraint keywords:**
@@ -153,6 +153,12 @@ Box  Rc  Arc  Weak  Cell  RefCell  Mutex  RwLock
 
 ```
 consuming  mutable
+```
+
+**Testing keywords:**
+
+```
+test  suite  assert
 ```
 
 **Special identifiers:**
@@ -774,8 +780,8 @@ dotted_name    = IDENTIFIER { "." IDENTIFIER } ;
 
 ```gorget
 import std.io
-import std.sync.{Arc, Mutex}
-from std.fmt import Displayable, format
+import std.json
+from std.conv import int_to_str, parse_int
 ```
 
 ### 5.7 Type Aliases
@@ -848,18 +854,24 @@ attr_arg  = IDENTIFIER | STRING_LITERAL | IDENTIFIER "=" STRING_LITERAL ;
 Attributes provide metadata to the compiler:
 
 ```gorget
-@derive(Debuggable, Cloneable, Equatable)
+@derive(Cloneable, Equatable, Hashable)
 struct Point:
     float x
     float y
 
-@test
-void test_addition():
-    assert_eq(add(2, 3), 5)
+test "addition":
+    assert add(2, 3) == 5
 
 @inline
 int fast_add(int a, int b) = a + b
 ```
+
+**Derivable traits:**
+
+- **Structs:** Equatable, Displayable, Cloneable, Hashable, Serializable, Deserializable, Default, From, TryFrom
+- **Enums:** Equatable, Displayable, Cloneable, Hashable, Serializable, Deserializable
+
+Note: `From` and `TryFrom` are only derivable for single-field structs (newtypes).
 
 ---
 
@@ -1938,6 +1950,10 @@ The compiler automatically registers the following core traits. They cannot be r
 | `Comparable` | `int compare(self, Self other)` | `int` | `<`, `>`, `<=`, `>=` operators |
 | `Index[K, V]` | `V get(self, K key)` | `V` | `a[k]` read access |
 | `IndexMut[K, V]` | `void set(&self, K key, V value)` | `void` | `a[k] = v` write access |
+| `Iterable[T]` | `Iterator[T] iter(&self)` | `Iterator[T]` | `for` loop desugaring (§6.11) |
+| `Default` | `Self default()` (static) | `Self` | Zero/default values, `@derive(Default)` |
+| `From[T]` | `Self from(T value)` (static) | `Self` | Infallible type conversion, `@derive(From)` |
+| `TryFrom[T]` | `Result[Self, str] try_from(T value)` (static) | `Result[Self, str]` | Fallible type conversion, `@derive(TryFrom)` |
 
 #### Displayable
 
@@ -2030,6 +2046,68 @@ equip Counter with Iterator[int]:
 
 for i in Counter(0, 5):
     print("{i}")  # prints 0 through 4
+```
+
+#### Iterable[T]
+
+Provides the `iter` method used by `for` loop desugaring (§6.11). Types implementing `Iterable[T]` return an `Iterator[T]` that produces elements. The `&self` parameter allows creating iterators from mutable references.
+
+```gorget
+equip NumberRange with Iterable[int]:
+    Iterator[int] iter(&self):
+        return Counter(self.start, self.end)
+
+for n in NumberRange(1, 5):
+    print("{n}")  # prints 1 through 4
+```
+
+#### Default
+
+Provides a default value for a type via a static `default()` method. Derivable for structs with `@derive(Default)` — each field gets its zero value (`0` for int, `""` for str, etc.).
+
+```gorget
+@derive(Default)
+struct Config:
+    int timeout
+    str host
+    bool verbose
+
+Config c = Config.default()  # Config(0, "", false)
+```
+
+#### From[T]
+
+Infallible type conversion. The static `from` method converts a value of type `T` into `Self`. Derivable for single-field structs (newtypes) with `@derive(From)`.
+
+```gorget
+newtype Celsius(float)
+
+@derive(From)
+newtype Fahrenheit(float)
+
+# Manual implementation
+equip Celsius with From[Fahrenheit]:
+    static Celsius from(Fahrenheit f):
+        return Celsius((f.0 - 32.0) * 5.0 / 9.0)
+
+Celsius c = Celsius.from(Fahrenheit(212.0))  # Celsius(100.0)
+```
+
+#### TryFrom[T]
+
+Fallible type conversion. Like `From[T]` but returns `Result[Self, str]` to handle conversion failures. Derivable for single-field structs (newtypes) with `@derive(TryFrom)`.
+
+```gorget
+newtype Percentage(int)
+
+equip Percentage with TryFrom[int]:
+    static Result[Percentage, str] try_from(int value):
+        if value < 0 or value > 100:
+            return Error("percentage must be 0-100")
+        return Ok(Percentage(value))
+
+auto result = Percentage.try_from(50)   # Ok(Percentage(50))
+auto bad = Percentage.try_from(200)     # Error("percentage must be 0-100")
 ```
 
 #### Operator Traits
@@ -2330,6 +2408,12 @@ The following functions are available via `import`:
 | `append_file` | `void(str, str)` | Append string to file |
 | `file_exists` | `bool(str)` | Check if file exists |
 | `delete_file` | `bool(str)` | Delete a file |
+| `mkdir` | `bool(str)` | Create a directory |
+| `rmdir` | `bool(str)` | Remove a directory |
+| `rename` | `bool(str, str)` | Rename a file or directory |
+| `copy_file` | `bool(str, str)` | Copy a file from source to destination |
+| `file_size` | `int(str)` | Get file size in bytes |
+| `is_dir` | `bool(str)` | Check if path is a directory |
 
 **`std.path`** — Path manipulation
 
@@ -2365,6 +2449,7 @@ The following functions are available via `import`:
 | `float_to_str` | `str(float)` | Float to string (compact format) |
 | `bool_to_str` | `str(bool)` | Bool to `"true"` or `"false"` |
 | `char_to_str` | `str(char)` | Single character to string |
+| `codepoint_to_str` | `str(int)` | Unicode code point to string |
 
 **`std.io`** — I/O
 
@@ -2431,6 +2516,128 @@ Re-exports the `Displayable` trait and `format` builtin for discoverability. Bot
 | `ExecResult` | struct | Result of a process: `output: str`, `errors: str`, `exit_code: int` |
 | `exec` | `int(str)` | Run a shell command, return exit code |
 | `exec_output` | `ExecResult(str)` | Run a command, capture stdout and exit code |
+
+**`std.json`** — JSON parsing and serialization
+
+| Name | Kind | Description |
+|---|---|---|
+| `Json` | enum | JSON value: `Null`, `Bool(bool)`, `Int(int)`, `Float(float)`, `Str(str)`, `Arr(Vector[Json])`, `Obj(Dict[str, Json])` |
+| `json_parse` | `Json(str)` | Parse a JSON string into a `Json` value |
+| `json_stringify` | `str(Json)` | Serialize a `Json` value to a compact JSON string |
+| `json_pretty` | `str(Json)` | Serialize a `Json` value to a pretty-printed JSON string |
+| `Serializer` | trait | Serialization backend: `write_bool`, `write_int`, `write_float`, `write_str`, `write_null`, `begin_struct`/`end_struct`, `begin_seq`/`end_seq`, `result` |
+| `Serializable` | trait | `void serialize(self, Box[Serializer] ser)` — types implement this to be serialized (derivable via `@derive`) |
+| `Deserializer` | trait | Deserialization backend: `read_bool`, `read_int`, `read_float`, `read_str`, `is_null`, `begin_struct`/`end_struct`, `begin_seq`/`end_seq` |
+| `Deserializable` | trait | `void deserialize(&self, Box[Deserializer] de)` — types implement this to be deserialized (derivable via `@derive`) |
+
+**`std.toml`** — TOML parsing and serialization
+
+| Name | Kind | Description |
+|---|---|---|
+| `TomlValue` | enum | TOML value: string, integer, float, bool, datetime, array, table variants |
+| `toml_parse` | `TomlValue(str)` | Parse a TOML string into a `TomlValue` |
+| `toml_stringify` | `str(TomlValue)` | Serialize a `TomlValue` to a TOML string |
+
+**`std.xml`** — XML parsing and serialization
+
+| Name | Kind | Description |
+|---|---|---|
+| `XmlNode` | enum | XML node: `Element` (tag, attributes, children), `Text(str)` |
+| `xml_parse` | `XmlNode(str)` | Parse an XML string into an `XmlNode` tree |
+| `xml_stringify` | `str(XmlNode)` | Serialize an `XmlNode` tree to an XML string |
+
+**`std.bytes`** — Byte manipulation
+
+| Function | Signature | Description |
+|---|---|---|
+| `bytes_from_str` | `Vector[uint8](str)` | Convert string to byte vector |
+| `bytes_to_str` | `str(Vector[uint8])` | Convert byte vector to string |
+| `bytes_from_hex` | `Vector[uint8](str)` | Decode hex string to bytes |
+| `bytes_to_hex` | `str(Vector[uint8])` | Encode bytes as hex string |
+| `bytes_write_u32_be` | `void(Vector[uint8], int)` | Write 32-bit big-endian integer |
+| `bytes_read_u32_be` | `int(Vector[uint8])` | Read 32-bit big-endian integer |
+| `bytes_write_u16_be` | `void(Vector[uint8], int)` | Write 16-bit big-endian integer |
+| `bytes_read_u16_be` | `int(Vector[uint8])` | Read 16-bit big-endian integer |
+| `bytes_concat` | `Vector[uint8](Vector[uint8], Vector[uint8])` | Concatenate two byte vectors |
+| `bytes_slice` | `Vector[uint8](Vector[uint8], int, int)` | Slice a byte vector |
+| `random_bytes` | `Vector[uint8](int)` | Generate random bytes |
+
+**`std.crypto`** — Cryptography
+
+| Name | Kind | Description |
+|---|---|---|
+| `crypto_sha256` | `str(str)` | SHA-256 hash (hex string) |
+| `crypto_sha1` | `str(str)` | SHA-1 hash (hex string) |
+| `crypto_hmac` | `str(str, str, str)` | HMAC (algorithm, key, message) |
+| `crypto_aes_ctr_new` | `CipherContext(Vector[uint8], Vector[uint8])` | Create AES-CTR cipher context |
+| `CipherContext` | struct | Cipher state with `encrypt`/`decrypt` methods |
+| `BigNum` | struct | Arbitrary-precision integer for cryptographic operations |
+| `crypto_bn_from_bytes` | `BigNum(Vector[uint8])` | Create BigNum from bytes |
+| `crypto_bn_to_bytes` | `Vector[uint8](BigNum)` | Convert BigNum to bytes |
+| `crypto_bn_mod_exp` | `BigNum(BigNum, BigNum, BigNum)` | Modular exponentiation |
+| `RSAKey` | struct | RSA public key |
+| `crypto_rsa_load_public` | `RSAKey(Vector[uint8], Vector[uint8])` | Load RSA public key (n, e) |
+| `crypto_rsa_verify` | `bool(RSAKey, Vector[uint8], Vector[uint8])` | RSA signature verification |
+| `crypto_random_bytes` | `Vector[uint8](int)` | Cryptographically secure random bytes |
+
+**`std.http.client`** — HTTP client
+
+| Name | Kind | Description |
+|---|---|---|
+| `Response` | struct | HTTP response with `status() → int`, `body() → str`, `header(str) → str` methods |
+| `Client` | struct | Configurable HTTP client with `base_url`, `header`, `timeout` builder methods |
+| `get` | `Result[Response, str](str)` | HTTP GET request |
+| `post` | `Result[Response, str](str, str)` | HTTP POST request (url, body) |
+| `put` | `Result[Response, str](str, str)` | HTTP PUT request |
+| `delete` | `Result[Response, str](str)` | HTTP DELETE request |
+| `patch` | `Result[Response, str](str, str)` | HTTP PATCH request |
+| `head` | `Result[Response, str](str)` | HTTP HEAD request |
+
+**`std.net.socket`** — TCP sockets
+
+| Name | Kind | Description |
+|---|---|---|
+| `Socket` | struct | TCP socket with `read`, `read_exact`, `write`, `write_str`, `read_line`, `set_timeout`, `close` methods |
+| `socket_connect` | `Result[Socket, str](str, int)` | Connect to host:port |
+
+**`std.gfx`** — Canvas graphics
+
+| Name | Kind | Description |
+|---|---|---|
+| `Canvas` | struct | Drawing canvas |
+| `Color` | struct | RGBA color |
+| `gfx_open` | `Canvas(int, int, str)` | Open a canvas (width, height, title) |
+| `gfx_close` | `void(Canvas)` | Close a canvas |
+| `gfx_fill_circle` | `void(Canvas, int, int, int, Color)` | Draw filled circle |
+| `gfx_draw_circle` | `void(Canvas, int, int, int, Color)` | Draw circle outline |
+
+**`std.sdl`** — SDL2 bindings
+
+Low-level SDL2 bindings for window management, rendering, input handling, and audio. Provides opaque structs (`SDLWindow`, `SDLRenderer`, `SDLTexture`, `SDLFont`, `SDLEvent`), 40+ constants (`SDL_INIT_VIDEO`, `SDL_QUIT`, `SDLK_*` key codes, etc.), and functions covering:
+
+- **Lifecycle:** `sdl_init`, `sdl_quit`, `sdl_create_window`, `sdl_create_renderer`, `sdl_destroy_window`, `sdl_destroy_renderer`
+- **Rendering:** `sdl_set_draw_color`, `sdl_clear`, `sdl_present`, `sdl_draw_rect`, `sdl_fill_rect`, `sdl_draw_line`, `sdl_draw_point`
+- **Textures:** `sdl_load_texture`, `sdl_draw_texture`, `sdl_draw_texture_ex`, `sdl_destroy_texture`, `sdl_texture_width`, `sdl_texture_height`
+- **Text:** `sdl_load_font`, `sdl_draw_text`, `sdl_text_width`, `sdl_close_font`
+- **Input:** `sdl_poll_event`, `sdl_event_type`, `sdl_event_key`, `sdl_event_mouse_x`, `sdl_event_mouse_y`, `sdl_event_mouse_button`
+- **Time:** `sdl_delay`, `sdl_ticks`
+
+**`std.ecs`** — Entity Component System
+
+| Name | Kind | Description |
+|---|---|---|
+| `EntityPool` | struct | Entity ID allocator with `create() → int`, `destroy(int)`, `is_alive(int) → bool` methods |
+| `SparseSet` | struct | Sparse-set storage for component data with `add`, `remove`, `get`, `has`, `len` methods |
+
+**`std.ssh`** — SSH client
+
+| Name | Kind | Description |
+|---|---|---|
+| `Session` | struct | SSH session with `exec(str) → CommandResult` method for remote command execution |
+| `CommandResult` | struct | Command execution result (exit code, output) |
+| `ssh_connect` | `Session(...)` | Establish SSH connection (host, port, username, password, crypto parameters) |
+
+The SSH module implements the SSH-2 protocol including key exchange, encryption, and SFTP operations.
 
 ---
 
@@ -2511,6 +2718,7 @@ value     = IDENT ;
 | `directive immutable-by-default`   | *(none)*              | Make plain variables immutable; use `mutable` to opt in |
 | `directive name-first`             | *(none)*              | Enable Rust/Python-style name-before-type declaration syntax |
 | `directive trace`                  | `--trace`             | Enable execution tracing for testing      |
+| `directive hot-reload`             | `--hot-reload`        | Enable hot code reload mode               |
 
 #### Name-First Syntax
 
@@ -2581,8 +2789,12 @@ The Gorget compiler is invoked as `gg` with the following commands:
 | `gg build <file>`  | Compile to native binary                 |
 | `gg run <file>`    | Compile and execute                      |
 | `gg test <file>`   | Compile and run tests                    |
-| `gg fmt <file>`    | Format source code (prints to stdout; use shell redirection to save) |
+| `gg fmt <file>`    | Format source code (prints to stdout; use `-i`/`--in-place` to overwrite) |
 | `gg report <file>` | Generate HTML report from trace file     |
+| `gg init`          | Initialize a new Gorget project in the current directory |
+| `gg new <name>`    | Create a new project directory with scaffolding |
+| `gg add <dep>`     | Add a dependency (`--git <url>` or `--path <dir>`) |
+| `gg remove <dep>`  | Remove a dependency |
 | `gg`               | Launch interactive REPL for experimenting with Gorget code |
 
 **CLI flags:**
@@ -2599,6 +2811,10 @@ The Gorget compiler is invoked as `gg` with the following commands:
 | `--tag <name>`       | Only run tests matching this tag (repeatable)           |
 | `--exclude-tag <name>` | Skip tests with this tag (repeatable; exclusion wins) |
 | `--filter <substr>`  | Only run tests whose name contains `<substr>`           |
+| `--hot-reload`       | Enable hot code reload (builds host + guest shared library) |
+| `--shared [-o file]` | Build as a shared library (`.dylib`/`.so`)              |
+| `--show-borrows`     | Print inferred borrow analysis for all functions (diagnostic) |
+| `-i` / `--in-place`  | Format file in place (for `gg fmt`)                     |
 
 ---
 

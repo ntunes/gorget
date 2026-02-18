@@ -368,7 +368,7 @@ struct Pair[A, B]:
 
 ```gorget
 trait Displayable:
-    String to_string(self)
+    str display(self)
 
 trait Comparable:
     int compare(self, Self other)
@@ -385,10 +385,9 @@ trait Animal extends Displayable:
     str name(self)
     str sound(self)
 
-# Associated types
-trait Iterable:
-    type Item
-    Iterator[Self.Item] iter(self)
+# Iteration traits (generic parameter pattern)
+trait Iterable[T]:
+    Iterator[T] iter(&self)
 
 trait Iterator[T]:
     Option[T] next(&self)
@@ -449,19 +448,19 @@ Method calls **auto-borrow** (no &/! at call sites for methods).
 
 ```gorget
 equip Point with Displayable:
-    String to_string(self):
+    str display(self):
         return "({self.x}, {self.y})"
 
 # Generic implementation with where...is
 equip Vector[T] with Displayable where T is Displayable:
-    String to_string(self):
-        auto parts = [item.to_string() for item in self]
+    str display(self):
+        auto parts = [item.display() for item in self]
         return "[{parts.join(", ")}]"
 
 # Blanket implementation
 equip[T] T with Printable where T is Displayable:
     void print(self):
-        println(self.to_string())
+        println(self.display())
 ```
 
 ### 4.7 Trait Bounds with `where...is`
@@ -470,7 +469,7 @@ equip[T] T with Printable where T is Displayable:
 # Single bound
 void print_all[T](Vector[T] items) where T is Displayable:
     for item in items:
-        print(item.to_string())
+        print(item.display())
 
 # Multiple bounds
 void process[T](T item) where T is Displayable + Cloneable + Comparable:
@@ -780,7 +779,7 @@ enum AppError:
     NotFound(String)
 
 equip AppError with Displayable:
-    String to_string(self):
+    str display(self):
         match self:
             case Io(e): "IO error: {e}"
             case Parse(e): "Parse error: {e}"
@@ -1143,6 +1142,8 @@ print(boxed.len())       # Box[String] auto-derefs to String, calls String.len()
 
 ## 10. Concurrency
 
+*Not yet implemented.* The concurrency model below is aspirational design — async/await, threads, `Sendable`/`Syncable`, and the `std.sync`/`std.thread`/`std.async` modules do not exist yet.
+
 ```gorget
 import std.thread
 import std.sync.{Arc, Mutex}
@@ -1371,12 +1372,12 @@ equip[T] List[T] where T is Displayable:
             case Nil: 0
 
 equip[T] List[T] with Displayable where T is Displayable:
-    String to_string(self):
+    str display(self):
         match self:
             case Cons(head, tail):
                 match *tail:
                     case Nil: return "{head}"
-                    case _: return "{head} -> {tail.to_string()}"
+                    case _: return "{head} -> {tail.display()}"
             case Nil:
                 return "[]"
 
@@ -1386,7 +1387,7 @@ void main():
     list = list.prepend(2)
     list = list.prepend(1)
 
-    print("List: {list.to_string()}")       # "1 -> 2 -> 3"
+    print("List: {list.display()}")         # "1 -> 2 -> 3"
     print("Length: {list.len()}")            # 3
 ```
 
@@ -1597,37 +1598,37 @@ create_user(name = "Dave", age = 35, admin = true)
 Python-style `@` decorator syntax for compiler attributes:
 
 ```gorget
-@derive(Debuggable, Cloneable, Equatable)
+@derive(Cloneable, Equatable, Hashable)
 struct Point:
     float x
     float y
 
-@derive(Debuggable, Serialize, Deserialize)
+@derive(Serializable, Deserializable)
 enum Message:
     Text(String)
     Image(Vector[uint8])
     Ping
 
-@test
-void test_addition():
-    assert_eq(add(2, 3), 5)
+test "addition":
+    assert add(2, 3) == 5
 
-@test
 @should_panic("division by zero")
-void test_div_zero():
+test "division by zero":
     divide(1, 0)
 
 @inline
 int fast_add(int a, int b):
     return a + b
 
-@cfg(target_os = "linux")
-void linux_only():
-    ...
+# *Not yet implemented*
+# @cfg(target_os = "linux")
+# void linux_only():
+#     ...
 
-@deprecated("use new_api() instead")
-void old_api():
-    ...
+# *Not yet implemented*
+# @deprecated("use new_api() instead")
+# void old_api():
+#     ...
 ```
 
 ---
@@ -1636,27 +1637,20 @@ void old_api():
 
 ### 21.1 Associated Types
 
+*Not yet implemented.* Associated types are parsed but not validated or resolved in semantic analysis. Use generic parameters instead:
+
 ```gorget
-# Iterable: equip your type with this to make it work with for-loops
-trait Iterable:
-    type Item
-    Iterator[Self.Item] iter(self)
+# Iterable uses generic parameter (not associated type)
+trait Iterable[T]:
+    Iterator[T] iter(&self)
 
 # Iterator: the stateful cursor that walks through elements
 trait Iterator[T]:
     Option[T] next(&self)
 
-    # Default methods
-    Vector[T] collect(&self):
-        Vector[T] result = Vector.new()
-        while self.next() is Some(item):
-            result.push(item)
-        return result
-
 # Making a custom type iterable
-equip Counter with Iterable:
-    type Item = int
-    Iterator[int] iter(self):
+equip Counter with Iterable[int]:
+    Iterator[int] iter(&self):
         return CounterIterator(self.start, self.max)
 
 struct CounterIterator:
@@ -1695,37 +1689,31 @@ FixedArray[int, 256] buffer = FixedArray[int, 256].zeroed()
 ## 22. Operator Overloading via Traits
 
 ```gorget
-# Standard library defines:
-trait Add[Rhs = self]:
-    type Output
-    Self.Output add(self, Rhs rhs)
+# Standard library defines (generic parameter pattern):
+trait Add[Out]:
+    Out add(self, Self rhs)
 
-trait Sub[Rhs = self]:
-    type Output
-    Self.Output sub(self, Rhs rhs)
+trait Sub[Out]:
+    Out sub(self, Self rhs)
 
-trait Mul[Rhs = self]:
-    type Output
-    Self.Output mul(self, Rhs rhs)
+trait Mul[Out]:
+    Out mul(self, Self rhs)
 
-trait Index[Idx]:
-    type Output
-    Self.Output index(self, Idx idx)
+trait Index[K, V]:
+    V get(self, K key)
 
 # User equips:
-equip Point with Add:
-    type Output = Point
+equip Point with Add[Point]:
     Point add(self, Point rhs):
         return Point(self.x + rhs.x, self.y + rhs.y)
 
-equip Matrix with Index[int]:
-    type Output = Vector[float]
-    Vector[float] index(self, int row):
+equip Matrix with Index[int, Vector[float]]:
+    Vector[float] get(self, int row):
         return self.data[row]
 
 # Now operators work:
 Point c = a + b              # calls a.add(b)
-Vector[float] row = matrix[0]   # calls matrix.index(0)
+Vector[float] row = matrix[0]   # calls matrix.get(0)
 ```
 
 ---
@@ -1757,8 +1745,8 @@ str query = """
     WHERE active = true
 """
 
-# Byte strings
-[uint8] bytes = b"hello"
+# Byte strings — *Removed; use `Vector[uint8]` instead*
+# [uint8] bytes = b"hello"
 
 # Character literals
 char letter = 'A'
@@ -1767,8 +1755,8 @@ char emoji = '\u{1F40D}'     # snake emoji
 # String interpolation (built-in, all strings)
 String greeting = "Hello, {name}! You are {age} years old."
 String math = "2 + 2 = {2 + 2}"
-String formatted = "Pi is approximately {pi:.4}"     # format specifiers
-String padded = "Value: {x:>10}"                     # right-align, width 10
+String formatted = "Pi is approximately {pi:.4}"     # format specifiers — *Not yet implemented*
+String padded = "Value: {x:>10}"                     # right-align, width 10 — *Not yet implemented*
 
 # String repetition (Python-style * operator)
 String line = "-" * 40                   # "----------------------------------------"
@@ -1789,7 +1777,7 @@ C-style array syntax: `Type[Size]` for fixed arrays, `Vector[T]` for growable.
 int[5] arr = [1, 2, 3, 4, 5]
 
 # Type inferred
-auto arr = [1, 2, 3, 4, 5]           # inferred as int[5]
+auto arr = [1, 2, 3, 4, 5]           # Vector[int] — dynamic, supports push/pop/etc.
 
 # Slice: a borrowed view into contiguous memory
 int[] slice = arr[1..4]       # [2, 3, 4]
@@ -1933,53 +1921,50 @@ static Regex EMAIL_RE = Regex.compile(r"^[\w.]+@[\w.]+$")
 
 ```gorget
 # Unit tests live alongside the code (like Rust)
-@test
-void test_add():
-    assert_eq(add(2, 3), 5)
-    assert_ne(add(2, 3), 6)
-    assert(add(0, 0) == 0)
+test "addition":
+    assert add(2, 3) == 5
+    assert add(2, 3) != 6
+    assert add(0, 0) == 0
 
-@test
 @should_panic("division by zero")
-void test_div_zero():
+test "division by zero":
     divide(1, 0)
 
 # Test with setup
-@test
-void test_user_creation():
+test "user creation":
     auto db = TestDb.new()
     auto user = db.create_user("Alice", 30)
-    assert_eq(user.name, "Alice")
-    assert(user.id > 0)
+    assert user.name == "Alice"
+    assert user.id > 0
 
 # Documentation tests (code in doc comments is compiled & run)
+# *Not yet implemented*
 #/ Returns the larger of two values.
 #/
 #/ ```
-#/ assert_eq(max(3, 5), 5)
-#/ assert_eq(max(10, 2), 10)
+#/ assert max(3, 5) == 5
+#/ assert max(10, 2) == 10
 #/ ```
 T max[T](T a, T b) where T is Comparable:
     if a > b: a else: b
 
-# Benchmarks
-@bench
-void bench_sort(Bencher &b):
-    b.iter(():
-        auto data = random_vec(10000)
-        data.sort()
-    )
+# Benchmarks — *Not yet implemented*
+# @bench
+# void bench_sort(Bencher &b):
+#     b.iter(():
+#         auto data = random_vec(10000)
+#         data.sort()
+#     )
 ```
+
+Note: `assert_eq` and `assert_ne` are *not yet implemented*. Use `assert a == b` and `assert a != b` instead.
 
 ```bash
 # Run tests
 gg test
 
 # Run specific test
-gg test test_add
-
-# Run benchmarks
-gg bench
+gg test --filter addition
 ```
 
 ---
@@ -2089,6 +2074,8 @@ bool in_range = value in 1..=100
 ---
 
 ## 33. Conditional Compilation & Platform Abstractions
+
+*Not yet implemented.* The `@cfg` attribute is planned but not yet available. Use `std.os.platform()` for runtime platform checks.
 
 ```gorget
 @cfg(target_os = "linux")
@@ -2583,9 +2570,9 @@ std/
 │
 ├── collections/        # Data structures
 │   ├── Vector, HashMap, HashSet
-│   ├── BTreeMap, BTreeSet      # Sorted collections
-│   ├── LinkedList, VecDeque    # Specialized
-│   └── BinaryHeap             # Priority queue
+│   ├── BTreeMap, BTreeSet      # Sorted collections — *Not yet implemented*
+│   ├── LinkedList, VecDeque    # Specialized — *Not yet implemented*
+│   └── BinaryHeap             # Priority queue — *Not yet implemented*
 │
 ├── io/                 # Input/output
 │   ├── Read, Write     # Core traits
@@ -2621,18 +2608,18 @@ std/
 │   ├── Serializable    # Trait: to JSON
 │   └── Deserializable  # Trait: from JSON
 │
-├── sync/               # Synchronization
+├── sync/               # Synchronization — *Not yet implemented*
 │   ├── Mutex, RwLock
 │   ├── Arc, Channel (mpsc)
 │   ├── Barrier, Condvar
 │   └── Once            # One-time initialization
 │
-├── thread/             # Threading
+├── thread/             # Threading — *Not yet implemented*
 │   ├── spawn, sleep, JoinHandle
 │   ├── ThreadLocal
 │   └── pool            # Thread pool
 │
-├── async/              # Async runtime (built-in, Go-style)
+├── async/              # Async runtime — *Not yet implemented*
 │   ├── spawn           # Spawn async task
 │   ├── sleep           # Async sleep
 │   ├── select          # Wait on multiple futures
@@ -2652,7 +2639,7 @@ std/
 │   ├── floor, ceil, round
 │   └── sin, cos, tan, atan2
 │
-├── regex/              # Regular expressions
+├── regex/              # Regular expressions — *Not yet implemented*
 │   ├── Regex, Match
 │   ├── compile, is_match, find, find_all
 │   └── replace, split
@@ -2690,7 +2677,7 @@ std/
 │   ├── signals
 │   └── platform info
 │
-├── log/                # Logging (batteries included!)
+├── log/                # Logging — *Not yet implemented*
 │   ├── debug, info, warn, error
 │   ├── Logger          # Configurable logger
 │   └── Level           # Log levels
@@ -2705,7 +2692,7 @@ std/
 │   ├── Rng             # Random generator trait
 │   └── shuffle, choose
 │
-├── encoding/           # Data encoding
+├── encoding/           # Data encoding — *Not yet implemented*
 │   ├── base64
 │   ├── hex
 │   └── utf8
@@ -2720,22 +2707,26 @@ std/
 
 ```gorget
 # These are always available without import:
-trait Displayable       # .to_string() — human-readable representation
-trait Debuggable        # .debug() — development/debug representation
+trait Displayable       # .display() — human-readable representation
 trait Cloneable         # .clone() — deep copy
 trait Comparable        # .compare() — total ordering (enables <, >, <=, >=)
-trait Equatable         # .equals() — equality (enables ==, !=)
+trait Equatable         # .eq() — equality (enables ==, !=)
 trait Hashable          # .hash() — hash value for HashMap/HashSet
-trait Default           # .default() — default value
-trait Copy              # Marker: bitwise copyable (primitives)
+trait Default           # .default() — default value (static method)
 trait Iterable          # .iter() — produce an Iterator
-trait Serializable      # .to_json(), .to_bytes() — serialization
-trait Deserializable    # .from_json(), .from_bytes() — deserialization
+trait From[T]           # .from(T) — infallible type conversion (static method)
+trait TryFrom[T]        # .try_from(T) — fallible type conversion (static method)
+trait Serializable      # .serialize(ser) — serialization (derivable via @derive, import std.json)
+trait Deserializable    # .deserialize(de) — deserialization (derivable via @derive, import std.json)
+trait Debuggable        # *Not yet implemented* — development/debug representation
+trait Copy              # *Not yet implemented* — marker: bitwise copyable (primitives)
+trait Sendable          # *Not yet implemented* — marker: safe to send across threads
+trait Syncable          # *Not yet implemented* — marker: safe to share across threads
 ```
 
 ### 40.4 Async Runtime (Built-in)
 
-The async runtime is part of the language — no external dependency needed.
+*Not yet implemented.* The async runtime design below is aspirational.
 
 ```gorget
 import std.async

@@ -155,7 +155,7 @@ pub fn build_registry(
     registry
 }
 
-/// Register the four built-in core traits (Displayable, Equatable, Cloneable, Hashable).
+/// Register built-in core traits.
 fn register_builtin_traits(
     scopes: &ScopeTable,
     types: &TypeTable,
