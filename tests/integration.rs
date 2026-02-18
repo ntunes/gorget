@@ -1273,6 +1273,16 @@ drop inner auto",
 }
 
 #[test]
+fn drop_collections() {
+    run_gg(
+        "drop_collections.gg",
+        "\
+done
+drop boxed",
+    );
+}
+
+#[test]
 fn trait_defaults() {
     run_gg(
         "trait_defaults.gg",

@@ -2,8 +2,7 @@
 
 ## High
 
-
-
+- **Collection buffer drops need move-zeroing**: `DropAction::ArrayFree`, `MapFree`, `SetFree` variants are defined but not registered in `drop_action_for_type()`. Collections (Vector, Dict, HashMap, Set, HashSet) are non-Copy value types with shallow copy semantics — when a collection is pushed into another collection (`.push(v)`), stored in a struct, passed to a constructor (`Some(v)`), or retrieved via `.get()`, both source and destination share the same underlying buffer. Dropping the source frees data the destination still references (double-free). Enabling collection drops requires: (1) move-zeroing after `.push()`, `.put()`, `.add()`, and constructor calls that consume collection args; (2) marking `.get()` return values as non-owning (skip drop); (3) extending return handler to walk expression tree and remove drops for all consumed identifiers (not just top-level `Expr::Identifier`). This is the same ownership-transfer infrastructure needed for any non-Copy type. [added: 2026-02-18]
 
 ## Medium
 

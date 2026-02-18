@@ -65,7 +65,15 @@ impl CodegenContext<'_> {
     /// Emit the C cleanup code for a single drop entry.
     fn emit_drop_entry(entry: &DropEntry, emitter: &mut CEmitter) {
         match &entry.action {
-            DropAction::BoxFree => {
+            DropAction::BoxDrop { inner_drop } => {
+                // Deep drop: call inner type's destructor on *var before freeing
+                if let Some(inner) = inner_drop {
+                    let inner_entry = DropEntry {
+                        var_name: format!("(*{})", entry.var_name),
+                        action: (**inner).clone(),
+                    };
+                    Self::emit_drop_entry(&inner_entry, emitter);
+                }
                 emitter.emit_line(&format!("free({});", entry.var_name));
             }
             DropAction::TraitObjFree { has_drop } => {
@@ -105,6 +113,15 @@ impl CodegenContext<'_> {
                     };
                     Self::emit_drop_entry(&field_entry, emitter);
                 }
+            }
+            DropAction::ArrayFree => {
+                emitter.emit_line(&format!("gorget_array_free(&{});", entry.var_name));
+            }
+            DropAction::MapFree { mangled_name } => {
+                emitter.emit_line(&format!("{mangled_name}__free(&{});", entry.var_name));
+            }
+            DropAction::SetFree => {
+                emitter.emit_line(&format!("gorget_set_free(&{});", entry.var_name));
             }
         }
     }
@@ -188,8 +205,9 @@ impl CodegenContext<'_> {
 
     /// Determine the `DropAction` for an AST `Type`, or `None` if the type is Copy.
     ///
-    /// Handles primitives, String, Box, File, and recursively handles named structs
-    /// by checking for explicit Drop impls and/or non-Copy fields.
+    /// Handles primitives, String, Box (with deep drops), File, collections
+    /// (Vector, Dict, HashMap, Set, HashSet), and recursively handles named
+    /// structs by checking for explicit Drop impls and/or non-Copy fields.
     fn drop_action_for_type(&self, ty: &Type) -> Option<DropAction> {
         match ty {
             Type::Primitive(crate::parser::ast::PrimitiveType::StringType) => {
@@ -222,9 +240,27 @@ impl CodegenContext<'_> {
                     };
                     Some(DropAction::TraitObjFree { has_drop })
                 } else {
-                    Some(DropAction::BoxFree)
+                    // Deep drop: recursively check if inner type needs cleanup
+                    let inner_drop = self.drop_action_for_type(&generic_args[0].node)
+                        .map(|a| Box::new(a));
+                    Some(DropAction::BoxDrop { inner_drop })
                 }
             }
+            // NOTE: Collection drops (Vector, Dict, HashMap, Set, HashSet) are defined
+            // as DropAction variants (ArrayFree, MapFree, SetFree) but NOT registered
+            // here yet. Collections are non-Copy value types with shallow copy semantics:
+            // when a collection is pushed into another collection, stored in a struct,
+            // or returned from a function, both the source and destination share the
+            // same underlying buffer. Dropping the source would free data the destination
+            // still references (double-free / use-after-free).
+            //
+            // Enabling collection drops requires move-zeroing infrastructure:
+            // - .push(v), .put(k,v): zero source after consumption
+            // - Constructor calls: zero consumed collection args
+            // - .get() returns: mark copies as non-owning (no drop)
+            // - return statements: zero consumed collection locals
+            //
+            // Tracked in TODO.md under "Collection buffer drops need move-zeroing".
             Type::Named { name, generic_args }
                 if name.node == "File" && generic_args.is_empty() =>
             {
@@ -685,7 +721,7 @@ impl CodegenContext<'_> {
     /// for known leaf types.
     fn emit_test_cleanup_for_action(var_name: &str, action: &DropAction, emitter: &mut CEmitter) {
         match action {
-            DropAction::BoxFree => {
+            DropAction::BoxDrop { .. } => {
                 emitter.emit_line(&format!(
                     "__gorget_cleanup_push(free, (void*){var_name});"
                 ));
@@ -729,6 +765,21 @@ impl CodegenContext<'_> {
                     let field_var = format!("{var_name}.{field_name}");
                     Self::emit_test_cleanup_for_action(&field_var, field_action, emitter);
                 }
+            }
+            DropAction::ArrayFree => {
+                emitter.emit_line(&format!(
+                    "__gorget_cleanup_push((__gorget_cleanup_fn)gorget_array_free, (void*)&{var_name});"
+                ));
+            }
+            DropAction::MapFree { mangled_name } => {
+                emitter.emit_line(&format!(
+                    "__gorget_cleanup_push((__gorget_cleanup_fn){mangled_name}__free, (void*)&{var_name});"
+                ));
+            }
+            DropAction::SetFree => {
+                emitter.emit_line(&format!(
+                    "__gorget_cleanup_push((__gorget_cleanup_fn)gorget_set_free, (void*)&{var_name});"
+                ));
             }
         }
     }

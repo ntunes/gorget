@@ -66,8 +66,8 @@ pub struct DropEntry {
 /// How to drop a variable.
 #[derive(Clone)]
 pub enum DropAction {
-    /// free(var) for Box[T]
-    BoxFree,
+    /// free(var) for Box[T], with optional inner cleanup before freeing.
+    BoxDrop { inner_drop: Option<Box<DropAction>> },
     /// free(var.data) for trait objects (Box[Trait]).
     /// If the trait's vtable has a `drop` slot (the trait extends Drop or
     /// includes a `drop` method), dispatch it before freeing.
@@ -86,6 +86,12 @@ pub enum DropAction {
         has_user_drop: bool,
         field_drops: Vec<(String, DropAction)>,
     },
+    /// gorget_array_free(&var) for Vector/List/Array
+    ArrayFree,
+    /// {mangled}__free(&var) for Dict/HashMap (each instantiation has its own free)
+    MapFree { mangled_name: String },
+    /// gorget_set_free(&var) for Set/HashSet
+    SetFree,
 }
 
 /// How a closure captures a variable from its enclosing scope.

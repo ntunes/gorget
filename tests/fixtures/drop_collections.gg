@@ -1,0 +1,28 @@
+from std.collections import Vector, Dict, Set, Box
+
+struct Tracked:
+    str label
+
+equip Tracked with Drop:
+    void drop(!self):
+        str l = self.label
+        print("drop {l}")
+
+void main():
+    # Vector buffer cleanup (no crash = success)
+    Vector[int] nums = Vector[int]()
+    nums.push(1)
+    nums.push(2)
+
+    # Dict buffer cleanup
+    Dict[str, int] scores = Dict[str, int]()
+    scores["alice"] = 100
+
+    # Set buffer cleanup
+    Set[int] ids = Set[int]()
+    ids.add(42)
+
+    # Box deep drop — inner struct's Drop runs before free
+    Box[Tracked] b = Box(Tracked("boxed"))
+
+    print("done")
