@@ -390,7 +390,7 @@ impl CodegenContext<'_> {
                 if recv_type == "Socket" {
                     return match method.node.as_str() {
                         "read" | "read_exact" => "Vector",
-                        "read_line" => "str",
+                        "read_line" => "String",
                         "write" | "write_str" => "int",
                         _ => "Unknown",
                     }.to_string();
@@ -398,7 +398,7 @@ impl CodegenContext<'_> {
                 if recv_type == "TlsSocket" {
                     return match method.node.as_str() {
                         "read" | "read_exact" => "Vector",
-                        "read_line" => "str",
+                        "read_line" => "String",
                         "write" | "write_str" => "int",
                         _ => "Unknown",
                     }.to_string();

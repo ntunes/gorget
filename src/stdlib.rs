@@ -61,7 +61,7 @@ pub fn generate_stdlib_module(segments: &[String]) -> Option<Module> {
 
 fn gen_fs_module() -> Module {
     make_module(vec![
-        decl_fn("read_file", &[("path", ty_str())], ty_str()),
+        decl_fn("read_file", &[("path", ty_str())], ty_string()),
         decl_fn("write_file", &[("path", ty_str()), ("content", ty_str())], ty_void()),
         decl_fn("append_file", &[("path", ty_str()), ("content", ty_str())], ty_void()),
         decl_fn("file_exists", &[("path", ty_str())], ty_bool()),
@@ -77,11 +77,11 @@ fn gen_fs_module() -> Module {
 
 fn gen_path_module() -> Module {
     make_module(vec![
-        decl_fn("path_join", &[("a", ty_str()), ("b", ty_str())], ty_str()),
-        decl_fn("path_parent", &[("path", ty_str())], ty_str()),
-        decl_fn("path_basename", &[("path", ty_str())], ty_str()),
-        decl_fn("path_extension", &[("path", ty_str())], ty_str()),
-        decl_fn("path_stem", &[("path", ty_str())], ty_str()),
+        decl_fn("path_join", &[("a", ty_str()), ("b", ty_str())], ty_string()),
+        decl_fn("path_parent", &[("path", ty_str())], ty_string()),
+        decl_fn("path_basename", &[("path", ty_str())], ty_string()),
+        decl_fn("path_extension", &[("path", ty_str())], ty_string()),
+        decl_fn("path_stem", &[("path", ty_str())], ty_string()),
     ])
 }
 
@@ -90,7 +90,7 @@ fn gen_os_module() -> Module {
         decl_fn("exit", &[("code", ty_int())], ty_void()),
         decl_fn("getenv", &[("name", ty_str())], ty_str()),
         decl_fn("setenv", &[("name", ty_str()), ("value", ty_str())], ty_void()),
-        decl_fn("getcwd", &[], ty_str()),
+        decl_fn("getcwd", &[], ty_string()),
         decl_fn("platform", &[], ty_str()),
         decl_fn("args", &[], ty_vector_str()),
         decl_fn("readdir", &[("path", ty_str())], ty_vector_str()),
@@ -139,10 +139,10 @@ fn gen_io_module() -> Module {
         )));
     }
     items.push(Spanned::dummy(Item::Function(
-        decl_fn("input", &[("prompt", ty_str())], ty_str()),
+        decl_fn("input", &[("prompt", ty_str())], ty_string()),
     )));
     items.push(Spanned::dummy(Item::Function(
-        decl_fn("readline", &[], ty_str()),
+        decl_fn("readline", &[], ty_string()),
     )));
     items.push(Spanned::dummy(Item::Function(
         decl_fn("stdin_eof", &[], ty_bool()),
@@ -166,7 +166,7 @@ fn gen_time_module() -> Module {
         decl_fn("time", &[], ty_int()),
         decl_fn("time_ms", &[], ty_int()),
         decl_fn("sleep_ms", &[("ms", ty_int())], ty_void()),
-        decl_fn("format_time", &[("epoch", ty_int()), ("fmt", ty_str())], ty_str()),
+        decl_fn("format_time", &[("epoch", ty_int()), ("fmt", ty_str())], ty_string()),
         decl_fn("parse_time", &[("s", ty_str()), ("fmt", ty_str())], ty_int()),
     ])
 }
@@ -290,7 +290,7 @@ fn gen_collections_module() -> Module {
 
     // File instance methods — extern bindings (open/create stay hardcoded as static constructors)
     items.push(equip_block("File", vec![
-        extern_method("read_all", Ownership::MutableBorrow, &[], ty_str(), "gorget_file_read_all"),
+        extern_method("read_all", Ownership::MutableBorrow, &[], ty_string(), "gorget_file_read_all"),
         extern_method("write", Ownership::MutableBorrow, &[("content", ty_str())], ty_void(), "gorget_file_write"),
         extern_method("close", Ownership::MutableBorrow, &[], ty_void(), "gorget_file_close"),
     ]));
@@ -729,7 +729,7 @@ fn gen_socket_module() -> Module {
         extern_method("read_exact", Ownership::MutableBorrow, &[("n", ty_int())], ty_vector_uint8(), "gorget_socket_read_exact"),
         extern_method("write", Ownership::MutableBorrow, &[("data", ty_vector_uint8())], ty_int(), "gorget_socket_write"),
         extern_method("write_str", Ownership::MutableBorrow, &[("s", ty_str())], ty_int(), "gorget_socket_write_str"),
-        extern_method("read_line", Ownership::MutableBorrow, &[], ty_str(), "gorget_socket_read_line"),
+        extern_method("read_line", Ownership::MutableBorrow, &[], ty_string(), "gorget_socket_read_line"),
         extern_method("set_timeout", Ownership::MutableBorrow, &[("ms", ty_int())], ty_void(), "gorget_socket_set_timeout"),
         extern_method("close", Ownership::MutableBorrow, &[], ty_void(), "gorget_socket_close"),
     ]));
@@ -764,7 +764,7 @@ fn gen_tls_socket_module() -> Module {
         extern_method("read_exact", Ownership::MutableBorrow, &[("n", ty_int())], ty_vector_uint8(), "gorget_tls_read_exact"),
         extern_method("write", Ownership::MutableBorrow, &[("data", ty_vector_uint8())], ty_int(), "gorget_tls_write"),
         extern_method("write_str", Ownership::MutableBorrow, &[("s", ty_str())], ty_int(), "gorget_tls_write_str"),
-        extern_method("read_line", Ownership::MutableBorrow, &[], ty_str(), "gorget_tls_read_line"),
+        extern_method("read_line", Ownership::MutableBorrow, &[], ty_string(), "gorget_tls_read_line"),
         extern_method("close", Ownership::MutableBorrow, &[], ty_void(), "gorget_tls_close"),
     ]));
 

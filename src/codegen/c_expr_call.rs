@@ -81,6 +81,17 @@ impl CodegenContext<'_> {
         }
     }
 
+    /// Generate a C expression for an argument that expects `const char*` (str).
+    /// If the argument is a String (GorgetString), coerces via `.data`.
+    pub(super) fn gen_str_arg(&mut self, arg: &Spanned<Expr>) -> String {
+        let expr = self.gen_expr(arg);
+        if self.infer_c_type_from_expr(&arg.node) == "GorgetString" {
+            self.coerce_string_to_str(&expr)
+        } else {
+            expr
+        }
+    }
+
     /// Generate a function/builtin call.
     pub(super) fn gen_call(
         &mut self,
@@ -191,32 +202,32 @@ impl CodegenContext<'_> {
                     "path_parent" => {
                         if let Some(arg) = args.first() {
                             let p = self.gen_expr(&arg.node.value);
-                            return format!("gorget_path_parent({p})");
+                            return format!("gorget_string_adopt((char*)gorget_path_parent({p}))");
                         }
                     }
                     "path_basename" => {
                         if let Some(arg) = args.first() {
                             let p = self.gen_expr(&arg.node.value);
-                            return format!("gorget_path_basename({p})");
+                            return format!("gorget_string_adopt((char*)gorget_path_basename({p}))");
                         }
                     }
                     "path_extension" => {
                         if let Some(arg) = args.first() {
                             let p = self.gen_expr(&arg.node.value);
-                            return format!("gorget_path_extension({p})");
+                            return format!("gorget_string_adopt((char*)gorget_path_extension({p}))");
                         }
                     }
                     "path_stem" => {
                         if let Some(arg) = args.first() {
                             let p = self.gen_expr(&arg.node.value);
-                            return format!("gorget_path_stem({p})");
+                            return format!("gorget_string_adopt((char*)gorget_path_stem({p}))");
                         }
                     }
                     "path_join" => {
                         if args.len() >= 2 {
                             let a = self.gen_expr(&args[0].node.value);
                             let b = self.gen_expr(&args[1].node.value);
-                            return format!("gorget_path_join({a}, {b})");
+                            return format!("gorget_string_adopt((char*)gorget_path_join({a}, {b}))");
                         }
                     }
                     "readdir" => {
@@ -254,23 +265,23 @@ impl CodegenContext<'_> {
                     "format_time" => {
                         if args.len() >= 2 {
                             let epoch = self.gen_expr(&args[0].node.value);
-                            let fmt = self.gen_expr(&args[1].node.value);
-                            return format!("gorget_format_time({epoch}, {fmt})");
+                            let fmt = self.gen_str_arg(&args[1].node.value);
+                            return format!("gorget_string_adopt((char*)gorget_format_time({epoch}, {fmt}))");
                         }
                     }
                     "parse_time" => {
                         if args.len() >= 2 {
-                            let s = self.gen_expr(&args[0].node.value);
-                            let fmt = self.gen_expr(&args[1].node.value);
+                            let s = self.gen_str_arg(&args[0].node.value);
+                            let fmt = self.gen_str_arg(&args[1].node.value);
                             return format!("gorget_parse_time({s}, {fmt})");
                         }
                     }
                     "getchar" => return "gorget_getchar()".to_string(),
-                    "readline" => return "gorget_readline()".to_string(),
+                    "readline" => return "gorget_string_adopt((char*)gorget_readline())".to_string(),
                     "input" => {
                         if let Some(arg) = args.first() {
                             let prompt = self.gen_expr(&arg.node.value);
-                            return format!("gorget_input({prompt})");
+                            return format!("gorget_string_adopt((char*)gorget_input({prompt}))");
                         }
                     }
                     "stdin_eof" => return "((bool)feof(stdin))".to_string(),
@@ -355,7 +366,7 @@ impl CodegenContext<'_> {
                             return format!("gorget_setenv({name_expr}, {val_expr})");
                         }
                     }
-                    "getcwd" => return "gorget_getcwd()".to_string(),
+                    "getcwd" => return "gorget_string_adopt((char*)gorget_getcwd())".to_string(),
                     "platform" => return "gorget_platform()".to_string(),
                     // std.math — integer
                     "abs" => {

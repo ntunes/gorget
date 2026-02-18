@@ -923,14 +923,14 @@ static inline void gorget_file_close(GorgetFile* f) {
     if (f->handle && f->owned) { fclose(f->handle); f->handle = NULL; }
 }
 
-static inline const char* gorget_file_read_all(GorgetFile* f) {
+static inline GorgetString gorget_file_read_all(GorgetFile* f) {
     fseek(f->handle, 0, SEEK_END);
     long len = ftell(f->handle);
     fseek(f->handle, 0, SEEK_SET);
     char* buf = (char*)malloc(len + 1);
     fread(buf, 1, len, f->handle);
     buf[len] = '\0';
-    return buf;
+    return gorget_string_adopt(buf);
 }
 
 static inline void gorget_file_write(GorgetFile* f, const char* s) {
@@ -938,9 +938,9 @@ static inline void gorget_file_write(GorgetFile* f, const char* s) {
 }
 
 // Free functions
-static inline const char* gorget_read_file(const char* path) {
+static inline GorgetString gorget_read_file(const char* path) {
     GorgetFile f = gorget_file_open(path, "r");
-    const char* content = gorget_file_read_all(&f);
+    GorgetString content = gorget_file_read_all(&f);
     gorget_file_close(&f);
     return content;
 }
@@ -1008,15 +1008,15 @@ static inline bool gorget_is_dir(const char* path) {
 
 // ── Path functions ───────────────────────────────────────────
 static inline const char* gorget_path_parent(const char* path) {
-    if (path == NULL || path[0] == '\0') return ".";
+    if (path == NULL || path[0] == '\0') return strdup(".");
     size_t len = strlen(path);
     // Strip trailing slashes
     while (len > 1 && path[len - 1] == '/') len--;
     // Find last slash
     size_t i = len;
     while (i > 0 && path[i - 1] != '/') i--;
-    if (i == 0) return ".";      // no slash → parent is "."
-    if (i == 1) return "/";      // root slash
+    if (i == 0) return strdup(".");      // no slash → parent is "."
+    if (i == 1) return strdup("/");      // root slash
     // Return prefix up to (but not including) the trailing slash
     char* result = (char*)malloc(i);
     memcpy(result, path, i - 1);
@@ -1025,7 +1025,7 @@ static inline const char* gorget_path_parent(const char* path) {
 }
 
 static inline const char* gorget_path_basename(const char* path) {
-    if (path == NULL || path[0] == '\0') return "";
+    if (path == NULL || path[0] == '\0') return strdup("");
     size_t len = strlen(path);
     // Strip trailing slashes
     while (len > 1 && path[len - 1] == '/') len--;
@@ -1040,45 +1040,47 @@ static inline const char* gorget_path_basename(const char* path) {
 }
 
 static inline const char* gorget_path_extension(const char* path) {
-    const char* base = gorget_path_basename(path);
+    char* base = (char*)gorget_path_basename(path);
     size_t blen = strlen(base);
-    if (blen == 0) return "";
+    if (blen == 0) { free(base); return strdup(""); }
     // Find last dot, skipping leading dot for hidden files
     size_t start = (base[0] == '.') ? 1 : 0;
     const char* dot = NULL;
     for (size_t i = start; i < blen; i++) {
         if (base[i] == '.') dot = base + i;
     }
-    if (dot == NULL) return "";
+    if (dot == NULL) { free(base); return strdup(""); }
     // Return everything after the dot (not including the dot)
     size_t elen = blen - (size_t)(dot + 1 - base);
     char* result = (char*)malloc(elen + 1);
     memcpy(result, dot + 1, elen);
     result[elen] = '\0';
+    free(base);
     return result;
 }
 
 static inline const char* gorget_path_stem(const char* path) {
-    const char* base = gorget_path_basename(path);
+    char* base = (char*)gorget_path_basename(path);
     size_t blen = strlen(base);
-    if (blen == 0) return "";
+    if (blen == 0) { free(base); return strdup(""); }
     // Find last dot, skipping leading dot for hidden files
     size_t start = (base[0] == '.') ? 1 : 0;
     const char* dot = NULL;
     for (size_t i = start; i < blen; i++) {
         if (base[i] == '.') dot = base + i;
     }
-    if (dot == NULL) return base;
+    if (dot == NULL) return base;  // transfer ownership of malloc'd base
     size_t slen = (size_t)(dot - base);
     char* result = (char*)malloc(slen + 1);
     memcpy(result, base, slen);
     result[slen] = '\0';
+    free(base);
     return result;
 }
 
 static inline const char* gorget_path_join(const char* a, const char* b) {
-    if (a == NULL || a[0] == '\0') return b ? b : "";
-    if (b == NULL || b[0] == '\0') return a;
+    if (a == NULL || a[0] == '\0') return strdup(b ? b : "");
+    if (b == NULL || b[0] == '\0') return strdup(a);
     size_t alen = strlen(a);
     size_t blen = strlen(b);
     // Strip trailing slash from a
@@ -1228,7 +1230,7 @@ static inline void gorget_setenv(const char* name, const char* value) {
 
 static inline const char* gorget_getcwd(void) {
     char buf[4096];
-    if (getcwd(buf, sizeof(buf)) == NULL) return "";
+    if (getcwd(buf, sizeof(buf)) == NULL) return strdup("");
     size_t len = strlen(buf);
     char* out = (char*)malloc(len + 1);
     memcpy(out, buf, len + 1);
@@ -1301,7 +1303,7 @@ static inline int64_t gorget_term_rows(void) { struct winsize ws; if (ioctl(STDO
 // ── Line input ───────────────────────────────────────────────
 static inline const char* gorget_readline(void) {
     char buf[4096];
-    if (fgets(buf, sizeof(buf), stdin) == NULL) return "";
+    if (fgets(buf, sizeof(buf), stdin) == NULL) return strdup("");
     size_t len = strlen(buf);
     if (len > 0 && buf[len - 1] == '\n') buf[--len] = '\0';
     char* out = (char*)malloc(len + 1);
@@ -2109,9 +2111,9 @@ static int64_t gorget_socket_write_str(GorgetSocket* sock, const char* s) {
     return (int64_t)total;
 }
 
-// Read until \n, return as str (for text protocols like SSH banner)
-static const char* gorget_socket_read_line(GorgetSocket* sock) {
-    if (sock->fd < 0) return "";
+// Read until \n, return as String (for text protocols like SSH banner)
+static GorgetString gorget_socket_read_line(GorgetSocket* sock) {
+    if (sock->fd < 0) return (GorgetString){"", 0, 0};
     size_t cap = 256, len = 0;
     char* buf = (char*)malloc(cap);
     while (1) {
@@ -2130,7 +2132,7 @@ static const char* gorget_socket_read_line(GorgetSocket* sock) {
     while (len > 0 && (buf[len-1] == '\n' || buf[len-1] == '\r')) {
         buf[--len] = '\0';
     }
-    return buf;
+    return gorget_string_adopt(buf);
 }
 
 // Set socket timeout in milliseconds
@@ -2308,8 +2310,8 @@ static int64_t gorget_tls_write_str(GorgetTlsSocket* sock, const char* s) {
     return (int64_t)total;
 }
 
-static const char* gorget_tls_read_line(GorgetTlsSocket* sock) {
-    if (!sock->ssl) return "";
+static GorgetString gorget_tls_read_line(GorgetTlsSocket* sock) {
+    if (!sock->ssl) return (GorgetString){"", 0, 0};
     size_t cap = 256, len = 0;
     char* buf = (char*)malloc(cap);
     while (1) {
@@ -2328,7 +2330,7 @@ static const char* gorget_tls_read_line(GorgetTlsSocket* sock) {
     while (len > 0 && (buf[len-1] == '\n' || buf[len-1] == '\r')) {
         buf[--len] = '\0';
     }
-    return buf;
+    return gorget_string_adopt(buf);
 }
 
 static void gorget_tls_close(GorgetTlsSocket* sock) {
