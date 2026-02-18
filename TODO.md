@@ -116,8 +116,6 @@
 
 - **SDL local closure duplicates global `opaque_struct()`**: `gen_sdl_module()` defines its own `opaque_struct` closure identical to the global helper function. Just call the global one. (`stdlib.rs:291-303 vs 632`) [added: 2026-02-16]
 
-- **Missing little-endian byte helpers**: Only big-endian `bytes_read_u32_be` / `bytes_write_u32_be` provided. Little-endian variants expected for general-purpose bytes module. (`stdlib.rs` bytes module) [added: 2026-02-16]
-
 - **Vector/List/Array declared identically in collections module**: Three collection types declared with identical representations. Either an intentional alias system (document it) or placeholder for future differentiation. (`stdlib.rs:246`) [added: 2026-02-16]
 
 - **ECS `self` vs `&self` receiver inconsistency**: Mutating methods use `&self`, read-only use `self` — correct but surprising given Gorget convention. Needs doc comment explaining receiver semantics. (`ecs.gg`) [added: 2026-02-16]

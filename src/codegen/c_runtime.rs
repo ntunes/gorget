@@ -2492,6 +2492,52 @@ static inline int64_t gorget_bytes_read_u16_be(const GorgetArray* arr, int64_t o
     return (int64_t)(((uint16_t)p[0] << 8) | (uint16_t)p[1]);
 }
 
+// Write a little-endian uint32 at offset into Vector[uint8]
+static inline void gorget_bytes_write_u32_le(GorgetArray* arr, int64_t offset, int64_t value) {
+    if (offset < 0 || (size_t)(offset + 4) > arr->len) {
+        fprintf(stderr, "gorget: panic: bytes_write_u32_le: offset %lld out of bounds (len %zu)\n", (long long)offset, arr->len);
+        exit(1);
+    }
+    uint8_t* p = (uint8_t*)arr->data + offset;
+    uint32_t v = (uint32_t)value;
+    p[0] = v & 0xFF;
+    p[1] = (v >> 8) & 0xFF;
+    p[2] = (v >> 16) & 0xFF;
+    p[3] = (v >> 24) & 0xFF;
+}
+
+// Read a little-endian uint32 from offset in Vector[uint8]
+static inline int64_t gorget_bytes_read_u32_le(const GorgetArray* arr, int64_t offset) {
+    if (offset < 0 || (size_t)(offset + 4) > arr->len) {
+        fprintf(stderr, "gorget: panic: bytes_read_u32_le: offset %lld out of bounds (len %zu)\n", (long long)offset, arr->len);
+        exit(1);
+    }
+    const uint8_t* p = (const uint8_t*)arr->data + offset;
+    return (int64_t)((uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24));
+}
+
+// Write a little-endian uint16 at offset
+static inline void gorget_bytes_write_u16_le(GorgetArray* arr, int64_t offset, int64_t value) {
+    if (offset < 0 || (size_t)(offset + 2) > arr->len) {
+        fprintf(stderr, "gorget: panic: bytes_write_u16_le: offset %lld out of bounds (len %zu)\n", (long long)offset, arr->len);
+        exit(1);
+    }
+    uint8_t* p = (uint8_t*)arr->data + offset;
+    uint16_t v = (uint16_t)value;
+    p[0] = v & 0xFF;
+    p[1] = (v >> 8) & 0xFF;
+}
+
+// Read a little-endian uint16 from offset
+static inline int64_t gorget_bytes_read_u16_le(const GorgetArray* arr, int64_t offset) {
+    if (offset < 0 || (size_t)(offset + 2) > arr->len) {
+        fprintf(stderr, "gorget: panic: bytes_read_u16_le: offset %lld out of bounds (len %zu)\n", (long long)offset, arr->len);
+        exit(1);
+    }
+    const uint8_t* p = (const uint8_t*)arr->data + offset;
+    return (int64_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
+}
+
 // Convert Vector[uint8] to hex string
 static inline const char* gorget_bytes_to_hex(const GorgetArray* arr) {
     size_t len = arr->len;

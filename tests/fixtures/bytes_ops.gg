@@ -1,6 +1,8 @@
 from std.bytes import bytes_from_str, bytes_to_str, bytes_from_hex, bytes_to_hex
 from std.bytes import bytes_write_u32_be, bytes_read_u32_be
 from std.bytes import bytes_write_u16_be, bytes_read_u16_be
+from std.bytes import bytes_write_u32_le, bytes_read_u32_le
+from std.bytes import bytes_write_u16_le, bytes_read_u16_le
 from std.bytes import bytes_concat, bytes_slice, random_bytes
 from std.bytes import base64_encode, base64_decode
 from std.collections import Vector
@@ -36,6 +38,25 @@ void main():
     bytes_write_u16_be(buf16, 0, 4660)
     int v16 = bytes_read_u16_be(buf16, 0)
     print("{v16}")
+
+    # little-endian u32 read/write
+    Vector[uint8] le_buf = bytes_from_hex("0000000000000000")
+    bytes_write_u32_le(le_buf, 0, 305419896)
+    int le_val = bytes_read_u32_le(le_buf, 0)
+    print("{le_val}")
+    # verify byte order: 305419896 = 0x12345678
+    # LE stores as 78 56 34 12
+    str le_hex = bytes_to_hex(le_buf)
+    print(le_hex)
+
+    # little-endian u16 read/write
+    Vector[uint8] le_buf16 = bytes_from_hex("00000000")
+    bytes_write_u16_le(le_buf16, 0, 4660)
+    int le_v16 = bytes_read_u16_le(le_buf16, 0)
+    print("{le_v16}")
+    # verify byte order: 4660 = 0x1234, LE stores as 34 12
+    str le_hex16 = bytes_to_hex(le_buf16)
+    print(le_hex16)
 
     # concat
     Vector[uint8] a = bytes_from_str("Hello")
