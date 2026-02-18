@@ -60,6 +60,9 @@ pub struct ModuleLoader {
     load_stack: Vec<PathBuf>,
     /// Package name → source directory, populated from resolved dependencies.
     dep_paths: HashMap<String, PathBuf>,
+    /// Next byte offset for module span uniqueness. Each module is parsed at
+    /// a cumulative offset so that all span-keyed maps work across modules.
+    next_offset: usize,
 }
 
 /// Map a dotted import path to a filesystem path.
@@ -105,6 +108,7 @@ impl ModuleLoader {
             loaded: HashSet::new(),
             load_stack: Vec::new(),
             dep_paths: HashMap::new(),
+            next_offset: 0,
         }
     }
 
@@ -114,6 +118,7 @@ impl ModuleLoader {
             loaded: HashSet::new(),
             load_stack: Vec::new(),
             dep_paths,
+            next_offset: 0,
         }
     }
 
@@ -139,6 +144,9 @@ impl ModuleLoader {
         let mut results = Vec::new();
         self.loaded.insert(canonical.clone());
         self.load_stack.push(canonical.clone());
+
+        // Entry module was parsed at offset 0; next module starts after it (+1 separator)
+        self.next_offset = entry_source.len() + 1;
 
         // Collect imports from the entry module
         let imports = extract_imports(&entry_module);
@@ -177,7 +185,9 @@ impl ModuleLoader {
 
             // Try file-based stdlib module (real .gg source embedded in binary)
             if let Some(source) = crate::stdlib::stdlib_module_source(segments) {
-                let mut parser = Parser::new(source);
+                let offset = self.next_offset;
+                self.next_offset = offset + source.len() + 1;
+                let mut parser = Parser::new_with_offset(source, offset);
                 let module = parser.parse_module();
                 assert!(
                     parser.errors.is_empty(),
@@ -253,7 +263,9 @@ impl ModuleLoader {
             error: e,
         })?;
 
-        let mut parser = Parser::new(&source);
+        let offset = self.next_offset;
+        self.next_offset = offset + source.len() + 1;
+        let mut parser = Parser::new_with_offset(&source, offset);
         let module = parser.parse_module();
 
         if !parser.errors.is_empty() {

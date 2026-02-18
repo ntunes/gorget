@@ -25,7 +25,11 @@ pub struct Parser {
 
 impl Parser {
     pub fn new(source: &str) -> Self {
-        let lexer = Lexer::new(source);
+        Self::new_with_offset(source, 0)
+    }
+
+    pub fn new_with_offset(source: &str, base_offset: usize) -> Self {
+        let lexer = Lexer::new_with_offset(source, base_offset);
         let all_tokens: Vec<Spanned<Token>> = lexer.collect();
 
         // Partition: Comment tokens go to side-table, everything else to tokens

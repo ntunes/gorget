@@ -14,7 +14,9 @@ use gorget::parser::Parser;
 use gorget::resolver;
 
 /// Load imported modules and merge them into a single module.
-fn load_imports(filename: &str, source: &str, module: gorget::parser::ast::Module, dep_paths: HashMap<String, PathBuf>) -> gorget::parser::ast::Module {
+/// Returns `(merged_module, concatenated_source)` where the concatenated source
+/// covers all modules with offsets matching the spans in the merged AST.
+fn load_imports(filename: &str, source: &str, module: gorget::parser::ast::Module, dep_paths: HashMap<String, PathBuf>) -> (gorget::parser::ast::Module, String) {
     let input_path = Path::new(filename).canonicalize().unwrap_or_else(|e| {
         eprintln!("Error resolving path {filename}: {e}");
         process::exit(1);
@@ -52,7 +54,14 @@ fn load_imports(filename: &str, source: &str, module: gorget::parser::ast::Modul
             process::exit(1);
         });
 
-    loader::merge_modules(modules)
+    // Build concatenated source text matching the span offsets assigned during loading.
+    // Each module's source is separated by "\n" (matching the +1 offset gaps in the loader).
+    let concat_source = modules.iter()
+        .map(|(_, src, _)| src.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    (loader::merge_modules(modules), concat_source)
 }
 
 /// Resolve package dependencies for a source file, returning dep_paths.
@@ -276,7 +285,7 @@ fn try_build(
     }
 
     // Load imported modules recursively and merge
-    let mut module = load_imports(filename, source, module, dep_paths);
+    let (mut module, concat_source) = load_imports(filename, source, module, dep_paths);
 
     // Merge source directives with CLI flags.
     let dir_flags = extract_directives(&module);
@@ -304,7 +313,7 @@ fn try_build(
     }
 
     if !result.errors.is_empty() {
-        let reporter = ErrorReporter::new(filename.to_string(), source.to_string());
+        let reporter = ErrorReporter::new(filename.to_string(), concat_source.clone());
         for err in &result.errors {
             reporter.report_semantic_error(err);
         }
@@ -357,7 +366,7 @@ fn try_build(
         test_tags: test_tags.to_vec(),
         test_exclude_tags: test_exclude_tags.to_vec(),
         test_name_filter: test_name_filter.map(|s| s.to_string()),
-        source_text: source.to_string(),
+        source_text: concat_source,
         hot_reload,
         watch_paths: vec![abs_filename.display().to_string()],
         guest_lib_path: guest_lib_name.clone(),
@@ -1241,7 +1250,7 @@ fn main() {
 
             // Load imported modules recursively and merge
             let dep_paths = resolve_deps_for_file(filename);
-            let mut module = load_imports(filename, &source, module, dep_paths);
+            let (mut module, concat_source) = load_imports(filename, &source, module, dep_paths);
 
             let result = gorget::semantic::analyze(&mut module);
 
@@ -1252,7 +1261,7 @@ fn main() {
             if result.errors.is_empty() {
                 println!("OK: no semantic errors");
             } else {
-                let reporter = ErrorReporter::new(filename.clone(), source.clone());
+                let reporter = ErrorReporter::new(filename.clone(), concat_source);
                 for err in &result.errors {
                     reporter.report_semantic_error(err);
                 }

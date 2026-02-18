@@ -15,6 +15,8 @@ pub struct Lexer<'src> {
     source: &'src str,
     /// Current byte offset in source.
     pos: usize,
+    /// Base offset added to all spans for cross-module uniqueness.
+    base_offset: usize,
     /// Stack of indentation levels (in spaces). Starts with [0].
     indent_stack: Vec<usize>,
     /// Nesting depth of ( [ { — suppresses NEWLINE/INDENT/DEDENT when > 0.
@@ -31,9 +33,14 @@ pub struct Lexer<'src> {
 
 impl<'src> Lexer<'src> {
     pub fn new(source: &'src str) -> Self {
+        Self::new_with_offset(source, 0)
+    }
+
+    pub fn new_with_offset(source: &'src str, base_offset: usize) -> Self {
         Self {
             source,
             pos: 0,
+            base_offset,
             indent_stack: vec![0],
             bracket_depth: 0,
             pending: VecDeque::new(),
@@ -41,6 +48,16 @@ impl<'src> Lexer<'src> {
             need_newline: false,
             errors: Vec::new(),
         }
+    }
+
+    /// Create a `Span` with the base offset applied.
+    fn span(&self, start: usize, end: usize) -> Span {
+        Span::new(self.base_offset + start, self.base_offset + end)
+    }
+
+    /// The byte offset just past the end of this lexer's source.
+    pub fn end_offset(&self) -> usize {
+        self.base_offset + self.source.len()
     }
 
     /// Peek at the character at byte offset `pos`.
@@ -88,7 +105,7 @@ impl<'src> Lexer<'src> {
                         let content = self.scan_to_eol();
                         self.pending.push_back(Spanned::new(
                             Token::DocComment(content),
-                            Span::new(line_start, self.pos),
+                            self.span(line_start, self.pos),
                         ));
                         if self.pos < self.source.len() {
                             self.pos += 1; // skip \n
@@ -99,7 +116,7 @@ impl<'src> Lexer<'src> {
                     let content = self.scan_to_eol();
                     self.pending.push_back(Spanned::new(
                         Token::Comment(content),
-                        Span::new(line_start, self.pos),
+                        self.span(line_start, self.pos),
                     ));
                     if self.pos < self.source.len() {
                         self.pos += 1; // skip \n
@@ -133,7 +150,7 @@ impl<'src> Lexer<'src> {
                 b'\t' => {
                     self.errors.push(LexError {
                         kind: LexErrorKind::TabCharacter,
-                        span: Span::new(self.pos, self.pos + 1),
+                        span: self.span(self.pos, self.pos + 1),
                     });
                     self.pos += 1;
                 }
@@ -152,7 +169,7 @@ impl<'src> Lexer<'src> {
             if self.need_newline {
                 self.pending.push_back(Spanned::new(
                     Token::Newline,
-                    Span::new(line_start, line_start),
+                    self.span(line_start, line_start),
                 ));
             }
         } else if spaces > current {
@@ -160,33 +177,33 @@ impl<'src> Lexer<'src> {
             if self.need_newline {
                 self.pending.push_back(Spanned::new(
                     Token::Newline,
-                    Span::new(line_start, line_start),
+                    self.span(line_start, line_start),
                 ));
             }
             self.indent_stack.push(spaces);
             self.pending.push_back(Spanned::new(
                 Token::Indent,
-                Span::new(line_start, line_start + spaces),
+                self.span(line_start, line_start + spaces),
             ));
         } else {
             // Indentation decreased — emit DEDENT(s)
             if self.need_newline {
                 self.pending.push_back(Spanned::new(
                     Token::Newline,
-                    Span::new(line_start, line_start),
+                    self.span(line_start, line_start),
                 ));
             }
             while *self.indent_stack.last().unwrap() > spaces {
                 self.indent_stack.pop();
                 self.pending.push_back(Spanned::new(
                     Token::Dedent,
-                    Span::new(line_start, line_start + spaces),
+                    self.span(line_start, line_start + spaces),
                 ));
             }
             if *self.indent_stack.last().unwrap() != spaces {
                 self.errors.push(LexError {
                     kind: LexErrorKind::IndentationMismatch { got: spaces },
-                    span: Span::new(line_start, line_start + spaces),
+                    span: self.span(line_start, line_start + spaces),
                 });
             }
         }
@@ -205,7 +222,7 @@ impl<'src> Lexer<'src> {
         if self.need_newline {
             self.pending.push_back(Spanned::new(
                 Token::Newline,
-                Span::new(eof_pos, eof_pos),
+                self.span(eof_pos, eof_pos),
             ));
         }
 
@@ -214,12 +231,12 @@ impl<'src> Lexer<'src> {
             self.indent_stack.pop();
             self.pending.push_back(Spanned::new(
                 Token::Dedent,
-                Span::new(eof_pos, eof_pos),
+                self.span(eof_pos, eof_pos),
             ));
         }
 
         self.pending
-            .push_back(Spanned::new(Token::Eof, Span::new(eof_pos, eof_pos)));
+            .push_back(Spanned::new(Token::Eof, self.span(eof_pos, eof_pos)));
     }
 
     /// Tokenize the content of a line (after indentation has been handled).
@@ -248,7 +265,7 @@ impl<'src> Lexer<'src> {
                     let content = self.source[comment_start..i].to_string();
                     self.pending.push_back(Spanned::new(
                         Token::Comment(content),
-                        Span::new(comment_start, i),
+                        self.span(comment_start, i),
                     ));
                     break;
                 }
@@ -256,7 +273,7 @@ impl<'src> Lexer<'src> {
                 // String literals
                 b'"' => {
                     let (tok, new_end) = self.scan_string_literal(i);
-                    let span = Span::new(i, new_end);
+                    let span = self.span(i, new_end);
                     self.pending.push_back(Spanned::new(tok, span));
                     i = new_end;
                 }
@@ -264,7 +281,7 @@ impl<'src> Lexer<'src> {
                 // Raw string r"..." or byte string b"..."
                 b'r' | b'b' if i + 1 < bytes.len() && bytes[i + 1] == b'"' => {
                     let (tok, new_end) = self.scan_string_literal(i);
-                    let span = Span::new(i, new_end);
+                    let span = self.span(i, new_end);
                     self.pending.push_back(Spanned::new(tok, span));
                     i = new_end;
                 }
@@ -272,7 +289,7 @@ impl<'src> Lexer<'src> {
                 // Char literal
                 b'\'' => {
                     let (tok, new_end) = self.scan_char_literal(i);
-                    let span = Span::new(i, new_end);
+                    let span = self.span(i, new_end);
                     self.pending.push_back(Spanned::new(tok, span));
                     i = new_end;
                 }
@@ -302,7 +319,7 @@ impl<'src> Lexer<'src> {
                         let slice = lex.slice();
                         let span_start = seg_start + lex.span().start;
                         let span_end = seg_start + lex.span().end;
-                        let span = Span::new(span_start, span_end);
+                        let span = self.span(span_start, span_end);
                         match raw_result {
                             Ok(raw) => {
                                 if let Some(tok) = self.convert_raw_token(raw, slice, span) {
@@ -521,7 +538,7 @@ impl<'src> Lexer<'src> {
             if i >= bytes.len() {
                 self.errors.push(LexError {
                     kind: LexErrorKind::UnterminatedString,
-                    span: Span::new(pos, i),
+                    span: self.span(pos, i),
                 });
                 break;
             }
@@ -543,7 +560,7 @@ impl<'src> Lexer<'src> {
             if bytes[i] == b'\n' && !triple {
                 self.errors.push(LexError {
                     kind: LexErrorKind::UnterminatedString,
-                    span: Span::new(pos, i),
+                    span: self.span(pos, i),
                 });
                 break;
             }
@@ -554,7 +571,7 @@ impl<'src> Lexer<'src> {
                 if i >= bytes.len() {
                     self.errors.push(LexError {
                         kind: LexErrorKind::UnterminatedString,
-                        span: Span::new(pos, i),
+                        span: self.span(pos, i),
                     });
                     break;
                 }
@@ -609,7 +626,7 @@ impl<'src> Lexer<'src> {
                                     kind: LexErrorKind::InvalidEscapeSequence(
                                         format!("\\u{{{hex}}}"),
                                     ),
-                                    span: Span::new(hex_start - 3, i),
+                                    span: self.span(hex_start - 3, i),
                                 });
                             }
                         }
@@ -619,7 +636,7 @@ impl<'src> Lexer<'src> {
                             kind: LexErrorKind::InvalidEscapeSequence(
                                 format!("\\{}", other as char),
                             ),
-                            span: Span::new(i - 1, i + 1),
+                            span: self.span(i - 1, i + 1),
                         });
                         current_literal.push(other as char);
                         i += 1;
@@ -672,7 +689,7 @@ impl<'src> Lexer<'src> {
                 if brace_depth > 0 {
                     self.errors.push(LexError {
                         kind: LexErrorKind::UnterminatedInterpolation,
-                        span: Span::new(expr_start - 1, i),
+                        span: self.span(expr_start - 1, i),
                     });
                 } else {
                     let expr_text = self.source[expr_start..i].to_string();
@@ -718,7 +735,7 @@ impl<'src> Lexer<'src> {
         if i >= bytes.len() || bytes[i] == b'\n' {
             self.errors.push(LexError {
                 kind: LexErrorKind::UnterminatedCharLiteral,
-                span: Span::new(pos, i),
+                span: self.span(pos, i),
             });
             return (Token::Error("unterminated char".to_string()), i);
         }
@@ -728,7 +745,7 @@ impl<'src> Lexer<'src> {
             if i >= bytes.len() {
                 self.errors.push(LexError {
                     kind: LexErrorKind::UnterminatedCharLiteral,
-                    span: Span::new(pos, i),
+                    span: self.span(pos, i),
                 });
                 return (Token::Error("unterminated char".to_string()), i);
             }
@@ -756,7 +773,7 @@ impl<'src> Lexer<'src> {
                                 kind: LexErrorKind::InvalidEscapeSequence(
                                     format!("\\u{{{hex}}}"),
                                 ),
-                                span: Span::new(pos, i),
+                                span: self.span(pos, i),
                             });
                             '\u{FFFD}'
                         }
@@ -767,7 +784,7 @@ impl<'src> Lexer<'src> {
                         kind: LexErrorKind::InvalidEscapeSequence(
                             format!("\\{}", other as char),
                         ),
-                        span: Span::new(i - 1, i + 1),
+                        span: self.span(i - 1, i + 1),
                     });
                     other as char
                 }
@@ -791,7 +808,7 @@ impl<'src> Lexer<'src> {
         } else {
             self.errors.push(LexError {
                 kind: LexErrorKind::UnterminatedCharLiteral,
-                span: Span::new(pos, i),
+                span: self.span(pos, i),
             });
             (Token::CharLiteral(ch), i)
         }
