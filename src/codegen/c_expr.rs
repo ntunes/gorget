@@ -859,15 +859,6 @@ impl CodegenContext<'_> {
         }
     }
 
-    /// Resolve an expression to its C type string, preferring TypeId-based resolution
-    /// with generic substitution, falling back to AST-based inference.
-    pub(super) fn resolve_expr_c_type(&mut self, expr: &Spanned<Expr>) -> String {
-        if let Some(tid) = self.resolve_expr_type_id(expr) {
-            return self.type_id_to_c_substituted(tid);
-        }
-        self.infer_c_type_from_expr(&expr.node)
-    }
-
     /// Resolve the mangled C enum type name for a match scrutinee.
     /// For generic enums (e.g. `Option[int]`), returns the mangled name (`Option__int64_t`).
     /// For non-generic enums, returns the raw name. Returns `None` for non-enum types.

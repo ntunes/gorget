@@ -95,7 +95,7 @@ struct ActiveOutlives {
     shorter_group: String,
     longer_source_def_ids: Vec<DefId>,
     shorter_source_def_ids: Vec<DefId>,
-    call_span: Span,
+    _call_span: Span,
 }
 
 /// Snapshot of origin tracking state (for branching).
@@ -244,7 +244,7 @@ struct BorrowChecker<'a> {
     /// Whether the file has `directive immutable-by-default`.
     immutable_by_default: bool,
     /// Expression type map from the type checker (for lifetime tracking).
-    expr_types: &'a FxHashMap<Span, TypeId>,
+    _expr_types: &'a FxHashMap<Span, TypeId>,
 
     // ── Struct borrowing state (Phase 4) ──
     /// Structs that contain reference-type fields (directly or transitively).
@@ -297,7 +297,7 @@ impl<'a> BorrowChecker<'a> {
             var_states: FxHashMap::default(),
             loop_depth: 0,
             immutable_by_default,
-            expr_types,
+            _expr_types: expr_types,
             method_resolutions,
             ref_type_structs,
             struct_field_ref_flags,
@@ -688,7 +688,7 @@ impl<'a> BorrowChecker<'a> {
                     shorter_group: shorter.clone(),
                     longer_source_def_ids: longer_ids,
                     shorter_source_def_ids: shorter_ids,
-                    call_span,
+                    _call_span: call_span,
                 });
             }
         }
