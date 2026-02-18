@@ -137,102 +137,102 @@ impl CodegenContext<'_> {
                 match name.as_str() {
                     "read_file" => {
                         if let Some(arg) = args.first() {
-                            let path = self.gen_expr(&arg.node.value);
+                            let path = self.gen_str_arg(&arg.node.value);
                             return format!("gorget_read_file({path})");
                         }
                     }
                     "write_file" | "append_file" => {
                         let func = if name == "write_file" { "gorget_write_file" } else { "gorget_append_file" };
                         if args.len() >= 2 {
-                            let path = self.gen_expr(&args[0].node.value);
-                            let content = self.gen_expr(&args[1].node.value);
+                            let path = self.gen_str_arg(&args[0].node.value);
+                            let content = self.gen_str_arg(&args[1].node.value);
                             return format!("{func}({path}, {content})");
                         }
                     }
                     "file_exists" => {
                         if let Some(arg) = args.first() {
-                            let path = self.gen_expr(&arg.node.value);
+                            let path = self.gen_str_arg(&arg.node.value);
                             return format!("gorget_file_exists({path})");
                         }
                     }
                     "delete_file" => {
                         if let Some(arg) = args.first() {
-                            let path = self.gen_expr(&arg.node.value);
+                            let path = self.gen_str_arg(&arg.node.value);
                             return format!("gorget_delete_file({path})");
                         }
                     }
                     "mkdir" => {
                         if let Some(arg) = args.first() {
-                            let path = self.gen_expr(&arg.node.value);
+                            let path = self.gen_str_arg(&arg.node.value);
                             return format!("gorget_mkdir({path})");
                         }
                     }
                     "rmdir" => {
                         if let Some(arg) = args.first() {
-                            let path = self.gen_expr(&arg.node.value);
+                            let path = self.gen_str_arg(&arg.node.value);
                             return format!("gorget_rmdir({path})");
                         }
                     }
                     "rename" => {
                         if args.len() >= 2 {
-                            let old = self.gen_expr(&args[0].node.value);
-                            let new = self.gen_expr(&args[1].node.value);
+                            let old = self.gen_str_arg(&args[0].node.value);
+                            let new = self.gen_str_arg(&args[1].node.value);
                             return format!("gorget_rename({old}, {new})");
                         }
                     }
                     "copy_file" => {
                         if args.len() >= 2 {
-                            let src = self.gen_expr(&args[0].node.value);
-                            let dst = self.gen_expr(&args[1].node.value);
+                            let src = self.gen_str_arg(&args[0].node.value);
+                            let dst = self.gen_str_arg(&args[1].node.value);
                             return format!("gorget_copy_file({src}, {dst})");
                         }
                     }
                     "file_size" => {
                         if let Some(arg) = args.first() {
-                            let path = self.gen_expr(&arg.node.value);
+                            let path = self.gen_str_arg(&arg.node.value);
                             return format!("gorget_file_size({path})");
                         }
                     }
                     "is_dir" => {
                         if let Some(arg) = args.first() {
-                            let path = self.gen_expr(&arg.node.value);
+                            let path = self.gen_str_arg(&arg.node.value);
                             return format!("gorget_is_dir({path})");
                         }
                     }
                     "path_parent" => {
                         if let Some(arg) = args.first() {
-                            let p = self.gen_expr(&arg.node.value);
+                            let p = self.gen_str_arg(&arg.node.value);
                             return format!("gorget_string_adopt((char*)gorget_path_parent({p}))");
                         }
                     }
                     "path_basename" => {
                         if let Some(arg) = args.first() {
-                            let p = self.gen_expr(&arg.node.value);
+                            let p = self.gen_str_arg(&arg.node.value);
                             return format!("gorget_string_adopt((char*)gorget_path_basename({p}))");
                         }
                     }
                     "path_extension" => {
                         if let Some(arg) = args.first() {
-                            let p = self.gen_expr(&arg.node.value);
+                            let p = self.gen_str_arg(&arg.node.value);
                             return format!("gorget_string_adopt((char*)gorget_path_extension({p}))");
                         }
                     }
                     "path_stem" => {
                         if let Some(arg) = args.first() {
-                            let p = self.gen_expr(&arg.node.value);
+                            let p = self.gen_str_arg(&arg.node.value);
                             return format!("gorget_string_adopt((char*)gorget_path_stem({p}))");
                         }
                     }
                     "path_join" => {
                         if args.len() >= 2 {
-                            let a = self.gen_expr(&args[0].node.value);
-                            let b = self.gen_expr(&args[1].node.value);
+                            let a = self.gen_str_arg(&args[0].node.value);
+                            let b = self.gen_str_arg(&args[1].node.value);
                             return format!("gorget_string_adopt((char*)gorget_path_join({a}, {b}))");
                         }
                     }
                     "readdir" => {
                         if let Some(arg) = args.first() {
-                            let path = self.gen_expr(&arg.node.value);
+                            let path = self.gen_str_arg(&arg.node.value);
                             return format!("gorget_readdir({path})");
                         }
                     }
@@ -241,7 +241,7 @@ impl CodegenContext<'_> {
                     }
                     "exec" => {
                         if let Some(arg) = args.first() {
-                            let cmd = self.gen_expr(&arg.node.value);
+                            let cmd = self.gen_str_arg(&arg.node.value);
                             return format!("gorget_exec({cmd})");
                         }
                     }
@@ -280,7 +280,7 @@ impl CodegenContext<'_> {
                     "readline" => return "gorget_string_adopt((char*)gorget_readline())".to_string(),
                     "input" => {
                         if let Some(arg) = args.first() {
-                            let prompt = self.gen_expr(&arg.node.value);
+                            let prompt = self.gen_str_arg(&arg.node.value);
                             return format!("gorget_string_adopt((char*)gorget_input({prompt}))");
                         }
                     }
@@ -313,13 +313,13 @@ impl CodegenContext<'_> {
                     }
                     "parse_int" => {
                         if let Some(arg) = args.first() {
-                            let s = self.gen_expr(&arg.node.value);
+                            let s = self.gen_str_arg(&arg.node.value);
                             return format!("gorget_parse_int({s})");
                         }
                     }
                     "parse_float" => {
                         if let Some(arg) = args.first() {
-                            let s = self.gen_expr(&arg.node.value);
+                            let s = self.gen_str_arg(&arg.node.value);
                             return format!("gorget_parse_float({s})");
                         }
                     }
@@ -355,14 +355,14 @@ impl CodegenContext<'_> {
                     }
                     "getenv" => {
                         if let Some(arg) = args.first() {
-                            let name_expr = self.gen_expr(&arg.node.value);
+                            let name_expr = self.gen_str_arg(&arg.node.value);
                             return format!("gorget_getenv({name_expr})");
                         }
                     }
                     "setenv" => {
                         if args.len() >= 2 {
-                            let name_expr = self.gen_expr(&args[0].node.value);
-                            let val_expr = self.gen_expr(&args[1].node.value);
+                            let name_expr = self.gen_str_arg(&args[0].node.value);
+                            let val_expr = self.gen_str_arg(&args[1].node.value);
                             return format!("gorget_setenv({name_expr}, {val_expr})");
                         }
                     }
@@ -408,7 +408,7 @@ impl CodegenContext<'_> {
                     // std.process
                     "exec_output" => {
                         if let Some(arg) = args.first() {
-                            let cmd = self.gen_expr(&arg.node.value);
+                            let cmd = self.gen_str_arg(&arg.node.value);
                             return format!("gorget_exec_output({cmd})");
                         }
                     }
@@ -421,7 +421,7 @@ impl CodegenContext<'_> {
                     // std.sdl — window
                     "sdl_create_window" => {
                         if args.len() >= 4 {
-                            let title = self.gen_expr(&args[0].node.value);
+                            let title = self.gen_str_arg(&args[0].node.value);
                             let w = self.gen_expr(&args[1].node.value);
                             let h = self.gen_expr(&args[2].node.value);
                             let flags = self.gen_expr(&args[3].node.value);
@@ -510,7 +510,7 @@ impl CodegenContext<'_> {
                     "sdl_load_texture" => {
                         if args.len() >= 2 {
                             let r = self.gen_expr(&args[0].node.value);
-                            let path = self.gen_expr(&args[1].node.value);
+                            let path = self.gen_str_arg(&args[1].node.value);
                             return format!("gorget_sdl_load_texture({r}, {path})");
                         }
                     }
@@ -556,7 +556,7 @@ impl CodegenContext<'_> {
                     // std.sdl — text
                     "sdl_load_font" => {
                         if args.len() >= 2 {
-                            let path = self.gen_expr(&args[0].node.value);
+                            let path = self.gen_str_arg(&args[0].node.value);
                             let size = self.gen_expr(&args[1].node.value);
                             return format!("gorget_sdl_load_font({path}, {size})");
                         }
@@ -571,7 +571,7 @@ impl CodegenContext<'_> {
                         if args.len() >= 6 {
                             let r = self.gen_expr(&args[0].node.value);
                             let f = self.gen_expr(&args[1].node.value);
-                            let text = self.gen_expr(&args[2].node.value);
+                            let text = self.gen_str_arg(&args[2].node.value);
                             let red = self.gen_expr(&args[3].node.value);
                             let green = self.gen_expr(&args[4].node.value);
                             let blue = self.gen_expr(&args[5].node.value);
@@ -582,7 +582,7 @@ impl CodegenContext<'_> {
                         if args.len() >= 8 {
                             let r = self.gen_expr(&args[0].node.value);
                             let f = self.gen_expr(&args[1].node.value);
-                            let text = self.gen_expr(&args[2].node.value);
+                            let text = self.gen_str_arg(&args[2].node.value);
                             let x = self.gen_expr(&args[3].node.value);
                             let y = self.gen_expr(&args[4].node.value);
                             let red = self.gen_expr(&args[5].node.value);
@@ -594,7 +594,7 @@ impl CodegenContext<'_> {
                     "sdl_text_width" | "sdl_text_height" => {
                         if args.len() >= 2 {
                             let f = self.gen_expr(&args[0].node.value);
-                            let text = self.gen_expr(&args[1].node.value);
+                            let text = self.gen_str_arg(&args[1].node.value);
                             return format!("gorget_{name}({f}, {text})");
                         }
                     }
@@ -646,7 +646,7 @@ impl CodegenContext<'_> {
                     }
                     "crypto_hmac" => {
                         if args.len() >= 3 {
-                            let algo = self.gen_expr(&args[0].node.value);
+                            let algo = self.gen_str_arg(&args[0].node.value);
                             let key = self.gen_expr(&args[1].node.value);
                             let data = self.gen_expr(&args[2].node.value);
                             let key_addr = addr_of(&key, &args[1].node.value.node);
@@ -677,7 +677,7 @@ impl CodegenContext<'_> {
                     // std.net.socket
                     "socket_connect" => {
                         if args.len() >= 2 {
-                            let host = self.gen_expr(&args[0].node.value);
+                            let host = self.gen_str_arg(&args[0].node.value);
                             let port = self.gen_expr(&args[1].node.value);
                             let result_type = c_mangle::mangle_generic("Result", &["GorgetSocket".into(), "const char*".into()]);
                             let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
@@ -692,7 +692,7 @@ impl CodegenContext<'_> {
                     // std.net.tls
                     "tls_connect" => {
                         if args.len() >= 2 {
-                            let host = self.gen_expr(&args[0].node.value);
+                            let host = self.gen_str_arg(&args[0].node.value);
                             let port = self.gen_expr(&args[1].node.value);
                             let result_type = c_mangle::mangle_generic("Result", &["GorgetTlsSocket".into(), "const char*".into()]);
                             let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
@@ -863,13 +863,13 @@ impl CodegenContext<'_> {
                     match method_name.as_str() {
                         "open" => {
                             if let Some(arg) = args.first() {
-                                let path_arg = self.gen_expr(&arg.node.value);
+                                let path_arg = self.gen_str_arg(&arg.node.value);
                                 return format!("gorget_file_open({path_arg}, \"r\")");
                             }
                         }
                         "create" => {
                             if let Some(arg) = args.first() {
-                                let path_arg = self.gen_expr(&arg.node.value);
+                                let path_arg = self.gen_str_arg(&arg.node.value);
                                 return format!("gorget_file_open({path_arg}, \"w\")");
                             }
                         }
@@ -1118,13 +1118,13 @@ impl CodegenContext<'_> {
                 match method_name {
                     "open" => {
                         if let Some(arg) = args.first() {
-                            let path_arg = self.gen_expr(&arg.node.value);
+                            let path_arg = self.gen_str_arg(&arg.node.value);
                             return format!("gorget_file_open({path_arg}, \"r\")");
                         }
                     }
                     "create" => {
                         if let Some(arg) = args.first() {
-                            let path_arg = self.gen_expr(&arg.node.value);
+                            let path_arg = self.gen_str_arg(&arg.node.value);
                             return format!("gorget_file_open({path_arg}, \"w\")");
                         }
                     }

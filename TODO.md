@@ -6,8 +6,6 @@
 
 ## Medium
 
-- **String→str coercion in intercepted stdlib calls**: Intercepted stdlib calls in `gen_call` bypass `param_type_ids` coercion. When a `String` arg is passed to a C function expecting `const char*`, it must be manually coerced via `gen_str_arg()`. Currently only applied to `parse_time` and `format_time`. Should be applied to all intercepted calls with `str` parameters (write_file, append_file, parse_int, parse_float, file_exists, delete_file, mkdir, rmdir, rename, copy_file, file_size, is_dir, setenv, etc.). Low urgency since most callers pass string literals. [added: 2026-02-18]
-
 - **`Into[T]` conversion trait**: Counterpart to `From[T]` requiring explicit type args (`value.into[Celsius]()`) or return-type inference. Adds complexity (equipping primitives, potential blanket impl pattern). [added: 2026-02-17]
 
 - **`TryInto[T]` conversion trait**: Fallible counterpart to `Into[T]`, same complexity issues (explicit type args or return-type inference). Track alongside `Into[T]`. [added: 2026-02-18]
