@@ -161,7 +161,7 @@ pub enum SemanticErrorKind {
     // ── Lifetime errors ──
 
     /// Returning a reference to a local variable (would dangle after return).
-    DanglingReturn { name: String, local_name: String },
+    DanglingReturn { name: String, local_name: String, local_declared_at: Option<Span> },
 
     /// Using a reference-type variable after its source has been moved.
     UseAfterSourceMoved { name: String, source_name: String, moved_at: Span },
@@ -170,7 +170,7 @@ pub enum SemanticErrorKind {
     MissingLiveAnnotation { func_name: String },
 
     /// Binding a reference type to a temporary that will be immediately dropped.
-    TemporaryBorrow { name: String, callee: String },
+    TemporaryBorrow { name: String, callee: String, temp_at: Option<Span> },
 
     /// `where a outlives b` violated: group a's source was invalidated
     /// while group b's source is still alive.
@@ -361,7 +361,7 @@ impl std::fmt::Display for SemanticError {
             SemanticErrorKind::ValueOutOfRange { value, type_name, min, max } => {
                 write!(f, "value {value} is out of range for type {type_name} (valid range: {min}..={max})")
             }
-            SemanticErrorKind::DanglingReturn { name, local_name } => {
+            SemanticErrorKind::DanglingReturn { name, local_name, .. } => {
                 write!(f, "cannot return `{name}`: borrows from local variable `{local_name}` which will be dropped")
             }
             SemanticErrorKind::UseAfterSourceMoved { name, source_name, .. } => {
@@ -370,7 +370,7 @@ impl std::fmt::Display for SemanticError {
             SemanticErrorKind::MissingLiveAnnotation { func_name } => {
                 write!(f, "function `{func_name}` returns a reference type but has no `live` parameter annotations")
             }
-            SemanticErrorKind::TemporaryBorrow { name, callee } => {
+            SemanticErrorKind::TemporaryBorrow { name, callee, .. } => {
                 write!(f, "cannot bind `{name}` to temporary from `{callee}()` — value will be dropped")
             }
             SemanticErrorKind::OutlivesViolation { longer_group, shorter_group, longer_source, shorter_source } => {

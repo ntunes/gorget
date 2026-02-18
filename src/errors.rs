@@ -154,6 +154,28 @@ impl ErrorReporter {
                         .with_message("first move here"),
                 );
             }
+            SemanticErrorKind::UseAfterSourceMoved { moved_at, source_name, .. } => {
+                labels.push(
+                    Label::secondary(self.file_id, moved_at.start..moved_at.end)
+                        .with_message(format!("`{source_name}` moved here")),
+                );
+            }
+            SemanticErrorKind::DanglingReturn { local_declared_at, local_name, .. } => {
+                if let Some(decl_span) = local_declared_at {
+                    labels.push(
+                        Label::secondary(self.file_id, decl_span.start..decl_span.end)
+                            .with_message(format!("`{local_name}` declared here — will be dropped when function returns")),
+                    );
+                }
+            }
+            SemanticErrorKind::TemporaryBorrow { temp_at, callee, .. } => {
+                if let Some(temp_span) = temp_at {
+                    labels.push(
+                        Label::secondary(self.file_id, temp_span.start..temp_span.end)
+                            .with_message(format!("temporary from `{callee}()` created here — dropped at end of statement")),
+                    );
+                }
+            }
             _ => {}
         }
 

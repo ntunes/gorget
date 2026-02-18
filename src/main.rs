@@ -201,6 +201,45 @@ fn add_crypto_flags(cmd: &mut Command, needs_crypto: bool) {
     }
 }
 
+/// Print inferred borrow analysis for all functions (--show-borrows diagnostic).
+fn print_borrow_summary(result: &gorget::semantic::AnalysisResult) {
+    // Collect and sort by function name for stable output
+    let mut entries: Vec<(_, &gorget::semantic::resolve::FunctionInfo)> =
+        result.function_info.iter().collect();
+    entries.sort_by(|(_, a), (_, b)| {
+        let name_a = &result.scopes.get_def(a.def_id).name;
+        let name_b = &result.scopes.get_def(b.def_id).name;
+        name_a.cmp(name_b)
+    });
+
+    let mut has_output = false;
+    for (_, info) in &entries {
+        let def = result.scopes.get_def(info.def_id);
+        let func_name = &def.name;
+
+        if info.return_borrows_from.is_empty() {
+            continue;
+        }
+
+        if !has_output {
+            eprintln!("Borrow analysis:");
+            has_output = true;
+        }
+
+        let sources: Vec<String> = info.return_borrows_from.iter().map(|&idx| {
+            if idx < info.param_names.len() {
+                info.param_names[idx].clone()
+            } else {
+                format!("param[{idx}]")
+            }
+        }).collect();
+        eprintln!("  {func_name}() -> borrows from: {}", sources.join(", "));
+    }
+    if !has_output {
+        eprintln!("Borrow analysis: no functions return borrowed data");
+    }
+}
+
 /// Build a .gg source file into a binary. Returns the path to the executable,
 /// or an error string if compilation fails.
 ///
@@ -223,6 +262,7 @@ fn try_build(
     dep_paths: HashMap<String, PathBuf>,
     shared_output: Option<&Path>,
     hot_reload_flag: bool,
+    show_borrows: bool,
 ) -> Result<PathBuf, String> {
     let mut parser = Parser::new(source);
     let module = parser.parse_module();
@@ -258,6 +298,10 @@ fn try_build(
     let hot_reload = dir_flags.hot_reload || hot_reload_flag;
 
     let result = gorget::semantic::analyze(&mut module);
+
+    if show_borrows {
+        print_borrow_summary(&result);
+    }
 
     if !result.errors.is_empty() {
         let reporter = ErrorReporter::new(filename.to_string(), source.to_string());
@@ -520,7 +564,7 @@ fn build(
     output_dir: Option<&Path>,
     dep_paths: HashMap<String, PathBuf>,
 ) -> PathBuf {
-    try_build(filename, source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, test_mode, test_tags, test_exclude_tags, test_name_filter, output_dir, dep_paths, None, false)
+    try_build(filename, source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, test_mode, test_tags, test_exclude_tags, test_name_filter, output_dir, dep_paths, None, false, false)
         .unwrap_or_else(|e| {
             eprintln!("{e}");
             process::exit(1);
@@ -717,7 +761,7 @@ fn run_repl() {
         let gg_path_str = gg_path.display().to_string();
 
         // Try to build
-        match try_build(&gg_path_str, &source, false, false, false, false, false, false, false, &[], &[], None, Some(&tmp_dir), HashMap::new(), None, false) {
+        match try_build(&gg_path_str, &source, false, false, false, false, false, false, false, &[], &[], None, Some(&tmp_dir), HashMap::new(), None, false, false) {
             Err(e) => {
                 eprintln!("{e}");
                 // Don't update buffers on error
@@ -1108,6 +1152,7 @@ fn main() {
     let no_trace = args.iter().any(|a| a == "--no-trace");
     let hot_reload_flag = args.iter().any(|a| a == "--hot-reload");
     let shared_mode = args.iter().any(|a| a == "--shared");
+    let show_borrows = args.iter().any(|a| a == "--show-borrows");
     // Parse -o <path> for shared output
     let shared_output_path: Option<PathBuf> = {
         let mut path = None;
@@ -1200,6 +1245,10 @@ fn main() {
 
             let result = gorget::semantic::analyze(&mut module);
 
+            if show_borrows {
+                print_borrow_summary(&result);
+            }
+
             if result.errors.is_empty() {
                 println!("OK: no semantic errors");
             } else {
@@ -1226,7 +1275,7 @@ fn main() {
                     dir.join(format!("{stem}_guest{ext}"))
                 };
                 let shared_path = shared_output_path.as_deref().unwrap_or(&default_shared_path);
-                let result = try_build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, None, dep_paths, Some(shared_path), false);
+                let result = try_build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, None, dep_paths, Some(shared_path), false, show_borrows);
                 match result {
                     Ok(p) => println!("Built shared library: {}", p.display()),
                     Err(e) => {
@@ -1236,7 +1285,7 @@ fn main() {
                 }
             } else if hot_reload_flag {
                 // --hot-reload: two-phase build (host + guest)
-                let result = try_build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, None, dep_paths, None, true);
+                let result = try_build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, None, dep_paths, None, true, show_borrows);
                 match result {
                     Ok(p) => println!("Built (hot-reload): {}", p.display()),
                     Err(e) => {
@@ -1253,7 +1302,7 @@ fn main() {
             let dep_paths = resolve_deps_for_file(filename);
             if hot_reload_flag {
                 // --hot-reload: build with hot-reload and run
-                let result = try_build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, None, dep_paths, None, true);
+                let result = try_build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, None, dep_paths, None, true, show_borrows);
                 match result {
                     Ok(exe_path) => {
                         let status = Command::new(&exe_path)

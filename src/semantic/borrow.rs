@@ -527,6 +527,52 @@ impl<'a> BorrowChecker<'a> {
                 }
             }
 
+            // Value-type literals: always produce new owned values, never references
+            Expr::IntLiteral(_)
+            | Expr::FloatLiteral(_)
+            | Expr::BoolLiteral(_)
+            | Expr::CharLiteral(_) => BorrowOrigin::Static,
+
+            // Binary/unary ops produce new values (arithmetic, comparison, logical)
+            Expr::BinaryOp { .. } | Expr::UnaryOp { .. } => BorrowOrigin::Static,
+
+            // Range produces a new value
+            Expr::Range { .. } => BorrowOrigin::Static,
+
+            // `is` check produces a bool
+            Expr::Is { .. } => BorrowOrigin::Static,
+
+            // Comprehensions produce new collections
+            Expr::ListComprehension { .. }
+            | Expr::DictComprehension { .. }
+            | Expr::SetComprehension { .. } => BorrowOrigin::Static,
+
+            // Optional chain propagates from object
+            Expr::OptionalChain { object, .. } => self.compute_expr_origin(object),
+
+            // Mutable borrow propagates from inner
+            Expr::MutableBorrow { expr: inner } => self.compute_expr_origin(inner),
+
+            // Await/spawn propagate from inner expression
+            Expr::Await { expr: inner } | Expr::Spawn { expr: inner } => {
+                self.compute_expr_origin(inner)
+            }
+
+            // Path expressions (e.g., Module.name): resolve like identifiers
+            Expr::Path { .. } => {
+                if let Some(&def_id) = self.resolution_map.get(&expr.span.start) {
+                    if let Some(origin) = self.var_origins.get(&def_id) {
+                        return origin.clone();
+                    }
+                    let def = self.scopes.get_def(def_id);
+                    if def.kind == DefKind::Variable {
+                        return BorrowOrigin::Local(def_id);
+                    }
+                }
+                // Qualified path to a constant/static — treat as static
+                BorrowOrigin::Static
+            }
+
             // Everything else: unknown (conservative)
             _ => BorrowOrigin::Unknown,
         }
@@ -1139,6 +1185,7 @@ impl<'a> BorrowChecker<'a> {
                                     SemanticErrorKind::TemporaryBorrow {
                                         name: name.clone(),
                                         callee: callee_name,
+                                        temp_at: None,
                                     },
                                     value.span,
                                 );
@@ -1260,6 +1307,8 @@ impl<'a> BorrowChecker<'a> {
                             if origin.contains_local() {
                                 let local_names = origin.local_names(self.scopes);
                                 let local_name = local_names.first().cloned().unwrap_or_else(|| "<local>".to_string());
+                                let local_declared_at = origin.source_def_ids().first()
+                                    .map(|&did| self.scopes.get_def(did).span);
                                 // Get a name for what's being returned
                                 let return_name = match &expr.node {
                                     Expr::Identifier(n) => n.clone(),
@@ -1269,6 +1318,7 @@ impl<'a> BorrowChecker<'a> {
                                     SemanticErrorKind::DanglingReturn {
                                         name: return_name,
                                         local_name,
+                                        local_declared_at,
                                     },
                                     expr.span,
                                 );
@@ -1991,6 +2041,8 @@ impl<'a> BorrowChecker<'a> {
                         if origin.contains_local() {
                             let local_names = origin.local_names(self.scopes);
                             let local_name = local_names.first().cloned().unwrap_or_else(|| "<local>".to_string());
+                            let local_declared_at = origin.source_def_ids().first()
+                                .map(|&did| self.scopes.get_def(did).span);
                             let return_name = match &expr.node {
                                 Expr::Identifier(n) => n.clone(),
                                 _ => "<expression>".to_string(),
@@ -1999,6 +2051,7 @@ impl<'a> BorrowChecker<'a> {
                                 SemanticErrorKind::DanglingReturn {
                                     name: return_name,
                                     local_name,
+                                    local_declared_at,
                                 },
                                 expr.span,
                             );
@@ -3441,7 +3494,7 @@ void main():
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::TemporaryBorrow { name, callee }
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::TemporaryBorrow { name, callee, .. }
                 if name == "v" && callee == "make_string")),
             "expected TemporaryBorrow for str from String call, got: {:?}", errors
         );
@@ -3625,7 +3678,7 @@ void main():
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::TemporaryBorrow { name, callee }
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::TemporaryBorrow { name, callee, .. }
                 if name == "v" && callee == "b.build")),
             "expected TemporaryBorrow for method returning String, got: {:?}", errors
         );
