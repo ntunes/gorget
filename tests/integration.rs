@@ -3569,6 +3569,10 @@ Hello
 Hello World
 Hello
 16
+SGVsbG8=
+Hello
+
+caught error
 done",
     );
 }

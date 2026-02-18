@@ -578,7 +578,8 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
     // 1g. Bytes runtime (when std.bytes is imported)
     let has_bytes = module.items.iter().any(|i| {
         if let Item::Function(f) = &i.node {
-            f.name.node == "bytes_from_str" && f.span == crate::span::Span::dummy()
+            f.name.node == "bytes_from_str"
+                && matches!(&f.body, FunctionBody::Extern(sym) if sym == "gorget_bytes_from_str")
         } else {
             false
         }

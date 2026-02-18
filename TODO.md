@@ -10,7 +10,6 @@
 
 ## Medium
 
-- **Base64 codec in `std.bytes`**: `bytes_encode_base64(Vector[uint8]) -> str` and `bytes_decode_base64(str) -> Vector[uint8]`. Required for HTTP Authorization headers, JWT, binary payloads, certificate handling. Currently no way to do base64 without C interop. (`stdlib.rs` bytes module) [added: 2026-02-18]
 
 - **HTTP redirect following**: `http_request()` in `lib/std/http.gg` doesn't follow 301/302/303 redirects — returns the redirect response as-is. Most real-world URLs redirect at least once. Add optional redirect following (max 10 hops) with Location header parsing. (`lib/std/http.gg:117-206`) [added: 2026-02-18]
 

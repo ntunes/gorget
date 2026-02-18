@@ -2,6 +2,8 @@ from std.bytes import bytes_from_str, bytes_to_str, bytes_from_hex, bytes_to_hex
 from std.bytes import bytes_write_u32_be, bytes_read_u32_be
 from std.bytes import bytes_write_u16_be, bytes_read_u16_be
 from std.bytes import bytes_concat, bytes_slice, random_bytes
+from std.bytes import base64_encode, base64_decode
+from std.collections import Vector
 
 void main():
     # str → bytes → str roundtrip
@@ -48,5 +50,28 @@ void main():
     # random_bytes produces correct length
     Vector[uint8] r = random_bytes(16)
     print("{r.len()}")
+
+    # base64 encode
+    str b64_enc = base64_encode(bytes_from_str("Hello"))
+    print(b64_enc)
+
+    # base64 decode
+    auto b64_dec = base64_decode("SGVsbG8=")
+    match b64_dec:
+        case Ok(b64_decoded):
+            print(bytes_to_str(b64_decoded))
+        else:
+            print("error")
+
+    # base64 roundtrip empty
+    print(base64_encode(Vector[uint8]()))
+
+    # base64 decode error
+    auto b64_bad = base64_decode("!!!")
+    match b64_bad:
+        case Error(b64_msg):
+            print("caught error")
+        else:
+            print("unexpected ok")
 
     print("done")

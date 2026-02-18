@@ -43,7 +43,7 @@ pub fn generate_stdlib_module(segments: &[String]) -> Option<Module> {
             "json" => None, // file-based module — loaded via stdlib_module_source()
             "toml" => None, // file-based module — loaded via stdlib_module_source()
             "xml" => None,  // file-based module — loaded via stdlib_module_source()
-            "bytes" => Some(gen_bytes_module()),
+            "bytes" => None, // file-based module — loaded via stdlib_module_source()
             "crypto" => Some(gen_crypto_module()),
             "gfx" => None, // file-based module — loaded via stdlib_module_source()
             "ecs" => None, // file-based module — loaded via stdlib_module_source()
@@ -528,6 +528,7 @@ pub fn stdlib_module_source(segments: &[String]) -> Option<&'static str> {
         Some("json") => Some(include_str!("../lib/std/json.gg")),
         Some("toml") => Some(include_str!("../lib/std/toml.gg")),
         Some("xml") => Some(include_str!("../lib/std/xml.gg")),
+        Some("bytes") => Some(include_str!("../lib/std/bytes.gg")),
         _ => None,
     }
 }
@@ -769,24 +770,6 @@ fn gen_tls_socket_module() -> Module {
         items,
         span: Span::dummy(),
     }
-}
-
-// ─── std.bytes ──────────────────────────────────────────────
-
-fn gen_bytes_module() -> Module {
-    make_module(vec![
-        extern_fn("bytes_from_str", &[("s", ty_str())], ty_vector_uint8(), "gorget_bytes_from_str"),
-        extern_fn("bytes_to_str", &[("b", ty_vector_uint8())], ty_str(), "gorget_bytes_to_str"),
-        extern_fn("bytes_from_hex", &[("hex", ty_str())], ty_vector_uint8(), "gorget_bytes_from_hex"),
-        extern_fn("bytes_to_hex", &[("b", ty_vector_uint8())], ty_str(), "gorget_bytes_to_hex"),
-        extern_fn("bytes_write_u32_be", &[("b", ty_vector_uint8()), ("offset", ty_int()), ("value", ty_int())], ty_void(), "gorget_bytes_write_u32_be"),
-        extern_fn("bytes_read_u32_be", &[("b", ty_vector_uint8()), ("offset", ty_int())], ty_int(), "gorget_bytes_read_u32_be"),
-        extern_fn("bytes_write_u16_be", &[("b", ty_vector_uint8()), ("offset", ty_int()), ("value", ty_int())], ty_void(), "gorget_bytes_write_u16_be"),
-        extern_fn("bytes_read_u16_be", &[("b", ty_vector_uint8()), ("offset", ty_int())], ty_int(), "gorget_bytes_read_u16_be"),
-        extern_fn("bytes_concat", &[("a", ty_vector_uint8()), ("b", ty_vector_uint8())], ty_vector_uint8(), "gorget_bytes_concat"),
-        extern_fn("bytes_slice", &[("b", ty_vector_uint8()), ("start", ty_int()), ("end", ty_int())], ty_vector_uint8(), "gorget_bytes_slice"),
-        extern_fn("random_bytes", &[("n", ty_int())], ty_vector_uint8(), "gorget_random_bytes"),
-    ])
 }
 
 // ─── Helpers ────────────────────────────────────────────────
@@ -1267,24 +1250,44 @@ mod tests {
     }
 
     #[test]
-    fn generate_bytes() {
-        let m = generate_stdlib_module(&["std".into(), "bytes".into()]).unwrap();
+    fn generate_bytes_returns_none() {
+        // std.bytes is file-based, not synthetic — generate returns None
+        assert!(generate_stdlib_module(&["std".into(), "bytes".into()]).is_none());
+    }
+
+    #[test]
+    fn bytes_module_source_exists() {
+        let source = stdlib_module_source(&["std".into(), "bytes".into()]);
+        assert!(source.is_some());
+        let src = source.unwrap();
+        assert!(src.contains("bytes_from_str"));
+        assert!(src.contains("bytes_to_str"));
+        assert!(src.contains("bytes_from_hex"));
+        assert!(src.contains("bytes_to_hex"));
+        assert!(src.contains("base64_encode"));
+        assert!(src.contains("base64_decode"));
+    }
+
+    #[test]
+    fn bytes_source_parses() {
+        let source = stdlib_module_source(&["std".into(), "bytes".into()]).unwrap();
+        let mut parser = crate::parser::Parser::new(source);
+        let module = parser.parse_module();
+        assert!(parser.errors.is_empty(), "bytes.gg parse errors: {:?}", parser.errors);
+
         let mut fn_names = vec![];
-        for item in &m.items {
+        for item in &module.items {
             match &item.node {
                 Item::Function(f) => fn_names.push(f.name.node.clone()),
                 _ => {}
             }
         }
+
         assert!(fn_names.contains(&"bytes_from_str".to_string()));
         assert!(fn_names.contains(&"bytes_to_str".to_string()));
-        assert!(fn_names.contains(&"bytes_from_hex".to_string()));
-        assert!(fn_names.contains(&"bytes_to_hex".to_string()));
-        assert!(fn_names.contains(&"bytes_write_u32_be".to_string()));
-        assert!(fn_names.contains(&"bytes_read_u32_be".to_string()));
-        assert!(fn_names.contains(&"bytes_concat".to_string()));
-        assert!(fn_names.contains(&"bytes_slice".to_string()));
-        assert!(fn_names.contains(&"random_bytes".to_string()));
+        assert!(fn_names.contains(&"base64_encode".to_string()));
+        assert!(fn_names.contains(&"base64_decode".to_string()));
+        assert!(fn_names.contains(&"b64_char_value".to_string()));
     }
 
     #[test]
@@ -1627,32 +1630,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn bytes_free_functions_are_extern() {
-        let m = generate_stdlib_module(&["std".into(), "bytes".into()]).unwrap();
-        let extern_expected = [
-            "bytes_from_str",
-            "bytes_to_str",
-            "bytes_from_hex",
-            "bytes_to_hex",
-            "bytes_write_u32_be",
-            "bytes_read_u32_be",
-            "bytes_write_u16_be",
-            "bytes_read_u16_be",
-            "bytes_concat",
-            "bytes_slice",
-            "random_bytes",
-        ];
-        for item in &m.items {
-            if let Item::Function(f) = &item.node {
-                let name = f.name.node.as_str();
-                if extern_expected.contains(&name) {
-                    assert!(
-                        matches!(f.body, FunctionBody::Extern(_)),
-                        "{name} should be FunctionBody::Extern"
-                    );
-                }
-            }
-        }
-    }
 }
