@@ -1030,16 +1030,22 @@ impl CodegenContext<'_> {
                 if method_name == "default" {
                     return self.gen_default_call(name);
                 }
-                // From trait: Type.from(value) → From_for_Type__from(value)
+                // From trait: Type.from(value) → From__argtype_for_Type__from(value)
                 if method_name == "from" {
-                    let func = c_mangle::mangle_trait_method("From", name, "from");
+                    let trait_type_args: Vec<String> = args.first()
+                        .map(|a| vec![self.infer_c_type_from_expr(&a.node.value.node)])
+                        .unwrap_or_default();
+                    let func = c_mangle::mangle_trait_method("From", name, "from", &trait_type_args);
                     let arg_exprs: Vec<String> =
                         args.iter().map(|a| self.gen_expr(&a.node.value)).collect();
                     return format!("{func}({})", arg_exprs.join(", "));
                 }
-                // TryFrom trait: Type.try_from(value) → TryFrom_for_Type__try_from(value)
+                // TryFrom trait: Type.try_from(value) → TryFrom__argtype_for_Type__try_from(value)
                 if method_name == "try_from" {
-                    let func = c_mangle::mangle_trait_method("TryFrom", name, "try_from");
+                    let trait_type_args: Vec<String> = args.first()
+                        .map(|a| vec![self.infer_c_type_from_expr(&a.node.value.node)])
+                        .unwrap_or_default();
+                    let func = c_mangle::mangle_trait_method("TryFrom", name, "try_from", &trait_type_args);
                     let arg_exprs: Vec<String> =
                         args.iter().map(|a| self.gen_expr(&a.node.value)).collect();
                     return format!("{func}({})", arg_exprs.join(", "));
@@ -1115,8 +1121,8 @@ impl CodegenContext<'_> {
         // Use mangled name for generic types (e.g., Pair[int] → Pair__int64_t)
         let mangled_type = self.infer_receiver_mangled_type(receiver);
         // Check if this method comes from a trait impl (not inherent)
-        let mangled = if let Some(trait_name) = self.find_trait_for_method(&type_name, method_name) {
-            c_mangle::mangle_trait_method(&trait_name, &mangled_type, method_name)
+        let mangled = if let Some((trait_name, trait_type_args)) = self.find_trait_for_method(&type_name, method_name) {
+            c_mangle::mangle_trait_method(&trait_name, &mangled_type, method_name, &trait_type_args)
         } else {
             c_mangle::mangle_method(&mangled_type, method_name)
         };
@@ -1346,7 +1352,7 @@ impl CodegenContext<'_> {
             "str" => "\"\"".to_string(),
             "String" => "gorget_string_new(\"\")".to_string(),
             _ => {
-                let func = c_mangle::mangle_trait_method("Default", type_name, "default");
+                let func = c_mangle::mangle_trait_method("Default", type_name, "default", &[]);
                 format!("{func}()")
             }
         }

@@ -83,7 +83,7 @@ impl CodegenContext<'_> {
                 emitter.emit_line(&format!("gorget_file_close(&{});", entry.var_name));
             }
             DropAction::UserDrop { type_name } => {
-                let drop_fn = c_mangle::mangle_trait_method("Drop", type_name, "drop");
+                let drop_fn = c_mangle::mangle_trait_method("Drop", type_name, "drop", &[]);
                 emitter.emit_line(&format!("{drop_fn}(&{});", entry.var_name));
             }
             DropAction::StringFree => {
@@ -592,7 +592,7 @@ impl CodegenContext<'_> {
             // User-defined struct with Drop impl
             Type::Named { name, generic_args } if generic_args.is_empty() => {
                 if self.traits.has_trait_impl_by_name(&name.node, "Drop") {
-                    let drop_fn = c_mangle::mangle_trait_method("Drop", &name.node, "drop");
+                    let drop_fn = c_mangle::mangle_trait_method("Drop", &name.node, "drop", &[]);
                     self.register_droppable(
                         var_name,
                         DropAction::UserDrop {
@@ -665,7 +665,7 @@ impl CodegenContext<'_> {
                         return;
                     }
                     // IndexMut trait dispatch: obj[key] = value → IndexMut_for_Type__set(&obj, key, value)
-                    if let Some(type_name) = self.try_operator_trait_type(object, "IndexMut") {
+                    if let Some((type_name, trait_type_args)) = self.try_operator_trait_type(object, "IndexMut") {
                         if self.trace {
                             let vars = self.collect_expr_vars(&[&target.node, &value.node]);
                             self.emit_stmt_start(span, &vars, emitter);
@@ -673,7 +673,7 @@ impl CodegenContext<'_> {
                         let obj = self.gen_expr(object);
                         let idx = self.gen_expr(index);
                         let val = self.gen_expr(value);
-                        let mangled = c_mangle::mangle_trait_method("IndexMut", &type_name, "set");
+                        let mangled = c_mangle::mangle_trait_method("IndexMut", &type_name, "set", &trait_type_args);
                         let str_temps = self.flush_string_temps(emitter);
                         emitter.emit_line(&format!("{mangled}(&{obj}, {idx}, {val});"));
                         Self::emit_string_temp_frees(&str_temps, emitter);
@@ -764,9 +764,9 @@ impl CodegenContext<'_> {
                     _ => None,
                 };
                 if let Some((trait_name, method)) = trait_for_op {
-                    if let Some(type_name) = self.try_operator_trait_type(target, trait_name) {
+                    if let Some((type_name, trait_type_args)) = self.try_operator_trait_type(target, trait_name) {
                         let t = self.gen_expr(target);
-                        let call = self.gen_binary_op_trait_call(trait_name, method, &type_name, target, value);
+                        let call = self.gen_binary_op_trait_call(trait_name, method, &type_name, &trait_type_args, target, value);
                         let str_temps = self.flush_string_temps(emitter);
                         emitter.emit_line(&format!("{t} = {call};"));
                         Self::emit_string_temp_frees(&str_temps, emitter);
@@ -2102,10 +2102,12 @@ impl CodegenContext<'_> {
             // since trait method functions are emitted per-monomorphization.
             let collection_mangled = self.infer_receiver_type(iterable);
             let (elem_c_type, iter_c_type, iter_type_name) = self.get_iterable_iter_info(iterable);
-            let iter_fn = c_mangle::mangle_trait_method("Iterable", &collection_mangled, "iter");
+            let iterable_trait_args = self.lookup_trait_type_args(&collection_mangled, "Iterable");
+            let iter_fn = c_mangle::mangle_trait_method("Iterable", &collection_mangled, "iter", &iterable_trait_args);
             let option_mangled = self.register_generic("Option", &[elem_c_type.clone()], super::GenericInstanceKind::Enum);
             let tag_none = c_mangle::mangle_tag(&option_mangled, "None");
-            let next_fn = c_mangle::mangle_trait_method("Iterator", &iter_type_name, "next");
+            let iterator_trait_args = self.lookup_trait_type_args(&iter_type_name, "Iterator");
+            let next_fn = c_mangle::mangle_trait_method("Iterator", &iter_type_name, "next", &iterator_trait_args);
             let iter_tmp = emitter.fresh_temp();
             let next_tmp = emitter.fresh_temp();
             emitter.emit_line(&format!("{iter_c_type} {iter_tmp} = {iter_fn}(&{collection_expr});"));
@@ -2121,7 +2123,8 @@ impl CodegenContext<'_> {
             let elem_c_type = self.get_iterator_elem_c_type(iterable);
             let option_mangled = self.register_generic("Option", &[elem_c_type.clone()], super::GenericInstanceKind::Enum);
             let tag_none = c_mangle::mangle_tag(&option_mangled, "None");
-            let next_fn = c_mangle::mangle_trait_method("Iterator", &type_mangled, "next");
+            let iterator_trait_args = self.lookup_trait_type_args(&type_mangled, "Iterator");
+            let next_fn = c_mangle::mangle_trait_method("Iterator", &type_mangled, "next", &iterator_trait_args);
             let next_tmp = emitter.fresh_temp();
             emitter.emit_line("while (1) {");
             emitter.indent();

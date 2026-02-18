@@ -106,8 +106,8 @@ impl CodegenContext<'_> {
             Expr::UnaryOp { op, operand } => {
                 // Neg trait dispatch for user-defined types
                 if *op == UnaryOp::Neg {
-                    if let Some(type_name) = self.try_operator_trait_type(operand, "Neg") {
-                        return self.gen_unary_op_trait_call("Neg", "neg", &type_name, operand);
+                    if let Some((type_name, trait_type_args)) = self.try_operator_trait_type(operand, "Neg") {
+                        return self.gen_unary_op_trait_call("Neg", "neg", &type_name, &trait_type_args, operand);
                     }
                 }
                 let inner = self.gen_expr(operand);
@@ -126,10 +126,10 @@ impl CodegenContext<'_> {
                 }
                 // Auto-hook: Eq/Neq on struct types → Equatable trait call
                 if matches!(op, BinaryOp::Eq | BinaryOp::Neq) {
-                    if let Some(type_name) = self.try_equatable_type(left) {
+                    if let Some((type_name, trait_type_args)) = self.try_equatable_type(left) {
                         let l = self.gen_expr(left);
                         let r = self.gen_expr(right);
-                        let mangled = c_mangle::mangle_trait_method("Equatable", &type_name, "eq");
+                        let mangled = c_mangle::mangle_trait_method("Equatable", &type_name, "eq", &trait_type_args);
                         let needs_temp = !is_lvalue(&left.node);
                         let eq_call = if needs_temp {
                             format!("({{ __typeof__({l}) __recv = {l}; {mangled}(&__recv, {r}); }})")
@@ -197,13 +197,13 @@ impl CodegenContext<'_> {
                         BinaryOp::Mod => ("Rem", "rem"),
                         _ => unreachable!(),
                     };
-                    if let Some(type_name) = self.try_operator_trait_type(left, trait_name) {
-                        return self.gen_binary_op_trait_call(trait_name, method, &type_name, left, right);
+                    if let Some((type_name, trait_type_args)) = self.try_operator_trait_type(left, trait_name) {
+                        return self.gen_binary_op_trait_call(trait_name, method, &type_name, &trait_type_args, left, right);
                     }
                 }
                 // Comparable trait dispatch for comparison operators
                 if matches!(op, BinaryOp::Lt | BinaryOp::Gt | BinaryOp::LtEq | BinaryOp::GtEq) {
-                    if let Some(type_name) = self.try_operator_trait_type(left, "Comparable") {
+                    if let Some((type_name, trait_type_args)) = self.try_operator_trait_type(left, "Comparable") {
                         // Check for specific override method first (lt, gt, lte, gte)
                         let specific = match op {
                             BinaryOp::Lt => "lt",
@@ -214,10 +214,10 @@ impl CodegenContext<'_> {
                         };
                         let gorget_type = self.infer_receiver_type(left);
                         if self.traits.has_method_for_type(&gorget_type, specific) {
-                            return self.gen_binary_op_trait_call("Comparable", specific, &type_name, left, right);
+                            return self.gen_binary_op_trait_call("Comparable", specific, &type_name, &trait_type_args, left, right);
                         }
                         // Default: derive from compare() result compared to 0
-                        let compare_call = self.gen_binary_op_trait_call("Comparable", "compare", &type_name, left, right);
+                        let compare_call = self.gen_binary_op_trait_call("Comparable", "compare", &type_name, &trait_type_args, left, right);
                         let cmp = match op {
                             BinaryOp::Lt => "< 0",
                             BinaryOp::Gt => "> 0",
@@ -338,9 +338,9 @@ impl CodegenContext<'_> {
                         if (!__gp) gorget_panic(\"key not found in map\"); \
                         *__gp; }})"
                     )
-                } else if let Some(type_name) = self.try_operator_trait_type(object, "Index") {
+                } else if let Some((type_name, trait_type_args)) = self.try_operator_trait_type(object, "Index") {
                     let idx = self.gen_expr(index);
-                    let mangled = c_mangle::mangle_trait_method("Index", &type_name, "get");
+                    let mangled = c_mangle::mangle_trait_method("Index", &type_name, "get", &trait_type_args);
                     if !is_lvalue(&object.node) {
                         format!("({{ __typeof__({obj}) __recv = {obj}; {mangled}(&__recv, {idx}); }})")
                     } else {

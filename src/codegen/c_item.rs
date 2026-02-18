@@ -351,11 +351,12 @@ impl CodegenContext<'_> {
                     }
                     let type_name = self.impl_type_name(impl_block);
                     let trait_name = self.impl_trait_name(impl_block);
+                    let trait_type_args = self.impl_trait_type_args(impl_block);
                     // Emit prototypes for explicitly implemented methods
                     for method in &impl_block.items {
                         self.emit_function_prototype(
                             &method.node,
-                            Some((&type_name, trait_name.as_deref())),
+                            Some((&type_name, trait_name.as_deref(), &trait_type_args)),
                             emitter,
                         );
                     }
@@ -367,7 +368,7 @@ impl CodegenContext<'_> {
                                 if !Self::equip_has_method(impl_block, &method.name.node) {
                                     self.emit_function_prototype(
                                         method,
-                                        Some((&type_name, Some(tname))),
+                                        Some((&type_name, Some(tname), &trait_type_args)),
                                         emitter,
                                     );
                                 }
@@ -397,7 +398,7 @@ impl CodegenContext<'_> {
     fn emit_function_prototype(
         &self,
         f: &FunctionDef,
-        method_info: Option<(&str, Option<&str>)>,
+        method_info: Option<(&str, Option<&str>, &[String])>,
         emitter: &mut CEmitter,
     ) {
         if f.generic_params.is_some() {
@@ -443,12 +444,13 @@ impl CodegenContext<'_> {
                     }
                     let type_name = self.impl_type_name(impl_block);
                     let trait_name = self.impl_trait_name(impl_block);
+                    let trait_type_args = self.impl_trait_type_args(impl_block);
                     self.current_self_type = Some(type_name.clone());
                     // Emit explicitly implemented methods
                     for method in &impl_block.items {
                         self.emit_function_def(
                             &method.node,
-                            Some((&type_name, trait_name.as_deref())),
+                            Some((&type_name, trait_name.as_deref(), &trait_type_args)),
                             emitter,
                         );
                     }
@@ -462,7 +464,7 @@ impl CodegenContext<'_> {
                                         // Default method body — emit as-is
                                         self.emit_function_def(
                                             method,
-                                            Some((&type_name, Some(tname))),
+                                            Some((&type_name, Some(tname), &trait_type_args)),
                                             emitter,
                                         );
                                     } else if let Some(ref via) = impl_block.via_field {
@@ -472,6 +474,7 @@ impl CodegenContext<'_> {
                                             &type_name,
                                             tname,
                                             &via.node,
+                                            &trait_type_args,
                                             impl_block,
                                             emitter,
                                         );
@@ -502,7 +505,7 @@ impl CodegenContext<'_> {
     fn emit_function_def(
         &mut self,
         f: &FunctionDef,
-        method_info: Option<(&str, Option<&str>)>,
+        method_info: Option<(&str, Option<&str>, &[String])>,
         emitter: &mut CEmitter,
     ) {
         if f.generic_params.is_some() {
@@ -576,7 +579,7 @@ impl CodegenContext<'_> {
         }
 
         // Compute the Gorget-display name for this function (used in trace output).
-        let gorget_name = if let Some((type_name, _)) = method_info {
+        let gorget_name = if let Some((type_name, _, _)) = method_info {
             format!("{}.{}", type_name, f.name.node)
         } else {
             f.name.node.clone()
@@ -593,7 +596,7 @@ impl CodegenContext<'_> {
 
                 if method_info.is_some() {
                     // Set current_self_type for method bodies
-                    if let Some((type_name, _)) = method_info {
+                    if let Some((type_name, _, _)) = method_info {
                         self.current_self_type = Some(type_name.to_string());
                     }
                 }
@@ -738,10 +741,10 @@ impl CodegenContext<'_> {
     fn function_signature(
         &self,
         f: &FunctionDef,
-        method_info: Option<(&str, Option<&str>)>,
+        method_info: Option<(&str, Option<&str>, &[String])>,
     ) -> (String, String, String) {
         let ret_type = if matches!(f.return_type.node, Type::SelfType) {
-            if let Some((type_name, _)) = method_info {
+            if let Some((type_name, _, _)) = method_info {
                 type_name.to_string()
             } else {
                 c_types::ast_type_to_c(&f.return_type.node, self.scopes)
@@ -754,9 +757,9 @@ impl CodegenContext<'_> {
             c_types::ast_type_to_c(&f.return_type.node, self.scopes)
         };
 
-        let func_name = if let Some((type_name, trait_name)) = method_info {
+        let func_name = if let Some((type_name, trait_name, trait_type_args)) = method_info {
             if let Some(tname) = trait_name {
-                c_mangle::mangle_trait_method(tname, type_name, &f.name.node)
+                c_mangle::mangle_trait_method(tname, type_name, &f.name.node, trait_type_args)
             } else {
                 c_mangle::mangle_method(type_name, &f.name.node)
             }
@@ -770,7 +773,7 @@ impl CodegenContext<'_> {
         let self_param = f.params.iter().find(|p| p.node.name.node == "self");
         let has_self = self_param.is_some();
         if has_self {
-            if let Some((type_name, _)) = method_info {
+            if let Some((type_name, _, _)) = method_info {
                 let is_mutable = self_param
                     .map(|p| matches!(p.node.ownership, Ownership::MutableBorrow | Ownership::Move))
                     .unwrap_or(false);
@@ -788,7 +791,7 @@ impl CodegenContext<'_> {
                 continue;
             }
             let param_type = if matches!(param.node.type_.node, Type::SelfType) {
-                if let Some((type_name, _)) = method_info {
+                if let Some((type_name, _, _)) = method_info {
                     type_name.to_string()
                 } else {
                     c_types::ast_type_to_c(&param.node.type_.node, self.scopes)
@@ -995,6 +998,7 @@ impl CodegenContext<'_> {
                     _ => continue,
                 };
                 let type_name = self.impl_type_name(impl_block);
+                let trait_type_args = self.impl_trait_type_args(impl_block);
 
                 let Some(trait_def) = trait_defs.get(&trait_name) else {
                     continue;
@@ -1012,7 +1016,7 @@ impl CodegenContext<'_> {
                 for (method, _defining_trait) in &all_methods {
                     let method_name = &method.name.node;
                     // The impl function is always mangled with the leaf trait name + type
-                    let impl_fn = c_mangle::mangle_trait_method(&trait_name, &type_name, method_name);
+                    let impl_fn = c_mangle::mangle_trait_method(&trait_name, &type_name, method_name, &trait_type_args);
 
                     // Build the cast type for the function pointer
                     let ret_type = c_types::ast_type_to_c(&method.return_type.node, self.scopes);
@@ -1080,6 +1084,13 @@ impl CodegenContext<'_> {
                     continue;
                 };
 
+                // For monomorphized equip blocks, trait type args may contain generic params
+                // (e.g., T) that need substitution before converting to C types.
+                let raw_trait_args = Self::impl_trait_type_args_raw(equip_block);
+                let trait_type_args: Vec<String> = raw_trait_args.iter()
+                    .map(|ty| self.substitute_type(ty, &subs))
+                    .collect();
+
                 let vtable_type = c_mangle::mangle_vtable_struct(&trait_name);
                 let vtable_instance = c_mangle::mangle_vtable_instance(&trait_name, &inst.mangled_name);
 
@@ -1090,7 +1101,7 @@ impl CodegenContext<'_> {
 
                 for (method, _defining_trait) in &all_methods {
                     let method_name = &method.name.node;
-                    let impl_fn = c_mangle::mangle_trait_method(&trait_name, &inst.mangled_name, method_name);
+                    let impl_fn = c_mangle::mangle_trait_method(&trait_name, &inst.mangled_name, method_name, &trait_type_args);
 
                     // Use substitute_type for return/param types (trait methods may reference generic params)
                     let ret_type = self.substitute_type(&method.return_type.node, &subs);
@@ -1954,11 +1965,17 @@ impl CodegenContext<'_> {
                         });
                     for equip_block in &equip_blocks {
                         let trait_name = self.impl_trait_name(equip_block);
+                        // Compute trait type args with substitution for generic params
+                        let subs = self.build_type_substitutions(generic_params.as_ref(), &inst.c_type_args);
+                        let raw_trait_args = Self::impl_trait_type_args_raw(equip_block);
+                        let trait_type_args: Vec<String> = raw_trait_args.iter()
+                            .map(|ty| self.substitute_type(ty, &subs))
+                            .collect();
                         // Prototypes for explicitly implemented methods
                         for method in &equip_block.items {
                             let (ret_type, func_name, params, _) = self.monomorphized_equip_signature(
                                 &method.node, generic_params.as_ref(), &inst.c_type_args,
-                                &inst.mangled_name, trait_name.as_deref(),
+                                &inst.mangled_name, trait_name.as_deref(), &trait_type_args,
                             );
                             emitter.emit_line(&format!("{ret_type} {func_name}({params});"));
                         }
@@ -1971,7 +1988,7 @@ impl CodegenContext<'_> {
                                         if !matches!(method.body, FunctionBody::Declaration | FunctionBody::Extern(_)) {
                                             let (ret_type, func_name, params, _) = self.monomorphized_equip_signature(
                                                 method, generic_params.as_ref(), &inst.c_type_args,
-                                                &inst.mangled_name, Some(tname),
+                                                &inst.mangled_name, Some(tname), &trait_type_args,
                                             );
                                             emitter.emit_line(&format!("{ret_type} {func_name}({params});"));
                                         }
@@ -2026,6 +2043,12 @@ impl CodegenContext<'_> {
                         });
                     for equip_block in &equip_blocks {
                         let trait_name = self.impl_trait_name(&equip_block);
+                        // Compute trait type args with substitution for generic params
+                        let subs = self.build_type_substitutions(generic_params.as_ref(), &inst.c_type_args);
+                        let raw_trait_args = Self::impl_trait_type_args_raw(&equip_block);
+                        let trait_type_args: Vec<String> = raw_trait_args.iter()
+                            .map(|ty| self.substitute_type(ty, &subs))
+                            .collect();
                         // Emit explicitly implemented methods
                         for method in &equip_block.items {
                             self.emit_monomorphized_equip_method(
@@ -2034,6 +2057,7 @@ impl CodegenContext<'_> {
                                 &inst.c_type_args,
                                 &inst.mangled_name,
                                 trait_name.as_deref(),
+                                &trait_type_args,
                                 emitter,
                             );
                         }
@@ -2050,6 +2074,7 @@ impl CodegenContext<'_> {
                                                 &inst.c_type_args,
                                                 &inst.mangled_name,
                                                 Some(tname),
+                                                &trait_type_args,
                                                 emitter,
                                             );
                                         }
@@ -2982,6 +3007,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         type_name: &str,
         trait_name: &str,
         field_name: &str,
+        trait_type_args: &[String],
         _impl_block: &EquipBlock,
         emitter: &mut CEmitter,
     ) {
@@ -2999,10 +3025,10 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
 
         // Build the wrapper function signature (for the Outer type)
         let (ret_type, func_name, params) =
-            self.function_signature(method, Some((type_name, Some(trait_name))));
+            self.function_signature(method, Some((type_name, Some(trait_name), trait_type_args)));
 
         // Build the target function name (for the field's type)
-        let target_fn = c_mangle::mangle_trait_method(trait_name, &field_type_name, &method.name.node);
+        let target_fn = c_mangle::mangle_trait_method(trait_name, &field_type_name, &method.name.node, trait_type_args);
 
         // Build the forwarding arguments
         let self_param = method.params.iter().find(|p| p.node.name.node == "self");
@@ -3064,13 +3090,14 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         c_type_args: &[String],
         mangled_type_name: &str,
         trait_name: Option<&str>,
+        trait_type_args: &[String],
     ) -> (String, String, String, Vec<(String, String)>) {
         let subs = self.build_type_substitutions(struct_generic_params, c_type_args);
 
         let ret_type = self.substitute_type(&method.return_type.node, &subs);
 
         let func_name = if let Some(tname) = trait_name {
-            c_mangle::mangle_trait_method(tname, mangled_type_name, &method.name.node)
+            c_mangle::mangle_trait_method(tname, mangled_type_name, &method.name.node, trait_type_args)
         } else {
             c_mangle::mangle_method(mangled_type_name, &method.name.node)
         };
@@ -3117,10 +3144,11 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         c_type_args: &[String],
         mangled_type_name: &str,
         trait_name: Option<&str>,
+        trait_type_args: &[String],
         emitter: &mut CEmitter,
     ) {
         let (ret_type, func_name, params, subs) = self.monomorphized_equip_signature(
-            method, struct_generic_params, c_type_args, mangled_type_name, trait_name,
+            method, struct_generic_params, c_type_args, mangled_type_name, trait_name, trait_type_args,
         );
         let id_subs = self.build_type_id_substitutions(struct_generic_params, c_type_args);
 
@@ -3259,6 +3287,33 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
             match &t.trait_name.node {
                 Type::Named { name, .. } => name.node.clone(),
                 _ => "Unknown".to_string(),
+            }
+        })
+    }
+
+    /// Extract the trait's generic type arguments as C type strings from an equip block.
+    /// Returns an empty Vec for non-generic traits (e.g. `Displayable`).
+    /// Returns `["int64_t"]` for `From[int]`, `["const char*"]` for `From[str]`, etc.
+    fn impl_trait_type_args(&self, impl_block: &EquipBlock) -> Vec<String> {
+        impl_block.trait_.as_ref().map_or_else(Vec::new, |t| {
+            if let Type::Named { generic_args, .. } = &t.trait_name.node {
+                generic_args.iter()
+                    .map(|a| c_types::ast_type_to_c(&a.node, self.scopes))
+                    .collect()
+            } else {
+                Vec::new()
+            }
+        })
+    }
+
+    /// Extract the trait's generic type arguments as raw AST types (for monomorphization
+    /// where we need to apply type substitutions before converting to C).
+    fn impl_trait_type_args_raw(impl_block: &EquipBlock) -> Vec<Type> {
+        impl_block.trait_.as_ref().map_or_else(Vec::new, |t| {
+            if let Type::Named { generic_args, .. } = &t.trait_name.node {
+                generic_args.iter().map(|a| a.node.clone()).collect()
+            } else {
+                Vec::new()
             }
         })
     }
@@ -3403,7 +3458,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                     let decl = c_types::c_declare(&c_type, &escaped);
                     emitter.emit_line(&format!("{decl} = {val};"));
                     if self.traits.has_trait_impl_by_name(&c_type, "Drop") {
-                        let drop_fn = c_mangle::mangle_trait_method("Drop", &c_type, "drop");
+                        let drop_fn = c_mangle::mangle_trait_method("Drop", &c_type, "drop", &[]);
                         self.register_droppable(
                             &escaped,
                             DropAction::UserDrop { type_name: c_type.clone() },

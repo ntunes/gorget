@@ -383,7 +383,7 @@ impl CodegenContext<'_> {
                     } else {
                         name.clone()
                     };
-                    let mangled = c_mangle::mangle_trait_method("Displayable", &mangled_name, "display");
+                    let mangled = c_mangle::mangle_trait_method("Displayable", &mangled_name, "display", &[]);
                     // Use a GCC statement expression to handle non-lvalue exprs
                     let call = format!("({{ __typeof__({expr}) __tmp = {expr}; {mangled}(&__tmp); }})");
                     ("%s".to_string(), call)

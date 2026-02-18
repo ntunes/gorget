@@ -83,26 +83,32 @@ impl CodegenContext<'_> {
                         }
                         _ => {
                             let mangled_type = c_mangle::mangle_generic(type_name, &c_type_args);
-                            let func = c_mangle::mangle_trait_method("Default", &mangled_type, "default");
+                            let func = c_mangle::mangle_trait_method("Default", &mangled_type, "default", &[]);
                             return format!("{func}()");
                         }
                     }
                 }
 
-                // From trait: Type[T].from(value) → From_for_Type__T__from(value)
+                // From trait: Type[T].from(value) → From__argtype_for_Type__T__from(value)
                 if method_name == "from" {
                     let mangled_type = c_mangle::mangle_generic(type_name, &c_type_args);
-                    let func = c_mangle::mangle_trait_method("From", &mangled_type, "from");
+                    let trait_type_args: Vec<String> = args.first()
+                        .map(|a| vec![self.infer_c_type_from_expr(&a.node.value.node)])
+                        .unwrap_or_default();
+                    let func = c_mangle::mangle_trait_method("From", &mangled_type, "from", &trait_type_args);
                     self.register_generic(type_name, &c_type_args, super::GenericInstanceKind::Struct);
                     let arg_exprs: Vec<String> =
                         args.iter().map(|a| self.gen_expr(&a.node.value)).collect();
                     return format!("{func}({})", arg_exprs.join(", "));
                 }
 
-                // TryFrom trait: Type[T].try_from(value) → TryFrom_for_Type__T__try_from(value)
+                // TryFrom trait: Type[T].try_from(value) → TryFrom__argtype_for_Type__T__try_from(value)
                 if method_name == "try_from" {
                     let mangled_type = c_mangle::mangle_generic(type_name, &c_type_args);
-                    let func = c_mangle::mangle_trait_method("TryFrom", &mangled_type, "try_from");
+                    let trait_type_args: Vec<String> = args.first()
+                        .map(|a| vec![self.infer_c_type_from_expr(&a.node.value.node)])
+                        .unwrap_or_default();
+                    let func = c_mangle::mangle_trait_method("TryFrom", &mangled_type, "try_from", &trait_type_args);
                     self.register_generic(type_name, &c_type_args, super::GenericInstanceKind::Struct);
                     let arg_exprs: Vec<String> =
                         args.iter().map(|a| self.gen_expr(&a.node.value)).collect();
@@ -233,8 +239,9 @@ impl CodegenContext<'_> {
     }
 
     /// Check if a method on a type comes from a trait equip (not inherent impl).
-    /// Returns the trait name if found, None if it's an inherent method.
-    pub(super) fn find_trait_for_method(&mut self, type_name: &str, method_name: &str) -> Option<String> {
+    /// Returns the trait name and the trait's generic type args (as C type strings)
+    /// if found, None if it's an inherent method.
+    pub(super) fn find_trait_for_method(&mut self, type_name: &str, method_name: &str) -> Option<(String, Vec<String>)> {
         // For generic instantiations (e.g. "Wrapper__int64_t"), also try the base name
         // ("Wrapper") since impls are registered under base names.
         let base_name: Option<String> = self.generic_instances.iter()
@@ -259,12 +266,18 @@ impl CodegenContext<'_> {
             if names_to_check.iter().any(|n| impl_info.self_type_name == n.as_str()) && impl_info.trait_.is_some() {
                 // Check if the method is directly in the equip block
                 if impl_info.methods.contains_key(method_name) {
-                    return impl_info.trait_name.clone();
+                    let trait_type_args: Vec<String> = impl_info.trait_generic_args.iter()
+                        .map(|a| super::c_types::ast_type_to_c(a, self.scopes))
+                        .collect();
+                    return impl_info.trait_name.clone().map(|n| (n, trait_type_args));
                 }
                 // Check if the trait (or its parents) defines this method with a default
                 if let Some(trait_def_id) = impl_info.trait_ {
                     if self.trait_hierarchy_has_method(trait_def_id, method_name) {
-                        return impl_info.trait_name.clone();
+                        let trait_type_args: Vec<String> = impl_info.trait_generic_args.iter()
+                            .map(|a| super::c_types::ast_type_to_c(a, self.scopes))
+                            .collect();
+                        return impl_info.trait_name.clone().map(|n| (n, trait_type_args));
                     }
                 }
             }
@@ -572,10 +585,10 @@ impl CodegenContext<'_> {
         c_type.as_deref() == Some("GorgetArray")
     }
 
-    /// If `expr` has a user-defined type that implements the given trait, return the mangled type name.
-    /// For generic types like `Pair[int]`, returns `"Pair__int64_t"`.
+    /// If `expr` has a user-defined type that implements the given trait, return the mangled
+    /// type name and the trait's generic type args (as C type strings).
     /// Excludes primitives and built-in collection types.
-    pub(super) fn try_operator_trait_type(&mut self, expr: &Spanned<Expr>, trait_name: &str) -> Option<String> {
+    pub(super) fn try_operator_trait_type(&mut self, expr: &Spanned<Expr>, trait_name: &str) -> Option<(String, Vec<String>)> {
         let type_name = self.infer_receiver_type(expr);
         // Exclude primitives and builtins — these have hardcoded codegen paths
         if matches!(type_name.as_str(), "Unknown" | "int" | "float" | "bool" | "str" | "char"
@@ -583,15 +596,17 @@ impl CodegenContext<'_> {
             return None;
         }
         if self.traits.has_trait_impl_by_name(&type_name, trait_name) {
-            Some(self.infer_receiver_mangled_type(expr))
+            let mangled = self.infer_receiver_mangled_type(expr);
+            let trait_type_args = self.lookup_trait_type_args(&type_name, trait_name);
+            Some((mangled, trait_type_args))
         } else {
             None
         }
     }
 
-    /// If `expr` has a Defined (struct) type that implements Equatable, return the mangled type name.
-    /// For generic types like `Pair[int]`, returns `"Pair__int64_t"`.
-    pub(super) fn try_equatable_type(&mut self, expr: &Spanned<Expr>) -> Option<String> {
+    /// If `expr` has a Defined (struct) type that implements Equatable, return the mangled type name
+    /// and trait type args.
+    pub(super) fn try_equatable_type(&mut self, expr: &Spanned<Expr>) -> Option<(String, Vec<String>)> {
         self.try_operator_trait_type(expr, "Equatable")
     }
 
@@ -602,12 +617,13 @@ impl CodegenContext<'_> {
         trait_name: &str,
         method_name: &str,
         type_name: &str,
+        trait_type_args: &[String],
         left: &Spanned<Expr>,
         right: &Spanned<Expr>,
     ) -> String {
         let l = self.gen_expr(left);
         let r = self.gen_expr(right);
-        let mangled = c_mangle::mangle_trait_method(trait_name, type_name, method_name);
+        let mangled = c_mangle::mangle_trait_method(trait_name, type_name, method_name, trait_type_args);
         if !super::c_expr::is_lvalue(&left.node) {
             format!("({{ __typeof__({l}) __recv = {l}; {mangled}(&__recv, {r}); }})")
         } else {
@@ -622,14 +638,39 @@ impl CodegenContext<'_> {
         trait_name: &str,
         method_name: &str,
         type_name: &str,
+        trait_type_args: &[String],
         operand: &Spanned<Expr>,
     ) -> String {
         let inner = self.gen_expr(operand);
-        let mangled = c_mangle::mangle_trait_method(trait_name, type_name, method_name);
+        let mangled = c_mangle::mangle_trait_method(trait_name, type_name, method_name, trait_type_args);
         if !super::c_expr::is_lvalue(&operand.node) {
             format!("({{ __typeof__({inner}) __recv = {inner}; {mangled}(&__recv); }})")
         } else {
             format!("{mangled}(&{inner})")
         }
+    }
+
+    /// Look up the trait's generic type args (as C type strings) for a given type+trait pair.
+    /// Handles monomorphized generic types by falling back to the base name if the mangled
+    /// name doesn't match any impl's self_type_name.
+    pub(super) fn lookup_trait_type_args(&self, type_name: &str, trait_name: &str) -> Vec<String> {
+        // Try the type name directly first
+        let args = self.traits.trait_generic_args_by_name(type_name, trait_name);
+        if !args.is_empty() {
+            return args.iter()
+                .map(|a| super::c_types::ast_type_to_c(a, self.scopes))
+                .collect();
+        }
+        // For monomorphized generic types (e.g. "SparseSet__Health"), try the base name
+        let base_name = self.generic_instances.iter()
+            .find(|i| i.mangled_name == type_name)
+            .map(|i| i.base_name.as_str());
+        if let Some(base) = base_name {
+            let args = self.traits.trait_generic_args_by_name(base, trait_name);
+            return args.iter()
+                .map(|a| super::c_types::ast_type_to_c(a, self.scopes))
+                .collect();
+        }
+        Vec::new()
     }
 }

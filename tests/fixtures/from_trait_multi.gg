@@ -1,0 +1,23 @@
+# Multiple From[T] impls on a single type
+
+struct UserId:
+    int id
+
+equip UserId with From[int]:
+    UserId from(int n):
+        return UserId(n)
+
+struct Label:
+    str text
+
+equip UserId with From[Label]:
+    UserId from(Label lbl):
+        return UserId(99)
+
+void main():
+    UserId a = UserId.from(42)
+    print(a.id)
+
+    Label lbl = Label("hello")
+    UserId b = UserId.from(lbl)
+    print(b.id)

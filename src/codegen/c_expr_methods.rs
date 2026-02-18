@@ -251,7 +251,8 @@ impl CodegenContext<'_> {
             super::GenericInstanceKind::Enum,
         );
         let tag_none = super::c_mangle::mangle_tag(&option_mangled, "None");
-        let next_fn = super::c_mangle::mangle_trait_method("Iterator", type_name, "next");
+        let iterator_trait_args = self.lookup_trait_type_args(type_name, "Iterator");
+        let next_fn = super::c_mangle::mangle_trait_method("Iterator", type_name, "next", &iterator_trait_args);
 
         match method_name {
             "collect" => {

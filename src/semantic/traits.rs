@@ -49,8 +49,10 @@ pub struct TraitRegistry {
     pub impls: Vec<EquipInfo>,
     /// type -> indices into impls for inherent impls
     pub inherent_impls: FxHashMap<TypeId, Vec<usize>>,
-    /// (trait DefId, type TypeId) -> index into impls
-    pub trait_impls: FxHashMap<(DefId, TypeId), usize>,
+    /// (trait DefId, type TypeId, trait type args) -> index into impls
+    /// The Vec<TypeId> holds the resolved trait generic arguments (empty for non-generic traits).
+    /// This allows multiple impls of the same parameterized trait (e.g. `From[int]` and `From[str]`).
+    pub trait_impls: FxHashMap<(DefId, TypeId, Vec<TypeId>), usize>,
 }
 
 impl TraitRegistry {
@@ -96,6 +98,19 @@ impl TraitRegistry {
             impl_info.self_type_name == type_name
                 && impl_info.trait_name.as_deref() == Some(trait_name)
         })
+    }
+
+    /// Get the trait's generic AST type args for a specific trait impl on a type (by name).
+    /// Returns the first matching impl's trait_generic_args.
+    pub fn trait_generic_args_by_name(&self, type_name: &str, trait_name: &str) -> &[Type] {
+        for impl_info in &self.impls {
+            if impl_info.self_type_name == type_name
+                && impl_info.trait_name.as_deref() == Some(trait_name)
+            {
+                return &impl_info.trait_generic_args;
+            }
+        }
+        &[]
     }
 
     /// Check if a type (by name) has a specific method in any equip block.
@@ -462,9 +477,23 @@ fn process_impl(
         return;
     }
 
-    // Check for duplicate trait impl
+    // Resolve trait generic args to TypeIds for duplicate detection.
+    // e.g. From[int] → [int_type_id], From[str] → [str_type_id], Displayable → []
+    let trait_arg_type_ids: Vec<TypeId> = impl_block.trait_.as_ref()
+        .map(|t| {
+            if let Type::Named { generic_args, .. } = &t.trait_name.node {
+                generic_args.iter()
+                    .filter_map(|a| types::ast_type_to_resolved(&a.node, a.span, scopes, types).ok())
+                    .collect()
+            } else {
+                Vec::new()
+            }
+        })
+        .unwrap_or_default();
+
+    // Check for duplicate trait impl (same trait + type + type args)
     if let Some(trait_id) = trait_def_id {
-        if registry.trait_impls.contains_key(&(trait_id, self_type_id)) {
+        if registry.trait_impls.contains_key(&(trait_id, self_type_id, trait_arg_type_ids.clone())) {
             errors.push(SemanticError {
                 kind: SemanticErrorKind::DuplicateImpl {
                     trait_: trait_name.clone().unwrap_or_default(),
@@ -509,7 +538,7 @@ fn process_impl(
     });
 
     if let Some(trait_id) = trait_def_id {
-        registry.trait_impls.insert((trait_id, self_type_id), impl_idx);
+        registry.trait_impls.insert((trait_id, self_type_id, trait_arg_type_ids), impl_idx);
     } else {
         registry
             .inherent_impls

@@ -1144,6 +1144,16 @@ negative",
 }
 
 #[test]
+fn from_trait_multi() {
+    run_gg(
+        "from_trait_multi.gg",
+        "\
+42
+99",
+    );
+}
+
+#[test]
 fn serializable() {
     run_gg(
         "serializable.gg",

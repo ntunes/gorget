@@ -35,8 +35,23 @@ pub fn mangle_method(type_name: &str, method_name: &str) -> String {
 }
 
 /// Mangle a trait impl method: `Displayable_for_Point__to_string`
-pub fn mangle_trait_method(trait_name: &str, type_name: &str, method_name: &str) -> String {
-    format!("{trait_name}_for_{type_name}__{method_name}")
+///
+/// When `trait_type_args` is non-empty, the trait's generic type arguments are
+/// encoded between the trait name and `_for_` to disambiguate multiple impls of
+/// the same parameterized trait (e.g. `From[int]` vs `From[str]`).
+///
+/// ```text
+/// From[int]  for UserId → From__int64_t_for_UserId__from
+/// From[str]  for UserId → From__const_char_ptr_for_UserId__from
+/// Displayable for Point → Displayable_for_Point__to_string  (no trait type args)
+/// ```
+pub fn mangle_trait_method(trait_name: &str, type_name: &str, method_name: &str, trait_type_args: &[String]) -> String {
+    if trait_type_args.is_empty() {
+        format!("{trait_name}_for_{type_name}__{method_name}")
+    } else {
+        let mangled_args: Vec<String> = trait_type_args.iter().map(|t| sanitize_c_type(t)).collect();
+        format!("{trait_name}__{}_for_{type_name}__{method_name}", mangled_args.join("__"))
+    }
 }
 
 /// Mangle an enum variant: `Color__Red`
@@ -134,7 +149,7 @@ mod tests {
     fn method_mangling() {
         assert_eq!(mangle_method("Point", "distance"), "Point__distance");
         assert_eq!(
-            mangle_trait_method("Displayable", "Point", "to_string"),
+            mangle_trait_method("Displayable", "Point", "to_string", &[]),
             "Displayable_for_Point__to_string"
         );
     }
@@ -207,6 +222,30 @@ mod tests {
         assert_eq!(
             mangle_generic("Wrapper", &["int64_t*".into()]),
             "Wrapper__int64_t_ptr"
+        );
+    }
+
+    #[test]
+    fn trait_method_with_type_args() {
+        // Parameterized trait: From[int] for UserId
+        assert_eq!(
+            mangle_trait_method("From", "UserId", "from", &["int64_t".into()]),
+            "From__int64_t_for_UserId__from"
+        );
+        // Parameterized trait: From[str] for UserId
+        assert_eq!(
+            mangle_trait_method("From", "UserId", "from", &["const char*".into()]),
+            "From__const_char_ptr_for_UserId__from"
+        );
+        // Parameterized trait: TryFrom[str] for int
+        assert_eq!(
+            mangle_trait_method("TryFrom", "int64_t", "try_from", &["const char*".into()]),
+            "TryFrom__const_char_ptr_for_int64_t__try_from"
+        );
+        // No type args → unchanged
+        assert_eq!(
+            mangle_trait_method("Displayable", "Point", "to_string", &[]),
+            "Displayable_for_Point__to_string"
         );
     }
 }
