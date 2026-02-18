@@ -324,19 +324,6 @@ fn gen_collections_module() -> Module {
 }
 
 fn gen_sdl_module() -> Module {
-    // Helper to create an opaque handle struct (zero fields, dummy span)
-    let opaque_struct = |name: &str| -> Spanned<Item> {
-        Spanned::dummy(Item::Struct(StructDef {
-            attributes: vec![],
-            visibility: Visibility::Public,
-            name: Spanned::dummy(name.to_string()),
-            generic_params: None,
-            fields: vec![],
-            doc_comment: None,
-            span: Span::dummy(),
-        }))
-    };
-
     // SDLEvent has user-visible fields
     let sdl_event_struct = Spanned::dummy(Item::Struct(StructDef {
         attributes: vec![],
