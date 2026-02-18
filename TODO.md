@@ -2,11 +2,19 @@
 
 ## High
 
+- **Memory leak in all String-returning string methods**: `trim`, `strip`, `lstrip`, `rstrip`, `to_upper`, `to_lower`, `replace`, `substring`, `repeat`, `join`, `removeprefix`, `removesuffix`, `pad_left`, `pad_right` — 14 methods. Codegen emits `gorget_string_new(gorget_string_X(recv))`: the inner C function `malloc`s a `const char*`, then `gorget_string_new()` `malloc`s again and copies. The first pointer is never freed. Fix: add `gorget_string_adopt(char* s)` to c_runtime.rs that wraps an already-allocated pointer into a `GorgetString` without copying, then replace all 14 `gorget_string_new(gorget_string_X(...))` sites in `c_expr_methods.rs`. (`c_runtime.rs:33-40`, `c_expr_methods.rs:773-894`) [added: 2026-02-18]
+
 - **Collection drops: expand to function-call-returned collections**: Currently, collection drops are only registered for constructor-initialized variables (`Vector[T]()`, `Dict[K,V]()`, etc.). Collections returned by function calls (e.g., `parse_key()`, `items.filter(pred)`) don't get drops — their buffers leak. Expanding requires either: (1) function call argument move-zeroing (zero the caller's copy after passing to a function that stores it), which needs parameter ownership mode tracking at call sites; or (2) last-use analysis to detect when a droppable variable's final use is a function argument. The TOML module's `start_section(hdr_key)` pattern (borrowing param that stores the value) is the canonical example — semantically incorrect but common. [added: 2026-02-18]
 
 - **Collection drops: element-level drops**: Current collection drops only free the buffer (`gorget_array_free`, `GorgetDict__free`, `gorget_set_free`). Collections of non-Copy elements (`Vector[String]`, `Dict[str, Box[T]]`) don't drop individual elements before freeing the buffer — elements leak. Requires iterating the collection and calling the element's drop action before buffer free. [added: 2026-02-18]
 
 ## Medium
+
+- **Base64 codec in `std.bytes`**: `bytes_encode_base64(Vector[uint8]) -> str` and `bytes_decode_base64(str) -> Vector[uint8]`. Required for HTTP Authorization headers, JWT, binary payloads, certificate handling. Currently no way to do base64 without C interop. (`stdlib.rs` bytes module) [added: 2026-02-18]
+
+- **HTTP redirect following**: `http_request()` in `lib/std/http.gg` doesn't follow 301/302/303 redirects — returns the redirect response as-is. Most real-world URLs redirect at least once. Add optional redirect following (max 10 hops) with Location header parsing. (`lib/std/http.gg:117-206`) [added: 2026-02-18]
+
+- **Date/time formatting**: Only `time()` (epoch seconds) and `time_ms()` exist — no way to produce human-readable timestamps. Need `format_time(int, str) -> str` (strftime wrapper) and `parse_time(str, str) -> int` at minimum. Blocks logging, scheduling, and any time-display code. (`stdlib.rs` time module) [added: 2026-02-18]
 
 - **`Into[T]` conversion trait**: Counterpart to `From[T]` requiring explicit type args (`value.into[Celsius]()`) or return-type inference. Adds complexity (equipping primitives, potential blanket impl pattern). [added: 2026-02-17]
 
