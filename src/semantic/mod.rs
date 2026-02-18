@@ -35,6 +35,10 @@ pub struct AnalysisResult {
     pub expr_types: FxHashMap<Span, TypeId>,
     /// Maps (function_name, span_start) → body scope id (for ALL functions including equip methods).
     pub function_body_scopes: FxHashMap<(String, usize), ids::ScopeId>,
+    /// Maps method-call span start → DefId of the resolved method.
+    /// Threaded from typechecker through borrow checker to codegen for
+    /// ownership-aware move-zeroing at call sites.
+    pub method_resolutions: FxHashMap<usize, DefId>,
 }
 
 /// Run all semantic analysis passes on a parsed module.
@@ -210,5 +214,6 @@ pub fn analyze(module: &mut Module) -> AnalysisResult {
         function_info: resolve_ctx.function_info,
         expr_types,
         function_body_scopes: resolve_ctx.function_body_scopes,
+        method_resolutions,
     }
 }

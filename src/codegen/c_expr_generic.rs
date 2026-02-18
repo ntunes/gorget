@@ -194,10 +194,11 @@ impl CodegenContext<'_> {
     pub(super) fn gen_generic_method_call(
         &mut self,
         receiver: &Spanned<Expr>,
-        method_name: &str,
+        method: &Spanned<String>,
         type_args: &[Spanned<crate::parser::ast::Type>],
         args: &[Spanned<crate::parser::ast::CallArg>],
     ) -> String {
+        let method_name = method.node.as_str();
         let is_pointer_param = matches!(&receiver.node, Expr::Identifier(name) if self.pointer_params.contains(&c_mangle::escape_keyword(name)));
         let recv = if is_pointer_param {
             if let Expr::Identifier(name) = &receiver.node {

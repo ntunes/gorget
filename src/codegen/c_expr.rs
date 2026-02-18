@@ -261,9 +261,9 @@ impl CodegenContext<'_> {
                 args,
             } => {
                 if let Some(type_args) = generic_args {
-                    self.gen_generic_method_call(receiver, &method.node, type_args, args)
+                    self.gen_generic_method_call(receiver, method, type_args, args)
                 } else {
-                    self.gen_method_call(receiver, &method.node, args)
+                    self.gen_method_call(receiver, method, args)
                 }
             }
 
@@ -425,11 +425,7 @@ impl CodegenContext<'_> {
                 };
 
                 // Queue move-zeroing for consumed droppable args
-                for a in args.iter() {
-                    if let Expr::Identifier(ref id_name) = a.node {
-                        self.queue_move_zero_if_droppable(id_name);
-                    }
-                }
+                self.queue_constructor_move_zeros_exprs(args);
 
                 let field_exprs: Vec<String> = args.iter().enumerate().map(|(i, a)| {
                     let expr = self.gen_expr(a);

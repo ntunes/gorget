@@ -29,11 +29,6 @@ impl CodegenContext<'_> {
 
         match method_name {
             "push" => {
-                if let Some(a) = args.first() {
-                    if let Expr::Identifier(name) = &a.node.value.node {
-                        self.queue_move_zero_if_droppable(name);
-                    }
-                }
                 let arg = args.first()
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "0".to_string());
@@ -60,11 +55,6 @@ impl CodegenContext<'_> {
                 }
             }
             "set" => {
-                if let Some(a) = args.get(1) {
-                    if let Expr::Identifier(name) = &a.node.value.node {
-                        self.queue_move_zero_if_droppable(name);
-                    }
-                }
                 let idx = args.first()
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "0".to_string());
@@ -373,11 +363,6 @@ impl CodegenContext<'_> {
 
         match method_name {
             "put" => {
-                if let Some(a) = args.get(1) {
-                    if let Expr::Identifier(name) = &a.node.value.node {
-                        self.queue_move_zero_if_droppable(name);
-                    }
-                }
                 let key = args.first()
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "0".to_string());
@@ -555,11 +540,6 @@ impl CodegenContext<'_> {
 
         match method_name {
             "add" => {
-                if let Some(a) = args.first() {
-                    if let Expr::Identifier(name) = &a.node.value.node {
-                        self.queue_move_zero_if_droppable(name);
-                    }
-                }
                 let elem = args.first()
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "0".to_string());

@@ -298,6 +298,9 @@ pub struct CodegenContext<'a> {
     pub current_function_scope: Option<crate::semantic::ids::ScopeId>,
     /// Maps (function_name, span_start) → body scope id (for ALL functions including equip methods).
     pub function_body_scopes: &'a FxHashMap<(String, usize), crate::semantic::ids::ScopeId>,
+    /// Maps method-call span start → DefId of the resolved method.
+    /// Used for ownership-aware move-zeroing at user-defined method call sites.
+    pub method_resolutions: &'a FxHashMap<usize, DefId>,
 }
 
 impl CodegenContext<'_> {
@@ -521,6 +524,7 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
         source_text: opts.source_text,
         current_function_scope: None,
         function_body_scopes: &analysis.function_body_scopes,
+        method_resolutions: &analysis.method_resolutions,
     };
 
     let mut emitter = CEmitter::new();

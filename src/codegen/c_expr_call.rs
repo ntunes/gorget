@@ -1,5 +1,5 @@
 /// Call-related expression codegen: function calls, method calls, and `in` operator.
-use crate::parser::ast::Expr;
+use crate::parser::ast::{Expr, Ownership};
 use crate::semantic::scope::DefKind;
 use crate::span::Spanned;
 
@@ -8,7 +8,79 @@ use super::c_types;
 use super::c_expr::{is_lvalue, addr_of};
 use super::CodegenContext;
 
+/// Built-in collection methods that consume arguments by value.
+/// Returns indices of consuming args (excluding self), or None.
+fn builtin_consuming_arg_indices(type_name: &str, method: &str) -> Option<&'static [usize]> {
+    match (type_name, method) {
+        ("Vector" | "List" | "Array", "push") => Some(&[0]),
+        ("Vector" | "List" | "Array", "set") => Some(&[1]),
+        ("Dict" | "HashMap", "put") => Some(&[1]),
+        ("Set" | "HashSet", "add") => Some(&[0]),
+        _ => None,
+    }
+}
+
 impl CodegenContext<'_> {
+    /// Queue move-zeroing for arguments consumed by a method call.
+    ///
+    /// Two-tier lookup:
+    /// 1. Static table for built-in collection methods (push/set/put/add)
+    /// 2. method_resolutions → FunctionInfo.param_ownerships for user-defined
+    ///    methods with Ownership::Move parameters
+    pub(super) fn queue_method_arg_move_zeros(
+        &mut self,
+        receiver: &Spanned<Expr>,
+        method: &Spanned<String>,
+        args: &[Spanned<crate::parser::ast::CallArg>],
+    ) {
+        // 1. Built-in table
+        let type_name = self.infer_receiver_type(receiver);
+        if let Some(indices) = builtin_consuming_arg_indices(&type_name, &method.node) {
+            for &idx in indices {
+                if let Some(a) = args.get(idx) {
+                    if let Expr::Identifier(name) = &a.node.value.node {
+                        self.queue_move_zero_if_droppable(name);
+                    }
+                }
+            }
+            return;
+        }
+
+        // 2. User-defined methods with Move params
+        if let Some(&def_id) = self.method_resolutions.get(&method.span.start) {
+            if let Some(fi) = self.function_info.get(&def_id) {
+                // param_ownerships[0] is self, user args start at index 1
+                for (i, a) in args.iter().enumerate() {
+                    if fi.param_ownerships.get(i + 1) == Some(&Ownership::Move) {
+                        if let Expr::Identifier(name) = &a.node.value.node {
+                            self.queue_move_zero_if_droppable(name);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Queue move-zeroing for all identifier args in a constructor call (CallArg variant).
+    /// All struct/variant/newtype fields consume their arguments by value.
+    pub(super) fn queue_constructor_move_zeros_call_args(&mut self, args: &[Spanned<crate::parser::ast::CallArg>]) {
+        for a in args {
+            if let Expr::Identifier(name) = &a.node.value.node {
+                self.queue_move_zero_if_droppable(name);
+            }
+        }
+    }
+
+    /// Queue move-zeroing for all identifier args in a constructor call (Expr variant).
+    /// All struct literal fields consume their arguments by value.
+    pub(super) fn queue_constructor_move_zeros_exprs(&mut self, args: &[Spanned<Expr>]) {
+        for a in args {
+            if let Expr::Identifier(ref name) = a.node {
+                self.queue_move_zero_if_droppable(name);
+            }
+        }
+    }
+
     /// Generate a function/builtin call.
     pub(super) fn gen_call(
         &mut self,
@@ -42,7 +114,8 @@ impl CodegenContext<'_> {
                 }
                 "len" => {
                     if let Some(arg) = args.first() {
-                        return self.gen_method_call(&arg.node.value, "len", &[]);
+                        let len_method = Spanned::dummy("len".to_string());
+                        return self.gen_method_call(&arg.node.value, &len_method, &[]);
                     }
                 }
                 _ => {}
@@ -629,6 +702,9 @@ impl CodegenContext<'_> {
                 if def.kind == DefKind::Struct
                     || def.kind == DefKind::Newtype
                 {
+                    // Queue move-zeroing for consumed droppable args (fixes newtype bug)
+                    self.queue_constructor_move_zeros_call_args(args);
+
                     let c_name = c_types::def_name_to_c(def_id, self.scopes);
                     let struct_name = def.name.clone();
 
@@ -667,11 +743,7 @@ impl CodegenContext<'_> {
                 // Check for enum variant constructor
                 if def.kind == crate::semantic::scope::DefKind::Variant {
                     // Queue move-zeroing for consumed collection/droppable args
-                    for a in args {
-                        if let Expr::Identifier(name) = &a.node.value.node {
-                            self.queue_move_zero_if_droppable(name);
-                        }
-                    }
+                    self.queue_constructor_move_zeros_call_args(args);
                     // Find which enum this variant belongs to
                     for (enum_def_id, info) in self.enum_variants {
                         for (vname, vid) in &info.variants {
@@ -991,9 +1063,14 @@ impl CodegenContext<'_> {
     pub(super) fn gen_method_call(
         &mut self,
         receiver: &Spanned<Expr>,
-        method_name: &str,
+        method: &Spanned<String>,
         args: &[Spanned<crate::parser::ast::CallArg>],
     ) -> String {
+        let method_name = method.node.as_str();
+
+        // Centralized move-zeroing for consumed method arguments
+        self.queue_method_arg_move_zeros(receiver, method, args);
+
         // Check if receiver is a trait object → vtable dispatch
         if let Some(_trait_name) = self.resolve_trait_object_type(receiver) {
             let recv = self.gen_expr(receiver);
