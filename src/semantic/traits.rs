@@ -5,7 +5,7 @@ use crate::span::Span;
 
 use super::errors::{SemanticError, SemanticErrorKind};
 use super::ids::{DefId, TypeId};
-use super::resolve::ResolutionMap;
+use super::resolve::{ResolutionMap, validate_str_param_modes};
 use super::scope::ScopeTable;
 use super::types::{self, TypeTable};
 
@@ -406,7 +406,7 @@ fn collect_trait(
     scopes: &ScopeTable,
     types: &mut TypeTable,
     registry: &mut TraitRegistry,
-    _errors: &mut Vec<SemanticError>,
+    errors: &mut Vec<SemanticError>,
 ) {
     let Some(def_id) = scopes.lookup(&trait_def.name.node) else {
         return;
@@ -417,6 +417,7 @@ fn collect_trait(
 
     for item in &trait_def.items {
         if let TraitItem::Method(method) = &item.node {
+            validate_str_param_modes(&method.params, errors);
             let sig = build_function_sig(method, scopes, types);
             let has_body = !matches!(method.body, FunctionBody::Declaration | FunctionBody::Extern(_));
             has_default_body.insert(method.name.node.clone(), has_body);

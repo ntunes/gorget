@@ -180,6 +180,13 @@ pub enum SemanticErrorKind {
         longer_source: String,
         shorter_source: String,
     },
+
+    /// Parameter mode (`&` or `!`) is invalid for this type (e.g. `&str`, `!str`).
+    InvalidParameterMode {
+        param_name: String,
+        type_name: String,
+        mode: String,
+    },
 }
 
 impl std::fmt::Display for SemanticError {
@@ -375,6 +382,9 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::OutlivesViolation { longer_group, shorter_group, longer_source, shorter_source } => {
                 write!(f, "borrow group `{longer_group}` must outlive `{shorter_group}`, but `{longer_source}` (group `{longer_group}`) was moved while `{shorter_source}` (group `{shorter_group}`) is still alive")
+            }
+            SemanticErrorKind::InvalidParameterMode { param_name, type_name, mode } => {
+                write!(f, "parameter `{param_name}` of type `{type_name}` cannot use `{mode}` mode — `{type_name}` is Copy and always passed by value")
             }
         }
     }

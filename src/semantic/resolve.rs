@@ -163,6 +163,28 @@ fn collect_top_level_inner(
     }
 }
 
+/// Reject `&` and `!` parameter modes on `str` — it's Copy, pointer-sized,
+/// and immutable, so mutable borrows and moves are meaningless.
+pub(super) fn validate_str_param_modes(params: &[Spanned<Param>], errors: &mut Vec<SemanticError>) {
+    for p in params {
+        if matches!(p.node.type_.node, Type::Primitive(PrimitiveType::Str)) {
+            let mode = match p.node.ownership {
+                Ownership::MutableBorrow => "&",
+                Ownership::Move => "!",
+                Ownership::Borrow => continue,
+            };
+            errors.push(SemanticError {
+                kind: SemanticErrorKind::InvalidParameterMode {
+                    param_name: p.node.name.node.clone(),
+                    type_name: "str".to_string(),
+                    mode: mode.to_string(),
+                },
+                span: p.node.name.span,
+            });
+        }
+    }
+}
+
 fn collect_item(
     item: &Item,
     _span: Span,
@@ -204,6 +226,8 @@ fn collect_item(
                             .ok()
                         })
                         .collect();
+
+                    validate_str_param_modes(&f.params, errors);
 
                     let generic_param_names = extract_generic_param_names(&f.generic_params);
                     let where_bounds = extract_where_bounds(&f.where_clause);
@@ -365,6 +389,7 @@ fn collect_item(
                                 .ok()
                             })
                             .collect();
+                        validate_str_param_modes(&f.params, errors);
                         let generic_param_names = extract_generic_param_names(&f.generic_params);
                         let where_bounds = extract_where_bounds(&f.where_clause);
                         let outlives_bounds = extract_outlives_bounds(&f.where_clause);
@@ -1368,6 +1393,40 @@ void main():
         assert!(errors.is_empty(), "errors: {:?}", errors);
         assert!(scopes.lookup("Formatter").is_some());
         assert!(scopes.lookup("format").is_some());
+    }
+
+    #[test]
+    fn str_mutable_borrow_param_rejected() {
+        let (_, _, errors) = parse_and_collect("void greet(str &name) = print(name)\n");
+        assert_eq!(errors.len(), 1);
+        match &errors[0].kind {
+            SemanticErrorKind::InvalidParameterMode { param_name, type_name, mode } => {
+                assert_eq!(param_name, "name");
+                assert_eq!(type_name, "str");
+                assert_eq!(mode, "&");
+            }
+            other => panic!("expected InvalidParameterMode, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn str_move_param_rejected() {
+        let (_, _, errors) = parse_and_collect("void consume(str !s) = print(s)\n");
+        assert_eq!(errors.len(), 1);
+        match &errors[0].kind {
+            SemanticErrorKind::InvalidParameterMode { param_name, type_name, mode } => {
+                assert_eq!(param_name, "s");
+                assert_eq!(type_name, "str");
+                assert_eq!(mode, "!");
+            }
+            other => panic!("expected InvalidParameterMode, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn str_plain_param_accepted() {
+        let (_, _, errors) = parse_and_collect("void greet(str name) = print(name)\n");
+        assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
     }
 
     #[test]
