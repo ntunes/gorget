@@ -930,7 +930,7 @@ mod tests {
     #[test]
     fn generate_io() {
         let m = generate_stdlib_module(&["std".into(), "io".into()]).unwrap();
-        assert_eq!(m.items.len(), 7); // stderr, stdout, getchar, term_cols, term_rows, input, readline
+        assert_eq!(m.items.len(), 8); // stderr, stdout, getchar, term_cols, term_rows, input, readline, stdin_eof
     }
 
     #[test]
