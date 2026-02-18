@@ -3714,3 +3714,19 @@ fn lifetime_loop_error() {
         "cannot move",
     );
 }
+
+#[test]
+fn lifetime_closure_error() {
+    check_gg_fails(
+        "lifetime_closure_error.gg",
+        "after source",
+    );
+}
+
+#[test]
+fn lifetime_closure_return_error() {
+    check_gg_fails(
+        "lifetime_closure_return_error.gg",
+        "borrows from local variable",
+    );
+}

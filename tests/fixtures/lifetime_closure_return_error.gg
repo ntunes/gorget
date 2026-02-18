@@ -1,0 +1,7 @@
+Callable[void()] bad():
+    String local = "hello"
+    str v = local
+    return (): print(v)
+
+void main():
+    pass

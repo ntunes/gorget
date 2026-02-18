@@ -279,6 +279,18 @@ pub fn is_reference_type(type_id: TypeId, types: &TypeTable, ref_type_structs: &
     }
 }
 
+/// Check whether a TypeId is a callable type (function pointer or callable trait).
+pub fn is_callable_type(type_id: TypeId, types: &TypeTable) -> bool {
+    matches!(
+        types.get(type_id),
+        ResolvedType::Function { .. }
+            | ResolvedType::CallableTrait(_)
+            | ResolvedType::MutCallableTrait(_)
+            | ResolvedType::ConsumeCallableTrait(_)
+            | ResolvedType::BoxedCallable { .. }
+    )
+}
+
 /// Convert an AST Type to a resolved TypeId.
 pub fn ast_type_to_resolved(
     ast_ty: &ast::Type,

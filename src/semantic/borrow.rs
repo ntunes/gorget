@@ -390,12 +390,16 @@ impl<'a> BorrowChecker<'a> {
                         return origin.clone();
                     }
 
-                    // Only mark as Local if this variable owns data (non-reference type).
+                    // Only mark as Local if this variable owns data (non-reference, non-callable type).
                     // Reference-type locals that aren't in var_origins (e.g. pattern bindings
                     // from match arms) are views into existing data — not new local sources.
+                    // Callable-type locals get their capture origins stored in var_origins;
+                    // if absent, the closure captures no ref-type data and is safe to return.
                     if def.kind == DefKind::Variable {
                         if let Some(type_id) = def.type_id {
-                            if !types::is_reference_type(type_id, self.types, &self.ref_type_structs) {
+                            if !types::is_reference_type(type_id, self.types, &self.ref_type_structs)
+                                && !types::is_callable_type(type_id, self.types)
+                            {
                                 return BorrowOrigin::Local(def_id);
                             }
                         } else {
@@ -1140,6 +1144,17 @@ impl<'a> BorrowChecker<'a> {
                                 );
                             }
                         }
+
+                        // Phase 9: Track origin for closure-valued variables.
+                        // Closures inherit the lifetime of captured ref-type data.
+                        if !self.var_origins.contains_key(&def_id) {
+                            if matches!(&value.node, Expr::Closure { .. }) {
+                                let origin = self.compute_expr_origin(value);
+                                if !matches!(&origin, BorrowOrigin::Unknown) {
+                                    self.var_origins.insert(def_id, origin);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1222,10 +1237,12 @@ impl<'a> BorrowChecker<'a> {
                 if let Some(expr) = expr {
                     self.check_expr(expr);
 
-                    // Lifetime check: if the function returns a reference type,
+                    // Lifetime check: if the function returns a reference or callable type,
                     // verify the return expression doesn't reference local data.
                     if let Some(ret_type_id) = self.current_return_type_id {
-                        if types::is_reference_type(ret_type_id, self.types, &self.ref_type_structs) {
+                        if types::is_reference_type(ret_type_id, self.types, &self.ref_type_structs)
+                            || types::is_callable_type(ret_type_id, self.types)
+                        {
                             let origin = self.compute_expr_origin(expr);
                             if origin.contains_local() {
                                 let local_names = origin.local_names(self.scopes);
@@ -1950,7 +1967,9 @@ impl<'a> BorrowChecker<'a> {
             FunctionBody::Expression(expr) => {
                 // Expression-body functions: also validate dangling returns
                 if let Some(ret_type_id) = self.current_return_type_id {
-                    if types::is_reference_type(ret_type_id, self.types, &self.ref_type_structs) {
+                    if types::is_reference_type(ret_type_id, self.types, &self.ref_type_structs)
+                        || types::is_callable_type(ret_type_id, self.types)
+                    {
                         let origin = self.compute_expr_origin(expr);
                         if origin.contains_local() {
                             let local_names = origin.local_names(self.scopes);
@@ -3147,8 +3166,8 @@ void main():
     // ── Phase 6: Closure capture origin tracking ──
 
     #[test]
-    fn closure_capture_origin_computed() {
-        // Closure capturing a ref-type var → compute_expr_origin returns non-Unknown
+    fn closure_capture_source_moved() {
+        // Closure captures ref-type var, source moved → UseAfterSourceMoved on call
         let source = "\
 void consume(String !s):
     pass
@@ -3161,14 +3180,84 @@ void main():
     f()
 ";
         let errors = check(source);
-        // v's source s is moved before f() is called. However, the current check only
-        // detects UseAfterSourceMoved on direct use of v, not through closure f().
-        // The closure origin computation itself is verified by the fact that
-        // compute_expr_origin for the closure won't return Unknown.
-        // For now, we verify no false positives.
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { name, source_name, .. }
+                if name == "f" && source_name == "s")),
+            "expected UseAfterSourceMoved for f after s moved, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn closure_return_captures_local() {
+        // Returning a closure that captures a local reference → DanglingReturn
+        let source = "\
+Callable[void()] bad():
+    String local = \"hello\"
+    str v = local
+    return (): print(v)
+
+void main():
+    pass
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::DanglingReturn { .. })),
+            "expected DanglingReturn for closure capturing local, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn closure_return_captures_param_ok() {
+        // Returning a closure that captures a param → no error
+        let source = "\
+Callable[void()] ok(str v):
+    return (): print(v)
+
+void main():
+    pass
+";
+        let errors = check(source);
         assert!(
             !has_error(&errors, |k| matches!(k, SemanticErrorKind::DanglingReturn { .. })),
-            "unexpected DanglingReturn: {:?}", errors
+            "unexpected DanglingReturn for closure capturing param: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn closure_return_literal_ok() {
+        // Returning a closure that captures a literal str → no error
+        let source = "\
+Callable[void()] ok():
+    str v = \"hello\"
+    return (): print(v)
+
+void main():
+    pass
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::DanglingReturn { .. })),
+            "unexpected DanglingReturn for closure capturing literal: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn closure_no_ref_captures_ok() {
+        // Closure with no ref-type captures → no false positive
+        let source = "\
+void main():
+    int x = 42
+    auto f = (): print(x)
+    f()
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(
+                k,
+                SemanticErrorKind::UseAfterSourceMoved { .. }
+                    | SemanticErrorKind::DanglingReturn { .. }
+            )),
+            "unexpected error for closure with no ref captures: {:?}", errors
         );
     }
 
