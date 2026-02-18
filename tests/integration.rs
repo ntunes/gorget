@@ -3748,3 +3748,19 @@ fn lifetime_closure_cross_fn_error() {
         "after source",
     );
 }
+
+#[test]
+fn lifetime_reassign() {
+    run_gg(
+        "lifetime_reassign.gg",
+        "world",
+    );
+}
+
+#[test]
+fn lifetime_reassign_error() {
+    check_gg_fails(
+        "lifetime_reassign_error.gg",
+        "after source",
+    );
+}

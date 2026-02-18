@@ -1,0 +1,9 @@
+# Negative test: reassignment of non-Copy owner invalidates existing borrows.
+# The borrow checker should reject `print(v)` because `s` was reassigned,
+# destroying the old String that `v` borrows from.
+
+void main():
+    String s = "hello"
+    str v = s
+    s = "world"
+    print(v)

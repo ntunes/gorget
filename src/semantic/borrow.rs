@@ -107,6 +107,7 @@ struct BranchState {
     var_states: StateSnapshot,
     origins: OriginSnapshot,
     invalidated: FxHashSet<DefId>,
+    reassignment_invalidated: FxHashMap<DefId, (String, Span)>,
 }
 
 // ─── Copy Type Detection ───────────────────────────────────
@@ -268,6 +269,11 @@ struct BorrowChecker<'a> {
     // ── Outlives constraints (Phase 5) ──
     /// Active `where a outlives b` constraints from call sites.
     active_outlives: Vec<ActiveOutlives>,
+
+    // ── Reassignment invalidation (Phase 11) ──
+    /// Variables whose borrow source was reassigned, making their reference stale.
+    /// Maps the dependent variable's DefId → (source_name, reassignment_span).
+    reassignment_invalidated: FxHashMap<DefId, (String, Span)>,
 }
 
 impl<'a> BorrowChecker<'a> {
@@ -300,6 +306,7 @@ impl<'a> BorrowChecker<'a> {
             current_return_type_id: None,
             current_param_def_ids: Vec::new(),
             active_outlives: Vec::new(),
+            reassignment_invalidated: FxHashMap::default(),
         }
     }
 
@@ -321,6 +328,20 @@ impl<'a> BorrowChecker<'a> {
                 SemanticErrorKind::UseAfterMove {
                     name,
                     moved_at: *moved_at,
+                },
+                span,
+            );
+            return;
+        }
+
+        // Phase 11: Check if this variable's borrow source was reassigned.
+        if let Some((source_name, reassigned_at)) = self.reassignment_invalidated.get(&def_id) {
+            let name = self.scopes.get_def(def_id).name.clone();
+            self.error(
+                SemanticErrorKind::UseAfterSourceMoved {
+                    name,
+                    source_name: source_name.clone(),
+                    moved_at: *reassigned_at,
                 },
                 span,
             );
@@ -753,6 +774,7 @@ impl<'a> BorrowChecker<'a> {
             var_states: self.var_states.clone(),
             origins: self.var_origins.clone(),
             invalidated: self.invalidated_origins.clone(),
+            reassignment_invalidated: self.reassignment_invalidated.clone(),
         }
     }
 
@@ -761,6 +783,7 @@ impl<'a> BorrowChecker<'a> {
         self.var_states = state.var_states.clone();
         self.var_origins = state.origins.clone();
         self.invalidated_origins = state.invalidated.clone();
+        self.reassignment_invalidated = state.reassignment_invalidated.clone();
     }
 
     /// Merge multiple branch states: union var states (moved in either = moved),
@@ -772,6 +795,7 @@ impl<'a> BorrowChecker<'a> {
         let mut merged_vars = states[0].var_states.clone();
         let mut merged_origins = states[0].origins.clone();
         let mut merged_invalidated = states[0].invalidated.clone();
+        let mut merged_reassignment_invalidated = states[0].reassignment_invalidated.clone();
 
         for state in &states[1..] {
             // Merge var states: moved in either = moved
@@ -790,11 +814,16 @@ impl<'a> BorrowChecker<'a> {
             }
             // Merge invalidated: union (conservative)
             merged_invalidated.extend(&state.invalidated);
+            // Merge reassignment_invalidated: union (conservative)
+            for (def_id, info) in &state.reassignment_invalidated {
+                merged_reassignment_invalidated.entry(*def_id).or_insert_with(|| info.clone());
+            }
         }
 
         self.var_states = merged_vars;
         self.var_origins = merged_origins;
         self.invalidated_origins = merged_invalidated;
+        self.reassignment_invalidated = merged_reassignment_invalidated;
     }
 
     /// Check if a DefId refers to a ConsumeCallable-typed variable.
@@ -1243,6 +1272,26 @@ impl<'a> BorrowChecker<'a> {
                             // Also un-invalidate: if this variable was moved and
                             // reassigned, it's no longer a dangling source.
                             self.invalidated_origins.remove(&def_id);
+
+                            // Phase 11: If the dependent variable itself is reassigned,
+                            // clear its stale-borrow entry — it now has a fresh value.
+                            self.reassignment_invalidated.remove(&def_id);
+
+                            // Phase 11: Reassignment invalidation.
+                            // When a non-Copy owning variable is reassigned, all existing
+                            // references borrowing from the old value become dangling.
+                            let is_copy = self.scopes.get_def(def_id).type_id
+                                .map_or(false, |tid| is_copy_type(tid, self.types));
+                            if !is_copy {
+                                let source_name = self.scopes.get_def(def_id).name.clone();
+                                let dependents: Vec<DefId> = self.var_origins.iter()
+                                    .filter(|(vid, origin)| **vid != def_id && origin.references_def(def_id))
+                                    .map(|(vid, _)| *vid)
+                                    .collect();
+                                for dep_id in dependents {
+                                    self.reassignment_invalidated.insert(dep_id, (source_name.clone(), value.span));
+                                }
+                            }
 
                             // Update origin tracking for reference-typed variables
                             if self.var_origins.contains_key(&def_id) {
@@ -3876,6 +3925,100 @@ void main():
             has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { name, source_name, .. }
                 if name == "c" && source_name == "s")),
             "expected UseAfterSourceMoved for callable after source moved, got: {:?}", errors
+        );
+    }
+
+    // ── Phase 11: Reassignment invalidation ──
+
+    #[test]
+    fn reassignment_invalidates_borrow() {
+        // Reassigning a non-Copy owner invalidates borrows from the old value
+        let source = "\
+void main():
+    String s = \"hello\"
+    str v = s
+    s = \"world\"
+    print(v)
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { name, source_name, .. }
+                if name == "v" && source_name == "s")),
+            "expected UseAfterSourceMoved for v after s reassigned, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn reassignment_new_borrow_ok() {
+        // After reassignment, new borrows from the variable are fine
+        let source = "\
+void main():
+    String s = \"hello\"
+    s = \"world\"
+    str v = s
+    print(v)
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { .. })),
+            "unexpected UseAfterSourceMoved error, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn reassignment_reborrow_ok() {
+        // If the dependent variable is itself reassigned, the stale entry is cleared
+        let source = "\
+void main():
+    String s = \"hello\"
+    str v = s
+    s = \"world\"
+    v = s
+    print(v)
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { .. })),
+            "unexpected UseAfterSourceMoved error after reborrow, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn reassignment_copy_type_ok() {
+        // Copy types (str) don't destroy the old value on reassignment
+        let source = "\
+void main():
+    str s = \"hello\"
+    str v = s
+    s = \"world\"
+    print(v)
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { .. })),
+            "unexpected UseAfterSourceMoved for Copy type, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn reassignment_transitive() {
+        // Transitive through a function call: w borrows from v which borrows from s
+        let source = "\
+str identity(live str x):
+    return x
+
+void main():
+    String s = \"hello\"
+    str v = s
+    str w = identity(v)
+    s = \"world\"
+    print(w)
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { name, source_name, .. }
+                if name == "w" && source_name == "s")),
+            "expected UseAfterSourceMoved for w (transitive) after s reassigned, got: {:?}", errors
         );
     }
 }
