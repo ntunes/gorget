@@ -2482,8 +2482,8 @@ A
 #[test]
 fn builtins_interactive() {
     run_gg("builtins_interactive.gg", "\
-94
-23
+5
+91
 time ok
 done");
 }
