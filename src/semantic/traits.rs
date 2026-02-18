@@ -206,14 +206,14 @@ fn register_builtin_traits(
             });
             m
         }),
-        // Drop: void drop(self)
+        // Drop: void drop(!self)
         ("Drop", {
             let mut m = FxHashMap::default();
             m.insert("drop".into(), FunctionSig {
                 params: vec![],
                 return_type: types.void_id,
                 has_self: true,
-                self_ownership: None,
+                self_ownership: Some(Ownership::Move),
             });
             m
         }),

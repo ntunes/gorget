@@ -2,7 +2,7 @@ struct Tracked:
     str label
 
 equip Tracked with Drop:
-    void drop(self):
+    void drop(!self):
         str l = self.label
         print("drop {l}")
 

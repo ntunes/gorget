@@ -2,8 +2,6 @@
 
 ## High
 
-- **Drop trait registered with wrong ownership**: `traits.rs:216` registers Drop with `self_ownership: None` (immutable borrow) but Drop should use consuming ownership (`!self`) since drop takes ownership of the value being destroyed. The docs correctly say `void drop(!self)`. [added: 2026-02-18]
-
 
 
 
