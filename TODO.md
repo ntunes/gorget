@@ -101,7 +101,6 @@
 
 - **`--watch` mode**: `gg run --watch` and `gg test --watch` for recompile-and-rerun on file changes. [from roadmap, added: 2026-02-16]
 
-- **REPL**: Interactive read-eval-print loop for Gorget. [from roadmap, added: 2026-02-16]
 
 - **Incremental compilation**: Only recompile changed modules. [from roadmap, added: 2026-02-16]
 

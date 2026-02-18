@@ -588,21 +588,45 @@ fn is_definition_line(line: &str) -> bool {
     false
 }
 
-/// Interactive REPL for Gorget.
-fn run_repl() {
+/// Generate .gg source from accumulated TUI state.
+fn generate_tui_source(definitions: &[String], statements: &[String]) -> String {
+    let mut source = String::new();
+    for d in definitions {
+        source.push_str(d);
+        source.push('\n');
+    }
+    if !definitions.is_empty() {
+        source.push('\n');
+    }
+    source.push_str("void main():\n");
+    if statements.is_empty() {
+        source.push_str("    pass\n");
+    } else {
+        for s in statements {
+            for line in s.lines() {
+                source.push_str("    ");
+                source.push_str(line);
+                source.push('\n');
+            }
+        }
+    }
+    source
+}
+
+/// Interactive TUI for Gorget.
+fn run_tui() {
     let version = env!("CARGO_PKG_VERSION");
-    println!("Gorget {version} REPL");
-    println!("Type code and press Enter twice to execute. /help for commands.\n");
+    println!("Gorget {version}");
+    println!("Type code, then /run to execute. /help for commands.\n");
 
     let stdin = io::stdin();
     let mut reader = stdin.lock();
 
     let mut definitions: Vec<String> = Vec::new(); // top-level defs (functions, structs, etc.)
     let mut statements: Vec<String> = Vec::new();  // statements inside main()
-    let mut counter: u64 = 0;
 
     // Create temp directory
-    let tmp_dir = env::temp_dir().join("gorget_repl");
+    let tmp_dir = env::temp_dir().join("gorget_tui");
     let _ = fs::create_dir_all(&tmp_dir);
 
     loop {
@@ -625,7 +649,6 @@ fn run_repl() {
         if trimmed == "/reset" {
             definitions.clear();
             statements.clear();
-            counter = 0;
             println!("State cleared.");
             continue;
         }
@@ -647,14 +670,74 @@ fn run_repl() {
             }
             continue;
         }
+        if trimmed == "/run" {
+            if definitions.is_empty() && statements.is_empty() {
+                println!("(nothing to run)");
+                continue;
+            }
+            let source = generate_tui_source(&definitions, &statements);
+            let gg_path = tmp_dir.join("tui.gg");
+            if let Err(e) = fs::write(&gg_path, &source) {
+                eprintln!("Error writing temp file: {e}");
+                continue;
+            }
+            let gg_path_str = gg_path.display().to_string();
+            match try_build(&gg_path_str, &source, false, false, false, false, false, false, false, &[], &[], None, Some(&tmp_dir), HashMap::new(), None, false, false) {
+                Err(e) => {
+                    eprintln!("{e}");
+                }
+                Ok(exe_path) => {
+                    match Command::new(&exe_path).output() {
+                        Ok(output) => {
+                            let stdout = String::from_utf8_lossy(&output.stdout);
+                            if !stdout.is_empty() {
+                                print!("{stdout}");
+                            }
+                            let stderr = String::from_utf8_lossy(&output.stderr);
+                            if !stderr.is_empty() {
+                                eprint!("{stderr}");
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to execute: {e}");
+                        }
+                    }
+                }
+            }
+            continue;
+        }
+        if trimmed == "/check" {
+            if definitions.is_empty() && statements.is_empty() {
+                println!("(nothing to check)");
+                continue;
+            }
+            let source = generate_tui_source(&definitions, &statements);
+            let gg_path = tmp_dir.join("tui.gg");
+            if let Err(e) = fs::write(&gg_path, &source) {
+                eprintln!("Error writing temp file: {e}");
+                continue;
+            }
+            let gg_path_str = gg_path.display().to_string();
+            match try_build(&gg_path_str, &source, false, false, false, false, false, false, false, &[], &[], None, Some(&tmp_dir), HashMap::new(), None, false, false) {
+                Err(e) => {
+                    eprintln!("{e}");
+                }
+                Ok(_) => {
+                    println!("OK: no errors");
+                }
+            }
+            continue;
+        }
         if trimmed == "/help" {
-            println!("/reset  — clear accumulated code");
+            println!("/run    — compile and run the accumulated code");
+            println!("/check  — compile and show any errors");
             println!("/show   — show accumulated code");
-            println!("/quit   — exit REPL (also Ctrl+D)");
+            println!("/reset  — clear accumulated code");
+            println!("/quit   — exit (also Ctrl+D)");
             println!("/help   — show this help");
             println!();
-            println!("Type code and press Enter. If a line ends with ':',");
-            println!("continue with indented lines, then a blank line to execute.");
+            println!("Type definitions and statements, then /run to execute.");
+            println!("Lines ending with ':' start indented blocks (blank line ends block).");
             continue;
         }
 
@@ -692,96 +775,11 @@ fn run_repl() {
 
         let entry = block_lines.join("\n");
 
-        // Classify: definition or statement?
-        let is_def = is_definition_line(&block_lines[0]);
-
-        // Build new candidate buffers
-        let mut new_defs = definitions.clone();
-        let mut new_stmts = statements.clone();
-        if is_def {
-            new_defs.push(entry.clone());
+        // Classify and append: definition or statement
+        if is_definition_line(&block_lines[0]) {
+            definitions.push(entry);
         } else {
-            new_stmts.push(entry.clone());
-        }
-
-        // Generate .gg source
-        counter += 1;
-        let marker = format!("__GORGET_REPL_MARKER_{counter}__");
-
-        let mut source = String::new();
-        for d in &new_defs {
-            source.push_str(d);
-            source.push('\n');
-        }
-        if !new_defs.is_empty() {
-            source.push('\n');
-        }
-        source.push_str("void main():\n");
-        for s in &new_stmts[..new_stmts.len().saturating_sub(if is_def { 0 } else { 1 })] {
-            for line in s.lines() {
-                source.push_str("    ");
-                source.push_str(line);
-                source.push('\n');
-            }
-        }
-        // Print marker, then new statement code
-        source.push_str(&format!("    print(\"{marker}\")\n"));
-        if !is_def {
-            if let Some(newest) = new_stmts.last() {
-                for line in newest.lines() {
-                    source.push_str("    ");
-                    source.push_str(line);
-                    source.push('\n');
-                }
-            }
-        }
-
-        // Write temp file
-        let gg_path = tmp_dir.join("repl.gg");
-        if let Err(e) = fs::write(&gg_path, &source) {
-            eprintln!("Error writing temp file: {e}");
-            continue;
-        }
-
-        let gg_path_str = gg_path.display().to_string();
-
-        // Try to build
-        match try_build(&gg_path_str, &source, false, false, false, false, false, false, false, &[], &[], None, Some(&tmp_dir), HashMap::new(), None, false, false) {
-            Err(e) => {
-                eprintln!("{e}");
-                // Don't update buffers on error
-            }
-            Ok(exe_path) => {
-                // Run and capture output
-                match Command::new(&exe_path).output() {
-                    Ok(output) => {
-                        let stdout = String::from_utf8_lossy(&output.stdout);
-                        // Print only text after the marker
-                        if let Some(pos) = stdout.find(&marker) {
-                            let after = &stdout[pos + marker.len()..];
-                            // Skip the newline after the marker
-                            let after = after.strip_prefix('\n').unwrap_or(after);
-                            if !after.is_empty() {
-                                print!("{after}");
-                            }
-                        } else {
-                            // No marker found — print everything (shouldn't happen)
-                            print!("{stdout}");
-                        }
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-                        if !stderr.is_empty() {
-                            eprint!("{stderr}");
-                        }
-
-                        // Success — update accumulated state
-                        definitions = new_defs;
-                        statements = new_stmts;
-                    }
-                    Err(e) => {
-                        eprintln!("Failed to execute: {e}");
-                    }
-                }
-            }
+            statements.push(entry);
         }
     }
 
@@ -975,9 +973,9 @@ fn cmd_remove(name: &str) {
 fn main() {
     let args: Vec<String> = env::args().collect();
 
-    // No args → launch interactive REPL
+    // No args → launch interactive TUI
     if args.len() < 2 {
-        run_repl();
+        run_tui();
         return;
     }
 
@@ -991,7 +989,7 @@ fn main() {
     if args[1] == "--help" || args[1] == "-h" {
         println!("Usage: gg <file.gg>              Run a script");
         println!("       gg <command> <file.gg>     Run a compiler command");
-        println!("       gg                         Interactive REPL");
+        println!("       gg                         Interactive TUI");
         println!("       gg --version               Print version");
         println!();
         println!("Compiler commands: lex, parse, check, build, run, fmt, test, report");
