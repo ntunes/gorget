@@ -33,6 +33,26 @@ void main():
     items.push(99)
     Option[Vector[int]] opt = Some(items)
 
+    # Vector element drops — Tracked destructor proves drops fire
+    Vector[Tracked] tracked_items = Vector[Tracked]()
+    tracked_items.push(Tracked("elem-a"))
+    tracked_items.push(Tracked("elem-b"))
+
+    # String element drops (silent — validates no crash/leak)
+    Vector[String] string_vec = Vector[String]()
+    string_vec.push(String("hello"))
+    string_vec.push(String("world"))
+
+    # Dict value drops (silent)
+    Dict[str, String] string_dict = Dict[str, String]()
+    string_dict["x"] = String("one")
+
+    # Nested: Vector[Vector[String]]
+    Vector[Vector[String]] nested_strings = Vector[Vector[String]]()
+    Vector[String] inner_strs = Vector[String]()
+    inner_strs.push(String("deep"))
+    nested_strings.push(inner_strs)
+
     # Box deep drop — inner struct's Drop runs before free
     Box[Tracked] b = Box(Tracked("boxed"))
 

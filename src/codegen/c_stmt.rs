@@ -27,7 +27,7 @@ impl CodegenContext<'_> {
     pub fn pop_drop_scope(&mut self, emitter: &mut CEmitter) {
         if let Some((_kind, entries)) = self.drop_scopes.pop() {
             for entry in entries.iter().rev() {
-                Self::emit_drop_entry(entry, emitter);
+                Self::emit_drop_entry(entry, 0, emitter);
             }
         }
     }
@@ -37,7 +37,7 @@ impl CodegenContext<'_> {
     pub fn emit_cleanup_to(&mut self, kind: DropScopeKind, emitter: &mut CEmitter) {
         for (scope_kind, entries) in self.drop_scopes.iter().rev() {
             for entry in entries.iter().rev() {
-                Self::emit_drop_entry(entry, emitter);
+                Self::emit_drop_entry(entry, 0, emitter);
             }
             if *scope_kind == kind {
                 break;
@@ -63,7 +63,10 @@ impl CodegenContext<'_> {
     }
 
     /// Emit the C cleanup code for a single drop entry.
-    fn emit_drop_entry(entry: &DropEntry, emitter: &mut CEmitter) {
+    /// `depth` is used for unique loop variable names in nested collection drops.
+    fn emit_drop_entry(entry: &DropEntry, depth: usize, emitter: &mut CEmitter) {
+        let idx = format!("__di{depth}");
+        let elem = format!("__de{depth}");
         match &entry.action {
             DropAction::BoxDrop { inner_drop } => {
                 // Deep drop: call inner type's destructor on *var before freeing
@@ -72,7 +75,7 @@ impl CodegenContext<'_> {
                         var_name: format!("(*{})", entry.var_name),
                         action: (**inner).clone(),
                     };
-                    Self::emit_drop_entry(&inner_entry, emitter);
+                    Self::emit_drop_entry(&inner_entry, depth, emitter);
                 }
                 emitter.emit_line(&format!("free({});", entry.var_name));
             }
@@ -111,16 +114,78 @@ impl CodegenContext<'_> {
                         var_name: format!("{}.{}", entry.var_name, field_name),
                         action: field_action.clone(),
                     };
-                    Self::emit_drop_entry(&field_entry, emitter);
+                    Self::emit_drop_entry(&field_entry, depth, emitter);
                 }
             }
-            DropAction::ArrayFree => {
+            DropAction::ArrayFree { element_drop, element_c_type } => {
+                // Drop each element before freeing the buffer
+                if let (Some(edrop), Some(ec_type)) = (element_drop, element_c_type) {
+                    let v = &entry.var_name;
+                    emitter.emit_line(&format!("for (size_t {idx} = 0; {idx} < {v}.len; {idx}++) {{"));
+                    emitter.indent();
+                    emitter.emit_line(&format!(
+                        "{ec_type}* {elem} = ({ec_type}*)((char*){v}.data + {idx} * sizeof({ec_type}));"
+                    ));
+                    let elem_entry = DropEntry {
+                        var_name: format!("(*{elem})"),
+                        action: (**edrop).clone(),
+                    };
+                    Self::emit_drop_entry(&elem_entry, depth + 1, emitter);
+                    emitter.dedent();
+                    emitter.emit_line("}");
+                }
                 emitter.emit_line(&format!("gorget_array_free(&{});", entry.var_name));
             }
-            DropAction::MapFree { mangled_name } => {
+            DropAction::MapFree { mangled_name, key_drop, value_drop } => {
+                // Drop keys/values before freeing the map buffer
+                if key_drop.is_some() || value_drop.is_some() {
+                    let v = &entry.var_name;
+                    emitter.emit_line(&format!("for (size_t {idx} = 0; {idx} < {v}.cap; {idx}++) {{"));
+                    emitter.indent();
+                    emitter.emit_line(&format!("if ({v}.states[{idx}] == 1) {{"));
+                    emitter.indent();
+                    if let Some(kd) = key_drop {
+                        let key_entry = DropEntry {
+                            var_name: format!("{v}.keys[{idx}]"),
+                            action: (**kd).clone(),
+                        };
+                        Self::emit_drop_entry(&key_entry, depth + 1, emitter);
+                    }
+                    if let Some(vd) = value_drop {
+                        let val_entry = DropEntry {
+                            var_name: format!("{v}.values[{idx}]"),
+                            action: (**vd).clone(),
+                        };
+                        Self::emit_drop_entry(&val_entry, depth + 1, emitter);
+                    }
+                    emitter.dedent();
+                    emitter.emit_line("}");
+                    emitter.dedent();
+                    emitter.emit_line("}");
+                }
                 emitter.emit_line(&format!("{mangled_name}__free(&{});", entry.var_name));
             }
-            DropAction::SetFree => {
+            DropAction::SetFree { element_drop, element_c_type } => {
+                // Drop each element before freeing the set buffer
+                if let (Some(edrop), Some(ec_type)) = (element_drop, element_c_type) {
+                    let v = &entry.var_name;
+                    emitter.emit_line(&format!("for (size_t {idx} = 0; {idx} < {v}.cap; {idx}++) {{"));
+                    emitter.indent();
+                    emitter.emit_line(&format!("if ({v}.states[{idx}] == 1) {{"));
+                    emitter.indent();
+                    emitter.emit_line(&format!(
+                        "{ec_type}* {elem} = ({ec_type}*)((char*){v}.keys + {idx} * sizeof({ec_type}));"
+                    ));
+                    let elem_entry = DropEntry {
+                        var_name: format!("(*{elem})"),
+                        action: (**edrop).clone(),
+                    };
+                    Self::emit_drop_entry(&elem_entry, depth + 1, emitter);
+                    emitter.dedent();
+                    emitter.emit_line("}");
+                    emitter.dedent();
+                    emitter.emit_line("}");
+                }
                 emitter.emit_line(&format!("gorget_set_free(&{});", entry.var_name));
             }
         }
@@ -246,14 +311,18 @@ impl CodegenContext<'_> {
                     Some(DropAction::BoxDrop { inner_drop })
                 }
             }
-            // Vector/List/Array → buffer free
+            // Vector/List/Array → buffer free + element drops
             Type::Named { name, generic_args }
                 if matches!(name.node.as_str(), "Vector" | "List" | "Array")
                     && generic_args.len() == 1 =>
             {
-                Some(DropAction::ArrayFree)
+                let elem_drop = Self::safe_element_drop(
+                    self.drop_action_for_type(&generic_args[0].node)
+                );
+                let element_c_type = elem_drop.as_ref().map(|_| c_types::ast_type_to_c(&generic_args[0].node, self.scopes));
+                Some(DropAction::ArrayFree { element_drop: elem_drop, element_c_type })
             }
-            // Dict → monomorphized free
+            // Dict → monomorphized free + key/value drops
             Type::Named { name, generic_args }
                 if name.node == "Dict" && generic_args.len() == 2 =>
             {
@@ -261,9 +330,15 @@ impl CodegenContext<'_> {
                     .map(|a| c_types::ast_type_to_c(&a.node, self.scopes))
                     .collect();
                 let mangled = c_mangle::mangle_generic("GorgetDict", &c_args);
-                Some(DropAction::MapFree { mangled_name: mangled })
+                let key_drop = Self::safe_element_drop(
+                    self.drop_action_for_type(&generic_args[0].node)
+                );
+                let value_drop = Self::safe_element_drop(
+                    self.drop_action_for_type(&generic_args[1].node)
+                );
+                Some(DropAction::MapFree { mangled_name: mangled, key_drop, value_drop })
             }
-            // HashMap → monomorphized free
+            // HashMap → monomorphized free + key/value drops
             Type::Named { name, generic_args }
                 if name.node == "HashMap" && generic_args.len() == 2 =>
             {
@@ -271,14 +346,24 @@ impl CodegenContext<'_> {
                     .map(|a| c_types::ast_type_to_c(&a.node, self.scopes))
                     .collect();
                 let mangled = c_mangle::mangle_generic("GorgetMap", &c_args);
-                Some(DropAction::MapFree { mangled_name: mangled })
+                let key_drop = Self::safe_element_drop(
+                    self.drop_action_for_type(&generic_args[0].node)
+                );
+                let value_drop = Self::safe_element_drop(
+                    self.drop_action_for_type(&generic_args[1].node)
+                );
+                Some(DropAction::MapFree { mangled_name: mangled, key_drop, value_drop })
             }
-            // Set/HashSet → generic set free
+            // Set/HashSet → generic set free + element drops
             Type::Named { name, generic_args }
                 if matches!(name.node.as_str(), "Set" | "HashSet")
                     && generic_args.len() == 1 =>
             {
-                Some(DropAction::SetFree)
+                let elem_drop = Self::safe_element_drop(
+                    self.drop_action_for_type(&generic_args[0].node)
+                );
+                let element_c_type = elem_drop.as_ref().map(|_| c_types::ast_type_to_c(&generic_args[0].node, self.scopes));
+                Some(DropAction::SetFree { element_drop: elem_drop, element_c_type: element_c_type })
             }
             Type::Named { name, generic_args }
                 if name.node == "File" && generic_args.is_empty() =>
@@ -308,6 +393,22 @@ impl CodegenContext<'_> {
                 }
             }
             _ => None,
+        }
+    }
+
+    /// Filter element drop actions for safety.
+    ///
+    /// Struct elements whose field drops involve collection buffer frees are
+    /// skipped because shallow copies (e.g., passing a Vector by C value to a
+    /// function) can alias the inner collection buffers. Until field-level
+    /// move-zeroing is implemented, these element drops would cause
+    /// use-after-free. Direct collection and leaf-type element drops are safe
+    /// because they're moved into the collection via push/add.
+    fn safe_element_drop(action: Option<DropAction>) -> Option<Box<DropAction>> {
+        match action {
+            Some(ref a) if matches!(a, DropAction::StructDrop { .. }) && a.involves_collection() => None,
+            Some(a) => Some(Box::new(a)),
+            None => None,
         }
     }
 
@@ -818,17 +919,17 @@ impl CodegenContext<'_> {
                     Self::emit_test_cleanup_for_action(&field_var, field_action, emitter);
                 }
             }
-            DropAction::ArrayFree => {
+            DropAction::ArrayFree { .. } => {
                 emitter.emit_line(&format!(
                     "__gorget_cleanup_push((__gorget_cleanup_fn)gorget_array_free, (void*)&{var_name});"
                 ));
             }
-            DropAction::MapFree { mangled_name } => {
+            DropAction::MapFree { mangled_name, .. } => {
                 emitter.emit_line(&format!(
                     "__gorget_cleanup_push((__gorget_cleanup_fn){mangled_name}__free, (void*)&{var_name});"
                 ));
             }
-            DropAction::SetFree => {
+            DropAction::SetFree { .. } => {
                 emitter.emit_line(&format!(
                     "__gorget_cleanup_push((__gorget_cleanup_fn)gorget_set_free, (void*)&{var_name});"
                 ));
@@ -949,7 +1050,7 @@ impl CodegenContext<'_> {
                     Self::emit_drop_entry(&DropEntry {
                         var_name: target_var.clone().unwrap(),
                         action: drop_action,
-                    }, emitter);
+                    }, 0, emitter);
                     emitter.emit_line(&format!("{t} = {tmp};"));
                 } else {
                     emitter.emit_line(&format!("{t} = {v};"));

@@ -1278,7 +1278,9 @@ fn drop_collections() {
         "drop_collections.gg",
         "\
 done
-drop boxed",
+drop boxed
+drop elem-a
+drop elem-b",
     );
 }
 

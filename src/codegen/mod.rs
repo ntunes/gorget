@@ -86,12 +86,22 @@ pub enum DropAction {
         has_user_drop: bool,
         field_drops: Vec<(String, DropAction)>,
     },
-    /// gorget_array_free(&var) for Vector/List/Array
-    ArrayFree,
+    /// gorget_array_free(&var) for Vector/List/Array, with optional element cleanup
+    ArrayFree {
+        element_drop: Option<Box<DropAction>>,
+        element_c_type: Option<String>,
+    },
     /// {mangled}__free(&var) for Dict/HashMap (each instantiation has its own free)
-    MapFree { mangled_name: String },
-    /// gorget_set_free(&var) for Set/HashSet
-    SetFree,
+    MapFree {
+        mangled_name: String,
+        key_drop: Option<Box<DropAction>>,
+        value_drop: Option<Box<DropAction>>,
+    },
+    /// gorget_set_free(&var) for Set/HashSet, with optional element cleanup
+    SetFree {
+        element_drop: Option<Box<DropAction>>,
+        element_c_type: Option<String>,
+    },
 }
 
 impl DropAction {
@@ -100,7 +110,7 @@ impl DropAction {
     /// constructor-initialized variables (to avoid aliased-buffer double-frees).
     pub fn involves_collection(&self) -> bool {
         match self {
-            DropAction::ArrayFree | DropAction::MapFree { .. } | DropAction::SetFree => true,
+            DropAction::ArrayFree { .. } | DropAction::MapFree { .. } | DropAction::SetFree { .. } => true,
             DropAction::StructDrop { field_drops, .. } => {
                 field_drops.iter().any(|(_, d)| d.involves_collection())
             }
