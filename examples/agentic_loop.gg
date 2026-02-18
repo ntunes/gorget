@@ -13,7 +13,7 @@ from std.json import Json, json_parse, json_stringify
 from std.collections import Vector, Dict
 from std.os import getenv
 from std.conv import int_to_str
-from std.io import input
+from std.io import input, stdin_eof
 
 # Build the JSON messages array from parallel role/content vectors.
 Json build_messages(Vector[str] loop_roles, Vector[str] loop_contents):
@@ -81,7 +81,7 @@ void main():
         # ── Main loop ────────────────────────────────────────
         loop:
             str user_input = input("> ")
-            if user_input == "quit" or user_input == "exit":
+            if user_input == "quit" or user_input == "exit" or stdin_eof():
                 break
             if user_input == "":
                 continue

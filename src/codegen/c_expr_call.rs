@@ -186,6 +186,7 @@ impl CodegenContext<'_> {
                             return format!("gorget_input({prompt})");
                         }
                     }
+                    "stdin_eof" => return "((bool)feof(stdin))".to_string(),
                     "term_cols" => return "gorget_term_cols()".to_string(),
                     "term_rows" => return "gorget_term_rows()".to_string(),
                     "seed" => {

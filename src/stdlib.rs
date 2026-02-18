@@ -144,6 +144,9 @@ fn gen_io_module() -> Module {
     items.push(Spanned::dummy(Item::Function(
         decl_fn("readline", &[], ty_str()),
     )));
+    items.push(Spanned::dummy(Item::Function(
+        decl_fn("stdin_eof", &[], ty_bool()),
+    )));
     Module {
         items,
         span: Span::dummy(),
