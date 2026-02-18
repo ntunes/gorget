@@ -172,31 +172,53 @@ fn gen_time_module() -> Module {
 }
 
 fn gen_math_module() -> Module {
-    make_module(vec![
+    let float_const = |name: &str, value: f64| -> Spanned<Item> {
+        Spanned::dummy(Item::ConstDecl(ConstDecl {
+            visibility: Visibility::Public,
+            type_: Spanned::dummy(ty_float()),
+            name: Spanned::dummy(name.to_string()),
+            value: Spanned::dummy(Expr::FloatLiteral(value)),
+            span: Span::dummy(),
+        }))
+    };
+    let fn_item = |f: FunctionDef| -> Spanned<Item> {
+        Spanned::dummy(Item::Function(f))
+    };
+    let items = vec![
+        // Constants
+        float_const("PI", std::f64::consts::PI),
+        float_const("E", std::f64::consts::E),
+        float_const("TAU", std::f64::consts::TAU),
+        float_const("INFINITY", f64::INFINITY),
+        float_const("NAN", f64::NAN),
         // Integer math
-        decl_fn("abs", &[("x", ty_int())], ty_int()),
-        decl_fn("min", &[("a", ty_int()), ("b", ty_int())], ty_int()),
-        decl_fn("max", &[("a", ty_int()), ("b", ty_int())], ty_int()),
+        fn_item(decl_fn("abs", &[("x", ty_int())], ty_int())),
+        fn_item(decl_fn("min", &[("a", ty_int()), ("b", ty_int())], ty_int())),
+        fn_item(decl_fn("max", &[("a", ty_int()), ("b", ty_int())], ty_int())),
         // Float math
-        decl_fn("sqrt", &[("x", ty_float())], ty_float()),
-        decl_fn("pow", &[("base", ty_float()), ("exp", ty_float())], ty_float()),
-        decl_fn("floor", &[("x", ty_float())], ty_float()),
-        decl_fn("ceil", &[("x", ty_float())], ty_float()),
-        decl_fn("round", &[("x", ty_float())], ty_float()),
-        decl_fn("log", &[("x", ty_float())], ty_float()),
-        decl_fn("log2", &[("x", ty_float())], ty_float()),
-        decl_fn("log10", &[("x", ty_float())], ty_float()),
-        decl_fn("sin", &[("x", ty_float())], ty_float()),
-        decl_fn("cos", &[("x", ty_float())], ty_float()),
-        decl_fn("tan", &[("x", ty_float())], ty_float()),
-        decl_fn("asin", &[("x", ty_float())], ty_float()),
-        decl_fn("acos", &[("x", ty_float())], ty_float()),
-        decl_fn("atan", &[("x", ty_float())], ty_float()),
-        decl_fn("atan2", &[("y", ty_float()), ("x", ty_float())], ty_float()),
-        decl_fn("fabs", &[("x", ty_float())], ty_float()),
-        decl_fn("fmin", &[("a", ty_float()), ("b", ty_float())], ty_float()),
-        decl_fn("fmax", &[("a", ty_float()), ("b", ty_float())], ty_float()),
-    ])
+        fn_item(decl_fn("sqrt", &[("x", ty_float())], ty_float())),
+        fn_item(decl_fn("pow", &[("base", ty_float()), ("exp", ty_float())], ty_float())),
+        fn_item(decl_fn("floor", &[("x", ty_float())], ty_float())),
+        fn_item(decl_fn("ceil", &[("x", ty_float())], ty_float())),
+        fn_item(decl_fn("round", &[("x", ty_float())], ty_float())),
+        fn_item(decl_fn("log", &[("x", ty_float())], ty_float())),
+        fn_item(decl_fn("log2", &[("x", ty_float())], ty_float())),
+        fn_item(decl_fn("log10", &[("x", ty_float())], ty_float())),
+        fn_item(decl_fn("sin", &[("x", ty_float())], ty_float())),
+        fn_item(decl_fn("cos", &[("x", ty_float())], ty_float())),
+        fn_item(decl_fn("tan", &[("x", ty_float())], ty_float())),
+        fn_item(decl_fn("asin", &[("x", ty_float())], ty_float())),
+        fn_item(decl_fn("acos", &[("x", ty_float())], ty_float())),
+        fn_item(decl_fn("atan", &[("x", ty_float())], ty_float())),
+        fn_item(decl_fn("atan2", &[("y", ty_float()), ("x", ty_float())], ty_float())),
+        fn_item(decl_fn("fabs", &[("x", ty_float())], ty_float())),
+        fn_item(decl_fn("fmin", &[("a", ty_float()), ("b", ty_float())], ty_float())),
+        fn_item(decl_fn("fmax", &[("a", ty_float()), ("b", ty_float())], ty_float())),
+    ];
+    Module {
+        items,
+        span: Span::dummy(),
+    }
 }
 
 fn gen_fmt_module() -> Module {
@@ -949,16 +971,26 @@ mod tests {
     #[test]
     fn generate_math() {
         let m = generate_stdlib_module(&["std".into(), "math".into()]).unwrap();
-        assert_eq!(m.items.len(), 21);
-        let names: Vec<_> = m.items.iter().map(|i| match &i.node {
-            Item::Function(f) => f.name.node.clone(),
-            _ => panic!("expected function"),
-        }).collect();
-        assert!(names.contains(&"abs".to_string()));
-        assert!(names.contains(&"sqrt".to_string()));
-        assert!(names.contains(&"sin".to_string()));
-        assert!(names.contains(&"atan2".to_string()));
-        assert!(names.contains(&"fmin".to_string()));
+        assert_eq!(m.items.len(), 26); // 5 constants + 21 functions
+        let mut const_names = vec![];
+        let mut fn_names = vec![];
+        for item in &m.items {
+            match &item.node {
+                Item::ConstDecl(c) => const_names.push(c.name.node.clone()),
+                Item::Function(f) => fn_names.push(f.name.node.clone()),
+                _ => panic!("unexpected item type"),
+            }
+        }
+        assert!(const_names.contains(&"PI".to_string()));
+        assert!(const_names.contains(&"E".to_string()));
+        assert!(const_names.contains(&"TAU".to_string()));
+        assert!(const_names.contains(&"INFINITY".to_string()));
+        assert!(const_names.contains(&"NAN".to_string()));
+        assert!(fn_names.contains(&"abs".to_string()));
+        assert!(fn_names.contains(&"sqrt".to_string()));
+        assert!(fn_names.contains(&"sin".to_string()));
+        assert!(fn_names.contains(&"atan2".to_string()));
+        assert!(fn_names.contains(&"fmin".to_string()));
     }
 
     #[test]

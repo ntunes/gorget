@@ -70,7 +70,7 @@ impl CodegenContext<'_> {
                 if (name == "stderr" || name == "stdout") && self.is_stdlib_static(name) {
                     return name.clone();
                 }
-                // SDL constants → GORGET_ prefixed C constants
+                // Stdlib constants → GORGET_ prefixed C constants
                 if self.is_stdlib_const(name) {
                     return format!("GORGET_{name}");
                 }

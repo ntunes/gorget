@@ -1,0 +1,26 @@
+from std.math import PI, E, TAU, INFINITY, NAN, sin, cos, floor
+
+void main():
+    # Basic constant values
+    float pi_val = PI
+    print(floor(pi_val * 1000000.0) == 3141592.0)
+
+    float e_val = E
+    print(floor(e_val * 1000000.0) == 2718281.0)
+
+    float tau_val = TAU
+    print(floor(tau_val * 1000000.0) == 6283185.0)
+
+    # TAU == 2 * PI
+    print(TAU == 2.0 * PI)
+
+    # INFINITY comparisons
+    print(INFINITY > 1000000.0)
+    print(0.0 - INFINITY < 0.0 - 1000000.0)
+
+    # sin/cos use PI
+    float s = sin(PI / 2.0)
+    print(floor(s * 1000.0) == 1000.0)
+
+    float c = cos(PI)
+    print(floor(c * 1000.0) == 0.0 - 1000.0)

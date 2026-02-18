@@ -3896,3 +3896,19 @@ true
 12:30:00",
     );
 }
+
+#[test]
+fn math_constants() {
+    run_gg(
+        "math_constants.gg",
+        "\
+true
+true
+true
+true
+true
+true
+true
+true",
+    );
+}

@@ -1340,6 +1340,13 @@ static inline double gorget_fabs(double x) { return fabs(x); }
 static inline double gorget_fmin(double a, double b) { return fmin(a, b); }
 static inline double gorget_fmax(double a, double b) { return fmax(a, b); }
 
+// ── Math constants ──────────────────────────────────────────
+static const double GORGET_PI = 3.141592653589793;
+static const double GORGET_E = 2.718281828459045;
+static const double GORGET_TAU = 6.283185307179586;
+#define GORGET_INFINITY INFINITY
+#define GORGET_NAN NAN
+
 // ── Array sort comparators ───────────────────────────────────
 static int __gorget_cmp_i64(const void* a, const void* b) {
     int64_t va = *(const int64_t*)a, vb = *(const int64_t*)b;
