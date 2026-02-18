@@ -1,0 +1,24 @@
+from std.collections import Vector
+
+struct Container:
+    str label
+    Vector[int] data
+
+equip Container with Drop:
+    void drop(!self):
+        print("drop {self.label}")
+
+void main():
+    Vector[Container] items = Vector[Container]()
+
+    Container c1 = Container("first", Vector[int]())
+    c1.data.push(1)
+    c1.data.push(2)
+    items.push(c1)
+
+    Container c2 = Container("second", Vector[int]())
+    c2.data.push(3)
+    items.push(c2)
+
+    print("len {items.len()}")
+    print("done")

@@ -1285,6 +1285,18 @@ drop elem-b",
 }
 
 #[test]
+fn drop_struct_collection_fields() {
+    run_gg(
+        "drop_struct_collection_fields.gg",
+        "\
+len 2
+done
+drop first
+drop second",
+    );
+}
+
+#[test]
 fn drop_fn_return_collection() {
     run_gg(
         "drop_fn_return_collection.gg",

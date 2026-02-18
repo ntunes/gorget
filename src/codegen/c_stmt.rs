@@ -106,7 +106,15 @@ impl CodegenContext<'_> {
             DropAction::StructDrop { type_name, has_user_drop, field_drops } => {
                 if *has_user_drop {
                     let drop_fn = c_mangle::mangle_trait_method("Drop", type_name, "drop", &[]);
-                    emitter.emit_line(&format!("{drop_fn}(&{});", entry.var_name));
+                    let v = &entry.var_name;
+                    // Skip user Drop if struct was move-zeroed (all bytes zero)
+                    emitter.emit_line(&format!("{{ __typeof__({v}) __zg = {{0}};"));
+                    emitter.emit_line(&format!("if (memcmp(&{v}, &__zg, sizeof({v})) != 0) {{"));
+                    emitter.indent();
+                    emitter.emit_line(&format!("{drop_fn}(&{v});"));
+                    emitter.dedent();
+                    emitter.emit_line("}");
+                    emitter.emit_line("}");
                 }
                 // Drop fields in reverse declaration order (last declared → first dropped)
                 for (field_name, field_action) in field_drops.iter().rev() {
@@ -399,14 +407,39 @@ impl CodegenContext<'_> {
     /// Filter element drop actions for safety.
     ///
     /// Struct elements whose field drops involve collection buffer frees are
-    /// skipped because shallow copies (e.g., passing a Vector by C value to a
-    /// function) can alias the inner collection buffers. Until field-level
-    /// move-zeroing is implemented, these element drops would cause
-    /// use-after-free. Direct collection and leaf-type element drops are safe
-    /// because they're moved into the collection via push/add.
+    /// skipped because shallow copies (e.g., `.get()` on a Vector[S] where S
+    /// has Dict/Vector fields) can alias the inner collection buffers. The
+    /// copy's collection field metadata shares the same internal arrays as the
+    /// original element. When the parent collection's element drops fire at
+    /// scope exit, freeing those arrays would invalidate any escaped copies
+    /// (e.g., return values built from `.get()` results' field accesses).
+    /// Direct collection and leaf-type element drops are safe because they're
+    /// moved into the collection via push/add (move-zeroed, sole owner).
+    ///
+    /// Enabling struct element drops requires field-level move-zeroing: when a
+    /// struct's collection field is accessed (e.g., `sec.sec_data`), the field
+    /// should be zeroed in the source, making the copy the sole owner. This
+    /// needs per-field ownership tracking in codegen.
     fn safe_element_drop(action: Option<DropAction>) -> Option<Box<DropAction>> {
         match action {
-            Some(ref a) if matches!(a, DropAction::StructDrop { .. }) && a.involves_collection() => None,
+            Some(DropAction::StructDrop { type_name, has_user_drop, field_drops })
+                if field_drops.iter().any(|(_, fd)| fd.involves_collection()) =>
+            {
+                // Strip collection field drops (aliasing-unsafe) but keep
+                // user Drop and non-collection field drops (safe).
+                let safe_drops: Vec<_> = field_drops.into_iter()
+                    .filter(|(_, fd)| !fd.involves_collection())
+                    .collect();
+                if has_user_drop || !safe_drops.is_empty() {
+                    Some(Box::new(DropAction::StructDrop {
+                        type_name,
+                        has_user_drop,
+                        field_drops: safe_drops,
+                    }))
+                } else {
+                    None
+                }
+            }
             Some(a) => Some(Box::new(a)),
             None => None,
         }

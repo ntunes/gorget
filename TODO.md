@@ -2,7 +2,7 @@
 
 ## High
 
-- **Element drops for struct elements with collection fields**: Element-level collection drops (Phase 17) skip `StructDrop` elements whose field drops involve collection buffer frees (e.g., `Vector[TomlSection]` where `TomlSection` has Dict/Vector fields). Without field-level move-zeroing, shallow copies can alias inner collection buffers, causing use-after-free when element drops run. Fix requires: field-level move-zeroing (zero struct fields when they're moved out via field access), which needs per-field ownership tracking in codegen. The TOML module's `gg_toml_assemble(tp.sections)` pattern is the canonical example. [added: 2026-02-18]
+- **Full collection field drops for struct elements require field-level move-zeroing**: `safe_element_drop()` in `c_stmt.rs` now does partial stripping — user Drop + non-collection field drops are preserved, but collection field drops are still filtered out. Full enablement requires field-level move-zeroing: when a struct's collection field is accessed (e.g., `sec.sec_data`), the field should be zeroed in the source, making the copy the sole owner. This needs: (a) detecting field access on non-Copy struct fields, (b) emitting `memset` for the accessed field, (c) handling partially-moved structs in drop glue (skip zeroed fields). The TOML aliasing chain (tp.sections → element drops → Dict MapFree → frees buffers returned tree references) is still prevented by the collection field stripping. [added: 2026-02-18, updated: 2026-02-18]
 
 ## Medium
 
