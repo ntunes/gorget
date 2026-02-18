@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 use std::env;
 use std::fs;
-use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::{self, Command};
+
+mod tui;
 
 use gorget::errors::ErrorReporter;
 use gorget::lexer::Lexer;
@@ -588,13 +589,37 @@ fn is_definition_line(line: &str) -> bool {
     false
 }
 
+/// Returns true if a definition block defines `main()`.
+fn is_main_def(def: &str) -> bool {
+    let first_line = def.lines().next().unwrap_or("");
+    let trimmed = first_line.trim();
+    // Match "void main():" or "void main():" with any whitespace
+    if let Some(paren_pos) = trimmed.find('(') {
+        let before_paren = &trimmed[..paren_pos];
+        let words: Vec<&str> = before_paren.split_whitespace().collect();
+        if words.len() >= 2 && words[words.len() - 1] == "main" {
+            return true;
+        }
+    }
+    false
+}
+
 /// Generate .gg source from accumulated TUI state.
 fn generate_tui_source(definitions: &[String], statements: &[String]) -> String {
+    let has_user_main = definitions.iter().any(|d| is_main_def(d));
+
     let mut source = String::new();
     for d in definitions {
         source.push_str(d);
         source.push('\n');
     }
+
+    if has_user_main {
+        // User defined main() — don't generate a wrapper.
+        // Loose statements can't be included (they'd be top-level).
+        return source;
+    }
+
     if !definitions.is_empty() {
         source.push('\n');
     }
@@ -619,9 +644,6 @@ fn run_tui() {
     println!("Gorget {version}");
     println!("Type code, then /run to execute. /help for commands.\n");
 
-    let stdin = io::stdin();
-    let mut reader = stdin.lock();
-
     let mut definitions: Vec<String> = Vec::new(); // top-level defs (functions, structs, etc.)
     let mut statements: Vec<String> = Vec::new();  // statements inside main()
 
@@ -630,17 +652,12 @@ fn run_tui() {
     let _ = fs::create_dir_all(&tmp_dir);
 
     loop {
-        print!(">>> ");
-        let _ = io::stdout().flush();
+        let line = match tui::read_line(">>> ", true) {
+            tui::ReadLineResult::Line(l) => l,
+            tui::ReadLineResult::Eof => { println!(); break; }
+        };
 
-        let mut line = String::new();
-        if reader.read_line(&mut line).unwrap_or(0) == 0 {
-            // EOF (Ctrl+D)
-            println!();
-            break;
-        }
-
-        let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
+        let trimmed = line.trim();
 
         // Handle special commands
         if trimmed == "/quit" || trimmed == "/exit" {
@@ -751,21 +768,16 @@ fn run_tui() {
         // If line ends with ':', read continuation lines
         if trimmed.ends_with(':') {
             loop {
-                print!("... ");
-                let _ = io::stdout().flush();
-
-                let mut cont_line = String::new();
-                if reader.read_line(&mut cont_line).unwrap_or(0) == 0 {
-                    break;
-                }
-                let cont = cont_line.trim_end_matches('\n').trim_end_matches('\r');
+                let cont_line = match tui::read_line("... ", false) {
+                    tui::ReadLineResult::Line(l) => l,
+                    tui::ReadLineResult::Eof => break,
+                };
+                let cont = cont_line.trim_end();
                 // Blank line or unindented line ends the block
                 if cont.is_empty() {
                     break;
                 }
                 if !cont.starts_with(' ') && !cont.starts_with('\t') {
-                    // Not indented — this is a new entry, not continuation
-                    // Put it back? We can't easily unread, so just include it
                     block_lines.push(cont.to_string());
                     break;
                 }
