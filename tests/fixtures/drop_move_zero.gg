@@ -1,0 +1,7 @@
+void consume(String !s):
+    print(s)
+
+void main():
+    String s = String("hello")
+    consume(!s)
+    print("after move")

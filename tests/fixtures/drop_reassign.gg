@@ -1,0 +1,13 @@
+struct Tracked:
+    str label
+
+equip Tracked with Drop:
+    void drop(self):
+        str l = self.label
+        print("drop {l}")
+
+void main():
+    Tracked t = Tracked("first")
+    t = Tracked("second")
+    str alive = t.label
+    print("alive: {alive}")

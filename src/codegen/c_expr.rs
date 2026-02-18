@@ -475,8 +475,16 @@ impl CodegenContext<'_> {
                 format!("({cond} ? {then_val} : {else_val})")
             }
 
-            Expr::Move { expr } | Expr::MutableBorrow { expr } => {
-                // In C output, ownership/borrow semantics are erased
+            Expr::Move { expr } => {
+                // Record the move so we can zero the source after the statement
+                if let Expr::Identifier(name) = &expr.node {
+                    let escaped = c_mangle::escape_keyword(name);
+                    self.pending_move_zeros.push(escaped);
+                }
+                self.gen_expr(expr)
+            }
+
+            Expr::MutableBorrow { expr } => {
                 self.gen_expr(expr)
             }
 

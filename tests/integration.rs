@@ -1222,6 +1222,27 @@ dropping alpha",
 }
 
 #[test]
+fn drop_reassign() {
+    run_gg(
+        "drop_reassign.gg",
+        "\
+drop first
+alive: second
+drop second",
+    );
+}
+
+#[test]
+fn drop_move_zero() {
+    run_gg(
+        "drop_move_zero.gg",
+        "\
+hello
+after move",
+    );
+}
+
+#[test]
 fn trait_defaults() {
     run_gg(
         "trait_defaults.gg",

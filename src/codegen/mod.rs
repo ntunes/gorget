@@ -230,6 +230,10 @@ pub struct CodegenContext<'a> {
     /// Pending GorgetString temporaries: (temp_name, gorget_string_expr).
     /// Flushed before the containing statement to materialize + register for cleanup.
     pub string_temps: Vec<(String, String)>,
+    /// Variables that were moved (`!var`) in the current statement.
+    /// After the statement is emitted, `flush_move_zeros` emits `memset` to zero them,
+    /// making the scope-exit drop a no-op (prevents double-free).
+    pub pending_move_zeros: Vec<String>,
     /// Map from (struct_name, field_name) → AST Type, used to resolve field types
     /// in `infer_receiver_type` for FieldAccess expressions.
     pub field_type_names: FxHashMap<(String, String), Type>,
@@ -465,6 +469,7 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
         try_counter: 0,
         string_temp_counter: 0,
         string_temps: Vec::new(),
+        pending_move_zeros: Vec::new(),
         field_type_names,
         mutable_captures: HashSet::new(),
         pointer_params: HashSet::new(),

@@ -172,6 +172,26 @@ impl CodegenContext<'_> {
         false
     }
 
+    /// Emit `memset` zeroing for variables that were moved in the current statement.
+    /// After zeroing, the scope-exit drop becomes a no-op (e.g. `free(NULL)` is safe).
+    pub fn flush_move_zeros(&mut self, emitter: &mut CEmitter) {
+        for var in self.pending_move_zeros.drain(..) {
+            emitter.emit_line(&format!("memset(&{var}, 0, sizeof({var}));"));
+        }
+    }
+
+    /// Find the DropAction for a variable in any active drop scope.
+    pub fn find_drop_action(&self, var_name: &str) -> Option<DropAction> {
+        for (_kind, entries) in self.drop_scopes.iter().rev() {
+            for entry in entries {
+                if entry.var_name == var_name {
+                    return Some(entry.action.clone());
+                }
+            }
+        }
+        None
+    }
+
     /// Remove all drop entries for `var_name` across all scopes.
     /// Used to transfer ownership of a closure env when returning it.
     pub fn remove_droppable(&mut self, var_name: &str) {
@@ -640,6 +660,7 @@ impl CodegenContext<'_> {
                 let e = self.gen_expr(expr);
                 let str_temps = self.flush_string_temps(emitter);
                 emitter.emit_line(&format!("{e};"));
+                self.flush_move_zeros(emitter);
                 Self::emit_string_temp_frees(&str_temps, emitter);
                 if self.trace {
                     self.emit_stmt_end(emitter);
@@ -707,7 +728,36 @@ impl CodegenContext<'_> {
                     v
                 };
                 let str_temps = self.flush_string_temps(emitter);
-                emitter.emit_line(&format!("{t} = {v};"));
+
+                // Drop-before-reassign: if the target is a droppable variable,
+                // drop the old value before assigning the new one.
+                let target_var = if let Expr::Identifier(name) = &target.node {
+                    Some(c_mangle::escape_keyword(name))
+                } else {
+                    None
+                };
+                let needs_drop = target_var.as_ref()
+                    .and_then(|name| self.find_drop_action(name));
+
+                if let Some(drop_action) = needs_drop {
+                    // If the RHS moved the target (e.g., s = f(!s)), don't zero it
+                    // after giving it a new value
+                    if let Some(ref tv) = target_var {
+                        self.pending_move_zeros.retain(|v| v != tv);
+                    }
+                    let tmp = format!("__drop_tmp_{}", self.try_counter);
+                    self.try_counter += 1;
+                    let c_type = target_type.clone();
+                    emitter.emit_line(&format!("{c_type} {tmp} = {v};"));
+                    Self::emit_drop_entry(&DropEntry {
+                        var_name: target_var.clone().unwrap(),
+                        action: drop_action,
+                    }, emitter);
+                    emitter.emit_line(&format!("{t} = {tmp};"));
+                } else {
+                    emitter.emit_line(&format!("{t} = {v};"));
+                }
+                self.flush_move_zeros(emitter);
                 Self::emit_string_temp_frees(&str_temps, emitter);
                 if self.trace {
                     if let Some(ref ri) = result_info {
@@ -790,6 +840,7 @@ impl CodegenContext<'_> {
                     let c_op = compound_op_to_c(*op);
                     emitter.emit_line(&format!("{t} {c_op} {v};"));
                 }
+                self.flush_move_zeros(emitter);
                 if self.trace {
                     self.emit_stmt_end(emitter);
                 }
@@ -826,6 +877,7 @@ impl CodegenContext<'_> {
                         let str_temps = self.flush_string_temps(emitter);
                         let ret_type = self.ret_tmp_type(&e);
                         emitter.emit_line(&format!("{ret_type} __ret_tmp = {e};"));
+                        self.flush_move_zeros(emitter);
                         Self::emit_string_temp_frees(&str_temps, emitter);
                         if self.trace {
                             self.emit_stmt_end(emitter);
@@ -856,10 +908,12 @@ impl CodegenContext<'_> {
                     let e = self.coerce_return_value(e, &expr.node);
                     self.closure_heap_alloc = false;
                     let str_temps = self.flush_string_temps(emitter);
-                    if !str_temps.is_empty() || is_trace {
-                        // Need __ret_tmp to free temps before returning
+                    let has_move_zeros = !self.pending_move_zeros.is_empty();
+                    if !str_temps.is_empty() || is_trace || has_move_zeros {
+                        // Need __ret_tmp to free temps / zero moves before returning
                         let ret_type = self.ret_tmp_type(&e);
                         emitter.emit_line(&format!("{ret_type} __ret_tmp = {e};"));
+                        self.flush_move_zeros(emitter);
                         Self::emit_string_temp_frees(&str_temps, emitter);
                         if is_trace {
                             self.emit_stmt_end(emitter);
@@ -1448,6 +1502,7 @@ impl CodegenContext<'_> {
                 let str_temps = self.flush_string_temps(emitter);
                 let decl = c_types::c_declare(&c_type, &escaped);
                 emitter.emit_line(&format!("{const_prefix}{decl} = {val};"));
+                self.flush_move_zeros(emitter);
                 Self::emit_string_temp_frees(&str_temps, emitter);
 
                 // Track explicitly-typed Vector variables so is_vector_expr recognizes them
@@ -1485,6 +1540,7 @@ impl CodegenContext<'_> {
                 }
                 let val = self.gen_expr(value);
                 emitter.emit_line(&format!("(void){val};"));
+                self.flush_move_zeros(emitter);
                 if self.trace {
                     self.emit_stmt_end(emitter);
                 }
@@ -1498,6 +1554,7 @@ impl CodegenContext<'_> {
                 let val = self.gen_expr(value);
                 let decl = c_types::c_declare(&c_type, "__pat");
                 emitter.emit_line(&format!("/* pattern decl */ {decl} = {val};"));
+                self.flush_move_zeros(emitter);
                 if self.trace {
                     self.emit_stmt_end(emitter);
                 }
