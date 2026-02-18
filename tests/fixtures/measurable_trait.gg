@@ -1,0 +1,26 @@
+struct Buffer:
+    int size
+
+equip Buffer with Measurable:
+    int len(self):
+        return self.size
+
+void main():
+    # len() on built-in types via free function
+    Vector[int] nums = Vector[int]()
+    nums.push(10)
+    nums.push(20)
+    nums.push(30)
+    print("{len(nums)}")
+
+    str greeting = "hello"
+    print("{len(greeting)}")
+
+    # len() on user type equipped with Measurable
+    Buffer buf = Buffer(42)
+    print("{len(buf)}")
+
+    # .len() method still works directly
+    print("{nums.len()}")
+    print("{greeting.len()}")
+    print("{buf.len()}")

@@ -42,8 +42,7 @@ impl CodegenContext<'_> {
                 }
                 "len" => {
                     if let Some(arg) = args.first() {
-                        let a = self.gen_expr(&arg.node.value);
-                        return format!("(sizeof({a}) / sizeof({a}[0]))");
+                        return self.gen_method_call(&arg.node.value, "len", &[]);
                     }
                 }
                 _ => {}

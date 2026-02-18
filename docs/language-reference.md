@@ -1920,7 +1920,7 @@ The following functions are available without import:
 |---------------|-------------------------|---------------------------------|
 | `print`       | `void(String)`          | Print to stdout with newline    |
 | `println`     | `void(String)`          | Print to stdout with newline    |
-| `len`         | `int(Collection)`       | Length of a collection          |
+| `len`         | `int(Measurable)`       | Length — delegates to `x.len()` |
 | `range`       | `Range(int, int)`       | Create a range                  |
 | `enumerate`   | `Iterator(Collection)`  | Iterate with index              |
 | `zip`         | `Iterator(A, B)`        | Combine two iterators           |
@@ -1954,6 +1954,7 @@ The compiler automatically registers the following core traits. They cannot be r
 | `Default` | `Self default()` (static) | `Self` | Zero/default values, `@derive(Default)` |
 | `From[T]` | `Self from(T value)` (static) | `Self` | Infallible type conversion, `@derive(From)` |
 | `TryFrom[T]` | `Result[Self, str] try_from(T value)` (static) | `Result[Self, str]` | Fallible type conversion, `@derive(TryFrom)` |
+| `Measurable` | `int len(self)` | `int` | Types with a length; enables `len(x)` free function |
 
 #### Displayable
 
@@ -2108,6 +2109,23 @@ equip Percentage with TryFrom[int]:
 
 auto result = Percentage.try_from(50)   # Ok(Percentage(50))
 auto bad = Percentage.try_from(200)     # Error("percentage must be 0-100")
+```
+
+#### Measurable
+
+Types that have a length. Equipping `Measurable` enables the `len(x)` free function, which delegates to `x.len()`. Built-in types (`Vector`, `Dict`, `HashMap`, `Set`, `HashSet`, `str`, `String`) have built-in `.len()` methods that work without equipping the trait. User-defined types need `equip T with Measurable` to participate.
+
+```gorget
+struct Buffer:
+    int size
+
+equip Buffer with Measurable:
+    int len(self):
+        return self.size
+
+Buffer buf = Buffer(42)
+print("{len(buf)}")    # 42
+print("{buf.len()}")   # 42
 ```
 
 #### Operator Traits

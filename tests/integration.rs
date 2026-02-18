@@ -3801,3 +3801,17 @@ fn lifetime_reassign_error() {
         "after source",
     );
 }
+
+#[test]
+fn measurable_trait() {
+    run_gg(
+        "measurable_trait.gg",
+        "\
+3
+5
+42
+3
+5
+42",
+    );
+}

@@ -371,6 +371,17 @@ fn register_builtin_traits(
             });
             m
         }),
+        // Measurable: int len(self) — types that have a length
+        ("Measurable", {
+            let mut m = FxHashMap::default();
+            m.insert("len".into(), FunctionSig {
+                params: vec![],
+                return_type: types.int_id,
+                has_self: true,
+                self_ownership: None, // plain self (immutable borrow)
+            });
+            m
+        }),
     ];
 
     for (name, methods) in builtin_traits {
@@ -785,8 +796,8 @@ equip Circle with Drawable:
 ";
         let (registry, errors) = analyze(source);
         assert!(errors.is_empty(), "errors: {:?}", errors);
-        // 19 built-in traits + 1 user-defined trait
-        assert_eq!(registry.traits.len(), 20);
+        // 20 built-in traits + 1 user-defined trait
+        assert_eq!(registry.traits.len(), 21);
         assert_eq!(registry.impls.len(), 1);
         assert!(registry.impls[0].trait_.is_some());
     }
@@ -825,6 +836,7 @@ equip Circle with Drawable:
         assert!(trait_names.contains(&"Drop"));
         assert!(trait_names.contains(&"Iterator"));
         assert!(trait_names.contains(&"Iterable"));
+        assert!(trait_names.contains(&"Measurable"));
     }
 
     #[test]

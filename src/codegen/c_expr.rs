@@ -733,7 +733,7 @@ impl CodegenContext<'_> {
                         "format" => {
                             return Some(self.types.string_id);
                         }
-                        "rand" | "getchar" | "time" | "term_cols" | "term_rows" => {
+                        "rand" | "getchar" | "time" | "term_cols" | "term_rows" | "len" => {
                             return Some(self.types.int_id);
                         }
                         _ => {}
