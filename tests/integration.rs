@@ -1259,6 +1259,20 @@ done",
 }
 
 #[test]
+fn drop_struct_fields() {
+    run_gg(
+        "drop_struct_fields.gg",
+        "\
+created wrapper
+created container
+created config
+drop container box
+drop inner nested
+drop inner auto",
+    );
+}
+
+#[test]
 fn trait_defaults() {
     run_gg(
         "trait_defaults.gg",

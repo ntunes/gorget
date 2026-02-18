@@ -40,7 +40,7 @@ static inline GorgetString gorget_string_new(const char* s) {
 }
 
 static inline void gorget_string_free(GorgetString* s) {
-    free(s->data);
+    if (s->cap > 0) free(s->data);
     s->data = NULL;
     s->len = 0;
     s->cap = 0;

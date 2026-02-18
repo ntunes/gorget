@@ -2,8 +2,7 @@
 
 ## High
 
-
-
+- **Struct constructor str→String field coercion**: `Holder("hello")` where `Holder` has a `String` field generates `(Holder){"hello"}` — a string literal in a `GorgetString` struct instead of `gorget_string_new("hello")`. Currently safe because `gorget_string_free` guards with `cap > 0`, but semantically wrong — the field should be a proper heap-allocated GorgetString. Need to check each struct constructor arg against the field's declared type and emit `gorget_string_new()` coercion when passing `str` to a `String` field. [added: 2026-02-18]
 
 
 

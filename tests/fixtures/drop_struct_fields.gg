@@ -1,0 +1,36 @@
+struct Inner:
+    str label
+
+equip Inner with Drop:
+    void drop(!self):
+        str l = self.label
+        print("drop inner {l}")
+
+# Struct with non-Copy field, NO explicit Drop → auto field drop
+struct Wrapper:
+    Inner inner
+
+# Struct with non-Copy field AND explicit Drop → user drop + auto field drop
+struct Container:
+    Inner inner
+    str tag
+
+equip Container with Drop:
+    void drop(!self):
+        str t = self.tag
+        print("drop container {t}")
+
+# Struct with String field → auto string free (no crash = success)
+struct Config:
+    String name
+    String value
+
+void main():
+    Wrapper w = Wrapper(Inner("auto"))
+    print("created wrapper")
+
+    Container c = Container(Inner("nested"), "box")
+    print("created container")
+
+    Config cfg = Config(String("key"), String("val"))
+    print("created config")

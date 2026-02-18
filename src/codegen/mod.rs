@@ -80,6 +80,12 @@ pub enum DropAction {
     StringFree,
     /// free(var.env) for heap-allocated closure environments
     ClosureEnvFree,
+    /// Compiler-generated drop glue: user drop (if any) + per-field drops.
+    StructDrop {
+        type_name: String,
+        has_user_drop: bool,
+        field_drops: Vec<(String, DropAction)>,
+    },
 }
 
 /// How a closure captures a variable from its enclosing scope.

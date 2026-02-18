@@ -92,6 +92,20 @@ impl CodegenContext<'_> {
             DropAction::ClosureEnvFree => {
                 emitter.emit_line(&format!("free({}.env);", entry.var_name));
             }
+            DropAction::StructDrop { type_name, has_user_drop, field_drops } => {
+                if *has_user_drop {
+                    let drop_fn = c_mangle::mangle_trait_method("Drop", type_name, "drop", &[]);
+                    emitter.emit_line(&format!("{drop_fn}(&{});", entry.var_name));
+                }
+                // Drop fields in reverse declaration order (last declared → first dropped)
+                for (field_name, field_action) in field_drops.iter().rev() {
+                    let field_entry = DropEntry {
+                        var_name: format!("{}.{}", entry.var_name, field_name),
+                        action: field_action.clone(),
+                    };
+                    Self::emit_drop_entry(&field_entry, emitter);
+                }
+            }
         }
     }
 
@@ -170,6 +184,106 @@ impl CodegenContext<'_> {
             }
         }
         false
+    }
+
+    /// Determine the `DropAction` for an AST `Type`, or `None` if the type is Copy.
+    ///
+    /// Handles primitives, String, Box, File, and recursively handles named structs
+    /// by checking for explicit Drop impls and/or non-Copy fields.
+    fn drop_action_for_type(&self, ty: &Type) -> Option<DropAction> {
+        match ty {
+            Type::Primitive(crate::parser::ast::PrimitiveType::StringType) => {
+                Some(DropAction::StringFree)
+            }
+            Type::Named { name, generic_args }
+                if name.node == "Box" && !generic_args.is_empty() =>
+            {
+                // Check if Box[Trait] (trait object) vs Box[T] (plain pointer)
+                let is_trait_obj = if let Some(Type::Named { name: inner, generic_args: inner_args }) =
+                    generic_args.first().map(|a| &a.node)
+                {
+                    if inner_args.is_empty() {
+                        self.scopes.lookup(&inner.node).map_or(false, |def_id| {
+                            self.scopes.get_def(def_id).kind == crate::semantic::scope::DefKind::Trait
+                        })
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+                if is_trait_obj {
+                    let has_drop = if let Some(Type::Named { name: inner, .. }) =
+                        generic_args.first().map(|a| &a.node)
+                    {
+                        self.trait_has_drop_in_hierarchy(&inner.node)
+                    } else {
+                        false
+                    };
+                    Some(DropAction::TraitObjFree { has_drop })
+                } else {
+                    Some(DropAction::BoxFree)
+                }
+            }
+            Type::Named { name, generic_args }
+                if name.node == "File" && generic_args.is_empty() =>
+            {
+                Some(DropAction::FileClose)
+            }
+            Type::Named { name, generic_args } if generic_args.is_empty() => {
+                // Check if this is a struct (not an enum, trait, etc.)
+                let is_struct = self.scopes.lookup(&name.node).map_or(false, |def_id| {
+                    self.scopes.get_def(def_id).kind == crate::semantic::scope::DefKind::Struct
+                });
+                if !is_struct {
+                    return None;
+                }
+
+                let has_user_drop = self.traits.has_trait_impl_by_name(&name.node, "Drop");
+                let field_drops = self.compute_field_drops(&name.node);
+
+                if has_user_drop || !field_drops.is_empty() {
+                    Some(DropAction::StructDrop {
+                        type_name: name.node.clone(),
+                        has_user_drop,
+                        field_drops,
+                    })
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Compute per-field drop actions for a struct by name.
+    ///
+    /// Returns `(escaped_field_name, DropAction)` pairs for each non-Copy field.
+    /// Uses `struct_fields` for field names and `field_type_names` for field types.
+    fn compute_field_drops(&self, struct_name: &str) -> Vec<(String, DropAction)> {
+        // Look up the struct's DefId
+        let def_id = match self.scopes.lookup(struct_name) {
+            Some(id) => id,
+            None => return Vec::new(),
+        };
+
+        // Get field names from struct_fields
+        let field_info = match self.struct_fields.get(&def_id) {
+            Some(info) => info,
+            None => return Vec::new(),
+        };
+
+        let mut drops = Vec::new();
+        for (field_name, _span) in &field_info.fields {
+            let key = (struct_name.to_string(), field_name.clone());
+            if let Some(field_type) = self.field_type_names.get(&key) {
+                if let Some(action) = self.drop_action_for_type(field_type) {
+                    let escaped = c_mangle::escape_keyword(field_name);
+                    drops.push((escaped, action));
+                }
+            }
+        }
+        drops
     }
 
     /// Emit `memset` zeroing for variables that were moved in the current statement.
@@ -558,84 +672,64 @@ impl CodegenContext<'_> {
     /// When `in_test_body` is true, also emits a `__gorget_cleanup_push` call
     /// so that longjmp-based test failure can still run cleanup.
     fn maybe_register_droppable(&mut self, var_name: &str, ty: &Type, emitter: &mut CEmitter) {
-        match ty {
-            // Box[T] — if T is a trait, register TraitObjFree (free .data field)
-            Type::Named { name, generic_args }
-                if name.node == "Box"
-                    && !generic_args.is_empty() =>
-            {
-                let is_trait_obj = if let Some(Type::Named { name: inner, generic_args: inner_args }) =
-                    generic_args.first().map(|a| &a.node)
-                {
-                    if inner_args.is_empty() {
-                        self.scopes.lookup(&inner.node).map_or(false, |def_id| {
-                            self.scopes.get_def(def_id).kind == crate::semantic::scope::DefKind::Trait
-                        })
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                };
-                if is_trait_obj {
-                    let has_drop = if let Some(Type::Named { name: inner, .. }) =
-                        generic_args.first().map(|a| &a.node)
-                    {
-                        self.trait_has_drop_in_hierarchy(&inner.node)
-                    } else {
-                        false
-                    };
-                    self.register_droppable(var_name, DropAction::TraitObjFree { has_drop });
-                    if self.in_test_body {
-                        emitter.emit_line(&format!(
-                            "__gorget_cleanup_push(free, (void*){var_name}.data);"
-                        ));
-                    }
-                } else {
-                    self.register_droppable(var_name, DropAction::BoxFree);
-                    if self.in_test_body {
-                        emitter.emit_line(&format!(
-                            "__gorget_cleanup_push(free, (void*){var_name});"
-                        ));
-                    }
-                }
+        if let Some(action) = self.drop_action_for_type(ty) {
+            self.register_droppable(var_name, action.clone());
+            if self.in_test_body {
+                Self::emit_test_cleanup_for_action(var_name, &action, emitter);
             }
-            // File → auto-close on scope exit
-            Type::Named { name, generic_args } if name.node == "File" && generic_args.is_empty() => {
-                self.register_droppable(var_name, DropAction::FileClose);
-                if self.in_test_body {
+        }
+    }
+
+    /// Emit `__gorget_cleanup_push` calls for test-body mode.
+    /// Handles leaf types directly; for StructDrop, emits per-field cleanup
+    /// for known leaf types.
+    fn emit_test_cleanup_for_action(var_name: &str, action: &DropAction, emitter: &mut CEmitter) {
+        match action {
+            DropAction::BoxFree => {
+                emitter.emit_line(&format!(
+                    "__gorget_cleanup_push(free, (void*){var_name});"
+                ));
+            }
+            DropAction::TraitObjFree { .. } => {
+                emitter.emit_line(&format!(
+                    "__gorget_cleanup_push(free, (void*){var_name}.data);"
+                ));
+            }
+            DropAction::FileClose => {
+                emitter.emit_line(&format!(
+                    "__gorget_cleanup_push((__gorget_cleanup_fn)gorget_file_close, (void*)&{var_name});"
+                ));
+            }
+            DropAction::UserDrop { type_name } => {
+                let drop_fn = c_mangle::mangle_trait_method("Drop", type_name, "drop", &[]);
+                emitter.emit_line(&format!(
+                    "__gorget_cleanup_push((__gorget_cleanup_fn){drop_fn}, (void*)&{var_name});"
+                ));
+            }
+            DropAction::StringFree => {
+                emitter.emit_line(&format!(
+                    "__gorget_cleanup_push((__gorget_cleanup_fn)gorget_string_free, (void*)&{var_name});"
+                ));
+            }
+            DropAction::ClosureEnvFree => {
+                emitter.emit_line(&format!(
+                    "__gorget_cleanup_push(free, (void*){var_name}.env);"
+                ));
+            }
+            DropAction::StructDrop { type_name, has_user_drop, field_drops } => {
+                // For test-body cleanup, register the user drop if present
+                if *has_user_drop {
+                    let drop_fn = c_mangle::mangle_trait_method("Drop", type_name, "drop", &[]);
                     emitter.emit_line(&format!(
-                        "__gorget_cleanup_push((__gorget_cleanup_fn)gorget_file_close, (void*)&{var_name});"
+                        "__gorget_cleanup_push((__gorget_cleanup_fn){drop_fn}, (void*)&{var_name});"
                     ));
                 }
-            }
-            // User-defined struct with Drop impl
-            Type::Named { name, generic_args } if generic_args.is_empty() => {
-                if self.traits.has_trait_impl_by_name(&name.node, "Drop") {
-                    let drop_fn = c_mangle::mangle_trait_method("Drop", &name.node, "drop", &[]);
-                    self.register_droppable(
-                        var_name,
-                        DropAction::UserDrop {
-                            type_name: name.node.clone(),
-                        },
-                    );
-                    if self.in_test_body {
-                        emitter.emit_line(&format!(
-                            "__gorget_cleanup_push((__gorget_cleanup_fn){drop_fn}, (void*)&{var_name});"
-                        ));
-                    }
+                // Register leaf field cleanups
+                for (field_name, field_action) in field_drops {
+                    let field_var = format!("{var_name}.{field_name}");
+                    Self::emit_test_cleanup_for_action(&field_var, field_action, emitter);
                 }
             }
-            // String (owned) → gorget_string_free
-            Type::Primitive(crate::parser::ast::PrimitiveType::StringType) => {
-                self.register_droppable(var_name, DropAction::StringFree);
-                if self.in_test_body {
-                    emitter.emit_line(&format!(
-                        "__gorget_cleanup_push((__gorget_cleanup_fn)gorget_string_free, (void*)&{var_name});"
-                    ));
-                }
-            }
-            _ => {}
         }
     }
 
