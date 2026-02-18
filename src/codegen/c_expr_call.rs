@@ -666,6 +666,12 @@ impl CodegenContext<'_> {
                 }
                 // Check for enum variant constructor
                 if def.kind == crate::semantic::scope::DefKind::Variant {
+                    // Queue move-zeroing for consumed collection/droppable args
+                    for a in args {
+                        if let Expr::Identifier(name) = &a.node.value.node {
+                            self.queue_move_zero_if_droppable(name);
+                        }
+                    }
                     // Find which enum this variant belongs to
                     for (enum_def_id, info) in self.enum_variants {
                         for (vname, vid) in &info.variants {

@@ -424,6 +424,13 @@ impl CodegenContext<'_> {
                     }).collect()
                 };
 
+                // Queue move-zeroing for consumed droppable args
+                for a in args.iter() {
+                    if let Expr::Identifier(ref id_name) = a.node {
+                        self.queue_move_zero_if_droppable(id_name);
+                    }
+                }
+
                 let field_exprs: Vec<String> = args.iter().enumerate().map(|(i, a)| {
                     let expr = self.gen_expr(a);
                     let ptid = field_type_ids.get(i).copied().flatten();

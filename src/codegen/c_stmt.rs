@@ -246,21 +246,40 @@ impl CodegenContext<'_> {
                     Some(DropAction::BoxDrop { inner_drop })
                 }
             }
-            // NOTE: Collection drops (Vector, Dict, HashMap, Set, HashSet) are defined
-            // as DropAction variants (ArrayFree, MapFree, SetFree) but NOT registered
-            // here yet. Collections are non-Copy value types with shallow copy semantics:
-            // when a collection is pushed into another collection, stored in a struct,
-            // or returned from a function, both the source and destination share the
-            // same underlying buffer. Dropping the source would free data the destination
-            // still references (double-free / use-after-free).
-            //
-            // Enabling collection drops requires move-zeroing infrastructure:
-            // - .push(v), .put(k,v): zero source after consumption
-            // - Constructor calls: zero consumed collection args
-            // - .get() returns: mark copies as non-owning (no drop)
-            // - return statements: zero consumed collection locals
-            //
-            // Tracked in TODO.md under "Collection buffer drops need move-zeroing".
+            // Vector/List/Array → buffer free
+            Type::Named { name, generic_args }
+                if matches!(name.node.as_str(), "Vector" | "List" | "Array")
+                    && generic_args.len() == 1 =>
+            {
+                Some(DropAction::ArrayFree)
+            }
+            // Dict → monomorphized free
+            Type::Named { name, generic_args }
+                if name.node == "Dict" && generic_args.len() == 2 =>
+            {
+                let c_args: Vec<String> = generic_args.iter()
+                    .map(|a| c_types::ast_type_to_c(&a.node, self.scopes))
+                    .collect();
+                let mangled = c_mangle::mangle_generic("GorgetDict", &c_args);
+                Some(DropAction::MapFree { mangled_name: mangled })
+            }
+            // HashMap → monomorphized free
+            Type::Named { name, generic_args }
+                if name.node == "HashMap" && generic_args.len() == 2 =>
+            {
+                let c_args: Vec<String> = generic_args.iter()
+                    .map(|a| c_types::ast_type_to_c(&a.node, self.scopes))
+                    .collect();
+                let mangled = c_mangle::mangle_generic("GorgetMap", &c_args);
+                Some(DropAction::MapFree { mangled_name: mangled })
+            }
+            // Set/HashSet → generic set free
+            Type::Named { name, generic_args }
+                if matches!(name.node.as_str(), "Set" | "HashSet")
+                    && generic_args.len() == 1 =>
+            {
+                Some(DropAction::SetFree)
+            }
             Type::Named { name, generic_args }
                 if name.node == "File" && generic_args.is_empty() =>
             {
@@ -340,6 +359,16 @@ impl CodegenContext<'_> {
             }
         }
         None
+    }
+
+    /// Queue a variable for move-zeroing if it has a registered drop action.
+    /// After the statement completes, `flush_move_zeros()` emits `memset(&var, 0, sizeof(var))`,
+    /// making the scope-exit drop a no-op (`free(NULL)` is safe per C standard).
+    pub fn queue_move_zero_if_droppable(&mut self, name: &str) {
+        let escaped = c_mangle::escape_keyword(name);
+        if self.find_drop_action(&escaped).is_some() {
+            self.pending_move_zeros.push(escaped);
+        }
     }
 
     /// Remove all drop entries for `var_name` across all scopes.
@@ -704,15 +733,38 @@ impl CodegenContext<'_> {
         );
     }
 
-    /// Check if a declared type needs drop and register it if so.
-    /// When `in_test_body` is true, also emits a `__gorget_cleanup_push` call
-    /// so that longjmp-based test failure can still run cleanup.
-    fn maybe_register_droppable(&mut self, var_name: &str, ty: &Type, emitter: &mut CEmitter) {
-        if let Some(action) = self.drop_action_for_type(ty) {
-            self.register_droppable(var_name, action.clone());
-            if self.in_test_body {
-                Self::emit_test_cleanup_for_action(var_name, &action, emitter);
+    /// Check if an init expression is a collection constructor call.
+    /// Only constructor calls produce independently-owned buffers that are
+    /// safe to free at scope exit. Other init expressions (function calls,
+    /// copies, field access) may share buffers with existing data and must
+    /// NOT have drops registered to avoid double-frees.
+    ///
+    /// Constructor patterns:
+    /// - `Vector[T]()` / `Dict[K,V]()` / `Set[T]()` → `Call { callee: Identifier("Vector"|...) }`
+    /// - `StructLiteral { name: "MyStruct", ... }` → struct with collection fields
+    /// - Dict/Set/List comprehensions → new collection
+    fn is_owning_collection_init(expr: &Expr) -> bool {
+        match expr {
+            // Collection constructor: Vector[T](), Dict[K,V](), Set[T](), etc.
+            Expr::Call { callee, .. } => {
+                if let Expr::Identifier(name) = &callee.node {
+                    matches!(name.as_str(),
+                        "Vector" | "List" | "Array" | "Dict" | "HashMap" | "Set" | "HashSet"
+                    )
+                } else {
+                    false
+                }
             }
+            // Struct literal: the struct owns its collection fields
+            Expr::StructLiteral { .. } => true,
+            // Dict/Set/List literals and comprehensions create new collections
+            Expr::DictLiteral(_) => true,
+            Expr::DictComprehension { .. } => true,
+            Expr::ListComprehension { .. } => true,
+            Expr::SetComprehension { .. } => true,
+            // Box constructor: Box(value) or Box.new(value)
+            Expr::Path { .. } => false,
+            _ => false,
         }
     }
 
@@ -996,12 +1048,14 @@ impl CodegenContext<'_> {
                 // registration, remove it so cleanup doesn't free the value
                 // we're about to return.
                 if let Some(expr) = expr {
-                    if let Expr::Identifier(name) = &expr.node {
+                    // Transfer ownership: walk the expression tree to find all
+                    // consumed identifiers (in calls, constructors, variants)
+                    let consumed = collect_consumed_identifiers(&expr.node);
+                    for name in &consumed {
                         let escaped = c_mangle::escape_keyword(name);
                         if self.escaping_closure_vars.contains(name) {
                             self.remove_droppable(&escaped);
                         }
-                        // Transfer ownership for returned String variables
                         self.remove_droppable(&escaped);
                     }
                     // Inline closure literal in return: heap-allocate it
@@ -1687,7 +1741,18 @@ impl CodegenContext<'_> {
                         ));
                     }
                 } else {
-                    self.maybe_register_droppable(&escaped, &type_.node, emitter);
+                    // For collection-related drops, only register when the init
+                    // expression is a known constructor (to avoid aliased-buffer
+                    // double-frees from copies/field-access/function-returns).
+                    // Non-collection drops (Box, File, user Drop, etc.) always register.
+                    if let Some(action) = self.drop_action_for_type(&type_.node) {
+                        if !action.involves_collection() || Self::is_owning_collection_init(&value.node) {
+                            self.register_droppable(&escaped, action.clone());
+                            if self.in_test_body {
+                                Self::emit_test_cleanup_for_action(&escaped, &action, emitter);
+                            }
+                        }
+                    }
                 }
             }
             Pattern::Wildcard => {
@@ -2804,6 +2869,80 @@ impl CodegenContext<'_> {
             }
         }
         None
+    }
+}
+
+/// Recursively collect all identifiers consumed by call arguments,
+/// constructors, or enum variant constructors in an expression tree.
+/// Used by the return handler to transfer ownership of all consumed variables.
+fn collect_consumed_identifiers(expr: &Expr) -> Vec<String> {
+    let mut result = Vec::new();
+    collect_consumed_identifiers_inner(expr, &mut result);
+    result
+}
+
+fn collect_consumed_identifiers_inner(expr: &Expr, out: &mut Vec<String>) {
+    match expr {
+        Expr::Identifier(name) => {
+            out.push(name.clone());
+        }
+        Expr::Call { callee, args, .. } => {
+            // Recurse into the callee expr (for enum variant names)
+            collect_consumed_identifiers_inner(&callee.node, out);
+            // Recurse into all arguments
+            for a in args {
+                collect_consumed_identifiers_inner(&a.node.value.node, out);
+            }
+        }
+        Expr::StructLiteral { args, .. } => {
+            for a in args {
+                collect_consumed_identifiers_inner(&a.node, out);
+            }
+        }
+        Expr::MethodCall { args, .. } => {
+            // Recurse into args but NOT receiver (receiver isn't consumed)
+            for a in args {
+                collect_consumed_identifiers_inner(&a.node.value.node, out);
+            }
+        }
+        Expr::If { then_branch, else_branch, .. } => {
+            // Branches are Spanned<Expr> — recurse directly
+            collect_consumed_identifiers_inner(&then_branch.node, out);
+            if let Some(else_b) = else_branch {
+                collect_consumed_identifiers_inner(&else_b.node, out);
+            }
+        }
+        Expr::Match { arms, else_arm, .. } => {
+            for arm in arms {
+                collect_consumed_identifiers_inner(&arm.body.node, out);
+            }
+            if let Some(else_e) = else_arm {
+                collect_consumed_identifiers_inner(&else_e.node, out);
+            }
+        }
+        Expr::Move { expr } | Expr::Try { expr } => {
+            collect_consumed_identifiers_inner(&expr.node, out);
+        }
+        Expr::Block(block) => {
+            if let Some(last) = block.stmts.last() {
+                if let Stmt::Expr(e) = &last.node {
+                    collect_consumed_identifiers_inner(&e.node, out);
+                } else if let Stmt::Return(Some(e)) = &last.node {
+                    collect_consumed_identifiers_inner(&e.node, out);
+                }
+            }
+        }
+        Expr::Do { body } => {
+            if let Some(last) = body.stmts.last() {
+                if let Stmt::Expr(e) = &last.node {
+                    collect_consumed_identifiers_inner(&e.node, out);
+                } else if let Stmt::Return(Some(e)) = &last.node {
+                    collect_consumed_identifiers_inner(&e.node, out);
+                }
+            }
+        }
+        // Other expression types (literals, binary ops, etc.) don't consume identifiers
+        _ => {}
     }
 }
 

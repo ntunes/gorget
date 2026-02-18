@@ -94,6 +94,24 @@ pub enum DropAction {
     SetFree,
 }
 
+impl DropAction {
+    /// Does this drop action involve collection buffer cleanup?
+    /// Used to gate drop registration: collection drops are only safe for
+    /// constructor-initialized variables (to avoid aliased-buffer double-frees).
+    pub fn involves_collection(&self) -> bool {
+        match self {
+            DropAction::ArrayFree | DropAction::MapFree { .. } | DropAction::SetFree => true,
+            DropAction::StructDrop { field_drops, .. } => {
+                field_drops.iter().any(|(_, d)| d.involves_collection())
+            }
+            DropAction::BoxDrop { inner_drop } => {
+                inner_drop.as_ref().map_or(false, |d| d.involves_collection())
+            }
+            _ => false,
+        }
+    }
+}
+
 /// How a closure captures a variable from its enclosing scope.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CaptureMode {

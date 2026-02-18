@@ -22,6 +22,17 @@ void main():
     Set[int] ids = Set[int]()
     ids.add(42)
 
+    # Nested: push vector into vector (move-zeroed, no double-free)
+    Vector[Vector[int]] grid = Vector[Vector[int]]()
+    Vector[int] row = Vector[int]()
+    row.push(10)
+    grid.push(row)
+
+    # Collection in enum variant (move-zeroed, no double-free)
+    Vector[int] items = Vector[int]()
+    items.push(99)
+    Option[Vector[int]] opt = Some(items)
+
     # Box deep drop — inner struct's Drop runs before free
     Box[Tracked] b = Box(Tracked("boxed"))
 
