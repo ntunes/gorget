@@ -301,13 +301,13 @@ impl CodegenContext<'_> {
                     "int_to_str" => {
                         if let Some(arg) = args.first() {
                             let n = self.gen_expr(&arg.node.value);
-                            return format!("gorget_string_new(gorget_int_to_str({n}))");
+                            return format!("gorget_string_adopt((char*)gorget_int_to_str({n}))");
                         }
                     }
                     "float_to_str" => {
                         if let Some(arg) = args.first() {
                             let x = self.gen_expr(&arg.node.value);
-                            return format!("gorget_string_new(gorget_float_to_str({x}))");
+                            return format!("gorget_string_adopt((char*)gorget_float_to_str({x}))");
                         }
                     }
                     "bool_to_str" => {
@@ -319,13 +319,13 @@ impl CodegenContext<'_> {
                     "char_to_str" => {
                         if let Some(arg) = args.first() {
                             let c = self.gen_expr(&arg.node.value);
-                            return format!("gorget_string_new(gorget_char_to_str({c}))");
+                            return format!("gorget_string_adopt((char*)gorget_char_to_str({c}))");
                         }
                     }
                     "codepoint_to_str" => {
                         if let Some(arg) = args.first() {
                             let cp = self.gen_expr(&arg.node.value);
-                            return format!("gorget_string_new(gorget_codepoint_to_utf8({cp}))");
+                            return format!("gorget_string_adopt((char*)gorget_codepoint_to_utf8({cp}))");
                         }
                     }
                     "getenv" => {

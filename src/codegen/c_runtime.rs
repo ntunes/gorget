@@ -39,6 +39,14 @@ static inline GorgetString gorget_string_new(const char* s) {
     return (GorgetString){data, len, cap};
 }
 
+// Adopt a freshly-malloc'd char* into a GorgetString without copying.
+// The caller must have allocated `s` with malloc — ownership transfers to the GorgetString.
+static inline GorgetString gorget_string_adopt(char* s) {
+    if (s == NULL) return (GorgetString){NULL, 0, 0};
+    size_t len = strlen(s);
+    return (GorgetString){s, len, len + 1};
+}
+
 static inline void gorget_string_free(GorgetString* s) {
     if (s->cap > 0) free(s->data);
     s->data = NULL;

@@ -770,37 +770,37 @@ impl CodegenContext<'_> {
                 Some(format!("(strlen({recv}) == 0)"))
             }
             "trim" => {
-                Some(format!("gorget_string_new(gorget_string_trim({recv}))"))
+                Some(format!("gorget_string_adopt((char*)gorget_string_trim({recv}))"))
             }
             "strip" => {
                 if let Some(arg) = args.first() {
                     let arg = self.gen_expr(&arg.node.value);
-                    Some(format!("gorget_string_new(gorget_string_strip({recv}, {arg}))"))
+                    Some(format!("gorget_string_adopt((char*)gorget_string_strip({recv}, {arg}))"))
                 } else {
-                    Some(format!("gorget_string_new(gorget_string_trim({recv}))"))
+                    Some(format!("gorget_string_adopt((char*)gorget_string_trim({recv}))"))
                 }
             }
             "lstrip" => {
                 if let Some(arg) = args.first() {
                     let arg = self.gen_expr(&arg.node.value);
-                    Some(format!("gorget_string_new(gorget_string_lstrip({recv}, {arg}))"))
+                    Some(format!("gorget_string_adopt((char*)gorget_string_lstrip({recv}, {arg}))"))
                 } else {
-                    Some(format!("gorget_string_new(gorget_string_lstrip_ws({recv}))"))
+                    Some(format!("gorget_string_adopt((char*)gorget_string_lstrip_ws({recv}))"))
                 }
             }
             "rstrip" => {
                 if let Some(arg) = args.first() {
                     let arg = self.gen_expr(&arg.node.value);
-                    Some(format!("gorget_string_new(gorget_string_rstrip({recv}, {arg}))"))
+                    Some(format!("gorget_string_adopt((char*)gorget_string_rstrip({recv}, {arg}))"))
                 } else {
-                    Some(format!("gorget_string_new(gorget_string_rstrip_ws({recv}))"))
+                    Some(format!("gorget_string_adopt((char*)gorget_string_rstrip_ws({recv}))"))
                 }
             }
             "to_upper" => {
-                Some(format!("gorget_string_new(gorget_string_to_upper({recv}))"))
+                Some(format!("gorget_string_adopt((char*)gorget_string_to_upper({recv}))"))
             }
             "to_lower" => {
-                Some(format!("gorget_string_new(gorget_string_to_lower({recv}))"))
+                Some(format!("gorget_string_adopt((char*)gorget_string_to_lower({recv}))"))
             }
             "replace" => {
                 let old_arg = args.first()
@@ -809,7 +809,7 @@ impl CodegenContext<'_> {
                 let new_arg = args.get(1)
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "\"\"".to_string());
-                Some(format!("gorget_string_new(gorget_string_replace({recv}, {old_arg}, {new_arg}))"))
+                Some(format!("gorget_string_adopt((char*)gorget_string_replace({recv}, {old_arg}, {new_arg}))"))
             }
             "split" => {
                 let arg = args.first()
@@ -831,7 +831,7 @@ impl CodegenContext<'_> {
                 let end_arg = args.get(1)
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "0".to_string());
-                Some(format!("gorget_string_new(gorget_string_slice({recv}, {start_arg}, {end_arg}))"))
+                Some(format!("gorget_string_adopt((char*)gorget_string_slice({recv}, {start_arg}, {end_arg}))"))
             }
             "char_at" => {
                 let arg = args.first()
@@ -855,25 +855,25 @@ impl CodegenContext<'_> {
                 let arg = args.first()
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "0".to_string());
-                Some(format!("gorget_string_new(gorget_string_repeat({recv}, {arg}))"))
+                Some(format!("gorget_string_adopt((char*)gorget_string_repeat({recv}, {arg}))"))
             }
             "join" => {
                 let arg = args.first()
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "gorget_array_new(sizeof(const char*))".to_string());
-                Some(format!("gorget_string_new(gorget_string_join({recv}, {arg}))"))
+                Some(format!("gorget_string_adopt((char*)gorget_string_join({recv}, {arg}))"))
             }
             "removeprefix" => {
                 let arg = args.first()
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "\"\"".to_string());
-                Some(format!("gorget_string_new(gorget_string_removeprefix({recv}, {arg}))"))
+                Some(format!("gorget_string_adopt((char*)gorget_string_removeprefix({recv}, {arg}))"))
             }
             "removesuffix" => {
                 let arg = args.first()
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "\"\"".to_string());
-                Some(format!("gorget_string_new(gorget_string_removesuffix({recv}, {arg}))"))
+                Some(format!("gorget_string_adopt((char*)gorget_string_removesuffix({recv}, {arg}))"))
             }
             "pad_left" => {
                 let width = args.first()
@@ -882,7 +882,7 @@ impl CodegenContext<'_> {
                 let fill = args.get(1)
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "' '".to_string());
-                Some(format!("gorget_string_new(gorget_string_pad_left({recv}, {width}, {fill}))"))
+                Some(format!("gorget_string_adopt((char*)gorget_string_pad_left({recv}, {width}, {fill}))"))
             }
             "pad_right" => {
                 let width = args.first()
@@ -891,7 +891,7 @@ impl CodegenContext<'_> {
                 let fill = args.get(1)
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "' '".to_string());
-                Some(format!("gorget_string_new(gorget_string_pad_right({recv}, {width}, {fill}))"))
+                Some(format!("gorget_string_adopt((char*)gorget_string_pad_right({recv}, {width}, {fill}))"))
             }
             _ => None, // Not a known string method — fall through
         }
