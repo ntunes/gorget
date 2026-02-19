@@ -98,7 +98,14 @@ impl CodegenContext<'_> {
                 } else {
                     None
                 };
-                let predrop_code = self.compute_predrop_code(&elem_type, "__old_val");
+                let elem_type_id = self.resolve_expr_type_id(receiver).and_then(|tid| {
+                    match self.types.get(tid) {
+                        crate::semantic::types::ResolvedType::Generic(_, args) if !args.is_empty() => Some(args[0]),
+                        crate::semantic::types::ResolvedType::Array(elem_tid, _) => Some(*elem_tid),
+                        _ => None,
+                    }
+                });
+                let predrop_code = self.compute_predrop_code(&elem_type, "__old_val", elem_type_id);
                 if predrop_code.is_some() || clone_code.is_some() {
                     let predrop = predrop_code.map(|code| format!(
                         "if ((size_t)__set_idx < {recv}.len) {{ \
@@ -436,7 +443,13 @@ impl CodegenContext<'_> {
                 } else {
                     None
                 };
-                let predrop_code = self.compute_predrop_code(&val_type, "(*__old_vp)");
+                let val_type_id = self.resolve_expr_type_id(receiver).and_then(|tid| {
+                    match self.types.get(tid) {
+                        crate::semantic::types::ResolvedType::Generic(_, args) if args.len() >= 2 => Some(args[1]),
+                        _ => None,
+                    }
+                });
+                let predrop_code = self.compute_predrop_code(&val_type, "(*__old_vp)", val_type_id);
                 if predrop_code.is_some() || clone_code.is_some() {
                     let predrop = predrop_code.map(|code| format!(
                         "{{ {val_type}* __old_vp = {mangled}__get_ptr({recv_ref}, __put_key); \

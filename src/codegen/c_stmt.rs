@@ -512,6 +512,68 @@ impl CodegenContext<'_> {
         }
     }
 
+    /// Determine the `DropAction` for a `TypeId`, or `None` if the type is Copy.
+    ///
+    /// Parallel to `drop_action_for_type()` but operates on resolved TypeIds
+    /// instead of AST Types. Used by `compute_predrop_code()` to produce fully
+    /// recursive drop trees for collection elements.
+    fn drop_action_for_type_id(&self, tid: crate::semantic::ids::TypeId) -> Option<DropAction> {
+        use crate::semantic::types::ResolvedType;
+        use crate::parser::ast::PrimitiveType;
+        match self.types.get(tid) {
+            ResolvedType::Primitive(PrimitiveType::StringType) => Some(DropAction::StringFree),
+            ResolvedType::Primitive(_) => None,
+            ResolvedType::Generic(def_id, args) => {
+                let name = self.scopes.get_def(*def_id).name.clone();
+                match name.as_str() {
+                    "Vector" | "List" | "Array" if !args.is_empty() => {
+                        let elem_drop = self.drop_action_for_type_id(args[0]).map(Box::new);
+                        let element_c_type = elem_drop.as_ref().map(|_| self.type_id_to_c_substituted(args[0]));
+                        Some(DropAction::ArrayFree { element_drop: elem_drop, element_c_type })
+                    }
+                    "Dict" if args.len() == 2 => {
+                        let c_args: Vec<String> = args.iter().map(|&a| self.type_id_to_c_substituted(a)).collect();
+                        let mangled = c_mangle::mangle_generic("GorgetDict", &c_args);
+                        let key_drop = self.drop_action_for_type_id(args[0]).map(Box::new);
+                        let value_drop = self.drop_action_for_type_id(args[1]).map(Box::new);
+                        Some(DropAction::MapFree { mangled_name: mangled, key_drop, value_drop })
+                    }
+                    "HashMap" if args.len() == 2 => {
+                        let c_args: Vec<String> = args.iter().map(|&a| self.type_id_to_c_substituted(a)).collect();
+                        let mangled = c_mangle::mangle_generic("GorgetMap", &c_args);
+                        let key_drop = self.drop_action_for_type_id(args[0]).map(Box::new);
+                        let value_drop = self.drop_action_for_type_id(args[1]).map(Box::new);
+                        Some(DropAction::MapFree { mangled_name: mangled, key_drop, value_drop })
+                    }
+                    "Set" | "HashSet" if !args.is_empty() => {
+                        let elem_drop = self.drop_action_for_type_id(args[0]).map(Box::new);
+                        let element_c_type = elem_drop.as_ref().map(|_| self.type_id_to_c_substituted(args[0]));
+                        Some(DropAction::SetFree { element_drop: elem_drop, element_c_type })
+                    }
+                    "Box" if !args.is_empty() => {
+                        // Check if Box[Trait] (trait object)
+                        if let ResolvedType::TraitObject(trait_def_id) = self.types.get(args[0]) {
+                            let has_drop = {
+                                let trait_name = self.scopes.get_def(*trait_def_id).name.clone();
+                                self.trait_has_drop_in_hierarchy(&trait_name)
+                            };
+                            Some(DropAction::TraitObjFree { has_drop })
+                        } else {
+                            let inner_drop = self.drop_action_for_type_id(args[0]).map(Box::new);
+                            Some(DropAction::BoxDrop { inner_drop })
+                        }
+                    }
+                    _ => None,
+                }
+            }
+            ResolvedType::Defined(def_id) => {
+                let name = self.scopes.get_def(*def_id).name.clone();
+                self.drop_action_for_struct_name(&name)
+            }
+            _ => None,
+        }
+    }
+
     /// Compute the drop action for a struct given its C type name.
     /// Used for auto-typed variables where `drop_action_for_type` returns None
     /// because the AST type is Inferred.
@@ -839,7 +901,30 @@ impl CodegenContext<'_> {
     ///
     /// Returns `Some(code)` if the element type is non-Copy and needs cleanup
     /// before overwrite, `None` if Copy (no cleanup needed).
-    pub(super) fn compute_predrop_code(&self, elem_c_type: &str, var: &str) -> Option<String> {
+    ///
+    /// When `elem_type_id` is `Some`, uses `drop_action_for_type_id()` for full
+    /// recursive element drops (e.g., freeing String elements inside a nested
+    /// Vector before freeing the Vector buffer). Falls back to buffer-only
+    /// cleanup when `None`.
+    pub(super) fn compute_predrop_code(
+        &self,
+        elem_c_type: &str,
+        var: &str,
+        elem_type_id: Option<crate::semantic::ids::TypeId>,
+    ) -> Option<String> {
+        // When we have full type info, use it for recursive drops on collection types
+        if let Some(tid) = elem_type_id {
+            if elem_c_type == "GorgetArray"
+                || elem_c_type.starts_with("GorgetDict__")
+                || elem_c_type.starts_with("GorgetMap__")
+                || elem_c_type == "GorgetSet"
+            {
+                if let Some(action) = self.drop_action_for_type_id(tid) {
+                    return Some(Self::gen_inline_drop_code(var, &action, 0));
+                }
+            }
+        }
+
         // Direct collection/string types
         if elem_c_type == "GorgetString" {
             return Some(format!("gorget_string_free(&{var});"));

@@ -72,4 +72,15 @@ void main():
     auto v = nested.get(0).unwrap()
     print("nested len={v.len()}")
 
+    # Nested pre-drop: set() on Vector[Vector[Container]] drops inner elements
+    Vector[Vector[Container]] nested_v = Vector[Vector[Container]]()
+    Vector[Container] vc1 = Vector[Container]()
+    vc1.push(Container("old-inner", Vector[int]()))
+    nested_v.push(vc1)
+
+    Vector[Container] vc2 = Vector[Container]()
+    vc2.push(Container("new-inner", Vector[int]()))
+    nested_v.set(0, vc2)
+    print("after nested container set")
+
     print("done")

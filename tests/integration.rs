@@ -1311,7 +1311,10 @@ drop old len=2
 after set: new
 wrapper id=1
 nested len=2
+drop old-inner len=0
+after nested container set
 done
+drop new-inner len=0
 drop wrapped len=1
 drop wrapped len=1
 drop new len=1
