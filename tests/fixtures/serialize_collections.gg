@@ -1,0 +1,73 @@
+import std.json
+from std.collections import Box, Vector, Dict
+
+@derive(Serializable, Deserializable)
+struct Team:
+    str name
+    Vector[int] scores
+
+@derive(Serializable, Deserializable)
+struct Config:
+    str env
+    Dict[str, int] settings
+
+@derive(Serializable, Deserializable)
+struct Record:
+    Vector[str] tags
+    Dict[str, str] metadata
+
+void main():
+    # Roundtrip: Vector[int] field
+    Team t = Team("Hawks", Vector[int]())
+    t.scores.push(10)
+    t.scores.push(20)
+    JsonSerializer js1 = JsonSerializer("")
+    Box[Serializer] ser1 = Box.new(js1)
+    t.serialize(ser1)
+    str json1 = ser1.result()
+    print(json1)
+    Json j1 = json_parse(json1).unwrap()
+    JsonDeserializer jd1 = JsonDeserializer(j1, Vector[Json](), "")
+    Box[Deserializer] de1 = Box.new(jd1)
+    Team t2 = deserialize_Team(de1).unwrap()
+    JsonSerializer js1b = JsonSerializer("")
+    Box[Serializer] ser1b = Box.new(js1b)
+    t2.serialize(ser1b)
+    print(ser1b.result())
+
+    # Roundtrip: Dict[str, int] field
+    Config c = Config("prod", Dict[str, int]())
+    c.settings.put("timeout", 30)
+    c.settings.put("retries", 3)
+    JsonSerializer js2 = JsonSerializer("")
+    Box[Serializer] ser2 = Box.new(js2)
+    c.serialize(ser2)
+    str json2 = ser2.result()
+    print(json2)
+    Json j2 = json_parse(json2).unwrap()
+    JsonDeserializer jd2 = JsonDeserializer(j2, Vector[Json](), "")
+    Box[Deserializer] de2 = Box.new(jd2)
+    Config c2 = deserialize_Config(de2).unwrap()
+    JsonSerializer js2b = JsonSerializer("")
+    Box[Serializer] ser2b = Box.new(js2b)
+    c2.serialize(ser2b)
+    print(ser2b.result())
+
+    # Roundtrip: Vector[str] + Dict[str, str] fields
+    Record r = Record(Vector[str](), Dict[str, str]())
+    r.tags.push("bug")
+    r.tags.push("urgent")
+    r.metadata.put("author", "alice")
+    JsonSerializer js3 = JsonSerializer("")
+    Box[Serializer] ser3 = Box.new(js3)
+    r.serialize(ser3)
+    str json3 = ser3.result()
+    print(json3)
+    Json j3 = json_parse(json3).unwrap()
+    JsonDeserializer jd3 = JsonDeserializer(j3, Vector[Json](), "")
+    Box[Deserializer] de3 = Box.new(jd3)
+    Record r2 = deserialize_Record(de3).unwrap()
+    JsonSerializer js3b = JsonSerializer("")
+    Box[Serializer] ser3b = Box.new(js3b)
+    r2.serialize(ser3b)
+    print(ser3b.result())

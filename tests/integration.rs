@@ -1205,6 +1205,20 @@ fn deserializable() {
 }
 
 #[test]
+fn serialize_collections() {
+    run_gg(
+        "serialize_collections.gg",
+        "\
+{\"name\":\"Hawks\",\"scores\":[10,20]}
+{\"name\":\"Hawks\",\"scores\":[10,20]}
+{\"env\":\"prod\",\"settings\":{\"timeout\":30,\"retries\":3}}
+{\"env\":\"prod\",\"settings\":{\"timeout\":30,\"retries\":3}}
+{\"tags\":[\"bug\",\"urgent\"],\"metadata\":{\"author\":\"alice\"}}
+{\"tags\":[\"bug\",\"urgent\"],\"metadata\":{\"author\":\"alice\"}}",
+    );
+}
+
+#[test]
 fn iter_for_else() {
     run_gg(
         "iter_for_else.gg",

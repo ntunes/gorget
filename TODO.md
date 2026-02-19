@@ -9,8 +9,8 @@
 - **`TryInto[T]` conversion trait**: Fallible counterpart to `Into[T]`, same complexity issues (explicit type args or return-type inference). Track alongside `Into[T]`. [added: 2026-02-18]
 
 
-- **Serializable/Deserializable: Vector/Option/Dict field support in derive**: Currently fields of these types fall through to `.serialize(ser)` which requires the collection type to implement `Serializable`. Need special-cased derive codegen for `Vector[T]` (emit `begin_seq`/`elem`/`end_seq` loop), `Option[T]` (emit value or `write_null`), `Dict[str,T]` (emit as struct). [added: 2026-02-17]
 
+- **Option[T] as struct field codegen**: `Option[str]` (and likely `Option[T]` in general) as a struct field fails C compilation — the generic instantiation `Option__const_char_ptr` is incomplete when the struct definition references it. The constructor mangling also fails (`Option__Some` undeclared, `NULL()` for None). Discovered during collection derive work; not related to derive itself. [added: 2026-02-19]
 
 - **Extract serialization traits to `std.serialize` module**: When adding TOML/YAML serializers, move `Serializer` and `Serializable` traits to a shared `std.serialize` module. `std.json`, `std.toml`, `std.yaml` would each provide their own backend. [added: 2026-02-17]
 

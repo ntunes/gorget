@@ -54,6 +54,7 @@ trait Deserializer:
     int begin_seq(&self)
     void elem(&self, int index)
     void end_seq(&self)
+    Vector[str] keys(self)
     bool has_error(self)
     str error(self)
 
@@ -190,6 +191,12 @@ equip JsonDeserializer with Deserializer:
             self.de_err = "no seq context to end"
             return
         self.de_current = self.de_stack.pop().unwrap()
+
+    Vector[str] keys(self):
+        if self.de_stack.len() == 0:
+            return Vector[str]()
+        Json de_top = self.de_stack.get(self.de_stack.len() - 1).unwrap()
+        return de_top.keys()
 
     bool has_error(self):
         return self.de_err != ""

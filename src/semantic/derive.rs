@@ -1,11 +1,21 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use crate::parser::ast::{
     Attribute, AttributeArg, EnumDef, GenericParam, GenericParams, Item, Module, StructDef,
     VariantFields,
 };
 use crate::parser::Parser;
-use crate::span::{Span, Spanned};
+use crate::span::Spanned;
+// Span is used by tests (Span::dummy())
+#[cfg(test)]
+use crate::span::Span;
 
 use super::errors::{SemanticError, SemanticErrorKind};
+
+/// Global counter for allocating unique span offsets for derive-generated items.
+/// Each derive source string gets a unique base offset (spaced 100K apart) to prevent
+/// span collisions between different derive-generated equip blocks/functions.
+static DERIVE_SPAN_OFFSET: AtomicUsize = AtomicUsize::new(10_000_000);
 
 /// Format generic parameters back to source text.
 /// Returns `""` for `None`, `"[T]"` for single param, `"[T, U]"` for multiple.
@@ -289,9 +299,10 @@ fn generate_struct_serializable(type_name: &str, gs: &str, fields: &[(&str, &str
     ));
     for (i, (name, ty)) in fields.iter().enumerate() {
         body.push_str(&format!("        ser.field(\"{name}\", {i})\n"));
-        body.push_str(&format!(
-            "        {}\n",
-            field_write_call(&format!("self.{name}"), ty)
+        body.push_str(&field_write_lines(
+            &format!("self.{name}"),
+            ty,
+            "        ",
         ));
     }
     body.push_str("        ser.end_struct()");
@@ -301,6 +312,200 @@ fn generate_struct_serializable(type_name: &str, gs: &str, fields: &[(&str, &str
          \x20   void serialize(self, Box[Serializer] ser):\n\
          {body}\n"
     )
+}
+
+// ── Collection type detection ─────────────────────────────────
+
+/// Recognized collection wrapper types for special-cased derive codegen.
+enum CollectionKind {
+    Vector(String),        // Vector[T] → element type
+    Option(String),        // Option[T] → inner type
+    Dict(String, String),  // Dict[K, V] → key, value types
+    HashMap(String, String), // HashMap[K, V] → key, value types
+}
+
+/// Parse a type string to detect Vector, Option, Dict, or HashMap wrappers.
+fn parse_collection_type(ty: &str) -> Option<CollectionKind> {
+    if let Some(inner) = strip_generic(ty, "Vector") {
+        Some(CollectionKind::Vector(inner.to_string()))
+    } else if let Some(inner) = strip_generic(ty, "Option") {
+        Some(CollectionKind::Option(inner.to_string()))
+    } else if let Some(inner) = strip_generic(ty, "Dict") {
+        let (k, v) = split_top_level_comma(inner)?;
+        Some(CollectionKind::Dict(k.trim().to_string(), v.trim().to_string()))
+    } else if let Some(inner) = strip_generic(ty, "HashMap") {
+        let (k, v) = split_top_level_comma(inner)?;
+        Some(CollectionKind::HashMap(k.trim().to_string(), v.trim().to_string()))
+    } else {
+        None
+    }
+}
+
+/// Strip `Name[...]` wrapper, returning the content between brackets.
+/// Handles nested brackets: `Vector[Dict[str, int]]` → `Dict[str, int]`.
+fn strip_generic<'a>(ty: &'a str, name: &str) -> Option<&'a str> {
+    let rest = ty.strip_prefix(name)?;
+    let rest = rest.strip_prefix('[')?;
+    let rest = rest.strip_suffix(']')?;
+    Some(rest)
+}
+
+/// Split a string by the first top-level comma (respecting bracket nesting).
+fn split_top_level_comma(s: &str) -> Option<(&str, &str)> {
+    let mut depth = 0;
+    for (i, c) in s.char_indices() {
+        match c {
+            '[' => depth += 1,
+            ']' => depth -= 1,
+            ',' if depth == 0 => {
+                return Some((&s[..i], &s[i + 1..]));
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Global counter for allocating unique temporary variable names across all
+/// derive-generated code. Prevents `lookup_by_name_anywhere` from confusing
+/// variables of the same name across different equip blocks.
+static DERIVE_VAR_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+/// Generate a unique temporary variable name (globally unique across all derives).
+fn next_var() -> String {
+    let v = DERIVE_VAR_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("__t{v}")
+}
+
+// ── Multi-line serialization codegen ──────────────────────────
+
+/// Generate serialization code for writing `expr` of type `type_name`.
+/// Returns properly indented multi-line code. Recurses for nested collections.
+fn field_write_lines(expr: &str, type_name: &str, indent: &str) -> String {
+    match parse_collection_type(type_name) {
+        Some(CollectionKind::Vector(ref elem_ty)) => {
+            let idx = next_var();
+            let val = next_var();
+            let inner = format!("{indent}    ");
+            let elem_lines = field_write_lines(&val, elem_ty, &inner);
+            format!(
+                "{indent}ser.begin_seq({expr}.len())\n\
+                 {indent}int {idx} = 0\n\
+                 {indent}while {idx} < {expr}.len():\n\
+                 {inner}ser.elem({idx})\n\
+                 {inner}{elem_ty} {val} = {expr}.get({idx}).unwrap()\n\
+                 {elem_lines}\
+                 {inner}{idx} = {idx} + 1\n\
+                 {indent}ser.end_seq()\n"
+            )
+        }
+        Some(CollectionKind::Option(ref inner_ty)) => {
+            let val = next_var();
+            let case_indent = format!("{indent}    ");
+            let body_indent = format!("{indent}        ");
+            let write_lines = field_write_lines(&val, inner_ty, &body_indent);
+            format!(
+                "{indent}match {expr}:\n\
+                 {case_indent}case Some({val}):\n\
+                 {write_lines}\
+                 {case_indent}case None:\n\
+                 {body_indent}ser.write_null()\n"
+            )
+        }
+        Some(CollectionKind::Dict(ref key_ty, ref val_ty))
+        | Some(CollectionKind::HashMap(ref key_ty, ref val_ty))
+            if key_ty == "str" =>
+        {
+            let keys_var = next_var();
+            let idx = next_var();
+            let key_var = next_var();
+            let val_var = next_var();
+            let inner = format!("{indent}    ");
+            let val_lines = field_write_lines(&val_var, val_ty, &inner);
+            format!(
+                "{indent}Vector[str] {keys_var} = {expr}.keys()\n\
+                 {indent}ser.begin_struct(\"\", {keys_var}.len())\n\
+                 {indent}int {idx} = 0\n\
+                 {indent}while {idx} < {keys_var}.len():\n\
+                 {inner}str {key_var} = {keys_var}.get({idx}).unwrap()\n\
+                 {inner}ser.field({key_var}, {idx})\n\
+                 {inner}{val_ty} {val_var} = {expr}[{key_var}]\n\
+                 {val_lines}\
+                 {inner}{idx} = {idx} + 1\n\
+                 {indent}ser.end_struct()\n"
+            )
+        }
+        _ => {
+            // Primitive or named type — single line
+            format!("{indent}{}\n", field_write_call(expr, type_name))
+        }
+    }
+}
+
+// ── Multi-line deserialization codegen ─────────────────────────
+
+/// Generate deserialization code that declares variable `name` of type `type_name`.
+/// Returns properly indented multi-line code. Recurses for nested collections.
+fn field_read_lines(name: &str, type_name: &str, indent: &str) -> String {
+    match parse_collection_type(type_name) {
+        Some(CollectionKind::Vector(ref elem_ty)) => {
+            let len_var = next_var();
+            let idx = next_var();
+            let elem_var = next_var();
+            let inner = format!("{indent}    ");
+            let elem_lines = field_read_lines(&elem_var, elem_ty, &inner);
+            format!(
+                "{indent}int {len_var} = de.begin_seq()\n\
+                 {indent}{type_name} {name} = {type_name}()\n\
+                 {indent}int {idx} = 0\n\
+                 {indent}while {idx} < {len_var}:\n\
+                 {inner}de.elem({idx})\n\
+                 {elem_lines}\
+                 {inner}{name}.push({elem_var})\n\
+                 {inner}{idx} = {idx} + 1\n\
+                 {indent}de.end_seq()\n"
+            )
+        }
+        Some(CollectionKind::Option(ref inner_ty)) => {
+            let val_var = next_var();
+            let inner = format!("{indent}    ");
+            let val_lines = field_read_lines(&val_var, inner_ty, &inner);
+            format!(
+                "{indent}{type_name} {name} = None()\n\
+                 {indent}if not de.is_null():\n\
+                 {val_lines}\
+                 {inner}{name} = Some({val_var})\n"
+            )
+        }
+        Some(CollectionKind::Dict(ref key_ty, ref val_ty))
+        | Some(CollectionKind::HashMap(ref key_ty, ref val_ty))
+            if key_ty == "str" =>
+        {
+            let keys_var = next_var();
+            let idx = next_var();
+            let key_var = next_var();
+            let val_var = next_var();
+            let inner = format!("{indent}    ");
+            let val_lines = field_read_lines(&val_var, val_ty, &inner);
+            format!(
+                "{indent}de.begin_struct()\n\
+                 {indent}Vector[str] {keys_var} = de.keys()\n\
+                 {indent}{type_name} {name} = {type_name}()\n\
+                 {indent}int {idx} = 0\n\
+                 {indent}while {idx} < {keys_var}.len():\n\
+                 {inner}str {key_var} = {keys_var}.get({idx}).unwrap()\n\
+                 {inner}de.field({key_var})\n\
+                 {val_lines}\
+                 {inner}{name}.put({key_var}, {val_var})\n\
+                 {inner}{idx} = {idx} + 1\n\
+                 {indent}de.end_struct()\n"
+            )
+        }
+        _ => {
+            // Primitive or named type — single line
+            format!("{indent}{}\n", field_read_decl(name, type_name))
+        }
+    }
 }
 
 /// Generate the serializer call for a single field expression based on its type.
@@ -369,7 +574,7 @@ fn generate_struct_deserializable(type_name: &str, gs: &str, fields: &[(&str, &s
     body.push_str("    de.begin_struct()\n");
     for (name, ty) in fields {
         body.push_str(&format!("    de.field(\"{name}\")\n"));
-        body.push_str(&format!("    {}\n", field_read_decl(name, ty)));
+        body.push_str(&field_read_lines(name, ty, "    "));
     }
     body.push_str("    de.end_struct()\n");
     body.push_str("    if de.has_error():\n");
@@ -446,11 +651,7 @@ fn generate_enum_deserializable(type_name: &str, gs: &str, e: &EnumDef) -> Strin
             }
             body.push_str(&format!("            return Ok({vname}())\n"));
         }
-        if data_variants.is_empty() {
-            body.push_str("        return Error(\"unknown variant\")\n");
-        } else {
-            body.push_str("        return Error(\"unknown variant\")\n");
-        }
+        body.push_str("        return Error(\"unknown variant\")\n");
     }
 
     // Handle data variants via is_struct() + has_field()
@@ -460,16 +661,11 @@ fn generate_enum_deserializable(type_name: &str, gs: &str, e: &EnumDef) -> Strin
             let cond = if i == 0 { "if" } else { "elif" };
             body.push_str(&format!("    {cond} de.has_field(\"{vname}\"):\n"));
             body.push_str(&format!("        de.field(\"{vname}\")\n"));
-            body.push_str(&format!(
-                "        int de_seq_len = de.begin_seq()\n"
-            ));
+            body.push_str("        int de_seq_len = de.begin_seq()\n");
             for (fi, fty) in field_types.iter().enumerate() {
                 body.push_str(&format!("        de.elem({fi})\n"));
                 let var_name = format!("a{fi}");
-                body.push_str(&format!(
-                    "        {}\n",
-                    field_read_decl(&var_name, fty)
-                ));
+                body.push_str(&field_read_lines(&var_name, fty, "        "));
             }
             body.push_str("        de.end_seq()\n");
             body.push_str("        de.end_struct()\n");
@@ -715,12 +911,13 @@ fn generate_enum_serializable(type_name: &str, gs: &str, e: &EnumDef) -> String 
         } else {
             // Data variant → externally-tagged: {"VariantName": [field0, field1, ...]}
             let field_types: Vec<&str> = match &variant.node.fields {
-                VariantFields::Tuple(fields) => {
-                    fields.iter().map(|f| {
+                VariantFields::Tuple(fields) => fields
+                    .iter()
+                    .map(|f| {
                         let ty = format_type(&f.node);
                         Box::leak(ty.into_boxed_str()) as &str
-                    }).collect()
-                }
+                    })
+                    .collect(),
                 VariantFields::Unit => vec![],
             };
 
@@ -730,21 +927,19 @@ fn generate_enum_serializable(type_name: &str, gs: &str, e: &EnumDef) -> String 
                  \x20               ser.begin_seq({field_count})\n"
             );
             for (i, binding) in bindings.iter().enumerate() {
-                body.push_str(&format!(
-                    "                ser.elem({i})\n\
-                     \x20               {}\n",
-                    field_write_call(binding, field_types[i])
+                body.push_str(&format!("                ser.elem({i})\n"));
+                body.push_str(&field_write_lines(
+                    binding,
+                    field_types[i],
+                    "                ",
                 ));
             }
             body.push_str(
                 "                ser.end_seq()\n\
-                 \x20               ser.end_struct()"
+                 \x20               ser.end_struct()",
             );
 
-            arms.push_str(&format!(
-                "            case {pattern}:\n\
-                 {body}\n"
-            ));
+            arms.push_str(&format!("            case {pattern}:\n{body}\n"));
         }
     }
 
@@ -763,7 +958,12 @@ fn generate_enum_serializable(type_name: &str, gs: &str, e: &EnumDef) -> String 
 /// Most derives generate equip blocks (trait implementations). `@derive(Deserializable)`
 /// generates free functions instead (since Gorget has no `Self` type in traits).
 fn parse_and_collect_derived_items(source: &str, new_items: &mut Vec<Spanned<Item>>) {
-    let mut parser = Parser::new(source);
+    // Each derive source gets a unique base offset so that internal spans
+    // (method calls, expressions) don't collide across different derive-generated
+    // items. Without this, method_resolutions keyed by span.start would clash
+    // when multiple @derive attributes produce equip blocks with similar structure.
+    let base_offset = DERIVE_SPAN_OFFSET.fetch_add(100_000, Ordering::Relaxed);
+    let mut parser = Parser::new_with_offset(source, base_offset);
     let parsed = parser.parse_module();
 
     if !parser.errors.is_empty() {
@@ -776,8 +976,7 @@ fn parse_and_collect_derived_items(source: &str, new_items: &mut Vec<Spanned<Ite
 
     for item in parsed.items {
         if matches!(&item.node, Item::Equip(_) | Item::Function(_)) {
-            // Re-wrap with a dummy span so it doesn't point into the original source
-            new_items.push(Spanned::new(item.node, Span::dummy()));
+            new_items.push(item);
         }
     }
 }
