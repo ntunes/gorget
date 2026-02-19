@@ -1,11 +1,9 @@
 # Basics — core language constructs
 #
-# This example showcases fundamental Gorget syntax. Some features are
-# commented out because they depend on parts of the language that aren't
-# implemented yet.
+# This example showcases fundamental Gorget syntax.
 
-# NOT YET: stdlib imports (std.fmt, std.collections, etc.)
-# from std.fmt import Displayable
+from std.fmt import Displayable
+from std.collections import Vector
 
 struct Point:
     float x
@@ -15,15 +13,11 @@ enum Color:
     Red
     Green
     Blue
-    # NOT YET: uint8 type not implemented
-    # Custom(uint8, uint8, uint8)
+    Custom(uint8, uint8, uint8)
 
-# NOT YET: Displayable equip requires `str display(self)` method name,
-# and stdlib import is not available. The built-in Displayable trait
-# is already registered; this will work once we have stdlib imports.
-# equip Point with Displayable:
-#     str display(self):
-#         return "({self.x}, {self.y})"
+equip Point with Displayable:
+    str display(self):
+        return "({self.x}, {self.y})"
 
 int add(int a, int b):
     return a + b
@@ -49,5 +43,4 @@ void main():
     print("double(5) = {double(5)}")
     print("name = {name}")
 
-    # NOT YET: list comprehensions
-    # Vector[int] squares = [x * x for x in 0..10]
+    Vector[int] squares = [x * x for x in 0..10]

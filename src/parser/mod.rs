@@ -2307,8 +2307,8 @@ mod tests {
         let source = std::fs::read_to_string("examples/basics.gg")
             .expect("Could not read examples/basics.gg");
         let module = parse(&source);
-        // 5 items: struct Point, enum Color, add, double, main
-        assert_eq!(module.items.len(), 5);
+        // 8 items: 2 imports, struct Point, enum Color, equip Displayable, add, double, main
+        assert_eq!(module.items.len(), 8);
     }
 
     // ── Error Recovery ──────────────────────────────────────────
