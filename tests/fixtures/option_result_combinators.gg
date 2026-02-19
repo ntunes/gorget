@@ -29,6 +29,23 @@ void main():
     Option[int] chained = some.and_then((int x): Some(x + 1))
     print("{chained.unwrap()}")
 
+    # flatten
+    Option[int] inner_some = Some(100)
+    Option[Option[int]] nested = Some(inner_some)
+    Option[int] flat = nested.flatten()
+    print("{flat.unwrap()}")
+
+    Option[Option[int]] none_outer = None()
+    Option[int] flat_none = none_outer.flatten()
+    bool is_none1 = flat_none.is_none()
+    print("{is_none1}")
+
+    Option[int] inner_none = None()
+    Option[Option[int]] some_none = Some(inner_none)
+    Option[int] flat_some_none = some_none.flatten()
+    bool is_none2 = flat_some_none.is_none()
+    print("{is_none2}")
+
     # Result combinators
     Result[int, str] ok = Ok(10)
     Result[int, str] err = Error("fail")

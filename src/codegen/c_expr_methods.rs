@@ -1245,6 +1245,15 @@ impl CodegenContext<'_> {
                     "({{ {mangled} __opt = {recv}; (__opt.tag == {tag_some}) ? __opt : {alt}; }})"
                 )
             }
+            "flatten" => {
+                let type_args = self.infer_generic_type_args(receiver);
+                let inner_mangled = type_args.first().cloned()
+                    .unwrap_or_else(|| "Option__int64_t".to_string());
+                let inner_none = c_mangle::mangle_variant(&inner_mangled, "None");
+                format!(
+                    "({{ {mangled} __opt = {recv}; (__opt.tag == {tag_some}) ? __opt.data.Some._0 : {inner_none}(); }})"
+                )
+            }
             _ => format!("/* unknown Option method {method_name} */ 0"),
         }
     }

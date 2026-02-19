@@ -427,7 +427,7 @@ impl CodegenContext<'_> {
                 }
                 // Option methods that return Option
                 if recv_type == "Option" && matches!(method.node.as_str(),
-                    "map" | "and_then" | "or_else" | "or" | "filter"
+                    "map" | "and_then" | "or_else" | "or" | "filter" | "flatten"
                 ) {
                     return "Option".to_string();
                 }

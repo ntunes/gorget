@@ -2395,6 +2395,17 @@ impl<'a> TypeChecker<'a> {
                 "unwrap" | "unwrap_or" | "expect" | "unwrap_or_else" => Some(elem_type()),
                 "is_some" | "is_none" => Some(self.types.bool_id),
                 "map" | "and_then" | "or_else" | "or" | "filter" => Some(receiver_type),
+                "flatten" => {
+                    let inner = elem_type();
+                    // For Option[Option[U]], elem_type() is Option[U] — return it directly
+                    if let ResolvedType::Generic(inner_def, _) = self.types.get(inner) {
+                        if self.scopes.get_def(*inner_def).name == "Option" {
+                            return Some(inner);
+                        }
+                    }
+                    // Not a nested Option — gracefully return receiver_type
+                    Some(receiver_type)
+                }
                 _ => None,
             },
             "Result" => match method {

@@ -2384,6 +2384,7 @@ Same API as `Dict` but does not preserve insertion order. Use when order is irre
 | `map(f)` | `(T) → U → Option[U]` | Apply function to inner value |
 | `and_then(f)` | `(T) → Option[U] → Option[U]` | Flat-map |
 | `or_else(f)` | `() → Option[T] → Option[T]` | Fallback if `None` |
+| `flatten()` | `Option[Option[T]] → Option[T]` | Unwrap one nesting layer |
 
 **`Result[T, E]`** — Success or error
 
