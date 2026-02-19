@@ -1,0 +1,1124 @@
+# std.yaml — Pure Gorget YAML 1.2 parser
+#
+# Provides a recursive-descent YAML parser, serializer, and accessor methods.
+# Block and flow collections, quoted and plain scalars, comments, document markers.
+# No C dependencies — uses only Gorget standard library.
+
+from std.collections import Vector, Dict
+from std.conv import parse_int, parse_float, int_to_str, float_to_str, char_to_str
+
+# ── YAML value type ──────────────────────────────────────────
+
+enum Yaml:
+    Null
+    Bool(bool)
+    Int(int)
+    Float(float)
+    Str(str)
+    Seq(Vector[Yaml])
+    Map(Dict[str, Yaml])
+
+# ── Internal parser ──────────────────────────────────────────
+
+struct YamlParser:
+    str yaml_input
+    int yaml_pos
+    str yaml_err
+
+equip YamlParser:
+    bool failed(self) = self.yaml_err != ""
+
+    void fail(&self, str msg):
+        if self.yaml_err == "":
+            self.yaml_err = consuming msg
+
+    bool at_end(self) = self.yaml_pos >= self.yaml_input.len()
+
+    char peek(self):
+        if self.yaml_pos < self.yaml_input.len():
+            return self.yaml_input[self.yaml_pos]
+        return '\0'
+
+    char peek_at(self, int offset):
+        int yaml_idx = self.yaml_pos + offset
+        if yaml_idx >= 0 and yaml_idx < self.yaml_input.len():
+            return self.yaml_input[yaml_idx]
+        return '\0'
+
+    void advance(&self):
+        if self.yaml_pos < self.yaml_input.len():
+            self.yaml_pos = self.yaml_pos + 1
+
+    # Skip spaces only (not newlines — they're significant in YAML)
+    void skip_spaces(&self):
+        while self.yaml_pos < self.yaml_input.len():
+            char yaml_ch = self.yaml_input[self.yaml_pos]
+            if yaml_ch == ' ' or yaml_ch == '\t':
+                self.yaml_pos = self.yaml_pos + 1
+            else:
+                return
+
+    # Skip spaces and comments to end of line
+    void skip_to_eol(&self):
+        self.skip_spaces()
+        if self.yaml_pos < self.yaml_input.len() and self.yaml_input[self.yaml_pos] == '#':
+            while self.yaml_pos < self.yaml_input.len() and self.yaml_input[self.yaml_pos] != '\n':
+                self.yaml_pos = self.yaml_pos + 1
+
+    # Skip blank lines (empty or comment-only) and consume their newlines
+    void skip_blank_lines(&self):
+        while self.yaml_pos < self.yaml_input.len():
+            int yaml_saved = self.yaml_pos
+            self.skip_spaces()
+            if self.yaml_pos >= self.yaml_input.len():
+                return
+            char yaml_ch = self.yaml_input[self.yaml_pos]
+            if yaml_ch == '\n':
+                self.yaml_pos = self.yaml_pos + 1
+            elif yaml_ch == '\r':
+                self.yaml_pos = self.yaml_pos + 1
+                if self.yaml_pos < self.yaml_input.len() and self.yaml_input[self.yaml_pos] == '\n':
+                    self.yaml_pos = self.yaml_pos + 1
+            elif yaml_ch == '#':
+                while self.yaml_pos < self.yaml_input.len() and self.yaml_input[self.yaml_pos] != '\n':
+                    self.yaml_pos = self.yaml_pos + 1
+                if self.yaml_pos < self.yaml_input.len():
+                    self.yaml_pos = self.yaml_pos + 1
+            else:
+                self.yaml_pos = yaml_saved
+                return
+
+    # Count leading spaces at the current line position
+    int current_indent(self):
+        int yaml_cnt = 0
+        int yaml_idx = self.yaml_pos
+        while yaml_idx < self.yaml_input.len() and self.yaml_input[yaml_idx] == ' ':
+            yaml_cnt = yaml_cnt + 1
+            yaml_idx = yaml_idx + 1
+        return yaml_cnt
+
+    # Consume a newline (CR, LF, or CRLF)
+    void consume_newline(&self):
+        if self.yaml_pos < self.yaml_input.len():
+            if self.yaml_input[self.yaml_pos] == '\n':
+                self.yaml_pos = self.yaml_pos + 1
+            elif self.yaml_input[self.yaml_pos] == '\r':
+                self.yaml_pos = self.yaml_pos + 1
+                if self.yaml_pos < self.yaml_input.len() and self.yaml_input[self.yaml_pos] == '\n':
+                    self.yaml_pos = self.yaml_pos + 1
+
+    bool is_newline(self):
+        if self.yaml_pos >= self.yaml_input.len():
+            return true
+        char yaml_ch = self.yaml_input[self.yaml_pos]
+        return yaml_ch == '\n' or yaml_ch == '\r'
+
+    # Check if current position is at a document marker (--- or ...)
+    bool is_doc_marker(self):
+        if self.yaml_pos + 2 >= self.yaml_input.len():
+            return false
+        char yaml_m0 = self.yaml_input[self.yaml_pos]
+        char yaml_m1 = self.yaml_input[self.yaml_pos + 1]
+        char yaml_m2 = self.yaml_input[self.yaml_pos + 2]
+        bool yaml_is_three = false
+        if yaml_m0 == '-' and yaml_m1 == '-' and yaml_m2 == '-':
+            yaml_is_three = true
+        if yaml_m0 == '.' and yaml_m1 == '.' and yaml_m2 == '.':
+            yaml_is_three = true
+        if not yaml_is_three:
+            return false
+        # Must be followed by whitespace, newline, or EOF
+        if self.yaml_pos + 3 >= self.yaml_input.len():
+            return true
+        char yaml_after = self.yaml_input[self.yaml_pos + 3]
+        return yaml_after == ' ' or yaml_after == '\t' or yaml_after == '\n' or yaml_after == '\r'
+
+    # ── Document parsing ─────────────────────────────────────
+
+    Yaml parse_document(&self):
+        self.skip_blank_lines()
+        # Skip optional --- marker
+        if self.yaml_pos + 2 < self.yaml_input.len():
+            if self.yaml_input[self.yaml_pos] == '-' and self.yaml_input[self.yaml_pos + 1] == '-' and self.yaml_input[self.yaml_pos + 2] == '-':
+                self.yaml_pos = self.yaml_pos + 3
+                self.skip_to_eol()
+                if self.yaml_pos < self.yaml_input.len() and self.is_newline():
+                    self.consume_newline()
+        self.skip_blank_lines()
+        if self.at_end():
+            return Null()
+        Yaml yaml_doc = self.parse_block_value(0)
+        # Skip optional ... marker
+        self.skip_blank_lines()
+        if self.yaml_pos + 2 < self.yaml_input.len():
+            if self.yaml_input[self.yaml_pos] == '.' and self.yaml_input[self.yaml_pos + 1] == '.' and self.yaml_input[self.yaml_pos + 2] == '.':
+                self.yaml_pos = self.yaml_pos + 3
+        return yaml_doc
+
+    # ── Block value dispatch ─────────────────────────────────
+
+    Yaml parse_block_value(&self, int min_indent):
+        self.skip_blank_lines()
+        if self.at_end() or self.failed():
+            return Null()
+        int yaml_indent = self.current_indent()
+        if yaml_indent < min_indent:
+            return Null()
+        # Check first significant character
+        int yaml_sig = self.yaml_pos + yaml_indent
+        if yaml_sig >= self.yaml_input.len():
+            return Null()
+        char yaml_fc = self.yaml_input[yaml_sig]
+        # Flow collections
+        if yaml_fc == '{':
+            self.yaml_pos = yaml_sig
+            return self.parse_flow_mapping()
+        if yaml_fc == '[':
+            self.yaml_pos = yaml_sig
+            return self.parse_flow_sequence()
+        # Quoted scalars at block level
+        if yaml_fc == '"':
+            self.yaml_pos = yaml_sig
+            str yaml_dq = self.parse_double_quoted()
+            self.skip_to_eol()
+            if self.yaml_pos < self.yaml_input.len() and self.is_newline():
+                self.consume_newline()
+            return Str(yaml_dq)
+        if yaml_fc == '\'':
+            self.yaml_pos = yaml_sig
+            str yaml_sq = self.parse_single_quoted()
+            self.skip_to_eol()
+            if self.yaml_pos < self.yaml_input.len() and self.is_newline():
+                self.consume_newline()
+            return Str(yaml_sq)
+        # Block sequence (starts with -)
+        if yaml_fc == '-' and yaml_sig + 1 < self.yaml_input.len():
+            char yaml_after_dash = self.yaml_input[yaml_sig + 1]
+            if yaml_after_dash == ' ' or yaml_after_dash == '\n' or yaml_after_dash == '\r':
+                return self.parse_block_sequence(min_indent)
+        # Try block mapping: look for a key: pattern
+        if self.looks_like_mapping(yaml_sig):
+            return self.parse_block_mapping(min_indent)
+        # Plain scalar
+        self.yaml_pos = yaml_sig
+        return self.parse_plain_scalar(min_indent)
+
+    # Check if position looks like a mapping key (scan for unquoted colon followed by space/eol)
+    bool looks_like_mapping(self, int yaml_from):
+        int yaml_scan = yaml_from
+        # Check for quoted key
+        if yaml_scan < self.yaml_input.len():
+            char yaml_qc = self.yaml_input[yaml_scan]
+            if yaml_qc == '"' or yaml_qc == '\'':
+                # Skip quoted string to find colon after it
+                char yaml_quote = yaml_qc
+                yaml_scan = yaml_scan + 1
+                while yaml_scan < self.yaml_input.len() and self.yaml_input[yaml_scan] != yaml_quote:
+                    if self.yaml_input[yaml_scan] == '\\' and yaml_quote == '"':
+                        yaml_scan = yaml_scan + 1
+                    yaml_scan = yaml_scan + 1
+                if yaml_scan < self.yaml_input.len():
+                    yaml_scan = yaml_scan + 1
+                # Skip spaces after quoted key
+                while yaml_scan < self.yaml_input.len() and self.yaml_input[yaml_scan] == ' ':
+                    yaml_scan = yaml_scan + 1
+                if yaml_scan < self.yaml_input.len() and self.yaml_input[yaml_scan] == ':':
+                    if yaml_scan + 1 >= self.yaml_input.len():
+                        return true
+                    char yaml_ac = self.yaml_input[yaml_scan + 1]
+                    if yaml_ac == ' ' or yaml_ac == '\n' or yaml_ac == '\r':
+                        return true
+                return false
+        while yaml_scan < self.yaml_input.len():
+            char yaml_sc = self.yaml_input[yaml_scan]
+            if yaml_sc == ':':
+                if yaml_scan + 1 >= self.yaml_input.len():
+                    return true
+                char yaml_ac = self.yaml_input[yaml_scan + 1]
+                if yaml_ac == ' ' or yaml_ac == '\n' or yaml_ac == '\r':
+                    return true
+            if yaml_sc == '\n' or yaml_sc == '\r' or yaml_sc == '#':
+                return false
+            yaml_scan = yaml_scan + 1
+        return false
+
+    # ── Block mapping ────────────────────────────────────────
+
+    Yaml parse_block_mapping(&self, int min_indent):
+        Dict[str, Yaml] yaml_map = Dict[str, Yaml]()
+        self.skip_blank_lines()
+        int yaml_map_indent = self.current_indent()
+        if yaml_map_indent < min_indent:
+            return Map(yaml_map)
+        while not self.at_end() and not self.failed():
+            self.skip_blank_lines()
+            if self.at_end():
+                break
+            int yaml_line_indent = self.current_indent()
+            if yaml_line_indent < yaml_map_indent:
+                break
+            if yaml_line_indent > yaml_map_indent:
+                break
+            # Check for document markers (--- or ...) at column 0
+            if yaml_line_indent == 0 and self.is_doc_marker():
+                break
+            self.yaml_pos = self.yaml_pos + yaml_line_indent
+            # Parse the key
+            str yaml_key = self.parse_key()
+            if self.failed():
+                return Null()
+            # Expect colon
+            if self.yaml_pos >= self.yaml_input.len() or self.yaml_input[self.yaml_pos] != ':':
+                self.fail("expected ':' after mapping key")
+                return Null()
+            self.yaml_pos = self.yaml_pos + 1
+            # Value: inline or next-line
+            self.skip_spaces()
+            if self.at_end() or self.is_newline():
+                # Value on next line, indented deeper
+                if not self.at_end():
+                    self.consume_newline()
+                Yaml yaml_val = self.parse_block_value(yaml_map_indent + 1)
+                yaml_map.put(yaml_key, yaml_val)
+            elif self.yaml_input[self.yaml_pos] == '#':
+                # Comment after colon — value on next line
+                self.skip_to_eol()
+                if not self.at_end():
+                    self.consume_newline()
+                Yaml yaml_val = self.parse_block_value(yaml_map_indent + 1)
+                yaml_map.put(yaml_key, yaml_val)
+            else:
+                # Inline value
+                Yaml yaml_val = self.parse_inline_value(yaml_map_indent)
+                yaml_map.put(yaml_key, yaml_val)
+        return Map(yaml_map)
+
+    # Parse a mapping key (bare, double-quoted, or single-quoted)
+    str parse_key(&self):
+        if self.yaml_pos >= self.yaml_input.len():
+            self.fail("expected key")
+            return ""
+        char yaml_kc = self.yaml_input[self.yaml_pos]
+        if yaml_kc == '"':
+            return self.parse_double_quoted()
+        if yaml_kc == '\'':
+            return self.parse_single_quoted()
+        # Bare key: read until colon-space or colon-eol
+        int yaml_start = self.yaml_pos
+        while self.yaml_pos < self.yaml_input.len():
+            char yaml_bc = self.yaml_input[self.yaml_pos]
+            if yaml_bc == ':':
+                # Check if followed by space, eol, or end
+                if self.yaml_pos + 1 >= self.yaml_input.len():
+                    break
+                char yaml_after = self.yaml_input[self.yaml_pos + 1]
+                if yaml_after == ' ' or yaml_after == '\n' or yaml_after == '\r':
+                    break
+            if yaml_bc == '\n' or yaml_bc == '\r':
+                break
+            self.yaml_pos = self.yaml_pos + 1
+        # Trim trailing spaces from key
+        int yaml_end = self.yaml_pos
+        while yaml_end > yaml_start and self.yaml_input[yaml_end - 1] == ' ':
+            yaml_end = yaml_end - 1
+        if yaml_end <= yaml_start:
+            self.fail("empty key")
+            return ""
+        return self.yaml_input[yaml_start..yaml_end]
+
+    # ── Block sequence ───────────────────────────────────────
+
+    Yaml parse_block_sequence(&self, int min_indent):
+        Vector[Yaml] yaml_items = Vector[Yaml]()
+        self.skip_blank_lines()
+        int yaml_seq_indent = self.current_indent()
+        if yaml_seq_indent < min_indent:
+            return Seq(yaml_items)
+        while not self.at_end() and not self.failed():
+            self.skip_blank_lines()
+            if self.at_end():
+                break
+            int yaml_line_indent = self.current_indent()
+            if yaml_line_indent < yaml_seq_indent:
+                break
+            if yaml_line_indent > yaml_seq_indent:
+                break
+            # Check for document markers (--- or ...) at column 0
+            if yaml_line_indent == 0 and self.is_doc_marker():
+                break
+            # Must see '- ' at this indent level
+            int yaml_dash_pos = self.yaml_pos + yaml_seq_indent
+            if yaml_dash_pos >= self.yaml_input.len() or self.yaml_input[yaml_dash_pos] != '-':
+                break
+            if yaml_dash_pos + 1 < self.yaml_input.len():
+                char yaml_after_d = self.yaml_input[yaml_dash_pos + 1]
+                if yaml_after_d != ' ' and yaml_after_d != '\n' and yaml_after_d != '\r':
+                    break
+            # Skip "- "
+            self.yaml_pos = yaml_dash_pos + 1
+            if self.yaml_pos < self.yaml_input.len() and self.yaml_input[self.yaml_pos] == ' ':
+                self.yaml_pos = self.yaml_pos + 1
+            # Parse item value
+            if self.at_end() or self.is_newline():
+                if not self.at_end():
+                    self.consume_newline()
+                Yaml yaml_item_val = self.parse_block_value(yaml_seq_indent + 1)
+                yaml_items.push(yaml_item_val)
+            else:
+                Yaml yaml_item_val = self.parse_inline_value(yaml_seq_indent)
+                yaml_items.push(yaml_item_val)
+        return Seq(yaml_items)
+
+    # ── Inline value (after ': ' or '- ' on same line) ───────
+
+    Yaml parse_inline_value(&self, int yaml_ctx_indent):
+        if self.at_end() or self.failed():
+            return Null()
+        char yaml_ic = self.yaml_input[self.yaml_pos]
+        if yaml_ic == '{':
+            return self.parse_flow_mapping()
+        if yaml_ic == '[':
+            return self.parse_flow_sequence()
+        if yaml_ic == '"':
+            str yaml_dq = self.parse_double_quoted()
+            self.skip_to_eol()
+            if not self.at_end() and self.is_newline():
+                self.consume_newline()
+            return Str(yaml_dq)
+        if yaml_ic == '\'':
+            str yaml_sq = self.parse_single_quoted()
+            self.skip_to_eol()
+            if not self.at_end() and self.is_newline():
+                self.consume_newline()
+            return Str(yaml_sq)
+        # Plain scalar
+        return self.parse_plain_scalar(yaml_ctx_indent)
+
+    # ── Flow mapping {key: value, ...} ──────────────────────
+
+    Yaml parse_flow_mapping(&self):
+        self.yaml_pos = self.yaml_pos + 1
+        self.skip_flow_ws()
+        Dict[str, Yaml] yaml_fmap = Dict[str, Yaml]()
+        if not self.at_end() and self.yaml_input[self.yaml_pos] == '}':
+            self.yaml_pos = self.yaml_pos + 1
+            return Map(yaml_fmap)
+        while not self.at_end() and not self.failed():
+            self.skip_flow_ws()
+            # Parse key
+            str yaml_fkey = self.parse_flow_key()
+            if self.failed():
+                return Null()
+            self.skip_flow_ws()
+            if self.at_end() or self.yaml_input[self.yaml_pos] != ':':
+                self.fail("expected ':' in flow mapping")
+                return Null()
+            self.yaml_pos = self.yaml_pos + 1
+            self.skip_flow_ws()
+            # Parse value
+            Yaml yaml_fval = self.parse_flow_value()
+            if self.failed():
+                return Null()
+            yaml_fmap.put(yaml_fkey, yaml_fval)
+            self.skip_flow_ws()
+            if self.at_end():
+                self.fail("unterminated flow mapping")
+                return Null()
+            if self.yaml_input[self.yaml_pos] == ',':
+                self.yaml_pos = self.yaml_pos + 1
+            elif self.yaml_input[self.yaml_pos] == '}':
+                self.yaml_pos = self.yaml_pos + 1
+                return Map(yaml_fmap)
+            else:
+                self.fail("expected ',' or '}' in flow mapping")
+                return Null()
+        self.fail("unterminated flow mapping")
+        return Null()
+
+    # ── Flow sequence [item, ...] ────────────────────────────
+
+    Yaml parse_flow_sequence(&self):
+        self.yaml_pos = self.yaml_pos + 1
+        self.skip_flow_ws()
+        Vector[Yaml] yaml_fitems = Vector[Yaml]()
+        if not self.at_end() and self.yaml_input[self.yaml_pos] == ']':
+            self.yaml_pos = self.yaml_pos + 1
+            return Seq(yaml_fitems)
+        while not self.at_end() and not self.failed():
+            self.skip_flow_ws()
+            Yaml yaml_fitem = self.parse_flow_value()
+            if self.failed():
+                return Null()
+            yaml_fitems.push(yaml_fitem)
+            self.skip_flow_ws()
+            if self.at_end():
+                self.fail("unterminated flow sequence")
+                return Null()
+            if self.yaml_input[self.yaml_pos] == ',':
+                self.yaml_pos = self.yaml_pos + 1
+            elif self.yaml_input[self.yaml_pos] == ']':
+                self.yaml_pos = self.yaml_pos + 1
+                return Seq(yaml_fitems)
+            else:
+                self.fail("expected ',' or ']' in flow sequence")
+                return Null()
+        self.fail("unterminated flow sequence")
+        return Null()
+
+    # Skip whitespace in flow context (spaces, tabs, newlines)
+    void skip_flow_ws(&self):
+        while self.yaml_pos < self.yaml_input.len():
+            char yaml_fc = self.yaml_input[self.yaml_pos]
+            if yaml_fc == ' ' or yaml_fc == '\t' or yaml_fc == '\n' or yaml_fc == '\r':
+                self.yaml_pos = self.yaml_pos + 1
+            elif yaml_fc == '#':
+                while self.yaml_pos < self.yaml_input.len() and self.yaml_input[self.yaml_pos] != '\n':
+                    self.yaml_pos = self.yaml_pos + 1
+            else:
+                return
+
+    # Parse a key in flow context
+    str parse_flow_key(&self):
+        if self.at_end():
+            self.fail("expected flow key")
+            return ""
+        char yaml_fkc = self.yaml_input[self.yaml_pos]
+        if yaml_fkc == '"':
+            return self.parse_double_quoted()
+        if yaml_fkc == '\'':
+            return self.parse_single_quoted()
+        # Bare flow key: read until : , } ] or newline
+        int yaml_start = self.yaml_pos
+        while self.yaml_pos < self.yaml_input.len():
+            char yaml_bc = self.yaml_input[self.yaml_pos]
+            if yaml_bc == ':' or yaml_bc == ',' or yaml_bc == '}' or yaml_bc == ']':
+                break
+            if yaml_bc == '\n' or yaml_bc == '\r':
+                break
+            self.yaml_pos = self.yaml_pos + 1
+        int yaml_end = self.yaml_pos
+        while yaml_end > yaml_start and self.yaml_input[yaml_end - 1] == ' ':
+            yaml_end = yaml_end - 1
+        return self.yaml_input[yaml_start..yaml_end]
+
+    # Parse a value in flow context
+    Yaml parse_flow_value(&self):
+        if self.at_end() or self.failed():
+            return Null()
+        char yaml_fvc = self.yaml_input[self.yaml_pos]
+        if yaml_fvc == '{':
+            return self.parse_flow_mapping()
+        if yaml_fvc == '[':
+            return self.parse_flow_sequence()
+        if yaml_fvc == '"':
+            str yaml_dq = self.parse_double_quoted()
+            return Str(yaml_dq)
+        if yaml_fvc == '\'':
+            str yaml_sq = self.parse_single_quoted()
+            return Str(yaml_sq)
+        # Plain scalar in flow context (stops at , } ] : )
+        int yaml_start = self.yaml_pos
+        while self.yaml_pos < self.yaml_input.len():
+            char yaml_pc = self.yaml_input[self.yaml_pos]
+            if yaml_pc == ',' or yaml_pc == '}' or yaml_pc == ']':
+                break
+            if yaml_pc == ':':
+                if self.yaml_pos + 1 < self.yaml_input.len():
+                    char yaml_nxt = self.yaml_input[self.yaml_pos + 1]
+                    if yaml_nxt == ' ' or yaml_nxt == ',' or yaml_nxt == '}' or yaml_nxt == ']':
+                        break
+                else:
+                    break
+            if yaml_pc == '\n' or yaml_pc == '\r':
+                break
+            if yaml_pc == '#':
+                # Only a comment if preceded by space
+                if self.yaml_pos > yaml_start and self.yaml_input[self.yaml_pos - 1] == ' ':
+                    break
+            self.yaml_pos = self.yaml_pos + 1
+        int yaml_end = self.yaml_pos
+        while yaml_end > yaml_start and self.yaml_input[yaml_end - 1] == ' ':
+            yaml_end = yaml_end - 1
+        str yaml_text = self.yaml_input[yaml_start..yaml_end]
+        return yaml_resolve_scalar(yaml_text)
+
+    # ── Double-quoted string ─────────────────────────────────
+
+    str parse_double_quoted(&self):
+        self.yaml_pos = self.yaml_pos + 1
+        str yaml_dq_result = ""
+        while self.yaml_pos < self.yaml_input.len():
+            char yaml_dc = self.yaml_input[self.yaml_pos]
+            if yaml_dc == '"':
+                self.yaml_pos = self.yaml_pos + 1
+                return yaml_dq_result
+            if yaml_dc == '\\':
+                self.yaml_pos = self.yaml_pos + 1
+                if self.yaml_pos >= self.yaml_input.len():
+                    self.fail("unterminated string escape")
+                    return ""
+                char yaml_esc = self.yaml_input[self.yaml_pos]
+                self.yaml_pos = self.yaml_pos + 1
+                if yaml_esc == '"':
+                    yaml_dq_result = yaml_dq_result + "\""
+                elif yaml_esc == '\\':
+                    yaml_dq_result = yaml_dq_result + "\\"
+                elif yaml_esc == 'n':
+                    yaml_dq_result = yaml_dq_result + "\n"
+                elif yaml_esc == 't':
+                    yaml_dq_result = yaml_dq_result + "\t"
+                elif yaml_esc == 'r':
+                    yaml_dq_result = yaml_dq_result + "\r"
+                elif yaml_esc == '/':
+                    yaml_dq_result = yaml_dq_result + "/"
+                elif yaml_esc == '0':
+                    yaml_dq_result = yaml_dq_result + "\0"
+                elif yaml_esc == ' ':
+                    yaml_dq_result = yaml_dq_result + " "
+                else:
+                    yaml_dq_result = yaml_dq_result + "\\"
+                    yaml_dq_result = yaml_dq_result + char_to_str(yaml_esc)
+            else:
+                yaml_dq_result = yaml_dq_result + char_to_str(yaml_dc)
+                self.yaml_pos = self.yaml_pos + 1
+        self.fail("unterminated double-quoted string")
+        return ""
+
+    # ── Single-quoted string ─────────────────────────────────
+
+    str parse_single_quoted(&self):
+        self.yaml_pos = self.yaml_pos + 1
+        str yaml_sq_result = ""
+        while self.yaml_pos < self.yaml_input.len():
+            char yaml_sc = self.yaml_input[self.yaml_pos]
+            if yaml_sc == '\'':
+                # '' is an escaped single quote
+                if self.yaml_pos + 1 < self.yaml_input.len() and self.yaml_input[self.yaml_pos + 1] == '\'':
+                    yaml_sq_result = yaml_sq_result + "'"
+                    self.yaml_pos = self.yaml_pos + 2
+                else:
+                    self.yaml_pos = self.yaml_pos + 1
+                    return yaml_sq_result
+            else:
+                yaml_sq_result = yaml_sq_result + char_to_str(yaml_sc)
+                self.yaml_pos = self.yaml_pos + 1
+        self.fail("unterminated single-quoted string")
+        return ""
+
+    # ── Plain scalar ─────────────────────────────────────────
+
+    Yaml parse_plain_scalar(&self, int min_indent):
+        int yaml_start = self.yaml_pos
+        # Read until end of line, comment, or flow indicators
+        while self.yaml_pos < self.yaml_input.len():
+            char yaml_pc = self.yaml_input[self.yaml_pos]
+            if yaml_pc == '\n' or yaml_pc == '\r':
+                break
+            if yaml_pc == ':':
+                if self.yaml_pos + 1 < self.yaml_input.len():
+                    char yaml_nxt = self.yaml_input[self.yaml_pos + 1]
+                    if yaml_nxt == ' ' or yaml_nxt == '\n' or yaml_nxt == '\r':
+                        break
+                else:
+                    break
+            if yaml_pc == '#':
+                if self.yaml_pos > yaml_start and self.yaml_input[self.yaml_pos - 1] == ' ':
+                    break
+            self.yaml_pos = self.yaml_pos + 1
+        int yaml_end = self.yaml_pos
+        while yaml_end > yaml_start and self.yaml_input[yaml_end - 1] == ' ':
+            yaml_end = yaml_end - 1
+        # Consume newline
+        if self.yaml_pos < self.yaml_input.len() and self.is_newline():
+            self.consume_newline()
+        str yaml_text = self.yaml_input[yaml_start..yaml_end]
+        return yaml_resolve_scalar(yaml_text)
+
+# ── Scalar resolution ────────────────────────────────────────
+
+Yaml yaml_resolve_scalar(str yaml_text):
+    if yaml_text == "" or yaml_text == "null" or yaml_text == "Null" or yaml_text == "NULL" or yaml_text == "~":
+        return Null()
+    if yaml_text == "true" or yaml_text == "True" or yaml_text == "TRUE":
+        return Bool(true)
+    if yaml_text == "false" or yaml_text == "False" or yaml_text == "FALSE":
+        return Bool(false)
+    # .inf / -.inf / .nan
+    if yaml_text == ".inf" or yaml_text == ".Inf" or yaml_text == ".INF":
+        return Float(1.0 / 0.0)
+    if yaml_text == "-.inf" or yaml_text == "-.Inf" or yaml_text == "-.INF":
+        return Float(-1.0 / 0.0)
+    if yaml_text == ".nan" or yaml_text == ".NaN" or yaml_text == ".NAN":
+        return Float(0.0 / 0.0)
+    # Try integer (decimal, hex, octal, binary)
+    if yaml_is_int(yaml_text):
+        int yaml_ival = yaml_parse_int_value(yaml_text)
+        return Int(yaml_ival)
+    # Try float
+    if yaml_is_float(yaml_text):
+        float yaml_fval = parse_float(yaml_text)
+        return Float(yaml_fval)
+    return Str(yaml_text)
+
+bool yaml_is_int(str yaml_text):
+    int yaml_len = yaml_text.len()
+    if yaml_len == 0:
+        return false
+    int yaml_idx = 0
+    if yaml_text[0] == '-' or yaml_text[0] == '+':
+        yaml_idx = 1
+    if yaml_idx >= yaml_len:
+        return false
+    # Hex: 0x...
+    if yaml_idx + 1 < yaml_len and yaml_text[yaml_idx] == '0' and yaml_text[yaml_idx + 1] == 'x':
+        yaml_idx = yaml_idx + 2
+        if yaml_idx >= yaml_len:
+            return false
+        while yaml_idx < yaml_len:
+            char yaml_hc = yaml_text[yaml_idx]
+            if yaml_hc >= '0' and yaml_hc <= '9':
+                yaml_idx = yaml_idx + 1
+            elif yaml_hc >= 'a' and yaml_hc <= 'f':
+                yaml_idx = yaml_idx + 1
+            elif yaml_hc >= 'A' and yaml_hc <= 'F':
+                yaml_idx = yaml_idx + 1
+            elif yaml_hc == '_':
+                yaml_idx = yaml_idx + 1
+            else:
+                return false
+        return true
+    # Octal: 0o...
+    if yaml_idx + 1 < yaml_len and yaml_text[yaml_idx] == '0' and yaml_text[yaml_idx + 1] == 'o':
+        yaml_idx = yaml_idx + 2
+        if yaml_idx >= yaml_len:
+            return false
+        while yaml_idx < yaml_len:
+            char yaml_oc = yaml_text[yaml_idx]
+            if yaml_oc >= '0' and yaml_oc <= '7':
+                yaml_idx = yaml_idx + 1
+            elif yaml_oc == '_':
+                yaml_idx = yaml_idx + 1
+            else:
+                return false
+        return true
+    # Binary: 0b...
+    if yaml_idx + 1 < yaml_len and yaml_text[yaml_idx] == '0' and yaml_text[yaml_idx + 1] == 'b':
+        yaml_idx = yaml_idx + 2
+        if yaml_idx >= yaml_len:
+            return false
+        while yaml_idx < yaml_len:
+            char yaml_bc = yaml_text[yaml_idx]
+            if yaml_bc == '0' or yaml_bc == '1':
+                yaml_idx = yaml_idx + 1
+            elif yaml_bc == '_':
+                yaml_idx = yaml_idx + 1
+            else:
+                return false
+        return true
+    # Decimal
+    while yaml_idx < yaml_len:
+        char yaml_dc = yaml_text[yaml_idx]
+        if yaml_dc >= '0' and yaml_dc <= '9':
+            yaml_idx = yaml_idx + 1
+        elif yaml_dc == '_':
+            yaml_idx = yaml_idx + 1
+        else:
+            return false
+    return yaml_idx > 0
+
+int yaml_parse_int_value(str yaml_text):
+    int yaml_len = yaml_text.len()
+    int yaml_idx = 0
+    int yaml_sign = 1
+    if yaml_text[0] == '-':
+        yaml_sign = -1
+        yaml_idx = 1
+    elif yaml_text[0] == '+':
+        yaml_idx = 1
+    if yaml_idx + 1 < yaml_len and yaml_text[yaml_idx] == '0' and yaml_text[yaml_idx + 1] == 'x':
+        # Hex
+        yaml_idx = yaml_idx + 2
+        int yaml_hval = 0
+        while yaml_idx < yaml_len:
+            char yaml_hc = yaml_text[yaml_idx]
+            if yaml_hc >= '0' and yaml_hc <= '9':
+                yaml_hval = yaml_hval * 16 + yaml_hc as int - '0' as int
+            elif yaml_hc >= 'a' and yaml_hc <= 'f':
+                yaml_hval = yaml_hval * 16 + yaml_hc as int - 'a' as int + 10
+            elif yaml_hc >= 'A' and yaml_hc <= 'F':
+                yaml_hval = yaml_hval * 16 + yaml_hc as int - 'A' as int + 10
+            yaml_idx = yaml_idx + 1
+        return yaml_sign * yaml_hval
+    if yaml_idx + 1 < yaml_len and yaml_text[yaml_idx] == '0' and yaml_text[yaml_idx + 1] == 'o':
+        # Octal
+        yaml_idx = yaml_idx + 2
+        int yaml_oval = 0
+        while yaml_idx < yaml_len:
+            char yaml_oc = yaml_text[yaml_idx]
+            if yaml_oc >= '0' and yaml_oc <= '7':
+                yaml_oval = yaml_oval * 8 + yaml_oc as int - '0' as int
+            yaml_idx = yaml_idx + 1
+        return yaml_sign * yaml_oval
+    if yaml_idx + 1 < yaml_len and yaml_text[yaml_idx] == '0' and yaml_text[yaml_idx + 1] == 'b':
+        # Binary
+        yaml_idx = yaml_idx + 2
+        int yaml_bval = 0
+        while yaml_idx < yaml_len:
+            char yaml_bc = yaml_text[yaml_idx]
+            if yaml_bc == '1':
+                yaml_bval = yaml_bval * 2 + 1
+            elif yaml_bc == '0':
+                yaml_bval = yaml_bval * 2
+            yaml_idx = yaml_idx + 1
+        return yaml_sign * yaml_bval
+    # Decimal (may have underscores)
+    int yaml_dval = 0
+    while yaml_idx < yaml_len:
+        char yaml_dc = yaml_text[yaml_idx]
+        if yaml_dc >= '0' and yaml_dc <= '9':
+            yaml_dval = yaml_dval * 10 + yaml_dc as int - '0' as int
+        yaml_idx = yaml_idx + 1
+    return yaml_sign * yaml_dval
+
+bool yaml_is_float(str yaml_text):
+    int yaml_len = yaml_text.len()
+    if yaml_len == 0:
+        return false
+    int yaml_idx = 0
+    if yaml_text[0] == '-' or yaml_text[0] == '+':
+        yaml_idx = 1
+    if yaml_idx >= yaml_len:
+        return false
+    bool yaml_has_dot = false
+    bool yaml_has_e = false
+    bool yaml_has_digit = false
+    while yaml_idx < yaml_len:
+        char yaml_fc = yaml_text[yaml_idx]
+        if yaml_fc >= '0' and yaml_fc <= '9':
+            yaml_has_digit = true
+            yaml_idx = yaml_idx + 1
+        elif yaml_fc == '.':
+            if yaml_has_dot or yaml_has_e:
+                return false
+            yaml_has_dot = true
+            yaml_idx = yaml_idx + 1
+        elif yaml_fc == 'e' or yaml_fc == 'E':
+            if yaml_has_e or not yaml_has_digit:
+                return false
+            yaml_has_e = true
+            yaml_idx = yaml_idx + 1
+            if yaml_idx < yaml_len:
+                if yaml_text[yaml_idx] == '+' or yaml_text[yaml_idx] == '-':
+                    yaml_idx = yaml_idx + 1
+        elif yaml_fc == '_':
+            yaml_idx = yaml_idx + 1
+        else:
+            return false
+    return yaml_has_digit and yaml_has_dot or yaml_has_e
+
+# ── Public API ───────────────────────────────────────────────
+
+Result[Yaml, str] yaml_parse(str yaml_input):
+    YamlParser yaml_p = YamlParser(yaml_input, 0, "")
+    Yaml yaml_doc = yaml_p.parse_document()
+    if yaml_p.failed():
+        return Error(yaml_p.yaml_err)
+    return Ok(yaml_doc)
+
+# ── Serialization (compact flow-style) ──────────────────────
+
+str yaml_escape_str(str yaml_s):
+    str yaml_out = "\""
+    int yaml_idx = 0
+    while yaml_idx < yaml_s.len():
+        char yaml_ec = yaml_s[yaml_idx]
+        if yaml_ec == '"':
+            yaml_out = yaml_out + "\\\""
+        elif yaml_ec == '\\':
+            yaml_out = yaml_out + "\\\\"
+        elif yaml_ec == '\n':
+            yaml_out = yaml_out + "\\n"
+        elif yaml_ec == '\t':
+            yaml_out = yaml_out + "\\t"
+        elif yaml_ec == '\r':
+            yaml_out = yaml_out + "\\r"
+        else:
+            yaml_out = yaml_out + char_to_str(yaml_ec)
+        yaml_idx = yaml_idx + 1
+    return yaml_out + "\""
+
+bool yaml_needs_quoting(str yaml_s):
+    if yaml_s.len() == 0:
+        return true
+    # Check if it could be confused with a special value
+    if yaml_s == "null" or yaml_s == "Null" or yaml_s == "NULL" or yaml_s == "~":
+        return true
+    if yaml_s == "true" or yaml_s == "True" or yaml_s == "TRUE":
+        return true
+    if yaml_s == "false" or yaml_s == "False" or yaml_s == "FALSE":
+        return true
+    if yaml_s == ".inf" or yaml_s == ".Inf" or yaml_s == ".INF":
+        return true
+    if yaml_s == "-.inf" or yaml_s == "-.Inf" or yaml_s == "-.INF":
+        return true
+    if yaml_s == ".nan" or yaml_s == ".NaN" or yaml_s == ".NAN":
+        return true
+    # Check for characters that need quoting
+    int yaml_idx = 0
+    while yaml_idx < yaml_s.len():
+        char yaml_qc = yaml_s[yaml_idx]
+        if yaml_qc == ':' or yaml_qc == '#' or yaml_qc == '[' or yaml_qc == ']':
+            return true
+        if yaml_qc == '{' or yaml_qc == '}' or yaml_qc == ',' or yaml_qc == '"' or yaml_qc == '\'':
+            return true
+        if yaml_qc == '\n' or yaml_qc == '\r' or yaml_qc == '\t':
+            return true
+        yaml_idx = yaml_idx + 1
+    # Check first character for special meaning
+    char yaml_first = yaml_s[0]
+    if yaml_first == '-' or yaml_first == '?' or yaml_first == '&' or yaml_first == '*' or yaml_first == '!':
+        return true
+    if yaml_first == '|' or yaml_first == '>' or yaml_first == '%' or yaml_first == '@' or yaml_first == '`':
+        return true
+    # Check if it looks like a number
+    if yaml_is_int(yaml_s) or yaml_is_float(yaml_s):
+        return true
+    return false
+
+str yaml_format_scalar(str yaml_s):
+    if yaml_needs_quoting(yaml_s):
+        return yaml_escape_str(yaml_s)
+    return yaml_s
+
+str yaml_stringify(Yaml yaml_val):
+    match yaml_val:
+        case Null():
+            return "null"
+        case Bool(yaml_bv):
+            if yaml_bv:
+                return "true"
+            return "false"
+        case Int(yaml_iv):
+            return int_to_str(yaml_iv)
+        case Float(yaml_fv):
+            return float_to_str(yaml_fv)
+        case Str(yaml_sv):
+            return yaml_format_scalar(yaml_sv)
+        case Seq(yaml_items):
+            if yaml_items.len() == 0:
+                return "[]"
+            str yaml_out = "["
+            int yaml_idx = 0
+            while yaml_idx < yaml_items.len():
+                if yaml_idx > 0:
+                    yaml_out = yaml_out + ", "
+                yaml_out = yaml_out + yaml_stringify(yaml_items.get(yaml_idx).unwrap())
+                yaml_idx = yaml_idx + 1
+            return yaml_out + "]"
+        case Map(yaml_map):
+            if yaml_map.len() == 0:
+                return "\{\}"
+            Vector[str] yaml_keys = yaml_map.keys()
+            str yaml_out = "\{"
+            int yaml_idx = 0
+            while yaml_idx < yaml_keys.len():
+                if yaml_idx > 0:
+                    yaml_out = yaml_out + ", "
+                str yaml_k = yaml_keys.get(yaml_idx).unwrap()
+                yaml_out = yaml_out + yaml_format_scalar(yaml_k) + ": " + yaml_stringify(yaml_map[yaml_k])
+                yaml_idx = yaml_idx + 1
+            return yaml_out + "\}"
+
+# ── Pretty printing (block-style) ───────────────────────────
+
+str yaml_make_indent(int yaml_depth):
+    str yaml_out = ""
+    int yaml_idx = 0
+    while yaml_idx < yaml_depth:
+        yaml_out = yaml_out + "  "
+        yaml_idx = yaml_idx + 1
+    return yaml_out
+
+str yaml_pretty_internal(Yaml yaml_val, int yaml_depth):
+    str yaml_ind = yaml_make_indent(yaml_depth)
+    match yaml_val:
+        case Null():
+            return "null"
+        case Bool(yaml_bv):
+            if yaml_bv:
+                return "true"
+            return "false"
+        case Int(yaml_iv):
+            return int_to_str(yaml_iv)
+        case Float(yaml_fv):
+            return float_to_str(yaml_fv)
+        case Str(yaml_sv):
+            return yaml_format_scalar(yaml_sv)
+        case Seq(yaml_items):
+            if yaml_items.len() == 0:
+                return "[]"
+            str yaml_out = ""
+            int yaml_idx = 0
+            while yaml_idx < yaml_items.len():
+                if yaml_idx > 0:
+                    yaml_out = yaml_out + "\n"
+                yaml_out = yaml_out + yaml_ind + "- " + yaml_pretty_internal(yaml_items.get(yaml_idx).unwrap(), yaml_depth + 1)
+                yaml_idx = yaml_idx + 1
+            return yaml_out
+        case Map(yaml_map):
+            if yaml_map.len() == 0:
+                return "\{\}"
+            Vector[str] yaml_keys = yaml_map.keys()
+            str yaml_out = ""
+            int yaml_idx = 0
+            while yaml_idx < yaml_keys.len():
+                if yaml_idx > 0:
+                    yaml_out = yaml_out + "\n"
+                str yaml_k = yaml_keys.get(yaml_idx).unwrap()
+                Yaml yaml_v = yaml_map[yaml_k]
+                str yaml_formatted_key = yaml_format_scalar(yaml_k)
+                # Check if value is a collection
+                bool yaml_is_collection = false
+                match yaml_v:
+                    case Seq(yaml_sv):
+                        if yaml_sv.len() > 0:
+                            yaml_is_collection = true
+                    case Map(yaml_mv):
+                        if yaml_mv.len() > 0:
+                            yaml_is_collection = true
+                    else:
+                        yaml_is_collection = false
+                if yaml_is_collection:
+                    yaml_out = yaml_out + yaml_ind + yaml_formatted_key + ":\n" + yaml_pretty_internal(yaml_v, yaml_depth + 1)
+                else:
+                    yaml_out = yaml_out + yaml_ind + yaml_formatted_key + ": " + yaml_pretty_internal(yaml_v, yaml_depth + 1)
+                yaml_idx = yaml_idx + 1
+            return yaml_out
+
+str yaml_pretty(Yaml yaml_val):
+    return yaml_pretty_internal(yaml_val, 0)
+
+# ── Accessor methods ─────────────────────────────────────────
+
+equip Yaml:
+    Yaml get(self, str key):
+        match self:
+            case Map(yaml_d):
+                if yaml_d.contains(key):
+                    return yaml_d[key]
+                return Null()
+            else:
+                return Null()
+
+    Yaml at(self, int index):
+        match self:
+            case Seq(yaml_arr):
+                if index >= 0 and index < yaml_arr.len():
+                    return yaml_arr.get(index).unwrap()
+                return Null()
+            else:
+                return Null()
+
+    bool has(self, str key):
+        match self:
+            case Map(yaml_d):
+                return yaml_d.contains(key)
+            else:
+                return false
+
+    bool has_index(self, int index):
+        match self:
+            case Seq(yaml_arr):
+                return index >= 0 and index < yaml_arr.len()
+            else:
+                return false
+
+    str as_str(self):
+        match self:
+            case Str(yaml_sv):
+                return yaml_sv
+            else:
+                return ""
+
+    int as_int(self):
+        match self:
+            case Int(yaml_iv):
+                return yaml_iv
+            else:
+                return 0
+
+    float as_float(self):
+        match self:
+            case Float(yaml_fv):
+                return yaml_fv
+            case Int(yaml_iv):
+                return yaml_iv as float
+            else:
+                return 0.0
+
+    bool as_bool(self):
+        match self:
+            case Bool(yaml_bv):
+                return yaml_bv
+            else:
+                return false
+
+    bool is_null(self):
+        match self:
+            case Null():
+                return true
+            else:
+                return false
+
+    bool is_object(self):
+        match self:
+            case Map(yaml_d):
+                return true
+            else:
+                return false
+
+    bool is_array(self):
+        match self:
+            case Seq(yaml_a):
+                return true
+            else:
+                return false
+
+    bool is_string(self):
+        match self:
+            case Str(yaml_sv):
+                return true
+            else:
+                return false
+
+    bool is_number(self):
+        match self:
+            case Int(yaml_iv):
+                return true
+            case Float(yaml_fv):
+                return true
+            else:
+                return false
+
+    bool is_bool(self):
+        match self:
+            case Bool(yaml_bv):
+                return true
+            else:
+                return false
+
+    int len(self):
+        match self:
+            case Seq(yaml_arr):
+                return yaml_arr.len()
+            case Map(yaml_d):
+                return yaml_d.len()
+            else:
+                return 0
+
+    Vector[str] keys(self):
+        match self:
+            case Map(yaml_d):
+                return yaml_d.keys()
+            else:
+                return Vector[str]()

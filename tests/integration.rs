@@ -2109,6 +2109,59 @@ done",
 }
 
 #[test]
+fn yaml_parse() {
+    run_gg(
+        "yaml_parse.gg",
+        "\
+Alice
+30
+true
+apple
+banana
+cherry
+3
+localhost
+8080
+one
+two
+1
+2
+10
+20
+30
+hello world
+it's fine
+true
+true
+true
+false
+42
+-7
+3.140000
+just a string
+value
+Hello
+[10, 20, 30]
+name: Alice
+age: 30
+active: true
+true
+false
+true
+false
+true
+true
+true
+true
+true
+3
+name
+true
+done",
+    );
+}
+
+#[test]
 fn json_parse() {
     run_gg(
         "json_parse.gg",

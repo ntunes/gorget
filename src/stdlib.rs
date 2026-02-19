@@ -15,7 +15,7 @@ pub fn is_stdlib_module(segments: &[String]) -> bool {
         return false;
     }
     match segments.len() {
-        2 => matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv" | "io" | "random" | "time" | "collections" | "math" | "fmt" | "process" | "sdl" | "gfx" | "ecs" | "json" | "toml" | "xml" | "bytes" | "crypto" | "ssh" | "http"),
+        2 => matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv" | "io" | "random" | "time" | "collections" | "math" | "fmt" | "process" | "sdl" | "gfx" | "ecs" | "json" | "toml" | "xml" | "yaml" | "bytes" | "crypto" | "ssh" | "http"),
         3 => segments[1] == "net" && matches!(segments[2].as_str(), "socket" | "tls"),
         _ => false,
     }
@@ -43,6 +43,7 @@ pub fn generate_stdlib_module(segments: &[String]) -> Option<Module> {
             "json" => None, // file-based module — loaded via stdlib_module_source()
             "toml" => None, // file-based module — loaded via stdlib_module_source()
             "xml" => None,  // file-based module — loaded via stdlib_module_source()
+            "yaml" => None, // file-based module — loaded via stdlib_module_source()
             "bytes" => None, // file-based module — loaded via stdlib_module_source()
             "crypto" => Some(gen_crypto_module()),
             "gfx" => None, // file-based module — loaded via stdlib_module_source()
@@ -539,6 +540,7 @@ pub fn stdlib_module_source(segments: &[String]) -> Option<&'static str> {
         Some("json") => Some(include_str!("../lib/std/json.gg")),
         Some("toml") => Some(include_str!("../lib/std/toml.gg")),
         Some("xml") => Some(include_str!("../lib/std/xml.gg")),
+        Some("yaml") => Some(include_str!("../lib/std/yaml.gg")),
         Some("bytes") => Some(include_str!("../lib/std/bytes.gg")),
         _ => None,
     }
@@ -884,6 +886,7 @@ mod tests {
         assert!(is_stdlib_module(&["std".into(), "sdl".into()]));
         assert!(is_stdlib_module(&["std".into(), "ecs".into()]));
         assert!(is_stdlib_module(&["std".into(), "json".into()]));
+        assert!(is_stdlib_module(&["std".into(), "yaml".into()]));
         assert!(is_stdlib_module(&["std".into(), "bytes".into()]));
         assert!(is_stdlib_module(&["std".into(), "http".into()]));
         assert!(is_stdlib_module(&["std".into(), "net".into(), "tls".into()]));
@@ -1468,6 +1471,59 @@ mod tests {
         assert!(fn_names.contains(&"xml_parse".to_string()));
         assert!(fn_names.contains(&"xml_stringify".to_string()));
         assert_eq!(equip_count, 2); // equip XmlParser + equip XmlNode
+    }
+
+    #[test]
+    fn is_stdlib_yaml() {
+        assert!(is_stdlib_module(&["std".into(), "yaml".into()]));
+    }
+
+    #[test]
+    fn generate_yaml_returns_none() {
+        // std.yaml is file-based, not synthetic — generate returns None
+        assert!(generate_stdlib_module(&["std".into(), "yaml".into()]).is_none());
+    }
+
+    #[test]
+    fn yaml_module_source_exists() {
+        let source = stdlib_module_source(&["std".into(), "yaml".into()]);
+        assert!(source.is_some());
+        let src = source.unwrap();
+        assert!(src.contains("enum Yaml"));
+        assert!(src.contains("yaml_parse"));
+        assert!(src.contains("yaml_stringify"));
+        assert!(src.contains("yaml_pretty"));
+        assert!(src.contains("equip Yaml"));
+        assert!(src.contains("equip YamlParser"));
+    }
+
+    #[test]
+    fn yaml_source_parses() {
+        let source = stdlib_module_source(&["std".into(), "yaml".into()]).unwrap();
+        let mut parser = crate::parser::Parser::new(source);
+        let module = parser.parse_module();
+        assert!(parser.errors.is_empty(), "yaml.gg parse errors: {:?}", parser.errors);
+
+        let mut enum_names = vec![];
+        let mut struct_names = vec![];
+        let mut fn_names = vec![];
+        let mut equip_count = 0;
+        for item in &module.items {
+            match &item.node {
+                Item::Enum(e) => enum_names.push(e.name.node.clone()),
+                Item::Struct(s) => struct_names.push(s.name.node.clone()),
+                Item::Function(f) => fn_names.push(f.name.node.clone()),
+                Item::Equip(_) => equip_count += 1,
+                _ => {}
+            }
+        }
+
+        assert!(enum_names.contains(&"Yaml".to_string()));
+        assert!(struct_names.contains(&"YamlParser".to_string()));
+        assert!(fn_names.contains(&"yaml_parse".to_string()));
+        assert!(fn_names.contains(&"yaml_stringify".to_string()));
+        assert!(fn_names.contains(&"yaml_pretty".to_string()));
+        assert_eq!(equip_count, 2); // equip YamlParser + equip Yaml
     }
 
     #[test]

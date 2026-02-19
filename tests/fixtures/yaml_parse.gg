@@ -1,0 +1,127 @@
+from std.yaml import Yaml, yaml_parse, yaml_stringify, yaml_pretty
+from std.collections import Vector, Dict
+
+void main():
+    # ── Block mapping ────────────────────────────────────────
+    str yaml_block_map = "name: Alice\nage: 30\nactive: true\n"
+    Yaml yaml_bm = yaml_parse(yaml_block_map).unwrap()
+    print(yaml_bm.get("name").as_str())
+    int yaml_age = yaml_bm.get("age").as_int()
+    print("{yaml_age}")
+    bool yaml_active = yaml_bm.get("active").as_bool()
+    print("{yaml_active}")
+
+    # ── Block sequence ───────────────────────────────────────
+    str yaml_block_seq = "- apple\n- banana\n- cherry\n"
+    Yaml yaml_bs = yaml_parse(yaml_block_seq).unwrap()
+    print(yaml_bs.at(0).as_str())
+    print(yaml_bs.at(1).as_str())
+    print(yaml_bs.at(2).as_str())
+    int yaml_seq_len = yaml_bs.len()
+    print("{yaml_seq_len}")
+
+    # ── Nested mapping/sequence ──────────────────────────────
+    str yaml_nested = "server:\n  host: localhost\n  port: 8080\nitems:\n  - one\n  - two\n"
+    Yaml yaml_n = yaml_parse(yaml_nested).unwrap()
+    print(yaml_n.get("server").get("host").as_str())
+    int yaml_port = yaml_n.get("server").get("port").as_int()
+    print("{yaml_port}")
+    print(yaml_n.get("items").at(0).as_str())
+    print(yaml_n.get("items").at(1).as_str())
+
+    # ── Flow mapping ─────────────────────────────────────────
+    str yaml_flow_map_str = r"{a: 1, b: 2}"
+    Yaml yaml_fm = yaml_parse(yaml_flow_map_str).unwrap()
+    int yaml_fa = yaml_fm.get("a").as_int()
+    int yaml_fb = yaml_fm.get("b").as_int()
+    print("{yaml_fa}")
+    print("{yaml_fb}")
+
+    # ── Flow sequence ────────────────────────────────────────
+    str yaml_flow_seq_str = "[10, 20, 30]"
+    Yaml yaml_fs = yaml_parse(yaml_flow_seq_str).unwrap()
+    int yaml_f0 = yaml_fs.at(0).as_int()
+    int yaml_f1 = yaml_fs.at(1).as_int()
+    int yaml_f2 = yaml_fs.at(2).as_int()
+    print("{yaml_f0}")
+    print("{yaml_f1}")
+    print("{yaml_f2}")
+
+    # ── Quoted scalars ───────────────────────────────────────
+    str yaml_quoted = "dq: \"hello world\"\nsq: 'it''s fine'\n"
+    Yaml yaml_q = yaml_parse(yaml_quoted).unwrap()
+    print(yaml_q.get("dq").as_str())
+    print(yaml_q.get("sq").as_str())
+
+    # ── Scalar resolution ────────────────────────────────────
+    str yaml_scalars = "n1: null\nn2: ~\nb1: true\nb2: false\ni1: 42\ni2: -7\nf1: 3.14\ns1: just a string\n"
+    Yaml yaml_sc = yaml_parse(yaml_scalars).unwrap()
+    bool yaml_n1_null = yaml_sc.get("n1").is_null()
+    bool yaml_n2_null = yaml_sc.get("n2").is_null()
+    print("{yaml_n1_null}")
+    print("{yaml_n2_null}")
+    bool yaml_b1 = yaml_sc.get("b1").as_bool()
+    bool yaml_b2 = yaml_sc.get("b2").as_bool()
+    print("{yaml_b1}")
+    print("{yaml_b2}")
+    int yaml_i1 = yaml_sc.get("i1").as_int()
+    int yaml_i2 = yaml_sc.get("i2").as_int()
+    print("{yaml_i1}")
+    print("{yaml_i2}")
+    float yaml_f1v = yaml_sc.get("f1").as_float()
+    print("{yaml_f1v}")
+    print(yaml_sc.get("s1").as_str())
+
+    # ── Comments ─────────────────────────────────────────────
+    str yaml_comments = "# This is a comment\nkey: value # inline comment\n"
+    Yaml yaml_c = yaml_parse(yaml_comments).unwrap()
+    print(yaml_c.get("key").as_str())
+
+    # ── Document markers ─────────────────────────────────────
+    str yaml_doc_markers = "---\ntitle: Hello\n..."
+    Yaml yaml_dm = yaml_parse(yaml_doc_markers).unwrap()
+    print(yaml_dm.get("title").as_str())
+
+    # ── Stringify round-trip ─────────────────────────────────
+    str yaml_rt_str = yaml_stringify(yaml_fs)
+    print(yaml_rt_str)
+
+    # ── Pretty print ─────────────────────────────────────────
+    str yaml_pp = yaml_pretty(yaml_bm)
+    print(yaml_pp)
+
+    # ── Accessor methods ─────────────────────────────────────
+    bool yaml_has_name = yaml_bm.has("name")
+    bool yaml_has_missing = yaml_bm.has("missing")
+    print("{yaml_has_name}")
+    print("{yaml_has_missing}")
+
+    bool yaml_has_idx0 = yaml_bs.has_index(0)
+    bool yaml_has_idx5 = yaml_bs.has_index(5)
+    print("{yaml_has_idx0}")
+    print("{yaml_has_idx5}")
+
+    bool yaml_is_obj = yaml_bm.is_object()
+    bool yaml_is_arr = yaml_bs.is_array()
+    bool yaml_is_str = yaml_bm.get("name").is_string()
+    bool yaml_is_num = yaml_bm.get("age").is_number()
+    bool yaml_is_bval = yaml_bm.get("active").is_bool()
+    print("{yaml_is_obj}")
+    print("{yaml_is_arr}")
+    print("{yaml_is_str}")
+    print("{yaml_is_num}")
+    print("{yaml_is_bval}")
+
+    int yaml_map_len = yaml_bm.len()
+    print("{yaml_map_len}")
+
+    Vector[str] yaml_ks = yaml_bm.keys()
+    print(yaml_ks.get(0).unwrap())
+
+    # ── Error case ───────────────────────────────────────────
+    str yaml_bad_input = r"{unclosed: true"
+    Result[Yaml, str] yaml_bad = yaml_parse(yaml_bad_input)
+    bool yaml_is_err = yaml_bad.is_err()
+    print("{yaml_is_err}")
+
+    print("done")
