@@ -2311,29 +2311,14 @@ impl CodegenContext<'_> {
                             }
                         } else if self.deep_cloned_expr {
                             // .get() deep-cloned: variable owns independent buffer copies.
+                            // Function call args now have field-move-zeroing, and VarDecl
+                            // field extraction already has field-move-zeroing, so full
+                            // drops (including StructDrop with field drops) are safe.
                             self.deep_cloned_expr = false;
-                            if let DropAction::StructDrop { type_name, has_user_drop: true, .. } = &action {
-                                // Struct with user Drop: register UserDrop only.
-                                // Full field drops are unsafe — struct fields may be
-                                // shallow-copied to other variables or function args
-                                // without field-move-zeroing, creating aliased buffers.
-                                let ud = DropAction::UserDrop { type_name: type_name.clone() };
-                                self.register_droppable(&escaped, ud.clone());
-                                if self.in_test_body {
-                                    Self::emit_test_cleanup_for_action(&escaped, &ud, emitter);
-                                }
-                            } else if !matches!(&action, DropAction::StructDrop { .. }) {
-                                // Non-struct types (ArrayFree, MapFree, SetFree, etc.):
-                                // independently owned with no field aliasing — full drops safe.
-                                self.register_droppable(&escaped, action.clone());
-                                if self.in_test_body {
-                                    Self::emit_test_cleanup_for_action(&escaped, &action, emitter);
-                                }
+                            self.register_droppable(&escaped, action.clone());
+                            if self.in_test_body {
+                                Self::emit_test_cleanup_for_action(&escaped, &action, emitter);
                             }
-                            // StructDrop without user Drop: no drops registered.
-                            // Field buffers may leak if not consumed, but registering
-                            // drops risks double-free when fields are aliased via
-                            // function calls (e.g., TOML parser's assemble pattern).
                         }
                         // Otherwise: variable copy/field access — no drop (aliased buffer)
                     }

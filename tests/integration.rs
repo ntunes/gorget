@@ -1309,8 +1309,10 @@ len 3
 got first len=2
 drop old len=2
 after set: new
+wrapper id=1
 nested len=2
 done
+drop wrapped len=1
 drop new len=1
 drop new len=1
 drop first len=2

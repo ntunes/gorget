@@ -65,6 +65,32 @@ impl CodegenContext<'_> {
         }
     }
 
+    /// Queue field-level move-zeroing for FieldAccess arguments in function calls.
+    ///
+    /// When a non-Copy struct field is passed by value to a function, the callee
+    /// receives a shallow copy sharing the same buffer pointers. If the function
+    /// stores the copy in a long-lived structure, the parent struct's field-drop
+    /// at scope exit would double-free. Zeroing the field after the call prevents this.
+    ///
+    /// Guards (via `queue_field_move_zero` → `resolve_field_zero_target`):
+    /// - Parent must have StructDrop with `has_user_drop: false`
+    /// - Field type must be non-Copy (has a drop action)
+    /// - Parent must not be a pointer parameter
+    pub(super) fn queue_call_arg_field_move_zeros(
+        &mut self,
+        args: &[Spanned<crate::parser::ast::CallArg>],
+    ) {
+        for a in args {
+            // Skip &-args — no copy made, no buffer aliasing
+            if matches!(a.node.ownership, Ownership::MutableBorrow) {
+                continue;
+            }
+            if let Expr::FieldAccess { object, field } = &a.node.value.node {
+                self.queue_field_move_zero(&object.node, &field.node);
+            }
+        }
+    }
+
     /// Queue move-zeroing for all identifier args in a constructor call (CallArg variant).
     /// All struct/variant/newtype fields consume their arguments by value.
     pub(super) fn queue_constructor_move_zeros_call_args(&mut self, args: &[Spanned<crate::parser::ast::CallArg>]) {
@@ -930,6 +956,7 @@ impl CodegenContext<'_> {
         }
 
         // General function call
+        self.queue_call_arg_field_move_zeros(args);
         let callee_str = self.gen_expr(callee);
         let arg_exprs = self.resolve_call_args(callee, args);
         format!("{callee_str}({})", arg_exprs.join(", "))

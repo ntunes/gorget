@@ -8,6 +8,10 @@ equip Container with Drop:
     void drop(!self):
         print("drop {self.label} len={self.data.len()}")
 
+struct Wrapper:
+    Container inner
+    int id
+
 Container make_container(str label, int val):
     Container c = Container(label, Vector[int]())
     c.data.push(val)
@@ -47,6 +51,15 @@ void main():
 
     auto after = v2.get(0).unwrap()
     print("after set: {after.label}")
+
+    # deep-clone drops: Wrapper has no Drop, but Container field does
+    Vector[Wrapper] wrappers = Vector[Wrapper]()
+    Wrapper w1 = Wrapper(Container("wrapped", Vector[int]()), 1)
+    w1.inner.data.push(100)
+    wrappers.push(w1)
+
+    auto w = wrappers.get(0).unwrap()
+    print("wrapper id={w.id}")
 
     # deep-clone of direct collection type from nested .get()
     # Before fix: deep-cloned Vector[int] got no drops → buffer leaked.
