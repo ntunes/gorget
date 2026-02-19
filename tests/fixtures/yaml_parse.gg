@@ -211,4 +211,51 @@ void main():
     # ── Phase 3: pretty_all ──────────────────────────────
     print(yaml_pretty_all(yaml_all))
 
+    # ── Phase 4: Scalar anchor + alias ───────────────────
+    str yaml_anchor1 = "name: &n Alice\ngreeting: *n\n"
+    Yaml yaml_a1 = yaml_parse(yaml_anchor1).unwrap()
+    print(yaml_a1.get("name").as_str())
+    print(yaml_a1.get("greeting").as_str())
+
+    # ── Phase 4: Sequence with anchor/alias ──────────────
+    str yaml_anchor2 = "- &item first\n- second\n- *item\n"
+    Yaml yaml_a2 = yaml_parse(yaml_anchor2).unwrap()
+    print(yaml_a2.at(0).as_str())
+    print(yaml_a2.at(1).as_str())
+    print(yaml_a2.at(2).as_str())
+
+    # ── Phase 4: Mapping anchor + merge key ──────────────
+    str yaml_anchor3 = "defaults: &defs\n  host: localhost\n  port: 3000\ndev:\n  <<: *defs\n  db: dev_db\n"
+    Yaml yaml_a3 = yaml_parse(yaml_anchor3).unwrap()
+    print(yaml_a3.get("dev").get("host").as_str())
+    int yaml_a3_port = yaml_a3.get("dev").get("port").as_int()
+    print("{yaml_a3_port}")
+    print(yaml_a3.get("dev").get("db").as_str())
+
+    # ── Phase 4: Existing keys take precedence over merge ─
+    str yaml_anchor4 = "d: &d\n  a: 1\n  b: 2\nobj:\n  <<: *d\n  a: 99\n"
+    Yaml yaml_a4 = yaml_parse(yaml_anchor4).unwrap()
+    int yaml_a4_a = yaml_a4.get("obj").get("a").as_int()
+    int yaml_a4_b = yaml_a4.get("obj").get("b").as_int()
+    print("{yaml_a4_a}")
+    print("{yaml_a4_b}")
+
+    # ── Phase 4: Merge with sequence of mappings ─────────
+    str yaml_anchor5 = "b: &b\n  x: 1\ne: &e\n  y: 2\nr:\n  <<: [*b, *e]\n  z: 3\n"
+    Yaml yaml_a5 = yaml_parse(yaml_anchor5).unwrap()
+    int yaml_a5_x = yaml_a5.get("r").get("x").as_int()
+    int yaml_a5_y = yaml_a5.get("r").get("y").as_int()
+    int yaml_a5_z = yaml_a5.get("r").get("z").as_int()
+    print("{yaml_a5_x}")
+    print("{yaml_a5_y}")
+    print("{yaml_a5_z}")
+
+    # ── Phase 4: Flow context anchor/alias ───────────────
+    str yaml_anchor6 = "a: &val 42\nb: *val\n"
+    Yaml yaml_a6 = yaml_parse(yaml_anchor6).unwrap()
+    int yaml_a6_a = yaml_a6.get("a").as_int()
+    int yaml_a6_b = yaml_a6.get("b").as_int()
+    print("{yaml_a6_a}")
+    print("{yaml_a6_b}")
+
     print("done")

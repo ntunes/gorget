@@ -24,6 +24,8 @@ struct YamlParser:
     str yaml_input
     int yaml_pos
     str yaml_err
+    Vector[str] yaml_anc_names
+    Vector[Yaml] yaml_anc_vals
 
 equip YamlParser:
     bool failed(self) = self.yaml_err != ""
@@ -133,9 +135,89 @@ equip YamlParser:
         char yaml_after = self.yaml_input[self.yaml_pos + 3]
         return yaml_after == ' ' or yaml_after == '\t' or yaml_after == '\n' or yaml_after == '\r'
 
+    # ── Anchor/alias helpers ─────────────────────────────────
+
+    # Read anchor name after '&' — alphanumeric, '-', '_'
+    str parse_anchor_name(&self):
+        int yaml_astart = self.yaml_pos
+        while self.yaml_pos < self.yaml_input.len():
+            char yaml_ac = self.yaml_input[self.yaml_pos]
+            if yaml_ac >= 'a' and yaml_ac <= 'z':
+                self.yaml_pos = self.yaml_pos + 1
+            elif yaml_ac >= 'A' and yaml_ac <= 'Z':
+                self.yaml_pos = self.yaml_pos + 1
+            elif yaml_ac >= '0' and yaml_ac <= '9':
+                self.yaml_pos = self.yaml_pos + 1
+            elif yaml_ac == '-' or yaml_ac == '_':
+                self.yaml_pos = self.yaml_pos + 1
+            else:
+                break
+        if self.yaml_pos == yaml_astart:
+            self.fail("empty anchor name")
+            return ""
+        str yaml_aname = self.yaml_input[yaml_astart..self.yaml_pos]
+        self.skip_spaces()
+        return yaml_aname
+
+    # Read alias name after '*' — same char set as anchors
+    str parse_alias_name(&self):
+        int yaml_astart = self.yaml_pos
+        while self.yaml_pos < self.yaml_input.len():
+            char yaml_ac = self.yaml_input[self.yaml_pos]
+            if yaml_ac >= 'a' and yaml_ac <= 'z':
+                self.yaml_pos = self.yaml_pos + 1
+            elif yaml_ac >= 'A' and yaml_ac <= 'Z':
+                self.yaml_pos = self.yaml_pos + 1
+            elif yaml_ac >= '0' and yaml_ac <= '9':
+                self.yaml_pos = self.yaml_pos + 1
+            elif yaml_ac == '-' or yaml_ac == '_':
+                self.yaml_pos = self.yaml_pos + 1
+            else:
+                break
+        if self.yaml_pos == yaml_astart:
+            self.fail("empty alias name")
+            return ""
+        return self.yaml_input[yaml_astart..self.yaml_pos]
+
+    # Store an anchor value
+    void anchor_put(&self, str yaml_aname, Yaml yaml_aval):
+        # Overwrite if already exists
+        int yaml_ai = 0
+        while yaml_ai < self.yaml_anc_names.len():
+            if self.yaml_anc_names.get(yaml_ai).unwrap() == yaml_aname:
+                self.yaml_anc_vals.set(yaml_ai, yaml_aval)
+                return
+            yaml_ai = yaml_ai + 1
+        self.yaml_anc_names.push(yaml_aname)
+        self.yaml_anc_vals.push(yaml_aval)
+
+    # Retrieve an anchor value, or Null if not found
+    Yaml anchor_get(self, str yaml_aname):
+        int yaml_ai = 0
+        while yaml_ai < self.yaml_anc_names.len():
+            if self.yaml_anc_names.get(yaml_ai).unwrap() == yaml_aname:
+                return self.yaml_anc_vals.get(yaml_ai).unwrap()
+            yaml_ai = yaml_ai + 1
+        return Null()
+
+    # Check if an anchor exists
+    bool anchor_has(self, str yaml_aname):
+        int yaml_ai = 0
+        while yaml_ai < self.yaml_anc_names.len():
+            if self.yaml_anc_names.get(yaml_ai).unwrap() == yaml_aname:
+                return true
+            yaml_ai = yaml_ai + 1
+        return false
+
+    # Clear all anchors (per-document)
+    void anchor_clear(&self):
+        self.yaml_anc_names.clear()
+        self.yaml_anc_vals.clear()
+
     # ── Document parsing ─────────────────────────────────────
 
     Yaml parse_document(&self):
+        self.anchor_clear()
         self.skip_blank_lines()
         # Skip optional --- marker
         if self.yaml_pos + 2 < self.yaml_input.len():
@@ -191,6 +273,28 @@ equip YamlParser:
         if yaml_sig >= self.yaml_input.len():
             return Null()
         char yaml_fc = self.yaml_input[yaml_sig]
+        # Alias (*name) — resolve from stored anchors
+        if yaml_fc == '*':
+            self.yaml_pos = yaml_sig + 1
+            str yaml_alias = self.parse_alias_name()
+            if self.failed():
+                return Null()
+            self.skip_to_eol()
+            if not self.at_end() and self.is_newline():
+                self.consume_newline()
+            if not self.anchor_has(yaml_alias):
+                self.fail("undefined alias")
+                return Null()
+            return self.anchor_get(yaml_alias)
+        # Anchor (&name) — parse tagged value and store
+        if yaml_fc == '&':
+            self.yaml_pos = yaml_sig + 1
+            str yaml_anchor = self.parse_anchor_name()
+            if self.failed():
+                return Null()
+            Yaml yaml_aval = self.parse_block_value(min_indent)
+            self.anchor_put(yaml_anchor, yaml_aval)
+            return self.anchor_get(yaml_anchor)
         # Flow collections
         if yaml_fc == '{':
             self.yaml_pos = yaml_sig
@@ -308,18 +412,27 @@ equip YamlParser:
                 if not self.at_end():
                     self.consume_newline()
                 Yaml yaml_val = self.parse_block_value(yaml_map_indent + 1)
-                yaml_map.put(yaml_key, yaml_val)
+                if yaml_key == "<<":
+                    yaml_map = yaml_merge_into(yaml_map, yaml_val)
+                else:
+                    yaml_map.put(yaml_key, yaml_val)
             elif self.yaml_input[self.yaml_pos] == '#':
                 # Comment after colon — value on next line
                 self.skip_to_eol()
                 if not self.at_end():
                     self.consume_newline()
                 Yaml yaml_val = self.parse_block_value(yaml_map_indent + 1)
-                yaml_map.put(yaml_key, yaml_val)
+                if yaml_key == "<<":
+                    yaml_map = yaml_merge_into(yaml_map, yaml_val)
+                else:
+                    yaml_map.put(yaml_key, yaml_val)
             else:
                 # Inline value
                 Yaml yaml_val = self.parse_inline_value(yaml_map_indent)
-                yaml_map.put(yaml_key, yaml_val)
+                if yaml_key == "<<":
+                    yaml_map = yaml_merge_into(yaml_map, yaml_val)
+                else:
+                    yaml_map.put(yaml_key, yaml_val)
         return Map(yaml_map)
 
     # Parse a mapping key (bare, double-quoted, or single-quoted)
@@ -404,6 +517,35 @@ equip YamlParser:
         if self.at_end() or self.failed():
             return Null()
         char yaml_ic = self.yaml_input[self.yaml_pos]
+        # Alias (*name)
+        if yaml_ic == '*':
+            self.yaml_pos = self.yaml_pos + 1
+            str yaml_alias = self.parse_alias_name()
+            if self.failed():
+                return Null()
+            self.skip_to_eol()
+            if not self.at_end() and self.is_newline():
+                self.consume_newline()
+            if not self.anchor_has(yaml_alias):
+                self.fail("undefined alias")
+                return Null()
+            return self.anchor_get(yaml_alias)
+        # Anchor (&name)
+        if yaml_ic == '&':
+            self.yaml_pos = self.yaml_pos + 1
+            str yaml_anchor = self.parse_anchor_name()
+            if self.failed():
+                return Null()
+            # If at end of line, the anchored value is a block value on the next line
+            if self.at_end() or self.is_newline():
+                if not self.at_end():
+                    self.consume_newline()
+                Yaml yaml_aval = self.parse_block_value(yaml_ctx_indent + 1)
+                self.anchor_put(yaml_anchor, yaml_aval)
+                return self.anchor_get(yaml_anchor)
+            Yaml yaml_aval = self.parse_inline_value(yaml_ctx_indent)
+            self.anchor_put(yaml_anchor, yaml_aval)
+            return self.anchor_get(yaml_anchor)
         if yaml_ic == '{':
             return self.parse_flow_mapping()
         if yaml_ic == '[':
@@ -455,7 +597,10 @@ equip YamlParser:
             Yaml yaml_fval = self.parse_flow_value()
             if self.failed():
                 return Null()
-            yaml_fmap.put(yaml_fkey, yaml_fval)
+            if yaml_fkey == "<<":
+                yaml_fmap = yaml_merge_into(yaml_fmap, yaml_fval)
+            else:
+                yaml_fmap.put(yaml_fkey, yaml_fval)
             self.skip_flow_ws()
             if self.at_end():
                 self.fail("unterminated flow mapping")
@@ -542,6 +687,25 @@ equip YamlParser:
         if self.at_end() or self.failed():
             return Null()
         char yaml_fvc = self.yaml_input[self.yaml_pos]
+        # Alias (*name) in flow context
+        if yaml_fvc == '*':
+            self.yaml_pos = self.yaml_pos + 1
+            str yaml_alias = self.parse_alias_name()
+            if self.failed():
+                return Null()
+            if not self.anchor_has(yaml_alias):
+                self.fail("undefined alias")
+                return Null()
+            return self.anchor_get(yaml_alias)
+        # Anchor (&name) in flow context
+        if yaml_fvc == '&':
+            self.yaml_pos = self.yaml_pos + 1
+            str yaml_anchor = self.parse_anchor_name()
+            if self.failed():
+                return Null()
+            Yaml yaml_aval = self.parse_flow_value()
+            self.anchor_put(yaml_anchor, yaml_aval)
+            return self.anchor_get(yaml_anchor)
         if yaml_fvc == '{':
             return self.parse_flow_mapping()
         if yaml_fvc == '[':
@@ -878,6 +1042,38 @@ equip YamlParser:
                 yaml_ti = yaml_ti + 1
         return Str(yaml_result)
 
+# ── Merge key helper ─────────────────────────────────────────
+
+Dict[str, Yaml] yaml_merge_into(Dict[str, Yaml] yaml_target, Yaml yaml_source):
+    match yaml_source:
+        case Map(yaml_merge_map):
+            Vector[str] yaml_mkeys = yaml_merge_map.keys()
+            int yaml_mi = 0
+            while yaml_mi < yaml_mkeys.len():
+                str yaml_mk = yaml_mkeys.get(yaml_mi).unwrap()
+                if not yaml_target.contains(yaml_mk):
+                    yaml_target.put(yaml_mk, yaml_merge_map[yaml_mk])
+                yaml_mi = yaml_mi + 1
+        case Seq(yaml_merge_seq):
+            int yaml_mi = 0
+            while yaml_mi < yaml_merge_seq.len():
+                Yaml yaml_merge_item = yaml_merge_seq.get(yaml_mi).unwrap()
+                match yaml_merge_item:
+                    case Map(yaml_item_map):
+                        Vector[str] yaml_mkeys = yaml_item_map.keys()
+                        int yaml_mj = 0
+                        while yaml_mj < yaml_mkeys.len():
+                            str yaml_mk = yaml_mkeys.get(yaml_mj).unwrap()
+                            if not yaml_target.contains(yaml_mk):
+                                yaml_target.put(yaml_mk, yaml_item_map[yaml_mk])
+                            yaml_mj = yaml_mj + 1
+                    else:
+                        pass
+                yaml_mi = yaml_mi + 1
+        else:
+            pass
+    return yaml_target
+
 # ── Scalar resolution ────────────────────────────────────────
 
 Yaml yaml_resolve_scalar(str yaml_text):
@@ -1063,14 +1259,14 @@ bool yaml_is_float(str yaml_text):
 # ── Public API ───────────────────────────────────────────────
 
 Result[Yaml, str] yaml_parse(str yaml_input):
-    YamlParser yaml_p = YamlParser(yaml_input, 0, "")
+    YamlParser yaml_p = YamlParser(yaml_input, 0, "", Vector[str](), Vector[Yaml]())
     Yaml yaml_doc = yaml_p.parse_document()
     if yaml_p.failed():
         return Error(yaml_p.yaml_err)
     return Ok(yaml_doc)
 
 Result[Vector[Yaml], str] yaml_parse_all(str yaml_input):
-    YamlParser yaml_p = YamlParser(yaml_input, 0, "")
+    YamlParser yaml_p = YamlParser(yaml_input, 0, "", Vector[str](), Vector[Yaml]())
     Vector[Yaml] yaml_docs = yaml_p.parse_all_documents()
     if yaml_p.failed():
         return Error(yaml_p.yaml_err)
