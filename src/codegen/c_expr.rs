@@ -784,6 +784,14 @@ impl CodegenContext<'_> {
                         if let Some(fi) = self.function_info.get(&did) {
                             return fi.return_type_id;
                         }
+                        // Variant constructor: return the parent enum's TypeId
+                        if self.scopes.get_def(did).kind == crate::semantic::scope::DefKind::Variant {
+                            for (enum_def_id, info) in self.enum_variants {
+                                if info.variants.iter().any(|(_, vid)| *vid == did) {
+                                    return self.types.try_defined_id(*enum_def_id);
+                                }
+                            }
+                        }
                     }
                 }
                 None

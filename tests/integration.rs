@@ -2072,6 +2072,17 @@ fn recursive_enum() {
 }
 
 #[test]
+fn option_box_enum() {
+    run_gg(
+        "option_box_enum.gg",
+        "\
+42
+0
+7",
+    );
+}
+
+#[test]
 fn toml_parse() {
     run_gg(
         "toml_parse.gg",

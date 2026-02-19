@@ -1,0 +1,31 @@
+enum Expr:
+    Num(int)
+    Add(Box[Expr], Box[Expr])
+    Neg(Box[Expr])
+    If(Box[Expr], Box[Expr], Option[Box[Expr]])
+
+int eval(Expr e):
+    match e:
+        case Num(n):
+            return n
+        case Add(a, b):
+            return eval(*a) + eval(*b)
+        case Neg(a):
+            return 0 - eval(*a)
+        case If(cond, then_val, else_val):
+            if eval(*cond) != 0:
+                return eval(*then_val)
+            else:
+                match else_val:
+                    case Some(ev):
+                        return eval(*ev)
+                    else:
+                        return 0
+
+void main():
+    Expr with_else = If(Box(Num(1)), Box(Num(42)), Some(Box(Num(99))))
+    print("{eval(with_else)}")
+    Expr without_else = If(Box(Num(0)), Box(Num(42)), None())
+    print("{eval(without_else)}")
+    Expr nested = If(Box(Num(1)), Box(Add(Box(Num(3)), Box(Num(4)))), Some(Box(Neg(Box(Num(5))))))
+    print("{eval(nested)}")

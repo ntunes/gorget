@@ -594,7 +594,7 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
     let mut emitter = CEmitter::new();
 
     ctx.collect_generic_templates(module);
-    ctx.discover_generic_type_usages_from_semantic();
+    ctx.discover_generic_type_usages_from_semantic(module);
     ctx.discover_generic_function_usages(module);
     ctx.discover_tuple_types(module);
 

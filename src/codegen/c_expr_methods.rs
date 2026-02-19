@@ -1089,12 +1089,40 @@ impl CodegenContext<'_> {
                 return c_types::ast_type_to_c(&generic_args[0].node, self.scopes);
             }
         }
+        // Check if the inner expression is a variant constructor → use parent enum type
+        if let Some(enum_c_type) = self.resolve_variant_parent_enum_c_type(arg_expr) {
+            return enum_c_type;
+        }
         // Use resolve_expr_type_id for reliable type resolution (uses resolution map)
         if let Some(type_id) = self.resolve_expr_type_id(arg_expr) {
             return self.type_id_to_c_substituted(type_id);
         }
         // Fallback: infer from the argument expression
         self.infer_c_type_from_expr(&arg_expr.node)
+    }
+
+    /// Resolve a variant constructor call to its parent enum C type name.
+    /// Returns `Some("Expr")` for `Num(1)` if `Num` is a variant of `Expr`.
+    pub(super) fn resolve_variant_parent_enum_c_type(&self, expr: &Spanned<Expr>) -> Option<String> {
+        let callee = match &expr.node {
+            Expr::Call { callee, .. } => callee,
+            _ => return None,
+        };
+        if let Expr::Identifier(name) = &callee.node {
+            let def_id = self.resolution_map
+                .get(&callee.span.start)
+                .filter(|did| self.scopes.get_def(**did).name == *name)
+                .copied()
+                .or_else(|| self.scoped_lookup(name))?;
+            if self.scopes.get_def(def_id).kind == crate::semantic::scope::DefKind::Variant {
+                for (enum_def_id, info) in self.enum_variants {
+                    if info.variants.iter().any(|(_, vid)| *vid == def_id) {
+                        return Some(self.scopes.get_def(*enum_def_id).name.clone());
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// Resolve a unit variant constructor using the decl_type_hint.

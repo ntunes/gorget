@@ -879,24 +879,40 @@ impl CodegenContext<'_> {
                         for (vname, vid) in &info.variants {
                             if *vid == def_id {
                                 let enum_name = self.scopes.get_def(*enum_def_id).name.clone();
-                                // Peel one layer off decl_type_hint for single-type-param
-                                // generic enums so nested constructors (e.g. Some(Some(100)))
-                                // resolve each level's mangled name correctly.
                                 let saved_hint = self.decl_type_hint.clone();
-                                if !args.is_empty() {
-                                    if let Some(crate::parser::ast::Type::Named {
-                                        name,
-                                        generic_args,
-                                    }) = self.decl_type_hint.as_ref()
-                                    {
-                                        if name.node == enum_name && generic_args.len() == 1 {
-                                            self.decl_type_hint =
-                                                Some(generic_args[0].node.clone());
+
+                                // Look up variant field types for per-field hint propagation.
+                                // This ensures nested generic constructors (e.g. Some(Box(Num(1)))
+                                // inside an Option[Box[Expr]] field) get the correct type hints.
+                                let variant_field_types: Option<Vec<crate::parser::ast::Type>> =
+                                    info.variant_field_types.iter()
+                                        .find(|(vn, _)| vn == vname)
+                                        .map(|(_, types)| types.iter().map(|t| t.node.clone()).collect());
+
+                                let field_exprs: Vec<String> = args.iter().enumerate()
+                                    .map(|(i, a)| {
+                                        // Set per-field type hints when available
+                                        if let Some(ref field_types) = variant_field_types {
+                                            if let Some(field_type) = field_types.get(i) {
+                                                self.decl_type_hint = Some(field_type.clone());
+                                            }
+                                        } else if i == 0 {
+                                            // Fallback: peel one layer for single-type-param
+                                            // generic enums (e.g. Some(Some(100)))
+                                            if let Some(crate::parser::ast::Type::Named {
+                                                name,
+                                                generic_args,
+                                            }) = saved_hint.as_ref()
+                                            {
+                                                if name.node == enum_name && generic_args.len() == 1 {
+                                                    self.decl_type_hint =
+                                                        Some(generic_args[0].node.clone());
+                                                }
+                                            }
                                         }
-                                    }
-                                }
-                                let field_exprs: Vec<String> =
-                                    args.iter().map(|a| self.gen_expr(&a.node.value)).collect();
+                                        self.gen_expr(&a.node.value)
+                                    })
+                                    .collect();
                                 let fields = field_exprs.join(", ");
                                 self.decl_type_hint = saved_hint;
                                 // For generic enum templates, resolve the monomorphized name

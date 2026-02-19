@@ -179,6 +179,11 @@ impl TypeTable {
         &self.types[id.0 as usize]
     }
 
+    /// Look up an existing TypeId for `Defined(def_id)` without creating one.
+    pub fn try_defined_id(&self, def_id: DefId) -> Option<TypeId> {
+        self.defined_cache.get(&def_id).copied()
+    }
+
     /// Find an existing `Generic(def_id, args)` entry in the table.
     /// Returns `None` if no matching entry exists.
     pub fn find_generic(&self, def_id: DefId, args: &[TypeId]) -> Option<TypeId> {

@@ -1404,7 +1404,7 @@ impl CodegenContext<'_> {
     /// The TypeTable contains authoritative `ResolvedType::Generic` entries for
     /// every generic type the program uses. This replaces the fragile AST walker
     /// for struct/enum/map instantiations.
-    pub fn discover_generic_type_usages_from_semantic(&mut self) {
+    pub fn discover_generic_type_usages_from_semantic(&mut self, module: &crate::parser::ast::Module) {
         use crate::semantic::scope::DefKind;
 
         let instantiations = self.types.collect_generic_instantiations();
@@ -1470,6 +1470,82 @@ impl CodegenContext<'_> {
                     };
                     self.register_generic(&base_name, &c_type_args, kind);
                 }
+            }
+        }
+
+        // Second pass: scan AST enum/struct variant field types for generic type
+        // references (e.g., Option[Box[Expr]]) that aren't in the TypeTable because
+        // variant fields are stored as AST Type nodes, not resolved into TypeIds.
+        for item in &module.items {
+            match &item.node {
+                Item::Enum(e) if e.generic_params.is_none() => {
+                    for variant in &e.variants {
+                        if let VariantFields::Tuple(fields) = &variant.node.fields {
+                            for field in fields {
+                                self.discover_generic_from_ast_type(&field.node);
+                            }
+                        }
+                    }
+                }
+                Item::Struct(s) if s.generic_params.is_none() => {
+                    for field in &s.fields {
+                        self.discover_generic_from_ast_type(&field.node.type_.node);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Walk an AST Type and register any generic type instances it references.
+    /// This catches types like `Option[Box[Expr]]` used in variant fields or
+    /// struct fields that don't appear in the TypeTable.
+    fn discover_generic_from_ast_type(&mut self, ty: &crate::parser::ast::Type) {
+        if let crate::parser::ast::Type::Named { name, generic_args } = ty {
+            if !generic_args.is_empty() {
+                // Recurse into type args first
+                for arg in generic_args {
+                    self.discover_generic_from_ast_type(&arg.node);
+                }
+                // Runtime-provided types don't need monomorphization
+                match name.node.as_str() {
+                    "Vector" | "List" | "Array" | "Set" | "Box" => return,
+                    "Dict" => {
+                        let c_args: Vec<String> = generic_args.iter()
+                            .map(|a| c_types::ast_type_to_c(&a.node, self.scopes))
+                            .collect();
+                        self.register_generic(
+                            "GorgetDict",
+                            &c_args,
+                            super::GenericInstanceKind::Map { ordered: true },
+                        );
+                        return;
+                    }
+                    "HashMap" => {
+                        let c_args: Vec<String> = generic_args.iter()
+                            .map(|a| c_types::ast_type_to_c(&a.node, self.scopes))
+                            .collect();
+                        self.register_generic(
+                            "GorgetMap",
+                            &c_args,
+                            super::GenericInstanceKind::Map { ordered: false },
+                        );
+                        return;
+                    }
+                    "Callable" | "MutCallable" | "ConsumeCallable" => return,
+                    _ => {}
+                }
+                let c_args: Vec<String> = generic_args.iter()
+                    .map(|a| c_types::ast_type_to_c(&a.node, self.scopes))
+                    .collect();
+                let kind = if self.generic_enum_templates.contains_key(&name.node) {
+                    super::GenericInstanceKind::Enum
+                } else if self.generic_struct_templates.contains_key(&name.node) {
+                    super::GenericInstanceKind::Struct
+                } else {
+                    return;
+                };
+                self.register_generic(&name.node, &c_args, kind);
             }
         }
     }
@@ -1883,16 +1959,30 @@ impl CodegenContext<'_> {
         mangled
     }
 
-    /// Emit generic Struct and Map type definitions (phase 1).
-    /// These use pointer-based storage for type args, so they only need
-    /// forward declarations of user-defined types.
-    /// Must be called before regular type definitions so that structs like World
-    /// can use monomorphized generic types (e.g., SparseSet__Health) as fields.
+    /// Check if a C type arg is "pointer-safe" — it doesn't need a full user-type
+    /// definition, only a forward declaration (or is a primitive/pointer).
+    fn is_pointer_safe_type_arg(c_type: &str) -> bool {
+        c_type.ends_with('*')
+            || c_type.starts_with("int") || c_type.starts_with("uint")
+            || c_type == "double" || c_type == "float" || c_type == "bool" || c_type == "char"
+            || c_type == "const char*"
+            || c_type.starts_with("GorgetArray") || c_type.starts_with("GorgetSet")
+            || c_type.starts_with("GorgetDict") || c_type.starts_with("GorgetMap")
+            || c_type.starts_with("GorgetString")
+            || c_type.starts_with("Tuple_") || c_type.starts_with("GorgetTuple_")
+    }
+
+    /// Emit generic Struct, Map, and pointer-safe Enum type definitions (phase 1).
+    /// Structs and Maps use pointer-based storage for type args.
+    /// Enums whose type args are all pointer-safe (primitives, pointers) also go here
+    /// so that user types (e.g., `Expr`) can contain `Option[Box[Expr]]` fields.
+    /// Must be called before regular type definitions.
     pub fn emit_generic_type_definitions_phase1(&mut self, emitter: &mut CEmitter) {
         let has_types = self.generic_instances.iter().any(|i| matches!(
             i.kind,
             super::GenericInstanceKind::Struct | super::GenericInstanceKind::Map { .. }
-        ));
+        ) || (matches!(i.kind, super::GenericInstanceKind::Enum)
+              && i.c_type_args.iter().all(|a| Self::is_pointer_safe_type_arg(a))));
         if !has_types {
             return;
         }
@@ -1923,6 +2013,12 @@ impl CodegenContext<'_> {
                 super::GenericInstanceKind::Map { ordered } => {
                     self.emit_map_struct_def(&inst.c_type_args, &inst.mangled_name, ordered, emitter);
                 }
+                super::GenericInstanceKind::Enum if inst.c_type_args.iter().all(|a| Self::is_pointer_safe_type_arg(a)) => {
+                    let template = self.generic_enum_templates.get(&inst.base_name).cloned();
+                    if let Some(template) = template {
+                        self.emit_monomorphized_enum(&template, &inst.c_type_args, &inst.mangled_name, emitter);
+                    }
+                }
                 _ => {}
             }
         }
@@ -1930,14 +2026,15 @@ impl CodegenContext<'_> {
     }
 
     /// Emit generic Enum type definitions (phase 2).
-    /// Generic enums like Result[Json, str] contain type args by value in
-    /// variant data, so they need user-defined types to be fully defined first.
+    /// Generic enums whose type args contain user-defined value types need those
+    /// types fully defined first. Enums already emitted in phase 1 (pointer-safe
+    /// args) are skipped.
     /// Must be called after regular type definitions.
     pub fn emit_generic_type_definitions_phase2(&mut self, emitter: &mut CEmitter) {
-        let has_enums = self.generic_instances.iter().any(|i| matches!(
-            i.kind,
-            super::GenericInstanceKind::Enum
-        ));
+        let has_enums = self.generic_instances.iter().any(|i|
+            matches!(i.kind, super::GenericInstanceKind::Enum)
+            && !i.c_type_args.iter().all(|a| Self::is_pointer_safe_type_arg(a))
+        );
         if !has_enums {
             return;
         }
@@ -1945,6 +2042,10 @@ impl CodegenContext<'_> {
         for i in 0..self.generic_instances.len() {
             let inst = self.generic_instances[i].clone();
             if let super::GenericInstanceKind::Enum = inst.kind {
+                // Skip enums already emitted in phase 1
+                if inst.c_type_args.iter().all(|a| Self::is_pointer_safe_type_arg(a)) {
+                    continue;
+                }
                 let template = self.generic_enum_templates.get(&inst.base_name).cloned();
                 if let Some(template) = template {
                     self.emit_monomorphized_enum(&template, &inst.c_type_args, &inst.mangled_name, emitter);
@@ -2777,6 +2878,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                     .collect();
                 // Check built-in collections
                 match name.node.as_str() {
+                    "Box" if c_args.len() == 1 => format!("{}*", c_args[0]),
                     "Vector" | "List" | "Array" => "GorgetArray".to_string(),
                     "Set" => "GorgetSet".to_string(),
                     "Dict" => c_mangle::mangle_generic("GorgetDict", &c_args),
