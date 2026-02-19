@@ -65,3 +65,45 @@ void main():
     Option[int] my = Some(10)
     if mx is Some(mvx) and my is Some(mvy) and mvx + mvy == 15:
         print("multi_is:{mvx}:{mvy}")
+
+    # elif-is + else (the bug: generated invalid C before the fix)
+    Outcome r4 = Failure("bad")
+    if r4 is Success(v4):
+        print("should_not_print")
+    elif r4 is Failure(msg4):
+        print("elif_else:{msg4}")
+    else:
+        print("should_not_print")
+
+    # Multiple elif-is in a row
+    Outcome r5 = Failure("err")
+    if r5 is Success(v5):
+        print("should_not_print")
+    elif r5 is Failure(m5):
+        print("multi_elif:{m5}")
+    elif r5 is Success(v5b):
+        print("should_not_print")
+    else:
+        print("should_not_print")
+
+    # Mixed plain elif + elif-is + else
+    Outcome r6 = Failure("mixed")
+    int flag = 0
+    if flag == 1:
+        print("should_not_print")
+    elif r6 is Success(v6):
+        print("should_not_print")
+    elif r6 is Failure(m6):
+        print("mixed_chain:{m6}")
+    else:
+        print("should_not_print")
+
+    # elif-is after plain elif, hitting else
+    Outcome r7 = Failure("fallthrough")
+    int flag2 = 0
+    if flag2 == 1:
+        print("should_not_print")
+    elif r7 is Success(v7):
+        print("should_not_print")
+    else:
+        print("fallthrough_else")

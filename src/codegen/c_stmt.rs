@@ -1792,11 +1792,25 @@ impl CodegenContext<'_> {
                     self.pop_drop_scope(emitter);
                     emitter.dedent();
 
+                    // Track wrapper blocks that need closing after elif/else chain.
+                    // Elif-is-binding and string-temp elifs wrap in `} else { <temps>; if (...) { body }`.
+                    // The inner if is left open so the next elif/else connects to it naturally.
+                    // After all branches, we close all wrappers in reverse order.
+                    let mut wrapper_temp_frees: Vec<Vec<String>> = Vec::new();
+
                     for (elif_cond, elif_body) in elif_branches {
-                        // Check if this elif has is-pattern bindings (including compound)
                         let elif_is_binding = Self::has_compound_is_bindings(&elif_cond.node);
                         if elif_is_binding {
-                            self.gen_elif_is_binding(elif_cond, elif_body, emitter);
+                            // Wrap in else block so we can declare the scrutinee temp
+                            emitter.emit_line("} else {");
+                            emitter.indent();
+                            let scrut_temps = self.gen_compound_is_condition(elif_cond, "elif", emitter);
+                            self.push_drop_scope(DropScopeKind::Block);
+                            self.gen_block(elif_body, emitter);
+                            self.pop_drop_scope(emitter);
+                            emitter.dedent();
+                            // Leave inner if open — next elif/else/final `}` closes it
+                            wrapper_temp_frees.push(scrut_temps);
                         } else {
                             let ec = self.gen_expr(elif_cond);
                             let elif_temps = self.flush_string_temps_no_emit();
@@ -1813,6 +1827,7 @@ impl CodegenContext<'_> {
                                 self.pop_drop_scope(emitter);
                                 emitter.dedent();
                             } else {
+                                // String-temp elif: wrap in else block for temp declarations
                                 emitter.emit_line("} else {");
                                 emitter.indent();
                                 for (name, expr) in &elif_temps {
@@ -1829,10 +1844,9 @@ impl CodegenContext<'_> {
                                 self.gen_block(elif_body, emitter);
                                 self.pop_drop_scope(emitter);
                                 emitter.dedent();
-                                emitter.emit_line("}");
+                                // Leave inner if open — next elif/else/final `}` closes it
                                 let names: Vec<String> = elif_temps.iter().map(|(n, _)| n.clone()).collect();
-                                Self::emit_string_temp_frees(&names, emitter);
-                                emitter.dedent();
+                                wrapper_temp_frees.push(names);
                             }
                         }
                     }
@@ -1850,6 +1864,12 @@ impl CodegenContext<'_> {
                     }
 
                     emitter.emit_line("}");
+                    // Close all wrapper blocks in reverse order
+                    for temps in wrapper_temp_frees.iter().rev() {
+                        Self::emit_string_temp_frees(temps, emitter);
+                        emitter.dedent();
+                        emitter.emit_line("}");
+                    }
                     Self::emit_string_temp_frees(&cond_temps, emitter);
                 }
             }
@@ -3415,10 +3435,19 @@ impl CodegenContext<'_> {
         self.pop_drop_scope(emitter);
         emitter.dedent();
 
+        let mut wrapper_temp_frees: Vec<Vec<String>> = Vec::new();
+
         for (elif_cond, elif_body) in elif_branches {
             let elif_is_binding = Self::has_compound_is_bindings(&elif_cond.node);
             if elif_is_binding {
-                self.gen_elif_is_binding(elif_cond, elif_body, emitter);
+                emitter.emit_line("} else {");
+                emitter.indent();
+                let scrut_temps = self.gen_compound_is_condition(elif_cond, "elif", emitter);
+                self.push_drop_scope(DropScopeKind::Block);
+                self.gen_block(elif_body, emitter);
+                self.pop_drop_scope(emitter);
+                emitter.dedent();
+                wrapper_temp_frees.push(scrut_temps);
             } else {
                 let ec = self.gen_expr(elif_cond);
                 let elif_temps = self.flush_string_temps_no_emit();
@@ -3446,10 +3475,8 @@ impl CodegenContext<'_> {
                     self.gen_block(elif_body, emitter);
                     self.pop_drop_scope(emitter);
                     emitter.dedent();
-                    emitter.emit_line("}");
                     let names: Vec<String> = elif_temps.iter().map(|(n, _)| n.clone()).collect();
-                    Self::emit_string_temp_frees(&names, emitter);
-                    emitter.dedent();
+                    wrapper_temp_frees.push(names);
                 }
             }
         }
@@ -3467,32 +3494,12 @@ impl CodegenContext<'_> {
         }
 
         emitter.emit_line("}");
+        for temps in wrapper_temp_frees.iter().rev() {
+            Self::emit_string_temp_frees(temps, emitter);
+            emitter.dedent();
+            emitter.emit_line("}");
+        }
         Self::emit_string_temp_frees(&all_scrut_temps, emitter);
-    }
-
-    /// Generate codegen for `elif expr is Pattern(bindings):` with pattern variable extraction.
-    /// Follows the same nesting pattern as the string-temp elif case: wraps in `} else { ... }`.
-    /// The wrapping `else` block is left open — closed by the next `} else if`/`} else`/final `}`.
-    fn gen_elif_is_binding(
-        &mut self,
-        elif_cond: &Spanned<Expr>,
-        elif_body: &Block,
-        emitter: &mut CEmitter,
-    ) {
-        // Wrap in else block so we can declare the scrutinee temp
-        emitter.emit_line("} else {");
-        emitter.indent();
-
-        let scrut_temps = self.gen_compound_is_condition(elif_cond, "elif", emitter);
-
-        self.push_drop_scope(DropScopeKind::Block);
-        self.gen_block(elif_body, emitter);
-        self.pop_drop_scope(emitter);
-        emitter.dedent();
-        // Close inner if, free temps, dedent — leave wrapping else open
-        emitter.emit_line("}");
-        Self::emit_string_temp_frees(&scrut_temps, emitter);
-        emitter.dedent();
     }
 
     /// Shared helper for generating a compound `is` condition. Evaluates all scrutinee temps,

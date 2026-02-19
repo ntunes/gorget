@@ -547,7 +547,11 @@ done
 compound_guard:42
 guard_failed
 none_compound
-multi_is:5:10",
+multi_is:5:10
+elif_else:bad
+multi_elif:err
+mixed_chain:mixed
+fallthrough_else",
     );
 }
 

@@ -2,8 +2,6 @@
 
 ## High
 
-- **`elif expr is Pattern:` codegen bug**: `elif else_val is Some(ev):` generates nested `} else { ... } else {` C blocks, causing compile errors. The elif-is codegen path doesn't correctly handle the case where the scrutinee is a variable from an outer match/binding. Workaround: use `match` inside `else` block instead. [added: 2026-02-19]
-
 ## Medium
 
 - **`Into[T]` conversion trait**: Counterpart to `From[T]` requiring explicit type args (`value.into[Celsius]()`) or return-type inference. Adds complexity (equipping primitives, potential blanket impl pattern). [added: 2026-02-17]

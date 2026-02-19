@@ -15,12 +15,10 @@ int eval(Expr e):
         case If(cond, then_val, else_val):
             if eval(*cond) != 0:
                 return eval(*then_val)
+            elif else_val is Some(ev):
+                return eval(*ev)
             else:
-                match else_val:
-                    case Some(ev):
-                        return eval(*ev)
-                    else:
-                        return 0
+                return 0
 
 void main():
     Expr with_else = If(Box(Num(1)), Box(Num(42)), Some(Box(Num(99))))
