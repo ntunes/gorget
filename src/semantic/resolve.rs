@@ -741,11 +741,12 @@ fn resolve_stmt(
             body,
             else_body,
         } => {
-            resolve_expr(condition, scopes, errors, resolution_map);
+            // Push body scope first so compound `is` bindings are visible to guards
             scopes.push_scope(super::scope::ScopeKind::Block);
-            // If condition is `expr is Pattern`, define pattern bindings in body scope
-            if let Some(pattern) = extract_is_pattern(&condition.node) {
-                define_pattern_bindings(pattern, condition.span, scopes, errors, false);
+            if has_is_patterns(&condition.node) {
+                resolve_is_condition(condition, scopes, errors, resolution_map);
+            } else {
+                resolve_expr(condition, scopes, errors, resolution_map);
             }
             resolve_block(body, scopes, types, errors, resolution_map);
             scopes.pop_scope();
@@ -768,21 +769,22 @@ fn resolve_stmt(
             elif_branches,
             else_body,
         } => {
-            resolve_expr(condition, scopes, errors, resolution_map);
+            // Push body scope first so compound `is` bindings are visible to guards
             scopes.push_scope(super::scope::ScopeKind::Block);
-            // If condition is `expr is Pattern`, define pattern bindings in then-body scope
-            if let Some(pattern) = extract_is_pattern(&condition.node) {
-                define_pattern_bindings(pattern, condition.span, scopes, errors, false);
+            if has_is_patterns(&condition.node) {
+                resolve_is_condition(condition, scopes, errors, resolution_map);
+            } else {
+                resolve_expr(condition, scopes, errors, resolution_map);
             }
             resolve_block(then_body, scopes, types, errors, resolution_map);
             scopes.pop_scope();
 
             for (cond, body) in elif_branches {
-                resolve_expr(cond, scopes, errors, resolution_map);
                 scopes.push_scope(super::scope::ScopeKind::Block);
-                // Same for elif conditions
-                if let Some(pattern) = extract_is_pattern(&cond.node) {
-                    define_pattern_bindings(pattern, cond.span, scopes, errors, false);
+                if has_is_patterns(&cond.node) {
+                    resolve_is_condition(cond, scopes, errors, resolution_map);
+                } else {
+                    resolve_expr(cond, scopes, errors, resolution_map);
                 }
                 resolve_block(body, scopes, types, errors, resolution_map);
                 scopes.pop_scope();
@@ -1168,13 +1170,39 @@ fn resolve_expr(
     }
 }
 
-/// Extract the pattern from a non-negated `is` expression condition.
-/// Returns `None` for negated `is not` or non-`is` expressions.
-fn extract_is_pattern(expr: &Expr) -> Option<&Pattern> {
-    if let Expr::Is { negated: false, pattern, .. } = expr {
-        Some(&pattern.node)
-    } else {
-        None
+/// Check if a condition expression contains any `is` patterns (possibly compound).
+fn has_is_patterns(expr: &Expr) -> bool {
+    match expr {
+        Expr::Is { negated: false, .. } => true,
+        Expr::BinaryOp { left, op: BinaryOp::And, right } => {
+            has_is_patterns(&left.node) || has_is_patterns(&right.node)
+        }
+        _ => false,
+    }
+}
+
+/// Resolve a condition that may contain `is` patterns, defining bindings left-to-right
+/// so that guards in compound conditions can reference earlier bindings.
+/// For example, in `a is Some(x) and x > 10`, `x` is defined before `x > 10` is resolved.
+/// Must be called with the body scope already pushed.
+fn resolve_is_condition(
+    expr: &Spanned<Expr>,
+    scopes: &mut ScopeTable,
+    errors: &mut Vec<SemanticError>,
+    resolution_map: &mut ResolutionMap,
+) {
+    match &expr.node {
+        Expr::BinaryOp { left, op: BinaryOp::And, right } => {
+            resolve_is_condition(left, scopes, errors, resolution_map);
+            resolve_is_condition(right, scopes, errors, resolution_map);
+        }
+        Expr::Is { expr: inner, negated: false, pattern, .. } => {
+            resolve_expr(inner, scopes, errors, resolution_map);
+            define_pattern_bindings(&pattern.node, expr.span, scopes, errors, false);
+        }
+        _ => {
+            resolve_expr(expr, scopes, errors, resolution_map);
+        }
     }
 }
 

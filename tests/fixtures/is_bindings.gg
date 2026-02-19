@@ -43,3 +43,25 @@ void main():
             opt = Just(n + 1)
 
     print("done")
+
+    # Compound is + guard
+    Option[int] cval = Some(42)
+    if cval is Some(cv) and cv > 10:
+        print("compound_guard:{cv}")
+
+    if cval is Some(cv2) and cv2 > 100:
+        print("should_not_print")
+    else:
+        print("guard_failed")
+
+    Option[int] cnone = None()
+    if cnone is Some(cv3) and cv3 > 0:
+        print("should_not_print")
+    else:
+        print("none_compound")
+
+    # Multiple is patterns
+    Option[int] mx = Some(5)
+    Option[int] my = Some(10)
+    if mx is Some(mvx) and my is Some(mvy) and mvx + mvy == 15:
+        print("multi_is:{mvx}:{mvy}")

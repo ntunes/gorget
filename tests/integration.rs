@@ -543,7 +543,11 @@ not failure
 10
 11
 12
-done",
+done
+compound_guard:42
+guard_failed
+none_compound
+multi_is:5:10",
     );
 }
 
@@ -1026,7 +1030,8 @@ fn option_map() {
 84
 0
 43
-99",
+99
+val",
     );
 }
 
@@ -1042,7 +1047,9 @@ fn result_map() {
         "\
 20
 0
-11",
+11
+yes
+4",
     );
 }
 

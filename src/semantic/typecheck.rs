@@ -1665,11 +1665,8 @@ impl<'a> TypeChecker<'a> {
             } => {
                 let cond_type = self.infer_expr(condition);
                 self.unify(cond_type, self.types.bool_id, condition.span);
-                // If condition is `expr is Pattern`, assign types to pattern bindings
-                if let Expr::Is { expr: scrutinee, negated: false, pattern, .. } = &condition.node {
-                    let scrut_type = self.infer_expr(scrutinee);
-                    self.assign_pattern_types(pattern, scrut_type);
-                }
+                // Assign types to all `is` pattern bindings (including compound conditions)
+                self.assign_compound_is_types(condition);
                 self.check_block(body);
                 if let Some(else_body) = else_body {
                     self.check_block(else_body);
@@ -1688,21 +1685,14 @@ impl<'a> TypeChecker<'a> {
             } => {
                 let cond_type = self.infer_expr(condition);
                 self.unify(cond_type, self.types.bool_id, condition.span);
-                // If condition is `expr is Pattern`, assign types to pattern bindings
-                if let Expr::Is { expr: scrutinee, negated: false, pattern, .. } = &condition.node {
-                    let scrut_type = self.infer_expr(scrutinee);
-                    self.assign_pattern_types(pattern, scrut_type);
-                }
+                // Assign types to all `is` pattern bindings (including compound conditions)
+                self.assign_compound_is_types(condition);
                 self.check_block(then_body);
 
                 for (cond, body) in elif_branches {
                     let ct = self.infer_expr(cond);
                     self.unify(ct, self.types.bool_id, cond.span);
-                    // Same for elif conditions
-                    if let Expr::Is { expr: scrutinee, negated: false, pattern, .. } = &cond.node {
-                        let scrut_type = self.infer_expr(scrutinee);
-                        self.assign_pattern_types(pattern, scrut_type);
-                    }
+                    self.assign_compound_is_types(cond);
                     self.check_block(body);
                 }
 
@@ -1887,6 +1877,22 @@ impl<'a> TypeChecker<'a> {
                 }
             }
             _ => {} // Wildcard, Literal, Rest — no bindings
+        }
+    }
+
+    /// Walk compound `And` chains in conditions, assigning pattern types for each
+    /// `is` sub-expression. Handles `a is Some(x) and b is Ok(y) and guard`.
+    fn assign_compound_is_types(&mut self, expr: &Spanned<Expr>) {
+        match &expr.node {
+            Expr::Is { expr: scrutinee, negated: false, pattern, .. } => {
+                let scrut_type = self.infer_expr(scrutinee);
+                self.assign_pattern_types(pattern, scrut_type);
+            }
+            Expr::BinaryOp { left, op: BinaryOp::And, right } => {
+                self.assign_compound_is_types(left);
+                self.assign_compound_is_types(right);
+            }
+            _ => {}
         }
     }
 
@@ -2091,6 +2097,13 @@ impl<'a> TypeChecker<'a> {
                 let closure_type = self.infer_expr(&args.first()?.node.value);
                 let ret_type = self.extract_fn_return_type(closure_type)?;
                 Some(ret_type)
+            }
+            ("Result", "map_err") => {
+                // (E) -> F, returns Result[T, F]
+                let closure_type = self.infer_expr(&args.first()?.node.value);
+                let f_type = self.extract_fn_return_type(closure_type)?;
+                let t_type = type_args.first().copied()?;
+                Some(self.types.insert(ResolvedType::Generic(def_id, vec![t_type, f_type])))
             }
 
             // --- Vector higher-order methods ---

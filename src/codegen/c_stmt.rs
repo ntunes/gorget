@@ -1772,12 +1772,8 @@ impl CodegenContext<'_> {
                 elif_branches,
                 else_body,
             } => {
-                // Check if the main condition is `expr is Pattern` with bindings
-                let is_binding_if = matches!(
-                    &condition.node,
-                    Expr::Is { negated: false, pattern, .. }
-                    if Self::has_pattern_bindings(&pattern.node)
-                );
+                // Check if the main condition contains `is` pattern(s) with bindings
+                let is_binding_if = Self::has_compound_is_bindings(&condition.node);
 
                 if is_binding_if {
                     self.gen_if_is_binding(condition, then_body, elif_branches, else_body, emitter);
@@ -1797,12 +1793,8 @@ impl CodegenContext<'_> {
                     emitter.dedent();
 
                     for (elif_cond, elif_body) in elif_branches {
-                        // Check if this elif has is-pattern bindings
-                        let elif_is_binding = matches!(
-                            &elif_cond.node,
-                            Expr::Is { negated: false, pattern, .. }
-                            if Self::has_pattern_bindings(&pattern.node)
-                        );
+                        // Check if this elif has is-pattern bindings (including compound)
+                        let elif_is_binding = Self::has_compound_is_bindings(&elif_cond.node);
                         if elif_is_binding {
                             self.gen_elif_is_binding(elif_cond, elif_body, emitter);
                         } else {
@@ -1867,12 +1859,8 @@ impl CodegenContext<'_> {
                 body,
                 else_body,
             } => {
-                // Check if condition is `expr is Pattern` with bindings
-                let is_binding_while = matches!(
-                    &condition.node,
-                    Expr::Is { negated: false, pattern, .. }
-                    if Self::has_pattern_bindings(&pattern.node)
-                );
+                // Check if condition contains `is` pattern(s) with bindings
+                let is_binding_while = Self::has_compound_is_bindings(&condition.node);
 
                 if is_binding_while {
                     self.gen_while_is_binding(condition, body, else_body.as_ref(), emitter);
@@ -3394,7 +3382,24 @@ impl CodegenContext<'_> {
         }
     }
 
-    /// Generate codegen for `if expr is Pattern(bindings):` with pattern variable extraction.
+    /// Flatten a `BinaryOp::And` chain into an ordered list of sub-expressions (left-to-right).
+    fn flatten_and_chain<'a>(expr: &'a Spanned<Expr>) -> Vec<&'a Spanned<Expr>> {
+        let mut parts = Vec::new();
+        Self::flatten_and_chain_inner(expr, &mut parts);
+        parts
+    }
+
+    fn flatten_and_chain_inner<'a>(expr: &'a Spanned<Expr>, parts: &mut Vec<&'a Spanned<Expr>>) {
+        if let Expr::BinaryOp { left, op: BinaryOp::And, right } = &expr.node {
+            Self::flatten_and_chain_inner(left, parts);
+            Self::flatten_and_chain_inner(right, parts);
+        } else {
+            parts.push(expr);
+        }
+    }
+
+    /// Generate codegen for `if expr is Pattern(bindings):` and compound conditions
+    /// like `if a is Some(x) and x > 0:` or `if a is Some(x) and b is Ok(y) and guard:`.
     fn gen_if_is_binding(
         &mut self,
         condition: &Spanned<Expr>,
@@ -3403,87 +3408,66 @@ impl CodegenContext<'_> {
         else_body: &Option<Block>,
         emitter: &mut CEmitter,
     ) {
-        if let Expr::Is { expr: scrutinee, pattern, .. } = &condition.node {
-            // Evaluate scrutinee into a temp to avoid double-evaluation
-            let scrut_expr = self.gen_expr(scrutinee);
-            let scrut_temps = self.flush_string_temps(emitter);
-            let tmp = emitter.fresh_temp();
-            emitter.emit_line(&format!("__typeof__({scrut_expr}) {tmp} = {scrut_expr};"));
+        let all_scrut_temps = self.gen_compound_is_condition(condition, "if", emitter);
 
-            let enum_c_type = self.resolve_enum_c_type_for_scrutinee(scrutinee);
-            let cond = self.pattern_to_condition(&pattern.node, &tmp, enum_c_type.as_deref());
+        self.push_drop_scope(DropScopeKind::Block);
+        self.gen_block(then_body, emitter);
+        self.pop_drop_scope(emitter);
+        emitter.dedent();
 
-            emitter.emit_line(&format!("if ({cond}) {{"));
+        for (elif_cond, elif_body) in elif_branches {
+            let elif_is_binding = Self::has_compound_is_bindings(&elif_cond.node);
+            if elif_is_binding {
+                self.gen_elif_is_binding(elif_cond, elif_body, emitter);
+            } else {
+                let ec = self.gen_expr(elif_cond);
+                let elif_temps = self.flush_string_temps_no_emit();
+                if elif_temps.is_empty() {
+                    emitter.emit_line(&format!("}} else if ({ec}) {{"));
+                    emitter.indent();
+                    if self.trace {
+                        let src = c_string_escape(&format!("elif {}", self.source_line(elif_cond.span)));
+                        let vars = self.collect_expr_vars(&[&elif_cond.node]);
+                        self.emit_branch_trace("elif", &src, &vars, emitter);
+                    }
+                    self.push_drop_scope(DropScopeKind::Block);
+                    self.gen_block(elif_body, emitter);
+                    self.pop_drop_scope(emitter);
+                    emitter.dedent();
+                } else {
+                    emitter.emit_line("} else {");
+                    emitter.indent();
+                    for (name, expr) in &elif_temps {
+                        emitter.emit_line(&format!("GorgetString {name} = {expr};"));
+                    }
+                    emitter.emit_line(&format!("if ({ec}) {{"));
+                    emitter.indent();
+                    self.push_drop_scope(DropScopeKind::Block);
+                    self.gen_block(elif_body, emitter);
+                    self.pop_drop_scope(emitter);
+                    emitter.dedent();
+                    emitter.emit_line("}");
+                    let names: Vec<String> = elif_temps.iter().map(|(n, _)| n.clone()).collect();
+                    Self::emit_string_temp_frees(&names, emitter);
+                    emitter.dedent();
+                }
+            }
+        }
+
+        if let Some(else_body) = else_body {
+            emitter.emit_line("} else {");
             emitter.indent();
             if self.trace {
-                let src = c_string_escape(&format!("if {}", self.source_line(condition.span)));
-                let vars = self.collect_expr_vars(&[&condition.node]);
-                self.emit_branch_trace("if", &src, &vars, emitter);
+                self.emit_branch_trace("else", "else", &[], emitter);
             }
             self.push_drop_scope(DropScopeKind::Block);
-            self.emit_pattern_bindings(&pattern.node, &tmp, emitter);
-            self.gen_block(then_body, emitter);
+            self.gen_block(else_body, emitter);
             self.pop_drop_scope(emitter);
             emitter.dedent();
-
-            for (elif_cond, elif_body) in elif_branches {
-                let elif_is_binding = matches!(
-                    &elif_cond.node,
-                    Expr::Is { negated: false, pattern, .. }
-                    if Self::has_pattern_bindings(&pattern.node)
-                );
-                if elif_is_binding {
-                    self.gen_elif_is_binding(elif_cond, elif_body, emitter);
-                } else {
-                    let ec = self.gen_expr(elif_cond);
-                    let elif_temps = self.flush_string_temps_no_emit();
-                    if elif_temps.is_empty() {
-                        emitter.emit_line(&format!("}} else if ({ec}) {{"));
-                        emitter.indent();
-                        if self.trace {
-                            let src = c_string_escape(&format!("elif {}", self.source_line(elif_cond.span)));
-                            let vars = self.collect_expr_vars(&[&elif_cond.node]);
-                            self.emit_branch_trace("elif", &src, &vars, emitter);
-                        }
-                        self.push_drop_scope(DropScopeKind::Block);
-                        self.gen_block(elif_body, emitter);
-                        self.pop_drop_scope(emitter);
-                        emitter.dedent();
-                    } else {
-                        emitter.emit_line("} else {");
-                        emitter.indent();
-                        for (name, expr) in &elif_temps {
-                            emitter.emit_line(&format!("GorgetString {name} = {expr};"));
-                        }
-                        emitter.emit_line(&format!("if ({ec}) {{"));
-                        emitter.indent();
-                        self.push_drop_scope(DropScopeKind::Block);
-                        self.gen_block(elif_body, emitter);
-                        self.pop_drop_scope(emitter);
-                        emitter.dedent();
-                        emitter.emit_line("}");
-                        let names: Vec<String> = elif_temps.iter().map(|(n, _)| n.clone()).collect();
-                        Self::emit_string_temp_frees(&names, emitter);
-                        emitter.dedent();
-                    }
-                }
-            }
-
-            if let Some(else_body) = else_body {
-                emitter.emit_line("} else {");
-                emitter.indent();
-                if self.trace {
-                    self.emit_branch_trace("else", "else", &[], emitter);
-                }
-                self.push_drop_scope(DropScopeKind::Block);
-                self.gen_block(else_body, emitter);
-                self.pop_drop_scope(emitter);
-                emitter.dedent();
-            }
-
-            emitter.emit_line("}");
-            Self::emit_string_temp_frees(&scrut_temps, emitter);
         }
+
+        emitter.emit_line("}");
+        Self::emit_string_temp_frees(&all_scrut_temps, emitter);
     }
 
     /// Generate codegen for `elif expr is Pattern(bindings):` with pattern variable extraction.
@@ -3495,36 +3479,119 @@ impl CodegenContext<'_> {
         elif_body: &Block,
         emitter: &mut CEmitter,
     ) {
-        if let Expr::Is { expr: scrutinee, pattern, .. } = &elif_cond.node {
-            // Wrap in else block so we can declare the scrutinee temp
-            emitter.emit_line("} else {");
-            emitter.indent();
+        // Wrap in else block so we can declare the scrutinee temp
+        emitter.emit_line("} else {");
+        emitter.indent();
 
-            let scrut_expr = self.gen_expr(scrutinee);
-            let scrut_temps = self.flush_string_temps(emitter);
-            let tmp = emitter.fresh_temp();
-            emitter.emit_line(&format!("__typeof__({scrut_expr}) {tmp} = {scrut_expr};"));
+        let scrut_temps = self.gen_compound_is_condition(elif_cond, "elif", emitter);
 
-            let enum_c_type = self.resolve_enum_c_type_for_scrutinee(scrutinee);
-            let cond = self.pattern_to_condition(&pattern.node, &tmp, enum_c_type.as_deref());
+        self.push_drop_scope(DropScopeKind::Block);
+        self.gen_block(elif_body, emitter);
+        self.pop_drop_scope(emitter);
+        emitter.dedent();
+        // Close inner if, free temps, dedent — leave wrapping else open
+        emitter.emit_line("}");
+        Self::emit_string_temp_frees(&scrut_temps, emitter);
+        emitter.dedent();
+    }
 
-            emitter.emit_line(&format!("if ({cond}) {{"));
-            emitter.indent();
-            if self.trace {
-                let src = c_string_escape(&format!("elif {}", self.source_line(elif_cond.span)));
-                let vars = self.collect_expr_vars(&[&elif_cond.node]);
-                self.emit_branch_trace("elif", &src, &vars, emitter);
-            }
-            self.push_drop_scope(DropScopeKind::Block);
-            self.emit_pattern_bindings(&pattern.node, &tmp, emitter);
-            self.gen_block(elif_body, emitter);
-            self.pop_drop_scope(emitter);
-            emitter.dedent();
-            // Close inner if, free temps, dedent — leave wrapping else open
-            emitter.emit_line("}");
-            Self::emit_string_temp_frees(&scrut_temps, emitter);
-            emitter.dedent();
+    /// Shared helper for generating a compound `is` condition. Evaluates all scrutinee temps,
+    /// builds the combined condition (tag checks + guards via stmt-expr if needed), emits
+    /// the `if (condition) {` line with pattern bindings, and returns all scrutinee string temps.
+    /// Leaves the emitter indented inside the if block.
+    fn gen_compound_is_condition(
+        &mut self,
+        condition: &Spanned<Expr>,
+        branch_label: &str,
+        emitter: &mut CEmitter,
+    ) -> Vec<String> {
+        let parts = Self::flatten_and_chain(condition);
+
+        // Phase 1: evaluate all scrutinee temps and collect info
+        struct IsInfo {
+            tmp: String,
+            tag_cond: String,
+            has_bindings: bool,
         }
+        let mut all_scrut_temps = Vec::new();
+        let mut is_infos: Vec<IsInfo> = Vec::new();
+        let mut guard_indices: Vec<usize> = Vec::new(); // indices of non-is parts
+
+        for (i, part) in parts.iter().enumerate() {
+            if let Expr::Is { expr: scrutinee, negated: false, pattern, .. } = &part.node {
+                let scrut_expr = self.gen_expr(scrutinee);
+                let scrut_temps = self.flush_string_temps(emitter);
+                all_scrut_temps.extend(scrut_temps);
+                let tmp = emitter.fresh_temp();
+                emitter.emit_line(&format!("__typeof__({scrut_expr}) {tmp} = {scrut_expr};"));
+
+                let enum_c_type = self.resolve_enum_c_type_for_scrutinee(scrutinee);
+                let tag_cond = self.pattern_to_condition(&pattern.node, &tmp, enum_c_type.as_deref());
+                let has_bindings = Self::has_pattern_bindings(&pattern.node);
+
+                is_infos.push(IsInfo { tmp, tag_cond, has_bindings });
+            } else {
+                guard_indices.push(i);
+            }
+        }
+
+        // Phase 2: build the combined condition
+        let mut cond_parts: Vec<String> = Vec::new();
+        for info in &is_infos {
+            cond_parts.push(info.tag_cond.clone());
+        }
+
+        // If there are guard expressions, they might reference pattern bindings.
+        // Wrap them in a GCC statement expression with inline bindings.
+        if !guard_indices.is_empty() {
+            let mut inline_bindings = String::new();
+            let mut info_idx = 0;
+            for part in &parts {
+                if let Expr::Is { pattern, negated: false, .. } = &part.node {
+                    if info_idx < is_infos.len() && is_infos[info_idx].has_bindings {
+                        inline_bindings.push_str(&self.stmt_pattern_bindings_inline(
+                            &pattern.node,
+                            &is_infos[info_idx].tmp,
+                        ));
+                    }
+                    info_idx += 1;
+                }
+            }
+
+            let guard_exprs: Vec<String> = guard_indices.iter()
+                .map(|&i| self.gen_expr(parts[i]))
+                .collect();
+            let guard_combined = guard_exprs.join(" && ");
+
+            if inline_bindings.is_empty() {
+                cond_parts.push(guard_combined);
+            } else {
+                cond_parts.push(format!("({{ {inline_bindings}({guard_combined}); }})"));
+            }
+        }
+
+        let full_cond = cond_parts.join(" && ");
+        emitter.emit_line(&format!("if ({full_cond}) {{"));
+        emitter.indent();
+
+        if self.trace {
+            let src = c_string_escape(&format!("{branch_label} {}", self.source_line(condition.span)));
+            let vars = self.collect_expr_vars(&[&condition.node]);
+            self.emit_branch_trace(branch_label, &src, &vars, emitter);
+        }
+
+        // Phase 3: emit pattern bindings in the body scope
+        let mut info_idx = 0;
+        for part in &parts {
+            if let Expr::Is { pattern, negated: false, .. } = &part.node {
+                if info_idx < is_infos.len() && is_infos[info_idx].has_bindings {
+                    self.emit_pattern_bindings(&pattern.node, &is_infos[info_idx].tmp, emitter);
+                }
+                info_idx += 1;
+            }
+        }
+
+        all_scrut_temps
     }
 
     /// Generate codegen for `while expr is Pattern(bindings):` with pattern variable extraction.
@@ -3619,6 +3686,19 @@ impl CodegenContext<'_> {
                 alts.iter().any(|a| Self::has_pattern_bindings(&a.node))
             }
             Pattern::Wildcard | Pattern::Literal(_) | Pattern::Rest => false,
+        }
+    }
+
+    /// Check if a condition expression contains any `is` sub-expressions with bindings,
+    /// walking through `BinaryOp::And` chains for compound conditions.
+    fn has_compound_is_bindings(expr: &Expr) -> bool {
+        match expr {
+            Expr::Is { negated: false, pattern, .. } => Self::has_pattern_bindings(&pattern.node),
+            Expr::BinaryOp { left, op: BinaryOp::And, right } => {
+                Self::has_compound_is_bindings(&left.node)
+                    || Self::has_compound_is_bindings(&right.node)
+            }
+            _ => false,
         }
     }
 

@@ -9,3 +9,6 @@ void main():
     print("{chained.unwrap()}")
     Option[int] fallback = none.or_else((): Some(99))
     print("{fallback.unwrap()}")
+    # Cross-type map: int -> str
+    Option[str] as_str = some.map((int x): "val")
+    print(as_str.unwrap())
