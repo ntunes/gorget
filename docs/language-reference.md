@@ -1954,6 +1954,7 @@ The compiler automatically registers the following core traits. They cannot be r
 | `Default` | `Self default()` (static) | `Self` | Zero/default values, `@derive(Default)` |
 | `From[T]` | `Self from(T value)` (static) | `Self` | Infallible type conversion, `@derive(From)` |
 | `TryFrom[T]` | `Result[Self, str] try_from(T value)` (static) | `Result[Self, str]` | Fallible type conversion, `@derive(TryFrom)` |
+| `Parseable` | `Option[Self] parse(str s)` (static) | `Option[Self]` | Fallible string parsing via `Type.parse(s)` |
 | `Measurable` | `int len(self)` | `int` | Types with a length; enables `len(x)` free function |
 
 #### Displayable
@@ -2109,6 +2110,36 @@ equip Percentage with TryFrom[int]:
 
 auto result = Percentage.try_from(50)   # Ok(Percentage(50))
 auto bad = Percentage.try_from(200)     # Error("percentage must be 0-100")
+```
+
+#### Parseable
+
+Fallible string parsing. Returns `Option[Self]` — `Some(value)` on success, `None` on invalid input. Built-in for all numeric primitives (`int`, `int8`, `int16`, `int32`, `uint`, `uint8`, `uint16`, `uint32`, `float`, `float32`). Never panics.
+
+```gorget
+Option[int] n = int.parse("42")
+if n is Some(val):
+    print("{val}")            # 42
+
+Option[int] bad = int.parse("hello")
+if bad is None:
+    print("invalid")          # invalid
+
+# unwrap_or for default values
+int port = int.parse(port_str).unwrap_or(8080)
+```
+
+User-defined types can equip `Parseable`:
+
+```gorget
+newtype Hex(int)
+
+equip Hex with Parseable:
+    static Option[Hex] parse(str s):
+        Option[int] n = int.parse(s)
+        if n is Some(val):
+            return Some(Hex(val))
+        return None
 ```
 
 #### Measurable
@@ -2469,6 +2500,8 @@ The following functions are available via `import`:
 | `bool_to_str` | `str(bool)` | Bool to `"true"` or `"false"` |
 | `char_to_str` | `str(char)` | Single character to string |
 | `codepoint_to_str` | `str(int)` | Unicode code point to string |
+
+> **Note:** `parse_int` and `parse_float` panic on invalid input. For fallible parsing, use the `Parseable` trait: `int.parse(s)` returns `Option[int]`, `float.parse(s)` returns `Option[float]` (see §15.1).
 
 **`std.io`** — I/O
 

@@ -49,3 +49,49 @@ void main():
     # int.default() now works (parser fix)
     int d = int.default()
     print("{d}")
+
+    # ── Edge cases ──────────────────────────────────────────
+    Option[int] empty = int.parse("")
+    if empty is None:
+        print("empty_none")
+
+    Option[int] overflow = int.parse("99999999999999999999")
+    if overflow is None:
+        print("overflow_none")
+
+    # ── Integer type variants ───────────────────────────────
+    Option[int8] i8v = int8.parse("127")
+    if i8v is Some(v8):
+        print("{v8}")
+
+    Option[uint16] u16v = uint16.parse("65535")
+    if u16v is Some(v16):
+        print("{v16}")
+
+    # ── Float edge cases ────────────────────────────────────
+    Option[float] fneg0 = float.parse("-0.0")
+    if fneg0 is Some(fn0):
+        print("neg0_ok")
+
+    Option[float] fsci = float.parse("1.5e2")
+    if fsci is Some(fsc):
+        print("{fsc}")
+
+    # ── Auto inference ──────────────────────────────────────
+    auto auto_n = int.parse("99")
+    if auto_n is Some(av):
+        print("{av}")
+
+    # ── Method chaining ─────────────────────────────────────
+    int chained = int.parse("77").unwrap_or(0)
+    print("{chained}")
+
+    # ── More .default() coverage ────────────────────────────
+    float fd = float.default()
+    print("{fd}")
+
+    bool bd = bool.default()
+    print("{bd}")
+
+    str sd = str.default()
+    print("str_default:{sd}:")

@@ -9,7 +9,7 @@
 
 from std.net.tls import TlsSocket, tls_connect
 from std.collections import Vector, Dict
-from std.conv import int_to_str, parse_int, char_to_str
+from std.conv import int_to_str, char_to_str
 from std.bytes import bytes_to_str, bytes_concat
 
 # ── Response type ────────────────────────────────────────────
@@ -47,7 +47,9 @@ struct HttpResponse:
         int http_cp_v = http_cp.unwrap()
         http_host = http_hp[0..http_cp_v]
         str http_ps = http_hp[http_cp_v + 1..http_hp.len()]
-        http_port = parse_int(http_ps)
+        Option[int] http_port_parsed = int.parse(http_ps)
+        if http_port_parsed is Some(http_pv):
+            http_port = http_pv
 
     return (http_host, http_port, http_path)
 
@@ -165,9 +167,13 @@ Result[HttpResponse, str] http_single(str http_method, str http_url, str http_bo
         Option[int] http_sp2 = http_after.index_of(" ")
         if http_sp2.is_some():
             str http_code_str = http_after[0..http_sp2.unwrap()]
-            http_code = parse_int(http_code_str)
+            Option[int] http_code_opt = int.parse(http_code_str)
+            if http_code_opt is Some(http_cv):
+                http_code = http_cv
         else:
-            http_code = parse_int(http_after)
+            Option[int] http_code_opt2 = int.parse(http_after)
+            if http_code_opt2 is Some(http_cv2):
+                http_code = http_cv2
 
     # Headers (stored with lowercase names for easy lookup)
     Dict[str, str] http_resp_hdrs = Dict[str, str]()
@@ -197,8 +203,11 @@ Result[HttpResponse, str] http_single(str http_method, str http_url, str http_bo
         # Check Content-Length
         if http_resp_hdrs.contains("content-length"):
             str http_cl_str = http_resp_hdrs["content-length"]
-            int http_cl = parse_int(http_cl_str)
-            http_resp_body = http_read_body_fixed(&http_conn, http_cl)
+            Option[int] http_cl_opt = int.parse(http_cl_str)
+            if http_cl_opt is Some(http_cl):
+                http_resp_body = http_read_body_fixed(&http_conn, http_cl)
+            else:
+                http_resp_body = http_read_body_close(&http_conn)
         else:
             # No length info -- read until connection close
             http_resp_body = http_read_body_close(&http_conn)

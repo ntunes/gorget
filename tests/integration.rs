@@ -2846,7 +2846,18 @@ A
 none
 3.140000
 none
-0");
+0
+empty_none
+overflow_none
+127
+65535
+neg0_ok
+150.000000
+99
+77
+0.000000
+false
+str_default::");
 }
 
 #[test]

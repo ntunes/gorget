@@ -2734,6 +2734,7 @@ trait Default           # .default() — default value (static method)
 trait Iterable          # .iter() — produce an Iterator
 trait From[T]           # .from(T) — infallible type conversion (static method)
 trait TryFrom[T]        # .try_from(T) — fallible type conversion (static method)
+trait Parseable          # .parse(str) — fallible string parsing (static method)
 trait Serializable      # .serialize(ser) — serialization (derivable via @derive, import std.json)
 trait Deserializable    # .deserialize(de) — deserialization (derivable via @derive, import std.json)
 trait Debuggable        # *Not yet implemented* — development/debug representation
