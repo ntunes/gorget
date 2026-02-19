@@ -3967,3 +3967,26 @@ z
 ",
     );
 }
+
+#[test]
+fn option_result_combinators() {
+    run_gg(
+        "option_result_combinators.gg",
+        "\
+42
+99
+42
+true
+42
+77
+84
+43
+10
+99
+fail
+mapped
+10
+77
+20",
+    );
+}

@@ -1178,14 +1178,14 @@ impl CodegenContext<'_> {
                 if needs_temp {
                     format!("({{ {mangled} __opt = {recv}; __opt.tag == {tag_some}; }})")
                 } else {
-                    format!("{recv}.tag == {tag_some}")
+                    format!("({recv}.tag == {tag_some})")
                 }
             }
             "is_none" => {
                 if needs_temp {
                     format!("({{ {mangled} __opt = {recv}; __opt.tag == {tag_none}; }})")
                 } else {
-                    format!("{recv}.tag == {tag_none}")
+                    format!("({recv}.tag == {tag_none})")
                 }
             }
             "map" => {
@@ -1220,6 +1220,29 @@ impl CodegenContext<'_> {
                 let closure_fn = self.gen_expr(&args[0].node.value);
                 format!(
                     "({{ {mangled} __opt = {recv}; (__opt.tag == {tag_some}) ? __opt : {closure_fn}(); }})"
+                )
+            }
+            "unwrap_or_else" => {
+                let type_args = self.infer_generic_type_args(receiver);
+                let elem_c_type = type_args.first().cloned().unwrap_or_else(|| "int64_t".to_string());
+                self.closure_return_type_hint = Some(elem_c_type);
+                let closure_fn = self.gen_expr(&args[0].node.value);
+                format!(
+                    "({{ {mangled} __opt = {recv}; (__opt.tag == {tag_some}) ? __opt.data.Some._0 : {closure_fn}(); }})"
+                )
+            }
+            "filter" => {
+                self.closure_return_type_hint = Some("bool".to_string());
+                let closure_fn = self.gen_expr(&args[0].node.value);
+                let ctor_none = c_mangle::mangle_variant(&mangled, "None");
+                format!(
+                    "({{ {mangled} __opt = {recv}; (__opt.tag == {tag_some} && {closure_fn}(__opt.data.Some._0)) ? __opt : {ctor_none}(); }})"
+                )
+            }
+            "or" => {
+                let alt = self.gen_expr(&args[0].node.value);
+                format!(
+                    "({{ {mangled} __opt = {recv}; (__opt.tag == {tag_some}) ? __opt : {alt}; }})"
                 )
             }
             _ => format!("/* unknown Option method {method_name} */ 0"),
@@ -1259,14 +1282,14 @@ impl CodegenContext<'_> {
                 if needs_temp {
                     format!("({{ {mangled} __res = {recv}; __res.tag == {tag_ok}; }})")
                 } else {
-                    format!("{recv}.tag == {tag_ok}")
+                    format!("({recv}.tag == {tag_ok})")
                 }
             }
             "is_err" => {
                 if needs_temp {
                     format!("({{ {mangled} __res = {recv}; __res.tag == {tag_error}; }})")
                 } else {
-                    format!("{recv}.tag == {tag_error}")
+                    format!("({recv}.tag == {tag_error})")
                 }
             }
             "map" => {
@@ -1302,6 +1325,40 @@ impl CodegenContext<'_> {
                 let closure_fn = self.gen_expr(&args[0].node.value);
                 format!(
                     "({{ {mangled} __res = {recv}; (__res.tag == {tag_ok}) ? __res : {closure_fn}(__res.data.Error._0); }})"
+                )
+            }
+            "unwrap_or_else" => {
+                let type_args = self.infer_generic_type_args(receiver);
+                let ok_c_type = type_args.first().cloned().unwrap_or_else(|| "int64_t".to_string());
+                self.closure_return_type_hint = Some(ok_c_type);
+                let closure_fn = self.gen_expr(&args[0].node.value);
+                format!(
+                    "({{ {mangled} __res = {recv}; (__res.tag == {tag_ok}) ? __res.data.Ok._0 : {closure_fn}(__res.data.Error._0); }})"
+                )
+            }
+            "unwrap_err" => {
+                format!("({{ {mangled} __res = {recv}; if (__res.tag == {tag_ok}) {{ fprintf(stderr, \"unwrap_err called on Ok\\n\"); exit(1); }} __res.data.Error._0; }})")
+            }
+            "map_err" => {
+                let body_c_type = self.infer_closure_body_c_type(&args[0].node.value);
+                self.closure_return_type_hint = Some(body_c_type.clone());
+                let closure_fn = self.gen_expr(&args[0].node.value);
+                let type_args = self.infer_generic_type_args(receiver);
+                let ok_c_type = type_args.first().cloned().unwrap_or_else(|| "int64_t".to_string());
+                let output_mangled = self.register_generic("Result", &[ok_c_type, body_c_type], super::GenericInstanceKind::Enum);
+                let ctor_ok = c_mangle::mangle_variant(&output_mangled, "Ok");
+                let ctor_error = c_mangle::mangle_variant(&output_mangled, "Error");
+                format!(
+                    "({{ {mangled} __res = {recv}; {output_mangled} __result; \
+                    if (__res.tag == {tag_ok}) {{ __result = {ctor_ok}(__res.data.Ok._0); }} \
+                    else {{ __result = {ctor_error}({closure_fn}(__res.data.Error._0)); }} \
+                    __result; }})"
+                )
+            }
+            "or" => {
+                let alt = self.gen_expr(&args[0].node.value);
+                format!(
+                    "({{ {mangled} __res = {recv}; (__res.tag == {tag_ok}) ? __res : {alt}; }})"
                 )
             }
             _ => format!("/* unknown Result method {method_name} */ 0"),

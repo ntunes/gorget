@@ -425,6 +425,18 @@ impl CodegenContext<'_> {
                 {
                     return "Option".to_string();
                 }
+                // Option methods that return Option
+                if recv_type == "Option" && matches!(method.node.as_str(),
+                    "map" | "and_then" | "or_else" | "or" | "filter"
+                ) {
+                    return "Option".to_string();
+                }
+                // Result methods that return Result
+                if recv_type == "Result" && matches!(method.node.as_str(),
+                    "map" | "and_then" | "or_else" | "or" | "map_err"
+                ) {
+                    return "Result".to_string();
+                }
                 // Look up method return type in trait registry (inherent + trait impls)
                 for impl_info in &self.traits.impls {
                     if impl_info.self_type_name == recv_type {

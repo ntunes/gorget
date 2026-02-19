@@ -6,6 +6,10 @@
 
 - **`set()`/`put()` old-value leak**: When overwriting an existing collection element with `set()`/`put()`, the old value's non-Copy fields are not freed. The new value simply overwrites the slot. For elements with collection fields (e.g., `Vector[Container]` where Container has `Vector[int] data`), the old element's inner buffers leak. Fix requires pre-dropping the old value before overwriting. [added: 2026-02-19]
 
+- **`Option.flatten()` method**: `Option[Option[T]]` → `Option[T]` — unwraps one nesting layer. Requires the type checker to propagate `Generic(Option, [Generic(Option, [T])])` and codegen to extract the inner mangled name from nested type args. Deferred from the combinator batch. [added: 2026-02-19]
+
+- **Cross-type `map`/`map_err` type inference**: `builtin_method_type()` returns `receiver_type` as approximation for `map`, `map_err`, `and_then`, `or_else`. This breaks when the closure changes the type parameter (e.g., `Result[int, str].map_err((str e): len(e))` → `Result[int, int]`). Needs the type checker to inspect closure body return type for these methods. [added: 2026-02-19]
+
 ## Medium
 
 - **`Into[T]` conversion trait**: Counterpart to `From[T]` requiring explicit type args (`value.into[Celsius]()`) or return-type inference. Adds complexity (equipping primitives, potential blanket impl pattern). [added: 2026-02-17]

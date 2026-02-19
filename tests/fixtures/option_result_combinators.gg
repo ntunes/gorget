@@ -1,0 +1,56 @@
+void main():
+    # Option combinators
+    Option[int] some = Some(42)
+    Option[int] none = None()
+
+    # unwrap_or_else
+    print("{some.unwrap_or_else((): 0)}")
+    print("{none.unwrap_or_else((): 99)}")
+
+    # filter
+    Option[int] filtered = some.filter((int x): x > 40)
+    Option[int] rejected = some.filter((int x): x > 50)
+    print("{filtered.unwrap()}")
+    if rejected.is_none():
+        print("true")
+
+    # or
+    Option[int] alt_opt = Some(77)
+    Option[int] or_some = some.or(alt_opt)
+    Option[int] or_none = none.or(alt_opt)
+    print("{or_some.unwrap()}")
+    print("{or_none.unwrap()}")
+
+    # map (verify type checker integration)
+    Option[int] doubled = some.map((int x): x * 2)
+    print("{doubled.unwrap()}")
+
+    # and_then chaining
+    Option[int] chained = some.and_then((int x): Some(x + 1))
+    print("{chained.unwrap()}")
+
+    # Result combinators
+    Result[int, str] ok = Ok(10)
+    Result[int, str] err = Error("fail")
+
+    # unwrap_or_else
+    print("{ok.unwrap_or_else((str e): 0)}")
+    print("{err.unwrap_or_else((str e): 99)}")
+
+    # unwrap_err
+    print(err.unwrap_err())
+
+    # map_err
+    Result[int, str] mapped_err = err.map_err((str e): "mapped")
+    print(mapped_err.unwrap_err())
+
+    # or
+    Result[int, str] alt_ok = Ok(77)
+    Result[int, str] or_ok = ok.or(alt_ok)
+    Result[int, str] or_err = err.or(alt_ok)
+    print("{or_ok.unwrap()}")
+    print("{or_err.unwrap()}")
+
+    # map (verify type checker integration)
+    Result[int, str] doubled_r = ok.map((int x): x * 2)
+    print("{doubled_r.unwrap()}")
