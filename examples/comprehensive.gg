@@ -75,9 +75,9 @@ void print_all[T](Vector[T] items) where T is Displayable:
 # async str fetch(str url):
 #     pass
 
-# Throws declaration
-int parse_int(str s) throws str:
-    pass
+# NOT YET: throws declarations on function signatures
+# int parse_int(str s) throws ValueError:
+#     pass
 
 # Derive macros
 @derive(Displayable)
