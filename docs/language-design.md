@@ -1823,6 +1823,24 @@ unsafe:
     int x = arr.get_unchecked(i)     # no bounds check — UB if out of range
 ```
 
+#### Stdlib Design: Option Over Panic
+
+The standard library follows a strict principle: **methods that can fail return `Option[T]` (or `Result[T, E]`) instead of panicking**. A lookup that might not find anything is not an error — it's a normal outcome that the type system should represent.
+
+```gorget
+Vector[int] v = [10, 20, 30]
+Option[int] x = v.get(5)            # None (not a panic)
+int y = v.get(1).unwrap()           # 20
+
+Dict[str, int] m = {"a": 1}
+Option[int] val = m.get("z")        # None (not a panic)
+int fallback = m.get("z") ?? 0      # 0 via nil coalescing
+```
+
+The guideline: if a caller can reasonably trigger the failure case through normal use (missing key, out-of-bounds index, empty collection), the method must return `Option[T]`. Panics are reserved for logic errors — violations of documented preconditions that indicate a bug in the calling code (e.g., `unwrap()` on `None`, indexing with `[]` out of bounds).
+
+Convenience wrappers that provide inline fallbacks (`get_or`, `get_or_put`, `unwrap_or`) return `T` directly — the caller has already decided what to do on absence.
+
 ---
 
 ## 25. The `with` Statement (Scoped Resource Management)

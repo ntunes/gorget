@@ -2288,7 +2288,7 @@ The following methods are available on built-in types without any import.
 |---|---|---|
 | `push(item)` | `T → void` | Append an element |
 | `pop()` | `→ T` | Remove and return last element |
-| `get(index)` | `int → T` | Get element at index (panics if out of bounds) |
+| `get(index)` | `int → Option[T]` | Get element at index (`None` if out of bounds) |
 | `set(index, item)` | `int, T → void` | Set element at index |
 | `remove(index)` | `int → T` | Remove element at index, shifting subsequent elements |
 | `len()` | `→ int` | Number of elements |
@@ -2317,7 +2317,7 @@ Iteration, `keys()`, `values()`, and `items()` all return entries in insertion o
 | Method | Signature | Description |
 |---|---|---|
 | `put(key, value)` | `K, V → void` | Insert or update a key-value pair |
-| `get(key)` | `K → V` | Get value for key (panics if missing) |
+| `get(key)` | `K → Option[V]` | Get value for key (`None` if missing) |
 | `contains(key)` | `K → bool` | True if key exists |
 | `remove(key)` | `K → bool` | Remove key, return whether it existed |
 | `len()` | `→ int` | Number of entries |
@@ -2339,7 +2339,7 @@ Same API as `Dict` but does not preserve insertion order. Use when order is irre
 | Method | Signature | Description |
 |---|---|---|
 | `put(key, value)` | `K, V → void` | Insert or update a key-value pair |
-| `get(key)` | `K → V` | Get value for key (panics if missing) |
+| `get(key)` | `K → Option[V]` | Get value for key (`None` if missing) |
 | `contains(key)` | `K → bool` | True if key exists |
 | `remove(key)` | `K → bool` | Remove key, return whether it existed |
 | `len()` | `→ int` | Number of entries |
