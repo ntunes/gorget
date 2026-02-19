@@ -138,7 +138,7 @@ Result[HttpResponse, str] http_single(str http_method, str http_url, str http_bo
     Vector[str] http_hk = http_local_hdrs.keys()
     int http_hi = 0
     while http_hi < http_hk.len():
-        str http_key = http_hk.get(http_hi)
+        str http_key = http_hk.get(http_hi).unwrap()
         str http_hval = http_local_hdrs[http_key]
         http_req = http_req + http_key + ": " + http_hval + "\r\n"
         http_hi = http_hi + 1

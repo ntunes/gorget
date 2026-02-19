@@ -16,9 +16,9 @@ equip SparseSet[T]:
         # Grow sparse array if needed
         while self.sparse.len() <= id:
             self.sparse.push(-1)
-        if self.sparse.get(id) != -1:
+        if self.sparse.get(id).unwrap() != -1:
             # Already present — update in place
-            int idx = self.sparse.get(id)
+            int idx = self.sparse.get(id).unwrap()
             self.data.set(idx, value)
             return
         # Add new entry
@@ -31,14 +31,14 @@ equip SparseSet[T]:
     void remove(&self, int id):
         if id >= self.sparse.len():
             return
-        int idx = self.sparse.get(id)
+        int idx = self.sparse.get(id).unwrap()
         if idx == -1:
             return
         int last = self.count - 1
         if idx != last:
             # Swap with last element
-            int last_entity = self.entity_ids.get(last)
-            T last_data = self.data.get(last)
+            int last_entity = self.entity_ids.get(last).unwrap()
+            T last_data = self.data.get(last).unwrap()
             self.entity_ids.set(idx, last_entity)
             self.data.set(idx, last_data)
             self.sparse.set(last_entity, idx)
@@ -51,24 +51,24 @@ equip SparseSet[T]:
     bool has(self, int id):
         if id >= self.sparse.len():
             return false
-        return self.sparse.get(id) != -1
+        return self.sparse.get(id).unwrap() != -1
 
     T get(self, int id):
-        int idx = self.sparse.get(id)
-        return self.data.get(idx)
+        int idx = self.sparse.get(id).unwrap()
+        return self.data.get(idx).unwrap()
 
     void set(&self, int id, T value):
-        int idx = self.sparse.get(id)
+        int idx = self.sparse.get(id).unwrap()
         self.data.set(idx, value)
 
     int len(self):
         return self.count
 
     int entity_at(self, int idx):
-        return self.entity_ids.get(idx)
+        return self.entity_ids.get(idx).unwrap()
 
     T data_at(self, int idx):
-        return self.data.get(idx)
+        return self.data.get(idx).unwrap()
 
 struct SparseSetIter:
     Vector[int] collected_ids
@@ -79,7 +79,7 @@ equip SparseSetIter with Iterator[int]:
     Option[int] next(&self):
         if self.idx >= self.count:
             return None
-        int eid = self.collected_ids.get(self.idx)
+        int eid = self.collected_ids.get(self.idx).unwrap()
         self.idx = self.idx + 1
         return Some(eid)
 
@@ -88,6 +88,6 @@ equip SparseSet[T] with Iterable[int]:
         Vector[int] ss_eids = Vector[int]()
         int ss_i = 0
         while ss_i < self.count:
-            ss_eids.push(self.entity_ids.get(ss_i))
+            ss_eids.push(self.entity_ids.get(ss_i).unwrap())
             ss_i = ss_i + 1
         return SparseSetIter(ss_eids, 0, self.count)

@@ -1671,7 +1671,7 @@ fn assert_fails() {
 
 #[test]
 fn bounds_check() {
-    run_gg_panics("bounds_check.gg", "index out of bounds: index 5, length 3");
+    run_gg("bounds_check.gg", "1\n20\n1\n1\n");
 }
 
 #[test]

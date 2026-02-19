@@ -33,7 +33,7 @@ void main():
             match d["tags"]:
                 case Arr(arr):
                     print("tags has {arr.len()} items")
-                    match arr.get(0):
+                    match arr.get(0).unwrap():
                         case Str(s):
                             print("first = {s}")
                         else:

@@ -41,11 +41,15 @@ impl CodegenContext<'_> {
                 let idx = args.first()
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "0".to_string());
-                if needs_temp {
-                    format!("({{ __typeof__({recv}) __recv = {recv}; GORGET_ARRAY_AT({elem_type}, __recv, {idx}); }})")
-                } else {
-                    format!("GORGET_ARRAY_AT({elem_type}, {recv}, {idx})")
-                }
+                let opt = self.register_generic("Option", &[elem_type.clone()], super::GenericInstanceKind::Enum);
+                let ctor_some = c_mangle::mangle_variant(&opt, "Some");
+                let ctor_none = c_mangle::mangle_variant(&opt, "None");
+                format!(
+                    "({{ int64_t __gi = {idx}; GorgetArray __gr_src = {recv}; {opt} __gr; \
+                    if (__gi >= 0 && (size_t)__gi < __gr_src.len) \
+                    {{ __gr = {ctor_some}(GORGET_ARRAY_AT({elem_type}, __gr_src, __gi)); }} \
+                    else {{ __gr = {ctor_none}(); }} __gr; }})"
+                )
             }
             "pop" => {
                 if needs_temp {
@@ -376,9 +380,12 @@ impl CodegenContext<'_> {
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "0".to_string());
                 let (_key_type, val_type) = self.infer_map_kv_types(receiver);
+                let opt = self.register_generic("Option", &[val_type.clone()], super::GenericInstanceKind::Enum);
+                let ctor_some = c_mangle::mangle_variant(&opt, "Some");
+                let ctor_none = c_mangle::mangle_variant(&opt, "None");
                 format!(
                     "({{ {val_type}* __gp = {mangled}__get_ptr({recv_ref}, {key}); \
-                    if (!__gp) gorget_panic(\"key not found in map\"); *__gp; }})"
+                    __gp ? {ctor_some}(*__gp) : {ctor_none}(); }})"
                 )
             }
             "contains" => {
@@ -1026,6 +1033,21 @@ impl CodegenContext<'_> {
                     .map(|&a| self.type_id_to_c_substituted(a))
                     .collect();
                 return c_mangle::mangle_generic(&base, &c_args);
+            }
+        }
+        // When receiver is a collection .get() call, construct Option[T] mangled name
+        // directly from the collection's element/value type.
+        if let Expr::MethodCall { receiver: inner_recv, method, .. } = &receiver.node {
+            if method.node == "get" {
+                let recv_type = self.infer_receiver_type(inner_recv);
+                if matches!(recv_type.as_str(), "Vector" | "List" | "Array") {
+                    let elem = self.infer_vector_elem_type(inner_recv);
+                    return c_mangle::mangle_generic("Option", &[elem]);
+                }
+                if matches!(recv_type.as_str(), "Dict" | "HashMap") {
+                    let (_, val) = self.infer_map_kv_types(inner_recv);
+                    return c_mangle::mangle_generic("Option", &[val]);
+                }
             }
         }
         // Fallback: use the receiver C type directly

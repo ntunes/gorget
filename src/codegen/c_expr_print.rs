@@ -479,7 +479,7 @@ impl CodegenContext<'_> {
         // are mangled (e.g. "GorgetMap__int64_t__int64_t").
         if receiver_type == "GorgetArray" {
             return match method {
-                "len" | "get" | "pop" | "index_of" => Some(self.types.int_id),
+                "len" | "pop" | "index_of" => Some(self.types.int_id),
                 "contains" | "any" | "all" => Some(self.types.bool_id),
                 "sort" | "reverse" | "insert" | "extend" => Some(self.types.void_id),
                 _ => None,
@@ -487,7 +487,7 @@ impl CodegenContext<'_> {
         }
         if receiver_type.starts_with("GorgetMap") {
             return match method {
-                "len" | "get" => Some(self.types.int_id),
+                "len" => Some(self.types.int_id),
                 "contains" => Some(self.types.bool_id),
                 _ => None,
             };

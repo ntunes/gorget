@@ -92,7 +92,7 @@ equip World:
             if h.hp <= 0:
                 dead.push(eid)
         for i in 0..dead.len():
-            int id = dead.get(i)
+            int id = dead.get(i).unwrap()
             self.kill(id)
 
     void print_state(self):

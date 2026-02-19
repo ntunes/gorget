@@ -12,12 +12,12 @@ void main():
     grid.push(row1)
     grid.push(row2)
     print("{grid.len()}")
-    Vector[int] first_row = grid.get(0)
-    print("{first_row.get(0)}")
-    print("{first_row.get(1)}")
-    Vector[int] second_row = grid.get(1)
-    print("{second_row.get(0)}")
-    print("{second_row.get(1)}")
+    Vector[int] first_row = grid.get(0).unwrap()
+    print("{first_row.get(0).unwrap()}")
+    print("{first_row.get(1).unwrap()}")
+    Vector[int] second_row = grid.get(1).unwrap()
+    print("{second_row.get(0).unwrap()}")
+    print("{second_row.get(1).unwrap()}")
 
     # Option[Vector[int]] — Option wrapping a collection
     Vector[int] nums = Vector[int]()
@@ -25,7 +25,7 @@ void main():
     nums.push(20)
     Option[Vector[int]] some_vec = Some(nums)
     Vector[int] unwrapped = some_vec.unwrap()
-    print("{unwrapped.get(0)}")
+    print("{unwrapped.get(0).unwrap()}")
     print("{unwrapped.len()}")
 
     # Dict[str, Vector[int]] — Dict with collection values
@@ -39,6 +39,6 @@ void main():
     odds.push(3)
     groups.put("odds", odds)
     print("{groups.len()}")
-    Vector[int] got_evens = groups.get("evens")
-    print("{got_evens.get(0)}")
-    print("{got_evens.get(1)}")
+    Vector[int] got_evens = groups.get("evens").unwrap()
+    print("{got_evens.get(0).unwrap()}")
+    print("{got_evens.get(1).unwrap()}")

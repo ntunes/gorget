@@ -21,8 +21,8 @@ Json build_messages(Vector[str] loop_roles, Vector[str] loop_contents):
     int loop_mi = 0
     while loop_mi < loop_roles.len():
         Dict[str, Json] loop_msg = Dict[str, Json]()
-        loop_msg.put("role", Str(loop_roles.get(loop_mi)))
-        loop_msg.put("content", Str(loop_contents.get(loop_mi)))
+        loop_msg.put("role", Str(loop_roles.get(loop_mi).unwrap()))
+        loop_msg.put("content", Str(loop_contents.get(loop_mi).unwrap()))
         loop_msgs.push(Obj(loop_msg))
         loop_mi = loop_mi + 1
     return Arr(loop_msgs)

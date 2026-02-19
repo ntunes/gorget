@@ -50,6 +50,11 @@ impl CEmitter {
         name
     }
 
+    /// Append another emitter's output to this one.
+    pub fn append(&mut self, other: &CEmitter) {
+        self.output.push_str(&other.output);
+    }
+
     /// Consume and return the generated output.
     pub fn finish(self) -> String {
         self.output

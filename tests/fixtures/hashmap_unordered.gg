@@ -8,9 +8,9 @@ void main():
 
     # Basic operations
     print("{m.len()}")
-    print("{m.get(10)}")
-    print("{m.get(20)}")
-    print("{m.get(30)}")
+    print("{m.get(10).unwrap()}")
+    print("{m.get(20).unwrap()}")
+    print("{m.get(30).unwrap()}")
     print("{m.contains(10)}")
     print("{m.contains(99)}")
 

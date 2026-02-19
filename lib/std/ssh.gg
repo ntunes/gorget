@@ -74,7 +74,7 @@ SshConfig parse_ssh_config(str host, int default_port, str default_user):
 
     int i = 0
     while i < lines.len():
-        str line = lines.get(i)
+        str line = lines.get(i).unwrap()
         str trimmed = line.trim()
 
         # Skip empty lines and comments
@@ -92,8 +92,8 @@ SshConfig parse_ssh_config(str host, int default_port, str default_user):
             i = i + 1
             continue
 
-        str key = parts.get(0)
-        str value = parts.get(1)
+        str key = parts.get(0).unwrap()
+        str value = parts.get(1).unwrap()
 
         if key == "Host":
             # Check if this Host block matches our target
@@ -101,7 +101,7 @@ SshConfig parse_ssh_config(str host, int default_port, str default_user):
             in_matching_block = false
             int j = 1
             while j < parts.len():
-                str pattern = parts.get(j)
+                str pattern = parts.get(j).unwrap()
                 if pattern == "":
                     j = j + 1
                     continue
@@ -173,7 +173,7 @@ Vector[uint8] make_mpint(BigNum bn):
     Vector[uint8] data = crypto_bn_to_bytes(bn)
     # If high bit is set, prepend a zero byte
     if data.len() > 0:
-        uint8 first = data.get(0)
+        uint8 first = data.get(0).unwrap()
         if first >= 128:
             Vector[uint8] zero = bytes_from_hex("00")
             data = bytes_concat(zero, data)
@@ -269,7 +269,7 @@ Vector[uint8] read_packet(Session &session):
 
         # Extract payload (skip packet_length(4) + padding_length(1), trim padding)
         ssh_check_len(unenc_packet, 5, "read_packet encrypted header")
-        uint8 pad_len_val = unenc_packet.get(4)
+        uint8 pad_len_val = unenc_packet.get(4).unwrap()
         int pad_len = pad_len_val
         int payload_len = packet_len - 1 - pad_len
         if payload_len < 0:
@@ -285,7 +285,7 @@ Vector[uint8] read_packet(Session &session):
         int packet_len = bytes_read_u32_be(len_buf, 0)
         Vector[uint8] packet_data = session.sock.read_exact(packet_len)
         ssh_check_len(packet_data, 1, "read_packet unencrypted header")
-        uint8 pad_len_val = packet_data.get(0)
+        uint8 pad_len_val = packet_data.get(0).unwrap()
         int pad_len = pad_len_val
         int payload_len = packet_len - 1 - pad_len
         if payload_len < 0:
@@ -453,7 +453,7 @@ void auth_password(Session &session, str user, str password):
     # Read auth response
     Vector[uint8] auth_reply = read_packet(&session)
     ssh_check_len(auth_reply, 1, "auth_password reply")
-    uint8 auth_type = auth_reply.get(0)
+    uint8 auth_type = auth_reply.get(0).unwrap()
     if auth_type == SSH_MSG_USERAUTH_FAILURE:
         print("SSH authentication failed")
 
@@ -492,7 +492,7 @@ CommandResult channel_exec(Session &session, str cmd):
             done = true
         else:
             ssh_check_len(msg, 1, "channel_exec msg type")
-            uint8 msg_type = msg.get(0)
+            uint8 msg_type = msg.get(0).unwrap()
             if msg_type == SSH_MSG_CHANNEL_DATA:
                 # channel_data: skip recipient(4) + string_length(4)
                 ssh_check_len(msg, 9, "channel_exec data header")
@@ -568,7 +568,7 @@ str channel_read_until(Session &session, str delimiter):
             done = true
         else:
             ssh_check_len(msg, 1, "channel_read_until msg type")
-            uint8 msg_type = msg.get(0)
+            uint8 msg_type = msg.get(0).unwrap()
             if msg_type == SSH_MSG_CHANNEL_DATA:
                 ssh_check_len(msg, 9, "channel_read_until data header")
                 int data_len = bytes_read_u32_be(msg, 5)
@@ -609,7 +609,7 @@ equip Session:
         while waiting:
             Vector[uint8] reply = read_packet(&self)
             ssh_check_len(reply, 1, "open_subsystem reply")
-            uint8 reply_type = reply.get(0)
+            uint8 reply_type = reply.get(0).unwrap()
             if reply_type == SSH_MSG_CHANNEL_SUCCESS:
                 self.channel_open = true
                 return Ok(true)

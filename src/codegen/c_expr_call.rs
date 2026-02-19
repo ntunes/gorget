@@ -1316,8 +1316,10 @@ impl CodegenContext<'_> {
             || c_type.as_deref() == Some("GorgetSet");
         let is_string = matches!(type_name.as_str(), "str" | "String")
             || matches!(c_type.as_deref(), Some("const char*") | Some("GorgetString"));
-        let is_option = type_name == "Option";
-        let is_result = type_name == "Result";
+        let is_option = type_name == "Option"
+            || c_type.as_deref().map_or(false, |t| t.starts_with("Option__"));
+        let is_result = type_name == "Result"
+            || c_type.as_deref().map_or(false, |t| t.starts_with("Result__"));
         let is_box = type_name == "Box";
         let is_file = (type_name == "File" || c_type.as_deref() == Some("GorgetFile"))
             && matches!(method_name, "open" | "create");

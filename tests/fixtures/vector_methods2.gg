@@ -13,7 +13,7 @@ void main():
 
     # insert
     v.insert(1, 15)
-    print("{v.get(1)}")
+    print("{v.get(1).unwrap()}")
     print("{v.len()}")
 
     # extend
@@ -22,13 +22,13 @@ void main():
     other.push(60)
     v.extend(other)
     print("{v.len()}")
-    print("{v.get(6)}")
+    print("{v.get(6).unwrap()}")
 
     # slice
     Vector[int] s = v.slice(0, 3)
     print("{s.len()}")
-    print("{s.get(0)}")
-    print("{s.get(2)}")
+    print("{s.get(0).unwrap()}")
+    print("{s.get(2).unwrap()}")
 
     # any
     bool has_big = v.any((int x): x > 50)

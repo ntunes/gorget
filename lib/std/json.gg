@@ -144,7 +144,7 @@ equip JsonDeserializer with Deserializer:
     bool has_field(self, str name):
         if self.de_stack.len() == 0:
             return false
-        Json de_top = self.de_stack.get(self.de_stack.len() - 1)
+        Json de_top = self.de_stack.get(self.de_stack.len() - 1).unwrap()
         return de_top.has(name)
 
     void field(&self, str name):
@@ -153,7 +153,7 @@ equip JsonDeserializer with Deserializer:
         if self.de_stack.len() == 0:
             self.de_err = "no struct context"
             return
-        Json de_top = self.de_stack.get(self.de_stack.len() - 1)
+        Json de_top = self.de_stack.get(self.de_stack.len() - 1).unwrap()
         self.de_current = de_top.get(name)
 
     void end_struct(&self):
@@ -180,7 +180,7 @@ equip JsonDeserializer with Deserializer:
         if self.de_stack.len() == 0:
             self.de_err = "no seq context"
             return
-        Json de_top = self.de_stack.get(self.de_stack.len() - 1)
+        Json de_top = self.de_stack.get(self.de_stack.len() - 1).unwrap()
         self.de_current = de_top.at(index)
 
     void end_seq(&self):
@@ -504,7 +504,7 @@ str json_stringify(Json value):
             while idx < items.len():
                 if idx > 0:
                     json_result = json_result + ","
-                json_result = json_result + json_stringify(items.get(idx))
+                json_result = json_result + json_stringify(items.get(idx).unwrap())
                 idx = idx + 1
             return json_result + "]"
         case Obj(obj_map):
@@ -516,7 +516,7 @@ str json_stringify(Json value):
             while idx < key_list.len():
                 if idx > 0:
                     json_result = json_result + ","
-                str key_str = key_list.get(idx)
+                str key_str = key_list.get(idx).unwrap()
                 json_result = json_result + json_escape_string(key_str) + ":" + json_stringify(obj_map[key_str])
                 idx = idx + 1
             return json_result + "\}"
@@ -553,7 +553,7 @@ str json_pretty_internal(Json value, int depth):
             while idx < items.len():
                 if idx > 0:
                     json_result = json_result + ",\n"
-                json_result = json_result + inner + json_pretty_internal(items.get(idx), depth + 1)
+                json_result = json_result + inner + json_pretty_internal(items.get(idx).unwrap(), depth + 1)
                 idx = idx + 1
             return json_result + "\n" + indent + "]"
         case Obj(obj_map):
@@ -565,7 +565,7 @@ str json_pretty_internal(Json value, int depth):
             while idx < key_list.len():
                 if idx > 0:
                     json_result = json_result + ",\n"
-                str key_str = key_list.get(idx)
+                str key_str = key_list.get(idx).unwrap()
                 json_result = json_result + inner + json_escape_string(key_str) + ": " + json_pretty_internal(obj_map[key_str], depth + 1)
                 idx = idx + 1
             return json_result + "\n" + indent + "\}"
@@ -603,7 +603,7 @@ equip Json:
         match self:
             case Arr(arr):
                 if index >= 0 and index < arr.len():
-                    return arr.get(index)
+                    return arr.get(index).unwrap()
                 return Null()
             else:
                 return Null()

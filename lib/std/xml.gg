@@ -365,7 +365,7 @@ str xml_stringify_node(XmlNode nd, Dict[str, str] nd_attrs, Vector[XmlNode] nd_k
     Vector[str] attr_keys = nd_attrs.keys()
     int ki = 0
     while ki < attr_keys.len():
-        str akey = attr_keys.get(ki)
+        str akey = attr_keys.get(ki).unwrap()
         str aval = nd_attrs[akey]
         xml_out = xml_out + " " + akey + "=\"" + xml_encode_attr(aval) + "\""
         ki = ki + 1
@@ -374,7 +374,7 @@ str xml_stringify_node(XmlNode nd, Dict[str, str] nd_attrs, Vector[XmlNode] nd_k
     xml_out = xml_out + ">"
     int ci = 0
     while ci < nd_kids.len():
-        XmlNode xml_child = nd_kids.get(ci)
+        XmlNode xml_child = nd_kids.get(ci).unwrap()
         xml_out = xml_out + xml_stringify(xml_child)
         ci = ci + 1
     xml_out = xml_out + "</" + nd_tag + ">"
@@ -421,7 +421,7 @@ equip XmlNode:
                 str combined = ""
                 int ti = 0
                 while ti < xkids.len():
-                    XmlNode child_nd = xkids.get(ti)
+                    XmlNode child_nd = xkids.get(ti).unwrap()
                     combined = combined + child_nd.text()
                     ti = ti + 1
                 return combined
@@ -431,7 +431,7 @@ equip XmlNode:
             case Element(xtag, xattr_dict, xkids):
                 int fi = 0
                 while fi < xkids.len():
-                    XmlNode found_nd = xkids.get(fi)
+                    XmlNode found_nd = xkids.get(fi).unwrap()
                     if found_nd.tag() == find_tag:
                         return found_nd
                     fi = fi + 1
@@ -445,7 +445,7 @@ equip XmlNode:
             case Element(xtag, xattr_dict, xkids):
                 int fi = 0
                 while fi < xkids.len():
-                    XmlNode found_nd = xkids.get(fi)
+                    XmlNode found_nd = xkids.get(fi).unwrap()
                     if found_nd.tag() == find_tag:
                         xml_matches.push(found_nd)
                     fi = fi + 1

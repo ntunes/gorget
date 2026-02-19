@@ -44,9 +44,9 @@ void main():
     Vector[XmlNode] found_items = n8.find_all("item")
     int found_count = found_items.len()
     print("{found_count}")
-    XmlNode item0 = found_items.get(0)
+    XmlNode item0 = found_items.get(0).unwrap()
     print(item0.text())
-    XmlNode item1 = found_items.get(1)
+    XmlNode item1 = found_items.get(1).unwrap()
     print(item1.text())
 
     # xml_stringify round-trip

@@ -2,6 +2,10 @@
 
 ## High
 
+- **Element drops for struct elements with collection fields**: Element-level collection drops (Phase 17) skip `StructDrop` elements whose field drops involve collection buffer frees (e.g., `Vector[TomlSection]` where `TomlSection` has Dict/Vector fields). Without field-level move-zeroing, shallow copies can alias inner collection buffers, causing use-after-free when element drops run. Fix requires: field-level move-zeroing (zero struct fields when they're moved out via field access), which needs per-field ownership tracking in codegen. The TOML module's `gg_toml_assemble(tp.sections)` pattern is the canonical example. [added: 2026-02-18]
+
+- **Option[T] standardization — next batches**: (1) `Vector.pop()`, `Vector.remove()` → `Option[T]`. (2) `Vector.index_of()`, `str.index_of()` → `Option[int]` (currently returns -1 sentinel). These follow the same pattern as the completed `.get()` → `Option[T]` batch. [added: 2026-02-18]
+
 ## Medium
 
 - **`Into[T]` conversion trait**: Counterpart to `From[T]` requiring explicit type args (`value.into[Celsius]()`) or return-type inference. Adds complexity (equipping primitives, potential blanket impl pattern). [added: 2026-02-17]

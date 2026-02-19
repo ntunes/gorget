@@ -10,15 +10,15 @@ void main():
     Vector[str] ks = ages.keys()
     int i = 0
     while i < ks.len():
-        str k = ks.get(i)
+        str k = ks.get(i).unwrap()
         print(k)
         i = i + 1
 
     # values — insertion order preserved
     Vector[int] vs = ages.values()
-    print("{vs.get(0)}")
-    print("{vs.get(1)}")
-    print("{vs.get(2)}")
+    print("{vs.get(0).unwrap()}")
+    print("{vs.get(1).unwrap()}")
+    print("{vs.get(2).unwrap()}")
 
     # fold
     int total = ages.fold(0, (int acc, str k, int v): acc + v)

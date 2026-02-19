@@ -12,7 +12,7 @@ void main():
     int total = 0
     int i = 0
     while i < items.len():
-        auto item = items.get(i)
+        auto item = items.get(i).unwrap()
         total = total + item._1
         i = i + 1
     print("{total}")

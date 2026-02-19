@@ -27,5 +27,5 @@ void main():
     print("{d.len()}")
 
     # Verify key 11 survived and a new key works
-    print("{d.get(11)}")
-    print("{d.get(105)}")
+    print("{d.get(11).unwrap()}")
+    print("{d.get(105).unwrap()}")

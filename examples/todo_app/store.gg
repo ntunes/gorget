@@ -19,14 +19,14 @@ equip TaskStore:
     int count_done(self):
         int n = 0
         for i in 0..self.tasks.len():
-            Task t = self.tasks.get(i)
+            Task t = self.tasks.get(i).unwrap()
             if t.done:
                 n = n + 1
         return n
 
     void show_all(self):
         for i in 0..self.tasks.len():
-            Task t = self.tasks.get(i)
+            Task t = self.tasks.get(i).unwrap()
             print("{t}")
 
     Vector[Task] pending(self):

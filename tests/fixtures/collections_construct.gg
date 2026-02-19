@@ -6,5 +6,5 @@ void main():
     v.push(20)
     int len = v.len()
     print("{len}")
-    int first = v.get(0)
+    int first = v.get(0).unwrap()
     print("{first}")

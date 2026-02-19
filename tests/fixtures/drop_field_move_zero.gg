@@ -30,7 +30,7 @@ void main():
     h1.data.push(20)
     items.push(h1.data)
 
-    auto inner = items.get(0)
+    auto inner = items.get(0).unwrap()
     print("pushed {inner.len()}")
 
     # Test 2: assign field to new variable (enables ownership transfer)

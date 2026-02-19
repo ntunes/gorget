@@ -55,9 +55,9 @@ str base64_encode(Vector[uint8] b64_data):
 
     # Process complete 3-byte groups
     while b64_i + 2 < b64_len:
-        int b64_c0 = b64_data.get(b64_i) as int
-        int b64_c1 = b64_data.get(b64_i + 1) as int
-        int b64_c2 = b64_data.get(b64_i + 2) as int
+        int b64_c0 = b64_data.get(b64_i).unwrap() as int
+        int b64_c1 = b64_data.get(b64_i + 1).unwrap() as int
+        int b64_c2 = b64_data.get(b64_i + 2).unwrap() as int
 
         b64_out = b64_out + char_to_str(b64_alpha[b64_c0 >> 2])
 
@@ -76,14 +76,14 @@ str base64_encode(Vector[uint8] b64_data):
     # Handle 1- or 2-byte remainder
     int b64_rem = b64_len - b64_i
     if b64_rem == 1:
-        int b64_c0 = b64_data.get(b64_i) as int
+        int b64_c0 = b64_data.get(b64_i).unwrap() as int
         b64_out = b64_out + char_to_str(b64_alpha[b64_c0 >> 2])
         int b64_lo = b64_c0 & 3
         b64_out = b64_out + char_to_str(b64_alpha[b64_lo << 4])
         b64_out = b64_out + "=="
     elif b64_rem == 2:
-        int b64_c0 = b64_data.get(b64_i) as int
-        int b64_c1 = b64_data.get(b64_i + 1) as int
+        int b64_c0 = b64_data.get(b64_i).unwrap() as int
+        int b64_c1 = b64_data.get(b64_i + 1).unwrap() as int
         b64_out = b64_out + char_to_str(b64_alpha[b64_c0 >> 2])
         int b64_lo1 = b64_c0 & 3
         int b64_hi1 = b64_c1 >> 4

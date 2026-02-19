@@ -13,7 +13,7 @@ Vector[int] sieve(int limit):
 
     int i = 2
     while i * i < limit:
-        if is_prime.get(i) == 1:
+        if is_prime.get(i).unwrap() == 1:
             # Mark all multiples of i as composite
             int j = i * i
             while j < limit:
@@ -24,7 +24,7 @@ Vector[int] sieve(int limit):
     # Collect the primes
     Vector[int] primes = []
     for n in 0..limit:
-        if is_prime.get(n) == 1:
+        if is_prime.get(n).unwrap() == 1:
             primes.push(n)
     return primes
 

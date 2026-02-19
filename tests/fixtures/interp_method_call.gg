@@ -5,6 +5,6 @@ void main():
     v.push(10)
     v.push(20)
     print("{v.len()}")
-    print("{v.get(0)}")
+    print("{v.get(0).unwrap()}")
     str s = "hello"
     print("{s.len()}")

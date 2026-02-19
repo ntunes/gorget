@@ -16,12 +16,12 @@ void main():
     Vector[int] ks = d.keys()
     int i = 0
     while i < ks.len():
-        print("{ks.get(i)}")
+        print("{ks.get(i).unwrap()}")
         i = i + 1
 
     # Values should be: 10, 30, 99
     Vector[int] vs = d.values()
     i = 0
     while i < vs.len():
-        print("{vs.get(i)}")
+        print("{vs.get(i).unwrap()}")
         i = i + 1

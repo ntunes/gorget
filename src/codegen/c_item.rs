@@ -1426,6 +1426,16 @@ impl CodegenContext<'_> {
                 .map(|tid| self.type_id_to_c(*tid))
                 .collect();
 
+            // Ensure tuple type args have their typedefs registered early
+            for tid in &type_args {
+                if let crate::semantic::types::ResolvedType::Tuple(elems) = self.types.get(*tid) {
+                    let c_field_types: Vec<String> = elems.iter()
+                        .map(|e| self.type_id_to_c(*e))
+                        .collect();
+                    self.register_tuple_typedef(&c_field_types);
+                }
+            }
+
             match base_name.as_str() {
                 // Built-in collection types handled by the runtime — no monomorphization needed
                 "Vector" | "List" | "Array" | "Set" | "Box" => continue,
@@ -2437,7 +2447,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
     }
 
     /// Emit a monomorphized enum definition.
-    fn emit_monomorphized_enum(
+    pub fn emit_monomorphized_enum(
         &self,
         template: &EnumDef,
         c_type_args: &[String],

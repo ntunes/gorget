@@ -83,6 +83,6 @@ void main():
 
     # Double each element using map
     Vector[int] doubled = list.iter().map((int x): x * 2)
-    print(doubled.get(0))
-    print(doubled.get(1))
-    print(doubled.get(2))
+    print(doubled.get(0).unwrap())
+    print(doubled.get(1).unwrap())
+    print(doubled.get(2).unwrap())

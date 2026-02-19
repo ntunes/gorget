@@ -39,7 +39,7 @@ void spawn_food(Game mutable game):
         int fy = rand() % (game.height - 2) + 1
         bool on_snake = false
         for i in 0..game.body.len():
-            Position p = game.body.get(i)
+            Position p = game.body.get(i).unwrap()
             if p.x == fx and p.y == fy:
                 on_snake = true
                 break
@@ -49,7 +49,7 @@ void spawn_food(Game mutable game):
             break
 
 void update(Game mutable game):
-    Position head = game.body.get(game.body.len() - 1)
+    Position head = game.body.get(game.body.len() - 1).unwrap()
     int new_x = head.x
     int new_y = head.y
     match game.dir:
@@ -65,7 +65,7 @@ void update(Game mutable game):
         game.game_over = true
         return
     for i in 0..game.body.len():
-        Position p = game.body.get(i)
+        Position p = game.body.get(i).unwrap()
         if p.x == new_x and p.y == new_y:
             game.game_over = true
             return
@@ -89,7 +89,7 @@ void render(Game game):
             else:
                 bool is_snake = false
                 for i in 0..game.body.len():
-                    Position p = game.body.get(i)
+                    Position p = game.body.get(i).unwrap()
                     if p.x == x and p.y == y:
                         if i == game.body.len() - 1:
                             row = row + "@"

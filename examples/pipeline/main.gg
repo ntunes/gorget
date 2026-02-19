@@ -18,7 +18,7 @@ void main():
     # Show all students (uses Displayable)
     print("Class roster:")
     for i in 0..roster.len():
-        Student s = roster.get(i)
+        Student s = roster.get(i).unwrap()
         print("  {s}")
 
     # Extract grades via map (struct → int)
@@ -47,5 +47,5 @@ void main():
     # Filter + map chain: names of top scorers
     Vector[Student] top = roster.filter((Student s): s.grade >= 85)
     for i in 0..top.len():
-        Student s = top.get(i)
+        Student s = top.get(i).unwrap()
         print("top: {s.name}")

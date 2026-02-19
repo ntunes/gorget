@@ -369,11 +369,11 @@ equip TomlParser:
                 return Str("")
             # For inline tables, dotted keys create nested tables inline
             if key_parts.len() == 1:
-                tbl.put(key_parts.get(0), tbl_val)
+                tbl.put(key_parts.get(0).unwrap(), tbl_val)
             else:
                 # Build nested structure for dotted key in inline table
                 TomlValue nested = toml_wrap_dotted(key_parts, 0, tbl_val)
-                tbl.put(key_parts.get(0), nested)
+                tbl.put(key_parts.get(0).unwrap(), nested)
             self.skip_ws()
             if self.pos >= self.source.len():
                 self.fail("unterminated inline table")
@@ -484,13 +484,13 @@ equip TomlParser:
     void add_kv(&self, Vector[str] key_parts, TomlValue toml_val):
         # For dotted keys like a.b.c = val, we store key "a" → wrap_dotted
         # For simple keys, store directly in current section
-        TomlSection cur = self.sections.get(self.current_sec)
+        TomlSection cur = self.sections.get(self.current_sec).unwrap()
         Dict[str, TomlValue] sd = cur.sec_data
         if key_parts.len() == 1:
-            sd.put(key_parts.get(0), toml_val)
+            sd.put(key_parts.get(0).unwrap(), toml_val)
         else:
             # Build nested value for dotted key
-            str top_key = key_parts.get(0)
+            str top_key = key_parts.get(0).unwrap()
             TomlValue wrapped = toml_wrap_dotted(key_parts, 1, toml_val)
             if sd.contains(top_key):
                 # Merge with existing table (e.g. name.first + name.last)
@@ -569,12 +569,12 @@ TomlValue toml_wrap_dotted(Vector[str] key_parts, int from_idx, TomlValue leaf_v
     if from_idx >= key_parts.len() - 1:
         # Last part — just wrap key → val
         Dict[str, TomlValue] leaf_tbl = Dict[str, TomlValue]()
-        leaf_tbl.put(key_parts.get(key_parts.len() - 1), leaf_val)
+        leaf_tbl.put(key_parts.get(key_parts.len() - 1).unwrap(), leaf_val)
         return Tbl(leaf_tbl)
     # Recurse: inner = wrap_dotted(parts, from_idx+1, val)
     TomlValue inner = toml_wrap_dotted(key_parts, from_idx + 1, leaf_val)
     Dict[str, TomlValue] outer = Dict[str, TomlValue]()
-    outer.put(key_parts.get(from_idx), inner)
+    outer.put(key_parts.get(from_idx).unwrap(), inner)
     return Tbl(outer)
 
 str toml_strip_underscores(str txt):
@@ -597,14 +597,14 @@ TomlValue toml_assemble(Vector[TomlSection] secs):
     Dict[str, TomlValue] root = Dict[str, TomlValue]()
     int si = 0
     while si < secs.len():
-        TomlSection sec = secs.get(si)
+        TomlSection sec = secs.get(si).unwrap()
         if sec.sec_path.len() == 0:
             # Root section — copy entries directly
             Dict[str, TomlValue] sd = sec.sec_data
             Vector[str] rk = sd.keys()
             int ri = 0
             while ri < rk.len():
-                str rkey = rk.get(ri)
+                str rkey = rk.get(ri).unwrap()
                 root.put(rkey, sd[rkey])
                 ri = ri + 1
         else:
@@ -620,7 +620,7 @@ TomlValue toml_assemble(Vector[TomlSection] secs):
 void toml_place_table(Dict[str, TomlValue] &root, Vector[str] tpath, int idx, Dict[str, TomlValue] sec_data):
     if idx == tpath.len() - 1:
         # Place at this level
-        str final_key = tpath.get(idx)
+        str final_key = tpath.get(idx).unwrap()
         if root.contains(final_key):
             # Merge into existing table — entries from sec_data into existing
             # Since we can't modify nested Dict in-place, we rebuild
@@ -631,7 +631,7 @@ void toml_place_table(Dict[str, TomlValue] &root, Vector[str] tpath, int idx, Di
             root.put(final_key, Tbl(sec_data))
         return
     # Need to navigate deeper — extract, recurse, put back
-    str nav_key = tpath.get(idx)
+    str nav_key = tpath.get(idx).unwrap()
     if root.contains(nav_key):
         TomlValue existing = root[nav_key]
         Dict[str, TomlValue] sub = toml_extract_tbl(existing)
@@ -644,7 +644,7 @@ void toml_place_table(Dict[str, TomlValue] &root, Vector[str] tpath, int idx, Di
 
 void toml_place_aot(Dict[str, TomlValue] &root, Vector[str] tpath, Dict[str, TomlValue] sec_data):
     if tpath.len() == 1:
-        str aot_key = tpath.get(0)
+        str aot_key = tpath.get(0).unwrap()
         if root.contains(aot_key):
             # Append to existing array
             TomlValue existing = root[aot_key]
@@ -657,7 +657,7 @@ void toml_place_aot(Dict[str, TomlValue] &root, Vector[str] tpath, Dict[str, Tom
             root.put(aot_key, Arr(new_arr))
         return
     # Navigate to parent, recurse
-    str nav_key = tpath.get(0)
+    str nav_key = tpath.get(0).unwrap()
     Vector[str] rest_path = toml_subpath(tpath, 1)
     if root.contains(nav_key):
         TomlValue existing = root[nav_key]
@@ -688,7 +688,7 @@ Dict[str, TomlValue] toml_merge_into(TomlValue existing, Dict[str, TomlValue] ne
     Vector[str] nk = new_data.keys()
     int ni = 0
     while ni < nk.len():
-        str nkey = nk.get(ni)
+        str nkey = nk.get(ni).unwrap()
         base.put(nkey, new_data[nkey])
         ni = ni + 1
     return base
@@ -697,7 +697,7 @@ Vector[str] toml_subpath(Vector[str] full_path, int from_idx):
     Vector[str] sub = Vector[str]()
     int si = from_idx
     while si < full_path.len():
-        sub.push(full_path.get(si))
+        sub.push(full_path.get(si).unwrap())
         si = si + 1
     return sub
 
@@ -759,7 +759,7 @@ str toml_stringify_value(TomlValue tv):
             while ai < av.len():
                 if ai > 0:
                     arr_out = arr_out + ", "
-                arr_out = arr_out + toml_stringify_value(av.get(ai))
+                arr_out = arr_out + toml_stringify_value(av.get(ai).unwrap())
                 ai = ai + 1
             return arr_out + "]"
         case Tbl(tv_tbl):
@@ -771,7 +771,7 @@ str toml_stringify_value(TomlValue tv):
             while ti < tbl_keys.len():
                 if ti > 0:
                     tbl_out = tbl_out + ", "
-                str tk = tbl_keys.get(ti)
+                str tk = tbl_keys.get(ti).unwrap()
                 tbl_out = tbl_out + tk + " = " + toml_stringify_value(tv_tbl[tk])
                 ti = ti + 1
             return tbl_out + "\}"
@@ -782,7 +782,7 @@ str toml_stringify_section(str sec_prefix, Dict[str, TomlValue] tbl):
     # First pass: simple key-value pairs (not sub-tables or array-of-tables)
     int si = 0
     while si < sec_keys.len():
-        str sk1 = sec_keys.get(si)
+        str sk1 = sec_keys.get(si).unwrap()
         TomlValue sv1 = tbl[sk1]
         bool skip_val = toml_is_subtable(sv1)
         if not skip_val:
@@ -791,7 +791,7 @@ str toml_stringify_section(str sec_prefix, Dict[str, TomlValue] tbl):
     # Second pass: sub-tables and arrays-of-tables
     si = 0
     while si < sec_keys.len():
-        str sk2 = sec_keys.get(si)
+        str sk2 = sec_keys.get(si).unwrap()
         TomlValue sv2 = tbl[sk2]
         str child_prefix = sk2
         if sec_prefix != "":
@@ -820,7 +820,7 @@ bool toml_is_subtable(TomlValue tv):
 bool toml_is_aot_arr(Vector[TomlValue] items):
     if items.len() == 0:
         return false
-    TomlValue first = items.get(0)
+    TomlValue first = items.get(0).unwrap()
     match first:
         case Tbl(ft):
             return true
@@ -831,7 +831,7 @@ str toml_stringify_aot(str aot_prefix, Vector[TomlValue] aot_items):
     str aot_out = ""
     int aoti = 0
     while aoti < aot_items.len():
-        TomlValue aot_elem = aot_items.get(aoti)
+        TomlValue aot_elem = aot_items.get(aoti).unwrap()
         match aot_elem:
             case Tbl(aot_tbl):
                 aot_out = aot_out + "\n[[" + aot_prefix + "]]\n"
@@ -878,7 +878,7 @@ equip TomlValue:
         match self:
             case Arr(arr_data):
                 if index >= 0 and index < arr_data.len():
-                    return arr_data.get(index)
+                    return arr_data.get(index).unwrap()
                 return Str("")
             else:
                 return Str("")

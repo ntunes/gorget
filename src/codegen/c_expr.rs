@@ -819,7 +819,8 @@ impl CodegenContext<'_> {
                         }
                     }
                 }
-                None
+                // Fallback: use semantic expr_types map (populated by the type checker)
+                self.expr_types.get(&expr.span).copied()
             }
             Expr::Index { object, index } => {
                 if let Some(tid) = self.resolve_expr_type_id(object) {

@@ -409,6 +409,12 @@ impl CodegenContext<'_> {
                         _ => "Unknown",
                     }.to_string();
                 }
+                // Builtin collection methods returning Option
+                if matches!(recv_type.as_str(), "Vector" | "List" | "Array" | "Dict" | "HashMap")
+                    && method.node == "get"
+                {
+                    return "Option".to_string();
+                }
                 // Look up method return type in trait registry (inherent + trait impls)
                 for impl_info in &self.traits.impls {
                     if impl_info.self_type_name == recv_type {
@@ -417,6 +423,12 @@ impl CodegenContext<'_> {
                                 return name;
                             }
                         }
+                    }
+                }
+                // Fallback: use semantic expr_types map
+                if let Some(&type_id) = self.expr_types.get(&expr.span) {
+                    if let Some(name) = self.type_name_from_type_id(type_id) {
+                        return name;
                     }
                 }
                 "Unknown".to_string()

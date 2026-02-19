@@ -653,6 +653,7 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
     // 2b. Tuple typedefs (after forward declarations, before type definitions)
     ctx.emit_tuple_typedefs(&mut emitter);
     let tuple_count_before_codegen = ctx.tuple_typedefs.len();
+    let mut generic_count_before_codegen = ctx.generic_instances.len();
 
     // 2c. Emit monomorphized generic type definitions (structs/enums only)
     //     Split into two phases:
@@ -678,19 +679,40 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
     // 4b. Vtable instances (all functions are now declared)
     ctx.emit_vtable_instances(module, &mut emitter);
 
-    // 5. Generic method/function definitions
-    ctx.emit_generic_method_definitions(module, &mut emitter);
+    // 5. Generic method/function definitions — buffer output so we can splice
+    //    any newly-registered generic enum types (e.g. Option[Health] from
+    //    SparseSet[Health].get()) before the method bodies that reference them.
+    let mut generic_methods_buf = CEmitter::new();
+    ctx.emit_generic_method_definitions(module, &mut generic_methods_buf);
+
+    if ctx.generic_instances.len() > generic_count_before_codegen {
+        let mid_count = ctx.generic_instances.len();
+        for i in generic_count_before_codegen..mid_count {
+            let inst = ctx.generic_instances[i].clone();
+            if let GenericInstanceKind::Enum = inst.kind {
+                let template = ctx.generic_enum_templates.get(&inst.base_name).cloned();
+                if let Some(template) = template {
+                    ctx.emit_monomorphized_enum(&template, &inst.c_type_args, &inst.mangled_name, &mut emitter);
+                }
+            }
+        }
+        generic_count_before_codegen = mid_count;
+    }
+    emitter.append(&generic_methods_buf);
 
     // 5b. Function definitions (closures are collected during this pass)
     ctx.emit_function_definitions(module, &mut emitter);
 
-    // 6. Emit lifted closures and late-registered tuple typedefs — these were
-    //    collected during expression codegen in step 5. We insert them
-    //    before main by re-emitting into a separate buffer and splicing.
+    // 6. Emit lifted closures, late-registered tuple typedefs, and late-registered
+    //    generic enum instances — these were collected during expression codegen
+    //    in step 5. We insert them before main by re-emitting into a separate
+    //    buffer and splicing.
     let has_late_tuples = ctx.tuple_typedefs.len() > tuple_count_before_codegen;
-    if !ctx.lifted_closures.is_empty() || has_late_tuples {
+    let has_late_generics = ctx.generic_instances.len() > generic_count_before_codegen;
+    if !ctx.lifted_closures.is_empty() || has_late_tuples || has_late_generics {
         let mut splice_buf = CEmitter::new();
         // Emit any tuple typedefs registered during codegen (e.g. Dict.items())
+        // Must come before generic enums since Option[Tuple] references the tuple type.
         if has_late_tuples {
             splice_buf.emit_line("// ── Late Tuple Typedefs ──");
             for (name, field_types) in ctx.tuple_typedefs[tuple_count_before_codegen..].iter() {
@@ -703,6 +725,19 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
                     "typedef struct {{ {} }} {name};",
                     fields.join(" ")
                 ));
+            }
+        }
+        // Emit any generic enum instances registered during codegen (e.g. Option from .get())
+        if has_late_generics {
+            splice_buf.emit_line("// ── Late Generic Instantiations ──");
+            for i in generic_count_before_codegen..ctx.generic_instances.len() {
+                let inst = ctx.generic_instances[i].clone();
+                if let GenericInstanceKind::Enum = inst.kind {
+                    let template = ctx.generic_enum_templates.get(&inst.base_name).cloned();
+                    if let Some(template) = template {
+                        ctx.emit_monomorphized_enum(&template, &inst.c_type_args, &inst.mangled_name, &mut splice_buf);
+                    }
+                }
             }
         }
         if !ctx.lifted_closures.is_empty() {

@@ -30,16 +30,16 @@ void main():
     print("{evens.len()}")
 
     # filter: verify values
-    print("{evens.get(0)}")
+    print("{evens.get(0).unwrap()}")
 
     # collect length
-    print("{collected.get(0)}")
-    print("{collected.get(4)}")
+    print("{collected.get(0).unwrap()}")
+    print("{collected.get(4).unwrap()}")
 
     # map: double each element
     Vector[int] doubled = Counter(0, 5).iter().map((int x): x * 2)
-    print("{doubled.get(0)}")
-    print("{doubled.get(2)}")
+    print("{doubled.get(0).unwrap()}")
+    print("{doubled.get(2).unwrap()}")
 
     # fold: sum all elements
     int total = Counter(0, 5).iter().fold(0, (int acc, int x): acc + x)

@@ -39,6 +39,6 @@ void main():
     print("high priority: {urgent.len()}")
 
     # Complete a task and show it
-    Task t = store.tasks.get(1)
+    Task t = store.tasks.get(1).unwrap()
     Task finished = t.complete()
     print(finished)

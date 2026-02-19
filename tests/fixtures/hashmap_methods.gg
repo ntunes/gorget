@@ -7,7 +7,7 @@ void main():
     m.put(3, 30)
     int len = m.len()
     print("{len}")
-    int val = m.get(2)
+    int val = m.get(2).unwrap()
     print("{val}")
     if m.contains(1):
         print("has 1")

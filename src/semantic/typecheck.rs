@@ -1031,6 +1031,7 @@ impl<'a> TypeChecker<'a> {
                 } else {
                     // Check for closure-returning Option/Result methods (map, and_then, or_else)
                     if let Some(ret_type) = self.infer_closure_method_type(resolved_receiver, &method.node, args) {
+                        self.expr_types.insert(expr.span, ret_type);
                         ret_type
                     } else {
                         // Method not found — check built-in type methods
@@ -1038,6 +1039,7 @@ impl<'a> TypeChecker<'a> {
                             self.infer_expr(&arg.node.value);
                         }
                         if let Some(ret_type) = self.builtin_method_type(resolved_receiver, &method.node) {
+                            self.expr_types.insert(expr.span, ret_type);
                             ret_type
                         } else {
                             self.types.error_id
@@ -2294,7 +2296,14 @@ impl<'a> TypeChecker<'a> {
         match type_name.as_str() {
             "Vector" | "List" | "Array" => match method {
                 "push" => Some(self.types.void_id),
-                "pop" | "get" | "remove" => Some(elem_type()),
+                "pop" | "remove" => Some(elem_type()),
+                "get" => {
+                    if let Some(option_def_id) = self.scopes.lookup("Option") {
+                        Some(self.types.insert(ResolvedType::Generic(option_def_id, vec![elem_type()])))
+                    } else {
+                        Some(elem_type())
+                    }
+                }
                 "set" => Some(self.types.void_id),
                 "len" | "index_of" => Some(self.types.int_id),
                 "clear" | "reserve" | "sort" | "reverse" | "insert" | "extend" => Some(self.types.void_id),
@@ -2304,7 +2313,14 @@ impl<'a> TypeChecker<'a> {
             },
             "Dict" | "HashMap" => match method {
                 "put" | "update" => Some(self.types.void_id),
-                "get" | "get_or" | "get_or_put" => Some(val_type()),
+                "get" => {
+                    if let Some(option_def_id) = self.scopes.lookup("Option") {
+                        Some(self.types.insert(ResolvedType::Generic(option_def_id, vec![val_type()])))
+                    } else {
+                        Some(val_type())
+                    }
+                }
+                "get_or" | "get_or_put" => Some(val_type()),
                 "contains" => Some(self.types.bool_id),
                 "len" => Some(self.types.int_id),
                 "remove" => Some(self.types.bool_id),

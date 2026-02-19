@@ -11,14 +11,14 @@ void main():
     # filter: keep even numbers
     Vector[int] evens = v.filter((int x): x % 2 == 0)
     print("{evens.len()}")
-    print("{evens.get(0)}")
-    print("{evens.get(1)}")
+    print("{evens.get(0).unwrap()}")
+    print("{evens.get(1).unwrap()}")
 
     # map: double each element
     Vector[int] doubled = v.map((int x): x * 2)
     print("{doubled.len()}")
-    print("{doubled.get(0)}")
-    print("{doubled.get(4)}")
+    print("{doubled.get(0).unwrap()}")
+    print("{doubled.get(4).unwrap()}")
 
     # fold: sum all elements
     int total = v.fold(0, (int acc, int x): acc + x)
