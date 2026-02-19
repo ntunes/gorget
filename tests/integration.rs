@@ -3939,3 +3939,20 @@ true
 true",
     );
 }
+
+#[test]
+fn string_builder() {
+    run_gg(
+        "string_builder.gg",
+        "\
+hello world
+11
+false
+true
+first
+second
+42!
+3.14
+256",
+    );
+}

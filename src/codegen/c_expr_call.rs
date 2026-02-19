@@ -126,6 +126,11 @@ impl CodegenContext<'_> {
                     }
                     let arg = self.gen_expr(&args[0].node.value);
                     let arg_type = self.infer_c_type_from_expr(&args[0].node.value.node);
+                    // String(1024) → capacity constructor
+                    if matches!(arg_type.as_str(), "int64_t" | "int8_t" | "int16_t" | "int32_t"
+                        | "uint64_t" | "uint8_t" | "uint16_t" | "uint32_t") {
+                        return format!("gorget_string_with_capacity({arg})");
+                    }
                     if arg_type == "GorgetString" {
                         return format!("gorget_string_new({arg}.data)");
                     }

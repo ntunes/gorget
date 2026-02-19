@@ -128,6 +128,32 @@ static inline void gorget_string_push_char(GorgetString* s, char c) {
     s->data[s->len] = '\0';
 }
 
+static inline GorgetString gorget_string_with_capacity(int64_t cap) {
+    GorgetString s;
+    s.len = 0;
+    s.cap = (size_t)(cap > 0 ? cap : 16);
+    s.data = (char*)malloc(s.cap);
+    if (s.data) s.data[0] = '\0';
+    return s;
+}
+
+static inline void gorget_string_push_int(GorgetString* s, int64_t n) {
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%" PRId64, n);
+    gorget_string_append(s, buf);
+}
+
+static inline void gorget_string_push_float(GorgetString* s, double d) {
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%g", d);
+    gorget_string_append(s, buf);
+}
+
+static inline void gorget_string_push_line(GorgetString* s, const char* rhs) {
+    gorget_string_append(s, rhs);
+    gorget_string_push_char(s, '\n');
+}
+
 // ── String concatenation ────────────────────────────────────
 static inline const char* gorget_str_concat(const char* a, const char* b) {
     size_t la = strlen(a), lb = strlen(b);

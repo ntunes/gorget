@@ -737,6 +737,31 @@ impl CodegenContext<'_> {
                     let base = recv.strip_suffix(".data").unwrap_or(recv);
                     return Some(format!("(int64_t){base}.cap"));
                 }
+                "push_line" => {
+                    let base = recv.strip_suffix(".data").unwrap_or(recv);
+                    let arg = args.first()
+                        .map(|a| self.gen_expr(&a.node.value))
+                        .unwrap_or_else(|| "\"\"".to_string());
+                    let arg_type = args.first()
+                        .map(|a| self.infer_c_type_from_expr(&a.node.value.node))
+                        .unwrap_or_default();
+                    let rhs = if arg_type == "GorgetString" {
+                        self.coerce_string_to_str(&arg)
+                    } else {
+                        arg
+                    };
+                    return Some(format!("gorget_string_push_line(&{base}, {rhs})"));
+                }
+                "push_int" => {
+                    let base = recv.strip_suffix(".data").unwrap_or(recv);
+                    let arg = self.gen_expr(&args[0].node.value);
+                    return Some(format!("gorget_string_push_int(&{base}, {arg})"));
+                }
+                "push_float" => {
+                    let base = recv.strip_suffix(".data").unwrap_or(recv);
+                    let arg = self.gen_expr(&args[0].node.value);
+                    return Some(format!("gorget_string_push_float(&{base}, {arg})"));
+                }
                 _ => {} // Fall through to shared str methods
             }
         }
