@@ -1,8 +1,49 @@
-/// Virtual stdlib module system.
+/// Standard library module system.
 ///
-/// When the loader encounters `std.*` imports, it generates synthetic
-/// `Module` ASTs with `FunctionDef` / `FunctionBody::Declaration` nodes.
-/// No filesystem files needed — the C runtime already has the implementations.
+/// Stdlib modules use one of two strategies:
+///
+/// ## Synthetic modules (`generate_stdlib_module` returns `Some`)
+///
+/// The module AST is built in Rust via helper functions (`gen_fs_module`, etc.).
+/// Function bodies are either `FunctionBody::Declaration` (codegen emits a
+/// hardcoded C call, often with Result/Option wrapping) or `FunctionBody::Extern`
+/// (codegen emits a direct call to the named C symbol). The C implementations
+/// live in `c_runtime.rs`.
+///
+/// Use synthetic modules when the API is a thin wrapper over C functions that
+/// already exist in the runtime — the Gorget source would just be boilerplate
+/// `extern` declarations with no real logic.
+///
+/// Examples: `std.fs`, `std.os`, `std.conv`, `std.math`, `std.crypto`,
+/// `std.net.socket`, `std.sdl`, `std.regex`.
+///
+/// ## File-based modules (`stdlib_module_source` returns `Some`)
+///
+/// The module is written in Gorget as a `.gg` file under `lib/std/`. The loader
+/// reads the source via `include_str!`, parses it, recursively resolves its
+/// imports, and merges the resulting AST into the main module. Semantic analysis
+/// (name resolution, type checking, borrow checking) runs on the merged result
+/// — the file-based module code is fully checked, not trusted.
+///
+/// Use file-based modules when the module contains substantial Gorget logic
+/// (parsers, data structures, algorithms) that benefits from being written and
+/// tested in the language itself. File-based modules can import other stdlib
+/// modules and use all language features.
+///
+/// Examples: `std.json`, `std.toml`, `std.xml`, `std.yaml`, `std.csv`,
+/// `std.bytes`, `std.encoding`, `std.gfx`, `std.ecs`, `std.ssh`, `std.http`.
+///
+/// ## Adding a new module
+///
+/// 1. Choose synthetic if it's pure C-runtime glue, file-based if it has logic.
+/// 2. Add the module name to `is_stdlib_module`.
+/// 3. For synthetic: add a `gen_*_module()` function returning the AST.
+///    For file-based: create `lib/std/<name>.gg`, add `None` to
+///    `generate_stdlib_module`, add `include_str!` to `stdlib_module_source`.
+/// 4. Add unit tests (at minimum: is_stdlib, generate returns correct variant,
+///    source exists/parses for file-based modules).
+/// 5. Prefix all variables with `<module>_` to avoid cross-module name
+///    collisions from `lookup_by_name_anywhere`.
 ///
 /// All synthetic defs use `Span::dummy()`, which distinguishes them from
 /// user-defined code and enables the `is_stdlib_call()` guard in codegen.
