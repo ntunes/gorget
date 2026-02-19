@@ -324,9 +324,8 @@ impl CodegenContext<'_> {
                 if matches!(name.node.as_str(), "Vector" | "List" | "Array")
                     && generic_args.len() == 1 =>
             {
-                let elem_drop = Self::safe_element_drop(
-                    self.drop_action_for_type(&generic_args[0].node)
-                );
+                let elem_drop = self.drop_action_for_type(&generic_args[0].node)
+                    .map(Box::new);
                 let element_c_type = elem_drop.as_ref().map(|_| c_types::ast_type_to_c(&generic_args[0].node, self.scopes));
                 Some(DropAction::ArrayFree { element_drop: elem_drop, element_c_type })
             }
@@ -338,12 +337,10 @@ impl CodegenContext<'_> {
                     .map(|a| c_types::ast_type_to_c(&a.node, self.scopes))
                     .collect();
                 let mangled = c_mangle::mangle_generic("GorgetDict", &c_args);
-                let key_drop = Self::safe_element_drop(
-                    self.drop_action_for_type(&generic_args[0].node)
-                );
-                let value_drop = Self::safe_element_drop(
-                    self.drop_action_for_type(&generic_args[1].node)
-                );
+                let key_drop = self.drop_action_for_type(&generic_args[0].node)
+                    .map(Box::new);
+                let value_drop = self.drop_action_for_type(&generic_args[1].node)
+                    .map(Box::new);
                 Some(DropAction::MapFree { mangled_name: mangled, key_drop, value_drop })
             }
             // HashMap → monomorphized free + key/value drops
@@ -354,12 +351,10 @@ impl CodegenContext<'_> {
                     .map(|a| c_types::ast_type_to_c(&a.node, self.scopes))
                     .collect();
                 let mangled = c_mangle::mangle_generic("GorgetMap", &c_args);
-                let key_drop = Self::safe_element_drop(
-                    self.drop_action_for_type(&generic_args[0].node)
-                );
-                let value_drop = Self::safe_element_drop(
-                    self.drop_action_for_type(&generic_args[1].node)
-                );
+                let key_drop = self.drop_action_for_type(&generic_args[0].node)
+                    .map(Box::new);
+                let value_drop = self.drop_action_for_type(&generic_args[1].node)
+                    .map(Box::new);
                 Some(DropAction::MapFree { mangled_name: mangled, key_drop, value_drop })
             }
             // Set/HashSet → generic set free + element drops
@@ -367,11 +362,10 @@ impl CodegenContext<'_> {
                 if matches!(name.node.as_str(), "Set" | "HashSet")
                     && generic_args.len() == 1 =>
             {
-                let elem_drop = Self::safe_element_drop(
-                    self.drop_action_for_type(&generic_args[0].node)
-                );
+                let elem_drop = self.drop_action_for_type(&generic_args[0].node)
+                    .map(Box::new);
                 let element_c_type = elem_drop.as_ref().map(|_| c_types::ast_type_to_c(&generic_args[0].node, self.scopes));
-                Some(DropAction::SetFree { element_drop: elem_drop, element_c_type: element_c_type })
+                Some(DropAction::SetFree { element_drop: elem_drop, element_c_type })
             }
             Type::Named { name, generic_args }
                 if name.node == "File" && generic_args.is_empty() =>
@@ -404,44 +398,26 @@ impl CodegenContext<'_> {
         }
     }
 
-    /// Filter element drop actions for safety.
-    ///
-    /// Struct elements whose field drops involve collection buffer frees are
-    /// skipped because shallow copies (e.g., `.get()` on a Vector[S] where S
-    /// has Dict/Vector fields) can alias the inner collection buffers. The
-    /// copy's collection field metadata shares the same internal arrays as the
-    /// original element. When the parent collection's element drops fire at
-    /// scope exit, freeing those arrays would invalidate any escaped copies
-    /// (e.g., return values built from `.get()` results' field accesses).
-    /// Direct collection and leaf-type element drops are safe because they're
-    /// moved into the collection via push/add (move-zeroed, sole owner).
-    ///
-    /// Enabling struct element drops requires field-level move-zeroing: when a
-    /// struct's collection field is accessed (e.g., `sec.sec_data`), the field
-    /// should be zeroed in the source, making the copy the sole owner. This
-    /// needs per-field ownership tracking in codegen.
-    fn safe_element_drop(action: Option<DropAction>) -> Option<Box<DropAction>> {
-        match action {
-            Some(DropAction::StructDrop { type_name, has_user_drop, field_drops })
-                if field_drops.iter().any(|(_, fd)| fd.involves_collection()) =>
-            {
-                // Strip collection field drops (aliasing-unsafe) but keep
-                // user Drop and non-collection field drops (safe).
-                let safe_drops: Vec<_> = field_drops.into_iter()
-                    .filter(|(_, fd)| !fd.involves_collection())
-                    .collect();
-                if has_user_drop || !safe_drops.is_empty() {
-                    Some(Box::new(DropAction::StructDrop {
-                        type_name,
-                        has_user_drop,
-                        field_drops: safe_drops,
-                    }))
-                } else {
-                    None
-                }
-            }
-            Some(a) => Some(Box::new(a)),
-            None => None,
+    /// Compute the drop action for a struct given its C type name.
+    /// Used for auto-typed variables where `drop_action_for_type` returns None
+    /// because the AST type is Inferred.
+    fn drop_action_for_struct_name(&self, c_type_name: &str) -> Option<DropAction> {
+        let is_struct = self.scopes.lookup(c_type_name).map_or(false, |def_id| {
+            self.scopes.get_def(def_id).kind == crate::semantic::scope::DefKind::Struct
+        });
+        if !is_struct {
+            return None;
+        }
+        let has_user_drop = self.traits.has_trait_impl_by_name(c_type_name, "Drop");
+        let field_drops = self.compute_field_drops(c_type_name);
+        if has_user_drop || !field_drops.is_empty() {
+            Some(DropAction::StructDrop {
+                type_name: c_type_name.to_string(),
+                has_user_drop,
+                field_drops,
+            })
+        } else {
+            None
         }
     }
 
@@ -596,6 +572,129 @@ impl CodegenContext<'_> {
         } else {
             false
         }
+    }
+
+    /// Check whether a source expression is safe to push without deep-cloning.
+    /// Safe when:
+    /// - Identifier with a registered drop (will be move-zeroed, sole owner)
+    /// - FieldAccess with valid zero target (field will be zeroed, sole owner)
+    /// - Fresh allocation: Call/constructor/method return (uniquely owned, no aliasing)
+    pub(super) fn source_is_safe_for_push(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Identifier(name) => {
+                let escaped = c_mangle::escape_keyword(name);
+                self.find_drop_action(&escaped).is_some()
+            }
+            Expr::FieldAccess { object, .. } => {
+                self.resolve_field_zero_target(&object.node).is_some()
+            }
+            _ => Self::is_fresh_allocation_source(expr),
+        }
+    }
+
+    /// Returns clone actions for fields of a struct that need deep-cloning.
+    pub(super) fn compute_clone_fields(&self, struct_name: &str) -> Vec<(String, super::CloneAction)> {
+        let def_id = match self.scopes.lookup(struct_name) {
+            Some(id) => id,
+            None => return Vec::new(),
+        };
+        let field_info = match self.struct_fields.get(&def_id) {
+            Some(info) => info,
+            None => return Vec::new(),
+        };
+
+        let mut clones = Vec::new();
+        for (field_name, _span) in &field_info.fields {
+            let key = (struct_name.to_string(), field_name.clone());
+            if let Some(field_type) = self.field_type_names.get(&key) {
+                if let Some(action) = self.clone_action_for_type(field_type) {
+                    let escaped = c_mangle::escape_keyword(field_name);
+                    clones.push((escaped, action));
+                }
+            }
+        }
+        clones
+    }
+
+    /// Determine the CloneAction for a given AST type, if it needs cloning.
+    fn clone_action_for_type(&self, ty: &Type) -> Option<super::CloneAction> {
+        match ty {
+            Type::Named { name, generic_args } => match name.node.as_str() {
+                "Vector" | "List" | "Array" if generic_args.len() == 1 => {
+                    Some(super::CloneAction::ArrayClone)
+                }
+                "String" if generic_args.is_empty() => {
+                    Some(super::CloneAction::StringClone)
+                }
+                "Dict" if generic_args.len() == 2 => {
+                    let c_args: Vec<String> = generic_args.iter()
+                        .map(|a| c_types::ast_type_to_c(&a.node, self.scopes))
+                        .collect();
+                    let mangled = c_mangle::mangle_generic("GorgetDict", &c_args);
+                    Some(super::CloneAction::MapClone(mangled))
+                }
+                "HashMap" if generic_args.len() == 2 => {
+                    let c_args: Vec<String> = generic_args.iter()
+                        .map(|a| c_types::ast_type_to_c(&a.node, self.scopes))
+                        .collect();
+                    let mangled = c_mangle::mangle_generic("GorgetMap", &c_args);
+                    Some(super::CloneAction::MapClone(mangled))
+                }
+                "Set" | "HashSet" if generic_args.len() == 1 => {
+                    Some(super::CloneAction::SetClone)
+                }
+                _ => None,
+            }
+            _ => None,
+        }
+    }
+
+    /// Returns clone code for a value being pushed into a collection.
+    /// Handles both collection-typed values (GorgetArray, GorgetString, etc.)
+    /// and struct-typed values with collection fields.
+    pub(super) fn compute_push_clone_code(&self, elem_c_type: &str, var: &str) -> Option<String> {
+        // Direct collection types
+        if elem_c_type == "GorgetArray" {
+            return Some(format!("{var} = gorget_array_clone(&{var});"));
+        }
+        if elem_c_type == "GorgetString" {
+            return Some(format!("{var} = gorget_string_clone(&{var});"));
+        }
+        if elem_c_type.starts_with("GorgetDict__") || elem_c_type.starts_with("GorgetMap__") {
+            return Some(format!("{var} = {elem_c_type}__clone(&{var});"));
+        }
+        if elem_c_type == "GorgetSet" {
+            return Some(format!("{var} = gorget_set_clone(&{var});"));
+        }
+
+        // Struct types: check if any fields need cloning
+        // Look up the struct name from the C type — it's the same since
+        // non-generic struct names are used directly in C
+        let struct_name = elem_c_type;
+        let clone_fields = self.compute_clone_fields(struct_name);
+        if clone_fields.is_empty() {
+            return None;
+        }
+
+        let mut lines = Vec::new();
+        for (field, action) in &clone_fields {
+            let field_expr = format!("{var}.{field}");
+            match action {
+                super::CloneAction::ArrayClone => {
+                    lines.push(format!("{field_expr} = gorget_array_clone(&{field_expr});"));
+                }
+                super::CloneAction::StringClone => {
+                    lines.push(format!("{field_expr} = gorget_string_clone(&{field_expr});"));
+                }
+                super::CloneAction::MapClone(mangled) => {
+                    lines.push(format!("{field_expr} = {mangled}__clone(&{field_expr});"));
+                }
+                super::CloneAction::SetClone => {
+                    lines.push(format!("{field_expr} = gorget_set_clone(&{field_expr});"));
+                }
+            }
+        }
+        Some(lines.join(" "))
     }
 
     /// Remove all drop entries for `var_name` across all scopes.
@@ -1684,6 +1783,9 @@ impl CodegenContext<'_> {
         span: Span,
         emitter: &mut CEmitter,
     ) {
+        // Reset deep-clone flag — set by .get() codegen if element was deep-cloned
+        self.deep_cloned_expr = false;
+
         match &pattern.node {
             Pattern::Binding(name) => {
                 let escaped = c_mangle::escape_keyword(name);
@@ -2008,7 +2110,18 @@ impl CodegenContext<'_> {
                     // expression is a known constructor (to avoid aliased-buffer
                     // double-frees from copies/field-access/function-returns).
                     // Non-collection drops (Box, File, user Drop, etc.) always register.
-                    if let Some(action) = self.drop_action_for_type(&type_.node) {
+                    //
+                    // When the type is Inferred (auto), drop_action_for_type returns None.
+                    // Fall back to looking up the C type as a struct name for deep-cloned values.
+                    let action = self.drop_action_for_type(&type_.node).or_else(|| {
+                        if self.deep_cloned_expr {
+                            // Auto-typed deep-cloned value: look up struct by C type name
+                            self.drop_action_for_struct_name(&c_type)
+                        } else {
+                            None
+                        }
+                    });
+                    if let Some(action) = action {
                         if !action.involves_collection() {
                             // Non-collection: always register full drops
                             self.register_droppable(&escaped, action.clone());
@@ -2034,6 +2147,21 @@ impl CodegenContext<'_> {
                             if self.in_test_body {
                                 Self::emit_test_cleanup_for_action(&escaped, &action, emitter);
                             }
+                        } else if self.deep_cloned_expr {
+                            // .get() deep-cloned: variable has independent buffer ownership,
+                            // but field access may alias those buffers with other variables.
+                            // Only register user drop (if any) to avoid double-free.
+                            // Collection-field buffers may leak but this prevents aliasing crashes.
+                            self.deep_cloned_expr = false;
+                            if let DropAction::StructDrop { type_name, has_user_drop: true, .. } = &action {
+                                let ud = DropAction::UserDrop { type_name: type_name.clone() };
+                                self.register_droppable(&escaped, ud.clone());
+                                if self.in_test_body {
+                                    Self::emit_test_cleanup_for_action(&escaped, &ud, emitter);
+                                }
+                            }
+                            // No drops for structs without user drop or non-struct types:
+                            // buffers freed when consumed or leaked if unused.
                         }
                         // Otherwise: variable copy/field access — no drop (aliased buffer)
                     }

@@ -6,7 +6,12 @@ struct Container:
 
 equip Container with Drop:
     void drop(!self):
-        print("drop {self.label}")
+        print("drop {self.label} len={self.data.len()}")
+
+Container make_container(str label, int val):
+    Container c = Container(label, Vector[int]())
+    c.data.push(val)
+    return c
 
 void main():
     Vector[Container] items = Vector[Container]()
@@ -20,5 +25,13 @@ void main():
     c2.data.push(3)
     items.push(c2)
 
+    # Push from function return (non-Identifier argument)
+    items.push(make_container("third", 42))
+
     print("len {items.len()}")
+
+    # .get().unwrap() gives independent copy
+    auto got = items.get(0).unwrap()
+    print("got {got.label} len={got.data.len()}")
+
     print("done")

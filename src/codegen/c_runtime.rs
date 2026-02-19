@@ -54,6 +54,19 @@ static inline void gorget_string_free(GorgetString* s) {
     s->cap = 0;
 }
 
+static inline GorgetString gorget_string_clone(const GorgetString* src) {
+    GorgetString dst;
+    dst.len = src->len;
+    dst.cap = src->cap;
+    if (src->cap > 0) {
+        dst.data = (char*)malloc(src->cap);
+        memcpy(dst.data, src->data, src->len + 1);
+    } else {
+        dst.data = NULL;
+    }
+    return dst;
+}
+
 static inline GorgetString gorget_string_concat(const GorgetString* a, const GorgetString* b) {
     size_t len = a->len + b->len;
     size_t cap = len + 1;
@@ -927,6 +940,24 @@ static inline size_t gorget_set_len(const GorgetSet* s) {
 
 static inline void gorget_set_free(GorgetSet* s) {
     gorget_map_free(s);
+}
+
+static inline GorgetSet gorget_set_clone(const GorgetSet* src) {
+    GorgetSet dst;
+    dst.key_size = src->key_size;
+    dst.val_size = 0;
+    dst.count = src->count;
+    dst.cap = src->cap;
+    if (src->cap == 0) {
+        dst.keys = NULL; dst.values = NULL; dst.states = NULL;
+        return dst;
+    }
+    dst.keys = malloc(src->cap * src->key_size);
+    memcpy(dst.keys, src->keys, src->cap * src->key_size);
+    dst.values = NULL;
+    dst.states = (uint8_t*)malloc(src->cap);
+    memcpy(dst.states, src->states, src->cap);
+    return dst;
 }
 
 // ── Error Handling (setjmp/longjmp) ─────────────────────────

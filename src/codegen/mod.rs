@@ -63,6 +63,19 @@ pub struct DropEntry {
     pub action: DropAction,
 }
 
+/// How to deep-clone a non-Copy field when writing to / reading from a collection.
+#[derive(Clone)]
+pub enum CloneAction {
+    /// gorget_array_clone(&field) for Vector/List/Array fields
+    ArrayClone,
+    /// gorget_string_clone(&field) for owned String fields
+    StringClone,
+    /// {mangled}__clone(&field) for Dict/HashMap fields
+    MapClone(String),
+    /// gorget_set_clone(&field) for Set/HashSet fields
+    SetClone,
+}
+
 /// How to drop a variable.
 #[derive(Clone)]
 pub enum DropAction {
@@ -342,6 +355,9 @@ pub struct CodegenContext<'a> {
     /// Maps method-call span start → DefId of the resolved method.
     /// Used for ownership-aware move-zeroing at user-defined method call sites.
     pub method_resolutions: &'a FxHashMap<usize, DefId>,
+    /// Set by `.get()` codegen when the returned element was deep-cloned.
+    /// Consumed by `gen_var_decl` to register full drops for the variable.
+    pub deep_cloned_expr: bool,
 }
 
 impl CodegenContext<'_> {
@@ -567,6 +583,7 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
         current_function_scope: None,
         function_body_scopes: &analysis.function_body_scopes,
         method_resolutions: &analysis.method_resolutions,
+        deep_cloned_expr: false,
     };
 
     let mut emitter = CEmitter::new();

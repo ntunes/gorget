@@ -29,10 +29,19 @@ impl CodegenContext<'_> {
 
         match method_name {
             "push" => {
-                let arg = args.first()
-                    .map(|a| self.gen_expr(&a.node.value))
-                    .unwrap_or_else(|| "0".to_string());
-                format!("({{ {elem_type} __push_val = {arg}; gorget_array_push({recv_ref}, &__push_val); }})")
+                let arg_expr = &args[0].node.value;
+                let arg = self.gen_expr(arg_expr);
+                let source_will_be_zeroed = self.source_is_safe_for_push(&arg_expr.node);
+                let clone_code = if !source_will_be_zeroed {
+                    self.compute_push_clone_code(&elem_type, "__push_val")
+                } else {
+                    None
+                };
+                if let Some(clone) = clone_code {
+                    format!("({{ {elem_type} __push_val = {arg}; {clone} gorget_array_push({recv_ref}, &__push_val); }})")
+                } else {
+                    format!("({{ {elem_type} __push_val = {arg}; gorget_array_push({recv_ref}, &__push_val); }})")
+                }
             }
             "len" => {
                 format!("(int64_t)gorget_array_len({recv_ref})")
@@ -44,12 +53,24 @@ impl CodegenContext<'_> {
                 let opt = self.register_generic("Option", &[elem_type.clone()], super::GenericInstanceKind::Enum);
                 let ctor_some = c_mangle::mangle_variant(&opt, "Some");
                 let ctor_none = c_mangle::mangle_variant(&opt, "None");
-                format!(
-                    "({{ int64_t __gi = {idx}; GorgetArray __gr_src = {recv}; {opt} __gr; \
-                    if (__gi >= 0 && (size_t)__gi < __gr_src.len) \
-                    {{ __gr = {ctor_some}(GORGET_ARRAY_AT({elem_type}, __gr_src, __gi)); }} \
-                    else {{ __gr = {ctor_none}(); }} __gr; }})"
-                )
+                let clone_code = self.compute_push_clone_code(&elem_type, "__gc_elem");
+                if let Some(clone) = &clone_code {
+                    self.deep_cloned_expr = true;
+                    format!(
+                        "({{ int64_t __gi = {idx}; GorgetArray __gr_src = {recv}; {opt} __gr; \
+                        if (__gi >= 0 && (size_t)__gi < __gr_src.len) \
+                        {{ {elem_type} __gc_elem = GORGET_ARRAY_AT({elem_type}, __gr_src, __gi); \
+                        {clone} __gr = {ctor_some}(__gc_elem); }} \
+                        else {{ __gr = {ctor_none}(); }} __gr; }})"
+                    )
+                } else {
+                    format!(
+                        "({{ int64_t __gi = {idx}; GorgetArray __gr_src = {recv}; {opt} __gr; \
+                        if (__gi >= 0 && (size_t)__gi < __gr_src.len) \
+                        {{ __gr = {ctor_some}(GORGET_ARRAY_AT({elem_type}, __gr_src, __gi)); }} \
+                        else {{ __gr = {ctor_none}(); }} __gr; }})"
+                    )
+                }
             }
             "pop" => {
                 let opt = self.register_generic("Option", &[elem_type.clone()], super::GenericInstanceKind::Enum);
@@ -69,10 +90,19 @@ impl CodegenContext<'_> {
                 let idx = args.first()
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "0".to_string());
-                let val = args.get(1)
-                    .map(|a| self.gen_expr(&a.node.value))
-                    .unwrap_or_else(|| "0".to_string());
-                format!("({{ {elem_type} __set_val = {val}; gorget_array_set({recv_ref}, {idx}, &__set_val); }})")
+                let val_expr = &args[1].node.value;
+                let val = self.gen_expr(val_expr);
+                let source_will_be_zeroed = self.source_is_safe_for_push(&val_expr.node);
+                let clone_code = if !source_will_be_zeroed {
+                    self.compute_push_clone_code(&elem_type, "__set_val")
+                } else {
+                    None
+                };
+                if let Some(clone) = clone_code {
+                    format!("({{ {elem_type} __set_val = {val}; {clone} gorget_array_set({recv_ref}, {idx}, &__set_val); }})")
+                } else {
+                    format!("({{ {elem_type} __set_val = {val}; gorget_array_set({recv_ref}, {idx}, &__set_val); }})")
+                }
             }
             "remove" => {
                 let idx = args.first()
@@ -390,10 +420,20 @@ impl CodegenContext<'_> {
                 let key = args.first()
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "0".to_string());
-                let val = args.get(1)
-                    .map(|a| self.gen_expr(&a.node.value))
-                    .unwrap_or_else(|| "0".to_string());
-                format!("{mangled}__put({recv_ref}, {key}, {val})")
+                let val_expr = &args[1].node.value;
+                let val = self.gen_expr(val_expr);
+                let (_key_type, val_type) = self.infer_map_kv_types(receiver);
+                let source_will_be_zeroed = self.source_is_safe_for_push(&val_expr.node);
+                let clone_code = if !source_will_be_zeroed {
+                    self.compute_push_clone_code(&val_type, "__put_val")
+                } else {
+                    None
+                };
+                if let Some(clone) = clone_code {
+                    format!("({{ {val_type} __put_val = {val}; {clone} {mangled}__put({recv_ref}, {key}, __put_val); }})")
+                } else {
+                    format!("{mangled}__put({recv_ref}, {key}, {val})")
+                }
             }
             "get" => {
                 let key = args.first()
@@ -403,10 +443,20 @@ impl CodegenContext<'_> {
                 let opt = self.register_generic("Option", &[val_type.clone()], super::GenericInstanceKind::Enum);
                 let ctor_some = c_mangle::mangle_variant(&opt, "Some");
                 let ctor_none = c_mangle::mangle_variant(&opt, "None");
-                format!(
-                    "({{ {val_type}* __gp = {mangled}__get_ptr({recv_ref}, {key}); \
-                    __gp ? {ctor_some}(*__gp) : {ctor_none}(); }})"
-                )
+                let clone_code = self.compute_push_clone_code(&val_type, "__gc_val");
+                if let Some(clone) = &clone_code {
+                    self.deep_cloned_expr = true;
+                    format!(
+                        "({{ {val_type}* __gp = {mangled}__get_ptr({recv_ref}, {key}); {opt} __gr; \
+                        if (__gp) {{ {val_type} __gc_val = *__gp; {clone} __gr = {ctor_some}(__gc_val); }} \
+                        else {{ __gr = {ctor_none}(); }} __gr; }})"
+                    )
+                } else {
+                    format!(
+                        "({{ {val_type}* __gp = {mangled}__get_ptr({recv_ref}, {key}); \
+                        __gp ? {ctor_some}(*__gp) : {ctor_none}(); }})"
+                    )
+                }
             }
             "contains" => {
                 let key = args.first()

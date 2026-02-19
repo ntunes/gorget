@@ -2,7 +2,9 @@
 
 ## High
 
-- **Element drops for struct elements with collection fields**: Element-level collection drops (Phase 17) skip `StructDrop` elements whose field drops involve collection buffer frees (e.g., `Vector[TomlSection]` where `TomlSection` has Dict/Vector fields). Without field-level move-zeroing, shallow copies can alias inner collection buffers, causing use-after-free when element drops run. Fix requires: field-level move-zeroing (zero struct fields when they're moved out via field access), which needs per-field ownership tracking in codegen. The TOML module's `gg_toml_assemble(tp.sections)` pattern is the canonical example. [added: 2026-02-18]
+- **Deep-cloned `.get()` results only register user Drop, not field drops**: Phase 22 deep-clones collection `.get()` results to give callers independent ownership, but the `deep_cloned_expr` VarDecl path registers only the user Drop (not field drops) to avoid double-frees when fields are shallow-copied elsewhere (e.g., TOML parser's get→modify→set pattern). Consequence: collection-typed fields of deep-cloned results leak their buffers if not consumed. Fix requires either: (a) deep-clone on struct field access from deep-cloned variables, or (b) a borrow checker enhancement that tracks field aliasing and conditionally emits field drops. The TOML parser's `add_kv` pattern is the canonical motivating example. [added: 2026-02-19]
+
+- **`set()`/`put()` old-value leak**: When overwriting an existing collection element with `set()`/`put()`, the old value's non-Copy fields are not freed. The new value simply overwrites the slot. For elements with collection fields (e.g., `Vector[Container]` where Container has `Vector[int] data`), the old element's inner buffers leak. Fix requires pre-dropping the old value before overwriting. [added: 2026-02-19]
 
 ## Medium
 

@@ -1289,10 +1289,13 @@ fn drop_struct_collection_fields() {
     run_gg(
         "drop_struct_collection_fields.gg",
         "\
-len 2
+len 3
+got first len=2
 done
-drop first
-drop second",
+drop first len=2
+drop first len=2
+drop second len=1
+drop third len=1",
     );
 }
 

@@ -2422,6 +2422,48 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                  }}\n\n"
             ));
         }
+
+        // ── __clone ──
+        if ordered {
+            emitter.emit(&format!(
+                "static inline {mangled} {mangled}__clone(const {mangled}* src) {{\n\
+                 \x20   {mangled} dst;\n\
+                 \x20   dst.count = src->count; dst.cap = src->cap;\n\
+                 \x20   dst.order_len = src->order_len; dst.tombstones = src->tombstones;\n\
+                 \x20   if (src->cap == 0) {{\n\
+                 \x20       dst.keys = NULL; dst.values = NULL; dst.states = NULL; dst.order = NULL;\n\
+                 \x20       return dst;\n\
+                 \x20   }}\n\
+                 \x20   dst.keys = ({key_type}*)malloc(src->cap * sizeof({key_type}));\n\
+                 \x20   memcpy(dst.keys, src->keys, src->cap * sizeof({key_type}));\n\
+                 \x20   dst.values = ({val_type}*)malloc(src->cap * sizeof({val_type}));\n\
+                 \x20   memcpy(dst.values, src->values, src->cap * sizeof({val_type}));\n\
+                 \x20   dst.states = (uint8_t*)malloc(src->cap);\n\
+                 \x20   memcpy(dst.states, src->states, src->cap);\n\
+                 \x20   dst.order = (size_t*)malloc(src->cap * sizeof(size_t));\n\
+                 \x20   memcpy(dst.order, src->order, src->cap * sizeof(size_t));\n\
+                 \x20   return dst;\n\
+                 }}\n\n"
+            ));
+        } else {
+            emitter.emit(&format!(
+                "static inline {mangled} {mangled}__clone(const {mangled}* src) {{\n\
+                 \x20   {mangled} dst;\n\
+                 \x20   dst.count = src->count; dst.cap = src->cap;\n\
+                 \x20   if (src->cap == 0) {{\n\
+                 \x20       dst.keys = NULL; dst.values = NULL; dst.states = NULL;\n\
+                 \x20       return dst;\n\
+                 \x20   }}\n\
+                 \x20   dst.keys = ({key_type}*)malloc(src->cap * sizeof({key_type}));\n\
+                 \x20   memcpy(dst.keys, src->keys, src->cap * sizeof({key_type}));\n\
+                 \x20   dst.values = ({val_type}*)malloc(src->cap * sizeof({val_type}));\n\
+                 \x20   memcpy(dst.values, src->values, src->cap * sizeof({val_type}));\n\
+                 \x20   dst.states = (uint8_t*)malloc(src->cap);\n\
+                 \x20   memcpy(dst.states, src->states, src->cap);\n\
+                 \x20   return dst;\n\
+                 }}\n\n"
+            ));
+        }
     }
 
     /// Emit a monomorphized struct definition.
