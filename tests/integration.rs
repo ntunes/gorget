@@ -3392,6 +3392,23 @@ true",
     );
 }
 
+#[test]
+fn dict_struct_field() {
+    run_gg(
+        "dict_struct_field.gg",
+        "\
+3
+30
+has bob
+no nobody
+35
+3
+2
+100
+has y",
+    );
+}
+
 // ─── Test Framework Integration Tests ────────────────────────
 
 /// Run `gg test` on a fixture, assert stdout contains expected, and check exit code.

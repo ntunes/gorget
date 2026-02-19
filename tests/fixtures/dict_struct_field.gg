@@ -1,0 +1,53 @@
+from std.collections import Dict, HashMap
+
+struct Registry:
+    Dict[str, int] items
+
+equip Registry:
+    void add(&self, str key, int val):
+        self.items.put(key, val)
+
+    int lookup(self, str key) = self.items.get(key).unwrap()
+
+    int size(self) = self.items.len()
+
+    bool has(self, str key) = self.items.contains(key)
+
+struct Cache:
+    HashMap[str, int] data
+
+equip Cache:
+    void set(&self, str key, int val):
+        self.data.put(key, val)
+
+    int fetch(self, str key) = self.data.get(key).unwrap()
+
+    int count(self) = self.data.len()
+
+    bool has(self, str key) = self.data.contains(key)
+
+void main():
+    Registry reg = Registry(Dict[str, int]())
+    reg.add("alice", 30)
+    reg.add("bob", 25)
+    reg.add("carol", 35)
+    print("{reg.size()}")
+    print("{reg.lookup("alice")}")
+    if reg.has("bob"):
+        print("has bob")
+    if reg.has("nobody") == false:
+        print("no nobody")
+
+    int sub = reg.items["carol"]
+    print("{sub}")
+
+    Vector[str] ks = reg.items.keys()
+    print("{ks.len()}")
+
+    Cache cache = Cache(HashMap[str, int]())
+    cache.set("x", 100)
+    cache.set("y", 200)
+    print("{cache.count()}")
+    print("{cache.fetch("x")}")
+    if cache.has("y"):
+        print("has y")

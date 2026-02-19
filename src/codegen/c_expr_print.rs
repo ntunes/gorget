@@ -319,6 +319,14 @@ impl CodegenContext<'_> {
                         def.type_id
                     })
             }
+            Type::Named { name, generic_args } => {
+                let def_id = self.scoped_lookup(&name.node)?;
+                let mut resolved_args = Vec::new();
+                for arg in generic_args {
+                    resolved_args.push(self.ast_type_to_type_id(&arg.node)?);
+                }
+                self.types.find_generic(def_id, &resolved_args)
+            }
             _ => None,
         }
     }

@@ -179,6 +179,19 @@ impl TypeTable {
         &self.types[id.0 as usize]
     }
 
+    /// Find an existing `Generic(def_id, args)` entry in the table.
+    /// Returns `None` if no matching entry exists.
+    pub fn find_generic(&self, def_id: DefId, args: &[TypeId]) -> Option<TypeId> {
+        for (i, ty) in self.types.iter().enumerate() {
+            if let ResolvedType::Generic(d, a) = ty {
+                if *d == def_id && a.as_slice() == args {
+                    return Some(TypeId(i as u32));
+                }
+            }
+        }
+        None
+    }
+
     /// Get the TypeId for a primitive type.
     pub fn primitive_id(&mut self, prim: PrimitiveType) -> TypeId {
         match prim {
