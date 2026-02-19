@@ -1,34 +1,46 @@
 void main():
-    # Basic string interpolation
+    # Basic string interpolation — format() now returns String
     str name = "world"
-    str greeting = format("hello {name}")
+    String greeting = format("hello {name}")
     print(greeting)
 
-    # Plain string (no interpolation)
-    str plain = format("no interp")
+    # Plain string (no interpolation) — format() still returns String
+    String plain = format("no interp")
     print(plain)
 
     # Numeric formatting
     int x = 42
-    str num_str = format("{x}")
+    String num_str = format("{x}")
     print(num_str)
 
     # Multiple interpolations
     int a = 10
     int b = 20
-    str expr = format("{a} + {b} = 30")
-    print(expr)
+    String expr_str = format("{a} + {b} = 30")
+    print(expr_str)
 
     # Using format result in further string ops
-    str hello = format("hello")
-    str upper = hello.to_upper()
+    String hello = format("hello")
+    String upper = hello.to_upper()
     print(upper)
 
-    # Interpolation in assignment (desugared to format)
+    # Interpolation in assignment — auto resolves to String
     int v = 99
-    str assigned = "value is {v}"
+    auto assigned = "value is {v}"
     print(assigned)
 
-    # Interpolation in function argument
+    # Interpolation in function argument (coerced to str for concat)
     str who = "gorget"
     print("hello " + "from {who}")
+
+    # Direct String assignment from interpolated literal
+    String direct = "hi {name}"
+    print(direct)
+
+    # Plain string literal stays str
+    str plain_str = "no interp here"
+    print(plain_str)
+
+    # str variable from format — coercion String → str
+    str coerced = format("coerced {x}")
+    print(coerced)

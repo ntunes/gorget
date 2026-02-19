@@ -944,7 +944,7 @@ impl CodegenContext<'_> {
 
     /// Coerce a return value between GorgetString and const char* when the
     /// function return type doesn't match the expression type.
-    fn coerce_return_value(&mut self, expr: String, ast_expr: &Expr) -> String {
+    pub(super) fn coerce_return_value(&mut self, expr: String, ast_expr: &Expr) -> String {
         let ret_type = self.current_function_return_c_type.clone();
         if let Some(ret_type) = ret_type {
             let val_type = self.infer_c_type_from_expr(ast_expr);
@@ -2416,7 +2416,14 @@ impl CodegenContext<'_> {
             Expr::FloatLiteral(_) => "double".to_string(),
             Expr::BoolLiteral(_) => "bool".to_string(),
             Expr::CharLiteral(_) => "char".to_string(),
-            Expr::StringLiteral(_) => "const char*".to_string(),
+            Expr::StringLiteral(s) => {
+                use crate::lexer::token::StringSegment;
+                if s.segments.iter().any(|seg| matches!(seg, StringSegment::Interpolation(_))) {
+                    "GorgetString".to_string()
+                } else {
+                    "const char*".to_string()
+                }
+            }
             Expr::BinaryOp { op, left, right, .. } => {
                 use crate::parser::ast::BinaryOp;
                 match op {
@@ -2449,7 +2456,7 @@ impl CodegenContext<'_> {
                 if let Expr::Identifier(name) = &callee.node {
                     // Builtin return types (compiler builtins only; stdlib uses function_info)
                     match name.as_str() {
-                        "format" => return "const char*".to_string(),
+                        "format" => return "GorgetString".to_string(),
                         _ => {}
                     }
                     if let Some(def_id) = self.scoped_lookup(name) {

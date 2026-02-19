@@ -729,7 +729,14 @@ impl CodegenContext<'_> {
             Expr::IntLiteral(_) => Some(self.types.int_id),
             Expr::FloatLiteral(_) => Some(self.types.float_id),
             Expr::BoolLiteral(_) => Some(self.types.bool_id),
-            Expr::StringLiteral(_) => Some(self.types.string_id),
+            Expr::StringLiteral(s) => {
+                use crate::lexer::token::StringSegment;
+                if s.segments.iter().any(|seg| matches!(seg, StringSegment::Interpolation(_))) {
+                    Some(self.types.owned_string_id)
+                } else {
+                    Some(self.types.string_id)
+                }
+            }
             Expr::BinaryOp { op, left, right, .. } => match op {
                 BinaryOp::Eq
                 | BinaryOp::Neq
@@ -760,7 +767,7 @@ impl CodegenContext<'_> {
                     // Check builtin return types first
                     match name.as_str() {
                         "format" => {
-                            return Some(self.types.string_id);
+                            return Some(self.types.owned_string_id);
                         }
                         "rand" | "getchar" | "time" | "term_cols" | "term_rows" | "len" => {
                             return Some(self.types.int_id);

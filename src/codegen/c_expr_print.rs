@@ -103,13 +103,13 @@ impl CodegenContext<'_> {
         true
     }
 
-    /// Generate a `gorget_format(...)` call that returns `const char*`.
+    /// Generate a `gorget_string_format(...)` call that returns `GorgetString`.
     pub(super) fn gen_format_call(
         &mut self,
         args: &[Spanned<crate::parser::ast::CallArg>],
     ) -> String {
         if args.is_empty() {
-            return "gorget_format(\"\")".to_string();
+            return "gorget_string_format(\"\")".to_string();
         }
 
         let arg = &args[0].node.value;
@@ -124,13 +124,13 @@ impl CodegenContext<'_> {
 
         if let Some(type_id) = self.infer_interp_expr_type(arg) {
             let (fmt, arg_expr) = self.format_for_type_id(type_id, &expr);
-            return format!("gorget_format(\"{fmt}\", {arg_expr})");
+            return format!("gorget_string_format(\"{fmt}\", {arg_expr})");
         }
 
-        format!("gorget_format(\"%lld\", (long long){expr})")
+        format!("gorget_string_format(\"%lld\", (long long){expr})")
     }
 
-    /// Generate `gorget_format("fmt", args...)` from a StringLit.
+    /// Generate `gorget_string_format("fmt", args...)` from a StringLit.
     pub(super) fn gen_gorget_format_from_string_lit(&mut self, s: &StringLit) -> String {
         let mut format_parts = Vec::new();
         let mut format_args = Vec::new();
@@ -150,9 +150,9 @@ impl CodegenContext<'_> {
 
         let format_str = format_parts.join("");
         if format_args.is_empty() {
-            format!("gorget_format(\"{format_str}\")")
+            format!("gorget_string_format(\"{format_str}\")")
         } else {
-            format!("gorget_format(\"{format_str}\", {})", format_args.join(", "))
+            format!("gorget_string_format(\"{format_str}\", {})", format_args.join(", "))
         }
     }
 

@@ -3224,6 +3224,8 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         let prev_param_c_types = std::mem::replace(&mut self.monomorphized_param_c_types, param_c_types);
         let prev_self_type = self.current_self_type.take();
         self.current_self_type = Some(mangled_type_name.to_string());
+        let prev_return_c_type = self.current_function_return_c_type.take();
+        self.current_function_return_c_type = Some(ret_type.clone());
         let prev_self_is_mutable = self.self_is_mutable;
         let self_param = method.params.iter().find(|p| p.node.name.node == "self");
         self.self_is_mutable = self_param
@@ -3248,6 +3250,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                 emitter.emit_line(&format!("{ret_type} {func_name}({params}) {{"));
                 emitter.indent();
                 let e = self.gen_expr(expr);
+                let e = self.coerce_return_value(e, &expr.node);
                 emitter.emit_line(&format!("return {e};"));
                 emitter.dedent();
                 emitter.emit_line("}");
@@ -3268,6 +3271,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         self.type_id_subs = prev_id_subs;
         self.monomorphized_param_c_types = prev_param_c_types;
         self.current_self_type = prev_self_type;
+        self.current_function_return_c_type = prev_return_c_type;
         self.self_is_mutable = prev_self_is_mutable;
         self.pointer_params = prev_pointer_params;
     }

@@ -680,7 +680,11 @@ impl<'a> TypeChecker<'a> {
                         }
                     }
                 }
-                self.types.string_id
+                if s.segments.iter().any(|seg| matches!(seg, StringSegment::Interpolation(_))) {
+                    self.types.owned_string_id
+                } else {
+                    self.types.string_id
+                }
             }
             Expr::NoneLiteral => {
                 // None is Option[?T] — for now return error type

@@ -1853,7 +1853,10 @@ no interp
 10 + 20 = 30
 HELLO
 value is 99
-hello from gorget",
+hello from gorget
+hi world
+no interp here
+coerced 42",
     );
 }
 
