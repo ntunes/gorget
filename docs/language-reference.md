@@ -2640,6 +2640,34 @@ auto dec_url = url_decode("hello%20world")      # Ok("hello world")
 str safe = html_escape("<b>Tom & Jerry</b>")    # "&lt;b&gt;Tom &amp; Jerry&lt;/b&gt;"
 ```
 
+**`std.csv`** — RFC 4180 CSV parsing and serialization
+
+| Function | Signature | Description |
+|---|---|---|
+| `csv_parse` | `Result[Vector[Vector[str]], str](str)` | Parse CSV string into rows of fields |
+| `csv_parse_delim` | `Result[Vector[Vector[str]], str](str, str)` | Parse with custom delimiter (e.g. `"\t"` for TSV) |
+| `csv_parse_table` | `Result[CsvTable, str](str)` | Parse CSV where first row = headers |
+| `csv_parse_table_delim` | `Result[CsvTable, str](str, str)` | Parse table with custom delimiter |
+| `csv_stringify` | `str(Vector[Vector[str]])` | Serialize rows to CSV string (CRLF line endings) |
+| `csv_stringify_delim` | `str(Vector[Vector[str]], str)` | Serialize with custom delimiter |
+| `csv_stringify_table` | `str(CsvTable)` | Serialize table (headers + rows) to CSV |
+| `csv_stringify_table_delim` | `str(CsvTable, str)` | Serialize table with custom delimiter |
+
+`CsvTable` methods: `row_count()`, `col_count()`, `headers()`, `row(int)`, `get(int, int)`, `get_named(int, str)`, `has_column(str)`, `column_index(str)`.
+
+```gorget
+from std.csv import csv_parse_table, csv_stringify, CsvTable
+from std.collections import Vector
+
+auto result = csv_parse_table("name,age\nAlice,30\nBob,25\n")
+match result:
+    case Ok(tbl):
+        print(tbl.row_count())           # 2
+        print(tbl.get_named(0, "name"))  # Alice
+    else:
+        print("error")
+```
+
 **`std.bytes`** — Byte manipulation
 
 | Function | Signature | Description |

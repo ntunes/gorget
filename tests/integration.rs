@@ -4325,3 +4325,45 @@ Hi
 done",
     );
 }
+
+#[test]
+fn csv_basic() {
+    run_gg(
+        "csv_basic.gg",
+        "\
+2
+a
+b
+c
+1
+2
+3
+a,b
+c
+he said \"hi\"
+line1
+line2
+2
+a
+c
+3
+true
+2
+3
+Alice
+30
+LA
+true
+false
+2
+-1
+true
+true
+true
+0
+unterminated quoted field
+2
+1
+done",
+    );
+}

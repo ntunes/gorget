@@ -15,7 +15,7 @@ pub fn is_stdlib_module(segments: &[String]) -> bool {
         return false;
     }
     match segments.len() {
-        2 => matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv" | "io" | "random" | "time" | "collections" | "math" | "fmt" | "process" | "sdl" | "gfx" | "ecs" | "json" | "toml" | "xml" | "yaml" | "bytes" | "crypto" | "ssh" | "http" | "regex" | "encoding"),
+        2 => matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv" | "io" | "random" | "time" | "collections" | "math" | "fmt" | "process" | "sdl" | "gfx" | "ecs" | "json" | "toml" | "xml" | "yaml" | "bytes" | "crypto" | "ssh" | "http" | "regex" | "encoding" | "csv"),
         3 => segments[1] == "net" && matches!(segments[2].as_str(), "socket" | "tls"),
         _ => false,
     }
@@ -46,6 +46,7 @@ pub fn generate_stdlib_module(segments: &[String]) -> Option<Module> {
             "yaml" => None, // file-based module — loaded via stdlib_module_source()
             "bytes" => None, // file-based module — loaded via stdlib_module_source()
             "encoding" => None, // file-based module — loaded via stdlib_module_source()
+            "csv" => None,      // file-based module — loaded via stdlib_module_source()
             "crypto" => Some(gen_crypto_module()),
             "gfx" => None, // file-based module — loaded via stdlib_module_source()
             "ecs" => None, // file-based module — loaded via stdlib_module_source()
@@ -545,6 +546,7 @@ pub fn stdlib_module_source(segments: &[String]) -> Option<&'static str> {
         Some("yaml") => Some(include_str!("../lib/std/yaml.gg")),
         Some("bytes") => Some(include_str!("../lib/std/bytes.gg")),
         Some("encoding") => Some(include_str!("../lib/std/encoding.gg")),
+        Some("csv") => Some(include_str!("../lib/std/csv.gg")),
         _ => None,
     }
 }
@@ -1857,6 +1859,60 @@ mod tests {
                 }
             }
         }
+    }
+
+    // ─── std.csv ──────────────────────────────────────────────────
+
+    #[test]
+    fn is_stdlib_csv() {
+        assert!(is_stdlib_module(&["std".into(), "csv".into()]));
+    }
+
+    #[test]
+    fn generate_csv_returns_none() {
+        // std.csv is file-based, not synthetic — generate returns None
+        assert!(generate_stdlib_module(&["std".into(), "csv".into()]).is_none());
+    }
+
+    #[test]
+    fn csv_module_source_exists() {
+        let source = stdlib_module_source(&["std".into(), "csv".into()]);
+        assert!(source.is_some());
+        let src = source.unwrap();
+        assert!(src.contains("struct CsvParser"));
+        assert!(src.contains("struct CsvTable"));
+        assert!(src.contains("csv_parse"));
+        assert!(src.contains("csv_stringify"));
+        assert!(src.contains("equip CsvParser"));
+        assert!(src.contains("equip CsvTable"));
+    }
+
+    #[test]
+    fn csv_source_parses() {
+        let source = stdlib_module_source(&["std".into(), "csv".into()]).unwrap();
+        let mut parser = crate::parser::Parser::new(source);
+        let module = parser.parse_module();
+        assert!(parser.errors.is_empty(), "csv.gg parse errors: {:?}", parser.errors);
+
+        let mut struct_names = vec![];
+        let mut fn_names = vec![];
+        let mut equip_count = 0;
+        for item in &module.items {
+            match &item.node {
+                Item::Struct(s) => struct_names.push(s.name.node.clone()),
+                Item::Function(f) => fn_names.push(f.name.node.clone()),
+                Item::Equip(_) => equip_count += 1,
+                _ => {}
+            }
+        }
+
+        assert!(struct_names.contains(&"CsvParser".to_string()));
+        assert!(struct_names.contains(&"CsvTable".to_string()));
+        assert!(fn_names.contains(&"csv_parse".to_string()));
+        assert!(fn_names.contains(&"csv_stringify".to_string()));
+        assert!(fn_names.contains(&"csv_parse_table".to_string()));
+        assert!(fn_names.contains(&"csv_stringify_table".to_string()));
+        assert!(equip_count >= 2, "expected at least 2 equip blocks, got {equip_count}");
     }
 
 }

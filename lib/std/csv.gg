@@ -1,0 +1,258 @@
+# std.csv — RFC 4180 CSV parser and serializer
+#
+# Pure Gorget implementation. Supports quoted fields, embedded newlines,
+# configurable delimiter, and header-based table access.
+
+from std.collections import Vector
+from std.conv import char_to_str
+
+# ── CsvParser ────────────────────────────────────────────────
+
+struct CsvParser:
+    str csv_input
+    int csv_pos
+    str csv_err
+    str csv_delim
+
+equip CsvParser:
+    bool csv_failed(self) = self.csv_err != ""
+
+    void csv_fail(&self, str msg):
+        if self.csv_err == "":
+            self.csv_err = consuming msg
+
+    bool csv_at_end(self) = self.csv_pos >= self.csv_input.len()
+
+    char csv_peek(self) = self.csv_input[self.csv_pos]
+
+    void csv_advance(&self):
+        self.csv_pos = self.csv_pos + 1
+
+    str csv_parse_field(&self):
+        if self.csv_failed():
+            return ""
+        if self.csv_at_end():
+            return ""
+        if self.csv_peek() == '"':
+            return self.csv_parse_quoted()
+        # Unquoted field — consume until delimiter, \r, \n, or EOF
+        str csv_val = ""
+        while not self.csv_at_end():
+            char csv_ch = self.csv_peek()
+            if char_to_str(csv_ch) == self.csv_delim or csv_ch == '\r' or csv_ch == '\n':
+                return csv_val
+            csv_val = csv_val + char_to_str(csv_ch)
+            self.csv_advance()
+        return csv_val
+
+    str csv_parse_quoted(&self):
+        # Skip opening quote
+        self.csv_advance()
+        str csv_val = ""
+        while not self.csv_at_end():
+            char csv_ch = self.csv_peek()
+            if csv_ch == '"':
+                self.csv_advance()
+                # "" inside quoted field = literal "
+                if not self.csv_at_end() and self.csv_peek() == '"':
+                    csv_val = csv_val + "\""
+                    self.csv_advance()
+                else:
+                    return csv_val
+            else:
+                csv_val = csv_val + char_to_str(csv_ch)
+                self.csv_advance()
+        self.csv_fail("unterminated quoted field")
+        return ""
+
+    Vector[str] csv_parse_record(&self):
+        Vector[str] csv_fields = Vector[str]()
+        if self.csv_failed():
+            return csv_fields
+        # Parse first field
+        str csv_fld = self.csv_parse_field()
+        if self.csv_failed():
+            return csv_fields
+        csv_fields.push(csv_fld)
+        # Parse remaining fields separated by delimiter
+        while not self.csv_at_end() and not self.csv_failed():
+            char csv_ch = self.csv_peek()
+            if char_to_str(csv_ch) == self.csv_delim:
+                self.csv_advance()
+                str csv_next = self.csv_parse_field()
+                if self.csv_failed():
+                    return csv_fields
+                csv_fields.push(csv_next)
+            else:
+                # End of record — consume line ending
+                if csv_ch == '\r':
+                    self.csv_advance()
+                    if not self.csv_at_end() and self.csv_peek() == '\n':
+                        self.csv_advance()
+                elif csv_ch == '\n':
+                    self.csv_advance()
+                return csv_fields
+        return csv_fields
+
+    Vector[Vector[str]] csv_parse_all(&self):
+        Vector[Vector[str]] csv_records = Vector[Vector[str]]()
+        while not self.csv_at_end() and not self.csv_failed():
+            # Skip bare trailing newlines
+            if self.csv_peek() == '\r' or self.csv_peek() == '\n':
+                if self.csv_peek() == '\r':
+                    self.csv_advance()
+                    if not self.csv_at_end() and self.csv_peek() == '\n':
+                        self.csv_advance()
+                else:
+                    self.csv_advance()
+                continue
+            Vector[str] csv_rec = self.csv_parse_record()
+            if self.csv_failed():
+                return csv_records
+            csv_records.push(csv_rec)
+        return csv_records
+
+# ── CsvTable ─────────────────────────────────────────────────
+
+struct CsvTable:
+    Vector[str] csv_headers
+    Vector[Vector[str]] csv_rows
+
+equip CsvTable:
+    int row_count(self) = self.csv_rows.len()
+
+    int col_count(self) = self.csv_headers.len()
+
+    Vector[str] headers(self) = self.csv_headers
+
+    Vector[str] row(self, int csv_n):
+        return self.csv_rows.get(csv_n).unwrap()
+
+    str get(self, int csv_row_idx, int csv_col_idx):
+        Vector[str] csv_r = self.csv_rows.get(csv_row_idx).unwrap()
+        return csv_r.get(csv_col_idx).unwrap()
+
+    str get_named(self, int csv_row_idx, str csv_col):
+        int csv_ci = self.column_index(csv_col)
+        if csv_ci < 0:
+            return ""
+        Vector[str] csv_r = self.csv_rows.get(csv_row_idx).unwrap()
+        return csv_r.get(csv_ci).unwrap()
+
+    bool has_column(self, str csv_name):
+        int csv_k = 0
+        while csv_k < self.csv_headers.len():
+            if self.csv_headers.get(csv_k).unwrap() == csv_name:
+                return true
+            csv_k = csv_k + 1
+        return false
+
+    int column_index(self, str csv_name):
+        int csv_k = 0
+        while csv_k < self.csv_headers.len():
+            if self.csv_headers.get(csv_k).unwrap() == csv_name:
+                return csv_k
+            csv_k = csv_k + 1
+        return -1
+
+# ── Stringify helper ─────────────────────────────────────────
+
+str csv_stringify_field(str csv_field, str csv_sep):
+    # Check if quoting is needed
+    bool csv_need_quote = false
+    int csv_fi = 0
+    while csv_fi < csv_field.len():
+        char csv_fc = csv_field[csv_fi]
+        if char_to_str(csv_fc) == csv_sep or csv_fc == '"' or csv_fc == '\n' or csv_fc == '\r':
+            csv_need_quote = true
+        csv_fi = csv_fi + 1
+    if not csv_need_quote:
+        return csv_field
+    # Quote: wrap in " and double any " chars
+    str csv_out = "\""
+    int csv_fj = 0
+    while csv_fj < csv_field.len():
+        char csv_qc = csv_field[csv_fj]
+        if csv_qc == '"':
+            csv_out = csv_out + "\"\""
+        else:
+            csv_out = csv_out + char_to_str(csv_qc)
+        csv_fj = csv_fj + 1
+    return csv_out + "\""
+
+# ── Public API ───────────────────────────────────────────────
+
+Result[Vector[Vector[str]], str] csv_parse(str csv_text):
+    return csv_parse_delim(csv_text, ",")
+
+Result[Vector[Vector[str]], str] csv_parse_delim(str csv_text, str csv_sep):
+    CsvParser csv_p = CsvParser(csv_text, 0, "", csv_sep)
+    Vector[Vector[str]] csv_recs = csv_p.csv_parse_all()
+    if csv_p.csv_failed():
+        return Error(csv_p.csv_err)
+    return Ok(csv_recs)
+
+Result[CsvTable, str] csv_parse_table(str csv_text):
+    return csv_parse_table_delim(csv_text, ",")
+
+Result[CsvTable, str] csv_parse_table_delim(str csv_text, str csv_sep):
+    CsvParser csv_p = CsvParser(csv_text, 0, "", csv_sep)
+    Vector[Vector[str]] csv_all = csv_p.csv_parse_all()
+    if csv_p.csv_failed():
+        return Error(csv_p.csv_err)
+    if csv_all.len() == 0:
+        Vector[str] csv_empty_hdr = Vector[str]()
+        Vector[Vector[str]] csv_empty_rows = Vector[Vector[str]]()
+        return Ok(CsvTable(csv_empty_hdr, csv_empty_rows))
+    Vector[str] csv_hdr = csv_all.get(0).unwrap()
+    Vector[Vector[str]] csv_data = Vector[Vector[str]]()
+    int csv_ri = 1
+    while csv_ri < csv_all.len():
+        csv_data.push(csv_all.get(csv_ri).unwrap())
+        csv_ri = csv_ri + 1
+    return Ok(CsvTable(csv_hdr, csv_data))
+
+str csv_stringify(Vector[Vector[str]] csv_rows):
+    return csv_stringify_delim(csv_rows, ",")
+
+str csv_stringify_delim(Vector[Vector[str]] csv_rows, str csv_sep):
+    str csv_out = ""
+    int csv_ri = 0
+    while csv_ri < csv_rows.len():
+        Vector[str] csv_row = csv_rows.get(csv_ri).unwrap()
+        int csv_ci = 0
+        while csv_ci < csv_row.len():
+            if csv_ci > 0:
+                csv_out = csv_out + csv_sep
+            csv_out = csv_out + csv_stringify_field(csv_row.get(csv_ci).unwrap(), csv_sep)
+            csv_ci = csv_ci + 1
+        csv_out = csv_out + "\r\n"
+        csv_ri = csv_ri + 1
+    return csv_out
+
+str csv_stringify_table(CsvTable csv_tbl):
+    return csv_stringify_table_delim(csv_tbl, ",")
+
+str csv_stringify_table_delim(CsvTable csv_tbl, str csv_sep):
+    str csv_out = ""
+    # Headers
+    int csv_hi = 0
+    while csv_hi < csv_tbl.csv_headers.len():
+        if csv_hi > 0:
+            csv_out = csv_out + csv_sep
+        csv_out = csv_out + csv_stringify_field(csv_tbl.csv_headers.get(csv_hi).unwrap(), csv_sep)
+        csv_hi = csv_hi + 1
+    csv_out = csv_out + "\r\n"
+    # Rows
+    int csv_ri = 0
+    while csv_ri < csv_tbl.csv_rows.len():
+        Vector[str] csv_row = csv_tbl.csv_rows.get(csv_ri).unwrap()
+        int csv_ci = 0
+        while csv_ci < csv_row.len():
+            if csv_ci > 0:
+                csv_out = csv_out + csv_sep
+            csv_out = csv_out + csv_stringify_field(csv_row.get(csv_ci).unwrap(), csv_sep)
+            csv_ci = csv_ci + 1
+        csv_out = csv_out + "\r\n"
+        csv_ri = csv_ri + 1
+    return csv_out
