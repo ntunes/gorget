@@ -1313,6 +1313,7 @@ wrapper id=1
 nested len=2
 done
 drop wrapped len=1
+drop wrapped len=1
 drop new len=1
 drop new len=1
 drop first len=2

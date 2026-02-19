@@ -4,8 +4,6 @@
 
 - **Nested element drops for direct collection values in `compute_predrop_code()`**: Pre-drop on `set()`/`put()` uses buffer-only drops for direct collection element types (e.g., overwriting a `GorgetArray` in `Vector[Vector[String]]` only frees old inner Vector's buffer, not its String elements). Full nested element drops require propagating type system info not available from the C type string alone. [added: 2026-02-19]
 
-- **Deep-clone for structs containing structs with droppable fields**: `clone_action_for_type()` returns `None` for non-collection Named types (e.g., a struct containing another struct with Drop). This means `compute_push_clone_code` doesn't deep-clone nested struct fields, so `.get()` on `Vector[Wrapper]` (where Wrapper contains a Container with Drop) returns a shallow copy with no drops registered. The shallow-copied inner struct shares buffer pointers with the collection element, so drops can't be registered without double-free. Fix: add recursive `StructClone` action to `clone_action_for_type` that walks struct fields and deep-clones any that have clone actions (Vector, String, Dict, Set, or nested structs). [added: 2026-02-19]
-
 
 - **Cross-type `map`/`map_err` type inference**: `builtin_method_type()` returns `receiver_type` as approximation for `map`, `map_err`, `and_then`, `or_else`. This breaks when the closure changes the type parameter (e.g., `Result[int, str].map_err((str e): len(e))` → `Result[int, int]`). Needs the type checker to inspect closure body return type for these methods. [added: 2026-02-19]
 

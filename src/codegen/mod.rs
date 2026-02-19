@@ -74,6 +74,8 @@ pub enum CloneAction {
     MapClone(String),
     /// gorget_set_clone(&field) for Set/HashSet fields
     SetClone,
+    /// Recursively clone specific fields of a struct that contain non-Copy data.
+    StructClone(Vec<(String, CloneAction)>),
 }
 
 /// How to drop a variable.

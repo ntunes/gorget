@@ -744,9 +744,49 @@ impl CodegenContext<'_> {
                 "Set" | "HashSet" if generic_args.len() == 1 => {
                     Some(super::CloneAction::SetClone)
                 }
-                _ => None,
+                _ => {
+                    // Check if this is a struct with clonable fields
+                    if generic_args.is_empty() {
+                        let struct_name = &name.node;
+                        let is_struct = self.scopes.lookup(struct_name).map_or(false, |def_id| {
+                            self.scopes.get_def(def_id).kind == crate::semantic::scope::DefKind::Struct
+                        });
+                        if is_struct {
+                            let clone_fields = self.compute_clone_fields(struct_name);
+                            if !clone_fields.is_empty() {
+                                return Some(super::CloneAction::StructClone(clone_fields));
+                            }
+                        }
+                    }
+                    None
+                }
             }
             _ => None,
+        }
+    }
+
+    /// Generate clone code for a single `CloneAction`, recursing into `StructClone`.
+    fn gen_clone_code_for_action(var: &str, action: &super::CloneAction) -> String {
+        match action {
+            super::CloneAction::ArrayClone => {
+                format!("{var} = gorget_array_clone(&{var});")
+            }
+            super::CloneAction::StringClone => {
+                format!("{var} = gorget_string_clone(&{var});")
+            }
+            super::CloneAction::MapClone(mangled) => {
+                format!("{var} = {mangled}__clone(&{var});")
+            }
+            super::CloneAction::SetClone => {
+                format!("{var} = gorget_set_clone(&{var});")
+            }
+            super::CloneAction::StructClone(field_clones) => {
+                let lines: Vec<String> = field_clones.iter().map(|(field, act)| {
+                    let field_expr = format!("{var}.{field}");
+                    Self::gen_clone_code_for_action(&field_expr, act)
+                }).collect();
+                lines.join(" ")
+            }
         }
     }
 
@@ -777,25 +817,8 @@ impl CodegenContext<'_> {
             return None;
         }
 
-        let mut lines = Vec::new();
-        for (field, action) in &clone_fields {
-            let field_expr = format!("{var}.{field}");
-            match action {
-                super::CloneAction::ArrayClone => {
-                    lines.push(format!("{field_expr} = gorget_array_clone(&{field_expr});"));
-                }
-                super::CloneAction::StringClone => {
-                    lines.push(format!("{field_expr} = gorget_string_clone(&{field_expr});"));
-                }
-                super::CloneAction::MapClone(mangled) => {
-                    lines.push(format!("{field_expr} = {mangled}__clone(&{field_expr});"));
-                }
-                super::CloneAction::SetClone => {
-                    lines.push(format!("{field_expr} = gorget_set_clone(&{field_expr});"));
-                }
-            }
-        }
-        Some(lines.join(" "))
+        let action = super::CloneAction::StructClone(clone_fields);
+        Some(Self::gen_clone_code_for_action(var, &action))
     }
 
     /// Compute inline pre-drop code for an element about to be overwritten
