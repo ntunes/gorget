@@ -15,7 +15,7 @@ pub fn is_stdlib_module(segments: &[String]) -> bool {
         return false;
     }
     match segments.len() {
-        2 => matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv" | "io" | "random" | "time" | "collections" | "math" | "fmt" | "process" | "sdl" | "gfx" | "ecs" | "json" | "toml" | "xml" | "yaml" | "bytes" | "crypto" | "ssh" | "http" | "regex"),
+        2 => matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv" | "io" | "random" | "time" | "collections" | "math" | "fmt" | "process" | "sdl" | "gfx" | "ecs" | "json" | "toml" | "xml" | "yaml" | "bytes" | "crypto" | "ssh" | "http" | "regex" | "encoding"),
         3 => segments[1] == "net" && matches!(segments[2].as_str(), "socket" | "tls"),
         _ => false,
     }
@@ -45,6 +45,7 @@ pub fn generate_stdlib_module(segments: &[String]) -> Option<Module> {
             "xml" => None,  // file-based module — loaded via stdlib_module_source()
             "yaml" => None, // file-based module — loaded via stdlib_module_source()
             "bytes" => None, // file-based module — loaded via stdlib_module_source()
+            "encoding" => None, // file-based module — loaded via stdlib_module_source()
             "crypto" => Some(gen_crypto_module()),
             "gfx" => None, // file-based module — loaded via stdlib_module_source()
             "ecs" => None, // file-based module — loaded via stdlib_module_source()
@@ -543,6 +544,7 @@ pub fn stdlib_module_source(segments: &[String]) -> Option<&'static str> {
         Some("xml") => Some(include_str!("../lib/std/xml.gg")),
         Some("yaml") => Some(include_str!("../lib/std/yaml.gg")),
         Some("bytes") => Some(include_str!("../lib/std/bytes.gg")),
+        Some("encoding") => Some(include_str!("../lib/std/encoding.gg")),
         _ => None,
     }
 }
@@ -1407,6 +1409,61 @@ mod tests {
         assert!(fn_names.contains(&"base64_encode".to_string()));
         assert!(fn_names.contains(&"base64_decode".to_string()));
         assert!(fn_names.contains(&"b64_char_value".to_string()));
+    }
+
+    #[test]
+    fn is_stdlib_encoding() {
+        assert!(is_stdlib_module(&["std".into(), "encoding".into()]));
+    }
+
+    #[test]
+    fn generate_encoding_returns_none() {
+        // std.encoding is file-based, not synthetic — generate returns None
+        assert!(generate_stdlib_module(&["std".into(), "encoding".into()]).is_none());
+    }
+
+    #[test]
+    fn encoding_module_source_exists() {
+        let source = stdlib_module_source(&["std".into(), "encoding".into()]);
+        assert!(source.is_some());
+        let src = source.unwrap();
+        assert!(src.contains("url_encode"));
+        assert!(src.contains("url_decode"));
+        assert!(src.contains("html_escape"));
+        assert!(src.contains("html_unescape"));
+        assert!(src.contains("utf8_len"));
+        assert!(src.contains("utf8_codepoints"));
+        assert!(src.contains("latin1_encode"));
+        assert!(src.contains("latin1_decode"));
+    }
+
+    #[test]
+    fn encoding_source_parses() {
+        let source = stdlib_module_source(&["std".into(), "encoding".into()]).unwrap();
+        let mut parser = crate::parser::Parser::new(source);
+        let module = parser.parse_module();
+        assert!(parser.errors.is_empty(), "encoding.gg parse errors: {:?}", parser.errors);
+
+        let mut fn_names = vec![];
+        for item in &module.items {
+            match &item.node {
+                Item::Function(f) => fn_names.push(f.name.node.clone()),
+                _ => {}
+            }
+        }
+
+        assert!(fn_names.contains(&"url_encode".to_string()));
+        assert!(fn_names.contains(&"url_decode".to_string()));
+        assert!(fn_names.contains(&"form_encode".to_string()));
+        assert!(fn_names.contains(&"form_decode".to_string()));
+        assert!(fn_names.contains(&"html_escape".to_string()));
+        assert!(fn_names.contains(&"html_unescape".to_string()));
+        assert!(fn_names.contains(&"utf8_len".to_string()));
+        assert!(fn_names.contains(&"utf8_codepoints".to_string()));
+        assert!(fn_names.contains(&"utf8_is_valid".to_string()));
+        assert!(fn_names.contains(&"utf8_char_at".to_string()));
+        assert!(fn_names.contains(&"latin1_encode".to_string()));
+        assert!(fn_names.contains(&"latin1_decode".to_string()));
     }
 
     #[test]

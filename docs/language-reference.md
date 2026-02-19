@@ -2565,6 +2565,48 @@ Re-exports the `Displayable` trait and `format` builtin for discoverability. Bot
 | `xml_parse` | `XmlNode(str)` | Parse an XML string into an `XmlNode` tree |
 | `xml_stringify` | `str(XmlNode)` | Serialize an `XmlNode` tree to an XML string |
 
+**`std.encoding`** — Text encoding/decoding (URL, HTML, UTF-8, Latin-1)
+
+*URL encoding (RFC 3986):*
+
+| Function | Signature | Description |
+|---|---|---|
+| `url_encode` | `str(str)` | Percent-encode non-unreserved characters |
+| `url_decode` | `Result[str, str](str)` | Decode percent-encoded string |
+| `form_encode` | `str(str)` | URL-encode for `application/x-www-form-urlencoded` (space → `+`) |
+| `form_decode` | `Result[str, str](str)` | Decode form-encoded string (`+` → space) |
+
+*HTML entity escaping:*
+
+| Function | Signature | Description |
+|---|---|---|
+| `html_escape` | `str(str)` | Escape `& < > " '` to named entities |
+| `html_unescape` | `str(str)` | Decode named entities, `&#DDD;`, and `&#xHH;` references |
+
+*UTF-8 utilities:*
+
+| Function | Signature | Description |
+|---|---|---|
+| `utf8_len` | `int(str)` | Count Unicode codepoints (not bytes) |
+| `utf8_codepoints` | `Vector[int](str)` | Extract all codepoints as integers |
+| `utf8_is_valid` | `bool(str)` | Validate UTF-8 byte sequence structure |
+| `utf8_char_at` | `int(str, int)` | Get nth codepoint (0-indexed); returns -1 if out of range |
+
+*Latin-1 (ISO 8859-1):*
+
+| Function | Signature | Description |
+|---|---|---|
+| `latin1_encode` | `Result[Vector[uint8], str](str)` | UTF-8 → Latin-1 bytes; fails if any codepoint > 255 |
+| `latin1_decode` | `str(Vector[uint8])` | Latin-1 bytes → UTF-8 string |
+
+```gorget
+from std.encoding import url_encode, url_decode, html_escape
+
+str enc_url = url_encode("hello world")        # "hello%20world"
+auto dec_url = url_decode("hello%20world")      # Ok("hello world")
+str safe = html_escape("<b>Tom & Jerry</b>")    # "&lt;b&gt;Tom &amp; Jerry&lt;/b&gt;"
+```
+
 **`std.bytes`** — Byte manipulation
 
 | Function | Signature | Description |

@@ -1,0 +1,105 @@
+from std.encoding import url_encode, url_decode, form_encode, form_decode
+from std.encoding import html_escape, html_unescape
+from std.encoding import utf8_len, utf8_codepoints, utf8_is_valid, utf8_char_at
+from std.encoding import latin1_encode, latin1_decode
+from std.collections import Vector
+
+void main():
+    # ── URL encoding ──
+    print(url_encode("hello world"))
+    print(url_encode("a-b_c.d~e"))
+    print(url_encode("a=1&b=2"))
+
+    # URL decoding
+    auto enc_r1 = url_decode("hello%20world")
+    match enc_r1:
+        case Ok(enc_val):
+            print(enc_val)
+        else:
+            print("error")
+
+    # URL decode error
+    auto enc_r2 = url_decode("bad%GG")
+    match enc_r2:
+        case Error(enc_msg):
+            print("caught")
+        else:
+            print("unexpected")
+
+    # URL roundtrip
+    auto enc_r3 = url_decode(url_encode("hello world!"))
+    match enc_r3:
+        case Ok(enc_val):
+            print(enc_val)
+        else:
+            print("error")
+
+    # ── Form encoding ──
+    print(form_encode("hello world"))
+
+    auto enc_r4 = form_decode("hello+world")
+    match enc_r4:
+        case Ok(enc_val):
+            print(enc_val)
+        else:
+            print("error")
+
+    # ── HTML escape ──
+    print(html_escape("<b>A & B</b>"))
+
+    # HTML unescape named entities
+    print(html_unescape("&lt;b&gt;hi&lt;/b&gt;"))
+
+    # HTML unescape numeric decimal
+    print(html_unescape("&#65;&#66;"))
+
+    # HTML unescape numeric hex
+    print(html_unescape("&#x43;&#x44;"))
+
+    # HTML unescape common entity — verify codepoint
+    str enc_copy = html_unescape("&copy;")
+    Vector[int] enc_copy_cps = utf8_codepoints(enc_copy)
+    int enc_copy_val = enc_copy_cps.get(0).unwrap()
+    print("{enc_copy_val}")
+
+    # HTML roundtrip
+    str enc_html_rt = html_unescape(html_escape("<div>"))
+    print(enc_html_rt)
+
+    # ── UTF-8 ──
+    int enc_u8len = utf8_len("Hello")
+    print("{enc_u8len}")
+    print(utf8_is_valid("Hello"))
+    int enc_char0 = utf8_char_at("Hello", 0)
+    print("{enc_char0}")
+    int enc_oob = utf8_char_at("Hello", 10)
+    print("{enc_oob}")
+
+    Vector[int] enc_cps = utf8_codepoints("Hi")
+    int enc_cplen = enc_cps.len()
+    print("{enc_cplen}")
+    int enc_cp0 = enc_cps.get(0).unwrap()
+    int enc_cp1 = enc_cps.get(1).unwrap()
+    print("{enc_cp0}")
+    print("{enc_cp1}")
+
+    # ── Latin-1 ──
+    auto enc_l1 = latin1_encode("AB")
+    match enc_l1:
+        case Ok(enc_bytes):
+            int enc_blen = enc_bytes.len()
+            print("{enc_blen}")
+            int enc_b0 = enc_bytes.get(0).unwrap() as int
+            int enc_b1 = enc_bytes.get(1).unwrap() as int
+            print("{enc_b0}")
+            print("{enc_b1}")
+        else:
+            print("error")
+
+    # Latin-1 decode
+    Vector[uint8] enc_latin_bytes = Vector[uint8]()
+    enc_latin_bytes.push(72 as uint8)
+    enc_latin_bytes.push(105 as uint8)
+    print(latin1_decode(enc_latin_bytes))
+
+    print("done")

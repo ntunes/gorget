@@ -1,0 +1,406 @@
+# std.encoding — URL, HTML, UTF-8, and Latin-1 codecs
+#
+# Pure Gorget text encoding/decoding utilities.
+# All variables prefixed enc_ to avoid cross-module name collisions.
+
+from std.collections import Vector
+from std.conv import ord, chr, char_to_str, codepoint_to_str
+
+# ── Internal helpers ──────────────────────────────────────────
+
+# ord() returns signed values for bytes > 127 (char is signed in C).
+# This helper masks to get the unsigned byte value (0-255).
+int enc_byte_val(char enc_ch):
+    return ord(enc_ch) & 255
+
+char enc_hex_digit(int enc_n):
+    if enc_n < 10:
+        return chr(48 + enc_n)
+    return chr(55 + enc_n)
+
+int enc_hex_value(char enc_ch):
+    int enc_code = ord(enc_ch)
+    if enc_code >= 48 and enc_code <= 57:
+        return enc_code - 48
+    if enc_code >= 65 and enc_code <= 70:
+        return enc_code - 55
+    if enc_code >= 97 and enc_code <= 102:
+        return enc_code - 87
+    return -1
+
+str enc_byte_to_pct(int enc_byte):
+    str enc_pct = "%"
+    enc_pct = enc_pct + char_to_str(enc_hex_digit(enc_byte >> 4))
+    enc_pct = enc_pct + char_to_str(enc_hex_digit(enc_byte & 15))
+    return enc_pct
+
+bool enc_is_url_unreserved(char enc_ch):
+    int enc_code = ord(enc_ch)
+    if enc_code >= 65 and enc_code <= 90:
+        return true
+    if enc_code >= 97 and enc_code <= 122:
+        return true
+    if enc_code >= 48 and enc_code <= 57:
+        return true
+    if enc_code == 45:
+        return true
+    if enc_code == 95:
+        return true
+    if enc_code == 46:
+        return true
+    if enc_code == 126:
+        return true
+    return false
+
+# ── URL encoding (RFC 3986) ───────────────────────────────────
+
+str url_encode(str enc_input):
+    str enc_out = ""
+    int enc_i = 0
+    int enc_slen = enc_input.len()
+    while enc_i < enc_slen:
+        char enc_ch = enc_input[enc_i]
+        if enc_is_url_unreserved(enc_ch):
+            enc_out = enc_out + char_to_str(enc_ch)
+        else:
+            enc_out = enc_out + enc_byte_to_pct(enc_byte_val(enc_ch))
+        enc_i = enc_i + 1
+    return enc_out
+
+Result[str, str] url_decode(str enc_input):
+    str enc_out = ""
+    int enc_i = 0
+    int enc_slen = enc_input.len()
+    while enc_i < enc_slen:
+        char enc_ch = enc_input[enc_i]
+        if enc_ch == '%':
+            if enc_i + 2 >= enc_slen:
+                return Error("incomplete percent encoding")
+            int enc_hi = enc_hex_value(enc_input[enc_i + 1])
+            int enc_lo = enc_hex_value(enc_input[enc_i + 2])
+            if enc_hi < 0 or enc_lo < 0:
+                return Error("invalid hex in percent encoding")
+            enc_out = enc_out + char_to_str(chr(enc_hi * 16 + enc_lo))
+            enc_i = enc_i + 3
+        else:
+            enc_out = enc_out + char_to_str(enc_ch)
+            enc_i = enc_i + 1
+    return Ok(enc_out)
+
+str form_encode(str enc_input):
+    str enc_out = ""
+    int enc_i = 0
+    int enc_slen = enc_input.len()
+    while enc_i < enc_slen:
+        char enc_ch = enc_input[enc_i]
+        if enc_ch == ' ':
+            enc_out = enc_out + "+"
+        elif enc_is_url_unreserved(enc_ch):
+            enc_out = enc_out + char_to_str(enc_ch)
+        else:
+            enc_out = enc_out + enc_byte_to_pct(enc_byte_val(enc_ch))
+        enc_i = enc_i + 1
+    return enc_out
+
+Result[str, str] form_decode(str enc_input):
+    str enc_out = ""
+    int enc_i = 0
+    int enc_slen = enc_input.len()
+    while enc_i < enc_slen:
+        char enc_ch = enc_input[enc_i]
+        if enc_ch == '+':
+            enc_out = enc_out + " "
+            enc_i = enc_i + 1
+        elif enc_ch == '%':
+            if enc_i + 2 >= enc_slen:
+                return Error("incomplete percent encoding")
+            int enc_hi = enc_hex_value(enc_input[enc_i + 1])
+            int enc_lo = enc_hex_value(enc_input[enc_i + 2])
+            if enc_hi < 0 or enc_lo < 0:
+                return Error("invalid hex in percent encoding")
+            enc_out = enc_out + char_to_str(chr(enc_hi * 16 + enc_lo))
+            enc_i = enc_i + 3
+        else:
+            enc_out = enc_out + char_to_str(enc_ch)
+            enc_i = enc_i + 1
+    return Ok(enc_out)
+
+# ── HTML entity escaping ─────────────────────────────────────
+
+str html_escape(str enc_input):
+    str enc_out = ""
+    int enc_i = 0
+    int enc_slen = enc_input.len()
+    while enc_i < enc_slen:
+        char enc_ch = enc_input[enc_i]
+        if enc_ch == '&':
+            enc_out = enc_out + "&amp;"
+        elif enc_ch == '<':
+            enc_out = enc_out + "&lt;"
+        elif enc_ch == '>':
+            enc_out = enc_out + "&gt;"
+        elif enc_ch == '"':
+            enc_out = enc_out + "&quot;"
+        elif ord(enc_ch) == 39:
+            enc_out = enc_out + "&apos;"
+        else:
+            enc_out = enc_out + char_to_str(enc_ch)
+        enc_i = enc_i + 1
+    return enc_out
+
+str enc_decode_entity(str enc_name):
+    # Numeric references: &#DDD; or &#xHH;
+    if enc_name.len() > 1 and enc_name[0] == '#':
+        if enc_name[1] == 'x' or enc_name[1] == 'X':
+            # Hex numeric
+            int enc_cp = 0
+            int enc_k = 2
+            while enc_k < enc_name.len():
+                int enc_hv = enc_hex_value(enc_name[enc_k])
+                if enc_hv < 0:
+                    return ""
+                enc_cp = enc_cp * 16 + enc_hv
+                enc_k = enc_k + 1
+            if enc_cp > 0:
+                return codepoint_to_str(enc_cp)
+            return ""
+        # Decimal numeric
+        int enc_cp = 0
+        int enc_k = 1
+        while enc_k < enc_name.len():
+            int enc_dv = ord(enc_name[enc_k]) - 48
+            if enc_dv < 0 or enc_dv > 9:
+                return ""
+            enc_cp = enc_cp * 10 + enc_dv
+            enc_k = enc_k + 1
+        if enc_cp > 0:
+            return codepoint_to_str(enc_cp)
+        return ""
+    # 5 XML entities
+    if enc_name == "amp":
+        return "&"
+    if enc_name == "lt":
+        return "<"
+    if enc_name == "gt":
+        return ">"
+    if enc_name == "quot":
+        return char_to_str(chr(34))
+    if enc_name == "apos":
+        return char_to_str(chr(39))
+    # Common HTML named entities
+    if enc_name == "nbsp":
+        return codepoint_to_str(160)
+    if enc_name == "copy":
+        return codepoint_to_str(169)
+    if enc_name == "reg":
+        return codepoint_to_str(174)
+    if enc_name == "trade":
+        return codepoint_to_str(8482)
+    if enc_name == "ndash":
+        return codepoint_to_str(8211)
+    if enc_name == "mdash":
+        return codepoint_to_str(8212)
+    if enc_name == "lsquo":
+        return codepoint_to_str(8216)
+    if enc_name == "rsquo":
+        return codepoint_to_str(8217)
+    if enc_name == "ldquo":
+        return codepoint_to_str(8220)
+    if enc_name == "rdquo":
+        return codepoint_to_str(8221)
+    if enc_name == "hellip":
+        return codepoint_to_str(8230)
+    if enc_name == "euro":
+        return codepoint_to_str(8364)
+    if enc_name == "pound":
+        return codepoint_to_str(163)
+    if enc_name == "yen":
+        return codepoint_to_str(165)
+    if enc_name == "deg":
+        return codepoint_to_str(176)
+    if enc_name == "times":
+        return codepoint_to_str(215)
+    if enc_name == "divide":
+        return codepoint_to_str(247)
+    return ""
+
+str html_unescape(str enc_input):
+    str enc_out = ""
+    int enc_i = 0
+    int enc_slen = enc_input.len()
+    while enc_i < enc_slen:
+        if enc_input[enc_i] == '&':
+            # Find closing semicolon within reasonable range
+            int enc_limit = enc_i + 12
+            if enc_limit > enc_slen:
+                enc_limit = enc_slen
+            int enc_k = enc_i + 1
+            while enc_k < enc_limit and enc_input[enc_k] != ';':
+                enc_k = enc_k + 1
+            if enc_k < enc_limit and enc_input[enc_k] == ';':
+                # Build entity name between & and ;
+                str enc_entity = ""
+                int enc_j = enc_i + 1
+                while enc_j < enc_k:
+                    enc_entity = enc_entity + char_to_str(enc_input[enc_j])
+                    enc_j = enc_j + 1
+                str enc_decoded = enc_decode_entity(enc_entity)
+                if enc_decoded.len() > 0:
+                    enc_out = enc_out + enc_decoded
+                    enc_i = enc_k + 1
+                else:
+                    enc_out = enc_out + "&"
+                    enc_i = enc_i + 1
+            else:
+                enc_out = enc_out + "&"
+                enc_i = enc_i + 1
+        else:
+            enc_out = enc_out + char_to_str(enc_input[enc_i])
+            enc_i = enc_i + 1
+    return enc_out
+
+# ── UTF-8 utilities ──────────────────────────────────────────
+
+int utf8_len(str enc_s):
+    int enc_count = 0
+    int enc_i = 0
+    int enc_slen = enc_s.len()
+    while enc_i < enc_slen:
+        int enc_b = enc_byte_val(enc_s[enc_i])
+        # Count bytes that are NOT continuation bytes (10xxxxxx = 128..191)
+        if enc_b < 128 or enc_b >= 192:
+            enc_count = enc_count + 1
+        enc_i = enc_i + 1
+    return enc_count
+
+Vector[int] utf8_codepoints(str enc_s):
+    Vector[int] enc_cps = Vector[int]()
+    int enc_i = 0
+    int enc_slen = enc_s.len()
+    while enc_i < enc_slen:
+        int enc_b0 = enc_byte_val(enc_s[enc_i])
+        if enc_b0 < 128:
+            enc_cps.push(enc_b0)
+            enc_i = enc_i + 1
+        elif enc_b0 < 224:
+            int enc_lead = enc_b0 & 31
+            int enc_cont = enc_byte_val(enc_s[enc_i + 1]) & 63
+            enc_cps.push(enc_lead << 6 | enc_cont)
+            enc_i = enc_i + 2
+        elif enc_b0 < 240:
+            int enc_lead = enc_b0 & 15
+            int enc_c1 = enc_byte_val(enc_s[enc_i + 1]) & 63
+            int enc_c2 = enc_byte_val(enc_s[enc_i + 2]) & 63
+            enc_cps.push(enc_lead << 12 | enc_c1 << 6 | enc_c2)
+            enc_i = enc_i + 3
+        else:
+            int enc_lead = enc_b0 & 7
+            int enc_c1 = enc_byte_val(enc_s[enc_i + 1]) & 63
+            int enc_c2 = enc_byte_val(enc_s[enc_i + 2]) & 63
+            int enc_c3 = enc_byte_val(enc_s[enc_i + 3]) & 63
+            enc_cps.push(enc_lead << 18 | enc_c1 << 12 | enc_c2 << 6 | enc_c3)
+            enc_i = enc_i + 4
+    return enc_cps
+
+bool utf8_is_valid(str enc_s):
+    int enc_i = 0
+    int enc_slen = enc_s.len()
+    while enc_i < enc_slen:
+        int enc_b = enc_byte_val(enc_s[enc_i])
+        if enc_b < 128:
+            enc_i = enc_i + 1
+        elif enc_b >= 192 and enc_b < 224:
+            if enc_i + 1 >= enc_slen:
+                return false
+            int enc_c1 = enc_byte_val(enc_s[enc_i + 1])
+            if enc_c1 < 128 or enc_c1 >= 192:
+                return false
+            enc_i = enc_i + 2
+        elif enc_b >= 224 and enc_b < 240:
+            if enc_i + 2 >= enc_slen:
+                return false
+            int enc_c1 = enc_byte_val(enc_s[enc_i + 1])
+            int enc_c2 = enc_byte_val(enc_s[enc_i + 2])
+            if enc_c1 < 128 or enc_c1 >= 192:
+                return false
+            if enc_c2 < 128 or enc_c2 >= 192:
+                return false
+            enc_i = enc_i + 3
+        elif enc_b >= 240 and enc_b < 248:
+            if enc_i + 3 >= enc_slen:
+                return false
+            int enc_c1 = enc_byte_val(enc_s[enc_i + 1])
+            int enc_c2 = enc_byte_val(enc_s[enc_i + 2])
+            int enc_c3 = enc_byte_val(enc_s[enc_i + 3])
+            if enc_c1 < 128 or enc_c1 >= 192:
+                return false
+            if enc_c2 < 128 or enc_c2 >= 192:
+                return false
+            if enc_c3 < 128 or enc_c3 >= 192:
+                return false
+            enc_i = enc_i + 4
+        else:
+            return false
+    return true
+
+int utf8_char_at(str enc_s, int enc_n):
+    int enc_i = 0
+    int enc_count = 0
+    int enc_slen = enc_s.len()
+    while enc_i < enc_slen:
+        if enc_count == enc_n:
+            int enc_cur = enc_byte_val(enc_s[enc_i])
+            if enc_cur < 128:
+                return enc_cur
+            elif enc_cur < 224:
+                int enc_lead = enc_cur & 31
+                int enc_cont = enc_byte_val(enc_s[enc_i + 1]) & 63
+                return enc_lead << 6 | enc_cont
+            elif enc_cur < 240:
+                int enc_lead = enc_cur & 15
+                int enc_c1 = enc_byte_val(enc_s[enc_i + 1]) & 63
+                int enc_c2 = enc_byte_val(enc_s[enc_i + 2]) & 63
+                return enc_lead << 12 | enc_c1 << 6 | enc_c2
+            else:
+                int enc_lead = enc_cur & 7
+                int enc_c1 = enc_byte_val(enc_s[enc_i + 1]) & 63
+                int enc_c2 = enc_byte_val(enc_s[enc_i + 2]) & 63
+                int enc_c3 = enc_byte_val(enc_s[enc_i + 3]) & 63
+                return enc_lead << 18 | enc_c1 << 12 | enc_c2 << 6 | enc_c3
+        int enc_skip = enc_byte_val(enc_s[enc_i])
+        if enc_skip < 128:
+            enc_i = enc_i + 1
+        elif enc_skip < 224:
+            enc_i = enc_i + 2
+        elif enc_skip < 240:
+            enc_i = enc_i + 3
+        else:
+            enc_i = enc_i + 4
+        enc_count = enc_count + 1
+    return -1
+
+# ── Latin-1 (ISO 8859-1) ────────────────────────────────────
+
+Result[Vector[uint8], str] latin1_encode(str enc_s):
+    Vector[int] enc_cps = utf8_codepoints(enc_s)
+    Vector[uint8] enc_out = Vector[uint8]()
+    int enc_i = 0
+    while enc_i < enc_cps.len():
+        int enc_cp = enc_cps.get(enc_i).unwrap()
+        if enc_cp > 255:
+            return Error("codepoint out of Latin-1 range")
+        enc_out.push(enc_cp as uint8)
+        enc_i = enc_i + 1
+    return Ok(enc_out)
+
+str latin1_decode(Vector[uint8] enc_bytes):
+    str enc_out = ""
+    int enc_i = 0
+    while enc_i < enc_bytes.len():
+        int enc_b = enc_bytes.get(enc_i).unwrap() as int
+        if enc_b < 128:
+            enc_out = enc_out + char_to_str(chr(enc_b))
+        else:
+            enc_out = enc_out + codepoint_to_str(enc_b)
+        enc_i = enc_i + 1
+    return enc_out

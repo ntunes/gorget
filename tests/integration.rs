@@ -4273,3 +4273,37 @@ c,d,e
 done",
     );
 }
+
+#[test]
+fn encoding_basic() {
+    run_gg(
+        "encoding_basic.gg",
+        "\
+hello%20world
+a-b_c.d~e
+a%3D1%26b%3D2
+hello world
+caught
+hello world!
+hello+world
+hello world
+&lt;b&gt;A &amp; B&lt;/b&gt;
+<b>hi</b>
+AB
+CD
+169
+<div>
+5
+true
+72
+-1
+2
+72
+105
+2
+65
+66
+Hi
+done",
+    );
+}
