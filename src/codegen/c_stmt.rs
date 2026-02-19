@@ -199,6 +199,107 @@ impl CodegenContext<'_> {
         }
     }
 
+    /// Generate inline C drop statements as a `String`, mirroring `emit_drop_entry()`
+    /// but without `CEmitter`. Used by `compute_predrop_code()` for inline pre-drop
+    /// before collection overwrites.
+    ///
+    /// Uses `__pdi{depth}`/`__pde{depth}` for unique loop variables (prefix `p` for
+    /// "pre-drop" to avoid collision with scope-exit drop variables `__di`/`__de`).
+    fn gen_inline_drop_code(var: &str, action: &DropAction, depth: usize) -> String {
+        let idx = format!("__pdi{depth}");
+        let elem = format!("__pde{depth}");
+        match action {
+            DropAction::StringFree => {
+                format!("gorget_string_free(&{var});")
+            }
+            DropAction::ArrayFree { element_drop, element_c_type } => {
+                let mut code = String::new();
+                if let (Some(edrop), Some(ec_type)) = (element_drop, element_c_type) {
+                    code.push_str(&format!(
+                        "for (size_t {idx} = 0; {idx} < {var}.len; {idx}++) {{ \
+                         {ec_type}* {elem} = ({ec_type}*)((char*){var}.data + {idx} * sizeof({ec_type})); "
+                    ));
+                    code.push_str(&Self::gen_inline_drop_code(&format!("(*{elem})"), edrop, depth + 1));
+                    code.push_str(" } ");
+                }
+                code.push_str(&format!("gorget_array_free(&{var});"));
+                code
+            }
+            DropAction::MapFree { mangled_name, key_drop, value_drop } => {
+                let mut code = String::new();
+                if key_drop.is_some() || value_drop.is_some() {
+                    code.push_str(&format!(
+                        "for (size_t {idx} = 0; {idx} < {var}.cap; {idx}++) {{ \
+                         if ({var}.states[{idx}] == 1) {{ "
+                    ));
+                    if let Some(kd) = key_drop {
+                        code.push_str(&Self::gen_inline_drop_code(
+                            &format!("{var}.keys[{idx}]"), kd, depth + 1,
+                        ));
+                        code.push(' ');
+                    }
+                    if let Some(vd) = value_drop {
+                        code.push_str(&Self::gen_inline_drop_code(
+                            &format!("{var}.values[{idx}]"), vd, depth + 1,
+                        ));
+                        code.push(' ');
+                    }
+                    code.push_str("} } ");
+                }
+                code.push_str(&format!("{mangled_name}__free(&{var});"));
+                code
+            }
+            DropAction::SetFree { element_drop, element_c_type } => {
+                let mut code = String::new();
+                if let (Some(edrop), Some(ec_type)) = (element_drop, element_c_type) {
+                    code.push_str(&format!(
+                        "for (size_t {idx} = 0; {idx} < {var}.cap; {idx}++) {{ \
+                         if ({var}.states[{idx}] == 1) {{ \
+                         {ec_type}* {elem} = ({ec_type}*)((char*){var}.keys + {idx} * sizeof({ec_type})); "
+                    ));
+                    code.push_str(&Self::gen_inline_drop_code(&format!("(*{elem})"), edrop, depth + 1));
+                    code.push_str(" } } ");
+                }
+                code.push_str(&format!("gorget_set_free(&{var});"));
+                code
+            }
+            DropAction::StructDrop { type_name, has_user_drop, field_drops } => {
+                let mut code = String::new();
+                if *has_user_drop {
+                    let drop_fn = c_mangle::mangle_trait_method("Drop", type_name, "drop", &[]);
+                    // Skip user Drop if struct was move-zeroed (all bytes zero)
+                    code.push_str(&format!(
+                        "{{ __typeof__({var}) __zg = {{0}}; \
+                         if (memcmp(&{var}, &__zg, sizeof({var})) != 0) {{ \
+                         {drop_fn}(&{var}); }} }} "
+                    ));
+                }
+                // Drop fields in reverse declaration order
+                for (field_name, field_action) in field_drops.iter().rev() {
+                    let field_var = format!("{var}.{field_name}");
+                    code.push_str(&Self::gen_inline_drop_code(&field_var, field_action, depth));
+                    code.push(' ');
+                }
+                code
+            }
+            DropAction::UserDrop { type_name } => {
+                let drop_fn = c_mangle::mangle_trait_method("Drop", type_name, "drop", &[]);
+                format!("{drop_fn}(&{var});")
+            }
+            DropAction::BoxDrop { inner_drop } => {
+                let mut code = String::new();
+                if let Some(inner) = inner_drop {
+                    code.push_str(&Self::gen_inline_drop_code(&format!("(*{var})"), inner, depth));
+                    code.push(' ');
+                }
+                code.push_str(&format!("free({var});"));
+                code
+            }
+            // FileClose, ClosureEnvFree, TraitObjFree — not applicable for collection elements
+            _ => String::new(),
+        }
+    }
+
     /// Coerce a GorgetString C expression to `const char*`.
     ///
     /// If the expression is a named variable, field access, or dereference
@@ -695,6 +796,33 @@ impl CodegenContext<'_> {
             }
         }
         Some(lines.join(" "))
+    }
+
+    /// Compute inline pre-drop code for an element about to be overwritten
+    /// in a collection. Parallel to `compute_push_clone_code()`.
+    ///
+    /// Returns `Some(code)` if the element type is non-Copy and needs cleanup
+    /// before overwrite, `None` if Copy (no cleanup needed).
+    pub(super) fn compute_predrop_code(&self, elem_c_type: &str, var: &str) -> Option<String> {
+        // Direct collection/string types
+        if elem_c_type == "GorgetString" {
+            return Some(format!("gorget_string_free(&{var});"));
+        }
+        if elem_c_type == "GorgetArray" {
+            // Buffer-only: inner elem type unknown from C string
+            return Some(format!("gorget_array_free(&{var});"));
+        }
+        if elem_c_type.starts_with("GorgetDict__") || elem_c_type.starts_with("GorgetMap__") {
+            // Buffer-only: inner types unknown from C string
+            return Some(format!("{elem_c_type}__free(&{var});"));
+        }
+        if elem_c_type == "GorgetSet" {
+            return Some(format!("gorget_set_free(&{var});"));
+        }
+
+        // Struct types: full StructDrop with user drop + recursive field drops
+        self.drop_action_for_struct_name(elem_c_type)
+            .map(|action| Self::gen_inline_drop_code(var, &action, 0))
     }
 
     /// Remove all drop entries for `var_name` across all scopes.

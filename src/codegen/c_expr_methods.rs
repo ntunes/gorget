@@ -98,8 +98,15 @@ impl CodegenContext<'_> {
                 } else {
                     None
                 };
-                if let Some(clone) = clone_code {
-                    format!("({{ {elem_type} __set_val = {val}; {clone} gorget_array_set({recv_ref}, {idx}, &__set_val); }})")
+                let predrop_code = self.compute_predrop_code(&elem_type, "__old_val");
+                if predrop_code.is_some() || clone_code.is_some() {
+                    let predrop = predrop_code.map(|code| format!(
+                        "if ((size_t)__set_idx < {recv}.len) {{ \
+                         {elem_type} __old_val = GORGET_ARRAY_AT({elem_type}, {recv}, __set_idx); {code} }}"
+                    )).unwrap_or_default();
+                    let clone = clone_code.unwrap_or_default();
+                    format!("({{ int64_t __set_idx = {idx}; {elem_type} __set_val = {val}; {clone} \
+                             {predrop} gorget_array_set({recv_ref}, __set_idx, &__set_val); }})")
                 } else {
                     format!("({{ {elem_type} __set_val = {val}; gorget_array_set({recv_ref}, {idx}, &__set_val); }})")
                 }
@@ -422,15 +429,22 @@ impl CodegenContext<'_> {
                     .unwrap_or_else(|| "0".to_string());
                 let val_expr = &args[1].node.value;
                 let val = self.gen_expr(val_expr);
-                let (_key_type, val_type) = self.infer_map_kv_types(receiver);
+                let (key_type, val_type) = self.infer_map_kv_types(receiver);
                 let source_will_be_zeroed = self.source_is_safe_for_push(&val_expr.node);
                 let clone_code = if !source_will_be_zeroed {
                     self.compute_push_clone_code(&val_type, "__put_val")
                 } else {
                     None
                 };
-                if let Some(clone) = clone_code {
-                    format!("({{ {val_type} __put_val = {val}; {clone} {mangled}__put({recv_ref}, {key}, __put_val); }})")
+                let predrop_code = self.compute_predrop_code(&val_type, "(*__old_vp)");
+                if predrop_code.is_some() || clone_code.is_some() {
+                    let predrop = predrop_code.map(|code| format!(
+                        "{{ {val_type}* __old_vp = {mangled}__get_ptr({recv_ref}, __put_key); \
+                         if (__old_vp) {{ {code} }} }}"
+                    )).unwrap_or_default();
+                    let clone = clone_code.unwrap_or_default();
+                    format!("({{ {key_type} __put_key = {key}; {val_type} __put_val = {val}; {clone} \
+                             {predrop} {mangled}__put({recv_ref}, __put_key, __put_val); }})")
                 } else {
                     format!("{mangled}__put({recv_ref}, {key}, {val})")
                 }

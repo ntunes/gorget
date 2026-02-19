@@ -1291,7 +1291,11 @@ fn drop_struct_collection_fields() {
         "\
 len 3
 got first len=2
+drop old len=2
+after set: new
 done
+drop new len=1
+drop new len=1
 drop first len=2
 drop first len=2
 drop second len=1
