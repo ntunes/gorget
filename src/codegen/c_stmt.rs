@@ -505,6 +505,54 @@ impl CodegenContext<'_> {
         }
     }
 
+    /// Queue a struct field for move-zeroing if the field is non-Copy.
+    /// Returns true if zeroing was queued, false if skipped.
+    ///
+    /// Safety gates:
+    /// - Object must be a simple Identifier (not chained access, not self)
+    /// - Object must not be a pointer parameter
+    /// - Parent struct must NOT have user Drop (partial zeroing → UB in user Drop)
+    /// - Field type must be non-Copy (has a drop action)
+    pub(super) fn queue_field_move_zero(&mut self, object: &Expr, field_name: &str) -> bool {
+        let obj_name = match object {
+            Expr::Identifier(name) => name,
+            _ => return false,
+        };
+        let escaped_obj = c_mangle::escape_keyword(obj_name);
+
+        // Object must be a droppable struct without user Drop
+        match self.find_drop_action(&escaped_obj) {
+            Some(DropAction::StructDrop { has_user_drop: true, .. }) => return false,
+            Some(DropAction::StructDrop { type_name, .. }) => {
+                // Check field is non-Copy
+                let key = (type_name.clone(), field_name.to_string());
+                if let Some(field_type) = self.field_type_names.get(&key) {
+                    if self.drop_action_for_type(field_type).is_some() {
+                        if !self.pointer_params.contains(&escaped_obj) {
+                            let escaped_field = c_mangle::escape_keyword(field_name);
+                            self.pending_move_zeros.push(
+                                format!("{escaped_obj}.{escaped_field}")
+                            );
+                            return true;
+                        }
+                    }
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
+    /// Try to queue field-level move-zeroing for a FieldAccess expression.
+    /// Returns true if zeroing was queued.
+    fn try_queue_field_move_zero_for_value(&mut self, expr: &Expr) -> bool {
+        if let Expr::FieldAccess { object, field } = expr {
+            self.queue_field_move_zero(&object.node, &field.node)
+        } else {
+            false
+        }
+    }
+
     /// Remove all drop entries for `var_name` across all scopes.
     /// Used to transfer ownership of a closure env when returning it.
     pub fn remove_droppable(&mut self, var_name: &str) {
@@ -1228,6 +1276,10 @@ impl CodegenContext<'_> {
                     if matches!(&expr.node, Expr::Closure { .. }) {
                         self.closure_heap_alloc = true;
                     }
+                    // Handle direct field access returns: zero the source field
+                    if let Expr::FieldAccess { object, field } = &expr.node {
+                        self.queue_field_move_zero(&object.node, &field.node);
+                    }
                 }
 
                 if self.has_droppable_entries() {
@@ -1930,6 +1982,12 @@ impl CodegenContext<'_> {
                             self.register_droppable(&escaped, buf_action.clone());
                             if self.in_test_body {
                                 Self::emit_test_cleanup_for_action(&escaped, &buf_action, emitter);
+                            }
+                        } else if self.try_queue_field_move_zero_for_value(&value.node) {
+                            // Field access where source field was zeroed: variable is sole owner
+                            self.register_droppable(&escaped, action.clone());
+                            if self.in_test_body {
+                                Self::emit_test_cleanup_for_action(&escaped, &action, emitter);
                             }
                         }
                         // Otherwise: variable copy/field access — no drop (aliased buffer)

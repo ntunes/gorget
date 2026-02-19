@@ -40,6 +40,8 @@ impl CodegenContext<'_> {
                 if let Some(a) = args.get(idx) {
                     if let Expr::Identifier(name) = &a.node.value.node {
                         self.queue_move_zero_if_droppable(name);
+                    } else if let Expr::FieldAccess { object, field } = &a.node.value.node {
+                        self.queue_field_move_zero(&object.node, &field.node);
                     }
                 }
             }
@@ -54,6 +56,8 @@ impl CodegenContext<'_> {
                     if fi.param_ownerships.get(i + 1) == Some(&Ownership::Move) {
                         if let Expr::Identifier(name) = &a.node.value.node {
                             self.queue_move_zero_if_droppable(name);
+                        } else if let Expr::FieldAccess { object, field } = &a.node.value.node {
+                            self.queue_field_move_zero(&object.node, &field.node);
                         }
                     }
                 }
@@ -67,6 +71,8 @@ impl CodegenContext<'_> {
         for a in args {
             if let Expr::Identifier(name) = &a.node.value.node {
                 self.queue_move_zero_if_droppable(name);
+            } else if let Expr::FieldAccess { object, field } = &a.node.value.node {
+                self.queue_field_move_zero(&object.node, &field.node);
             }
         }
     }
@@ -77,6 +83,8 @@ impl CodegenContext<'_> {
         for a in args {
             if let Expr::Identifier(ref name) = a.node {
                 self.queue_move_zero_if_droppable(name);
+            } else if let Expr::FieldAccess { object, field } = &a.node {
+                self.queue_field_move_zero(&object.node, &field.node);
             }
         }
     }

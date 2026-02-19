@@ -1297,6 +1297,17 @@ drop second",
 }
 
 #[test]
+fn drop_field_move_zero() {
+    run_gg(
+        "drop_field_move_zero.gg",
+        "\
+pushed 2
+extracted 3
+done",
+    );
+}
+
+#[test]
 fn drop_fn_return_collection() {
     run_gg(
         "drop_fn_return_collection.gg",

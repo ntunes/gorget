@@ -1,0 +1,27 @@
+from std.collections import Vector
+
+struct Holder:
+    str label
+    Vector[int] data
+
+void main():
+    # Test 1: push field into collection (was double-free without fix)
+    Vector[Vector[int]] items = Vector[Vector[int]]()
+
+    Holder h1 = Holder("h1", Vector[int]())
+    h1.data.push(10)
+    h1.data.push(20)
+    items.push(h1.data)
+
+    auto inner = items.get(0)
+    print("pushed {inner.len()}")
+
+    # Test 2: assign field to new variable (enables ownership transfer)
+    Holder h2 = Holder("h2", Vector[int]())
+    h2.data.push(30)
+    h2.data.push(40)
+    h2.data.push(50)
+    Vector[int] extracted = h2.data
+    print("extracted {extracted.len()}")
+
+    print("done")

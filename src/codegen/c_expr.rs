@@ -507,6 +507,8 @@ impl CodegenContext<'_> {
                 if let Expr::Identifier(name) = &expr.node {
                     let escaped = c_mangle::escape_keyword(name);
                     self.pending_move_zeros.push(escaped);
+                } else if let Expr::FieldAccess { object, field } = &expr.node {
+                    self.queue_field_move_zero(&object.node, &field.node);
                 }
                 self.gen_expr(expr)
             }
