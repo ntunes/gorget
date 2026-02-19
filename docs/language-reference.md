@@ -2658,6 +2658,50 @@ Low-level SDL2 bindings for window management, rendering, input handling, and au
 
 The SSH module implements the SSH-2 protocol including key exchange, encryption, and SFTP operations.
 
+**`std.regex`** — Regular expressions (PCRE2)
+
+| Name | Kind | Description |
+|---|---|---|
+| `Regex` | struct | Compiled regular expression pattern |
+| `Match` | struct | Result of a successful match (text, offsets, groups) |
+| `regex_compile` | `Result[Regex, str](str)` | Compile a regex pattern |
+| `regex_compile_with` | `Result[Regex, str](str, str)` | Compile with flags (`"i"`, `"m"`, `"s"`, `"x"`, `"u"`, `"U"`) |
+| `regex_escape` | `String(str)` | Escape special regex characters in a string |
+| `regex_is_match` | `bool(str, str)` | Convenience: compile + test (pattern, subject) |
+| `regex_find` | `Option[Match](str, str)` | Convenience: compile + find first match |
+| `regex_replace` | `String(str, str, str)` | Convenience: compile + replace first match |
+
+**Regex methods:**
+
+| Method | Signature | Description |
+|---|---|---|
+| `is_match` | `bool(self, str)` | Test if pattern matches anywhere in subject |
+| `find` | `Option[Match](self, str)` | Find first match |
+| `find_at` | `Option[Match](self, str, int)` | Find first match starting at byte offset |
+| `find_all` | `Vector[Match](self, str)` | Find all non-overlapping matches |
+| `replace` | `String(self, str, str)` | Replace first match |
+| `replace_all` | `String(self, str, str)` | Replace all matches |
+| `split` | `Vector[str](self, str)` | Split string by pattern |
+| `splitn` | `Vector[str](self, str, int)` | Split with maximum number of parts |
+| `fullmatch` | `Option[Match](self, str)` | Match entire string |
+| `capture_count` | `int(self)` | Number of capture groups |
+| `group_names` | `Vector[str](self)` | Names of named capture groups |
+| `pattern_str` | `str(self)` | Original pattern string |
+
+**Match methods:**
+
+| Method | Signature | Description |
+|---|---|---|
+| `text` | `str(self)` | Full matched text |
+| `start` | `int(self)` | Start byte offset |
+| `end_pos` | `int(self)` | End byte offset |
+| `group` | `Option[str](self, int)` | Get capture group by index (0-based) |
+| `group_by_name` | `Option[str](self, str)` | Get capture group by name |
+| `groups` | `Vector[str](self)` | All capture group values |
+| `group_count` | `int(self)` | Number of capture groups |
+
+Flags for `regex_compile_with`: `i` (case-insensitive), `m` (multiline), `s` (dotall), `x` (extended), `u` (Unicode), `U` (ungreedy). Requires PCRE2 (`libpcre2-8`).
+
 ---
 
 ## 16. Compilation Model

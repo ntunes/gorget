@@ -405,7 +405,13 @@ impl CodegenContext<'_> {
             return; // Generic template — emitted per-instantiation
         }
         if matches!(f.body, FunctionBody::Extern(_)) {
-            return; // Extern binding — C runtime provides the symbol
+            return; // Extern binding — no C prototype needed
+        }
+        // Declaration bodies from synthetic modules (dummy span) get hardcoded dispatch
+        // and don't need prototypes. But Declaration bodies from user code (e.g. via-delegation)
+        // DO get real function definitions and need forward declarations.
+        if matches!(f.body, FunctionBody::Declaration) && f.name.span == crate::span::Span::dummy() {
+            return;
         }
         let (ret_type, func_name, params) = self.function_signature(f, method_info);
         emitter.emit_line(&format!("{ret_type} {func_name}({params});"));

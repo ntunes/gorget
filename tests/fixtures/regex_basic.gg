@@ -1,0 +1,200 @@
+from std.regex import regex_compile, regex_compile_with, regex_escape, regex_is_match, regex_find, regex_replace, Regex, Match
+
+void main():
+    # Test 1: compile and is_match
+    Result[Regex, str] rx_result = regex_compile(r"\d+")
+    match rx_result:
+        case Ok(rx):
+            bool m1 = rx.is_match("abc 123 def")
+            print("{m1}")
+            bool m2 = rx.is_match("no digits here")
+            print("{m2}")
+        case Error(e):
+            print("error")
+
+    # Test 2: find with groups
+    Result[Regex, str] grp_result = regex_compile(r"(\w+)@(\w+)\.(\w+)")
+    match grp_result:
+        case Ok(rx):
+            Option[Match] m_opt = rx.find("contact user@example.com please")
+            match m_opt:
+                case Some(m):
+                    print(m.text())
+                    int s = m.start()
+                    print("{s}")
+                    int ep = m.end_pos()
+                    print("{ep}")
+                    int gc = m.group_count()
+                    print("{gc}")
+                    Option[str] g1 = m.group(0)
+                    match g1:
+                        case Some(g):
+                            print(g)
+                        case None:
+                            print("none")
+                    Option[str] g2 = m.group(1)
+                    match g2:
+                        case Some(g):
+                            print(g)
+                        case None:
+                            print("none")
+                    Option[str] g3 = m.group(2)
+                    match g3:
+                        case Some(g):
+                            print(g)
+                        case None:
+                            print("none")
+                case None:
+                    print("no match")
+        case Error(e):
+            print("error")
+
+    # Test 3: find_all
+    Result[Regex, str] word_result = regex_compile(r"\w+")
+    match word_result:
+        case Ok(rx):
+            Vector[Match] matches = rx.find_all("hello world foo")
+            int mlen = matches.len()
+            print("{mlen}")
+            int idx = 0
+            while idx < matches.len():
+                Match cur = matches[idx]
+                print(cur.text())
+                idx = idx + 1
+        case Error(e):
+            print("error")
+
+    # Test 4: replace
+    Result[Regex, str] dig_result = regex_compile(r"\d+")
+    match dig_result:
+        case Ok(rx):
+            String replaced = rx.replace("abc 123 def 456", "NUM")
+            print(replaced.data)
+            String replaced_all = rx.replace_all("abc 123 def 456", "NUM")
+            print(replaced_all.data)
+        case Error(e):
+            print("error")
+
+    # Test 5: split
+    str comma_pat = r",\s*"
+    Result[Regex, str] comma_result = regex_compile(comma_pat)
+    match comma_result:
+        case Ok(rx):
+            Vector[str] parts = rx.split("a, b,  c,d")
+            int plen = parts.len()
+            print("{plen}")
+            int idx = 0
+            while idx < parts.len():
+                print(parts[idx])
+                idx = idx + 1
+        case Error(e):
+            print("error")
+
+    # Test 6: named groups
+    str named_pat = r"(?P<year>\d\d\d\d)-(?P<month>\d\d)-(?P<day>\d\d)"
+    Result[Regex, str] named_result = regex_compile(named_pat)
+    match named_result:
+        case Ok(rx):
+            Option[Match] m_opt = rx.find("date: 2025-01-15")
+            match m_opt:
+                case Some(m):
+                    Option[str] yr = m.group_by_name("year")
+                    match yr:
+                        case Some(v):
+                            print(v)
+                        case None:
+                            print("none")
+                    Option[str] mo = m.group_by_name("month")
+                    match mo:
+                        case Some(v):
+                            print(v)
+                        case None:
+                            print("none")
+                    Option[str] dy = m.group_by_name("day")
+                    match dy:
+                        case Some(v):
+                            print(v)
+                        case None:
+                            print("none")
+                case None:
+                    print("no match")
+            # group_names
+            Vector[str] names = rx.group_names()
+            int nlen = names.len()
+            print("{nlen}")
+            # capture_count
+            int cc = rx.capture_count()
+            print("{cc}")
+        case Error(e):
+            print("error")
+
+    # Test 7: escape
+    String escaped = regex_escape("hello.world[0]")
+    print(escaped.data)
+
+    # Test 8: convenience functions
+    bool cim = regex_is_match(r"\d+", "abc 42 def")
+    print("{cim}")
+
+    Option[Match] conv_m = regex_find(r"\d+", "abc 42 def")
+    match conv_m:
+        case Some(m):
+            print(m.text())
+        case None:
+            print("no match")
+
+    String conv_r = regex_replace(r"\d+", "abc 42 def", "NUM")
+    print(conv_r.data)
+
+    # Test 9: fullmatch
+    Result[Regex, str] full_result = regex_compile(r"\d\d\d")
+    match full_result:
+        case Ok(rx):
+            Option[Match] fm1 = rx.fullmatch("123")
+            match fm1:
+                case Some(m):
+                    print(m.text())
+                case None:
+                    print("no fullmatch")
+            Option[Match] fm2 = rx.fullmatch("1234")
+            match fm2:
+                case Some(m):
+                    print(m.text())
+                case None:
+                    print("no fullmatch")
+        case Error(e):
+            print("error")
+
+    # Test 10: compile error
+    Result[Regex, str] bad_result = regex_compile("[invalid")
+    match bad_result:
+        case Ok(rx):
+            print("should not reach here")
+        case Error(e):
+            print("compile error caught")
+
+    # Test 11: case-insensitive with flags
+    Result[Regex, str] ci_result = regex_compile_with("hello", "i")
+    match ci_result:
+        case Ok(rx):
+            bool ci_match = rx.is_match("HELLO WORLD")
+            print("{ci_match}")
+            print(rx.pattern_str())
+        case Error(e):
+            print("error")
+
+    # Test 12: splitn
+    Result[Regex, str] sn_result = regex_compile(",")
+    match sn_result:
+        case Ok(rx):
+            Vector[str] parts = rx.splitn("a,b,c,d,e", 3)
+            int plen = parts.len()
+            print("{plen}")
+            int idx = 0
+            while idx < parts.len():
+                print(parts[idx])
+                idx = idx + 1
+        case Error(e):
+            print("error")
+
+    print("done")

@@ -864,6 +864,17 @@ impl CodegenContext<'_> {
                 None
             }
             Expr::FieldAccess { object, field } => {
+                // Check if the object has a known primitive type via type_id
+                if let Some(obj_tid) = self.resolve_expr_type_id(object) {
+                    if obj_tid == self.types.owned_string_id {
+                        // GorgetString field access
+                        return match field.node.as_str() {
+                            "data" => Some(self.types.string_id),
+                            "len" | "cap" => Some(self.types.int_id),
+                            _ => None,
+                        };
+                    }
+                }
                 let obj_type = self.infer_receiver_type(object);
                 if obj_type != "Unknown" {
                     let key = (obj_type, field.node.clone());

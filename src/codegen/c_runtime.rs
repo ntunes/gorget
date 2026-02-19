@@ -2632,6 +2632,435 @@ static inline const char* gorget_bytes_to_hex(const GorgetArray* arr) {
 
 "#;
 
+pub const REGEX_RUNTIME: &str = r#"
+// ── Regex Runtime (PCRE2) ──────────────────────────────────────
+#define PCRE2_CODE_UNIT_WIDTH 8
+#include <pcre2.h>
+
+// ── Regex type ──────────────────────────────────────────────────
+
+typedef struct {
+    pcre2_code* code;
+    const char* pattern_str;   // strdup'd
+} GorgetRegex;
+
+// ── Match type ──────────────────────────────────────────────────
+
+typedef struct {
+    const char* text;          // strdup'd full match
+    int64_t start;             // byte offset (-1 = no match sentinel)
+    int64_t end_pos;           // byte offset
+    const char** groups;       // array of strdup'd group strings (NULL if unmatched)
+    int64_t group_count;       // capture groups (excl. group 0)
+    const char** group_names;  // parallel array: name or NULL for each group
+    int64_t names_len;
+} GorgetRegexMatch;
+
+// ── Thread-local error ──────────────────────────────────────────
+
+static __thread const char* __gorget_regex_last_error = NULL;
+
+static const char* gorget_regex_last_error(void) {
+    const char* e = __gorget_regex_last_error;
+    __gorget_regex_last_error = NULL;
+    return e;
+}
+
+// ── Parse flags string ──────────────────────────────────────────
+
+static uint32_t gorget_regex_parse_flags(const char* flags) {
+    uint32_t opts = 0;
+    if (!flags) return opts;
+    for (const char* p = flags; *p; p++) {
+        switch (*p) {
+            case 'i': opts |= PCRE2_CASELESS; break;
+            case 'm': opts |= PCRE2_MULTILINE; break;
+            case 's': opts |= PCRE2_DOTALL; break;
+            case 'x': opts |= PCRE2_EXTENDED; break;
+            case 'u': opts |= PCRE2_UTF | PCRE2_UCP; break;
+            case 'U': opts |= PCRE2_UNGREEDY; break;
+            default: break;
+        }
+    }
+    return opts;
+}
+
+// ── Compile ─────────────────────────────────────────────────────
+
+static GorgetRegex gorget_regex_compile(const char* pattern, const char* flags) {
+    GorgetRegex rx = {NULL, NULL};
+    uint32_t opts = gorget_regex_parse_flags(flags);
+    int errcode;
+    PCRE2_SIZE erroffset;
+    pcre2_code* code = pcre2_compile(
+        (PCRE2_SPTR)pattern, PCRE2_ZERO_TERMINATED,
+        opts, &errcode, &erroffset, NULL);
+    if (!code) {
+        PCRE2_UCHAR buf[256];
+        pcre2_get_error_message(errcode, buf, sizeof(buf));
+        char* msg = (char*)malloc(512);
+        snprintf(msg, 512, "regex error at offset %zu: %s", (size_t)erroffset, (char*)buf);
+        __gorget_regex_last_error = msg;
+        return rx;
+    }
+    rx.code = code;
+    rx.pattern_str = strdup(pattern);
+    return rx;
+}
+
+// ── Free ────────────────────────────────────────────────────────
+
+static void gorget_regex_free(GorgetRegex* rx) {
+    if (rx->code) { pcre2_code_free(rx->code); rx->code = NULL; }
+    if (rx->pattern_str) { free((void*)rx->pattern_str); rx->pattern_str = NULL; }
+}
+
+static void gorget_regex_match_free(GorgetRegexMatch* m) {
+    if (m->text) { free((void*)m->text); m->text = NULL; }
+    if (m->groups) {
+        for (int64_t i = 0; i < m->group_count; i++) {
+            if (m->groups[i]) free((void*)m->groups[i]);
+        }
+        free(m->groups);
+        m->groups = NULL;
+    }
+    if (m->group_names) {
+        for (int64_t i = 0; i < m->names_len; i++) {
+            if (m->group_names[i]) free((void*)m->group_names[i]);
+        }
+        free(m->group_names);
+        m->group_names = NULL;
+    }
+}
+
+// ── Drop glue (called by Gorget RAII) ───────────────────────────
+
+static void Drop_for_Regex__drop(GorgetRegex* rx) { gorget_regex_free(rx); }
+static void Drop_for_Match__drop(GorgetRegexMatch* m) { gorget_regex_match_free(m); }
+
+// ── Helper: extract named groups array ──────────────────────────
+
+static void gorget_regex_extract_names(pcre2_code* code, int64_t group_count,
+                                        const char*** out_names, int64_t* out_names_len) {
+    *out_names_len = group_count;
+    if (group_count == 0) { *out_names = NULL; return; }
+    const char** names = (const char**)calloc(group_count, sizeof(const char*));
+    uint32_t namecount;
+    pcre2_pattern_info(code, PCRE2_INFO_NAMECOUNT, &namecount);
+    if (namecount > 0) {
+        uint32_t name_entry_size;
+        PCRE2_SPTR nametable;
+        pcre2_pattern_info(code, PCRE2_INFO_NAMEENTRYSIZE, &name_entry_size);
+        pcre2_pattern_info(code, PCRE2_INFO_NAMETABLE, &nametable);
+        for (uint32_t i = 0; i < namecount; i++) {
+            PCRE2_SPTR entry = nametable + i * name_entry_size;
+            int grp = (entry[0] << 8) | entry[1];
+            if (grp >= 1 && grp <= group_count) {
+                names[grp - 1] = strdup((const char*)(entry + 2));
+            }
+        }
+    }
+    *out_names = names;
+}
+
+// ── Find (single match) ────────────────────────────────────────
+
+static GorgetRegexMatch gorget_regex_find(GorgetRegex* rx, const char* subject, int64_t start_offset) {
+    GorgetRegexMatch m = {NULL, -1, -1, NULL, 0, NULL, 0};
+    if (!rx->code) return m;
+    size_t subject_len = strlen(subject);
+    pcre2_match_data* md = pcre2_match_data_create_from_pattern(rx->code, NULL);
+    int rc = pcre2_match(rx->code, (PCRE2_SPTR)subject, subject_len,
+                         (PCRE2_SIZE)start_offset, 0, md, NULL);
+    if (rc < 1) { pcre2_match_data_free(md); return m; }
+    PCRE2_SIZE* ov = pcre2_get_ovector_pointer(md);
+    m.start = (int64_t)ov[0];
+    m.end_pos = (int64_t)ov[1];
+    size_t match_len = ov[1] - ov[0];
+    char* text = (char*)malloc(match_len + 1);
+    memcpy(text, subject + ov[0], match_len);
+    text[match_len] = '\0';
+    m.text = text;
+
+    uint32_t capturecount;
+    pcre2_pattern_info(rx->code, PCRE2_INFO_CAPTURECOUNT, &capturecount);
+    m.group_count = (int64_t)capturecount;
+    if (capturecount > 0) {
+        m.groups = (const char**)calloc(capturecount, sizeof(const char*));
+        for (uint32_t i = 1; i <= capturecount; i++) {
+            if ((int)i < rc && ov[2*i] != PCRE2_UNSET) {
+                size_t glen = ov[2*i+1] - ov[2*i];
+                char* g = (char*)malloc(glen + 1);
+                memcpy(g, subject + ov[2*i], glen);
+                g[glen] = '\0';
+                m.groups[i-1] = g;
+            }
+        }
+    }
+    gorget_regex_extract_names(rx->code, capturecount, &m.group_names, &m.names_len);
+    pcre2_match_data_free(md);
+    return m;
+}
+
+// ── is_match ────────────────────────────────────────────────────
+
+static bool gorget_regex_is_match(GorgetRegex* rx, const char* subject) {
+    if (!rx->code) return false;
+    pcre2_match_data* md = pcre2_match_data_create_from_pattern(rx->code, NULL);
+    int rc = pcre2_match(rx->code, (PCRE2_SPTR)subject, strlen(subject), 0, 0, md, NULL);
+    pcre2_match_data_free(md);
+    return rc >= 1;
+}
+
+// ── find_all ────────────────────────────────────────────────────
+
+static GorgetArray gorget_regex_find_all(GorgetRegex* rx, const char* subject) {
+    GorgetArray arr = {NULL, 0, 0, sizeof(GorgetRegexMatch)};
+    if (!rx->code) return arr;
+    size_t subject_len = strlen(subject);
+    PCRE2_SIZE offset = 0;
+    while (offset <= (PCRE2_SIZE)subject_len) {
+        pcre2_match_data* md = pcre2_match_data_create_from_pattern(rx->code, NULL);
+        int rc = pcre2_match(rx->code, (PCRE2_SPTR)subject, subject_len, offset, 0, md, NULL);
+        if (rc < 1) { pcre2_match_data_free(md); break; }
+        PCRE2_SIZE* ov = pcre2_get_ovector_pointer(md);
+
+        GorgetRegexMatch m = {NULL, -1, -1, NULL, 0, NULL, 0};
+        m.start = (int64_t)ov[0];
+        m.end_pos = (int64_t)ov[1];
+        size_t match_len = ov[1] - ov[0];
+        char* text = (char*)malloc(match_len + 1);
+        memcpy(text, subject + ov[0], match_len);
+        text[match_len] = '\0';
+        m.text = text;
+
+        uint32_t capturecount;
+        pcre2_pattern_info(rx->code, PCRE2_INFO_CAPTURECOUNT, &capturecount);
+        m.group_count = (int64_t)capturecount;
+        if (capturecount > 0) {
+            m.groups = (const char**)calloc(capturecount, sizeof(const char*));
+            for (uint32_t i = 1; i <= capturecount; i++) {
+                if ((int)i < rc && ov[2*i] != PCRE2_UNSET) {
+                    size_t glen = ov[2*i+1] - ov[2*i];
+                    char* g = (char*)malloc(glen + 1);
+                    memcpy(g, subject + ov[2*i], glen);
+                    g[glen] = '\0';
+                    m.groups[i-1] = g;
+                }
+            }
+        }
+        gorget_regex_extract_names(rx->code, capturecount, &m.group_names, &m.names_len);
+        gorget_array_push(&arr, &m);
+        // Save ovector values before freeing match data (ov points into md)
+        PCRE2_SIZE match_start = ov[0];
+        PCRE2_SIZE match_end = ov[1];
+        pcre2_match_data_free(md);
+        // Advance past current match; handle zero-length matches
+        if (match_end == match_start) offset = match_start + 1;
+        else offset = match_end;
+    }
+    return arr;
+}
+
+// ── Replace ─────────────────────────────────────────────────────
+
+static GorgetString gorget_regex_replace_impl(GorgetRegex* rx, const char* subject,
+                                               const char* replacement, uint32_t extra_opts) {
+    GorgetString result = {NULL, 0, 0};
+    if (!rx->code) { result = gorget_string_new(subject); return result; }
+    size_t subject_len = strlen(subject);
+    size_t repl_len = strlen(replacement);
+    PCRE2_SIZE outlen = 0;
+    // First call to get required size
+    int rc = pcre2_substitute(rx->code, (PCRE2_SPTR)subject, subject_len, 0,
+                              PCRE2_SUBSTITUTE_OVERFLOW_LENGTH | extra_opts,
+                              NULL, NULL,
+                              (PCRE2_SPTR)replacement, repl_len,
+                              NULL, &outlen);
+    if (rc != PCRE2_ERROR_NOMEMORY && rc < 0) {
+        // No match or error — return original
+        result = gorget_string_new(subject);
+        return result;
+    }
+    outlen += 1; // null terminator
+    PCRE2_UCHAR* outbuf = (PCRE2_UCHAR*)malloc(outlen);
+    rc = pcre2_substitute(rx->code, (PCRE2_SPTR)subject, subject_len, 0,
+                          extra_opts,
+                          NULL, NULL,
+                          (PCRE2_SPTR)replacement, repl_len,
+                          outbuf, &outlen);
+    if (rc < 0) {
+        free(outbuf);
+        result = gorget_string_new(subject);
+        return result;
+    }
+    result.data = (char*)outbuf;
+    result.len = outlen;
+    result.cap = outlen + 1;
+    return result;
+}
+
+static GorgetString gorget_regex_replace(GorgetRegex* rx, const char* subject, const char* replacement) {
+    return gorget_regex_replace_impl(rx, subject, replacement, 0);
+}
+
+static GorgetString gorget_regex_replace_all(GorgetRegex* rx, const char* subject, const char* replacement) {
+    return gorget_regex_replace_impl(rx, subject, replacement, PCRE2_SUBSTITUTE_GLOBAL);
+}
+
+// ── Split ───────────────────────────────────────────────────────
+
+static GorgetArray gorget_regex_split(GorgetRegex* rx, const char* subject, int64_t limit) {
+    GorgetArray arr = {NULL, 0, 0, sizeof(const char*)};
+    if (!rx->code || !subject) {
+        const char* copy = strdup(subject ? subject : "");
+        gorget_array_push(&arr, &copy);
+        return arr;
+    }
+    size_t subject_len = strlen(subject);
+    PCRE2_SIZE offset = 0;
+    int64_t count = 0;
+    while (offset <= (PCRE2_SIZE)subject_len) {
+        if (limit > 0 && count >= limit - 1) break;
+        pcre2_match_data* md = pcre2_match_data_create_from_pattern(rx->code, NULL);
+        int rc = pcre2_match(rx->code, (PCRE2_SPTR)subject, subject_len, offset, 0, md, NULL);
+        if (rc < 1) { pcre2_match_data_free(md); break; }
+        PCRE2_SIZE* ov = pcre2_get_ovector_pointer(md);
+        size_t seg_len = ov[0] - offset;
+        char* seg = (char*)malloc(seg_len + 1);
+        memcpy(seg, subject + offset, seg_len);
+        seg[seg_len] = '\0';
+        const char* seg_ptr = seg;
+        gorget_array_push(&arr, &seg_ptr);
+        count++;
+        if (ov[1] == ov[0]) offset = ov[0] + 1;
+        else offset = ov[1];
+        pcre2_match_data_free(md);
+    }
+    // Remaining tail
+    size_t tail_len = subject_len - offset;
+    char* tail = (char*)malloc(tail_len + 1);
+    memcpy(tail, subject + offset, tail_len);
+    tail[tail_len] = '\0';
+    const char* tail_ptr = tail;
+    gorget_array_push(&arr, &tail_ptr);
+    return arr;
+}
+
+// ── Fullmatch ───────────────────────────────────────────────────
+
+static GorgetRegexMatch gorget_regex_fullmatch(GorgetRegex* rx, const char* subject) {
+    GorgetRegexMatch m = gorget_regex_find(rx, subject, 0);
+    if (m.start == 0 && m.end_pos == (int64_t)strlen(subject)) {
+        return m;
+    }
+    gorget_regex_match_free(&m);
+    GorgetRegexMatch empty = {NULL, -1, -1, NULL, 0, NULL, 0};
+    return empty;
+}
+
+// ── Capture count ───────────────────────────────────────────────
+
+static int64_t gorget_regex_capture_count(GorgetRegex* rx) {
+    if (!rx->code) return 0;
+    uint32_t count;
+    pcre2_pattern_info(rx->code, PCRE2_INFO_CAPTURECOUNT, &count);
+    return (int64_t)count;
+}
+
+// ── Group names ─────────────────────────────────────────────────
+
+static GorgetArray gorget_regex_group_names(GorgetRegex* rx) {
+    GorgetArray arr = {NULL, 0, 0, sizeof(const char*)};
+    if (!rx->code) return arr;
+    uint32_t namecount;
+    pcre2_pattern_info(rx->code, PCRE2_INFO_NAMECOUNT, &namecount);
+    if (namecount == 0) return arr;
+    uint32_t name_entry_size;
+    PCRE2_SPTR nametable;
+    pcre2_pattern_info(rx->code, PCRE2_INFO_NAMEENTRYSIZE, &name_entry_size);
+    pcre2_pattern_info(rx->code, PCRE2_INFO_NAMETABLE, &nametable);
+    for (uint32_t i = 0; i < namecount; i++) {
+        PCRE2_SPTR entry = nametable + i * name_entry_size;
+        const char* name = strdup((const char*)(entry + 2));
+        gorget_array_push(&arr, &name);
+    }
+    return arr;
+}
+
+// ── Pattern string ──────────────────────────────────────────────
+
+static const char* gorget_regex_pattern_str(GorgetRegex* rx) {
+    return rx->pattern_str ? rx->pattern_str : "";
+}
+
+// ── Match accessors ─────────────────────────────────────────────
+
+static const char* gorget_regex_match_text(GorgetRegexMatch* m) {
+    return m->text ? m->text : "";
+}
+
+static int64_t gorget_regex_match_start(GorgetRegexMatch* m) { return m->start; }
+static int64_t gorget_regex_match_end(GorgetRegexMatch* m) { return m->end_pos; }
+static int64_t gorget_regex_match_group_count(GorgetRegexMatch* m) { return m->group_count; }
+
+// group(n) → returns NULL if out of range or unmatched
+static const char* gorget_regex_match_group(GorgetRegexMatch* m, int64_t n) {
+    if (n < 0 || n >= m->group_count || !m->groups) return NULL;
+    return m->groups[n];
+}
+
+// group_by_name(name) → returns NULL if not found
+static const char* gorget_regex_match_group_by_name(GorgetRegexMatch* m, const char* name) {
+    if (!m->group_names || !m->groups) return NULL;
+    for (int64_t i = 0; i < m->names_len; i++) {
+        if (m->group_names[i] && strcmp(m->group_names[i], name) == 0) {
+            if (i < m->group_count) return m->groups[i];
+        }
+    }
+    return NULL;
+}
+
+// groups() → Vector[str] of all group values
+static GorgetArray gorget_regex_match_groups(GorgetRegexMatch* m) {
+    GorgetArray arr = {NULL, 0, 0, sizeof(const char*)};
+    if (!m->groups) return arr;
+    for (int64_t i = 0; i < m->group_count; i++) {
+        const char* g = m->groups[i] ? m->groups[i] : "";
+        const char* copy = strdup(g);
+        gorget_array_push(&arr, &copy);
+    }
+    return arr;
+}
+
+// ── Escape ──────────────────────────────────────────────────────
+
+static GorgetString gorget_regex_escape(const char* s) {
+    if (!s) return gorget_string_new("");
+    size_t len = strlen(s);
+    // Worst case: every char needs escaping → 2x + 1
+    char* buf = (char*)malloc(len * 2 + 1);
+    size_t j = 0;
+    for (size_t i = 0; i < len; i++) {
+        char c = s[i];
+        // PCRE2 metacharacters that need escaping
+        if (c == '\\' || c == '^' || c == '$' || c == '.' || c == '[' || c == ']' ||
+            c == '|' || c == '(' || c == ')' || c == '?' || c == '*' || c == '+' ||
+            c == '{' || c == '}' || c == '-') {
+            buf[j++] = '\\';
+        }
+        buf[j++] = c;
+    }
+    buf[j] = '\0';
+    GorgetString result;
+    result.data = buf;
+    result.len = j;
+    result.cap = len * 2 + 1;
+    return result;
+}
+
+"#;
+
 pub const HOT_RELOAD_RUNTIME: &str = r#"
 // ── Hot Reload Runtime ──────────────────────────────────────────
 #include <dlfcn.h>

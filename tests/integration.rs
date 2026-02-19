@@ -4218,3 +4218,50 @@ fn enumerate() {
 done",
     );
 }
+
+#[test]
+fn regex_basic() {
+    run_gg(
+        "regex_basic.gg",
+        "\
+true
+false
+user@example.com
+8
+24
+3
+user
+example
+com
+3
+hello
+world
+foo
+abc NUM def 456
+abc NUM def NUM
+4
+a
+b
+c
+d
+2025
+01
+15
+3
+3
+hello\\.world\\[0\\]
+true
+42
+abc NUM def
+123
+no fullmatch
+compile error caught
+true
+hello
+3
+a
+b
+c,d,e
+done",
+    );
+}

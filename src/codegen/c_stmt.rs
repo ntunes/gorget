@@ -103,6 +103,9 @@ impl CodegenContext<'_> {
             DropAction::ClosureEnvFree => {
                 emitter.emit_line(&format!("free({}.env);", entry.var_name));
             }
+            DropAction::OpaqueFree { free_fn } => {
+                emitter.emit_line(&format!("{free_fn}(&{});", entry.var_name));
+            }
             DropAction::StructDrop { type_name, has_user_drop, field_drops } => {
                 if *has_user_drop {
                     let drop_fn = c_mangle::mangle_trait_method("Drop", type_name, "drop", &[]);
@@ -472,6 +475,16 @@ impl CodegenContext<'_> {
                 if name.node == "File" && generic_args.is_empty() =>
             {
                 Some(DropAction::FileClose)
+            }
+            Type::Named { name, generic_args }
+                if name.node == "Regex" && generic_args.is_empty() =>
+            {
+                Some(DropAction::OpaqueFree { free_fn: "gorget_regex_free".into() })
+            }
+            Type::Named { name, generic_args }
+                if name.node == "Match" && generic_args.is_empty() =>
+            {
+                Some(DropAction::OpaqueFree { free_fn: "gorget_regex_match_free".into() })
             }
             Type::Named { name, generic_args } if generic_args.is_empty() => {
                 // Check if this is a struct (not an enum, trait, etc.)
@@ -1311,6 +1324,11 @@ impl CodegenContext<'_> {
             DropAction::ClosureEnvFree => {
                 emitter.emit_line(&format!(
                     "__gorget_cleanup_push(free, (void*){var_name}.env);"
+                ));
+            }
+            DropAction::OpaqueFree { free_fn } => {
+                emitter.emit_line(&format!(
+                    "__gorget_cleanup_push((__gorget_cleanup_fn){free_fn}, (void*)&{var_name});"
                 ));
             }
             DropAction::StructDrop { type_name, has_user_drop, field_drops } => {
@@ -2487,6 +2505,16 @@ impl CodegenContext<'_> {
                 "int64_t".to_string()
             }
             Expr::FieldAccess { object, field } => {
+                // Check via type_id for built-in struct fields
+                if let Some(obj_tid) = self.resolve_expr_type_id(object) {
+                    if obj_tid == self.types.owned_string_id {
+                        return match field.node.as_str() {
+                            "data" => "const char*".to_string(),
+                            "len" | "cap" => "size_t".to_string(),
+                            _ => "int64_t".to_string(),
+                        };
+                    }
+                }
                 let obj_type = self.infer_receiver_type(object);
                 if obj_type != "Unknown" {
                     let key = (obj_type, field.node.clone());

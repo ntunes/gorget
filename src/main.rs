@@ -187,6 +187,36 @@ fn add_crypto_flags(cmd: &mut Command, needs_crypto: bool) {
     }
 }
 
+/// Add PCRE2 linker flags to a cc command (for std.regex).
+fn add_regex_flags(cmd: &mut Command, needs_regex: bool) {
+    if !needs_regex { return; }
+    let pkg_ok = Command::new("pkg-config")
+        .args(["--cflags", "--libs", "libpcre2-8"])
+        .output()
+        .ok()
+        .and_then(|o| {
+            if o.status.success() {
+                Some(String::from_utf8_lossy(&o.stdout).to_string())
+            } else {
+                None
+            }
+        });
+    if let Some(flags) = pkg_ok {
+        for flag in flags.split_whitespace() {
+            cmd.arg(flag);
+        }
+    } else {
+        cmd.arg("-lpcre2-8");
+        #[cfg(target_os = "macos")]
+        {
+            cmd.arg("-I/opt/homebrew/include");
+            cmd.arg("-L/opt/homebrew/lib");
+            cmd.arg("-I/usr/local/include");
+            cmd.arg("-L/usr/local/lib");
+        }
+    }
+}
+
 /// Print inferred borrow analysis for all functions (--show-borrows diagnostic).
 fn print_borrow_summary(result: &gorget::semantic::AnalysisResult) {
     // Collect and sort by function name for stable output
@@ -353,6 +383,7 @@ fn try_build(
     let needs_sdl = codegen_output.needs_sdl;
     let needs_tls = codegen_output.needs_tls;
     let needs_crypto = codegen_output.needs_crypto;
+    let needs_regex = codegen_output.needs_regex;
     let c_path = dir.join(format!("{stem}.c"));
     // Canonicalize to an absolute path so Command::new() doesn't search $PATH.
     // For a bare filename like "hello.gg", dir is "." and exe_path would be "hello",
@@ -388,6 +419,7 @@ fn try_build(
         add_sdl_flags(&mut cc_cmd, needs_sdl);
         add_tls_flags(&mut cc_cmd, needs_tls);
         add_crypto_flags(&mut cc_cmd, needs_crypto);
+        add_regex_flags(&mut cc_cmd, needs_regex);
 
         let status = cc_cmd.status();
         return match status {
@@ -435,6 +467,7 @@ fn try_build(
         add_sdl_flags(&mut guest_cmd, needs_sdl);
         add_tls_flags(&mut guest_cmd, needs_tls);
         add_crypto_flags(&mut guest_cmd, needs_crypto);
+        add_regex_flags(&mut guest_cmd, needs_regex);
 
         let guest_status = guest_cmd.status();
         match guest_status {
@@ -460,6 +493,7 @@ fn try_build(
         add_sdl_flags(&mut host_cmd, needs_sdl);
         add_tls_flags(&mut host_cmd, needs_tls);
         add_crypto_flags(&mut host_cmd, needs_crypto);
+        add_regex_flags(&mut host_cmd, needs_regex);
 
         let host_status = host_cmd.status();
         return match host_status {
@@ -496,6 +530,7 @@ fn try_build(
     add_sdl_flags(&mut cc_cmd, needs_sdl);
     add_tls_flags(&mut cc_cmd, needs_tls);
     add_crypto_flags(&mut cc_cmd, needs_crypto);
+    add_regex_flags(&mut cc_cmd, needs_regex);
 
     let status = cc_cmd.status();
 
@@ -523,6 +558,12 @@ fn try_build(
                 msg.push_str("\nInstall with:");
                 msg.push_str("\n  macOS:   brew install openssl");
                 msg.push_str("\n  Ubuntu:  apt install libssl-dev");
+            }
+            if needs_regex {
+                msg.push_str("\n\nHint: This program uses std.regex which requires PCRE2.");
+                msg.push_str("\nInstall with:");
+                msg.push_str("\n  macOS:   brew install pcre2");
+                msg.push_str("\n  Ubuntu:  apt install libpcre2-dev");
             }
             Err(msg)
         }

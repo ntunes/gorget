@@ -15,7 +15,7 @@ pub fn is_stdlib_module(segments: &[String]) -> bool {
         return false;
     }
     match segments.len() {
-        2 => matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv" | "io" | "random" | "time" | "collections" | "math" | "fmt" | "process" | "sdl" | "gfx" | "ecs" | "json" | "toml" | "xml" | "yaml" | "bytes" | "crypto" | "ssh" | "http"),
+        2 => matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv" | "io" | "random" | "time" | "collections" | "math" | "fmt" | "process" | "sdl" | "gfx" | "ecs" | "json" | "toml" | "xml" | "yaml" | "bytes" | "crypto" | "ssh" | "http" | "regex"),
         3 => segments[1] == "net" && matches!(segments[2].as_str(), "socket" | "tls"),
         _ => false,
     }
@@ -50,6 +50,7 @@ pub fn generate_stdlib_module(segments: &[String]) -> Option<Module> {
             "ecs" => None, // file-based module — loaded via stdlib_module_source()
             "ssh" => None, // file-based module — loaded via stdlib_module_source()
             "http" => None, // file-based module — loaded via stdlib_module_source()
+            "regex" => Some(gen_regex_module()),
             _ => None,
         },
         3 if segments[1] == "net" && segments[2] == "socket" => Some(gen_socket_module()),
@@ -646,6 +647,13 @@ fn ty_result(ok: Type, err: Type) -> Type {
     }
 }
 
+fn ty_option(inner: Type) -> Type {
+    Type::Named {
+        name: Spanned::dummy("Option".to_string()),
+        generic_args: vec![Spanned::dummy(inner)],
+    }
+}
+
 fn opaque_struct(name: &str) -> Spanned<Item> {
     Spanned::dummy(Item::Struct(StructDef {
         attributes: vec![],
@@ -785,6 +793,90 @@ fn gen_tls_socket_module() -> Module {
     }
 }
 
+// ─── std.regex ──────────────────────────────────────────────
+
+fn gen_regex_module() -> Module {
+    let ty_regex = || Type::Named {
+        name: Spanned::dummy("Regex".to_string()),
+        generic_args: vec![],
+    };
+    let ty_match = || Type::Named {
+        name: Spanned::dummy("Match".to_string()),
+        generic_args: vec![],
+    };
+    let ty_vector_match = || Type::Named {
+        name: Spanned::dummy("Vector".to_string()),
+        generic_args: vec![Spanned::dummy(ty_match())],
+    };
+
+    let mut items: Vec<Spanned<Item>> = Vec::new();
+
+    // Opaque structs
+    items.push(opaque_struct("Regex"));
+    items.push(opaque_struct("Match"));
+
+    // Free functions
+    // regex_compile → Result[Regex, str] (hardcoded dispatch)
+    items.push(Spanned::dummy(Item::Function(
+        decl_fn("regex_compile", &[("pattern", ty_str())], ty_result(ty_regex(), ty_str())),
+    )));
+    // regex_compile_with → Result[Regex, str] (hardcoded dispatch)
+    items.push(Spanned::dummy(Item::Function(
+        decl_fn("regex_compile_with", &[("pattern", ty_str()), ("flags", ty_str())], ty_result(ty_regex(), ty_str())),
+    )));
+    // regex_escape → String (extern)
+    items.push(Spanned::dummy(Item::Function(
+        extern_fn("regex_escape", &[("s", ty_str())], ty_string(), "gorget_regex_escape"),
+    )));
+    // regex_is_match → bool (hardcoded — compile, match, free)
+    items.push(Spanned::dummy(Item::Function(
+        decl_fn("regex_is_match", &[("pattern", ty_str()), ("subject", ty_str())], ty_bool()),
+    )));
+    // regex_find → Option[Match] (hardcoded — compile, find, free pattern)
+    items.push(Spanned::dummy(Item::Function(
+        decl_fn("regex_find", &[("pattern", ty_str()), ("subject", ty_str())], ty_option(ty_match())),
+    )));
+    // regex_replace → String (hardcoded — compile, replace, free pattern)
+    items.push(Spanned::dummy(Item::Function(
+        decl_fn("regex_replace", &[("pattern", ty_str()), ("subject", ty_str()), ("repl", ty_str())], ty_string()),
+    )));
+
+    // Regex methods
+    items.push(equip_block("Regex", vec![
+        // Direct extern bindings (no Result/Option wrapping)
+        extern_method("is_match", Ownership::Borrow, &[("subject", ty_str())], ty_bool(), "gorget_regex_is_match"),
+        extern_method("replace_all", Ownership::Borrow, &[("subject", ty_str()), ("replacement", ty_str())], ty_string(), "gorget_regex_replace_all"),
+        extern_method("capture_count", Ownership::Borrow, &[], ty_int(), "gorget_regex_capture_count"),
+        extern_method("pattern_str", Ownership::Borrow, &[], ty_str(), "gorget_regex_pattern_str"),
+        extern_method("group_names", Ownership::Borrow, &[], ty_vector_str(), "gorget_regex_group_names"),
+        // Result/Option-wrapping methods (hardcoded dispatch)
+        decl_method("find", Ownership::Borrow, &[("subject", ty_str())], ty_option(ty_match())),
+        decl_method("find_at", Ownership::Borrow, &[("subject", ty_str()), ("pos", ty_int())], ty_option(ty_match())),
+        decl_method("find_all", Ownership::Borrow, &[("subject", ty_str())], ty_vector_match()),
+        decl_method("replace", Ownership::Borrow, &[("subject", ty_str()), ("replacement", ty_str())], ty_string()),
+        decl_method("split", Ownership::Borrow, &[("subject", ty_str())], ty_vector_str()),
+        decl_method("splitn", Ownership::Borrow, &[("subject", ty_str()), ("limit", ty_int())], ty_vector_str()),
+        decl_method("fullmatch", Ownership::Borrow, &[("subject", ty_str())], ty_option(ty_match())),
+    ]));
+
+    // Match methods (all extern — simple accessors)
+    items.push(equip_block("Match", vec![
+        extern_method("text", Ownership::Borrow, &[], ty_str(), "gorget_regex_match_text"),
+        extern_method("start", Ownership::Borrow, &[], ty_int(), "gorget_regex_match_start"),
+        extern_method("end_pos", Ownership::Borrow, &[], ty_int(), "gorget_regex_match_end"),
+        extern_method("group_count", Ownership::Borrow, &[], ty_int(), "gorget_regex_match_group_count"),
+        extern_method("groups", Ownership::Borrow, &[], ty_vector_str(), "gorget_regex_match_groups"),
+        // group(n) → Option[str], group_by_name(name) → Option[str] (hardcoded dispatch)
+        decl_method("group", Ownership::Borrow, &[("n", ty_int())], ty_option(ty_str())),
+        decl_method("group_by_name", Ownership::Borrow, &[("name", ty_str())], ty_option(ty_str())),
+    ]));
+
+    Module {
+        items,
+        span: Span::dummy(),
+    }
+}
+
 // ─── Helpers ────────────────────────────────────────────────
 
 /// Build an extern free function declaration.
@@ -889,6 +981,7 @@ mod tests {
         assert!(is_stdlib_module(&["std".into(), "yaml".into()]));
         assert!(is_stdlib_module(&["std".into(), "bytes".into()]));
         assert!(is_stdlib_module(&["std".into(), "http".into()]));
+        assert!(is_stdlib_module(&["std".into(), "regex".into()]));
         assert!(is_stdlib_module(&["std".into(), "net".into(), "tls".into()]));
         assert!(!is_stdlib_module(&["std".into(), "http".into(), "client".into()]));
         assert!(!is_stdlib_module(&["std".into(), "test".into(), "process".into()]));

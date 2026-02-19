@@ -117,6 +117,8 @@ pub enum DropAction {
         element_drop: Option<Box<DropAction>>,
         element_c_type: Option<String>,
     },
+    /// free_fn(&var) for opaque types with a C free function (e.g., Regex, Match)
+    OpaqueFree { free_fn: String },
 }
 
 impl DropAction {
@@ -443,6 +445,7 @@ pub struct CodegenOutput {
     pub needs_sdl: bool,
     pub needs_tls: bool,
     pub needs_crypto: bool,
+    pub needs_regex: bool,
     /// Host C source for hot-reload mode (contains main loop + file watcher).
     pub host_code: Option<String>,
     /// Guest C source for hot-reload mode (contains user functions as shared lib).
@@ -653,6 +656,14 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
         emitter.emit(c_runtime::BYTES_RUNTIME);
     }
 
+    // 1h. Regex runtime (when std.regex is imported)
+    let has_regex = module.items.iter().any(|i| {
+        matches!(&i.node, Item::Struct(s) if s.name.node == "Regex" && s.span == crate::span::Span::dummy())
+    });
+    if has_regex {
+        emitter.emit(c_runtime::REGEX_RUNTIME);
+    }
+
     // 1g. SDL2 runtime (when std.sdl is imported, directly or via std.gfx)
     let has_sdl = module.items.iter().any(|i| {
         matches!(&i.node, Item::Struct(s) if s.name.node == "SDLWindow" && s.span == crate::span::Span::dummy())
@@ -772,12 +783,12 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
             combined.push_str(&output[..pos]);
             combined.push_str(&splice_buf.finish());
             combined.push_str(&output[pos..]);
-            return CodegenOutput { c_code: combined, needs_sdl: has_sdl, needs_tls: has_tls, needs_crypto: has_crypto, host_code: None, guest_code: None };
+            return CodegenOutput { c_code: combined, needs_sdl: has_sdl, needs_tls: has_tls, needs_crypto: has_crypto, needs_regex: has_regex, host_code: None, guest_code: None };
         }
-        return CodegenOutput { c_code: output + &splice_buf.finish(), needs_sdl: has_sdl, needs_tls: has_tls, needs_crypto: has_crypto, host_code: None, guest_code: None };
+        return CodegenOutput { c_code: output + &splice_buf.finish(), needs_sdl: has_sdl, needs_tls: has_tls, needs_crypto: has_crypto, needs_regex: has_regex, host_code: None, guest_code: None };
     }
 
-    let mut output = CodegenOutput { c_code: emitter.finish(), needs_sdl: has_sdl, needs_tls: has_tls, needs_crypto: has_crypto, host_code: None, guest_code: None };
+    let mut output = CodegenOutput { c_code: emitter.finish(), needs_sdl: has_sdl, needs_tls: has_tls, needs_crypto: has_crypto, needs_regex: has_regex, host_code: None, guest_code: None };
 
     // Hot-reload: generate split host/guest C sources
     if hot_reload {

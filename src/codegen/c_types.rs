@@ -118,6 +118,10 @@ pub fn ast_type_to_c(ty: &crate::parser::ast::Type, scopes: &ScopeTable) -> Stri
                 return "GorgetBigNum".to_string();
             } else if name.node == "RSAKey" {
                 return "GorgetRSAKey".to_string();
+            } else if name.node == "Regex" {
+                return "GorgetRegex".to_string();
+            } else if name.node == "Match" {
+                return "GorgetRegexMatch".to_string();
             } else {
                 name.node.clone()
             }
@@ -280,6 +284,8 @@ pub(super) fn def_name_to_c(def_id: DefId, scopes: &ScopeTable) -> String {
         "CipherContext" => "GorgetCipherContext".to_string(),
         "BigNum" => "GorgetBigNum".to_string(),
         "RSAKey" => "GorgetRSAKey".to_string(),
+        "Regex" => "GorgetRegex".to_string(),
+        "Match" => "GorgetRegexMatch".to_string(),
         _ => name,
     }
 }

@@ -743,6 +743,72 @@ impl CodegenContext<'_> {
                             );
                         }
                     }
+                    // std.regex — free functions with Result/Option wrapping
+                    "regex_compile" => {
+                        if let Some(arg) = args.first() {
+                            let pat = self.gen_str_arg(&arg.node.value);
+                            let result_type = self.register_generic("Result", &["GorgetRegex".into(), "const char*".into()], super::GenericInstanceKind::Enum);
+                            let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
+                            let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
+                            return format!(
+                                "({{ GorgetRegex __rx = gorget_regex_compile({pat}, NULL); \
+                                const char* __re = gorget_regex_last_error(); \
+                                __re ? {err_ctor}(__re) : {ok_ctor}(__rx); }})"
+                            );
+                        }
+                    }
+                    "regex_compile_with" => {
+                        if args.len() >= 2 {
+                            let pat = self.gen_str_arg(&args[0].node.value);
+                            let flags = self.gen_str_arg(&args[1].node.value);
+                            let result_type = self.register_generic("Result", &["GorgetRegex".into(), "const char*".into()], super::GenericInstanceKind::Enum);
+                            let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
+                            let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
+                            return format!(
+                                "({{ GorgetRegex __rx = gorget_regex_compile({pat}, {flags}); \
+                                const char* __re = gorget_regex_last_error(); \
+                                __re ? {err_ctor}(__re) : {ok_ctor}(__rx); }})"
+                            );
+                        }
+                    }
+                    "regex_is_match" => {
+                        if args.len() >= 2 {
+                            let pat = self.gen_str_arg(&args[0].node.value);
+                            let subj = self.gen_str_arg(&args[1].node.value);
+                            return format!(
+                                "({{ GorgetRegex __rx = gorget_regex_compile({pat}, NULL); \
+                                bool __rm = gorget_regex_is_match(&__rx, {subj}); \
+                                gorget_regex_free(&__rx); __rm; }})"
+                            );
+                        }
+                    }
+                    "regex_find" => {
+                        if args.len() >= 2 {
+                            let pat = self.gen_str_arg(&args[0].node.value);
+                            let subj = self.gen_str_arg(&args[1].node.value);
+                            let opt = self.register_generic("Option", &["GorgetRegexMatch".into()], super::GenericInstanceKind::Enum);
+                            let ctor_some = c_mangle::mangle_variant(&opt, "Some");
+                            let ctor_none = c_mangle::mangle_variant(&opt, "None");
+                            return format!(
+                                "({{ GorgetRegex __rx = gorget_regex_compile({pat}, NULL); \
+                                GorgetRegexMatch __rm = gorget_regex_find(&__rx, {subj}, 0); \
+                                gorget_regex_free(&__rx); \
+                                __rm.start >= 0 ? {ctor_some}(__rm) : {ctor_none}(); }})"
+                            );
+                        }
+                    }
+                    "regex_replace" => {
+                        if args.len() >= 3 {
+                            let pat = self.gen_str_arg(&args[0].node.value);
+                            let subj = self.gen_str_arg(&args[1].node.value);
+                            let repl = self.gen_str_arg(&args[2].node.value);
+                            return format!(
+                                "({{ GorgetRegex __rx = gorget_regex_compile({pat}, NULL); \
+                                GorgetString __rs = gorget_regex_replace(&__rx, {subj}, {repl}); \
+                                gorget_regex_free(&__rx); __rs; }})"
+                            );
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -1231,6 +1297,112 @@ impl CodegenContext<'_> {
                 let arg_exprs: Vec<String> =
                     args.iter().map(|a| self.gen_expr(&a.node.value)).collect();
                 return format!("{mangled}({})", arg_exprs.join(", "));
+            }
+        }
+
+        // Regex/Match method dispatch (Declaration methods needing Option/wrapping)
+        {
+            let type_name = self.infer_receiver_type(receiver);
+            if type_name == "Regex" || type_name == "GorgetRegex" {
+                let recv = self.gen_expr(receiver);
+                let recv_ref = addr_of(&recv, &receiver.node);
+                match method_name {
+                    "find" => {
+                        if let Some(arg) = args.first() {
+                            let subj = self.gen_str_arg(&arg.node.value);
+                            let opt = self.register_generic("Option", &["GorgetRegexMatch".into()], super::GenericInstanceKind::Enum);
+                            let ctor_some = c_mangle::mangle_variant(&opt, "Some");
+                            let ctor_none = c_mangle::mangle_variant(&opt, "None");
+                            return format!(
+                                "({{ GorgetRegexMatch __rm = gorget_regex_find({recv_ref}, {subj}, 0); \
+                                __rm.start >= 0 ? {ctor_some}(__rm) : {ctor_none}(); }})"
+                            );
+                        }
+                    }
+                    "find_at" => {
+                        if args.len() >= 2 {
+                            let subj = self.gen_str_arg(&args[0].node.value);
+                            let pos = self.gen_expr(&args[1].node.value);
+                            let opt = self.register_generic("Option", &["GorgetRegexMatch".into()], super::GenericInstanceKind::Enum);
+                            let ctor_some = c_mangle::mangle_variant(&opt, "Some");
+                            let ctor_none = c_mangle::mangle_variant(&opt, "None");
+                            return format!(
+                                "({{ GorgetRegexMatch __rm = gorget_regex_find({recv_ref}, {subj}, {pos}); \
+                                __rm.start >= 0 ? {ctor_some}(__rm) : {ctor_none}(); }})"
+                            );
+                        }
+                    }
+                    "fullmatch" => {
+                        if let Some(arg) = args.first() {
+                            let subj = self.gen_str_arg(&arg.node.value);
+                            let opt = self.register_generic("Option", &["GorgetRegexMatch".into()], super::GenericInstanceKind::Enum);
+                            let ctor_some = c_mangle::mangle_variant(&opt, "Some");
+                            let ctor_none = c_mangle::mangle_variant(&opt, "None");
+                            return format!(
+                                "({{ GorgetRegexMatch __rm = gorget_regex_fullmatch({recv_ref}, {subj}); \
+                                __rm.start >= 0 ? {ctor_some}(__rm) : {ctor_none}(); }})"
+                            );
+                        }
+                    }
+                    "find_all" => {
+                        if let Some(arg) = args.first() {
+                            let subj = self.gen_str_arg(&arg.node.value);
+                            return format!("gorget_regex_find_all({recv_ref}, {subj})");
+                        }
+                    }
+                    "replace" => {
+                        if args.len() >= 2 {
+                            let subj = self.gen_str_arg(&args[0].node.value);
+                            let repl = self.gen_str_arg(&args[1].node.value);
+                            return format!("gorget_regex_replace({recv_ref}, {subj}, {repl})");
+                        }
+                    }
+                    "split" => {
+                        if let Some(arg) = args.first() {
+                            let subj = self.gen_str_arg(&arg.node.value);
+                            return format!("gorget_regex_split({recv_ref}, {subj}, 0)");
+                        }
+                    }
+                    "splitn" => {
+                        if args.len() >= 2 {
+                            let subj = self.gen_str_arg(&args[0].node.value);
+                            let limit = self.gen_expr(&args[1].node.value);
+                            return format!("gorget_regex_split({recv_ref}, {subj}, {limit})");
+                        }
+                    }
+                    _ => {} // fall through to extern_symbols for is_match, replace_all, etc.
+                }
+            }
+            if type_name == "Match" || type_name == "GorgetRegexMatch" {
+                let recv = self.gen_expr(receiver);
+                let recv_ref = addr_of(&recv, &receiver.node);
+                match method_name {
+                    "group" => {
+                        if let Some(arg) = args.first() {
+                            let n = self.gen_expr(&arg.node.value);
+                            let opt = self.register_generic("Option", &["const char*".into()], super::GenericInstanceKind::Enum);
+                            let ctor_some = c_mangle::mangle_variant(&opt, "Some");
+                            let ctor_none = c_mangle::mangle_variant(&opt, "None");
+                            return format!(
+                                "({{ const char* __mg = gorget_regex_match_group({recv_ref}, {n}); \
+                                __mg ? {ctor_some}(__mg) : {ctor_none}(); }})"
+                            );
+                        }
+                    }
+                    "group_by_name" => {
+                        if let Some(arg) = args.first() {
+                            let name = self.gen_str_arg(&arg.node.value);
+                            let opt = self.register_generic("Option", &["const char*".into()], super::GenericInstanceKind::Enum);
+                            let ctor_some = c_mangle::mangle_variant(&opt, "Some");
+                            let ctor_none = c_mangle::mangle_variant(&opt, "None");
+                            return format!(
+                                "({{ const char* __mg = gorget_regex_match_group_by_name({recv_ref}, {name}); \
+                                __mg ? {ctor_some}(__mg) : {ctor_none}(); }})"
+                            );
+                        }
+                    }
+                    _ => {} // fall through to extern_symbols for text, start, end_pos, etc.
+                }
             }
         }
 
