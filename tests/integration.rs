@@ -1303,6 +1303,8 @@ fn drop_field_move_zero() {
         "\
 pushed 2
 extracted 3
+taken 3
+chained 1
 done",
     );
 }

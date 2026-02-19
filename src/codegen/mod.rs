@@ -224,6 +224,10 @@ pub struct CodegenContext<'a> {
     pub function_info: &'a FxHashMap<DefId, FunctionInfo>,
     pub traits: &'a TraitRegistry,
     pub current_self_type: Option<String>,
+    /// Whether the current `self` parameter is mutable (&self or !self).
+    /// Used by `resolve_field_zero_target` to allow field-level move-zeroing
+    /// on `self.field` in equip methods.
+    pub self_is_mutable: bool,
     pub current_function_throws: bool,
     /// Closures collected during codegen, emitted in a later pass.
     pub lifted_closures: Vec<LiftedClosure>,
@@ -515,6 +519,7 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
         function_info: &analysis.function_info,
         traits: &analysis.traits,
         current_self_type: None,
+        self_is_mutable: false,
         current_function_throws: false,
         lifted_closures: Vec::new(),
         closure_counter: 0,

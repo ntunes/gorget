@@ -7,8 +7,7 @@ struct LinkedList:
     int len
 
 struct LinkedListIter:
-    Vector[int] values
-    Vector[int] nexts
+    Vector[int] collected
     int cursor
 
 equip LinkedList:
@@ -27,15 +26,20 @@ equip LinkedList:
 
 equip LinkedListIter with Iterator[int]:
     Option[int] next(&self):
-        if self.cursor == -1:
+        if self.cursor >= self.collected.len():
             return None
-        int val = self.values[self.cursor]
-        self.cursor = self.nexts[self.cursor]
+        int val = self.collected[self.cursor]
+        self.cursor = self.cursor + 1
         return Some(val)
 
 equip LinkedList with Iterable[int]:
     LinkedListIter iter(&self):
-        return LinkedListIter(self.values, self.nexts, self.head)
+        Vector[int] ll_vals = Vector[int]()
+        int cur = self.head
+        while cur != -1:
+            ll_vals.push(self.values[cur])
+            cur = self.nexts[cur]
+        return LinkedListIter(ll_vals, 0)
 
 void main():
     LinkedList list = LinkedList(Vector[int](), Vector[int](), -1, 0)

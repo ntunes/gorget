@@ -484,6 +484,7 @@ impl CodegenContext<'_> {
                         }
                     }
                     self.current_self_type = None;
+                    self.self_is_mutable = false;
                 }
                 Item::ConstDecl(c) => {
                     self.emit_const_decl(c, emitter);
@@ -530,6 +531,7 @@ impl CodegenContext<'_> {
 
         // Track mutable borrow params as pointer params for body codegen.
         let prev_pointer_params = std::mem::take(&mut self.pointer_params);
+        let prev_self_is_mutable = self.self_is_mutable;
         // Save/restore closure_vars and fn_type_signatures for Fn-typed params.
         let prev_closure_vars = self.closure_vars.clone();
         let prev_fn_type_sigs = self.fn_type_signatures.clone();
@@ -594,11 +596,12 @@ impl CodegenContext<'_> {
                 emitter.emit_line(&format!("{ret_type} {func_name}({params}) {{"));
                 emitter.indent();
 
-                if method_info.is_some() {
-                    // Set current_self_type for method bodies
-                    if let Some((type_name, _, _)) = method_info {
-                        self.current_self_type = Some(type_name.to_string());
-                    }
+                if let Some((type_name, _, _)) = method_info {
+                    self.current_self_type = Some(type_name.to_string());
+                    let self_param = f.params.iter().find(|p| p.node.name.node == "self");
+                    self.self_is_mutable = self_param
+                        .map(|p| matches!(p.node.ownership, Ownership::MutableBorrow | Ownership::Move))
+                        .unwrap_or(false);
                 }
 
                 // Set decl_type_hint from return type so variant constructors
@@ -681,6 +684,7 @@ impl CodegenContext<'_> {
         self.current_function_gorget_name = prev_gorget_name;
 
         self.pointer_params = prev_pointer_params;
+        self.self_is_mutable = prev_self_is_mutable;
         self.closure_vars = prev_closure_vars;
         self.fn_type_signatures = prev_fn_type_sigs;
         self.current_function_scope = prev_function_scope;
@@ -3168,6 +3172,11 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         let prev_param_c_types = std::mem::replace(&mut self.monomorphized_param_c_types, param_c_types);
         let prev_self_type = self.current_self_type.take();
         self.current_self_type = Some(mangled_type_name.to_string());
+        let prev_self_is_mutable = self.self_is_mutable;
+        let self_param = method.params.iter().find(|p| p.node.name.node == "self");
+        self.self_is_mutable = self_param
+            .map(|p| matches!(p.node.ownership, Ownership::MutableBorrow | Ownership::Move))
+            .unwrap_or(false);
 
         // Track mutable borrow params as pointer params for body codegen
         let prev_pointer_params = std::mem::take(&mut self.pointer_params);
@@ -3207,6 +3216,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         self.type_id_subs = prev_id_subs;
         self.monomorphized_param_c_types = prev_param_c_types;
         self.current_self_type = prev_self_type;
+        self.self_is_mutable = prev_self_is_mutable;
         self.pointer_params = prev_pointer_params;
     }
 

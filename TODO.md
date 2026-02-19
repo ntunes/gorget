@@ -2,8 +2,6 @@
 
 ## High
 
-- **Full collection field drops for struct elements — chained field access and `self.field`**: Field-level move-zeroing (Phase 20) handles single-level `obj.field` patterns. Two remaining gaps: (a) chained field access (`obj.a.b`) — needs recursive object traversal in `queue_field_move_zero`; (b) `self.field` in equip methods — `self` is a pointer param, needs `self->field` zeroing with different codegen. Also, `safe_element_drop()` still strips collection field drops for struct elements; enabling them requires field-level zeroing for `.get()` element copies (not named variables). [added: 2026-02-18]
-
 ## Medium
 
 - **`Into[T]` conversion trait**: Counterpart to `From[T]` requiring explicit type args (`value.into[Celsius]()`) or return-type inference. Adds complexity (equipping primitives, potential blanket impl pattern). [added: 2026-02-17]

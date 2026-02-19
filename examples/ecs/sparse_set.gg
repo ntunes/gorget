@@ -71,7 +71,7 @@ equip SparseSet[T]:
         return self.data.get(idx)
 
 struct SparseSetIter:
-    Vector[int] entity_ids
+    Vector[int] collected_ids
     int idx
     int count
 
@@ -79,10 +79,15 @@ equip SparseSetIter with Iterator[int]:
     Option[int] next(&self):
         if self.idx >= self.count:
             return None
-        int eid = self.entity_ids.get(self.idx)
+        int eid = self.collected_ids.get(self.idx)
         self.idx = self.idx + 1
         return Some(eid)
 
 equip SparseSet[T] with Iterable[int]:
     SparseSetIter iter(&self):
-        return SparseSetIter(self.entity_ids, 0, self.count)
+        Vector[int] ss_eids = Vector[int]()
+        int ss_i = 0
+        while ss_i < self.count:
+            ss_eids.push(self.entity_ids.get(ss_i))
+            ss_i = ss_i + 1
+        return SparseSetIter(ss_eids, 0, self.count)

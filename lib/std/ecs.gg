@@ -103,4 +103,9 @@ equip SparseSetIter with Iterator[int]:
 
 equip SparseSet[T] with Iterable[int]:
     SparseSetIter iter(&self):
-        return SparseSetIter(self.entity_ids, 0, self.count)
+        Vector[int] ecs_eids = Vector[int]()
+        int ecs_i = 0
+        while ecs_i < self.count:
+            ecs_eids.push(self.entity_ids.get(ecs_i))
+            ecs_i = ecs_i + 1
+        return SparseSetIter(ecs_eids, 0, self.count)

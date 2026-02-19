@@ -21,8 +21,7 @@ struct LinkedList:
     int len
 
 struct LinkedListIter:
-    Vector[int] values
-    Vector[int] nexts
+    Vector[int] collected
     int cursor
 
 equip LinkedList:
@@ -43,19 +42,24 @@ equip LinkedList:
     int peek(self):
         return self.values[self.head]
 
-# Iterator walks the linked list from head to tail.
+# Iterator collects values into a fresh vector (avoids aliased non-Copy arena copies).
 equip LinkedListIter with Iterator[int]:
     Option[int] next(&self):
-        if self.cursor == -1:
+        if self.cursor >= self.collected.len():
             return None
-        int val = self.values[self.cursor]
-        self.cursor = self.nexts[self.cursor]
+        int val = self.collected[self.cursor]
+        self.cursor = self.cursor + 1
         return Some(val)
 
-# Iterable creates a fresh iterator each time.
+# Iterable creates a fresh iterator each time by traversing the arena.
 equip LinkedList with Iterable[int]:
     LinkedListIter iter(&self):
-        return LinkedListIter(self.values, self.nexts, self.head)
+        Vector[int] ll_vals = Vector[int]()
+        int cur = self.head
+        while cur != -1:
+            ll_vals.push(self.values[cur])
+            cur = self.nexts[cur]
+        return LinkedListIter(ll_vals, 0)
 
 void main():
     # Construct an empty list (head=-1)

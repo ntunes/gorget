@@ -4,6 +4,23 @@ struct Holder:
     str label
     Vector[int] data
 
+# Test 3: self.field zeroing in equip method (mutable borrow)
+struct DataHolder:
+    str name
+    Vector[int] payload
+
+equip DataHolder:
+    Vector[int] take_payload(&self):
+        Vector[int] result = self.payload
+        return result
+
+# Test 4: chained field access (obj.nested.items)
+struct Inner:
+    Vector[int] items
+
+struct Outer:
+    Inner nested
+
 void main():
     # Test 1: push field into collection (was double-free without fix)
     Vector[Vector[int]] items = Vector[Vector[int]]()
@@ -23,5 +40,19 @@ void main():
     h2.data.push(50)
     Vector[int] extracted = h2.data
     print("extracted {extracted.len()}")
+
+    # Test 3: self.field
+    DataHolder dh = DataHolder("test", Vector[int]())
+    dh.payload.push(100)
+    dh.payload.push(200)
+    dh.payload.push(300)
+    Vector[int] taken = dh.take_payload()
+    print("taken {taken.len()}")
+
+    # Test 4: chained access
+    Outer o = Outer(Inner(Vector[int]()))
+    o.nested.items.push(42)
+    Vector[int] chained = o.nested.items
+    print("chained {chained.len()}")
 
     print("done")

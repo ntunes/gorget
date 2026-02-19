@@ -509,37 +509,82 @@ impl CodegenContext<'_> {
     /// Returns true if zeroing was queued, false if skipped.
     ///
     /// Safety gates:
-    /// - Object must be a simple Identifier (not chained access, not self)
+    /// - Object must resolve via `resolve_field_zero_target` (Identifier, SelfExpr, or chained FieldAccess)
     /// - Object must not be a pointer parameter
     /// - Parent struct must NOT have user Drop (partial zeroing → UB in user Drop)
     /// - Field type must be non-Copy (has a drop action)
     pub(super) fn queue_field_move_zero(&mut self, object: &Expr, field_name: &str) -> bool {
-        let obj_name = match object {
-            Expr::Identifier(name) => name,
-            _ => return false,
+        let (obj_path, obj_type, is_ptr) = match self.resolve_field_zero_target(object) {
+            Some(t) => t,
+            None => return false,
         };
-        let escaped_obj = c_mangle::escape_keyword(obj_name);
-
-        // Object must be a droppable struct without user Drop
-        match self.find_drop_action(&escaped_obj) {
-            Some(DropAction::StructDrop { has_user_drop: true, .. }) => return false,
-            Some(DropAction::StructDrop { type_name, .. }) => {
-                // Check field is non-Copy
-                let key = (type_name.clone(), field_name.to_string());
-                if let Some(field_type) = self.field_type_names.get(&key) {
-                    if self.drop_action_for_type(field_type).is_some() {
-                        if !self.pointer_params.contains(&escaped_obj) {
-                            let escaped_field = c_mangle::escape_keyword(field_name);
-                            self.pending_move_zeros.push(
-                                format!("{escaped_obj}.{escaped_field}")
-                            );
-                            return true;
-                        }
-                    }
-                }
-                false
+        let key = (obj_type, field_name.to_string());
+        if let Some(field_type) = self.field_type_names.get(&key) {
+            if self.drop_action_for_type(field_type).is_some() {
+                let escaped_field = c_mangle::escape_keyword(field_name);
+                let accessor = if is_ptr { "->" } else { "." };
+                self.pending_move_zeros.push(format!("{obj_path}{accessor}{escaped_field}"));
+                return true;
             }
-            _ => false,
+        }
+        false
+    }
+
+    /// Resolve the target of a field-level move-zero: returns `(c_path, struct_type_name, is_pointer)`.
+    ///
+    /// Handles three cases:
+    /// - `Identifier`: local variable with StructDrop (no user Drop)
+    /// - `SelfExpr`: `self` pointer in a mutable equip method (no user Drop)
+    /// - `FieldAccess`: chained access `obj.a.b` — recursively resolves the inner object
+    fn resolve_field_zero_target(&self, object: &Expr) -> Option<(String, String, bool)> {
+        match object {
+            Expr::Identifier(name) => {
+                let escaped = c_mangle::escape_keyword(name);
+                if self.pointer_params.contains(&escaped) {
+                    return None;
+                }
+                match self.find_drop_action(&escaped) {
+                    Some(DropAction::StructDrop { has_user_drop: false, type_name, .. }) => {
+                        Some((escaped, type_name, false))
+                    }
+                    _ => None,
+                }
+            }
+            Expr::SelfExpr => {
+                if !self.self_is_mutable {
+                    return None;
+                }
+                let self_type = self.current_self_type.as_ref()?;
+                if self.traits.has_trait_impl_by_name(self_type, "Drop") {
+                    return None;
+                }
+                Some(("self".to_string(), self_type.clone(), true))
+            }
+            Expr::FieldAccess { object: inner, field } => {
+                let (parent_path, parent_type, parent_is_ptr) =
+                    self.resolve_field_zero_target(&inner.node)?;
+                let key = (parent_type, field.node.clone());
+                let field_type = self.field_type_names.get(&key)?;
+                // Must be a plain Named struct type (no generics)
+                let struct_name = match field_type {
+                    Type::Named { name, generic_args } if generic_args.is_empty() => &name.node,
+                    _ => return None,
+                };
+                // Must be a struct, must NOT have user Drop
+                let is_struct = self.scopes.lookup(struct_name).map_or(false, |def_id| {
+                    self.scopes.get_def(def_id).kind == crate::semantic::scope::DefKind::Struct
+                });
+                if !is_struct {
+                    return None;
+                }
+                if self.traits.has_trait_impl_by_name(struct_name, "Drop") {
+                    return None;
+                }
+                let escaped_field = c_mangle::escape_keyword(&field.node);
+                let accessor = if parent_is_ptr { "->" } else { "." };
+                Some((format!("{parent_path}{accessor}{escaped_field}"), struct_name.clone(), false))
+            }
+            _ => None,
         }
     }
 
