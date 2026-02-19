@@ -2663,13 +2663,57 @@ impl CodegenContext<'_> {
         else_body: &Option<Block>,
         emitter: &mut CEmitter,
     ) {
-        let gorget_var_name = match &pattern.node {
-            Pattern::Binding(name) => name.clone(),
-            _ => "__gorget_i".to_string(),
+        // Detect .enumerate() and unwrap to inner iterable
+        let (iterable, enumerate_idx_var) = if let Expr::MethodCall {
+            receiver, method, args, ..
+        } = &iterable.node {
+            if method.node == "enumerate" && args.is_empty() {
+                if let Pattern::Tuple(elems) = &pattern.node {
+                    let idx_name = match &elems[0].node {
+                        Pattern::Binding(n) => c_mangle::escape_keyword(n),
+                        _ => "__gorget_enum_idx".to_string(),
+                    };
+                    (receiver.as_ref(), Some(idx_name))
+                } else {
+                    (iterable, None)
+                }
+            } else {
+                (iterable, None)
+            }
+        } else {
+            (iterable, None)
         };
-        let var_name = match &pattern.node {
-            Pattern::Binding(name) => c_mangle::escape_keyword(name),
-            _ => "__gorget_i".to_string(),
+
+        // Extract the element variable name (second element of tuple when enumerating)
+        let gorget_var_name = if enumerate_idx_var.is_some() {
+            if let Pattern::Tuple(elems) = &pattern.node {
+                if elems.len() >= 2 {
+                    match &elems[1].node {
+                        Pattern::Binding(name) => name.clone(),
+                        _ => "__gorget_elem".to_string(),
+                    }
+                } else { "__gorget_elem".to_string() }
+            } else { "__gorget_i".to_string() }
+        } else {
+            match &pattern.node {
+                Pattern::Binding(name) => name.clone(),
+                _ => "__gorget_i".to_string(),
+            }
+        };
+        let var_name = if enumerate_idx_var.is_some() {
+            if let Pattern::Tuple(elems) = &pattern.node {
+                if elems.len() >= 2 {
+                    match &elems[1].node {
+                        Pattern::Binding(name) => c_mangle::escape_keyword(name),
+                        _ => "__gorget_elem".to_string(),
+                    }
+                } else { "__gorget_elem".to_string() }
+            } else { "__gorget_i".to_string() }
+        } else {
+            match &pattern.node {
+                Pattern::Binding(name) => c_mangle::escape_keyword(name),
+                _ => "__gorget_i".to_string(),
+            }
         };
 
         // Else handling: emit a break-flag before the loop
@@ -2679,6 +2723,15 @@ impl CodegenContext<'_> {
             f
         });
         let has_else = flag.is_some();
+
+        // Enumerate counter: emit before the loop (unique name per loop)
+        let enum_counter = if enumerate_idx_var.is_some() {
+            let c = emitter.fresh_temp();
+            emitter.emit_line(&format!("size_t {c} = 0;"));
+            Some(c)
+        } else {
+            None
+        };
 
         // Track the loop kind for trace output
         let is_range = matches!(iterable.node, Expr::Range { .. });
@@ -2835,6 +2888,11 @@ impl CodegenContext<'_> {
             emitter.emit_line(&format!(
                 "__typeof__({iter}[0]) {var_name} = {iter}[{idx}];"
             ));
+        }
+
+        // --- Enumerate: bind the sequential index ---
+        if let (Some(idx_name), Some(counter)) = (&enumerate_idx_var, &enum_counter) {
+            emitter.emit_line(&format!("int64_t {idx_name} = (int64_t){counter}++;"));
         }
 
         // --- Common: trace loop iteration ---

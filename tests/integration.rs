@@ -4046,3 +4046,18 @@ mapped
 20",
     );
 }
+
+#[test]
+fn enumerate() {
+    run_gg(
+        "enumerate.gg",
+        "\
+0: hello
+1: world
+2: foo
+0: a
+1: b
+2: c
+done",
+    );
+}

@@ -1580,17 +1580,67 @@ impl<'a> TypeChecker<'a> {
             Stmt::For {
                 pattern, iterable, body, else_body, ..
             } => {
-                let iter_type = self.infer_expr(iterable);
-                // If iterating over a string, the loop variable is char
+                // Detect .enumerate() and unwrap to inner iterable
+                let (inner_iterable, is_enumerate) = if let Expr::MethodCall {
+                    receiver, method, args, ..
+                } = &iterable.node {
+                    if method.node == "enumerate" && args.is_empty() {
+                        (receiver.as_ref() as &Spanned<Expr>, true)
+                    } else {
+                        (iterable, false)
+                    }
+                } else {
+                    (iterable, false)
+                };
+
+                let iter_type = self.infer_expr(inner_iterable);
                 let resolved_iter = self.resolve_type(iter_type);
-                if resolved_iter == self.types.string_id {
+
+                // Determine the element type from the iterable
+                let elem_type = if resolved_iter == self.types.string_id {
+                    Some(self.types.char_id)
+                } else {
+                    match self.types.get(resolved_iter).clone() {
+                        ResolvedType::Generic(def_id, args) => {
+                            let name = self.scopes.get_def(def_id).name.clone();
+                            match name.as_str() {
+                                "Vector" | "List" | "Array" | "Set" | "HashSet" => {
+                                    args.first().copied()
+                                }
+                                _ => None,
+                            }
+                        }
+                        _ => None,
+                    }
+                };
+
+                if is_enumerate {
+                    // Assign types to enumerate tuple pattern: (idx, elem)
+                    if let Pattern::Tuple(elems) = &pattern.node {
+                        if let Some(Pattern::Binding(idx_name)) = elems.first().map(|e| &e.node) {
+                            if let Some(def_id) = self.scopes.lookup_def_by_span(idx_name, elems[0].span) {
+                                self.scopes.get_def_mut(def_id).type_id = Some(self.types.int_id);
+                            }
+                        }
+                        if let Some(elem_tid) = elem_type {
+                            if elems.len() >= 2 {
+                                if let Pattern::Binding(elem_name) = &elems[1].node {
+                                    if let Some(def_id) = self.scopes.lookup_def_by_span(elem_name, elems[1].span) {
+                                        self.scopes.get_def_mut(def_id).type_id = Some(elem_tid);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else if let Some(elem_tid) = elem_type {
+                    // Assign element type to simple binding
                     if let Pattern::Binding(name) = &pattern.node {
-                        // Use span-based lookup to avoid cross-module name collisions
                         if let Some(def_id) = self.scopes.lookup_def_by_span(name, pattern.span) {
-                            self.scopes.get_def_mut(def_id).type_id = Some(self.types.char_id);
+                            self.scopes.get_def_mut(def_id).type_id = Some(elem_tid);
                         }
                     }
                 }
+
                 self.check_block(body);
                 if let Some(else_body) = else_body {
                     self.check_block(else_body);
@@ -2314,7 +2364,7 @@ impl<'a> TypeChecker<'a> {
                 }
                 "clear" | "reserve" | "sort" | "reverse" | "insert" | "extend" => Some(self.types.void_id),
                 "is_empty" | "contains" | "any" | "all" => Some(self.types.bool_id),
-                "sorted" | "slice" => Some(receiver_type),
+                "sorted" | "slice" | "enumerate" => Some(receiver_type),
                 _ => None,
             },
             "Dict" | "HashMap" => match method {
@@ -2380,6 +2430,7 @@ impl<'a> TypeChecker<'a> {
                 }
                 "contains" | "starts_with" | "ends_with" | "is_empty" => Some(self.types.bool_id),
                 "trim" | "strip" | "lstrip" | "rstrip" | "to_upper" | "to_lower" | "replace" | "substring" | "repeat" | "join" | "removeprefix" | "removesuffix" | "pad_left" | "pad_right" => Some(self.types.string_id),
+                "enumerate" => Some(receiver_type),
                 "char_at" => Some(self.types.char_id),
                 "split" => {
                     // Return Vector[str]
