@@ -787,9 +787,26 @@ impl CodegenContext<'_> {
                         for (vname, vid) in &info.variants {
                             if *vid == def_id {
                                 let enum_name = self.scopes.get_def(*enum_def_id).name.clone();
+                                // Peel one layer off decl_type_hint for single-type-param
+                                // generic enums so nested constructors (e.g. Some(Some(100)))
+                                // resolve each level's mangled name correctly.
+                                let saved_hint = self.decl_type_hint.clone();
+                                if !args.is_empty() {
+                                    if let Some(crate::parser::ast::Type::Named {
+                                        name,
+                                        generic_args,
+                                    }) = self.decl_type_hint.as_ref()
+                                    {
+                                        if name.node == enum_name && generic_args.len() == 1 {
+                                            self.decl_type_hint =
+                                                Some(generic_args[0].node.clone());
+                                        }
+                                    }
+                                }
                                 let field_exprs: Vec<String> =
                                     args.iter().map(|a| self.gen_expr(&a.node.value)).collect();
                                 let fields = field_exprs.join(", ");
+                                self.decl_type_hint = saved_hint;
                                 // For generic enum templates, resolve the monomorphized name
                                 if self.generic_enum_templates.contains_key(&enum_name) {
                                     // In a monomorphized method body, use the self type

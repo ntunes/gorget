@@ -30,8 +30,7 @@ void main():
     print("{chained.unwrap()}")
 
     # flatten
-    Option[int] inner_some = Some(100)
-    Option[Option[int]] nested = Some(inner_some)
+    Option[Option[int]] nested = Some(Some(100))
     Option[int] flat = nested.flatten()
     print("{flat.unwrap()}")
 
@@ -40,8 +39,7 @@ void main():
     bool is_none1 = flat_none.is_none()
     print("{is_none1}")
 
-    Option[int] inner_none = None()
-    Option[Option[int]] some_none = Some(inner_none)
+    Option[Option[int]] some_none = Some(None())
     Option[int] flat_some_none = some_none.flatten()
     bool is_none2 = flat_some_none.is_none()
     print("{is_none2}")

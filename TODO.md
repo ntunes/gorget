@@ -7,8 +7,6 @@
 - **Nested element drops for direct collection values in `compute_predrop_code()`**: Pre-drop on `set()`/`put()` uses buffer-only drops for direct collection element types (e.g., overwriting a `GorgetArray` in `Vector[Vector[String]]` only frees old inner Vector's buffer, not its String elements). Full nested element drops require propagating type system info not available from the C type string alone. [added: 2026-02-19]
 
 
-- **Nested generic enum constructor resolution**: `Some(Some(100))` for `Option[Option[int]]` generates both `Some` calls with the outer type's mangled name. `resolve_unit_variant_from_type_hint()` uses the enclosing `decl_type_hint` for all nested constructors instead of resolving each call's type individually. Workaround: construct inner values as separate variables. Fix: use `resolve_expr_type_id` on the call expression to get the correct type per nesting level. [added: 2026-02-19]
-
 - **Cross-type `map`/`map_err` type inference**: `builtin_method_type()` returns `receiver_type` as approximation for `map`, `map_err`, `and_then`, `or_else`. This breaks when the closure changes the type parameter (e.g., `Result[int, str].map_err((str e): len(e))` → `Result[int, int]`). Needs the type checker to inspect closure body return type for these methods. [added: 2026-02-19]
 
 ## Medium
