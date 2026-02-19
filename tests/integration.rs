@@ -2838,7 +2838,12 @@ fn conv_stdlib() {
 1000
 true
 false
-A");
+A
+42
+none
+3.140000
+none
+0");
 }
 
 #[test]

@@ -159,8 +159,6 @@
 
 - **Showcase examples**: `DenseStore[T]` / archetype ECS; type erasure / `any` type; ECS query builder (needs variadic generics); `examples/collections/` generic Stack[T]. [added: 2026-02-12]
 
-- **Default trait: primitive-type method call syntax**: `int.default()`, `float.default()`, `bool.default()`, `str.default()` don't parse because primitive type names are keywords, not expressions. Parser would need to allow type-keyword-dot-method patterns in expression position. The codegen already handles these types — just the parser doesn't let them through. [added: 2026-02-17]
-
 - **Default trait: enum derive**: `@derive(Default)` for enums — which variant is default? Could use first variant, `@default` attribute, or unit-only constraint. Currently not derivable. [added: 2026-02-17]
 
 - **Default trait: replace TryCapture memset with Default call**: TryCapture codegen uses `memset(&var, 0, sizeof(var))` for zero-default on error. Could call `Default_for_Type__default()` instead for proper initialization (e.g., empty strings vs null pointers). Needs type info at the TryCapture site. [added: 2026-02-17]

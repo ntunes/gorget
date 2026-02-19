@@ -97,7 +97,7 @@ pub fn collect_top_level(
     for trait_name in &[
         "Displayable", "Equatable", "Cloneable", "Hashable", "Drop", "Iterator", "Iterable",
         "Add", "Sub", "Mul", "Div", "Rem", "Neg", "Comparable", "Index", "IndexMut",
-        "Default", "From", "TryFrom", "Measurable",
+        "Default", "From", "TryFrom", "Measurable", "Parseable",
     ] {
         let _ = scopes.define(trait_name.to_string(), DefKind::Trait, Span::dummy());
     }
@@ -1289,7 +1289,12 @@ fn extract_outlives_bounds(
 /// Collection types live in `std.collections`; traits and Option/Result are
 /// pre-registered in `collect_top_level`.
 fn is_builtin(name: &str) -> bool {
-    matches!(name, "print" | "format" | "len" | "type")
+    matches!(name, "print" | "format" | "len" | "type"
+        | "int" | "int8" | "int16" | "int32" | "int64"
+        | "uint" | "uint8" | "uint16" | "uint32" | "uint64"
+        | "float" | "float32" | "float64"
+        | "bool" | "char" | "str"
+    )
 }
 
 #[cfg(test)]

@@ -1008,6 +1008,13 @@ impl<'a> TypeChecker<'a> {
                 args,
                 ..
             } => {
+                // Static method calls on type names: int.parse(), float.default()
+                if let Expr::Identifier(name) = &receiver.node {
+                    if let Some(ret) = self.resolve_static_method_type(name, &method.node, args, expr.span) {
+                        return ret;
+                    }
+                }
+
                 let receiver_type = self.infer_expr(receiver);
                 let resolved_receiver = self.resolve_type(receiver_type);
 
@@ -2325,6 +2332,72 @@ impl<'a> TypeChecker<'a> {
     fn extract_fn_return_type(&self, type_id: TypeId) -> Option<TypeId> {
         match self.types.get(type_id) {
             ResolvedType::Function { return_type, .. } => Some(*return_type),
+            _ => None,
+        }
+    }
+
+    /// Resolve static method calls on type names (e.g. `int.parse("42")`, `float.default()`).
+    /// Returns the return TypeId if this is a known static method, None to fall through.
+    fn resolve_static_method_type(
+        &mut self,
+        type_name: &str,
+        method: &str,
+        args: &[Spanned<CallArg>],
+        span: Span,
+    ) -> Option<TypeId> {
+        let prim = match type_name {
+            "int" => Some(PrimitiveType::Int),
+            "int8" => Some(PrimitiveType::Int8),
+            "int16" => Some(PrimitiveType::Int16),
+            "int32" => Some(PrimitiveType::Int32),
+            "int64" => Some(PrimitiveType::Int64),
+            "uint" => Some(PrimitiveType::Uint),
+            "uint8" => Some(PrimitiveType::Uint8),
+            "uint16" => Some(PrimitiveType::Uint16),
+            "uint32" => Some(PrimitiveType::Uint32),
+            "uint64" => Some(PrimitiveType::Uint64),
+            "float" => Some(PrimitiveType::Float),
+            "float32" => Some(PrimitiveType::Float32),
+            "float64" => Some(PrimitiveType::Float64),
+            "bool" => Some(PrimitiveType::Bool),
+            "char" => Some(PrimitiveType::Char),
+            "str" => Some(PrimitiveType::Str),
+            _ => None,
+        };
+        let prim = prim?;
+        let prim_tid = self.types.primitive_id(prim);
+
+        match method {
+            "parse" => {
+                // Only int and float types support parse
+                match prim {
+                    PrimitiveType::Int | PrimitiveType::Int8 | PrimitiveType::Int16
+                    | PrimitiveType::Int32 | PrimitiveType::Int64
+                    | PrimitiveType::Uint | PrimitiveType::Uint8 | PrimitiveType::Uint16
+                    | PrimitiveType::Uint32 | PrimitiveType::Uint64
+                    | PrimitiveType::Float | PrimitiveType::Float32 | PrimitiveType::Float64 => {}
+                    _ => return None,
+                }
+                // Infer argument types
+                for arg in args {
+                    self.infer_expr(&arg.node.value);
+                }
+                // Return Option[T]
+                if let Some(option_def_id) = self.scopes.lookup("Option") {
+                    let ret = self.types.insert(ResolvedType::Generic(option_def_id, vec![prim_tid]));
+                    self.expr_types.insert(span, ret);
+                    Some(ret)
+                } else {
+                    Some(prim_tid)
+                }
+            }
+            "default" => {
+                for arg in args {
+                    self.infer_expr(&arg.node.value);
+                }
+                self.expr_types.insert(span, prim_tid);
+                Some(prim_tid)
+            }
             _ => None,
         }
     }

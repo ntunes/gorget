@@ -503,6 +503,22 @@ impl Parser {
                 Ok(Spanned::new(Expr::Identifier("Self".to_string()), start))
             }
 
+            // Primitive type names in expression position (for static methods: int.parse(), float.default())
+            Token::Keyword(
+                Keyword::Int | Keyword::Int8 | Keyword::Int16 | Keyword::Int32 | Keyword::Int64
+                | Keyword::Uint | Keyword::Uint8 | Keyword::Uint16 | Keyword::Uint32 | Keyword::Uint64
+                | Keyword::Float | Keyword::Float32 | Keyword::Float64
+                | Keyword::Bool | Keyword::Char | Keyword::Str
+            ) => {
+                let name_str = format!("{}", self.peek()).trim_matches('\'').to_string();
+                self.advance();
+                let end = self.previous_span();
+                Ok(Spanned::new(
+                    Expr::Identifier(name_str),
+                    start.merge(end),
+                ))
+            }
+
             _ => Err(self.error_unexpected("expression")),
         }
     }
@@ -1557,6 +1573,22 @@ impl Parser {
                 | Token::Keyword(Keyword::It)
                 | Token::Keyword(Keyword::Consuming)
                 | Token::Keyword(Keyword::Mutable)
+                | Token::Keyword(Keyword::Int)
+                | Token::Keyword(Keyword::Int8)
+                | Token::Keyword(Keyword::Int16)
+                | Token::Keyword(Keyword::Int32)
+                | Token::Keyword(Keyword::Int64)
+                | Token::Keyword(Keyword::Uint)
+                | Token::Keyword(Keyword::Uint8)
+                | Token::Keyword(Keyword::Uint16)
+                | Token::Keyword(Keyword::Uint32)
+                | Token::Keyword(Keyword::Uint64)
+                | Token::Keyword(Keyword::Float)
+                | Token::Keyword(Keyword::Float32)
+                | Token::Keyword(Keyword::Float64)
+                | Token::Keyword(Keyword::Bool)
+                | Token::Keyword(Keyword::Char)
+                | Token::Keyword(Keyword::Str)
         )
     }
 

@@ -27,3 +27,25 @@ void main():
     # char_to_str
     str s5 = char_to_str('A')
     print(s5)
+
+    # Parseable trait — int.parse()
+    Option[int] n = int.parse("42")
+    if n is Some(val):
+        print("{val}")
+
+    Option[int] bad = int.parse("hello")
+    if bad is None:
+        print("none")
+
+    # Parseable trait — float.parse()
+    Option[float] f = float.parse("3.14")
+    if f is Some(fval):
+        print("{fval}")
+
+    Option[float] fbad = float.parse("xyz")
+    if fbad is None:
+        print("none")
+
+    # int.default() now works (parser fix)
+    int d = int.default()
+    print("{d}")

@@ -1255,7 +1255,13 @@ impl CodegenContext<'_> {
                 }
             }
 
-            let is_type = self
+            let is_primitive_type = matches!(name.as_str(),
+                "int" | "int8" | "int16" | "int32" | "int64"
+                | "uint" | "uint8" | "uint16" | "uint32" | "uint64"
+                | "float" | "float32" | "float64"
+                | "bool" | "char" | "str" | "String"
+            );
+            let is_type = is_primitive_type || self
                 .resolution_map
                 .get(&receiver.span.start)
                 .filter(|did| self.scopes.get_def(**did).name == *name)
@@ -1269,6 +1275,10 @@ impl CodegenContext<'_> {
                 });
 
             if is_type {
+                // Parseable trait: Type.parse(s) → fallible parse returning Option[T]
+                if method_name == "parse" {
+                    return self.gen_parse_call(name, args);
+                }
                 // Default trait: Type.default() → inline zero or trait function call
                 if method_name == "default" {
                     return self.gen_default_call(name);
@@ -1699,6 +1709,58 @@ impl CodegenContext<'_> {
                 let func = c_mangle::mangle_trait_method("Default", type_name, "default", &[]);
                 format!("{func}()")
             }
+        }
+    }
+
+    /// Generate `Type.parse(s)` → fallible parse returning `Option[T]`.
+    fn gen_parse_call(
+        &mut self,
+        type_name: &str,
+        args: &[Spanned<crate::parser::ast::CallArg>],
+    ) -> String {
+        let arg_str = args.first()
+            .map(|a| self.gen_str_arg(&a.node.value))
+            .unwrap_or_else(|| "\"\"".to_string());
+
+        // Map Gorget type name → C type for Option registration
+        let c_type = match type_name {
+            "int" | "int64" => "int64_t",
+            "int8" => "int8_t",
+            "int16" => "int16_t",
+            "int32" => "int32_t",
+            "uint" | "uint64" => "uint64_t",
+            "uint8" => "uint8_t",
+            "uint16" => "uint16_t",
+            "uint32" => "uint32_t",
+            "float" | "float64" => "double",
+            "float32" => "float",
+            _ => {
+                // User-defined types: call Parseable_for_Type__parse(s)
+                let func = c_mangle::mangle_trait_method("Parseable", type_name, "parse", &[]);
+                return format!("{func}({arg_str})");
+            }
+        };
+
+        let opt = self.register_generic("Option", &[c_type.into()], super::GenericInstanceKind::Enum);
+        let ctor_some = c_mangle::mangle_variant(&opt, "Some");
+        let ctor_none = c_mangle::mangle_variant(&opt, "None");
+
+        // Determine which runtime parser to call and the cast expression
+        let is_int = matches!(type_name,
+            "int" | "int8" | "int16" | "int32" | "int64"
+            | "uint" | "uint8" | "uint16" | "uint32" | "uint64"
+        );
+
+        if is_int {
+            format!(
+                "({{ GorgetParseIntResult __pr = gorget_try_parse_int({arg_str}); \
+                __pr.ok ? {ctor_some}(({c_type})__pr.value) : {ctor_none}(); }})"
+            )
+        } else {
+            format!(
+                "({{ GorgetParseFloatResult __pr = gorget_try_parse_float({arg_str}); \
+                __pr.ok ? {ctor_some}(({c_type})__pr.value) : {ctor_none}(); }})"
+            )
         }
     }
 }
