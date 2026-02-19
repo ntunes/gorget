@@ -1,4 +1,4 @@
-from std.yaml import Yaml, yaml_parse, yaml_stringify, yaml_pretty
+from std.yaml import Yaml, yaml_parse, yaml_parse_all, yaml_stringify, yaml_stringify_all, yaml_pretty, yaml_pretty_all
 from std.collections import Vector, Dict
 
 void main():
@@ -179,5 +179,36 @@ void main():
     str yaml_pp_bs_out = yaml_pretty(yaml_pp_bs_v)
     print("pretty-block:")
     print(yaml_pp_bs_out)
+
+    # ── Phase 3: Multi-document parsing ─────────────────────
+    str yaml_multi = "---\nfirst: 1\n---\nsecond: 2\n"
+    Vector[Yaml] yaml_all = yaml_parse_all(yaml_multi).unwrap()
+    int yaml_ndocs = yaml_all.len()
+    print("{yaml_ndocs}")
+    int yaml_d1v = yaml_all.get(0).unwrap().get("first").as_int()
+    print("{yaml_d1v}")
+    int yaml_d2v = yaml_all.get(1).unwrap().get("second").as_int()
+    print("{yaml_d2v}")
+
+    # ── Phase 3: Multi-doc with ... separator ─────────────
+    str yaml_dots = "---\nalpha: a\n...\n---\nbeta: b\n"
+    Vector[Yaml] yaml_dot_docs = yaml_parse_all(yaml_dots).unwrap()
+    int yaml_ddocs = yaml_dot_docs.len()
+    print("{yaml_ddocs}")
+    print(yaml_dot_docs.get(0).unwrap().get("alpha").as_str())
+    print(yaml_dot_docs.get(1).unwrap().get("beta").as_str())
+
+    # ── Phase 3: Single doc via parse_all ─────────────────
+    str yaml_single = "key: value\n"
+    Vector[Yaml] yaml_single_docs = yaml_parse_all(yaml_single).unwrap()
+    int yaml_sdocs = yaml_single_docs.len()
+    print("{yaml_sdocs}")
+    print(yaml_single_docs.get(0).unwrap().get("key").as_str())
+
+    # ── Phase 3: stringify_all ────────────────────────────
+    print(yaml_stringify_all(yaml_all))
+
+    # ── Phase 3: pretty_all ──────────────────────────────
+    print(yaml_pretty_all(yaml_all))
 
     print("done")

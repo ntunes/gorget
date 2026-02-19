@@ -147,13 +147,35 @@ equip YamlParser:
         self.skip_blank_lines()
         if self.at_end():
             return Null()
+        # Check for document end/start markers before parsing content
+        if self.is_doc_marker():
+            return Null()
         Yaml yaml_doc = self.parse_block_value(0)
         # Skip optional ... marker
         self.skip_blank_lines()
         if self.yaml_pos + 2 < self.yaml_input.len():
             if self.yaml_input[self.yaml_pos] == '.' and self.yaml_input[self.yaml_pos + 1] == '.' and self.yaml_input[self.yaml_pos + 2] == '.':
                 self.yaml_pos = self.yaml_pos + 3
+                self.skip_to_eol()
+                if self.yaml_pos < self.yaml_input.len() and self.is_newline():
+                    self.consume_newline()
         return yaml_doc
+
+    Vector[Yaml] parse_all_documents(&self):
+        Vector[Yaml] yaml_docs = Vector[Yaml]()
+        while not self.at_end() and not self.failed():
+            self.skip_blank_lines()
+            if self.at_end():
+                break
+            int yaml_saved = self.yaml_pos
+            Yaml yaml_doc = self.parse_document()
+            if self.failed():
+                break
+            yaml_docs.push(yaml_doc)
+            # Safety: break if no progress to avoid infinite loop
+            if self.yaml_pos <= yaml_saved:
+                break
+        return yaml_docs
 
     # ── Block value dispatch ─────────────────────────────────
 
@@ -1047,6 +1069,13 @@ Result[Yaml, str] yaml_parse(str yaml_input):
         return Error(yaml_p.yaml_err)
     return Ok(yaml_doc)
 
+Result[Vector[Yaml], str] yaml_parse_all(str yaml_input):
+    YamlParser yaml_p = YamlParser(yaml_input, 0, "")
+    Vector[Yaml] yaml_docs = yaml_p.parse_all_documents()
+    if yaml_p.failed():
+        return Error(yaml_p.yaml_err)
+    return Ok(yaml_docs)
+
 # ── Serialization (compact flow-style) ──────────────────────
 
 str yaml_escape_str(str yaml_s):
@@ -1151,6 +1180,20 @@ str yaml_stringify(Yaml yaml_val):
                 yaml_idx = yaml_idx + 1
             return yaml_out + "\}"
 
+str yaml_stringify_all(Vector[Yaml] yaml_docs):
+    if yaml_docs.len() == 0:
+        return ""
+    if yaml_docs.len() == 1:
+        return yaml_stringify(yaml_docs.get(0).unwrap())
+    str yaml_out = ""
+    int yaml_idx = 0
+    while yaml_idx < yaml_docs.len():
+        if yaml_idx > 0:
+            yaml_out = yaml_out + "\n"
+        yaml_out = yaml_out + "--- " + yaml_stringify(yaml_docs.get(yaml_idx).unwrap())
+        yaml_idx = yaml_idx + 1
+    return yaml_out
+
 # ── Helpers ───────────────────────────────────────────────────
 
 bool yaml_str_contains_newline(str yaml_s):
@@ -1249,6 +1292,20 @@ str yaml_pretty_internal(Yaml yaml_val, int yaml_depth):
 
 str yaml_pretty(Yaml yaml_val):
     return yaml_pretty_internal(yaml_val, 0)
+
+str yaml_pretty_all(Vector[Yaml] yaml_docs):
+    if yaml_docs.len() == 0:
+        return ""
+    if yaml_docs.len() == 1:
+        return yaml_pretty(yaml_docs.get(0).unwrap())
+    str yaml_out = ""
+    int yaml_idx = 0
+    while yaml_idx < yaml_docs.len():
+        if yaml_idx > 0:
+            yaml_out = yaml_out + "\n"
+        yaml_out = yaml_out + "---\n" + yaml_pretty(yaml_docs.get(yaml_idx).unwrap())
+        yaml_idx = yaml_idx + 1
+    return yaml_out
 
 # ── Accessor methods ─────────────────────────────────────────
 

@@ -2197,6 +2197,20 @@ desc: |
   line
 
 name: test
+2
+1
+2
+2
+a
+b
+1
+value
+--- {first: 1}
+--- {second: 2}
+---
+first: 1
+---
+second: 2
 done",
     );
 }
