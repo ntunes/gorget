@@ -50,6 +50,8 @@
 - **Synthetic vs file-based module split is undocumented**: No comment explaining why some modules are synthetic (Rust-generated AST) vs file-based (parsed `.gg`). Contributors can't make the right choice when adding new modules. (`stdlib.rs:27-59`) [added: 2026-02-16]
 
 
+- **Compound `is` conditions**: `if a is Some(x) and x > 0:` — combining `is`-pattern bindings with `and`/`or` boolean operators. Currently only bare `is` conditions bind variables. Users nest `if` statements as a workaround. Requires extending `extract_is_pattern()` to walk through `BinaryOp::And` trees and emit multiple scrutinee temps + bindings. [added: 2026-02-19]
+
 - **Struct destructuring**: Tuple destructuring works but struct destructuring does not. E.g., `auto Point { x, y } = point` or `case Point { x, y }:` in match. [from roadmap, added: 2026-02-16]
 
 - **Const generics**: Partially parsed but not validated or monomorphized. E.g., `struct Array[T, N: int]`. [from roadmap, added: 2026-02-16]

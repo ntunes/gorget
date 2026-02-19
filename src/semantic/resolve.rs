@@ -743,6 +743,10 @@ fn resolve_stmt(
         } => {
             resolve_expr(condition, scopes, errors, resolution_map);
             scopes.push_scope(super::scope::ScopeKind::Block);
+            // If condition is `expr is Pattern`, define pattern bindings in body scope
+            if let Some(pattern) = extract_is_pattern(&condition.node) {
+                define_pattern_bindings(pattern, condition.span, scopes, errors, false);
+            }
             resolve_block(body, scopes, types, errors, resolution_map);
             scopes.pop_scope();
             if let Some(else_body) = else_body {
@@ -766,12 +770,20 @@ fn resolve_stmt(
         } => {
             resolve_expr(condition, scopes, errors, resolution_map);
             scopes.push_scope(super::scope::ScopeKind::Block);
+            // If condition is `expr is Pattern`, define pattern bindings in then-body scope
+            if let Some(pattern) = extract_is_pattern(&condition.node) {
+                define_pattern_bindings(pattern, condition.span, scopes, errors, false);
+            }
             resolve_block(then_body, scopes, types, errors, resolution_map);
             scopes.pop_scope();
 
             for (cond, body) in elif_branches {
                 resolve_expr(cond, scopes, errors, resolution_map);
                 scopes.push_scope(super::scope::ScopeKind::Block);
+                // Same for elif conditions
+                if let Some(pattern) = extract_is_pattern(&cond.node) {
+                    define_pattern_bindings(pattern, cond.span, scopes, errors, false);
+                }
                 resolve_block(body, scopes, types, errors, resolution_map);
                 scopes.pop_scope();
             }
@@ -1153,6 +1165,16 @@ fn resolve_expr(
         Expr::Is { expr: inner, .. } => {
             resolve_expr(inner, scopes, errors, resolution_map);
         }
+    }
+}
+
+/// Extract the pattern from a non-negated `is` expression condition.
+/// Returns `None` for negated `is not` or non-`is` expressions.
+fn extract_is_pattern(expr: &Expr) -> Option<&Pattern> {
+    if let Expr::Is { negated: false, pattern, .. } = expr {
+        Some(&pattern.node)
+    } else {
+        None
     }
 }
 

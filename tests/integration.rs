@@ -532,6 +532,22 @@ is green",
 }
 
 #[test]
+fn is_bindings() {
+    run_gg(
+        "is_bindings.gg",
+        "\
+42
+oops
+not failure
+100
+10
+11
+12
+done",
+    );
+}
+
+#[test]
 fn block_expr() {
     run_gg(
         "block_expr.gg",

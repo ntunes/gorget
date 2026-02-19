@@ -1419,6 +1419,11 @@ impl<'a> BorrowChecker<'a> {
                 else_body,
             } => {
                 self.check_expr(condition);
+                // If condition is `expr is Pattern`, mark borrow origins for pattern bindings
+                if let Expr::Is { expr: scrutinee, negated: false, pattern, .. } = &condition.node {
+                    let origin = self.compute_expr_origin(scrutinee);
+                    self.mark_pattern_origins(&pattern.node, &origin);
+                }
                 let before = self.save_branch_state();
                 self.loop_depth += 1;
                 self.check_block(body);
@@ -1451,6 +1456,11 @@ impl<'a> BorrowChecker<'a> {
                 else_body,
             } => {
                 self.check_expr(condition);
+                // If condition is `expr is Pattern`, mark borrow origins for pattern bindings
+                if let Expr::Is { expr: scrutinee, negated: false, pattern, .. } = &condition.node {
+                    let origin = self.compute_expr_origin(scrutinee);
+                    self.mark_pattern_origins(&pattern.node, &origin);
+                }
 
                 let before = self.save_branch_state();
                 self.check_block(then_body);
@@ -1459,6 +1469,11 @@ impl<'a> BorrowChecker<'a> {
                 for (cond, body) in elif_branches {
                     self.restore_branch_state(&before);
                     self.check_expr(cond);
+                    // Same for elif conditions
+                    if let Expr::Is { expr: scrutinee, negated: false, pattern, .. } = &cond.node {
+                        let origin = self.compute_expr_origin(scrutinee);
+                        self.mark_pattern_origins(&pattern.node, &origin);
+                    }
                     self.check_block(body);
                     branch_states.push(self.save_branch_state());
                 }

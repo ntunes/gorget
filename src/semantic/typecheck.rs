@@ -1654,6 +1654,11 @@ impl<'a> TypeChecker<'a> {
             } => {
                 let cond_type = self.infer_expr(condition);
                 self.unify(cond_type, self.types.bool_id, condition.span);
+                // If condition is `expr is Pattern`, assign types to pattern bindings
+                if let Expr::Is { expr: scrutinee, negated: false, pattern, .. } = &condition.node {
+                    let scrut_type = self.infer_expr(scrutinee);
+                    self.assign_pattern_types(pattern, scrut_type);
+                }
                 self.check_block(body);
                 if let Some(else_body) = else_body {
                     self.check_block(else_body);
@@ -1672,11 +1677,21 @@ impl<'a> TypeChecker<'a> {
             } => {
                 let cond_type = self.infer_expr(condition);
                 self.unify(cond_type, self.types.bool_id, condition.span);
+                // If condition is `expr is Pattern`, assign types to pattern bindings
+                if let Expr::Is { expr: scrutinee, negated: false, pattern, .. } = &condition.node {
+                    let scrut_type = self.infer_expr(scrutinee);
+                    self.assign_pattern_types(pattern, scrut_type);
+                }
                 self.check_block(then_body);
 
                 for (cond, body) in elif_branches {
                     let ct = self.infer_expr(cond);
                     self.unify(ct, self.types.bool_id, cond.span);
+                    // Same for elif conditions
+                    if let Expr::Is { expr: scrutinee, negated: false, pattern, .. } = &cond.node {
+                        let scrut_type = self.infer_expr(scrutinee);
+                        self.assign_pattern_types(pattern, scrut_type);
+                    }
                     self.check_block(body);
                 }
 

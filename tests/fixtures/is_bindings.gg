@@ -1,0 +1,45 @@
+enum Outcome:
+    Success(int)
+    Failure(str)
+
+enum Maybe:
+    Just(int)
+    Nothing
+
+void main():
+    # Basic if-is with binding
+    Outcome r = Success(42)
+    if r is Success(value):
+        print("{value}")
+
+    # elif-is with binding
+    Outcome r2 = Failure("oops")
+    if r2 is Success(v):
+        print("should not print")
+    elif r2 is Failure(msg):
+        print("{msg}")
+
+    # is not — no binding, just boolean
+    if r is not Failure:
+        print("not failure")
+
+    # Binding with else branch
+    Outcome r3 = Success(99)
+    if r3 is Success(x):
+        int y = x + 1
+        print("{y}")
+    else:
+        print("should not print")
+
+    # while-is with binding
+    int count = 0
+    Maybe opt = Just(10)
+    while opt is Just(n):
+        print("{n}")
+        count = count + 1
+        if count >= 3:
+            opt = Nothing()
+        else:
+            opt = Just(n + 1)
+
+    print("done")
