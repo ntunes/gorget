@@ -258,4 +258,196 @@ void main():
     print("{yaml_a6_a}")
     print("{yaml_a6_b}")
 
+    # ── Phase 5: Hex integer ─────────────────────────────────
+    str yaml_p5_hex = "h: 0xFF\n"
+    Yaml yaml_p5_hv = yaml_parse(yaml_p5_hex).unwrap()
+    int yaml_p5_hex_val = yaml_p5_hv.get("h").as_int()
+    print("{yaml_p5_hex_val}")
+
+    # ── Phase 5: Octal integer ────────────────────────────────
+    str yaml_p5_oct = "o: 0o17\n"
+    Yaml yaml_p5_ov = yaml_parse(yaml_p5_oct).unwrap()
+    int yaml_p5_oct_val = yaml_p5_ov.get("o").as_int()
+    print("{yaml_p5_oct_val}")
+
+    # ── Phase 5: Binary integer ───────────────────────────────
+    str yaml_p5_bin = "b: 0b1010\n"
+    Yaml yaml_p5_bv = yaml_parse(yaml_p5_bin).unwrap()
+    int yaml_p5_bin_val = yaml_p5_bv.get("b").as_int()
+    print("{yaml_p5_bin_val}")
+
+    # ── Phase 5: Underscored integer ──────────────────────────
+    str yaml_p5_us = "u: 1_000_000\n"
+    Yaml yaml_p5_uv = yaml_parse(yaml_p5_us).unwrap()
+    int yaml_p5_us_val = yaml_p5_uv.get("u").as_int()
+    print("{yaml_p5_us_val}")
+
+    # ── Phase 5: Negative hex ─────────────────────────────────
+    str yaml_p5_nhex = "nh: -0xFF\n"
+    Yaml yaml_p5_nhv = yaml_parse(yaml_p5_nhex).unwrap()
+    int yaml_p5_nhex_val = yaml_p5_nhv.get("nh").as_int()
+    print("{yaml_p5_nhex_val}")
+
+    # ── Phase 5: Scientific float ─────────────────────────────
+    str yaml_p5_sci = "s: 1.5e2\n"
+    Yaml yaml_p5_sv = yaml_parse(yaml_p5_sci).unwrap()
+    float yaml_p5_sci_val = yaml_p5_sv.get("s").as_float()
+    print("{yaml_p5_sci_val}")
+
+    # ── Phase 5: Positive integer with sign ───────────────────
+    str yaml_p5_pos = "p: +42\n"
+    Yaml yaml_p5_pv = yaml_parse(yaml_p5_pos).unwrap()
+    int yaml_p5_pos_val = yaml_p5_pv.get("p").as_int()
+    print("{yaml_p5_pos_val}")
+
+    # ── Phase 5: Special floats (.inf, -.inf, .nan) ───────────
+    str yaml_p5_inf = "a: .inf\nb: -.inf\nc: .nan\n"
+    Yaml yaml_p5_infv = yaml_parse(yaml_p5_inf).unwrap()
+    bool yaml_p5_inf_num = yaml_p5_infv.get("a").is_number()
+    bool yaml_p5_ninf_num = yaml_p5_infv.get("b").is_number()
+    bool yaml_p5_nan_num = yaml_p5_infv.get("c").is_number()
+    print("{yaml_p5_inf_num}")
+    print("{yaml_p5_ninf_num}")
+    print("{yaml_p5_nan_num}")
+
+    # ── Phase 5: Leading underscore → string (bug fix) ────────
+    str yaml_p5_lu = "v: _100\n"
+    Yaml yaml_p5_luv = yaml_parse(yaml_p5_lu).unwrap()
+    bool yaml_p5_lu_str = yaml_p5_luv.get("v").is_string()
+    print("{yaml_p5_lu_str}")
+    print(yaml_p5_luv.get("v").as_str())
+
+    # ── Phase 5: Unknown escape → error (bug fix) ─────────────
+    str yaml_p5_be = "v: \"hello\\qworld\"\n"
+    Result[Yaml, str] yaml_p5_ber = yaml_parse(yaml_p5_be)
+    bool yaml_p5_be_err = yaml_p5_ber.is_err()
+    print("{yaml_p5_be_err}")
+
+    # ── Phase 5: Known escape sequences ───────────────────────
+    str yaml_p5_esc = "v: \"line1\\nline2\"\n"
+    Yaml yaml_p5_escv = yaml_parse(yaml_p5_esc).unwrap()
+    print(yaml_p5_escv.get("v").as_str())
+
+    # ── Phase 5: Backslash and quote escapes ──────────────────
+    str yaml_p5_bse = "v: \"a\\\\b\\\"c\"\n"
+    Yaml yaml_p5_bsev = yaml_parse(yaml_p5_bse).unwrap()
+    print(yaml_p5_bsev.get("v").as_str())
+
+    # ── Phase 5: Error — unterminated double-quoted string ────
+    str yaml_p5_e1 = "v: \"unclosed\n"
+    bool yaml_p5_e1_f = yaml_parse(yaml_p5_e1).is_err()
+    print("{yaml_p5_e1_f}")
+
+    # ── Phase 5: Error — unterminated single-quoted string ────
+    str yaml_p5_e2 = "v: 'unclosed\n"
+    bool yaml_p5_e2_f = yaml_parse(yaml_p5_e2).is_err()
+    print("{yaml_p5_e2_f}")
+
+    # ── Phase 5: Error — unterminated flow sequence ───────────
+    str yaml_p5_e3 = "[1, 2, 3\n"
+    bool yaml_p5_e3_f = yaml_parse(yaml_p5_e3).is_err()
+    print("{yaml_p5_e3_f}")
+
+    # ── Phase 5: Error — unterminated flow mapping ────────────
+    str yaml_p5_e4 = r"{a: 1, b: 2"
+    bool yaml_p5_e4_f = yaml_parse(yaml_p5_e4).is_err()
+    print("{yaml_p5_e4_f}")
+
+    # ── Phase 5: Error — undefined alias ──────────────────────
+    str yaml_p5_e5 = "v: *nonexistent\n"
+    bool yaml_p5_e5_f = yaml_parse(yaml_p5_e5).is_err()
+    print("{yaml_p5_e5_f}")
+
+    # ── Phase 5: Empty value → null ───────────────────────────
+    str yaml_p5_ev = "key:\nother: ok\n"
+    Yaml yaml_p5_evv = yaml_parse(yaml_p5_ev).unwrap()
+    bool yaml_p5_ev_null = yaml_p5_evv.get("key").is_null()
+    print("{yaml_p5_ev_null}")
+    print(yaml_p5_evv.get("other").as_str())
+
+    # ── Phase 5: Quoted keys ──────────────────────────────────
+    str yaml_p5_qk = "\"special:key\": value1\n'quoted key': value2\n"
+    Yaml yaml_p5_qkv = yaml_parse(yaml_p5_qk).unwrap()
+    print(yaml_p5_qkv.get("special:key").as_str())
+    print(yaml_p5_qkv.get("quoted key").as_str())
+
+    # ── Phase 5: Empty collections ────────────────────────────
+    str yaml_p5_em = r"{}"
+    Yaml yaml_p5_emv = yaml_parse(yaml_p5_em).unwrap()
+    bool yaml_p5_em_obj = yaml_p5_emv.is_object()
+    int yaml_p5_em_len = yaml_p5_emv.len()
+    print("{yaml_p5_em_obj}")
+    print("{yaml_p5_em_len}")
+
+    str yaml_p5_es = "[]"
+    Yaml yaml_p5_esv = yaml_parse(yaml_p5_es).unwrap()
+    bool yaml_p5_es_arr = yaml_p5_esv.is_array()
+    int yaml_p5_es_len = yaml_p5_esv.len()
+    print("{yaml_p5_es_arr}")
+    print("{yaml_p5_es_len}")
+
+    # ── Phase 5: Plain scalar # handling ──────────────────────
+    str yaml_p5_hash = "v1: value#not-comment\nv2: value # comment\n"
+    Yaml yaml_p5_hashv = yaml_parse(yaml_p5_hash).unwrap()
+    print(yaml_p5_hashv.get("v1").as_str())
+    print(yaml_p5_hashv.get("v2").as_str())
+
+    # ── Phase 5: Anchor redefine ──────────────────────────────
+    str yaml_p5_redef = "a: &x first\nb: &x second\nc: *x\n"
+    Yaml yaml_p5_rv = yaml_parse(yaml_p5_redef).unwrap()
+    print(yaml_p5_rv.get("c").as_str())
+
+    # ── Phase 5: Null variants ────────────────────────────────
+    str yaml_p5_nulls = "n1: null\nn2: Null\nn3: NULL\nn4: ~\n"
+    Yaml yaml_p5_nv = yaml_parse(yaml_p5_nulls).unwrap()
+    bool yaml_p5_n1 = yaml_p5_nv.get("n1").is_null()
+    bool yaml_p5_n2 = yaml_p5_nv.get("n2").is_null()
+    bool yaml_p5_n3 = yaml_p5_nv.get("n3").is_null()
+    bool yaml_p5_n4 = yaml_p5_nv.get("n4").is_null()
+    print("{yaml_p5_n1}")
+    print("{yaml_p5_n2}")
+    print("{yaml_p5_n3}")
+    print("{yaml_p5_n4}")
+
+    # ── Phase 5: Bool variants ────────────────────────────────
+    str yaml_p5_bools = "b1: True\nb2: TRUE\nb3: False\nb4: FALSE\n"
+    Yaml yaml_p5_bov = yaml_parse(yaml_p5_bools).unwrap()
+    bool yaml_p5_b1 = yaml_p5_bov.get("b1").as_bool()
+    bool yaml_p5_b2 = yaml_p5_bov.get("b2").as_bool()
+    bool yaml_p5_b3 = yaml_p5_bov.get("b3").as_bool()
+    bool yaml_p5_b4 = yaml_p5_bov.get("b4").as_bool()
+    print("{yaml_p5_b1}")
+    print("{yaml_p5_b2}")
+    print("{yaml_p5_b3}")
+    print("{yaml_p5_b4}")
+
+    # ── Phase 5: Nested flow collections ──────────────────────
+    str yaml_p5_nfc = r"{a: [1, 2], b: {x: 3}}"
+    Yaml yaml_p5_nfcv = yaml_parse(yaml_p5_nfc).unwrap()
+    int yaml_p5_nfc_a0 = yaml_p5_nfcv.get("a").at(0).as_int()
+    int yaml_p5_nfc_a1 = yaml_p5_nfcv.get("a").at(1).as_int()
+    int yaml_p5_nfc_bx = yaml_p5_nfcv.get("b").get("x").as_int()
+    print("{yaml_p5_nfc_a0}")
+    print("{yaml_p5_nfc_a1}")
+    print("{yaml_p5_nfc_bx}")
+
+    # ── Phase 5: Deeply nested block structure ────────────────
+    str yaml_p5_deep = "l1:\n  l2:\n    l3: deep\n"
+    Yaml yaml_p5_dv = yaml_parse(yaml_p5_deep).unwrap()
+    print(yaml_p5_dv.get("l1").get("l2").get("l3").as_str())
+
+    # ── Phase 5: Multiple keys same mapping ───────────────────
+    str yaml_p5_multi = "a: 1\nb: 2\nc: 3\nd: 4\ne: 5\n"
+    Yaml yaml_p5_mv = yaml_parse(yaml_p5_multi).unwrap()
+    int yaml_p5_m_len = yaml_p5_mv.len()
+    print("{yaml_p5_m_len}")
+
+    # ── Phase 5: Stringify special values ─────────────────────
+    str yaml_p5_sn = yaml_stringify(Null())
+    str yaml_p5_sb = yaml_stringify(Bool(true))
+    str yaml_p5_si = yaml_stringify(Int(42))
+    print(yaml_p5_sn)
+    print(yaml_p5_sb)
+    print(yaml_p5_si)
+
     print("done")

@@ -6,6 +6,7 @@
 
 from std.collections import Vector, Dict
 from std.conv import parse_int, parse_float, int_to_str, float_to_str, char_to_str
+from std.math import INFINITY, NAN
 
 # ── YAML value type ──────────────────────────────────────────
 
@@ -302,6 +303,10 @@ equip YamlParser:
         if yaml_fc == '[':
             self.yaml_pos = yaml_sig
             return self.parse_flow_sequence()
+        # Try block mapping: look for a key: pattern (check before quoted scalars
+        # so that quoted keys like "key": value are parsed as mappings)
+        if self.looks_like_mapping(yaml_sig):
+            return self.parse_block_mapping(min_indent)
         # Quoted scalars at block level
         if yaml_fc == '"':
             self.yaml_pos = yaml_sig
@@ -322,9 +327,6 @@ equip YamlParser:
             char yaml_after_dash = self.yaml_input[yaml_sig + 1]
             if yaml_after_dash == ' ' or yaml_after_dash == '\n' or yaml_after_dash == '\r':
                 return self.parse_block_sequence(min_indent)
-        # Try block mapping: look for a key: pattern
-        if self.looks_like_mapping(yaml_sig):
-            return self.parse_block_mapping(min_indent)
         # Block scalars
         if yaml_fc == '|':
             self.yaml_pos = yaml_sig + 1
@@ -776,8 +778,8 @@ equip YamlParser:
                 elif yaml_esc == ' ':
                     yaml_dq_result = yaml_dq_result + " "
                 else:
-                    yaml_dq_result = yaml_dq_result + "\\"
-                    yaml_dq_result = yaml_dq_result + char_to_str(yaml_esc)
+                    self.fail("unknown escape sequence")
+                    return ""
             else:
                 yaml_dq_result = yaml_dq_result + char_to_str(yaml_dc)
                 self.yaml_pos = self.yaml_pos + 1
@@ -1085,11 +1087,11 @@ Yaml yaml_resolve_scalar(str yaml_text):
         return Bool(false)
     # .inf / -.inf / .nan
     if yaml_text == ".inf" or yaml_text == ".Inf" or yaml_text == ".INF":
-        return Float(1.0 / 0.0)
+        return Float(INFINITY)
     if yaml_text == "-.inf" or yaml_text == "-.Inf" or yaml_text == "-.INF":
-        return Float(-1.0 / 0.0)
+        return Float(-INFINITY)
     if yaml_text == ".nan" or yaml_text == ".NaN" or yaml_text == ".NAN":
-        return Float(0.0 / 0.0)
+        return Float(NAN)
     # Try integer (decimal, hex, octal, binary)
     if yaml_is_int(yaml_text):
         int yaml_ival = yaml_parse_int_value(yaml_text)
@@ -1114,6 +1116,8 @@ bool yaml_is_int(str yaml_text):
         yaml_idx = yaml_idx + 2
         if yaml_idx >= yaml_len:
             return false
+        if yaml_text[yaml_idx] == '_':
+            return false
         while yaml_idx < yaml_len:
             char yaml_hc = yaml_text[yaml_idx]
             if yaml_hc >= '0' and yaml_hc <= '9':
@@ -1132,6 +1136,8 @@ bool yaml_is_int(str yaml_text):
         yaml_idx = yaml_idx + 2
         if yaml_idx >= yaml_len:
             return false
+        if yaml_text[yaml_idx] == '_':
+            return false
         while yaml_idx < yaml_len:
             char yaml_oc = yaml_text[yaml_idx]
             if yaml_oc >= '0' and yaml_oc <= '7':
@@ -1146,6 +1152,8 @@ bool yaml_is_int(str yaml_text):
         yaml_idx = yaml_idx + 2
         if yaml_idx >= yaml_len:
             return false
+        if yaml_text[yaml_idx] == '_':
+            return false
         while yaml_idx < yaml_len:
             char yaml_bc = yaml_text[yaml_idx]
             if yaml_bc == '0' or yaml_bc == '1':
@@ -1155,7 +1163,9 @@ bool yaml_is_int(str yaml_text):
             else:
                 return false
         return true
-    # Decimal
+    # Decimal — first char must be a digit (reject leading underscore)
+    if yaml_text[yaml_idx] < '0' or yaml_text[yaml_idx] > '9':
+        return false
     while yaml_idx < yaml_len:
         char yaml_dc = yaml_text[yaml_idx]
         if yaml_dc >= '0' and yaml_dc <= '9':
@@ -1228,6 +1238,8 @@ bool yaml_is_float(str yaml_text):
     if yaml_text[0] == '-' or yaml_text[0] == '+':
         yaml_idx = 1
     if yaml_idx >= yaml_len:
+        return false
+    if yaml_text[yaml_idx] == '_':
         return false
     bool yaml_has_dot = false
     bool yaml_has_e = false
