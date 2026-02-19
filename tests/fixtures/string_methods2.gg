@@ -12,8 +12,10 @@ void main():
     print("{c}")
 
     # index_of
-    print("{s.index_of("world")}")
-    print("{s.index_of("xyz")}")
+    int idx = s.index_of("world").unwrap()
+    print("{idx}")
+    bool not_found = s.index_of("xyz").is_none()
+    print("{not_found}")
 
     # count
     str s2 = "abcabcabc"

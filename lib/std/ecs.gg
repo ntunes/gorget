@@ -12,7 +12,7 @@ struct EntityPool:
 equip EntityPool:
     int create(&self):
         if self.free_ids.len() > 0:
-            return self.free_ids.pop()
+            return self.free_ids.pop().unwrap()
         int id = self.next_id
         self.next_id = self.next_id + 1
         return id

@@ -415,6 +415,16 @@ impl CodegenContext<'_> {
                 {
                     return "Option".to_string();
                 }
+                if matches!(recv_type.as_str(), "Vector" | "List" | "Array")
+                    && matches!(method.node.as_str(), "pop" | "remove" | "index_of")
+                {
+                    return "Option".to_string();
+                }
+                if matches!(recv_type.as_str(), "str" | "String")
+                    && method.node == "index_of"
+                {
+                    return "Option".to_string();
+                }
                 // Look up method return type in trait registry (inherent + trait impls)
                 for impl_info in &self.traits.impls {
                     if impl_info.self_type_name == recv_type {

@@ -162,7 +162,7 @@ equip JsonDeserializer with Deserializer:
         if self.de_stack.len() == 0:
             self.de_err = "no struct context to end"
             return
-        self.de_current = self.de_stack.pop()
+        self.de_current = self.de_stack.pop().unwrap()
 
     int begin_seq(&self):
         if self.de_err != "":
@@ -189,7 +189,7 @@ equip JsonDeserializer with Deserializer:
         if self.de_stack.len() == 0:
             self.de_err = "no seq context to end"
             return
-        self.de_current = self.de_stack.pop()
+        self.de_current = self.de_stack.pop().unwrap()
 
     bool has_error(self):
         return self.de_err != ""

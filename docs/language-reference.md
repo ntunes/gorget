@@ -2249,7 +2249,7 @@ The following methods are available on built-in types without any import.
 | `contains(needle)` | `str → bool` | True if `needle` is a substring |
 | `starts_with(prefix)` | `str → bool` | True if string starts with `prefix` |
 | `ends_with(suffix)` | `str → bool` | True if string ends with `suffix` |
-| `index_of(needle)` | `str → int` | Offset of first occurrence, or `-1` |
+| `index_of(needle)` | `str → Option[int]` | Offset of first occurrence (`None` if not found) |
 | `count(needle)` | `str → int` | Number of non-overlapping occurrences |
 | `char_at(index)` | `int → char` | Character at byte index (panics if out of bounds) |
 | `substring(start, end)` | `int, int → str` | Substring from `start` to `end` (panics if out of bounds) |
@@ -2287,14 +2287,14 @@ The following methods are available on built-in types without any import.
 | Method | Signature | Description |
 |---|---|---|
 | `push(item)` | `T → void` | Append an element |
-| `pop()` | `→ T` | Remove and return last element |
+| `pop()` | `→ Option[T]` | Remove and return last element (`None` if empty) |
 | `get(index)` | `int → Option[T]` | Get element at index (`None` if out of bounds) |
 | `set(index, item)` | `int, T → void` | Set element at index |
-| `remove(index)` | `int → T` | Remove element at index, shifting subsequent elements |
+| `remove(index)` | `int → Option[T]` | Remove element at index, shifting subsequent elements (`None` if out of bounds) |
 | `len()` | `→ int` | Number of elements |
 | `is_empty()` | `→ bool` | True if length is zero |
 | `contains(item)` | `T → bool` | True if element exists (by value) |
-| `index_of(item)` | `T → int` | Index of first match, or `-1` |
+| `index_of(item)` | `T → Option[int]` | Index of first match (`None` if not found) |
 | `insert(index, item)` | `int, T → void` | Insert element at index, shifting subsequent elements |
 | `extend(other)` | `Vector[T] → void` | Append all elements from another vector |
 | `slice(start, end)` | `int, int → Vector[T]` | New vector from elements `[start, end)` |

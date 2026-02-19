@@ -19,12 +19,13 @@ str render_inline(str text):
         if c == "`":
             if seg_start < i:
                 parts.push(escape_html(text.substring(seg_start, i)))
-            int close = text.substring(i + 1, n).index_of("`")
-            if close < 0:
+            Option[int] close_opt = text.substring(i + 1, n).index_of("`")
+            if close_opt.is_none():
                 parts.push("`")
                 seg_start = i + 1
                 i = i + 1
                 continue
+            int close = close_opt.unwrap()
             str code = text.substring(i + 1, i + 1 + close)
             parts.push("<code>" + escape_html(code) + "</code>")
             i = i + 1 + close + 1
@@ -33,12 +34,13 @@ str render_inline(str text):
         if c == "*" and i + 1 < n and text.substring(i + 1, i + 2) == "*":
             if seg_start < i:
                 parts.push(escape_html(text.substring(seg_start, i)))
-            int close = text.substring(i + 2, n).index_of("**")
-            if close < 0:
+            Option[int] close_opt = text.substring(i + 2, n).index_of("**")
+            if close_opt.is_none():
                 parts.push("**")
                 seg_start = i + 2
                 i = i + 2
                 continue
+            int close = close_opt.unwrap()
             str bold = text.substring(i + 2, i + 2 + close)
             parts.push("<strong>" + render_inline(bold) + "</strong>")
             i = i + 2 + close + 2
@@ -47,24 +49,27 @@ str render_inline(str text):
         if c == "*":
             if seg_start < i:
                 parts.push(escape_html(text.substring(seg_start, i)))
-            int close = text.substring(i + 1, n).index_of("*")
-            if close < 0:
+            Option[int] close_opt = text.substring(i + 1, n).index_of("*")
+            if close_opt.is_none():
                 parts.push("*")
                 seg_start = i + 1
                 i = i + 1
                 continue
+            int close = close_opt.unwrap()
             str em = text.substring(i + 1, i + 1 + close)
             parts.push("<em>" + render_inline(em) + "</em>")
             i = i + 1 + close + 1
             seg_start = i
             continue
         if c == "[":
-            int close_bracket = text.substring(i + 1, n).index_of("]")
-            if close_bracket >= 0:
+            Option[int] close_bracket_opt = text.substring(i + 1, n).index_of("]")
+            if close_bracket_opt.is_some():
+                int close_bracket = close_bracket_opt.unwrap()
                 int abs_cb = i + 1 + close_bracket
                 if abs_cb + 1 < n and text.substring(abs_cb + 1, abs_cb + 2) == "(":
-                    int close_paren = text.substring(abs_cb + 2, n).index_of(")")
-                    if close_paren >= 0:
+                    Option[int] close_paren_opt = text.substring(abs_cb + 2, n).index_of(")")
+                    if close_paren_opt.is_some():
+                        int close_paren = close_paren_opt.unwrap()
                         if seg_start < i:
                             parts.push(escape_html(text.substring(seg_start, i)))
                         str link_text = text.substring(i + 1, abs_cb)
@@ -361,8 +366,9 @@ str convert(str markdown):
         if line.len() >= 3:
             str first_ch = line.substring(0, 1)
             if is_digit_str(first_ch):
-                int dot_pos = line.index_of(". ")
-                if dot_pos > 0:
+                Option[int] dot_pos_opt = line.index_of(". ")
+                if dot_pos_opt.is_some():
+                    int dot_pos = dot_pos_opt.unwrap()
                     str before_dot = line.substring(0, dot_pos)
                     if all_digits(before_dot):
                         str p = flush_paragraph(para_lines)

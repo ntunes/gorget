@@ -8,8 +8,10 @@ void main():
     v.push(40)
 
     # index_of
-    print("{v.index_of(20)}")
-    print("{v.index_of(99)}")
+    int found_idx = v.index_of(20).unwrap()
+    print("{found_idx}")
+    bool not_found = v.index_of(99).is_none()
+    print("{not_found}")
 
     # insert
     v.insert(1, 15)

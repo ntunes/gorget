@@ -32,19 +32,21 @@ struct HttpResponse:
         http_port = 80
 
     # Split host from path at the first "/"
-    int http_sl = http_rest.index_of("/")
+    Option[int] http_sl = http_rest.index_of("/")
     str http_hp = http_rest
     str http_path = "/"
-    if http_sl >= 0:
-        http_hp = http_rest[0..http_sl]
-        http_path = http_rest[http_sl..http_rest.len()]
+    if http_sl.is_some():
+        int http_sl_v = http_sl.unwrap()
+        http_hp = http_rest[0..http_sl_v]
+        http_path = http_rest[http_sl_v..http_rest.len()]
 
     # Split host:port
-    int http_cp = http_hp.index_of(":")
+    Option[int] http_cp = http_hp.index_of(":")
     str http_host = http_hp
-    if http_cp >= 0:
-        http_host = http_hp[0..http_cp]
-        str http_ps = http_hp[http_cp + 1..http_hp.len()]
+    if http_cp.is_some():
+        int http_cp_v = http_cp.unwrap()
+        http_host = http_hp[0..http_cp_v]
+        str http_ps = http_hp[http_cp_v + 1..http_hp.len()]
         http_port = parse_int(http_ps)
 
     return (http_host, http_port, http_path)
@@ -83,9 +85,9 @@ str http_read_body_chunked(TlsSocket &http_conn):
     while http_reading:
         str http_size_line = http_conn.read_line()
         # Strip any chunk extensions after ";"
-        int http_semi = http_size_line.index_of(";")
-        if http_semi >= 0:
-            http_size_line = http_size_line[0..http_semi]
+        Option[int] http_semi = http_size_line.index_of(";")
+        if http_semi.is_some():
+            http_size_line = http_size_line[0..http_semi.unwrap()]
         http_size_line = http_size_line.trim()
         int http_chunk_sz = http_parse_hex(http_size_line)
         if http_chunk_sz == 0:
@@ -156,13 +158,13 @@ Result[HttpResponse, str] http_single(str http_method, str http_url, str http_bo
 
     # Status line: "HTTP/1.1 200 OK"
     str http_status_line = http_conn.read_line()
-    int http_sp1 = http_status_line.index_of(" ")
+    Option[int] http_sp1 = http_status_line.index_of(" ")
     int http_code = 0
-    if http_sp1 >= 0:
-        str http_after = http_status_line[http_sp1 + 1..http_status_line.len()]
-        int http_sp2 = http_after.index_of(" ")
-        if http_sp2 >= 0:
-            str http_code_str = http_after[0..http_sp2]
+    if http_sp1.is_some():
+        str http_after = http_status_line[http_sp1.unwrap() + 1..http_status_line.len()]
+        Option[int] http_sp2 = http_after.index_of(" ")
+        if http_sp2.is_some():
+            str http_code_str = http_after[0..http_sp2.unwrap()]
             http_code = parse_int(http_code_str)
         else:
             http_code = parse_int(http_after)
@@ -175,10 +177,11 @@ Result[HttpResponse, str] http_single(str http_method, str http_url, str http_bo
         if http_hdr_line == "":
             http_in_hdrs = false
         else:
-            int http_colon = http_hdr_line.index_of(":")
-            if http_colon >= 0:
-                str http_hname = http_hdr_line[0..http_colon].trim().to_lower()
-                str http_hval = http_hdr_line[http_colon + 1..http_hdr_line.len()].trim()
+            Option[int] http_colon = http_hdr_line.index_of(":")
+            if http_colon.is_some():
+                int http_colon_v = http_colon.unwrap()
+                str http_hname = http_hdr_line[0..http_colon_v].trim().to_lower()
+                str http_hval = http_hdr_line[http_colon_v + 1..http_hdr_line.len()].trim()
                 http_resp_hdrs.put(http_hname, http_hval)
 
     # Body

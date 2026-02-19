@@ -52,10 +52,17 @@ impl CodegenContext<'_> {
                 )
             }
             "pop" => {
+                let opt = self.register_generic("Option", &[elem_type.clone()], super::GenericInstanceKind::Enum);
+                let ctor_some = c_mangle::mangle_variant(&opt, "Some");
+                let ctor_none = c_mangle::mangle_variant(&opt, "None");
                 if needs_temp {
-                    format!("({{ __typeof__({recv}) __recv = {recv}; {elem_type} __popped = GORGET_ARRAY_AT({elem_type}, __recv, __recv.len - 1); __recv.len--; __popped; }})")
+                    format!("({{ __typeof__({recv}) __recv = {recv}; {opt} __pr; \
+                    if (__recv.len > 0) {{ __pr = {ctor_some}(GORGET_ARRAY_AT({elem_type}, __recv, __recv.len - 1)); __recv.len--; }} \
+                    else {{ __pr = {ctor_none}(); }} __pr; }})")
                 } else {
-                    format!("({{ {elem_type} __popped = GORGET_ARRAY_AT({elem_type}, {recv}, {recv}.len - 1); {recv}.len--; __popped; }})")
+                    format!("({{ {opt} __pr; \
+                    if ({recv}.len > 0) {{ __pr = {ctor_some}(GORGET_ARRAY_AT({elem_type}, {recv}, {recv}.len - 1)); {recv}.len--; }} \
+                    else {{ __pr = {ctor_none}(); }} __pr; }})")
                 }
             }
             "set" => {
@@ -71,10 +78,19 @@ impl CodegenContext<'_> {
                 let idx = args.first()
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "0".to_string());
+                let opt = self.register_generic("Option", &[elem_type.clone()], super::GenericInstanceKind::Enum);
+                let ctor_some = c_mangle::mangle_variant(&opt, "Some");
+                let ctor_none = c_mangle::mangle_variant(&opt, "None");
                 if needs_temp {
-                    format!("({{ __typeof__({recv}) __recv = {recv}; {elem_type} __removed = GORGET_ARRAY_AT({elem_type}, __recv, {idx}); gorget_array_remove(&__recv, {idx}); __removed; }})")
+                    format!("({{ __typeof__({recv}) __recv = {recv}; int64_t __ri = {idx}; {opt} __rr; \
+                    if (__ri >= 0 && (size_t)__ri < __recv.len) \
+                    {{ __rr = {ctor_some}(GORGET_ARRAY_AT({elem_type}, __recv, __ri)); gorget_array_remove(&__recv, __ri); }} \
+                    else {{ __rr = {ctor_none}(); }} __rr; }})")
                 } else {
-                    format!("({{ {elem_type} __removed = GORGET_ARRAY_AT({elem_type}, {recv}, {idx}); gorget_array_remove(&{recv}, {idx}); __removed; }})")
+                    format!("({{ int64_t __ri = {idx}; {opt} __rr; \
+                    if (__ri >= 0 && (size_t)__ri < {recv}.len) \
+                    {{ __rr = {ctor_some}(GORGET_ARRAY_AT({elem_type}, {recv}, __ri)); gorget_array_remove(&{recv}, __ri); }} \
+                    else {{ __rr = {ctor_none}(); }} __rr; }})")
                 }
             }
             "clear" => {
@@ -121,7 +137,11 @@ impl CodegenContext<'_> {
                 let arg = args.first()
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "0".to_string());
-                format!("({{ {elem_type} __needle = {arg}; gorget_array_index_of({recv_ref}, &__needle); }})")
+                let opt = self.register_generic("Option", &["int64_t".to_string()], super::GenericInstanceKind::Enum);
+                let ctor_some = c_mangle::mangle_variant(&opt, "Some");
+                let ctor_none = c_mangle::mangle_variant(&opt, "None");
+                format!("({{ {elem_type} __needle = {arg}; int64_t __idx = gorget_array_index_of({recv_ref}, &__needle); \
+                __idx >= 0 ? {ctor_some}(__idx) : {ctor_none}(); }})")
             }
             "insert" => {
                 let idx = args.first()
@@ -862,7 +882,11 @@ impl CodegenContext<'_> {
                 let arg = args.first()
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "\"\"".to_string());
-                Some(format!("gorget_string_index_of({recv}, {arg})"))
+                let opt = self.register_generic("Option", &["int64_t".to_string()], super::GenericInstanceKind::Enum);
+                let ctor_some = c_mangle::mangle_variant(&opt, "Some");
+                let ctor_none = c_mangle::mangle_variant(&opt, "None");
+                Some(format!("({{ int64_t __si = gorget_string_index_of({recv}, {arg}); \
+                __si >= 0 ? {ctor_some}(__si) : {ctor_none}(); }})"))
             }
             "count" => {
                 let arg = args.first()
@@ -1025,13 +1049,23 @@ impl CodegenContext<'_> {
         // When receiver is a collection .get() call, construct Option[T] mangled name
         // directly from the collection's element/value type.
         if let Expr::MethodCall { receiver: inner_recv, method, .. } = &receiver.node {
-            if method.node == "get" {
+            let m = method.node.as_str();
+            if matches!(m, "get" | "pop" | "remove" | "index_of") {
                 let recv_type = self.infer_receiver_type(inner_recv);
-                if matches!(recv_type.as_str(), "Vector" | "List" | "Array") {
+                if matches!(m, "index_of") {
+                    // index_of always returns Option[int] regardless of collection type
+                    if matches!(recv_type.as_str(), "Vector" | "List" | "Array")
+                        || recv_type == "const char*"
+                        || recv_type == "GorgetString"
+                        || recv_type == "str"
+                        || recv_type == "String"
+                    {
+                        return c_mangle::mangle_generic("Option", &["int64_t".to_string()]);
+                    }
+                } else if matches!(recv_type.as_str(), "Vector" | "List" | "Array") {
                     let elem = self.infer_vector_elem_type(inner_recv);
                     return c_mangle::mangle_generic("Option", &[elem]);
-                }
-                if matches!(recv_type.as_str(), "Dict" | "HashMap") {
+                } else if m == "get" && matches!(recv_type.as_str(), "Dict" | "HashMap") {
                     let (_, val) = self.infer_map_kv_types(inner_recv);
                     return c_mangle::mangle_generic("Option", &[val]);
                 }

@@ -479,7 +479,7 @@ impl CodegenContext<'_> {
         // are mangled (e.g. "GorgetMap__int64_t__int64_t").
         if receiver_type == "GorgetArray" {
             return match method {
-                "len" | "pop" | "index_of" => Some(self.types.int_id),
+                "len" => Some(self.types.int_id),
                 "contains" | "any" | "all" => Some(self.types.bool_id),
                 "sort" | "reverse" | "insert" | "extend" => Some(self.types.void_id),
                 _ => None,
@@ -501,7 +501,7 @@ impl CodegenContext<'_> {
         }
         if receiver_type == "GorgetString" {
             return match method {
-                "len" | "hash" | "index_of" | "count" | "capacity" => Some(self.types.int_id),
+                "len" | "hash" | "count" | "capacity" => Some(self.types.int_id),
                 "contains" | "starts_with" | "ends_with" | "is_empty" => Some(self.types.bool_id),
                 "trim" | "strip" | "lstrip" | "rstrip" | "to_upper" | "to_lower" | "replace"
                 | "substring" | "repeat" | "join" | "removeprefix" | "removesuffix"
@@ -513,7 +513,7 @@ impl CodegenContext<'_> {
             };
         }
         match (receiver_type, method) {
-            ("const char*", "len" | "hash" | "index_of" | "count") => Some(self.types.int_id),
+            ("const char*", "len" | "hash" | "count") => Some(self.types.int_id),
             ("const char*", "contains" | "starts_with" | "ends_with" | "is_empty") => {
                 Some(self.types.bool_id)
             }

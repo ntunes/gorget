@@ -2296,8 +2296,7 @@ impl<'a> TypeChecker<'a> {
         match type_name.as_str() {
             "Vector" | "List" | "Array" => match method {
                 "push" => Some(self.types.void_id),
-                "pop" | "remove" => Some(elem_type()),
-                "get" => {
+                "pop" | "remove" | "get" => {
                     if let Some(option_def_id) = self.scopes.lookup("Option") {
                         Some(self.types.insert(ResolvedType::Generic(option_def_id, vec![elem_type()])))
                     } else {
@@ -2305,7 +2304,14 @@ impl<'a> TypeChecker<'a> {
                     }
                 }
                 "set" => Some(self.types.void_id),
-                "len" | "index_of" => Some(self.types.int_id),
+                "len" => Some(self.types.int_id),
+                "index_of" => {
+                    if let Some(option_def_id) = self.scopes.lookup("Option") {
+                        Some(self.types.insert(ResolvedType::Generic(option_def_id, vec![self.types.int_id])))
+                    } else {
+                        Some(self.types.int_id)
+                    }
+                }
                 "clear" | "reserve" | "sort" | "reverse" | "insert" | "extend" => Some(self.types.void_id),
                 "is_empty" | "contains" | "any" | "all" => Some(self.types.bool_id),
                 "sorted" | "slice" => Some(receiver_type),
@@ -2364,7 +2370,14 @@ impl<'a> TypeChecker<'a> {
                 _ => None,
             },
             "str" | "String" => match method {
-                "len" | "hash" | "index_of" | "count" => Some(self.types.int_id),
+                "len" | "hash" | "count" => Some(self.types.int_id),
+                "index_of" => {
+                    if let Some(option_def_id) = self.scopes.lookup("Option") {
+                        Some(self.types.insert(ResolvedType::Generic(option_def_id, vec![self.types.int_id])))
+                    } else {
+                        Some(self.types.int_id)
+                    }
+                }
                 "contains" | "starts_with" | "ends_with" | "is_empty" => Some(self.types.bool_id),
                 "trim" | "strip" | "lstrip" | "rstrip" | "to_upper" | "to_lower" | "replace" | "substring" | "repeat" | "join" | "removeprefix" | "removesuffix" | "pad_left" | "pad_right" => Some(self.types.string_id),
                 "char_at" => Some(self.types.char_id),

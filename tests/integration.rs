@@ -2939,7 +2939,7 @@ fn vector_methods2() {
         "vector_methods2.gg",
         "\
 1
--1
+true
 15
 5
 7
@@ -3122,7 +3122,7 @@ hello
 world
 h
 6
--1
+true
 3
 0
 hahaha
