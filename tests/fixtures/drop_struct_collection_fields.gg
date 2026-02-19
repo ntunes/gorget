@@ -48,4 +48,15 @@ void main():
     auto after = v2.get(0).unwrap()
     print("after set: {after.label}")
 
+    # deep-clone of direct collection type from nested .get()
+    # Before fix: deep-cloned Vector[int] got no drops → buffer leaked.
+    # After fix: ArrayFree registered → buffer properly freed.
+    Vector[Vector[int]] nested = Vector[Vector[int]]()
+    Vector[int] inner = Vector[int]()
+    inner.push(42)
+    inner.push(99)
+    nested.push(inner)
+    auto v = nested.get(0).unwrap()
+    print("nested len={v.len()}")
+
     print("done")

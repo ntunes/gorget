@@ -1309,6 +1309,7 @@ len 3
 got first len=2
 drop old len=2
 after set: new
+nested len=2
 done
 drop new len=1
 drop new len=1
