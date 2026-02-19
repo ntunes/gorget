@@ -149,8 +149,32 @@ static inline void gorget_string_push_float(GorgetString* s, double d) {
     gorget_string_append(s, buf);
 }
 
+static inline void gorget_string_push_bool(GorgetString* s, bool b) {
+    gorget_string_append(s, b ? "true" : "false");
+}
+
 static inline void gorget_string_push_line(GorgetString* s, const char* rhs) {
     gorget_string_append(s, rhs);
+    gorget_string_push_char(s, '\n');
+}
+
+static inline void gorget_string_push_line_int(GorgetString* s, int64_t n) {
+    gorget_string_push_int(s, n);
+    gorget_string_push_char(s, '\n');
+}
+
+static inline void gorget_string_push_line_float(GorgetString* s, double d) {
+    gorget_string_push_float(s, d);
+    gorget_string_push_char(s, '\n');
+}
+
+static inline void gorget_string_push_line_bool(GorgetString* s, bool b) {
+    gorget_string_push_bool(s, b);
+    gorget_string_push_char(s, '\n');
+}
+
+static inline void gorget_string_push_line_char(GorgetString* s, char c) {
+    gorget_string_push_char(s, c);
     gorget_string_push_char(s, '\n');
 }
 

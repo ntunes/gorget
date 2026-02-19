@@ -508,7 +508,7 @@ impl CodegenContext<'_> {
                 | "pad_left" | "pad_right" => Some(self.types.owned_string_id),
                 "str" => Some(self.types.string_id),
                 "char_at" => Some(self.types.char_id),
-                "push" | "push_char" | "clear" | "push_line" | "push_int" | "push_float" => Some(self.types.void_id),
+                "push" | "push_char" | "push_line" | "clear" => Some(self.types.void_id),
                 _ => None,
             };
         }

@@ -3955,6 +3955,12 @@ first
 second
 42!
 3.14
-256",
+256
+true false
+100
+2.72
+true
+z
+",
     );
 }
