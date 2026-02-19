@@ -199,6 +199,13 @@ equip YamlParser:
         # Try block mapping: look for a key: pattern
         if self.looks_like_mapping(yaml_sig):
             return self.parse_block_mapping(min_indent)
+        # Block scalars
+        if yaml_fc == '|':
+            self.yaml_pos = yaml_sig + 1
+            return self.parse_block_scalar(true)
+        if yaml_fc == '>':
+            self.yaml_pos = yaml_sig + 1
+            return self.parse_block_scalar(false)
         # Plain scalar
         self.yaml_pos = yaml_sig
         return self.parse_plain_scalar(min_indent)
@@ -391,6 +398,13 @@ equip YamlParser:
             if not self.at_end() and self.is_newline():
                 self.consume_newline()
             return Str(yaml_sq)
+        # Block scalars
+        if yaml_ic == '|':
+            self.yaml_pos = self.yaml_pos + 1
+            return self.parse_block_scalar(true)
+        if yaml_ic == '>':
+            self.yaml_pos = self.yaml_pos + 1
+            return self.parse_block_scalar(false)
         # Plain scalar
         return self.parse_plain_scalar(yaml_ctx_indent)
 
@@ -628,11 +642,219 @@ equip YamlParser:
         int yaml_end = self.yaml_pos
         while yaml_end > yaml_start and self.yaml_input[yaml_end - 1] == ' ':
             yaml_end = yaml_end - 1
+        str yaml_first_line = self.yaml_input[yaml_start..yaml_end]
         # Consume newline
         if self.yaml_pos < self.yaml_input.len() and self.is_newline():
             self.consume_newline()
-        str yaml_text = self.yaml_input[yaml_start..yaml_end]
+        # Check for multi-line continuation
+        str yaml_text = yaml_first_line
+        bool yaml_has_continuation = false
+        while not self.at_end():
+            # Peek at next line indent
+            int yaml_next_indent = self.current_indent()
+            if yaml_next_indent <= min_indent:
+                break
+            # Check if it's a blank line
+            int yaml_peek_pos = self.yaml_pos + yaml_next_indent
+            if yaml_peek_pos >= self.yaml_input.len():
+                break
+            char yaml_next_ch = self.yaml_input[yaml_peek_pos]
+            if yaml_next_ch == '\n' or yaml_next_ch == '\r':
+                # Blank continuation line — preserve as paragraph break
+                yaml_text = yaml_text + "\n"
+                self.yaml_pos = yaml_peek_pos
+                self.consume_newline()
+                yaml_has_continuation = true
+            else:
+                # Check if it looks like a mapping key or sequence item
+                if yaml_next_ch == '-':
+                    if yaml_peek_pos + 1 < self.yaml_input.len():
+                        char yaml_ad = self.yaml_input[yaml_peek_pos + 1]
+                        if yaml_ad == ' ' or yaml_ad == '\n' or yaml_ad == '\r':
+                            break
+                if self.looks_like_mapping(yaml_peek_pos):
+                    break
+                # Check for document markers
+                if yaml_next_indent == 0 and self.is_doc_marker():
+                    break
+                # It's a continuation line — fold with space
+                self.yaml_pos = yaml_peek_pos
+                int yaml_cont_start = self.yaml_pos
+                while self.yaml_pos < self.yaml_input.len():
+                    char yaml_cc = self.yaml_input[self.yaml_pos]
+                    if yaml_cc == '\n' or yaml_cc == '\r':
+                        break
+                    if yaml_cc == ':':
+                        if self.yaml_pos + 1 < self.yaml_input.len():
+                            char yaml_cn = self.yaml_input[self.yaml_pos + 1]
+                            if yaml_cn == ' ' or yaml_cn == '\n' or yaml_cn == '\r':
+                                break
+                        else:
+                            break
+                    if yaml_cc == '#':
+                        if self.yaml_pos > yaml_cont_start and self.yaml_input[self.yaml_pos - 1] == ' ':
+                            break
+                    self.yaml_pos = self.yaml_pos + 1
+                int yaml_cont_end = self.yaml_pos
+                while yaml_cont_end > yaml_cont_start and self.yaml_input[yaml_cont_end - 1] == ' ':
+                    yaml_cont_end = yaml_cont_end - 1
+                str yaml_cont_line = self.yaml_input[yaml_cont_start..yaml_cont_end]
+                yaml_text = yaml_text + " " + yaml_cont_line
+                yaml_has_continuation = true
+                if self.yaml_pos < self.yaml_input.len() and self.is_newline():
+                    self.consume_newline()
+        # Multi-line plain scalars are always strings (never resolved to int/bool/null)
+        if yaml_has_continuation:
+            return Str(yaml_text)
         return yaml_resolve_scalar(yaml_text)
+
+    # ── Block scalar (literal | and folded >) ─────────────────
+
+    Yaml parse_block_scalar(&self, bool yaml_is_literal):
+        # Parse header: optional chomping indicator and explicit indent
+        # chomping: 0 = clip (default), 1 = strip (-), 2 = keep (+)
+        int yaml_chomp = 0
+        int yaml_explicit_indent = 0
+        # Read optional chomping and indent indicators (order flexible)
+        while self.yaml_pos < self.yaml_input.len():
+            char yaml_hc = self.yaml_input[self.yaml_pos]
+            if yaml_hc == '+':
+                yaml_chomp = 2
+                self.yaml_pos = self.yaml_pos + 1
+            elif yaml_hc == '-':
+                yaml_chomp = 1
+                self.yaml_pos = self.yaml_pos + 1
+            elif yaml_hc >= '1' and yaml_hc <= '9':
+                yaml_explicit_indent = yaml_hc as int - '0' as int
+                self.yaml_pos = self.yaml_pos + 1
+            else:
+                break
+        # Skip to end of line (remaining chars incl. comments)
+        self.skip_to_eol()
+        # Consume newline after header
+        if self.yaml_pos < self.yaml_input.len() and self.is_newline():
+            self.consume_newline()
+        # Determine content indent from first non-empty line (if not explicit)
+        int yaml_content_indent = yaml_explicit_indent
+        if yaml_content_indent == 0:
+            # Find first non-empty line to determine indent
+            int yaml_probe = self.yaml_pos
+            while yaml_probe < self.yaml_input.len():
+                # Count spaces at this line
+                int yaml_sp = 0
+                while yaml_probe + yaml_sp < self.yaml_input.len() and self.yaml_input[yaml_probe + yaml_sp] == ' ':
+                    yaml_sp = yaml_sp + 1
+                if yaml_probe + yaml_sp < self.yaml_input.len():
+                    char yaml_lc = self.yaml_input[yaml_probe + yaml_sp]
+                    if yaml_lc != '\n' and yaml_lc != '\r':
+                        # Found non-empty line
+                        yaml_content_indent = yaml_sp
+                        break
+                # Skip this empty line
+                while yaml_probe < self.yaml_input.len() and self.yaml_input[yaml_probe] != '\n':
+                    yaml_probe = yaml_probe + 1
+                if yaml_probe < self.yaml_input.len():
+                    yaml_probe = yaml_probe + 1
+        if yaml_content_indent == 0:
+            # No content lines found
+            return Str("")
+        # Collect content lines
+        Vector[str] yaml_lines = Vector[str]()
+        while self.yaml_pos < self.yaml_input.len():
+            # Count leading spaces
+            int yaml_sp = 0
+            while self.yaml_pos + yaml_sp < self.yaml_input.len() and self.yaml_input[self.yaml_pos + yaml_sp] == ' ':
+                yaml_sp = yaml_sp + 1
+            # Check if this is an empty/blank line
+            if self.yaml_pos + yaml_sp >= self.yaml_input.len():
+                # EOF after spaces — treat as empty line
+                yaml_lines.push("")
+                self.yaml_pos = self.yaml_pos + yaml_sp
+                break
+            char yaml_lc = self.yaml_input[self.yaml_pos + yaml_sp]
+            if yaml_lc == '\n' or yaml_lc == '\r':
+                # Empty line — preserve it
+                yaml_lines.push("")
+                self.yaml_pos = self.yaml_pos + yaml_sp
+                self.consume_newline()
+            elif yaml_sp < yaml_content_indent:
+                # Non-empty line with less indent — end of block scalar
+                break
+            else:
+                # Content line — strip content_indent leading spaces
+                int yaml_line_start = self.yaml_pos + yaml_content_indent
+                int yaml_line_end = yaml_line_start
+                while yaml_line_end < self.yaml_input.len() and self.yaml_input[yaml_line_end] != '\n' and self.yaml_input[yaml_line_end] != '\r':
+                    yaml_line_end = yaml_line_end + 1
+                str yaml_line = self.yaml_input[yaml_line_start..yaml_line_end]
+                yaml_lines.push(yaml_line)
+                self.yaml_pos = yaml_line_end
+                if self.yaml_pos < self.yaml_input.len() and self.is_newline():
+                    self.consume_newline()
+        # Strip trailing empty lines and count them
+        int yaml_trailing = 0
+        while yaml_lines.len() > 0:
+            str yaml_last = yaml_lines.get(yaml_lines.len() - 1).unwrap()
+            if yaml_last == "":
+                yaml_trailing = yaml_trailing + 1
+                yaml_lines.pop()
+            else:
+                break
+        # Assemble result based on literal vs folded
+        str yaml_result = ""
+        if yaml_is_literal:
+            # Literal: join lines with newlines, preserving everything
+            int yaml_li = 0
+            while yaml_li < yaml_lines.len():
+                if yaml_li > 0:
+                    yaml_result = yaml_result + "\n"
+                yaml_result = yaml_result + yaml_lines.get(yaml_li).unwrap()
+                yaml_li = yaml_li + 1
+        else:
+            # Folded: fold consecutive non-blank lines at content indent
+            # More-indented lines preserved literally
+            # Blank lines = paragraph breaks
+            int yaml_li = 0
+            while yaml_li < yaml_lines.len():
+                str yaml_fl = yaml_lines.get(yaml_li).unwrap()
+                if yaml_fl == "":
+                    # Blank line — paragraph break
+                    yaml_result = yaml_result + "\n"
+                elif yaml_fl.len() > 0 and yaml_fl[0] == ' ':
+                    # More-indented line — preserve literally
+                    if yaml_li > 0:
+                        yaml_result = yaml_result + "\n"
+                    yaml_result = yaml_result + yaml_fl
+                else:
+                    # Normal line — fold with previous normal line
+                    if yaml_li > 0:
+                        str yaml_prev = yaml_lines.get(yaml_li - 1).unwrap()
+                        if yaml_prev == "":
+                            # After blank line
+                            yaml_result = yaml_result + "\n"
+                        elif yaml_prev.len() > 0 and yaml_prev[0] == ' ':
+                            # After more-indented line
+                            yaml_result = yaml_result + "\n"
+                        else:
+                            # After normal line — fold
+                            yaml_result = yaml_result + " "
+                    yaml_result = yaml_result + yaml_fl
+                yaml_li = yaml_li + 1
+        # Apply chomping
+        if yaml_chomp == 0:
+            # Clip — exactly one trailing newline
+            yaml_result = yaml_result + "\n"
+        elif yaml_chomp == 1:
+            # Strip — no trailing newlines
+            pass
+        elif yaml_chomp == 2:
+            # Keep — all trailing newlines preserved
+            yaml_result = yaml_result + "\n"
+            int yaml_ti = 0
+            while yaml_ti < yaml_trailing:
+                yaml_result = yaml_result + "\n"
+                yaml_ti = yaml_ti + 1
+        return Str(yaml_result)
 
 # ── Scalar resolution ────────────────────────────────────────
 
@@ -929,6 +1151,16 @@ str yaml_stringify(Yaml yaml_val):
                 yaml_idx = yaml_idx + 1
             return yaml_out + "\}"
 
+# ── Helpers ───────────────────────────────────────────────────
+
+bool yaml_str_contains_newline(str yaml_s):
+    int yaml_idx = 0
+    while yaml_idx < yaml_s.len():
+        if yaml_s[yaml_idx] == '\n':
+            return true
+        yaml_idx = yaml_idx + 1
+    return false
+
 # ── Pretty printing (block-style) ───────────────────────────
 
 str yaml_make_indent(int yaml_depth):
@@ -953,6 +1185,26 @@ str yaml_pretty_internal(Yaml yaml_val, int yaml_depth):
         case Float(yaml_fv):
             return float_to_str(yaml_fv)
         case Str(yaml_sv):
+            if yaml_str_contains_newline(yaml_sv):
+                # Emit as literal block scalar
+                str yaml_block_ind = yaml_make_indent(yaml_depth)
+                str yaml_out = "|\n"
+                int yaml_bi = 0
+                int yaml_line_start = 0
+                while yaml_bi < yaml_sv.len():
+                    if yaml_sv[yaml_bi] == '\n':
+                        str yaml_bline = yaml_sv[yaml_line_start..yaml_bi]
+                        if yaml_bline == "":
+                            yaml_out = yaml_out + "\n"
+                        else:
+                            yaml_out = yaml_out + yaml_block_ind + yaml_bline + "\n"
+                        yaml_line_start = yaml_bi + 1
+                    yaml_bi = yaml_bi + 1
+                # Handle any remaining text after the last newline
+                if yaml_line_start < yaml_sv.len():
+                    str yaml_bline = yaml_sv[yaml_line_start..yaml_sv.len()]
+                    yaml_out = yaml_out + yaml_block_ind + yaml_bline + "\n"
+                return yaml_out
             return yaml_format_scalar(yaml_sv)
         case Seq(yaml_items):
             if yaml_items.len() == 0:

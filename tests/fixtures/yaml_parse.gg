@@ -124,4 +124,60 @@ void main():
     bool yaml_is_err = yaml_bad.is_err()
     print("{yaml_is_err}")
 
+    # ── Phase 2: Literal block scalar ─────────────────────
+    str yaml_lit_src = "text: |\n  line 1\n  line 2\n  line 3\n"
+    Yaml yaml_lit = yaml_parse(yaml_lit_src).unwrap()
+    str yaml_lit_val = yaml_lit.get("text").as_str()
+    print("literal:")
+    print(yaml_lit_val)
+
+    # ── Phase 2: Folded block scalar ──────────────────────
+    str yaml_fold_src = "text: >\n  This is\n  a paragraph.\n\n  Another one.\n"
+    Yaml yaml_fold = yaml_parse(yaml_fold_src).unwrap()
+    str yaml_fold_val = yaml_fold.get("text").as_str()
+    print("folded:")
+    print(yaml_fold_val)
+
+    # ── Phase 2: Chomping: strip ──────────────────────────
+    str yaml_strip_src = "text: |-\n  no trailing\n"
+    Yaml yaml_strip = yaml_parse(yaml_strip_src).unwrap()
+    str yaml_strip_val = yaml_strip.get("text").as_str()
+    print("strip:")
+    print(yaml_strip_val)
+    print("end-strip")
+
+    # ── Phase 2: Chomping: keep ───────────────────────────
+    str yaml_keep_src = "text: |+\n  keep trailing\n\n\n"
+    Yaml yaml_keep = yaml_parse(yaml_keep_src).unwrap()
+    str yaml_keep_val = yaml_keep.get("text").as_str()
+    print("keep:")
+    print(yaml_keep_val)
+    print("end-keep")
+
+    # ── Phase 2: Multi-line plain scalar ──────────────────
+    str yaml_mlp_src = "desc: This is\n  a multi-line\n  plain scalar.\nother: val\n"
+    Yaml yaml_mlp = yaml_parse(yaml_mlp_src).unwrap()
+    print(yaml_mlp.get("desc").as_str())
+    print(yaml_mlp.get("other").as_str())
+
+    # ── Phase 2: Block scalar in sequence ─────────────────
+    str yaml_seq_bs = "items:\n  - |\n    first item\n    multi line\n  - second\n"
+    Yaml yaml_seq_bs_v = yaml_parse(yaml_seq_bs).unwrap()
+    print(yaml_seq_bs_v.get("items").at(0).as_str())
+    print(yaml_seq_bs_v.get("items").at(1).as_str())
+
+    # ── Phase 2: Folded with more-indented lines ──────────
+    str yaml_fold_mi = "text: >\n  paragraph\n    indented line\n  back to normal\n"
+    Yaml yaml_fold_mi_v = yaml_parse(yaml_fold_mi).unwrap()
+    str yaml_fold_mi_val = yaml_fold_mi_v.get("text").as_str()
+    print("folded-indent:")
+    print(yaml_fold_mi_val)
+
+    # ── Phase 2: Pretty-print with block scalar ──────────
+    str yaml_pp_bs = "desc: |\n  multi\n  line\nname: test\n"
+    Yaml yaml_pp_bs_v = yaml_parse(yaml_pp_bs).unwrap()
+    str yaml_pp_bs_out = yaml_pretty(yaml_pp_bs_v)
+    print("pretty-block:")
+    print(yaml_pp_bs_out)
+
     print("done")

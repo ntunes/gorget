@@ -2157,6 +2157,42 @@ true
 3
 name
 true
+literal:
+line 1
+line 2
+line 3
+
+folded:
+This is a paragraph.
+
+Another one.
+
+strip:
+no trailing
+end-strip
+keep:
+keep trailing
+
+
+
+end-keep
+This is a multi-line plain scalar.
+val
+first item
+multi line
+
+second
+folded-indent:
+paragraph
+  indented line
+back to normal
+
+pretty-block:
+desc: |
+  multi
+  line
+
+name: test
 done",
     );
 }

@@ -62,7 +62,7 @@
 
 - **SSH library enhancements**: Public key authentication (IdentityFile), host key verification against known_hosts, ProxyJump/ProxyCommand support from ssh_config. [added: 2026-02-15]
 
-- **std.yaml enhancements**: Phase 1 (core) is done. Remaining phases: (2) Multi-line — literal `|` and folded `>` block scalars with chomping indicators (`+`, `-`), multi-line plain scalars; (3) Multi-doc — `yaml_parse_all`, `yaml_stringify_all`, `yaml_pretty_all`; (4) Anchors — `&anchor`/`*alias` resolution, merge keys `<<`. [added: 2026-02-19]
+- **std.yaml enhancements**: Phases 1–2 done. Remaining phases: (3) Multi-doc — `yaml_parse_all`, `yaml_stringify_all`, `yaml_pretty_all`; (4) Anchors — `&anchor`/`*alias` resolution, merge keys `<<`. [added: 2026-02-19]
 
 - **Fixture system for tests**: suite setup/teardown (done) → `with` clause (done) → fixture injection. Named, composable, scoped resources injected into test signatures. Design questions: yield semantics (Drop-based vs explicit teardown), scope model (test/suite), composability (fixture graphs). [added: 2026-02-14]
 
