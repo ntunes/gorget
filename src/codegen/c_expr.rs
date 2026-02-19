@@ -762,7 +762,7 @@ impl CodegenContext<'_> {
                 _ => self.resolve_expr_type_id(left),
             },
             Expr::UnaryOp { operand, .. } => self.resolve_expr_type_id(operand),
-            Expr::Call { callee, .. } => {
+            Expr::Call { callee, args, .. } => {
                 if let Expr::Identifier(name) = &callee.node {
                     // Check builtin return types first
                     match name.as_str() {
@@ -771,6 +771,16 @@ impl CodegenContext<'_> {
                         }
                         "rand" | "getchar" | "time" | "term_cols" | "term_rows" | "len" => {
                             return Some(self.types.int_id);
+                        }
+                        // abs/min/max return float when given float arguments
+                        "abs" | "min" | "max" => {
+                            if let Some(first_arg) = args.first() {
+                                if self.resolve_expr_type_id(&first_arg.node.value)
+                                    .map_or(false, |t| t == self.types.float_id)
+                                {
+                                    return Some(self.types.float_id);
+                                }
+                            }
                         }
                         _ => {}
                     }

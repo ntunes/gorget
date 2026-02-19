@@ -291,23 +291,6 @@ impl ScopeTable {
         None
     }
 
-    /// Search all scopes for a variable with the given name (most recent definition wins).
-    /// Used by the borrow checker to find DefIds for pattern bindings.
-    pub fn lookup_by_name_anywhere(&self, name: &str) -> Option<DefId> {
-        // Walk backwards to find the most recent definition
-        for (i, def) in self.definitions.iter().enumerate().rev() {
-            if def.name == name
-                && matches!(
-                    def.kind,
-                    DefKind::Variable | DefKind::Const | DefKind::Function
-                )
-            {
-                return Some(DefId(i as u32));
-            }
-        }
-        None
-    }
-
     /// Check if a name refers to a global definition (function, enum variant, struct, etc.)
     /// that doesn't need to be captured by closures.
     pub fn is_global_def(&self, name: &str) -> bool {

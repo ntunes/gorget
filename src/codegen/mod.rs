@@ -367,13 +367,13 @@ pub struct CodegenContext<'a> {
 impl CodegenContext<'_> {
     /// Scope-aware variable lookup: if we know the current function scope, search
     /// within the function's scope tree (the scope itself, all descendants, and
-    /// ancestors). Falls back to `lookup_by_name_anywhere` when no function scope
-    /// is set.
+    /// ancestors). Falls back to scope-chain walk when no function scope is set
+    /// (e.g., at module level).
     pub fn scoped_lookup(&self, name: &str) -> Option<DefId> {
         if let Some(scope_id) = self.current_function_scope {
             self.scopes.lookup_within_function(scope_id, name)
         } else {
-            self.scopes.lookup_by_name_anywhere(name)
+            self.scopes.lookup(name)
         }
     }
 

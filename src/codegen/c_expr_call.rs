@@ -407,37 +407,46 @@ impl CodegenContext<'_> {
                     }
                     "getcwd" => return "gorget_string_adopt((char*)gorget_getcwd())".to_string(),
                     "platform" => return "gorget_platform()".to_string(),
-                    // std.math — integer
+                    // std.math — abs/min/max dispatch to float or int variant
                     "abs" => {
                         if let Some(arg) = args.first() {
                             let x = self.gen_expr(&arg.node.value);
-                            return format!("gorget_abs({x})");
+                            let is_float = self.resolve_expr_type_id(&arg.node.value)
+                                .map_or(false, |t| t == self.types.float_id);
+                            let func = if is_float { "gorget_fabs" } else { "gorget_abs" };
+                            return format!("{func}({x})");
                         }
                     }
                     "min" => {
                         if args.len() >= 2 {
                             let a = self.gen_expr(&args[0].node.value);
                             let b = self.gen_expr(&args[1].node.value);
-                            return format!("gorget_min({a}, {b})");
+                            let is_float = self.resolve_expr_type_id(&args[0].node.value)
+                                .map_or(false, |t| t == self.types.float_id);
+                            let func = if is_float { "gorget_fmin" } else { "gorget_min" };
+                            return format!("{func}({a}, {b})");
                         }
                     }
                     "max" => {
                         if args.len() >= 2 {
                             let a = self.gen_expr(&args[0].node.value);
                             let b = self.gen_expr(&args[1].node.value);
-                            return format!("gorget_max({a}, {b})");
+                            let is_float = self.resolve_expr_type_id(&args[0].node.value)
+                                .map_or(false, |t| t == self.types.float_id);
+                            let func = if is_float { "gorget_fmax" } else { "gorget_max" };
+                            return format!("{func}({a}, {b})");
                         }
                     }
                     // std.math — float (1-arg)
                     "sqrt" | "floor" | "ceil" | "round" | "log" | "log2" | "log10"
-                    | "sin" | "cos" | "tan" | "asin" | "acos" | "atan" | "fabs" => {
+                    | "sin" | "cos" | "tan" | "asin" | "acos" | "atan" => {
                         if let Some(arg) = args.first() {
                             let x = self.gen_expr(&arg.node.value);
                             return format!("gorget_{name}({x})");
                         }
                     }
                     // std.math — float (2-arg)
-                    "pow" | "atan2" | "fmin" | "fmax" => {
+                    "pow" | "atan2" => {
                         if args.len() >= 2 {
                             let a = self.gen_expr(&args[0].node.value);
                             let b = self.gen_expr(&args[1].node.value);

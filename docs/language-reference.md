@@ -2535,9 +2535,9 @@ The following functions are available via `import`:
 
 | Function | Signature | Description |
 |---|---|---|
-| `abs` | `int(int)` | Absolute value (integer) |
-| `min` | `int(int, int)` | Minimum of two integers |
-| `max` | `int(int, int)` | Maximum of two integers |
+| `abs` | `int(int)` / `float(float)` | Absolute value (dispatches by argument type) |
+| `min` | `int(int, int)` / `float(float, float)` | Minimum (dispatches by argument type) |
+| `max` | `int(int, int)` / `float(float, float)` | Maximum (dispatches by argument type) |
 | `sqrt` | `float(float)` | Square root |
 | `pow` | `float(float, float)` | Exponentiation |
 | `floor` | `float(float)` | Round down |
@@ -2553,9 +2553,6 @@ The following functions are available via `import`:
 | `acos` | `float(float)` | Arccosine |
 | `atan` | `float(float)` | Arctangent |
 | `atan2` | `float(float, float)` | Two-argument arctangent |
-| `fabs` | `float(float)` | Absolute value (float) |
-| `fmin` | `float(float, float)` | Minimum of two floats |
-| `fmax` | `float(float, float)` | Maximum of two floats |
 
 **`std.fmt`** — Formatting
 

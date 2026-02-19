@@ -236,6 +236,7 @@ struct BorrowChecker<'a> {
     types: &'a TypeTable,
     resolution_map: &'a ResolutionMap,
     function_info: &'a FxHashMap<DefId, FunctionInfo>,
+    function_body_scopes: &'a FxHashMap<(String, usize), ScopeId>,
     errors: Vec<SemanticError>,
     /// Variable state: DefId -> current state.
     var_states: FxHashMap<DefId, VarState>,
@@ -245,6 +246,8 @@ struct BorrowChecker<'a> {
     immutable_by_default: bool,
     /// Expression type map from the type checker (for lifetime tracking).
     _expr_types: &'a FxHashMap<Span, TypeId>,
+    /// Current function's body scope (for scope-aware variable lookup).
+    current_fn_scope: Option<ScopeId>,
 
     // ── Struct borrowing state (Phase 4) ──
     /// Structs that contain reference-type fields (directly or transitively).
@@ -282,6 +285,7 @@ impl<'a> BorrowChecker<'a> {
         types: &'a TypeTable,
         resolution_map: &'a ResolutionMap,
         function_info: &'a FxHashMap<DefId, FunctionInfo>,
+        function_body_scopes: &'a FxHashMap<(String, usize), ScopeId>,
         immutable_by_default: bool,
         expr_types: &'a FxHashMap<Span, TypeId>,
         method_resolutions: &'a FxHashMap<usize, DefId>,
@@ -293,11 +297,13 @@ impl<'a> BorrowChecker<'a> {
             types,
             resolution_map,
             function_info,
+            function_body_scopes,
             errors: Vec::new(),
             var_states: FxHashMap::default(),
             loop_depth: 0,
             immutable_by_default,
             _expr_types: expr_types,
+            current_fn_scope: None,
             method_resolutions,
             ref_type_structs,
             struct_field_ref_flags,
@@ -1645,7 +1651,11 @@ impl<'a> BorrowChecker<'a> {
 
     /// Find the DefId for a variable name by looking it up in the scope table.
     fn find_def_by_name(&self, name: &str) -> Option<DefId> {
-        self.scopes.lookup_by_name_anywhere(name)
+        if let Some(scope_id) = self.current_fn_scope {
+            self.scopes.lookup_within_function(scope_id, name)
+        } else {
+            self.scopes.lookup(name)
+        }
     }
 
     /// Resolve a Call callee expression to its DefId (if it's a simple identifier).
@@ -2074,6 +2084,11 @@ impl<'a> BorrowChecker<'a> {
         self.invalidated_origins.clear();
         self.current_param_def_ids.clear();
         self.active_outlives.clear();
+
+        // Set scope-aware lookup context for this function
+        self.current_fn_scope = self.function_body_scopes
+            .get(&(func.name.node.clone(), func.name.span.start))
+            .copied();
 
         // Set up return type for lifetime checking
         if let Some(def_id) = self.scopes.lookup(&func.name.node) {
@@ -2533,6 +2548,7 @@ pub fn check_module(
     types: &TypeTable,
     resolution_map: &ResolutionMap,
     function_info: &mut FxHashMap<DefId, FunctionInfo>,
+    function_body_scopes: &FxHashMap<(String, usize), ScopeId>,
     immutable_by_default: bool,
     expr_types: &FxHashMap<Span, TypeId>,
     method_resolutions: &FxHashMap<usize, DefId>,
@@ -2547,7 +2563,8 @@ pub fn check_module(
 
     // Pass 5b: full borrow check with origin tracking
     let mut checker = BorrowChecker::new(
-        scopes, types, resolution_map, function_info, immutable_by_default, expr_types,
+        scopes, types, resolution_map, function_info, function_body_scopes,
+        immutable_by_default, expr_types,
         method_resolutions, ref_type_structs, struct_field_ref_flags,
     );
 

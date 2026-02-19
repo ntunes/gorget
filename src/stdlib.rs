@@ -42,8 +42,6 @@
 ///    `generate_stdlib_module`, add `include_str!` to `stdlib_module_source`.
 /// 4. Add unit tests (at minimum: is_stdlib, generate returns correct variant,
 ///    source exists/parses for file-based modules).
-/// 5. Prefix all variables with `<module>_` to avoid cross-module name
-///    collisions from `lookup_by_name_anywhere`.
 ///
 /// All synthetic defs use `Span::dummy()`, which distinguishes them from
 /// user-defined code and enables the `is_stdlib_call()` guard in codegen.
@@ -256,9 +254,6 @@ fn gen_math_module() -> Module {
         fn_item(decl_fn("acos", &[("x", ty_float())], ty_float())),
         fn_item(decl_fn("atan", &[("x", ty_float())], ty_float())),
         fn_item(decl_fn("atan2", &[("y", ty_float()), ("x", ty_float())], ty_float())),
-        fn_item(decl_fn("fabs", &[("x", ty_float())], ty_float())),
-        fn_item(decl_fn("fmin", &[("a", ty_float()), ("b", ty_float())], ty_float())),
-        fn_item(decl_fn("fmax", &[("a", ty_float()), ("b", ty_float())], ty_float())),
     ];
     Module {
         items,
@@ -1099,7 +1094,7 @@ mod tests {
     #[test]
     fn generate_math() {
         let m = generate_stdlib_module(&["std".into(), "math".into()]).unwrap();
-        assert_eq!(m.items.len(), 26); // 5 constants + 21 functions
+        assert_eq!(m.items.len(), 23); // 5 constants + 18 functions
         let mut const_names = vec![];
         let mut fn_names = vec![];
         for item in &m.items {
@@ -1118,7 +1113,7 @@ mod tests {
         assert!(fn_names.contains(&"sqrt".to_string()));
         assert!(fn_names.contains(&"sin".to_string()));
         assert!(fn_names.contains(&"atan2".to_string()));
-        assert!(fn_names.contains(&"fmin".to_string()));
+        assert!(fn_names.contains(&"pow".to_string()));
     }
 
     #[test]

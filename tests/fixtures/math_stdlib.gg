@@ -1,4 +1,4 @@
-from std.math import abs, min, max, sqrt, pow, floor, ceil, round, sin, cos, log2, log10, fabs, fmin, fmax
+from std.math import abs, min, max, sqrt, pow, floor, ceil, round, sin, cos, log2, log10
 
 void main():
     # Integer math
@@ -23,7 +23,7 @@ void main():
     print("{log2(8.0)}")
     print("{log10(1000.0)}")
 
-    # fabs/fmin/fmax
-    print("{fabs(-2.5)}")
-    print("{fmin(1.5, 2.5)}")
-    print("{fmax(1.5, 2.5)}")
+    # abs/min/max with floats (dispatches to fabs/fmin/fmax)
+    print("{abs(-2.5)}")
+    print("{min(1.5, 2.5)}")
+    print("{max(1.5, 2.5)}")

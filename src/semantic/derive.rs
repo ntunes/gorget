@@ -367,8 +367,7 @@ fn split_top_level_comma(s: &str) -> Option<(&str, &str)> {
 }
 
 /// Global counter for allocating unique temporary variable names across all
-/// derive-generated code. Prevents `lookup_by_name_anywhere` from confusing
-/// variables of the same name across different equip blocks.
+/// derive-generated code. Ensures unique names across different equip blocks.
 static DERIVE_VAR_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 /// Generate a unique temporary variable name (globally unique across all derives).

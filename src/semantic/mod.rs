@@ -184,6 +184,7 @@ pub fn analyze(module: &mut Module) -> AnalysisResult {
         &resolution_map,
         &resolve_ctx.function_info,
         &resolve_ctx.enum_variants,
+        &resolve_ctx.function_body_scopes,
         &mut errors,
     );
 
@@ -197,6 +198,7 @@ pub fn analyze(module: &mut Module) -> AnalysisResult {
         &types,
         &resolution_map,
         &mut resolve_ctx.function_info,
+        &resolve_ctx.function_body_scopes,
         immutable_by_default,
         &expr_types,
         &method_resolutions,

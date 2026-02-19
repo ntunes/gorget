@@ -4,7 +4,7 @@ use crate::parser::ast::*;
 use crate::span::{Span, Spanned};
 
 use super::errors::{SemanticError, SemanticErrorKind};
-use super::ids::{DefId, TypeId};
+use super::ids::{DefId, ScopeId, TypeId};
 use super::resolve::{EnumVariantInfo, FunctionInfo, ResolutionMap};
 use super::scope::{DefKind, ScopeKind, ScopeTable};
 use super::traits::TraitRegistry;
@@ -309,6 +309,10 @@ struct TypeChecker<'a> {
     current_self_type: Option<TypeId>,
     /// Declared type hint for integer literal coercion (e.g., uint8 x = 5).
     decl_type_hint: Option<TypeId>,
+    /// Maps (function_name, span_start) → body scope id (for scope-aware lookups).
+    function_body_scopes: &'a FxHashMap<(String, usize), ScopeId>,
+    /// Current function's body scope (for scope-aware variable lookup).
+    current_fn_scope: Option<ScopeId>,
 }
 
 impl<'a> TypeChecker<'a> {
@@ -319,6 +323,7 @@ impl<'a> TypeChecker<'a> {
         resolution_map: &'a ResolutionMap,
         function_info: &'a FxHashMap<DefId, FunctionInfo>,
         enum_variants: &'a FxHashMap<DefId, EnumVariantInfo>,
+        function_body_scopes: &'a FxHashMap<(String, usize), ScopeId>,
     ) -> Self {
         Self {
             scopes,
@@ -337,6 +342,8 @@ impl<'a> TypeChecker<'a> {
             method_resolutions: FxHashMap::default(),
             current_self_type: None,
             decl_type_hint: None,
+            function_body_scopes,
+            current_fn_scope: None,
         }
     }
 
@@ -357,7 +364,13 @@ impl<'a> TypeChecker<'a> {
             .get(&span_start)
             .copied()
             .filter(|&def_id| self.scopes.get_def(def_id).name == expected_name)
-            .or_else(|| self.scopes.lookup_by_name_anywhere(expected_name))
+            .or_else(|| {
+                if let Some(scope_id) = self.current_fn_scope {
+                    self.scopes.lookup_within_function(scope_id, expected_name)
+                } else {
+                    self.scopes.lookup(expected_name)
+                }
+            })
     }
 
     /// Resolve a type variable to its substitution, following chains.
@@ -646,7 +659,12 @@ impl<'a> TypeChecker<'a> {
                 use crate::lexer::token::StringSegment;
                 for seg in &s.segments {
                     if let StringSegment::Interpolation(var_name) = seg {
-                        if let Some(def_id) = self.scopes.lookup_by_name_anywhere(var_name) {
+                        let def_id_opt = if let Some(scope_id) = self.current_fn_scope {
+                            self.scopes.lookup_within_function(scope_id, var_name)
+                        } else {
+                            self.scopes.lookup(var_name)
+                        };
+                        if let Some(def_id) = def_id_opt {
                             let def = self.scopes.get_def(def_id);
                             if let Some(type_id) = def.type_id {
                                 match self.types.get(type_id) {
@@ -2682,6 +2700,11 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn check_function(&mut self, func: &FunctionDef) {
+        // Set scope-aware lookup context for this function
+        self.current_fn_scope = self.function_body_scopes
+            .get(&(func.name.node.clone(), func.name.span.start))
+            .copied();
+
         // Resolve return type
         let return_type = super::types::ast_type_to_resolved(
             &func.return_type.node,
@@ -2724,6 +2747,7 @@ impl<'a> TypeChecker<'a> {
 
         self.current_return_type = None;
         self.current_function_throws = false;
+        self.current_fn_scope = None;
     }
 
     /// If `arg_expr` is a closure and `param_type` is a Callable variant,
@@ -2784,9 +2808,10 @@ pub fn check_module(
     resolution_map: &ResolutionMap,
     function_info: &FxHashMap<DefId, FunctionInfo>,
     enum_variants: &FxHashMap<DefId, EnumVariantInfo>,
+    function_body_scopes: &FxHashMap<(String, usize), ScopeId>,
     errors: &mut Vec<SemanticError>,
 ) -> (FxHashMap<Span, TypeId>, FxHashMap<usize, DefId>) {
-    let mut checker = TypeChecker::new(scopes, types, traits, resolution_map, function_info, enum_variants);
+    let mut checker = TypeChecker::new(scopes, types, traits, resolution_map, function_info, enum_variants, function_body_scopes);
 
     // Pre-pass: register function signatures so callers can infer return types.
     // This must run before body checking so that e.g. `auto x = imported_fn()`
@@ -2862,7 +2887,7 @@ pub fn check_module(
                 checker.current_function_throws = false;
                 for binding in &t.with_bindings {
                     let value_type = checker.infer_expr(&binding.expr);
-                    if let Some(def_id) = checker.scopes.lookup_by_name_anywhere(&binding.name.node) {
+                    if let Some(def_id) = checker.scopes.lookup_def_by_span(&binding.name.node, binding.name.span) {
                         checker.scopes.get_def_mut(def_id).type_id = Some(value_type);
                     }
                 }
