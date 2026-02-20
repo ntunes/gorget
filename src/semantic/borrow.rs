@@ -989,6 +989,16 @@ impl<'a> BorrowChecker<'a> {
                 }
                 self.check_call_ownership(callee, args);
                 self.check_call_aliasing(args);
+
+                // Determine if callee is a constructor (variant/newtype) —
+                // their args implicitly consume non-Copy values.
+                let is_constructor = self.resolve_callee_def_id(callee)
+                    .map(|id| {
+                        let kind = self.scopes.get_def(id).kind;
+                        matches!(kind, DefKind::Variant | DefKind::Newtype)
+                    })
+                    .unwrap_or(false);
+
                 for arg in args {
                     match arg.node.ownership {
                         Ownership::Move => {
@@ -1007,6 +1017,32 @@ impl<'a> BorrowChecker<'a> {
                             }
                         }
                         Ownership::MutableBorrow | Ownership::Borrow => {
+                            // For constructor calls, bare non-Copy identifier
+                            // args are implicitly consumed (moved into fields).
+                            if is_constructor {
+                                if let Expr::Identifier(_) = &arg.node.value.node {
+                                    if let Some(&var_def_id) = self.resolution_map.get(&arg.node.value.span.start) {
+                                        let def = self.scopes.get_def(var_def_id);
+                                        if def.kind == DefKind::Variable && !def.is_param {
+                                            if let Some(type_id) = def.type_id {
+                                                if !is_copy_type(type_id, self.types) {
+                                                    // Skip implicit move tracking for
+                                                    // non-loop-local vars inside loops —
+                                                    // common in `return Variant(var)` which
+                                                    // exits the function (no re-iteration).
+                                                    let in_loop_non_local = self.loop_depth > 0
+                                                        && !self.loop_local_defs.last()
+                                                            .map_or(false, |s| s.contains(&var_def_id));
+                                                    if !in_loop_non_local {
+                                                        self.check_move(var_def_id, arg.span);
+                                                        continue;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                             self.check_expr(&arg.node.value);
                         }
                     }
@@ -1223,7 +1259,27 @@ impl<'a> BorrowChecker<'a> {
             }
 
             Expr::StructLiteral { args, .. } => {
+                // Struct fields own their data — non-Copy identifier args
+                // are implicitly consumed (moved into the struct).
                 for arg in args {
+                    if let Expr::Identifier(_) = &arg.node {
+                        if let Some(&var_def_id) = self.resolution_map.get(&arg.span.start) {
+                            let def = self.scopes.get_def(var_def_id);
+                            if def.kind == DefKind::Variable && !def.is_param {
+                                if let Some(type_id) = def.type_id {
+                                    if !is_copy_type(type_id, self.types) {
+                                        let in_loop_non_local = self.loop_depth > 0
+                                            && !self.loop_local_defs.last()
+                                                .map_or(false, |s| s.contains(&var_def_id));
+                                        if !in_loop_non_local {
+                                            self.check_move(var_def_id, arg.span);
+                                            continue;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     self.check_expr(arg);
                 }
             }
@@ -4135,6 +4191,111 @@ void main():
             has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { name, source_name, .. }
                 if name == "w" && source_name == "s")),
             "expected UseAfterSourceMoved for w (transitive) after s reassigned, got: {:?}", errors
+        );
+    }
+
+    // ── Constructor implicit move tests ──
+
+    #[test]
+    fn struct_constructor_implicit_move() {
+        let source = "\
+struct Wrapper:
+    String value
+
+void main():
+    String s = \"hello\"
+    Wrapper w = Wrapper(s)
+    print(s)
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterMove { name, .. } if name == "s")),
+            "expected UseAfterMove for s after implicit move into struct constructor, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn struct_constructor_copy_args_ok() {
+        let source = "\
+struct Point:
+    int x
+    int y
+
+void main():
+    int a = 1
+    int b = 2
+    Point p = Point(a, b)
+    print(\"{a}\")
+    print(\"{b}\")
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(
+                k,
+                SemanticErrorKind::UseAfterMove { .. }
+                    | SemanticErrorKind::DoubleMove { .. }
+            )),
+            "unexpected move errors for Copy-type constructor args: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn struct_constructor_double_move() {
+        let source = "\
+struct Pair:
+    String a
+    String b
+
+void main():
+    String s = \"hello\"
+    Pair p = Pair(s, s)
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::DoubleMove { name, .. } if name == "s")),
+            "expected DoubleMove for s passed twice to struct constructor, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn variant_constructor_implicit_move() {
+        let source = "\
+enum Container:
+    Holding(String)
+    Empty
+
+void main():
+    String s = \"hello\"
+    Container c = Holding(s)
+    print(s)
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterMove { name, .. } if name == "s")),
+            "expected UseAfterMove for s after implicit move into variant constructor, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn struct_constructor_param_not_moved() {
+        // Parameters are borrowed from the caller — passing them to a
+        // constructor should NOT be treated as a move.
+        let source = "\
+struct Wrapper:
+    String value
+
+void wrap(String s):
+    Wrapper w = Wrapper(s)
+    print(s)
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(
+                k,
+                SemanticErrorKind::UseAfterMove { .. }
+                    | SemanticErrorKind::DoubleMove { .. }
+            )),
+            "unexpected move errors for param passed to constructor: {:?}", errors
         );
     }
 }
