@@ -1,0 +1,23 @@
+from std.net.udp import UdpSocket, UdpAddr, UdpPacket, udp_bind
+from std.bytes import bytes_from_str, bytes_to_str
+
+void main():
+    # Bind two sockets on localhost with OS-assigned ports
+    UdpSocket sender = udp_bind("127.0.0.1", 0).unwrap()
+    UdpSocket receiver = udp_bind("127.0.0.1", 0).unwrap()
+
+    # Get the receiver's actual port
+    UdpAddr recv_addr = receiver.local_addr()
+
+    # Send a message
+    Vector[uint8] msg = bytes_from_str("hello p2p")
+    sender.sendto(msg, "127.0.0.1", recv_addr.port).unwrap()
+
+    # Wait for data (up to 1 second)
+    bool ready = receiver.poll(1000)
+    if ready:
+        UdpPacket pkt = receiver.recvfrom(1024).unwrap()
+        print(bytes_to_str(pkt.data))
+
+    sender.close()
+    receiver.close()

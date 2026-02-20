@@ -1,0 +1,68 @@
+from std.p2p import Node, P2PEvent, ExternalAddr, PeerInfo
+from std.p2p import p2p_create_node, p2p_add_peer, p2p_poll, p2p_send_raw
+from std.p2p import p2p_hole_punch, p2p_request_relay, p2p_peer_id_hex
+from std.p2p import p2p_encode_announce_payload
+from std.bytes import bytes_from_str, bytes_to_str, bytes_to_hex, bytes_concat
+from std.net.udp import UdpAddr
+from std.collections import Vector
+
+void main():
+    # Three nodes: A wants to connect to C via rendezvous B
+    Node node_a = p2p_create_node("127.0.0.1", 0).unwrap()
+    Node node_b = p2p_create_node("127.0.0.1", 0).unwrap()
+    Node node_c = p2p_create_node("127.0.0.1", 0).unwrap()
+
+    UdpAddr addr_a = node_a.socket.local_addr()
+    UdpAddr addr_b = node_b.socket.local_addr()
+    UdpAddr addr_c = node_c.socket.local_addr()
+
+    # Connect A <-> B and B <-> C
+    p2p_add_peer(&node_a, "127.0.0.1", addr_b.port)
+    p2p_poll(&node_b, 1000)
+    p2p_poll(&node_a, 1000)
+
+    p2p_add_peer(&node_b, "127.0.0.1", addr_c.port)
+    p2p_poll(&node_c, 1000)
+    p2p_poll(&node_b, 1000)
+
+    # Step 1: External address discovery
+    # A sends ADDR_PROBE (40) to B
+    p2p_send_raw(&node_a, "127.0.0.1", addr_b.port, 40, Vector[uint8]())
+    # B processes it and sends ADDR_REPLY (41)
+    p2p_poll(&node_b, 1000)
+    # A receives ADDR_REPLY (event_type 5)
+    P2PEvent addr_ev = p2p_poll(&node_a, 1000)
+    if addr_ev.event_type == 5:
+        print("addr discovered")
+
+    # Step 2: Hole punch via rendezvous
+    # A sends HOLE_PUNCH_REQ (42) to B with target=C's peer_id + A's address
+    ExternalAddr a_ext = ExternalAddr(addr_a.host, addr_a.port)
+    p2p_hole_punch(&node_a, node_c.identity.peer_id, node_b.identity.peer_id, a_ext)
+    # B processes HOLE_PUNCH_REQ, forwards NOTIFY (43) to C
+    p2p_poll(&node_b, 1000)
+    # C processes NOTIFY, learns A's address, sends PING to A
+    P2PEvent ev_c = p2p_poll(&node_c, 1000)
+    if ev_c.event_type == 2:
+        print("C discovered A via hole punch")
+    # A receives PING from C
+    P2PEvent ev_a = p2p_poll(&node_a, 1000)
+    if ev_a.event_type == 2:
+        print("A discovered C via hole punch")
+
+    # Step 3: Relay — A sends data to C via relay B
+    p2p_request_relay(&node_a, node_b.identity.peer_id, node_c.identity.peer_id, bytes_from_str("relayed msg"))
+    # B processes RELAY_REQUEST and forwards to C
+    p2p_poll(&node_b, 1000)
+    # C receives RELAY_DATA (event_type 6) — may need extra polls to drain PONG
+    int tries = 0
+    while tries < 5:
+        P2PEvent relay_ev = p2p_poll(&node_c, 500)
+        if relay_ev.event_type == 6:
+            print(bytes_to_str(relay_ev.data))
+            tries = 5
+        tries = tries + 1
+
+    node_a.socket.close()
+    node_b.socket.close()
+    node_c.socket.close()

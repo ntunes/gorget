@@ -1,0 +1,58 @@
+from std.p2p import Node, P2PEvent, DiscoveryConfig, PeerId
+from std.p2p import p2p_create_node, p2p_enable_discovery, p2p_poll
+from std.p2p import p2p_peer_id_hex, p2p_send, p2p_send_raw
+from std.p2p import p2p_default_discovery_config
+from std.bytes import bytes_from_str, bytes_to_str
+from std.collections import Vector
+from std.net.udp import UdpAddr
+
+void main():
+    # Create two nodes on localhost with OS-assigned ports
+    Node node1 = p2p_create_node("127.0.0.1", 0).unwrap()
+    Node node2 = p2p_create_node("127.0.0.1", 0).unwrap()
+
+    # Enable discovery on node2 FIRST so it joins the multicast group
+    DiscoveryConfig config2 = p2p_default_discovery_config()
+    p2p_enable_discovery(&node2, config2)
+
+    # Now enable node1 — its announce will be heard by node2
+    DiscoveryConfig config1 = p2p_default_discovery_config()
+    p2p_enable_discovery(&node1, config1)
+
+    # Poll both nodes in a loop until both discover each other
+    bool node2_found = false
+    bool node1_found = false
+    int tries = 0
+    while tries < 20:
+        if not node2_found:
+            P2PEvent ev = p2p_poll(&node2, 100)
+            if ev.event_type == 2:
+                node2_found = true
+        if not node1_found:
+            P2PEvent ev2 = p2p_poll(&node1, 100)
+            if ev2.event_type == 2:
+                node1_found = true
+        if node1_found and node2_found:
+            tries = 20
+        tries = tries + 1
+
+    if node1_found and node2_found:
+        print("both discovered")
+
+    # Send DATA from node1 directly to node2's address
+    UdpAddr addr2 = node2.socket.local_addr()
+    p2p_send_raw(&node1, addr2.host, addr2.port, 3, bytes_from_str("discovery works"))
+
+    # Poll node2 until we get the DATA message
+    int attempts = 0
+    while attempts < 10:
+        P2PEvent ev3 = p2p_poll(&node2, 500)
+        if ev3.event_type == 1:
+            print(bytes_to_str(ev3.data))
+            attempts = 10
+        attempts = attempts + 1
+
+    node1.socket.close()
+    node1.disc_socket.close()
+    node2.socket.close()
+    node2.disc_socket.close()

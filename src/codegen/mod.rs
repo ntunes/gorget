@@ -651,6 +651,14 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
         emitter.emit(c_runtime::SOCKET_RUNTIME);
     }
 
+    // 1g2. UDP socket runtime (when std.net.udp is imported)
+    let has_udp = module.items.iter().any(|i| {
+        matches!(&i.node, Item::Struct(s) if s.name.node == "UdpSocket" && s.span == crate::span::Span::dummy())
+    });
+    if has_udp {
+        emitter.emit(c_runtime::UDP_SOCKET_RUNTIME);
+    }
+
     // 1g. Bytes runtime (when std.bytes is imported)
     let has_bytes = module.items.iter().any(|i| {
         if let Item::Function(f) = &i.node {

@@ -1,0 +1,59 @@
+from std.p2p import Node, P2PEvent, PeerInfo
+from std.p2p import p2p_create_node, p2p_add_peer, p2p_poll
+from std.p2p import p2p_dht_store, p2p_dht_local_get, p2p_send_raw
+from std.bytes import bytes_from_str, bytes_to_str, bytes_to_hex
+from std.crypto import crypto_sha256
+from std.net.udp import UdpAddr
+from std.collections import Vector
+
+void main():
+    # Create three nodes
+    Node node_a = p2p_create_node("127.0.0.1", 0).unwrap()
+    Node node_b = p2p_create_node("127.0.0.1", 0).unwrap()
+    Node node_c = p2p_create_node("127.0.0.1", 0).unwrap()
+
+    # Connect them: A <-> B <-> C
+    UdpAddr addr_b = node_b.socket.local_addr()
+    UdpAddr addr_c = node_c.socket.local_addr()
+
+    p2p_add_peer(&node_a, "127.0.0.1", addr_b.port)
+    p2p_poll(&node_b, 1000)
+    p2p_poll(&node_a, 1000)
+
+    p2p_add_peer(&node_b, "127.0.0.1", addr_c.port)
+    p2p_poll(&node_c, 1000)
+    p2p_poll(&node_b, 1000)
+
+    print("peers connected")
+
+    # Node A stores a value with key = sha256("test-key")
+    Vector[uint8] key = crypto_sha256(bytes_from_str("test-key"))
+    p2p_dht_store(&node_a, key, bytes_from_str("hello from DHT"))
+
+    # Poll B to receive STORE message from A
+    p2p_poll(&node_b, 1000)
+
+    # Verify B has the value locally
+    str key_hex = bytes_to_hex(key)
+    Result[Vector[uint8], str] b_result = p2p_dht_local_get(node_b, key_hex)
+    if b_result.is_ok():
+        print(bytes_to_str(b_result.unwrap()))
+
+    # C queries via DHT: send FIND_VALUE(23) to its known peer B
+    int ci = 0
+    while ci < node_c.peers.len():
+        PeerInfo cpi = node_c.peers.get(ci).unwrap()
+        p2p_send_raw(&node_c, cpi.host, cpi.port, 23, key)
+        ci = ci + 1
+
+    # Poll B to process FIND_VALUE and send FIND_VALUE_REPLY
+    p2p_poll(&node_b, 1000)
+
+    # Poll C to receive FIND_VALUE_REPLY (event_type 4 = DHT_RESULT)
+    P2PEvent dht_ev = p2p_poll(&node_c, 1000)
+    if dht_ev.event_type == 4:
+        print(bytes_to_str(dht_ev.data))
+
+    node_a.socket.close()
+    node_b.socket.close()
+    node_c.socket.close()

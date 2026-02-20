@@ -54,8 +54,8 @@ pub fn is_stdlib_module(segments: &[String]) -> bool {
         return false;
     }
     match segments.len() {
-        2 => matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv" | "io" | "random" | "time" | "collections" | "math" | "fmt" | "process" | "sdl" | "gfx" | "ecs" | "json" | "toml" | "xml" | "yaml" | "bytes" | "crypto" | "ssh" | "http" | "regex" | "encoding" | "csv"),
-        3 => segments[1] == "net" && matches!(segments[2].as_str(), "socket" | "tls"),
+        2 => matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv" | "io" | "random" | "time" | "collections" | "math" | "fmt" | "process" | "sdl" | "gfx" | "ecs" | "json" | "toml" | "xml" | "yaml" | "bytes" | "crypto" | "ssh" | "http" | "regex" | "encoding" | "csv" | "p2p"),
+        3 => segments[1] == "net" && matches!(segments[2].as_str(), "socket" | "tls" | "udp"),
         _ => false,
     }
 }
@@ -92,10 +92,12 @@ pub fn generate_stdlib_module(segments: &[String]) -> Option<Module> {
             "ssh" => None, // file-based module — loaded via stdlib_module_source()
             "http" => None, // file-based module — loaded via stdlib_module_source()
             "regex" => Some(gen_regex_module()),
+            "p2p" => None, // file-based module — loaded via stdlib_module_source()
             _ => None,
         },
         3 if segments[1] == "net" && segments[2] == "socket" => Some(gen_socket_module()),
         3 if segments[1] == "net" && segments[2] == "tls" => Some(gen_tls_socket_module()),
+        3 if segments[1] == "net" && segments[2] == "udp" => Some(gen_udp_socket_module()),
         _ => None,
     }
 }
@@ -583,6 +585,7 @@ pub fn stdlib_module_source(segments: &[String]) -> Option<&'static str> {
         Some("bytes") => Some(include_str!("../lib/std/bytes.gg")),
         Some("encoding") => Some(include_str!("../lib/std/encoding.gg")),
         Some("csv") => Some(include_str!("../lib/std/csv.gg")),
+        Some("p2p") => Some(include_str!("../lib/std/p2p.gg")),
         _ => None,
     }
 }
@@ -721,6 +724,10 @@ fn gen_crypto_module() -> Module {
         name: Spanned::dummy("RSAKey".to_string()),
         generic_args: vec![],
     };
+    let ty_ed25519_keypair = || Type::Named {
+        name: Spanned::dummy("Ed25519KeyPair".to_string()),
+        generic_args: vec![],
+    };
 
     let mut items: Vec<Spanned<Item>> = Vec::new();
 
@@ -728,6 +735,7 @@ fn gen_crypto_module() -> Module {
     items.push(opaque_struct("CipherContext"));
     items.push(opaque_struct("BigNum"));
     items.push(opaque_struct("RSAKey"));
+    items.push(opaque_struct("Ed25519KeyPair"));
 
     // Free functions — extern bindings (except Result-wrapping functions which stay as Declaration)
     let fns = vec![
@@ -747,6 +755,10 @@ fn gen_crypto_module() -> Module {
         extern_fn("crypto_rsa_verify", &[("key", ty_rsakey()), ("data", ty_vector_uint8()), ("sig", ty_vector_uint8())], ty_bool(), "gorget_crypto_rsa_verify"),
         // Random — Result wrapping in codegen
         decl_fn("crypto_random_bytes", &[("n", ty_int())], ty_result(ty_vector_uint8(), ty_str())),
+        // Ed25519 — keygen returns Result, sign returns Result, verify is direct
+        decl_fn("crypto_ed25519_keygen", &[], ty_result(ty_ed25519_keypair(), ty_str())),
+        decl_fn("crypto_ed25519_sign", &[("private_key", ty_vector_uint8()), ("data", ty_vector_uint8())], ty_result(ty_vector_uint8(), ty_str())),
+        extern_fn("crypto_ed25519_verify", &[("public_key", ty_vector_uint8()), ("data", ty_vector_uint8()), ("signature", ty_vector_uint8())], ty_bool(), "gorget_crypto_ed25519_verify"),
     ];
     for f in fns {
         items.push(Spanned::dummy(Item::Function(f)));
@@ -756,6 +768,12 @@ fn gen_crypto_module() -> Module {
     items.push(equip_block("CipherContext", vec![
         extern_method("encrypt", Ownership::MutableBorrow, &[("data", ty_vector_uint8())], ty_vector_uint8(), "gorget_cipher_encrypt"),
         extern_method("decrypt", Ownership::MutableBorrow, &[("data", ty_vector_uint8())], ty_vector_uint8(), "gorget_cipher_decrypt"),
+    ]));
+
+    // Ed25519KeyPair methods — extern bindings
+    items.push(equip_block("Ed25519KeyPair", vec![
+        extern_method("public_key", Ownership::Borrow, &[], ty_vector_uint8(), "gorget_ed25519_public_key"),
+        extern_method("private_key", Ownership::Borrow, &[], ty_vector_uint8(), "gorget_ed25519_private_key"),
     ]));
 
     Module {
@@ -791,6 +809,104 @@ fn gen_socket_module() -> Module {
         extern_method("read_line", Ownership::MutableBorrow, &[], ty_string(), "gorget_socket_read_line"),
         extern_method("set_timeout", Ownership::MutableBorrow, &[("ms", ty_int())], ty_void(), "gorget_socket_set_timeout"),
         extern_method("close", Ownership::MutableBorrow, &[], ty_void(), "gorget_socket_close"),
+    ]));
+
+    Module {
+        items,
+        span: Span::dummy(),
+    }
+}
+
+// ─── std.net.udp ────────────────────────────────────────────
+
+fn gen_udp_socket_module() -> Module {
+    let ty_udp_socket = || Type::Named {
+        name: Spanned::dummy("UdpSocket".to_string()),
+        generic_args: vec![],
+    };
+    let ty_udp_addr = || Type::Named {
+        name: Spanned::dummy("UdpAddr".to_string()),
+        generic_args: vec![],
+    };
+    let ty_udp_packet = || Type::Named {
+        name: Spanned::dummy("UdpPacket".to_string()),
+        generic_args: vec![],
+    };
+
+    let mut items: Vec<Spanned<Item>> = Vec::new();
+
+    // Opaque struct: UdpSocket
+    items.push(opaque_struct("UdpSocket"));
+
+    // Struct with visible fields: UdpAddr { host: str, port: int }
+    items.push(Spanned::dummy(Item::Struct(StructDef {
+        attributes: vec![],
+        visibility: Visibility::Public,
+        name: Spanned::dummy("UdpAddr".to_string()),
+        generic_params: None,
+        fields: vec![
+            Spanned::dummy(FieldDef {
+                visibility: Visibility::Public,
+                name: Spanned::dummy("host".to_string()),
+                type_: Spanned::dummy(ty_str()),
+            }),
+            Spanned::dummy(FieldDef {
+                visibility: Visibility::Public,
+                name: Spanned::dummy("port".to_string()),
+                type_: Spanned::dummy(ty_int()),
+            }),
+        ],
+        doc_comment: None,
+        span: Span::dummy(),
+    })));
+
+    // Struct with visible fields: UdpPacket { data: Vector[uint8], sender: UdpAddr }
+    items.push(Spanned::dummy(Item::Struct(StructDef {
+        attributes: vec![],
+        visibility: Visibility::Public,
+        name: Spanned::dummy("UdpPacket".to_string()),
+        generic_params: None,
+        fields: vec![
+            Spanned::dummy(FieldDef {
+                visibility: Visibility::Public,
+                name: Spanned::dummy("data".to_string()),
+                type_: Spanned::dummy(ty_vector_uint8()),
+            }),
+            Spanned::dummy(FieldDef {
+                visibility: Visibility::Public,
+                name: Spanned::dummy("sender".to_string()),
+                type_: Spanned::dummy(ty_udp_addr()),
+            }),
+        ],
+        doc_comment: None,
+        span: Span::dummy(),
+    })));
+
+    // Free function: udp_bind(addr, port) -> Result[UdpSocket, str]
+    items.push(Spanned::dummy(Item::Function(
+        decl_fn("udp_bind", &[("addr", ty_str()), ("port", ty_int())], ty_result(ty_udp_socket(), ty_str())),
+    )));
+
+    // UdpSocket methods
+    items.push(equip_block("UdpSocket", vec![
+        // sendto(&self, data, host, port) -> Result[int, str]
+        decl_method("sendto", Ownership::MutableBorrow, &[("data", ty_vector_uint8()), ("host", ty_str()), ("port", ty_int())], ty_result(ty_int(), ty_str())),
+        // recvfrom(&self, max_bytes) -> Result[UdpPacket, str]
+        decl_method("recvfrom", Ownership::MutableBorrow, &[("max_bytes", ty_int())], ty_result(ty_udp_packet(), ty_str())),
+        // poll(&self, timeout_ms) -> bool
+        extern_method("poll", Ownership::MutableBorrow, &[("timeout_ms", ty_int())], ty_bool(), "gorget_udp_poll"),
+        // set_nonblocking(&self, enabled)
+        extern_method("set_nonblocking", Ownership::MutableBorrow, &[("enabled", ty_bool())], ty_void(), "gorget_udp_set_nonblocking"),
+        // join_multicast(&self, group_addr) -> Result[bool, str]
+        decl_method("join_multicast", Ownership::MutableBorrow, &[("group_addr", ty_str())], ty_result(ty_bool(), ty_str())),
+        // leave_multicast(&self, group_addr)
+        extern_method("leave_multicast", Ownership::MutableBorrow, &[("group_addr", ty_str())], ty_void(), "gorget_udp_leave_multicast"),
+        // set_multicast_loopback(&self, enabled)
+        extern_method("set_multicast_loopback", Ownership::MutableBorrow, &[("enabled", ty_bool())], ty_void(), "gorget_udp_set_multicast_loopback"),
+        // local_addr(self) -> UdpAddr
+        extern_method("local_addr", Ownership::Borrow, &[], ty_udp_addr(), "gorget_udp_local_addr"),
+        // close(&self)
+        extern_method("close", Ownership::MutableBorrow, &[], ty_void(), "gorget_udp_close"),
     ]));
 
     Module {

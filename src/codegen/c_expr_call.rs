@@ -722,6 +722,48 @@ impl CodegenContext<'_> {
                             );
                         }
                     }
+                    // std.crypto — Ed25519
+                    "crypto_ed25519_keygen" => {
+                        let result_type = self.register_generic("Result", &["GorgetEd25519KeyPair".into(), "const char*".into()], super::GenericInstanceKind::Enum);
+                        let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
+                        let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
+                        return format!(
+                            "({{ GorgetEd25519KeyPair __rk = gorget_crypto_ed25519_keygen(); \
+                            const char* __re = gorget_crypto_last_error(); \
+                            __re ? {err_ctor}(__re) : {ok_ctor}(__rk); }})"
+                        );
+                    }
+                    "crypto_ed25519_sign" => {
+                        if args.len() >= 2 {
+                            let pk = self.gen_expr(&args[0].node.value);
+                            let data = self.gen_expr(&args[1].node.value);
+                            let pk_addr = addr_of(&pk, &args[0].node.value.node);
+                            let data_addr = addr_of(&data, &args[1].node.value.node);
+                            let result_type = self.register_generic("Result", &["GorgetArray".into(), "const char*".into()], super::GenericInstanceKind::Enum);
+                            let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
+                            let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
+                            return format!(
+                                "({{ GorgetArray __rk = gorget_crypto_ed25519_sign({pk_addr}, {data_addr}); \
+                                const char* __re = gorget_crypto_last_error(); \
+                                __re ? {err_ctor}(__re) : {ok_ctor}(__rk); }})"
+                            );
+                        }
+                    }
+                    // std.net.udp
+                    "udp_bind" => {
+                        if args.len() >= 2 {
+                            let addr = self.gen_str_arg(&args[0].node.value);
+                            let port = self.gen_expr(&args[1].node.value);
+                            let result_type = self.register_generic("Result", &["GorgetUdpSocket".into(), "const char*".into()], super::GenericInstanceKind::Enum);
+                            let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
+                            let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
+                            return format!(
+                                "({{ GorgetUdpSocket __us = gorget_udp_bind({addr}, {port}); \
+                                const char* __ue = gorget_udp_last_error(); \
+                                __ue ? {err_ctor}(__ue) : {ok_ctor}(__us); }})"
+                            );
+                        }
+                    }
                     // std.net.socket
                     "socket_connect" => {
                         if args.len() >= 2 {
@@ -1449,6 +1491,60 @@ impl CodegenContext<'_> {
                         }
                     }
                     _ => {} // fall through to extern_symbols for text, start, end_pos, etc.
+                }
+            }
+        }
+
+        // UdpSocket method dispatch (Declaration methods needing Result-wrapping)
+        {
+            let type_name = self.infer_receiver_type(receiver);
+            if type_name == "UdpSocket" || type_name == "GorgetUdpSocket" {
+                let recv = self.gen_expr(receiver);
+                let recv_ref = addr_of(&recv, &receiver.node);
+                match method_name {
+                    "sendto" => {
+                        if args.len() >= 3 {
+                            let data = self.gen_expr(&args[0].node.value);
+                            let data_addr = addr_of(&data, &args[0].node.value.node);
+                            let host = self.gen_str_arg(&args[1].node.value);
+                            let port = self.gen_expr(&args[2].node.value);
+                            let result_type = self.register_generic("Result", &["int64_t".into(), "const char*".into()], super::GenericInstanceKind::Enum);
+                            let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
+                            let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
+                            return format!(
+                                "({{ int64_t __us = gorget_udp_sendto({recv_ref}, {data_addr}, {host}, {port}); \
+                                const char* __ue = gorget_udp_last_error(); \
+                                __ue ? {err_ctor}(__ue) : {ok_ctor}(__us); }})"
+                            );
+                        }
+                    }
+                    "recvfrom" => {
+                        if let Some(arg) = args.first() {
+                            let max_bytes = self.gen_expr(&arg.node.value);
+                            let result_type = self.register_generic("Result", &["GorgetUdpPacket".into(), "const char*".into()], super::GenericInstanceKind::Enum);
+                            let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
+                            let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
+                            return format!(
+                                "({{ GorgetUdpPacket __up = gorget_udp_recvfrom({recv_ref}, {max_bytes}); \
+                                const char* __ue = gorget_udp_last_error(); \
+                                __ue ? {err_ctor}(__ue) : {ok_ctor}(__up); }})"
+                            );
+                        }
+                    }
+                    "join_multicast" => {
+                        if let Some(arg) = args.first() {
+                            let group = self.gen_str_arg(&arg.node.value);
+                            let result_type = self.register_generic("Result", &["bool".into(), "const char*".into()], super::GenericInstanceKind::Enum);
+                            let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
+                            let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
+                            return format!(
+                                "({{ bool __uj = gorget_udp_join_multicast({recv_ref}, {group}); \
+                                const char* __ue = gorget_udp_last_error(); \
+                                __ue ? {err_ctor}(__ue) : {ok_ctor}(__uj); }})"
+                            );
+                        }
+                    }
+                    _ => {} // fall through to extern_symbols for poll, set_nonblocking, etc.
                 }
             }
         }

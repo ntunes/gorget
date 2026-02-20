@@ -3872,6 +3872,70 @@ done",
 }
 
 #[test]
+fn udp_echo() {
+    run_gg(
+        "udp_echo.gg",
+        "hello p2p",
+    );
+}
+
+#[test]
+fn p2p_basic() {
+    run_gg(
+        "p2p_basic.gg",
+        "\
+node2 discovered peer
+node1 discovered peer
+hello p2p",
+    );
+}
+
+#[test]
+fn p2p_discovery() {
+    run_gg(
+        "p2p_discovery.gg",
+        "\
+both discovered
+discovery works",
+    );
+}
+
+#[test]
+fn p2p_dht() {
+    run_gg(
+        "p2p_dht.gg",
+        "\
+peers connected
+hello from DHT
+hello from DHT",
+    );
+}
+
+#[test]
+fn p2p_nat() {
+    run_gg(
+        "p2p_nat.gg",
+        "\
+addr discovered
+C discovered A via hole punch
+A discovered C via hole punch
+relayed msg",
+    );
+}
+
+#[test]
+fn p2p_gossip() {
+    run_gg(
+        "p2p_gossip.gg",
+        "\
+chat
+hello gossip
+hello gossip
+second msg",
+    );
+}
+
+#[test]
 fn name_first() {
     run_gg(
         "name_first.gg",

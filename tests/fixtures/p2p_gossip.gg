@@ -1,0 +1,56 @@
+from std.p2p import Node, P2PEvent
+from std.p2p import p2p_create_node, p2p_add_peer, p2p_poll
+from std.p2p import p2p_subscribe, p2p_publish
+from std.bytes import bytes_from_str, bytes_to_str
+from std.net.udp import UdpAddr
+from std.collections import Vector
+
+void main():
+    # Three nodes in a chain: A <-> B <-> C
+    Node node_a = p2p_create_node("127.0.0.1", 0).unwrap()
+    Node node_b = p2p_create_node("127.0.0.1", 0).unwrap()
+    Node node_c = p2p_create_node("127.0.0.1", 0).unwrap()
+
+    UdpAddr addr_b = node_b.socket.local_addr()
+    UdpAddr addr_c = node_c.socket.local_addr()
+
+    # A <-> B
+    p2p_add_peer(&node_a, "127.0.0.1", addr_b.port)
+    p2p_poll(&node_b, 1000)
+    p2p_poll(&node_a, 1000)
+
+    # B <-> C
+    p2p_add_peer(&node_b, "127.0.0.1", addr_c.port)
+    p2p_poll(&node_c, 1000)
+    p2p_poll(&node_b, 1000)
+
+    # Subscribe B and C to "chat" topic
+    p2p_subscribe(&node_b, "chat")
+    p2p_subscribe(&node_c, "chat")
+
+    # A publishes to "chat" — goes to B (A's only known peer)
+    p2p_publish(&node_a, "chat", bytes_from_str("hello gossip"))
+
+    # B processes gossip: receives, stores msg_id, forwards to C
+    P2PEvent ev_b = p2p_poll(&node_b, 1000)
+    if ev_b.event_type == 7:
+        print(ev_b.topic)
+        print(bytes_to_str(ev_b.data))
+
+    # C processes gossip: receives from B
+    P2PEvent ev_c = p2p_poll(&node_c, 1000)
+    if ev_c.event_type == 7:
+        print(bytes_to_str(ev_c.data))
+
+    # Dedup test: B forwards to C, but if C somehow got the same msg again
+    # it would be deduplicated. Let's verify B also marked it seen by
+    # having A publish a SECOND message
+    p2p_publish(&node_a, "chat", bytes_from_str("second msg"))
+    P2PEvent ev_b2 = p2p_poll(&node_b, 1000)
+    P2PEvent ev_c2 = p2p_poll(&node_c, 1000)
+    if ev_c2.event_type == 7:
+        print(bytes_to_str(ev_c2.data))
+
+    node_a.socket.close()
+    node_b.socket.close()
+    node_c.socket.close()

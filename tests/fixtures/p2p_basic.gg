@@ -1,0 +1,37 @@
+from std.p2p import Node, P2PEvent, p2p_create_node, p2p_add_peer, p2p_poll, p2p_send
+from std.net.udp import UdpAddr
+from std.bytes import bytes_from_str, bytes_to_str
+
+void main():
+    # Create two nodes on localhost with OS-assigned ports
+    Node node1 = p2p_create_node("127.0.0.1", 0).unwrap()
+    Node node2 = p2p_create_node("127.0.0.1", 0).unwrap()
+
+    # Get node2's actual address
+    UdpAddr addr2 = node2.socket.local_addr()
+
+    # node1 introduces itself to node2 (sends PING)
+    p2p_add_peer(&node1, "127.0.0.1", addr2.port)
+
+    # node2 polls: should receive PING and auto-reply PONG
+    # event_type 2 = PEER_DISCOVERED
+    P2PEvent ev1 = p2p_poll(&node2, 1000)
+    if ev1.event_type == 2:
+        print("node2 discovered peer")
+
+    # node1 polls: should receive PONG
+    P2PEvent ev2 = p2p_poll(&node1, 1000)
+    if ev2.event_type == 2:
+        print("node1 discovered peer")
+
+    # Now node1 can send DATA to node2 via peer_id
+    p2p_send(&node1, ev2.peer_id, bytes_from_str("hello p2p"))
+
+    # node2 polls: should receive DATA
+    # event_type 1 = MESSAGE
+    P2PEvent ev3 = p2p_poll(&node2, 1000)
+    if ev3.event_type == 1:
+        print(bytes_to_str(ev3.data))
+
+    node1.socket.close()
+    node2.socket.close()

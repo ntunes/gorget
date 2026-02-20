@@ -110,6 +110,12 @@ pub fn ast_type_to_c(ty: &crate::parser::ast::Type, scopes: &ScopeTable) -> Stri
                 return "GorgetSDLEvent".to_string();
             } else if name.node == "Socket" {
                 return "GorgetSocket".to_string();
+            } else if name.node == "UdpSocket" {
+                return "GorgetUdpSocket".to_string();
+            } else if name.node == "UdpAddr" {
+                return "GorgetUdpAddr".to_string();
+            } else if name.node == "UdpPacket" {
+                return "GorgetUdpPacket".to_string();
             } else if name.node == "TlsSocket" {
                 return "GorgetTlsSocket".to_string();
             } else if name.node == "CipherContext" {
@@ -118,6 +124,8 @@ pub fn ast_type_to_c(ty: &crate::parser::ast::Type, scopes: &ScopeTable) -> Stri
                 return "GorgetBigNum".to_string();
             } else if name.node == "RSAKey" {
                 return "GorgetRSAKey".to_string();
+            } else if name.node == "Ed25519KeyPair" {
+                return "GorgetEd25519KeyPair".to_string();
             } else if name.node == "Regex" {
                 return "GorgetRegex".to_string();
             } else if name.node == "Match" {
@@ -280,10 +288,14 @@ pub(super) fn def_name_to_c(def_id: DefId, scopes: &ScopeTable) -> String {
         "SDLFont" => "GorgetSDLFont".to_string(),
         "SDLEvent" => "GorgetSDLEvent".to_string(),
         "Socket" => "GorgetSocket".to_string(),
+        "UdpSocket" => "GorgetUdpSocket".to_string(),
+        "UdpAddr" => "GorgetUdpAddr".to_string(),
+        "UdpPacket" => "GorgetUdpPacket".to_string(),
         "TlsSocket" => "GorgetTlsSocket".to_string(),
         "CipherContext" => "GorgetCipherContext".to_string(),
         "BigNum" => "GorgetBigNum".to_string(),
         "RSAKey" => "GorgetRSAKey".to_string(),
+        "Ed25519KeyPair" => "GorgetEd25519KeyPair".to_string(),
         "Regex" => "GorgetRegex".to_string(),
         "Match" => "GorgetRegexMatch".to_string(),
         _ => name,
