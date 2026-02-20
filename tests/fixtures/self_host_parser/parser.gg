@@ -702,80 +702,80 @@ bool is_compound_assign(int tag):
 
 int infix_left_bp(int tag):
     if tag == TOK_DOUBLEQUESTION:
-        return 5
+        return 3
     elif tag == TOK_DOTDOT:
-        return 10
-    elif tag == TOK_PIPE:
-        return 20
-    elif tag == TOK_CARET:
-        return 22
-    elif tag == TOK_AMP:
-        return 24
+        return 23
     elif tag == TOK_EQEQ:
-        return 30
+        return 11
     elif tag == TOK_BANGEQ:
-        return 30
+        return 11
     elif tag == TOK_LT:
-        return 35
+        return 13
     elif tag == TOK_GT:
-        return 35
+        return 13
     elif tag == TOK_LTEQ:
-        return 35
+        return 13
     elif tag == TOK_GTEQ:
-        return 35
+        return 13
+    elif tag == TOK_PIPE:
+        return 17
+    elif tag == TOK_CARET:
+        return 19
+    elif tag == TOK_AMP:
+        return 21
     elif tag == TOK_LTLT:
-        return 37
+        return 25
     elif tag == TOK_GTGT:
-        return 37
+        return 25
     elif tag == TOK_PLUS:
-        return 40
+        return 27
     elif tag == TOK_MINUS:
-        return 40
+        return 27
     elif tag == TOK_STAR:
-        return 50
+        return 29
     elif tag == TOK_SLASH:
-        return 50
+        return 29
     elif tag == TOK_PERCENT:
-        return 50
+        return 29
     return 0
 
 int infix_right_bp(int tag):
     if tag == TOK_DOUBLEQUESTION:
-        return 6
+        return 4
     elif tag == TOK_DOTDOT:
-        return 11
-    elif tag == TOK_PIPE:
-        return 21
-    elif tag == TOK_CARET:
-        return 23
-    elif tag == TOK_AMP:
-        return 25
+        return 24
     elif tag == TOK_EQEQ:
-        return 31
+        return 12
     elif tag == TOK_BANGEQ:
-        return 31
+        return 12
     elif tag == TOK_LT:
-        return 36
+        return 14
     elif tag == TOK_GT:
-        return 36
+        return 14
     elif tag == TOK_LTEQ:
-        return 36
+        return 14
     elif tag == TOK_GTEQ:
-        return 36
+        return 14
+    elif tag == TOK_PIPE:
+        return 18
+    elif tag == TOK_CARET:
+        return 20
+    elif tag == TOK_AMP:
+        return 22
     elif tag == TOK_LTLT:
-        return 38
+        return 26
     elif tag == TOK_GTGT:
-        return 38
+        return 26
     elif tag == TOK_PLUS:
-        return 41
+        return 28
     elif tag == TOK_MINUS:
-        return 41
+        return 28
     elif tag == TOK_STAR:
-        return 51
+        return 30
     elif tag == TOK_SLASH:
-        return 51
+        return 30
     elif tag == TOK_PERCENT:
-        return 51
+        return 30
     return 0
 
 # ── Parser struct ────────────────────────────────────────────
@@ -1155,20 +1155,20 @@ equip Parser:
 
             # and / or: keyword-based infix operators
             if self.check_kw(KW_AND):
-                int l_bp = 15
+                int l_bp = 7
                 if l_bp < min_bp:
                     break
                 self.advance()
-                SpannedExpr rhs = self.parse_expr_bp(16)
+                SpannedExpr rhs = self.parse_expr_bp(8)
                 lhs = SpannedExpr(EBinaryOp(Box(lhs), "and", Box(rhs)), Span(lhs.span.start, rhs.span.end))
                 continue
 
             if self.check_kw(KW_OR):
-                int l_bp = 12
+                int l_bp = 5
                 if l_bp < min_bp:
                     break
                 self.advance()
-                SpannedExpr rhs = self.parse_expr_bp(13)
+                SpannedExpr rhs = self.parse_expr_bp(6)
                 lhs = SpannedExpr(EBinaryOp(Box(lhs), "or", Box(rhs)), Span(lhs.span.start, rhs.span.end))
                 continue
 
