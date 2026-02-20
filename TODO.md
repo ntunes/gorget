@@ -2,7 +2,25 @@
 
 ## High
 
+- **Parser: match stmt/expr duplicate arm-parsing loop**: `stmt.rs:231-315` and `expr.rs:1399-1459` both parse `case <pattern> [if guard]: <body>` arms with `else:` fallthrough — ~120 lines of structural duplication. Extract shared `parse_match_arms()` helper. [added: 2026-02-20]
+
+- **Parser: String/Some/Ok/Error constructor parsing inconsistency**: `expr.rs:418-498` — `String(x)` uses full inline call-arg loop (duplicating `parse_call_args()`), `Some`/`Ok`/`Error` use semi-inline, `Box` uses postfix. Unify: convert keyword to identifier, let `parse_postfix` handle `(args)`. [added: 2026-02-20]
+
 ## Medium
+
+- **Parser: optional generic params repeated 6x**: `mod.rs:577,644,711,804,970,1247` — same `if check LBracket { Some(parse_generic_params()) } else { None }`. Extract `parse_optional_generic_params()`. [added: 2026-02-20]
+
+- **Parser: doc comment accumulation loop repeated 3x**: `mod.rs:337,731,844` — identical `while DocComment { accumulate }` loops. Extract `collect_doc_comment()`. [added: 2026-02-20]
+
+- **Parser: `trim_matches('\'')` fragile keyword-to-string hack**: `expr.rs:447,491,513`, `mod.rs:162`, `pattern.rs:123` — relies on undocumented Display contract. Add explicit `Keyword::as_name()` method. [added: 2026-02-20]
+
+- **Parser: manual backtracking without abstraction**: `expr.rs:829,904,1110`, `stmt.rs:397,517` — 5 sites with manual `saved_pos` ceremony. Extract `try_parse()` helper. [added: 2026-02-20]
+
+- **Parser: inline block parsers missing forward-progress guard**: `stmt.rs:271-277` (match arm) and `expr.rs:1162-1167` (closure body) lack the `pos_before` infinite-loop guard that `parse_block()` has. Latent correctness issue. [added: 2026-02-20]
+
+- **Parser: `parse_decl_or_expr_stmt` does too much**: `stmt.rs:395-453` — handles mutable prefix, auto shorthand, type parsing with backtrack, ownership modifiers, identifier detection, and value parsing. Split into smaller pieces. [added: 2026-02-20]
+
+- **Parser: tests embedded in mod.rs (~1210 lines)**: `mod.rs:1729-2939` — move to separate `tests.rs` module to shrink `mod.rs` from 2939 to ~1727 lines. [added: 2026-02-20]
 
 - **`Into[T]` conversion trait**: Counterpart to `From[T]` requiring explicit type args (`value.into[Celsius]()`) or return-type inference. Adds complexity (equipping primitives, potential blanket impl pattern). [added: 2026-02-17]
 
@@ -63,6 +81,14 @@
 - **`std.regex` deferred features**: (1) `replace_with(self, str subject, Callable[Match, str] fn)` — callback replacement (requires C→Gorget closure call for user-defined replacement logic). (2) `named_groups(self) -> Dict[str, str]` — requires building a Gorget Dict from C. [added: 2026-02-19]
 
 ## Low
+
+- **Parser: `parse_param` has 3 near-identical self-param constructions**: `mod.rs:1368-1416` — three early returns building the same `Param { type_: SelfType, ownership: X }`. Extract `make_self_param()`. [added: 2026-02-20]
+
+- **Parser: `auto` → `Type::Inferred` handled inline in 3 places**: `stmt.rs:359,409,537` — redundant with `parse_type()` which already handles `auto`. May be able to just call `parse_type()` directly. [added: 2026-02-20]
+
+- **Parser: set literal emits `Expr::ArrayLiteral`**: `expr.rs:1361` — `{a, b, c}` falls through to `ArrayLiteral` instead of a set-specific AST variant. Missing `SetLiteral` or needs clarifying comment. [added: 2026-02-20]
+
+- **Parser: `ImportStmt` lacks `.span()` method**: `mod.rs:385-399` — verbose match over all 3 variants just to extract `span`. Add `.span()` accessor. [added: 2026-02-20]
 
 - **Package management phase 2 (`gg update`, registry)**: Semver-aware resolution, central registry, `gg publish`, workspaces. [added: 2026-02-15]
 

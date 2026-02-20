@@ -508,19 +508,7 @@ impl Parser {
                             // key = "value"
                             if let Token::StringLiteral(s) = self.peek().clone() {
                                 self.advance();
-                                let val = s
-                                    .segments
-                                    .iter()
-                                    .filter_map(|seg| {
-                                        if let crate::lexer::token::StringSegment::Literal(l) = seg
-                                        {
-                                            Some(l.as_str())
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .collect();
-                                args.push(AttributeArg::KeyValue(ident.node, val));
+                                args.push(AttributeArg::KeyValue(ident.node, s.as_plain_text()));
                             } else {
                                 let val_ident = self.expect_identifier()?;
                                 args.push(AttributeArg::KeyValue(ident.node, val_ident.node));
@@ -531,18 +519,7 @@ impl Parser {
                     }
                     Token::StringLiteral(_) => {
                         if let Token::StringLiteral(s) = self.advance().node {
-                            let val: String = s
-                                .segments
-                                .iter()
-                                .filter_map(|seg| {
-                                    if let crate::lexer::token::StringSegment::Literal(l) = seg {
-                                        Some(l.as_str())
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect();
-                            args.push(AttributeArg::StringLiteral(val));
+                            args.push(AttributeArg::StringLiteral(s.as_plain_text()));
                         }
                     }
                     _ => {
@@ -1013,18 +990,7 @@ impl Parser {
 
         let abi = if let Token::StringLiteral(_) = self.peek() {
             if let Token::StringLiteral(s) = self.advance().node {
-                let val: String = s
-                    .segments
-                    .iter()
-                    .filter_map(|seg| {
-                        if let crate::lexer::token::StringSegment::Literal(l) = seg {
-                            Some(l.as_str())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                Some(Spanned::new(val, self.previous_span()))
+                Some(Spanned::new(s.as_plain_text(), self.previous_span()))
             } else {
                 None
             }
@@ -1287,19 +1253,8 @@ impl Parser {
             // Extern function: expect `= "c_symbol_name"`
             self.expect(&Token::Eq)?;
             if let Token::StringLiteral(s) = self.advance().node {
-                let symbol: String = s
-                    .segments
-                    .iter()
-                    .filter_map(|seg| {
-                        if let crate::lexer::token::StringSegment::Literal(l) = seg {
-                            Some(l.as_str())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
                 self.consume_newline();
-                FunctionBody::Extern(symbol)
+                FunctionBody::Extern(s.as_plain_text())
             } else {
                 return Err(self.error_unexpected("string literal for extern symbol"));
             }
@@ -1648,20 +1603,10 @@ impl Parser {
     fn expect_plain_string(&mut self) -> Result<Spanned<String>, ParseError> {
         match self.peek().clone() {
             Token::StringLiteral(ref s) => {
-                let text: String = s
-                    .segments
-                    .iter()
-                    .filter_map(|seg| {
-                        if let crate::lexer::token::StringSegment::Literal(l) = seg {
-                            Some(l.as_str())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                if s.segments.iter().any(|seg| matches!(seg, crate::lexer::token::StringSegment::Interpolation(_))) {
+                if s.has_interpolation() {
                     return Err(self.error_at(self.peek_span(), "test name must be a plain string (no interpolations)"));
                 }
+                let text = s.as_plain_text();
                 let span = self.peek_span();
                 self.advance();
                 Ok(Spanned::new(text, span))

@@ -691,6 +691,29 @@ pub struct StringLit {
     pub segments: Vec<StringSegment>,
 }
 
+impl StringLit {
+    /// Extract the plain text content, ignoring any interpolation segments.
+    pub fn as_plain_text(&self) -> String {
+        self.segments
+            .iter()
+            .filter_map(|seg| {
+                if let StringSegment::Literal(l) = seg {
+                    Some(l.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Returns true if the string contains any interpolation segments.
+    pub fn has_interpolation(&self) -> bool {
+        self.segments
+            .iter()
+            .any(|seg| matches!(seg, StringSegment::Interpolation(_)))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StringKind {
     Normal,
