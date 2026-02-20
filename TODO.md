@@ -4,10 +4,6 @@
 
 ## Medium
 
-- **Parser: `parse_decl_or_expr_stmt` does too much**: `stmt.rs:395-453` — handles mutable prefix, auto shorthand, type parsing with backtrack, ownership modifiers, identifier detection, and value parsing. Split into smaller pieces. [added: 2026-02-20]
-
-- **Parser: tests embedded in mod.rs (~1210 lines)**: `mod.rs:1729-2939` — move to separate `tests.rs` module to shrink `mod.rs` from 2939 to ~1727 lines. [added: 2026-02-20]
-
 - **`Into[T]` conversion trait**: Counterpart to `From[T]` requiring explicit type args (`value.into[Celsius]()`) or return-type inference. Adds complexity (equipping primitives, potential blanket impl pattern). [added: 2026-02-17]
 
 - **`TryInto[T]` conversion trait**: Fallible counterpart to `Into[T]`, same complexity issues (explicit type args or return-type inference). Track alongside `Into[T]`. [added: 2026-02-18]
