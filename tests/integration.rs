@@ -4045,6 +4045,33 @@ done");
 }
 
 #[test]
+fn generic_callable() {
+    run_gg("generic_callable.gg", "\
+10
+val
+14
+done");
+}
+
+#[test]
+fn callable_ref_param() {
+    run_gg("callable_ref_param.gg", "\
+1
+2
+2
+done");
+}
+
+#[test]
+fn generic_callable_ref() {
+    run_gg("generic_callable_ref.gg", "\
+1
+restored
+1
+done");
+}
+
+#[test]
 fn extern_ffi() {
     run_gg(
         "extern_ffi.gg",

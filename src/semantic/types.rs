@@ -28,9 +28,10 @@ pub enum ResolvedType {
     /// Slice: ref int[]
     Slice(TypeId),
 
-    /// Function type: int(int, int)
+    /// Function type: int(int, int) or int(&MyStruct, int)
     Function {
         params: Vec<TypeId>,
+        param_ownerships: Vec<crate::parser::ast::Ownership>,
         return_type: TypeId,
     },
 
@@ -265,6 +266,7 @@ impl TypeTable {
             ResolvedType::Function {
                 params,
                 return_type,
+                ..
             } => {
                 let params: Vec<_> = params.iter().map(|p| self.display(*p)).collect();
                 format!("{}({})", self.display(*return_type), params.join(", "))
@@ -438,6 +440,7 @@ pub fn ast_type_to_resolved(
         ast::Type::Function {
             return_type,
             params,
+            param_ownerships,
         } => {
             let ret_id =
                 ast_type_to_resolved(&return_type.node, return_type.span, scopes, types)?;
@@ -447,6 +450,7 @@ pub fn ast_type_to_resolved(
             }
             Ok(types.insert(ResolvedType::Function {
                 params: param_ids,
+                param_ownerships: param_ownerships.clone(),
                 return_type: ret_id,
             }))
         }

@@ -161,13 +161,23 @@ impl Parser {
             ));
         }
 
-        // Check for function type suffix: int(int, int)
+        // Check for function type suffix: int(int, int) or int(&MyStruct, int)
         // A type followed by ( is a function type
         if self.check(&Token::LParen) && self.is_function_type_context(&base.node) {
             self.advance(); // (
             let mut params = Vec::new();
+            let mut param_ownerships = Vec::new();
             while !self.check(&Token::RParen) && !self.at_end() {
+                // Check for ownership prefix: & (MutableBorrow) or ! (Move)
+                let ownership = if self.match_token(&Token::Ampersand) {
+                    Ownership::MutableBorrow
+                } else if self.match_token(&Token::Bang) {
+                    Ownership::Move
+                } else {
+                    Ownership::Borrow
+                };
                 params.push(self.parse_type()?);
+                param_ownerships.push(ownership);
                 if !self.check(&Token::RParen) {
                     self.expect(&Token::Comma)?;
                 }
@@ -178,6 +188,7 @@ impl Parser {
                 Type::Function {
                     return_type: Box::new(base),
                     params,
+                    param_ownerships,
                 },
                 start.merge(end),
             ));
@@ -191,8 +202,9 @@ impl Parser {
     /// not in expression position where ( would be a call.
     fn is_function_type_context(&self, base: &Type) -> bool {
         // Function types use return_type(param_types)
-        // We only treat this as function type for primitive return types
-        // or if explicitly in a type context (handled by the caller)
-        matches!(base, Type::Primitive(_))
+        // This is safe because parse_type() is only called in type positions,
+        // never in expression positions where ( would be a call.
+        // Named types are needed for generic callable params: Callable[T(int)]
+        matches!(base, Type::Primitive(_) | Type::Named { .. })
     }
 }

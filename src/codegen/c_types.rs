@@ -64,7 +64,7 @@ pub fn ast_type_to_c(ty: &crate::parser::ast::Type, scopes: &ScopeTable) -> Stri
                             };
                             if let Some(prefix) = kind_prefix {
                                 if inner_args.len() == 1 {
-                                    if let crate::parser::ast::Type::Function { return_type, params } = &inner_args[0].node {
+                                    if let crate::parser::ast::Type::Function { return_type, params, .. } = &inner_args[0].node {
                                         let ret_c = ast_type_to_c(&return_type.node, scopes);
                                         let param_c: Vec<String> = params.iter()
                                             .map(|p| ast_type_to_c(&p.node, scopes))
@@ -149,11 +149,21 @@ pub fn ast_type_to_c(ty: &crate::parser::ast::Type, scopes: &ScopeTable) -> Stri
                 .collect();
             super::c_mangle::mangle_tuple(&c_field_types)
         }
-        crate::parser::ast::Type::Function { return_type, params } => {
+        crate::parser::ast::Type::Function { return_type, params, param_ownerships } => {
             let ret = ast_type_to_c(&return_type.node, scopes);
             let param_types: Vec<String> = params
                 .iter()
-                .map(|p| ast_type_to_c(&p.node, scopes))
+                .enumerate()
+                .map(|(i, p)| {
+                    let base = ast_type_to_c(&p.node, scopes);
+                    let ownership = param_ownerships.get(i).copied()
+                        .unwrap_or(crate::parser::ast::Ownership::Borrow);
+                    if ownership == crate::parser::ast::Ownership::MutableBorrow {
+                        format!("{base}*")
+                    } else {
+                        base
+                    }
+                })
                 .collect();
             let params_str = if param_types.is_empty() {
                 "void".to_string()
@@ -190,11 +200,21 @@ pub fn type_id_to_c(type_id: TypeId, types: &TypeTable, scopes: &ScopeTable) -> 
                 .collect();
             super::c_mangle::mangle_tuple(&c_field_types)
         }
-        ResolvedType::Function { params, return_type } => {
+        ResolvedType::Function { params, param_ownerships, return_type, .. } => {
             let ret = type_id_to_c(*return_type, types, scopes);
             let param_types: Vec<String> = params
                 .iter()
-                .map(|tid| type_id_to_c(*tid, types, scopes))
+                .enumerate()
+                .map(|(i, tid)| {
+                    let base = type_id_to_c(*tid, types, scopes);
+                    let ownership = param_ownerships.get(i).copied()
+                        .unwrap_or(crate::parser::ast::Ownership::Borrow);
+                    if ownership == crate::parser::ast::Ownership::MutableBorrow {
+                        format!("{base}*")
+                    } else {
+                        base
+                    }
+                })
                 .collect();
             let params_str = if param_types.is_empty() {
                 "void".to_string()
@@ -259,7 +279,7 @@ pub fn type_id_to_c(type_id: TypeId, types: &TypeTable, scopes: &ScopeTable) -> 
                 crate::semantic::types::ClosureKind::MutCallable => "MutCallable",
                 crate::semantic::types::ClosureKind::ConsumeCallable => "ConsumeCallable",
             };
-            if let ResolvedType::Function { params, return_type } = types.get(*inner) {
+            if let ResolvedType::Function { params, return_type, .. } = types.get(*inner) {
                 let ret_c = type_id_to_c(*return_type, types, scopes);
                 let param_c: Vec<String> = params.iter()
                     .map(|p| type_id_to_c(*p, types, scopes))
@@ -353,7 +373,7 @@ pub fn ast_type_to_gorget(ty: &crate::parser::ast::Type) -> String {
                 .collect();
             format!("({})", parts.join(", "))
         }
-        crate::parser::ast::Type::Function { return_type, params } => {
+        crate::parser::ast::Type::Function { return_type, params, .. } => {
             let ret = ast_type_to_gorget(&return_type.node);
             let ps: Vec<String> = params
                 .iter()

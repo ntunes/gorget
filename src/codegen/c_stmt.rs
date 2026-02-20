@@ -1,5 +1,5 @@
 /// Statement codegen: convert Gorget statements to C statements.
-use crate::parser::ast::{BinaryOp, Block, Expr, Pattern, Stmt, Type};
+use crate::parser::ast::{BinaryOp, Block, Expr, Ownership, Pattern, Stmt, Type};
 use crate::span::{Span, Spanned};
 
 use super::c_emitter::CEmitter;
@@ -2092,10 +2092,18 @@ impl CodegenContext<'_> {
                 };
 
                 // Special handling for Box[Callable[sig]] construction
-                if let Some((kind_prefix, fn_ret, fn_params)) = Self::extract_box_callable_type(type_) {
+                if let Some((kind_prefix, fn_ret, fn_params, fn_ownerships)) = Self::extract_box_callable_type(type_) {
                     let ret_c = super::c_types::ast_type_to_c(&fn_ret.node, self.scopes);
-                    let param_c: Vec<String> = fn_params.iter()
-                        .map(|p| super::c_types::ast_type_to_c(&p.node, self.scopes))
+                    let param_c: Vec<String> = fn_params.iter().enumerate()
+                        .map(|(i, p)| {
+                            let base = super::c_types::ast_type_to_c(&p.node, self.scopes);
+                            let ownership = fn_ownerships.get(i).copied().unwrap_or(Ownership::Borrow);
+                            if matches!(ownership, Ownership::MutableBorrow) {
+                                format!("{base}*")
+                            } else {
+                                base
+                            }
+                        })
                         .collect();
                     let sig_name = super::c_item::callable_sig_name(kind_prefix, &param_c, &ret_c);
                     let traitobj_type = format!("{sig_name}__TraitObj");
@@ -2308,12 +2316,20 @@ impl CodegenContext<'_> {
                         };
                         if let Some(_kind) = callable_kind {
                             if generic_args.len() == 1 {
-                                if let Type::Function { return_type: fn_ret, params: fn_params } = &generic_args[0].node {
+                                if let Type::Function { return_type: fn_ret, params: fn_params, param_ownerships } = &generic_args[0].node {
                                     let ret_c = super::c_types::ast_type_to_c(&fn_ret.node, self.scopes);
-                                    let param_c: Vec<String> = fn_params.iter()
-                                        .map(|p| super::c_types::ast_type_to_c(&p.node, self.scopes))
+                                    let param_c: Vec<String> = fn_params.iter().enumerate()
+                                        .map(|(i, p)| {
+                                            let base = super::c_types::ast_type_to_c(&p.node, self.scopes);
+                                            let ownership = param_ownerships.get(i).copied().unwrap_or(Ownership::Borrow);
+                                            if matches!(ownership, Ownership::MutableBorrow) {
+                                                format!("{base}*")
+                                            } else {
+                                                base
+                                            }
+                                        })
                                         .collect();
-                                    self.fn_type_signatures.insert(escaped.clone(), (param_c, ret_c));
+                                    self.fn_type_signatures.insert(escaped.clone(), (param_c, ret_c, param_ownerships.clone()));
                                 }
                             }
                         }
@@ -2803,7 +2819,7 @@ impl CodegenContext<'_> {
     /// Returns (kind_prefix, return_type, params) if the type matches.
     fn extract_box_callable_type<'b>(
         type_: &'b Spanned<Type>,
-    ) -> Option<(&'static str, &'b Spanned<Type>, &'b [Spanned<Type>])> {
+    ) -> Option<(&'static str, &'b Spanned<Type>, &'b [Spanned<Type>], &'b [Ownership])> {
         if let Type::Named { name, generic_args } = &type_.node {
             if name.node == "Box" && generic_args.len() == 1 {
                 if let Type::Named { name: inner_name, generic_args: inner_args } = &generic_args[0].node {
@@ -2815,8 +2831,8 @@ impl CodegenContext<'_> {
                     };
                     if let Some(prefix) = kind_prefix {
                         if inner_args.len() == 1 {
-                            if let Type::Function { return_type, params } = &inner_args[0].node {
-                                return Some((prefix, return_type, params));
+                            if let Type::Function { return_type, params, param_ownerships } = &inner_args[0].node {
+                                return Some((prefix, return_type, params, param_ownerships));
                             }
                         }
                     }

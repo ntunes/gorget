@@ -652,12 +652,20 @@ impl CodegenContext<'_> {
                         let escaped = c_mangle::escape_keyword(&param.node.name.node);
                         self.closure_vars.insert(escaped.clone());
                         // Extract signature from the function type generic arg
-                        if let Type::Function { return_type, params: fn_params } = &generic_args[0].node {
+                        if let Type::Function { return_type, params: fn_params, param_ownerships } = &generic_args[0].node {
                             let ret_c = c_types::ast_type_to_c(&return_type.node, self.scopes);
-                            let param_c: Vec<String> = fn_params.iter()
-                                .map(|p| c_types::ast_type_to_c(&p.node, self.scopes))
+                            let param_c: Vec<String> = fn_params.iter().enumerate()
+                                .map(|(i, p)| {
+                                    let base = c_types::ast_type_to_c(&p.node, self.scopes);
+                                    let ownership = param_ownerships.get(i).copied().unwrap_or(Ownership::Borrow);
+                                    if matches!(ownership, Ownership::MutableBorrow) {
+                                        format!("{base}*")
+                                    } else {
+                                        base
+                                    }
+                                })
                                 .collect();
-                            self.fn_type_signatures.insert(escaped.clone(), (param_c.clone(), ret_c.clone()));
+                            self.fn_type_signatures.insert(escaped.clone(), (param_c.clone(), ret_c.clone(), param_ownerships.clone()));
                             // Register the signature for vtable generation
                             let sig = (kind, param_c, ret_c);
                             if !self.fn_trait_sigs.contains(&sig) {
@@ -1659,7 +1667,7 @@ impl CodegenContext<'_> {
             ResolvedType::Array(elem, _) | ResolvedType::Slice(elem) => {
                 self.is_concrete_type_id(*elem)
             }
-            ResolvedType::Function { params, return_type } => {
+            ResolvedType::Function { params, return_type, .. } => {
                 params.iter().all(|p| self.is_concrete_type_id(*p))
                     && self.is_concrete_type_id(*return_type)
             }
@@ -2806,9 +2814,22 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
             if param.node.name.node == "self" {
                 continue;
             }
-            let param_type = self.substitute_type(&param.node.type_.node, &subs);
+            // Callable/MutCallable/ConsumeCallable-typed params use GorgetClosure
+            // (not the raw function pointer produced by substitute_type)
+            let is_callable_param = matches!(&param.node.type_.node,
+                Type::Named { name, .. } if matches!(name.node.as_str(), "Callable" | "MutCallable" | "ConsumeCallable")
+            );
+            let param_type = if is_callable_param {
+                "GorgetClosure".to_string()
+            } else {
+                self.substitute_type(&param.node.type_.node, &subs)
+            };
             let param_name = c_mangle::escape_keyword(&param.node.name.node);
-            params_vec.push(c_types::c_declare(&param_type, &param_name));
+            if matches!(param.node.ownership, Ownership::MutableBorrow) {
+                params_vec.push(format!("{param_type}* {param_name}"));
+            } else {
+                params_vec.push(c_types::c_declare(&param_type, &param_name));
+            }
         }
         let params = if params_vec.is_empty() {
             "void".to_string()
@@ -2842,9 +2863,59 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
             .collect();
 
         // Activate type substitutions so that body codegen sees T → concrete type
-        let prev_subs = std::mem::replace(&mut self.type_subs, subs);
+        let prev_subs = std::mem::replace(&mut self.type_subs, subs.clone());
         let prev_id_subs = std::mem::replace(&mut self.type_id_subs, id_subs);
         let prev_param_c_types = std::mem::replace(&mut self.monomorphized_param_c_types, param_c_types);
+
+        // Track mutable borrow params as pointer params and register Callable-typed params
+        let prev_pointer_params = std::mem::take(&mut self.pointer_params);
+        let prev_closure_vars = self.closure_vars.clone();
+        let prev_fn_type_sigs = self.fn_type_signatures.clone();
+        for param in &template.params {
+            if param.node.name.node == "self" {
+                continue;
+            }
+            if matches!(param.node.ownership, Ownership::MutableBorrow) {
+                self.pointer_params
+                    .insert(c_mangle::escape_keyword(&param.node.name.node));
+            }
+            // Detect Callable/MutCallable/ConsumeCallable-typed params — register for closure dispatch
+            if let Type::Named { name, generic_args } = &param.node.type_.node {
+                let callable_kind = match name.node.as_str() {
+                    "Callable" => Some(super::CallableKind::Callable),
+                    "MutCallable" => Some(super::CallableKind::MutCallable),
+                    "ConsumeCallable" => Some(super::CallableKind::ConsumeCallable),
+                    _ => None,
+                };
+                if let Some(kind) = callable_kind {
+                    if generic_args.len() == 1 {
+                        let escaped = c_mangle::escape_keyword(&param.node.name.node);
+                        self.closure_vars.insert(escaped.clone());
+                        // Extract signature from the function type generic arg, with type substitutions applied
+                        if let Type::Function { return_type, params: fn_params, param_ownerships } = &generic_args[0].node {
+                            let ret_c = self.substitute_type(&return_type.node, &subs);
+                            let param_c: Vec<String> = fn_params.iter().enumerate()
+                                .map(|(i, p)| {
+                                    let base = self.substitute_type(&p.node, &subs);
+                                    let ownership = param_ownerships.get(i).copied().unwrap_or(Ownership::Borrow);
+                                    if matches!(ownership, Ownership::MutableBorrow) {
+                                        format!("{base}*")
+                                    } else {
+                                        base
+                                    }
+                                })
+                                .collect();
+                            self.fn_type_signatures.insert(escaped.clone(), (param_c.clone(), ret_c.clone(), param_ownerships.clone()));
+                            // Register the signature for vtable generation
+                            let sig = (kind, param_c, ret_c);
+                            if !self.fn_trait_sigs.contains(&sig) {
+                                self.fn_trait_sigs.push(sig);
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         // Emit definition
         match &template.body {
@@ -2870,14 +2941,17 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
             }
         }
 
-        // Restore previous substitutions
+        // Restore previous substitutions and state
         self.type_subs = prev_subs;
         self.type_id_subs = prev_id_subs;
         self.monomorphized_param_c_types = prev_param_c_types;
+        self.pointer_params = prev_pointer_params;
+        self.closure_vars = prev_closure_vars;
+        self.fn_type_signatures = prev_fn_type_sigs;
     }
 
     /// Build a substitution map from generic param names to concrete C types.
-    fn build_type_substitutions(
+    pub(super) fn build_type_substitutions(
         &self,
         generic_params: Option<&crate::span::Spanned<crate::parser::ast::GenericParams>>,
         c_type_args: &[String],
@@ -2948,7 +3022,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
     }
 
     /// Substitute type parameters in an AST Type, returning a C type string.
-    fn substitute_type(
+    pub(super) fn substitute_type(
         &self,
         ty: &crate::parser::ast::Type,
         subs: &[(String, String)],
@@ -2977,8 +3051,36 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                     "Set" => "GorgetSet".to_string(),
                     "Dict" => c_mangle::mangle_generic("GorgetDict", &c_args),
                     "HashMap" => c_mangle::mangle_generic("GorgetMap", &c_args),
+                    // Callable[sig] → function pointer type (substituted sig is already a C fn ptr)
+                    "Callable" | "MutCallable" | "ConsumeCallable" if c_args.len() == 1 => {
+                        c_args[0].clone()
+                    }
                     _ => c_mangle::mangle_generic(&name.node, &c_args),
                 }
+            }
+            crate::parser::ast::Type::Function { return_type, params, param_ownerships } => {
+                // Substitute recursively through function type (needed for generic callable params)
+                let ret = self.substitute_type(&return_type.node, subs);
+                let param_types: Vec<String> = params
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| {
+                        let base = self.substitute_type(&p.node, subs);
+                        let ownership = param_ownerships.get(i).copied()
+                            .unwrap_or(crate::parser::ast::Ownership::Borrow);
+                        if ownership == crate::parser::ast::Ownership::MutableBorrow {
+                            format!("{base}*")
+                        } else {
+                            base
+                        }
+                    })
+                    .collect();
+                let params_str = if param_types.is_empty() {
+                    "void".to_string()
+                } else {
+                    param_types.join(", ")
+                };
+                format!("{ret} (*)({params_str})")
             }
             // Type::Ref removed
             _ => c_types::ast_type_to_c(ty, self.scopes),
@@ -3179,7 +3281,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
             Type::Array { element, .. } | Type::Slice { element } => {
                 self.scan_type_for_tuples(&element.node);
             }
-            Type::Function { return_type, params } => {
+            Type::Function { return_type, params, .. } => {
                 self.scan_type_for_tuples(&return_type.node);
                 for p in params {
                     self.scan_type_for_tuples(&p.node);

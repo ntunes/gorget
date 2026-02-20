@@ -1,0 +1,51 @@
+struct State:
+    int pos
+
+equip State:
+    void advance(&self):
+        self.pos = self.pos + 1
+
+    int get_pos(self):
+        return self.pos
+
+Option[T] try_action[T](Callable[Option[T](&State)] f, State &s):
+    int saved = s.pos
+    Option[T] result = f(s)
+    match result:
+        case None:
+            s.pos = saved
+        else:
+            pass
+    return result
+
+Option[int] do_advance(State &s):
+    s.advance()
+    return Some(s.get_pos())
+
+Option[str] do_fail(State &s):
+    s.advance()
+    return None
+
+void main():
+    State s = State(0)
+    # Success case: advance and return value
+    Option[int] r1 = try_action[int](do_advance, &s)
+    match r1:
+        case Some(v):
+            int val = v
+            print("{val}")
+        else:
+            print("none")
+
+    # Failure case: advance then fail — position should be restored
+    Option[str] r2 = try_action[str](do_fail, &s)
+    match r2:
+        case Some(v):
+            str sv = v
+            print(sv)
+        else:
+            print("restored")
+
+    int final_pos = s.get_pos()
+    print("{final_pos}")
+    print("done")

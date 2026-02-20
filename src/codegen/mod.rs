@@ -261,9 +261,9 @@ pub struct CodegenContext<'a> {
     pub generic_equip_templates: FxHashMap<String, Vec<EquipBlock>>,
     /// Variables declared with GorgetClosure type (need fn_ptr dispatch on call).
     pub closure_vars: HashSet<String>,
-    /// For Fn[sig]-typed variables: maps var name → (param_c_types, return_c_type).
+    /// For Fn[sig]-typed variables: maps var name → (param_c_types, return_c_type, param_ownerships).
     /// Used for correct fn_ptr cast in GorgetClosure dispatch.
-    pub fn_type_signatures: FxHashMap<String, (Vec<String>, String)>,
+    pub fn_type_signatures: FxHashMap<String, (Vec<String>, String, Vec<crate::parser::ast::Ownership>)>,
     /// Per-closure-struct info: maps var name → ClosureVarInfo.
     /// Tracks whether a variable is a concrete closure struct or a trait object.
     pub closure_var_info: FxHashMap<String, ClosureVarInfo>,
@@ -1507,6 +1507,10 @@ void main():
                     node: crate::parser::ast::Type::Primitive(crate::parser::ast::PrimitiveType::Int),
                     span: crate::span::Span::new(0, 0),
                 },
+            ],
+            param_ownerships: vec![
+                crate::parser::ast::Ownership::Borrow,
+                crate::parser::ast::Ownership::Borrow,
             ],
         };
         let result = c_types::ast_type_to_c(&ty, &scopes);

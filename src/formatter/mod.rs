@@ -1013,12 +1013,20 @@ impl Formatter {
             Type::Function {
                 return_type,
                 params,
+                param_ownerships,
             } => {
                 self.format_type(return_type);
                 self.emitter.write("(");
                 for (i, p) in params.iter().enumerate() {
                     if i > 0 {
                         self.emitter.write(", ");
+                    }
+                    if let Some(ownership) = param_ownerships.get(i) {
+                        match ownership {
+                            Ownership::MutableBorrow => self.emitter.write("&"),
+                            Ownership::Move => self.emitter.write("!"),
+                            Ownership::Borrow => {}
+                        }
                     }
                     self.format_type(p);
                 }

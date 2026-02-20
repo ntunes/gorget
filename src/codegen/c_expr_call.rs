@@ -1021,11 +1021,11 @@ impl CodegenContext<'_> {
             if self.closure_vars.contains(escaped_name.as_str()) {
                 let arg_exprs: Vec<String> =
                     args.iter().map(|a| self.gen_expr(&a.node.value)).collect();
-                let cast = if let Some((param_types, ret)) = self.fn_type_signatures.get(&escaped_name) {
+                let (cast, param_ownerships) = if let Some((param_types, ret, ownerships)) = self.fn_type_signatures.get(&escaped_name) {
                     // Fn[sig]-typed: use declared signature for precise cast
                     let mut cp = vec!["void*".to_string()];
                     cp.extend(param_types.clone());
-                    format!("{ret} (*)({})", cp.join(", "))
+                    (format!("{ret} (*)({})", cp.join(", ")), Some(ownerships.clone()))
                 } else {
                     // Legacy GorgetClosure: infer from arguments
                     let arg_types: Vec<String> = args
@@ -1034,10 +1034,21 @@ impl CodegenContext<'_> {
                         .collect();
                     let mut cp = vec!["void*".to_string()];
                     cp.extend(arg_types);
-                    format!("int64_t (*)({})", cp.join(", "))
+                    (format!("int64_t (*)({})", cp.join(", ")), None)
                 };
+                // Apply ownership-based argument wrapping for MutableBorrow params
+                let wrapped_args: Vec<String> = arg_exprs.into_iter().enumerate().map(|(i, expr)| {
+                    let ownership = param_ownerships.as_ref()
+                        .and_then(|o| o.get(i).copied())
+                        .unwrap_or(crate::parser::ast::Ownership::Borrow);
+                    if matches!(ownership, crate::parser::ast::Ownership::MutableBorrow) {
+                        super::c_expr::addr_of(&expr, &args[i].node.value.node)
+                    } else {
+                        expr
+                    }
+                }).collect();
                 let mut call_args = vec![format!("{escaped_name}.env")];
-                call_args.extend(arg_exprs);
+                call_args.extend(wrapped_args);
                 return format!("(({cast})({escaped_name}.fn_ptr))({})", call_args.join(", "));
             }
         }
@@ -1166,7 +1177,7 @@ impl CodegenContext<'_> {
                         | crate::semantic::types::ResolvedType::ConsumeCallableTrait(id) => *id,
                         _ => unreachable!(),
                     };
-                    if let crate::semantic::types::ResolvedType::Function { params, return_type } =
+                    if let crate::semantic::types::ResolvedType::Function { params, param_ownerships, return_type } =
                         self.types.get(inner_id).clone()
                     {
                         let id = self.closure_counter;
@@ -1176,7 +1187,14 @@ impl CodegenContext<'_> {
 
                         let closure_params: Vec<(String, String)> = params.iter().enumerate()
                             .map(|(i, tid)| {
-                                let c_type = super::c_types::type_id_to_c(*tid, self.types, self.scopes);
+                                let base = super::c_types::type_id_to_c(*tid, self.types, self.scopes);
+                                let ownership = param_ownerships.get(i).copied()
+                                    .unwrap_or(crate::parser::ast::Ownership::Borrow);
+                                let c_type = if matches!(ownership, crate::parser::ast::Ownership::MutableBorrow) {
+                                    format!("{base}*")
+                                } else {
+                                    base
+                                };
                                 (format!("__p{i}"), c_type)
                             })
                             .collect();

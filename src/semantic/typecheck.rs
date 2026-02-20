@@ -393,7 +393,7 @@ impl<'a> TypeChecker<'a> {
     fn resolve_type_deep(&mut self, id: TypeId) -> TypeId {
         let base = self.resolve_type(id);
         match self.types.get(base).clone() {
-            ResolvedType::Function { params, return_type } => {
+            ResolvedType::Function { params, return_type, param_ownerships } => {
                 let new_params: Vec<TypeId> = params.iter()
                     .map(|&p| self.resolve_type_deep(p))
                     .collect();
@@ -404,6 +404,7 @@ impl<'a> TypeChecker<'a> {
                     self.types.insert(ResolvedType::Function {
                         params: new_params,
                         return_type: new_ret,
+                        param_ownerships: param_ownerships.clone(),
                     })
                 }
             }
@@ -522,10 +523,12 @@ impl<'a> TypeChecker<'a> {
                 ResolvedType::Function {
                     params: a_params,
                     return_type: a_ret,
+                    ..
                 },
                 ResolvedType::Function {
                     params: b_params,
                     return_type: b_ret,
+                    ..
                 },
             ) if a_params.len() == b_params.len() => {
                 let pairs: Vec<_> = a_params
@@ -859,6 +862,7 @@ impl<'a> TypeChecker<'a> {
                     ResolvedType::Function {
                         params,
                         return_type,
+                        ..
                     } => {
                         let has_named = args.iter().any(|a| a.node.name.is_some());
                         let has_defaults = func_info.map_or(false, |fi| fi.param_defaults.iter().any(|d| d.is_some()));
@@ -894,7 +898,7 @@ impl<'a> TypeChecker<'a> {
                     | ResolvedType::ConsumeCallableTrait(inner)
                     | ResolvedType::BoxedCallable { inner, .. } => {
                         // Callable[sig]-typed callable — extract Function from inner
-                        if let ResolvedType::Function { params, return_type } = self.types.get(inner).clone() {
+                        if let ResolvedType::Function { params, return_type, .. } = self.types.get(inner).clone() {
                             if args.len() != params.len() {
                                 self.error(
                                     SemanticErrorKind::WrongArgCount {
@@ -1332,6 +1336,7 @@ impl<'a> TypeChecker<'a> {
                 }
                 let body_type = self.infer_expr(body);
                 self.types.insert(ResolvedType::Function {
+                    param_ownerships: vec![crate::parser::ast::Ownership::Borrow; param_types.len()],
                     params: param_types,
                     return_type: body_type,
                 })
@@ -1345,6 +1350,7 @@ impl<'a> TypeChecker<'a> {
                 self.types.insert(ResolvedType::Function {
                     params: vec![param_type],
                     return_type: body_type,
+                    param_ownerships: vec![crate::parser::ast::Ownership::Borrow],
                 })
             }
 
@@ -2693,6 +2699,7 @@ impl<'a> TypeChecker<'a> {
 
         // Create the Function type and set it on the DefInfo
         let func_type = self.types.insert(ResolvedType::Function {
+            param_ownerships: vec![crate::parser::ast::Ownership::Borrow; param_types.len()],
             params: param_types,
             return_type,
         });

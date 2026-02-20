@@ -183,8 +183,77 @@ impl CodegenContext<'_> {
 
         let mangled = c_mangle::mangle_generic(&base_name, &c_type_args);
         self.register_generic(&base_name, &c_type_args, super::GenericInstanceKind::Function);
-        let arg_exprs: Vec<String> = args.iter().map(|a| {
+
+        // Look up the template to determine Callable-typed params and their signatures
+        let subs = self.build_type_substitutions(
+            self.generic_fn_templates.get(&base_name).and_then(|t| t.generic_params.as_ref()),
+            &c_type_args,
+        );
+        let callable_param_info: Option<Vec<Option<(Vec<String>, String, Vec<crate::parser::ast::Ownership>)>>> =
+            self.generic_fn_templates.get(&base_name).map(|tmpl| {
+                tmpl.params.iter()
+                    .filter(|p| p.node.name.node != "self")
+                    .map(|p| {
+                        if let crate::parser::ast::Type::Named { name, generic_args } = &p.node.type_.node {
+                            if matches!(name.node.as_str(), "Callable" | "MutCallable" | "ConsumeCallable") {
+                                if generic_args.len() == 1 {
+                                    if let crate::parser::ast::Type::Function { return_type, params: fn_params, param_ownerships } = &generic_args[0].node {
+                                        let ret_c = self.substitute_type(&return_type.node, &subs);
+                                        let param_c: Vec<String> = fn_params.iter().enumerate()
+                                            .map(|(i, fp)| {
+                                                let base = self.substitute_type(&fp.node, &subs);
+                                                let ownership = param_ownerships.get(i).copied()
+                                                    .unwrap_or(crate::parser::ast::Ownership::Borrow);
+                                                if matches!(ownership, crate::parser::ast::Ownership::MutableBorrow) {
+                                                    format!("{base}*")
+                                                } else {
+                                                    base
+                                                }
+                                            })
+                                            .collect();
+                                        return Some((param_c, ret_c, param_ownerships.clone()));
+                                    }
+                                }
+                            }
+                        }
+                        None
+                    })
+                    .collect()
+            });
+
+        let arg_exprs: Vec<String> = args.iter().enumerate().map(|(i, a)| {
             let expr = self.gen_expr(&a.node.value);
+            // Wrap named functions passed to Callable-typed params in GorgetClosure
+            let expr = if let Some(Some((param_c, ret_c, _ownerships))) =
+                callable_param_info.as_ref().and_then(|info| info.get(i))
+            {
+                if !self.closure_vars.contains(expr.as_str()) && !expr.starts_with("(GorgetClosure)") {
+                    // Create an adapter closure for the named function
+                    let id = self.closure_counter;
+                    self.closure_counter += 1;
+                    let struct_name = format!("__Closure_{id}");
+                    let fn_name = super::c_mangle::mangle_closure(id);
+                    let closure_params: Vec<(String, String)> = param_c.iter().enumerate()
+                        .map(|(j, ct)| (format!("__p{j}"), ct.clone()))
+                        .collect();
+                    let arg_names: Vec<&str> = closure_params.iter().map(|(n, _)| n.as_str()).collect();
+                    let call_expr = format!("{expr}({})", arg_names.join(", "));
+
+                    self.lifted_closures.push(super::LiftedClosure {
+                        id,
+                        struct_name,
+                        captures: vec![],
+                        params: closure_params,
+                        return_type: ret_c.clone(),
+                        body: call_expr,
+                    });
+                    format!("(GorgetClosure){{.fn_ptr = (void*){fn_name}_fn, .env = NULL}}")
+                } else {
+                    expr
+                }
+            } else {
+                expr
+            };
             self.wrap_borrow_arg(expr, &a.node.value.node, a.node.ownership)
         }).collect();
         format!("{mangled}({})", arg_exprs.join(", "))

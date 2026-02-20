@@ -1,0 +1,17 @@
+T apply[T](Callable[T(int)] f, int x):
+    return f(x)
+
+int double(int n):
+    return n * 2
+
+str describe(int n):
+    return "val"
+
+void main():
+    int r1 = apply[int]((int n): n * 2, 5)
+    print("{r1}")
+    str r2 = apply[str]((int n): "val", 3)
+    print(r2)
+    int r3 = apply[int](double, 7)
+    print("{r3}")
+    print("done")

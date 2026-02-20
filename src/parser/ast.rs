@@ -363,10 +363,11 @@ pub enum Type {
     /// Tuple: `(int, String)`
     Tuple(Vec<Spanned<Type>>),
 
-    /// Function type: `int(int, int)`
+    /// Function type: `int(int, int)` or `int(&MyStruct, int)`
     Function {
         return_type: Box<Spanned<Type>>,
         params: Vec<Spanned<Type>>,
+        param_ownerships: Vec<Ownership>,
     },
 
     /// Self type
