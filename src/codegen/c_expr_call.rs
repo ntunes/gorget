@@ -749,6 +749,104 @@ impl CodegenContext<'_> {
                             );
                         }
                     }
+                    // std.crypto — X25519
+                    "crypto_x25519_keygen" => {
+                        let result_type = self.register_generic("Result", &["GorgetX25519KeyPair".into(), "const char*".into()], super::GenericInstanceKind::Enum);
+                        let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
+                        let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
+                        return format!(
+                            "({{ GorgetX25519KeyPair __rk = gorget_crypto_x25519_keygen(); \
+                            const char* __re = gorget_crypto_last_error(); \
+                            __re ? {err_ctor}(__re) : {ok_ctor}(__rk); }})"
+                        );
+                    }
+                    "crypto_x25519_shared_secret" => {
+                        if args.len() >= 2 {
+                            let pk = self.gen_expr(&args[0].node.value);
+                            let peer_pub = self.gen_expr(&args[1].node.value);
+                            let pk_addr = addr_of(&pk, &args[0].node.value.node);
+                            let peer_pub_addr = addr_of(&peer_pub, &args[1].node.value.node);
+                            let result_type = self.register_generic("Result", &["GorgetArray".into(), "const char*".into()], super::GenericInstanceKind::Enum);
+                            let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
+                            let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
+                            return format!(
+                                "({{ GorgetArray __rk = gorget_crypto_x25519_shared_secret({pk_addr}, {peer_pub_addr}); \
+                                const char* __re = gorget_crypto_last_error(); \
+                                __re ? {err_ctor}(__re) : {ok_ctor}(__rk); }})"
+                            );
+                        }
+                    }
+                    "crypto_x25519_dh" => {
+                        if args.len() >= 2 {
+                            let pk = self.gen_expr(&args[0].node.value);
+                            let peer_pub = self.gen_expr(&args[1].node.value);
+                            let pk_addr = addr_of(&pk, &args[0].node.value.node);
+                            let peer_pub_addr = addr_of(&peer_pub, &args[1].node.value.node);
+                            let result_type = self.register_generic("Result", &["GorgetArray".into(), "const char*".into()], super::GenericInstanceKind::Enum);
+                            let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
+                            let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
+                            return format!(
+                                "({{ GorgetArray __rk = gorget_crypto_x25519_dh({pk_addr}, {peer_pub_addr}); \
+                                const char* __re = gorget_crypto_last_error(); \
+                                __re ? {err_ctor}(__re) : {ok_ctor}(__rk); }})"
+                            );
+                        }
+                    }
+                    // std.crypto — HKDF-SHA256
+                    "crypto_hkdf_sha256" => {
+                        if args.len() >= 4 {
+                            let salt = self.gen_expr(&args[0].node.value);
+                            let ikm = self.gen_expr(&args[1].node.value);
+                            let info = self.gen_expr(&args[2].node.value);
+                            let length = self.gen_expr(&args[3].node.value);
+                            let salt_addr = addr_of(&salt, &args[0].node.value.node);
+                            let ikm_addr = addr_of(&ikm, &args[1].node.value.node);
+                            let info_addr = addr_of(&info, &args[2].node.value.node);
+                            let result_type = self.register_generic("Result", &["GorgetArray".into(), "const char*".into()], super::GenericInstanceKind::Enum);
+                            let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
+                            let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
+                            return format!(
+                                "({{ GorgetArray __rk = gorget_crypto_hkdf_sha256({salt_addr}, {ikm_addr}, {info_addr}, {length}); \
+                                const char* __re = gorget_crypto_last_error(); \
+                                __re ? {err_ctor}(__re) : {ok_ctor}(__rk); }})"
+                            );
+                        }
+                    }
+                    // std.crypto — AES-256-GCM
+                    "crypto_aes_gcm_encrypt" => {
+                        if args.len() >= 3 {
+                            let key = self.gen_expr(&args[0].node.value);
+                            let nonce = self.gen_expr(&args[1].node.value);
+                            let pt = self.gen_expr(&args[2].node.value);
+                            let key_addr = addr_of(&key, &args[0].node.value.node);
+                            let nonce_addr = addr_of(&nonce, &args[1].node.value.node);
+                            let pt_addr = addr_of(&pt, &args[2].node.value.node);
+                            let result_type = self.register_generic("Result", &["GorgetArray".into(), "const char*".into()], super::GenericInstanceKind::Enum);
+                            let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
+                            let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
+                            return format!(
+                                "({{ GorgetArray __rk = gorget_crypto_aes_gcm_encrypt({key_addr}, {nonce_addr}, {pt_addr}); \
+                                const char* __re = gorget_crypto_last_error(); \
+                                __re ? {err_ctor}(__re) : {ok_ctor}(__rk); }})"
+                            );
+                        }
+                    }
+                    "crypto_aes_gcm_decrypt" => {
+                        if args.len() >= 2 {
+                            let key = self.gen_expr(&args[0].node.value);
+                            let ct = self.gen_expr(&args[1].node.value);
+                            let key_addr = addr_of(&key, &args[0].node.value.node);
+                            let ct_addr = addr_of(&ct, &args[1].node.value.node);
+                            let result_type = self.register_generic("Result", &["GorgetArray".into(), "const char*".into()], super::GenericInstanceKind::Enum);
+                            let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
+                            let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
+                            return format!(
+                                "({{ GorgetArray __rk = gorget_crypto_aes_gcm_decrypt({key_addr}, {ct_addr}); \
+                                const char* __re = gorget_crypto_last_error(); \
+                                __re ? {err_ctor}(__re) : {ok_ctor}(__rk); }})"
+                            );
+                        }
+                    }
                     // std.net.udp
                     "udp_bind" => {
                         if args.len() >= 2 {

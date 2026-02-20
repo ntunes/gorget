@@ -1917,6 +1917,7 @@ pub const CRYPTO_RUNTIME: &str = r#"
 #include <openssl/rsa.h>
 #include <openssl/pem.h>
 #include <openssl/err.h>
+#include <openssl/kdf.h>
 
 // Opaque types wrapping OpenSSL handles
 typedef struct {
@@ -2210,6 +2211,294 @@ static bool gorget_crypto_ed25519_verify(const GorgetArray* public_key, const Go
     EVP_MD_CTX_free(ctx);
     EVP_PKEY_free(pkey);
     return ok == 1;
+}
+
+// ── X25519 ECDH ─────────────────────────────────────────────
+typedef struct {
+    EVP_PKEY* pkey;
+} GorgetX25519KeyPair;
+
+// Generate ephemeral X25519 keypair
+static GorgetX25519KeyPair gorget_crypto_x25519_keygen(void) {
+    __gorget_crypto_last_error = NULL;
+    EVP_PKEY* pkey = NULL;
+    EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_X25519, NULL);
+    if (!ctx) {
+        __gorget_crypto_last_error = "failed to create X25519 context";
+        return (GorgetX25519KeyPair){NULL};
+    }
+    if (EVP_PKEY_keygen_init(ctx) <= 0 || EVP_PKEY_keygen(ctx, &pkey) <= 0) {
+        EVP_PKEY_CTX_free(ctx);
+        __gorget_crypto_last_error = "X25519 key generation failed";
+        return (GorgetX25519KeyPair){NULL};
+    }
+    EVP_PKEY_CTX_free(ctx);
+    return (GorgetX25519KeyPair){pkey};
+}
+
+// Extract 32-byte public key from X25519 keypair
+static GorgetArray gorget_crypto_x25519_public(const GorgetX25519KeyPair* kp) {
+    GorgetArray out = gorget_array_new(sizeof(uint8_t));
+    if (!kp->pkey) return out;
+    size_t len = 32;
+    out.data = malloc(32);
+    out.cap = 32;
+    EVP_PKEY_get_raw_public_key(kp->pkey, (unsigned char*)out.data, &len);
+    out.len = (int64_t)len;
+    return out;
+}
+
+// Extract 32-byte raw private key from X25519 keypair
+static GorgetArray gorget_crypto_x25519_private(const GorgetX25519KeyPair* kp) {
+    GorgetArray out = gorget_array_new(sizeof(uint8_t));
+    if (!kp->pkey) return out;
+    size_t len = 32;
+    out.data = malloc(32);
+    out.cap = 32;
+    EVP_PKEY_get_raw_private_key(kp->pkey, (unsigned char*)out.data, &len);
+    out.len = (int64_t)len;
+    return out;
+}
+
+// Compute shared secret from raw 32-byte private key bytes + raw 32-byte peer public key
+static GorgetArray gorget_crypto_x25519_dh(const GorgetArray* private_key_bytes, const GorgetArray* peer_public) {
+    __gorget_crypto_last_error = NULL;
+    GorgetArray out = gorget_array_new(sizeof(uint8_t));
+    if (private_key_bytes->len != 32 || peer_public->len != 32) {
+        __gorget_crypto_last_error = "X25519 keys must be 32 bytes";
+        return out;
+    }
+    EVP_PKEY* our_pkey = EVP_PKEY_new_raw_private_key(EVP_PKEY_X25519, NULL,
+        (const unsigned char*)private_key_bytes->data, 32);
+    if (!our_pkey) {
+        __gorget_crypto_last_error = "failed to load X25519 private key";
+        return out;
+    }
+    EVP_PKEY* peer_pkey = EVP_PKEY_new_raw_public_key(EVP_PKEY_X25519, NULL,
+        (const unsigned char*)peer_public->data, 32);
+    if (!peer_pkey) {
+        EVP_PKEY_free(our_pkey);
+        __gorget_crypto_last_error = "failed to load peer X25519 public key";
+        return out;
+    }
+    EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new(our_pkey, NULL);
+    if (!ctx || EVP_PKEY_derive_init(ctx) <= 0 || EVP_PKEY_derive_set_peer(ctx, peer_pkey) <= 0) {
+        if (ctx) EVP_PKEY_CTX_free(ctx);
+        EVP_PKEY_free(our_pkey);
+        EVP_PKEY_free(peer_pkey);
+        __gorget_crypto_last_error = "X25519 derive init failed";
+        return out;
+    }
+    size_t secret_len = 32;
+    out.data = malloc(32);
+    out.cap = 32;
+    if (EVP_PKEY_derive(ctx, (unsigned char*)out.data, &secret_len) <= 0) {
+        free(out.data);
+        out.data = NULL;
+        out.cap = 0;
+        EVP_PKEY_CTX_free(ctx);
+        EVP_PKEY_free(our_pkey);
+        EVP_PKEY_free(peer_pkey);
+        __gorget_crypto_last_error = "X25519 key derivation failed";
+        return out;
+    }
+    out.len = (int64_t)secret_len;
+    EVP_PKEY_CTX_free(ctx);
+    EVP_PKEY_free(our_pkey);
+    EVP_PKEY_free(peer_pkey);
+    return out;
+}
+
+// Compute 32-byte shared secret from our X25519 keypair + peer's raw 32-byte public key
+static GorgetArray gorget_crypto_x25519_shared_secret(const GorgetX25519KeyPair* private_key, const GorgetArray* peer_public) {
+    __gorget_crypto_last_error = NULL;
+    GorgetArray out = gorget_array_new(sizeof(uint8_t));
+    if (!private_key->pkey || peer_public->len != 32) {
+        __gorget_crypto_last_error = "invalid X25519 key material";
+        return out;
+    }
+    EVP_PKEY* peer_pkey = EVP_PKEY_new_raw_public_key(EVP_PKEY_X25519, NULL,
+        (const unsigned char*)peer_public->data, 32);
+    if (!peer_pkey) {
+        __gorget_crypto_last_error = "failed to load peer X25519 public key";
+        return out;
+    }
+    EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new(private_key->pkey, NULL);
+    if (!ctx || EVP_PKEY_derive_init(ctx) <= 0 || EVP_PKEY_derive_set_peer(ctx, peer_pkey) <= 0) {
+        if (ctx) EVP_PKEY_CTX_free(ctx);
+        EVP_PKEY_free(peer_pkey);
+        __gorget_crypto_last_error = "X25519 derive init failed";
+        return out;
+    }
+    size_t secret_len = 32;
+    out.data = malloc(32);
+    out.cap = 32;
+    if (EVP_PKEY_derive(ctx, (unsigned char*)out.data, &secret_len) <= 0) {
+        free(out.data);
+        out.data = NULL;
+        out.cap = 0;
+        EVP_PKEY_CTX_free(ctx);
+        EVP_PKEY_free(peer_pkey);
+        __gorget_crypto_last_error = "X25519 key derivation failed";
+        return out;
+    }
+    out.len = (int64_t)secret_len;
+    EVP_PKEY_CTX_free(ctx);
+    EVP_PKEY_free(peer_pkey);
+    return out;
+}
+
+// ── HKDF-SHA256 ─────────────────────────────────────────────
+static GorgetArray gorget_crypto_hkdf_sha256(const GorgetArray* salt, const GorgetArray* ikm, const GorgetArray* info, int64_t length) {
+    __gorget_crypto_last_error = NULL;
+    GorgetArray out = gorget_array_new(sizeof(uint8_t));
+    if (length <= 0 || length > 255 * 32) {
+        __gorget_crypto_last_error = "HKDF output length out of range";
+        return out;
+    }
+    EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_HKDF, NULL);
+    if (!ctx) {
+        __gorget_crypto_last_error = "failed to create HKDF context";
+        return out;
+    }
+    if (EVP_PKEY_derive_init(ctx) <= 0 ||
+        EVP_PKEY_CTX_set_hkdf_md(ctx, EVP_sha256()) <= 0 ||
+        EVP_PKEY_CTX_set1_hkdf_salt(ctx, (const unsigned char*)salt->data, (int)salt->len) <= 0 ||
+        EVP_PKEY_CTX_set1_hkdf_key(ctx, (const unsigned char*)ikm->data, (int)ikm->len) <= 0 ||
+        EVP_PKEY_CTX_add1_hkdf_info(ctx, (const unsigned char*)info->data, (int)info->len) <= 0) {
+        EVP_PKEY_CTX_free(ctx);
+        __gorget_crypto_last_error = "HKDF parameter setup failed";
+        return out;
+    }
+    size_t out_len = (size_t)length;
+    out.data = malloc(out_len);
+    out.cap = (int64_t)out_len;
+    if (EVP_PKEY_derive(ctx, (unsigned char*)out.data, &out_len) <= 0) {
+        free(out.data);
+        out.data = NULL;
+        out.cap = 0;
+        EVP_PKEY_CTX_free(ctx);
+        __gorget_crypto_last_error = "HKDF derivation failed";
+        return out;
+    }
+    out.len = (int64_t)out_len;
+    EVP_PKEY_CTX_free(ctx);
+    return out;
+}
+
+// ── AES-256-GCM AEAD ────────────────────────────────────────
+
+// Encrypt: key (32B), nonce (12B), plaintext → returns [12B nonce | ciphertext | 16B tag]
+static GorgetArray gorget_crypto_aes_gcm_encrypt(const GorgetArray* key, const GorgetArray* nonce, const GorgetArray* plaintext) {
+    __gorget_crypto_last_error = NULL;
+    GorgetArray out = gorget_array_new(sizeof(uint8_t));
+    if (key->len != 32) { __gorget_crypto_last_error = "AES-GCM key must be 32 bytes"; return out; }
+    if (nonce->len != 12) { __gorget_crypto_last_error = "AES-GCM nonce must be 12 bytes"; return out; }
+
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) { __gorget_crypto_last_error = "failed to create cipher context"; return out; }
+
+    if (EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL) != 1 ||
+        EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, 12, NULL) != 1 ||
+        EVP_EncryptInit_ex(ctx, NULL, NULL, (const unsigned char*)key->data, (const unsigned char*)nonce->data) != 1) {
+        EVP_CIPHER_CTX_free(ctx);
+        __gorget_crypto_last_error = "AES-GCM encrypt init failed";
+        return out;
+    }
+
+    // Output: 12B nonce + ciphertext (same len as plaintext) + 16B tag
+    size_t total = 12 + (size_t)plaintext->len + 16;
+    out.data = malloc(total);
+    out.cap = (int64_t)total;
+
+    // Copy nonce to output
+    memcpy(out.data, nonce->data, 12);
+
+    int ct_len = 0;
+    if (EVP_EncryptUpdate(ctx, (unsigned char*)out.data + 12, &ct_len,
+            (const unsigned char*)plaintext->data, (int)plaintext->len) != 1) {
+        EVP_CIPHER_CTX_free(ctx);
+        free(out.data); out.data = NULL; out.cap = 0;
+        __gorget_crypto_last_error = "AES-GCM encrypt update failed";
+        return out;
+    }
+
+    int final_len = 0;
+    if (EVP_EncryptFinal_ex(ctx, (unsigned char*)out.data + 12 + ct_len, &final_len) != 1) {
+        EVP_CIPHER_CTX_free(ctx);
+        free(out.data); out.data = NULL; out.cap = 0;
+        __gorget_crypto_last_error = "AES-GCM encrypt final failed";
+        return out;
+    }
+    ct_len += final_len;
+
+    // Append 16-byte tag
+    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, 16, (unsigned char*)out.data + 12 + ct_len) != 1) {
+        EVP_CIPHER_CTX_free(ctx);
+        free(out.data); out.data = NULL; out.cap = 0;
+        __gorget_crypto_last_error = "AES-GCM get tag failed";
+        return out;
+    }
+
+    out.len = (int64_t)(12 + ct_len + 16);
+    EVP_CIPHER_CTX_free(ctx);
+    return out;
+}
+
+// Decrypt: key (32B), ciphertext ([12B nonce | ct | 16B tag]) → plaintext
+static GorgetArray gorget_crypto_aes_gcm_decrypt(const GorgetArray* key, const GorgetArray* ciphertext) {
+    __gorget_crypto_last_error = NULL;
+    GorgetArray out = gorget_array_new(sizeof(uint8_t));
+    if (key->len != 32) { __gorget_crypto_last_error = "AES-GCM key must be 32 bytes"; return out; }
+    if (ciphertext->len < 28) { __gorget_crypto_last_error = "AES-GCM ciphertext too short"; return out; }
+
+    const unsigned char* nonce = (const unsigned char*)ciphertext->data;
+    int ct_len = (int)ciphertext->len - 12 - 16;
+    const unsigned char* ct = (const unsigned char*)ciphertext->data + 12;
+    const unsigned char* tag = (const unsigned char*)ciphertext->data + 12 + ct_len;
+
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) { __gorget_crypto_last_error = "failed to create cipher context"; return out; }
+
+    if (EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL) != 1 ||
+        EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, 12, NULL) != 1 ||
+        EVP_DecryptInit_ex(ctx, NULL, NULL, (const unsigned char*)key->data, nonce) != 1) {
+        EVP_CIPHER_CTX_free(ctx);
+        __gorget_crypto_last_error = "AES-GCM decrypt init failed";
+        return out;
+    }
+
+    out.data = malloc((size_t)ct_len);
+    out.cap = (int64_t)ct_len;
+
+    int pt_len = 0;
+    if (EVP_DecryptUpdate(ctx, (unsigned char*)out.data, &pt_len, ct, ct_len) != 1) {
+        EVP_CIPHER_CTX_free(ctx);
+        free(out.data); out.data = NULL; out.cap = 0;
+        __gorget_crypto_last_error = "AES-GCM decrypt update failed";
+        return out;
+    }
+
+    // Set expected tag
+    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, 16, (void*)tag) != 1) {
+        EVP_CIPHER_CTX_free(ctx);
+        free(out.data); out.data = NULL; out.cap = 0;
+        __gorget_crypto_last_error = "AES-GCM set tag failed";
+        return out;
+    }
+
+    int final_len = 0;
+    if (EVP_DecryptFinal_ex(ctx, (unsigned char*)out.data + pt_len, &final_len) != 1) {
+        EVP_CIPHER_CTX_free(ctx);
+        free(out.data); out.data = NULL; out.cap = 0;
+        __gorget_crypto_last_error = "AES-GCM authentication failed";
+        return out;
+    }
+    pt_len += final_len;
+
+    out.len = (int64_t)pt_len;
+    EVP_CIPHER_CTX_free(ctx);
+    return out;
 }
 
 "#;

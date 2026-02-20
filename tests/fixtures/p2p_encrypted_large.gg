@@ -1,0 +1,93 @@
+from std.p2p import Node, P2PEvent, p2p_create_node, p2p_add_peer, p2p_poll
+from std.p2p import p2p_stream_open_encrypted, p2p_stream_accept, p2p_stream_send
+from std.p2p import p2p_stream_recv, p2p_stream_close, p2p_peer_id_hex
+from std.net.udp import UdpAddr
+from std.bytes import bytes_from_str, bytes_to_str, bytes_read_u32_be, bytes_concat
+from std.collections import Vector
+
+void main():
+    # Create two nodes
+    Node nodeA = p2p_create_node("127.0.0.1", 0).unwrap()
+    Node nodeB = p2p_create_node("127.0.0.1", 0).unwrap()
+
+    # Introduce and connect
+    UdpAddr addrB = nodeB.socket.local_addr()
+    p2p_add_peer(&nodeA, "127.0.0.1", addrB.port)
+    P2PEvent ev1 = p2p_poll(&nodeB, 1000)
+    P2PEvent ev2 = p2p_poll(&nodeA, 1000)
+
+    # Open encrypted stream: A -> B
+    str b_hex = p2p_peer_id_hex(nodeB.identity.peer_id)
+    int stream_id = p2p_stream_open_encrypted(&nodeA, b_hex).unwrap()
+
+    # B accepts
+    P2PEvent syn_ev = p2p_poll(&nodeB, 1000)
+    if syn_ev.event_type == 8:
+        int sid = bytes_read_u32_be(syn_ev.data, 0)
+        p2p_stream_accept(&nodeB, sid)
+
+    # A connected
+    P2PEvent conn_ev = p2p_poll(&nodeA, 1000)
+
+    # Build 12KB payload (10 x ~1172 byte segments after encryption MSS reduction)
+    Vector[uint8] big_data = Vector[uint8]()
+    int i = 0
+    while i < 12000:
+        int b = i % 256
+        big_data.push(b as uint8)
+        i = i + 1
+
+    # Send all at once — will be segmented, encrypted, and sent internally
+    p2p_stream_send(&nodeA, stream_id, big_data)
+
+    # Poll loop: A flushes, B receives, A gets ACKs
+    Vector[uint8] all_received = Vector[uint8]()
+    int rounds = 0
+    while all_received.len() < 12000 and rounds < 100:
+        p2p_poll(&nodeA, 50)
+        P2PEvent bev = p2p_poll(&nodeB, 50)
+        if bev.event_type == 10:
+            int data_sid = bytes_read_u32_be(bev.data, 0)
+            Vector[uint8] chunk = p2p_stream_recv(&nodeB, data_sid)
+            if chunk.len() > 0:
+                all_received = bytes_concat(all_received, chunk)
+        rounds = rounds + 1
+
+    # Verify length
+    if all_received.len() == 12000:
+        print("received 12000 bytes")
+    else:
+        print("wrong size")
+
+    # Verify content integrity
+    int idx_first = 0
+    int idx_mid = 6000
+    int idx_last = 11999
+    uint8 first = all_received.get(idx_first).unwrap()
+    uint8 mid = all_received.get(idx_mid).unwrap()
+    uint8 last = all_received.get(idx_last).unwrap()
+    if first as int == 0 and mid as int == 112 and last as int == 223:
+        print("content verified")
+    else:
+        print("content mismatch")
+
+    # Close
+    p2p_stream_close(&nodeA, stream_id)
+    bool a_closed = false
+    bool b_closed = false
+    int cr = 0
+    while cr < 20:
+        P2PEvent cev_b = p2p_poll(&nodeB, 100)
+        if cev_b.event_type == 11:
+            b_closed = true
+        P2PEvent cev_a = p2p_poll(&nodeA, 100)
+        if cev_a.event_type == 11:
+            a_closed = true
+        if a_closed and b_closed:
+            cr = 20
+        cr = cr + 1
+    if a_closed and b_closed:
+        print("stream closed")
+
+    nodeA.socket.close()
+    nodeB.socket.close()

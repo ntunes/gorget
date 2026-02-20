@@ -3865,6 +3865,19 @@ done",
 }
 
 #[test]
+fn crypto_x25519() {
+    run_gg(
+        "crypto_x25519.gg",
+        "\
+keys generated
+shared secret matches
+hkdf produced 32 bytes
+ciphertext size correct
+hello encrypted world",
+    );
+}
+
+#[test]
 fn socket_connect() {
     run_gg(
         "socket_connect.gg",
@@ -3973,6 +3986,32 @@ B->A connected
 hello from A
 hello from B
 both streams closed",
+    );
+}
+
+#[test]
+fn p2p_encrypted() {
+    run_gg(
+        "p2p_encrypted.gg",
+        "\
+peers connected
+syn received
+stream connected
+encrypted: true
+hello encrypted
+stream closed
+fin acked",
+    );
+}
+
+#[test]
+fn p2p_encrypted_large() {
+    run_gg(
+        "p2p_encrypted_large.gg",
+        "\
+received 12000 bytes
+content verified
+stream closed",
     );
 }
 

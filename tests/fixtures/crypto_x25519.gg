@@ -1,0 +1,38 @@
+from std.crypto import crypto_x25519_keygen, crypto_x25519_shared_secret
+from std.crypto import crypto_hkdf_sha256, crypto_aes_gcm_encrypt, crypto_aes_gcm_decrypt
+from std.bytes import bytes_to_hex, bytes_from_str, bytes_to_str
+from std.collections import Vector
+
+void main():
+    # X25519 key exchange — Alice and Bob derive the same shared secret
+    auto alice = crypto_x25519_keygen().unwrap()
+    auto bob = crypto_x25519_keygen().unwrap()
+    Vector[uint8] alice_pub = alice.public_key()
+    Vector[uint8] bob_pub = bob.public_key()
+
+    if alice_pub.len() == 32 and bob_pub.len() == 32:
+        print("keys generated")
+
+    Vector[uint8] shared_a = crypto_x25519_shared_secret(alice, bob_pub).unwrap()
+    Vector[uint8] shared_b = crypto_x25519_shared_secret(bob, alice_pub).unwrap()
+    if bytes_to_hex(shared_a) == bytes_to_hex(shared_b):
+        print("shared secret matches")
+
+    # HKDF-SHA256 — derive a 32-byte key from the shared secret
+    Vector[uint8] salt = bytes_from_str("salt")
+    Vector[uint8] info = bytes_from_str("gorget-p2p")
+    Vector[uint8] key = crypto_hkdf_sha256(salt, shared_a, info, 32).unwrap()
+    if key.len() == 32:
+        print("hkdf produced 32 bytes")
+
+    # AES-256-GCM round-trip
+    Vector[uint8] nonce = bytes_from_str("123456789012")
+    Vector[uint8] plaintext = bytes_from_str("hello encrypted world")
+    Vector[uint8] encrypted = crypto_aes_gcm_encrypt(key, nonce, plaintext).unwrap()
+
+    # Encrypted output should be 12 + 21 + 16 = 49 bytes (nonce + ct + tag)
+    if encrypted.len() == 49:
+        print("ciphertext size correct")
+
+    Vector[uint8] decrypted = crypto_aes_gcm_decrypt(key, encrypted).unwrap()
+    print(bytes_to_str(decrypted))

@@ -126,6 +126,8 @@ pub fn ast_type_to_c(ty: &crate::parser::ast::Type, scopes: &ScopeTable) -> Stri
                 return "GorgetRSAKey".to_string();
             } else if name.node == "Ed25519KeyPair" {
                 return "GorgetEd25519KeyPair".to_string();
+            } else if name.node == "X25519KeyPair" {
+                return "GorgetX25519KeyPair".to_string();
             } else if name.node == "Regex" {
                 return "GorgetRegex".to_string();
             } else if name.node == "Match" {
@@ -316,6 +318,7 @@ pub(super) fn def_name_to_c(def_id: DefId, scopes: &ScopeTable) -> String {
         "BigNum" => "GorgetBigNum".to_string(),
         "RSAKey" => "GorgetRSAKey".to_string(),
         "Ed25519KeyPair" => "GorgetEd25519KeyPair".to_string(),
+        "X25519KeyPair" => "GorgetX25519KeyPair".to_string(),
         "Regex" => "GorgetRegex".to_string(),
         "Match" => "GorgetRegexMatch".to_string(),
         _ => name,
