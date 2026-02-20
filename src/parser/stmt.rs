@@ -335,16 +335,10 @@ impl Parser {
         self.expect_keyword(Keyword::Const)?;
 
         let (type_, pattern) = if self.name_first {
-            // name-first: `const name: type = expr`
+            // name-first: `const name: type = expr` (parse_type handles `auto`)
             let pattern = self.parse_binding_pattern()?;
             self.expect(&Token::Colon)?;
-            let type_ = if self.check_keyword(Keyword::Auto) {
-                let auto_start = self.peek_span();
-                self.advance();
-                Spanned::new(Type::Inferred, auto_start)
-            } else {
-                self.parse_type()?
-            };
+            let type_ = self.parse_type()?;
             (type_, pattern)
         } else {
             // type-first: `const type name = expr`
@@ -505,14 +499,8 @@ impl Parser {
                 (is_mutable, name)
             })
         }) {
-            // Committed: parse type = expr
-            let type_ = if self.check_keyword(Keyword::Auto) {
-                let auto_start = self.peek_span();
-                self.advance();
-                Spanned::new(Type::Inferred, auto_start)
-            } else {
-                self.parse_type()?
-            };
+            // Committed: parse type = expr (parse_type handles `auto`)
+            let type_ = self.parse_type()?;
 
             self.expect(&Token::Eq)?;
             let value = self.parse_expr()?;

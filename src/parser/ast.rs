@@ -254,6 +254,16 @@ pub enum ImportStmt {
     },
 }
 
+impl ImportStmt {
+    pub fn span(&self) -> Span {
+        match self {
+            ImportStmt::Simple { span, .. }
+            | ImportStmt::Grouped { span, .. }
+            | ImportStmt::From { span, .. } => *span,
+        }
+    }
+}
+
 // ══════════════════════════════════════════════════════════════
 // Type Aliases & Newtypes
 // ══════════════════════════════════════════════════════════════

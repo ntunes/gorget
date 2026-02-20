@@ -9,6 +9,27 @@ use crate::lexer::token::{Keyword, Token};
 use crate::lexer::Lexer;
 use crate::span::{Span, Spanned};
 use ast::*;
+
+fn make_self_param(
+    start: Span,
+    name_span: Span,
+    ownership: Ownership,
+    is_live: bool,
+    live_group: Option<String>,
+) -> Spanned<Param> {
+    Spanned::new(
+        Param {
+            type_: Spanned::new(Type::SelfType, name_span),
+            ownership,
+            name: Spanned::new("self".to_string(), name_span),
+            default: None,
+            is_live,
+            live_group,
+        },
+        start.merge(name_span),
+    )
+}
+
 /// Recursive descent parser for Gorget source code.
 pub struct Parser {
     tokens: Vec<Spanned<Token>>,
@@ -379,20 +400,12 @@ impl Parser {
             }
             Token::Keyword(Keyword::Import) => {
                 let stmt = self.parse_import()?;
-                let span = start.merge(match &stmt {
-                    ImportStmt::Simple { span, .. }
-                    | ImportStmt::Grouped { span, .. }
-                    | ImportStmt::From { span, .. } => *span,
-                });
+                let span = start.merge(stmt.span());
                 Ok(Spanned::new(Item::Import(stmt), span))
             }
             Token::Keyword(Keyword::From) => {
                 let stmt = self.parse_from_import()?;
-                let span = start.merge(match &stmt {
-                    ImportStmt::Simple { span, .. }
-                    | ImportStmt::Grouped { span, .. }
-                    | ImportStmt::From { span, .. } => *span,
-                });
+                let span = start.merge(stmt.span());
                 Ok(Spanned::new(Item::Import(stmt), span))
             }
             Token::Keyword(Keyword::Type) => {
@@ -1278,51 +1291,21 @@ impl Parser {
         // Handle self parameter: self, &self, !self
         if self.check_keyword(Keyword::SelfLower) {
             let name_tok = self.advance();
-            return Ok(Spanned::new(
-                Param {
-                    type_: Spanned::new(Type::SelfType, name_tok.span),
-                    ownership: Ownership::Borrow,
-                    name: Spanned::new("self".to_string(), name_tok.span),
-                    default: None,
-                    is_live,
-                    live_group: live_group.clone(),
-                },
-                start.merge(name_tok.span),
-            ));
+            return Ok(make_self_param(start, name_tok.span, Ownership::Borrow, is_live, live_group));
         }
         if (self.check(&Token::Ampersand) || self.check_keyword(Keyword::Mutable))
             && matches!(self.peek_ahead(1), Token::Keyword(Keyword::SelfLower))
         {
             self.advance(); // skip & or mutable
             let name_tok = self.advance(); // self
-            return Ok(Spanned::new(
-                Param {
-                    type_: Spanned::new(Type::SelfType, name_tok.span),
-                    ownership: Ownership::MutableBorrow,
-                    name: Spanned::new("self".to_string(), name_tok.span),
-                    default: None,
-                    is_live,
-                    live_group: live_group.clone(),
-                },
-                start.merge(name_tok.span),
-            ));
+            return Ok(make_self_param(start, name_tok.span, Ownership::MutableBorrow, is_live, live_group));
         }
         if (self.check(&Token::Bang) || self.check_keyword(Keyword::Consuming))
             && matches!(self.peek_ahead(1), Token::Keyword(Keyword::SelfLower))
         {
             self.advance(); // skip ! or consuming
             let name_tok = self.advance(); // self
-            return Ok(Spanned::new(
-                Param {
-                    type_: Spanned::new(Type::SelfType, name_tok.span),
-                    ownership: Ownership::Move,
-                    name: Spanned::new("self".to_string(), name_tok.span),
-                    default: None,
-                    is_live,
-                    live_group: live_group.clone(),
-                },
-                start.merge(name_tok.span),
-            ));
+            return Ok(make_self_param(start, name_tok.span, Ownership::Move, is_live, live_group));
         }
 
         let (type_, ownership, name) = if self.name_first {

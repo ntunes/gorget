@@ -1229,6 +1229,7 @@ impl Parser {
         }
 
         // Set literal: {a, b, c}
+        // Reuses ArrayLiteral — semantic analysis distinguishes set vs array by context.
         let mut items = vec![first];
         while self.match_token(&Token::Comma) {
             if self.check(&Token::RBrace) {

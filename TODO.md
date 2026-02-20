@@ -62,13 +62,6 @@
 
 ## Low
 
-- **Parser: `parse_param` has 3 near-identical self-param constructions**: `mod.rs:1368-1416` — three early returns building the same `Param { type_: SelfType, ownership: X }`. Extract `make_self_param()`. [added: 2026-02-20]
-
-- **Parser: `auto` → `Type::Inferred` handled inline in 3 places**: `stmt.rs:359,409,537` — redundant with `parse_type()` which already handles `auto`. May be able to just call `parse_type()` directly. [added: 2026-02-20]
-
-- **Parser: set literal emits `Expr::ArrayLiteral`**: `expr.rs:1361` — `{a, b, c}` falls through to `ArrayLiteral` instead of a set-specific AST variant. Missing `SetLiteral` or needs clarifying comment. [added: 2026-02-20]
-
-- **Parser: `ImportStmt` lacks `.span()` method**: `mod.rs:385-399` — verbose match over all 3 variants just to extract `span`. Add `.span()` accessor. [added: 2026-02-20]
 
 - **Package management phase 2 (`gg update`, registry)**: Semver-aware resolution, central registry, `gg publish`, workspaces. [added: 2026-02-15]
 
