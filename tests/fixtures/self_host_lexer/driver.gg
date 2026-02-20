@@ -1,0 +1,24 @@
+# CLI driver for lexer comparison testing.
+# Reads a .gg file and prints canonical tokens, one per line.
+# Usage: driver <path-to-file.gg>
+
+from lexer import lex_tokenize, SpannedToken, Token
+from format import describe_token_canonical
+from std.fs import read_file
+from std.os import args
+from std.collections import Vector
+
+void main():
+    Vector[str] cmd_args = args()
+    str path = cmd_args.get(1).unwrap()
+    String source = read_file(path)
+    Vector[SpannedToken] tokens = lex_tokenize(source)
+    int i = 0
+    while i < tokens.len():
+        SpannedToken st = tokens.get(i).unwrap()
+        match st.lex_token:
+            case TkEof():
+                pass
+            else:
+                print(describe_token_canonical(st.lex_token))
+        i = i + 1

@@ -1,6 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use gorget::lexer::Lexer;
+use gorget::lexer::token::{StringKind, StringLiteral, StringSegment, Token};
+
 /// Build and run a `.gg` fixture, asserting its stdout matches `expected`.
 fn run_gg(fixture: &str, expected: &str) {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -4529,4 +4532,352 @@ unterminated quoted field
 1
 done",
     );
+}
+
+// ══════════════════════════════════════════════════════════════
+// Lexer comparison: Rust vs self-hosting Gorget lexer
+// ══════════════════════════════════════════════════════════════
+
+/// Build a multi-file `.gg` fixture from a directory.
+/// Returns (exe_path, c_path) — caller is responsible for cleanup.
+fn build_gg_dir(dir_name: &str, main_file: &str) -> (PathBuf, PathBuf) {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let dir_path = manifest_dir.join("tests/fixtures").join(dir_name);
+    let main_path = dir_path.join(main_file);
+
+    assert!(
+        main_path.exists(),
+        "Fixture not found: {}",
+        main_path.display()
+    );
+
+    let stem = Path::new(main_file)
+        .file_stem()
+        .unwrap()
+        .to_str()
+        .unwrap();
+    let c_path = dir_path.join(format!("{stem}.c"));
+    let exe_path = dir_path.join(stem);
+
+    let build = Command::new(env!("CARGO"))
+        .args(["run", "--quiet", "--", "build"])
+        .arg(&main_path)
+        .output()
+        .expect("failed to run cargo");
+
+    assert!(
+        build.status.success(),
+        "Build failed for {dir_name}/{main_file}:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr),
+    );
+
+    (exe_path, c_path)
+}
+
+/// Canonical Rust-side string literal formatter matching the Gorget describe_string_canonical.
+fn describe_string_canonical_rust(slit: &StringLiteral) -> String {
+    let prefix = match slit.kind {
+        StringKind::Normal => "str:",
+        StringKind::Raw => "rstr:",
+        StringKind::MultiLine => "mstr:",
+        StringKind::Byte => "bstr:",
+    };
+    let mut result = prefix.to_string();
+    for seg in &slit.segments {
+        match seg {
+            StringSegment::Literal(text) => result.push_str(text),
+            StringSegment::Interpolation(expr) => {
+                result.push('{');
+                result.push_str(expr);
+                result.push('}');
+            }
+        }
+    }
+    result
+}
+
+/// Canonical Rust-side token formatter matching the Gorget describe_token_canonical.
+fn describe_token_canonical_rust(token: &Token) -> String {
+    match token {
+        Token::Keyword(kw) => format!("kw:{}", kw.as_name()),
+        Token::Identifier(name) => format!("ident:{name}"),
+        Token::IntLiteral(n) => format!("int:{n}"),
+        Token::FloatLiteral(n) => format!("float:{n}"),
+        Token::StringLiteral(slit) => describe_string_canonical_rust(slit),
+        Token::CharLiteral(c) => format!("char:{c}"),
+        Token::BoolLiteral(b) => format!("bool:{b}"),
+        Token::Plus => "+".into(),
+        Token::Minus => "-".into(),
+        Token::Star => "*".into(),
+        Token::Slash => "/".into(),
+        Token::Percent => "%".into(),
+        Token::Eq => "=".into(),
+        Token::Lt => "<".into(),
+        Token::Gt => ">".into(),
+        Token::Bang => "!".into(),
+        Token::Ampersand => "&".into(),
+        Token::Pipe => "|".into(),
+        Token::Caret => "^".into(),
+        Token::Tilde => "~".into(),
+        Token::Dot => ".".into(),
+        Token::Question => "?".into(),
+        Token::At => "@".into(),
+        Token::Underscore => "_".into(),
+        Token::EqEq => "==".into(),
+        Token::BangEq => "!=".into(),
+        Token::LtEq => "<=".into(),
+        Token::GtEq => ">=".into(),
+        Token::LtLt => "<<".into(),
+        Token::GtGt => ">>".into(),
+        Token::LtLtEq => "<<=".into(),
+        Token::GtGtEq => ">>=".into(),
+        Token::AmpersandEq => "&=".into(),
+        Token::PipeEq => "|=".into(),
+        Token::CaretEq => "^=".into(),
+        Token::PlusEq => "+=".into(),
+        Token::Arrow => "->".into(),
+        Token::MinusEq => "-=".into(),
+        Token::StarEq => "*=".into(),
+        Token::SlashEq => "/=".into(),
+        Token::PercentEq => "%=".into(),
+        Token::PlusPercent => "+%".into(),
+        Token::MinusPercent => "-%".into(),
+        Token::StarPercent => "*%".into(),
+        Token::PlusPercentEq => "+%=".into(),
+        Token::MinusPercentEq => "-%=".into(),
+        Token::StarPercentEq => "*%=".into(),
+        Token::DotDot => "..".into(),
+        Token::DotDotEq => "..=".into(),
+        Token::QuestionDot => "?.".into(),
+        Token::DoubleQuestion => "??".into(),
+        Token::LParen => "(".into(),
+        Token::RParen => ")".into(),
+        Token::LBracket => "[".into(),
+        Token::RBracket => "]".into(),
+        Token::LBrace => "lbrace".into(),
+        Token::RBrace => "rbrace".into(),
+        Token::Colon => ":".into(),
+        Token::Comma => ",".into(),
+        Token::Indent => "INDENT".into(),
+        Token::Dedent => "DEDENT".into(),
+        Token::Newline => "NL".into(),
+        Token::DocComment(text) => format!("doc:{text}"),
+        Token::Comment(text) => format!("comment:{text}"),
+        Token::Eof => "EOF".into(),
+        Token::Error(msg) => format!("error:{msg}"),
+    }
+}
+
+/// Compare two canonical token strings, with float tolerance.
+fn canonical_token_eq(a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
+    }
+    // Float tolerance: parse both values and compare with relative epsilon.
+    // C's %g uses 6 significant digits, so values may round differently from Rust's Display.
+    if a.starts_with("float:") && b.starts_with("float:") {
+        if let (Ok(va), Ok(vb)) = (a[6..].parse::<f64>(), b[6..].parse::<f64>()) {
+            if va == vb {
+                return true;
+            }
+            let max = va.abs().max(vb.abs());
+            if max == 0.0 {
+                return true;
+            }
+            return (va - vb).abs() / max < 1e-6;
+        }
+    }
+    false
+}
+
+/// Returns true if a canonical token string is a comment or doc comment.
+fn is_comment_token(s: &str) -> bool {
+    s.starts_with("comment:") || s.starts_with("doc:")
+}
+
+#[test]
+fn lexer_comparison() {
+    // 1. Build the Gorget lexer driver
+    let (driver_exe, driver_c) = build_gg_dir("self_host_lexer", "driver.gg");
+
+    // 2. Discover all top-level .gg fixture files
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixtures_dir = manifest_dir.join("tests/fixtures");
+    let mut fixtures: Vec<PathBuf> = std::fs::read_dir(&fixtures_dir)
+        .expect("failed to read fixtures dir")
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && p.extension().map_or(false, |ext| ext == "gg"))
+        .collect();
+    fixtures.sort();
+
+    assert!(
+        !fixtures.is_empty(),
+        "No .gg fixtures found in {}",
+        fixtures_dir.display()
+    );
+
+    struct Mismatch {
+        fixture: String,
+        first_diff: usize,
+        rust_len: usize,
+        gorget_len: usize,
+        rust_context: Vec<String>,
+        gorget_context: Vec<String>,
+    }
+
+    let mut mismatches: Vec<Mismatch> = Vec::new();
+    let mut crashes: Vec<(String, String)> = Vec::new();
+    let mut compared = 0;
+
+    // 3. For each fixture, compare Rust vs Gorget lexer output
+    for fixture in &fixtures {
+        let source = match std::fs::read_to_string(fixture) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!(
+                    "  SKIP {}: read error: {e}",
+                    fixture.file_name().unwrap().to_string_lossy()
+                );
+                continue;
+            }
+        };
+
+        // Rust side: lex with Gorget's Rust lexer
+        let rust_tokens: Vec<String> = Lexer::new(&source)
+            .map(|spanned| describe_token_canonical_rust(&spanned.node))
+            .filter(|s| !is_comment_token(s))
+            .collect();
+
+        // Gorget side: run the driver binary
+        let output = Command::new(&driver_exe).arg(fixture).output();
+
+        match output {
+            Ok(out) if out.status.success() => {
+                let gorget_tokens: Vec<String> = String::from_utf8_lossy(&out.stdout)
+                    .lines()
+                    .filter(|s| !is_comment_token(s))
+                    .map(|s| s.to_string())
+                    .collect();
+
+                // Find first divergence
+                let mut first_diff = None;
+                let max_len = rust_tokens.len().max(gorget_tokens.len());
+                for i in 0..max_len {
+                    let r = rust_tokens.get(i).map(|s| s.as_str()).unwrap_or("<missing>");
+                    let g = gorget_tokens
+                        .get(i)
+                        .map(|s| s.as_str())
+                        .unwrap_or("<missing>");
+                    if !canonical_token_eq(r, g) {
+                        first_diff = Some(i);
+                        break;
+                    }
+                }
+
+                if let Some(diff_idx) = first_diff {
+                    // Collect context: 2 tokens before and 3 after the divergence
+                    let start = diff_idx.saturating_sub(2);
+                    let end = (diff_idx + 3).min(max_len);
+                    let rust_context: Vec<String> = (start..end)
+                        .map(|i| {
+                            let prefix = if i == diff_idx { ">>  " } else { "    " };
+                            format!(
+                                "{prefix}[{i}] {}",
+                                rust_tokens
+                                    .get(i)
+                                    .map(|s| s.as_str())
+                                    .unwrap_or("<missing>")
+                            )
+                        })
+                        .collect();
+                    let gorget_context: Vec<String> = (start..end)
+                        .map(|i| {
+                            let prefix = if i == diff_idx { ">>  " } else { "    " };
+                            format!(
+                                "{prefix}[{i}] {}",
+                                gorget_tokens
+                                    .get(i)
+                                    .map(|s| s.as_str())
+                                    .unwrap_or("<missing>")
+                            )
+                        })
+                        .collect();
+
+                    mismatches.push(Mismatch {
+                        fixture: fixture
+                            .file_name()
+                            .unwrap()
+                            .to_string_lossy()
+                            .to_string(),
+                        first_diff: diff_idx,
+                        rust_len: rust_tokens.len(),
+                        gorget_len: gorget_tokens.len(),
+                        rust_context,
+                        gorget_context,
+                    });
+                }
+            }
+            Ok(out) => {
+                let name = fixture
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string();
+                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                crashes.push((name, stderr));
+            }
+            Err(e) => {
+                let name = fixture
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string();
+                crashes.push((name, format!("exec error: {e}")));
+            }
+        }
+        compared += 1;
+    }
+
+    // 4. Cleanup
+    let _ = std::fs::remove_file(&driver_c);
+    let _ = std::fs::remove_file(&driver_exe);
+
+    // 5. Report
+    eprintln!("\n=== Lexer Comparison Results ===");
+    eprintln!("Fixtures compared: {compared}");
+    eprintln!("Crashes: {}", crashes.len());
+    eprintln!("Mismatches: {}", mismatches.len());
+
+    if !crashes.is_empty() {
+        eprintln!("\n--- Crashes ---");
+        for (name, err) in &crashes {
+            let first_line = err.lines().next().unwrap_or("(no stderr)");
+            eprintln!("  {name}: {first_line}");
+        }
+    }
+
+    if !mismatches.is_empty() {
+        eprintln!("\n--- Mismatches ---");
+        for m in &mismatches {
+            eprintln!(
+                "\n  {} (first diff at token {}, rust={} gorget={} tokens)",
+                m.fixture, m.first_diff, m.rust_len, m.gorget_len
+            );
+            eprintln!("  Rust:");
+            for line in &m.rust_context {
+                eprintln!("  {line}");
+            }
+            eprintln!("  Gorget:");
+            for line in &m.gorget_context {
+                eprintln!("  {line}");
+            }
+        }
+    }
+
+    // The test passes even with mismatches — this is a diagnostic/tracking test.
+    // Mismatches are expected during development and guide Gorget lexer improvements.
+    // Crashes indicate the Gorget driver can't handle a fixture at all.
+    eprintln!("\n================================\n");
 }
