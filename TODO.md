@@ -4,8 +4,6 @@
 
 ## Medium
 
-- **Parser: manual backtracking without abstraction**: `expr.rs:829,904,1110`, `stmt.rs:397,517` — 5 sites with manual `saved_pos` ceremony. Extract `try_parse()` helper. [added: 2026-02-20]
-
 - **Parser: `parse_decl_or_expr_stmt` does too much**: `stmt.rs:395-453` — handles mutable prefix, auto shorthand, type parsing with backtrack, ownership modifiers, identifier detection, and value parsing. Split into smaller pieces. [added: 2026-02-20]
 
 - **Parser: tests embedded in mod.rs (~1210 lines)**: `mod.rs:1729-2939` — move to separate `tests.rs` module to shrink `mod.rs` from 2939 to ~1727 lines. [added: 2026-02-20]

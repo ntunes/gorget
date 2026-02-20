@@ -1415,6 +1415,22 @@ impl Parser {
         Ok(Spanned::new(GenericParams { params }, start.merge(end)))
     }
 
+    /// Speculatively attempt a parse. If the closure returns `None`, the parser
+    /// position is restored to where it was before the attempt.
+    fn try_parse<F, T>(&mut self, f: F) -> Option<T>
+    where
+        F: FnOnce(&mut Self) -> Option<T>,
+    {
+        let saved_pos = self.pos;
+        match f(self) {
+            Some(result) => Some(result),
+            None => {
+                self.pos = saved_pos;
+                None
+            }
+        }
+    }
+
     /// Parse optional generic parameters (`[T, U]`). Returns `None` if not present.
     fn try_parse_generic_params(&mut self) -> Result<Option<Spanned<GenericParams>>, ParseError> {
         if self.check(&Token::LBracket) {

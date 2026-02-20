@@ -376,62 +376,51 @@ impl Parser {
     /// and ownership modifiers (`type &name = expr`, `type mutable name = expr`, etc.).
     fn parse_decl_or_expr_stmt(&mut self) -> Result<Spanned<Stmt>, ParseError> {
         let start = self.peek_span();
-        let saved_pos = self.pos;
 
-        // 1. Check for optional `mutable` prefix
-        let has_mutable_prefix = if self.check_keyword(Keyword::Mutable) {
-            self.advance();
-            true
-        } else {
-            false
-        };
+        // Speculatively try: [mutable] type [ownership] name =
+        if let Some((is_mutable, type_, name)) = self.try_parse(|p| {
+            let has_mutable_prefix = if p.check_keyword(Keyword::Mutable) {
+                p.advance();
+                true
+            } else {
+                false
+            };
 
-        // 2. Parse type (`auto` shorthand only valid after `mutable` prefix)
-        let type_ = if has_mutable_prefix && self.check_keyword(Keyword::Auto) {
-            let auto_start = self.peek_span();
-            self.advance();
-            Spanned::new(Type::Inferred, auto_start)
-        } else {
-            match self.parse_type() {
-                Ok(t) => t,
-                Err(_) => {
-                    self.pos = saved_pos;
-                    return self.parse_expr_or_assign_stmt();
-                }
+            let type_ = if has_mutable_prefix && p.check_keyword(Keyword::Auto) {
+                let auto_start = p.peek_span();
+                p.advance();
+                Spanned::new(Type::Inferred, auto_start)
+            } else {
+                p.parse_type().ok()?
+            };
+
+            let is_mutable = if !has_mutable_prefix
+                && (p.check(&Token::Ampersand)
+                    || p.check(&Token::Bang)
+                    || p.check_keyword(Keyword::Mutable)
+                    || p.check_keyword(Keyword::Consuming))
+            {
+                let ownership_tok = p.advance();
+                matches!(ownership_tok.node, Token::Keyword(Keyword::Mutable))
+            } else {
+                has_mutable_prefix
+            };
+
+            if !matches!(p.peek(), Token::Identifier(_)) {
+                return None;
             }
-        };
+            let name = p.expect_identifier().ok()?;
 
-        // 3. Check for ownership modifier (only without mutable prefix)
-        let is_mutable = if !has_mutable_prefix
-            && (self.check(&Token::Ampersand)
-                || self.check(&Token::Bang)
-                || self.check_keyword(Keyword::Mutable)
-                || self.check_keyword(Keyword::Consuming))
-        {
-            let ownership_tok = self.advance();
-            matches!(ownership_tok.node, Token::Keyword(Keyword::Mutable))
+            p.match_token(&Token::Eq)
+                .then_some((is_mutable, type_, name))
+        }) {
+            let value = self.parse_expr()?;
+            self.consume_newline();
+            let pattern = Spanned::new(Pattern::Binding(name.node), name.span);
+            Ok(make_var_decl(false, is_mutable, type_, pattern, value, start))
         } else {
-            has_mutable_prefix
-        };
-
-        // 4. Expect identifier
-        if !matches!(self.peek(), Token::Identifier(_)) {
-            self.pos = saved_pos;
-            return self.parse_expr_or_assign_stmt();
+            self.parse_expr_or_assign_stmt()
         }
-        let name = self.expect_identifier()?;
-
-        // 5. Expect `=`
-        if !self.match_token(&Token::Eq) {
-            self.pos = saved_pos;
-            return self.parse_expr_or_assign_stmt();
-        }
-
-        // 6. Parse value and emit VarDecl
-        let value = self.parse_expr()?;
-        self.consume_newline();
-        let pattern = Spanned::new(Pattern::Binding(name.node), name.span);
-        Ok(make_var_decl(false, is_mutable, type_, pattern, value, start))
     }
 
     /// Parse an expression statement, assignment, or compound assignment.
@@ -496,43 +485,43 @@ impl Parser {
     /// or fall back to expression/assignment statement.
     fn parse_name_first_decl_or_expr_stmt(&mut self) -> Result<Spanned<Stmt>, ParseError> {
         let start = self.peek_span();
-        let saved_pos = self.pos;
 
-        // Check for optional `mutable` prefix
-        let is_mutable = if self.check_keyword(Keyword::Mutable) {
-            self.advance();
-            true
-        } else {
-            false
-        };
+        // Speculatively try: [mutable] name :
+        if let Some((is_mutable, name)) = self.try_parse(|p| {
+            let is_mutable = if p.check_keyword(Keyword::Mutable) {
+                p.advance();
+                true
+            } else {
+                false
+            };
 
-        // Check for identifier followed by colon (name-first declaration)
-        if let Token::Identifier(_) = self.peek() {
-            let name = self.expect_identifier()?;
-
-            if self.check(&Token::Colon) {
-                self.advance(); // consume colon
-
-                // Parse the type (could be `auto` keyword)
-                let type_ = if self.check_keyword(Keyword::Auto) {
-                    let auto_start = self.peek_span();
-                    self.advance();
-                    Spanned::new(Type::Inferred, auto_start)
-                } else {
-                    self.parse_type()?
-                };
-
-                self.expect(&Token::Eq)?;
-                let value = self.parse_expr()?;
-                self.consume_newline();
-                let pattern = Spanned::new(Pattern::Binding(name.node), name.span);
-                return Ok(make_var_decl(false, is_mutable, type_, pattern, value, start));
+            if !matches!(p.peek(), Token::Identifier(_)) {
+                return None;
             }
-        }
+            let name = p.expect_identifier().ok()?;
 
-        // Not a name-first declaration — backtrack and parse as expression
-        self.pos = saved_pos;
-        self.parse_expr_or_assign_stmt()
+            p.check(&Token::Colon).then(|| {
+                p.advance(); // consume colon
+                (is_mutable, name)
+            })
+        }) {
+            // Committed: parse type = expr
+            let type_ = if self.check_keyword(Keyword::Auto) {
+                let auto_start = self.peek_span();
+                self.advance();
+                Spanned::new(Type::Inferred, auto_start)
+            } else {
+                self.parse_type()?
+            };
+
+            self.expect(&Token::Eq)?;
+            let value = self.parse_expr()?;
+            self.consume_newline();
+            let pattern = Spanned::new(Pattern::Binding(name.node), name.span);
+            Ok(make_var_decl(false, is_mutable, type_, pattern, value, start))
+        } else {
+            self.parse_expr_or_assign_stmt()
+        }
     }
 
     /// Parse a simple binding pattern for variable declarations.

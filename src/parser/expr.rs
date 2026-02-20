@@ -742,16 +742,17 @@ impl Parser {
                 // Check for method call: expr.method(args) or expr.method[T](args)
                 if self.check(&Token::LBracket) || self.check(&Token::LParen) {
                     // Ambiguity: expr.field[...] could be expr.field[T](args) (generic method)
-                    // or field access followed by indexing. Use save/restore backtracking.
+                    // or field access followed by indexing. Try parsing as generic args;
+                    // backtrack if it's not followed by `(`.
                     let generic_args = if self.check(&Token::LBracket) {
-                        let saved_pos = self.pos;
-                        if let Ok(type_args) = self.parse_generic_type_args() {
-                            if self.check(&Token::LParen) {
-                                Some(type_args)
-                            } else {
-                                // Not a generic method call — backtrack.
-                                // Return FieldAccess; the next iteration will handle [
-                                self.pos = saved_pos;
+                        match self.try_parse(|p| {
+                            let type_args = p.parse_generic_type_args().ok()?;
+                            p.check(&Token::LParen).then_some(type_args)
+                        }) {
+                            Some(args) => Some(args),
+                            None => {
+                                // Not a generic method call — return FieldAccess;
+                                // the next iteration will handle [
                                 let end = field.span;
                                 return Ok(Spanned::new(
                                     Expr::FieldAccess {
@@ -761,17 +762,6 @@ impl Parser {
                                     start.merge(end),
                                 ));
                             }
-                        } else {
-                            // parse_generic_type_args failed — backtrack, return FieldAccess
-                            self.pos = saved_pos;
-                            let end = field.span;
-                            return Ok(Spanned::new(
-                                Expr::FieldAccess {
-                                    object: Box::new(lhs),
-                                    field,
-                                },
-                                start.merge(end),
-                            ));
                         }
                     } else {
                         None
@@ -816,28 +806,25 @@ impl Parser {
 
             Token::LBracket => {
                 // Ambiguity: expr[...] could be indexing OR generic call expr[T](args).
-                // Use save/restore backtracking: try parsing as generic type args.
-                // If the next token after ] is (, it's a generic call. Otherwise, restore
-                // and parse as index.
-                let saved_pos = self.pos;
-                if let Ok(type_args) = self.parse_generic_type_args() {
-                    if self.check(&Token::LParen) {
-                        self.advance(); // skip (
-                        let args = self.parse_call_args()?;
-                        self.expect(&Token::RParen)?;
-                        let end = self.previous_span();
-                        return Ok(Spanned::new(
-                            Expr::Call {
-                                callee: Box::new(lhs),
-                                generic_args: Some(type_args),
-                                args,
-                            },
-                            start.merge(end),
-                        ));
-                    }
+                // Try parsing as generic type args followed by `(`.
+                if let Some(type_args) = self.try_parse(|p| {
+                    let type_args = p.parse_generic_type_args().ok()?;
+                    p.check(&Token::LParen).then_some(type_args)
+                }) {
+                    self.advance(); // skip (
+                    let args = self.parse_call_args()?;
+                    self.expect(&Token::RParen)?;
+                    let end = self.previous_span();
+                    return Ok(Spanned::new(
+                        Expr::Call {
+                            callee: Box::new(lhs),
+                            generic_args: Some(type_args),
+                            args,
+                        },
+                        start.merge(end),
+                    ));
                 }
-                // Not a generic call — backtrack, parse as index
-                self.pos = saved_pos;
+                // Not a generic call — parse as index
                 self.advance(); // skip [
                 let index = self.parse_expr()?;
                 self.expect(&Token::RBracket)?;
@@ -1025,26 +1012,19 @@ impl Parser {
                 (ty, ownership, n)
             } else if self.is_type_start() {
                 // type-first: Could be typed parameter `Type name`
-                let saved_pos = self.pos;
-                match self.parse_type() {
-                    Ok(ty) => {
-                        let ownership = self.parse_ownership_modifier();
-
-                        if let Token::Identifier(_) = self.peek() {
-                            let n = self.expect_identifier()?;
-                            (Some(ty), ownership, n)
-                        } else {
-                            // Not a typed param — backtrack, treat as untyped
-                            self.pos = saved_pos;
-                            let n = self.expect_identifier()?;
-                            (None, Ownership::Borrow, n)
-                        }
-                    }
-                    Err(_) => {
-                        self.pos = saved_pos;
-                        let n = self.expect_identifier()?;
-                        (None, Ownership::Borrow, n)
-                    }
+                if let Some(result) = self.try_parse(|p| {
+                    let ty = p.parse_type().ok()?;
+                    let ownership = p.parse_ownership_modifier();
+                    matches!(p.peek(), Token::Identifier(_)).then(|| {
+                        let n = p.expect_identifier().unwrap(); // safe: just checked
+                        (Some(ty), ownership, n)
+                    })
+                }) {
+                    result
+                } else {
+                    // Not a typed param — treat as untyped
+                    let n = self.expect_identifier()?;
+                    (None, Ownership::Borrow, n)
                 }
             } else {
                 let n = self.expect_identifier()?;
