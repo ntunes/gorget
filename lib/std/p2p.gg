@@ -6,6 +6,7 @@
 
 from std.net.udp import UdpSocket, UdpAddr, UdpPacket, udp_bind
 from std.crypto import crypto_sha256, crypto_ed25519_keygen, Ed25519KeyPair
+from std.crypto import crypto_ed25519_sign, crypto_ed25519_verify
 from std.crypto import crypto_x25519_keygen, crypto_x25519_shared_secret, crypto_x25519_dh, X25519KeyPair
 from std.crypto import crypto_hkdf_sha256, crypto_aes_gcm_encrypt, crypto_aes_gcm_decrypt
 from std.bytes import bytes_from_str, bytes_to_str, bytes_to_hex, bytes_concat, bytes_slice
@@ -222,6 +223,8 @@ struct ReliableStream:
     Vector[uint8] local_ephemeral_pub   # our X25519 public key (32 bytes)
     Vector[uint8] local_ephemeral_priv  # our X25519 raw private key (32 bytes, for initiator)
     Vector[uint8] remote_ephemeral_pub  # peer's X25519 public key (32 bytes)
+    # Authentication fields (Phase 9)
+    bool authenticated
 
 # ── Discovery Config ─────────────────────────────────────────
 
@@ -627,7 +630,8 @@ ReliableStream p2p_new_stream(int stream_id, str peer_hex, int initial_state):
         262144, 262144,
         0, 0, 0, 0, 0,
         false, Vector[uint8](), Vector[uint8](), 0, 0,
-        Vector[uint8](), Vector[uint8](), Vector[uint8]()
+        Vector[uint8](), Vector[uint8](), Vector[uint8](),
+        false
     )
 
 int p2p_find_stream(Node &node, int stream_id):
@@ -655,6 +659,16 @@ Vector[uint8] p2p_encode_syn_encrypted_payload(int stream_id, int initial_seq, V
     buf = bytes_concat(buf, pubkey)
     return buf
 
+# Authenticated SYN: [4B stream_id] [4B initial_seq] [1B flags=0x03] [32B X25519] [32B Ed25519] [64B sig]
+Vector[uint8] p2p_encode_syn_auth_payload(int stream_id, int initial_seq, Vector[uint8] ephemeral_pub, Vector[uint8] ed25519_pub, Vector[uint8] signature):
+    Vector[uint8] buf = p2p_make_u32(stream_id)
+    buf = bytes_concat(buf, p2p_make_u32(initial_seq))
+    buf = bytes_concat(buf, p2p_make_byte(3))
+    buf = bytes_concat(buf, ephemeral_pub)
+    buf = bytes_concat(buf, ed25519_pub)
+    buf = bytes_concat(buf, signature)
+    return buf
+
 # RELIABLE_SYN_ACK (53): [4B stream_id] [4B responder_isn] [4B ack_isn] [1B flags] [32B pubkey if flags & 0x01]
 Vector[uint8] p2p_encode_syn_ack_payload(int stream_id, int responder_isn, int ack_isn):
     Vector[uint8] buf = p2p_make_u32(stream_id)
@@ -669,6 +683,17 @@ Vector[uint8] p2p_encode_syn_ack_encrypted_payload(int stream_id, int responder_
     buf = bytes_concat(buf, p2p_make_u32(ack_isn))
     buf = bytes_concat(buf, p2p_make_byte(1))
     buf = bytes_concat(buf, pubkey)
+    return buf
+
+# Authenticated SYN-ACK: [4B stream_id] [4B responder_isn] [4B ack_isn] [1B flags=0x03] [32B X25519] [32B Ed25519] [64B sig]
+Vector[uint8] p2p_encode_syn_ack_auth_payload(int stream_id, int responder_isn, int ack_isn, Vector[uint8] ephemeral_pub, Vector[uint8] ed25519_pub, Vector[uint8] signature):
+    Vector[uint8] buf = p2p_make_u32(stream_id)
+    buf = bytes_concat(buf, p2p_make_u32(responder_isn))
+    buf = bytes_concat(buf, p2p_make_u32(ack_isn))
+    buf = bytes_concat(buf, p2p_make_byte(3))
+    buf = bytes_concat(buf, ephemeral_pub)
+    buf = bytes_concat(buf, ed25519_pub)
+    buf = bytes_concat(buf, signature)
     return buf
 
 # RELIABLE_DATA (50): [4B stream_id] [4B seq_num] [data...]
@@ -781,11 +806,14 @@ Result[int, str] p2p_stream_open_encrypted(Node &node, str peer_hex):
     s.local_initial_seq = 0
     s.syn_send_ms = time_ms()
     s.encrypted = true
+    s.authenticated = true
     s.local_ephemeral_pub = bytes_slice(epub, 0, epub.len())
     s.local_ephemeral_priv = bytes_slice(epriv, 0, epriv.len())
     node.streams.push(!s)
-    # Send encrypted SYN with our ephemeral public key
-    Vector[uint8] payload = p2p_encode_syn_encrypted_payload(sid, 0, epub)
+    # Sign ephemeral X25519 public key with our Ed25519 identity key
+    Vector[uint8] sig = crypto_ed25519_sign(node.identity.private_key, epub).unwrap()
+    # Send authenticated SYN (flags=0x03): ephemeral + Ed25519 pubkey + signature
+    Vector[uint8] payload = p2p_encode_syn_auth_payload(sid, 0, epub, node.identity.public_key, sig)
     PeerInfo pi = node.peers.get(idx).unwrap()
     p2p_send_raw(&node, pi.host, pi.port, 52, payload)
     return Ok(sid)
@@ -796,6 +824,15 @@ bool p2p_stream_is_encrypted(Node node, int stream_id):
         ReliableStream s = node.streams.get(i).unwrap()
         if s.stream_id == stream_id:
             return s.encrypted
+        i = i + 1
+    return false
+
+bool p2p_stream_is_authenticated(Node node, int stream_id):
+    int i = 0
+    while i < node.streams.len():
+        ReliableStream s = node.streams.get(i).unwrap()
+        if s.stream_id == stream_id:
+            return s.authenticated
         i = i + 1
     return false
 
@@ -814,10 +851,17 @@ void p2p_stream_accept(Node &node, int stream_id):
     int remote_isn = s.remote_initial_seq
     int sid = s.stream_id
     bool is_enc = s.encrypted
+    bool is_auth = s.authenticated
     Vector[uint8] our_pub = bytes_slice(s.local_ephemeral_pub, 0, s.local_ephemeral_pub.len())
     node.streams.push(!s)
-    # Send SYN-ACK (with pubkey if encrypted)
-    if is_enc:
+    # Send SYN-ACK
+    if is_auth:
+        # Authenticated: sign our ephemeral key and include Ed25519 pubkey
+        Vector[uint8] sig = crypto_ed25519_sign(node.identity.private_key, our_pub).unwrap()
+        Vector[uint8] payload = p2p_encode_syn_ack_auth_payload(sid, 0, remote_isn + 1, our_pub, node.identity.public_key, sig)
+        p2p_stream_send_raw(&node, peer, 53, payload)
+    elif is_enc:
+        # Encrypted only (no auth)
         Vector[uint8] payload = p2p_encode_syn_ack_encrypted_payload(sid, 0, remote_isn + 1, our_pub)
         p2p_stream_send_raw(&node, peer, 53, payload)
     else:
@@ -857,10 +901,38 @@ P2PEvent p2p_handle_syn(Node &node, str sender_hex, Vector[uint8] payload):
     ReliableStream s = p2p_new_stream(stream_id, sender_hex, 2)
     s.remote_initial_seq = initial_seq
     s.remote_seq_acked = initial_seq + 1
-    # Check for encryption flag: [8B base] [1B flags] [32B pubkey if flags & 0x01]
-    if payload.len() >= 41:
+    # Check flags byte at offset 8
+    if payload.len() >= 9:
         uint8 flags = payload.get(8).unwrap()
-        if flags as int == 1:
+        int flags_int = flags as int
+        int enc_bit = flags_int & 1
+        int auth_bit = flags_int & 2
+        if enc_bit == 1 and auth_bit == 2 and payload.len() >= 137:
+            # Authenticated + encrypted: [9..41] X25519, [41..73] Ed25519, [73..137] signature
+            Vector[uint8] ephemeral_pub = bytes_slice(payload, 9, 41)
+            Vector[uint8] ed25519_pub = bytes_slice(payload, 41, 73)
+            Vector[uint8] signature = bytes_slice(payload, 73, 137)
+            # Identity check: SHA256(ed25519_pub) must match sender's PeerId
+            str computed_hex = bytes_to_hex(crypto_sha256(ed25519_pub))
+            if computed_hex != sender_hex:
+                return p2p_no_event()
+            # Signature check: verify that sender signed their ephemeral key
+            if not crypto_ed25519_verify(ed25519_pub, ephemeral_pub, signature):
+                return p2p_no_event()
+            s.encrypted = true
+            s.authenticated = true
+            s.remote_ephemeral_pub = !ephemeral_pub
+            # Generate our own ephemeral keypair
+            X25519KeyPair ekp = crypto_x25519_keygen().unwrap()
+            Vector[uint8] epub = ekp.public_key()
+            s.local_ephemeral_pub = bytes_slice(epub, 0, epub.len())
+            # Compute shared secret and derive keys (we are responder)
+            Vector[uint8] shared = crypto_x25519_shared_secret(ekp, s.remote_ephemeral_pub).unwrap()
+            Vector[uint8] keys = p2p_derive_stream_keys(shared, false)
+            s.tx_key = bytes_slice(keys, 0, 32)
+            s.rx_key = bytes_slice(keys, 32, 64)
+        elif enc_bit == 1 and payload.len() >= 41:
+            # Encrypted only (Phase 8 backward compat)
             s.encrypted = true
             s.remote_ephemeral_pub = bytes_slice(payload, 9, 41)
             # Generate our own ephemeral keypair
@@ -895,12 +967,36 @@ P2PEvent p2p_handle_syn_ack(Node &node, str sender_hex, Vector[uint8] payload):
     s.state = 3
     s.remote_initial_seq = responder_isn
     s.remote_seq_acked = responder_isn + 1
-    # Check for encryption flag in SYN-ACK: [12B base] [1B flags] [32B pubkey if flags & 0x01]
-    if s.encrypted and payload.len() >= 45:
+    # Check flags byte at offset 12
+    if s.encrypted and payload.len() >= 13:
         uint8 flags = payload.get(12).unwrap()
-        if flags as int == 1:
+        int flags_int = flags as int
+        int auth_bit = flags_int & 2
+        int enc_bit = flags_int & 1
+        if auth_bit == 2 and s.authenticated and payload.len() >= 141:
+            # Authenticated SYN-ACK: [13..45] X25519, [45..77] Ed25519, [77..141] signature
             Vector[uint8] responder_pub = bytes_slice(payload, 13, 45)
-            # We are initiator — compute shared secret from our stored private key + responder's public key
+            Vector[uint8] ed25519_pub = bytes_slice(payload, 45, 77)
+            Vector[uint8] signature = bytes_slice(payload, 77, 141)
+            # Identity check: SHA256(ed25519_pub) must match the peer we intended to connect to
+            str computed_hex = bytes_to_hex(crypto_sha256(ed25519_pub))
+            if computed_hex != s.peer_hex:
+                s.state = 0
+                node.streams.push(!s)
+                return p2p_no_event()
+            # Signature check: verify responder signed their ephemeral key
+            if not crypto_ed25519_verify(ed25519_pub, responder_pub, signature):
+                s.state = 0
+                node.streams.push(!s)
+                return p2p_no_event()
+            # Derive keys from shared secret
+            Vector[uint8] shared = crypto_x25519_dh(s.local_ephemeral_priv, responder_pub).unwrap()
+            Vector[uint8] keys = p2p_derive_stream_keys(shared, true)
+            s.tx_key = bytes_slice(keys, 0, 32)
+            s.rx_key = bytes_slice(keys, 32, 64)
+        elif enc_bit == 1 and payload.len() >= 45:
+            # Encrypted only (Phase 8 backward compat)
+            Vector[uint8] responder_pub = bytes_slice(payload, 13, 45)
             Vector[uint8] shared = crypto_x25519_dh(s.local_ephemeral_priv, responder_pub).unwrap()
             Vector[uint8] keys = p2p_derive_stream_keys(shared, true)
             s.tx_key = bytes_slice(keys, 0, 32)
@@ -1299,7 +1395,12 @@ void p2p_stream_tick(Node &node):
             if syn_elapsed >= s.rto_ms:
                 str peer = s.peer_hex
                 int sid = s.stream_id
-                if s.encrypted:
+                if s.authenticated:
+                    # Re-sign ephemeral key for retransmit
+                    Vector[uint8] sig = crypto_ed25519_sign(node.identity.private_key, s.local_ephemeral_pub).unwrap()
+                    Vector[uint8] syn_payload = p2p_encode_syn_auth_payload(sid, s.local_initial_seq, s.local_ephemeral_pub, node.identity.public_key, sig)
+                    p2p_stream_send_raw(&node, peer, 52, syn_payload)
+                elif s.encrypted:
                     Vector[uint8] syn_payload = p2p_encode_syn_encrypted_payload(sid, s.local_initial_seq, s.local_ephemeral_pub)
                     p2p_stream_send_raw(&node, peer, 52, syn_payload)
                 else:

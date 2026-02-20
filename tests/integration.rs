@@ -3998,6 +3998,7 @@ peers connected
 syn received
 stream connected
 encrypted: true
+authenticated: true
 hello encrypted
 stream closed
 fin acked",
