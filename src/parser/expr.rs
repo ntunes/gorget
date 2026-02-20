@@ -474,40 +474,19 @@ impl Parser {
                 op: InfixOp::Binary(BinaryOp::And),
             },
 
-            // Bitwise OR
-            Token::Pipe => InfixBP {
-                left: 9,
-                right: 10,
-                op: InfixOp::Binary(BinaryOp::BitOr),
-            },
-
-            // Bitwise XOR
-            Token::Caret => InfixBP {
-                left: 11,
-                right: 12,
-                op: InfixOp::Binary(BinaryOp::BitXor),
-            },
-
-            // Bitwise AND
-            Token::Ampersand => InfixBP {
-                left: 13,
-                right: 14,
-                op: InfixOp::Binary(BinaryOp::BitAnd),
-            },
-
             // is / is not
             Token::Keyword(Keyword::Is) => {
                 // Check for "is not"
                 if matches!(self.peek_ahead(1), Token::Keyword(Keyword::Not)) {
                     InfixBP {
-                        left: 15,
-                        right: 16,
+                        left: 9,
+                        right: 10,
                         op: InfixOp::IsNot,
                     }
                 } else {
                     InfixBP {
-                        left: 15,
-                        right: 16,
+                        left: 9,
+                        right: 10,
                         op: InfixOp::Is,
                     }
                 }
@@ -515,41 +494,62 @@ impl Parser {
 
             // Comparison
             Token::EqEq => InfixBP {
-                left: 17,
-                right: 18,
+                left: 11,
+                right: 12,
                 op: InfixOp::Binary(BinaryOp::Eq),
             },
             Token::BangEq => InfixBP {
-                left: 17,
-                right: 18,
+                left: 11,
+                right: 12,
                 op: InfixOp::Binary(BinaryOp::Neq),
             },
             Token::Lt => InfixBP {
-                left: 19,
-                right: 20,
+                left: 13,
+                right: 14,
                 op: InfixOp::Binary(BinaryOp::Lt),
             },
             Token::Gt => InfixBP {
-                left: 19,
-                right: 20,
+                left: 13,
+                right: 14,
                 op: InfixOp::Binary(BinaryOp::Gt),
             },
             Token::LtEq => InfixBP {
-                left: 19,
-                right: 20,
+                left: 13,
+                right: 14,
                 op: InfixOp::Binary(BinaryOp::LtEq),
             },
             Token::GtEq => InfixBP {
-                left: 19,
-                right: 20,
+                left: 13,
+                right: 14,
                 op: InfixOp::Binary(BinaryOp::GtEq),
             },
 
             // in
             Token::Keyword(Keyword::In) => InfixBP {
+                left: 15,
+                right: 16,
+                op: InfixOp::Binary(BinaryOp::In),
+            },
+
+            // Bitwise OR
+            Token::Pipe => InfixBP {
+                left: 17,
+                right: 18,
+                op: InfixOp::Binary(BinaryOp::BitOr),
+            },
+
+            // Bitwise XOR
+            Token::Caret => InfixBP {
+                left: 19,
+                right: 20,
+                op: InfixOp::Binary(BinaryOp::BitXor),
+            },
+
+            // Bitwise AND
+            Token::Ampersand => InfixBP {
                 left: 21,
                 right: 22,
-                op: InfixOp::Binary(BinaryOp::In),
+                op: InfixOp::Binary(BinaryOp::BitAnd),
             },
 
             // Range
