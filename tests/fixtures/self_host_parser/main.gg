@@ -1,0 +1,30 @@
+# Self-hosting parser test harness.
+# Parses small Gorget source fragments and prints formatted AST.
+
+from std.collections import Vector
+from lexer import lex_tokenize, SpannedToken, Token, Keyword, StringLiteral, StringSegment
+from ast import Module, Item, Stmt, Expr, Type, Pattern, Span, SpannedExpr, SpannedType, SpannedPattern, FunctionDef, StructDef, EnumDef, EnumVariant, TraitDef, EquipBlock, MatchArm, ElseBranch, Param, ImportStmt
+from parser import Parser, parse_source
+from format import format_module
+
+void test_parse(str label, str source):
+    Module m = parse_source(source)
+    str out = format_module(m)
+    print(label)
+    print(out)
+
+void main():
+    # Items (parsed at module level)
+    test_parse("=== function ===", "int add(int a, int b):\n    return a + b\n")
+    test_parse("=== struct ===", "struct Point:\n    int x\n    int y\n")
+    test_parse("=== enum ===", "enum Color:\n    Red\n    Green\n    Blue(int)\n")
+    test_parse("=== import ===", "from std.collections import Vector\n")
+    test_parse("=== expr_body ===", "int double(int x) = x * 2\n")
+
+    # Statements inside functions
+    test_parse("=== vardecl ===", "void f():\n    int x = 42\n")
+    test_parse("=== if_else ===", "void f():\n    if x > 0:\n        print(x)\n    else:\n        print(0)\n")
+    test_parse("=== for_loop ===", "void f():\n    for i in range(10):\n        print(i)\n")
+    test_parse("=== match ===", "void f():\n    match x:\n        case 1:\n            print(1)\n        else:\n            print(0)\n")
+    test_parse("=== method_call ===", "void f():\n    v.push(42)\n")
+    test_parse("=== assign ===", "void f():\n    x = 10\n")

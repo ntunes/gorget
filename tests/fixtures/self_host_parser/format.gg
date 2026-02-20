@@ -1,0 +1,601 @@
+# AST formatter for the self-hosting Gorget parser.
+# Produces canonical string representations of AST nodes for testing.
+
+from std.collections import Vector
+from std.conv import int_to_str, float_to_str
+from ast import Module, Item, Stmt, Expr, Type, Pattern, Span, SpannedExpr, SpannedType, SpannedPattern, FunctionDef, StructDef, EnumDef, EnumVariant, TraitDef, EquipBlock, MatchArm, ElseBranch, Param, ImportStmt
+
+# ── Typed accessors (workaround: pattern-destructured Vectors lose generic type) ──
+
+SpannedType get_stype_at(Vector[SpannedType] v, int i):
+    return v.get(i).unwrap()
+
+SpannedPattern get_spat_at(Vector[SpannedPattern] v, int i):
+    return v.get(i).unwrap()
+
+SpannedExpr get_sexpr_at(Vector[SpannedExpr] v, int i):
+    return v.get(i).unwrap()
+
+ElseBranch get_else_at(Vector[ElseBranch] v, int i):
+    return v.get(i).unwrap()
+
+MatchArm get_arm_at(Vector[MatchArm] v, int i):
+    return v.get(i).unwrap()
+
+Param get_param_at(Vector[Param] v, int i):
+    return v.get(i).unwrap()
+
+Stmt get_stmt_at(Vector[Stmt] v, int i):
+    return v.get(i).unwrap()
+
+str get_str_at(Vector[str] v, int i):
+    return v.get(i).unwrap()
+
+int sexpr_vec_len(Vector[SpannedExpr] v):
+    return v.len()
+
+bool has_opt_boxed_expr(Option[Box[SpannedExpr]] opt):
+    match opt:
+        case Some(_):
+            return true
+        else:
+            return false
+
+SpannedExpr get_opt_boxed_expr(Option[Box[SpannedExpr]] opt):
+    match opt:
+        case Some(b):
+            return *b
+        else:
+            return SpannedExpr(EIntLiteral(0), Span(0, 0))
+
+# ── Type formatting ──────────────────────────────────────────
+
+str format_type(SpannedType st):
+    match st.ty:
+        case TPrimitive(name):
+            return "" + name
+        case TNamed(name, args):
+            if args.len() == 0:
+                return "" + name
+            str result = name + "["
+            int i = 0
+            while i < args.len():
+                if i > 0:
+                    result = result + ", "
+                SpannedType arg = get_stype_at(args, i)
+                result = result + format_type(arg)
+                i = i + 1
+            result = result + "]"
+            return result
+        case TArray(elem, size):
+            str es = format_type(*elem)
+            str ss = int_to_str(size)
+            return "[" + es + "; " + ss + "]"
+        case TSlice(elem):
+            str es = format_type(*elem)
+            return "[" + es + "]"
+        case TTuple(elems):
+            str result = "("
+            int i = 0
+            while i < elems.len():
+                if i > 0:
+                    result = result + ", "
+                SpannedType e = get_stype_at(elems, i)
+                result = result + format_type(e)
+                i = i + 1
+            result = result + ")"
+            return result
+        case TFunction(ret, params, owns):
+            str result = format_type(*ret) + "("
+            int i = 0
+            while i < params.len():
+                if i > 0:
+                    result = result + ", "
+                SpannedType p = get_stype_at(params, i)
+                result = result + format_type(p)
+                i = i + 1
+            result = result + ")"
+            return result
+        case TSelf:
+            return "Self"
+        case TInferred:
+            return "auto"
+        else:
+            return "?"
+
+# ── Pattern formatting ───────────────────────────────────────
+
+str format_pattern(SpannedPattern sp):
+    match sp.pat:
+        case PWildcard:
+            return "_"
+        case PBinding(name):
+            return "" + name
+        case PLiteral(expr):
+            return format_expr(expr)
+        case PConstructor(name, args):
+            if args.len() == 0:
+                return "" + name
+            str result = name + "("
+            int i = 0
+            while i < args.len():
+                if i > 0:
+                    result = result + ", "
+                SpannedPattern a = get_spat_at(args, i)
+                result = result + format_pattern(a)
+                i = i + 1
+            result = result + ")"
+            return result
+        case PTuple(elems):
+            str result = "("
+            int i = 0
+            while i < elems.len():
+                if i > 0:
+                    result = result + ", "
+                SpannedPattern e = get_spat_at(elems, i)
+                result = result + format_pattern(e)
+                i = i + 1
+            result = result + ")"
+            return result
+        case POr(alts):
+            str result = ""
+            int i = 0
+            while i < alts.len():
+                if i > 0:
+                    result = result + " | "
+                SpannedPattern a = get_spat_at(alts, i)
+                result = result + format_pattern(a)
+                i = i + 1
+            return result
+        case PRest:
+            return ".."
+        else:
+            return "?"
+
+# ── Expression formatting ────────────────────────────────────
+
+str format_expr(SpannedExpr se):
+    match se.expr:
+        case EIntLiteral(n):
+            return int_to_str(n)
+        case EFloatLiteral(f):
+            return float_to_str(f)
+        case EBoolLiteral(b):
+            if b:
+                return "true"
+            return "false"
+        case EStringLiteral(s):
+            return "\"" + s + "\""
+        case ECharLiteral(c):
+            return "'" + c + "'"
+        case ENoneLiteral:
+            return "None"
+        case EIdentifier(name):
+            return "" + name
+        case ESelfExpr:
+            return "self"
+        case EBinaryOp(l, op, r):
+            str ls = format_expr(*l)
+            str rs = format_expr(*r)
+            return "(" + ls + " " + op + " " + rs + ")"
+        case EUnaryOp(op, operand):
+            str os = format_expr(*operand)
+            return "(" + op + " " + os + ")"
+        case ECall(callee, args, targs):
+            str cs = format_expr(*callee)
+            str result = cs + "("
+            int i = 0
+            while i < args.len():
+                if i > 0:
+                    result = result + ", "
+                SpannedExpr a = get_sexpr_at(args, i)
+                result = result + format_expr(a)
+                i = i + 1
+            result = result + ")"
+            return result
+        case EMethodCall(obj, name, args, targs):
+            str os = format_expr(*obj)
+            str result = os + "." + name + "("
+            int i = 0
+            while i < args.len():
+                if i > 0:
+                    result = result + ", "
+                SpannedExpr a = get_sexpr_at(args, i)
+                result = result + format_expr(a)
+                i = i + 1
+            result = result + ")"
+            return result
+        case EFieldAccess(obj, name):
+            str os = format_expr(*obj)
+            return os + "." + name
+        case EIndex(obj, idx):
+            str os = format_expr(*obj)
+            str is_ = format_expr(*idx)
+            return os + "[" + is_ + "]"
+        case ERange(lo, hi):
+            str result = ""
+            if has_opt_boxed_expr(lo):
+                result = format_expr(get_opt_boxed_expr(lo))
+            result = result + ".."
+            if has_opt_boxed_expr(hi):
+                result = result + format_expr(get_opt_boxed_expr(hi))
+            return result
+        case EIf(cond, body, branches):
+            str result = "if " + format_expr(*cond) + ":"
+            result = result + format_block(body)
+            int i = 0
+            while i < branches.len():
+                ElseBranch br = get_else_at(branches, i)
+                match br.condition:
+                    case Some(c):
+                        result = result + " elif " + format_expr(c) + ":"
+                    else:
+                        result = result + " else:"
+                result = result + format_block(br.body)
+                i = i + 1
+            return result
+        case EMatch(subject, arms):
+            str result = "match " + format_expr(*subject) + ":"
+            int i = 0
+            while i < arms.len():
+                MatchArm arm = get_arm_at(arms, i)
+                result = result + " case " + format_pattern(arm.pattern) + ":"
+                result = result + format_block(arm.body)
+                i = i + 1
+            return result
+        case EClosure(params, body):
+            str result = "("
+            int i = 0
+            while i < params.len():
+                if i > 0:
+                    result = result + ", "
+                Param p = get_param_at(params, i)
+                result = result + format_type(p.param_type) + " " + p.param_name
+                i = i + 1
+            result = result + "):"
+            result = result + format_block(body)
+            return result
+        case EArrayLiteral(elems):
+            str result = "["
+            int i = 0
+            while i < elems.len():
+                if i > 0:
+                    result = result + ", "
+                SpannedExpr e = get_sexpr_at(elems, i)
+                result = result + format_expr(e)
+                i = i + 1
+            result = result + "]"
+            return result
+        case ETupleLiteral(elems):
+            str result = "("
+            int i = 0
+            while i < elems.len():
+                if i > 0:
+                    result = result + ", "
+                SpannedExpr e = get_sexpr_at(elems, i)
+                result = result + format_expr(e)
+                i = i + 1
+            result = result + ")"
+            return result
+        case EDictLiteral(keys, vals):
+            str open_b = r"{"
+            str close_b = r"}"
+            str result = open_b
+            int i = 0
+            while i < sexpr_vec_len(keys):
+                if i > 0:
+                    result = result + ", "
+                SpannedExpr k = get_sexpr_at(keys, i)
+                SpannedExpr v = get_sexpr_at(vals, i)
+                result = result + format_expr(k) + ": " + format_expr(v)
+                i = i + 1
+            result = result + close_b
+            return result
+        case EStructLiteral(name, fields, vals):
+            str result = name + "("
+            int i = 0
+            while i < sexpr_vec_len(vals):
+                if i > 0:
+                    result = result + ", "
+                SpannedExpr v = get_sexpr_at(vals, i)
+                result = result + format_expr(v)
+                i = i + 1
+            result = result + ")"
+            return result
+        case ETry(inner):
+            return format_expr(*inner) + "?"
+        case EMove(inner):
+            return "!" + format_expr(*inner)
+        case EMutableBorrow(inner):
+            return "&" + format_expr(*inner)
+        case EDeref(inner):
+            return "*" + format_expr(*inner)
+        case EAs(inner, ty):
+            return format_expr(*inner) + " as " + format_type(*ty)
+        case EBlock(stmts):
+            return "block:" + format_block(stmts)
+        case EListComp(expr, var, iter, cond):
+            str result = "[" + format_expr(*expr) + " for " + var + " in " + format_expr(*iter)
+            if has_opt_boxed_expr(cond):
+                result = result + " if " + format_expr(get_opt_boxed_expr(cond))
+            result = result + "]"
+            return result
+        case ENilCoalescing(l, r):
+            return "(" + format_expr(*l) + " ?? " + format_expr(*r) + ")"
+        else:
+            return "?"
+
+# ── Statement formatting ─────────────────────────────────────
+
+str format_stmt(Stmt s):
+    match s:
+        case SVarDecl(ty, name, init, own):
+            str ts = format_type(ty)
+            str is_ = format_expr(init)
+            return ts + " " + name + " = " + is_
+        case SAssign(lhs, rhs):
+            return format_expr(lhs) + " = " + format_expr(rhs)
+        case SCompoundAssign(lhs, op, rhs):
+            return format_expr(lhs) + " " + op + " " + format_expr(rhs)
+        case SExpr(expr):
+            return format_expr(expr)
+        case SReturn(val):
+            match val:
+                case Some(v):
+                    return "return " + format_expr(v)
+                else:
+                    return "return"
+        case SThrow(val):
+            return "throw " + format_expr(val)
+        case SBreak(val):
+            match val:
+                case Some(v):
+                    return "break " + format_expr(v)
+                else:
+                    return "break"
+        case SContinue:
+            return "continue"
+        case SPass:
+            return "pass"
+        case SFor(pat, iter, body, own):
+            return "for " + format_pattern(pat) + " in " + format_expr(iter) + ":" + format_block(body)
+        case SWhile(cond, body):
+            return "while " + format_expr(cond) + ":" + format_block(body)
+        case SLoop(body):
+            return "loop:" + format_block(body)
+        case SIf(cond, body, branches):
+            str result = "if " + format_expr(cond) + ":" + format_block(body)
+            int i = 0
+            while i < branches.len():
+                ElseBranch br = get_else_at(branches, i)
+                match br.condition:
+                    case Some(c):
+                        result = result + " elif " + format_expr(c) + ":"
+                    else:
+                        result = result + " else:"
+                result = result + format_block(br.body)
+                i = i + 1
+            return result
+        case SMatch(subject, arms):
+            str result = "match " + format_expr(subject) + ":"
+            int i = 0
+            while i < arms.len():
+                MatchArm arm = get_arm_at(arms, i)
+                result = result + " case " + format_pattern(arm.pattern) + ":"
+                result = result + format_block(arm.body)
+                i = i + 1
+            return result
+        case SWith(resource, name, body):
+            return "with " + format_expr(resource) + " as " + name + ":" + format_block(body)
+        case SAssert(cond, msg):
+            str result = "assert " + format_expr(cond)
+            match msg:
+                case Some(m):
+                    result = result + ", \"" + m + "\""
+                else:
+                    pass
+            return result
+        case SItem(item):
+            return format_item(item)
+        else:
+            return "?"
+
+str format_block(Vector[Stmt] stmts):
+    if stmts.len() == 0:
+        return " pass"
+    str result = ""
+    int i = 0
+    while i < stmts.len():
+        Stmt s = stmts.get(i).unwrap()
+        result = result + " " + format_stmt(s) + ";"
+        i = i + 1
+    return result
+
+# ── Item formatting ──────────────────────────────────────────
+
+str format_item(Item item):
+    match item:
+        case IFunction(fd):
+            return format_function(fd)
+        case IStruct(sd):
+            return format_struct(sd)
+        case IEnum(ed):
+            return format_enum(ed)
+        case ITrait(td):
+            return format_trait(td)
+        case IEquip(eq):
+            return format_equip(eq)
+        case IImport(imp):
+            return format_import(imp)
+        case IDirective(name, value):
+            if value == "":
+                return "directive " + name
+            return "directive " + name + " " + value
+        else:
+            return "?"
+
+str format_function(FunctionDef fd):
+    str result = format_type(fd.return_type) + " " + fd.name
+    if fd.type_params.len() > 0:
+        result = result + "["
+        int i = 0
+        while i < fd.type_params.len():
+            if i > 0:
+                result = result + ", "
+            str tp = fd.type_params.get(i).unwrap()
+            result = result + tp
+            i = i + 1
+        result = result + "]"
+    result = result + "("
+    int i = 0
+    while i < fd.params.len():
+        if i > 0:
+            result = result + ", "
+        Param p = fd.params.get(i).unwrap()
+        if p.param_name == "self":
+            if p.ownership == 1:
+                result = result + "&self"
+            elif p.ownership == 2:
+                result = result + "!self"
+            else:
+                result = result + "self"
+        else:
+            result = result + format_type(p.param_type) + " " + p.param_name
+        i = i + 1
+    result = result + ")"
+    if fd.is_expr_body:
+        if fd.body.len() > 0:
+            Stmt first = fd.body.get(0).unwrap()
+            match first:
+                case SReturn(val):
+                    match val:
+                        case Some(v):
+                            result = result + " = " + format_expr(v)
+                        else:
+                            pass
+                else:
+                    pass
+    else:
+        result = result + ":" + format_block(fd.body)
+    return result
+
+str format_struct(StructDef sd):
+    str result = "struct " + sd.name
+    if sd.type_params.len() > 0:
+        result = result + "["
+        int i = 0
+        while i < sd.type_params.len():
+            if i > 0:
+                result = result + ", "
+            str tp = sd.type_params.get(i).unwrap()
+            result = result + tp
+            i = i + 1
+        result = result + "]"
+    result = result + ":"
+    int i = 0
+    while i < sd.fields.len():
+        Param f = sd.fields.get(i).unwrap()
+        result = result + " " + format_type(f.param_type) + " " + f.param_name + ";"
+        i = i + 1
+    return result
+
+str format_enum(EnumDef ed):
+    str result = "enum " + ed.name
+    if ed.type_params.len() > 0:
+        result = result + "["
+        int i = 0
+        while i < ed.type_params.len():
+            if i > 0:
+                result = result + ", "
+            str tp = ed.type_params.get(i).unwrap()
+            result = result + tp
+            i = i + 1
+        result = result + "]"
+    result = result + ":"
+    int i = 0
+    while i < ed.variants.len():
+        EnumVariant v = ed.variants.get(i).unwrap()
+        result = result + " " + v.name
+        if v.fields.len() > 0:
+            result = result + "("
+            int j = 0
+            while j < v.fields.len():
+                if j > 0:
+                    result = result + ", "
+                SpannedType ft = v.fields.get(j).unwrap()
+                result = result + format_type(ft)
+                j = j + 1
+            result = result + ")"
+        result = result + ";"
+        i = i + 1
+    return result
+
+str format_trait(TraitDef td):
+    str result = "trait " + td.name
+    if td.type_params.len() > 0:
+        result = result + "["
+        int i = 0
+        while i < td.type_params.len():
+            if i > 0:
+                result = result + ", "
+            str tp = td.type_params.get(i).unwrap()
+            result = result + tp
+            i = i + 1
+        result = result + "]"
+    if td.parent_traits.len() > 0:
+        result = result + " extends "
+        int i = 0
+        while i < td.parent_traits.len():
+            if i > 0:
+                result = result + ", "
+            str e = td.parent_traits.get(i).unwrap()
+            result = result + e
+            i = i + 1
+    result = result + ":"
+    int i = 0
+    while i < td.methods.len():
+        FunctionDef m = td.methods.get(i).unwrap()
+        result = result + " " + format_function(m) + ";"
+        i = i + 1
+    return result
+
+str format_equip(EquipBlock eq):
+    str result = "equip " + format_type(eq.target)
+    match eq.trait_name:
+        case Some(tn):
+            result = result + " via " + tn
+        else:
+            pass
+    result = result + ":"
+    int i = 0
+    while i < eq.methods.len():
+        FunctionDef m = eq.methods.get(i).unwrap()
+        result = result + " " + format_function(m) + ";"
+        i = i + 1
+    return result
+
+str format_import(ImportStmt imp):
+    if imp.names.len() > 0:
+        str result = "from " + imp.module_path + " import "
+        int i = 0
+        while i < imp.names.len():
+            if i > 0:
+                result = result + ", "
+            str n = imp.names.get(i).unwrap()
+            result = result + n
+            i = i + 1
+        return result
+    return "import " + imp.module_path
+
+# ── Module formatting ────────────────────────────────────────
+
+str format_module(Module m):
+    str result = ""
+    int i = 0
+    while i < m.items.len():
+        if i > 0:
+            result = result + "\n"
+        Item item = m.items.get(i).unwrap()
+        result = result + format_item(item)
+        i = i + 1
+    return result

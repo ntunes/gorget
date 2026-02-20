@@ -249,9 +249,17 @@ impl CodegenContext<'_> {
             Type::Named { name, generic_args } if generic_args.is_empty() => {
                 out.push(name.node.clone());
             }
-            Type::Named { generic_args, .. } if !generic_args.is_empty() => {
-                for arg in generic_args {
-                    Self::collect_value_type_dep_names(&arg.node, out);
+            Type::Named { name, generic_args } if !generic_args.is_empty() => {
+                // Pointer-based wrappers store their type args behind pointers,
+                // so the args don't need to be fully defined — skip them.
+                let pointer_based = matches!(
+                    name.node.as_str(),
+                    "Box" | "Rc" | "Arc" | "Weak" | "Vector" | "Dict" | "HashMap"
+                );
+                if !pointer_based {
+                    for arg in generic_args {
+                        Self::collect_value_type_dep_names(&arg.node, out);
+                    }
                 }
             }
             _ => {}

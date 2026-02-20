@@ -876,6 +876,37 @@ kw:if kw:true kw:and kw:not kw:false : NL INDENT kw:return kw:None NL DEDENT EOF
 }
 
 #[test]
+fn self_host_parser() {
+    run_gg_dir(
+        "self_host_parser",
+        "main.gg",
+        "\
+=== function ===
+int add(int a, int b): return (a + b);
+=== struct ===
+struct Point: int x; int y;
+=== enum ===
+enum Color: Red; Green; Blue(int);
+=== import ===
+from std.collections import Vector
+=== expr_body ===
+int double(int x) = (x * 2)
+=== vardecl ===
+void f(): int x = 42;
+=== if_else ===
+void f(): if (x > 0): print(x); else: print(0);;
+=== for_loop ===
+void f(): for i in range(10): print(i);;
+=== match ===
+void f(): match x: case 1: print(1); case _: print(0);;
+=== method_call ===
+void f(): v.push(42);
+=== assign ===
+void f(): x = 10;",
+    );
+}
+
+#[test]
 fn vector_methods() {
     run_gg(
         "vector_methods.gg",
