@@ -4,10 +4,6 @@
 
 ## Medium
 
-- **Parser: optional generic params repeated 6x**: `mod.rs:577,644,711,804,970,1247` — same `if check LBracket { Some(parse_generic_params()) } else { None }`. Extract `parse_optional_generic_params()`. [added: 2026-02-20]
-
-- **Parser: doc comment accumulation loop repeated 3x**: `mod.rs:337,731,844` — identical `while DocComment { accumulate }` loops. Extract `collect_doc_comment()`. [added: 2026-02-20]
-
 - **Parser: manual backtracking without abstraction**: `expr.rs:829,904,1110`, `stmt.rs:397,517` — 5 sites with manual `saved_pos` ceremony. Extract `try_parse()` helper. [added: 2026-02-20]
 
 - **Parser: `parse_decl_or_expr_stmt` does too much**: `stmt.rs:395-453` — handles mutable prefix, auto shorthand, type parsing with backtrack, ownership modifiers, identifier detection, and value parsing. Split into smaller pieces. [added: 2026-02-20]

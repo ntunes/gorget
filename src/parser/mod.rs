@@ -340,16 +340,7 @@ impl Parser {
         }
 
         // Collect doc comments
-        let mut doc_comment = None;
-        while matches!(self.peek(), Token::DocComment(_)) {
-            if let Token::DocComment(comment) = self.advance().node {
-                let dc = doc_comment.get_or_insert_with(String::new);
-                if !dc.is_empty() {
-                    dc.push('\n');
-                }
-                dc.push_str(&comment);
-            }
-        }
+        let doc_comment = self.collect_doc_comment();
 
         // Collect attributes
         let mut attributes = Vec::new();
@@ -557,11 +548,7 @@ impl Parser {
         self.expect_keyword(Keyword::Struct)?;
         let name = self.expect_identifier()?;
 
-        let generic_params = if self.check(&Token::LBracket) {
-            Some(self.parse_generic_params()?)
-        } else {
-            None
-        };
+        let generic_params = self.try_parse_generic_params()?;
 
         self.expect(&Token::Colon)?;
         self.expect(&Token::Newline)?;
@@ -624,11 +611,7 @@ impl Parser {
         self.expect_keyword(Keyword::Enum)?;
         let name = self.expect_identifier()?;
 
-        let generic_params = if self.check(&Token::LBracket) {
-            Some(self.parse_generic_params()?)
-        } else {
-            None
-        };
+        let generic_params = self.try_parse_generic_params()?;
 
         self.expect(&Token::Colon)?;
         self.expect(&Token::Newline)?;
@@ -691,11 +674,7 @@ impl Parser {
         self.expect_keyword(Keyword::Trait)?;
         let name = self.expect_identifier()?;
 
-        let generic_params = if self.check(&Token::LBracket) {
-            Some(self.parse_generic_params()?)
-        } else {
-            None
-        };
+        let generic_params = self.try_parse_generic_params()?;
 
         let extends = if self.match_keyword(Keyword::Extends) {
             self.parse_trait_bound_list()?
@@ -710,16 +689,7 @@ impl Parser {
         let mut items = Vec::new();
         while !self.check(&Token::Dedent) && !self.at_end() {
             // Skip doc comments within trait body
-            let mut method_doc = None;
-            while matches!(self.peek(), Token::DocComment(_)) {
-                if let Token::DocComment(comment) = self.advance().node {
-                    let dc = method_doc.get_or_insert_with(String::new);
-                    if !dc.is_empty() {
-                        dc.push('\n');
-                    }
-                    dc.push_str(&comment);
-                }
-            }
+            let method_doc = self.collect_doc_comment();
 
             if self.check(&Token::Newline) {
                 self.advance();
@@ -784,11 +754,7 @@ impl Parser {
         let start = self.peek_span();
         self.expect_keyword(Keyword::Equip)?;
 
-        let generic_params = if self.check(&Token::LBracket) {
-            Some(self.parse_generic_params()?)
-        } else {
-            None
-        };
+        let generic_params = self.try_parse_generic_params()?;
 
         // Parse self type (always comes first in equip syntax)
         let self_type = self.parse_type()?;
@@ -823,16 +789,7 @@ impl Parser {
 
         let mut items = Vec::new();
         while !self.check(&Token::Dedent) && !self.at_end() {
-            let mut method_doc = None;
-            while matches!(self.peek(), Token::DocComment(_)) {
-                if let Token::DocComment(comment) = self.advance().node {
-                    let dc = method_doc.get_or_insert_with(String::new);
-                    if !dc.is_empty() {
-                        dc.push('\n');
-                    }
-                    dc.push_str(&comment);
-                }
-            }
+            let method_doc = self.collect_doc_comment();
 
             if self.check(&Token::Newline) {
                 self.advance();
@@ -950,11 +907,7 @@ impl Parser {
         self.expect_keyword(Keyword::Type)?;
         let name = self.expect_identifier()?;
 
-        let generic_params = if self.check(&Token::LBracket) {
-            Some(self.parse_generic_params()?)
-        } else {
-            None
-        };
+        let generic_params = self.try_parse_generic_params()?;
 
         self.expect(&Token::Eq)?;
         let type_ = self.parse_type()?;
@@ -1216,11 +1169,7 @@ impl Parser {
         start: Span,
         is_extern: bool,
     ) -> Result<FunctionDef, ParseError> {
-        let generic_params = if self.check(&Token::LBracket) {
-            Some(self.parse_generic_params()?)
-        } else {
-            None
-        };
+        let generic_params = self.try_parse_generic_params()?;
 
         // Parse parameters
         self.expect(&Token::LParen)?;
@@ -1464,6 +1413,30 @@ impl Parser {
         let end = self.previous_span();
 
         Ok(Spanned::new(GenericParams { params }, start.merge(end)))
+    }
+
+    /// Parse optional generic parameters (`[T, U]`). Returns `None` if not present.
+    fn try_parse_generic_params(&mut self) -> Result<Option<Spanned<GenericParams>>, ParseError> {
+        if self.check(&Token::LBracket) {
+            Ok(Some(self.parse_generic_params()?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Collect consecutive doc comments into a single string, or `None` if no doc comments present.
+    fn collect_doc_comment(&mut self) -> Option<String> {
+        let mut doc_comment = None;
+        while matches!(self.peek(), Token::DocComment(_)) {
+            if let Token::DocComment(comment) = self.advance().node {
+                let dc = doc_comment.get_or_insert_with(String::new);
+                if !dc.is_empty() {
+                    dc.push('\n');
+                }
+                dc.push_str(&comment);
+            }
+        }
+        doc_comment
     }
 
     pub fn parse_where_clause(&mut self) -> Result<Spanned<WhereClause>, ParseError> {
