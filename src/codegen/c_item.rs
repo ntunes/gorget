@@ -84,7 +84,10 @@ impl CodegenContext<'_> {
     // ─── Type Definitions ────────────────────────────────────
 
     /// Emit all type definitions (structs, enums).
-    pub fn emit_type_definitions(&self, module: &crate::parser::ast::Module, emitter: &mut CEmitter) {
+    /// Non-pointer-safe generic enum instances (e.g. `Option[UserStruct]`) that appear
+    /// as struct fields are interleaved into the topological sort so they're defined
+    /// before the struct that contains them.
+    pub fn emit_type_definitions(&mut self, module: &crate::parser::ast::Module, emitter: &mut CEmitter) {
         emitter.emit_line("// ── Type Definitions ──");
 
         // Emit non-struct types first (enums, type aliases, newtypes, traits) in original order
@@ -171,8 +174,23 @@ impl CodegenContext<'_> {
             }
         }
 
-        // Emit structs in topological order
+        // Emit structs in topological order, interleaving non-pointer-safe
+        // generic enum instances (e.g. Option[Color]) before the struct that
+        // needs them. The topo sort guarantees the enum's type args (Color)
+        // are already defined at this point.
         for &idx in &sorted_indices {
+            let mut enum_deps = Vec::new();
+            for field in &struct_defs[idx].fields {
+                self.collect_field_generic_enum_deps(&field.node.type_.node, &mut enum_deps);
+            }
+            for (mangled, base_name, c_type_args) in &enum_deps {
+                if !self.emitted_in_type_defs.contains(mangled) {
+                    if let Some(template) = self.generic_enum_templates.get(base_name).cloned() {
+                        self.emit_monomorphized_enum(&template, c_type_args, mangled, emitter);
+                        self.emitted_in_type_defs.insert(mangled.clone());
+                    }
+                }
+            }
             self.emit_struct_def(struct_defs[idx], emitter);
         }
 
@@ -181,6 +199,18 @@ impl CodegenContext<'_> {
             let sorted_set: HashSet<usize> = sorted_indices.iter().copied().collect();
             for i in 0..n {
                 if !sorted_set.contains(&i) {
+                    let mut enum_deps = Vec::new();
+                    for field in &struct_defs[i].fields {
+                        self.collect_field_generic_enum_deps(&field.node.type_.node, &mut enum_deps);
+                    }
+                    for (mangled, base_name, c_type_args) in &enum_deps {
+                        if !self.emitted_in_type_defs.contains(mangled) {
+                            if let Some(template) = self.generic_enum_templates.get(base_name).cloned() {
+                                self.emit_monomorphized_enum(&template, c_type_args, mangled, emitter);
+                                self.emitted_in_type_defs.insert(mangled.clone());
+                            }
+                        }
+                    }
                     self.emit_struct_def(struct_defs[i], emitter);
                 }
             }
@@ -190,13 +220,51 @@ impl CodegenContext<'_> {
     }
 
     /// Collect named types that appear as by-value field types (dependencies for ordering).
-    /// Only non-generic Named types count — pointers, generics, etc. work with forward decls.
+    /// Non-generic Named types are direct dependencies. For generic Named types, we recurse
+    /// into their type args to capture transitive dependencies (e.g., `Option[Color]` → `Color`).
     fn collect_value_type_dep_names(ty: &Type, out: &mut Vec<String>) {
         match ty {
             Type::Named { name, generic_args } if generic_args.is_empty() => {
                 out.push(name.node.clone());
             }
+            Type::Named { generic_args, .. } if !generic_args.is_empty() => {
+                for arg in generic_args {
+                    Self::collect_value_type_dep_names(&arg.node, out);
+                }
+            }
             _ => {}
+        }
+    }
+
+    /// Collect non-pointer-safe generic enum dependencies from a field's AST type.
+    /// Returns `(mangled_name, base_name, c_type_args)` triples for generic enums
+    /// whose type args include non-pointer-safe (user-defined value) types.
+    /// Inner deps are collected before outer (recursion-first).
+    fn collect_field_generic_enum_deps(
+        &self,
+        ty: &Type,
+        out: &mut Vec<(String, String, Vec<String>)>,
+    ) {
+        if let Type::Named { name, generic_args } = ty {
+            if !generic_args.is_empty() {
+                // Recurse into type args first (inner deps come before outer)
+                for arg in generic_args {
+                    self.collect_field_generic_enum_deps(&arg.node, out);
+                }
+                // If this is a generic enum template with non-pointer-safe args,
+                // it must be emitted during the struct topo sort phase
+                if self.generic_enum_templates.contains_key(&name.node) {
+                    let c_type_args: Vec<String> = generic_args.iter()
+                        .map(|a| c_types::ast_type_to_c(&a.node, self.scopes))
+                        .collect();
+                    if !c_type_args.iter().all(|a| Self::is_pointer_safe_type_arg(a)) {
+                        let mangled = c_mangle::mangle_generic(&name.node, &c_type_args);
+                        if !out.iter().any(|(m, _, _)| m == &mangled) {
+                            out.push((mangled, name.node.clone(), c_type_args));
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -2028,12 +2096,13 @@ impl CodegenContext<'_> {
     /// Emit generic Enum type definitions (phase 2).
     /// Generic enums whose type args contain user-defined value types need those
     /// types fully defined first. Enums already emitted in phase 1 (pointer-safe
-    /// args) are skipped.
+    /// args) or during the struct topo sort (interleaved) are skipped.
     /// Must be called after regular type definitions.
     pub fn emit_generic_type_definitions_phase2(&mut self, emitter: &mut CEmitter) {
         let has_enums = self.generic_instances.iter().any(|i|
             matches!(i.kind, super::GenericInstanceKind::Enum)
             && !i.c_type_args.iter().all(|a| Self::is_pointer_safe_type_arg(a))
+            && !self.emitted_in_type_defs.contains(&i.mangled_name)
         );
         if !has_enums {
             return;
@@ -2042,8 +2111,11 @@ impl CodegenContext<'_> {
         for i in 0..self.generic_instances.len() {
             let inst = self.generic_instances[i].clone();
             if let super::GenericInstanceKind::Enum = inst.kind {
-                // Skip enums already emitted in phase 1
+                // Skip enums already emitted in phase 1 or during struct topo sort
                 if inst.c_type_args.iter().all(|a| Self::is_pointer_safe_type_arg(a)) {
+                    continue;
+                }
+                if self.emitted_in_type_defs.contains(&inst.mangled_name) {
                     continue;
                 }
                 let template = self.generic_enum_templates.get(&inst.base_name).cloned();

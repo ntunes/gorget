@@ -362,6 +362,9 @@ pub struct CodegenContext<'a> {
     /// Set by `.get()` codegen when the returned element was deep-cloned.
     /// Consumed by `gen_var_decl` to register full drops for the variable.
     pub deep_cloned_expr: bool,
+    /// Generic enum mangled names already emitted during the struct topo sort
+    /// in `emit_type_definitions`. Phase 2 skips these to avoid duplicate defs.
+    pub emitted_in_type_defs: HashSet<String>,
 }
 
 impl CodegenContext<'_> {
@@ -589,6 +592,7 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
         function_body_scopes: &analysis.function_body_scopes,
         method_resolutions: &analysis.method_resolutions,
         deep_cloned_expr: false,
+        emitted_in_type_defs: HashSet::new(),
     };
 
     let mut emitter = CEmitter::new();

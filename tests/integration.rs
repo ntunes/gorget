@@ -4356,6 +4356,27 @@ done",
 }
 
 #[test]
+fn option_struct_field() {
+    run_gg(
+        "option_struct_field.gg",
+        "\
+hello (1)
+no message (no priority)
+world (no priority)",
+    );
+}
+
+#[test]
+fn option_struct_field_ordering() {
+    run_gg(
+        "option_struct_field_ordering.gg",
+        "\
+255
+no color",
+    );
+}
+
+#[test]
 fn csv_basic() {
     run_gg(
         "csv_basic.gg",

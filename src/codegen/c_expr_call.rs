@@ -847,17 +847,19 @@ impl CodegenContext<'_> {
                     let c_name = c_types::def_name_to_c(def_id, self.scopes);
                     let struct_name = def.name.clone();
 
-                    // Build per-field TypeIds for str↔String coercion.
+                    // Hoist field names for per-field type hint + coercion.
                     // For structs, field order comes from struct_fields;
                     // for newtypes, single field named "value".
+                    let field_names: Vec<String> = if def.kind == DefKind::Struct {
+                        self.struct_fields.get(&def_id)
+                            .map(|info| info.fields.iter().map(|(n, _)| n.clone()).collect())
+                            .unwrap_or_default()
+                    } else {
+                        vec!["value".to_string()]
+                    };
+
+                    // Build per-field TypeIds for str↔String coercion.
                     let field_type_ids: Vec<Option<crate::semantic::ids::TypeId>> = {
-                        let field_names: Vec<String> = if def.kind == DefKind::Struct {
-                            self.struct_fields.get(&def_id)
-                                .map(|info| info.fields.iter().map(|(n, _)| n.clone()).collect())
-                                .unwrap_or_default()
-                        } else {
-                            vec!["value".to_string()]
-                        };
                         field_names.iter().map(|fname| {
                             let key = (struct_name.clone(), fname.clone());
                             self.field_type_names.get(&key).and_then(|ast_type| {
@@ -871,11 +873,21 @@ impl CodegenContext<'_> {
                         }).collect()
                     };
 
+                    let saved_hint = self.decl_type_hint.clone();
                     let field_exprs: Vec<String> = args.iter().enumerate().map(|(i, a)| {
+                        // Set per-field type hint so nested generic constructors
+                        // (e.g. Some("hi") in an Option[str] field) resolve correctly
+                        if let Some(fname) = field_names.get(i) {
+                            let key = (struct_name.clone(), fname.clone());
+                            if let Some(field_type) = self.field_type_names.get(&key) {
+                                self.decl_type_hint = Some(field_type.clone());
+                            }
+                        }
                         let expr = self.gen_expr(&a.node.value);
                         let ptid = field_type_ids.get(i).copied().flatten();
                         self.coerce_arg_to_str(expr, &a.node.value, ptid)
                     }).collect();
+                    self.decl_type_hint = saved_hint;
                     let fields = field_exprs.join(", ");
                     return format!("({c_name}){{{fields}}}");
                 }

@@ -405,13 +405,15 @@ impl CodegenContext<'_> {
                     name.node.clone()
                 };
 
+                // Hoist struct name and field names for per-field type hint + coercion
+                let struct_name = name.node.clone();
+                let field_names: Vec<String> = self.scopes.lookup(&struct_name)
+                    .and_then(|def_id| self.struct_fields.get(&def_id))
+                    .map(|info| info.fields.iter().map(|(n, _)| n.clone()).collect())
+                    .unwrap_or_default();
+
                 // Build per-field TypeIds for str↔String coercion
                 let field_type_ids: Vec<Option<crate::semantic::ids::TypeId>> = {
-                    let struct_name = &name.node;
-                    let field_names: Vec<String> = self.scopes.lookup(struct_name)
-                        .and_then(|def_id| self.struct_fields.get(&def_id))
-                        .map(|info| info.fields.iter().map(|(n, _)| n.clone()).collect())
-                        .unwrap_or_default();
                     field_names.iter().map(|fname| {
                         let key = (struct_name.clone(), fname.clone());
                         self.field_type_names.get(&key).and_then(|ast_type| {
@@ -427,11 +429,21 @@ impl CodegenContext<'_> {
                 // Queue move-zeroing for consumed droppable args
                 self.queue_constructor_move_zeros_exprs(args);
 
+                let saved_hint = self.decl_type_hint.clone();
                 let field_exprs: Vec<String> = args.iter().enumerate().map(|(i, a)| {
+                    // Set per-field type hint so nested generic constructors
+                    // (e.g. Some("hi") in an Option[str] field) resolve correctly
+                    if let Some(fname) = field_names.get(i) {
+                        let key = (struct_name.clone(), fname.clone());
+                        if let Some(field_type) = self.field_type_names.get(&key) {
+                            self.decl_type_hint = Some(field_type.clone());
+                        }
+                    }
                     let expr = self.gen_expr(a);
                     let ptid = field_type_ids.get(i).copied().flatten();
                     self.coerce_arg_to_str(expr, a, ptid)
                 }).collect();
+                self.decl_type_hint = saved_hint;
                 let fields_str = field_exprs.join(", ");
                 format!("({c_name}){{{fields_str}}}")
             }
@@ -931,6 +943,30 @@ impl CodegenContext<'_> {
         if matches!(&scrutinee.node, Expr::SelfExpr) {
             if let Some(self_type) = &self.current_self_type {
                 return Some(self_type.clone());
+            }
+        }
+        // For field access on a struct, resolve directly from the field's AST type.
+        // This handles generic enum fields (e.g. `g.message` where message is `Option[str]`)
+        // that may not have a matching Generic entry in the TypeTable.
+        if let Expr::FieldAccess { object, field } = &scrutinee.node {
+            let obj_type = self.infer_receiver_type(object);
+            if obj_type != "Unknown" {
+                let key = (obj_type, field.node.clone());
+                if let Some(ast_type) = self.field_type_names.get(&key).cloned() {
+                    if let Type::Named { name, generic_args } = &ast_type {
+                        if !generic_args.is_empty() {
+                            let c_type_args: Vec<String> = generic_args.iter()
+                                .map(|a| c_types::ast_type_to_c(&a.node, self.scopes))
+                                .collect();
+                            return Some(c_mangle::mangle_generic(&name.node, &c_type_args));
+                        }
+                        // Non-generic named type — return C name
+                        if let Some(def_id) = self.scoped_lookup(&name.node) {
+                            return Some(c_types::def_name_to_c(def_id, self.scopes));
+                        }
+                        return Some(name.node.clone());
+                    }
+                }
             }
         }
         let type_id = self.resolve_expr_type_id(scrutinee)?;

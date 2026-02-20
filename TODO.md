@@ -24,8 +24,6 @@
 
 
 
-- **Option[T] as struct field codegen**: `Option[str]` (and likely `Option[T]` in general) as a struct field fails C compilation — the generic instantiation `Option__const_char_ptr` is incomplete when the struct definition references it. The constructor mangling also fails (`Option__Some` undeclared, `NULL()` for None). Discovered during collection derive work; not related to derive itself. [added: 2026-02-19]
-
 - **Extract serialization traits to `std.serialize` module**: When adding TOML/YAML serializers, move `Serializer` and `Serializable` traits to a shared `std.serialize` module. `std.json`, `std.toml`, `std.yaml` would each provide their own backend. [added: 2026-02-17]
 
 - **Hot-reload: inotify file watching for Linux**: Current hot-reload file watcher is macOS-only (kqueue). Need `inotify` implementation in `HOT_RELOAD_RUNTIME` for Linux support. The Linux stub is in place, just needs implementation. [added: 2026-02-16]
