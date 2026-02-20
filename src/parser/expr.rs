@@ -415,106 +415,24 @@ impl Parser {
             // Identifiers and paths
             Token::Identifier(_) => self.parse_identifier_expr(),
 
-            // String constructor: String("hello") or String()
-            Token::Keyword(Keyword::StringType) if matches!(self.peek_ahead(1), Token::LParen) => {
-                self.advance();
-                self.advance(); // skip '('
-                let mut args = Vec::new();
-                while !self.check(&Token::RParen) && !self.at_end() {
-                    let arg = self.parse_call_arg()?;
-                    args.push(arg);
-                    if !self.check(&Token::RParen) {
-                        self.expect(&Token::Comma)?;
-                    }
-                }
-                self.expect(&Token::RParen)?;
-                let end = self.previous_span();
-                Ok(Spanned::new(
-                    Expr::Call {
-                        callee: Box::new(Spanned::new(
-                            Expr::Identifier("String".to_string()),
-                            start,
-                        )),
-                        generic_args: None,
-                        args,
-                    },
-                    start.merge(end),
-                ))
-            }
-
-            // Named enum/type constructors: Some, Ok, Error
-            Token::Keyword(Keyword::Some | Keyword::Ok | Keyword::Error) => {
-                let name_str = format!("{}", self.peek()).trim_matches('\'').to_string();
-                self.advance();
-                let name = Spanned::new(name_str, start);
-
-                if self.check(&Token::LParen) {
-                    // Constructor call: Some(value), Ok(value), Error(msg)
-                    self.advance();
-                    let mut args = Vec::new();
-                    while !self.check(&Token::RParen) && !self.at_end() {
-                        let arg = self.parse_call_arg()?;
-                        args.push(arg);
-                        if !self.check(&Token::RParen) {
-                            self.expect(&Token::Comma)?;
-                        }
-                    }
-                    self.expect(&Token::RParen)?;
-                    let end = self.previous_span();
-                    Ok(Spanned::new(
-                        Expr::Call {
-                            callee: Box::new(Spanned::new(
-                                Expr::Identifier(name.node.clone()),
-                                name.span,
-                            )),
-                            generic_args: None,
-                            args,
-                        },
-                        start.merge(end),
-                    ))
-                } else {
-                    Ok(Spanned::new(Expr::Identifier(name.node), start))
-                }
-            }
-
-            // Smart pointer constructors
+            // Keywords used as identifiers in expression position.
+            // Postfix parsing handles `(args)` to form Call, `.method()` for static methods, etc.
             Token::Keyword(
-                Keyword::Box
-                | Keyword::Rc
-                | Keyword::Arc
-                | Keyword::Weak
-                | Keyword::Cell
-                | Keyword::RefCell
-                | Keyword::Mutex
-                | Keyword::RwLock,
-            ) => {
-                let name_str = format!("{}", self.peek()).trim_matches('\'').to_string();
-                self.advance();
-                let end = self.previous_span();
-                Ok(Spanned::new(
-                    Expr::Identifier(name_str),
-                    start.merge(end),
-                ))
-            }
-
-            // Keyword used as type name in expression context
-            Token::Keyword(Keyword::SelfUpper) => {
-                self.advance();
-                Ok(Spanned::new(Expr::Identifier("Self".to_string()), start))
-            }
-
-            // Primitive type names in expression position (for static methods: int.parse(), float.default())
-            Token::Keyword(
-                Keyword::Int | Keyword::Int8 | Keyword::Int16 | Keyword::Int32 | Keyword::Int64
+                kw @ (Keyword::StringType
+                | Keyword::Some | Keyword::Ok | Keyword::Error
+                | Keyword::Box | Keyword::Rc | Keyword::Arc | Keyword::Weak
+                | Keyword::Cell | Keyword::RefCell | Keyword::Mutex | Keyword::RwLock
+                | Keyword::SelfUpper
+                | Keyword::Int | Keyword::Int8 | Keyword::Int16 | Keyword::Int32 | Keyword::Int64
                 | Keyword::Uint | Keyword::Uint8 | Keyword::Uint16 | Keyword::Uint32 | Keyword::Uint64
                 | Keyword::Float | Keyword::Float32 | Keyword::Float64
-                | Keyword::Bool | Keyword::Char | Keyword::Str
+                | Keyword::Bool | Keyword::Char | Keyword::Str),
             ) => {
-                let name_str = format!("{}", self.peek()).trim_matches('\'').to_string();
+                let name = kw.as_name().to_string();
                 self.advance();
                 let end = self.previous_span();
                 Ok(Spanned::new(
-                    Expr::Identifier(name_str),
+                    Expr::Identifier(name),
                     start.merge(end),
                 ))
             }

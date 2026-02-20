@@ -119,8 +119,8 @@ impl Parser {
             }
 
             // Named patterns: Some, Ok, Error, or identifiers
-            Token::Keyword(Keyword::Some | Keyword::Ok | Keyword::Error) => {
-                let name_str = format!("{}", self.peek()).trim_matches('\'').to_string();
+            Token::Keyword(kw @ (Keyword::Some | Keyword::Ok | Keyword::Error)) => {
+                let name_str = kw.as_name().to_string();
                 self.advance();
                 self.parse_constructor_or_binding(Spanned::new(name_str, start), start)
             }

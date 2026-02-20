@@ -2,15 +2,11 @@
 
 ## High
 
-- **Parser: String/Some/Ok/Error constructor parsing inconsistency**: `expr.rs:418-498` — `String(x)` uses full inline call-arg loop (duplicating `parse_call_args()`), `Some`/`Ok`/`Error` use semi-inline, `Box` uses postfix. Unify: convert keyword to identifier, let `parse_postfix` handle `(args)`. [added: 2026-02-20]
-
 ## Medium
 
 - **Parser: optional generic params repeated 6x**: `mod.rs:577,644,711,804,970,1247` — same `if check LBracket { Some(parse_generic_params()) } else { None }`. Extract `parse_optional_generic_params()`. [added: 2026-02-20]
 
 - **Parser: doc comment accumulation loop repeated 3x**: `mod.rs:337,731,844` — identical `while DocComment { accumulate }` loops. Extract `collect_doc_comment()`. [added: 2026-02-20]
-
-- **Parser: `trim_matches('\'')` fragile keyword-to-string hack**: `expr.rs:447,491,513`, `mod.rs:162`, `pattern.rs:123` — relies on undocumented Display contract. Add explicit `Keyword::as_name()` method. [added: 2026-02-20]
 
 - **Parser: manual backtracking without abstraction**: `expr.rs:829,904,1110`, `stmt.rs:397,517` — 5 sites with manual `saved_pos` ceremony. Extract `try_parse()` helper. [added: 2026-02-20]
 

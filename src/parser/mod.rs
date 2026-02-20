@@ -159,7 +159,7 @@ impl Parser {
             Token::Keyword(kw) => {
                 let span = self.peek_span();
                 self.advance();
-                Ok(Spanned::new(format!("{kw}").trim_matches('\'').to_string(), span))
+                Ok(Spanned::new(kw.as_name().to_string(), span))
             }
             _ => Err(self.error_unexpected("identifier")),
         }
