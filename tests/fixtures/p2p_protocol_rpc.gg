@@ -1,0 +1,118 @@
+from std.p2p import Node, P2PEvent, RpcMessage, p2p_create_node, p2p_add_peer, p2p_poll
+from std.p2p import p2p_stream_open_protocol, p2p_stream_accept, p2p_stream_protocol
+from std.p2p import p2p_stream_close, p2p_peer_id_hex
+from std.p2p import p2p_rpc_send_request, p2p_rpc_send_response
+from std.p2p import p2p_rpc_recv, p2p_rpc_recv_request, p2p_rpc_recv_response
+from std.net.udp import UdpAddr
+from std.bytes import bytes_from_str, bytes_to_str, bytes_read_u32_be
+from std.collections import Vector
+
+void main():
+    # Create two nodes
+    Node nodeA = p2p_create_node("127.0.0.1", 0).unwrap()
+    Node nodeB = p2p_create_node("127.0.0.1", 0).unwrap()
+
+    # Introduce peers
+    UdpAddr addrB = nodeB.socket.local_addr()
+    p2p_add_peer(&nodeA, "127.0.0.1", addrB.port)
+    P2PEvent ev1 = p2p_poll(&nodeB, 1000)
+    P2PEvent ev2 = p2p_poll(&nodeA, 1000)
+
+    str b_hex = p2p_peer_id_hex(nodeB.identity.peer_id)
+
+    # ── Test 1: Protocol tag on SYN ─────────────────────────
+
+    int s1 = p2p_stream_open_protocol(&nodeA, b_hex, "echo/1.0").unwrap()
+
+    # B: accept SYN — check protocol in event topic
+    P2PEvent syn1 = p2p_poll(&nodeB, 1000)
+    int b_sid1 = 0
+    if syn1.event_type == 8:
+        print("protocol: " + syn1.topic)
+        b_sid1 = bytes_read_u32_be(syn1.data, 0)
+        # Query protocol via function
+        str qp = p2p_stream_protocol(nodeB, b_sid1)
+        print("query: " + qp)
+        p2p_stream_accept(&nodeB, b_sid1)
+
+    # A: wait for CONNECTED
+    P2PEvent conn1 = p2p_poll(&nodeA, 1000)
+    if conn1.event_type == 9:
+        print("connected")
+
+    # ── Test 2: RPC echo — request/response ─────────────────
+
+    # A sends request "ping"
+    int req_cid = p2p_rpc_send_request(&nodeA, s1, bytes_from_str("ping")).unwrap()
+
+    # Poll until B receives the request
+    bool got_req = false
+    int rr = 0
+    while rr < 50 and not got_req:
+        P2PEvent aev = p2p_poll(&nodeA, 10)
+        P2PEvent bev = p2p_poll(&nodeB, 10)
+        RpcMessage req = p2p_rpc_recv_request(&nodeB, b_sid1)
+        if req.msg_type == 1:
+            str req_body = bytes_to_str(req.payload)
+            print("request: " + req_body)
+            # B responds with "pong"
+            p2p_rpc_send_response(&nodeB, b_sid1, req.correlation_id, bytes_from_str("pong"))
+            got_req = true
+        rr = rr + 1
+
+    # Poll until A receives the response
+    bool got_resp = false
+    int rr2 = 0
+    while rr2 < 50 and not got_resp:
+        P2PEvent aev2 = p2p_poll(&nodeA, 10)
+        P2PEvent bev2 = p2p_poll(&nodeB, 10)
+        RpcMessage resp = p2p_rpc_recv_response(&nodeA, s1)
+        if resp.msg_type == 2:
+            str resp_body = bytes_to_str(resp.payload)
+            print("response: " + resp_body)
+            got_resp = true
+        rr2 = rr2 + 1
+
+    # ── Test 3: RPC error-style response ────────────────────
+
+    # A sends a second request
+    int req2_cid = p2p_rpc_send_request(&nodeA, s1, bytes_from_str("lookup")).unwrap()
+
+    # Poll until B receives it and responds with an error
+    bool got_req2 = false
+    int rr3 = 0
+    while rr3 < 50 and not got_req2:
+        P2PEvent aev3 = p2p_poll(&nodeA, 10)
+        P2PEvent bev3 = p2p_poll(&nodeB, 10)
+        RpcMessage req2 = p2p_rpc_recv_request(&nodeB, b_sid1)
+        if req2.msg_type == 1:
+            # Respond with error
+            p2p_rpc_send_response(&nodeB, b_sid1, req2.correlation_id, bytes_from_str("not found"))
+            got_req2 = true
+        rr3 = rr3 + 1
+
+    # Poll until A receives the error response
+    bool got_err = false
+    int rr4 = 0
+    while rr4 < 50 and not got_err:
+        P2PEvent aev4 = p2p_poll(&nodeA, 10)
+        P2PEvent bev4 = p2p_poll(&nodeB, 10)
+        RpcMessage err_resp = p2p_rpc_recv_response(&nodeA, s1)
+        if err_resp.msg_type == 2:
+            str err_body = bytes_to_str(err_resp.payload)
+            print("error: " + err_body)
+            got_err = true
+        rr4 = rr4 + 1
+
+    print("rpc done")
+
+    # Close stream and drain events
+    p2p_stream_close(&nodeA, s1)
+    int dr = 0
+    while dr < 30:
+        P2PEvent dev = p2p_poll(&nodeA, 10)
+        P2PEvent dev2 = p2p_poll(&nodeB, 10)
+        dr = dr + 1
+
+    nodeA.socket.close()
+    nodeB.socket.close()

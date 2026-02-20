@@ -190,6 +190,11 @@ struct RecvSegment:
     int seq_num
     Vector[uint8] data
 
+struct RpcMessage:
+    int msg_type           # 1=REQUEST, 2=RESPONSE, 0=none available
+    int correlation_id
+    Vector[uint8] payload
+
 struct ReliableStream:
     int stream_id
     int remote_stream_id    # peer's local stream ID (0 until SYN-ACK)
@@ -232,6 +237,9 @@ struct ReliableStream:
     int keepalive_timeout_ms       # declare dead after silence this long (default 120000)
     int last_recv_ms               # timestamp of last received packet (0 until first recv)
     Vector[uint8] frame_buf        # accumulated bytes for frame reassembly
+    # Phase 12: Protocol tags + RPC
+    str protocol                   # protocol tag from SYN ("echo/1.0"), "" if none
+    int rpc_next_id                # monotonic correlation ID counter (starts at 1)
 
 # ── Discovery Config ─────────────────────────────────────────
 
@@ -642,7 +650,8 @@ ReliableStream p2p_new_stream(int stream_id, int remote_stream_id, str peer_hex,
         false, Vector[uint8](), Vector[uint8](), 0, 0,
         Vector[uint8](), Vector[uint8](), Vector[uint8](),
         false,
-        30000, 120000, 0, Vector[uint8]()
+        30000, 120000, 0, Vector[uint8](),
+        "", 1
     )
 
 int p2p_find_stream(Node &node, int stream_id):
@@ -678,6 +687,39 @@ Vector[uint8] p2p_encode_syn_auth_payload(int stream_id, int initial_seq, Vector
     buf = bytes_concat(buf, ephemeral_pub)
     buf = bytes_concat(buf, ed25519_pub)
     buf = bytes_concat(buf, signature)
+    return buf
+
+# Protocol-tagged SYN encoders: append [2B proto_len][proto_bytes] after base payload
+# Flags 0x04 = protocol tag present
+Vector[uint8] p2p_encode_syn_protocol_payload(int stream_id, int initial_seq, str protocol):
+    Vector[uint8] buf = p2p_make_u32(stream_id)
+    buf = bytes_concat(buf, p2p_make_u32(initial_seq))
+    buf = bytes_concat(buf, p2p_make_byte(4))
+    Vector[uint8] proto_bytes = bytes_from_str(protocol)
+    buf = bytes_concat(buf, p2p_make_u16(proto_bytes.len()))
+    buf = bytes_concat(buf, proto_bytes)
+    return buf
+
+Vector[uint8] p2p_encode_syn_encrypted_protocol_payload(int stream_id, int initial_seq, Vector[uint8] pubkey, str protocol):
+    Vector[uint8] buf = p2p_make_u32(stream_id)
+    buf = bytes_concat(buf, p2p_make_u32(initial_seq))
+    buf = bytes_concat(buf, p2p_make_byte(5))
+    buf = bytes_concat(buf, pubkey)
+    Vector[uint8] proto_bytes = bytes_from_str(protocol)
+    buf = bytes_concat(buf, p2p_make_u16(proto_bytes.len()))
+    buf = bytes_concat(buf, proto_bytes)
+    return buf
+
+Vector[uint8] p2p_encode_syn_auth_protocol_payload(int stream_id, int initial_seq, Vector[uint8] ephemeral_pub, Vector[uint8] ed25519_pub, Vector[uint8] signature, str protocol):
+    Vector[uint8] buf = p2p_make_u32(stream_id)
+    buf = bytes_concat(buf, p2p_make_u32(initial_seq))
+    buf = bytes_concat(buf, p2p_make_byte(7))
+    buf = bytes_concat(buf, ephemeral_pub)
+    buf = bytes_concat(buf, ed25519_pub)
+    buf = bytes_concat(buf, signature)
+    Vector[uint8] proto_bytes = bytes_from_str(protocol)
+    buf = bytes_concat(buf, p2p_make_u16(proto_bytes.len()))
+    buf = bytes_concat(buf, proto_bytes)
     return buf
 
 # RELIABLE_SYN_ACK (53): [4B responder_sid] [4B initiator_sid] [4B responder_isn] [4B ack_isn] [1B flags] [32B pubkey if flags & 0x01]
@@ -853,6 +895,60 @@ Result[int, str] p2p_stream_open_encrypted(Node &node, str peer_hex):
     p2p_send_raw(&node, pi.host, pi.port, 52, payload)
     return Ok(sid)
 
+# ── Protocol-tagged stream open ──────────────────────────
+
+Result[int, str] p2p_stream_open_protocol(Node &node, str peer_hex, str protocol):
+    int idx = p2p_find_peer(node, peer_hex)
+    if idx < 0:
+        return Error("unknown peer")
+    int sid = node.next_stream_id
+    node.next_stream_id = node.next_stream_id + 1
+    ReliableStream s = p2p_new_stream(sid, 0, peer_hex, 1)
+    s.local_seq = 1
+    s.local_initial_seq = 0
+    s.syn_send_ms = time_ms()
+    s.protocol = protocol
+    node.streams.push(!s)
+    # Send SYN with protocol tag
+    Vector[uint8] payload = p2p_encode_syn_protocol_payload(sid, 0, protocol)
+    PeerInfo pi = node.peers.get(idx).unwrap()
+    p2p_send_raw(&node, pi.host, pi.port, 52, payload)
+    return Ok(sid)
+
+Result[int, str] p2p_stream_open_encrypted_protocol(Node &node, str peer_hex, str protocol):
+    int idx = p2p_find_peer(node, peer_hex)
+    if idx < 0:
+        return Error("unknown peer")
+    int sid = node.next_stream_id
+    node.next_stream_id = node.next_stream_id + 1
+    X25519KeyPair ekp = crypto_x25519_keygen().unwrap()
+    Vector[uint8] epub = ekp.public_key()
+    Vector[uint8] epriv = ekp.private_key()
+    ReliableStream s = p2p_new_stream(sid, 0, peer_hex, 1)
+    s.local_seq = 1
+    s.local_initial_seq = 0
+    s.syn_send_ms = time_ms()
+    s.encrypted = true
+    s.authenticated = true
+    s.local_ephemeral_pub = bytes_slice(epub, 0, epub.len())
+    s.local_ephemeral_priv = bytes_slice(epriv, 0, epriv.len())
+    s.protocol = protocol
+    node.streams.push(!s)
+    Vector[uint8] sig = crypto_ed25519_sign(node.identity.private_key, epub).unwrap()
+    Vector[uint8] payload = p2p_encode_syn_auth_protocol_payload(sid, 0, epub, node.identity.public_key, sig, protocol)
+    PeerInfo pi = node.peers.get(idx).unwrap()
+    p2p_send_raw(&node, pi.host, pi.port, 52, payload)
+    return Ok(sid)
+
+str p2p_stream_protocol(Node node, int stream_id):
+    int i = 0
+    while i < node.streams.len():
+        ReliableStream s = node.streams.get(i).unwrap()
+        if s.stream_id == stream_id:
+            return s.protocol
+        i = i + 1
+    return ""
+
 bool p2p_stream_is_encrypted(Node node, int stream_id):
     int i = 0
     while i < node.streams.len():
@@ -993,10 +1089,31 @@ P2PEvent p2p_handle_syn(Node &node, str sender_hex, Vector[uint8] payload):
             Vector[uint8] keys = p2p_derive_stream_keys(shared, false)
             s.tx_key = bytes_slice(keys, 0, 32)
             s.rx_key = bytes_slice(keys, 32, 64)
+    # Extract protocol tag if flags & 0x04
+    str syn_protocol = ""
+    if payload.len() >= 9:
+        uint8 pflags = payload.get(8).unwrap()
+        int pflags_int = pflags as int
+        int proto_bit = pflags_int & 4
+        if proto_bit == 4:
+            # Compute base offset past enc/auth fields
+            int base_off = 9
+            int penc = pflags_int & 1
+            int pauth = pflags_int & 2
+            if penc == 1 and pauth == 2:
+                base_off = 137
+            elif penc == 1:
+                base_off = 41
+            if payload.len() >= base_off + 2:
+                int proto_len = bytes_read_u16_be(payload, base_off)
+                if payload.len() >= base_off + 2 + proto_len:
+                    Vector[uint8] proto_bytes = bytes_slice(payload, base_off + 2, base_off + 2 + proto_len)
+                    syn_protocol = bytes_to_str(proto_bytes)
+    s.protocol = syn_protocol
     node.streams.push(!s)
-    # Return STREAM_SYN event with our local stream_id in data
+    # Return STREAM_SYN event with our local stream_id in data, protocol in topic
     Vector[uint8] ev_data = p2p_make_u32(local_sid)
-    return P2PEvent(8, PeerId(Vector[uint8]()), ev_data, "")
+    return P2PEvent(8, PeerId(Vector[uint8]()), ev_data, syn_protocol)
 
 # ── Handle incoming SYN-ACK (53) ──────────────────────────
 
@@ -1230,6 +1347,63 @@ Vector[uint8] p2p_stream_recv_frame(Node &node, int stream_id):
         s.frame_buf = Vector[uint8]()
     node.streams.push(!s)
     return frame
+
+# ── RPC (Request/Response) ─────────────────────────────────
+# RPC frame format (inside a stream frame):
+#   [1B rpc_type] [4B correlation_id] [payload...]
+# rpc_type 1 = REQUEST, rpc_type 2 = RESPONSE
+# Do not mix raw frames and RPC on the same stream.
+
+Result[int, str] p2p_rpc_send_request(Node &node, int stream_id, Vector[uint8] data):
+    int sidx = p2p_find_stream(&node, stream_id)
+    if sidx < 0:
+        return Error("stream not found")
+    ReliableStream s = node.streams.remove(sidx).unwrap()
+    int cid = s.rpc_next_id
+    s.rpc_next_id = s.rpc_next_id + 1
+    node.streams.push(!s)
+    # Build RPC frame: [1B type=1] [4B cid] [payload]
+    Vector[uint8] rpc_buf = p2p_make_byte(1)
+    rpc_buf = bytes_concat(rpc_buf, p2p_make_u32(cid))
+    rpc_buf = bytes_concat(rpc_buf, data)
+    Result[int, str] send_res = p2p_stream_send_frame(&node, stream_id, rpc_buf)
+    if send_res.is_err():
+        return Error(send_res.unwrap_err())
+    return Ok(cid)
+
+Result[int, str] p2p_rpc_send_response(Node &node, int stream_id, int correlation_id, Vector[uint8] data):
+    # Build RPC frame: [1B type=2] [4B cid] [payload]
+    Vector[uint8] rpc_buf = p2p_make_byte(2)
+    rpc_buf = bytes_concat(rpc_buf, p2p_make_u32(correlation_id))
+    rpc_buf = bytes_concat(rpc_buf, data)
+    Result[int, str] send_res = p2p_stream_send_frame(&node, stream_id, rpc_buf)
+    if send_res.is_err():
+        return Error(send_res.unwrap_err())
+    return Ok(correlation_id)
+
+RpcMessage p2p_rpc_recv(Node &node, int stream_id):
+    Vector[uint8] frame = p2p_stream_recv_frame(&node, stream_id)
+    if frame.len() < 5:
+        return RpcMessage(0, 0, Vector[uint8]())
+    uint8 rpc_type_byte = frame.get(0).unwrap()
+    int rpc_type = rpc_type_byte as int
+    int cid = bytes_read_u32_be(frame, 1)
+    Vector[uint8] payload = Vector[uint8]()
+    if frame.len() > 5:
+        payload = bytes_slice(frame, 5, frame.len())
+    return RpcMessage(rpc_type, cid, payload)
+
+RpcMessage p2p_rpc_recv_request(Node &node, int stream_id):
+    RpcMessage msg = p2p_rpc_recv(&node, stream_id)
+    if msg.msg_type == 1:
+        return msg
+    return RpcMessage(0, 0, Vector[uint8]())
+
+RpcMessage p2p_rpc_recv_response(Node &node, int stream_id):
+    RpcMessage msg = p2p_rpc_recv(&node, stream_id)
+    if msg.msg_type == 2:
+        return msg
+    return RpcMessage(0, 0, Vector[uint8]())
 
 # ── Handle incoming DATA (50) ─────────────────────────────
 
@@ -1551,17 +1725,30 @@ void p2p_stream_tick(Node &node):
             if syn_elapsed >= s.rto_ms:
                 str peer = s.peer_hex
                 int sid = s.stream_id
+                bool has_proto = s.protocol != ""
                 if s.authenticated:
                     # Re-sign ephemeral key for retransmit
                     Vector[uint8] sig = crypto_ed25519_sign(node.identity.private_key, s.local_ephemeral_pub).unwrap()
-                    Vector[uint8] syn_payload = p2p_encode_syn_auth_payload(sid, s.local_initial_seq, s.local_ephemeral_pub, node.identity.public_key, sig)
-                    p2p_stream_send_raw(&node, peer, 52, syn_payload)
+                    if has_proto:
+                        Vector[uint8] syn_payload = p2p_encode_syn_auth_protocol_payload(sid, s.local_initial_seq, s.local_ephemeral_pub, node.identity.public_key, sig, s.protocol)
+                        p2p_stream_send_raw(&node, peer, 52, syn_payload)
+                    else:
+                        Vector[uint8] syn_payload = p2p_encode_syn_auth_payload(sid, s.local_initial_seq, s.local_ephemeral_pub, node.identity.public_key, sig)
+                        p2p_stream_send_raw(&node, peer, 52, syn_payload)
                 elif s.encrypted:
-                    Vector[uint8] syn_payload = p2p_encode_syn_encrypted_payload(sid, s.local_initial_seq, s.local_ephemeral_pub)
-                    p2p_stream_send_raw(&node, peer, 52, syn_payload)
+                    if has_proto:
+                        Vector[uint8] syn_payload = p2p_encode_syn_encrypted_protocol_payload(sid, s.local_initial_seq, s.local_ephemeral_pub, s.protocol)
+                        p2p_stream_send_raw(&node, peer, 52, syn_payload)
+                    else:
+                        Vector[uint8] syn_payload = p2p_encode_syn_encrypted_payload(sid, s.local_initial_seq, s.local_ephemeral_pub)
+                        p2p_stream_send_raw(&node, peer, 52, syn_payload)
                 else:
-                    Vector[uint8] syn_payload = p2p_encode_syn_payload(sid, s.local_initial_seq)
-                    p2p_stream_send_raw(&node, peer, 52, syn_payload)
+                    if has_proto:
+                        Vector[uint8] syn_payload = p2p_encode_syn_protocol_payload(sid, s.local_initial_seq, s.protocol)
+                        p2p_stream_send_raw(&node, peer, 52, syn_payload)
+                    else:
+                        Vector[uint8] syn_payload = p2p_encode_syn_payload(sid, s.local_initial_seq)
+                        p2p_stream_send_raw(&node, peer, 52, syn_payload)
                 s.syn_send_ms = now
                 s.rto_ms = s.rto_ms * 2
                 if s.rto_ms > 60000:

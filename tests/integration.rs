@@ -4073,6 +4073,21 @@ graceful close ok",
 }
 
 #[test]
+fn p2p_protocol_rpc() {
+    run_gg(
+        "p2p_protocol_rpc.gg",
+        "\
+protocol: echo/1.0
+query: echo/1.0
+connected
+request: ping
+response: pong
+error: not found
+rpc done",
+    );
+}
+
+#[test]
 fn name_first() {
     run_gg(
         "name_first.gg",
