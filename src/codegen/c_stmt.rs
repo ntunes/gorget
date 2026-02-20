@@ -797,6 +797,20 @@ impl CodegenContext<'_> {
         match ty {
             Type::Named { name, generic_args } => match name.node.as_str() {
                 "Vector" | "List" | "Array" if generic_args.len() == 1 => {
+                    // Check if element type is a struct with non-Copy fields
+                    // that also need deep cloning.
+                    let elem_type = &generic_args[0].node;
+                    if let Type::Named { name: elem_name, generic_args: elem_generics } = elem_type {
+                        if elem_generics.is_empty() {
+                            let elem_clone_fields = self.compute_clone_fields(&elem_name.node);
+                            if !elem_clone_fields.is_empty() {
+                                let elem_c_type = c_types::ast_type_to_c(elem_type, self.scopes);
+                                return Some(super::CloneAction::ArrayDeepClone(
+                                    elem_c_type, elem_clone_fields
+                                ));
+                            }
+                        }
+                    }
                     Some(super::CloneAction::ArrayClone)
                 }
                 "String" if generic_args.is_empty() => {
@@ -845,6 +859,20 @@ impl CodegenContext<'_> {
         match action {
             super::CloneAction::ArrayClone => {
                 format!("{var} = gorget_array_clone(&{var});")
+            }
+            super::CloneAction::ArrayDeepClone(elem_c_type, elem_field_clones) => {
+                // Clone the array, then iterate elements and deep-clone their fields.
+                let elem_clones: Vec<String> = elem_field_clones.iter().map(|(field, act)| {
+                    let field_expr = format!("(*__dce).{field}");
+                    Self::gen_clone_code_for_action(&field_expr, act)
+                }).collect();
+                format!(
+                    "{var} = gorget_array_clone(&{var}); \
+                    for (size_t __dci = 0; __dci < {var}.len; __dci++) {{ \
+                    {elem_c_type}* __dce = ({elem_c_type}*)((char*){var}.data + __dci * sizeof({elem_c_type})); \
+                    {elem_clone} }}",
+                    elem_clone = elem_clones.join(" ")
+                )
             }
             super::CloneAction::StringClone => {
                 format!("{var} = gorget_string_clone(&{var});")

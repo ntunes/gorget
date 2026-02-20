@@ -3939,6 +3939,44 @@ second msg",
 }
 
 #[test]
+fn p2p_reliable_basic() {
+    run_gg(
+        "p2p_reliable_basic.gg",
+        "\
+peers connected
+syn received
+stream connected
+hello reliable
+stream closed
+fin acked",
+    );
+}
+
+#[test]
+fn p2p_reliable_large() {
+    run_gg(
+        "p2p_reliable_large.gg",
+        "\
+received 12000 bytes
+content verified
+stream closed",
+    );
+}
+
+#[test]
+fn p2p_reliable_bidir() {
+    run_gg(
+        "p2p_reliable_bidir.gg",
+        "\
+A->B connected
+B->A connected
+hello from A
+hello from B
+both streams closed",
+    );
+}
+
+#[test]
 fn name_first() {
     run_gg(
         "name_first.gg",

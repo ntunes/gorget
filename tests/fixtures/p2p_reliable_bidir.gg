@@ -1,0 +1,99 @@
+from std.p2p import Node, P2PEvent, p2p_create_node, p2p_add_peer, p2p_poll
+from std.p2p import p2p_stream_open, p2p_stream_accept, p2p_stream_send
+from std.p2p import p2p_stream_recv, p2p_stream_close, p2p_peer_id_hex
+from std.net.udp import UdpAddr
+from std.bytes import bytes_from_str, bytes_to_str, bytes_read_u32_be, bytes_concat
+from std.collections import Vector
+
+void main():
+    # Create two nodes
+    Node nodeA = p2p_create_node("127.0.0.1", 0).unwrap()
+    Node nodeB = p2p_create_node("127.0.0.1", 0).unwrap()
+
+    # Introduce and connect
+    UdpAddr addrB = nodeB.socket.local_addr()
+    p2p_add_peer(&nodeA, "127.0.0.1", addrB.port)
+    P2PEvent ev1 = p2p_poll(&nodeB, 1000)
+    P2PEvent ev2 = p2p_poll(&nodeA, 1000)
+
+    # A opens stream to B
+    str b_hex = p2p_peer_id_hex(nodeB.identity.peer_id)
+    int sid_ab = p2p_stream_open(&nodeA, b_hex).unwrap()
+
+    # B accepts
+    P2PEvent syn_ev = p2p_poll(&nodeB, 1000)
+    if syn_ev.event_type == 8:
+        int sid = bytes_read_u32_be(syn_ev.data, 0)
+        p2p_stream_accept(&nodeB, sid)
+
+    # A connected
+    P2PEvent conn_ev = p2p_poll(&nodeA, 1000)
+    if conn_ev.event_type == 9:
+        print("A->B connected")
+
+    # B opens stream to A
+    str a_hex = p2p_peer_id_hex(nodeA.identity.peer_id)
+    int sid_ba = p2p_stream_open(&nodeB, a_hex).unwrap()
+
+    # A accepts
+    P2PEvent syn_ev2 = p2p_poll(&nodeA, 1000)
+    if syn_ev2.event_type == 8:
+        int sid2 = bytes_read_u32_be(syn_ev2.data, 0)
+        p2p_stream_accept(&nodeA, sid2)
+
+    # B connected
+    P2PEvent conn_ev2 = p2p_poll(&nodeB, 1000)
+    if conn_ev2.event_type == 9:
+        print("B->A connected")
+
+    # Send data in both directions simultaneously
+    p2p_stream_send(&nodeA, sid_ab, bytes_from_str("hello from A"))
+    p2p_stream_send(&nodeB, sid_ba, bytes_from_str("hello from B"))
+
+    # Poll loop: flush + receive (polls both flush and process incoming data)
+    str a_received = ""
+    str b_received = ""
+    int rounds = 0
+    while rounds < 20:
+        P2PEvent aev = p2p_poll(&nodeA, 50)
+        if aev.event_type == 10:
+            int a_data_sid = bytes_read_u32_be(aev.data, 0)
+            Vector[uint8] a_data = p2p_stream_recv(&nodeA, a_data_sid)
+            if a_data.len() > 0:
+                a_received = bytes_to_str(a_data)
+
+        P2PEvent bev = p2p_poll(&nodeB, 50)
+        if bev.event_type == 10:
+            int b_data_sid = bytes_read_u32_be(bev.data, 0)
+            Vector[uint8] b_data = p2p_stream_recv(&nodeB, b_data_sid)
+            if b_data.len() > 0:
+                b_received = bytes_to_str(b_data)
+
+        if a_received != "" and b_received != "":
+            rounds = 20
+        rounds = rounds + 1
+
+    print(b_received)
+    print(a_received)
+
+    # Close both streams
+    p2p_stream_close(&nodeA, sid_ab)
+    p2p_stream_close(&nodeB, sid_ba)
+
+    # Drain close events
+    int close_count = 0
+    int cr = 0
+    while cr < 10:
+        P2PEvent cev_a = p2p_poll(&nodeA, 50)
+        if cev_a.event_type == 11:
+            close_count = close_count + 1
+        P2PEvent cev_b = p2p_poll(&nodeB, 50)
+        if cev_b.event_type == 11:
+            close_count = close_count + 1
+        cr = cr + 1
+
+    if close_count >= 2:
+        print("both streams closed")
+
+    nodeA.socket.close()
+    nodeB.socket.close()

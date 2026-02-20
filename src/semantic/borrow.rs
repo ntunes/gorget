@@ -108,6 +108,8 @@ struct BranchState {
     origins: OriginSnapshot,
     invalidated: FxHashSet<DefId>,
     reassignment_invalidated: FxHashMap<DefId, (String, Span)>,
+    /// Whether this branch always diverges (return/break/continue/throw).
+    diverges: bool,
 }
 
 // ─── Copy Type Detection ───────────────────────────────────
@@ -242,6 +244,11 @@ struct BorrowChecker<'a> {
     var_states: FxHashMap<DefId, VarState>,
     /// Nesting depth inside loops (for move-in-loop detection).
     loop_depth: usize,
+    /// Stack of DefId sets: variables declared in each loop nesting level.
+    /// Variables declared within a loop body are re-created each iteration
+    /// and can safely be moved. Only variables from OUTSIDE the innermost
+    /// loop are rejected.
+    loop_local_defs: Vec<FxHashSet<DefId>>,
     /// Whether the file has `directive immutable-by-default`.
     immutable_by_default: bool,
     /// Expression type map from the type checker (for lifetime tracking).
@@ -277,6 +284,12 @@ struct BorrowChecker<'a> {
     /// Variables whose borrow source was reassigned, making their reference stale.
     /// Maps the dependent variable's DefId → (source_name, reassignment_span).
     reassignment_invalidated: FxHashMap<DefId, (String, Span)>,
+
+    /// Whether the current execution path has unconditionally diverged
+    /// (return, break, continue, throw). Used to exclude diverging branches
+    /// from state merges so that moves in early-return paths don't poison
+    /// the post-branch state.
+    diverged: bool,
 }
 
 impl<'a> BorrowChecker<'a> {
@@ -301,6 +314,7 @@ impl<'a> BorrowChecker<'a> {
             errors: Vec::new(),
             var_states: FxHashMap::default(),
             loop_depth: 0,
+            loop_local_defs: Vec::new(),
             immutable_by_default,
             _expr_types: expr_types,
             current_fn_scope: None,
@@ -313,6 +327,7 @@ impl<'a> BorrowChecker<'a> {
             current_param_def_ids: Vec::new(),
             active_outlives: Vec::new(),
             reassignment_invalidated: FxHashMap::default(),
+            diverged: false,
         }
     }
 
@@ -323,6 +338,11 @@ impl<'a> BorrowChecker<'a> {
     /// Mark a variable as Live (e.g., on declaration or reassignment).
     fn mark_live(&mut self, def_id: DefId) {
         self.var_states.insert(def_id, VarState::Live);
+        // Track variables declared inside loops so we can allow safe
+        // per-iteration moves (variable is re-created each iteration).
+        if let Some(local_set) = self.loop_local_defs.last_mut() {
+            local_set.insert(def_id);
+        }
     }
 
     /// Check that a variable is usable (Live). Error if Moved.
@@ -755,10 +775,15 @@ impl<'a> BorrowChecker<'a> {
             return;
         }
 
-        // Check if inside a loop
+        // Check if inside a loop — but allow moves of variables declared within
+        // the innermost loop body (they are re-created each iteration).
         if self.loop_depth > 0 {
-            self.error(SemanticErrorKind::MoveInLoop { name }, span);
-            return;
+            let is_loop_local = self.loop_local_defs.last()
+                .map_or(false, |set| set.contains(&def_id));
+            if !is_loop_local {
+                self.error(SemanticErrorKind::MoveInLoop { name }, span);
+                return;
+            }
         }
 
         self.var_states.insert(def_id, VarState::Moved { moved_at: span });
@@ -781,6 +806,7 @@ impl<'a> BorrowChecker<'a> {
             origins: self.var_origins.clone(),
             invalidated: self.invalidated_origins.clone(),
             reassignment_invalidated: self.reassignment_invalidated.clone(),
+            diverges: self.diverged,
         }
     }
 
@@ -790,20 +816,38 @@ impl<'a> BorrowChecker<'a> {
         self.var_origins = state.origins.clone();
         self.invalidated_origins = state.invalidated.clone();
         self.reassignment_invalidated = state.reassignment_invalidated.clone();
+        self.diverged = state.diverges;
     }
 
     /// Merge multiple branch states: union var states (moved in either = moved),
     /// union origins, union invalidated sets.
+    /// Branches that diverge (return/break/continue/throw) are excluded from
+    /// the merge because their state never reaches the join point. If ALL
+    /// branches diverge, the merged state is marked diverged.
     fn merge_branch_states(&mut self, states: &[BranchState]) {
         if states.is_empty() {
             return;
         }
-        let mut merged_vars = states[0].var_states.clone();
-        let mut merged_origins = states[0].origins.clone();
-        let mut merged_invalidated = states[0].invalidated.clone();
-        let mut merged_reassignment_invalidated = states[0].reassignment_invalidated.clone();
 
-        for state in &states[1..] {
+        // Filter to branches that actually reach the join point.
+        let live: Vec<&BranchState> = states.iter().filter(|s| !s.diverges).collect();
+
+        if live.is_empty() {
+            // Every branch diverges — keep first state, mark diverged.
+            self.var_states = states[0].var_states.clone();
+            self.var_origins = states[0].origins.clone();
+            self.invalidated_origins = states[0].invalidated.clone();
+            self.reassignment_invalidated = states[0].reassignment_invalidated.clone();
+            self.diverged = true;
+            return;
+        }
+
+        let mut merged_vars = live[0].var_states.clone();
+        let mut merged_origins = live[0].origins.clone();
+        let mut merged_invalidated = live[0].invalidated.clone();
+        let mut merged_reassignment_invalidated = live[0].reassignment_invalidated.clone();
+
+        for state in &live[1..] {
             // Merge var states: moved in either = moved
             for (def_id, b_state) in &state.var_states {
                 match (merged_vars.get(def_id), b_state) {
@@ -830,6 +874,7 @@ impl<'a> BorrowChecker<'a> {
         self.var_origins = merged_origins;
         self.invalidated_origins = merged_invalidated;
         self.reassignment_invalidated = merged_reassignment_invalidated;
+        self.diverged = false;
     }
 
     /// Check if a DefId refers to a ConsumeCallable-typed variable.
@@ -1119,10 +1164,12 @@ impl<'a> BorrowChecker<'a> {
             } => {
                 self.check_expr(iterable);
                 self.loop_depth += 1;
+                self.loop_local_defs.push(FxHashSet::default());
                 self.check_expr(comp_expr);
                 if let Some(cond) = condition {
                     self.check_expr(cond);
                 }
+                self.loop_local_defs.pop();
                 self.loop_depth -= 1;
             }
 
@@ -1135,11 +1182,13 @@ impl<'a> BorrowChecker<'a> {
             } => {
                 self.check_expr(iterable);
                 self.loop_depth += 1;
+                self.loop_local_defs.push(FxHashSet::default());
                 self.check_expr(key);
                 self.check_expr(value);
                 if let Some(cond) = condition {
                     self.check_expr(cond);
                 }
+                self.loop_local_defs.pop();
                 self.loop_depth -= 1;
             }
 
@@ -1151,10 +1200,12 @@ impl<'a> BorrowChecker<'a> {
             } => {
                 self.check_expr(iterable);
                 self.loop_depth += 1;
+                self.loop_local_defs.push(FxHashSet::default());
                 self.check_expr(comp_expr);
                 if let Some(cond) = condition {
                     self.check_expr(cond);
                 }
+                self.loop_local_defs.pop();
                 self.loop_depth -= 1;
             }
 
@@ -1197,11 +1248,13 @@ impl<'a> BorrowChecker<'a> {
                 self.check_value_needs_move(value);
 
                 // Mark new bindings as Live
-                self.mark_pattern_live(&pattern.node);
+                self.mark_pattern_live_spanned(pattern);
 
                 // Track origin for reference-typed variables
                 if let Pattern::Binding(name) = &pattern.node {
-                    if let Some(def_id) = self.find_def_by_name(name) {
+                    let def_id_opt = self.scopes.lookup_def_by_span(name, pattern.span)
+                        .or_else(|| self.find_def_by_name(name));
+                    if let Some(def_id) = def_id_opt {
                         let is_ref = self.is_var_reference_type(def_id, Some(type_));
                         if is_ref {
                             let origin = self.compute_expr_origin(value);
@@ -1381,19 +1434,26 @@ impl<'a> BorrowChecker<'a> {
                         }
                     }
                 }
+                self.diverged = true;
             }
 
             Stmt::Throw(expr) => {
                 self.check_expr(expr);
+                self.diverged = true;
             }
 
             Stmt::Break(expr) => {
                 if let Some(expr) = expr {
                     self.check_expr(expr);
                 }
+                self.diverged = true;
             }
 
-            Stmt::Continue | Stmt::Pass => {}
+            Stmt::Continue => {
+                self.diverged = true;
+            }
+
+            Stmt::Pass => {}
 
             Stmt::For {
                 iterable,
@@ -1404,7 +1464,9 @@ impl<'a> BorrowChecker<'a> {
                 self.check_expr(iterable);
                 let before = self.save_branch_state();
                 self.loop_depth += 1;
+                self.loop_local_defs.push(FxHashSet::default());
                 self.check_block(body);
+                self.loop_local_defs.pop();
                 self.loop_depth -= 1;
                 let after_body = self.save_branch_state();
                 if let Some(else_body) = else_body {
@@ -1429,7 +1491,9 @@ impl<'a> BorrowChecker<'a> {
                 self.mark_compound_is_origins(&condition.node);
                 let before = self.save_branch_state();
                 self.loop_depth += 1;
+                self.loop_local_defs.push(FxHashSet::default());
                 self.check_block(body);
+                self.loop_local_defs.pop();
                 self.loop_depth -= 1;
                 let after_body = self.save_branch_state();
                 if let Some(else_body) = else_body {
@@ -1445,7 +1509,9 @@ impl<'a> BorrowChecker<'a> {
             Stmt::Loop { body } => {
                 let before = self.save_branch_state();
                 self.loop_depth += 1;
+                self.loop_local_defs.push(FxHashSet::default());
                 self.check_block(body);
+                self.loop_local_defs.pop();
                 self.loop_depth -= 1;
                 let after_body = self.save_branch_state();
                 // Infinite loop, but break can exit: merge pre+post for break paths
@@ -1621,28 +1687,32 @@ impl<'a> BorrowChecker<'a> {
     }
 
     /// Mark all bindings in a pattern as Live.
-    fn mark_pattern_live(&mut self, pattern: &Pattern) {
-        match pattern {
+    fn mark_pattern_live_spanned(&mut self, pattern: &Spanned<Pattern>) {
+        match &pattern.node {
             Pattern::Binding(name) => {
-                // Look up the DefId by scanning definitions
-                // Since the pattern was just defined, it's the most recently defined with this name
-                if let Some(def_id) = self.find_def_by_name(name) {
+                // Use span-based lookup to find the exact DefId for this binding,
+                // avoiding confusion when multiple variables share the same name
+                // in different scopes within the same function.
+                if let Some(def_id) = self.scopes.lookup_def_by_span(name, pattern.span) {
+                    self.mark_live(def_id);
+                } else if let Some(def_id) = self.find_def_by_name(name) {
+                    // Fallback for cases where span doesn't match exactly
                     self.mark_live(def_id);
                 }
             }
             Pattern::Constructor { fields, .. } => {
                 for field in fields {
-                    self.mark_pattern_live(&field.node);
+                    self.mark_pattern_live_spanned(field);
                 }
             }
             Pattern::Tuple(elements) => {
                 for elem in elements {
-                    self.mark_pattern_live(&elem.node);
+                    self.mark_pattern_live_spanned(elem);
                 }
             }
             Pattern::Or(alternatives) => {
                 if let Some(first) = alternatives.first() {
-                    self.mark_pattern_live(&first.node);
+                    self.mark_pattern_live_spanned(first);
                 }
             }
             Pattern::Wildcard | Pattern::Literal(_) | Pattern::Rest => {}
@@ -2080,6 +2150,8 @@ impl<'a> BorrowChecker<'a> {
         // Reset state for each function
         self.var_states.clear();
         self.loop_depth = 0;
+        self.loop_local_defs.clear();
+        self.diverged = false;
         self.var_origins.clear();
         self.invalidated_origins.clear();
         self.current_param_def_ids.clear();
@@ -2089,6 +2161,9 @@ impl<'a> BorrowChecker<'a> {
         self.current_fn_scope = self.function_body_scopes
             .get(&(func.name.node.clone(), func.name.span.start))
             .copied();
+        if self.current_fn_scope.is_none() {
+            // Module-level or equip function — fall back to global lookup.
+        }
 
         // Set up return type for lifetime checking
         if let Some(def_id) = self.scopes.lookup(&func.name.node) {
@@ -2581,6 +2656,7 @@ pub fn check_module(
             Item::Test(t) => {
                 checker.var_states.clear();
                 checker.loop_depth = 0;
+                checker.loop_local_defs.clear();
                 checker.var_origins.clear();
                 checker.invalidated_origins.clear();
                 for binding in &t.with_bindings {
@@ -2591,6 +2667,7 @@ pub fn check_module(
             Item::SuiteSetup(s) => {
                 checker.var_states.clear();
                 checker.loop_depth = 0;
+                checker.loop_local_defs.clear();
                 checker.var_origins.clear();
                 checker.invalidated_origins.clear();
                 checker.check_block(&s.body);
@@ -2598,6 +2675,7 @@ pub fn check_module(
             Item::SuiteTeardown(s) => {
                 checker.var_states.clear();
                 checker.loop_depth = 0;
+                checker.loop_local_defs.clear();
                 checker.var_origins.clear();
                 checker.invalidated_origins.clear();
                 checker.check_block(&s.body);

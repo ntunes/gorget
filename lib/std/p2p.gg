@@ -41,7 +41,10 @@ KeyPair p2p_generate_identity():
 #           30=GOSSIP, 31=SUBSCRIBE, 32=UNSUBSCRIBE,
 #           40=ADDR_PROBE, 41=ADDR_REPLY,
 #           42=HOLE_PUNCH_REQ, 43=HOLE_PUNCH_NOTIFY,
-#           44=RELAY_REQUEST, 45=RELAY_DATA
+#           44=RELAY_REQUEST, 45=RELAY_DATA,
+#           50=RELIABLE_DATA, 51=RELIABLE_ACK,
+#           52=RELIABLE_SYN, 53=RELIABLE_SYN_ACK,
+#           54=RELIABLE_FIN, 55=RELIABLE_FIN_ACK
 
 struct Message:
     int msg_type
@@ -135,7 +138,8 @@ Result[Message, str] p2p_decode_message(Vector[uint8] raw):
 # ── Events ───────────────────────────────────────────────────
 # event_type: 0=NONE, 1=MESSAGE, 2=PEER_DISCOVERED, 3=PEER_LOST,
 #             4=DHT_RESULT, 5=ADDR_DISCOVERED, 6=RELAY_RECEIVED,
-#             7=GOSSIP
+#             7=GOSSIP, 8=STREAM_SYN, 9=STREAM_CONNECTED,
+#             10=STREAM_DATA, 11=STREAM_CLOSED
 
 struct P2PEvent:
     int event_type
@@ -165,6 +169,49 @@ struct DHTEntry:
 struct GossipSeen:
     str msg_id
 
+# ── Reliable Stream Types ───────────────────────────────────
+
+struct SACKBlock:
+    int left
+    int right
+
+struct SendSegment:
+    int seq_num
+    Vector[uint8] data
+    int send_time_ms
+    int retransmit_count
+    bool acked
+
+struct RecvSegment:
+    int seq_num
+    Vector[uint8] data
+
+struct ReliableStream:
+    int stream_id
+    str peer_hex
+    int state              # 0=CLOSED, 1=SYN_SENT, 2=SYN_RECEIVED, 3=ESTABLISHED, 4=FIN_WAIT, 5=CLOSE_WAIT
+    int local_seq
+    int local_initial_seq
+    int remote_initial_seq
+    int remote_seq_acked
+    Vector[SendSegment] send_buffer
+    Vector[uint8] send_queue
+    Vector[RecvSegment] recv_ooo
+    Vector[uint8] recv_ready
+    int srtt_ms
+    int rttvar_ms
+    int rto_ms
+    int cwnd
+    int ssthresh
+    int flight_size
+    int recv_window
+    int local_recv_buf_max
+    int last_send_ms
+    int syn_send_ms
+    int fin_send_ms
+    int dup_ack_count
+    int last_ack_num
+
 # ── Discovery Config ─────────────────────────────────────────
 
 struct DiscoveryConfig:
@@ -191,6 +238,8 @@ struct Node:
     Vector[DHTEntry] dht_store
     Vector[str] subscriptions
     Vector[GossipSeen] seen_msgs
+    Vector[ReliableStream] streams
+    int next_stream_id
 
 Result[Node, str] p2p_create_node(str bind_addr, int bind_port):
     Result[UdpSocket, str] sock_result = udp_bind(bind_addr, bind_port)
@@ -204,7 +253,8 @@ Result[Node, str] p2p_create_node(str bind_addr, int bind_port):
     Vector[GossipSeen] seen = Vector[GossipSeen]()
     # Create a placeholder discovery socket (unused until discovery enabled)
     UdpSocket disc_sock = udp_bind("0.0.0.0", 0).unwrap()
-    return Ok(Node(sock, ident, peers, 0, disc_sock, false, 0, 5000, "", 0, store, subs, seen))
+    Vector[ReliableStream] streams = Vector[ReliableStream]()
+    return Ok(Node(sock, ident, peers, 0, disc_sock, false, 0, 5000, "", 0, store, subs, seen, streams, 0))
 
 # ── Peer lookup helpers ──────────────────────────────────────
 
@@ -551,6 +601,575 @@ void p2p_publish(Node &node, str topic, Vector[uint8] data):
         p2p_send_raw(&node, pi.host, pi.port, 30, payload)
         i = i + 1
 
+# ── Reliable Streams ────────────────────────────────────────
+# MSS = 1200 bytes (fits in IPv6 min MTU with GG01 header)
+# msg_type 50=RELIABLE_DATA, 51=RELIABLE_ACK, 52=RELIABLE_SYN,
+#          53=RELIABLE_SYN_ACK, 54=RELIABLE_FIN, 55=RELIABLE_FIN_ACK
+
+ReliableStream p2p_new_stream(int stream_id, str peer_hex, int initial_state):
+    return ReliableStream(
+        stream_id, peer_hex, initial_state,
+        0, 0, 0, 0,
+        Vector[SendSegment](), Vector[uint8](), Vector[RecvSegment](), Vector[uint8](),
+        0, 0, 1000,
+        1, 64, 0,
+        262144, 262144,
+        0, 0, 0, 0, 0
+    )
+
+int p2p_find_stream(Node &node, int stream_id):
+    int i = 0
+    while i < node.streams.len():
+        ReliableStream s = node.streams.get(i).unwrap()
+        if s.stream_id == stream_id:
+            return i
+        i = i + 1
+    return -1
+
+# ── Payload encode/decode ──────────────────────────────────
+
+# RELIABLE_SYN (52): [4B stream_id] [4B initial_seq]
+Vector[uint8] p2p_encode_syn_payload(int stream_id, int initial_seq):
+    Vector[uint8] buf = p2p_make_u32(stream_id)
+    buf = bytes_concat(buf, p2p_make_u32(initial_seq))
+    return buf
+
+# RELIABLE_SYN_ACK (53): [4B stream_id] [4B responder_isn] [4B ack_isn]
+Vector[uint8] p2p_encode_syn_ack_payload(int stream_id, int responder_isn, int ack_isn):
+    Vector[uint8] buf = p2p_make_u32(stream_id)
+    buf = bytes_concat(buf, p2p_make_u32(responder_isn))
+    buf = bytes_concat(buf, p2p_make_u32(ack_isn))
+    return buf
+
+# RELIABLE_DATA (50): [4B stream_id] [4B seq_num] [data...]
+Vector[uint8] p2p_encode_data_payload(int stream_id, int seq_num, Vector[uint8] data):
+    Vector[uint8] buf = p2p_make_u32(stream_id)
+    buf = bytes_concat(buf, p2p_make_u32(seq_num))
+    buf = bytes_concat(buf, data)
+    return buf
+
+# RELIABLE_ACK (51): [4B stream_id] [4B cum_ack] [4B recv_window] [1B num_sacks] [8B*N sack_blocks]
+Vector[uint8] p2p_encode_ack_payload(int stream_id, int cum_ack, int recv_window, Vector[SACKBlock] sacks):
+    Vector[uint8] buf = p2p_make_u32(stream_id)
+    buf = bytes_concat(buf, p2p_make_u32(cum_ack))
+    buf = bytes_concat(buf, p2p_make_u32(recv_window))
+    int num_sacks = sacks.len()
+    if num_sacks > 4:
+        num_sacks = 4
+    buf = bytes_concat(buf, p2p_make_byte(num_sacks))
+    int i = 0
+    while i < num_sacks:
+        SACKBlock sb = sacks.get(i).unwrap()
+        buf = bytes_concat(buf, p2p_make_u32(sb.left))
+        buf = bytes_concat(buf, p2p_make_u32(sb.right))
+        i = i + 1
+    return buf
+
+# RELIABLE_FIN (54): [4B stream_id] [4B final_seq]
+Vector[uint8] p2p_encode_fin_payload(int stream_id, int final_seq):
+    Vector[uint8] buf = p2p_make_u32(stream_id)
+    buf = bytes_concat(buf, p2p_make_u32(final_seq))
+    return buf
+
+# RELIABLE_FIN_ACK (55): [4B stream_id] [4B ack_seq]
+Vector[uint8] p2p_encode_fin_ack_payload(int stream_id, int ack_seq):
+    Vector[uint8] buf = p2p_make_u32(stream_id)
+    buf = bytes_concat(buf, p2p_make_u32(ack_seq))
+    return buf
+
+# Decode stream_id from any reliable payload (first 4 bytes)
+int p2p_decode_stream_id(Vector[uint8] payload):
+    return bytes_read_u32_be(payload, 0)
+
+# ── Stream send helper ─────────────────────────────────────
+
+void p2p_stream_send_raw(Node &node, str peer_hex, int msg_type, Vector[uint8] payload):
+    int idx = p2p_find_peer(node, peer_hex)
+    if idx >= 0:
+        PeerInfo pi = node.peers.get(idx).unwrap()
+        p2p_send_raw(&node, pi.host, pi.port, msg_type, payload)
+
+# ── Handshake ──────────────────────────────────────────────
+
+Result[int, str] p2p_stream_open(Node &node, str peer_hex):
+    int idx = p2p_find_peer(node, peer_hex)
+    if idx < 0:
+        return Error("unknown peer")
+    int sid = node.next_stream_id
+    node.next_stream_id = node.next_stream_id + 1
+    ReliableStream s = p2p_new_stream(sid, peer_hex, 1)
+    s.local_seq = 1
+    s.local_initial_seq = 0
+    s.syn_send_ms = time_ms()
+    node.streams.push(!s)
+    # Send SYN
+    Vector[uint8] payload = p2p_encode_syn_payload(sid, 0)
+    PeerInfo pi = node.peers.get(idx).unwrap()
+    p2p_send_raw(&node, pi.host, pi.port, 52, payload)
+    return Ok(sid)
+
+void p2p_stream_accept(Node &node, int stream_id):
+    int sidx = p2p_find_stream(&node, stream_id)
+    if sidx < 0:
+        return
+    ReliableStream s = node.streams.remove(sidx).unwrap()
+    if s.state != 2:
+        node.streams.push(!s)
+        return
+    s.state = 3
+    s.local_seq = 1
+    s.local_initial_seq = 0
+    str peer = s.peer_hex
+    int remote_isn = s.remote_initial_seq
+    int sid = s.stream_id
+    node.streams.push(!s)
+    # Send SYN-ACK
+    Vector[uint8] payload = p2p_encode_syn_ack_payload(sid, 0, remote_isn + 1)
+    p2p_stream_send_raw(&node, peer, 53, payload)
+
+void p2p_stream_close(Node &node, int stream_id):
+    int sidx = p2p_find_stream(&node, stream_id)
+    if sidx < 0:
+        return
+    ReliableStream s = node.streams.remove(sidx).unwrap()
+    if s.state != 3:
+        node.streams.push(!s)
+        return
+    s.state = 4
+    s.fin_send_ms = time_ms()
+    str peer = s.peer_hex
+    int final_seq = s.local_seq
+    int sid = s.stream_id
+    node.streams.push(!s)
+    # Send FIN
+    Vector[uint8] payload = p2p_encode_fin_payload(sid, final_seq)
+    p2p_stream_send_raw(&node, peer, 54, payload)
+
+# ── Handle incoming SYN (52) ──────────────────────────────
+
+P2PEvent p2p_handle_syn(Node &node, str sender_hex, Vector[uint8] payload):
+    if payload.len() < 8:
+        return p2p_no_event()
+    int stream_id = bytes_read_u32_be(payload, 0)
+    int initial_seq = bytes_read_u32_be(payload, 4)
+    # Bump next_stream_id past the remote ID to prevent collisions
+    # when both sides open streams independently
+    if stream_id >= node.next_stream_id:
+        node.next_stream_id = stream_id + 1
+    # Create stream in SYN_RECEIVED state
+    ReliableStream s = p2p_new_stream(stream_id, sender_hex, 2)
+    s.remote_initial_seq = initial_seq
+    s.remote_seq_acked = initial_seq + 1
+    node.streams.push(!s)
+    # Return STREAM_SYN event with stream_id in data
+    Vector[uint8] ev_data = p2p_make_u32(stream_id)
+    return P2PEvent(8, PeerId(Vector[uint8]()), ev_data, "")
+
+# ── Handle incoming SYN-ACK (53) ──────────────────────────
+
+P2PEvent p2p_handle_syn_ack(Node &node, str sender_hex, Vector[uint8] payload):
+    if payload.len() < 12:
+        return p2p_no_event()
+    int stream_id = bytes_read_u32_be(payload, 0)
+    int responder_isn = bytes_read_u32_be(payload, 4)
+    int ack_isn = bytes_read_u32_be(payload, 8)
+    int sidx = p2p_find_stream(&node, stream_id)
+    if sidx < 0:
+        return p2p_no_event()
+    ReliableStream s = node.streams.remove(sidx).unwrap()
+    if s.state != 1:
+        node.streams.push(!s)
+        return p2p_no_event()
+    s.state = 3
+    s.remote_initial_seq = responder_isn
+    s.remote_seq_acked = responder_isn + 1
+    # Compute RTT from SYN
+    if s.syn_send_ms > 0:
+        int rtt_sample = time_ms() - s.syn_send_ms
+        s.srtt_ms = rtt_sample
+        s.rttvar_ms = rtt_sample / 2
+        s.rto_ms = rtt_sample + 4 * s.rttvar_ms
+        if s.rto_ms < 200:
+            s.rto_ms = 200
+        if s.rto_ms > 60000:
+            s.rto_ms = 60000
+    node.streams.push(!s)
+    # Return STREAM_CONNECTED event
+    Vector[uint8] ev_data = p2p_make_u32(stream_id)
+    return P2PEvent(9, PeerId(Vector[uint8]()), ev_data, "")
+
+# ── Handle incoming FIN (54) ──────────────────────────────
+
+P2PEvent p2p_handle_fin(Node &node, str sender_hex, Vector[uint8] payload):
+    if payload.len() < 8:
+        return p2p_no_event()
+    int stream_id = bytes_read_u32_be(payload, 0)
+    int final_seq = bytes_read_u32_be(payload, 4)
+    int sidx = p2p_find_stream(&node, stream_id)
+    if sidx < 0:
+        return p2p_no_event()
+    ReliableStream s = node.streams.remove(sidx).unwrap()
+    s.state = 0
+    str peer = s.peer_hex
+    int sid = s.stream_id
+    node.streams.push(!s)
+    # Send FIN-ACK
+    Vector[uint8] ack_payload = p2p_encode_fin_ack_payload(sid, final_seq)
+    p2p_stream_send_raw(&node, peer, 55, ack_payload)
+    # Return STREAM_CLOSED event
+    Vector[uint8] ev_data = p2p_make_u32(stream_id)
+    return P2PEvent(11, PeerId(Vector[uint8]()), ev_data, "")
+
+# ── Handle incoming FIN-ACK (55) ──────────────────────────
+
+P2PEvent p2p_handle_fin_ack(Node &node, str sender_hex, Vector[uint8] payload):
+    if payload.len() < 8:
+        return p2p_no_event()
+    int stream_id = bytes_read_u32_be(payload, 0)
+    int sidx = p2p_find_stream(&node, stream_id)
+    if sidx < 0:
+        return p2p_no_event()
+    ReliableStream s = node.streams.remove(sidx).unwrap()
+    s.state = 0
+    node.streams.push(!s)
+    # Return STREAM_CLOSED event
+    Vector[uint8] ev_data = p2p_make_u32(stream_id)
+    return P2PEvent(11, PeerId(Vector[uint8]()), ev_data, "")
+
+# ── Data transfer ──────────────────────────────────────────
+
+Result[int, str] p2p_stream_send(Node &node, int stream_id, Vector[uint8] data):
+    int sidx = p2p_find_stream(&node, stream_id)
+    if sidx < 0:
+        return Error("stream not found")
+    ReliableStream s = node.streams.remove(sidx).unwrap()
+    if s.state != 3:
+        node.streams.push(!s)
+        return Error("stream not established")
+    int data_len = data.len()
+    # Append data to send_queue
+    if data_len > 0:
+        Vector[uint8] data_copy = bytes_slice(data, 0, data_len)
+        s.send_queue = bytes_concat(s.send_queue, data_copy)
+    node.streams.push(!s)
+    return Ok(data_len)
+
+void p2p_stream_flush_send(Node &node, int stream_id):
+    int sidx = p2p_find_stream(&node, stream_id)
+    if sidx < 0:
+        return
+    ReliableStream s = node.streams.remove(sidx).unwrap()
+    if s.state != 3:
+        node.streams.push(!s)
+        return
+    str peer = s.peer_hex
+    int sid = s.stream_id
+    int now = time_ms()
+    # Segment and send up to cwnd - flight_size segments
+    int can_send = s.cwnd - s.flight_size
+    while s.send_queue.len() > 0 and can_send > 0:
+        int chunk_size = 1200
+        if s.send_queue.len() < chunk_size:
+            chunk_size = s.send_queue.len()
+        Vector[uint8] chunk = bytes_slice(s.send_queue, 0, chunk_size)
+        # Remove consumed bytes from send_queue
+        if chunk_size < s.send_queue.len():
+            s.send_queue = bytes_slice(s.send_queue, chunk_size, s.send_queue.len())
+        else:
+            s.send_queue = Vector[uint8]()
+        # Create segment
+        int seq = s.local_seq
+        # Copy data for sending BEFORE chunk is consumed by struct constructor
+        Vector[uint8] seg_data = bytes_slice(chunk, 0, chunk.len())
+        SendSegment seg = SendSegment(seq, chunk, now, 0, false)
+        s.send_buffer.push(!seg)
+        s.local_seq = s.local_seq + 1
+        s.flight_size = s.flight_size + 1
+        can_send = can_send - 1
+        # Send the segment
+        Vector[uint8] payload = p2p_encode_data_payload(sid, seq, seg_data)
+        p2p_stream_send_raw(&node, peer, 50, payload)
+    s.last_send_ms = now
+    node.streams.push(!s)
+
+Vector[uint8] p2p_stream_recv(Node &node, int stream_id):
+    int sidx = p2p_find_stream(&node, stream_id)
+    if sidx < 0:
+        return Vector[uint8]()
+    ReliableStream s = node.streams.remove(sidx).unwrap()
+    Vector[uint8] data = s.recv_ready
+    s.recv_ready = Vector[uint8]()
+    node.streams.push(!s)
+    return data
+
+# ── Handle incoming DATA (50) ─────────────────────────────
+
+void p2p_stream_handle_data(Node &node, str sender_hex, Vector[uint8] payload):
+    if payload.len() < 8:
+        return
+    int stream_id = bytes_read_u32_be(payload, 0)
+    int seq_num = bytes_read_u32_be(payload, 4)
+    int sidx = p2p_find_stream(&node, stream_id)
+    if sidx < 0:
+        return
+    ReliableStream s = node.streams.remove(sidx).unwrap()
+    if s.state != 3:
+        node.streams.push(!s)
+        return
+    Vector[uint8] seg_data = Vector[uint8]()
+    if payload.len() > 8:
+        seg_data = bytes_slice(payload, 8, payload.len())
+    # In-order delivery
+    if seq_num == s.remote_seq_acked:
+        # Append directly to recv_ready
+        s.recv_ready = bytes_concat(s.recv_ready, seg_data)
+        s.remote_seq_acked = s.remote_seq_acked + 1
+        # Check if any OOO segments are now contiguous
+        bool found = true
+        while found:
+            found = false
+            int oi = 0
+            while oi < s.recv_ooo.len():
+                RecvSegment ooo = s.recv_ooo.get(oi).unwrap()
+                if ooo.seq_num == s.remote_seq_acked:
+                    Vector[uint8] ooo_data = bytes_slice(ooo.data, 0, ooo.data.len())
+                    s.recv_ready = bytes_concat(s.recv_ready, ooo_data)
+                    s.recv_ooo.remove(oi)
+                    s.remote_seq_acked = s.remote_seq_acked + 1
+                    found = true
+                else:
+                    oi = oi + 1
+    elif seq_num > s.remote_seq_acked:
+        # Out of order — buffer it
+        bool dup = false
+        int oi = 0
+        while oi < s.recv_ooo.len():
+            RecvSegment ooo = s.recv_ooo.get(oi).unwrap()
+            if ooo.seq_num == seq_num:
+                dup = true
+            oi = oi + 1
+        if not dup:
+            Vector[uint8] ooo_copy = bytes_slice(seg_data, 0, seg_data.len())
+            RecvSegment rs = RecvSegment(seq_num, ooo_copy)
+            s.recv_ooo.push(!rs)
+    # Compute available recv window
+    int recv_used = s.recv_ready.len()
+    int recv_window = s.local_recv_buf_max - recv_used
+    if recv_window < 0:
+        recv_window = 0
+    # Compute SACKs
+    Vector[SACKBlock] sacks = Vector[SACKBlock]()
+    # Sort OOO by seq_num and build contiguous blocks
+    int si = 0
+    while si < s.recv_ooo.len():
+        RecvSegment ooo = s.recv_ooo.get(si).unwrap()
+        int sn = ooo.seq_num
+        # Check if this seq extends an existing sack block
+        bool merged = false
+        int bi = 0
+        while bi < sacks.len():
+            SACKBlock sb = sacks.get(bi).unwrap()
+            if sn == sb.right:
+                SACKBlock new_sb = SACKBlock(sb.left, sb.right + 1)
+                sacks.set(bi, !new_sb)
+                merged = true
+            elif sn == sb.left - 1:
+                SACKBlock new_sb = SACKBlock(sb.left - 1, sb.right)
+                sacks.set(bi, !new_sb)
+                merged = true
+            bi = bi + 1
+        if not merged:
+            SACKBlock new_sb = SACKBlock(sn, sn + 1)
+            sacks.push(!new_sb)
+        si = si + 1
+    str peer = s.peer_hex
+    int sid = s.stream_id
+    int cum_ack = s.remote_seq_acked
+    node.streams.push(!s)
+    # Send ACK
+    Vector[uint8] ack_payload = p2p_encode_ack_payload(sid, cum_ack, recv_window, sacks)
+    p2p_stream_send_raw(&node, peer, 51, ack_payload)
+
+# ── Handle incoming ACK (51) ──────────────────────────────
+
+void p2p_stream_handle_ack(Node &node, str sender_hex, Vector[uint8] payload):
+    if payload.len() < 13:
+        return
+    int stream_id = bytes_read_u32_be(payload, 0)
+    int cum_ack = bytes_read_u32_be(payload, 4)
+    int recv_window = bytes_read_u32_be(payload, 8)
+    uint8 num_sacks_byte = payload.get(12).unwrap()
+    int num_sacks = num_sacks_byte as int
+    # Parse SACK blocks
+    Vector[SACKBlock] sacks = Vector[SACKBlock]()
+    int si = 0
+    while si < num_sacks and si < 4:
+        int sack_off = 13 + si * 8
+        if payload.len() >= sack_off + 8:
+            int sack_left = bytes_read_u32_be(payload, sack_off)
+            int sack_right = bytes_read_u32_be(payload, sack_off + 4)
+            SACKBlock sb = SACKBlock(sack_left, sack_right)
+            sacks.push(!sb)
+        si = si + 1
+    int sidx = p2p_find_stream(&node, stream_id)
+    if sidx < 0:
+        return
+    ReliableStream s = node.streams.remove(sidx).unwrap()
+    if s.state != 3 and s.state != 4:
+        node.streams.push(!s)
+        return
+    s.recv_window = recv_window
+    int now = time_ms()
+    # Mark cumulative acked segments
+    int new_acks = 0
+    int bi = 0
+    while bi < s.send_buffer.len():
+        SendSegment seg = s.send_buffer.get(bi).unwrap()
+        if seg.seq_num < cum_ack and not seg.acked:
+            SendSegment acked_seg = SendSegment(seg.seq_num, seg.data, seg.send_time_ms, seg.retransmit_count, true)
+            s.send_buffer.set(bi, !acked_seg)
+            new_acks = new_acks + 1
+            # RTT sample (only from non-retransmitted segments)
+            if seg.retransmit_count == 0:
+                int rtt_sample = now - seg.send_time_ms
+                if s.srtt_ms == 0:
+                    s.srtt_ms = rtt_sample
+                    s.rttvar_ms = rtt_sample / 2
+                else:
+                    int diff = rtt_sample - s.srtt_ms
+                    if diff < 0:
+                        diff = 0 - diff
+                    s.rttvar_ms = 3 * s.rttvar_ms / 4 + diff / 4
+                    s.srtt_ms = 7 * s.srtt_ms / 8 + rtt_sample / 8
+                s.rto_ms = s.srtt_ms + 4 * s.rttvar_ms
+                if s.rto_ms < 200:
+                    s.rto_ms = 200
+                if s.rto_ms > 60000:
+                    s.rto_ms = 60000
+        bi = bi + 1
+    # Mark SACK-acked segments
+    int ski = 0
+    while ski < sacks.len():
+        SACKBlock sb = sacks.get(ski).unwrap()
+        int sbi = 0
+        while sbi < s.send_buffer.len():
+            SendSegment seg = s.send_buffer.get(sbi).unwrap()
+            if seg.seq_num >= sb.left and seg.seq_num < sb.right and not seg.acked:
+                SendSegment acked_seg = SendSegment(seg.seq_num, seg.data, seg.send_time_ms, seg.retransmit_count, true)
+                s.send_buffer.set(sbi, !acked_seg)
+                new_acks = new_acks + 1
+            sbi = sbi + 1
+        ski = ski + 1
+    # Update flight_size
+    s.flight_size = 0
+    int fi = 0
+    while fi < s.send_buffer.len():
+        SendSegment seg = s.send_buffer.get(fi).unwrap()
+        if not seg.acked:
+            s.flight_size = s.flight_size + 1
+        fi = fi + 1
+    # Purge fully acked segments from front of send_buffer
+    while s.send_buffer.len() > 0:
+        SendSegment front = s.send_buffer.get(0).unwrap()
+        if front.acked:
+            s.send_buffer.remove(0)
+        else:
+            # stop at first unacked
+            break
+    # Congestion control: AIMD
+    if new_acks > 0:
+        if cum_ack == s.last_ack_num:
+            # Duplicate ACK
+            s.dup_ack_count = s.dup_ack_count + 1
+            if s.dup_ack_count == 3:
+                # Fast retransmit: retransmit first unacked
+                s.ssthresh = s.cwnd / 2
+                if s.ssthresh < 1:
+                    s.ssthresh = 1
+                s.cwnd = s.ssthresh + 3
+                # Retransmit first unacked segment
+                int ri = 0
+                while ri < s.send_buffer.len():
+                    SendSegment seg = s.send_buffer.get(ri).unwrap()
+                    if not seg.acked:
+                        str peer = s.peer_hex
+                        int sid = s.stream_id
+                        Vector[uint8] seg_data = bytes_slice(seg.data, 0, seg.data.len())
+                        Vector[uint8] pld = p2p_encode_data_payload(sid, seg.seq_num, seg_data)
+                        p2p_stream_send_raw(&node, peer, 50, pld)
+                        SendSegment resent = SendSegment(seg.seq_num, seg.data, now, seg.retransmit_count + 1, false)
+                        s.send_buffer.set(ri, !resent)
+                        ri = s.send_buffer.len()
+                    ri = ri + 1
+        else:
+            s.dup_ack_count = 0
+            s.last_ack_num = cum_ack
+            # Increase cwnd
+            if s.cwnd < s.ssthresh:
+                # Slow start
+                s.cwnd = s.cwnd + 1
+            else:
+                # Congestion avoidance: +1 per full window
+                s.cwnd = s.cwnd + 1
+    node.streams.push(!s)
+
+# ── Retransmission tick ────────────────────────────────────
+
+void p2p_stream_tick(Node &node):
+    int now = time_ms()
+    int count = node.streams.len()
+    int i = 0
+    while i < count:
+        # Always remove index 0: each iteration rotates the front to the back
+        ReliableStream s = node.streams.remove(0).unwrap()
+        if s.state == 3 or s.state == 4:
+            bool retransmitted = false
+            int ri = 0
+            while ri < s.send_buffer.len():
+                SendSegment seg = s.send_buffer.get(ri).unwrap()
+                if not seg.acked:
+                    int elapsed = now - seg.send_time_ms
+                    if elapsed >= s.rto_ms:
+                        # Timeout retransmit
+                        str peer = s.peer_hex
+                        int sid = s.stream_id
+                        Vector[uint8] seg_data = bytes_slice(seg.data, 0, seg.data.len())
+                        Vector[uint8] pld = p2p_encode_data_payload(sid, seg.seq_num, seg_data)
+                        p2p_stream_send_raw(&node, peer, 50, pld)
+                        SendSegment resent = SendSegment(seg.seq_num, seg.data, now, seg.retransmit_count + 1, false)
+                        s.send_buffer.set(ri, !resent)
+                        retransmitted = true
+                ri = ri + 1
+            if retransmitted:
+                # Multiplicative decrease
+                s.ssthresh = s.cwnd / 2
+                if s.ssthresh < 1:
+                    s.ssthresh = 1
+                s.cwnd = 1
+                # Exponential backoff on RTO
+                s.rto_ms = s.rto_ms * 2
+                if s.rto_ms > 60000:
+                    s.rto_ms = 60000
+        # SYN timeout: resend after rto_ms
+        if s.state == 1 and s.syn_send_ms > 0:
+            int syn_elapsed = now - s.syn_send_ms
+            if syn_elapsed >= s.rto_ms:
+                str peer = s.peer_hex
+                int sid = s.stream_id
+                Vector[uint8] syn_payload = p2p_encode_syn_payload(sid, s.local_initial_seq)
+                p2p_stream_send_raw(&node, peer, 52, syn_payload)
+                s.syn_send_ms = now
+                s.rto_ms = s.rto_ms * 2
+                if s.rto_ms > 60000:
+                    s.rto_ms = 60000
+        # Flush pending send_queue data
+        node.streams.push(!s)
+        # Flush after re-inserting
+        # Note: find_stream will find the stream at the new index
+        int sid_tmp = node.streams.get(node.streams.len() - 1).unwrap().stream_id
+        p2p_stream_flush_send(&node, sid_tmp)
+        i = i + 1
+
 # ── Poll ─────────────────────────────────────────────────────
 
 P2PEvent p2p_poll_socket(Node &node, UdpSocket &sock):
@@ -765,9 +1384,46 @@ P2PEvent p2p_poll_socket(Node &node, UdpSocket &sock):
                     return P2PEvent(7, msg.sender, event_data, topic)
         return p2p_no_event()
 
+    # RELIABLE_SYN (52)
+    if msg.msg_type == 52:
+        return p2p_handle_syn(&node, sender_hex, msg.payload)
+
+    # RELIABLE_SYN_ACK (53)
+    if msg.msg_type == 53:
+        return p2p_handle_syn_ack(&node, sender_hex, msg.payload)
+
+    # RELIABLE_DATA (50)
+    if msg.msg_type == 50:
+        p2p_stream_handle_data(&node, sender_hex, msg.payload)
+        # Check if any stream has data ready
+        int si = 0
+        while si < node.streams.len():
+            ReliableStream st = node.streams.get(si).unwrap()
+            if st.recv_ready.len() > 0:
+                Vector[uint8] ev_data = p2p_make_u32(st.stream_id)
+                return P2PEvent(10, msg.sender, ev_data, "")
+            si = si + 1
+        return p2p_no_event()
+
+    # RELIABLE_ACK (51)
+    if msg.msg_type == 51:
+        p2p_stream_handle_ack(&node, sender_hex, msg.payload)
+        return p2p_no_event()
+
+    # RELIABLE_FIN (54)
+    if msg.msg_type == 54:
+        return p2p_handle_fin(&node, sender_hex, msg.payload)
+
+    # RELIABLE_FIN_ACK (55)
+    if msg.msg_type == 55:
+        return p2p_handle_fin_ack(&node, sender_hex, msg.payload)
+
     return p2p_no_event()
 
 P2PEvent p2p_poll(Node &node, int timeout_ms):
+    # Drive reliable stream retransmission and flush
+    p2p_stream_tick(&node)
+
     # Check discovery socket first (non-blocking)
     if node.disc_enabled:
         # Re-announce periodically

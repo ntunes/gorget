@@ -68,6 +68,10 @@ pub struct DropEntry {
 pub enum CloneAction {
     /// gorget_array_clone(&field) for Vector/List/Array fields
     ArrayClone,
+    /// gorget_array_clone + deep clone each element's non-Copy fields.
+    /// Used for Vector[Struct] where Struct has collection fields.
+    /// Fields: (element_c_type, element_field_clones)
+    ArrayDeepClone(String, Vec<(String, CloneAction)>),
     /// gorget_string_clone(&field) for owned String fields
     StringClone,
     /// {mangled}__clone(&field) for Dict/HashMap fields

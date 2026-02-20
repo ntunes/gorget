@@ -1,0 +1,71 @@
+from std.p2p import Node, P2PEvent, p2p_create_node, p2p_add_peer, p2p_poll
+from std.p2p import p2p_stream_open, p2p_stream_accept, p2p_stream_send
+from std.p2p import p2p_stream_recv, p2p_stream_close, p2p_peer_id_hex
+from std.net.udp import UdpAddr
+from std.bytes import bytes_from_str, bytes_to_str, bytes_read_u32_be
+
+void main():
+    # Create two nodes
+    Node nodeA = p2p_create_node("127.0.0.1", 0).unwrap()
+    Node nodeB = p2p_create_node("127.0.0.1", 0).unwrap()
+
+    # Introduce nodes to each other
+    UdpAddr addrB = nodeB.socket.local_addr()
+    p2p_add_peer(&nodeA, "127.0.0.1", addrB.port)
+
+    # B discovers A via PING/PONG
+    P2PEvent ev1 = p2p_poll(&nodeB, 1000)
+    # A discovers B
+    P2PEvent ev2 = p2p_poll(&nodeA, 1000)
+
+    if ev1.event_type == 2 and ev2.event_type == 2:
+        print("peers connected")
+
+    # A opens a reliable stream to B
+    str b_hex = p2p_peer_id_hex(nodeB.identity.peer_id)
+    int stream_id = p2p_stream_open(&nodeA, b_hex).unwrap()
+
+    # B polls — should receive SYN (event_type 8 = STREAM_SYN)
+    P2PEvent syn_ev = p2p_poll(&nodeB, 1000)
+    if syn_ev.event_type == 8:
+        int sid = bytes_read_u32_be(syn_ev.data, 0)
+        print("syn received")
+        # B accepts the stream
+        p2p_stream_accept(&nodeB, sid)
+
+    # A polls — should receive SYN-ACK (event_type 9 = STREAM_CONNECTED)
+    P2PEvent conn_ev = p2p_poll(&nodeA, 1000)
+    if conn_ev.event_type == 9:
+        print("stream connected")
+
+    # A sends data to B
+    p2p_stream_send(&nodeA, stream_id, bytes_from_str("hello reliable"))
+
+    # Poll A to flush data
+    p2p_poll(&nodeA, 100)
+
+    # B polls — should receive DATA (event_type 10 = STREAM_DATA)
+    P2PEvent data_ev = p2p_poll(&nodeB, 1000)
+    if data_ev.event_type == 10:
+        int data_sid = bytes_read_u32_be(data_ev.data, 0)
+        Vector[uint8] received = p2p_stream_recv(&nodeB, data_sid)
+        print(bytes_to_str(received))
+
+    # A polls to receive ACK (no event expected for user)
+    p2p_poll(&nodeA, 100)
+
+    # A closes the stream
+    p2p_stream_close(&nodeA, stream_id)
+
+    # B polls — should receive FIN (event_type 11 = STREAM_CLOSED)
+    P2PEvent close_ev = p2p_poll(&nodeB, 1000)
+    if close_ev.event_type == 11:
+        print("stream closed")
+
+    # A polls — should receive FIN-ACK (event_type 11 = STREAM_CLOSED)
+    P2PEvent fin_ack_ev = p2p_poll(&nodeA, 1000)
+    if fin_ack_ev.event_type == 11:
+        print("fin acked")
+
+    nodeA.socket.close()
+    nodeB.socket.close()

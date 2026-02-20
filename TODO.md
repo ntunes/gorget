@@ -4,6 +4,10 @@
 
 ## Medium
 
+- **Reliable stream ID disambiguation for concurrent bidirectional opens**: `p2p_handle_syn` bumps `next_stream_id` past the remote's ID to prevent collisions, but this is probabilistic. Proper fix: add `remote_stream_id` field to `ReliableStream`, use (local_id, remote_id) pairs, and carry both IDs in SYN-ACK. Outgoing packets use receiver's local_id; incoming matched by local stream_id. [added: 2026-02-20]
+
+- **Borrow checker: struct constructor moves not tracked**: Passing a non-Copy variable to a struct constructor (e.g., `SendSegment(seq, chunk, ...)`) consumes it via move semantics in codegen (`memset` zeroes source), but the borrow checker doesn't flag subsequent uses of the moved variable. Discovered via `p2p_stream_flush_send` where `chunk` was used after being moved into a struct. Currently harmless if code is written correctly (create copies before struct construction). [added: 2026-02-20]
+
 - **Codegen: chained method calls on index expressions don't resolve receiver type**: `self.lex_source[pos].is_digit()` generates `char__is_digit()` (mangled struct method) instead of `isdigit()` (C builtin). The `infer_receiver_c_type` doesn't resolve TypeId for `Index` expressions on strings. Workaround: assign index result to local variable first, then call method. [added: 2026-02-20]
 
 
