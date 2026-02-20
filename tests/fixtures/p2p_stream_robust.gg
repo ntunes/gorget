@@ -1,0 +1,132 @@
+from std.p2p import Node, P2PEvent, p2p_create_node, p2p_add_peer, p2p_poll
+from std.p2p import p2p_stream_open, p2p_stream_accept, p2p_stream_send
+from std.p2p import p2p_stream_recv, p2p_stream_close, p2p_peer_id_hex
+from std.p2p import p2p_stream_send_frame, p2p_stream_recv_frame
+from std.net.udp import UdpAddr
+from std.bytes import bytes_from_str, bytes_to_str, bytes_read_u32_be
+from std.collections import Vector
+
+void main():
+    # Create two nodes
+    Node nodeA = p2p_create_node("127.0.0.1", 0).unwrap()
+    Node nodeB = p2p_create_node("127.0.0.1", 0).unwrap()
+
+    # Introduce peers
+    UdpAddr addrB = nodeB.socket.local_addr()
+    p2p_add_peer(&nodeA, "127.0.0.1", addrB.port)
+    P2PEvent ev1 = p2p_poll(&nodeB, 1000)
+    P2PEvent ev2 = p2p_poll(&nodeA, 1000)
+
+    str b_hex = p2p_peer_id_hex(nodeB.identity.peer_id)
+
+    # ── Test 1: Message Framing ──────────────────────────────
+    # Open stream, send 3 framed messages, verify each arrives independently
+
+    int s1 = p2p_stream_open(&nodeA, b_hex).unwrap()
+
+    # B: accept SYN
+    P2PEvent syn1 = p2p_poll(&nodeB, 1000)
+    int b_sid1 = 0
+    if syn1.event_type == 8:
+        b_sid1 = bytes_read_u32_be(syn1.data, 0)
+        p2p_stream_accept(&nodeB, b_sid1)
+
+    # A: wait for CONNECTED
+    P2PEvent conn1 = p2p_poll(&nodeA, 1000)
+
+    # Send 3 framed messages
+    p2p_stream_send_frame(&nodeA, s1, bytes_from_str("hello"))
+    p2p_stream_send_frame(&nodeA, s1, bytes_from_str("world"))
+    p2p_stream_send_frame(&nodeA, s1, bytes_from_str("!"))
+
+    # Poll loop to deliver data
+    int frame_count = 0
+    int rounds = 0
+    while rounds < 50:
+        P2PEvent aev = p2p_poll(&nodeA, 10)
+        P2PEvent bev = p2p_poll(&nodeB, 10)
+        # Try to receive frames
+        bool got_frame = true
+        while got_frame:
+            Vector[uint8] frame = p2p_stream_recv_frame(&nodeB, b_sid1)
+            if frame.len() > 0:
+                print(bytes_to_str(frame))
+                frame_count = frame_count + 1
+            else:
+                got_frame = false
+        if frame_count >= 3:
+            rounds = 50
+        rounds = rounds + 1
+
+    # Close stream 1 and drain ALL close events (both sides)
+    p2p_stream_close(&nodeA, s1)
+    int close_count = 0
+    int cr = 0
+    while cr < 30:
+        P2PEvent cev_a = p2p_poll(&nodeA, 10)
+        P2PEvent cev_b = p2p_poll(&nodeB, 10)
+        if cev_a.event_type == 11:
+            close_count = close_count + 1
+        if cev_b.event_type == 11:
+            close_count = close_count + 1
+        if close_count >= 2:
+            cr = 30
+        cr = cr + 1
+
+    # ── Test 2: Graceful Close ───────────────────────────────
+    # Open stream, send data, close immediately, verify data arrives
+
+    int s2 = p2p_stream_open(&nodeA, b_hex).unwrap()
+
+    # B: accept SYN (loop until we get the SYN event)
+    int b_sid2 = 0
+    int sr = 0
+    while sr < 30:
+        P2PEvent sev = p2p_poll(&nodeB, 50)
+        if sev.event_type == 8:
+            b_sid2 = bytes_read_u32_be(sev.data, 0)
+            p2p_stream_accept(&nodeB, b_sid2)
+            sr = 30
+        sr = sr + 1
+
+    # A: wait for CONNECTED (loop until we get the connected event)
+    int ar = 0
+    while ar < 30:
+        P2PEvent cev = p2p_poll(&nodeA, 50)
+        if cev.event_type == 9:
+            ar = 30
+        ar = ar + 1
+
+    # Send data then immediately close
+    p2p_stream_send(&nodeA, s2, bytes_from_str("graceful data"))
+    p2p_stream_close(&nodeA, s2)
+
+    # Poll until B receives data and close event
+    str recv_data = ""
+    bool got_close = false
+    int gr = 0
+    while gr < 50:
+        P2PEvent gev_a = p2p_poll(&nodeA, 10)
+        P2PEvent gev_b = p2p_poll(&nodeB, 10)
+        if gev_b.event_type == 10:
+            Vector[uint8] d = p2p_stream_recv(&nodeB, b_sid2)
+            if d.len() > 0:
+                recv_data = bytes_to_str(d)
+        if gev_b.event_type == 11:
+            got_close = true
+        if recv_data != "" and got_close:
+            gr = 50
+        gr = gr + 1
+
+    if recv_data == "graceful data":
+        print("graceful close ok")
+
+    # Drain remaining close events
+    int dr = 0
+    while dr < 20:
+        P2PEvent dev = p2p_poll(&nodeA, 10)
+        P2PEvent dev2 = p2p_poll(&nodeB, 10)
+        dr = dr + 1
+
+    nodeA.socket.close()
+    nodeB.socket.close()

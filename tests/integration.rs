@@ -4061,6 +4061,18 @@ both closed",
 }
 
 #[test]
+fn p2p_stream_robust() {
+    run_gg(
+        "p2p_stream_robust.gg",
+        "\
+hello
+world
+!
+graceful close ok",
+    );
+}
+
+#[test]
 fn name_first() {
     run_gg(
         "name_first.gg",
