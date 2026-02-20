@@ -365,6 +365,9 @@ pub struct CodegenContext<'a> {
     /// Generic enum mangled names already emitted during the struct topo sort
     /// in `emit_type_definitions`. Phase 2 skips these to avoid duplicate defs.
     pub emitted_in_type_defs: HashSet<String>,
+    /// TypeIds for variables introduced by pattern destructuring in codegen.
+    /// Supplements `resolution_map`/`scoped_lookup` which can't find these vars.
+    pub pattern_var_types: FxHashMap<String, TypeId>,
 }
 
 impl CodegenContext<'_> {
@@ -593,6 +596,7 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
         method_resolutions: &analysis.method_resolutions,
         deep_cloned_expr: false,
         emitted_in_type_defs: HashSet::new(),
+        pattern_var_types: FxHashMap::default(),
     };
 
     let mut emitter = CEmitter::new();

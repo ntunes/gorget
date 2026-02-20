@@ -1,0 +1,18 @@
+# Test pattern destructuring in for-loops
+
+from std.collections import Dict
+
+void main():
+    # For-loop tuple destructuring over Dict
+    Dict[str, int] scores = Dict[str, int]()
+    scores.put("a", 10)
+    scores.put("b", 20)
+    int total = 0
+    for (k, v) in scores:
+        total = total + v
+    print("{total}")
+
+    # For-loop with enumerate still works
+    Vector[str] words = ["hello", "world"]
+    for (i, w) in words.enumerate():
+        print("{i} {w}")

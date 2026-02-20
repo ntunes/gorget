@@ -4377,6 +4377,32 @@ no color",
 }
 
 #[test]
+fn pattern_destructure() {
+    run_gg(
+        "pattern_destructure.gg",
+        "\
+10
+20
+42
+hello
+1
+2
+3",
+    );
+}
+
+#[test]
+fn pattern_destructure_loop() {
+    run_gg(
+        "pattern_destructure_loop.gg",
+        "\
+30
+0 hello
+1 world",
+    );
+}
+
+#[test]
 fn csv_basic() {
     run_gg(
         "csv_basic.gg",

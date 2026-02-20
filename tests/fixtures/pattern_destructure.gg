@@ -1,0 +1,25 @@
+# Test pattern destructuring in VarDecl
+
+(int, int) get_pair():
+    return (10, 20)
+
+(int, str) get_mixed():
+    return (42, "hello")
+
+void main():
+    # VarDecl tuple destructuring with auto
+    auto (a, b) = get_pair()
+    print("{a}")
+    print("{b}")
+
+    # VarDecl tuple destructuring from a variable
+    (int, str) pair = get_mixed()
+    auto (n, s) = pair
+    print("{n}")
+    print(s)
+
+    # VarDecl 3-element tuple destructuring
+    auto (x, y, z) = (1, 2, 3)
+    print("{x}")
+    print("{y}")
+    print("{z}")

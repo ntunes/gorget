@@ -737,6 +737,10 @@ impl CodegenContext<'_> {
                         self.scoped_lookup(name)
                             .and_then(|def_id| self.scopes.get_def(def_id).type_id)
                     })
+                    .or_else(|| {
+                        // Pattern-bound variables from VarDecl destructuring
+                        self.pattern_var_types.get(name.as_str()).copied()
+                    })
             }
             Expr::IntLiteral(_) => Some(self.types.int_id),
             Expr::FloatLiteral(_) => Some(self.types.float_id),

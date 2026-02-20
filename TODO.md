@@ -45,7 +45,7 @@
 
 
 
-- **Struct destructuring**: Tuple destructuring works but struct destructuring does not. E.g., `auto Point { x, y } = point` or `case Point { x, y }:` in match. [from roadmap, added: 2026-02-16]
+- **Struct destructuring in VarDecl/for-loop**: Tuple destructuring now works in VarDecl, for-loop, match, and comprehensions. Struct field destructuring (`auto Point { x, y } = point`) still not implemented — would need named-field pattern parsing + codegen. [from roadmap, added: 2026-02-16, updated: 2026-02-20]
 
 - **Const generics**: Partially parsed but not validated or monomorphized. E.g., `struct Array[T, N: int]`. [from roadmap, added: 2026-02-16]
 

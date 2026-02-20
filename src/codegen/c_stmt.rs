@@ -2477,8 +2477,42 @@ impl CodegenContext<'_> {
                 }
                 let c_type = self.resolve_decl_type(type_, value, None);
                 let val = self.gen_expr(value);
-                let decl = c_types::c_declare(&c_type, "__pat");
-                emitter.emit_line(&format!("/* pattern decl */ {decl} = {val};"));
+                let tmp = emitter.fresh_temp();
+                let decl = c_types::c_declare(&c_type, &tmp);
+                emitter.emit_line(&format!("{decl} = {val};"));
+                if !matches!(type_.node, Type::Inferred) {
+                    self.emit_typed_pattern_bindings(&pattern.node, &tmp, &type_.node, emitter);
+                } else {
+                    // For auto: try to resolve the value's TypeId to emit typed bindings
+                    let resolved_tuple_field_types = self.resolve_expr_type_id(value)
+                        .and_then(|tid| {
+                            if let crate::semantic::types::ResolvedType::Tuple(field_tids) = self.types.get(tid).clone() {
+                                Some(field_tids)
+                            } else {
+                                None
+                            }
+                        });
+                    if let (Some(field_tids), Pattern::Tuple(elements)) = (&resolved_tuple_field_types, &pattern.node) {
+                        for (i, elem) in elements.iter().enumerate() {
+                            let field_access = format!("{tmp}._{i}");
+                            if let Some(field_tid) = field_tids.get(i) {
+                                let field_c_type = c_types::type_id_to_c(*field_tid, self.types, self.scopes);
+                                if let Pattern::Binding(name) = &elem.node {
+                                    let escaped = c_mangle::escape_keyword(name);
+                                    let field_decl = c_types::c_declare(&field_c_type, &escaped);
+                                    emitter.emit_line(&format!("{field_decl} = {field_access};"));
+                                    self.pattern_var_types.insert(name.clone(), *field_tid);
+                                } else {
+                                    self.emit_pattern_bindings(&elem.node, &field_access, emitter);
+                                }
+                            } else {
+                                self.emit_pattern_bindings(&elem.node, &field_access, emitter);
+                            }
+                        }
+                    } else {
+                        self.emit_pattern_bindings(&pattern.node, &tmp, emitter);
+                    }
+                }
                 self.flush_move_zeros(emitter);
                 if self.trace {
                     self.emit_stmt_end(emitter);
@@ -3043,6 +3077,8 @@ impl CodegenContext<'_> {
 
         // Track the loop kind for trace output
         let is_range = matches!(iterable.node, Expr::Range { .. });
+        // Track whether var_name holds the element (true) or pattern is already handled (false)
+        let mut var_name_holds_element = true;
 
         // --- Iterable-specific: preamble, loop header, indent, inner preamble, bindings ---
 
@@ -3066,6 +3102,7 @@ impl CodegenContext<'_> {
             ));
             emitter.indent();
             if !has_else { self.push_drop_scope(DropScopeKind::Loop); }
+            var_name_holds_element = false; // var_name IS the loop counter, not an element to destructure
         } else if self.is_string_expr(iterable) {
             let iter = self.gen_expr(iterable);
             let len_var = emitter.fresh_temp();
@@ -3077,6 +3114,7 @@ impl CodegenContext<'_> {
             emitter.indent();
             if !has_else { self.push_drop_scope(DropScopeKind::Loop); }
             emitter.emit_line(&format!("char {var_name} = {iter}[{idx}];"));
+            var_name_holds_element = false; // char element, no tuple destructuring
         } else if self.is_gorget_array_expr(iterable) {
             let iter = self.gen_expr(iterable);
             let idx = emitter.fresh_temp();
@@ -3134,6 +3172,7 @@ impl CodegenContext<'_> {
                     "{key_type} {var_name} = {iter}.keys[{idx}];"
                 ));
             }
+            var_name_holds_element = false; // Map handles (k,v) directly
         } else if self.is_gorget_set_expr(iterable) {
             let iter = self.gen_expr(iterable);
             let idx = emitter.fresh_temp();
@@ -3237,6 +3276,21 @@ impl CodegenContext<'_> {
             emitter.emit_line(
                 r#"fprintf(__gorget_trace_fp, ",\"depth\":%d}\n", __gorget_trace_depth);"#
             );
+        }
+
+        // --- Common: pattern destructuring for non-binding patterns ---
+        // Only emit when var_name holds the element and pattern needs unpacking
+        if var_name_holds_element {
+            if enumerate_idx_var.is_some() {
+                // Enumerate: destructure the element part (second tuple field) if non-trivial
+                if let Pattern::Tuple(elems) = &pattern.node {
+                    if elems.len() >= 2 && !matches!(&elems[1].node, Pattern::Binding(_)) {
+                        self.emit_pattern_bindings(&elems[1].node, &var_name, emitter);
+                    }
+                }
+            } else if !matches!(&pattern.node, Pattern::Binding(_)) {
+                self.emit_pattern_bindings(&pattern.node, &var_name, emitter);
+            }
         }
 
         // --- Common: body ---
@@ -3741,6 +3795,58 @@ impl CodegenContext<'_> {
             }
             Pattern::Wildcard | Pattern::Literal(_) | Pattern::Rest => {
                 // No bindings to emit
+            }
+        }
+    }
+
+    /// Emit pattern bindings with concrete C types (resolved from AST Type).
+    /// Unlike `emit_pattern_bindings` which uses `__typeof__`, this emits explicit types
+    /// so that downstream codegen (print format inference, etc.) can resolve variable types.
+    fn emit_typed_pattern_bindings(
+        &mut self,
+        pattern: &Pattern,
+        scrutinee: &str,
+        ast_type: &crate::parser::ast::Type,
+        emitter: &mut CEmitter,
+    ) {
+        use crate::parser::ast::Type;
+        match (pattern, ast_type) {
+            (Pattern::Binding(name), _) => {
+                let escaped = c_mangle::escape_keyword(name);
+                let c_type = self.type_to_c(ast_type);
+                let decl = c_types::c_declare(&c_type, &escaped);
+                emitter.emit_line(&format!("{decl} = {scrutinee};"));
+                if let Some(tid) = self.ast_type_to_type_id(ast_type) {
+                    self.pattern_var_types.insert(name.clone(), tid);
+                }
+            }
+            (Pattern::Tuple(elements), Type::Tuple(types)) => {
+                for (i, elem) in elements.iter().enumerate() {
+                    let field_access = format!("{scrutinee}._{i}");
+                    if let Some(field_type) = types.get(i) {
+                        self.emit_typed_pattern_bindings(&elem.node, &field_access, &field_type.node, emitter);
+                    } else {
+                        self.emit_pattern_bindings(&elem.node, &field_access, emitter);
+                    }
+                }
+            }
+            (Pattern::Constructor { path, fields }, _) => {
+                // Fall back to __typeof__ for constructor patterns (enum variants)
+                if let Some((_enum_name, variant_name)) = self.find_enum_for_variant_path(path) {
+                    for (i, field_pat) in fields.iter().enumerate() {
+                        let field_access = format!("{scrutinee}.data.{variant_name}._{i}");
+                        self.emit_pattern_bindings(&field_pat.node, &field_access, emitter);
+                    }
+                }
+            }
+            (Pattern::Or(alternatives), _) => {
+                if let Some(first) = alternatives.first() {
+                    self.emit_typed_pattern_bindings(&first.node, scrutinee, ast_type, emitter);
+                }
+            }
+            _ => {
+                // Wildcard, Literal, Rest, or type mismatch — fall back
+                self.emit_pattern_bindings(pattern, scrutinee, emitter);
             }
         }
     }

@@ -19,9 +19,13 @@ impl CodegenContext<'_> {
         let elem_expr = self.gen_expr(expr);
         let elem_type = self.infer_c_type_from_expr(&expr.node);
 
-        let var_name = match &variable.node {
-            crate::parser::ast::Pattern::Binding(name) => c_mangle::escape_keyword(name),
-            _ => "__gorget_v".to_string(),
+        let (var_name, destructure_bindings) = match &variable.node {
+            crate::parser::ast::Pattern::Binding(name) => (c_mangle::escape_keyword(name), String::new()),
+            _ => {
+                let tmp = "__gorget_v".to_string();
+                let bindings = self.pattern_bindings_inline(&variable.node, &tmp);
+                (tmp, bindings)
+            }
         };
 
         // Check if iterable is a range
@@ -48,6 +52,7 @@ impl CodegenContext<'_> {
             return format!(
                 "({{ GorgetArray __comp = gorget_array_new(sizeof({elem_type})); \
                 for (int64_t {var_name} = {start_expr}; {var_name} {cmp} {end_expr}; {var_name}++) {{ \
+                {destructure_bindings}\
                 {cond_guard}{{ {elem_type} __elem = {elem_expr}; gorget_array_push(&__comp, &__elem); }} \
                 }} __comp; }})"
             );
@@ -63,6 +68,7 @@ impl CodegenContext<'_> {
             "({{ GorgetArray __comp = gorget_array_new(sizeof({elem_type})); \
             for (size_t __i = 0; __i < sizeof({iter})/sizeof({iter}[0]); __i++) {{ \
             {elem_type} {var_name} = {iter}[__i]; \
+            {destructure_bindings}\
             {cond_guard}{{ {elem_type} __elem = {elem_expr}; gorget_array_push(&__comp, &__elem); }} \
             }} __comp; }})"
         )
@@ -571,8 +577,14 @@ impl CodegenContext<'_> {
                         format!("{const_prefix}{decl} = {val};")
                     }
                     _ => {
+                        let c_type = match &type_.node {
+                            crate::parser::ast::Type::Inferred => self.infer_c_type_from_expr(&value.node),
+                            _ => self.type_to_c(&type_.node),
+                        };
                         let val = self.gen_expr(value);
-                        format!("/* pattern decl */ (void){val};")
+                        let decl = c_types::c_declare(&c_type, "__pat");
+                        let bindings = self.pattern_bindings_inline(&pattern.node, "__pat");
+                        format!("{const_prefix}{decl} = {val}; {bindings}")
                     }
                 }
             }
