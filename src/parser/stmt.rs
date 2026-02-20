@@ -264,27 +264,9 @@ impl Parser {
             self.expect(&Token::Colon)?;
             let body = if self.check(&Token::Newline) {
                 // Block arm
-                self.advance();
-                self.expect(&Token::Indent)?;
-                let mut stmts = Vec::new();
-                while !self.check(&Token::Dedent) && !self.at_end() {
-                    match self.parse_stmt() {
-                        Ok(stmt) => stmts.push(stmt),
-                        Err(e) => {
-                            self.errors.push(e);
-                            self.synchronize();
-                        }
-                    }
-                }
-                self.expect(&Token::Dedent)?;
-                let end = self.previous_span();
-                Spanned::new(
-                    Expr::Block(Block {
-                        stmts,
-                        span: arm_start.merge(end),
-                    }),
-                    arm_start.merge(end),
-                )
+                let block = self.parse_block_body(arm_start)?;
+                let span = block.span;
+                Spanned::new(Expr::Block(block), span)
             } else {
                 // Expression arm on same line
                 let expr = self.parse_expr()?;
@@ -294,7 +276,7 @@ impl Parser {
 
             let arm_end = body.span;
             arms.push(MatchArm {
-                pattern: pattern.clone(),
+                pattern,
                 guard,
                 body,
                 span: arm_start.merge(arm_end),

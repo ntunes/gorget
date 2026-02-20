@@ -1154,27 +1154,9 @@ impl Parser {
         // Body: either single expression on same line, or indented block
         let body = if self.check(&Token::Newline) {
             // Multi-line closure body
-            self.advance(); // consume newline
-            self.expect(&Token::Indent)?;
-            let mut stmts = Vec::new();
-            while !self.check(&Token::Dedent) && !self.at_end() {
-                match self.parse_stmt() {
-                    Ok(stmt) => stmts.push(stmt),
-                    Err(e) => {
-                        self.errors.push(e);
-                        self.synchronize();
-                    }
-                }
-            }
-            self.expect(&Token::Dedent)?;
-            let end = self.previous_span();
-            Spanned::new(
-                Expr::Block(Block {
-                    stmts,
-                    span: start.merge(end),
-                }),
-                start.merge(end),
-            )
+            let block = self.parse_block_body(start)?;
+            let span = block.span;
+            Spanned::new(Expr::Block(block), span)
         } else {
             // Single expression
             self.parse_expr()?
@@ -1433,15 +1415,16 @@ impl Parser {
             };
 
             self.expect(&Token::Colon)?;
+            let pattern_span = pattern.span;
             let body = self.parse_expr()?;
             let arm_end = body.span;
             self.consume_newline();
 
             arms.push(MatchArm {
-                pattern: pattern.clone(),
+                pattern,
                 guard,
                 body,
-                span: pattern.span.merge(arm_end),
+                span: pattern_span.merge(arm_end),
             });
         }
 

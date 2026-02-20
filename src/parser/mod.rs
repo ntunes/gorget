@@ -247,6 +247,12 @@ impl Parser {
     pub fn parse_block(&mut self) -> Result<Block, ParseError> {
         let start = self.peek_span();
         self.expect(&Token::Colon)?;
+        self.parse_block_body(start)
+    }
+
+    /// Parse `NEWLINE INDENT stmt* DEDENT`, returning a Block.
+    /// The colon (or other introducer) must already be consumed by the caller.
+    pub fn parse_block_body(&mut self, start: Span) -> Result<Block, ParseError> {
         self.expect(&Token::Newline)?;
         self.expect(&Token::Indent)?;
 

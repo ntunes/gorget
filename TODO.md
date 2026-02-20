@@ -2,8 +2,6 @@
 
 ## High
 
-- **Parser: match stmt/expr duplicate arm-parsing loop**: `stmt.rs:231-315` and `expr.rs:1399-1459` both parse `case <pattern> [if guard]: <body>` arms with `else:` fallthrough — ~120 lines of structural duplication. Extract shared `parse_match_arms()` helper. [added: 2026-02-20]
-
 - **Parser: String/Some/Ok/Error constructor parsing inconsistency**: `expr.rs:418-498` — `String(x)` uses full inline call-arg loop (duplicating `parse_call_args()`), `Some`/`Ok`/`Error` use semi-inline, `Box` uses postfix. Unify: convert keyword to identifier, let `parse_postfix` handle `(args)`. [added: 2026-02-20]
 
 ## Medium
@@ -15,8 +13,6 @@
 - **Parser: `trim_matches('\'')` fragile keyword-to-string hack**: `expr.rs:447,491,513`, `mod.rs:162`, `pattern.rs:123` — relies on undocumented Display contract. Add explicit `Keyword::as_name()` method. [added: 2026-02-20]
 
 - **Parser: manual backtracking without abstraction**: `expr.rs:829,904,1110`, `stmt.rs:397,517` — 5 sites with manual `saved_pos` ceremony. Extract `try_parse()` helper. [added: 2026-02-20]
-
-- **Parser: inline block parsers missing forward-progress guard**: `stmt.rs:271-277` (match arm) and `expr.rs:1162-1167` (closure body) lack the `pos_before` infinite-loop guard that `parse_block()` has. Latent correctness issue. [added: 2026-02-20]
 
 - **Parser: `parse_decl_or_expr_stmt` does too much**: `stmt.rs:395-453` — handles mutable prefix, auto shorthand, type parsing with backtrack, ownership modifiers, identifier detection, and value parsing. Split into smaller pieces. [added: 2026-02-20]
 
