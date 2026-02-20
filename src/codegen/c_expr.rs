@@ -1,5 +1,5 @@
 /// Expression codegen: convert Gorget expressions to C expression strings.
-use crate::lexer::token::{StringLit, StringSegment};
+use crate::lexer::token::{StringLiteral, StringSegment};
 use crate::parser::ast::{BinaryOp, Expr, PrimitiveType, Type, UnaryOp};
 use crate::span::Spanned;
 
@@ -703,7 +703,7 @@ impl CodegenContext<'_> {
     }
 
     /// Generate a plain C string literal (no interpolation).
-    fn gen_string_literal(&mut self, s: &StringLit) -> String {
+    fn gen_string_literal(&mut self, s: &StringLiteral) -> String {
         let mut result = String::from("\"");
         for segment in &s.segments {
             match segment {

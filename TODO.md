@@ -4,6 +4,9 @@
 
 ## Medium
 
+- **Codegen: chained method calls on index expressions don't resolve receiver type**: `self.lex_source[pos].is_digit()` generates `char__is_digit()` (mangled struct method) instead of `isdigit()` (C builtin). The `infer_receiver_c_type` doesn't resolve TypeId for `Index` expressions on strings. Workaround: assign index result to local variable first, then call method. [added: 2026-02-20]
+
+
 - **`Into[T]` conversion trait**: Counterpart to `From[T]` requiring explicit type args (`value.into[Celsius]()`) or return-type inference. Adds complexity (equipping primitives, potential blanket impl pattern). [added: 2026-02-17]
 
 - **`TryInto[T]` conversion trait**: Fallible counterpart to `Into[T]`, same complexity issues (explicit type args or return-type inference). Track alongside `Into[T]`. [added: 2026-02-18]

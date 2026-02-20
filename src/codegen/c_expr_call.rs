@@ -1594,7 +1594,7 @@ impl CodegenContext<'_> {
             );
 
         let is_char = c_type.as_deref() == Some("char")
-            && matches!(method_name, "is_alpha" | "is_digit" | "is_alphanumeric" | "is_whitespace" | "to_upper" | "to_lower" | "is_upper" | "is_lower");
+            && matches!(method_name, "is_alpha" | "is_digit" | "is_alphanumeric" | "is_whitespace" | "is_hex_digit" | "to_upper" | "to_lower" | "is_upper" | "is_lower");
 
         let is_primitive_hashable = !is_vector && !is_map && !is_set && !is_string
             && !is_option && !is_result && !is_box && !is_file && !is_iterator
@@ -1616,12 +1616,13 @@ impl CodegenContext<'_> {
 
         if is_char {
             return match method_name {
-                "is_alpha" | "is_digit" | "is_alphanumeric" | "is_whitespace" | "is_upper" | "is_lower" => {
+                "is_alpha" | "is_digit" | "is_alphanumeric" | "is_whitespace" | "is_hex_digit" | "is_upper" | "is_lower" => {
                     let c_func = match method_name {
                         "is_alpha" => "isalpha",
                         "is_digit" => "isdigit",
                         "is_alphanumeric" => "isalnum",
                         "is_whitespace" => "isspace",
+                        "is_hex_digit" => "isxdigit",
                         "is_upper" => "isupper",
                         "is_lower" => "islower",
                         _ => unreachable!(),

@@ -4,7 +4,7 @@ use crate::errors::{LexError, LexErrorKind};
 use crate::span::{Span, Spanned};
 use logos::Logos;
 use std::collections::VecDeque;
-use token::{Keyword, RawToken, StringKind, StringLit, StringSegment, Token};
+use token::{Keyword, RawToken, StringKind, StringLiteral, StringSegment, Token};
 
 /// Indentation-aware lexer for Gorget source code.
 ///
@@ -29,6 +29,22 @@ pub struct Lexer<'src> {
     need_newline: bool,
     /// Collected errors.
     pub errors: Vec<LexError>,
+}
+
+/// What kind of literal we're parsing escape sequences for.
+enum EscapeContext {
+    /// String literal: allows `\"`, `\{`, `\}`.
+    String,
+    /// Char literal: allows `\'`.
+    Char,
+}
+
+/// Result of parsing a single escape sequence.
+enum EscapeResult {
+    /// Successfully resolved escape character.
+    Char(char),
+    /// EOF encountered after backslash.
+    Eof,
 }
 
 impl<'src> Lexer<'src> {
@@ -359,61 +375,28 @@ impl<'src> Lexer<'src> {
         }
     }
 
+    /// Parse an integer literal with the given radix and prefix length.
+    fn parse_int_literal(&mut self, slice: &str, prefix_len: usize, radix: u32, name: &str, span: Span) -> Token {
+        let clean: String = slice[prefix_len..].chars().filter(|c| *c != '_').collect();
+        match i64::from_str_radix(&clean, radix) {
+            Ok(n) => Token::IntLiteral(n),
+            Err(_) => {
+                self.errors.push(LexError {
+                    kind: LexErrorKind::InvalidNumericLiteral(slice.to_string()),
+                    span,
+                });
+                Token::Error(format!("invalid {name}: {slice}"))
+            }
+        }
+    }
+
     /// Convert a raw token + its slice into a final Token.
     fn convert_raw_token(&mut self, raw: RawToken, slice: &str, span: Span) -> Option<Token> {
         Some(match raw {
-            RawToken::IntLiteral => {
-                let clean: String = slice.chars().filter(|c| *c != '_').collect();
-                match clean.parse::<i64>() {
-                    Ok(n) => Token::IntLiteral(n),
-                    Err(_) => {
-                        self.errors.push(LexError {
-                            kind: LexErrorKind::InvalidNumericLiteral(slice.to_string()),
-                            span,
-                        });
-                        Token::Error(format!("invalid integer: {slice}"))
-                    }
-                }
-            }
-            RawToken::HexLiteral => {
-                let clean: String = slice[2..].chars().filter(|c| *c != '_').collect();
-                match i64::from_str_radix(&clean, 16) {
-                    Ok(n) => Token::IntLiteral(n),
-                    Err(_) => {
-                        self.errors.push(LexError {
-                            kind: LexErrorKind::InvalidNumericLiteral(slice.to_string()),
-                            span,
-                        });
-                        Token::Error(format!("invalid hex: {slice}"))
-                    }
-                }
-            }
-            RawToken::OctalLiteral => {
-                let clean: String = slice[2..].chars().filter(|c| *c != '_').collect();
-                match i64::from_str_radix(&clean, 8) {
-                    Ok(n) => Token::IntLiteral(n),
-                    Err(_) => {
-                        self.errors.push(LexError {
-                            kind: LexErrorKind::InvalidNumericLiteral(slice.to_string()),
-                            span,
-                        });
-                        Token::Error(format!("invalid octal: {slice}"))
-                    }
-                }
-            }
-            RawToken::BinaryLiteral => {
-                let clean: String = slice[2..].chars().filter(|c| *c != '_').collect();
-                match i64::from_str_radix(&clean, 2) {
-                    Ok(n) => Token::IntLiteral(n),
-                    Err(_) => {
-                        self.errors.push(LexError {
-                            kind: LexErrorKind::InvalidNumericLiteral(slice.to_string()),
-                            span,
-                        });
-                        Token::Error(format!("invalid binary: {slice}"))
-                    }
-                }
-            }
+            RawToken::IntLiteral => self.parse_int_literal(slice, 0, 10, "integer", span),
+            RawToken::HexLiteral => self.parse_int_literal(slice, 2, 16, "hex", span),
+            RawToken::OctalLiteral => self.parse_int_literal(slice, 2, 8, "octal", span),
+            RawToken::BinaryLiteral => self.parse_int_literal(slice, 2, 2, "binary", span),
             RawToken::FloatLiteral => {
                 let clean: String = slice.chars().filter(|c| *c != '_').collect();
                 match clean.parse::<f64>() {
@@ -496,6 +479,68 @@ impl<'src> Lexer<'src> {
         })
     }
 
+    /// Parse a single escape sequence at `bytes[*i]` (the byte after `\`).
+    /// Advances `*i` past the consumed bytes. Pushes errors on invalid sequences.
+    fn parse_escape(&mut self, bytes: &[u8], i: &mut usize, context: EscapeContext) -> EscapeResult {
+        if *i >= bytes.len() {
+            return EscapeResult::Eof;
+        }
+        let backslash_pos = *i - 1;
+        let ch = match bytes[*i] {
+            b'n' => { *i += 1; '\n' }
+            b't' => { *i += 1; '\t' }
+            b'r' => { *i += 1; '\r' }
+            b'\\' => { *i += 1; '\\' }
+            b'0' => { *i += 1; '\0' }
+            b'"' if matches!(context, EscapeContext::String) => { *i += 1; '"' }
+            b'\'' if matches!(context, EscapeContext::Char) => { *i += 1; '\'' }
+            b'{' if matches!(context, EscapeContext::String) => { *i += 1; '{' }
+            b'}' if matches!(context, EscapeContext::String) => { *i += 1; '}' }
+            b'u' if *i + 1 < bytes.len() && bytes[*i + 1] == b'{' => {
+                *i += 2; // skip u{
+                let hex_start = *i;
+                while *i < bytes.len() && bytes[*i] != b'}' {
+                    *i += 1;
+                }
+                let hex = &self.source[hex_start..*i];
+                if *i < bytes.len() {
+                    *i += 1; // skip }
+                }
+                match u32::from_str_radix(hex, 16) {
+                    Ok(code) => char::from_u32(code).unwrap_or_else(|| {
+                        self.errors.push(LexError {
+                            kind: LexErrorKind::InvalidEscapeSequence(
+                                format!("\\u{{{hex}}}"),
+                            ),
+                            span: self.span(backslash_pos, *i),
+                        });
+                        '\u{FFFD}'
+                    }),
+                    Err(_) => {
+                        self.errors.push(LexError {
+                            kind: LexErrorKind::InvalidEscapeSequence(
+                                format!("\\u{{{hex}}}"),
+                            ),
+                            span: self.span(backslash_pos, *i),
+                        });
+                        '\u{FFFD}'
+                    }
+                }
+            }
+            other => {
+                self.errors.push(LexError {
+                    kind: LexErrorKind::InvalidEscapeSequence(
+                        format!("\\{}", other as char),
+                    ),
+                    span: self.span(*i - 1, *i + 1),
+                });
+                *i += 1;
+                other as char
+            }
+        };
+        EscapeResult::Char(ch)
+    }
+
     /// Scan a string literal starting at `pos`. Returns (Token, end_position).
     fn scan_string_literal(&mut self, pos: usize) -> (Token, usize) {
         let bytes = self.source.as_bytes();
@@ -567,79 +612,15 @@ impl<'src> Lexer<'src> {
 
             // Escape sequences
             if bytes[i] == b'\\' && actual_kind != StringKind::Raw {
-                i += 1;
-                if i >= bytes.len() {
-                    self.errors.push(LexError {
-                        kind: LexErrorKind::UnterminatedString,
-                        span: self.span(pos, i),
-                    });
-                    break;
-                }
-                match bytes[i] {
-                    b'n' => {
-                        current_literal.push('\n');
-                        i += 1;
-                    }
-                    b't' => {
-                        current_literal.push('\t');
-                        i += 1;
-                    }
-                    b'r' => {
-                        current_literal.push('\r');
-                        i += 1;
-                    }
-                    b'\\' => {
-                        current_literal.push('\\');
-                        i += 1;
-                    }
-                    b'"' => {
-                        current_literal.push('"');
-                        i += 1;
-                    }
-                    b'0' => {
-                        current_literal.push('\0');
-                        i += 1;
-                    }
-                    b'{' => {
-                        current_literal.push('{');
-                        i += 1;
-                    }
-                    b'}' => {
-                        current_literal.push('}');
-                        i += 1;
-                    }
-                    b'u' if i + 1 < bytes.len() && bytes[i + 1] == b'{' => {
-                        i += 2; // skip u{
-                        let hex_start = i;
-                        while i < bytes.len() && bytes[i] != b'}' {
-                            i += 1;
-                        }
-                        let hex = &self.source[hex_start..i];
-                        if i < bytes.len() {
-                            i += 1; // skip }
-                        }
-                        if let Ok(code) = u32::from_str_radix(hex, 16) {
-                            if let Some(c) = char::from_u32(code) {
-                                current_literal.push(c);
-                            } else {
-                                self.errors.push(LexError {
-                                    kind: LexErrorKind::InvalidEscapeSequence(
-                                        format!("\\u{{{hex}}}"),
-                                    ),
-                                    span: self.span(hex_start - 3, i),
-                                });
-                            }
-                        }
-                    }
-                    other => {
+                i += 1; // skip backslash
+                match self.parse_escape(bytes, &mut i, EscapeContext::String) {
+                    EscapeResult::Char(c) => current_literal.push(c),
+                    EscapeResult::Eof => {
                         self.errors.push(LexError {
-                            kind: LexErrorKind::InvalidEscapeSequence(
-                                format!("\\{}", other as char),
-                            ),
-                            span: self.span(i - 1, i + 1),
+                            kind: LexErrorKind::UnterminatedString,
+                            span: self.span(pos, i),
                         });
-                        current_literal.push(other as char);
-                        i += 1;
+                        break;
                     }
                 }
                 continue;
@@ -720,7 +701,7 @@ impl<'src> Lexer<'src> {
             segments.push(StringSegment::Literal(current_literal));
         }
 
-        let token = Token::StringLiteral(StringLit {
+        let token = Token::StringLiteral(StringLiteral {
             kind: actual_kind,
             segments,
         });
@@ -741,60 +722,17 @@ impl<'src> Lexer<'src> {
         }
 
         let ch = if bytes[i] == b'\\' {
-            i += 1;
-            if i >= bytes.len() {
-                self.errors.push(LexError {
-                    kind: LexErrorKind::UnterminatedCharLiteral,
-                    span: self.span(pos, i),
-                });
-                return (Token::Error("unterminated char".to_string()), i);
-            }
-            let escaped = match bytes[i] {
-                b'n' => '\n',
-                b't' => '\t',
-                b'r' => '\r',
-                b'\\' => '\\',
-                b'\'' => '\'',
-                b'0' => '\0',
-                b'u' if i + 1 < bytes.len() && bytes[i + 1] == b'{' => {
-                    i += 2; // skip u{
-                    let hex_start = i;
-                    while i < bytes.len() && bytes[i] != b'}' {
-                        i += 1;
-                    }
-                    let hex = &self.source[hex_start..i];
-                    if i < bytes.len() {
-                        i += 1; // skip }
-                    }
-                    match u32::from_str_radix(hex, 16) {
-                        Ok(code) => char::from_u32(code).unwrap_or('\u{FFFD}'),
-                        Err(_) => {
-                            self.errors.push(LexError {
-                                kind: LexErrorKind::InvalidEscapeSequence(
-                                    format!("\\u{{{hex}}}"),
-                                ),
-                                span: self.span(pos, i),
-                            });
-                            '\u{FFFD}'
-                        }
-                    }
-                }
-                other => {
+            i += 1; // skip backslash
+            match self.parse_escape(bytes, &mut i, EscapeContext::Char) {
+                EscapeResult::Char(c) => c,
+                EscapeResult::Eof => {
                     self.errors.push(LexError {
-                        kind: LexErrorKind::InvalidEscapeSequence(
-                            format!("\\{}", other as char),
-                        ),
-                        span: self.span(i - 1, i + 1),
+                        kind: LexErrorKind::UnterminatedCharLiteral,
+                        span: self.span(pos, i),
                     });
-                    other as char
+                    return (Token::Error("unterminated char".to_string()), i);
                 }
-            };
-            i += if bytes.get(i.wrapping_sub(1)) == Some(&b'u') {
-                0
-            } else {
-                1
-            };
-            escaped
+            }
         } else {
             let c = self.source[i..].chars().next().unwrap();
             i += c.len_utf8();
@@ -952,7 +890,7 @@ mod tests {
         assert_eq!(
             tokens,
             vec![
-                Token::StringLiteral(StringLit {
+                Token::StringLiteral(StringLiteral {
                     kind: StringKind::Normal,
                     segments: vec![StringSegment::Literal("hello".to_string())],
                 }),
@@ -967,7 +905,7 @@ mod tests {
         assert_eq!(
             tokens,
             vec![
-                Token::StringLiteral(StringLit {
+                Token::StringLiteral(StringLiteral {
                     kind: StringKind::Normal,
                     segments: vec![
                         StringSegment::Literal("Hello, ".to_string()),
@@ -1177,7 +1115,7 @@ mod tests {
         assert_eq!(
             tokens,
             vec![
-                Token::StringLiteral(StringLit {
+                Token::StringLiteral(StringLiteral {
                     kind: StringKind::Raw,
                     segments: vec![StringSegment::Literal("no \\escape".to_string())],
                 }),
@@ -1192,7 +1130,7 @@ mod tests {
         assert_eq!(
             tokens,
             vec![
-                Token::StringLiteral(StringLit {
+                Token::StringLiteral(StringLiteral {
                     kind: StringKind::Normal,
                     segments: vec![StringSegment::Literal("{literal}".to_string())],
                 }),
@@ -1354,7 +1292,7 @@ void main():
                 Token::Indent,
                 Token::Identifier("print".to_string()),
                 Token::LParen,
-                Token::StringLiteral(StringLit {
+                Token::StringLiteral(StringLiteral {
                     kind: StringKind::Normal,
                     segments: vec![StringSegment::Literal("positive".to_string())],
                 }),

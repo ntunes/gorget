@@ -2,7 +2,7 @@
 ///
 /// Handles `print()`, `format()`, and the interpolation machinery that
 /// maps Gorget types to printf format specifiers.
-use crate::lexer::token::{StringLit, StringSegment};
+use crate::lexer::token::{StringLiteral, StringSegment};
 use crate::parser::ast::{Expr, PrimitiveType, Type};
 use crate::parser::Parser;
 use crate::semantic::scope::DefKind;
@@ -130,8 +130,8 @@ impl CodegenContext<'_> {
         format!("gorget_string_format(\"%lld\", (long long){expr})")
     }
 
-    /// Generate `gorget_string_format("fmt", args...)` from a StringLit.
-    pub(super) fn gen_gorget_format_from_string_lit(&mut self, s: &StringLit) -> String {
+    /// Generate `gorget_string_format("fmt", args...)` from a StringLiteral.
+    pub(super) fn gen_gorget_format_from_string_lit(&mut self, s: &StringLiteral) -> String {
         let mut format_parts = Vec::new();
         let mut format_args = Vec::new();
 
@@ -156,9 +156,9 @@ impl CodegenContext<'_> {
         }
     }
 
-    /// Generate printf/fprintf from a StringLit with possible interpolation segments.
+    /// Generate printf/fprintf from a StringLiteral with possible interpolation segments.
     /// When `stream` is `None`, emits `printf(...)`. When `Some("stderr")`, emits `fprintf(stderr, ...)`.
-    fn gen_printf_from_string_lit(&mut self, s: &StringLit, is_println: bool, stream: Option<&str>) -> String {
+    fn gen_printf_from_string_lit(&mut self, s: &StringLiteral, is_println: bool, stream: Option<&str>) -> String {
         let mut format_parts = Vec::new();
         let mut printf_args = Vec::new();
 
@@ -535,7 +535,7 @@ impl CodegenContext<'_> {
                 "double" | "float" | "bool" | "char32_t",
                 "hash",
             ) => Some(self.types.int_id),
-            ("char" | "char32_t", "is_alpha" | "is_digit" | "is_alphanumeric" | "is_whitespace" | "is_upper" | "is_lower") => {
+            ("char" | "char32_t", "is_alpha" | "is_digit" | "is_alphanumeric" | "is_whitespace" | "is_hex_digit" | "is_upper" | "is_lower") => {
                 Some(self.types.bool_id)
             }
             ("char", "to_upper" | "to_lower") => {

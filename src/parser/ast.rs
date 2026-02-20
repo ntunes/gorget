@@ -409,7 +409,7 @@ pub enum Expr {
     FloatLiteral(f64),
     BoolLiteral(bool),
     CharLiteral(char),
-    StringLiteral(crate::lexer::token::StringLit),
+    StringLiteral(crate::lexer::token::StringLiteral),
     NoneLiteral,
 
     // ── Identifiers ──

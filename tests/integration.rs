@@ -854,6 +854,25 @@ fn modules_pkg() {
 }
 
 #[test]
+fn self_host_lexer() {
+    run_gg_dir(
+        "self_host_lexer",
+        "main.gg",
+        "\
+kw:int ident:x = int:42 NL EOF
+kw:int ident:add ( kw:int ident:a , kw:int ident:b ) : NL INDENT kw:return ident:a + ident:b NL DEDENT EOF
+ident:x == ident:y != ident:z <= ident:w >= ident:v NL EOF
+int:255 int:63 int:10 float:3.14 NL EOF
+ident:print ( str:hello {name} ) NL EOF
+kw:char ident:c = char:a NL EOF
+comment:this is a comment ident:x = int:1 NL EOF
+ident:f ( ident:a , ident:b ) NL EOF
+ident:a += int:1 NL ident:b -= int:2 NL ident:c ..= ident:d NL EOF
+kw:if kw:true kw:and kw:not kw:false : NL INDENT kw:return kw:None NL DEDENT EOF",
+    );
+}
+
+#[test]
 fn vector_methods() {
     run_gg(
         "vector_methods.gg",
@@ -3412,6 +3431,10 @@ true
 true
 false
 false
+false
+true
+false
+true
 false",
     );
 }

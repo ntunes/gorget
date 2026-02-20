@@ -83,17 +83,16 @@ impl CodegenContext<'_> {
 
     // ─── Type Definitions ────────────────────────────────────
 
-    /// Emit all type definitions (structs, enums).
-    /// Non-pointer-safe generic enum instances (e.g. `Option[UserStruct]`) that appear
-    /// as struct fields are interleaved into the topological sort so they're defined
-    /// before the struct that contains them.
+    /// Emit all type definitions (structs, enums, type aliases, newtypes, traits).
+    /// Structs and non-generic enums are topologically sorted together so that
+    /// an enum embedding a struct by value (e.g. `Token` with `TkString(StringLiteral)`)
+    /// is emitted after the struct it depends on.
     pub fn emit_type_definitions(&mut self, module: &crate::parser::ast::Module, emitter: &mut CEmitter) {
         emitter.emit_line("// ── Type Definitions ──");
 
-        // Emit non-struct types first (enums, type aliases, newtypes, traits) in original order
+        // Emit type aliases, newtypes, and traits first (no by-value embedding issues)
         for item in &module.items {
             match &item.node {
-                Item::Enum(e) => self.emit_enum_def(e, emitter),
                 Item::TypeAlias(a) => self.emit_type_alias(a, emitter),
                 Item::Newtype(nt) => self.emit_newtype(nt, emitter),
                 Item::Trait(t) => self.emit_trait_def(t, emitter),
@@ -101,25 +100,48 @@ impl CodegenContext<'_> {
             }
         }
 
-        // Collect eligible struct defs and their indices for dependency analysis
-        let mut struct_defs: Vec<&StructDef> = Vec::new();
+        // Unified type def tracking for topological sort of structs + enums
+        enum TypeDefEntry<'a> {
+            Struct(&'a StructDef),
+            Enum(&'a EnumDef),
+        }
+
+        let mut type_defs: Vec<TypeDefEntry> = Vec::new();
         let mut name_to_idx: HashMap<String, usize> = HashMap::new();
         for item in &module.items {
-            if let Item::Struct(s) = &item.node {
-                if s.generic_params.is_none() && s.span != crate::span::Span::dummy() {
-                    name_to_idx.insert(s.name.node.clone(), struct_defs.len());
-                    struct_defs.push(s);
+            match &item.node {
+                Item::Struct(s) if s.generic_params.is_none() && s.span != crate::span::Span::dummy() => {
+                    name_to_idx.insert(s.name.node.clone(), type_defs.len());
+                    type_defs.push(TypeDefEntry::Struct(s));
                 }
+                Item::Enum(e) if e.generic_params.is_none() => {
+                    name_to_idx.insert(e.name.node.clone(), type_defs.len());
+                    type_defs.push(TypeDefEntry::Enum(e));
+                }
+                _ => {}
             }
         }
 
-        // Build dependency graph: deps[i] = set of indices that struct i depends on
-        let n = struct_defs.len();
+        // Build dependency graph
+        let n = type_defs.len();
         let mut deps: Vec<Vec<usize>> = vec![Vec::new(); n];
-        for (i, s) in struct_defs.iter().enumerate() {
+        for (i, td) in type_defs.iter().enumerate() {
             let mut dep_names = Vec::new();
-            for field in &s.fields {
-                Self::collect_value_type_dep_names(&field.node.type_.node, &mut dep_names);
+            match td {
+                TypeDefEntry::Struct(s) => {
+                    for field in &s.fields {
+                        Self::collect_value_type_dep_names(&field.node.type_.node, &mut dep_names);
+                    }
+                }
+                TypeDefEntry::Enum(e) => {
+                    for variant in &e.variants {
+                        if let VariantFields::Tuple(types) = &variant.node.fields {
+                            for ty in types {
+                                Self::collect_value_type_dep_names(&ty.node, &mut dep_names);
+                            }
+                        }
+                    }
+                }
             }
             for dep_name in &dep_names {
                 if let Some(&j) = name_to_idx.get(dep_name) {
@@ -131,18 +153,7 @@ impl CodegenContext<'_> {
         }
 
         // Topological sort (Kahn's algorithm)
-        let mut in_degree = vec![0usize; n];
-        for d in &deps {
-            for &j in d {
-                in_degree[j] += 1;
-            }
-        }
-        // Wait — in_degree here counts how many structs depend on j (reverse edges).
-        // For Kahn's we need in_degree[i] = number of i's dependencies = deps[i].len()
-        // and we process nodes with 0 dependencies first.
-        // Actually the edge direction matters: edge i→j means "i depends on j", so j
-        // must come before i. Kahn's on a DAG: in_degree[node] = number of incoming
-        // edges = number of nodes that must come before it = its dependency count.
+        // in_degree[i] = number of i's dependencies
         let mut in_degree = vec![0usize; n];
         for (i, d) in deps.iter().enumerate() {
             in_degree[i] = d.len();
@@ -174,33 +185,12 @@ impl CodegenContext<'_> {
             }
         }
 
-        // Emit structs in topological order, interleaving non-pointer-safe
-        // generic enum instances (e.g. Option[Color]) before the struct that
-        // needs them. The topo sort guarantees the enum's type args (Color)
-        // are already defined at this point.
+        // Emit in topological order, interleaving generic enum instances as needed
         for &idx in &sorted_indices {
-            let mut enum_deps = Vec::new();
-            for field in &struct_defs[idx].fields {
-                self.collect_field_generic_enum_deps(&field.node.type_.node, &mut enum_deps);
-            }
-            for (mangled, base_name, c_type_args) in &enum_deps {
-                if !self.emitted_in_type_defs.contains(mangled) {
-                    if let Some(template) = self.generic_enum_templates.get(base_name).cloned() {
-                        self.emit_monomorphized_enum(&template, c_type_args, mangled, emitter);
-                        self.emitted_in_type_defs.insert(mangled.clone());
-                    }
-                }
-            }
-            self.emit_struct_def(struct_defs[idx], emitter);
-        }
-
-        // Emit any remaining structs (cycles — shouldn't happen but be safe)
-        if sorted_indices.len() < n {
-            let sorted_set: HashSet<usize> = sorted_indices.iter().copied().collect();
-            for i in 0..n {
-                if !sorted_set.contains(&i) {
+            match &type_defs[idx] {
+                TypeDefEntry::Struct(s) => {
                     let mut enum_deps = Vec::new();
-                    for field in &struct_defs[i].fields {
+                    for field in &s.fields {
                         self.collect_field_generic_enum_deps(&field.node.type_.node, &mut enum_deps);
                     }
                     for (mangled, base_name, c_type_args) in &enum_deps {
@@ -211,7 +201,39 @@ impl CodegenContext<'_> {
                             }
                         }
                     }
-                    self.emit_struct_def(struct_defs[i], emitter);
+                    self.emit_struct_def(s, emitter);
+                }
+                TypeDefEntry::Enum(e) => {
+                    self.emit_enum_def(e, emitter);
+                }
+            }
+        }
+
+        // Emit any remaining type defs (cycles — shouldn't happen but be safe)
+        if sorted_indices.len() < n {
+            let sorted_set: HashSet<usize> = sorted_indices.iter().copied().collect();
+            for i in 0..n {
+                if !sorted_set.contains(&i) {
+                    match &type_defs[i] {
+                        TypeDefEntry::Struct(s) => {
+                            let mut enum_deps = Vec::new();
+                            for field in &s.fields {
+                                self.collect_field_generic_enum_deps(&field.node.type_.node, &mut enum_deps);
+                            }
+                            for (mangled, base_name, c_type_args) in &enum_deps {
+                                if !self.emitted_in_type_defs.contains(mangled) {
+                                    if let Some(template) = self.generic_enum_templates.get(base_name).cloned() {
+                                        self.emit_monomorphized_enum(&template, c_type_args, mangled, emitter);
+                                        self.emitted_in_type_defs.insert(mangled.clone());
+                                    }
+                                }
+                            }
+                            self.emit_struct_def(s, emitter);
+                        }
+                        TypeDefEntry::Enum(e) => {
+                            self.emit_enum_def(e, emitter);
+                        }
+                    }
                 }
             }
         }

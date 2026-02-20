@@ -1,4 +1,4 @@
-use crate::lexer::token::{StringKind, StringLit, StringSegment};
+use crate::lexer::token::{StringKind, StringLiteral, StringSegment};
 use crate::parser::ast::*;
 use crate::span::Spanned;
 
@@ -1523,7 +1523,7 @@ impl Formatter {
 
     // ── String formatting ───────────────────────────────────
 
-    fn format_string_lit(&mut self, s: &StringLit) {
+    fn format_string_lit(&mut self, s: &StringLiteral) {
         match s.kind {
             StringKind::Raw => self.emitter.write("r\""),
             StringKind::Byte => self.emitter.write("b\""),

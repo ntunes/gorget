@@ -1,0 +1,290 @@
+from lexer import lex_tokenize, SpannedToken, Token, Keyword, StringLiteral, StringSegment, StringKind
+from std.collections import Vector
+from std.conv import int_to_str, float_to_str, char_to_str
+
+# Helper to describe a token for test output
+str describe_token(Token t):
+    match t:
+        case TkKeyword(kw):
+            return describe_keyword(kw)
+        case TkIdentifier(name):
+            return "ident:" + name
+        case TkInt(n):
+            return "int:" + int_to_str(n)
+        case TkFloat(f):
+            return "float:" + float_to_str(f)
+        case TkString(slit):
+            return describe_string(slit)
+        case TkChar(c):
+            return "char:" + char_to_str(c)
+        case TkBool(b):
+            if b:
+                return "bool:true"
+            return "bool:false"
+        case TkPlus():
+            return "+"
+        case TkMinus():
+            return "-"
+        case TkStar():
+            return "*"
+        case TkSlash():
+            return "/"
+        case TkPercent():
+            return "%"
+        case TkEq():
+            return "="
+        case TkLt():
+            return "<"
+        case TkGt():
+            return ">"
+        case TkBang():
+            return "!"
+        case TkAmpersand():
+            return "&"
+        case TkPipe():
+            return "|"
+        case TkCaret():
+            return "^"
+        case TkTilde():
+            return "~"
+        case TkDot():
+            return "."
+        case TkQuestion():
+            return "?"
+        case TkAt():
+            return "@"
+        case TkUnderscore():
+            return "_"
+        case TkEqEq():
+            return "=="
+        case TkBangEq():
+            return "!="
+        case TkLtEq():
+            return "<="
+        case TkGtEq():
+            return ">="
+        case TkLtLt():
+            return "<<"
+        case TkGtGt():
+            return ">>"
+        case TkLtLtEq():
+            return "<<="
+        case TkGtGtEq():
+            return ">>="
+        case TkAmpEq():
+            return "&="
+        case TkPipeEq():
+            return "|="
+        case TkCaretEq():
+            return "^="
+        case TkPlusEq():
+            return "+="
+        case TkArrow():
+            return "->"
+        case TkMinusEq():
+            return "-="
+        case TkStarEq():
+            return "*="
+        case TkSlashEq():
+            return "/="
+        case TkPercentEq():
+            return "%="
+        case TkPlusPercent():
+            return "+%"
+        case TkMinusPercent():
+            return "-%"
+        case TkStarPercent():
+            return "*%"
+        case TkPlusPercentEq():
+            return "+%="
+        case TkMinusPercentEq():
+            return "-%="
+        case TkStarPercentEq():
+            return "*%="
+        case TkDotDot():
+            return ".."
+        case TkDotDotEq():
+            return "..="
+        case TkQuestionDot():
+            return "?."
+        case TkDoubleQuestion():
+            return "??"
+        case TkLParen():
+            return "("
+        case TkRParen():
+            return ")"
+        case TkLBracket():
+            return "["
+        case TkRBracket():
+            return "]"
+        case TkLBrace():
+            return "lbrace"
+        case TkRBrace():
+            return "rbrace"
+        case TkColon():
+            return ":"
+        case TkComma():
+            return ","
+        case TkIndent():
+            return "INDENT"
+        case TkDedent():
+            return "DEDENT"
+        case TkNewline():
+            return "NL"
+        case TkDocComment(text):
+            return "doc:" + text
+        case TkComment(text):
+            return "comment:" + text
+        case TkEof():
+            return "EOF"
+        case TkError(msg):
+            return "error:" + msg
+    return "?"
+
+str describe_keyword(Keyword kw):
+    match kw:
+        case KwInt():
+            return "kw:int"
+        case KwFloat():
+            return "kw:float"
+        case KwBool():
+            return "kw:bool"
+        case KwChar():
+            return "kw:char"
+        case KwStr():
+            return "kw:str"
+        case KwVoid():
+            return "kw:void"
+        case KwAuto():
+            return "kw:auto"
+        case KwIf():
+            return "kw:if"
+        case KwElif():
+            return "kw:elif"
+        case KwElse():
+            return "kw:else"
+        case KwFor():
+            return "kw:for"
+        case KwWhile():
+            return "kw:while"
+        case KwReturn():
+            return "kw:return"
+        case KwStruct():
+            return "kw:struct"
+        case KwEnum():
+            return "kw:enum"
+        case KwTrait():
+            return "kw:trait"
+        case KwEquip():
+            return "kw:equip"
+        case KwImport():
+            return "kw:import"
+        case KwFrom():
+            return "kw:from"
+        case KwAnd():
+            return "kw:and"
+        case KwOr():
+            return "kw:or"
+        case KwNot():
+            return "kw:not"
+        case KwTrue():
+            return "kw:true"
+        case KwFalse():
+            return "kw:false"
+        case KwNone():
+            return "kw:None"
+        case KwSome():
+            return "kw:Some"
+        case KwIn():
+            return "kw:in"
+        case KwMatch():
+            return "kw:match"
+        case KwCase():
+            return "kw:case"
+        case KwConst():
+            return "kw:const"
+        case KwPass():
+            return "kw:pass"
+        case KwBreak():
+            return "kw:break"
+        case KwContinue():
+            return "kw:continue"
+        case KwSelfLower():
+            return "kw:self"
+        else:
+            return "kw:other"
+
+str describe_string(StringLiteral slit):
+    str result = "str:"
+    int i = 0
+    while i < slit.lex_segments.len():
+        StringSegment seg = slit.lex_segments.get(i).unwrap()
+        match seg:
+            case SegLiteral(text):
+                result = result + text
+            case SegInterpolation(expr):
+                result = result + "{{" + expr + "}}"
+        i = i + 1
+    return result
+
+str tokens_to_str(Vector[SpannedToken] tokens):
+    str result = ""
+    int i = 0
+    while i < tokens.len():
+        SpannedToken st = tokens.get(i).unwrap()
+        if i > 0:
+            result = result + " "
+        result = result + describe_token(st.lex_token)
+        i = i + 1
+    return result
+
+void main():
+    # Test 1: Simple variable declaration
+    str src1 = "int x = 42\n"
+    auto toks1 = lex_tokenize(src1)
+    print(tokens_to_str(toks1))
+
+    # Test 2: Function definition with indentation
+    str src2 = "int add(int a, int b):\n    return a + b\n"
+    auto toks2 = lex_tokenize(src2)
+    print(tokens_to_str(toks2))
+
+    # Test 3: Operators
+    str src3 = "x == y != z <= w >= v\n"
+    auto toks3 = lex_tokenize(src3)
+    print(tokens_to_str(toks3))
+
+    # Test 4: Hex, octal, binary literals
+    str src4 = "0xFF 0o77 0b1010 3.14\n"
+    auto toks4 = lex_tokenize(src4)
+    print(tokens_to_str(toks4))
+
+    # Test 5: String with interpolation
+    str src5 = "print(\"hello \{name\}\")\n"
+    auto toks5 = lex_tokenize(src5)
+    print(tokens_to_str(toks5))
+
+    # Test 6: Char literal
+    str src6 = "char c = 'a'\n"
+    auto toks6 = lex_tokenize(src6)
+    print(tokens_to_str(toks6))
+
+    # Test 7: Comment handling
+    str src7 = "# this is a comment\nx = 1\n"
+    auto toks7 = lex_tokenize(src7)
+    print(tokens_to_str(toks7))
+
+    # Test 8: Bracket depth suppresses newlines
+    str src8 = "f(a,\n  b)\n"
+    auto toks8 = lex_tokenize(src8)
+    print(tokens_to_str(toks8))
+
+    # Test 9: Multi-char operators
+    str src9 = "a += 1\nb -= 2\nc ..= d\n"
+    auto toks9 = lex_tokenize(src9)
+    print(tokens_to_str(toks9))
+
+    # Test 10: Keywords
+    str src10 = "if true and not false:\n    return None\n"
+    auto toks10 = lex_tokenize(src10)
+    print(tokens_to_str(toks10))

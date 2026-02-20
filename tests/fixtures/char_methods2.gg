@@ -16,3 +16,10 @@ void main():
     # digits are neither upper nor lower
     print("{c3.is_upper()}")
     print("{c3.is_lower()}")
+
+    # is_hex_digit
+    print("{c1.is_hex_digit()}")
+    print("{c2.is_hex_digit()}")
+    print("{c3.is_hex_digit()}")
+    char c4 = 'G'
+    print("{c4.is_hex_digit()}")

@@ -535,7 +535,7 @@ pub enum Token {
     // Literals
     IntLiteral(i64),
     FloatLiteral(f64),
-    StringLiteral(StringLit),
+    StringLiteral(StringLiteral),
     CharLiteral(char),
     BoolLiteral(bool),
 
@@ -690,12 +690,12 @@ impl fmt::Display for Token {
 
 /// A processed string literal with possible interpolation segments.
 #[derive(Debug, Clone, PartialEq)]
-pub struct StringLit {
+pub struct StringLiteral {
     pub kind: StringKind,
     pub segments: Vec<StringSegment>,
 }
 
-impl StringLit {
+impl StringLiteral {
     /// Extract the plain text content, ignoring any interpolation segments.
     pub fn as_plain_text(&self) -> String {
         self.segments

@@ -448,7 +448,7 @@ mod tests {
                             name: None,
                             ownership: Ownership::Borrow,
                             value: Spanned::new(Expr::StringLiteral(
-                                crate::lexer::token::StringLit {
+                                crate::lexer::token::StringLiteral {
                                 kind: crate::lexer::token::StringKind::Normal,
                                 segments: vec![crate::lexer::token::StringSegment::Literal("hi".to_string())],
                             }
