@@ -4576,6 +4576,21 @@ fn build_gg_dir(dir_name: &str, main_file: &str) -> (PathBuf, PathBuf) {
 }
 
 /// Canonical Rust-side string literal formatter matching the Gorget describe_string_canonical.
+fn escape_canonical_rust(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\n' => result.push_str("\\n"),
+            '\r' => result.push_str("\\r"),
+            '\t' => result.push_str("\\t"),
+            '\0' => result.push_str("\\0"),
+            '\\' => result.push_str("\\\\"),
+            _ => result.push(c),
+        }
+    }
+    result
+}
+
 fn describe_string_canonical_rust(slit: &StringLiteral) -> String {
     let prefix = match slit.kind {
         StringKind::Normal => "str:",
@@ -4586,7 +4601,7 @@ fn describe_string_canonical_rust(slit: &StringLiteral) -> String {
     let mut result = prefix.to_string();
     for seg in &slit.segments {
         match seg {
-            StringSegment::Literal(text) => result.push_str(text),
+            StringSegment::Literal(text) => result.push_str(&escape_canonical_rust(text)),
             StringSegment::Interpolation(expr) => {
                 result.push('{');
                 result.push_str(expr);
@@ -4605,7 +4620,9 @@ fn describe_token_canonical_rust(token: &Token) -> String {
         Token::IntLiteral(n) => format!("int:{n}"),
         Token::FloatLiteral(n) => format!("float:{n}"),
         Token::StringLiteral(slit) => describe_string_canonical_rust(slit),
-        Token::CharLiteral(c) => format!("char:{c}"),
+        Token::CharLiteral(c) => {
+            format!("char:{}", escape_canonical_rust(&c.to_string()))
+        }
         Token::BoolLiteral(b) => format!("bool:{b}"),
         Token::Plus => "+".into(),
         Token::Minus => "-".into(),

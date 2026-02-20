@@ -5,6 +5,28 @@
 from lexer import Token, Keyword, StringLiteral, StringSegment, StringKind
 from std.conv import int_to_str, float_to_str, char_to_str
 
+str escape_char_canonical(char c):
+    if c == '\n':
+        return "\\n"
+    if c == '\r':
+        return "\\r"
+    if c == '\t':
+        return "\\t"
+    if c == '\0':
+        return "\\0"
+    if c == '\\':
+        return "\\\\"
+    return char_to_str(c)
+
+str escape_canonical(str s):
+    str result = ""
+    int i = 0
+    while i < s.len():
+        char c = s[i]
+        result = result + escape_char_canonical(c)
+        i = i + 1
+    return result
+
 str describe_keyword_canonical(Keyword kw):
     match kw:
         case KwInt():
@@ -200,7 +222,7 @@ str describe_string_canonical(StringLiteral slit):
         StringSegment seg = slit.lex_segments.get(i).unwrap()
         match seg:
             case SegLiteral(text):
-                result = result + text
+                result = result + escape_canonical(text)
             case SegInterpolation(expr):
                 result = result + "\{" + expr + "\}"
         i = i + 1
@@ -219,7 +241,7 @@ str describe_token_canonical(Token t):
         case TkString(slit):
             return describe_string_canonical(slit)
         case TkChar(c):
-            return "char:" + char_to_str(c)
+            return "char:" + escape_char_canonical(c)
         case TkBool(b):
             if b:
                 return "bool:true"
