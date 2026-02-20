@@ -191,6 +191,7 @@ struct RecvSegment:
 
 struct ReliableStream:
     int stream_id
+    int remote_stream_id    # peer's local stream ID (0 until SYN-ACK)
     str peer_hex
     int state              # 0=CLOSED, 1=SYN_SENT, 2=SYN_RECEIVED, 3=ESTABLISHED, 4=FIN_WAIT, 5=CLOSE_WAIT
     int local_seq
@@ -616,13 +617,15 @@ void p2p_publish(Node &node, str topic, Vector[uint8] data):
         i = i + 1
 
 # ── Reliable Streams ────────────────────────────────────────
-# MSS = 1200 bytes (fits in IPv6 min MTU with GG01 header)
+# Each stream is identified by a (local_id, remote_id) pair.
+# After handshake, all packets carry (receiver_sid, sender_sid).
+# MSS = 1196 bytes plain, 1168 encrypted (fits in IPv6 min MTU with GG01 header + dual IDs)
 # msg_type 50=RELIABLE_DATA, 51=RELIABLE_ACK, 52=RELIABLE_SYN,
 #          53=RELIABLE_SYN_ACK, 54=RELIABLE_FIN, 55=RELIABLE_FIN_ACK
 
-ReliableStream p2p_new_stream(int stream_id, str peer_hex, int initial_state):
+ReliableStream p2p_new_stream(int stream_id, int remote_stream_id, str peer_hex, int initial_state):
     return ReliableStream(
-        stream_id, peer_hex, initial_state,
+        stream_id, remote_stream_id, peer_hex, initial_state,
         0, 0, 0, 0,
         Vector[SendSegment](), Vector[uint8](), Vector[RecvSegment](), Vector[uint8](),
         0, 0, 1000,
@@ -645,7 +648,7 @@ int p2p_find_stream(Node &node, int stream_id):
 
 # ── Payload encode/decode ──────────────────────────────────
 
-# RELIABLE_SYN (52): [4B stream_id] [4B initial_seq] [1B flags] [32B pubkey if flags & 0x01]
+# RELIABLE_SYN (52): [4B initiator_sid] [4B initial_seq] [1B flags] [32B pubkey if flags & 0x01]
 Vector[uint8] p2p_encode_syn_payload(int stream_id, int initial_seq):
     Vector[uint8] buf = p2p_make_u32(stream_id)
     buf = bytes_concat(buf, p2p_make_u32(initial_seq))
@@ -669,25 +672,28 @@ Vector[uint8] p2p_encode_syn_auth_payload(int stream_id, int initial_seq, Vector
     buf = bytes_concat(buf, signature)
     return buf
 
-# RELIABLE_SYN_ACK (53): [4B stream_id] [4B responder_isn] [4B ack_isn] [1B flags] [32B pubkey if flags & 0x01]
-Vector[uint8] p2p_encode_syn_ack_payload(int stream_id, int responder_isn, int ack_isn):
-    Vector[uint8] buf = p2p_make_u32(stream_id)
+# RELIABLE_SYN_ACK (53): [4B responder_sid] [4B initiator_sid] [4B responder_isn] [4B ack_isn] [1B flags] [32B pubkey if flags & 0x01]
+Vector[uint8] p2p_encode_syn_ack_payload(int responder_sid, int initiator_sid, int responder_isn, int ack_isn):
+    Vector[uint8] buf = p2p_make_u32(responder_sid)
+    buf = bytes_concat(buf, p2p_make_u32(initiator_sid))
     buf = bytes_concat(buf, p2p_make_u32(responder_isn))
     buf = bytes_concat(buf, p2p_make_u32(ack_isn))
     buf = bytes_concat(buf, p2p_make_byte(0))
     return buf
 
-Vector[uint8] p2p_encode_syn_ack_encrypted_payload(int stream_id, int responder_isn, int ack_isn, Vector[uint8] pubkey):
-    Vector[uint8] buf = p2p_make_u32(stream_id)
+Vector[uint8] p2p_encode_syn_ack_encrypted_payload(int responder_sid, int initiator_sid, int responder_isn, int ack_isn, Vector[uint8] pubkey):
+    Vector[uint8] buf = p2p_make_u32(responder_sid)
+    buf = bytes_concat(buf, p2p_make_u32(initiator_sid))
     buf = bytes_concat(buf, p2p_make_u32(responder_isn))
     buf = bytes_concat(buf, p2p_make_u32(ack_isn))
     buf = bytes_concat(buf, p2p_make_byte(1))
     buf = bytes_concat(buf, pubkey)
     return buf
 
-# Authenticated SYN-ACK: [4B stream_id] [4B responder_isn] [4B ack_isn] [1B flags=0x03] [32B X25519] [32B Ed25519] [64B sig]
-Vector[uint8] p2p_encode_syn_ack_auth_payload(int stream_id, int responder_isn, int ack_isn, Vector[uint8] ephemeral_pub, Vector[uint8] ed25519_pub, Vector[uint8] signature):
-    Vector[uint8] buf = p2p_make_u32(stream_id)
+# Authenticated SYN-ACK: [4B responder_sid] [4B initiator_sid] [4B responder_isn] [4B ack_isn] [1B flags=0x03] [32B X25519] [32B Ed25519] [64B sig]
+Vector[uint8] p2p_encode_syn_ack_auth_payload(int responder_sid, int initiator_sid, int responder_isn, int ack_isn, Vector[uint8] ephemeral_pub, Vector[uint8] ed25519_pub, Vector[uint8] signature):
+    Vector[uint8] buf = p2p_make_u32(responder_sid)
+    buf = bytes_concat(buf, p2p_make_u32(initiator_sid))
     buf = bytes_concat(buf, p2p_make_u32(responder_isn))
     buf = bytes_concat(buf, p2p_make_u32(ack_isn))
     buf = bytes_concat(buf, p2p_make_byte(3))
@@ -696,16 +702,18 @@ Vector[uint8] p2p_encode_syn_ack_auth_payload(int stream_id, int responder_isn, 
     buf = bytes_concat(buf, signature)
     return buf
 
-# RELIABLE_DATA (50): [4B stream_id] [4B seq_num] [data...]
-Vector[uint8] p2p_encode_data_payload(int stream_id, int seq_num, Vector[uint8] data):
-    Vector[uint8] buf = p2p_make_u32(stream_id)
+# RELIABLE_DATA (50): [4B receiver_sid] [4B sender_sid] [4B seq_num] [data...]
+Vector[uint8] p2p_encode_data_payload(int receiver_sid, int sender_sid, int seq_num, Vector[uint8] data):
+    Vector[uint8] buf = p2p_make_u32(receiver_sid)
+    buf = bytes_concat(buf, p2p_make_u32(sender_sid))
     buf = bytes_concat(buf, p2p_make_u32(seq_num))
     buf = bytes_concat(buf, data)
     return buf
 
-# RELIABLE_ACK (51): [4B stream_id] [4B cum_ack] [4B recv_window] [1B num_sacks] [8B*N sack_blocks]
-Vector[uint8] p2p_encode_ack_payload(int stream_id, int cum_ack, int recv_window, Vector[SACKBlock] sacks):
-    Vector[uint8] buf = p2p_make_u32(stream_id)
+# RELIABLE_ACK (51): [4B receiver_sid] [4B sender_sid] [4B cum_ack] [4B recv_window] [1B num_sacks] [8B*N sack_blocks]
+Vector[uint8] p2p_encode_ack_payload(int receiver_sid, int sender_sid, int cum_ack, int recv_window, Vector[SACKBlock] sacks):
+    Vector[uint8] buf = p2p_make_u32(receiver_sid)
+    buf = bytes_concat(buf, p2p_make_u32(sender_sid))
     buf = bytes_concat(buf, p2p_make_u32(cum_ack))
     buf = bytes_concat(buf, p2p_make_u32(recv_window))
     int num_sacks = sacks.len()
@@ -720,15 +728,17 @@ Vector[uint8] p2p_encode_ack_payload(int stream_id, int cum_ack, int recv_window
         i = i + 1
     return buf
 
-# RELIABLE_FIN (54): [4B stream_id] [4B final_seq]
-Vector[uint8] p2p_encode_fin_payload(int stream_id, int final_seq):
-    Vector[uint8] buf = p2p_make_u32(stream_id)
+# RELIABLE_FIN (54): [4B receiver_sid] [4B sender_sid] [4B final_seq]
+Vector[uint8] p2p_encode_fin_payload(int receiver_sid, int sender_sid, int final_seq):
+    Vector[uint8] buf = p2p_make_u32(receiver_sid)
+    buf = bytes_concat(buf, p2p_make_u32(sender_sid))
     buf = bytes_concat(buf, p2p_make_u32(final_seq))
     return buf
 
-# RELIABLE_FIN_ACK (55): [4B stream_id] [4B ack_seq]
-Vector[uint8] p2p_encode_fin_ack_payload(int stream_id, int ack_seq):
-    Vector[uint8] buf = p2p_make_u32(stream_id)
+# RELIABLE_FIN_ACK (55): [4B receiver_sid] [4B sender_sid] [4B ack_seq]
+Vector[uint8] p2p_encode_fin_ack_payload(int receiver_sid, int sender_sid, int ack_seq):
+    Vector[uint8] buf = p2p_make_u32(receiver_sid)
+    buf = bytes_concat(buf, p2p_make_u32(sender_sid))
     buf = bytes_concat(buf, p2p_make_u32(ack_seq))
     return buf
 
@@ -780,7 +790,7 @@ Result[int, str] p2p_stream_open(Node &node, str peer_hex):
         return Error("unknown peer")
     int sid = node.next_stream_id
     node.next_stream_id = node.next_stream_id + 1
-    ReliableStream s = p2p_new_stream(sid, peer_hex, 1)
+    ReliableStream s = p2p_new_stream(sid, 0, peer_hex, 1)
     s.local_seq = 1
     s.local_initial_seq = 0
     s.syn_send_ms = time_ms()
@@ -801,7 +811,7 @@ Result[int, str] p2p_stream_open_encrypted(Node &node, str peer_hex):
     X25519KeyPair ekp = crypto_x25519_keygen().unwrap()
     Vector[uint8] epub = ekp.public_key()
     Vector[uint8] epriv = ekp.private_key()
-    ReliableStream s = p2p_new_stream(sid, peer_hex, 1)
+    ReliableStream s = p2p_new_stream(sid, 0, peer_hex, 1)
     s.local_seq = 1
     s.local_initial_seq = 0
     s.syn_send_ms = time_ms()
@@ -850,22 +860,23 @@ void p2p_stream_accept(Node &node, int stream_id):
     str peer = s.peer_hex
     int remote_isn = s.remote_initial_seq
     int sid = s.stream_id
+    int remote_sid = s.remote_stream_id
     bool is_enc = s.encrypted
     bool is_auth = s.authenticated
     Vector[uint8] our_pub = bytes_slice(s.local_ephemeral_pub, 0, s.local_ephemeral_pub.len())
     node.streams.push(!s)
-    # Send SYN-ACK
+    # Send SYN-ACK with both IDs: (our sid, initiator's remote_sid)
     if is_auth:
         # Authenticated: sign our ephemeral key and include Ed25519 pubkey
         Vector[uint8] sig = crypto_ed25519_sign(node.identity.private_key, our_pub).unwrap()
-        Vector[uint8] payload = p2p_encode_syn_ack_auth_payload(sid, 0, remote_isn + 1, our_pub, node.identity.public_key, sig)
+        Vector[uint8] payload = p2p_encode_syn_ack_auth_payload(sid, remote_sid, 0, remote_isn + 1, our_pub, node.identity.public_key, sig)
         p2p_stream_send_raw(&node, peer, 53, payload)
     elif is_enc:
         # Encrypted only (no auth)
-        Vector[uint8] payload = p2p_encode_syn_ack_encrypted_payload(sid, 0, remote_isn + 1, our_pub)
+        Vector[uint8] payload = p2p_encode_syn_ack_encrypted_payload(sid, remote_sid, 0, remote_isn + 1, our_pub)
         p2p_stream_send_raw(&node, peer, 53, payload)
     else:
-        Vector[uint8] payload = p2p_encode_syn_ack_payload(sid, 0, remote_isn + 1)
+        Vector[uint8] payload = p2p_encode_syn_ack_payload(sid, remote_sid, 0, remote_isn + 1)
         p2p_stream_send_raw(&node, peer, 53, payload)
 
 void p2p_stream_close(Node &node, int stream_id):
@@ -881,9 +892,10 @@ void p2p_stream_close(Node &node, int stream_id):
     str peer = s.peer_hex
     int final_seq = s.local_seq
     int sid = s.stream_id
+    int remote_sid = s.remote_stream_id
     node.streams.push(!s)
-    # Send FIN
-    Vector[uint8] payload = p2p_encode_fin_payload(sid, final_seq)
+    # Send FIN with dual IDs
+    Vector[uint8] payload = p2p_encode_fin_payload(remote_sid, sid, final_seq)
     p2p_stream_send_raw(&node, peer, 54, payload)
 
 # ── Handle incoming SYN (52) ──────────────────────────────
@@ -891,14 +903,20 @@ void p2p_stream_close(Node &node, int stream_id):
 P2PEvent p2p_handle_syn(Node &node, str sender_hex, Vector[uint8] payload):
     if payload.len() < 8:
         return p2p_no_event()
-    int stream_id = bytes_read_u32_be(payload, 0)
+    int initiator_sid = bytes_read_u32_be(payload, 0)
     int initial_seq = bytes_read_u32_be(payload, 4)
-    # Bump next_stream_id past the remote ID to prevent collisions
-    # when both sides open streams independently
-    if stream_id >= node.next_stream_id:
-        node.next_stream_id = stream_id + 1
-    # Create stream in SYN_RECEIVED state
-    ReliableStream s = p2p_new_stream(stream_id, sender_hex, 2)
+    # Duplicate SYN detection: same (peer_hex, remote_stream_id) pair
+    int di = 0
+    while di < node.streams.len():
+        ReliableStream ds = node.streams.get(di).unwrap()
+        if ds.peer_hex == sender_hex and ds.remote_stream_id == initiator_sid:
+            return p2p_no_event()
+        di = di + 1
+    # Assign our own local stream ID (independent from initiator's)
+    int local_sid = node.next_stream_id
+    node.next_stream_id = node.next_stream_id + 1
+    # Create stream with our local ID, store initiator's as remote_stream_id
+    ReliableStream s = p2p_new_stream(local_sid, initiator_sid, sender_hex, 2)
     s.remote_initial_seq = initial_seq
     s.remote_seq_acked = initial_seq + 1
     # Check flags byte at offset 8
@@ -945,19 +963,21 @@ P2PEvent p2p_handle_syn(Node &node, str sender_hex, Vector[uint8] payload):
             s.tx_key = bytes_slice(keys, 0, 32)
             s.rx_key = bytes_slice(keys, 32, 64)
     node.streams.push(!s)
-    # Return STREAM_SYN event with stream_id in data
-    Vector[uint8] ev_data = p2p_make_u32(stream_id)
+    # Return STREAM_SYN event with our local stream_id in data
+    Vector[uint8] ev_data = p2p_make_u32(local_sid)
     return P2PEvent(8, PeerId(Vector[uint8]()), ev_data, "")
 
 # ── Handle incoming SYN-ACK (53) ──────────────────────────
 
 P2PEvent p2p_handle_syn_ack(Node &node, str sender_hex, Vector[uint8] payload):
-    if payload.len() < 12:
+    if payload.len() < 16:
         return p2p_no_event()
-    int stream_id = bytes_read_u32_be(payload, 0)
-    int responder_isn = bytes_read_u32_be(payload, 4)
-    int ack_isn = bytes_read_u32_be(payload, 8)
-    int sidx = p2p_find_stream(&node, stream_id)
+    int responder_sid = bytes_read_u32_be(payload, 0)
+    int initiator_sid = bytes_read_u32_be(payload, 4)
+    int responder_isn = bytes_read_u32_be(payload, 8)
+    int ack_isn = bytes_read_u32_be(payload, 12)
+    # Look up by OUR local ID (initiator_sid is ours)
+    int sidx = p2p_find_stream(&node, initiator_sid)
     if sidx < 0:
         return p2p_no_event()
     ReliableStream s = node.streams.remove(sidx).unwrap()
@@ -967,17 +987,19 @@ P2PEvent p2p_handle_syn_ack(Node &node, str sender_hex, Vector[uint8] payload):
     s.state = 3
     s.remote_initial_seq = responder_isn
     s.remote_seq_acked = responder_isn + 1
-    # Check flags byte at offset 12
-    if s.encrypted and payload.len() >= 13:
-        uint8 flags = payload.get(12).unwrap()
+    # Store the responder's stream ID
+    s.remote_stream_id = responder_sid
+    # Check flags byte at offset 16 (was 12)
+    if s.encrypted and payload.len() >= 17:
+        uint8 flags = payload.get(16).unwrap()
         int flags_int = flags as int
         int auth_bit = flags_int & 2
         int enc_bit = flags_int & 1
-        if auth_bit == 2 and s.authenticated and payload.len() >= 141:
-            # Authenticated SYN-ACK: [13..45] X25519, [45..77] Ed25519, [77..141] signature
-            Vector[uint8] responder_pub = bytes_slice(payload, 13, 45)
-            Vector[uint8] ed25519_pub = bytes_slice(payload, 45, 77)
-            Vector[uint8] signature = bytes_slice(payload, 77, 141)
+        if auth_bit == 2 and s.authenticated and payload.len() >= 145:
+            # Authenticated SYN-ACK: [17..49] X25519, [49..81] Ed25519, [81..145] signature
+            Vector[uint8] responder_pub = bytes_slice(payload, 17, 49)
+            Vector[uint8] ed25519_pub = bytes_slice(payload, 49, 81)
+            Vector[uint8] signature = bytes_slice(payload, 81, 145)
             # Identity check: SHA256(ed25519_pub) must match the peer we intended to connect to
             str computed_hex = bytes_to_hex(crypto_sha256(ed25519_pub))
             if computed_hex != s.peer_hex:
@@ -994,9 +1016,9 @@ P2PEvent p2p_handle_syn_ack(Node &node, str sender_hex, Vector[uint8] payload):
             Vector[uint8] keys = p2p_derive_stream_keys(shared, true)
             s.tx_key = bytes_slice(keys, 0, 32)
             s.rx_key = bytes_slice(keys, 32, 64)
-        elif enc_bit == 1 and payload.len() >= 45:
-            # Encrypted only (Phase 8 backward compat)
-            Vector[uint8] responder_pub = bytes_slice(payload, 13, 45)
+        elif enc_bit == 1 and payload.len() >= 49:
+            # Encrypted only: [17..49] X25519 pubkey
+            Vector[uint8] responder_pub = bytes_slice(payload, 17, 49)
             Vector[uint8] shared = crypto_x25519_dh(s.local_ephemeral_priv, responder_pub).unwrap()
             Vector[uint8] keys = p2p_derive_stream_keys(shared, true)
             s.tx_key = bytes_slice(keys, 0, 32)
@@ -1012,46 +1034,48 @@ P2PEvent p2p_handle_syn_ack(Node &node, str sender_hex, Vector[uint8] payload):
         if s.rto_ms > 60000:
             s.rto_ms = 60000
     node.streams.push(!s)
-    # Return STREAM_CONNECTED event
-    Vector[uint8] ev_data = p2p_make_u32(stream_id)
+    # Return STREAM_CONNECTED event with our local stream_id
+    Vector[uint8] ev_data = p2p_make_u32(initiator_sid)
     return P2PEvent(9, PeerId(Vector[uint8]()), ev_data, "")
 
 # ── Handle incoming FIN (54) ──────────────────────────────
 
 P2PEvent p2p_handle_fin(Node &node, str sender_hex, Vector[uint8] payload):
-    if payload.len() < 8:
+    if payload.len() < 12:
         return p2p_no_event()
-    int stream_id = bytes_read_u32_be(payload, 0)
-    int final_seq = bytes_read_u32_be(payload, 4)
-    int sidx = p2p_find_stream(&node, stream_id)
+    int receiver_sid = bytes_read_u32_be(payload, 0)
+    int sender_sid = bytes_read_u32_be(payload, 4)
+    int final_seq = bytes_read_u32_be(payload, 8)
+    int sidx = p2p_find_stream(&node, receiver_sid)
     if sidx < 0:
         return p2p_no_event()
     ReliableStream s = node.streams.remove(sidx).unwrap()
     s.state = 0
     str peer = s.peer_hex
     int sid = s.stream_id
+    int remote_sid = s.remote_stream_id
     node.streams.push(!s)
-    # Send FIN-ACK
-    Vector[uint8] ack_payload = p2p_encode_fin_ack_payload(sid, final_seq)
+    # Send FIN-ACK: swap IDs (our local → receiver, their local → sender)
+    Vector[uint8] ack_payload = p2p_encode_fin_ack_payload(remote_sid, sid, final_seq)
     p2p_stream_send_raw(&node, peer, 55, ack_payload)
     # Return STREAM_CLOSED event
-    Vector[uint8] ev_data = p2p_make_u32(stream_id)
+    Vector[uint8] ev_data = p2p_make_u32(receiver_sid)
     return P2PEvent(11, PeerId(Vector[uint8]()), ev_data, "")
 
 # ── Handle incoming FIN-ACK (55) ──────────────────────────
 
 P2PEvent p2p_handle_fin_ack(Node &node, str sender_hex, Vector[uint8] payload):
-    if payload.len() < 8:
+    if payload.len() < 12:
         return p2p_no_event()
-    int stream_id = bytes_read_u32_be(payload, 0)
-    int sidx = p2p_find_stream(&node, stream_id)
+    int receiver_sid = bytes_read_u32_be(payload, 0)
+    int sidx = p2p_find_stream(&node, receiver_sid)
     if sidx < 0:
         return p2p_no_event()
     ReliableStream s = node.streams.remove(sidx).unwrap()
     s.state = 0
     node.streams.push(!s)
     # Return STREAM_CLOSED event
-    Vector[uint8] ev_data = p2p_make_u32(stream_id)
+    Vector[uint8] ev_data = p2p_make_u32(receiver_sid)
     return P2PEvent(11, PeerId(Vector[uint8]()), ev_data, "")
 
 # ── Data transfer ──────────────────────────────────────────
@@ -1082,13 +1106,14 @@ void p2p_stream_flush_send(Node &node, int stream_id):
         return
     str peer = s.peer_hex
     int sid = s.stream_id
+    int remote_sid = s.remote_stream_id
     int now = time_ms()
     bool is_enc = s.encrypted
     # Segment and send up to cwnd - flight_size segments
     # Encrypted streams use smaller chunks to account for 28-byte AEAD overhead
-    int mss = 1200
+    int mss = 1196
     if is_enc:
-        mss = 1172
+        mss = 1168
     int can_send = s.cwnd - s.flight_size
     while s.send_queue.len() > 0 and can_send > 0:
         int chunk_size = mss
@@ -1114,8 +1139,8 @@ void p2p_stream_flush_send(Node &node, int stream_id):
             Vector[uint8] nonce = p2p_make_nonce(s.tx_nonce_counter)
             s.tx_nonce_counter = s.tx_nonce_counter + 1
             seg_data = crypto_aes_gcm_encrypt(s.tx_key, nonce, seg_data).unwrap()
-        # Send the segment
-        Vector[uint8] payload = p2p_encode_data_payload(sid, seq, seg_data)
+        # Send the segment with dual IDs
+        Vector[uint8] payload = p2p_encode_data_payload(remote_sid, sid, seq, seg_data)
         p2p_stream_send_raw(&node, peer, 50, payload)
     s.last_send_ms = now
     node.streams.push(!s)
@@ -1133,11 +1158,12 @@ Vector[uint8] p2p_stream_recv(Node &node, int stream_id):
 # ── Handle incoming DATA (50) ─────────────────────────────
 
 void p2p_stream_handle_data(Node &node, str sender_hex, Vector[uint8] payload):
-    if payload.len() < 8:
+    if payload.len() < 12:
         return
-    int stream_id = bytes_read_u32_be(payload, 0)
-    int seq_num = bytes_read_u32_be(payload, 4)
-    int sidx = p2p_find_stream(&node, stream_id)
+    int receiver_sid = bytes_read_u32_be(payload, 0)
+    int sender_sid = bytes_read_u32_be(payload, 4)
+    int seq_num = bytes_read_u32_be(payload, 8)
+    int sidx = p2p_find_stream(&node, receiver_sid)
     if sidx < 0:
         return
     ReliableStream s = node.streams.remove(sidx).unwrap()
@@ -1145,8 +1171,8 @@ void p2p_stream_handle_data(Node &node, str sender_hex, Vector[uint8] payload):
         node.streams.push(!s)
         return
     Vector[uint8] seg_data = Vector[uint8]()
-    if payload.len() > 8:
-        seg_data = bytes_slice(payload, 8, payload.len())
+    if payload.len() > 12:
+        seg_data = bytes_slice(payload, 12, payload.len())
     # Decrypt if encrypted
     if s.encrypted and seg_data.len() > 0:
         seg_data = crypto_aes_gcm_decrypt(s.rx_key, seg_data).unwrap()
@@ -1215,34 +1241,36 @@ void p2p_stream_handle_data(Node &node, str sender_hex, Vector[uint8] payload):
         si = si + 1
     str peer = s.peer_hex
     int sid = s.stream_id
+    int remote_sid = s.remote_stream_id
     int cum_ack = s.remote_seq_acked
     node.streams.push(!s)
-    # Send ACK
-    Vector[uint8] ack_payload = p2p_encode_ack_payload(sid, cum_ack, recv_window, sacks)
+    # Send ACK with dual IDs (receiver_sid = peer's local ID, sender_sid = our ID)
+    Vector[uint8] ack_payload = p2p_encode_ack_payload(remote_sid, sid, cum_ack, recv_window, sacks)
     p2p_stream_send_raw(&node, peer, 51, ack_payload)
 
 # ── Handle incoming ACK (51) ──────────────────────────────
 
 void p2p_stream_handle_ack(Node &node, str sender_hex, Vector[uint8] payload):
-    if payload.len() < 13:
+    if payload.len() < 17:
         return
-    int stream_id = bytes_read_u32_be(payload, 0)
-    int cum_ack = bytes_read_u32_be(payload, 4)
-    int recv_window = bytes_read_u32_be(payload, 8)
-    uint8 num_sacks_byte = payload.get(12).unwrap()
+    int receiver_sid = bytes_read_u32_be(payload, 0)
+    int sender_sid = bytes_read_u32_be(payload, 4)
+    int cum_ack = bytes_read_u32_be(payload, 8)
+    int recv_window = bytes_read_u32_be(payload, 12)
+    uint8 num_sacks_byte = payload.get(16).unwrap()
     int num_sacks = num_sacks_byte as int
     # Parse SACK blocks
     Vector[SACKBlock] sacks = Vector[SACKBlock]()
     int si = 0
     while si < num_sacks and si < 4:
-        int sack_off = 13 + si * 8
+        int sack_off = 17 + si * 8
         if payload.len() >= sack_off + 8:
             int sack_left = bytes_read_u32_be(payload, sack_off)
             int sack_right = bytes_read_u32_be(payload, sack_off + 4)
             SACKBlock sb = SACKBlock(sack_left, sack_right)
             sacks.push(!sb)
         si = si + 1
-    int sidx = p2p_find_stream(&node, stream_id)
+    int sidx = p2p_find_stream(&node, receiver_sid)
     if sidx < 0:
         return
     ReliableStream s = node.streams.remove(sidx).unwrap()
@@ -1325,12 +1353,13 @@ void p2p_stream_handle_ack(Node &node, str sender_hex, Vector[uint8] payload):
                     if not seg.acked:
                         str peer = s.peer_hex
                         int sid = s.stream_id
+                        int remote_sid = s.remote_stream_id
                         Vector[uint8] seg_data = bytes_slice(seg.data, 0, seg.data.len())
                         if s.encrypted:
                             Vector[uint8] nonce = p2p_make_nonce(s.tx_nonce_counter)
                             s.tx_nonce_counter = s.tx_nonce_counter + 1
                             seg_data = crypto_aes_gcm_encrypt(s.tx_key, nonce, seg_data).unwrap()
-                        Vector[uint8] pld = p2p_encode_data_payload(sid, seg.seq_num, seg_data)
+                        Vector[uint8] pld = p2p_encode_data_payload(remote_sid, sid, seg.seq_num, seg_data)
                         p2p_stream_send_raw(&node, peer, 50, pld)
                         SendSegment resent = SendSegment(seg.seq_num, seg.data, now, seg.retransmit_count + 1, false)
                         s.send_buffer.set(ri, !resent)
@@ -1368,12 +1397,13 @@ void p2p_stream_tick(Node &node):
                         # Timeout retransmit
                         str peer = s.peer_hex
                         int sid = s.stream_id
+                        int remote_sid = s.remote_stream_id
                         Vector[uint8] seg_data = bytes_slice(seg.data, 0, seg.data.len())
                         if s.encrypted:
                             Vector[uint8] nonce = p2p_make_nonce(s.tx_nonce_counter)
                             s.tx_nonce_counter = s.tx_nonce_counter + 1
                             seg_data = crypto_aes_gcm_encrypt(s.tx_key, nonce, seg_data).unwrap()
-                        Vector[uint8] pld = p2p_encode_data_payload(sid, seg.seq_num, seg_data)
+                        Vector[uint8] pld = p2p_encode_data_payload(remote_sid, sid, seg.seq_num, seg_data)
                         p2p_stream_send_raw(&node, peer, 50, pld)
                         SendSegment resent = SendSegment(seg.seq_num, seg.data, now, seg.retransmit_count + 1, false)
                         s.send_buffer.set(ri, !resent)

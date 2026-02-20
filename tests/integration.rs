@@ -4048,6 +4048,19 @@ stream closed",
 }
 
 #[test]
+fn p2p_multiplex() {
+    run_gg(
+        "p2p_multiplex.gg",
+        "\
+stream 1 connected
+stream 2 connected
+stream1: data channel
+stream2: control channel
+both closed",
+    );
+}
+
+#[test]
 fn name_first() {
     run_gg(
         "name_first.gg",
