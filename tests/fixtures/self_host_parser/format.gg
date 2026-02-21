@@ -159,7 +159,10 @@ str format_expr(SpannedExpr se):
         case EIntLiteral(n):
             return int_to_str(n)
         case EFloatLiteral(f):
-            return float_to_str(f)
+            str fs = float_to_str(f)
+            if not fs.contains(".") and not fs.contains("e") and not fs.contains("E"):
+                return fs + ".0"
+            return fs
         case EBoolLiteral(b):
             if b:
                 return "true"
@@ -304,6 +307,8 @@ str format_expr(SpannedExpr se):
             return result
         case ETry(inner):
             return format_expr(*inner) + "?"
+        case ETryCapture(inner):
+            return "try " + format_expr(*inner)
         case EMove(inner):
             return "!" + format_expr(*inner)
         case EMutableBorrow(inner):
@@ -320,8 +325,33 @@ str format_expr(SpannedExpr se):
                 result = result + " if " + format_expr(get_opt_boxed_expr(cond))
             result = result + "]"
             return result
+        case ESetComp(expr, var, iter, cond):
+            str lb = r"{"
+            str rb = r"}"
+            str sc_result = lb + format_expr(*expr) + " for " + var + " in " + format_expr(*iter)
+            # Check if cond is a non-dummy expression (dummy = EIntLiteral(0) at span 0,0)
+            match (*cond).expr:
+                case EIntLiteral(n):
+                    if n != 0:
+                        sc_result = sc_result + " if " + format_expr(*cond)
+                else:
+                    sc_result = sc_result + " if " + format_expr(*cond)
+            sc_result = sc_result + rb
+            return sc_result
+        case EDictComp(key, val, var, iter):
+            str lb = r"{"
+            str rb = r"}"
+            return lb + format_expr(*key) + ": " + format_expr(*val) + " for " + var + " in " + format_expr(*iter) + rb
         case ENilCoalescing(l, r):
             return "(" + format_expr(*l) + " ?? " + format_expr(*r) + ")"
+        case EIs(expr, negated, pat):
+            str es = format_expr(*expr)
+            str ps = format_pattern(*pat)
+            if negated:
+                return "(" + es + " is not " + ps + ")"
+            return "(" + es + " is " + ps + ")"
+        case EDo(body):
+            return "do:" + format_block(body)
         else:
             return "?"
 
@@ -431,6 +461,38 @@ str format_item(Item item):
             if value == "":
                 return "directive " + name
             return "directive " + name + " " + value
+        case ITypeAlias(name, tps, ty):
+            str result = "type " + name
+            if tps.len() > 0:
+                result = result + "["
+                int i = 0
+                while i < tps.len():
+                    if i > 0:
+                        result = result + ", "
+                    str tp = tps.get(i).unwrap()
+                    result = result + tp
+                    i = i + 1
+                result = result + "]"
+            result = result + " = " + format_type(ty)
+            return result
+        case INewtype(name, inner):
+            return "newtype " + name + "(" + format_type(inner) + ")"
+        case IConstDecl(ty, name, val):
+            return "const " + format_type(ty) + " " + name + " = " + format_expr(val)
+        case IExternBlock(fns):
+            str result = "extern:"
+            int i = 0
+            while i < fns.len():
+                FunctionDef f = fns.get(i).unwrap()
+                result = result + " " + format_function(f) + ";"
+                i = i + 1
+            return result
+        case ITest(name, body):
+            return "test \"" + name + "\":" + format_block(body)
+        case ISuiteSetup(body):
+            return "suite_setup:" + format_block(body)
+        case ISuiteTeardown(body):
+            return "suite_teardown:" + format_block(body)
         else:
             return "?"
 

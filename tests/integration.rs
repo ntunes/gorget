@@ -3,6 +3,8 @@ use std::process::Command;
 
 use gorget::lexer::Lexer;
 use gorget::lexer::token::{StringKind, StringLiteral, StringSegment, Token};
+use gorget::parser::ast::*;
+use gorget::span::Spanned;
 
 /// Build and run a `.gg` fixture, asserting its stdout matches `expected`.
 fn run_gg(fixture: &str, expected: &str) {
@@ -5072,5 +5074,1039 @@ fn lexer_comparison() {
     // The test passes even with mismatches — this is a diagnostic/tracking test.
     // Mismatches are expected during development and guide Gorget lexer improvements.
     // Crashes indicate the Gorget driver can't handle a fixture at all.
+    eprintln!("\n================================\n");
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Canonical AST Formatter (Rust side)
+// Produces the same format as format.gg in the self-hosting parser.
+// ═══════════════════════════════════════════════════════════════
+
+fn format_primitive_canonical(p: &PrimitiveType) -> &'static str {
+    match p {
+        PrimitiveType::Int => "int",
+        PrimitiveType::Int8 => "int8",
+        PrimitiveType::Int16 => "int16",
+        PrimitiveType::Int32 => "int32",
+        PrimitiveType::Int64 => "int64",
+        PrimitiveType::Uint => "uint",
+        PrimitiveType::Uint8 => "uint8",
+        PrimitiveType::Uint16 => "uint16",
+        PrimitiveType::Uint32 => "uint32",
+        PrimitiveType::Uint64 => "uint64",
+        PrimitiveType::Float => "float",
+        PrimitiveType::Float32 => "float32",
+        PrimitiveType::Float64 => "float64",
+        PrimitiveType::Bool => "bool",
+        PrimitiveType::Char => "char",
+        PrimitiveType::Str => "str",
+        PrimitiveType::StringType => "String",
+        PrimitiveType::Void => "void",
+    }
+}
+
+fn format_type_canonical(ty: &Type) -> String {
+    match ty {
+        Type::Primitive(p) => format_primitive_canonical(p).to_string(),
+        Type::Named { name, generic_args } => {
+            if generic_args.is_empty() {
+                name.node.clone()
+            } else {
+                let args: Vec<String> = generic_args
+                    .iter()
+                    .map(|a| format_type_canonical(&a.node))
+                    .collect();
+                format!("{}[{}]", name.node, args.join(", "))
+            }
+        }
+        Type::Array { element, size } => {
+            let elem = format_type_canonical(&element.node);
+            let sz = format_expr_canonical(&size.node);
+            format!("[{elem}; {sz}]")
+        }
+        Type::Slice { element } => {
+            let elem = format_type_canonical(&element.node);
+            format!("[{elem}]")
+        }
+        Type::Tuple(elems) => {
+            let parts: Vec<String> = elems.iter().map(|e| format_type_canonical(&e.node)).collect();
+            format!("({})", parts.join(", "))
+        }
+        Type::Function {
+            return_type,
+            params,
+            ..
+        } => {
+            let ret = format_type_canonical(&return_type.node);
+            let ps: Vec<String> = params.iter().map(|p| format_type_canonical(&p.node)).collect();
+            format!("{ret}({})", ps.join(", "))
+        }
+        Type::SelfType => "Self".to_string(),
+        Type::Inferred => "auto".to_string(),
+    }
+}
+
+fn format_pattern_canonical(pat: &Pattern) -> String {
+    match pat {
+        Pattern::Wildcard => "_".to_string(),
+        Pattern::Binding(name) => name.clone(),
+        Pattern::Literal(expr) => format_expr_canonical(&expr.node),
+        Pattern::Constructor { path, fields } => {
+            let name = path
+                .iter()
+                .map(|s| s.node.as_str())
+                .collect::<Vec<_>>()
+                .join(".");
+            if fields.is_empty() {
+                name
+            } else {
+                let args: Vec<String> = fields
+                    .iter()
+                    .map(|f| format_pattern_canonical(&f.node))
+                    .collect();
+                format!("{name}({})", args.join(", "))
+            }
+        }
+        Pattern::Tuple(elems) => {
+            let parts: Vec<String> = elems
+                .iter()
+                .map(|e| format_pattern_canonical(&e.node))
+                .collect();
+            format!("({})", parts.join(", "))
+        }
+        Pattern::Or(alts) => {
+            let parts: Vec<String> = alts
+                .iter()
+                .map(|a| format_pattern_canonical(&a.node))
+                .collect();
+            parts.join(" | ")
+        }
+        Pattern::Rest => "..".to_string(),
+    }
+}
+
+fn format_binop_canonical(op: &BinaryOp) -> &'static str {
+    match op {
+        BinaryOp::Add => "+",
+        BinaryOp::Sub => "-",
+        BinaryOp::Mul => "*",
+        BinaryOp::Div => "/",
+        BinaryOp::Mod => "%",
+        BinaryOp::AddWrap => "+%",
+        BinaryOp::SubWrap => "-%",
+        BinaryOp::MulWrap => "*%",
+        BinaryOp::BitAnd => "&",
+        BinaryOp::BitOr => "|",
+        BinaryOp::BitXor => "^",
+        BinaryOp::Shl => "<<",
+        BinaryOp::Shr => ">>",
+        BinaryOp::Eq => "==",
+        BinaryOp::Neq => "!=",
+        BinaryOp::Lt => "<",
+        BinaryOp::Gt => ">",
+        BinaryOp::LtEq => "<=",
+        BinaryOp::GtEq => ">=",
+        BinaryOp::And => "and",
+        BinaryOp::Or => "or",
+        BinaryOp::In => "in",
+    }
+}
+
+fn format_compound_assign_canonical(op: &BinaryOp) -> &'static str {
+    match op {
+        BinaryOp::Add => "+=",
+        BinaryOp::Sub => "-=",
+        BinaryOp::Mul => "*=",
+        BinaryOp::Div => "/=",
+        BinaryOp::Mod => "%=",
+        BinaryOp::AddWrap => "+%=",
+        BinaryOp::SubWrap => "-%=",
+        BinaryOp::MulWrap => "*%=",
+        BinaryOp::BitAnd => "&=",
+        BinaryOp::BitOr => "|=",
+        BinaryOp::BitXor => "^=",
+        BinaryOp::Shl => "<<=",
+        BinaryOp::Shr => ">>=",
+        _ => "?=",
+    }
+}
+
+fn format_unaryop_canonical(op: &UnaryOp) -> &'static str {
+    match op {
+        UnaryOp::Neg => "-",
+        UnaryOp::Not => "not",
+        UnaryOp::BitNot => "~",
+        UnaryOp::Deref => "*",
+    }
+}
+
+/// Flatten a StringLiteral to a plain string for canonical output.
+fn flatten_string_literal(slit: &StringLiteral) -> String {
+    let mut result = String::new();
+    for seg in &slit.segments {
+        match seg {
+            StringSegment::Literal(text) => result.push_str(text),
+            StringSegment::Interpolation(expr) => {
+                result.push('{');
+                result.push_str(expr);
+                result.push('}');
+            }
+        }
+    }
+    result
+}
+
+fn format_expr_canonical(expr: &Expr) -> String {
+    match expr {
+        Expr::IntLiteral(n) => n.to_string(),
+        Expr::FloatLiteral(f) => {
+            // Match Gorget's float_to_str: use %g-style formatting
+            let s = format!("{f}");
+            // Ensure there's a decimal point for whole numbers
+            if !s.contains('.') && !s.contains('e') && !s.contains('E') {
+                format!("{s}.0")
+            } else {
+                s
+            }
+        }
+        Expr::BoolLiteral(b) => if *b { "true" } else { "false" }.to_string(),
+        Expr::CharLiteral(c) => format!("'{c}'"),
+        Expr::StringLiteral(slit) => {
+            let text = flatten_string_literal(slit);
+            format!("\"{text}\"")
+        }
+        Expr::NoneLiteral => "None".to_string(),
+        Expr::Identifier(name) => name.clone(),
+        Expr::SelfExpr => "self".to_string(),
+        Expr::It => "it".to_string(),
+        Expr::Path { segments } => segments
+            .iter()
+            .map(|s| s.node.as_str())
+            .collect::<Vec<_>>()
+            .join("."),
+        Expr::BinaryOp { left, op, right } => {
+            let ls = format_expr_canonical(&left.node);
+            let ops = format_binop_canonical(op);
+            let rs = format_expr_canonical(&right.node);
+            format!("({ls} {ops} {rs})")
+        }
+        Expr::UnaryOp { op, operand } => {
+            let ops = format_unaryop_canonical(op);
+            let os = format_expr_canonical(&operand.node);
+            format!("({ops} {os})")
+        }
+        Expr::Call { callee, args, .. } => {
+            let cs = format_expr_canonical(&callee.node);
+            let arg_strs: Vec<String> = args.iter().map(|a| format_callarg_canonical(a)).collect();
+            format!("{cs}({})", arg_strs.join(", "))
+        }
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            ..
+        } => {
+            let os = format_expr_canonical(&receiver.node);
+            let arg_strs: Vec<String> = args.iter().map(|a| format_callarg_canonical(a)).collect();
+            format!("{os}.{}({})", method.node, arg_strs.join(", "))
+        }
+        Expr::FieldAccess { object, field } => {
+            let os = format_expr_canonical(&object.node);
+            format!("{os}.{}", field.node)
+        }
+        Expr::TupleFieldAccess { object, index } => {
+            let os = format_expr_canonical(&object.node);
+            format!("{os}.{index}")
+        }
+        Expr::Index { object, index } => {
+            let os = format_expr_canonical(&object.node);
+            let is = format_expr_canonical(&index.node);
+            format!("{os}[{is}]")
+        }
+        Expr::Range {
+            start, end, ..
+        } => {
+            let mut result = String::new();
+            if let Some(s) = start {
+                result.push_str(&format_expr_canonical(&s.node));
+            }
+            result.push_str("..");
+            if let Some(e) = end {
+                result.push_str(&format_expr_canonical(&e.node));
+            }
+            result
+        }
+        Expr::NilCoalescing { lhs, rhs } => {
+            let ls = format_expr_canonical(&lhs.node);
+            let rs = format_expr_canonical(&rhs.node);
+            format!("({ls} ?? {rs})")
+        }
+        Expr::If {
+            condition,
+            then_branch,
+            elif_branches,
+            else_branch,
+        } => {
+            // Expr::If has then_branch as Box<Spanned<Expr>> — wrap in a pseudo-block
+            let cond = format_expr_canonical(&condition.node);
+            let then_body = format!(" {};", format_expr_canonical(&then_branch.node));
+            let mut result = format!("if {cond}:{then_body}");
+            for (elif_cond, elif_body) in elif_branches {
+                let ec = format_expr_canonical(&elif_cond.node);
+                let eb = format!(" {};", format_expr_canonical(&elif_body.node));
+                result.push_str(&format!(" elif {ec}:{eb}"));
+            }
+            if let Some(else_body) = else_branch {
+                let eb = format!(" {};", format_expr_canonical(&else_body.node));
+                result.push_str(&format!(" else:{eb}"));
+            }
+            result
+        }
+        Expr::Match {
+            scrutinee,
+            arms,
+            else_arm,
+        } => {
+            let subj = format_expr_canonical(&scrutinee.node);
+            let mut result = format!("match {subj}:");
+            for arm in arms {
+                let pat = format_pattern_canonical(&arm.pattern.node);
+                let body = match &arm.body.node {
+                    Expr::Block(block) => format_block_canonical(&block.stmts),
+                    _ => format!(" {};", format_expr_canonical(&arm.body.node)),
+                };
+                result.push_str(&format!(" case {pat}:{body}"));
+            }
+            if let Some(else_body) = else_arm {
+                let eb = match &else_body.node {
+                    Expr::Block(block) => format_block_canonical(&block.stmts),
+                    _ => format!(" {};", format_expr_canonical(&else_body.node)),
+                };
+                result.push_str(&format!(" case _:{eb}"));
+            }
+            result
+        }
+        Expr::Closure {
+            params, body, ..
+        } => {
+            let param_strs: Vec<String> = params
+                .iter()
+                .map(|p| {
+                    let cp = &p.node;
+                    if let Some(ty) = &cp.type_ {
+                        format!("{} {}", format_type_canonical(&ty.node), cp.name.node)
+                    } else {
+                        format!("auto {}", cp.name.node)
+                    }
+                })
+                .collect();
+            // If body is Block, unwrap to match Gorget's Vector[Stmt] representation
+            let body_str = match &body.node {
+                Expr::Block(block) => format_block_canonical(&block.stmts),
+                _ => format!(" {};", format_expr_canonical(&body.node)),
+            };
+            format!("({}):{body_str}", param_strs.join(", "))
+        }
+        Expr::ImplicitClosure { body } => {
+            // Gorget parser doesn't wrap implicit-it in closures, so just emit the body expression
+            format_expr_canonical(&body.node)
+        }
+        Expr::Block(block) => {
+            let body = format_block_canonical(&block.stmts);
+            format!("block:{body}")
+        }
+        Expr::Do { body } => {
+            let body_str = format_block_canonical(&body.stmts);
+            format!("do:{body_str}")
+        }
+        Expr::ArrayLiteral(elems) => {
+            let parts: Vec<String> = elems
+                .iter()
+                .map(|e| format_expr_canonical(&e.node))
+                .collect();
+            format!("[{}]", parts.join(", "))
+        }
+        Expr::TupleLiteral(elems) => {
+            let parts: Vec<String> = elems
+                .iter()
+                .map(|e| format_expr_canonical(&e.node))
+                .collect();
+            format!("({})", parts.join(", "))
+        }
+        Expr::DictLiteral(pairs) => {
+            let parts: Vec<String> = pairs
+                .iter()
+                .map(|(k, v)| {
+                    format!(
+                        "{}: {}",
+                        format_expr_canonical(&k.node),
+                        format_expr_canonical(&v.node)
+                    )
+                })
+                .collect();
+            format!("{{{}}}", parts.join(", "))
+        }
+        Expr::StructLiteral { name, args, .. } => {
+            let arg_strs: Vec<String> = args
+                .iter()
+                .map(|a| format_expr_canonical(&a.node))
+                .collect();
+            format!("{}({})", name.node, arg_strs.join(", "))
+        }
+        Expr::Try { expr } => {
+            format!("{}?", format_expr_canonical(&expr.node))
+        }
+        Expr::TryCapture { expr } => {
+            format!("try {}", format_expr_canonical(&expr.node))
+        }
+        Expr::Move { expr } => {
+            format!("!{}", format_expr_canonical(&expr.node))
+        }
+        Expr::MutableBorrow { expr } => {
+            format!("&{}", format_expr_canonical(&expr.node))
+        }
+        Expr::Deref { expr } => {
+            format!("*{}", format_expr_canonical(&expr.node))
+        }
+        Expr::As { expr, type_ } => {
+            format!(
+                "{} as {}",
+                format_expr_canonical(&expr.node),
+                format_type_canonical(&type_.node)
+            )
+        }
+        Expr::ListComprehension {
+            expr,
+            variable,
+            iterable,
+            condition,
+            ..
+        } => {
+            let e = format_expr_canonical(&expr.node);
+            let var = format_pattern_canonical(&variable.node);
+            let iter = format_expr_canonical(&iterable.node);
+            let mut result = format!("[{e} for {var} in {iter}");
+            if let Some(cond) = condition {
+                result.push_str(&format!(" if {}", format_expr_canonical(&cond.node)));
+            }
+            result.push(']');
+            result
+        }
+        Expr::Is {
+            expr,
+            negated,
+            pattern,
+        } => {
+            let e = format_expr_canonical(&expr.node);
+            let p = format_pattern_canonical(&pattern.node);
+            if *negated {
+                format!("({e} is not {p})")
+            } else {
+                format!("({e} is {p})")
+            }
+        }
+        Expr::Await { expr } => {
+            format!("await {}", format_expr_canonical(&expr.node))
+        }
+        Expr::Spawn { expr } => {
+            format!("spawn {}", format_expr_canonical(&expr.node))
+        }
+        Expr::OptionalChain { object, field } => {
+            let os = format_expr_canonical(&object.node);
+            format!("{os}?.{}", field.node)
+        }
+        Expr::SetComprehension {
+            expr,
+            variable,
+            iterable,
+            condition,
+        } => {
+            let e = format_expr_canonical(&expr.node);
+            let var = &variable.node;
+            let iter = format_expr_canonical(&iterable.node);
+            let mut result = format!("{{{e} for {var} in {iter}");
+            if let Some(cond) = condition {
+                result.push_str(&format!(" if {}", format_expr_canonical(&cond.node)));
+            }
+            result.push('}');
+            result
+        }
+        Expr::DictComprehension {
+            key,
+            value,
+            variables,
+            iterable,
+            condition,
+        } => {
+            let k = format_expr_canonical(&key.node);
+            let v = format_expr_canonical(&value.node);
+            let vars: Vec<&str> = variables.iter().map(|s| s.node.as_str()).collect();
+            let iter = format_expr_canonical(&iterable.node);
+            let mut result = format!("{{{k}: {v} for {} in {iter}", vars.join(", "));
+            if let Some(cond) = condition {
+                result.push_str(&format!(" if {}", format_expr_canonical(&cond.node)));
+            }
+            result.push('}');
+            result
+        }
+    }
+}
+
+fn format_callarg_canonical(arg: &Spanned<CallArg>) -> String {
+    format_expr_canonical(&arg.node.value.node)
+}
+
+fn format_stmt_canonical(stmt: &Stmt) -> String {
+    match stmt {
+        Stmt::VarDecl {
+            is_const,
+            type_,
+            pattern,
+            value,
+            ..
+        } => {
+            let ts = format_type_canonical(&type_.node);
+            let name = format_pattern_canonical(&pattern.node);
+            let vs = format_expr_canonical(&value.node);
+            if *is_const {
+                format!("const {ts} {name} = {vs}")
+            } else {
+                format!("{ts} {name} = {vs}")
+            }
+        }
+        Stmt::Assign { target, value } => {
+            format!(
+                "{} = {}",
+                format_expr_canonical(&target.node),
+                format_expr_canonical(&value.node)
+            )
+        }
+        Stmt::CompoundAssign { target, op, value } => {
+            format!(
+                "{} {} {}",
+                format_expr_canonical(&target.node),
+                format_compound_assign_canonical(op),
+                format_expr_canonical(&value.node)
+            )
+        }
+        Stmt::Expr(expr) => format_expr_canonical(&expr.node),
+        Stmt::Return(Some(expr)) => format!("return {}", format_expr_canonical(&expr.node)),
+        Stmt::Return(None) => "return".to_string(),
+        Stmt::Throw(expr) => format!("throw {}", format_expr_canonical(&expr.node)),
+        Stmt::Break(Some(expr)) => format!("break {}", format_expr_canonical(&expr.node)),
+        Stmt::Break(None) => "break".to_string(),
+        Stmt::Continue => "continue".to_string(),
+        Stmt::Pass => "pass".to_string(),
+        Stmt::For {
+            pattern,
+            iterable,
+            body,
+            ..
+        } => {
+            let pat = format_pattern_canonical(&pattern.node);
+            let iter = format_expr_canonical(&iterable.node);
+            let b = format_block_canonical(&body.stmts);
+            format!("for {pat} in {iter}:{b}")
+        }
+        Stmt::While {
+            condition, body, ..
+        } => {
+            let cond = format_expr_canonical(&condition.node);
+            let b = format_block_canonical(&body.stmts);
+            format!("while {cond}:{b}")
+        }
+        Stmt::Loop { body } => {
+            let b = format_block_canonical(&body.stmts);
+            format!("loop:{b}")
+        }
+        Stmt::If {
+            condition,
+            then_body,
+            elif_branches,
+            else_body,
+        } => {
+            let cond = format_expr_canonical(&condition.node);
+            let b = format_block_canonical(&then_body.stmts);
+            let mut result = format!("if {cond}:{b}");
+            for (elif_cond, elif_body) in elif_branches {
+                let ec = format_expr_canonical(&elif_cond.node);
+                let eb = format_block_canonical(&elif_body.stmts);
+                result.push_str(&format!(" elif {ec}:{eb}"));
+            }
+            if let Some(else_body) = else_body {
+                let eb = format_block_canonical(&else_body.stmts);
+                result.push_str(&format!(" else:{eb}"));
+            }
+            result
+        }
+        Stmt::Match {
+            scrutinee,
+            arms,
+            else_arm,
+        } => {
+            let subj = format_expr_canonical(&scrutinee.node);
+            let mut result = format!("match {subj}:");
+            for arm in arms {
+                let pat = format_pattern_canonical(&arm.pattern.node);
+                // Unwrap Block bodies to match Gorget's representation
+                let body = match &arm.body.node {
+                    Expr::Block(block) => format_block_canonical(&block.stmts),
+                    _ => format!(" {};", format_expr_canonical(&arm.body.node)),
+                };
+                result.push_str(&format!(" case {pat}:{body}"));
+            }
+            if let Some(else_body) = else_arm {
+                let eb = format_block_canonical(&else_body.stmts);
+                result.push_str(&format!(" case _:{eb}"));
+            }
+            result
+        }
+        Stmt::With { bindings, body } => {
+            // Use first binding (Gorget AST only supports one)
+            if let Some(b) = bindings.first() {
+                let res = format_expr_canonical(&b.expr.node);
+                let name = &b.name.node;
+                let body_str = format_block_canonical(&body.stmts);
+                format!("with {res} as {name}:{body_str}")
+            } else {
+                "with ?".to_string()
+            }
+        }
+        Stmt::Unsafe { body } => {
+            let b = format_block_canonical(&body.stmts);
+            format!("unsafe:{b}")
+        }
+        Stmt::Assert { condition, message } => {
+            let cond = format_expr_canonical(&condition.node);
+            if let Some(msg) = message {
+                // Extract string text from message expr
+                let msg_text = match &msg.node {
+                    Expr::StringLiteral(slit) => flatten_string_literal(slit),
+                    other => format_expr_canonical(other),
+                };
+                format!("assert {cond}, \"{msg_text}\"")
+            } else {
+                format!("assert {cond}")
+            }
+        }
+        Stmt::Item(item) => format_item_canonical(item),
+    }
+}
+
+fn format_block_canonical(stmts: &[Spanned<Stmt>]) -> String {
+    if stmts.is_empty() {
+        return " pass".to_string();
+    }
+    let mut result = String::new();
+    for s in stmts {
+        result.push(' ');
+        result.push_str(&format_stmt_canonical(&s.node));
+        result.push(';');
+    }
+    result
+}
+
+fn format_generic_params_canonical(gp: &Option<Spanned<GenericParams>>) -> String {
+    match gp {
+        Some(gp) => {
+            let params: Vec<String> = gp
+                .node
+                .params
+                .iter()
+                .map(|p| match &p.node {
+                    GenericParam::Type(name) => name.node.clone(),
+                    GenericParam::Lifetime(name) => name.node.clone(),
+                    GenericParam::Const { name, .. } => name.node.clone(),
+                })
+                .collect();
+            if params.is_empty() {
+                String::new()
+            } else {
+                format!("[{}]", params.join(", "))
+            }
+        }
+        None => String::new(),
+    }
+}
+
+fn format_param_canonical(p: &Param) -> String {
+    if p.name.node == "self" {
+        match p.ownership {
+            Ownership::MutableBorrow => "&self".to_string(),
+            Ownership::Move => "!self".to_string(),
+            _ => "self".to_string(),
+        }
+    } else {
+        format!("{} {}", format_type_canonical(&p.type_.node), p.name.node)
+    }
+}
+
+fn format_function_canonical(fd: &FunctionDef) -> String {
+    let ret = format_type_canonical(&fd.return_type.node);
+    let gp = format_generic_params_canonical(&fd.generic_params);
+    let params: Vec<String> = fd.params.iter().map(|p| format_param_canonical(&p.node)).collect();
+    let mut result = format!("{ret} {}{gp}({})", fd.name.node, params.join(", "));
+
+    match &fd.body {
+        FunctionBody::Expression(expr) => {
+            result.push_str(&format!(" = {}", format_expr_canonical(&expr.node)));
+        }
+        FunctionBody::Block(block) => {
+            result.push_str(&format!(":{}", format_block_canonical(&block.stmts)));
+        }
+        FunctionBody::Declaration | FunctionBody::Extern(_) => {
+            result.push_str(": pass");
+        }
+    }
+    result
+}
+
+fn format_struct_canonical(sd: &StructDef) -> String {
+    let gp = format_generic_params_canonical(&sd.generic_params);
+    let mut result = format!("struct {}{gp}:", sd.name.node);
+    for f in &sd.fields {
+        let fd = &f.node;
+        result.push_str(&format!(
+            " {} {};",
+            format_type_canonical(&fd.type_.node),
+            fd.name.node
+        ));
+    }
+    result
+}
+
+fn format_enum_canonical(ed: &EnumDef) -> String {
+    let gp = format_generic_params_canonical(&ed.generic_params);
+    let mut result = format!("enum {}{gp}:", ed.name.node);
+    for v in &ed.variants {
+        let var = &v.node;
+        result.push_str(&format!(" {}", var.name.node));
+        match &var.fields {
+            VariantFields::Tuple(fields) if !fields.is_empty() => {
+                let parts: Vec<String> =
+                    fields.iter().map(|f| format_type_canonical(&f.node)).collect();
+                result.push_str(&format!("({})", parts.join(", ")));
+            }
+            _ => {}
+        }
+        result.push(';');
+    }
+    result
+}
+
+fn format_trait_canonical(td: &TraitDef) -> String {
+    let gp = format_generic_params_canonical(&td.generic_params);
+    let mut result = format!("trait {}{gp}", td.name.node);
+    if !td.extends.is_empty() {
+        let parents: Vec<String> = td.extends.iter().map(|e| e.node.name.node.clone()).collect();
+        result.push_str(&format!(" extends {}", parents.join(", ")));
+    }
+    result.push(':');
+    for item in &td.items {
+        match &item.node {
+            TraitItem::Method(fd) => {
+                result.push_str(&format!(" {};", format_function_canonical(fd)));
+            }
+            TraitItem::AssociatedType(_) => {
+                result.push_str(" ?;");
+            }
+        }
+    }
+    result
+}
+
+fn format_equip_canonical(eq: &EquipBlock) -> String {
+    let target = format_type_canonical(&eq.type_.node);
+    let mut result = format!("equip {target}");
+    if let Some(trait_) = &eq.trait_ {
+        let tn = format_type_canonical(&trait_.trait_name.node);
+        result.push_str(&format!(" via {tn}"));
+    }
+    result.push(':');
+    for item in &eq.items {
+        result.push_str(&format!(" {};", format_function_canonical(&item.node)));
+    }
+    result
+}
+
+fn format_import_canonical(imp: &ImportStmt) -> String {
+    match imp {
+        ImportStmt::From { path, names, .. } => {
+            let module_path = path
+                .iter()
+                .map(|s| s.node.as_str())
+                .collect::<Vec<_>>()
+                .join(".");
+            let name_list = names
+                .iter()
+                .map(|s| s.node.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("from {module_path} import {name_list}")
+        }
+        ImportStmt::Simple { path, .. } => {
+            let module_path = path
+                .iter()
+                .map(|s| s.node.as_str())
+                .collect::<Vec<_>>()
+                .join(".");
+            format!("import {module_path}")
+        }
+        ImportStmt::Grouped { path, names, .. } => {
+            let module_path = path
+                .iter()
+                .map(|s| s.node.as_str())
+                .collect::<Vec<_>>()
+                .join(".");
+            let name_list = names
+                .iter()
+                .map(|s| s.node.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("from {module_path} import {name_list}")
+        }
+    }
+}
+
+fn format_item_canonical(item: &Item) -> String {
+    match item {
+        Item::Function(fd) => format_function_canonical(fd),
+        Item::Struct(sd) => format_struct_canonical(sd),
+        Item::Enum(ed) => format_enum_canonical(ed),
+        Item::Trait(td) => format_trait_canonical(td),
+        Item::Equip(eq) => format_equip_canonical(eq),
+        Item::Import(imp) => format_import_canonical(imp),
+        Item::Directive(d) => {
+            if let Some(val) = &d.value {
+                format!("directive {} {val}", d.name)
+            } else {
+                format!("directive {}", d.name)
+            }
+        }
+        Item::TypeAlias(ta) => {
+            let gp = format_generic_params_canonical(&ta.generic_params);
+            format!(
+                "type {}{gp} = {}",
+                ta.name.node,
+                format_type_canonical(&ta.type_.node)
+            )
+        }
+        Item::Newtype(nt) => {
+            format!(
+                "newtype {}({})",
+                nt.name.node,
+                format_type_canonical(&nt.inner_type.node)
+            )
+        }
+        Item::ConstDecl(cd) => {
+            format!(
+                "const {} {} = {}",
+                format_type_canonical(&cd.type_.node),
+                cd.name.node,
+                format_expr_canonical(&cd.value.node)
+            )
+        }
+        Item::StaticDecl(sd) => {
+            format!(
+                "static {} {} = {}",
+                format_type_canonical(&sd.type_.node),
+                sd.name.node,
+                format_expr_canonical(&sd.value.node)
+            )
+        }
+        Item::ExternBlock(eb) => {
+            let mut result = "extern:".to_string();
+            for f in &eb.items {
+                result.push_str(&format!(" {};", format_function_canonical(&f.node)));
+            }
+            result
+        }
+        Item::Test(td) => {
+            let body = format_block_canonical(&td.body.stmts);
+            format!("test \"{}\":{body}", td.name.node)
+        }
+        Item::SuiteSetup(ss) => {
+            let body = format_block_canonical(&ss.body.stmts);
+            format!("suite_setup:{body}")
+        }
+        Item::SuiteTeardown(st) => {
+            let body = format_block_canonical(&st.body.stmts);
+            format!("suite_teardown:{body}")
+        }
+    }
+}
+
+fn format_module_canonical(m: &Module) -> String {
+    m.items
+        .iter()
+        .map(|item| format_item_canonical(&item.node))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Parser Comparison Test
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn parser_comparison() {
+    use gorget::parser::Parser;
+
+    // 1. Build the Gorget parser driver
+    let (driver_exe, driver_c) = build_gg_dir("self_host_parser", "driver.gg");
+
+    // 2. Discover all top-level .gg fixture files
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixtures_dir = manifest_dir.join("tests/fixtures");
+    let mut fixtures: Vec<PathBuf> = std::fs::read_dir(&fixtures_dir)
+        .expect("failed to read fixtures dir")
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && p.extension().map_or(false, |ext| ext == "gg"))
+        .collect();
+    fixtures.sort();
+
+    assert!(
+        !fixtures.is_empty(),
+        "No .gg fixtures found in {}",
+        fixtures_dir.display()
+    );
+
+    struct Mismatch {
+        fixture: String,
+        first_diff_line: usize,
+        rust_line: String,
+        gorget_line: String,
+        rust_total: usize,
+        gorget_total: usize,
+    }
+
+    let mut matched = 0;
+    let mut mismatches: Vec<Mismatch> = Vec::new();
+    let mut crashes: Vec<(String, String)> = Vec::new();
+    let mut compared = 0;
+
+    // 3. For each fixture, compare Rust vs Gorget parser output
+    for fixture in &fixtures {
+        let source = match std::fs::read_to_string(fixture) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!(
+                    "  SKIP {}: read error: {e}",
+                    fixture.file_name().unwrap().to_string_lossy()
+                );
+                continue;
+            }
+        };
+
+        // Rust side: parse and format canonically
+        let mut parser = Parser::new(&source);
+        let module = parser.parse_module();
+        let rust_output = format_module_canonical(&module);
+
+        // Gorget side: run the driver binary
+        let output = Command::new(&driver_exe).arg(fixture).output();
+
+        match output {
+            Ok(out) if out.status.success() => {
+                let gorget_output = String::from_utf8_lossy(&out.stdout)
+                    .trim_end()
+                    .to_string();
+
+                let rust_lines: Vec<&str> = rust_output.lines().collect();
+                let gorget_lines: Vec<&str> = gorget_output.lines().collect();
+
+                // Find first line divergence
+                let mut first_diff = None;
+                let max_lines = rust_lines.len().max(gorget_lines.len());
+                for i in 0..max_lines {
+                    let r = rust_lines.get(i).unwrap_or(&"<missing>");
+                    let g = gorget_lines.get(i).unwrap_or(&"<missing>");
+                    if r != g {
+                        first_diff = Some(i);
+                        break;
+                    }
+                }
+
+                if let Some(diff_line) = first_diff {
+                    mismatches.push(Mismatch {
+                        fixture: fixture
+                            .file_name()
+                            .unwrap()
+                            .to_string_lossy()
+                            .to_string(),
+                        first_diff_line: diff_line,
+                        rust_line: rust_lines
+                            .get(diff_line)
+                            .unwrap_or(&"<missing>")
+                            .to_string(),
+                        gorget_line: gorget_lines
+                            .get(diff_line)
+                            .unwrap_or(&"<missing>")
+                            .to_string(),
+                        rust_total: rust_lines.len(),
+                        gorget_total: gorget_lines.len(),
+                    });
+                } else {
+                    matched += 1;
+                }
+            }
+            Ok(out) => {
+                let name = fixture
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string();
+                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                crashes.push((name, stderr));
+            }
+            Err(e) => {
+                let name = fixture
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string();
+                crashes.push((name, format!("exec error: {e}")));
+            }
+        }
+        compared += 1;
+    }
+
+    // 4. Cleanup
+    let _ = std::fs::remove_file(&driver_c);
+    let _ = std::fs::remove_file(&driver_exe);
+
+    // 5. Report
+    eprintln!("\n=== Parser Comparison Results ===");
+    eprintln!(
+        "Fixtures compared: {compared}, matched: {matched}, mismatched: {}, crashed: {}",
+        mismatches.len(),
+        crashes.len()
+    );
+
+    if !crashes.is_empty() {
+        eprintln!("\n--- Crashes ({}) ---", crashes.len());
+        for (name, err) in &crashes {
+            let first_line = err.lines().next().unwrap_or("(no stderr)");
+            eprintln!("  {name}: {first_line}");
+        }
+    }
+
+    if !mismatches.is_empty() {
+        eprintln!("\n--- Mismatches ({}) ---", mismatches.len());
+        for m in mismatches.iter().take(200) {
+            eprintln!(
+                "\n  {} (line {}, rust={} gorget={} lines)",
+                m.fixture, m.first_diff_line, m.rust_total, m.gorget_total
+            );
+            eprintln!("    Rust:   {}", m.rust_line);
+            eprintln!("    Gorget: {}", m.gorget_line);
+        }
+        if mismatches.len() > 30 {
+            eprintln!("\n  ... and {} more", mismatches.len() - 30);
+        }
+    }
+
+    // Diagnostic test — always passes. Mismatches guide development.
     eprintln!("\n================================\n");
 }

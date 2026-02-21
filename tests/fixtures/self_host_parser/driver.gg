@@ -1,0 +1,17 @@
+# CLI driver for parser comparison testing.
+# Reads a .gg file, parses it, and prints canonical AST, one item per line.
+# Usage: driver <path-to-file.gg>
+
+from parser import parse_source
+from format import format_item, format_module
+from ast import Module
+from std.fs import read_file
+from std.os import args
+from std.collections import Vector
+
+void main():
+    Vector[str] cmd_args = args()
+    str path = cmd_args.get(1).unwrap()
+    String source = read_file(path)
+    Module m = parse_source(source)
+    print(format_module(m))

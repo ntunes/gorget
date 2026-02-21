@@ -70,13 +70,18 @@ enum Expr:
     EDictLiteral(Vector[SpannedExpr], Vector[SpannedExpr])
     EStructLiteral(str, Vector[str], Vector[SpannedExpr])
     ETry(Box[SpannedExpr])
+    ETryCapture(Box[SpannedExpr])
     EMove(Box[SpannedExpr])
     EMutableBorrow(Box[SpannedExpr])
     EDeref(Box[SpannedExpr])
     EAs(Box[SpannedExpr], Box[SpannedType])
     EBlock(Vector[Stmt])
     EListComp(Box[SpannedExpr], str, Box[SpannedExpr], Option[Box[SpannedExpr]])
+    ESetComp(Box[SpannedExpr], str, Box[SpannedExpr], Box[SpannedExpr])
+    EDictComp(Box[SpannedExpr], Box[SpannedExpr], str, Box[SpannedExpr])
     ENilCoalescing(Box[SpannedExpr], Box[SpannedExpr])
+    EIs(Box[SpannedExpr], bool, Box[SpannedPattern])
+    EDo(Vector[Stmt])
 
 # ── Statements ───────────────────────────────────────────────
 
@@ -109,6 +114,13 @@ enum Item:
     IEquip(EquipBlock)
     IImport(ImportStmt)
     IDirective(str, str)
+    ITypeAlias(str, Vector[str], SpannedType)
+    INewtype(str, SpannedType)
+    IConstDecl(SpannedType, str, SpannedExpr)
+    IExternBlock(Vector[FunctionDef])
+    ITest(str, Vector[Stmt])
+    ISuiteSetup(Vector[Stmt])
+    ISuiteTeardown(Vector[Stmt])
 
 # ── Supporting structures ────────────────────────────────────
 

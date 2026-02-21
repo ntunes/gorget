@@ -68,6 +68,12 @@ const int TOK_PIPEEQ = 57
 const int TOK_CARETEQ = 58
 const int TOK_LTLTEQ = 59
 const int TOK_GTGTEQ = 60
+const int TOK_PLUSPERCENT = 61
+const int TOK_MINUSPERCENT = 62
+const int TOK_STARPERCENT = 63
+const int TOK_PLUSPERCENTEQ = 64
+const int TOK_MINUSPERCENTEQ = 65
+const int TOK_STARPERCENTEQ = 66
 
 # ── Keyword tag constants ────────────────────────────────────
 
@@ -290,6 +296,18 @@ int token_tag(Token tok):
             return TOK_LTLTEQ
         case TkGtGtEq:
             return TOK_GTGTEQ
+        case TkPlusPercent:
+            return TOK_PLUSPERCENT
+        case TkMinusPercent:
+            return TOK_MINUSPERCENT
+        case TkStarPercent:
+            return TOK_STARPERCENT
+        case TkPlusPercentEq:
+            return TOK_PLUSPERCENTEQ
+        case TkMinusPercentEq:
+            return TOK_MINUSPERCENTEQ
+        case TkStarPercentEq:
+            return TOK_STARPERCENTEQ
         else:
             return 0
 
@@ -510,7 +528,9 @@ str token_string_val(Token tok):
                     case SegLiteral(s):
                         result = result + s
                     case SegInterpolation(s):
-                        result = result + s
+                        str open_b = r"{"
+                        str close_b = r"}"
+                        result = result + open_b + s + close_b
                 i = i + 1
             return result
         else:
@@ -523,7 +543,36 @@ str token_char_val(Token tok):
         else:
             return ""
 
+# ── Helper: convert parsed type to name string ──────────────
+
+SpannedType stype_vec_get(Vector[SpannedType] v, int i):
+    return v.get(i).unwrap()
+
+int stype_vec_len(Vector[SpannedType] v):
+    return v.len()
+
+str type_to_name(SpannedType st):
+    match st.ty:
+        case TPrimitive(name):
+            return "" + name
+        case TNamed(name, args):
+            if stype_vec_len(args) == 0:
+                return "" + name
+            str result = name + "["
+            int i = 0
+            while i < stype_vec_len(args):
+                if i > 0:
+                    result = result + ", "
+                SpannedType a = stype_vec_get(args, i)
+                result = result + type_to_name(a)
+                i = i + 1
+            result = result + "]"
+            return result
+        else:
+            return "?"
+
 # ── Helper: check if keyword is a type keyword ──────────────
+
 
 bool is_type_keyword(int kw):
     if kw == KW_INT:
@@ -611,6 +660,47 @@ str type_keyword_name(int kw):
         return "Self"
     return ""
 
+str non_type_keyword_name(int kw):
+    if kw == KW_OR:
+        return "or"
+    elif kw == KW_AND:
+        return "and"
+    elif kw == KW_IN:
+        return "in"
+    elif kw == KW_NOT:
+        return "not"
+    elif kw == KW_IF:
+        return "if"
+    elif kw == KW_FOR:
+        return "for"
+    elif kw == KW_WHILE:
+        return "while"
+    elif kw == KW_RETURN:
+        return "return"
+    elif kw == KW_BREAK:
+        return "break"
+    elif kw == KW_CONTINUE:
+        return "continue"
+    elif kw == KW_MATCH:
+        return "match"
+    elif kw == KW_FROM:
+        return "from"
+    elif kw == KW_AS:
+        return "as"
+    elif kw == KW_PASS:
+        return "pass"
+    elif kw == KW_TRUE:
+        return "true"
+    elif kw == KW_FALSE:
+        return "false"
+    elif kw == KW_NONE:
+        return "none"
+    elif kw == KW_IT:
+        return "it"
+    elif kw == KW_TYPE:
+        return "type"
+    return ""
+
 # ── Operator helpers ─────────────────────────────────────────
 
 str op_str(int tag):
@@ -673,6 +763,12 @@ str compound_op_str(int tag):
         return "<<="
     elif tag == TOK_GTGTEQ:
         return ">>="
+    elif tag == TOK_PLUSPERCENTEQ:
+        return "+%="
+    elif tag == TOK_MINUSPERCENTEQ:
+        return "-%="
+    elif tag == TOK_STARPERCENTEQ:
+        return "*%="
     return ""
 
 bool is_compound_assign(int tag):
@@ -695,6 +791,12 @@ bool is_compound_assign(int tag):
     elif tag == TOK_LTLTEQ:
         return true
     elif tag == TOK_GTGTEQ:
+        return true
+    elif tag == TOK_PLUSPERCENTEQ:
+        return true
+    elif tag == TOK_MINUSPERCENTEQ:
+        return true
+    elif tag == TOK_STARPERCENTEQ:
         return true
     return false
 
@@ -778,6 +880,16 @@ int infix_right_bp(int tag):
         return 30
     return 0
 
+# ── Expression helpers ───────────────────────────────────────
+
+str expr_ident_name(Expr e):
+    match e:
+        case EIdentifier(id_name):
+            str result = "" + id_name
+            return result
+        else:
+            return ""
+
 # ── Parser struct ────────────────────────────────────────────
 
 struct Parser:
@@ -846,6 +958,32 @@ equip Parser:
         if not self.match_kw(kw):
             self.errors.push(msg)
 
+    # Extract a name from a token that may be an identifier or a keyword used as a name
+    str extract_name(&self, SpannedToken tok):
+        str name = token_ident(tok.lex_token)
+        if name != "":
+            return name
+        int kt = keyword_tag(tok.lex_token)
+        if kt == KW_BOX:
+            return "Box"
+        if kt == KW_RC:
+            return "Rc"
+        if kt == KW_ARC:
+            return "Arc"
+        if kt == KW_OPTION:
+            return "Option"
+        if kt == KW_WEAK:
+            return "Weak"
+        if kt == KW_CELL:
+            return "Cell"
+        if kt == KW_REFCELL:
+            return "RefCell"
+        if kt == KW_MUTEX:
+            return "Mutex"
+        if kt == KW_RWLOCK:
+            return "RwLock"
+        return ""
+
     void skip_newlines(&self):
         while self.check_tok(TOK_NEWLINE):
             self.advance()
@@ -886,6 +1024,15 @@ equip Parser:
                 return self.mk_type(TSelf(), start)
             elif kw == KW_AUTO:
                 return self.mk_type(TInferred(), start)
+            # Check for function type: RetType(ParamTypes...)
+            if self.check_tok(TOK_LPAREN):
+                int saved = self.pos
+                SpannedType ret_ty = self.mk_type(TPrimitive(name), start)
+                SpannedType fn_ty = self.parse_function_type(ret_ty, start)
+                # Accept if followed by a name, closing bracket, comma (in type context)
+                if self.check_tok(TOK_IDENT) or self.check_tok(TOK_RBRACKET) or self.check_tok(TOK_COMMA) or self.check_tok(TOK_RPAREN) or self.check_tok(TOK_BANG) or self.check_tok(TOK_AMP):
+                    return fn_ty
+                self.pos = saved
             return self.mk_type(TPrimitive(name), start)
 
         # Box[T], Rc[T], Arc[T]
@@ -937,16 +1084,48 @@ equip Parser:
             str name = token_ident(name_tok.lex_token)
             if self.check_tok(TOK_LBRACKET):
                 Vector[SpannedType] args = self.parse_type_args()
-                return self.mk_type(TNamed(name, args), start)
-            # Check if it looks like a function type: name(params)
-            # Function types are like: int(int, int) — but the return type is already parsed as a name
-            # We handle this at a higher level in parse_function_type_or_named
+                SpannedType named_ty = self.mk_type(TNamed(name, args), start)
+                # Check for function type: NamedType[T](params)
+                if self.check_tok(TOK_LPAREN):
+                    int saved = self.pos
+                    SpannedType fn_ty = self.parse_function_type(named_ty, start)
+                    # Only accept if followed by closing bracket/paren/comma (inside type context)
+                    if self.check_tok(TOK_RBRACKET) or self.check_tok(TOK_COMMA) or self.check_tok(TOK_RPAREN):
+                        return fn_ty
+                    self.pos = saved
+                return named_ty
+            # Check for function type: Name(params) — only in contexts where followed by ) ] , or name
+            if self.check_tok(TOK_LPAREN):
+                int saved = self.pos
+                SpannedType named_ty = self.mk_type(TNamed(name, Vector[SpannedType]()), start)
+                SpannedType fn_ty = self.parse_function_type(named_ty, start)
+                # Accept if followed by name (var/param name) or closing context
+                if self.check_tok(TOK_IDENT) or self.check_tok(TOK_RBRACKET) or self.check_tok(TOK_COMMA) or self.check_tok(TOK_RPAREN) or self.check_tok(TOK_BANG) or self.check_tok(TOK_AMP):
+                    return fn_ty
+                self.pos = saved
             return self.mk_type(TNamed(name, Vector[SpannedType]()), start)
 
         # Fallback: error
         self.errors.push("expected type")
         self.advance()
         return self.mk_type(TPrimitive("void"), start)
+
+    SpannedType parse_function_type(&self, SpannedType ret_ty, int start):
+        # Function type: RetType(Param1, Param2, ...)
+        # Params can have ownership markers: &Type, !Type, consuming Type, mutable Type
+        self.expect_tok(TOK_LPAREN, "expected '(' for function type")
+        Vector[SpannedType] param_types = Vector[SpannedType]()
+        Vector[int] ownerships = Vector[int]()
+        if not self.check_tok(TOK_RPAREN):
+            self.skip_ownership_markers()
+            param_types.push(self.parse_type())
+            ownerships.push(OWN_BORROW)
+            while self.match_tok(TOK_COMMA):
+                self.skip_ownership_markers()
+                param_types.push(self.parse_type())
+                ownerships.push(OWN_BORROW)
+        self.expect_tok(TOK_RPAREN, "expected ')' for function type")
+        return self.mk_type(TFunction(Box(ret_ty), param_types, ownerships), start)
 
     Vector[SpannedType] parse_type_args(&self):
         Vector[SpannedType] args = Vector[SpannedType]()
@@ -1114,9 +1293,22 @@ equip Parser:
                 lhs = self.parse_dot_expr(lhs)
                 continue
 
-            # Index: expr[...]
+            # Index or generic constructor: expr[...]
             if ptag == TOK_LBRACKET:
                 int bp_start = lhs.span.start
+                # If lhs is an identifier, try to parse as generic type args + call
+                str ident_name = expr_ident_name(lhs.expr)
+                if ident_name != "":
+                    int saved = self.pos
+                    Vector[SpannedType] targs = self.parse_type_args()
+                    if self.check_tok(TOK_LPAREN):
+                        # Generic constructor: Name[T](args)
+                        Vector[SpannedExpr] call_args = self.parse_call_args()
+
+                        lhs = SpannedExpr(ECall(Box(lhs), call_args, targs), Span(bp_start, self.peek().lex_start))
+                        continue
+                    # Not a generic constructor — restore and parse as index
+                    self.pos = saved
                 self.advance()
                 SpannedExpr idx = self.parse_expr()
                 self.expect_tok(TOK_RBRACKET, "expected ']' after index")
@@ -1145,12 +1337,16 @@ equip Parser:
                 lhs = SpannedExpr(EAs(Box(lhs), Box(cast_ty)), Span(bp_start, self.peek().lex_start))
                 continue
 
-            # Is: treat as infix
+            # Is / Is not: pattern matching expressions
             if self.check_kw(KW_IS):
                 int bp_start = lhs.span.start
                 self.advance()
+                bool negated = false
+                if self.check_kw(KW_NOT):
+                    negated = true
+                    self.advance()
                 SpannedPattern pat = self.parse_pattern()
-                lhs = SpannedExpr(EBinaryOp(Box(lhs), "is", Box(SpannedExpr(EIdentifier("_pattern"), pat.span))), Span(bp_start, self.peek().lex_start))
+                lhs = SpannedExpr(EIs(Box(lhs), negated, Box(pat)), Span(bp_start, self.peek().lex_start))
                 continue
 
             # and / or: keyword-based infix operators
@@ -1172,6 +1368,47 @@ equip Parser:
                 lhs = SpannedExpr(EBinaryOp(Box(lhs), "or", Box(rhs)), Span(lhs.span.start, rhs.span.end))
                 continue
 
+            if self.check_kw(KW_IN):
+                int l_bp = 15
+                if l_bp < min_bp:
+                    break
+                self.advance()
+                SpannedExpr rhs = self.parse_expr_bp(16)
+                lhs = SpannedExpr(EBinaryOp(Box(lhs), "in", Box(rhs)), Span(lhs.span.start, rhs.span.end))
+                continue
+
+            if self.check_kw(KW_NOT):
+                # Check for 'not in' operator
+                if self.pos + 1 < self.tokens.len():
+                    SpannedToken next_ni = self.tokens.get(self.pos + 1).unwrap()
+                    if keyword_tag(next_ni.lex_token) == KW_IN:
+                        int l_bp = 15
+                        if l_bp < min_bp:
+                            break
+                        self.advance()
+                        self.advance()
+                        SpannedExpr rhs = self.parse_expr_bp(16)
+                        lhs = SpannedExpr(EBinaryOp(Box(lhs), "not in", Box(rhs)), Span(lhs.span.start, rhs.span.end))
+                        continue
+
+            # Wrapping operators: +%, -%, *%
+            if ptag == TOK_PLUSPERCENT or ptag == TOK_MINUSPERCENT or ptag == TOK_STARPERCENT:
+                int w_bp = 27
+                if ptag == TOK_STARPERCENT:
+                    w_bp = 29
+                if w_bp < min_bp:
+                    break
+                str wop = "+%"
+                if ptag == TOK_MINUSPERCENT:
+                    wop = "-%"
+                elif ptag == TOK_STARPERCENT:
+                    wop = "*%"
+                self.advance()
+                int w_rbp = w_bp + 1
+                SpannedExpr rhs = self.parse_expr_bp(w_rbp)
+                lhs = SpannedExpr(EBinaryOp(Box(lhs), wop, Box(rhs)), Span(lhs.span.start, rhs.span.end))
+                continue
+
             # Infix operators
             int l_bp = infix_left_bp(ptag)
             if l_bp == 0:
@@ -1182,16 +1419,26 @@ equip Parser:
             str op = op_str(ptag)
             self.advance()
             SpannedExpr rhs = self.parse_expr_bp(r_bp)
-            lhs = SpannedExpr(EBinaryOp(Box(lhs), op, Box(rhs)), Span(lhs.span.start, rhs.span.end))
+            if ptag == TOK_DOTDOT:
+                lhs = SpannedExpr(ERange(Some(Box(lhs)), Some(Box(rhs))), Span(lhs.span.start, rhs.span.end))
+            else:
+                lhs = SpannedExpr(EBinaryOp(Box(lhs), op, Box(rhs)), Span(lhs.span.start, rhs.span.end))
 
         return lhs
 
     SpannedExpr parse_dot_expr(&self, SpannedExpr lhs):
         int start = lhs.span.start
         self.advance()
-        if self.check_tok(TOK_IDENT):
+        # Handle identifier or keyword-as-method-name (e.g. .str(), .or(), .len())
+        if self.check_tok(TOK_IDENT) or self.peek_kw() > 0:
             SpannedToken name_tok = self.advance()
             str name = token_ident(name_tok.lex_token)
+            if name == "":
+                # Keyword token — extract name from keyword tag
+                int kw = keyword_tag(name_tok.lex_token)
+                name = type_keyword_name(kw)
+                if name == "":
+                    name = non_type_keyword_name(kw)
             if self.check_tok(TOK_LPAREN):
                 Vector[SpannedExpr] call_args = self.parse_call_args()
                 return SpannedExpr(EMethodCall(Box(lhs), name, call_args, Vector[SpannedType]()), Span(start, self.peek().lex_start))
@@ -1217,13 +1464,143 @@ equip Parser:
         Vector[SpannedExpr] args = Vector[SpannedExpr]()
         self.expect_tok(TOK_LPAREN, "expected '(' for call args")
         if not self.check_tok(TOK_RPAREN):
-            args.push(self.parse_expr())
+            # Skip ownership markers before args
+            self.skip_ownership_markers()
+            args.push(self.parse_call_arg())
             while self.match_tok(TOK_COMMA):
-                args.push(self.parse_expr())
+                self.skip_ownership_markers()
+                args.push(self.parse_call_arg())
         self.expect_tok(TOK_RPAREN, "expected ')' after call args")
         return args
 
+    void skip_ownership_markers(&self):
+        # Skip &, !, consuming, mutable before args
+        if self.check_tok(TOK_AMP) or self.check_tok(TOK_BANG):
+            self.advance()
+        elif self.check_kw(KW_CONSUMING) or self.check_kw(KW_MUTABLE):
+            self.advance()
+
+    SpannedExpr parse_call_arg(&self):
+        # Handle named args: name = value — just parse the value, discard the name
+        if self.check_tok(TOK_IDENT) and self.pos + 1 < self.tokens.len():
+            SpannedToken next_arg = self.tokens.get(self.pos + 1).unwrap()
+            if token_tag(next_arg.lex_token) == TOK_EQ:
+                self.advance()
+                self.advance()
+                return self.parse_expr()
+        return self.parse_expr()
+
     # ── Prefix expressions ───────────────────────────────────
+
+    # Try to detect if current position starts a closure: (params): body
+    # Returns true if it looks like a closure, false otherwise.
+    # Does NOT consume tokens (caller must save/restore pos).
+    bool try_detect_closure(&self):
+        if not self.check_tok(TOK_LPAREN):
+            return false
+        self.advance()
+        # Empty parens followed by colon = no-arg closure
+        if self.check_tok(TOK_RPAREN):
+            self.advance()
+            return self.check_tok(TOK_COLON)
+        # Check if first thing inside parens is a type keyword or 'auto' followed by an identifier
+        # Pattern: (Type name, Type name, ...):
+        # We need to check if the first parameter looks like Type Ident
+        int kw = self.peek_kw()
+        bool first_is_type = is_type_keyword(kw)
+        if not first_is_type:
+            # Could also be a named type (identifier) followed by another identifier
+            if self.check_tok(TOK_IDENT):
+                # Save pos, try: skip identifier, check if next is also an identifier
+                int saved2 = self.pos
+                self.advance()
+                if self.check_tok(TOK_IDENT):
+                    first_is_type = true
+                elif self.check_tok(TOK_LBRACKET):
+                    # Could be Vector[int] name — skip type args
+                    first_is_type = true
+                self.pos = saved2
+        if not first_is_type:
+            # Could be an untyped closure: (a, b): body
+            # Check if contents are just identifiers separated by commas, followed by ):
+            bool all_idents = true
+            if not self.check_tok(TOK_IDENT):
+                all_idents = false
+            if all_idents:
+                # Scan: ident (comma ident)* rparen colon
+                int saved3 = self.pos
+                self.advance()
+                while self.match_tok(TOK_COMMA):
+                    if not self.check_tok(TOK_IDENT):
+                        all_idents = false
+                        break
+                    self.advance()
+                if all_idents and self.check_tok(TOK_RPAREN):
+                    self.advance()
+                    if self.check_tok(TOK_COLON):
+                        self.pos = saved3
+                        return true
+                self.pos = saved3
+            return false
+        # Skip through params to find matching ) then :
+        int depth = 1
+        while depth > 0 and not self.at_end():
+            if self.check_tok(TOK_LPAREN):
+                depth = depth + 1
+            elif self.check_tok(TOK_RPAREN):
+                depth = depth - 1
+                if depth == 0:
+                    self.advance()
+                    return self.check_tok(TOK_COLON)
+            self.advance()
+        return false
+
+    # Parse a single closure parameter — could be typed (Type name) or untyped (name)
+    Param parse_closure_param(&self):
+        # Check if this is a typed param: Type ident
+        # or untyped: just ident
+        int saved = self.pos
+        int kw = self.peek_kw()
+        bool is_typed = is_type_keyword(kw)
+        if not is_typed and self.check_tok(TOK_IDENT):
+            # Could be: ident ident (typed) or just ident (untyped)
+            self.advance()
+            if self.check_tok(TOK_IDENT):
+                is_typed = true
+            elif self.check_tok(TOK_LBRACKET):
+                is_typed = true
+            self.pos = saved
+        if is_typed:
+            SpannedType pt = self.parse_type()
+            SpannedToken pn = self.advance()
+            str pname = token_ident(pn.lex_token)
+            return Param(pt, pname, OWN_BORROW)
+        # Untyped param — just an identifier, use auto as type
+        SpannedToken pn = self.advance()
+        str pname = token_ident(pn.lex_token)
+        SpannedType auto_type = SpannedType(TInferred(), Span(pn.lex_start, pn.lex_end))
+        return Param(auto_type, pname, OWN_BORROW)
+
+    # Parse a closure expression: (params): body
+    SpannedExpr parse_closure_expr(&self, int start):
+        self.expect_tok(TOK_LPAREN, "expected '(' for closure")
+        Vector[Param] params = Vector[Param]()
+        if not self.check_tok(TOK_RPAREN):
+            params.push(self.parse_closure_param())
+            while self.match_tok(TOK_COMMA):
+                params.push(self.parse_closure_param())
+        self.expect_tok(TOK_RPAREN, "expected ')' after closure params")
+        self.expect_tok(TOK_COLON, "expected ':' after closure params")
+        # Inline closure: body is a single expression or a block
+        Vector[Stmt] body = Vector[Stmt]()
+        if self.check_tok(TOK_NEWLINE):
+            # Multi-line closure body
+            body = self.parse_block()
+        else:
+            # Inline closure: parse single expression
+            SpannedExpr expr = self.parse_expr()
+            body.push(SExpr(expr))
+        return SpannedExpr(EClosure(params, body), Span(start, self.peek().lex_start))
 
     SpannedExpr parse_prefix(&self):
         int start = self.peek().lex_start
@@ -1276,6 +1653,30 @@ equip Parser:
             SpannedToken t = self.advance()
             return SpannedExpr(ESelfExpr(), Span(t.lex_start, t.lex_end))
 
+        # Type keyword as expression (e.g., int.parse(), float.default())
+        int prefix_kw = self.peek_kw()
+        if is_type_keyword(prefix_kw) and prefix_kw != KW_AUTO and prefix_kw != KW_SELF_UPPER and prefix_kw != KW_VOID:
+            if self.pos + 1 < self.tokens.len():
+                SpannedToken after_type = self.tokens.get(self.pos + 1).unwrap()
+                if token_tag(after_type.lex_token) == TOK_DOT:
+                    str tname = type_keyword_name(prefix_kw)
+                    SpannedToken t = self.advance()
+                    return SpannedExpr(EIdentifier(tname), Span(t.lex_start, t.lex_end))
+
+        # it keyword (implicit closure parameter)
+        if self.check_kw(KW_IT):
+            SpannedToken t = self.advance()
+            return SpannedExpr(EIdentifier("it"), Span(t.lex_start, t.lex_end))
+
+        # panic keyword (treated as a function call)
+        if self.check_kw(KW_PANIC):
+            SpannedToken t = self.advance()
+            SpannedExpr callee = SpannedExpr(EIdentifier("panic"), Span(t.lex_start, t.lex_end))
+            if self.check_tok(TOK_LPAREN):
+                Vector[SpannedExpr] call_args = self.parse_call_args()
+                return SpannedExpr(ECall(Box(callee), call_args, Vector[SpannedType]()), Span(start, self.peek().lex_start))
+            return callee
+
         # Unary minus
         if ptag == TOK_MINUS:
             self.advance()
@@ -1288,9 +1689,28 @@ equip Parser:
             SpannedExpr operand = self.parse_expr_bp(60)
             return SpannedExpr(EUnaryOp("not", Box(operand)), Span(start, operand.span.end))
 
-        # Unary bang
+        # Unary bang (move) — but !(params): is a consuming closure, format without !
         if ptag == TOK_BANG:
             self.advance()
+            # Check for consuming closure: !(params): body
+            if self.check_tok(TOK_LPAREN):
+                int saved_move = self.pos
+                bool is_closure = self.try_detect_closure()
+                self.pos = saved_move
+                if is_closure:
+                    return self.parse_closure_expr(start)
+            SpannedExpr operand = self.parse_expr_bp(60)
+            return SpannedExpr(EMove(Box(operand)), Span(start, operand.span.end))
+
+        # consuming keyword as move (same as !)
+        if self.check_kw(KW_CONSUMING):
+            self.advance()
+            if self.check_tok(TOK_LPAREN):
+                int saved_move2 = self.pos
+                bool is_closure2 = self.try_detect_closure()
+                self.pos = saved_move2
+                if is_closure2:
+                    return self.parse_closure_expr(start)
             SpannedExpr operand = self.parse_expr_bp(60)
             return SpannedExpr(EMove(Box(operand)), Span(start, operand.span.end))
 
@@ -1306,11 +1726,27 @@ equip Parser:
             SpannedExpr operand = self.parse_expr_bp(60)
             return SpannedExpr(EDeref(Box(operand)), Span(start, operand.span.end))
 
-        # Parenthesized expr or tuple
+        # Closure or parenthesized expr or tuple
         if ptag == TOK_LPAREN:
+            # Try to detect closure: (params): body
+            int saved = self.pos
+            bool is_closure = self.try_detect_closure()
+            self.pos = saved
+            if is_closure:
+                return self.parse_closure_expr(start)
             self.advance()
             if self.check_tok(TOK_RPAREN):
                 self.advance()
+                # Check if this is a no-arg closure: (): body
+                if self.check_tok(TOK_COLON):
+                    self.advance()
+                    Vector[Stmt] body = Vector[Stmt]()
+                    if self.check_tok(TOK_NEWLINE):
+                        body = self.parse_block()
+                    else:
+                        SpannedExpr expr = self.parse_expr()
+                        body.push(SExpr(expr))
+                    return SpannedExpr(EClosure(Vector[Param](), body), Span(start, self.peek().lex_start))
                 return SpannedExpr(ETupleLiteral(Vector[SpannedExpr]()), Span(start, self.peek().lex_start))
             SpannedExpr first = self.parse_expr()
             if self.match_tok(TOK_COMMA):
@@ -1325,18 +1761,81 @@ equip Parser:
             self.expect_tok(TOK_RPAREN, "expected ')'")
             return first
 
-        # Array literal: [a, b, c]
+        # Array literal or list comprehension: [a, b, c] or [expr for var in iter]
         if ptag == TOK_LBRACKET:
             self.advance()
             Vector[SpannedExpr] elems = Vector[SpannedExpr]()
             if not self.check_tok(TOK_RBRACKET):
                 elems.push(self.parse_expr())
+                # Check for list comprehension: [expr for var in iter [if cond]]
+                if self.check_kw(KW_FOR):
+                    SpannedExpr comp_expr = elems.get(0).unwrap()
+                    self.advance()
+                    SpannedToken var_tok = self.advance()
+                    str var_name = token_ident(var_tok.lex_token)
+                    self.expect_kw(KW_IN, "expected 'in' in comprehension")
+                    SpannedExpr iterable = self.parse_expr()
+                    # Skip optional 'if cond' (condition stored as None for now)
+                    if self.check_kw(KW_IF):
+                        self.advance()
+                        self.parse_expr()
+                    self.expect_tok(TOK_RBRACKET, "expected ']' after comprehension")
+                    Option[Box[SpannedExpr]] no_cond = None
+                    return SpannedExpr(EListComp(Box(comp_expr), var_name, Box(iterable), no_cond), Span(start, self.peek().lex_start))
                 while self.match_tok(TOK_COMMA):
                     if self.check_tok(TOK_RBRACKET):
                         break
                     elems.push(self.parse_expr())
             self.expect_tok(TOK_RBRACKET, "expected ']' after array literal")
             return SpannedExpr(EArrayLiteral(elems), Span(start, self.peek().lex_start))
+
+        # Dict literal, set comprehension, or dict comprehension: {}, {k: v}, {expr for var in iter}, {k: v for var in iter}
+        if ptag == TOK_LBRACE:
+            self.advance()
+            Vector[SpannedExpr] keys = Vector[SpannedExpr]()
+            Vector[SpannedExpr] vals = Vector[SpannedExpr]()
+            if not self.check_tok(TOK_RBRACE):
+                SpannedExpr first = self.parse_expr()
+                # Set comprehension: {expr for var in iter [if cond]}
+                if self.check_kw(KW_FOR):
+                    self.advance()
+                    SpannedToken var_tok = self.advance()
+                    str var_name = token_ident(var_tok.lex_token)
+                    self.expect_kw(KW_IN, "expected 'in' in set comprehension")
+                    SpannedExpr iterable = self.parse_expr()
+                    SpannedExpr cond = SpannedExpr(EIntLiteral(0), Span(0, 0))
+                    if self.check_kw(KW_IF):
+                        self.advance()
+                        cond = self.parse_expr()
+                    self.expect_tok(TOK_RBRACE, "expected '}' after set comprehension")
+                    return SpannedExpr(ESetComp(Box(first), var_name, Box(iterable), Box(cond)), Span(start, self.peek().lex_start))
+                self.expect_tok(TOK_COLON, "expected ':' in dict literal")
+                SpannedExpr v = self.parse_expr()
+                # Dict comprehension: {key: value for var in iter}
+                if self.check_kw(KW_FOR):
+                    self.advance()
+                    SpannedToken dvar_tok = self.advance()
+                    str dvar_name = token_ident(dvar_tok.lex_token)
+                    self.expect_kw(KW_IN, "expected 'in' in dict comprehension")
+                    SpannedExpr diterable = self.parse_expr()
+                    # Skip optional 'if cond'
+                    if self.check_kw(KW_IF):
+                        self.advance()
+                        self.parse_expr()
+                    self.expect_tok(TOK_RBRACE, "expected '}' after dict comprehension")
+                    return SpannedExpr(EDictComp(Box(first), Box(v), dvar_name, Box(diterable)), Span(start, self.peek().lex_start))
+                keys.push(first)
+                vals.push(v)
+                while self.match_tok(TOK_COMMA):
+                    if self.check_tok(TOK_RBRACE):
+                        break
+                    SpannedExpr k2 = self.parse_expr()
+                    self.expect_tok(TOK_COLON, "expected ':' in dict literal")
+                    SpannedExpr v2 = self.parse_expr()
+                    keys.push(k2)
+                    vals.push(v2)
+            self.expect_tok(TOK_RBRACE, "expected '}' after dict literal")
+            return SpannedExpr(EDictLiteral(keys, vals), Span(start, self.peek().lex_start))
 
         # If expression
         if self.check_kw(KW_IF):
@@ -1350,10 +1849,17 @@ equip Parser:
         if self.check_kw(KW_TRY):
             self.advance()
             SpannedExpr operand = self.parse_expr_bp(60)
-            return SpannedExpr(ETry(Box(operand)), Span(start, operand.span.end))
+            return SpannedExpr(ETryCapture(Box(operand)), Span(start, operand.span.end))
 
-        # Some(expr), Ok(expr), Error(expr), Box(expr) — keyword constructors
-        if self.check_kw(KW_SOME) or self.check_kw(KW_OK) or self.check_kw(KW_ERROR) or self.check_kw(KW_BOX):
+        # Do block expression
+        if self.check_kw(KW_DO):
+            self.advance()
+            self.expect_tok(TOK_COLON, "expected ':' after do")
+            Vector[Stmt] body = self.parse_block()
+            return SpannedExpr(EDo(body), Span(start, self.peek().lex_start))
+
+        # Some(expr), Ok(expr), Error(expr), Box(expr), String(...), Option(...) — keyword constructors
+        if self.check_kw(KW_SOME) or self.check_kw(KW_OK) or self.check_kw(KW_ERROR) or self.check_kw(KW_BOX) or self.check_kw(KW_RC) or self.check_kw(KW_ARC) or self.check_kw(KW_STRING_TYPE) or self.check_kw(KW_OPTION) or self.check_kw(KW_WEAK) or self.check_kw(KW_CELL) or self.check_kw(KW_REFCELL) or self.check_kw(KW_MUTEX) or self.check_kw(KW_RWLOCK):
             SpannedToken kw_tok = self.advance()
             str ctor_name = ""
             int kt = keyword_tag(kw_tok.lex_token)
@@ -1365,7 +1871,33 @@ equip Parser:
                 ctor_name = "Error"
             elif kt == KW_BOX:
                 ctor_name = "Box"
+            elif kt == KW_RC:
+                ctor_name = "Rc"
+            elif kt == KW_ARC:
+                ctor_name = "Arc"
+            elif kt == KW_STRING_TYPE:
+                ctor_name = "String"
+            elif kt == KW_OPTION:
+                ctor_name = "Option"
+            elif kt == KW_WEAK:
+                ctor_name = "Weak"
+            elif kt == KW_CELL:
+                ctor_name = "Cell"
+            elif kt == KW_REFCELL:
+                ctor_name = "RefCell"
+            elif kt == KW_MUTEX:
+                ctor_name = "Mutex"
+            elif kt == KW_RWLOCK:
+                ctor_name = "RwLock"
             SpannedExpr callee = SpannedExpr(EIdentifier(ctor_name), Span(kw_tok.lex_start, kw_tok.lex_end))
+            if self.check_tok(TOK_LBRACKET):
+                # Generic constructor: Option[int]()
+                int saved = self.pos
+                Vector[SpannedType] targs = self.parse_type_args()
+                if self.check_tok(TOK_LPAREN):
+                    Vector[SpannedExpr] call_args = self.parse_call_args()
+                    return SpannedExpr(ECall(Box(callee), call_args, targs), Span(start, self.peek().lex_start))
+                self.pos = saved
             if self.check_tok(TOK_LPAREN):
                 Vector[SpannedExpr] call_args = self.parse_call_args()
                 return SpannedExpr(ECall(Box(callee), call_args, Vector[SpannedType]()), Span(start, self.peek().lex_start))
@@ -1421,6 +1953,10 @@ equip Parser:
             if self.check_kw(KW_CASE):
                 self.advance()
                 SpannedPattern pat = self.parse_pattern()
+                # Skip optional guard: if expr
+                if self.check_kw(KW_IF):
+                    self.advance()
+                    self.parse_expr()
                 self.expect_tok(TOK_COLON, "expected ':' after case pattern")
                 Vector[Stmt] arm_body = self.parse_block()
                 arms.push(MatchArm(pat, arm_body))
@@ -1440,7 +1976,7 @@ equip Parser:
 
     Vector[Stmt] parse_block(&self):
         Vector[Stmt] stmts = Vector[Stmt]()
-        self.skip_newlines()
+        self.skip_trivia()
         if not self.match_tok(TOK_INDENT):
             # Single-line block after colon
             if not self.check_tok(TOK_NEWLINE) and not self.check_tok(TOK_DEDENT) and not self.at_end():
@@ -1516,6 +2052,11 @@ equip Parser:
             SpannedExpr cond = self.parse_expr()
             self.expect_tok(TOK_COLON, "expected ':' after while condition")
             Vector[Stmt] body = self.parse_block()
+            # Skip optional else: block (while-else)
+            if self.check_kw(KW_ELSE):
+                self.advance()
+                self.expect_tok(TOK_COLON, "expected ':' after else")
+                self.parse_block()
             return SWhile(cond, body)
 
         # for
@@ -1544,7 +2085,7 @@ equip Parser:
             Vector[Stmt] body = self.parse_block()
             return SWith(resource, name, body)
 
-        # Items: struct, enum, trait, equip, import, from, directive
+        # Items: struct, enum, trait, equip, import, from, directive, const, type, newtype, extern, test
         if self.check_kw(KW_STRUCT):
             return SItem(self.parse_struct_item())
         if self.check_kw(KW_ENUM):
@@ -1557,6 +2098,18 @@ equip Parser:
             return SItem(self.parse_import_item())
         if self.check_kw(KW_DIRECTIVE):
             return SItem(self.parse_directive_item())
+        if self.check_kw(KW_CONST):
+            return SItem(self.parse_const_item())
+        if self.check_kw(KW_TYPE):
+            return SItem(self.parse_type_alias_item())
+        if self.check_kw(KW_NEWTYPE):
+            return SItem(self.parse_newtype_item())
+        if self.check_kw(KW_EXTERN):
+            return SItem(self.parse_extern_block())
+        if self.check_kw(KW_TEST):
+            return SItem(self.parse_test_item())
+        if self.check_kw(KW_SUITE):
+            return SItem(self.parse_suite_item())
 
         # Try to parse as var decl: Type name = expr
         # We detect this by checking if current position looks like a type followed by an identifier and =
@@ -1625,6 +2178,11 @@ equip Parser:
         SpannedExpr iter = self.parse_expr()
         self.expect_tok(TOK_COLON, "expected ':' after for iterable")
         Vector[Stmt] body = self.parse_block()
+        # Skip optional else: block (for-else)
+        if self.check_kw(KW_ELSE):
+            self.advance()
+            self.expect_tok(TOK_COLON, "expected ':' after else")
+            self.parse_block()
         return SFor(pat, iter, body, OWN_BORROW)
 
     # ── Match statement ──────────────────────────────────────
@@ -1644,6 +2202,10 @@ equip Parser:
             if self.check_kw(KW_CASE):
                 self.advance()
                 SpannedPattern pat = self.parse_pattern()
+                # Skip optional guard: if expr
+                if self.check_kw(KW_IF):
+                    self.advance()
+                    self.parse_expr()
                 self.expect_tok(TOK_COLON, "expected ':' after case pattern")
                 Vector[Stmt] arm_body = self.parse_block()
                 arms.push(MatchArm(pat, arm_body))
@@ -1662,22 +2224,27 @@ equip Parser:
     # ── Var decl detection (lookahead) ───────────────────────
 
     bool try_detect_var_decl(&self):
-        # A var decl looks like: Type name = ...
+        # A var decl looks like: [mutable] Type name = ...
         # Type can be: keyword, Ident, Ident[...], (T, T), etc.
         # After type, must be Ident followed by =
+
+        # Skip optional 'mutable' keyword
+        if self.check_kw(KW_MUTABLE):
+            self.advance()
 
         # Skip the type
         if not self.skip_type_lookahead():
             return false
 
-        # Must have an identifier
-        if not self.check_tok(TOK_IDENT):
-            return false
-        self.advance()
-
-        # Must have =
-        if self.check_tok(TOK_EQ):
-            return true
+        # Must have an identifier or tuple pattern (for destructuring)
+        if self.check_tok(TOK_IDENT):
+            self.advance()
+            # Must have =
+            return self.check_tok(TOK_EQ)
+        # Tuple pattern: Type (a, b) = expr
+        if self.check_tok(TOK_LPAREN):
+            self.skip_paren_contents()
+            return self.check_tok(TOK_EQ)
         return false
 
     bool skip_type_lookahead(&self):
@@ -1685,6 +2252,9 @@ equip Parser:
         int kw = self.peek_kw()
         if is_type_keyword(kw):
             self.advance()
+            # Check for function type: RetType(ParamTypes...) — but not auto(...)
+            if kw != KW_AUTO and kw != KW_SELF_UPPER and self.check_tok(TOK_LPAREN):
+                self.skip_paren_contents()
             return true
 
         if self.check_kw(KW_BOX) or self.check_kw(KW_RC) or self.check_kw(KW_ARC):
@@ -1697,6 +2267,9 @@ equip Parser:
             self.advance()
             if self.check_tok(TOK_LBRACKET):
                 self.skip_bracket_contents()
+            # Check for function type: Name[T](ParamTypes...)
+            if self.check_tok(TOK_LPAREN):
+                self.skip_paren_contents()
             return true
 
         if self.check_tok(TOK_LPAREN):
@@ -1737,7 +2310,8 @@ equip Parser:
         # A function looks like: Type name(...):  or  Type name(...) = expr
         if not self.skip_type_lookahead():
             return false
-        if not self.check_tok(TOK_IDENT):
+        # Function name can be an identifier or a keyword (e.g., 'from' in trait impl)
+        if not self.check_tok(TOK_IDENT) and self.peek_kw() == 0:
             return false
         self.advance()
         # Optional type params
@@ -1755,8 +2329,24 @@ equip Parser:
             own = OWN_MUTABLE
             self.advance()
         SpannedType ty = self.parse_type()
-        SpannedToken name_tok = self.advance()
-        str name = token_ident(name_tok.lex_token)
+        str name = ""
+        if self.check_tok(TOK_LPAREN):
+            # Tuple pattern: Type (a, b, ...) = expr
+            self.advance()
+            name = "("
+            bool first = true
+            while not self.check_tok(TOK_RPAREN) and not self.at_end():
+                if not first:
+                    self.expect_tok(TOK_COMMA, "expected ',' in tuple pattern")
+                    name = name + ", "
+                first = false
+                SpannedToken ptok = self.advance()
+                name = name + token_ident(ptok.lex_token)
+            self.expect_tok(TOK_RPAREN, "expected ')' in tuple pattern")
+            name = name + ")"
+        else:
+            SpannedToken name_tok = self.advance()
+            name = token_ident(name_tok.lex_token)
         self.expect_tok(TOK_EQ, "expected '=' in variable declaration")
         SpannedExpr init = self.parse_expr()
         return SVarDecl(ty, name, init, own)
@@ -1771,12 +2361,30 @@ equip Parser:
         SpannedType ret_ty = self.parse_type()
         SpannedToken name_tok = self.advance()
         str name = token_ident(name_tok.lex_token)
+        if name == "":
+            # Function name is a keyword (e.g., 'from' in trait impl)
+            int fn_kw = keyword_tag(name_tok.lex_token)
+            name = non_type_keyword_name(fn_kw)
+            if name == "":
+                name = type_keyword_name(fn_kw)
         Vector[str] type_params = Vector[str]()
         if self.check_tok(TOK_LBRACKET):
             type_params = self.parse_type_params()
         self.expect_tok(TOK_LPAREN, "expected '(' in function def")
         Vector[Param] params = self.parse_params()
         self.expect_tok(TOK_RPAREN, "expected ')' in function def")
+
+        # Skip optional 'throws Type'
+        if self.check_kw(KW_THROWS):
+            self.advance()
+            self.parse_type()
+
+        # Skip optional 'where T is Trait, ...' clause
+        if self.check_kw(KW_WHERE):
+            self.advance()
+            # Skip tokens until we hit ':', '=', newline, or EOF
+            while not self.check_tok(TOK_COLON) and not self.check_tok(TOK_EQ) and not self.check_tok(TOK_NEWLINE) and not self.check_tok(TOK_DEDENT) and not self.at_end():
+                self.advance()
 
         # Expression-body function: Type name(params) = expr
         if self.check_tok(TOK_EQ):
@@ -1785,6 +2393,11 @@ equip Parser:
             Vector[Stmt] body = Vector[Stmt]()
             body.push(SReturn(Some(body_expr)))
             return FunctionDef(name, params, ret_ty, type_params, body, true)
+
+        # Declaration-only function (no body — e.g. trait method signatures)
+        if self.check_tok(TOK_NEWLINE) or self.check_tok(TOK_DEDENT) or self.at_end():
+            Vector[Stmt] body = Vector[Stmt]()
+            return FunctionDef(name, params, ret_ty, type_params, body, false)
 
         self.expect_tok(TOK_COLON, "expected ':' after function signature")
         Vector[Stmt] body = self.parse_block()
@@ -1829,9 +2442,32 @@ equip Parser:
             own = OWN_MUTABLE
             self.advance()
 
+        # Skip lifetime annotation: live Type name or live(group) Type name
+        if self.check_kw(KW_LIVE):
+            self.advance()
+            # Skip optional group name: live(a) → skip (a)
+            if self.check_tok(TOK_LPAREN):
+                self.skip_paren_contents()
         SpannedType ty = self.parse_type()
+        # Handle ownership markers between type and name
+        if self.check_tok(TOK_BANG):
+            own = OWN_MOVE
+            self.advance()
+        elif self.check_tok(TOK_AMP):
+            own = OWN_MUTABLE
+            self.advance()
+        elif self.check_kw(KW_CONSUMING):
+            own = OWN_MOVE
+            self.advance()
+        elif self.check_kw(KW_MUTABLE):
+            own = OWN_MUTABLE
+            self.advance()
         SpannedToken name_tok = self.advance()
         str pname = token_ident(name_tok.lex_token)
+        # Skip optional default value: = expr
+        if self.check_tok(TOK_EQ):
+            self.advance()
+            self.parse_expr()
         return Param(ty, pname, own)
 
     Item parse_struct_item(&self):
@@ -1920,11 +2556,17 @@ equip Parser:
         SpannedType target = self.parse_type()
         Vector[str] type_params = Vector[str]()
         Option[str] trait_name = None
-        if self.check_kw(KW_VIA):
+        if self.check_kw(KW_WITH):
             self.advance()
-            SpannedToken trait_tok = self.advance()
-            Option[str] some_tn = Some(token_ident(trait_tok.lex_token))
+            # Parse trait name as a type, then convert to string
+            SpannedType trait_type = self.parse_type()
+            str tn = type_to_name(trait_type)
+            Option[str] some_tn = Some(tn)
             trait_name = !some_tn
+            # Skip optional 'via field_name' delegation
+            if self.check_kw(KW_VIA):
+                self.advance()
+                self.advance()
         self.expect_tok(TOK_COLON, "expected ':' after equip target")
         self.expect_tok(TOK_NEWLINE, "expected newline after equip ':'")
         self.expect_tok(TOK_INDENT, "expected indent in equip body")
@@ -1933,6 +2575,11 @@ equip Parser:
             self.skip_trivia()
             if self.check_tok(TOK_DEDENT):
                 break
+            # Handle 'pass' as empty equip body (delegation with no overrides)
+            if self.check_kw(KW_PASS):
+                self.advance()
+                self.skip_newlines()
+                continue
             FunctionDef m = self.parse_function_def()
             methods.push(m)
             self.skip_newlines()
@@ -1953,21 +2600,13 @@ equip Parser:
                 SpannedToken next = self.advance()
                 module_path = module_path + "." + token_ident(next.lex_token)
             self.expect_kw(KW_IMPORT, "expected 'import' after from path")
-            # Parse names
+            # Parse names (identifiers or keywords used as names like Box, Rc, Arc)
             SpannedToken n1 = self.advance()
-            names.push(token_ident(n1.lex_token))
+            str n1_name = self.extract_name(n1)
+            names.push(n1_name)
             while self.match_tok(TOK_COMMA):
                 SpannedToken n2 = self.advance()
-                str n2_name = token_ident(n2.lex_token)
-                if n2_name == "":
-                    # Could be a keyword used as import name (e.g., "import Box")
-                    int kt = keyword_tag(n2.lex_token)
-                    if kt == KW_BOX:
-                        n2_name = "Box"
-                    elif kt == KW_RC:
-                        n2_name = "Rc"
-                    elif kt == KW_ARC:
-                        n2_name = "Arc"
+                str n2_name = self.extract_name(n2)
                 names.push(n2_name)
         elif self.check_kw(KW_IMPORT):
             self.advance()
@@ -1983,11 +2622,131 @@ equip Parser:
         self.expect_kw(KW_DIRECTIVE, "expected 'directive'")
         SpannedToken name_tok = self.advance()
         str name = token_ident(name_tok.lex_token)
+        # Consume hyphenated parts: immutable-by-default → "immutable-by-default"
+        while self.check_tok(TOK_MINUS):
+            self.advance()
+            SpannedToken next = self.advance()
+            name = name + "-" + token_ident(next.lex_token)
+        # Check for test_suite directive
+        if name == "test_suite":
+            self.expect_tok(TOK_COLON, "expected ':' after test_suite")
+            self.skip_trivia()
+            # Look for setup: or teardown:
+            if self.check_tok(TOK_INDENT):
+                self.advance()
+            SpannedToken sub_tok = self.advance()
+            str sub_name = token_ident(sub_tok.lex_token)
+            self.expect_tok(TOK_COLON, "expected ':' after setup/teardown")
+            Vector[Stmt] body = self.parse_block()
+            if sub_name == "setup":
+                return ISuiteSetup(body)
+            return ISuiteTeardown(body)
         str value = ""
-        if not self.check_tok(TOK_NEWLINE) and not self.at_end():
+        if self.match_tok(TOK_EQ):
+            # directive name=value
             SpannedToken val_tok = self.advance()
             value = token_ident(val_tok.lex_token)
+        elif not self.check_tok(TOK_NEWLINE) and not self.at_end():
+            SpannedToken val_tok = self.advance()
+            value = token_ident(val_tok.lex_token)
+            # Consume hyphenated parts of value
+            while self.check_tok(TOK_MINUS):
+                self.advance()
+                SpannedToken next = self.advance()
+                value = value + "-" + token_ident(next.lex_token)
         return IDirective(name, value)
+
+    Item parse_const_item(&self):
+        self.expect_kw(KW_CONST, "expected 'const'")
+        SpannedType ty = self.parse_type()
+        SpannedToken name_tok = self.advance()
+        str name = token_ident(name_tok.lex_token)
+        self.expect_tok(TOK_EQ, "expected '=' in const declaration")
+        SpannedExpr val = self.parse_expr()
+        return IConstDecl(ty, name, val)
+
+    Item parse_type_alias_item(&self):
+        self.expect_kw(KW_TYPE, "expected 'type'")
+        SpannedToken name_tok = self.advance()
+        str name = token_ident(name_tok.lex_token)
+        Vector[str] type_params = Vector[str]()
+        if self.match_tok(TOK_LBRACKET):
+            SpannedToken tp_tok = self.advance()
+            type_params.push(token_ident(tp_tok.lex_token))
+            while self.match_tok(TOK_COMMA):
+                SpannedToken tp2 = self.advance()
+                type_params.push(token_ident(tp2.lex_token))
+            self.expect_tok(TOK_RBRACKET, "expected ']' after type params")
+        self.expect_tok(TOK_EQ, "expected '=' in type alias")
+        SpannedType target = self.parse_type()
+        return ITypeAlias(name, type_params, target)
+
+    Item parse_newtype_item(&self):
+        self.expect_kw(KW_NEWTYPE, "expected 'newtype'")
+        SpannedToken name_tok = self.advance()
+        str name = token_ident(name_tok.lex_token)
+        self.expect_tok(TOK_LPAREN, "expected '(' in newtype")
+        SpannedType inner = self.parse_type()
+        self.expect_tok(TOK_RPAREN, "expected ')' in newtype")
+        return INewtype(name, inner)
+
+    Item parse_extern_block(&self):
+        self.expect_kw(KW_EXTERN, "expected 'extern'")
+        # Skip optional ABI string (e.g., "C")
+        if self.check_tok(TOK_STRING):
+            self.advance()
+        # Inline extern: extern int func(int x) = "symbol"
+        # Detected when next token is a type keyword or identifier (not ':')
+        if not self.check_tok(TOK_COLON):
+            FunctionDef fd = self.parse_function_def()
+            # Convert expr-body (= "symbol") to declaration (empty body)
+            Vector[Stmt] empty = Vector[Stmt]()
+            FunctionDef decl = FunctionDef(fd.name, fd.params, fd.return_type, fd.type_params, empty, false)
+            return IFunction(decl)
+        self.expect_tok(TOK_COLON, "expected ':' after extern")
+        Vector[FunctionDef] fns = Vector[FunctionDef]()
+        if self.match_tok(TOK_INDENT):
+            while not self.check_tok(TOK_DEDENT) and not self.at_end():
+                self.skip_trivia()
+                if self.check_tok(TOK_DEDENT) or self.at_end():
+                    break
+                # Skip 'public' if present
+                if self.check_kw(KW_PUBLIC):
+                    self.advance()
+                Item fn_item = self.parse_function_item()
+                match fn_item:
+                    case IFunction(fd):
+                        fns.push(fd)
+                    else:
+                        pass
+                self.skip_trivia()
+            if self.check_tok(TOK_DEDENT):
+                self.advance()
+        return IExternBlock(fns)
+
+    Item parse_test_item(&self):
+        self.expect_kw(KW_TEST, "expected 'test'")
+        SpannedToken name_tok = self.advance()
+        str name = token_string_val(name_tok.lex_token)
+        # Skip optional 'with Expr as name [, Expr as name]*' clause
+        if self.check_kw(KW_WITH):
+            self.advance()
+            # Skip until we reach ':'
+            while not self.check_tok(TOK_COLON) and not self.at_end():
+                self.advance()
+        self.expect_tok(TOK_COLON, "expected ':' after test name")
+        Vector[Stmt] body = self.parse_block()
+        return ITest(name, body)
+
+    Item parse_suite_item(&self):
+        self.expect_kw(KW_SUITE, "expected 'suite'")
+        SpannedToken sub_tok = self.advance()
+        str sub_name = token_ident(sub_tok.lex_token)
+        self.expect_tok(TOK_COLON, "expected ':' after suite setup/teardown")
+        Vector[Stmt] body = self.parse_block()
+        if sub_name == "setup":
+            return ISuiteSetup(body)
+        return ISuiteTeardown(body)
 
     # ── Module parsing ───────────────────────────────────────
 
@@ -1998,6 +2757,24 @@ equip Parser:
             self.skip_trivia()
             if self.at_end():
                 break
+
+            # Skip @attributes (e.g. @derive(Eq, Clone))
+            while self.check_tok(TOK_AT):
+                self.advance()
+                if self.check_tok(TOK_IDENT):
+                    self.advance()
+                elif self.peek_kw() > 0:
+                    self.advance()
+                if self.check_tok(TOK_LPAREN):
+                    self.skip_paren_contents()
+                self.skip_trivia()
+
+            if self.at_end():
+                break
+
+            # Skip 'public' visibility modifier
+            if self.check_kw(KW_PUBLIC):
+                self.advance()
 
             # Try to detect an item
             if self.check_kw(KW_STRUCT):
@@ -2012,6 +2789,18 @@ equip Parser:
                 items.push(self.parse_import_item())
             elif self.check_kw(KW_DIRECTIVE):
                 items.push(self.parse_directive_item())
+            elif self.check_kw(KW_CONST):
+                items.push(self.parse_const_item())
+            elif self.check_kw(KW_TYPE):
+                items.push(self.parse_type_alias_item())
+            elif self.check_kw(KW_NEWTYPE):
+                items.push(self.parse_newtype_item())
+            elif self.check_kw(KW_EXTERN):
+                items.push(self.parse_extern_block())
+            elif self.check_kw(KW_TEST):
+                items.push(self.parse_test_item())
+            elif self.check_kw(KW_SUITE):
+                items.push(self.parse_suite_item())
             else:
                 # Must be a function definition or top-level statement
                 int saved_pos = self.pos
