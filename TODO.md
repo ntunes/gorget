@@ -2,6 +2,12 @@
 
 ## High
 
+- **Borrow checker: closure body walks leak state into enclosing scope**: `check_expr` for `Expr::Closure` walks the closure body with the enclosing function's `var_states`, so a move inside a non-consuming closure body marks the variable as Moved in the enclosing scope. A closure *definition* shouldn't affect enclosing state — only calling or passing the closure should. Fix: snapshot/restore enclosing state around closure body check, register captures as the closure's "parameters" with appropriate borrow modes. [added: 2026-02-21]
+
+- **Borrow checker: ~750 lines of duplicated AST walks**: Six separate hand-written recursive walkers (`collect_captured_ref_origins`, `trace_closure_body_to_params`, `trace_expr_to_params`, `expr_mutates_captures`, `walk_free_vars`, `walk_mutations`) all follow the same pattern with `_ => {}` catch-alls. New `Expr` variants are silently ignored instead of causing compile errors. Inconsistent variant coverage across walkers (e.g., `DictComprehension` handled in some but not others). Extract a generic `ExprVisitor` trait with default recursion. [added: 2026-02-21]
+
+- **Borrow checker: Pass 5a doesn't trace through local variable assignments**: `compute_function_return_borrows` can't trace `str local = a; return local` back to param `a`, producing empty `return_borrows_from`. Pass 5b's call-site origin tracking depends on this metadata, so cross-function origin chains break when returns flow through locals. Either enhance Pass 5a to track local→param mappings, or unify with Pass 5b's `var_origins`. [added: 2026-02-21]
+
 ## Medium
 
 
@@ -30,6 +36,12 @@
 
 - **Hot-reload: trait objects / closures in State**: Trait object vtable pointers and closure function pointers become invalid after dlclose. The `reload()` hook can reconstruct them, but compiler-assisted fixup would be better. [added: 2026-02-16]
 
+
+- **Borrow checker: `BorrowOrigin::Unknown` treated as safe**: `merge_origins` filters out `Unknown`, so unresolvable origins silently disappear. A closure capturing a variable with undetermined origin won't flag dangling returns. Should treat `Unknown` conservatively as potentially local. [added: 2026-02-21]
+
+- **Borrow checker: no capture set tracking**: The checker knows a closure's origin (which references flow in) but not its capture set (which variables it closes over). Without this, can't enforce aliasing between closures and their captures, can't detect two closures mutably capturing the same variable, and scope isolation (above) can't be implemented properly. Codegen computes free vars independently — should share this analysis. [added: 2026-02-21]
+
+- **Borrow checker: no MutCallable aliasing enforcement**: A `MutCallable` closure holds `&mut` to captured variables, but the checker doesn't prevent simultaneous reads of those variables while the closure exists. Works in C (raw pointers) but would be unsound with stricter backends. [added: 2026-02-21]
 
 - **ByMutRef captures in escaping closures**: `&count` captures still point to the caller's stack even when the env is heap-allocated (step 1). Needs boxing the captured variable itself — separate fix from env heap-allocation. [added: 2026-02-15]
 
