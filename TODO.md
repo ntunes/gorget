@@ -58,7 +58,7 @@
 
 - **Const generics**: Partially parsed but not validated or monomorphized. E.g., `struct Array[T, N: int]`. [from roadmap, added: 2026-02-16]
 
-- **Smart pointers (Rc[T], Arc[T])**: `Box[Trait]` exists for trait objects but general reference-counted (`Rc[T]`) and atomic reference-counted (`Arc[T]`) pointers are missing. Also `Cell`, `RefCell`, `Mutex`. [from roadmap, added: 2026-02-16]
+- **Smart pointers (Rc[T], Arc[T])**: `Box[Trait]` exists for trait objects but general reference-counted (`Rc[T]`) and atomic reference-counted (`Arc[T]`) pointers are missing. Also `Cell`, `RefCell`, `Mutex`. Recommended order: (1) `Rc[T]` for concrete types — single-threaded refcount codegen, immediately useful for trees/graphs/observers. (2) Generalize trait object recognition from hardcoded `Box[Trait]` to any smart pointer — add `SmartPtrKind` (Box/Rc/Arc/Weak) to `ResolvedType::TraitObject`, extend the `name.node == "Box"` check in `types.rs:367` to a set of known smart pointer names. Vtable dispatch is identical across wrappers; only construction/clone/drop differs. (3) `Weak[T]` — cycle-breaking companion. (4) `Arc[T]` — defer until threading/async work starts (atomic refcount is concurrency-adjacent, not async-specific). [from roadmap, added: 2026-02-16, updated: 2026-02-21]
 
 - **Pattern-bound variable type inference in print**: Bindings from `case Error(e):` use `__typeof__()` for declaration but their TypeId isn't in the resolution map. `print("{e}")` defaults to `%lld` format outside monomorphized contexts (inside monomorphized contexts, single-param `type_id_subs` fallback now works). Workaround: use `print(e)` for non-int pattern-bound vars. [from codegen-notes, added: 2026-02-16, updated: 2026-02-17]
 
