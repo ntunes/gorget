@@ -1,0 +1,19 @@
+void main():
+    str s = "Hello123"
+
+    # char methods on string index expression
+    print("{s[0].is_alpha()}")
+    print("{s[4].is_digit()}")
+    print("{s[5].is_digit()}")
+    print("{s[0].is_upper()}")
+    print("{s[1].is_lower()}")
+    print("{s[5].to_upper()}")
+    print("{s[0].to_lower()}")
+
+    # method on index variable (should also work)
+    int i = 0
+    print("{s[i].is_alpha()}")
+
+    # chained on a local works (baseline)
+    char c = s[0]
+    print("{c.is_alpha()}")

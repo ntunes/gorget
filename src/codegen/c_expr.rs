@@ -882,7 +882,7 @@ impl CodegenContext<'_> {
                     if matches!(&index.node, Expr::Range { .. }) {
                         return Some(self.types.string_id);
                     }
-                    return Some(self.types.int_id); // char is printed as int
+                    return Some(self.types.char_id);
                 }
                 None
             }

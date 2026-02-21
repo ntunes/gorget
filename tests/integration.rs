@@ -3476,6 +3476,23 @@ false",
 }
 
 #[test]
+fn char_method_on_index() {
+    run_gg(
+        "char_method_on_index.gg",
+        "\
+true
+false
+true
+true
+true
+1
+h
+true
+true",
+    );
+}
+
+#[test]
 fn option_expect() {
     run_gg(
         "option_expect.gg",
