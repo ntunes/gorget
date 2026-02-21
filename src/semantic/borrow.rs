@@ -290,6 +290,10 @@ struct BorrowChecker<'a> {
     /// from state merges so that moves in early-return paths don't poison
     /// the post-branch state.
     diverged: bool,
+
+    /// Whether we are inside a return expression (for allowing implicit
+    /// constructor moves of non-loop-local vars — return exits the function).
+    in_return_expr: bool,
 }
 
 impl<'a> BorrowChecker<'a> {
@@ -328,6 +332,7 @@ impl<'a> BorrowChecker<'a> {
             active_outlives: Vec::new(),
             reassignment_invalidated: FxHashMap::default(),
             diverged: false,
+            in_return_expr: false,
         }
     }
 
@@ -1026,14 +1031,15 @@ impl<'a> BorrowChecker<'a> {
                                         if def.kind == DefKind::Variable && !def.is_param {
                                             if let Some(type_id) = def.type_id {
                                                 if !is_copy_type(type_id, self.types) {
-                                                    // Skip implicit move tracking for
-                                                    // non-loop-local vars inside loops —
-                                                    // common in `return Variant(var)` which
-                                                    // exits the function (no re-iteration).
-                                                    let in_loop_non_local = self.loop_depth > 0
+                                                    // Skip implicit move check only when
+                                                    // we are in a return expression — return
+                                                    // exits the function so the move happens
+                                                    // at most once even inside a loop.
+                                                    let skip_implicit_move = self.loop_depth > 0
                                                         && !self.loop_local_defs.last()
-                                                            .map_or(false, |s| s.contains(&var_def_id));
-                                                    if !in_loop_non_local {
+                                                            .map_or(false, |s| s.contains(&var_def_id))
+                                                        && self.in_return_expr;
+                                                    if !skip_implicit_move {
                                                         self.check_move(var_def_id, arg.span);
                                                         continue;
                                                     }
@@ -1199,6 +1205,8 @@ impl<'a> BorrowChecker<'a> {
                 ..
             } => {
                 self.check_expr(iterable);
+                let saved_in_return = self.in_return_expr;
+                self.in_return_expr = false;
                 self.loop_depth += 1;
                 self.loop_local_defs.push(FxHashSet::default());
                 self.check_expr(comp_expr);
@@ -1207,6 +1215,7 @@ impl<'a> BorrowChecker<'a> {
                 }
                 self.loop_local_defs.pop();
                 self.loop_depth -= 1;
+                self.in_return_expr = saved_in_return;
             }
 
             Expr::DictComprehension {
@@ -1217,6 +1226,8 @@ impl<'a> BorrowChecker<'a> {
                 ..
             } => {
                 self.check_expr(iterable);
+                let saved_in_return = self.in_return_expr;
+                self.in_return_expr = false;
                 self.loop_depth += 1;
                 self.loop_local_defs.push(FxHashSet::default());
                 self.check_expr(key);
@@ -1226,6 +1237,7 @@ impl<'a> BorrowChecker<'a> {
                 }
                 self.loop_local_defs.pop();
                 self.loop_depth -= 1;
+                self.in_return_expr = saved_in_return;
             }
 
             Expr::SetComprehension {
@@ -1235,6 +1247,8 @@ impl<'a> BorrowChecker<'a> {
                 ..
             } => {
                 self.check_expr(iterable);
+                let saved_in_return = self.in_return_expr;
+                self.in_return_expr = false;
                 self.loop_depth += 1;
                 self.loop_local_defs.push(FxHashSet::default());
                 self.check_expr(comp_expr);
@@ -1243,6 +1257,7 @@ impl<'a> BorrowChecker<'a> {
                 }
                 self.loop_local_defs.pop();
                 self.loop_depth -= 1;
+                self.in_return_expr = saved_in_return;
             }
 
             Expr::ArrayLiteral(elements) | Expr::TupleLiteral(elements) => {
@@ -1268,10 +1283,11 @@ impl<'a> BorrowChecker<'a> {
                             if def.kind == DefKind::Variable && !def.is_param {
                                 if let Some(type_id) = def.type_id {
                                     if !is_copy_type(type_id, self.types) {
-                                        let in_loop_non_local = self.loop_depth > 0
+                                        let skip_implicit_move = self.loop_depth > 0
                                             && !self.loop_local_defs.last()
-                                                .map_or(false, |s| s.contains(&var_def_id));
-                                        if !in_loop_non_local {
+                                                .map_or(false, |s| s.contains(&var_def_id))
+                                            && self.in_return_expr;
+                                        if !skip_implicit_move {
                                             self.check_move(var_def_id, arg.span);
                                             continue;
                                         }
@@ -1459,7 +1475,10 @@ impl<'a> BorrowChecker<'a> {
 
             Stmt::Return(expr) => {
                 if let Some(expr) = expr {
+                    let saved_in_return = self.in_return_expr;
+                    self.in_return_expr = true;
                     self.check_expr(expr);
+                    self.in_return_expr = saved_in_return;
 
                     // Lifetime check: if the function returns a reference or callable type,
                     // verify the return expression doesn't reference local data.
@@ -1519,11 +1538,14 @@ impl<'a> BorrowChecker<'a> {
             } => {
                 self.check_expr(iterable);
                 let before = self.save_branch_state();
+                let saved_in_return = self.in_return_expr;
+                self.in_return_expr = false;
                 self.loop_depth += 1;
                 self.loop_local_defs.push(FxHashSet::default());
                 self.check_block(body);
                 self.loop_local_defs.pop();
                 self.loop_depth -= 1;
+                self.in_return_expr = saved_in_return;
                 let after_body = self.save_branch_state();
                 if let Some(else_body) = else_body {
                     // for-else: else only runs if body never does (0 iterations)
@@ -1546,11 +1568,14 @@ impl<'a> BorrowChecker<'a> {
                 // Mark borrow origins for all `is` pattern bindings (including compound conditions)
                 self.mark_compound_is_origins(&condition.node);
                 let before = self.save_branch_state();
+                let saved_in_return = self.in_return_expr;
+                self.in_return_expr = false;
                 self.loop_depth += 1;
                 self.loop_local_defs.push(FxHashSet::default());
                 self.check_block(body);
                 self.loop_local_defs.pop();
                 self.loop_depth -= 1;
+                self.in_return_expr = saved_in_return;
                 let after_body = self.save_branch_state();
                 if let Some(else_body) = else_body {
                     self.restore_branch_state(&before);
@@ -1564,11 +1589,14 @@ impl<'a> BorrowChecker<'a> {
 
             Stmt::Loop { body } => {
                 let before = self.save_branch_state();
+                let saved_in_return = self.in_return_expr;
+                self.in_return_expr = false;
                 self.loop_depth += 1;
                 self.loop_local_defs.push(FxHashSet::default());
                 self.check_block(body);
                 self.loop_local_defs.pop();
                 self.loop_depth -= 1;
+                self.in_return_expr = saved_in_return;
                 let after_body = self.save_branch_state();
                 // Infinite loop, but break can exit: merge pre+post for break paths
                 self.merge_branch_states(&[before, after_body]);
@@ -4296,6 +4324,88 @@ void wrap(String s):
                     | SemanticErrorKind::DoubleMove { .. }
             )),
             "unexpected move errors for param passed to constructor: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn constructor_move_in_loop_not_return() {
+        // `auto w = Value(s)` in a loop should error — s is consumed every iteration
+        let source = "\
+enum Wrapper:
+    Value(String)
+
+void main():
+    String s = \"hello\"
+    for i in 0..3:
+        auto w = Value(s)
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::MoveInLoop { name } if name == "s")),
+            "expected MoveInLoop for s in non-return constructor, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn constructor_move_in_loop_return() {
+        // `return Value(label)` in a loop should be fine — return exits the function
+        let source = "\
+enum Wrapper:
+    Value(String)
+
+Wrapper find(Vector[String] items):
+    for item in items:
+        String label = item
+        return Value(label)
+    return Value(\"default\")
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::MoveInLoop { .. })),
+            "unexpected MoveInLoop for return-position constructor: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn struct_literal_move_in_loop_not_return() {
+        // Struct constructor consuming non-loop-local var in a loop should error.
+        // Parser rewrites `Container(s)` to StructLiteral for struct types.
+        let source = "\
+struct Container:
+    String value
+
+void main():
+    String s = \"hello\"
+    for i in 0..3:
+        auto b = Container(s)
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::MoveInLoop { name } if name == "s")),
+            "expected MoveInLoop for s in struct literal, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn nested_constructor_in_return() {
+        // `return Wrap(Val(s))` — nested constructors in return should be fine
+        let source = "\
+enum Inner:
+    Val(String)
+
+enum Outer:
+    Wrap(Inner)
+
+Outer find(Vector[String] items):
+    for item in items:
+        String s = item
+        return Wrap(Val(s))
+    return Wrap(Val(\"default\"))
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::MoveInLoop { .. })),
+            "unexpected MoveInLoop for nested return-position constructor: {:?}", errors
         );
     }
 }
