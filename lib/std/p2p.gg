@@ -237,6 +237,7 @@ struct ReliableStream:
     int keepalive_timeout_ms       # declare dead after silence this long (default 120000)
     int last_recv_ms               # timestamp of last received packet (0 until first recv)
     Vector[uint8] frame_buf        # accumulated bytes for frame reassembly
+    int ca_ack_count               # congestion avoidance: ACKs since last cwnd bump
     # Phase 12: Protocol tags + RPC
     str protocol                   # protocol tag from SYN ("echo/1.0"), "" if none
     int rpc_next_id                # monotonic correlation ID counter (starts at 1)
@@ -650,7 +651,7 @@ ReliableStream p2p_new_stream(int stream_id, int remote_stream_id, str peer_hex,
         false, Vector[uint8](), Vector[uint8](), 0, 0,
         Vector[uint8](), Vector[uint8](), Vector[uint8](),
         false,
-        30000, 120000, 0, Vector[uint8](),
+        30000, 120000, 0, Vector[uint8](), 0,
         "", 1
     )
 
@@ -1598,6 +1599,7 @@ void p2p_stream_handle_ack(Node &node, str sender_hex, Vector[uint8] payload):
                 if s.ssthresh < 1:
                     s.ssthresh = 1
                 s.cwnd = s.ssthresh + 3
+                s.ca_ack_count = 0
                 # Retransmit first unacked segment
                 int ri = 0
                 while ri < s.send_buffer.len():
@@ -1622,11 +1624,14 @@ void p2p_stream_handle_ack(Node &node, str sender_hex, Vector[uint8] payload):
             s.last_ack_num = cum_ack
             # Increase cwnd
             if s.cwnd < s.ssthresh:
-                # Slow start
+                # Slow start: +1 per ACK (exponential growth)
                 s.cwnd = s.cwnd + 1
             else:
-                # Congestion avoidance: +1 per full window
-                s.cwnd = s.cwnd + 1
+                # Congestion avoidance: +1 per full window (AIMD)
+                s.ca_ack_count = s.ca_ack_count + 1
+                if s.ca_ack_count >= s.cwnd:
+                    s.cwnd = s.cwnd + 1
+                    s.ca_ack_count = 0
     node.streams.push(!s)
 
 # ── Retransmission tick ────────────────────────────────────
@@ -1668,6 +1673,7 @@ void p2p_stream_tick(Node &node):
                 if s.ssthresh < 1:
                     s.ssthresh = 1
                 s.cwnd = 1
+                s.ca_ack_count = 0
                 # Exponential backoff on RTO
                 s.rto_ms = s.rto_ms * 2
                 if s.rto_ms > 60000:

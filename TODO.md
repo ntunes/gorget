@@ -6,7 +6,6 @@
 
 - **Borrow checker: implicit constructor moves in loops**: Variant/struct constructor calls inside loops with non-loop-local non-Copy args currently skip implicit move tracking (to avoid false `MoveInLoop` for `return Variant(var)` patterns). Could be improved with return-position analysis so that `Variant(var)` NOT in a return/break is still caught. [added: 2026-02-20]
 
-- **Congestion avoidance increment wrong** (in `p2p_stream_handle_ack`): The code does `s.cwnd = s.cwnd + 1` per ACK in congestion avoidance phase, but AIMD calls for +1/cwnd per ACK (i.e., +1 per full window). Integer division `1/cwnd` rounds to 0, so the standard approach is a counter: increment cwnd when `ack_count >= cwnd`. Pre-existing from Phase 7. [added: 2026-02-20]
 
 - **Self-hosting parser: 3 remaining comparison mismatches (234/237)**: (1) `chars.gg` — `'\0'` null character literal truncates the C string at the null byte, so the Gorget parser outputs `''` instead of `'\0'`. Fundamental C string limitation. (2) `math_constants.gg` — C's `%g` float formatting outputs `1e+06` / `3.14159e+06` while Rust's `Display` outputs `1000000.0` / `3141592.0`. Would need custom float-to-string in format.gg. (3) `name_first.gg` — `directive name-first` enables a completely different parsing mode (identifier-first declarations like `x int` instead of `int x`). The self-hosting parser only handles the default type-first mode. [added: 2026-02-21]
 
