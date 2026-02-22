@@ -1456,8 +1456,10 @@ void main():
     #[test]
     fn await_stub() {
         let source = "\
+async int fetch():
+    return 42
 async void main():
-    auto x = await 42
+    auto x = await fetch()
 ";
         let c_code = compile_to_c(source);
         assert!(c_code.contains("/* await */"));
@@ -1466,8 +1468,10 @@ async void main():
     #[test]
     fn spawn_stub() {
         let source = "\
-void main():
-    auto x = spawn 42
+async int fetch():
+    return 42
+async void main():
+    auto x = spawn fetch()
 ";
         let c_code = compile_to_c(source);
         assert!(c_code.contains("/* spawn */"));

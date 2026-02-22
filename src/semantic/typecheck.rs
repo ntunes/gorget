@@ -196,6 +196,8 @@ struct TypeChecker<'a> {
     current_return_type: Option<TypeId>,
     /// Whether the current function has `throws`.
     current_function_throws: bool,
+    /// Whether the current function is `async`.
+    current_function_is_async: bool,
     /// Type variable for implicit `it` parameter inside ImplicitClosure.
     implicit_it_type: Option<TypeId>,
     /// Map from expression span to its inferred TypeId (used by codegen for Result-based `?`).
@@ -234,6 +236,7 @@ impl<'a> TypeChecker<'a> {
             next_type_var: 0,
             current_return_type: None,
             current_function_throws: false,
+            current_function_is_async: false,
             implicit_it_type: None,
             expr_types: FxHashMap::default(),
             method_resolutions: FxHashMap::default(),
@@ -1134,13 +1137,53 @@ impl<'a> TypeChecker<'a> {
             }
 
             Expr::Await { expr: inner } => {
-                self.infer_expr(inner);
-                self.types.error_id // unwrapped Future[T] -> T
+                let inner_type = self.infer_expr(inner);
+                if !self.current_function_is_async {
+                    self.error(SemanticErrorKind::AwaitOutsideAsync, expr.span);
+                }
+                let resolved = self.resolve_type(inner_type);
+                let future_type = if let ResolvedType::Generic(def_id, args) = self.types.get(resolved).clone() {
+                    if self.scopes.get_def(def_id).name == "Future" && args.len() == 1 {
+                        Some((resolved, args))
+                    } else {
+                        None
+                    }
+                } else {
+                    self.try_resolve_call_generic_type(inner, "Future", 1)
+                };
+                if let Some((type_id, args)) = future_type {
+                    self.expr_types.insert(inner.span, type_id);
+                    args[0]
+                } else {
+                    if inner_type != self.types.error_id {
+                        self.error(SemanticErrorKind::AwaitNonFuture, expr.span);
+                    }
+                    self.types.error_id
+                }
             }
 
             Expr::Spawn { expr: inner } => {
-                self.infer_expr(inner);
-                self.types.error_id // Task[T]
+                let inner_type = self.infer_expr(inner);
+                let resolved = self.resolve_type(inner_type);
+                let future_type = if let ResolvedType::Generic(def_id, args) = self.types.get(resolved).clone() {
+                    if self.scopes.get_def(def_id).name == "Future" && args.len() == 1 {
+                        Some((resolved, args))
+                    } else {
+                        None
+                    }
+                } else {
+                    self.try_resolve_call_generic_type(inner, "Future", 1)
+                };
+                if let Some((type_id, args)) = future_type {
+                    self.expr_types.insert(inner.span, type_id);
+                    let task_def_id = self.scopes.lookup("Task").expect("Task not registered");
+                    self.types.insert(ResolvedType::Generic(task_def_id, vec![args[0]]))
+                } else {
+                    if inner_type != self.types.error_id {
+                        self.error(SemanticErrorKind::SpawnNonFuture, expr.span);
+                    }
+                    self.types.error_id
+                }
             }
 
             Expr::TryCapture { expr: inner } => {
@@ -2262,6 +2305,30 @@ impl<'a> TypeChecker<'a> {
         None
     }
 
+    /// Try to determine if a Call expression returns a generic type with the given name
+    /// by looking up the callee's FunctionInfo. Generalized version of `try_resolve_call_result_type`.
+    fn try_resolve_call_generic_type(
+        &self, expr: &Spanned<Expr>, type_name: &str, expected_args: usize,
+    ) -> Option<(TypeId, Vec<TypeId>)> {
+        if let Expr::Call { callee, .. } = &expr.node {
+            if let Expr::Identifier(cname) = &callee.node {
+                if let Some(def_id) = self.resolve_name(callee.span.start, cname) {
+                    if let Some(info) = self.function_info.get(&def_id) {
+                        if let Some(ret_type_id) = info.return_type_id {
+                            let resolved = self.resolve_type(ret_type_id);
+                            if let ResolvedType::Generic(d, args) = self.types.get(resolved).clone() {
+                                if self.scopes.get_def(d).name == type_name && args.len() == expected_args {
+                                    return Some((resolved, args));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Extract the return type from a Function type.
     fn extract_fn_return_type(&self, type_id: TypeId) -> Option<TypeId> {
         match self.types.get(type_id) {
@@ -2594,6 +2661,14 @@ impl<'a> TypeChecker<'a> {
             param_types.push(type_id);
         }
 
+        // Async functions expose Future[T] as their return type at call sites
+        let return_type = if func.qualifiers.is_async {
+            let future_def_id = self.scopes.lookup("Future").expect("Future not registered");
+            self.types.insert(ResolvedType::Generic(future_def_id, vec![return_type]))
+        } else {
+            return_type
+        };
+
         // Create the Function type and set it on the DefInfo
         let func_type = self.types.insert(ResolvedType::Function {
             param_ownerships: vec![crate::parser::ast::Ownership::Borrow; param_types.len()],
@@ -2620,6 +2695,7 @@ impl<'a> TypeChecker<'a> {
 
         self.current_return_type = Some(return_type);
         self.current_function_throws = func.throws.is_some();
+        self.current_function_is_async = func.qualifiers.is_async;
 
         // Resolve parameter types and write to DefInfo
         for param in &func.params {
@@ -3406,6 +3482,96 @@ void main():
                 super::SemanticErrorKind::ValueOutOfRange { .. }
             )),
             "unexpected ValueOutOfRange error: {:?}",
+            errors
+        );
+    }
+
+    // ── Async/Await tests ──
+
+    #[test]
+    fn async_fn_returns_future() {
+        // An async function should type-check without errors
+        let errors = check("async int fetch():\n    return 42\n");
+        assert!(
+            !errors.iter().any(|e| matches!(
+                &e.kind,
+                super::SemanticErrorKind::TypeMismatch { .. }
+            )),
+            "unexpected TypeMismatch for async function: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn await_extracts_type() {
+        // await on an async call inside an async function should work
+        let errors = check(
+            "async int fetch():\n    return 1\nasync int caller():\n    return await fetch()\n"
+        );
+        assert!(
+            !errors.iter().any(|e| matches!(
+                &e.kind,
+                super::SemanticErrorKind::AwaitNonFuture
+                | super::SemanticErrorKind::AwaitOutsideAsync
+            )),
+            "unexpected async/await error: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn await_outside_async_rejected() {
+        let errors = check(
+            "async int fetch():\n    return 1\nint caller():\n    return await fetch()\n"
+        );
+        assert!(
+            errors.iter().any(|e| matches!(
+                &e.kind,
+                super::SemanticErrorKind::AwaitOutsideAsync
+            )),
+            "expected AwaitOutsideAsync error, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn await_non_future_rejected() {
+        let errors = check("async int caller():\n    return await 42\n");
+        assert!(
+            errors.iter().any(|e| matches!(
+                &e.kind,
+                super::SemanticErrorKind::AwaitNonFuture
+            )),
+            "expected AwaitNonFuture error, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn spawn_returns_task() {
+        // spawn on an async call should produce Task[T] — no type errors expected
+        let errors = check(
+            "async int fetch():\n    return 1\nasync void caller():\n    auto t = spawn fetch()\n"
+        );
+        assert!(
+            !errors.iter().any(|e| matches!(
+                &e.kind,
+                super::SemanticErrorKind::SpawnNonFuture
+            )),
+            "unexpected SpawnNonFuture error: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn spawn_non_future_rejected() {
+        let errors = check("async void caller():\n    auto t = spawn 42\n");
+        assert!(
+            errors.iter().any(|e| matches!(
+                &e.kind,
+                super::SemanticErrorKind::SpawnNonFuture
+            )),
+            "expected SpawnNonFuture error, got: {:?}",
             errors
         );
     }

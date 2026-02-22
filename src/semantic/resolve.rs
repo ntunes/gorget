@@ -42,6 +42,7 @@ pub struct FunctionInfo {
     /// Default value expressions for each parameter (None if no default).
     pub param_defaults: Vec<Option<Spanned<Expr>>>,
     pub throws: bool,
+    pub is_async: bool,
     pub scope_id: super::ids::ScopeId,
     /// Names of generic type parameters, in declaration order.
     pub generic_param_names: Vec<String>,
@@ -109,7 +110,7 @@ pub fn collect_top_level(
     // Register built-in collection types as Import placeholders so they're always
     // available for type resolution (e.g. Result[Vector[uint8], str] in synthetic modules).
     // The real struct definitions from std.collections replace these when imported.
-    for type_name in &["Vector", "List", "Array", "Dict", "HashMap", "Set", "HashSet", "Box"] {
+    for type_name in &["Vector", "List", "Array", "Dict", "HashMap", "Set", "HashSet", "Box", "Future", "Task"] {
         let _ = scopes.define(type_name.to_string(), DefKind::Import, Span::dummy());
     }
     // Register built-in Option[T] and Result[T,E] enum types with their variants.
@@ -138,13 +139,22 @@ pub fn collect_top_level(
             if let Some(def_id) = scopes.lookup(&f.name.node) {
                 if let Some(fi) = ctx.function_info.get_mut(&def_id) {
                     if fi.return_type_id.is_none() {
-                        fi.return_type_id = types::ast_type_to_resolved(
+                        let ret_type = types::ast_type_to_resolved(
                             &f.return_type.node,
                             f.return_type.span,
                             scopes,
                             types,
                         )
                         .ok();
+                        // Async functions return Future[T] at call sites
+                        fi.return_type_id = if f.qualifiers.is_async {
+                            ret_type.map(|inner_tid| {
+                                let future_def_id = scopes.lookup("Future").expect("Future not registered");
+                                types.insert(types::ResolvedType::Generic(future_def_id, vec![inner_tid]))
+                            })
+                        } else {
+                            ret_type
+                        };
                     }
                 }
             }
@@ -209,6 +219,16 @@ fn collect_item(
                     )
                     .ok();
 
+                    // Async functions return Future[T] at call sites
+                    let ret_type = if f.qualifiers.is_async {
+                        ret_type.map(|inner_tid| {
+                            let future_def_id = scopes.lookup("Future").expect("Future not registered");
+                            types.insert(types::ResolvedType::Generic(future_def_id, vec![inner_tid]))
+                        })
+                    } else {
+                        ret_type
+                    };
+
                     let param_ownerships: Vec<Ownership> =
                         f.params.iter().map(|p| p.node.ownership).collect();
                     let param_names: Vec<String> =
@@ -250,6 +270,7 @@ fn collect_item(
                             param_names,
                             param_defaults,
                             throws: f.throws.is_some(),
+                            is_async: f.qualifiers.is_async,
                             scope_id: scopes.current_scope(),
                             generic_param_names,
                             where_bounds,
@@ -374,6 +395,17 @@ fn collect_item(
                             types,
                         )
                         .ok();
+
+                        // Async methods return Future[T] at call sites
+                        let ret_type = if f.qualifiers.is_async {
+                            ret_type.map(|inner_tid| {
+                                let future_def_id = scopes.lookup("Future").expect("Future not registered");
+                                types.insert(types::ResolvedType::Generic(future_def_id, vec![inner_tid]))
+                            })
+                        } else {
+                            ret_type
+                        };
+
                         let param_ownerships: Vec<Ownership> =
                             f.params.iter().map(|p| p.node.ownership).collect();
                         let param_names: Vec<String> =
@@ -412,6 +444,7 @@ fn collect_item(
                                 param_names,
                                 param_defaults,
                                 throws: f.throws.is_some(),
+                                is_async: f.qualifiers.is_async,
                                 scope_id: scopes.current_scope(),
                                 generic_param_names,
                                 where_bounds,

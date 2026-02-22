@@ -68,6 +68,15 @@ pub enum SemanticErrorKind {
     /// `?` on Result in a function that doesn't return Result.
     TryOnResultInNonResultFunction,
 
+    /// `await` used outside an `async` function.
+    AwaitOutsideAsync,
+
+    /// `await` applied to a non-`Future[T]` value.
+    AwaitNonFuture,
+
+    /// `spawn` applied to a non-`Future[T]` value.
+    SpawnNonFuture,
+
     // ── Borrow checking errors ──
 
     /// Variable used after ownership was moved.
@@ -265,6 +274,15 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::TryOnResultInNonResultFunction => {
                 write!(f, "`?` on Result requires enclosing function to return Result")
+            }
+            SemanticErrorKind::AwaitOutsideAsync => {
+                write!(f, "`await` can only be used inside an `async` function")
+            }
+            SemanticErrorKind::AwaitNonFuture => {
+                write!(f, "`await` requires a `Future[T]` value")
+            }
+            SemanticErrorKind::SpawnNonFuture => {
+                write!(f, "`spawn` requires a `Future[T]` value (an async function call)")
             }
             SemanticErrorKind::UseAfterMove { name, .. } => {
                 write!(f, "use of moved value `{name}`")
