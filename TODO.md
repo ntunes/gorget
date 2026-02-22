@@ -6,7 +6,6 @@
 
 - **Docs: add "When do I need `live`?" section to language reference**: Dedicated section with concrete examples covering: (1) trait method declarations with ref params (no body to analyze), (2) structs holding references, (3) multiple independent borrow sources needing precision (`live(a)` / `live(b)` + `where a outlives b`), (4) extern FFI declarations with multiple ref params. Each case should show the annotation and explain why inference can't handle it. [added: 2026-02-22]
 
-- **Borrow checker: Pass 5a doesn't trace through local variable assignments**: `compute_function_return_borrows` can't trace `str local = a; return local` back to param `a`, producing empty `return_borrows_from`. Pass 5b's call-site origin tracking depends on this metadata, so cross-function origin chains break when returns flow through locals. Either enhance Pass 5a to track local→param mappings, or unify with Pass 5b's `var_origins`. [added: 2026-02-21]
 
 ## Medium
 
@@ -108,7 +107,7 @@
 
 - **`gg info` command**: show fields, methods, traits, memory layout for a type. [added: 2026-02-10]
 
-- **Docs: document borrow checker inference pipeline for contributors**: Explain the multi-phase architecture: Pass 5a computes `return_borrows_from` per function (body analysis → elision fallback → explicit `live`), Pass 5b validates at call sites using `var_origins` + `return_borrows_from`. Document how the two systems interact — 5b depends on 5a's metadata for cross-function analysis, so 5a's local-alias limitation (High TODO item) breaks the chain. Cover `BorrowOrigin` variants and `compute_expr_origin()`. [added: 2026-02-22]
+- **Docs: document borrow checker inference pipeline for contributors**: Explain the multi-phase architecture: Pass 5a computes `return_borrows_from` per function (body analysis with local alias tracing → elision fallback → explicit `live`), Pass 5b validates at call sites using `var_origins` + `return_borrows_from`. Document how the two systems interact — 5b depends on 5a's metadata for cross-function analysis. Cover `BorrowOrigin` variants, `compute_expr_origin()`, and the `LocalAliasMap` that traces through local variables and calls. [added: 2026-02-22, updated: 2026-02-22]
 
 - **Associated type validation**: Associated types are parsed but not validated or resolved in semantic analysis. [from roadmap, added: 2026-02-16]
 

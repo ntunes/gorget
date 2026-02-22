@@ -2230,12 +2230,21 @@ fn compute_function_return_borrows(
 
     let mut borrows_from = FxHashSet::default();
 
+    // Build local alias map for Block bodies (expression bodies have no locals)
+    let local_aliases = match &func.body {
+        FunctionBody::Block(block) => build_local_alias_map(block, &param_name_to_idx, &*function_info, resolution_map, scopes),
+        _ => LocalAliasMap::default(),
+    };
+
+    // Shared reborrow for trace functions (compute_function_return_borrows holds &mut)
+    let fi_ref: &FxHashMap<DefId, FunctionInfo> = &*function_info;
+
     match &func.body {
         FunctionBody::Expression(expr) => {
-            trace_expr_to_params(expr, &param_name_to_idx, resolution_map, scopes, &mut borrows_from);
+            trace_expr_to_params(expr, &param_name_to_idx, &local_aliases, fi_ref, resolution_map, scopes, &mut borrows_from);
         }
         FunctionBody::Block(block) => {
-            trace_block_returns_to_params(block, &param_name_to_idx, resolution_map, scopes, &mut borrows_from);
+            trace_block_returns_to_params(block, &param_name_to_idx, &local_aliases, fi_ref, resolution_map, scopes, &mut borrows_from);
         }
         FunctionBody::Declaration | FunctionBody::Extern(_) => {
             // No body — apply elision rules
@@ -2344,6 +2353,7 @@ impl crate::parser::visitor::ExprVisitor for CapturedRefOriginCollector<'_> {
 /// Skips nested closures (they have their own capture scope).
 struct ClosureBodyParamTracer<'a> {
     outer_params: &'a FxHashMap<String, usize>,
+    outer_aliases: &'a LocalAliasMap,
     closure_params: &'a FxHashSet<&'a str>,
     result: &'a mut FxHashSet<usize>,
 }
@@ -2355,6 +2365,8 @@ impl crate::parser::visitor::ExprVisitor for ClosureBodyParamTracer<'_> {
                 if !self.closure_params.contains(name.as_str()) {
                     if let Some(&idx) = self.outer_params.get(name) {
                         self.result.insert(idx);
+                    } else if let Some(indices) = self.outer_aliases.get(name) {
+                        self.result.extend(indices);
                     }
                 }
             }
@@ -2371,10 +2383,176 @@ impl crate::parser::visitor::ExprVisitor for ClosureBodyParamTracer<'_> {
     // CompoundAssign, For, While, Loop, Match, With, Unsafe, Assert, etc.).
 }
 
+// ─── Local Alias Map ─────────────────────────────────────────
+
+/// Maps local variable names to the set of param indices their values may originate from.
+/// Over-approximates via union: assignments in different branches are merged.
+type LocalAliasMap = FxHashMap<String, FxHashSet<usize>>;
+
+/// Build a map from local variable names to the param indices they may alias.
+/// Walks all statements in the function body before return-tracing begins.
+fn build_local_alias_map(
+    block: &Block,
+    param_names: &FxHashMap<String, usize>,
+    function_info: &FxHashMap<DefId, FunctionInfo>,
+    resolution_map: &ResolutionMap,
+    scopes: &ScopeTable,
+) -> LocalAliasMap {
+    let mut aliases = LocalAliasMap::default();
+    build_aliases_from_block(block, param_names, &mut aliases, function_info, resolution_map, scopes);
+    aliases
+}
+
+fn build_aliases_from_block(
+    block: &Block,
+    param_names: &FxHashMap<String, usize>,
+    aliases: &mut LocalAliasMap,
+    function_info: &FxHashMap<DefId, FunctionInfo>,
+    resolution_map: &ResolutionMap,
+    scopes: &ScopeTable,
+) {
+    for stmt in &block.stmts {
+        build_aliases_from_stmt(&stmt.node, param_names, aliases, function_info, resolution_map, scopes);
+    }
+}
+
+fn build_aliases_from_stmt(
+    stmt: &Stmt,
+    param_names: &FxHashMap<String, usize>,
+    aliases: &mut LocalAliasMap,
+    function_info: &FxHashMap<DefId, FunctionInfo>,
+    resolution_map: &ResolutionMap,
+    scopes: &ScopeTable,
+) {
+    match stmt {
+        Stmt::VarDecl { pattern, value, .. } => {
+            if let Pattern::Binding(name) = &pattern.node {
+                let indices = collect_param_indices(&value.node, param_names, aliases, function_info, resolution_map, scopes);
+                if !indices.is_empty() {
+                    aliases.entry(name.clone()).or_default().extend(indices);
+                }
+            }
+        }
+        Stmt::Assign { target, value } => {
+            if let Expr::Identifier(name) = &target.node {
+                // Skip params — they already have direct entries
+                if !param_names.contains_key(name) {
+                    let indices = collect_param_indices(&value.node, param_names, aliases, function_info, resolution_map, scopes);
+                    if !indices.is_empty() {
+                        // Union with existing (conservative for reassignment)
+                        aliases.entry(name.clone()).or_default().extend(indices);
+                    }
+                }
+            }
+        }
+        // Recurse into control flow — over-approximate by unioning all branches
+        Stmt::If { then_body, elif_branches, else_body, .. } => {
+            build_aliases_from_block(then_body, param_names, aliases, function_info, resolution_map, scopes);
+            for (_, body) in elif_branches {
+                build_aliases_from_block(body, param_names, aliases, function_info, resolution_map, scopes);
+            }
+            if let Some(else_body) = else_body {
+                build_aliases_from_block(else_body, param_names, aliases, function_info, resolution_map, scopes);
+            }
+        }
+        Stmt::Match { arms, else_arm, .. } => {
+            for arm in arms {
+                if let Expr::Block(block) = &arm.body.node {
+                    build_aliases_from_block(block, param_names, aliases, function_info, resolution_map, scopes);
+                }
+            }
+            if let Some(else_arm) = else_arm {
+                build_aliases_from_block(else_arm, param_names, aliases, function_info, resolution_map, scopes);
+            }
+        }
+        Stmt::For { body, .. } | Stmt::While { body, .. } | Stmt::Loop { body } => {
+            build_aliases_from_block(body, param_names, aliases, function_info, resolution_map, scopes);
+        }
+        Stmt::With { body, .. } | Stmt::Unsafe { body } => {
+            build_aliases_from_block(body, param_names, aliases, function_info, resolution_map, scopes);
+        }
+        _ => {}
+    }
+}
+
+/// Trace an expression to the set of param indices it may originate from.
+/// Consults both `param_names` (direct params) and `aliases` (local variables).
+fn collect_param_indices(
+    expr: &Expr,
+    param_names: &FxHashMap<String, usize>,
+    aliases: &LocalAliasMap,
+    function_info: &FxHashMap<DefId, FunctionInfo>,
+    resolution_map: &ResolutionMap,
+    scopes: &ScopeTable,
+) -> FxHashSet<usize> {
+    let mut result = FxHashSet::default();
+    match expr {
+        Expr::Identifier(name) => {
+            if let Some(&idx) = param_names.get(name) {
+                result.insert(idx);
+            } else if let Some(indices) = aliases.get(name) {
+                result.extend(indices);
+            }
+        }
+        Expr::SelfExpr => {
+            if param_names.contains_key("self") {
+                result.insert(0);
+            }
+        }
+        Expr::FieldAccess { object, .. } | Expr::TupleFieldAccess { object, .. } => {
+            result.extend(collect_param_indices(&object.node, param_names, aliases, function_info, resolution_map, scopes));
+        }
+        Expr::Index { object, .. } => {
+            result.extend(collect_param_indices(&object.node, param_names, aliases, function_info, resolution_map, scopes));
+        }
+        Expr::Call { callee, args, .. } => {
+            // Resolve callee and look up return_borrows_from
+            let callee_def_id = match &callee.node {
+                Expr::Identifier(_) => resolution_map.get(&callee.span.start).copied(),
+                Expr::Path { segments } => segments.first().and_then(|s| resolution_map.get(&s.span.start).copied()),
+                _ => None,
+            };
+            if let Some(def_id) = callee_def_id {
+                if let Some(info) = function_info.get(&def_id) {
+                    if !info.return_borrows_from.is_empty() {
+                        for &idx in &info.return_borrows_from {
+                            if let Some(arg) = args.get(idx) {
+                                result.extend(collect_param_indices(&arg.node.value.node, param_names, aliases, function_info, resolution_map, scopes));
+                            }
+                        }
+                        return result;
+                    }
+                }
+            }
+            // Callee not resolved or no return_borrows_from — no info
+        }
+        Expr::If { then_branch, elif_branches, else_branch, .. } => {
+            result.extend(collect_param_indices(&then_branch.node, param_names, aliases, function_info, resolution_map, scopes));
+            for (_, body) in elif_branches {
+                result.extend(collect_param_indices(&body.node, param_names, aliases, function_info, resolution_map, scopes));
+            }
+            if let Some(else_br) = else_branch {
+                result.extend(collect_param_indices(&else_br.node, param_names, aliases, function_info, resolution_map, scopes));
+            }
+        }
+        Expr::NilCoalescing { lhs, rhs } => {
+            result.extend(collect_param_indices(&lhs.node, param_names, aliases, function_info, resolution_map, scopes));
+            result.extend(collect_param_indices(&rhs.node, param_names, aliases, function_info, resolution_map, scopes));
+        }
+        Expr::Move { expr: inner } | Expr::Deref { expr: inner } | Expr::Try { expr: inner } => {
+            result.extend(collect_param_indices(&inner.node, param_names, aliases, function_info, resolution_map, scopes));
+        }
+        _ => {}
+    }
+    result
+}
+
 /// Trace a return expression back through variable assignments to find which params flow to it.
 fn trace_expr_to_params(
     expr: &Spanned<Expr>,
     param_names: &FxHashMap<String, usize>,
+    local_aliases: &LocalAliasMap,
+    function_info: &FxHashMap<DefId, FunctionInfo>,
     resolution_map: &ResolutionMap,
     scopes: &ScopeTable,
     result: &mut FxHashSet<usize>,
@@ -2383,68 +2561,92 @@ fn trace_expr_to_params(
         Expr::Identifier(name) => {
             if let Some(&idx) = param_names.get(name) {
                 result.insert(idx);
+            } else if let Some(indices) = local_aliases.get(name) {
+                result.extend(indices);
             }
-            // Note: doesn't trace through local variable assignments in this simple version.
-            // The full borrow checker (Pass 5b) handles transitive tracking via var_origins.
         }
 
         Expr::FieldAccess { object, .. } | Expr::TupleFieldAccess { object, .. } => {
-            trace_expr_to_params(object, param_names, resolution_map, scopes, result);
+            trace_expr_to_params(object, param_names, local_aliases, function_info, resolution_map, scopes, result);
         }
 
         Expr::Index { object, .. } => {
-            trace_expr_to_params(object, param_names, resolution_map, scopes, result);
+            trace_expr_to_params(object, param_names, local_aliases, function_info, resolution_map, scopes, result);
         }
 
         Expr::If { then_branch, elif_branches, else_branch, .. } => {
-            trace_expr_to_params(then_branch, param_names, resolution_map, scopes, result);
+            trace_expr_to_params(then_branch, param_names, local_aliases, function_info, resolution_map, scopes, result);
             for (_, body) in elif_branches {
-                trace_expr_to_params(body, param_names, resolution_map, scopes, result);
+                trace_expr_to_params(body, param_names, local_aliases, function_info, resolution_map, scopes, result);
             }
             if let Some(else_br) = else_branch {
-                trace_expr_to_params(else_br, param_names, resolution_map, scopes, result);
+                trace_expr_to_params(else_br, param_names, local_aliases, function_info, resolution_map, scopes, result);
             }
         }
 
         Expr::Block(block) | Expr::Do { body: block } => {
             if let Some(last) = block.stmts.last() {
                 if let Stmt::Expr(e) = &last.node {
-                    trace_expr_to_params(e, param_names, resolution_map, scopes, result);
+                    trace_expr_to_params(e, param_names, local_aliases, function_info, resolution_map, scopes, result);
                 }
             }
         }
 
         Expr::SelfExpr => {
-            // self borrows from param index 0
             if param_names.contains_key("self") {
                 result.insert(0);
             }
         }
 
-        // Struct literal: trace all args conservatively (the function's return type
-        // is already known to be a reference type if we got here)
         Expr::StructLiteral { args, .. } => {
             for arg in args {
-                trace_expr_to_params(arg, param_names, resolution_map, scopes, result);
+                trace_expr_to_params(arg, param_names, local_aliases, function_info, resolution_map, scopes, result);
             }
         }
 
+        Expr::Call { callee, args, .. } => {
+            // Resolve callee and trace through its return_borrows_from
+            let callee_def_id = match &callee.node {
+                Expr::Identifier(_) => resolution_map.get(&callee.span.start).copied(),
+                Expr::Path { segments } => segments.first().and_then(|s| resolution_map.get(&s.span.start).copied()),
+                _ => None,
+            };
+            if let Some(def_id) = callee_def_id {
+                if let Some(info) = function_info.get(&def_id) {
+                    if !info.return_borrows_from.is_empty() {
+                        for &idx in &info.return_borrows_from {
+                            if let Some(arg) = args.get(idx) {
+                                trace_expr_to_params(&arg.node.value, param_names, local_aliases, function_info, resolution_map, scopes, result);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Expr::NilCoalescing { lhs, rhs } => {
+            trace_expr_to_params(lhs, param_names, local_aliases, function_info, resolution_map, scopes, result);
+            trace_expr_to_params(rhs, param_names, local_aliases, function_info, resolution_map, scopes, result);
+        }
+
+        Expr::Move { expr: inner } | Expr::Deref { expr: inner } | Expr::Try { expr: inner } => {
+            trace_expr_to_params(inner, param_names, local_aliases, function_info, resolution_map, scopes, result);
+        }
+
         Expr::Closure { body, params, .. } => {
-            // Walk the closure body to find captured params from the enclosing function.
-            // Build a set of the closure's own parameter names to exclude them.
             use crate::parser::visitor::ExprVisitor;
             let closure_param_names: FxHashSet<&str> = params.iter()
                 .map(|p| p.node.name.node.as_str())
                 .collect();
             let mut tracer = ClosureBodyParamTracer {
                 outer_params: param_names,
+                outer_aliases: local_aliases,
                 closure_params: &closure_param_names,
                 result,
             };
             tracer.visit_expr(body);
         }
 
-        // Everything else: no param flow detected in this lightweight analysis
         _ => {}
     }
 }
@@ -2453,50 +2655,54 @@ fn trace_expr_to_params(
 fn trace_block_returns_to_params(
     block: &Block,
     param_names: &FxHashMap<String, usize>,
+    local_aliases: &LocalAliasMap,
+    function_info: &FxHashMap<DefId, FunctionInfo>,
     resolution_map: &ResolutionMap,
     scopes: &ScopeTable,
     result: &mut FxHashSet<usize>,
 ) {
     for stmt in &block.stmts {
-        trace_stmt_returns_to_params(&stmt.node, param_names, resolution_map, scopes, result);
+        trace_stmt_returns_to_params(&stmt.node, param_names, local_aliases, function_info, resolution_map, scopes, result);
     }
 }
 
 fn trace_stmt_returns_to_params(
     stmt: &Stmt,
     param_names: &FxHashMap<String, usize>,
+    local_aliases: &LocalAliasMap,
+    function_info: &FxHashMap<DefId, FunctionInfo>,
     resolution_map: &ResolutionMap,
     scopes: &ScopeTable,
     result: &mut FxHashSet<usize>,
 ) {
     match stmt {
         Stmt::Return(Some(expr)) => {
-            trace_expr_to_params(expr, param_names, resolution_map, scopes, result);
+            trace_expr_to_params(expr, param_names, local_aliases, function_info, resolution_map, scopes, result);
         }
         Stmt::If { then_body, elif_branches, else_body, .. } => {
-            trace_block_returns_to_params(then_body, param_names, resolution_map, scopes, result);
+            trace_block_returns_to_params(then_body, param_names, local_aliases, function_info, resolution_map, scopes, result);
             for (_, body) in elif_branches {
-                trace_block_returns_to_params(body, param_names, resolution_map, scopes, result);
+                trace_block_returns_to_params(body, param_names, local_aliases, function_info, resolution_map, scopes, result);
             }
             if let Some(else_body) = else_body {
-                trace_block_returns_to_params(else_body, param_names, resolution_map, scopes, result);
+                trace_block_returns_to_params(else_body, param_names, local_aliases, function_info, resolution_map, scopes, result);
             }
         }
         Stmt::Match { arms, else_arm, .. } => {
             for arm in arms {
                 if let Expr::Block(block) = &arm.body.node {
-                    trace_block_returns_to_params(block, param_names, resolution_map, scopes, result);
+                    trace_block_returns_to_params(block, param_names, local_aliases, function_info, resolution_map, scopes, result);
                 }
             }
             if let Some(else_arm) = else_arm {
-                trace_block_returns_to_params(else_arm, param_names, resolution_map, scopes, result);
+                trace_block_returns_to_params(else_arm, param_names, local_aliases, function_info, resolution_map, scopes, result);
             }
         }
         Stmt::For { body, .. } | Stmt::While { body, .. } | Stmt::Loop { body } => {
-            trace_block_returns_to_params(body, param_names, resolution_map, scopes, result);
+            trace_block_returns_to_params(body, param_names, local_aliases, function_info, resolution_map, scopes, result);
         }
         Stmt::With { body, .. } | Stmt::Unsafe { body } => {
-            trace_block_returns_to_params(body, param_names, resolution_map, scopes, result);
+            trace_block_returns_to_params(body, param_names, local_aliases, function_info, resolution_map, scopes, result);
         }
         _ => {}
     }
@@ -4295,6 +4501,142 @@ Outer find(Vector[String] items):
         assert!(
             !has_error(&errors, |k| matches!(k, SemanticErrorKind::MoveInLoop { .. })),
             "unexpected MoveInLoop for nested return-position constructor: {:?}", errors
+        );
+    }
+
+    // ─── Pass 5a: Local Variable Alias Tracing ───────────────
+
+    #[test]
+    fn return_through_local_two_ref_params() {
+        // `str select(str a, str b)` with local alias — Pass 5a should trace `result` back to `a`
+        let source = "\
+str select(str a, str b):
+    str result = a
+    return result
+
+void main():
+    str x = \"hello\"
+    str y = \"world\"
+    str r = select(x, y)
+    print(r)
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { .. })),
+            "unexpected error for return through local alias: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn return_through_local_use_after_move() {
+        // Return goes through local → Pass 5a traces to `a` → moving source invalidates result
+        let source = "\
+str id(str x):
+    return x
+
+str select(str a, str b):
+    str result = a
+    return result
+
+void main():
+    String s = \"hello\"
+    str r = select(s, \"world\")
+    String s2 = !s
+    print(r)
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { name, .. } if name == "r")),
+            "expected UseAfterSourceMoved for r after source s was moved, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn return_through_local_branch_union() {
+        // result assigned from a or b depending on branch — both should flow
+        let source = "\
+str select(str a, str b, bool flag):
+    str result = a
+    if flag:
+        result = b
+    return result
+
+void main():
+    str x = \"hello\"
+    str y = \"world\"
+    str r = select(x, y, true)
+    print(r)
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { .. })),
+            "unexpected error for branch union alias: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn return_through_transitive_alias() {
+        // `str x = a; str y = x; return y` — transitive chain should resolve
+        let source = "\
+str chain(str a, str b):
+    str x = a
+    str y = x
+    return y
+
+void main():
+    str s = \"hello\"
+    str r = chain(s, \"world\")
+    print(r)
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { .. })),
+            "unexpected error for transitive alias chain: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn return_through_call() {
+        // `return id(a)` where id has return_borrows_from = [0] — trace through call
+        let source = "\
+str id(str x):
+    return x
+
+str wrapper(str a, str b):
+    return id(a)
+
+void main():
+    str s = \"hello\"
+    str r = wrapper(s, \"world\")
+    print(r)
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { .. })),
+            "unexpected error for return through call: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn return_local_assigned_from_call() {
+        // `str result = id(a); return result` — alias from call result
+        let source = "\
+str id(str x):
+    return x
+
+str wrapper(str a, str b):
+    str result = id(a)
+    return result
+
+void main():
+    str s = \"hello\"
+    str r = wrapper(s, \"world\")
+    print(r)
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { .. })),
+            "unexpected error for local assigned from call: {:?}", errors
         );
     }
 }
