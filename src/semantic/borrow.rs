@@ -532,8 +532,7 @@ impl<'a> BorrowChecker<'a> {
             Expr::Closure { params, body, .. } => {
                 let param_names: FxHashSet<&str> = params.iter()
                     .map(|p| p.node.name.node.as_str()).collect();
-                let mut captured_origins = Vec::new();
-                self.collect_captured_ref_origins(body, &param_names, &mut captured_origins);
+                let captured_origins = self.collect_captured_ref_origins(body, &param_names);
                 Self::merge_origins(captured_origins)
             }
 
@@ -1968,217 +1967,25 @@ impl<'a> BorrowChecker<'a> {
         }
     }
 
-    /// Recursively walk a closure body collecting origins of captured reference-type variables.
-    /// Skips: closure parameters (in `param_names`), nested closures (own capture scope),
-    /// and variables that are not reference-typed or have no tracked origin.
+    /// Collect origins of captured reference-type variables in a closure body.
+    /// Uses the ExprVisitor trait for exhaustive variant coverage.
     fn collect_captured_ref_origins(
         &self,
         expr: &Spanned<Expr>,
         param_names: &FxHashSet<&str>,
-        origins: &mut Vec<BorrowOrigin>,
-    ) {
-        match &expr.node {
-            Expr::Identifier(name) => {
-                // Skip closure parameters
-                if param_names.contains(name.as_str()) {
-                    return;
-                }
-                if let Some(&def_id) = self.resolution_map.get(&expr.span.start) {
-                    let def = self.scopes.get_def(def_id);
-                    if def.kind == DefKind::Variable {
-                        // Check if it's a reference or callable type with a tracked origin
-                        if let Some(type_id) = def.type_id {
-                            if types::is_reference_type(type_id, self.types, &self.ref_type_structs)
-                                || types::is_callable_type(type_id, self.types)
-                            {
-                                if let Some(origin) = self.var_origins.get(&def_id) {
-                                    origins.push(origin.clone());
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            // Skip nested closures — they have their own capture scope
-            Expr::Closure { .. } | Expr::ImplicitClosure { .. } => {}
-            // Recurse into sub-expressions
-            Expr::BinaryOp { left, right, .. } => {
-                self.collect_captured_ref_origins(left, param_names, origins);
-                self.collect_captured_ref_origins(right, param_names, origins);
-            }
-            Expr::UnaryOp { operand, .. } | Expr::Move { expr: operand }
-            | Expr::MutableBorrow { expr: operand } | Expr::Deref { expr: operand }
-            | Expr::Try { expr: operand } | Expr::TryCapture { expr: operand }
-            | Expr::Await { expr: operand } | Expr::Spawn { expr: operand }
-            | Expr::As { expr: operand, .. } | Expr::Is { expr: operand, .. } => {
-                self.collect_captured_ref_origins(operand, param_names, origins);
-            }
-            Expr::Call { callee, args, .. } => {
-                self.collect_captured_ref_origins(callee, param_names, origins);
-                for arg in args {
-                    self.collect_captured_ref_origins(&arg.node.value, param_names, origins);
-                }
-            }
-            Expr::MethodCall { receiver, args, .. } => {
-                self.collect_captured_ref_origins(receiver, param_names, origins);
-                for arg in args {
-                    self.collect_captured_ref_origins(&arg.node.value, param_names, origins);
-                }
-            }
-            Expr::FieldAccess { object, .. } | Expr::TupleFieldAccess { object, .. } => {
-                self.collect_captured_ref_origins(object, param_names, origins);
-            }
-            Expr::Index { object, index } => {
-                self.collect_captured_ref_origins(object, param_names, origins);
-                self.collect_captured_ref_origins(index, param_names, origins);
-            }
-            Expr::If { condition, then_branch, elif_branches, else_branch } => {
-                self.collect_captured_ref_origins(condition, param_names, origins);
-                self.collect_captured_ref_origins(then_branch, param_names, origins);
-                for (cond, body) in elif_branches {
-                    self.collect_captured_ref_origins(cond, param_names, origins);
-                    self.collect_captured_ref_origins(body, param_names, origins);
-                }
-                if let Some(e) = else_branch {
-                    self.collect_captured_ref_origins(e, param_names, origins);
-                }
-            }
-            Expr::Block(block) | Expr::Do { body: block } => {
-                for stmt in &block.stmts {
-                    self.collect_captured_ref_origins_stmt(stmt, param_names, origins);
-                }
-            }
-            Expr::ArrayLiteral(elems) | Expr::TupleLiteral(elems) => {
-                for e in elems {
-                    self.collect_captured_ref_origins(e, param_names, origins);
-                }
-            }
-            Expr::StructLiteral { args, .. } => {
-                for arg in args {
-                    self.collect_captured_ref_origins(arg, param_names, origins);
-                }
-            }
-            Expr::NilCoalescing { lhs, rhs } => {
-                self.collect_captured_ref_origins(lhs, param_names, origins);
-                self.collect_captured_ref_origins(rhs, param_names, origins);
-            }
-            Expr::Range { start, end, .. } => {
-                if let Some(s) = start { self.collect_captured_ref_origins(s, param_names, origins); }
-                if let Some(e) = end { self.collect_captured_ref_origins(e, param_names, origins); }
-            }
-            Expr::OptionalChain { object, .. } => {
-                self.collect_captured_ref_origins(object, param_names, origins);
-            }
-            Expr::Match { scrutinee, arms, else_arm } => {
-                self.collect_captured_ref_origins(scrutinee, param_names, origins);
-                for arm in arms {
-                    self.collect_captured_ref_origins(&arm.body, param_names, origins);
-                }
-                if let Some(else_arm) = else_arm {
-                    self.collect_captured_ref_origins(else_arm, param_names, origins);
-                }
-            }
-            Expr::DictLiteral(pairs) => {
-                for (k, v) in pairs {
-                    self.collect_captured_ref_origins(k, param_names, origins);
-                    self.collect_captured_ref_origins(v, param_names, origins);
-                }
-            }
-            Expr::ListComprehension { expr: comp_expr, iterable, condition, .. } => {
-                self.collect_captured_ref_origins(iterable, param_names, origins);
-                self.collect_captured_ref_origins(comp_expr, param_names, origins);
-                if let Some(cond) = condition {
-                    self.collect_captured_ref_origins(cond, param_names, origins);
-                }
-            }
-            Expr::SetComprehension { expr: comp_expr, iterable, condition, .. } => {
-                self.collect_captured_ref_origins(iterable, param_names, origins);
-                self.collect_captured_ref_origins(comp_expr, param_names, origins);
-                if let Some(cond) = condition {
-                    self.collect_captured_ref_origins(cond, param_names, origins);
-                }
-            }
-            Expr::DictComprehension { key, value, iterable, condition, .. } => {
-                self.collect_captured_ref_origins(iterable, param_names, origins);
-                self.collect_captured_ref_origins(key, param_names, origins);
-                self.collect_captured_ref_origins(value, param_names, origins);
-                if let Some(cond) = condition {
-                    self.collect_captured_ref_origins(cond, param_names, origins);
-                }
-            }
-            _ => {} // Literals, SelfExpr, It, etc.
-        }
-    }
-
-    /// Helper for collect_captured_ref_origins that handles statements.
-    fn collect_captured_ref_origins_stmt(
-        &self,
-        stmt: &Spanned<Stmt>,
-        param_names: &FxHashSet<&str>,
-        origins: &mut Vec<BorrowOrigin>,
-    ) {
-        match &stmt.node {
-            Stmt::Expr(e) | Stmt::Return(Some(e)) | Stmt::Throw(e) | Stmt::Break(Some(e)) => {
-                self.collect_captured_ref_origins(e, param_names, origins);
-            }
-            Stmt::VarDecl { value, .. } => {
-                self.collect_captured_ref_origins(value, param_names, origins);
-            }
-            Stmt::Assign { target, value } => {
-                self.collect_captured_ref_origins(target, param_names, origins);
-                self.collect_captured_ref_origins(value, param_names, origins);
-            }
-            Stmt::CompoundAssign { target, value, .. } => {
-                self.collect_captured_ref_origins(target, param_names, origins);
-                self.collect_captured_ref_origins(value, param_names, origins);
-            }
-            Stmt::If { condition, then_body, elif_branches, else_body } => {
-                self.collect_captured_ref_origins(condition, param_names, origins);
-                for s in &then_body.stmts {
-                    self.collect_captured_ref_origins_stmt(s, param_names, origins);
-                }
-                for (cond, body) in elif_branches {
-                    self.collect_captured_ref_origins(cond, param_names, origins);
-                    for s in &body.stmts {
-                        self.collect_captured_ref_origins_stmt(s, param_names, origins);
-                    }
-                }
-                if let Some(else_body) = else_body {
-                    for s in &else_body.stmts {
-                        self.collect_captured_ref_origins_stmt(s, param_names, origins);
-                    }
-                }
-            }
-            Stmt::For { iterable, body, .. } | Stmt::While { condition: iterable, body, .. } => {
-                self.collect_captured_ref_origins(iterable, param_names, origins);
-                for s in &body.stmts {
-                    self.collect_captured_ref_origins_stmt(s, param_names, origins);
-                }
-            }
-            Stmt::Loop { body } | Stmt::Unsafe { body } => {
-                for s in &body.stmts {
-                    self.collect_captured_ref_origins_stmt(s, param_names, origins);
-                }
-            }
-            Stmt::Match { scrutinee, arms, else_arm } => {
-                self.collect_captured_ref_origins(scrutinee, param_names, origins);
-                for arm in arms {
-                    self.collect_captured_ref_origins(&arm.body, param_names, origins);
-                }
-                if let Some(else_arm) = else_arm {
-                    for s in &else_arm.stmts {
-                        self.collect_captured_ref_origins_stmt(s, param_names, origins);
-                    }
-                }
-            }
-            Stmt::Assert { condition, message } => {
-                self.collect_captured_ref_origins(condition, param_names, origins);
-                if let Some(msg) = message {
-                    self.collect_captured_ref_origins(msg, param_names, origins);
-                }
-            }
-            _ => {} // Pass, Continue, Return(None), Break(None), Item, With
-        }
+    ) -> Vec<BorrowOrigin> {
+        use crate::parser::visitor::ExprVisitor;
+        let mut collector = CapturedRefOriginCollector {
+            resolution_map: self.resolution_map,
+            scopes: self.scopes,
+            types: self.types,
+            ref_type_structs: &self.ref_type_structs,
+            var_origins: &self.var_origins,
+            param_names,
+            origins: Vec::new(),
+        };
+        collector.visit_expr(expr);
+        collector.origins
     }
 
     /// Check if a function returns a temporary (non-reference owning type) with
@@ -2483,6 +2290,87 @@ fn compute_function_return_borrows(
     }
 }
 
+// ─── Visitor: Captured Reference Origin Collector ─────────────
+
+/// Walks a closure body collecting origins of captured reference-type variables.
+/// Skips nested closures (own capture scope) and closure parameters.
+struct CapturedRefOriginCollector<'a> {
+    resolution_map: &'a ResolutionMap,
+    scopes: &'a ScopeTable,
+    types: &'a TypeTable,
+    ref_type_structs: &'a FxHashSet<DefId>,
+    var_origins: &'a FxHashMap<DefId, BorrowOrigin>,
+    param_names: &'a FxHashSet<&'a str>,
+    origins: Vec<BorrowOrigin>,
+}
+
+impl crate::parser::visitor::ExprVisitor for CapturedRefOriginCollector<'_> {
+    fn visit_expr(&mut self, expr: &Spanned<Expr>) {
+        match &expr.node {
+            Expr::Identifier(name) => {
+                if self.param_names.contains(name.as_str()) {
+                    return;
+                }
+                if let Some(&def_id) = self.resolution_map.get(&expr.span.start) {
+                    let def = self.scopes.get_def(def_id);
+                    if def.kind == DefKind::Variable {
+                        if let Some(type_id) = def.type_id {
+                            if types::is_reference_type(type_id, self.types, self.ref_type_structs)
+                                || types::is_callable_type(type_id, self.types)
+                            {
+                                if let Some(origin) = self.var_origins.get(&def_id) {
+                                    self.origins.push(origin.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // Skip nested closures — they have their own capture scope
+            Expr::Closure { .. } | Expr::ImplicitClosure { .. } => {}
+            // Default walk handles all other variants exhaustively
+            _ => crate::parser::visitor::walk_expr(self, expr),
+        }
+    }
+
+    // visit_stmt and visit_block: use default walk_stmt/walk_block.
+    // This covers Stmt::With, Assert, and all other statement variants
+    // that the previous manual walker missed with its `_ => {}` catch-all.
+}
+
+// ─── Visitor: Closure Body Param Tracer ──────────────────────
+
+/// Walks a closure body to find references to enclosing function parameters.
+/// Skips nested closures (they have their own capture scope).
+struct ClosureBodyParamTracer<'a> {
+    outer_params: &'a FxHashMap<String, usize>,
+    closure_params: &'a FxHashSet<&'a str>,
+    result: &'a mut FxHashSet<usize>,
+}
+
+impl crate::parser::visitor::ExprVisitor for ClosureBodyParamTracer<'_> {
+    fn visit_expr(&mut self, expr: &Spanned<Expr>) {
+        match &expr.node {
+            Expr::Identifier(name) => {
+                if !self.closure_params.contains(name.as_str()) {
+                    if let Some(&idx) = self.outer_params.get(name) {
+                        self.result.insert(idx);
+                    }
+                }
+            }
+            // Skip nested closures — they have their own capture scope
+            Expr::Closure { .. } | Expr::ImplicitClosure { .. } => {}
+            // Default walk handles all other variants exhaustively
+            _ => crate::parser::visitor::walk_expr(self, expr),
+        }
+    }
+
+    // visit_stmt and visit_block: use default walk_stmt/walk_block.
+    // This covers all statement variants exhaustively, fixing coverage gaps
+    // in the previous manual trace_closure_body_stmts (which missed Assign,
+    // CompoundAssign, For, While, Loop, Match, With, Unsafe, Assert, etc.).
+}
+
 /// Trace a return expression back through variable assignments to find which params flow to it.
 fn trace_expr_to_params(
     expr: &Spanned<Expr>,
@@ -2544,126 +2432,19 @@ fn trace_expr_to_params(
         Expr::Closure { body, params, .. } => {
             // Walk the closure body to find captured params from the enclosing function.
             // Build a set of the closure's own parameter names to exclude them.
+            use crate::parser::visitor::ExprVisitor;
             let closure_param_names: FxHashSet<&str> = params.iter()
                 .map(|p| p.node.name.node.as_str())
                 .collect();
-            trace_closure_body_to_params(body, param_names, &closure_param_names, result);
+            let mut tracer = ClosureBodyParamTracer {
+                outer_params: param_names,
+                closure_params: &closure_param_names,
+                result,
+            };
+            tracer.visit_expr(body);
         }
 
         // Everything else: no param flow detected in this lightweight analysis
-        _ => {}
-    }
-}
-
-/// Walk a closure body to find references to enclosing function params.
-fn trace_closure_body_to_params(
-    expr: &Spanned<Expr>,
-    outer_params: &FxHashMap<String, usize>,
-    closure_params: &FxHashSet<&str>,
-    result: &mut FxHashSet<usize>,
-) {
-    match &expr.node {
-        Expr::Identifier(name) => {
-            if !closure_params.contains(name.as_str()) {
-                if let Some(&idx) = outer_params.get(name) {
-                    result.insert(idx);
-                }
-            }
-        }
-        // Skip nested closures — they have their own capture scope
-        Expr::Closure { .. } | Expr::ImplicitClosure { .. } => {}
-        // Recurse into sub-expressions
-        Expr::BinaryOp { left, right, .. } => {
-            trace_closure_body_to_params(left, outer_params, closure_params, result);
-            trace_closure_body_to_params(right, outer_params, closure_params, result);
-        }
-        Expr::UnaryOp { operand, .. } | Expr::Move { expr: operand }
-        | Expr::MutableBorrow { expr: operand } | Expr::Deref { expr: operand }
-        | Expr::Try { expr: operand } | Expr::TryCapture { expr: operand }
-        | Expr::Await { expr: operand } | Expr::Spawn { expr: operand }
-        | Expr::As { expr: operand, .. } | Expr::Is { expr: operand, .. } => {
-            trace_closure_body_to_params(operand, outer_params, closure_params, result);
-        }
-        Expr::Call { callee, args, .. } => {
-            trace_closure_body_to_params(callee, outer_params, closure_params, result);
-            for arg in args {
-                trace_closure_body_to_params(&arg.node.value, outer_params, closure_params, result);
-            }
-        }
-        Expr::MethodCall { receiver, args, .. } => {
-            trace_closure_body_to_params(receiver, outer_params, closure_params, result);
-            for arg in args {
-                trace_closure_body_to_params(&arg.node.value, outer_params, closure_params, result);
-            }
-        }
-        Expr::FieldAccess { object, .. } | Expr::TupleFieldAccess { object, .. } => {
-            trace_closure_body_to_params(object, outer_params, closure_params, result);
-        }
-        Expr::Index { object, index } => {
-            trace_closure_body_to_params(object, outer_params, closure_params, result);
-            trace_closure_body_to_params(index, outer_params, closure_params, result);
-        }
-        Expr::If { condition, then_branch, elif_branches, else_branch } => {
-            trace_closure_body_to_params(condition, outer_params, closure_params, result);
-            trace_closure_body_to_params(then_branch, outer_params, closure_params, result);
-            for (cond, body) in elif_branches {
-                trace_closure_body_to_params(cond, outer_params, closure_params, result);
-                trace_closure_body_to_params(body, outer_params, closure_params, result);
-            }
-            if let Some(else_br) = else_branch {
-                trace_closure_body_to_params(else_br, outer_params, closure_params, result);
-            }
-        }
-        Expr::Block(block) | Expr::Do { body: block } => {
-            for stmt in &block.stmts {
-                trace_closure_body_stmts(&stmt.node, outer_params, closure_params, result);
-            }
-        }
-        Expr::StructLiteral { args, .. } => {
-            for arg in args {
-                trace_closure_body_to_params(arg, outer_params, closure_params, result);
-            }
-        }
-        Expr::ArrayLiteral(items) | Expr::TupleLiteral(items) => {
-            for item in items {
-                trace_closure_body_to_params(item, outer_params, closure_params, result);
-            }
-        }
-        _ => {}
-    }
-}
-
-/// Walk statements inside a closure body to find references to enclosing function params.
-fn trace_closure_body_stmts(
-    stmt: &Stmt,
-    outer_params: &FxHashMap<String, usize>,
-    closure_params: &FxHashSet<&str>,
-    result: &mut FxHashSet<usize>,
-) {
-    match stmt {
-        Stmt::Expr(expr) | Stmt::Return(Some(expr)) => {
-            trace_closure_body_to_params(expr, outer_params, closure_params, result);
-        }
-        Stmt::VarDecl { value, .. } => {
-            trace_closure_body_to_params(value, outer_params, closure_params, result);
-        }
-        Stmt::If { condition, then_body, elif_branches, else_body } => {
-            trace_closure_body_to_params(condition, outer_params, closure_params, result);
-            for s in &then_body.stmts {
-                trace_closure_body_stmts(&s.node, outer_params, closure_params, result);
-            }
-            for (cond, body) in elif_branches {
-                trace_closure_body_to_params(cond, outer_params, closure_params, result);
-                for s in &body.stmts {
-                    trace_closure_body_stmts(&s.node, outer_params, closure_params, result);
-                }
-            }
-            if let Some(else_body) = else_body {
-                for s in &else_body.stmts {
-                    trace_closure_body_stmts(&s.node, outer_params, closure_params, result);
-                }
-            }
-        }
         _ => {}
     }
 }

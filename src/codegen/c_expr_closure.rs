@@ -50,14 +50,14 @@ impl CodegenContext<'_> {
         // Collect free variables
         let param_names: std::collections::HashSet<&str> =
             params.iter().map(|p| p.node.name.node.as_str()).collect();
-        let free_vars = self.collect_free_vars(&body.node, &param_names);
+        let free_vars = self.collect_free_vars(body, &param_names);
 
         // Detect mutations: walk body for assignments to captured variables
         let mutated = if is_move {
             // Move closures own their captures — all by value
             std::collections::HashSet::new()
         } else {
-            self.detect_mutations(&body.node, &param_names)
+            self.detect_mutations(body, &param_names)
         };
 
         // Build captures with modes.
@@ -143,239 +143,29 @@ impl CodegenContext<'_> {
         }
     }
 
-    /// Collect free variable references from an expression (simple walk).
+    /// Collect free variable references from an expression.
+    /// Uses the ExprVisitor trait for exhaustive variant coverage.
     pub(super) fn collect_free_vars(
         &mut self,
-        expr: &Expr,
+        expr: &Spanned<Expr>,
         bound: &std::collections::HashSet<&str>,
     ) -> Vec<(String, String)> {
-        let mut free = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-        self.walk_free_vars(expr, bound, &mut seen, &mut free);
-        free
-    }
-
-    fn walk_free_vars(
-        &mut self,
-        expr: &Expr,
-        bound: &std::collections::HashSet<&str>,
-        seen: &mut std::collections::HashSet<String>,
-        free: &mut Vec<(String, String)>,
-    ) {
-        match expr {
-            Expr::Identifier(name) if !bound.contains(name.as_str()) && name != "self" => {
-                // Skip global definitions (functions, enum variants, structs, etc.)
-                // — they don't need to be captured, they're available globally in C.
-                let is_global = self.scopes.is_global_def(name);
-                if !is_global && seen.insert(name.clone()) {
-                    let ty = self.infer_c_type_from_expr(expr);
-                    free.push((c_mangle::escape_keyword(name), ty));
-                }
-            }
-            Expr::BinaryOp { left, right, .. } => {
-                self.walk_free_vars(&left.node, bound, seen, free);
-                self.walk_free_vars(&right.node, bound, seen, free);
-            }
-            Expr::UnaryOp { operand, .. } => {
-                self.walk_free_vars(&operand.node, bound, seen, free);
-            }
-            Expr::Call { callee, args, .. } => {
-                self.walk_free_vars(&callee.node, bound, seen, free);
-                for arg in args {
-                    self.walk_free_vars(&arg.node.value.node, bound, seen, free);
-                }
-            }
-            Expr::FieldAccess { object, .. } => {
-                self.walk_free_vars(&object.node, bound, seen, free);
-            }
-            Expr::TupleFieldAccess { object, .. } => {
-                self.walk_free_vars(&object.node, bound, seen, free);
-            }
-            Expr::MethodCall {
-                receiver, args, ..
-            } => {
-                self.walk_free_vars(&receiver.node, bound, seen, free);
-                for arg in args {
-                    self.walk_free_vars(&arg.node.value.node, bound, seen, free);
-                }
-            }
-            Expr::If {
-                condition,
-                then_branch,
-                else_branch,
-                ..
-            } => {
-                self.walk_free_vars(&condition.node, bound, seen, free);
-                self.walk_free_vars(&then_branch.node, bound, seen, free);
-                if let Some(eb) = else_branch {
-                    self.walk_free_vars(&eb.node, bound, seen, free);
-                }
-            }
-            Expr::Index { object, index } => {
-                self.walk_free_vars(&object.node, bound, seen, free);
-                self.walk_free_vars(&index.node, bound, seen, free);
-            }
-            Expr::Block(block) | Expr::Do { body: block } => {
-                self.walk_free_vars_in_block(block, &mut bound.clone(), seen, free);
-            }
-            Expr::Match { scrutinee, arms, else_arm } => {
-                self.walk_free_vars(&scrutinee.node, bound, seen, free);
-                for arm in arms {
-                    // Pattern bindings are local to the arm
-                    let mut arm_bound = bound.clone();
-                    self.collect_pattern_names(&arm.pattern.node, &mut arm_bound);
-                    if let Some(guard) = &arm.guard {
-                        self.walk_free_vars(&guard.node, &arm_bound, seen, free);
-                    }
-                    self.walk_free_vars(&arm.body.node, &arm_bound, seen, free);
-                }
-                if let Some(else_body) = else_arm {
-                    self.walk_free_vars(&else_body.node, bound, seen, free);
-                }
-            }
-            Expr::Closure { params, body, .. } => {
-                // Nested closure: its params are bound, recurse into body
-                let mut inner_bound = bound.clone();
-                for p in params {
-                    inner_bound.insert(p.node.name.node.as_str());
-                }
-                self.walk_free_vars(&body.node, &inner_bound, seen, free);
-            }
-            Expr::StringLiteral(s) => {
-                for seg in &s.segments {
-                    if let crate::lexer::token::StringSegment::Interpolation(name) = seg {
-                        // Treat interpolated names as identifier references
-                        let fake = Expr::Identifier(name.clone());
-                        self.walk_free_vars(&fake, bound, seen, free);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    /// Walk a block's statements collecting free variables.
-    fn walk_free_vars_in_block<'b>(
-        &mut self,
-        block: &'b crate::parser::ast::Block,
-        bound: &mut std::collections::HashSet<&'b str>,
-        seen: &mut std::collections::HashSet<String>,
-        free: &mut Vec<(String, String)>,
-    ) {
-        for stmt in &block.stmts {
-            self.walk_free_vars_in_stmt(&stmt.node, bound, seen, free);
-        }
-    }
-
-    /// Walk a statement collecting free variables (with mutable bound set
-    /// so that VarDecl names become bound for subsequent statements).
-    fn walk_free_vars_in_stmt<'b>(
-        &mut self,
-        stmt: &'b crate::parser::ast::Stmt,
-        bound: &mut std::collections::HashSet<&'b str>,
-        seen: &mut std::collections::HashSet<String>,
-        free: &mut Vec<(String, String)>,
-    ) {
-        use crate::parser::ast::{Pattern, Stmt};
-        match stmt {
-            Stmt::VarDecl { pattern, value, .. } => {
-                // Value is evaluated before binding, so walk it first
-                self.walk_free_vars(&value.node, bound, seen, free);
-                // Then add the declared name to bound
-                if let Pattern::Binding(name) = &pattern.node {
-                    bound.insert(name.as_str());
-                }
-            }
-            Stmt::Assign { target, value } => {
-                self.walk_free_vars(&target.node, bound, seen, free);
-                self.walk_free_vars(&value.node, bound, seen, free);
-            }
-            Stmt::CompoundAssign { target, value, .. } => {
-                self.walk_free_vars(&target.node, bound, seen, free);
-                self.walk_free_vars(&value.node, bound, seen, free);
-            }
-            Stmt::Expr(expr) => {
-                self.walk_free_vars(&expr.node, bound, seen, free);
-            }
-            Stmt::Return(Some(expr)) => {
-                self.walk_free_vars(&expr.node, bound, seen, free);
-            }
-            Stmt::For { iterable, body, else_body, pattern, .. } => {
-                self.walk_free_vars(&iterable.node, bound, seen, free);
-                let mut for_bound = bound.clone();
-                self.collect_pattern_names(&pattern.node, &mut for_bound);
-                self.walk_free_vars_in_block(body, &mut for_bound, seen, free);
-                if let Some(eb) = else_body {
-                    self.walk_free_vars_in_block(eb, bound, seen, free);
-                }
-            }
-            Stmt::While { condition, body, else_body } => {
-                self.walk_free_vars(&condition.node, bound, seen, free);
-                self.walk_free_vars_in_block(body, &mut bound.clone(), seen, free);
-                if let Some(eb) = else_body {
-                    self.walk_free_vars_in_block(eb, bound, seen, free);
-                }
-            }
-            Stmt::If { condition, then_body, elif_branches, else_body } => {
-                self.walk_free_vars(&condition.node, bound, seen, free);
-                self.walk_free_vars_in_block(then_body, &mut bound.clone(), seen, free);
-                for (cond, body) in elif_branches {
-                    self.walk_free_vars(&cond.node, bound, seen, free);
-                    self.walk_free_vars_in_block(body, &mut bound.clone(), seen, free);
-                }
-                if let Some(eb) = else_body {
-                    self.walk_free_vars_in_block(eb, &mut bound.clone(), seen, free);
-                }
-            }
-            Stmt::Match { scrutinee, arms, else_arm } => {
-                self.walk_free_vars(&scrutinee.node, bound, seen, free);
-                for arm in arms {
-                    let mut arm_bound: std::collections::HashSet<&str> = bound.iter().copied().collect();
-                    self.collect_pattern_names(&arm.pattern.node, &mut arm_bound);
-                    self.walk_free_vars(&arm.body.node, &arm_bound, seen, free);
-                }
-                if let Some(eb) = else_arm {
-                    let mut eb_bound = bound.clone();
-                    self.walk_free_vars_in_block(eb, &mut eb_bound, seen, free);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    /// Collect binding names from a pattern into a bound set.
-    fn collect_pattern_names<'b>(
-        &self,
-        pattern: &'b crate::parser::ast::Pattern,
-        bound: &mut std::collections::HashSet<&'b str>,
-    ) {
-        use crate::parser::ast::Pattern;
-        match pattern {
-            Pattern::Binding(name) => { bound.insert(name.as_str()); }
-            Pattern::Constructor { fields, .. } => {
-                for f in fields {
-                    self.collect_pattern_names(&f.node, bound);
-                }
-            }
-            Pattern::Tuple(pats) => {
-                for p in pats {
-                    self.collect_pattern_names(&p.node, bound);
-                }
-            }
-            Pattern::Or(pats) => {
-                for p in pats {
-                    self.collect_pattern_names(&p.node, bound);
-                }
-            }
-            _ => {}
-        }
+        use crate::parser::visitor::ExprVisitor;
+        let mut collector = FreeVarCollector {
+            ctx: self,
+            bound: bound.iter().map(|s| s.to_string()).collect(),
+            seen: std::collections::HashSet::new(),
+            free: Vec::new(),
+        };
+        collector.visit_expr(expr);
+        std::mem::take(&mut collector.free)
     }
 
     /// Detect which free variables are mutated inside a closure body.
     /// Returns a set of escaped variable names that are assigned to.
     fn detect_mutations(
         &self,
-        expr: &Expr,
+        expr: &Spanned<Expr>,
         param_names: &std::collections::HashSet<&str>,
     ) -> std::collections::HashSet<String> {
         use crate::parser::visitor::ExprVisitor;
@@ -412,16 +202,16 @@ impl crate::parser::visitor::ExprVisitor for MutationDetector {
         self.bound = saved;
     }
 
-    fn visit_stmt(&mut self, stmt: &crate::parser::ast::Stmt) {
+    fn visit_stmt(&mut self, stmt: &crate::span::Spanned<crate::parser::ast::Stmt>) {
         use crate::parser::ast::{Pattern, Stmt};
-        match stmt {
+        match &stmt.node {
             Stmt::Assign { target, value } => {
                 if let Expr::Identifier(name) = &target.node {
                     if !self.bound.contains(name.as_str()) {
                         self.mutated.insert(c_mangle::escape_keyword(name));
                     }
                 }
-                self.visit_expr(&value.node);
+                self.visit_expr(value);
             }
             Stmt::CompoundAssign { target, value, .. } => {
                 if let Expr::Identifier(name) = &target.node {
@@ -429,10 +219,10 @@ impl crate::parser::visitor::ExprVisitor for MutationDetector {
                         self.mutated.insert(c_mangle::escape_keyword(name));
                     }
                 }
-                self.visit_expr(&value.node);
+                self.visit_expr(value);
             }
             Stmt::VarDecl { pattern, value, .. } => {
-                self.visit_expr(&value.node);
+                self.visit_expr(value);
                 if let Pattern::Binding(name) = &pattern.node {
                     self.bound.insert(name.clone());
                 }
@@ -444,7 +234,7 @@ impl crate::parser::visitor::ExprVisitor for MutationDetector {
                 else_body,
                 ..
             } => {
-                self.visit_expr(&iterable.node);
+                self.visit_expr(iterable);
                 let saved = self.bound.clone();
                 if let Pattern::Binding(name) = &pattern.node {
                     self.bound.insert(name.clone());
@@ -457,5 +247,152 @@ impl crate::parser::visitor::ExprVisitor for MutationDetector {
             }
             _ => crate::parser::visitor::walk_stmt(self, stmt),
         }
+    }
+}
+
+// ─── Visitor: Free Variable Collector ────────────────────────
+
+/// Walks a closure body collecting free variable references (unbound
+/// identifiers that need to be captured).  Uses the ExprVisitor trait
+/// for exhaustive variant coverage; overrides expression, statement,
+/// and block handling for scope tracking (VarDecl adds to bound,
+/// blocks save/restore, patterns extend bound per match arm / for loop).
+struct FreeVarCollector<'a, 'b> {
+    ctx: &'a mut CodegenContext<'b>,
+    /// Variable names currently in scope (closure params + block-local).
+    bound: std::collections::HashSet<String>,
+    /// Already-collected names (dedup).
+    seen: std::collections::HashSet<String>,
+    /// Collected free variables: (escaped_name, c_type).
+    free: Vec<(String, String)>,
+}
+
+impl crate::parser::visitor::ExprVisitor for FreeVarCollector<'_, '_> {
+    fn visit_expr(&mut self, expr: &crate::span::Spanned<Expr>) {
+        match &expr.node {
+            Expr::Identifier(name)
+                if !self.bound.contains(name.as_str()) && name != "self" =>
+            {
+                let is_global = self.ctx.scopes.is_global_def(name);
+                if !is_global && self.seen.insert(name.clone()) {
+                    let ty = self.ctx.infer_c_type_from_expr(&expr.node);
+                    self.free.push((c_mangle::escape_keyword(name), ty));
+                }
+            }
+            // Nested closure: extend bound with its params, recurse into body
+            Expr::Closure { params, body, .. } => {
+                let saved = self.bound.clone();
+                for p in params {
+                    self.bound.insert(p.node.name.node.clone());
+                }
+                self.visit_expr(body);
+                self.bound = saved;
+            }
+            // Match (expr): extend bound with pattern bindings per arm
+            Expr::Match {
+                scrutinee,
+                arms,
+                else_arm,
+            } => {
+                self.visit_expr(scrutinee);
+                for arm in arms {
+                    let saved = self.bound.clone();
+                    collect_pattern_names_owned(&arm.pattern.node, &mut self.bound);
+                    if let Some(guard) = &arm.guard {
+                        self.visit_expr(guard);
+                    }
+                    self.visit_expr(&arm.body);
+                    self.bound = saved;
+                }
+                if let Some(eb) = else_arm {
+                    self.visit_expr(eb);
+                }
+            }
+            // Default walk handles all other variants exhaustively
+            _ => crate::parser::visitor::walk_expr(self, expr),
+        }
+    }
+
+    fn visit_block(&mut self, block: &crate::parser::ast::Block) {
+        // Save/restore bound for block scoping: VarDecls inside a block
+        // should not leak to the enclosing scope.
+        let saved = self.bound.clone();
+        crate::parser::visitor::walk_block(self, block);
+        self.bound = saved;
+    }
+
+    fn visit_stmt(&mut self, stmt: &crate::span::Spanned<crate::parser::ast::Stmt>) {
+        use crate::parser::ast::{Pattern, Stmt};
+        match &stmt.node {
+            Stmt::VarDecl { pattern, value, .. } => {
+                // Value is evaluated before binding, so walk it first
+                self.visit_expr(value);
+                // Then add the declared name to bound
+                if let Pattern::Binding(name) = &pattern.node {
+                    self.bound.insert(name.clone());
+                }
+            }
+            Stmt::For {
+                iterable,
+                body,
+                pattern,
+                else_body,
+                ..
+            } => {
+                self.visit_expr(iterable);
+                let saved = self.bound.clone();
+                collect_pattern_names_owned(&pattern.node, &mut self.bound);
+                self.visit_block(body);
+                self.bound = saved;
+                if let Some(eb) = else_body {
+                    self.visit_block(eb);
+                }
+            }
+            // Match (stmt): extend bound with pattern bindings per arm
+            Stmt::Match {
+                scrutinee,
+                arms,
+                else_arm,
+            } => {
+                self.visit_expr(scrutinee);
+                for arm in arms {
+                    let saved = self.bound.clone();
+                    collect_pattern_names_owned(&arm.pattern.node, &mut self.bound);
+                    if let Some(guard) = &arm.guard {
+                        self.visit_expr(guard);
+                    }
+                    self.visit_expr(&arm.body);
+                    self.bound = saved;
+                }
+                if let Some(eb) = else_arm {
+                    self.visit_block(eb);
+                }
+            }
+            _ => crate::parser::visitor::walk_stmt(self, stmt),
+        }
+    }
+}
+
+/// Collect binding names from a pattern into a `HashSet<String>`.
+fn collect_pattern_names_owned(
+    pattern: &crate::parser::ast::Pattern,
+    bound: &mut std::collections::HashSet<String>,
+) {
+    use crate::parser::ast::Pattern;
+    match pattern {
+        Pattern::Binding(name) => {
+            bound.insert(name.clone());
+        }
+        Pattern::Constructor { fields, .. } => {
+            for f in fields {
+                collect_pattern_names_owned(&f.node, bound);
+            }
+        }
+        Pattern::Tuple(pats) | Pattern::Or(pats) => {
+            for p in pats {
+                collect_pattern_names_owned(&p.node, bound);
+            }
+        }
+        Pattern::Wildcard | Pattern::Literal(_) | Pattern::Rest => {}
     }
 }

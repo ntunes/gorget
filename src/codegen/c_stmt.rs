@@ -2579,7 +2579,7 @@ impl CodegenContext<'_> {
                 if let Expr::Closure { params, body, .. } = &value.node {
                     let bound: std::collections::HashSet<&str> =
                         params.iter().map(|p| p.node.name.node.as_str()).collect();
-                    let captures = self.collect_free_vars(&body.node, &bound);
+                    let captures = self.collect_free_vars(body, &bound);
                     if !captures.is_empty() {
                         return "GorgetClosure".to_string();
                     }

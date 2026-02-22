@@ -7,8 +7,12 @@
 //! Implementors override the `visit_*` methods they care about and call the
 //! corresponding `walk_*` function for default recursion.  The pattern follows
 //! rustc's own visitor infrastructure.
+//!
+//! The trait passes `Spanned<Expr>` and `Spanned<Stmt>` so that visitors
+//! needing source location info (e.g. resolution-map lookups) have it.
 
 use crate::lexer::token::StringSegment;
+use crate::span::{Span, Spanned};
 
 use super::ast::*;
 
@@ -19,12 +23,12 @@ use super::ast::*;
 /// corresponding `walk_*` from your override to continue recursion.
 pub trait ExprVisitor {
     /// Visit an expression.  Default: recurse via [`walk_expr`].
-    fn visit_expr(&mut self, expr: &Expr) {
+    fn visit_expr(&mut self, expr: &Spanned<Expr>) {
         walk_expr(self, expr);
     }
 
     /// Visit a statement.  Default: recurse via [`walk_stmt`].
-    fn visit_stmt(&mut self, stmt: &Stmt) {
+    fn visit_stmt(&mut self, stmt: &Spanned<Stmt>) {
         walk_stmt(self, stmt);
     }
 
@@ -40,8 +44,8 @@ pub trait ExprVisitor {
 ///
 /// **Exhaustive:** every `Expr` variant is matched.  A new variant that is
 /// not added here will cause a compile error.
-pub fn walk_expr<V: ExprVisitor + ?Sized>(v: &mut V, expr: &Expr) {
-    match expr {
+pub fn walk_expr<V: ExprVisitor + ?Sized>(v: &mut V, expr: &Spanned<Expr>) {
+    match &expr.node {
         // ── Leaves (no child expressions) ──
         Expr::IntLiteral(_)
         | Expr::FloatLiteral(_)
@@ -58,7 +62,12 @@ pub fn walk_expr<V: ExprVisitor + ?Sized>(v: &mut V, expr: &Expr) {
             for seg in &s.segments {
                 if let StringSegment::Interpolation(name) = seg {
                     // Treat interpolated name as an identifier reference.
-                    let fake = Expr::Identifier(name.clone());
+                    // Use the string literal's span as a fallback — visitors
+                    // needing precise interpolation spans should override.
+                    let fake = Spanned {
+                        node: Expr::Identifier(name.clone()),
+                        span: Span::dummy(),
+                    };
                     v.visit_expr(&fake);
                 }
             }
@@ -66,57 +75,57 @@ pub fn walk_expr<V: ExprVisitor + ?Sized>(v: &mut V, expr: &Expr) {
 
         // ── Unary ──
         Expr::UnaryOp { operand, .. } => {
-            v.visit_expr(&operand.node);
+            v.visit_expr(operand);
         }
 
         // ── Binary ──
         Expr::BinaryOp { left, right, .. } => {
-            v.visit_expr(&left.node);
-            v.visit_expr(&right.node);
+            v.visit_expr(left);
+            v.visit_expr(right);
         }
 
         // ── Calls ──
         Expr::Call { callee, args, .. } => {
-            v.visit_expr(&callee.node);
+            v.visit_expr(callee);
             for arg in args {
-                v.visit_expr(&arg.node.value.node);
+                v.visit_expr(&arg.node.value);
             }
         }
         Expr::MethodCall {
             receiver, args, ..
         } => {
-            v.visit_expr(&receiver.node);
+            v.visit_expr(receiver);
             for arg in args {
-                v.visit_expr(&arg.node.value.node);
+                v.visit_expr(&arg.node.value);
             }
         }
 
         // ── Access ──
         Expr::FieldAccess { object, .. } | Expr::TupleFieldAccess { object, .. } => {
-            v.visit_expr(&object.node);
+            v.visit_expr(object);
         }
         Expr::Index { object, index } => {
-            v.visit_expr(&object.node);
-            v.visit_expr(&index.node);
+            v.visit_expr(object);
+            v.visit_expr(index);
         }
 
         // ── Range ──
         Expr::Range { start, end, .. } => {
             if let Some(s) = start {
-                v.visit_expr(&s.node);
+                v.visit_expr(s);
             }
             if let Some(e) = end {
-                v.visit_expr(&e.node);
+                v.visit_expr(e);
             }
         }
 
         // ── Optional chaining / nil coalescing ──
         Expr::OptionalChain { object, .. } => {
-            v.visit_expr(&object.node);
+            v.visit_expr(object);
         }
         Expr::NilCoalescing { lhs, rhs } => {
-            v.visit_expr(&lhs.node);
-            v.visit_expr(&rhs.node);
+            v.visit_expr(lhs);
+            v.visit_expr(rhs);
         }
 
         // ── Wrapper expressions ──
@@ -128,7 +137,7 @@ pub fn walk_expr<V: ExprVisitor + ?Sized>(v: &mut V, expr: &Expr) {
         | Expr::Spawn { expr }
         | Expr::TryCapture { expr }
         | Expr::As { expr, .. } => {
-            v.visit_expr(&expr.node);
+            v.visit_expr(expr);
         }
 
         // ── If expression ──
@@ -138,14 +147,14 @@ pub fn walk_expr<V: ExprVisitor + ?Sized>(v: &mut V, expr: &Expr) {
             elif_branches,
             else_branch,
         } => {
-            v.visit_expr(&condition.node);
-            v.visit_expr(&then_branch.node);
+            v.visit_expr(condition);
+            v.visit_expr(then_branch);
             for (cond, body) in elif_branches {
-                v.visit_expr(&cond.node);
-                v.visit_expr(&body.node);
+                v.visit_expr(cond);
+                v.visit_expr(body);
             }
             if let Some(eb) = else_branch {
-                v.visit_expr(&eb.node);
+                v.visit_expr(eb);
             }
         }
 
@@ -155,15 +164,15 @@ pub fn walk_expr<V: ExprVisitor + ?Sized>(v: &mut V, expr: &Expr) {
             arms,
             else_arm,
         } => {
-            v.visit_expr(&scrutinee.node);
+            v.visit_expr(scrutinee);
             for arm in arms {
                 if let Some(guard) = &arm.guard {
-                    v.visit_expr(&guard.node);
+                    v.visit_expr(guard);
                 }
-                v.visit_expr(&arm.body.node);
+                v.visit_expr(&arm.body);
             }
             if let Some(eb) = else_arm {
-                v.visit_expr(&eb.node);
+                v.visit_expr(eb);
             }
         }
 
@@ -174,7 +183,7 @@ pub fn walk_expr<V: ExprVisitor + ?Sized>(v: &mut V, expr: &Expr) {
 
         // ── Closures ──
         Expr::Closure { body, .. } | Expr::ImplicitClosure { body } => {
-            v.visit_expr(&body.node);
+            v.visit_expr(body);
         }
 
         // ── Comprehensions ──
@@ -184,10 +193,10 @@ pub fn walk_expr<V: ExprVisitor + ?Sized>(v: &mut V, expr: &Expr) {
             condition,
             ..
         } => {
-            v.visit_expr(&iterable.node);
-            v.visit_expr(&comp_expr.node);
+            v.visit_expr(iterable);
+            v.visit_expr(comp_expr);
             if let Some(cond) = condition {
-                v.visit_expr(&cond.node);
+                v.visit_expr(cond);
             }
         }
         Expr::DictComprehension {
@@ -197,11 +206,11 @@ pub fn walk_expr<V: ExprVisitor + ?Sized>(v: &mut V, expr: &Expr) {
             condition,
             ..
         } => {
-            v.visit_expr(&iterable.node);
-            v.visit_expr(&key.node);
-            v.visit_expr(&value.node);
+            v.visit_expr(iterable);
+            v.visit_expr(key);
+            v.visit_expr(value);
             if let Some(cond) = condition {
-                v.visit_expr(&cond.node);
+                v.visit_expr(cond);
             }
         }
         Expr::SetComprehension {
@@ -210,36 +219,36 @@ pub fn walk_expr<V: ExprVisitor + ?Sized>(v: &mut V, expr: &Expr) {
             condition,
             ..
         } => {
-            v.visit_expr(&iterable.node);
-            v.visit_expr(&comp_expr.node);
+            v.visit_expr(iterable);
+            v.visit_expr(comp_expr);
             if let Some(cond) = condition {
-                v.visit_expr(&cond.node);
+                v.visit_expr(cond);
             }
         }
 
         // ── Collection literals ──
         Expr::ArrayLiteral(items) | Expr::TupleLiteral(items) => {
             for item in items {
-                v.visit_expr(&item.node);
+                v.visit_expr(item);
             }
         }
         Expr::DictLiteral(pairs) => {
             for (k, val) in pairs {
-                v.visit_expr(&k.node);
-                v.visit_expr(&val.node);
+                v.visit_expr(k);
+                v.visit_expr(val);
             }
         }
 
         // ── Struct literal ──
         Expr::StructLiteral { args, .. } => {
             for arg in args {
-                v.visit_expr(&arg.node);
+                v.visit_expr(arg);
             }
         }
 
         // ── Is pattern test ──
         Expr::Is { expr, .. } => {
-            v.visit_expr(&expr.node);
+            v.visit_expr(expr);
         }
     }
 }
@@ -247,24 +256,24 @@ pub fn walk_expr<V: ExprVisitor + ?Sized>(v: &mut V, expr: &Expr) {
 /// Recursively visit all child expressions/blocks of `stmt`.
 ///
 /// **Exhaustive:** every `Stmt` variant is matched.
-pub fn walk_stmt<V: ExprVisitor + ?Sized>(v: &mut V, stmt: &Stmt) {
-    match stmt {
+pub fn walk_stmt<V: ExprVisitor + ?Sized>(v: &mut V, stmt: &Spanned<Stmt>) {
+    match &stmt.node {
         Stmt::VarDecl { value, .. } => {
-            v.visit_expr(&value.node);
+            v.visit_expr(value);
         }
         Stmt::Expr(expr) => {
-            v.visit_expr(&expr.node);
+            v.visit_expr(expr);
         }
         Stmt::Assign { target, value } => {
-            v.visit_expr(&target.node);
-            v.visit_expr(&value.node);
+            v.visit_expr(target);
+            v.visit_expr(value);
         }
         Stmt::CompoundAssign { target, value, .. } => {
-            v.visit_expr(&target.node);
-            v.visit_expr(&value.node);
+            v.visit_expr(target);
+            v.visit_expr(value);
         }
         Stmt::Return(Some(expr)) | Stmt::Throw(expr) | Stmt::Break(Some(expr)) => {
-            v.visit_expr(&expr.node);
+            v.visit_expr(expr);
         }
         Stmt::Return(None) | Stmt::Break(None) | Stmt::Continue | Stmt::Pass => {}
         Stmt::For {
@@ -273,7 +282,7 @@ pub fn walk_stmt<V: ExprVisitor + ?Sized>(v: &mut V, stmt: &Stmt) {
             else_body,
             ..
         } => {
-            v.visit_expr(&iterable.node);
+            v.visit_expr(iterable);
             v.visit_block(body);
             if let Some(eb) = else_body {
                 v.visit_block(eb);
@@ -284,7 +293,7 @@ pub fn walk_stmt<V: ExprVisitor + ?Sized>(v: &mut V, stmt: &Stmt) {
             body,
             else_body,
         } => {
-            v.visit_expr(&condition.node);
+            v.visit_expr(condition);
             v.visit_block(body);
             if let Some(eb) = else_body {
                 v.visit_block(eb);
@@ -299,10 +308,10 @@ pub fn walk_stmt<V: ExprVisitor + ?Sized>(v: &mut V, stmt: &Stmt) {
             elif_branches,
             else_body,
         } => {
-            v.visit_expr(&condition.node);
+            v.visit_expr(condition);
             v.visit_block(then_body);
             for (cond, body) in elif_branches {
-                v.visit_expr(&cond.node);
+                v.visit_expr(cond);
                 v.visit_block(body);
             }
             if let Some(eb) = else_body {
@@ -314,12 +323,12 @@ pub fn walk_stmt<V: ExprVisitor + ?Sized>(v: &mut V, stmt: &Stmt) {
             arms,
             else_arm,
         } => {
-            v.visit_expr(&scrutinee.node);
+            v.visit_expr(scrutinee);
             for arm in arms {
                 if let Some(guard) = &arm.guard {
-                    v.visit_expr(&guard.node);
+                    v.visit_expr(guard);
                 }
-                v.visit_expr(&arm.body.node);
+                v.visit_expr(&arm.body);
             }
             if let Some(eb) = else_arm {
                 v.visit_block(eb);
@@ -327,7 +336,7 @@ pub fn walk_stmt<V: ExprVisitor + ?Sized>(v: &mut V, stmt: &Stmt) {
         }
         Stmt::With { bindings, body } => {
             for binding in bindings {
-                v.visit_expr(&binding.expr.node);
+                v.visit_expr(&binding.expr);
             }
             v.visit_block(body);
         }
@@ -338,9 +347,9 @@ pub fn walk_stmt<V: ExprVisitor + ?Sized>(v: &mut V, stmt: &Stmt) {
             condition,
             message,
         } => {
-            v.visit_expr(&condition.node);
+            v.visit_expr(condition);
             if let Some(msg) = message {
-                v.visit_expr(&msg.node);
+                v.visit_expr(msg);
             }
         }
         Stmt::Item(_) => {
@@ -352,6 +361,6 @@ pub fn walk_stmt<V: ExprVisitor + ?Sized>(v: &mut V, stmt: &Stmt) {
 /// Walk each statement in a block.
 pub fn walk_block<V: ExprVisitor + ?Sized>(v: &mut V, block: &Block) {
     for stmt in &block.stmts {
-        v.visit_stmt(&stmt.node);
+        v.visit_stmt(stmt);
     }
 }

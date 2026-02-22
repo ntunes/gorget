@@ -2,7 +2,7 @@
 
 ## High
 
-- **Borrow checker: remaining duplicated AST walks**: ExprVisitor trait extracted (`src/parser/visitor.rs`) and mutation detector refactored. Remaining walkers to convert: `collect_captured_ref_origins` + `collect_captured_ref_origins_stmt` (borrow.rs, ~140 lines), `trace_expr_to_params` + `trace_closure_body_to_params` + `trace_closure_body_stmts` (borrow.rs, ~180 lines), `walk_free_vars` + `walk_free_vars_in_block` + `walk_free_vars_in_stmt` (c_expr_closure.rs, ~190 lines). [added: 2026-02-21, updated: 2026-02-22]
+- **Remaining manual AST walkers in codegen/typecheck**: `expr_mutates_captures` + `stmt_mutates_captures` + `block_mutates_captures` (typecheck.rs, ~180 lines — returns `bool` with short-circuit OR, harder to convert to void-returning visitor), `walk_free_vars_readonly` (c_stmt.rs, ~43 lines), `walk_expr_for_vars` (c_stmt.rs, ~70 lines), `collect_consumed_identifiers_inner` (c_stmt.rs, ~64 lines). These are lower priority — the semantic analysis walkers (highest duplication risk) have been converted. `trace_expr_to_params` (borrow.rs, ~70 lines) deliberately uses selective tracing (not a full walk), so it stays manual. [added: 2026-02-21, updated: 2026-02-22]
 
 - **Borrow checker: Pass 5a doesn't trace through local variable assignments**: `compute_function_return_borrows` can't trace `str local = a; return local` back to param `a`, producing empty `return_borrows_from`. Pass 5b's call-site origin tracking depends on this metadata, so cross-function origin chains break when returns flow through locals. Either enhance Pass 5a to track local→param mappings, or unify with Pass 5b's `var_origins`. [added: 2026-02-21]
 
