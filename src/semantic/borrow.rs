@@ -1190,12 +1190,35 @@ impl<'a> BorrowChecker<'a> {
             }
 
             Expr::Closure { body, .. } => {
-                // Closures have their own scope — for now just check the body
+                // A closure definition must not leak state into the enclosing
+                // scope.  Moves/borrows inside the body execute when the
+                // closure is *called*, not when it is *defined*.  Snapshot the
+                // enclosing state, check the body in isolation, then restore.
+                let saved = self.save_branch_state();
+                let saved_loop_depth = self.loop_depth;
+                let saved_loop_locals = std::mem::take(&mut self.loop_local_defs);
+                let saved_in_return = self.in_return_expr;
+                self.loop_depth = 0;
+                self.in_return_expr = false;
                 self.check_expr(body);
+                self.restore_branch_state(&saved);
+                self.loop_depth = saved_loop_depth;
+                self.loop_local_defs = saved_loop_locals;
+                self.in_return_expr = saved_in_return;
             }
 
             Expr::ImplicitClosure { body } => {
+                let saved = self.save_branch_state();
+                let saved_loop_depth = self.loop_depth;
+                let saved_loop_locals = std::mem::take(&mut self.loop_local_defs);
+                let saved_in_return = self.in_return_expr;
+                self.loop_depth = 0;
+                self.in_return_expr = false;
                 self.check_expr(body);
+                self.restore_branch_state(&saved);
+                self.loop_depth = saved_loop_depth;
+                self.loop_local_defs = saved_loop_locals;
+                self.in_return_expr = saved_in_return;
             }
 
             Expr::ListComprehension {
@@ -3725,6 +3748,91 @@ void main():
                     | SemanticErrorKind::DanglingReturn { .. }
             )),
             "unexpected error for closure capturing literal: {:?}", errors
+        );
+    }
+
+    // ── Closure body scope isolation ──
+
+    #[test]
+    fn closure_body_move_does_not_leak_to_enclosing_scope() {
+        // A move inside a closure body should not mark the variable as Moved
+        // in the enclosing scope — the closure body executes on call, not at
+        // definition.
+        let source = "\
+void consume(String !s):
+    pass
+
+void main():
+    String s = \"hello\"
+    auto f = (): consume(!s)
+    print(s)
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterMove { .. })),
+            "closure body move should not leak to enclosing scope: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn closure_body_move_still_detected_inside_body() {
+        // A double-move inside the closure body should still be caught.
+        let source = "\
+void consume(String !s):
+    pass
+
+void main():
+    String s = \"hello\"
+    auto f = ():
+        consume(!s)
+        consume(!s)
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterMove { .. }
+                | SemanticErrorKind::DoubleMove { .. })),
+            "double move inside closure body should be caught: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn closure_in_loop_body_no_false_move_in_loop() {
+        // A move inside a closure body should not trigger MoveInLoop even if
+        // the closure is defined inside a loop.
+        let source = "\
+void consume(String !s):
+    pass
+
+void main():
+    String s = \"hello\"
+    for i in 0..3:
+        auto f = (): consume(!s)
+        print(\"ok\")
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::MoveInLoop { .. })),
+            "move inside closure body should not trigger MoveInLoop: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn closure_definition_preserves_enclosing_origins() {
+        // A closure that captures a ref-type variable should not change the
+        // variable's origin in the enclosing scope.
+        let source = "\
+void main():
+    String owner = \"hello\"
+    str v = owner
+    auto f = (): print(v)
+    print(v)
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k,
+                SemanticErrorKind::UseAfterMove { .. }
+                | SemanticErrorKind::UseAfterSourceMoved { .. })),
+            "closure definition should not alter enclosing origins: {:?}", errors
         );
     }
 
