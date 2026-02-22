@@ -35,6 +35,7 @@ fn is_integer_type(prim: &PrimitiveType) -> bool {
 // ══════════════════════════════════════════════════════════════
 
 use super::types::ClosureKind;
+use crate::parser::visitor::{self, ExprVisitor};
 use std::collections::HashSet;
 
 /// Classify a closure's kind based on its `is_move` flag and whether the body
@@ -50,7 +51,9 @@ pub fn classify_closure_kind(
     let param_names: HashSet<String> = params.iter()
         .map(|p| p.node.name.node.clone())
         .collect();
-    if expr_mutates_captures(&body.node, &param_names) {
+    let mut detector = CapturedMutationDetector { locals: param_names, found: false };
+    detector.visit_expr(body);
+    if detector.found {
         ClosureKind::MutCallable
     } else {
         ClosureKind::Callable
@@ -94,193 +97,87 @@ fn collect_pattern_bindings(pattern: &Pattern, locals: &mut HashSet<String>) {
     }
 }
 
-/// Check if an expression tree contains mutations to captured variables.
+/// Detects mutations to captured (non-local) variables in a closure body.
 /// Does NOT recurse into nested closures (they have their own capture scope).
-fn expr_mutates_captures(expr: &Expr, locals: &HashSet<String>) -> bool {
-    match expr {
-        // Block — walk statements
-        Expr::Block(block) => block_mutates_captures(block, locals),
-        Expr::Do { body } => block_mutates_captures(body, locals),
-
-        // Branching — recurse into all sub-expressions
-        Expr::If { condition, then_branch, elif_branches, else_branch } => {
-            expr_mutates_captures(&condition.node, locals)
-            || expr_mutates_captures(&then_branch.node, locals)
-            || elif_branches.iter().any(|(c, b)|
-                expr_mutates_captures(&c.node, locals)
-                || expr_mutates_captures(&b.node, locals))
-            || else_branch.as_ref().map_or(false, |b| expr_mutates_captures(&b.node, locals))
-        }
-        Expr::Match { scrutinee, arms, else_arm } => {
-            expr_mutates_captures(&scrutinee.node, locals)
-            || arms.iter().any(|arm| expr_mutates_captures(&arm.body.node, locals))
-            || else_arm.as_ref().map_or(false, |b| expr_mutates_captures(&b.node, locals))
-        }
-
-        // Compound expressions — recurse into sub-expressions
-        Expr::BinaryOp { left, right, .. } => {
-            expr_mutates_captures(&left.node, locals)
-            || expr_mutates_captures(&right.node, locals)
-        }
-        Expr::UnaryOp { operand, .. } => expr_mutates_captures(&operand.node, locals),
-        Expr::Call { callee, args, .. } => {
-            expr_mutates_captures(&callee.node, locals)
-            || args.iter().any(|a| expr_mutates_captures(&a.node.value.node, locals))
-        }
-        Expr::MethodCall { receiver, args, .. } => {
-            expr_mutates_captures(&receiver.node, locals)
-            || args.iter().any(|a| expr_mutates_captures(&a.node.value.node, locals))
-        }
-        Expr::FieldAccess { object, .. } => expr_mutates_captures(&object.node, locals),
-        Expr::TupleFieldAccess { object, .. } => expr_mutates_captures(&object.node, locals),
-        Expr::Index { object, index } => {
-            expr_mutates_captures(&object.node, locals)
-            || expr_mutates_captures(&index.node, locals)
-        }
-        Expr::As { expr, .. } | Expr::Try { expr } | Expr::Move { expr }
-        | Expr::MutableBorrow { expr } | Expr::Deref { expr }
-        | Expr::Await { expr } | Expr::Spawn { expr } | Expr::TryCapture { expr } => {
-            expr_mutates_captures(&expr.node, locals)
-        }
-        Expr::TupleLiteral(elems) | Expr::ArrayLiteral(elems) => {
-            elems.iter().any(|e| expr_mutates_captures(&e.node, locals))
-        }
-        Expr::StructLiteral { args, .. } => {
-            args.iter().any(|a| expr_mutates_captures(&a.node, locals))
-        }
-        Expr::DictLiteral(entries) => {
-            entries.iter().any(|(k, v)|
-                expr_mutates_captures(&k.node, locals)
-                || expr_mutates_captures(&v.node, locals))
-        }
-        Expr::Range { start, end, .. } => {
-            start.as_ref().map_or(false, |e| expr_mutates_captures(&e.node, locals))
-            || end.as_ref().map_or(false, |e| expr_mutates_captures(&e.node, locals))
-        }
-        Expr::OptionalChain { object, .. } => expr_mutates_captures(&object.node, locals),
-        Expr::NilCoalescing { lhs, rhs } => {
-            expr_mutates_captures(&lhs.node, locals)
-            || expr_mutates_captures(&rhs.node, locals)
-        }
-        Expr::Is { expr, .. } => expr_mutates_captures(&expr.node, locals),
-        Expr::ListComprehension { expr: comp_expr, iterable, condition, .. } => {
-            expr_mutates_captures(&comp_expr.node, locals)
-            || expr_mutates_captures(&iterable.node, locals)
-            || condition.as_ref().map_or(false, |c| expr_mutates_captures(&c.node, locals))
-        }
-        Expr::DictComprehension { key, value, iterable, condition, .. } => {
-            expr_mutates_captures(&key.node, locals)
-            || expr_mutates_captures(&value.node, locals)
-            || expr_mutates_captures(&iterable.node, locals)
-            || condition.as_ref().map_or(false, |c| expr_mutates_captures(&c.node, locals))
-        }
-        Expr::SetComprehension { expr: comp_expr, iterable, condition, .. } => {
-            expr_mutates_captures(&comp_expr.node, locals)
-            || expr_mutates_captures(&iterable.node, locals)
-            || condition.as_ref().map_or(false, |c| expr_mutates_captures(&c.node, locals))
-        }
-
-        // Nested closures — do NOT recurse (separate capture scope)
-        Expr::Closure { .. } | Expr::ImplicitClosure { .. } => false,
-
-        // Leaf expressions — no mutations
-        Expr::Identifier(_) | Expr::SelfExpr | Expr::Path { .. } | Expr::It
-        | Expr::IntLiteral(_) | Expr::FloatLiteral(_) | Expr::BoolLiteral(_)
-        | Expr::CharLiteral(_) | Expr::StringLiteral(_) | Expr::NoneLiteral => false,
-    }
+/// Uses `found` flag for short-circuit termination.
+struct CapturedMutationDetector {
+    locals: HashSet<String>,
+    found: bool,
 }
 
-/// Check if a statement contains mutations to captured variables.
-fn stmt_mutates_captures(stmt: &Stmt, locals: &mut HashSet<String>) -> bool {
-    match stmt {
-        // Assignment — check if target is a capture
-        Stmt::Assign { target, value } => {
-            is_capture_mutation(&target.node, locals)
-            || expr_mutates_captures(&value.node, locals)
+impl ExprVisitor for CapturedMutationDetector {
+    fn visit_expr(&mut self, expr: &Spanned<Expr>) {
+        if self.found { return; }
+        match &expr.node {
+            // Nested closures have their own capture scope — skip
+            Expr::Closure { .. } | Expr::ImplicitClosure { .. } => {}
+            _ => visitor::walk_expr(self, expr),
         }
-        Stmt::CompoundAssign { target, value, .. } => {
-            is_capture_mutation(&target.node, locals)
-            || expr_mutates_captures(&value.node, locals)
-        }
+    }
 
-        // VarDecl — register the binding as local, then check initializer
-        Stmt::VarDecl { pattern, value, .. } => {
-            collect_pattern_bindings(&pattern.node, locals);
-            expr_mutates_captures(&value.node, locals)
-        }
-
-        // Expression statement
-        Stmt::Expr(expr) => expr_mutates_captures(&expr.node, locals),
-
-        // Control flow with blocks
-        Stmt::For { pattern, iterable, body, else_body, .. } => {
-            collect_pattern_bindings(&pattern.node, locals);
-            expr_mutates_captures(&iterable.node, locals)
-            || block_mutates_captures(body, locals)
-            || else_body.as_ref().map_or(false, |b| block_mutates_captures(b, locals))
-        }
-        Stmt::While { condition, body, else_body } => {
-            expr_mutates_captures(&condition.node, locals)
-            || block_mutates_captures(body, locals)
-            || else_body.as_ref().map_or(false, |b| block_mutates_captures(b, locals))
-        }
-        Stmt::Loop { body } => block_mutates_captures(body, locals),
-        Stmt::If { condition, then_body, elif_branches, else_body } => {
-            expr_mutates_captures(&condition.node, locals)
-            || block_mutates_captures(then_body, locals)
-            || elif_branches.iter().any(|(c, b)|
-                expr_mutates_captures(&c.node, locals)
-                || block_mutates_captures(b, locals))
-            || else_body.as_ref().map_or(false, |b| block_mutates_captures(b, locals))
-        }
-        Stmt::Match { scrutinee, arms, else_arm } => {
-            expr_mutates_captures(&scrutinee.node, locals)
-            || arms.iter().any(|arm| {
-                let mut arm_locals = locals.clone();
-                collect_pattern_bindings(&arm.pattern.node, &mut arm_locals);
-                arm.guard.as_ref().map_or(false, |g| expr_mutates_captures(&g.node, &arm_locals))
-                || expr_mutates_captures(&arm.body.node, &arm_locals)
-            })
-            || else_arm.as_ref().map_or(false, |b| block_mutates_captures(b, locals))
-        }
-        Stmt::With { bindings, body } => {
-            for b in bindings {
-                locals.insert(b.name.node.clone());
+    fn visit_stmt(&mut self, stmt: &Spanned<Stmt>) {
+        if self.found { return; }
+        match &stmt.node {
+            Stmt::Assign { target, value } => {
+                if is_capture_mutation(&target.node, &self.locals) {
+                    self.found = true;
+                    return;
+                }
+                self.visit_expr(value);
             }
-            bindings.iter().any(|b| expr_mutates_captures(&b.expr.node, locals))
-            || block_mutates_captures(body, locals)
+            Stmt::CompoundAssign { target, value, .. } => {
+                if is_capture_mutation(&target.node, &self.locals) {
+                    self.found = true;
+                    return;
+                }
+                self.visit_expr(value);
+            }
+            Stmt::VarDecl { pattern, value, .. } => {
+                collect_pattern_bindings(&pattern.node, &mut self.locals);
+                self.visit_expr(value);
+            }
+            Stmt::For { pattern, .. } => {
+                collect_pattern_bindings(&pattern.node, &mut self.locals);
+                visitor::walk_stmt(self, stmt);
+            }
+            Stmt::Match { scrutinee, arms, else_arm } => {
+                self.visit_expr(scrutinee);
+                for arm in arms {
+                    if self.found { return; }
+                    let saved = self.locals.clone();
+                    collect_pattern_bindings(&arm.pattern.node, &mut self.locals);
+                    if let Some(guard) = &arm.guard {
+                        self.visit_expr(guard);
+                    }
+                    self.visit_expr(&arm.body);
+                    self.locals = saved;
+                }
+                if let Some(eb) = else_arm {
+                    self.visit_block(eb);
+                }
+            }
+            Stmt::With { bindings, body } => {
+                for b in bindings {
+                    self.locals.insert(b.name.node.clone());
+                }
+                for b in bindings {
+                    if self.found { return; }
+                    self.visit_expr(&b.expr);
+                }
+                self.visit_block(body);
+            }
+            _ => visitor::walk_stmt(self, stmt),
         }
-        Stmt::Unsafe { body } => block_mutates_captures(body, locals),
-
-        // Return / throw — check the expression
-        Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
-            expr_mutates_captures(&expr.node, locals)
-        }
-        Stmt::Break(Some(expr)) => expr_mutates_captures(&expr.node, locals),
-
-        // Assert — check condition and message
-        Stmt::Assert { condition, message } => {
-            expr_mutates_captures(&condition.node, locals)
-            || message.as_ref().map_or(false, |m| expr_mutates_captures(&m.node, locals))
-        }
-
-        // Leaf statements — no mutations
-        Stmt::Return(None) | Stmt::Break(None) | Stmt::Continue | Stmt::Pass => false,
-
-        // Nested items — skip (they define their own scope)
-        Stmt::Item(_) => false,
     }
-}
 
-/// Check if a block contains mutations to captured variables.
-fn block_mutates_captures(block: &Block, locals: &HashSet<String>) -> bool {
-    let mut locals = locals.clone();
-    for stmt in &block.stmts {
-        if stmt_mutates_captures(&stmt.node, &mut locals) {
-            return true;
+    fn visit_block(&mut self, block: &Block) {
+        let saved = self.locals.clone();
+        for stmt in &block.stmts {
+            if self.found { break; }
+            self.visit_stmt(stmt);
         }
+        self.locals = saved;
     }
-    false
 }
 
 /// Type checker with bidirectional inference.

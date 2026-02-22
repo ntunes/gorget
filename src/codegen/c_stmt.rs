@@ -1,5 +1,9 @@
 /// Statement codegen: convert Gorget statements to C statements.
 use crate::parser::ast::{BinaryOp, Block, Expr, Ownership, Pattern, Stmt, Type};
+use crate::parser::visitor::{self, ExprVisitor};
+use crate::semantic::ids::ScopeId;
+use crate::semantic::scope::{DefKind, ScopeTable};
+use crate::semantic::types::TypeTable;
 use crate::span::{Span, Spanned};
 
 use super::c_emitter::CEmitter;
@@ -997,7 +1001,7 @@ impl CodegenContext<'_> {
                         if let Expr::Closure { params, body, .. } = &value.node {
                             let bound: std::collections::HashSet<&str> =
                                 params.iter().map(|p| p.node.name.node.as_str()).collect();
-                            let captures = self.collect_free_vars_readonly(&body.node, &bound);
+                            let captures = self.collect_free_vars_readonly(body, &bound);
                             if !captures.is_empty() {
                                 closure_candidates.insert(name.clone());
                             }
@@ -1028,57 +1032,17 @@ impl CodegenContext<'_> {
     /// Returns non-empty if the closure captures variables.
     fn collect_free_vars_readonly(
         &self,
-        expr: &Expr,
+        expr: &Spanned<Expr>,
         bound: &std::collections::HashSet<&str>,
     ) -> Vec<String> {
-        let mut free = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-        self.walk_free_vars_readonly(expr, bound, &mut seen, &mut free);
-        free
-    }
-
-    fn walk_free_vars_readonly(
-        &self,
-        expr: &Expr,
-        bound: &std::collections::HashSet<&str>,
-        seen: &mut std::collections::HashSet<String>,
-        free: &mut Vec<String>,
-    ) {
-        match expr {
-            Expr::Identifier(name) if !bound.contains(name.as_str()) && name != "self" => {
-                let is_global = self.scopes.is_global_def(name);
-                if !is_global && seen.insert(name.clone()) {
-                    free.push(name.clone());
-                }
-            }
-            Expr::BinaryOp { left, right, .. } => {
-                self.walk_free_vars_readonly(&left.node, bound, seen, free);
-                self.walk_free_vars_readonly(&right.node, bound, seen, free);
-            }
-            Expr::UnaryOp { operand, .. } => {
-                self.walk_free_vars_readonly(&operand.node, bound, seen, free);
-            }
-            Expr::Call { callee, args, .. } => {
-                self.walk_free_vars_readonly(&callee.node, bound, seen, free);
-                for arg in args {
-                    self.walk_free_vars_readonly(&arg.node.value.node, bound, seen, free);
-                }
-            }
-            Expr::MethodCall { receiver, args, .. } => {
-                self.walk_free_vars_readonly(&receiver.node, bound, seen, free);
-                for arg in args {
-                    self.walk_free_vars_readonly(&arg.node.value.node, bound, seen, free);
-                }
-            }
-            Expr::FieldAccess { object, .. } => {
-                self.walk_free_vars_readonly(&object.node, bound, seen, free);
-            }
-            Expr::Index { object, index } => {
-                self.walk_free_vars_readonly(&object.node, bound, seen, free);
-                self.walk_free_vars_readonly(&index.node, bound, seen, free);
-            }
-            _ => {}
-        }
+        let mut collector = FreeVarReadonlyCollector {
+            bound: bound.clone(),
+            scopes: self.scopes,
+            seen: std::collections::HashSet::new(),
+            free: Vec::new(),
+        };
+        collector.visit_expr(expr);
+        collector.free
     }
 
     /// Emit a structural trace "return" event that closes the function's Call frame.
@@ -1117,16 +1081,21 @@ impl CodegenContext<'_> {
         }
     }
 
-    /// Walk an expression AST collecting `Expr::Identifier` references suitable
+    /// Walk expression ASTs collecting `Expr::Identifier` references suitable
     /// for variable substitution in trace output. Returns deduplicated
     /// `(gorget_name, c_name, formatter_fn)` triples for traceable variables.
-    fn collect_expr_vars(&self, exprs: &[&Expr]) -> Vec<(String, String, &'static str)> {
-        let mut seen = std::collections::HashSet::new();
-        let mut result = Vec::new();
+    fn collect_expr_vars(&self, exprs: &[&Spanned<Expr>]) -> Vec<(String, String, &'static str)> {
+        let mut collector = TraceVarCollector {
+            scopes: self.scopes,
+            types: self.types,
+            current_function_scope: self.current_function_scope,
+            seen: std::collections::HashSet::new(),
+            out: Vec::new(),
+        };
         for expr in exprs {
-            self.walk_expr_for_vars(expr, false, &mut seen, &mut result);
+            collector.visit_expr(expr);
         }
-        result
+        collector.out
     }
 
     /// Look up trace info for a single variable by name.
@@ -1135,8 +1104,7 @@ impl CodegenContext<'_> {
         let def_id = self.scoped_lookup(name)?;
         let def = self.scopes.get_def(def_id);
         match def.kind {
-            crate::semantic::scope::DefKind::Variable
-            | crate::semantic::scope::DefKind::Const => {}
+            DefKind::Variable | DefKind::Const => {}
             _ => return None,
         }
         let type_id = def.type_id?;
@@ -1147,79 +1115,6 @@ impl CodegenContext<'_> {
             Some((name.to_string(), c_name, formatter))
         } else {
             None
-        }
-    }
-
-    /// Recursively walk an expression, collecting identifier references.
-    /// `is_callee` is true when we're visiting the callee position of a Call.
-    fn walk_expr_for_vars(
-        &self,
-        expr: &Expr,
-        is_callee: bool,
-        seen: &mut std::collections::HashSet<String>,
-        out: &mut Vec<(String, String, &'static str)>,
-    ) {
-        match expr {
-            Expr::Identifier(name) => {
-                if is_callee || seen.contains(name) {
-                    return;
-                }
-                if let Some(def_id) = self.scoped_lookup(name) {
-                    let def = self.scopes.get_def(def_id);
-                    match def.kind {
-                        crate::semantic::scope::DefKind::Variable
-                        | crate::semantic::scope::DefKind::Const => {}
-                        _ => return,
-                    }
-                    if let Some(type_id) = def.type_id {
-                        let c_type =
-                            c_types::type_id_to_c(type_id, self.types, self.scopes);
-                        if c_types::is_traceable_for_vars(&c_type) {
-                            let formatter = c_types::trace_formatter_for_c_type(&c_type);
-                            let c_name = c_mangle::escape_keyword(name);
-                            seen.insert(name.clone());
-                            out.push((name.clone(), c_name, formatter));
-                        }
-                    }
-                }
-            }
-            Expr::BinaryOp { left, right, .. } => {
-                self.walk_expr_for_vars(&left.node, false, seen, out);
-                self.walk_expr_for_vars(&right.node, false, seen, out);
-            }
-            Expr::UnaryOp { operand, .. } => {
-                self.walk_expr_for_vars(&operand.node, false, seen, out);
-            }
-            Expr::Call { callee, args, .. } => {
-                self.walk_expr_for_vars(&callee.node, true, seen, out);
-                for arg in args {
-                    self.walk_expr_for_vars(&arg.node.value.node, false, seen, out);
-                }
-            }
-            Expr::MethodCall {
-                receiver, args, ..
-            } => {
-                self.walk_expr_for_vars(&receiver.node, false, seen, out);
-                for arg in args {
-                    self.walk_expr_for_vars(&arg.node.value.node, false, seen, out);
-                }
-            }
-            Expr::Index { object, index } => {
-                self.walk_expr_for_vars(&object.node, false, seen, out);
-                self.walk_expr_for_vars(&index.node, false, seen, out);
-            }
-            Expr::FieldAccess { object, .. } => {
-                self.walk_expr_for_vars(&object.node, false, seen, out);
-            }
-            Expr::StringLiteral(s) => {
-                for seg in &s.segments {
-                    if let crate::lexer::token::StringSegment::Interpolation(name) = seg {
-                        let fake = Expr::Identifier(name.clone());
-                        self.walk_expr_for_vars(&fake, false, seen, out);
-                    }
-                }
-            }
-            _ => {}
         }
     }
 
@@ -1491,7 +1386,7 @@ impl CodegenContext<'_> {
 
             Stmt::Expr(expr) => {
                 if self.trace {
-                    let vars = self.collect_expr_vars(&[&expr.node]);
+                    let vars = self.collect_expr_vars(&[expr]);
                     self.emit_stmt_start(span, &vars, emitter);
                 }
                 let e = self.gen_expr(expr);
@@ -1509,7 +1404,7 @@ impl CodegenContext<'_> {
                 if let Expr::Index { object, index } = &target.node {
                     if self.is_gorget_map_expr(object) {
                         if self.trace {
-                            let vars = self.collect_expr_vars(&[&target.node, &value.node]);
+                            let vars = self.collect_expr_vars(&[target, value]);
                             self.emit_stmt_start(span, &vars, emitter);
                         }
                         let obj = self.gen_expr(object);
@@ -1525,7 +1420,7 @@ impl CodegenContext<'_> {
                     // IndexMut trait dispatch: obj[key] = value → IndexMut_for_Type__set(&obj, key, value)
                     if let Some((type_name, trait_type_args)) = self.try_operator_trait_type(object, "IndexMut") {
                         if self.trace {
-                            let vars = self.collect_expr_vars(&[&target.node, &value.node]);
+                            let vars = self.collect_expr_vars(&[target, value]);
                             self.emit_stmt_start(span, &vars, emitter);
                         }
                         let obj = self.gen_expr(object);
@@ -1542,7 +1437,7 @@ impl CodegenContext<'_> {
                     }
                 }
                 let result_info = if self.trace {
-                    let vars = self.collect_expr_vars(&[&target.node, &value.node]);
+                    let vars = self.collect_expr_vars(&[target, value]);
                     self.emit_stmt_start(span, &vars, emitter);
                     if let Expr::Identifier(name) = &target.node {
                         self.lookup_var_trace_info(name)
@@ -1607,7 +1502,7 @@ impl CodegenContext<'_> {
 
             Stmt::CompoundAssign { target, op, value } => {
                 if self.trace {
-                    let vars = self.collect_expr_vars(&[&target.node, &value.node]);
+                    let vars = self.collect_expr_vars(&[target, value]);
                     self.emit_stmt_start(span, &vars, emitter);
                 }
                 // String +=: in-place append for GorgetString, leaky concat for const char*
@@ -1711,7 +1606,7 @@ impl CodegenContext<'_> {
                 if self.has_droppable_entries() {
                     if let Some(expr) = expr {
                         if self.trace {
-                            let vars = self.collect_expr_vars(&[&expr.node]);
+                            let vars = self.collect_expr_vars(&[expr]);
                             self.emit_stmt_start(span, &vars, emitter);
                         }
                         let e = self.gen_expr(expr);
@@ -1744,7 +1639,7 @@ impl CodegenContext<'_> {
                 } else if let Some(expr) = expr {
                     let is_trace = self.trace;
                     if is_trace {
-                        let vars = self.collect_expr_vars(&[&expr.node]);
+                        let vars = self.collect_expr_vars(&[expr]);
                         self.emit_stmt_start(span, &vars, emitter);
                     }
                     let e = self.gen_expr(expr);
@@ -1812,7 +1707,7 @@ impl CodegenContext<'_> {
                     emitter.indent();
                     if self.trace {
                         let src = c_string_escape(&format!("if {}", self.source_line(condition.span)));
-                        let vars = self.collect_expr_vars(&[&condition.node]);
+                        let vars = self.collect_expr_vars(&[condition]);
                         self.emit_branch_trace("if", &src, &vars, emitter);
                     }
                     self.push_drop_scope(DropScopeKind::Block);
@@ -1847,7 +1742,7 @@ impl CodegenContext<'_> {
                                 emitter.indent();
                                 if self.trace {
                                     let src = c_string_escape(&format!("elif {}", self.source_line(elif_cond.span)));
-                                    let vars = self.collect_expr_vars(&[&elif_cond.node]);
+                                    let vars = self.collect_expr_vars(&[elif_cond]);
                                     self.emit_branch_trace("elif", &src, &vars, emitter);
                                 }
                                 self.push_drop_scope(DropScopeKind::Block);
@@ -1865,7 +1760,7 @@ impl CodegenContext<'_> {
                                 emitter.indent();
                                 if self.trace {
                                     let src = c_string_escape(&format!("elif {}", self.source_line(elif_cond.span)));
-                                    let vars = self.collect_expr_vars(&[&elif_cond.node]);
+                                    let vars = self.collect_expr_vars(&[elif_cond]);
                                     self.emit_branch_trace("elif", &src, &vars, emitter);
                                 }
                                 self.push_drop_scope(DropScopeKind::Block);
@@ -2020,7 +1915,7 @@ impl CodegenContext<'_> {
                     if self.trace {
                         emitter.emit_line("{");
                         emitter.indent();
-                        let vars = self.collect_expr_vars(&[&condition.node]);
+                        let vars = self.collect_expr_vars(&[condition]);
                         self.emit_stmt_start(span, &vars, emitter);
                         let cond = self.gen_expr(condition);
                         let msg = match message {
@@ -2112,7 +2007,7 @@ impl CodegenContext<'_> {
                 let const_prefix = if is_const { "const " } else { "" };
 
                 let result_info = if self.trace {
-                    let vars = self.collect_expr_vars(&[&value.node]);
+                    let vars = self.collect_expr_vars(&[value]);
                     self.emit_stmt_start(span, &vars, emitter);
                     self.lookup_var_trace_info(name)
                 } else {
@@ -2504,7 +2399,7 @@ impl CodegenContext<'_> {
             }
             Pattern::Wildcard => {
                 if self.trace {
-                    let vars = self.collect_expr_vars(&[&value.node]);
+                    let vars = self.collect_expr_vars(&[value]);
                     self.emit_stmt_start(span, &vars, emitter);
                 }
                 let val = self.gen_expr(value);
@@ -2516,7 +2411,7 @@ impl CodegenContext<'_> {
             }
             _ => {
                 if self.trace {
-                    let vars = self.collect_expr_vars(&[&value.node]);
+                    let vars = self.collect_expr_vars(&[value]);
                     self.emit_stmt_start(span, &vars, emitter);
                 }
                 let c_type = self.resolve_decl_type(type_, value, None);
@@ -3554,7 +3449,7 @@ impl CodegenContext<'_> {
                     emitter.indent();
                     if self.trace {
                         let src = c_string_escape(&format!("elif {}", self.source_line(elif_cond.span)));
-                        let vars = self.collect_expr_vars(&[&elif_cond.node]);
+                        let vars = self.collect_expr_vars(&[elif_cond]);
                         self.emit_branch_trace("elif", &src, &vars, emitter);
                     }
                     self.push_drop_scope(DropScopeKind::Block);
@@ -3681,7 +3576,7 @@ impl CodegenContext<'_> {
 
         if self.trace {
             let src = c_string_escape(&format!("{branch_label} {}", self.source_line(condition.span)));
-            let vars = self.collect_expr_vars(&[&condition.node]);
+            let vars = self.collect_expr_vars(&[condition]);
             self.emit_branch_trace(branch_label, &src, &vars, emitter);
         }
 
@@ -4104,6 +3999,99 @@ impl CodegenContext<'_> {
             }
         }
         None
+    }
+}
+
+// ─── ExprVisitor-based collectors ──────────────────────────────
+
+/// Scope-aware variable lookup: searches within the function scope tree when
+/// a function scope is set, otherwise falls back to scope-chain walk.
+/// Standalone helper for use by visitor structs that don't have access to
+/// `CodegenContext`.
+fn scoped_lookup_with(
+    scopes: &ScopeTable,
+    scope_id: Option<ScopeId>,
+    name: &str,
+) -> Option<crate::semantic::ids::DefId> {
+    if let Some(sid) = scope_id {
+        scopes.lookup_within_function(sid, name)
+    } else {
+        scopes.lookup(name)
+    }
+}
+
+/// Collects free (unbound) variable names in a closure body without
+/// requiring `&mut CodegenContext`.  Used to detect whether a closure
+/// captures variables (for heap-allocation decisions).
+struct FreeVarReadonlyCollector<'a> {
+    bound: std::collections::HashSet<&'a str>,
+    scopes: &'a ScopeTable,
+    seen: std::collections::HashSet<String>,
+    free: Vec<String>,
+}
+
+impl ExprVisitor for FreeVarReadonlyCollector<'_> {
+    fn visit_expr(&mut self, expr: &Spanned<Expr>) {
+        match &expr.node {
+            Expr::Identifier(name) if !self.bound.contains(name.as_str()) && name != "self" => {
+                if !self.scopes.is_global_def(name) && self.seen.insert(name.clone()) {
+                    self.free.push(name.clone());
+                }
+            }
+            // Don't recurse into nested closures
+            Expr::Closure { .. } | Expr::ImplicitClosure { .. } => {}
+            _ => visitor::walk_expr(self, expr),
+        }
+    }
+}
+
+/// Walks expressions collecting `Expr::Identifier` references suitable for
+/// variable substitution in trace output.  Produces deduplicated
+/// `(gorget_name, c_name, formatter_fn)` triples for traceable variables.
+struct TraceVarCollector<'a> {
+    scopes: &'a ScopeTable,
+    types: &'a TypeTable,
+    current_function_scope: Option<ScopeId>,
+    seen: std::collections::HashSet<String>,
+    out: Vec<(String, String, &'static str)>,
+}
+
+impl ExprVisitor for TraceVarCollector<'_> {
+    fn visit_expr(&mut self, expr: &Spanned<Expr>) {
+        match &expr.node {
+            Expr::Identifier(name) => {
+                if self.seen.contains(name) {
+                    return;
+                }
+                if let Some(def_id) = scoped_lookup_with(self.scopes, self.current_function_scope, name) {
+                    let def = self.scopes.get_def(def_id);
+                    match def.kind {
+                        DefKind::Variable | DefKind::Const => {}
+                        _ => return,
+                    }
+                    if let Some(type_id) = def.type_id {
+                        let c_type = c_types::type_id_to_c(type_id, self.types, self.scopes);
+                        if c_types::is_traceable_for_vars(&c_type) {
+                            let formatter = c_types::trace_formatter_for_c_type(&c_type);
+                            let c_name = c_mangle::escape_keyword(name);
+                            self.seen.insert(name.clone());
+                            self.out.push((name.clone(), c_name, formatter));
+                        }
+                    }
+                }
+            }
+            // Skip callee position of calls — function names aren't trace vars
+            Expr::Call { callee, args, .. } => {
+                match &callee.node {
+                    Expr::Identifier(_) | Expr::Path { .. } => {}
+                    _ => self.visit_expr(callee),
+                }
+                for arg in args {
+                    self.visit_expr(&arg.node.value);
+                }
+            }
+            _ => visitor::walk_expr(self, expr),
+        }
     }
 }
 

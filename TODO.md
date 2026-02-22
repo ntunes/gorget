@@ -2,7 +2,6 @@
 
 ## High
 
-- **Remaining manual AST walkers in codegen/typecheck**: `expr_mutates_captures` + `stmt_mutates_captures` + `block_mutates_captures` (typecheck.rs, ~180 lines — returns `bool` with short-circuit OR, harder to convert to void-returning visitor), `walk_free_vars_readonly` (c_stmt.rs, ~43 lines), `walk_expr_for_vars` (c_stmt.rs, ~70 lines), `collect_consumed_identifiers_inner` (c_stmt.rs, ~64 lines). These are lower priority — the semantic analysis walkers (highest duplication risk) have been converted. `trace_expr_to_params` (borrow.rs, ~70 lines) deliberately uses selective tracing (not a full walk), so it stays manual. [added: 2026-02-21, updated: 2026-02-22]
 
 - **Docs: add "When do I need `live`?" section to language reference**: Dedicated section with concrete examples covering: (1) trait method declarations with ref params (no body to analyze), (2) structs holding references, (3) multiple independent borrow sources needing precision (`live(a)` / `live(b)` + `where a outlives b`), (4) extern FFI declarations with multiple ref params. Each case should show the annotation and explain why inference can't handle it. [added: 2026-02-22]
 
