@@ -1284,9 +1284,8 @@ void p2p_stream_flush_send(Node &node, int stream_id):
             s.send_queue = Vector[uint8]()
         # Create segment
         int seq = s.local_seq
-        # Copy data for sending BEFORE chunk is consumed by struct constructor
-        Vector[uint8] seg_data = bytes_slice(chunk, 0, chunk.len())
         SendSegment seg = SendSegment(seq, chunk, now, 0, false)
+        Vector[uint8] seg_data = bytes_slice(seg.data, 0, seg.data.len())
         s.send_buffer.push(!seg)
         s.local_seq = s.local_seq + 1
         s.flight_size = s.flight_size + 1
@@ -1694,8 +1693,8 @@ void p2p_stream_tick(Node &node):
                     else:
                         s.send_queue = Vector[uint8]()
                     int probe_seq = s.local_seq
-                    Vector[uint8] probe_seg_data = bytes_slice(probe_chunk, 0, probe_chunk.len())
                     SendSegment probe_seg = SendSegment(probe_seq, probe_chunk, now, 0, false)
+                    Vector[uint8] probe_seg_data = bytes_slice(probe_seg.data, 0, probe_seg.data.len())
                     s.send_buffer.push(!probe_seg)
                     s.local_seq = s.local_seq + 1
                     s.flight_size = s.flight_size + 1

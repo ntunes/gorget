@@ -1,0 +1,8 @@
+void main():
+    Option[str] msg = None()
+    msg = Some("hello")
+    match msg:
+        case Some(s):
+            print(s)
+        else:
+            print("none")

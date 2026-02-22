@@ -1448,7 +1448,28 @@ impl CodegenContext<'_> {
                     None
                 };
                 let t = self.gen_expr(target);
+                // Set decl_type_hint so unit variant constructors (None(), Some(), Ok(), Error())
+                // resolve to the correct monomorphized enum in assignment context.
+                let saved_hint = self.decl_type_hint.clone();
+                if let Expr::FieldAccess { object, field, .. } = &target.node {
+                    let obj_type = self.infer_receiver_type(object);
+                    if obj_type != "Unknown" {
+                        let key = (obj_type, field.node.clone());
+                        if let Some(ast_type) = self.field_type_names.get(&key).cloned() {
+                            if matches!(&ast_type, Type::Named { generic_args, .. } if !generic_args.is_empty()) {
+                                self.decl_type_hint = Some(ast_type);
+                            }
+                        }
+                    }
+                } else if let Some(tid) = self.resolve_expr_type_id(target) {
+                    if let Some(ast_type) = self.type_id_to_ast_type(tid) {
+                        if matches!(&ast_type, Type::Named { generic_args, .. } if !generic_args.is_empty()) {
+                            self.decl_type_hint = Some(ast_type);
+                        }
+                    }
+                }
                 let v = self.gen_expr(value);
+                self.decl_type_hint = saved_hint;
                 // Coerce between String and str on assignment
                 let target_type = self.infer_c_type_from_expr(&target.node);
                 let val_type = self.infer_c_type_from_expr(&value.node);
@@ -3314,6 +3335,7 @@ impl CodegenContext<'_> {
 
             // Emit pattern bindings inside the arm body
             self.emit_pattern_bindings(&arm.pattern.node, &tmp, emitter);
+            self.register_pattern_var_types(&arm.pattern.node, scrutinee);
 
             // If the arm body is a block, generate it as statements directly
             // (avoids wrapping in a GCC statement expression which can't handle
@@ -3787,6 +3809,151 @@ impl CodegenContext<'_> {
                 // Wildcard, Literal, Rest, or type mismatch — fall back
                 self.emit_pattern_bindings(pattern, scrutinee, emitter);
             }
+        }
+    }
+
+    /// Register TypeIds for variables bound by pattern matching on enum variants.
+    /// This fills `pattern_var_types` so downstream codegen (method calls, print, etc.)
+    /// can resolve the concrete type of pattern-bound variables.
+    fn register_pattern_var_types(
+        &mut self,
+        pattern: &Pattern,
+        scrutinee: &Spanned<Expr>,
+    ) {
+        let Some(scrut_tid) = self.resolve_expr_type_id(scrutinee) else { return };
+
+        // Determine the enum's DefId and build a generic substitution map.
+        let (enum_def_id, subst_tids) = match self.types.get(scrut_tid) {
+            crate::semantic::types::ResolvedType::Generic(def_id, args) => (*def_id, args.clone()),
+            crate::semantic::types::ResolvedType::Defined(def_id) => (*def_id, vec![]),
+            _ => return,
+        };
+
+        let Some(info) = self.enum_variants.get(&enum_def_id).cloned() else { return };
+
+        // Build AST-level substitution: generic param name → AST Type
+        let subst: std::collections::HashMap<String, Type> = info
+            .generic_param_names
+            .iter()
+            .zip(subst_tids.iter())
+            .filter_map(|(param_name, &tid)| {
+                self.type_id_to_ast_type(tid).map(|ty| (param_name.clone(), ty))
+            })
+            .collect();
+
+        self.register_pattern_var_types_inner(pattern, &info, &subst);
+    }
+
+    /// Recursive inner helper for `register_pattern_var_types`.
+    fn register_pattern_var_types_inner(
+        &mut self,
+        pattern: &Pattern,
+        info: &crate::semantic::resolve::EnumVariantInfo,
+        subst: &std::collections::HashMap<String, Type>,
+    ) {
+        match pattern {
+            Pattern::Constructor { path, fields } => {
+                let variant_name = if path.len() == 1 {
+                    &path[0].node
+                } else if path.len() == 2 {
+                    &path[1].node
+                } else {
+                    return;
+                };
+
+                // Find variant's field types
+                let field_types = info
+                    .variant_field_types
+                    .iter()
+                    .find(|(name, _)| name == variant_name)
+                    .map(|(_, types)| types.as_slice());
+
+                let Some(field_types) = field_types else { return };
+
+                for (i, field_pat) in fields.iter().enumerate() {
+                    if let Some(spanned_ty) = field_types.get(i) {
+                        let substituted = Self::substitute_generic_params(&spanned_ty.node, subst);
+                        if let Some(tid) = self.ast_type_to_type_id(&substituted) {
+                            self.register_pattern_binding_types(&field_pat.node, tid);
+                        }
+                    }
+                }
+            }
+            Pattern::Or(alternatives) => {
+                if let Some(first) = alternatives.first() {
+                    self.register_pattern_var_types_inner(&first.node, info, subst);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Register a TypeId for a pattern binding (recursing into nested tuples).
+    fn register_pattern_binding_types(
+        &mut self,
+        pattern: &Pattern,
+        type_id: crate::semantic::ids::TypeId,
+    ) {
+        match pattern {
+            Pattern::Binding(name) => {
+                self.pattern_var_types.insert(name.clone(), type_id);
+            }
+            Pattern::Tuple(elements) => {
+                if let crate::semantic::types::ResolvedType::Tuple(elem_tids) = self.types.get(type_id) {
+                    let elem_tids = elem_tids.clone();
+                    for (i, elem) in elements.iter().enumerate() {
+                        if let Some(&tid) = elem_tids.get(i) {
+                            self.register_pattern_binding_types(&elem.node, tid);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Substitute generic type parameter names in an AST Type.
+    /// E.g., `T` → `int` when `subst = {"T": int}`, or `Vector[T]` → `Vector[int]`.
+    fn substitute_generic_params(
+        ty: &Type,
+        subst: &std::collections::HashMap<String, Type>,
+    ) -> Type {
+        match ty {
+            Type::Named { name, generic_args } if generic_args.is_empty() => {
+                // Bare name — might be a generic param like "T"
+                if let Some(replacement) = subst.get(&name.node) {
+                    return replacement.clone();
+                }
+                ty.clone()
+            }
+            Type::Named { name, generic_args } => {
+                let new_args: Vec<_> = generic_args
+                    .iter()
+                    .map(|arg| {
+                        crate::span::Spanned::new(
+                            Self::substitute_generic_params(&arg.node, subst),
+                            arg.span,
+                        )
+                    })
+                    .collect();
+                Type::Named {
+                    name: name.clone(),
+                    generic_args: new_args,
+                }
+            }
+            Type::Tuple(types) => {
+                let new_types: Vec<_> = types
+                    .iter()
+                    .map(|t| {
+                        crate::span::Spanned::new(
+                            Self::substitute_generic_params(&t.node, subst),
+                            t.span,
+                        )
+                    })
+                    .collect();
+                Type::Tuple(new_types)
+            }
+            _ => ty.clone(),
         }
     }
 

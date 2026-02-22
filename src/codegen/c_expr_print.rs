@@ -331,6 +331,50 @@ impl CodegenContext<'_> {
         }
     }
 
+    /// Convert a semantic `TypeId` back to an AST `Type`.
+    /// Inverse of `ast_type_to_type_id`. Uses `Span::dummy()` for synthesized spans.
+    pub(super) fn type_id_to_ast_type(&self, type_id: crate::semantic::ids::TypeId) -> Option<Type> {
+        use crate::semantic::types::ResolvedType;
+        use crate::span::{Span, Spanned as Sp};
+
+        match self.types.get(type_id) {
+            ResolvedType::Primitive(p) => Some(Type::Primitive(p.clone())),
+            ResolvedType::Defined(def_id) => {
+                let def = self.scopes.get_def(*def_id);
+                match def.kind {
+                    DefKind::Struct | DefKind::Enum | DefKind::Newtype | DefKind::TypeAlias => {
+                        Some(Type::Named {
+                            name: Sp::new(def.name.clone(), Span::dummy()),
+                            generic_args: vec![],
+                        })
+                    }
+                    _ => None,
+                }
+            }
+            ResolvedType::Generic(def_id, args) => {
+                let def = self.scopes.get_def(*def_id);
+                let mut generic_args = Vec::new();
+                for &arg_tid in args {
+                    let arg_type = self.type_id_to_ast_type(arg_tid)?;
+                    generic_args.push(Sp::new(arg_type, Span::dummy()));
+                }
+                Some(Type::Named {
+                    name: Sp::new(def.name.clone(), Span::dummy()),
+                    generic_args,
+                })
+            }
+            ResolvedType::Tuple(elems) => {
+                let mut types = Vec::new();
+                for &elem_tid in elems {
+                    let elem_type = self.type_id_to_ast_type(elem_tid)?;
+                    types.push(Sp::new(elem_type, Span::dummy()));
+                }
+                Some(Type::Tuple(types))
+            }
+            _ => None,
+        }
+    }
+
     /// Get printf format + expression for a given TypeId.
     pub(super) fn format_for_type_id(
         &mut self,

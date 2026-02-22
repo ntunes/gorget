@@ -1,0 +1,11 @@
+void main():
+    Vector[int] nums = Vector[int]()
+    nums.push(10)
+    nums.push(20)
+    Option[Vector[int]] opt = Some(nums)
+    match opt:
+        case Some(v):
+            print(v.len())
+            print(v.get(0).unwrap())
+        else:
+            print("none")

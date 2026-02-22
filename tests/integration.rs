@@ -525,6 +525,21 @@ is none",
 }
 
 #[test]
+fn option_assign() {
+    run_gg("option_assign.gg", "hello");
+}
+
+#[test]
+fn match_generic_methods() {
+    run_gg(
+        "match_generic_methods.gg",
+        "\
+2
+10",
+    );
+}
+
+#[test]
 fn pattern_is() {
     run_gg(
         "pattern_is.gg",
