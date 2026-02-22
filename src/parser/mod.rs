@@ -3,6 +3,7 @@ pub mod expr;
 pub mod pattern;
 pub mod stmt;
 pub mod types;
+pub mod visitor;
 
 use crate::errors::ParseError;
 use crate::lexer::token::{Keyword, Token};

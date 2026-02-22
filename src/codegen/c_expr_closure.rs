@@ -378,125 +378,84 @@ impl CodegenContext<'_> {
         expr: &Expr,
         param_names: &std::collections::HashSet<&str>,
     ) -> std::collections::HashSet<String> {
-        let mut mutated = std::collections::HashSet::new();
-        self.walk_mutations(expr, param_names, &mut mutated);
-        mutated
+        use crate::parser::visitor::ExprVisitor;
+        let mut detector = MutationDetector {
+            bound: param_names.iter().map(|s| s.to_string()).collect(),
+            mutated: std::collections::HashSet::new(),
+        };
+        detector.visit_expr(expr);
+        detector.mutated
+    }
+}
+
+/// Visitor-based mutation detector for closure captures.
+///
+/// Walks a closure body to find which free variables are assigned to
+/// (via `=` or `+=` etc.).  Uses the ExprVisitor trait for exhaustive
+/// expression coverage; only overrides statement handling for scope
+/// tracking and assignment detection.
+struct MutationDetector {
+    /// Variable names in scope (closure params + block-local declarations).
+    bound: std::collections::HashSet<String>,
+    /// Free variable names that are assigned to (the result).
+    mutated: std::collections::HashSet<String>,
+}
+
+impl crate::parser::visitor::ExprVisitor for MutationDetector {
+    // visit_expr: default walk_expr handles all expression variants exhaustively.
+
+    fn visit_block(&mut self, block: &crate::parser::ast::Block) {
+        // Save/restore bound for block scoping: VarDecls inside a block
+        // should not leak to the enclosing scope.
+        let saved = self.bound.clone();
+        crate::parser::visitor::walk_block(self, block);
+        self.bound = saved;
     }
 
-    fn walk_mutations(
-        &self,
-        expr: &Expr,
-        bound: &std::collections::HashSet<&str>,
-        mutated: &mut std::collections::HashSet<String>,
-    ) {
-        match expr {
-            Expr::Block(block) | Expr::Do { body: block } => {
-                self.walk_mutations_in_block(block, &mut bound.clone(), mutated);
-            }
-            Expr::If { condition, then_branch, else_branch, .. } => {
-                self.walk_mutations(&condition.node, bound, mutated);
-                self.walk_mutations(&then_branch.node, bound, mutated);
-                if let Some(eb) = else_branch {
-                    self.walk_mutations(&eb.node, bound, mutated);
-                }
-            }
-            Expr::Match { scrutinee, arms, else_arm } => {
-                self.walk_mutations(&scrutinee.node, bound, mutated);
-                for arm in arms {
-                    self.walk_mutations(&arm.body.node, bound, mutated);
-                }
-                if let Some(eb) = else_arm {
-                    self.walk_mutations(&eb.node, bound, mutated);
-                }
-            }
-            Expr::BinaryOp { left, right, .. } => {
-                self.walk_mutations(&left.node, bound, mutated);
-                self.walk_mutations(&right.node, bound, mutated);
-            }
-            Expr::UnaryOp { operand, .. } => {
-                self.walk_mutations(&operand.node, bound, mutated);
-            }
-            Expr::Call { callee, args, .. } => {
-                self.walk_mutations(&callee.node, bound, mutated);
-                for arg in args {
-                    self.walk_mutations(&arg.node.value.node, bound, mutated);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn walk_mutations_in_block<'b>(
-        &self,
-        block: &'b crate::parser::ast::Block,
-        bound: &mut std::collections::HashSet<&'b str>,
-        mutated: &mut std::collections::HashSet<String>,
-    ) {
-        for stmt in &block.stmts {
-            self.walk_mutations_in_stmt(&stmt.node, bound, mutated);
-        }
-    }
-
-    fn walk_mutations_in_stmt<'b>(
-        &self,
-        stmt: &'b crate::parser::ast::Stmt,
-        bound: &mut std::collections::HashSet<&'b str>,
-        mutated: &mut std::collections::HashSet<String>,
-    ) {
+    fn visit_stmt(&mut self, stmt: &crate::parser::ast::Stmt) {
         use crate::parser::ast::{Pattern, Stmt};
         match stmt {
-            Stmt::Assign { target, value, .. } => {
+            Stmt::Assign { target, value } => {
                 if let Expr::Identifier(name) = &target.node {
-                    if !bound.contains(name.as_str()) {
-                        mutated.insert(c_mangle::escape_keyword(name));
+                    if !self.bound.contains(name.as_str()) {
+                        self.mutated.insert(c_mangle::escape_keyword(name));
                     }
                 }
-                self.walk_mutations(&value.node, bound, mutated);
+                self.visit_expr(&value.node);
             }
             Stmt::CompoundAssign { target, value, .. } => {
                 if let Expr::Identifier(name) = &target.node {
-                    if !bound.contains(name.as_str()) {
-                        mutated.insert(c_mangle::escape_keyword(name));
+                    if !self.bound.contains(name.as_str()) {
+                        self.mutated.insert(c_mangle::escape_keyword(name));
                     }
                 }
-                self.walk_mutations(&value.node, bound, mutated);
+                self.visit_expr(&value.node);
             }
             Stmt::VarDecl { pattern, value, .. } => {
-                self.walk_mutations(&value.node, bound, mutated);
+                self.visit_expr(&value.node);
                 if let Pattern::Binding(name) = &pattern.node {
-                    bound.insert(name.as_str());
+                    self.bound.insert(name.clone());
                 }
             }
-            Stmt::Expr(expr) => {
-                self.walk_mutations(&expr.node, bound, mutated);
-            }
-            Stmt::Return(Some(expr)) => {
-                self.walk_mutations(&expr.node, bound, mutated);
-            }
-            Stmt::For { iterable, body, pattern, .. } => {
-                self.walk_mutations(&iterable.node, bound, mutated);
-                let mut for_bound = bound.clone();
+            Stmt::For {
+                iterable,
+                body,
+                pattern,
+                else_body,
+                ..
+            } => {
+                self.visit_expr(&iterable.node);
+                let saved = self.bound.clone();
                 if let Pattern::Binding(name) = &pattern.node {
-                    for_bound.insert(name.as_str());
+                    self.bound.insert(name.clone());
                 }
-                self.walk_mutations_in_block(body, &mut for_bound, mutated);
-            }
-            Stmt::While { condition, body, .. } => {
-                self.walk_mutations(&condition.node, bound, mutated);
-                self.walk_mutations_in_block(body, &mut bound.clone(), mutated);
-            }
-            Stmt::If { condition, then_body, elif_branches, else_body } => {
-                self.walk_mutations(&condition.node, bound, mutated);
-                self.walk_mutations_in_block(then_body, &mut bound.clone(), mutated);
-                for (cond, body) in elif_branches {
-                    self.walk_mutations(&cond.node, bound, mutated);
-                    self.walk_mutations_in_block(body, &mut bound.clone(), mutated);
-                }
+                self.visit_block(body);
+                self.bound = saved;
                 if let Some(eb) = else_body {
-                    self.walk_mutations_in_block(eb, &mut bound.clone(), mutated);
+                    self.visit_block(eb);
                 }
             }
-            _ => {}
+            _ => crate::parser::visitor::walk_stmt(self, stmt),
         }
     }
 }
