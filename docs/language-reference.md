@@ -617,6 +617,8 @@ str pick_first(live(a) str x, live(b) str y) where a outlives b:
 
 The `where a outlives b` bound is enforced at call sites: if group `a`'s argument source is moved while group `b`'s source is still alive, the compiler emits an error.
 
+See [section 9.6](#96-lifetime-inference-and-live-annotations) for guidance on when `live` is required vs. when inference handles it automatically.
+
 On struct fields, `live` marks fields that hold borrowed data. The struct cannot outlive the referenced data:
 
 ```gorget
@@ -1726,6 +1728,93 @@ else:
     pass
 # s is treated as moved here (conservative)
 print(s)  # ERROR: use after move
+```
+
+### 9.6 Lifetime Inference and `live` Annotations
+
+The compiler automatically infers which parameters' data flows into a function's return value. Most code needs no lifetime annotations at all. The `live` keyword exists for the small number of cases where inference cannot determine the relationship on its own.
+
+#### What the compiler infers automatically
+
+**Single reference parameter** — when a function takes exactly one reference-type parameter and returns a reference type, the compiler assumes the return borrows from that parameter:
+
+```gorget
+str trim_prefix(str s):
+    return s[1..s.len()]
+```
+
+**`self` methods** — methods returning a reference type are assumed to borrow from `self`:
+
+```gorget
+equip Holder:
+    str get_name(self):
+        return self.name
+```
+
+**Body analysis with multiple reference parameters** — the compiler traces return expressions through the function body to determine which parameters contribute:
+
+```gorget
+str longer(str x, str y):
+    if x.len() >= y.len():
+        return x
+    return y
+```
+
+Here the compiler sees both `x` and `y` in return positions and records that the result may borrow from either.
+
+**Transitive through calls** — when a return expression calls another function, the compiler uses that function's already-computed metadata to determine which arguments (and therefore which outer parameters) flow through:
+
+```gorget
+str chain(str s):
+    return identity(s)
+```
+
+**Local variable aliases** — assignments from parameters to locals are traced, so returning a local that holds parameter data is correctly attributed:
+
+```gorget
+str forward(str s):
+    str local = s
+    return local
+```
+
+#### When `live` is required
+
+**Trait method declarations** have no body for the compiler to analyze. For methods with `self`, the self-elision rule covers most cases automatically. For non-self methods with multiple reference parameters, `live` makes the dependency explicit:
+
+```gorget
+trait Container:
+    str get(live Container self, int index)
+```
+
+**Extern FFI declarations** also have no body. With two or more reference-type parameters and no `self`, the elision rules cannot determine which parameter the return borrows from:
+
+```gorget
+extern str pick_better(live str a, str b)
+```
+
+**Multiple independent borrow sources** needing precision use named groups and `outlives` constraints. This lets the compiler reject moving one source while the other is still in use:
+
+```gorget
+str pick_first(live(a) str x, live(b) str y) where a outlives b:
+    return x
+```
+
+Named groups are optional — the compiler's body analysis already determines that only `x` flows to the return. The groups add the `outlives` constraint, which is enforced at call sites.
+
+**Struct fields holding references** use `live` to mark that the struct borrows from external data. The struct cannot outlive what its `live` fields reference:
+
+```gorget
+struct Parser:
+    live str source
+    int position
+```
+
+Named groups on struct fields distinguish independent lifetimes:
+
+```gorget
+struct Merger:
+    live(left) str a
+    live(right) str b
 ```
 
 ---

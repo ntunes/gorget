@@ -3,9 +3,6 @@
 ## High
 
 
-- **Docs: add "When do I need `live`?" section to language reference**: Dedicated section with concrete examples covering: (1) trait method declarations with ref params (no body to analyze), (2) structs holding references, (3) multiple independent borrow sources needing precision (`live(a)` / `live(b)` + `where a outlives b`), (4) extern FFI declarations with multiple ref params. Each case should show the annotation and explain why inference can't handle it. [added: 2026-02-22]
-
-
 ## Medium
 
 
