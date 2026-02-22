@@ -13,7 +13,7 @@ A systems-capable language that reads like pseudocode but compiles to safe, effi
 1. **Safe by default** - no null, no data races, no use-after-free
 2. **Readable first** - code should look clean; minimize sigils and noise
 3. **Explicit types at boundaries** - function signatures are fully typed; locals can be inferred
-4. **Mutable by default, const opt-in** - variables are mutable; use `const` for immutability
+4. **Mutable by default, const opt-in** - local variables are mutable; use `const` for immutability. Function arguments are the opposite: immutable borrow by default, requiring `&` for mutable access
 5. **Zero-cost abstractions** - traits, generics, and closures compile away
 6. **No garbage collector** - ownership + borrowing, like Rust
 

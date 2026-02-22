@@ -894,7 +894,7 @@ statement = var_decl | expr_stmt | assign_stmt | compound_assign_stmt
 var_decl = [ "const" ] ( type | "auto" ) pattern "=" expr NEWLINE ;
 ```
 
-Declares a new variable with an explicit type or inferred type (`auto`). Variables are mutable by default; prefix with `const` for immutability.
+Declares a new variable with an explicit type or inferred type (`auto`). Local variables are mutable by default; prefix with `const` for immutability. Note that function arguments follow the opposite convention: they are immutable borrows by default, requiring `&` for mutable access (see [Ownership](#43-ownership-rules)).
 
 ```gorget
 int x = 5
