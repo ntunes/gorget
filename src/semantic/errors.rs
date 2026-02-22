@@ -187,6 +187,9 @@ pub enum SemanticErrorKind {
         type_name: String,
         mode: String,
     },
+
+    /// Returning a value whose borrow origin could not be determined.
+    UnresolvedBorrowOrigin { name: String },
 }
 
 impl std::fmt::Display for SemanticError {
@@ -385,6 +388,9 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::InvalidParameterMode { param_name, type_name, mode } => {
                 write!(f, "parameter `{param_name}` of type `{type_name}` cannot use `{mode}` mode — `{type_name}` is Copy and always passed by value")
+            }
+            SemanticErrorKind::UnresolvedBorrowOrigin { name } => {
+                write!(f, "cannot return `{name}`: borrow origin could not be determined — consider adding `live` annotation to the source function")
             }
         }
     }

@@ -58,6 +58,9 @@ pub struct FunctionInfo {
     pub outlives_bounds: Vec<(String, String)>,
     /// Whether the function has a body (Block or Expression, not Declaration/Extern).
     pub has_body: bool,
+    /// True if the function has a body and body analysis proved return value is static
+    /// (no parameter data flows to the return). Set by Pass 5a.
+    pub return_origin_is_static: bool,
 }
 
 /// Shared context passed around during resolution.
@@ -255,6 +258,7 @@ fn collect_item(
                             param_live_groups,
                             outlives_bounds,
                             has_body: matches!(f.body, crate::parser::ast::FunctionBody::Block(_) | crate::parser::ast::FunctionBody::Expression(_)),
+                            return_origin_is_static: false,
                         },
                     );
                 }
@@ -416,6 +420,7 @@ fn collect_item(
                                 param_live_groups,
                                 outlives_bounds,
                                 has_body: matches!(f.body, crate::parser::ast::FunctionBody::Block(_) | crate::parser::ast::FunctionBody::Expression(_)),
+                                return_origin_is_static: false,
                             },
                         );
                     }

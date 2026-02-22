@@ -45,9 +45,11 @@ enum BorrowOrigin {
 
 impl BorrowOrigin {
     /// Returns true if this origin (or any nested origin) references a local.
+    /// Unknown is treated conservatively — it might be local.
     fn contains_local(&self) -> bool {
         match self {
             BorrowOrigin::Local(_) => true,
+            BorrowOrigin::Unknown => true,
             BorrowOrigin::CallResult(origins) => origins.iter().any(|o| o.contains_local()),
             _ => false,
         }
@@ -66,10 +68,20 @@ impl BorrowOrigin {
     fn local_names(&self, scopes: &ScopeTable) -> Vec<String> {
         match self {
             BorrowOrigin::Local(def_id) => vec![scopes.get_def(*def_id).name.clone()],
+            BorrowOrigin::Unknown => vec!["<unresolved origin>".to_string()],
             BorrowOrigin::CallResult(origins) => {
                 origins.iter().flat_map(|o| o.local_names(scopes)).collect()
             }
             _ => vec![],
+        }
+    }
+
+    /// Returns true if this origin (or any nested origin) is Unknown.
+    fn contains_unknown(&self) -> bool {
+        match self {
+            BorrowOrigin::Unknown => true,
+            BorrowOrigin::CallResult(origins) => origins.iter().any(|o| o.contains_unknown()),
+            _ => false,
         }
     }
 
@@ -408,15 +420,12 @@ impl<'a> BorrowChecker<'a> {
 
     // ─── Origin Tracking ──────────────────────────────────
 
-    /// Merge multiple origins: filter out Unknown, return single or CallResult union.
+    /// Merge multiple origins into a single origin.
     fn merge_origins(origins: Vec<BorrowOrigin>) -> BorrowOrigin {
-        let meaningful: Vec<_> = origins.into_iter()
-            .filter(|o| !matches!(o, BorrowOrigin::Unknown))
-            .collect();
-        match meaningful.len() {
-            0 => BorrowOrigin::Unknown,
-            1 => meaningful.into_iter().next().unwrap(),
-            _ => BorrowOrigin::CallResult(meaningful),
+        match origins.len() {
+            0 => BorrowOrigin::Static,
+            1 => origins.into_iter().next().unwrap(),
+            _ => BorrowOrigin::CallResult(origins),
         }
     }
 
@@ -646,6 +655,18 @@ impl<'a> BorrowChecker<'a> {
                         BorrowOrigin::CallResult(origins)
                     };
                 }
+                if info.return_origin_is_static {
+                    return BorrowOrigin::Static;
+                }
+                // If callee returns an owned (non-reference, non-callable) type,
+                // the call produces fresh data — always Static.
+                if let Some(ret_tid) = info.return_type_id {
+                    if !types::is_reference_type(ret_tid, self.types, &self.ref_type_structs)
+                        && !types::is_callable_type(ret_tid, self.types)
+                    {
+                        return BorrowOrigin::Static;
+                    }
+                }
             }
         }
         BorrowOrigin::Unknown
@@ -667,6 +688,18 @@ impl<'a> BorrowChecker<'a> {
                         })
                         .collect();
                     return Self::merge_origins(origins);
+                }
+                if info.return_origin_is_static {
+                    return BorrowOrigin::Static;
+                }
+                // If callee returns an owned (non-reference, non-callable) type,
+                // the call produces fresh data — always Static.
+                if let Some(ret_tid) = info.return_type_id {
+                    if !types::is_reference_type(ret_tid, self.types, &self.ref_type_structs)
+                        && !types::is_callable_type(ret_tid, self.types)
+                    {
+                        return BorrowOrigin::Static;
+                    }
                 }
             }
         }
@@ -1161,7 +1194,7 @@ impl<'a> BorrowChecker<'a> {
 
                 for arm in arms {
                     self.restore_branch_state(&before);
-                    self.mark_pattern_origins(&arm.pattern.node, &scrutinee_origin);
+                    self.mark_pattern_origins(&arm.pattern, &scrutinee_origin);
                     if let Some(guard) = &arm.guard {
                         self.check_expr(guard);
                     }
@@ -1382,9 +1415,7 @@ impl<'a> BorrowChecker<'a> {
                             // Also check expression form for `auto` vars where type_id may not be set
                             if is_callable || matches!(&value.node, Expr::Closure { .. }) {
                                 let origin = self.compute_expr_origin(value);
-                                if !matches!(&origin, BorrowOrigin::Unknown) {
-                                    self.var_origins.insert(def_id, origin);
-                                }
+                                self.var_origins.insert(def_id, origin);
                             }
                         }
                     }
@@ -1456,9 +1487,7 @@ impl<'a> BorrowChecker<'a> {
                                     .map_or(false, |tid| types::is_callable_type(tid, self.types));
                                 if is_callable || matches!(&value.node, Expr::Closure { .. }) {
                                     let origin = self.compute_expr_origin(value);
-                                    if !matches!(&origin, BorrowOrigin::Unknown) {
-                                        self.var_origins.insert(def_id, origin);
-                                    }
+                                    self.var_origins.insert(def_id, origin);
                                 }
                             }
                         }
@@ -1510,23 +1539,31 @@ impl<'a> BorrowChecker<'a> {
                         {
                             let origin = self.compute_expr_origin(expr);
                             if origin.contains_local() {
-                                let local_names = origin.local_names(self.scopes);
-                                let local_name = local_names.first().cloned().unwrap_or_else(|| "<local>".to_string());
-                                let local_declared_at = origin.source_def_ids().first()
-                                    .map(|&did| self.scopes.get_def(did).span);
-                                // Get a name for what's being returned
                                 let return_name = match &expr.node {
                                     Expr::Identifier(n) => n.clone(),
                                     _ => "<expression>".to_string(),
                                 };
-                                self.error(
-                                    SemanticErrorKind::DanglingReturn {
-                                        name: return_name,
-                                        local_name,
-                                        local_declared_at,
-                                    },
-                                    expr.span,
-                                );
+                                if origin.contains_unknown() && !matches!(&origin, BorrowOrigin::Local(_)) {
+                                    self.error(
+                                        SemanticErrorKind::UnresolvedBorrowOrigin {
+                                            name: return_name,
+                                        },
+                                        expr.span,
+                                    );
+                                } else {
+                                    let local_names = origin.local_names(self.scopes);
+                                    let local_name = local_names.first().cloned().unwrap_or_else(|| "<local>".to_string());
+                                    let local_declared_at = origin.source_def_ids().first()
+                                        .map(|&did| self.scopes.get_def(did).span);
+                                    self.error(
+                                        SemanticErrorKind::DanglingReturn {
+                                            name: return_name,
+                                            local_name,
+                                            local_declared_at,
+                                        },
+                                        expr.span,
+                                    );
+                                }
                             }
                         }
                     }
@@ -1669,7 +1706,7 @@ impl<'a> BorrowChecker<'a> {
 
                 for arm in arms {
                     self.restore_branch_state(&before);
-                    self.mark_pattern_origins(&arm.pattern.node, &scrutinee_origin);
+                    self.mark_pattern_origins(&arm.pattern, &scrutinee_origin);
                     if let Some(guard) = &arm.guard {
                         self.check_expr(guard);
                     }
@@ -1746,7 +1783,7 @@ impl<'a> BorrowChecker<'a> {
         match expr {
             Expr::Is { expr: scrutinee, negated: false, pattern, .. } => {
                 let origin = self.compute_expr_origin(scrutinee);
-                self.mark_pattern_origins(&pattern.node, &origin);
+                self.mark_pattern_origins(pattern, &origin);
             }
             Expr::BinaryOp { left, op: BinaryOp::And, right } => {
                 self.mark_compound_is_origins(&left.node);
@@ -1758,10 +1795,16 @@ impl<'a> BorrowChecker<'a> {
 
     /// Walk a pattern from a match arm, mark bindings as Live, and assign
     /// origins derived from the scrutinee to any reference-type bindings.
-    fn mark_pattern_origins(&mut self, pattern: &Pattern, scrutinee_origin: &BorrowOrigin) {
-        match pattern {
+    /// Uses span-based DefId lookup to avoid name collisions between arms.
+    fn mark_pattern_origins(&mut self, pattern: &Spanned<Pattern>, scrutinee_origin: &BorrowOrigin) {
+        match &pattern.node {
             Pattern::Binding(name) => {
-                if let Some(def_id) = self.find_def_by_name(name) {
+                // Use span-based lookup to find the correct DefId for this exact binding.
+                // Name-based lookup (find_def_by_name) can return the wrong DefId when
+                // multiple match arms bind the same name.
+                let def_id = self.scopes.lookup_def_by_span(name, pattern.span)
+                    .or_else(|| self.find_def_by_name(name));
+                if let Some(def_id) = def_id {
                     self.mark_live(def_id);
                     // Only assign origin to reference-type or callable-type bindings
                     if let Some(type_id) = self.scopes.get_def(def_id).type_id {
@@ -1775,17 +1818,17 @@ impl<'a> BorrowChecker<'a> {
             }
             Pattern::Constructor { fields, .. } => {
                 for field in fields {
-                    self.mark_pattern_origins(&field.node, scrutinee_origin);
+                    self.mark_pattern_origins(field, scrutinee_origin);
                 }
             }
             Pattern::Tuple(elements) => {
                 for elem in elements {
-                    self.mark_pattern_origins(&elem.node, scrutinee_origin);
+                    self.mark_pattern_origins(elem, scrutinee_origin);
                 }
             }
             Pattern::Or(alternatives) => {
                 if let Some(first) = alternatives.first() {
-                    self.mark_pattern_origins(&first.node, scrutinee_origin);
+                    self.mark_pattern_origins(first, scrutinee_origin);
                 }
             }
             Pattern::Wildcard | Pattern::Literal(_) | Pattern::Rest => {}
@@ -2113,22 +2156,31 @@ impl<'a> BorrowChecker<'a> {
                     {
                         let origin = self.compute_expr_origin(expr);
                         if origin.contains_local() {
-                            let local_names = origin.local_names(self.scopes);
-                            let local_name = local_names.first().cloned().unwrap_or_else(|| "<local>".to_string());
-                            let local_declared_at = origin.source_def_ids().first()
-                                .map(|&did| self.scopes.get_def(did).span);
                             let return_name = match &expr.node {
                                 Expr::Identifier(n) => n.clone(),
                                 _ => "<expression>".to_string(),
                             };
-                            self.error(
-                                SemanticErrorKind::DanglingReturn {
-                                    name: return_name,
-                                    local_name,
-                                    local_declared_at,
-                                },
-                                expr.span,
-                            );
+                            if origin.contains_unknown() && !matches!(&origin, BorrowOrigin::Local(_)) {
+                                self.error(
+                                    SemanticErrorKind::UnresolvedBorrowOrigin {
+                                        name: return_name,
+                                    },
+                                    expr.span,
+                                );
+                            } else {
+                                let local_names = origin.local_names(self.scopes);
+                                let local_name = local_names.first().cloned().unwrap_or_else(|| "<local>".to_string());
+                                let local_declared_at = origin.source_def_ids().first()
+                                    .map(|&did| self.scopes.get_def(did).span);
+                                self.error(
+                                    SemanticErrorKind::DanglingReturn {
+                                        name: return_name,
+                                        local_name,
+                                        local_declared_at,
+                                    },
+                                    expr.span,
+                                );
+                            }
                         }
                     }
                 }
@@ -2263,6 +2315,13 @@ fn compute_function_return_borrows(
                 borrows_from.insert(ref_param_indices[0]);
             } else if !info.param_names.is_empty() && info.param_names[0] == "self" {
                 borrows_from.insert(0);
+            } else if ref_param_indices.is_empty() {
+                // No reference-type params → return can't borrow from any param.
+                // Mark as static so callers don't get Unknown origin.
+                if let Some(fi) = function_info.get_mut(&def_id) {
+                    fi.return_origin_is_static = true;
+                }
+                return;
             }
         }
     }
@@ -2294,6 +2353,15 @@ fn compute_function_return_borrows(
             // Method with &self — borrows from self
             if let Some(fi) = function_info.get_mut(&def_id) {
                 fi.return_borrows_from = vec![0];
+            }
+        }
+
+        // If function has a body and return_borrows_from is still empty after
+        // body analysis + elision, the return is provably static.
+        let info = function_info.get(&def_id).unwrap();
+        if info.has_body && info.return_borrows_from.is_empty() {
+            if let Some(fi) = function_info.get_mut(&def_id) {
+                fi.return_origin_is_static = true;
             }
         }
     }
@@ -4637,6 +4705,110 @@ void main():
         assert!(
             !has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { .. })),
             "unexpected error for local assigned from call: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn unknown_origin_return_rejected() {
+        // Bodyless function returning str with multiple ref params and no live annotation.
+        // Multiple ref params = elision can't choose → origin is Unknown.
+        // Returning its result should be rejected.
+        let source = "\
+str get_data(str a, str b)
+
+str wrapper(str x, str y):
+    str s = get_data(x, y)
+    return s
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::UnresolvedBorrowOrigin { .. })),
+            "expected UnresolvedBorrowOrigin, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn static_origin_return_ok() {
+        // Function with body returning a string literal — origin is Static.
+        let source = "\
+str greet():
+    return \"hello\"
+
+str wrapper():
+    str s = greet()
+    return s
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(
+                k,
+                SemanticErrorKind::DanglingReturn { .. }
+                    | SemanticErrorKind::UnresolvedBorrowOrigin { .. }
+            )),
+            "unexpected error for static return: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn unknown_closure_capture_rejected() {
+        // Closure captures str from unresolvable call, returned — should error.
+        let source = "\
+str get_data(str a, str b)
+
+Callable[str()] wrapper(str x, str y):
+    str s = get_data(x, y)
+    return (): s
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(
+                k,
+                SemanticErrorKind::DanglingReturn { .. }
+                    | SemanticErrorKind::UnresolvedBorrowOrigin { .. }
+            )),
+            "expected error for closure capturing unknown origin, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn merge_unknown_with_static() {
+        // If/else with Static and Unknown branches — should error on return.
+        let source = "\
+str get_data(str a, str b)
+
+str pick(bool cond, str x, str y):
+    if cond:
+        return \"hello\"
+    return get_data(x, y)
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(
+                k,
+                SemanticErrorKind::UnresolvedBorrowOrigin { .. }
+            )),
+            "expected UnresolvedBorrowOrigin for merged unknown+static, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn owned_return_from_bodyless_fn_ok() {
+        // Bodyless function returning an owned type — caller should be fine
+        // returning coerced result, since owned data is always Static.
+        let source = "\
+String make_string()
+
+str wrapper():
+    return make_string()
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(
+                k,
+                SemanticErrorKind::DanglingReturn { .. }
+                    | SemanticErrorKind::UnresolvedBorrowOrigin { .. }
+            )),
+            "unexpected error for owned return coercion: {:?}", errors
         );
     }
 }
