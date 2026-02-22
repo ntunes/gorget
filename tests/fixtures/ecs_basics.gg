@@ -1,0 +1,75 @@
+from std.collections import Vector
+from std.ecs import EntityPool, SparseSet
+
+struct Health:
+    int hp
+    int max_hp
+
+void main():
+    # EntityPool.new() factory
+    EntityPool pool = EntityPool.new()
+    int e1 = pool.create()
+    int e2 = pool.create()
+    print(e1)
+    print(e2)
+    print(pool.count())
+    print(pool.max_id())
+
+    # Destroy and recycle
+    pool.destroy(e1)
+    int e3 = pool.create()
+    print(e3)
+    print(pool.count())
+
+    # Destroy out-of-range ID — should be ignored
+    pool.destroy(-1)
+    pool.destroy(999)
+    print(pool.count())
+
+    # SparseSet basics
+    SparseSet[Health] health = SparseSet[Health](Vector[int](), Vector[int](), Vector[Health](), 0)
+    health.insert(e2, Health(100, 100))
+    health.insert(e3, Health(80, 80))
+    print(health.len())
+    print(health.has(e2))
+    print(health.has(e1))
+
+    # get
+    Health h = health.get(e2)
+    print(h.hp)
+
+    # has with negative ID — should return false
+    print(health.has(-5))
+
+    # set with bounds check
+    health.set(e2, Health(50, 100))
+    Health h2 = health.get(e2)
+    print(h2.hp)
+
+    # set on missing entity — should silently no-op
+    health.set(999, Health(1, 1))
+    print(health.len())
+
+    # insert updates existing
+    health.insert(e2, Health(75, 100))
+    Health h3 = health.get(e2)
+    print(h3.hp)
+
+    # remove
+    health.remove(e2)
+    print(health.len())
+    print(health.has(e2))
+
+    # iteration via for-in
+    SparseSet[Health] store = SparseSet[Health](Vector[int](), Vector[int](), Vector[Health](), 0)
+    store.insert(10, Health(100, 100))
+    store.insert(20, Health(200, 200))
+    store.insert(30, Health(300, 300))
+    for eid in store:
+        Health s = store.get(eid)
+        print("{eid}:{s.hp}")
+
+    # entity_at / data_at
+    print(store.entity_at(0))
+    Health d = store.data_at(1)
+    print(d.hp)

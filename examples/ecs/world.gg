@@ -5,8 +5,7 @@
 # game systems as methods operating on World via &self.
 
 from std.collections import Vector
-from entity import EntityPool
-from sparse_set import SparseSet
+from std.ecs import EntityPool, SparseSet
 from components import Health
 from components import Attack
 
@@ -48,7 +47,7 @@ equip World:
         return n
 
     void combat_round(&self):
-        int max_id = self.entities.next_id
+        int max_id = self.entities.max_id()
         for i in 0..max_id:
             if self.is_alive(i) == false:
                 continue

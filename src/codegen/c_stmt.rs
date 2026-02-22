@@ -3128,9 +3128,9 @@ impl CodegenContext<'_> {
         } else if self.has_iterable_impl(iterable) {
             // Iterable[T]: call iter() to get a fresh iterator, then use Iterator protocol
             let collection_expr = self.gen_expr(iterable);
-            // Use infer_receiver_type for the mangled name (e.g. "SparseSet__Health")
+            // Use infer_receiver_mangled_type for the fully-qualified name (e.g. "SparseSet__Health")
             // since trait method functions are emitted per-monomorphization.
-            let collection_mangled = self.infer_receiver_type(iterable);
+            let collection_mangled = self.infer_receiver_mangled_type(iterable);
             let (elem_c_type, iter_c_type, iter_type_name) = self.get_iterable_iter_info(iterable);
             let iterable_trait_args = self.lookup_trait_type_args(&collection_mangled, "Iterable");
             let iter_fn = c_mangle::mangle_trait_method("Iterable", &collection_mangled, "iter", &iterable_trait_args);

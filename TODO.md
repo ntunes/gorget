@@ -57,8 +57,6 @@
 
 - **SSH Session initialization is fragile**: Constructor takes 11 positional arguments, several initialized with dummy values (`bytes_from_hex("")`, dummy crypto contexts). Error-prone — needs builder pattern or named-parameter constructor. (`ssh.gg:635`) [added: 2026-02-16]
 
-- **ECS `get()` has no bounds check**: Calls `self.sparse.get(id)` without checking `id < sparse.len()` while the adjacent `has()` method does check. Out-of-bounds panic for callers who forget `has()`. (`ecs.gg:74-76`) [added: 2026-02-16]
-
 - **Inconsistent function naming across synthetic stdlib modules**: Modules use different prefixing: `crypto_sha256()`, `bytes_from_str()`, `path_join()`, but HTTP uses bare `get()`/`post()`. Crypto has `crypto_random_bytes()` while bytes has `random_bytes()`. Adopt consistent `module_verb()` convention. (`stdlib.rs`) [added: 2026-02-16]
 
 
@@ -82,6 +80,22 @@
 - **`@guarded` annotation for opt-in self-referential structs**: If self-referential structs are ever needed, consider an explicit `@guarded` annotation that adds runtime scope-token checks to specific fields. Opt-in (not automatic) to preserve zero-cost default. Each guarded field would carry a scope token that invalidates when the source field is mutated. Requires: field-granularity mutation tracking, fat pointer layout for guarded fields, instrumentation of field writes. Philosophy: compile error by default for unsafe self-references; `@guarded` as explicit escape hatch with documented runtime cost. [added: 2026-02-18]
 
 - **`std.regex` deferred features**: (1) `replace_with(self, str subject, Callable[Match, str] fn)` — callback replacement (requires C→Gorget closure call for user-defined replacement logic). (2) `named_groups(self) -> Dict[str, str]` — requires building a Gorget Dict from C. [added: 2026-02-19]
+
+- **ECS generational entity IDs (ABA problem)**: After `destroy(3)` + `create()` (returns 3), old code holding entity ID 3 silently accesses a different entity's components. Fix: `Entity { int id, int generation }` handle type, generation bump on recycle, `SparseSet` validates generation on access. Significant refactor — changes EntityPool API surface, all stores, and downstream code. [added: 2026-02-22]
+
+- **ECS `try_get()` returning `Option[T]`**: Safe accessor for SparseSet that returns `None` instead of panicking on missing entity. Blocked by codegen: `None` and `Some()` in generic equip blocks generate unqualified `Option__Some` / `NULL` instead of fully-qualified constructors (e.g., `Option__Health__None()`). Same root cause as the bare `Some()` assignment issue (TODO line above). Unblock by fixing generic Option constructor codegen first. [added: 2026-02-22]
+
+- **ECS multi-component query/join**: Every "system" manually nests `has()` checks across multiple sparse sets. A `query(SparseSet[A], SparseSet[B])` helper that iterates entities present in both sets would eliminate the most error-prone boilerplate. Even a simple intersection (iterate smaller set, check `has()` on larger) would help. Full query builder needs variadic generics. [added: 2026-02-22]
+
+- **ECS `SparseSet[T].new()` static factory**: Like `EntityPool.new()`, but for generic SparseSet. Needs `Vector[T]()` constructor inside a generic equip method body — currently untested codegen path. Would eliminate verbose `SparseSet[Health](Vector[int](), Vector[int](), Vector[Health](), 0)` boilerplate. [added: 2026-02-22]
+
+- **ECS `(int, T)` pair iteration / `items()` method**: `Iterable[int]` only yields entity IDs, forcing immediate `get(eid)` in every loop. An `items()` method yielding `(int, T)` tuples would eliminate boilerplate. Blocked: tuple return from generic equip methods is untested codegen territory. [added: 2026-02-22]
+
+- **ECS iter() copies entire entity_ids vector**: `SparseSet[T].iter()` allocates a fresh `Vector[int]` and copies all entity IDs. O(n) allocation just to start iteration. Language limitation: `SparseSetIter` can't hold a reference (no lifetime-annotated struct fields). Could improve with index+length snapshot if struct references become available. [added: 2026-02-22]
+
+- **ECS `each()` callback iteration**: `void each(Callable[int, T, void] fn)` would enable `health.each((int id, Health h): ...)` without manual iteration. Needs `Callable` with generic `T` in equip block — untested. [added: 2026-02-22]
+
+- **ECS double-destroy still possible**: `EntityPool.destroy()` now guards against out-of-range IDs (`id < 0 or id >= next_id`) but doesn't prevent destroying the same ID twice (pushes to free_ids twice, corrupts `count()`). Full fix requires generation tracking or an alive bitset. [added: 2026-02-22]
 
 ## Low
 
@@ -134,8 +148,6 @@
 
 
 - **Vector/List/Array declared identically in collections module**: Three collection types declared with identical representations. Either an intentional alias system (document it) or placeholder for future differentiation. (`stdlib.rs:246`) [added: 2026-02-16]
-
-- **ECS `self` vs `&self` receiver inconsistency**: Mutating methods use `&self`, read-only use `self` — correct but surprising given Gorget convention. Needs doc comment explaining receiver semantics. (`ecs.gg`) [added: 2026-02-16]
 
 - **Serial port library (`std.io.serial`)**: `Port` struct, `.write()`, `.read_until()`, timeout support. C backend via termios/POSIX. [added: 2026-02-14]
 

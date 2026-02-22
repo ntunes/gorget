@@ -183,7 +183,7 @@ equip BreakoutWorld:
         return self.game_won
 
 BreakoutWorld new_world():
-    EntityPool pool = EntityPool(0, Vector[int]())
+    EntityPool pool = EntityPool.new()
     SparseSet[Position] positions = SparseSet[Position](Vector[int](), Vector[int](), Vector[Position](), 0)
     SparseSet[Size] sizes = SparseSet[Size](Vector[int](), Vector[int](), Vector[Size](), 0)
     SparseSet[Velocity] velocities = SparseSet[Velocity](Vector[int](), Vector[int](), Vector[Velocity](), 0)

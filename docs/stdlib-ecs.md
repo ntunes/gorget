@@ -23,21 +23,23 @@ struct EntityPool:
 
 | Signature | Description |
 |---|---|
+| `EntityPool new()` | Create a new empty pool (static factory) |
 | `int create(&self)` | Allocate a new entity ID (reuses freed IDs first) |
-| `void destroy(&self, int id)` | Return an ID to the free list |
+| `void destroy(&self, int id)` | Return an ID to the free list (ignores out-of-range IDs) |
 | `int count(self)` | Number of currently live entities |
+| `int max_id(self)` | Upper bound on entity IDs (one past the highest ever allocated) |
 
 ### Usage
 
 ```gorget
-from std.collections import Vector
 from std.ecs import EntityPool
 
-EntityPool pool = EntityPool(0, Vector[int]())
+EntityPool pool = EntityPool.new()
 int e1 = pool.create()   # 0
 int e2 = pool.create()   # 1
 pool.destroy(e1)
 int e3 = pool.create()   # 0 (recycled)
+print(pool.max_id())     # 2
 ```
 
 ## SparseSet[T]
@@ -61,11 +63,21 @@ struct SparseSet[T]:
 | `void insert(&self, int id, T value)` | Add or update a component for entity `id` |
 | `void remove(&self, int id)` | Remove the component (swap-and-pop) |
 | `bool has(self, int id)` | Check if entity `id` has a component |
-| `T get(self, int id)` | Get the component value for entity `id` |
-| `void set(&self, int id, T value)` | Update in place (entity must already exist) |
+| `T get(self, int id)` | Get the component value (panics if missing — use `has()` first) |
+| `void set(&self, int id, T value)` | Update in place (silently no-ops if entity missing) |
 | `int len(self)` | Number of stored components |
 | `int entity_at(self, int idx)` | Entity ID at dense index `idx` |
 | `T data_at(self, int idx)` | Component value at dense index `idx` |
+
+### Iteration
+
+`SparseSet[T]` implements `Iterable[int]`, so you can iterate entity IDs directly:
+
+```gorget
+for eid in health:
+    Health h = health.get(eid)
+    print("{eid}: {h.hp} HP")
+```
 
 ### Usage
 
@@ -77,7 +89,7 @@ struct Health:
     int hp
     int max_hp
 
-EntityPool pool = EntityPool(0, Vector[int]())
+EntityPool pool = EntityPool.new()
 SparseSet[Health] health = SparseSet[Health](Vector[int](), Vector[int](), Vector[Health](), 0)
 
 int id = pool.create()
@@ -88,9 +100,8 @@ print("{h.hp}")           # 100
 
 health.set(id, Health(80, 100))
 
-for i in 0..health.len():
-    int eid = health.entity_at(i)
-    Health val = health.data_at(i)
+for eid in health:
+    Health val = health.get(eid)
     print("Entity {eid}: {val.hp} HP")
 ```
 

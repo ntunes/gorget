@@ -10,6 +10,9 @@ struct EntityPool:
     Vector[int] free_ids
 
 equip EntityPool:
+    EntityPool new():
+        return EntityPool(0, Vector[int]())
+
     int create(&self):
         if self.free_ids.len() > 0:
             return self.free_ids.pop().unwrap()
@@ -18,10 +21,15 @@ equip EntityPool:
         return id
 
     void destroy(&self, int id):
+        if id < 0 or id >= self.next_id:
+            return
         self.free_ids.push(id)
 
     int count(self):
         return self.next_id - self.free_ids.len()
+
+    int max_id(self):
+        return self.next_id
 
 struct SparseSet[T]:
     Vector[int] sparse
@@ -34,14 +42,14 @@ equip SparseSet[T]:
         # Grow sparse array if needed
         while self.sparse.len() <= id:
             self.sparse.push(-1)
-        if self.sparse.get(id).unwrap() != -1:
+        int idx = self.sparse.get(id).unwrap()
+        if idx != -1:
             # Already present — update in place
-            int idx = self.sparse.get(id).unwrap()
             self.data.set(idx, value)
             return
         # Add new entry
-        int idx = self.count
-        self.sparse.set(id, idx)
+        int new_idx = self.count
+        self.sparse.set(id, new_idx)
         self.entity_ids.push(id)
         self.data.push(value)
         self.count = self.count + 1
@@ -67,7 +75,7 @@ equip SparseSet[T]:
         self.count = self.count - 1
 
     bool has(self, int id):
-        if id >= self.sparse.len():
+        if id < 0 or id >= self.sparse.len():
             return false
         return self.sparse.get(id).unwrap() != -1
 
@@ -76,7 +84,11 @@ equip SparseSet[T]:
         return self.data.get(idx).unwrap()
 
     void set(&self, int id, T value):
+        if id < 0 or id >= self.sparse.len():
+            return
         int idx = self.sparse.get(id).unwrap()
+        if idx == -1:
+            return
         self.data.set(idx, value)
 
     int len(self):
@@ -106,6 +118,6 @@ equip SparseSet[T] with Iterable[int]:
         Vector[int] ecs_eids = Vector[int]()
         int ecs_i = 0
         while ecs_i < self.count:
-            ecs_eids.push(self.entity_ids.get(ecs_i))
+            ecs_eids.push(self.entity_ids.get(ecs_i).unwrap())
             ecs_i = ecs_i + 1
         return SparseSetIter(ecs_eids, 0, self.count)
