@@ -362,6 +362,12 @@ pub struct CodegenContext<'a> {
     pub async_match_counter: usize,
     /// For-loop counter within current async function (for unique __for_idx_N / __for_oi_N names).
     pub async_for_counter: usize,
+    /// When inside an async for-loop body that has an else clause, holds the
+    /// break-flag field reference (e.g., `__self->__for_broke_0`). `Stmt::Break`
+    /// in `emit_async_stmt` sets this flag to `true` before emitting `break;`.
+    pub async_break_flag: Option<String>,
+    /// Counter for unique `__for_broke_N` names across multiple for/else loops in same async function.
+    pub async_for_else_counter: usize,
     /// Span-start → state field reference for expression-position await temps.
     /// When non-empty, gen_expr replaces Await nodes with these references.
     pub async_await_replacements: FxHashMap<usize, String>,
@@ -617,6 +623,8 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
         async_sub_counter: 0,
         async_match_counter: 0,
         async_for_counter: 0,
+        async_break_flag: None,
+        async_for_else_counter: 0,
         async_await_replacements: FxHashMap::default(),
         future_types: FxHashMap::default(),
         has_spawn: false,

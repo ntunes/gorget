@@ -6072,6 +6072,16 @@ fn async_range_await() {
     run_gg("async_range_await.gg", "10");
 }
 
+#[test]
+fn async_task_expr_await() {
+    run_gg("async_task_expr_await.gg", "25");
+}
+
+#[test]
+fn async_for_else() {
+    run_gg("async_for_else.gg", "6\n-1");
+}
+
 // Parser Comparison Test
 // ═══════════════════════════════════════════════════════════════
 

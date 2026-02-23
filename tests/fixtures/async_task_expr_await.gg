@@ -1,0 +1,8 @@
+async int compute(int x):
+    return x * x
+
+async void main():
+    Task[int] a = spawn compute(3)
+    Task[int] b = spawn compute(4)
+    int sum = a.await() + b.await()
+    print(sum)

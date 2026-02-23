@@ -49,6 +49,8 @@ struct CollectedAwait<'a> {
     inner_expr: &'a Spanned<Expr>,
     /// span.start of the Await node itself (used as replacement key).
     await_span_start: usize,
+    /// True when inner is NOT a Call (task-await on a Task[T] variable).
+    is_task: bool,
 }
 
 /// Depth-first left-to-right collection of Await nodes from an expression tree.
@@ -58,13 +60,12 @@ fn collect_awaits_from_spanned<'a>(expr: &'a Spanned<Expr>, out: &mut Vec<Collec
         Expr::Await { expr: inner } => {
             // Recurse into inner first (handles nested awaits like `await f(await g())`)
             collect_awaits_from_spanned(inner, out);
-            // Only collect Future-awaits (inner is Call), skip Task-awaits
-            if matches!(inner.node, Expr::Call { .. }) {
-                out.push(CollectedAwait {
-                    inner_expr: inner,
-                    await_span_start: expr.span.start,
-                });
-            }
+            // Collect both Future-awaits (inner is Call) and Task-awaits (inner is Identifier/etc.)
+            out.push(CollectedAwait {
+                inner_expr: inner,
+                await_span_start: expr.span.start,
+                is_task: !matches!(inner.node, Expr::Call { .. }),
+            });
         }
         Expr::Call { callee, args, .. } => {
             collect_awaits_from_spanned(callee, out);
@@ -3562,13 +3563,22 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
     ) {
         let collected = collect_awaits_vec(expr);
         for ca in &collected {
-            let sub_future_type = self.infer_await_future_type(&ca.inner_expr.node, context_fn);
-            sub_futures.push((*await_count, sub_future_type));
-            // Always allocate temps for expression-position awaits (result is used in expression context)
-            let result_c_type = self.infer_await_result_c_type(&ca.inner_expr.node, context_fn);
-            let tmp_name = format!("__await_tmp_{}", *await_count);
-            if !locals.iter().any(|(n, _, _)| n == &tmp_name) {
-                locals.push((tmp_name, result_c_type, None));
+            if ca.is_task {
+                // Task-await: no sub-future, but allocate __await_tmp_N for result
+                let result_c_type = self.infer_task_await_result_c_type_readonly(&ca.inner_expr.node);
+                let tmp_name = format!("__await_tmp_{}", *await_count);
+                if !locals.iter().any(|(n, _, _)| n == &tmp_name) {
+                    locals.push((tmp_name, result_c_type, None));
+                }
+            } else {
+                // Future-await: allocate sub-future + temp
+                let sub_future_type = self.infer_await_future_type(&ca.inner_expr.node, context_fn);
+                sub_futures.push((*await_count, sub_future_type));
+                let result_c_type = self.infer_await_result_c_type(&ca.inner_expr.node, context_fn);
+                let tmp_name = format!("__await_tmp_{}", *await_count);
+                if !locals.iter().any(|(n, _, _)| n == &tmp_name) {
+                    locals.push((tmp_name, result_c_type, None));
+                }
             }
             *await_count += 1;
         }
@@ -3606,13 +3616,24 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                     let is_direct_single = matches!(&value.node, Expr::Await { expr: inner } if !Self::expr_contains_await(&inner.node));
                     let collected = collect_awaits_vec(value);
                     for ca in &collected {
-                        let sub_future_type = self.infer_await_future_type(&ca.inner_expr.node, context_fn);
-                        sub_futures.push((*await_count, sub_future_type));
-                        if !is_direct_single {
-                            let result_c_type = self.infer_await_result_c_type(&ca.inner_expr.node, context_fn);
-                            let tmp_name = format!("__await_tmp_{}", *await_count);
-                            if !locals.iter().any(|(n, _, _)| n == &tmp_name) {
-                                locals.push((tmp_name, result_c_type, None));
+                        if ca.is_task {
+                            // Task-await: no sub-future, but allocate temp for expression-position
+                            if !is_direct_single {
+                                let result_c_type = self.infer_task_await_result_c_type_readonly(&ca.inner_expr.node);
+                                let tmp_name = format!("__await_tmp_{}", *await_count);
+                                if !locals.iter().any(|(n, _, _)| n == &tmp_name) {
+                                    locals.push((tmp_name, result_c_type, None));
+                                }
+                            }
+                        } else {
+                            let sub_future_type = self.infer_await_future_type(&ca.inner_expr.node, context_fn);
+                            sub_futures.push((*await_count, sub_future_type));
+                            if !is_direct_single {
+                                let result_c_type = self.infer_await_result_c_type(&ca.inner_expr.node, context_fn);
+                                let tmp_name = format!("__await_tmp_{}", *await_count);
+                                if !locals.iter().any(|(n, _, _)| n == &tmp_name) {
+                                    locals.push((tmp_name, result_c_type, None));
+                                }
                             }
                         }
                         *await_count += 1;
@@ -3624,13 +3645,23 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                     let is_direct_single = matches!(&value.node, Expr::Await { expr: inner } if !Self::expr_contains_await(&inner.node));
                     let collected = collect_awaits_vec(value);
                     for ca in &collected {
-                        let sub_future_type = self.infer_await_future_type(&ca.inner_expr.node, context_fn);
-                        sub_futures.push((*await_count, sub_future_type));
-                        if !is_direct_single {
-                            let result_c_type = self.infer_await_result_c_type(&ca.inner_expr.node, context_fn);
-                            let tmp_name = format!("__await_tmp_{}", *await_count);
-                            if !locals.iter().any(|(n, _, _)| n == &tmp_name) {
-                                locals.push((tmp_name, result_c_type, None));
+                        if ca.is_task {
+                            if !is_direct_single {
+                                let result_c_type = self.infer_task_await_result_c_type_readonly(&ca.inner_expr.node);
+                                let tmp_name = format!("__await_tmp_{}", *await_count);
+                                if !locals.iter().any(|(n, _, _)| n == &tmp_name) {
+                                    locals.push((tmp_name, result_c_type, None));
+                                }
+                            }
+                        } else {
+                            let sub_future_type = self.infer_await_future_type(&ca.inner_expr.node, context_fn);
+                            sub_futures.push((*await_count, sub_future_type));
+                            if !is_direct_single {
+                                let result_c_type = self.infer_await_result_c_type(&ca.inner_expr.node, context_fn);
+                                let tmp_name = format!("__await_tmp_{}", *await_count);
+                                if !locals.iter().any(|(n, _, _)| n == &tmp_name) {
+                                    locals.push((tmp_name, result_c_type, None));
+                                }
                             }
                         }
                         *await_count += 1;
@@ -3642,13 +3673,23 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                     let is_direct_single = matches!(&expr.node, Expr::Await { expr: inner } if !Self::expr_contains_await(&inner.node));
                     let collected = collect_awaits_vec(expr);
                     for ca in &collected {
-                        let sub_future_type = self.infer_await_future_type(&ca.inner_expr.node, context_fn);
-                        sub_futures.push((*await_count, sub_future_type));
-                        if !is_direct_single {
-                            let result_c_type = self.infer_await_result_c_type(&ca.inner_expr.node, context_fn);
-                            let tmp_name = format!("__await_tmp_{}", *await_count);
-                            if !locals.iter().any(|(n, _, _)| n == &tmp_name) {
-                                locals.push((tmp_name, result_c_type, None));
+                        if ca.is_task {
+                            if !is_direct_single {
+                                let result_c_type = self.infer_task_await_result_c_type_readonly(&ca.inner_expr.node);
+                                let tmp_name = format!("__await_tmp_{}", *await_count);
+                                if !locals.iter().any(|(n, _, _)| n == &tmp_name) {
+                                    locals.push((tmp_name, result_c_type, None));
+                                }
+                            }
+                        } else {
+                            let sub_future_type = self.infer_await_future_type(&ca.inner_expr.node, context_fn);
+                            sub_futures.push((*await_count, sub_future_type));
+                            if !is_direct_single {
+                                let result_c_type = self.infer_await_result_c_type(&ca.inner_expr.node, context_fn);
+                                let tmp_name = format!("__await_tmp_{}", *await_count);
+                                if !locals.iter().any(|(n, _, _)| n == &tmp_name) {
+                                    locals.push((tmp_name, result_c_type, None));
+                                }
                             }
                         }
                         *await_count += 1;
@@ -3696,13 +3737,21 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                     self.analyze_async_block(body, params, locals, await_count, sub_futures, context_fn);
                 }
             }
-            Stmt::For { pattern, iterable, body, .. } => {
+            Stmt::For { pattern, iterable, body, else_body, .. } => {
                 let body_has_await = Self::block_contains_await(body);
                 let iterable_has_await = Self::expr_contains_await(&iterable.node) && !Self::is_task_await_static(&iterable.node);
                 if iterable_has_await {
                     self.analyze_expr_awaits(iterable, locals, await_count, sub_futures, context_fn);
                 }
                 if body_has_await || iterable_has_await {
+                    // Allocate break-flag for for/else
+                    if else_body.is_some() {
+                        let broke_n = locals.iter().filter(|(n, _, _)| n.starts_with("__for_broke_")).count();
+                        let broke_name = format!("__for_broke_{broke_n}");
+                        if !locals.iter().any(|(n, _, _)| n == &broke_name) {
+                            locals.push((broke_name, "bool".to_string(), None));
+                        }
+                    }
                     if let Expr::Range { .. } = &iterable.node {
                         // Range for-loop: just lift the loop variable as int64_t
                         if let Pattern::Binding(name) = &pattern.node {
@@ -4089,6 +4138,24 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         "int64_t".to_string()
     }
 
+    /// Infer the C result type for a task-await expression (read-only, works in analysis pass).
+    /// For `task_var.await()` where `task_var` is `Task[T]`, returns the C type of `T`.
+    /// Uses scoped_lookup to find the Task[T] type and strips the `Task__` prefix.
+    fn infer_task_await_result_c_type_readonly(&self, inner_expr: &Expr) -> String {
+        if let Expr::Identifier(name) = inner_expr {
+            if let Some(def_id) = self.scoped_lookup(name) {
+                let def = self.scopes.get_def(def_id);
+                if let Some(tid) = def.type_id {
+                    let c_type = c_types::type_id_to_c(tid, self.types, self.scopes);
+                    if let Some(suffix) = c_type.strip_prefix("Task__") {
+                        return suffix.to_string();
+                    }
+                }
+            }
+        }
+        "int64_t".to_string()
+    }
+
     /// Check if a name matches a known enum variant (to distinguish genuine bindings from
     /// unit-variant pattern matches like `case None:`).
     fn is_enum_variant_name(&self, name: &str) -> bool {
@@ -4348,26 +4415,66 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
     ) {
         let collected = collect_awaits_vec(expr);
         for ca in &collected {
-            // Generate the future-producing expression (prior awaits already have replacements)
-            let inner_c = self.gen_expr(ca.inner_expr);
-            let sub_field = format!("__sub{}", *sub_idx);
             let tmp_field = format!("__await_tmp_{}", *sub_idx);
 
-            // Store the sub-future and transition to next state
-            emitter.emit_line(&format!("__self->{sub_field} = {inner_c};"));
-            *state_idx += 1;
-            emitter.emit_line(&format!("__self->__state = {};", *state_idx));
-            emitter.dedent();
+            if ca.is_task {
+                // Task-await: non-blocking waker-based suspension (same pattern as statement-level task-await)
+                let task_expr = self.gen_expr(ca.inner_expr);
+                // Infer the Task[T] type to get the SpawnCtx suffix
+                let inner_c_type_task = self.infer_c_type_from_expr(&ca.inner_expr.node);
+                let suffix = inner_c_type_task.strip_prefix("Task__").unwrap_or("void");
+                let ctx_name = format!("__SpawnCtx__{suffix}");
 
-            // Poll case label
-            emitter.emit_line(&format!("case {}:", *state_idx));
-            emitter.indent();
-            emitter.emit_line(&format!(
-                "if (__self->{sub_field}.poll(&__self->{sub_field}, __waker) != GORGET_POLL_READY) return GORGET_POLL_PENDING;"
-            ));
+                *state_idx += 1;
+                emitter.emit_line(&format!("__self->__state = {};", *state_idx));
+                emitter.dedent();
+                emitter.emit_line(&format!("case {}:", *state_idx));
+                emitter.indent();
 
-            // Extract result into temp field
-            emitter.emit_line(&format!("__self->{tmp_field} = __self->{sub_field}.result;"));
+                emitter.emit_line("{");
+                emitter.indent();
+                emitter.emit_line(&format!("GorgetTask* __td = ({task_expr})._task;"));
+                emitter.emit_line("pthread_mutex_lock(&__td->mtx);");
+                emitter.emit_line("if (!__td->done) {");
+                emitter.indent();
+                emitter.emit_line("__td->parent_waker = *__waker;");
+                emitter.emit_line("pthread_mutex_unlock(&__td->mtx);");
+                emitter.emit_line("return GORGET_POLL_PENDING;");
+                emitter.dedent();
+                emitter.emit_line("}");
+                emitter.emit_line("pthread_mutex_unlock(&__td->mtx);");
+
+                if suffix != "void" {
+                    emitter.emit_line(&format!(
+                        "__self->{tmp_field} = (({ctx_name}*)__td)->future.result;"
+                    ));
+                }
+                emitter.emit_line("pthread_mutex_destroy(&__td->mtx);");
+                emitter.emit_line("pthread_cond_destroy(&__td->cond);");
+                emitter.emit_line("free(__td);");
+                emitter.dedent();
+                emitter.emit_line("}");
+            } else {
+                // Future-await: existing sub-future poll logic
+                let inner_c = self.gen_expr(ca.inner_expr);
+                let sub_field = format!("__sub{}", *sub_idx);
+
+                // Store the sub-future and transition to next state
+                emitter.emit_line(&format!("__self->{sub_field} = {inner_c};"));
+                *state_idx += 1;
+                emitter.emit_line(&format!("__self->__state = {};", *state_idx));
+                emitter.dedent();
+
+                // Poll case label
+                emitter.emit_line(&format!("case {}:", *state_idx));
+                emitter.indent();
+                emitter.emit_line(&format!(
+                    "if (__self->{sub_field}.poll(&__self->{sub_field}, __waker) != GORGET_POLL_READY) return GORGET_POLL_PENDING;"
+                ));
+
+                // Extract result into temp field
+                emitter.emit_line(&format!("__self->{tmp_field} = __self->{sub_field}.result;"));
+            }
 
             // Register replacement so gen_expr substitutes this Await node
             self.async_await_replacements.insert(
@@ -4511,10 +4618,13 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         let prev_sub_counter = self.async_sub_counter;
         let prev_match_counter = self.async_match_counter;
         let prev_for_counter = self.async_for_counter;
+        let prev_for_else_counter = self.async_for_else_counter;
+        let prev_break_flag = self.async_break_flag.take();
         self.async_lifted_vars = Some(lifted);
         self.async_sub_counter = 0;
         self.async_match_counter = 0;
         self.async_for_counter = 0;
+        self.async_for_else_counter = 0;
 
         // Track which params are pointer params (none for async — all are in state struct)
         let prev_pointer_params = std::mem::take(&mut self.pointer_params);
@@ -4586,6 +4696,8 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         self.async_sub_counter = prev_sub_counter;
         self.async_match_counter = prev_match_counter;
         self.async_for_counter = prev_for_counter;
+        self.async_for_else_counter = prev_for_else_counter;
+        self.async_break_flag = prev_break_flag;
         self.pointer_params = prev_pointer_params;
         self.current_function_scope = prev_function_scope;
 
@@ -5067,6 +5179,23 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
             Stmt::For { pattern, iterable, body, else_body, .. }
                 if Self::expr_contains_await(&iterable.node) || Self::block_contains_await(body) =>
             {
+                // Compute break-flag for for/else
+                let broke_flag = if else_body.is_some() {
+                    let broke_n = self.async_for_else_counter;
+                    self.async_for_else_counter += 1;
+                    Some(format!("__self->__for_broke_{broke_n}"))
+                } else {
+                    None
+                };
+
+                if let Some(ref flag) = broke_flag {
+                    emitter.emit_line(&format!("{flag} = false;"));
+                }
+
+                // Save and set break-flag context
+                let prev_break_flag = self.async_break_flag.take();
+                self.async_break_flag = broke_flag.clone();
+
                 if let Expr::Range { start, end, inclusive } = &iterable.node {
                     // Pre-evaluate iterable awaits (range bounds) before the loop
                     let iterable_has_await = Self::expr_contains_await(&iterable.node);
@@ -5093,7 +5222,19 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                         emitter.dedent();
                         emitter.emit_line("}");
                         if let Some(else_b) = else_body {
-                            self.emit_async_stmts(&else_b.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
+                            if let Some(ref flag) = broke_flag {
+                                emitter.emit_line(&format!("if (!{flag}) {{"));
+                                emitter.indent();
+                            }
+                            if Self::block_contains_await(else_b) {
+                                self.emit_async_stmts(&else_b.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
+                            } else {
+                                self.gen_block(else_b, emitter);
+                            }
+                            if broke_flag.is_some() {
+                                emitter.dedent();
+                                emitter.emit_line("}");
+                            }
                         }
                     }
                 } else if self.is_gorget_array_expr(iterable) {
@@ -5116,10 +5257,18 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                         emitter.dedent();
                         emitter.emit_line("}");
                         if let Some(else_b) = else_body {
+                            if let Some(ref flag) = broke_flag {
+                                emitter.emit_line(&format!("if (!{flag}) {{"));
+                                emitter.indent();
+                            }
                             if Self::block_contains_await(else_b) {
                                 self.emit_async_stmts(&else_b.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
                             } else {
                                 self.gen_block(else_b, emitter);
+                            }
+                            if broke_flag.is_some() {
+                                emitter.dedent();
+                                emitter.emit_line("}");
                             }
                         }
                     }
@@ -5179,10 +5328,18 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                     emitter.dedent();
                     emitter.emit_line("}");
                     if let Some(else_b) = else_body {
+                        if let Some(ref flag) = broke_flag {
+                            emitter.emit_line(&format!("if (!{flag}) {{"));
+                            emitter.indent();
+                        }
                         if Self::block_contains_await(else_b) {
                             self.emit_async_stmts(&else_b.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
                         } else {
                             self.gen_block(else_b, emitter);
+                        }
+                        if broke_flag.is_some() {
+                            emitter.dedent();
+                            emitter.emit_line("}");
                         }
                     }
                 } else if self.is_string_expr(iterable) {
@@ -5208,10 +5365,18 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                         emitter.dedent();
                         emitter.emit_line("}");
                         if let Some(else_b) = else_body {
+                            if let Some(ref flag) = broke_flag {
+                                emitter.emit_line(&format!("if (!{flag}) {{"));
+                                emitter.indent();
+                            }
                             if Self::block_contains_await(else_b) {
                                 self.emit_async_stmts(&else_b.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
                             } else {
                                 self.gen_block(else_b, emitter);
+                            }
+                            if broke_flag.is_some() {
+                                emitter.dedent();
+                                emitter.emit_line("}");
                             }
                         }
                     }
@@ -5238,10 +5403,18 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                         emitter.dedent();
                         emitter.emit_line("}");
                         if let Some(else_b) = else_body {
+                            if let Some(ref flag) = broke_flag {
+                                emitter.emit_line(&format!("if (!{flag}) {{"));
+                                emitter.indent();
+                            }
                             if Self::block_contains_await(else_b) {
                                 self.emit_async_stmts(&else_b.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
                             } else {
                                 self.gen_block(else_b, emitter);
+                            }
+                            if broke_flag.is_some() {
+                                emitter.dedent();
+                                emitter.emit_line("}");
                             }
                         }
                     }
@@ -5249,6 +5422,9 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                     // Unknown iterable with await: busy-poll fallback
                     self.gen_stmt(stmt, span, emitter);
                 }
+
+                // Restore break-flag context
+                self.async_break_flag = prev_break_flag;
             }
 
             // Match with await in any arm — Duff's device
@@ -5350,8 +5526,11 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                 }
             }
 
-            // Break/Continue pass through directly
+            // Break: set break-flag if inside async for/else, then break
             Stmt::Break(_) => {
+                if let Some(flag) = &self.async_break_flag {
+                    emitter.emit_line(&format!("{flag} = true;"));
+                }
                 emitter.emit_line("break;");
             }
             Stmt::Continue => {

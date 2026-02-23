@@ -1725,6 +1725,9 @@ impl CodegenContext<'_> {
                 if self.has_droppable_entries() {
                     self.emit_cleanup_to(DropScopeKind::Loop, emitter);
                 }
+                if let Some(flag) = &self.async_break_flag {
+                    emitter.emit_line(&format!("{flag} = true;"));
+                }
                 emitter.emit_line("break;");
             }
 

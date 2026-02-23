@@ -1,0 +1,22 @@
+async int double(int x):
+    return x * 2
+
+async void main():
+    int result = 0
+    for i in 0..5:
+        int v = double(i).await()
+        if v == 6:
+            result = v
+            break
+    else:
+        result = -1
+    print(result)
+    int result2 = 0
+    for i in 0..5:
+        int v = double(i).await()
+        if v == 100:
+            result2 = v
+            break
+    else:
+        result2 = -1
+    print(result2)
