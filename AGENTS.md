@@ -67,6 +67,7 @@ Maintain `TODO.md` and `DONE.md` at the project root to track work across plans 
 
 - **Adding work:** Append new items to `TODO.md`. Never replace existing items. Categorize by priority (High / Medium / Low).
 - **Completing work:** Delete the item from `TODO.md` and add it to the top of `DONE.md` with a date stamp: `- [2026-02-10] Task description`. Never mark items as done in `TODO.md` — completed items only live in `DONE.md`.
+- **Before overwriting your plan:** Always check if there are incomplete items from the previous plan and add them to TODO.md.
 - **Restoring context:** Read `TODO.md` at the start of every conversation and after finishing any tangential fix.
 - **Discovered issues:** Fix small bugs inline. For anything too large to fix immediately, add it to `TODO.md` and move on. Never silently work around a bug — either fix it or record it.
 - **Never delete `TODO.md`** — only move completed items out of it.
