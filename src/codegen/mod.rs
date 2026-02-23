@@ -697,6 +697,7 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
     };
     if has_spawn {
         emitter.emit(c_runtime::EXECUTOR_RUNTIME);
+        emitter.emit(c_runtime::MAIN_WAKER_RUNTIME);
     }
     ctx.has_spawn = has_spawn;
 

@@ -3231,7 +3231,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
             emitter.emit_line(&format!("typedef struct {mangled} {mangled};"));
             emitter.emit_line(&format!("struct {mangled} {{"));
             emitter.indent();
-            emitter.emit_line(&format!("int (*poll)({mangled}*);"));
+            emitter.emit_line(&format!("int (*poll)({mangled}*, GorgetWaker*);"));
             emitter.emit_line("void* state;");
             if inner_c_type != "void" {
                 emitter.emit_line(&format!("{inner_c_type} result;"));
@@ -3268,11 +3268,13 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
             emitter.emit_line(&format!("static void {ctx_name}__run(GorgetTask* __base) {{"));
             emitter.indent();
             emitter.emit_line(&format!("{ctx_name}* __ctx = ({ctx_name}*)__base;"));
-            emitter.emit_line("while (__ctx->future.poll(&__ctx->future) != GORGET_POLL_READY) {}");
+            emitter.emit_line("while (__ctx->future.poll(&__ctx->future, &__gorget_noop_waker) != GORGET_POLL_READY) {}");
             emitter.emit_line("pthread_mutex_lock(&__base->mtx);");
             emitter.emit_line("__base->done = 1;");
-            emitter.emit_line("pthread_cond_broadcast(&__base->cond);");
+            emitter.emit_line("GorgetWaker __pw = __base->parent_waker;");
             emitter.emit_line("pthread_mutex_unlock(&__base->mtx);");
+            emitter.emit_line("pthread_cond_broadcast(&__base->cond);");
+            emitter.emit_line("if (__pw.wake) __pw.wake(&__pw);");
             emitter.dedent();
             emitter.emit_line("}");
             emitter.blank_line();
@@ -3340,7 +3342,20 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
             emitter.indent();
             emitter.emit_line("gorget_init_args(argc, argv);");
             emitter.emit_line(&format!("{future_type} __f = gg__async_main();"));
-            emitter.emit_line("while (__f.poll(&__f) != GORGET_POLL_READY) {}");
+            if self.has_spawn {
+                // Event-driven: sleep on condvar, woken by worker via parent_waker
+                emitter.emit_line("while (__f.poll(&__f, &__gorget_main_waker) != GORGET_POLL_READY) {");
+                emitter.indent();
+                emitter.emit_line("pthread_mutex_lock(&__gorget_main_mtx);");
+                emitter.emit_line("while (!__gorget_main_woken) pthread_cond_wait(&__gorget_main_cond, &__gorget_main_mtx);");
+                emitter.emit_line("__gorget_main_woken = 0;");
+                emitter.emit_line("pthread_mutex_unlock(&__gorget_main_mtx);");
+                emitter.dedent();
+                emitter.emit_line("}");
+            } else {
+                // No spawn: noop waker, simple busy-poll
+                emitter.emit_line("while (__f.poll(&__f, &__gorget_noop_waker) != GORGET_POLL_READY) {}");
+            }
             emitter.emit_line("if (__f.state) free(__f.state);");
             if self.has_spawn {
                 emitter.emit_line("__gorget_executor_shutdown();");
@@ -4200,7 +4215,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
             emitter.emit_line(&format!("case {}:", *state_idx));
             emitter.indent();
             emitter.emit_line(&format!(
-                "if (__self->{sub_field}.poll(&__self->{sub_field}) != GORGET_POLL_READY) return GORGET_POLL_PENDING;"
+                "if (__self->{sub_field}.poll(&__self->{sub_field}, __waker) != GORGET_POLL_READY) return GORGET_POLL_PENDING;"
             ));
 
             // Extract result into temp field
@@ -4326,7 +4341,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         emitter: &mut CEmitter,
     ) {
         emitter.emit_line(&format!(
-            "static int {poll_name}({future_type}* __future) {{"
+            "static int {poll_name}({future_type}* __future, GorgetWaker* __waker) {{"
         ));
         emitter.indent();
         emitter.emit_line(&format!(
@@ -4387,7 +4402,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                             emitter.emit_line(&format!("case {}:", state_idx));
                             emitter.indent();
                             emitter.emit_line(&format!(
-                                "if (__self->{sub_field}.poll(&__self->{sub_field}) != GORGET_POLL_READY) return GORGET_POLL_PENDING;"
+                                "if (__self->{sub_field}.poll(&__self->{sub_field}, __waker) != GORGET_POLL_READY) return GORGET_POLL_PENDING;"
                             ));
                             if inner_c_type != "void" {
                                 emitter.emit_line(&format!(
@@ -4507,7 +4522,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                             emitter.emit_line(&format!("case {}:", *state_idx));
                             emitter.indent();
                             emitter.emit_line(&format!(
-                                "if (__self->{sub_field}.poll(&__self->{sub_field}) != GORGET_POLL_READY) return GORGET_POLL_PENDING;"
+                                "if (__self->{sub_field}.poll(&__self->{sub_field}, __waker) != GORGET_POLL_READY) return GORGET_POLL_PENDING;"
                             ));
 
                             if let Pattern::Binding(name) = &pattern.node {
@@ -4528,8 +4543,49 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                             emitter.emit_line(&format!("__self->{escaped} = {residual};"));
                         }
                     }
+                } else if self.is_task_await(&value.node) {
+                    // Non-blocking task-await: suspend until task completes
+                    if let Expr::Await { expr: await_inner } = &value.node {
+                        let inner_c_type_task = self.infer_c_type_from_expr(&await_inner.node);
+                        let suffix = &inner_c_type_task["Task__".len()..];
+                        let ctx_name = format!("__SpawnCtx__{suffix}");
+                        let task_expr = self.gen_expr(await_inner);
+
+                        *state_idx += 1;
+                        emitter.emit_line(&format!("__self->__state = {};", *state_idx));
+                        emitter.dedent();
+                        emitter.emit_line(&format!("case {}:", *state_idx));
+                        emitter.indent();
+
+                        emitter.emit_line("{");
+                        emitter.indent();
+                        emitter.emit_line(&format!("GorgetTask* __td = ({task_expr})._task;"));
+                        emitter.emit_line("pthread_mutex_lock(&__td->mtx);");
+                        emitter.emit_line("if (!__td->done) {");
+                        emitter.indent();
+                        emitter.emit_line("__td->parent_waker = *__waker;");
+                        emitter.emit_line("pthread_mutex_unlock(&__td->mtx);");
+                        emitter.emit_line("return GORGET_POLL_PENDING;");
+                        emitter.dedent();
+                        emitter.emit_line("}");
+                        emitter.emit_line("pthread_mutex_unlock(&__td->mtx);");
+
+                        if let Pattern::Binding(name) = &pattern.node {
+                            let escaped = c_mangle::escape_keyword(name);
+                            if suffix != "void" {
+                                emitter.emit_line(&format!(
+                                    "__self->{escaped} = (({ctx_name}*)__td)->future.result;"
+                                ));
+                            }
+                        }
+                        emitter.emit_line("pthread_mutex_destroy(&__td->mtx);");
+                        emitter.emit_line("pthread_cond_destroy(&__td->cond);");
+                        emitter.emit_line("free(__td);");
+                        emitter.dedent();
+                        emitter.emit_line("}");
+                    }
                 } else {
-                    // VarDecl without await (or Task-await which is blocking)
+                    // VarDecl without await
                     if let Pattern::Binding(name) = &pattern.node {
                         let escaped = c_mangle::escape_keyword(name);
                         let val = self.gen_expr(value);
@@ -4553,7 +4609,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                         emitter.emit_line(&format!("case {}:", *state_idx));
                         emitter.indent();
                         emitter.emit_line(&format!(
-                            "if (__self->{sub_field}.poll(&__self->{sub_field}) != GORGET_POLL_READY) return GORGET_POLL_PENDING;"
+                            "if (__self->{sub_field}.poll(&__self->{sub_field}, __waker) != GORGET_POLL_READY) return GORGET_POLL_PENDING;"
                         ));
 
                         let target_c = self.gen_expr(target);
@@ -4569,6 +4625,47 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                     self.async_await_replacements.clear();
                     let target_c = self.gen_expr(target);
                     emitter.emit_line(&format!("{target_c} = {residual};"));
+                }
+            }
+
+            Stmt::Assign { target, value } if self.is_task_await(&value.node) => {
+                // Non-blocking task-await in assignment
+                if let Expr::Await { expr: await_inner } = &value.node {
+                    let inner_c_type_task = self.infer_c_type_from_expr(&await_inner.node);
+                    let suffix = &inner_c_type_task["Task__".len()..];
+                    let ctx_name = format!("__SpawnCtx__{suffix}");
+                    let task_expr = self.gen_expr(await_inner);
+
+                    *state_idx += 1;
+                    emitter.emit_line(&format!("__self->__state = {};", *state_idx));
+                    emitter.dedent();
+                    emitter.emit_line(&format!("case {}:", *state_idx));
+                    emitter.indent();
+
+                    emitter.emit_line("{");
+                    emitter.indent();
+                    emitter.emit_line(&format!("GorgetTask* __td = ({task_expr})._task;"));
+                    emitter.emit_line("pthread_mutex_lock(&__td->mtx);");
+                    emitter.emit_line("if (!__td->done) {");
+                    emitter.indent();
+                    emitter.emit_line("__td->parent_waker = *__waker;");
+                    emitter.emit_line("pthread_mutex_unlock(&__td->mtx);");
+                    emitter.emit_line("return GORGET_POLL_PENDING;");
+                    emitter.dedent();
+                    emitter.emit_line("}");
+                    emitter.emit_line("pthread_mutex_unlock(&__td->mtx);");
+
+                    let target_c = self.gen_expr(target);
+                    if suffix != "void" {
+                        emitter.emit_line(&format!(
+                            "{target_c} = (({ctx_name}*)__td)->future.result;"
+                        ));
+                    }
+                    emitter.emit_line("pthread_mutex_destroy(&__td->mtx);");
+                    emitter.emit_line("pthread_cond_destroy(&__td->cond);");
+                    emitter.emit_line("free(__td);");
+                    emitter.dedent();
+                    emitter.emit_line("}");
                 }
             }
 
@@ -4589,7 +4686,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                             emitter.emit_line(&format!("case {}:", *state_idx));
                             emitter.indent();
                             emitter.emit_line(&format!(
-                                "if (__self->{sub_field}.poll(&__self->{sub_field}) != GORGET_POLL_READY) return GORGET_POLL_PENDING;"
+                                "if (__self->{sub_field}.poll(&__self->{sub_field}, __waker) != GORGET_POLL_READY) return GORGET_POLL_PENDING;"
                             ));
                             if inner_c_type != "void" {
                                 emitter.emit_line(&format!(
@@ -4606,6 +4703,44 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                         if inner_c_type != "void" {
                             emitter.emit_line(&format!("__future->result = {residual};"));
                         }
+                    }
+                } else if self.is_task_await(&expr.node) {
+                    // Non-blocking task-await in return
+                    if let Expr::Await { expr: await_inner } = &expr.node {
+                        let inner_c_type_task = self.infer_c_type_from_expr(&await_inner.node);
+                        let suffix = &inner_c_type_task["Task__".len()..];
+                        let ctx_name = format!("__SpawnCtx__{suffix}");
+                        let task_expr = self.gen_expr(await_inner);
+
+                        *state_idx += 1;
+                        emitter.emit_line(&format!("__self->__state = {};", *state_idx));
+                        emitter.dedent();
+                        emitter.emit_line(&format!("case {}:", *state_idx));
+                        emitter.indent();
+
+                        emitter.emit_line("{");
+                        emitter.indent();
+                        emitter.emit_line(&format!("GorgetTask* __td = ({task_expr})._task;"));
+                        emitter.emit_line("pthread_mutex_lock(&__td->mtx);");
+                        emitter.emit_line("if (!__td->done) {");
+                        emitter.indent();
+                        emitter.emit_line("__td->parent_waker = *__waker;");
+                        emitter.emit_line("pthread_mutex_unlock(&__td->mtx);");
+                        emitter.emit_line("return GORGET_POLL_PENDING;");
+                        emitter.dedent();
+                        emitter.emit_line("}");
+                        emitter.emit_line("pthread_mutex_unlock(&__td->mtx);");
+
+                        if inner_c_type != "void" && suffix != "void" {
+                            emitter.emit_line(&format!(
+                                "__future->result = (({ctx_name}*)__td)->future.result;"
+                            ));
+                        }
+                        emitter.emit_line("pthread_mutex_destroy(&__td->mtx);");
+                        emitter.emit_line("pthread_cond_destroy(&__td->cond);");
+                        emitter.emit_line("free(__td);");
+                        emitter.dedent();
+                        emitter.emit_line("}");
                     }
                 } else {
                     skip = Self::async_return_skip_var(&expr.node);
@@ -4639,7 +4774,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                             emitter.emit_line(&format!("case {}:", *state_idx));
                             emitter.indent();
                             emitter.emit_line(&format!(
-                                "if (__self->{sub_field}.poll(&__self->{sub_field}) != GORGET_POLL_READY) return GORGET_POLL_PENDING;"
+                                "if (__self->{sub_field}.poll(&__self->{sub_field}, __waker) != GORGET_POLL_READY) return GORGET_POLL_PENDING;"
                             ));
                             *sub_idx += 1;
                         }
@@ -4649,6 +4784,40 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                         let residual = self.gen_expr(expr);
                         self.async_await_replacements.clear();
                         emitter.emit_line(&format!("{residual};"));
+                    }
+                } else if self.is_task_await(&expr.node) {
+                    // Non-blocking task-await as expression statement (void result)
+                    if let Expr::Await { expr: await_inner } = &expr.node {
+                        let inner_c_type_task = self.infer_c_type_from_expr(&await_inner.node);
+                        let suffix = &inner_c_type_task["Task__".len()..];
+                        let task_expr = self.gen_expr(await_inner);
+
+                        *state_idx += 1;
+                        emitter.emit_line(&format!("__self->__state = {};", *state_idx));
+                        emitter.dedent();
+                        emitter.emit_line(&format!("case {}:", *state_idx));
+                        emitter.indent();
+
+                        emitter.emit_line("{");
+                        emitter.indent();
+                        emitter.emit_line(&format!("GorgetTask* __td = ({task_expr})._task;"));
+                        emitter.emit_line("pthread_mutex_lock(&__td->mtx);");
+                        emitter.emit_line("if (!__td->done) {");
+                        emitter.indent();
+                        emitter.emit_line("__td->parent_waker = *__waker;");
+                        emitter.emit_line("pthread_mutex_unlock(&__td->mtx);");
+                        emitter.emit_line("return GORGET_POLL_PENDING;");
+                        emitter.dedent();
+                        emitter.emit_line("}");
+                        emitter.emit_line("pthread_mutex_unlock(&__td->mtx);");
+
+                        // Extract result if non-void (even though it's discarded, the ctx_name is needed for cleanup)
+                        let _ = suffix; // result discarded for expr-stmt
+                        emitter.emit_line("pthread_mutex_destroy(&__td->mtx);");
+                        emitter.emit_line("pthread_cond_destroy(&__td->cond);");
+                        emitter.emit_line("free(__td);");
+                        emitter.dedent();
+                        emitter.emit_line("}");
                     }
                 } else {
                     let e = self.gen_expr(expr);

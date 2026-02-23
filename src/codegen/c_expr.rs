@@ -704,7 +704,7 @@ impl CodegenContext<'_> {
                     // Await on Future[T] → busy-poll (existing Phase 3 behavior)
                     let inner = self.gen_expr(await_expr);
                     let future_type = inner_c_type;
-                    format!("({{ {future_type} __af = {inner}; while (__af.poll(&__af) != GORGET_POLL_READY) {{}} __af.result; }})")
+                    format!("({{ {future_type} __af = {inner}; while (__af.poll(&__af, &__gorget_noop_waker) != GORGET_POLL_READY) {{}} __af.result; }})")
                 }
             }
 

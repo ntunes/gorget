@@ -482,6 +482,14 @@ pub const ASYNC_RUNTIME: &str = r#"
 // ── Async Runtime ──
 #define GORGET_POLL_READY 0
 #define GORGET_POLL_PENDING 1
+
+typedef struct GorgetWaker {
+    void (*wake)(struct GorgetWaker*);
+    void* data;
+} GorgetWaker;
+
+static void __gorget_noop_wake(GorgetWaker* w) { (void)w; }
+static GorgetWaker __gorget_noop_waker = { __gorget_noop_wake, NULL };
 "#;
 
 /// Thread-pool executor runtime for `spawn` (pthread-based).
@@ -494,6 +502,7 @@ typedef struct GorgetTask {
     pthread_mutex_t mtx;
     pthread_cond_t cond;
     volatile int done;
+    GorgetWaker parent_waker;
 } GorgetTask;
 
 typedef struct {
@@ -569,6 +578,24 @@ static void __gorget_executor_shutdown(void) {
     pthread_cond_destroy(&__gorget_exec.cond);
     __gorget_exec_init_done = 0;
 }
+"#;
+
+/// Main-thread waker for event-driven async main loop.
+/// Only emitted when `has_spawn` is true (needs pthreads).
+pub const MAIN_WAKER_RUNTIME: &str = r#"
+// ── Main Thread Waker ──
+static pthread_mutex_t __gorget_main_mtx = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t __gorget_main_cond = PTHREAD_COND_INITIALIZER;
+static volatile int __gorget_main_woken = 1;
+
+static void __gorget_main_wake(GorgetWaker* w) {
+    (void)w;
+    pthread_mutex_lock(&__gorget_main_mtx);
+    __gorget_main_woken = 1;
+    pthread_cond_signal(&__gorget_main_cond);
+    pthread_mutex_unlock(&__gorget_main_mtx);
+}
+static GorgetWaker __gorget_main_waker = { __gorget_main_wake, NULL };
 "#;
 
 /// Bounded MPMC channel runtime (mutex + condvar ring buffer).
