@@ -3971,6 +3971,37 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                 emitter.emit_line("}");
             }
 
+            // For with await in body — Duff's device
+            Stmt::For { pattern, iterable, body, else_body, .. }
+                if Self::block_contains_await(body) =>
+            {
+                if let Expr::Range { start, end, inclusive } = &iterable.node {
+                    if let Pattern::Binding(name) = &pattern.node {
+                        let var = c_mangle::escape_keyword(name);
+                        let start_expr = start.as_ref()
+                            .map(|e| self.gen_expr(e))
+                            .unwrap_or_else(|| "0".to_string());
+                        let end_expr = end.as_ref()
+                            .map(|e| self.gen_expr(e))
+                            .unwrap_or_else(|| "0".to_string());
+                        let cmp = if *inclusive { "<=" } else { "<" };
+                        emitter.emit_line(&format!(
+                            "for (__self->{var} = {start_expr}; __self->{var} {cmp} {end_expr}; __self->{var}++) {{"
+                        ));
+                        emitter.indent();
+                        self.emit_async_stmts(&body.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
+                        emitter.dedent();
+                        emitter.emit_line("}");
+                        if let Some(else_b) = else_body {
+                            self.emit_async_stmts(&else_b.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
+                        }
+                    }
+                } else {
+                    // Non-range iterable with await: delegate to gen_stmt (busy-poll fallback)
+                    self.gen_stmt(stmt, span, emitter);
+                }
+            }
+
             // Break/Continue pass through directly
             Stmt::Break(_) => {
                 emitter.emit_line("break;");

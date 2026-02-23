@@ -6032,6 +6032,11 @@ fn async_drop() {
     run_gg("async_drop.gg", "drop compute-local\n42\ndone\ndrop main-local");
 }
 
+#[test]
+fn async_for_loop() {
+    run_gg("async_for_loop.gg", "20\n6\n18");
+}
+
 // Parser Comparison Test
 // ═══════════════════════════════════════════════════════════════
 
