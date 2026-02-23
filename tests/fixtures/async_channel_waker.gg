@@ -1,0 +1,20 @@
+from std.channel import Channel
+
+async void producer(Channel[int] ch, int n):
+    int i = 0
+    while i < n:
+        ch.send(i)
+        i = i + 1
+
+async void main():
+    Channel[int] ch = Channel[int](1)
+    Task[void] t = spawn producer(ch, 5)
+    int total = 0
+    int i = 0
+    while i < 5:
+        int val = ch.recv()
+        total = total + val
+        i = i + 1
+    t.await()
+    ch.close()
+    print(total)

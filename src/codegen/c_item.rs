@@ -3695,15 +3695,28 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                         *await_count += 1;
                     }
                 }
+                // Allocate temp state fields for channel send operations
+                if Self::expr_is_channel_op(&expr.node) {
+                    if let Expr::MethodCall { receiver, method, .. } = &expr.node {
+                        if method.node == "send" {
+                            let send_n = locals.iter().filter(|(n, _, _)| n.starts_with("__ch_send_tmp_")).count();
+                            let tmp_name = format!("__ch_send_tmp_{send_n}");
+                            let elem_c_type = self.infer_channel_elem_c_type_readonly(receiver);
+                            if !locals.iter().any(|(n, _, _)| n == &tmp_name) {
+                                locals.push((tmp_name, elem_c_type, None));
+                            }
+                        }
+                    }
+                }
             }
-            // Only recurse into control flow bodies that contain await.
-            // Variables in non-await bodies stay as normal C locals (not state struct fields).
+            // Only recurse into control flow bodies that contain await or channel ops.
+            // Variables in non-await/non-channel-op bodies stay as normal C locals (not state struct fields).
             Stmt::If { condition, then_body, elif_branches, else_body } => {
                 // Analyze condition for awaits (always expression-position)
                 if Self::expr_contains_await(&condition.node) && !Self::is_task_await_static(&condition.node) {
                     self.analyze_expr_awaits(condition, locals, await_count, sub_futures, context_fn);
                 }
-                if Self::block_contains_await(then_body) {
+                if Self::block_contains_await(then_body) || Self::block_contains_channel_op(then_body) {
                     self.analyze_async_block(then_body, params, locals, await_count, sub_futures, context_fn);
                 }
                 for (elif_cond, elif_body) in elif_branches {
@@ -3711,12 +3724,12 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                     if Self::expr_contains_await(&elif_cond.node) && !Self::is_task_await_static(&elif_cond.node) {
                         self.analyze_expr_awaits(elif_cond, locals, await_count, sub_futures, context_fn);
                     }
-                    if Self::block_contains_await(elif_body) {
+                    if Self::block_contains_await(elif_body) || Self::block_contains_channel_op(elif_body) {
                         self.analyze_async_block(elif_body, params, locals, await_count, sub_futures, context_fn);
                     }
                 }
                 if let Some(else_b) = else_body {
-                    if Self::block_contains_await(else_b) {
+                    if Self::block_contains_await(else_b) || Self::block_contains_channel_op(else_b) {
                         self.analyze_async_block(else_b, params, locals, await_count, sub_futures, context_fn);
                     }
                 }
@@ -3724,26 +3737,28 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
             Stmt::While { condition, body, .. } => {
                 let cond_has_await = Self::expr_contains_await(&condition.node) && !Self::is_task_await_static(&condition.node);
                 let body_has_await = Self::block_contains_await(body);
+                let body_has_channel_op = Self::block_contains_channel_op(body);
                 if cond_has_await {
                     self.analyze_expr_awaits(condition, locals, await_count, sub_futures, context_fn);
                 }
-                if body_has_await || cond_has_await {
-                    // If condition has await, body locals must be lifted too (whole stmt crosses suspension points)
+                if body_has_await || body_has_channel_op || cond_has_await {
+                    // If condition has await or body has channel ops, body locals must be lifted too
                     self.analyze_async_block(body, params, locals, await_count, sub_futures, context_fn);
                 }
             }
             Stmt::Loop { body } => {
-                if Self::block_contains_await(body) {
+                if Self::block_contains_await(body) || Self::block_contains_channel_op(body) {
                     self.analyze_async_block(body, params, locals, await_count, sub_futures, context_fn);
                 }
             }
             Stmt::For { pattern, iterable, body, else_body, .. } => {
                 let body_has_await = Self::block_contains_await(body);
+                let body_has_channel_op = Self::block_contains_channel_op(body);
                 let iterable_has_await = Self::expr_contains_await(&iterable.node) && !Self::is_task_await_static(&iterable.node);
                 if iterable_has_await {
                     self.analyze_expr_awaits(iterable, locals, await_count, sub_futures, context_fn);
                 }
-                if body_has_await || iterable_has_await {
+                if body_has_await || body_has_channel_op || iterable_has_await {
                     // Allocate break-flag for for/else
                     if else_body.is_some() {
                         let broke_n = locals.iter().filter(|(n, _, _)| n.starts_with("__for_broke_")).count();
@@ -3872,26 +3887,26 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                 }
             }
             Stmt::Match { scrutinee, arms, else_arm } => {
-                let any_arm_has_await = arms.iter().any(|arm| match &arm.body.node {
-                    Expr::Block(block) => Self::block_contains_await(block),
-                    other => Self::expr_contains_await(other),
+                let any_arm_has_suspend = arms.iter().any(|arm| match &arm.body.node {
+                    Expr::Block(block) => Self::block_contains_await(block) || Self::block_contains_channel_op(block),
+                    other => Self::expr_contains_await(other) || Self::expr_contains_channel_op(other),
                 });
-                let else_has_await = else_arm.as_ref().map_or(false, Self::block_contains_await);
+                let else_has_suspend = else_arm.as_ref().map_or(false, |b| Self::block_contains_await(b) || Self::block_contains_channel_op(b));
 
-                if any_arm_has_await || else_has_await {
+                if any_arm_has_suspend || else_has_suspend {
                     // Add scrutinee temp variable
                     let match_idx = locals.iter().filter(|(n, _, _)| n.starts_with("__match_scrut_")).count();
                     let scrut_name = format!("__match_scrut_{match_idx}");
                     let scrut_c_type = self.infer_async_var_type(&scrutinee.node, params, locals, context_fn);
                     locals.push((scrut_name, scrut_c_type.clone(), None));
 
-                    // Collect pattern-bound variables from arms that contain await
+                    // Collect pattern-bound variables from arms that contain await or channel ops
                     for arm in arms {
-                        let arm_has_await = match &arm.body.node {
-                            Expr::Block(block) => Self::block_contains_await(block),
-                            other => Self::expr_contains_await(other),
+                        let arm_has_suspend = match &arm.body.node {
+                            Expr::Block(block) => Self::block_contains_await(block) || Self::block_contains_channel_op(block),
+                            other => Self::expr_contains_await(other) || Self::expr_contains_channel_op(other),
                         };
-                        if arm_has_await {
+                        if arm_has_suspend {
                             let bindings = self.collect_async_pattern_binding_c_types(
                                 &arm.pattern.node, scrutinee, &scrut_c_type,
                             );
@@ -3906,9 +3921,9 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                             }
                         }
                     }
-                    // Recurse into else arm if it has await
+                    // Recurse into else arm if it has await or channel ops
                     if let Some(else_b) = else_arm {
-                        if else_has_await {
+                        if else_has_suspend {
                             self.analyze_async_block(else_b, params, locals, await_count, sub_futures, context_fn);
                         }
                     }
@@ -4014,6 +4029,142 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         } else {
             false
         }
+    }
+
+    // ── Channel op detection (AST-level, conservative) ──
+
+    /// Check if an expression is a potential channel send/recv MethodCall.
+    /// Conservative: any MethodCall named "send"/"recv" matches.
+    /// False positives only cause unnecessary async routing (safe).
+    fn expr_is_channel_op(expr: &Expr) -> bool {
+        matches!(expr, Expr::MethodCall { method, .. } if method.node == "send" || method.node == "recv")
+    }
+
+    /// Check if an expression tree contains a potential channel op.
+    fn expr_contains_channel_op(expr: &Expr) -> bool {
+        match expr {
+            Expr::MethodCall { receiver, method, args, .. } => {
+                if method.node == "send" || method.node == "recv" {
+                    return true;
+                }
+                Self::expr_contains_channel_op(&receiver.node)
+                    || args.iter().any(|a| Self::expr_contains_channel_op(&a.node.value.node))
+            }
+            Expr::Call { callee, args, .. } => {
+                Self::expr_contains_channel_op(&callee.node)
+                    || args.iter().any(|a| Self::expr_contains_channel_op(&a.node.value.node))
+            }
+            Expr::BinaryOp { left, right, .. } => {
+                Self::expr_contains_channel_op(&left.node) || Self::expr_contains_channel_op(&right.node)
+            }
+            Expr::UnaryOp { operand, .. } => Self::expr_contains_channel_op(&operand.node),
+            Expr::FieldAccess { object, .. } | Expr::TupleFieldAccess { object, .. } => {
+                Self::expr_contains_channel_op(&object.node)
+            }
+            Expr::Index { object, index } => {
+                Self::expr_contains_channel_op(&object.node) || Self::expr_contains_channel_op(&index.node)
+            }
+            Expr::As { expr: inner, .. }
+            | Expr::Try { expr: inner }
+            | Expr::Move { expr: inner }
+            | Expr::MutableBorrow { expr: inner }
+            | Expr::Deref { expr: inner }
+            | Expr::TryCapture { expr: inner } => Self::expr_contains_channel_op(&inner.node),
+            Expr::TupleLiteral(elems) | Expr::ArrayLiteral(elems) => {
+                elems.iter().any(|e| Self::expr_contains_channel_op(&e.node))
+            }
+            _ => false,
+        }
+    }
+
+    /// Check if a statement (or its sub-blocks) contains a potential channel op.
+    fn stmt_contains_channel_op(stmt: &Stmt) -> bool {
+        match stmt {
+            Stmt::VarDecl { value, .. } => Self::expr_contains_channel_op(&value.node),
+            Stmt::Assign { value, .. } => Self::expr_contains_channel_op(&value.node),
+            Stmt::CompoundAssign { value, .. } => Self::expr_contains_channel_op(&value.node),
+            Stmt::Expr(e) | Stmt::Return(Some(e)) => Self::expr_contains_channel_op(&e.node),
+            Stmt::If { condition, then_body, elif_branches, else_body } =>
+                Self::expr_contains_channel_op(&condition.node)
+                || Self::block_contains_channel_op(then_body)
+                || elif_branches.iter().any(|(c, b)| Self::expr_contains_channel_op(&c.node) || Self::block_contains_channel_op(b))
+                || else_body.as_ref().map_or(false, Self::block_contains_channel_op),
+            Stmt::While { condition, body, .. } =>
+                Self::expr_contains_channel_op(&condition.node) || Self::block_contains_channel_op(body),
+            Stmt::Loop { body } => Self::block_contains_channel_op(body),
+            Stmt::For { iterable, body, .. } =>
+                Self::expr_contains_channel_op(&iterable.node) || Self::block_contains_channel_op(body),
+            Stmt::Match { arms, else_arm, .. } => {
+                arms.iter().any(|arm| match &arm.body.node {
+                    Expr::Block(block) => Self::block_contains_channel_op(block),
+                    other => Self::expr_contains_channel_op(other),
+                }) || else_arm.as_ref().map_or(false, Self::block_contains_channel_op)
+            }
+            _ => false,
+        }
+    }
+
+    /// Check if a block contains any potential channel op.
+    fn block_contains_channel_op(block: &Block) -> bool {
+        block.stmts.iter().any(|s| Self::stmt_contains_channel_op(&s.node))
+    }
+
+    // ── Type-aware channel detection (for emit phase) ──
+
+    /// Check if an expression is an async channel send (only inside async poll body).
+    fn is_async_channel_send(&mut self, expr: &Expr) -> bool {
+        if self.async_lifted_vars.is_none() { return false; }
+        if let Expr::MethodCall { receiver, method, .. } = expr {
+            if method.node == "send" {
+                let c_type = self.infer_c_type_from_expr(&receiver.node);
+                return c_type == "GorgetChannel*";
+            }
+        }
+        false
+    }
+
+    /// Check if an expression is an async channel recv (only inside async poll body).
+    fn is_async_channel_recv(&mut self, expr: &Expr) -> bool {
+        if self.async_lifted_vars.is_none() { return false; }
+        if let Expr::MethodCall { receiver, method, .. } = expr {
+            if method.node == "recv" {
+                let c_type = self.infer_c_type_from_expr(&receiver.node);
+                return c_type == "GorgetChannel*";
+            }
+        }
+        false
+    }
+
+    /// Infer the element C type of a Channel[T] from the receiver expression (&mut self version).
+    fn infer_channel_elem_c_type(&mut self, receiver: &Spanned<Expr>) -> String {
+        if let Some(tid) = self.resolve_expr_type_id(receiver) {
+            if let crate::semantic::types::ResolvedType::Generic(_, type_args) = self.types.get(tid) {
+                if let Some(&elem_tid) = type_args.first() {
+                    return crate::codegen::c_types::type_id_to_c(elem_tid, self.types, self.scopes);
+                }
+            }
+        }
+        "int64_t".to_string()
+    }
+
+    /// Readonly version of channel element type inference for analysis phase.
+    /// Uses scoped_lookup on Identifier receivers instead of resolve_expr_type_id.
+    fn infer_channel_elem_c_type_readonly(&self, receiver: &Spanned<Expr>) -> String {
+        let tid = match &receiver.node {
+            Expr::Identifier(name) => {
+                self.scoped_lookup(name)
+                    .and_then(|def_id| self.scopes.get_def(def_id).type_id)
+            }
+            _ => None,
+        };
+        if let Some(tid) = tid {
+            if let crate::semantic::types::ResolvedType::Generic(_, type_args) = self.types.get(tid) {
+                if let Some(&elem_tid) = type_args.first() {
+                    return crate::codegen::c_types::type_id_to_c(elem_tid, self.types, self.scopes);
+                }
+            }
+        }
+        "int64_t".to_string()
     }
 
     /// Infer the Future[T] C type for an await expression.
@@ -4619,12 +4770,14 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         let prev_match_counter = self.async_match_counter;
         let prev_for_counter = self.async_for_counter;
         let prev_for_else_counter = self.async_for_else_counter;
+        let prev_channel_op_counter = self.async_channel_op_counter;
         let prev_break_flag = self.async_break_flag.take();
         self.async_lifted_vars = Some(lifted);
         self.async_sub_counter = 0;
         self.async_match_counter = 0;
         self.async_for_counter = 0;
         self.async_for_else_counter = 0;
+        self.async_channel_op_counter = 0;
 
         // Track which params are pointer params (none for async — all are in state struct)
         let prev_pointer_params = std::mem::take(&mut self.pointer_params);
@@ -4697,6 +4850,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         self.async_match_counter = prev_match_counter;
         self.async_for_counter = prev_for_counter;
         self.async_for_else_counter = prev_for_else_counter;
+        self.async_channel_op_counter = prev_channel_op_counter;
         self.async_break_flag = prev_break_flag;
         self.pointer_params = prev_pointer_params;
         self.current_function_scope = prev_function_scope;
@@ -4767,7 +4921,23 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
     ) {
         match stmt {
             Stmt::VarDecl { pattern, type_: _, value, is_const: _, .. } => {
-                if Self::expr_contains_await(&value.node) && !self.is_task_await(&value.node) {
+                if self.is_async_channel_recv(&value.node) {
+                    // Channel recv as suspension point: poll_recv directly into state field
+                    if let Expr::MethodCall { receiver, .. } = &value.node {
+                        let recv_c = self.gen_expr(receiver);
+                        *state_idx += 1;
+                        emitter.emit_line(&format!("__self->__state = {};", *state_idx));
+                        emitter.dedent();
+                        emitter.emit_line(&format!("case {}:", *state_idx));
+                        emitter.indent();
+                        if let Pattern::Binding(name) = &pattern.node {
+                            let escaped = c_mangle::escape_keyword(name);
+                            emitter.emit_line(&format!(
+                                "if (!gorget_channel_poll_recv({recv_c}, &__self->{escaped}, __waker)) return GORGET_POLL_PENDING;"
+                            ));
+                        }
+                    }
+                } else if Self::expr_contains_await(&value.node) && !self.is_task_await(&value.node) {
                     let is_direct_single = matches!(&value.node, Expr::Await { expr: inner } if !Self::expr_contains_await(&inner.node));
                     if is_direct_single {
                         // Direct single await: existing path
@@ -4851,6 +5021,22 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                         let val = self.gen_expr(value);
                         emitter.emit_line(&format!("__self->{escaped} = {val};"));
                     }
+                }
+            }
+
+            Stmt::Assign { target, value } if self.is_async_channel_recv(&value.node) => {
+                // Channel recv as suspension point in assignment
+                if let Expr::MethodCall { receiver, .. } = &value.node {
+                    let recv_c = self.gen_expr(receiver);
+                    let target_c = self.gen_expr(target);
+                    *state_idx += 1;
+                    emitter.emit_line(&format!("__self->__state = {};", *state_idx));
+                    emitter.dedent();
+                    emitter.emit_line(&format!("case {}:", *state_idx));
+                    emitter.indent();
+                    emitter.emit_line(&format!(
+                        "if (!gorget_channel_poll_recv({recv_c}, &{target_c}, __waker)) return GORGET_POLL_PENDING;"
+                    ));
                 }
             }
 
@@ -5019,7 +5205,43 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
             }
 
             Stmt::Expr(expr) => {
-                if Self::expr_contains_await(&expr.node) && !self.is_task_await(&expr.node) {
+                if self.is_async_channel_send(&expr.node) {
+                    // Channel send as suspension point
+                    if let Expr::MethodCall { receiver, args, .. } = &expr.node {
+                        let recv_c = self.gen_expr(receiver);
+                        let val_c = self.gen_expr(&args[0].node.value);
+                        let tmp_n = self.async_channel_op_counter;
+                        self.async_channel_op_counter += 1;
+                        let tmp_field = format!("__ch_send_tmp_{tmp_n}");
+
+                        // Store value in state struct (persists across suspension)
+                        emitter.emit_line(&format!("__self->{tmp_field} = {val_c};"));
+
+                        // Suspension point
+                        *state_idx += 1;
+                        emitter.emit_line(&format!("__self->__state = {};", *state_idx));
+                        emitter.dedent();
+                        emitter.emit_line(&format!("case {}:", *state_idx));
+                        emitter.indent();
+                        emitter.emit_line(&format!(
+                            "if (!gorget_channel_poll_send({recv_c}, &__self->{tmp_field}, __waker)) return GORGET_POLL_PENDING;"
+                        ));
+                    }
+                } else if self.is_async_channel_recv(&expr.node) {
+                    // Channel recv as bare expression statement (result discarded)
+                    if let Expr::MethodCall { receiver, .. } = &expr.node {
+                        let recv_c = self.gen_expr(receiver);
+                        let elem_c_type = self.infer_channel_elem_c_type(receiver);
+                        *state_idx += 1;
+                        emitter.emit_line(&format!("__self->__state = {};", *state_idx));
+                        emitter.dedent();
+                        emitter.emit_line(&format!("case {}:", *state_idx));
+                        emitter.indent();
+                        emitter.emit_line(&format!(
+                            "{{ {elem_c_type} __ch_discard; if (!gorget_channel_poll_recv({recv_c}, &__ch_discard, __waker)) return GORGET_POLL_PENDING; }}"
+                        ));
+                    }
+                } else if Self::expr_contains_await(&expr.node) && !self.is_task_await(&expr.node) {
                     let is_direct_single = matches!(&expr.node, Expr::Await { expr: inner } if !Self::expr_contains_await(&inner.node));
                     if is_direct_single {
                         // Direct single await: existing path
@@ -5085,9 +5307,10 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                 }
             }
 
-            // While with await in condition or body — Duff's device
+            // While with await/channel-op in condition or body — Duff's device
             Stmt::While { condition, body, .. }
-                if Self::expr_contains_await(&condition.node) || Self::block_contains_await(body) =>
+                if Self::expr_contains_await(&condition.node) || Self::block_contains_await(body)
+                || Self::block_contains_channel_op(body) =>
             {
                 let cond_has_await = Self::expr_contains_await(&condition.node);
                 if cond_has_await {
@@ -5113,8 +5336,8 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                 }
             }
 
-            // Loop with await in body — Duff's device: case labels inside while(1) body
-            Stmt::Loop { body } if Self::block_contains_await(body) => {
+            // Loop with await/channel-op in body — Duff's device: case labels inside while(1) body
+            Stmt::Loop { body } if Self::block_contains_await(body) || Self::block_contains_channel_op(body) => {
                 emitter.emit_line("while (1) {");
                 emitter.indent();
                 self.emit_async_stmts(&body.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
@@ -5122,12 +5345,12 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                 emitter.emit_line("}");
             }
 
-            // If/elif/else with await in condition or any branch — Duff's device
+            // If/elif/else with await/channel-op in condition or any branch — Duff's device
             Stmt::If { condition, then_body, elif_branches, else_body }
                 if Self::expr_contains_await(&condition.node)
-                || Self::block_contains_await(then_body)
-                || elif_branches.iter().any(|(c, b)| Self::expr_contains_await(&c.node) || Self::block_contains_await(b))
-                || else_body.as_ref().map_or(false, Self::block_contains_await) =>
+                || Self::block_contains_await(then_body) || Self::block_contains_channel_op(then_body)
+                || elif_branches.iter().any(|(c, b)| Self::expr_contains_await(&c.node) || Self::block_contains_await(b) || Self::block_contains_channel_op(b))
+                || else_body.as_ref().map_or(false, |b| Self::block_contains_await(b) || Self::block_contains_channel_op(b)) =>
             {
                 // Pre-evaluate condition awaits before the if
                 if Self::expr_contains_await(&condition.node) {
@@ -5175,9 +5398,10 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                 }
             }
 
-            // For with await in iterable or body — Duff's device
+            // For with await/channel-op in iterable or body — Duff's device
             Stmt::For { pattern, iterable, body, else_body, .. }
-                if Self::expr_contains_await(&iterable.node) || Self::block_contains_await(body) =>
+                if Self::expr_contains_await(&iterable.node) || Self::block_contains_await(body)
+                || Self::block_contains_channel_op(body) =>
             {
                 // Compute break-flag for for/else
                 let broke_flag = if else_body.is_some() {
@@ -5226,7 +5450,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                                 emitter.emit_line(&format!("if (!{flag}) {{"));
                                 emitter.indent();
                             }
-                            if Self::block_contains_await(else_b) {
+                            if Self::block_contains_await(else_b) || Self::block_contains_channel_op(else_b) {
                                 self.emit_async_stmts(&else_b.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
                             } else {
                                 self.gen_block(else_b, emitter);
@@ -5261,7 +5485,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                                 emitter.emit_line(&format!("if (!{flag}) {{"));
                                 emitter.indent();
                             }
-                            if Self::block_contains_await(else_b) {
+                            if Self::block_contains_await(else_b) || Self::block_contains_channel_op(else_b) {
                                 self.emit_async_stmts(&else_b.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
                             } else {
                                 self.gen_block(else_b, emitter);
@@ -5369,7 +5593,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                                 emitter.emit_line(&format!("if (!{flag}) {{"));
                                 emitter.indent();
                             }
-                            if Self::block_contains_await(else_b) {
+                            if Self::block_contains_await(else_b) || Self::block_contains_channel_op(else_b) {
                                 self.emit_async_stmts(&else_b.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
                             } else {
                                 self.gen_block(else_b, emitter);
@@ -5407,7 +5631,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                                 emitter.emit_line(&format!("if (!{flag}) {{"));
                                 emitter.indent();
                             }
-                            if Self::block_contains_await(else_b) {
+                            if Self::block_contains_await(else_b) || Self::block_contains_channel_op(else_b) {
                                 self.emit_async_stmts(&else_b.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
                             } else {
                                 self.gen_block(else_b, emitter);
@@ -5427,12 +5651,12 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                 self.async_break_flag = prev_break_flag;
             }
 
-            // Match with await in any arm — Duff's device
+            // Match with await/channel-op in any arm — Duff's device
             Stmt::Match { scrutinee, arms, else_arm }
                 if arms.iter().any(|arm| match &arm.body.node {
-                    Expr::Block(block) => Self::block_contains_await(block),
-                    other => Self::expr_contains_await(other),
-                }) || else_arm.as_ref().map_or(false, Self::block_contains_await) =>
+                    Expr::Block(block) => Self::block_contains_await(block) || Self::block_contains_channel_op(block),
+                    other => Self::expr_contains_await(other) || Self::expr_contains_channel_op(other),
+                }) || else_arm.as_ref().map_or(false, |b| Self::block_contains_await(b) || Self::block_contains_channel_op(b)) =>
             {
                 let match_idx = self.async_match_counter;
                 self.async_match_counter += 1;
@@ -5448,8 +5672,8 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                 let mut first = true;
                 for arm in arms {
                     let arm_has_await = match &arm.body.node {
-                        Expr::Block(block) => Self::block_contains_await(block),
-                        other => Self::expr_contains_await(other),
+                        Expr::Block(block) => Self::block_contains_await(block) || Self::block_contains_channel_op(block),
+                        other => Self::expr_contains_await(other) || Self::expr_contains_channel_op(other),
                     };
 
                     let pattern_cond = self.pattern_to_condition(
@@ -5511,10 +5735,10 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                 }
 
                 if let Some(else_b) = else_arm {
-                    let else_has_await = Self::block_contains_await(else_b);
+                    let else_has_suspend = Self::block_contains_await(else_b) || Self::block_contains_channel_op(else_b);
                     emitter.emit_line("} else {");
                     emitter.indent();
-                    if else_has_await {
+                    if else_has_suspend {
                         self.emit_async_stmts(&else_b.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
                     } else {
                         self.gen_block(else_b, emitter);

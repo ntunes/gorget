@@ -613,7 +613,7 @@ static void __gorget_main_wake(GorgetWaker* w) {
 static GorgetWaker __gorget_main_waker = { __gorget_main_wake, NULL };
 "#;
 
-/// Bounded MPMC channel runtime (mutex + condvar ring buffer).
+/// Bounded MPMC channel runtime (mutex + condvar ring buffer) with async waker support.
 pub const CHANNEL_RUNTIME: &str = r#"
 // ── Channel (bounded MPMC) ──
 typedef struct GorgetChannel {
@@ -627,6 +627,12 @@ typedef struct GorgetChannel {
     pthread_cond_t  not_full;
     pthread_cond_t  not_empty;
     volatile int    closed;
+    GorgetWaker*    send_waiters;
+    size_t          send_waiter_count;
+    size_t          send_waiter_cap;
+    GorgetWaker*    recv_waiters;
+    size_t          recv_waiter_count;
+    size_t          recv_waiter_cap;
 } GorgetChannel;
 
 static GorgetChannel* gorget_channel_new(size_t capacity, size_t elem_size) {
@@ -658,8 +664,16 @@ static void gorget_channel_send(GorgetChannel* ch, const void* data) {
     memcpy((char*)ch->buf + ch->tail * ch->elem_size, data, ch->elem_size);
     ch->tail = (ch->tail + 1) % ch->capacity;
     ch->count++;
-    pthread_cond_signal(&ch->not_empty);
-    pthread_mutex_unlock(&ch->mtx);
+    // Wake one async recv waiter if any, else signal condvar for sync waiters
+    if (ch->recv_waiter_count > 0) {
+        GorgetWaker w = ch->recv_waiters[0];
+        memmove(ch->recv_waiters, ch->recv_waiters + 1, (--ch->recv_waiter_count) * sizeof(GorgetWaker));
+        pthread_mutex_unlock(&ch->mtx);
+        w.wake(&w);
+    } else {
+        pthread_cond_signal(&ch->not_empty);
+        pthread_mutex_unlock(&ch->mtx);
+    }
 }
 
 static void gorget_channel_recv(GorgetChannel* ch, void* out) {
@@ -674,13 +688,96 @@ static void gorget_channel_recv(GorgetChannel* ch, void* out) {
     memcpy(out, (char*)ch->buf + ch->head * ch->elem_size, ch->elem_size);
     ch->head = (ch->head + 1) % ch->capacity;
     ch->count--;
-    pthread_cond_signal(&ch->not_full);
+    // Wake one async send waiter if any, else signal condvar for sync waiters
+    if (ch->send_waiter_count > 0) {
+        GorgetWaker w = ch->send_waiters[0];
+        memmove(ch->send_waiters, ch->send_waiters + 1, (--ch->send_waiter_count) * sizeof(GorgetWaker));
+        pthread_mutex_unlock(&ch->mtx);
+        w.wake(&w);
+    } else {
+        pthread_cond_signal(&ch->not_full);
+        pthread_mutex_unlock(&ch->mtx);
+    }
+}
+
+// Poll-based channel send for async contexts. Returns 1 if sent, 0 if would block (waker registered).
+static int gorget_channel_poll_send(GorgetChannel* ch, const void* data, GorgetWaker* waker) {
+    pthread_mutex_lock(&ch->mtx);
+    if (ch->closed) {
+        pthread_mutex_unlock(&ch->mtx);
+        fprintf(stderr, "gorget: panic: send on closed channel\n");
+        exit(1);
+    }
+    if (ch->count < ch->capacity) {
+        memcpy((char*)ch->buf + ch->tail * ch->elem_size, data, ch->elem_size);
+        ch->tail = (ch->tail + 1) % ch->capacity;
+        ch->count++;
+        if (ch->recv_waiter_count > 0) {
+            GorgetWaker w = ch->recv_waiters[0];
+            memmove(ch->recv_waiters, ch->recv_waiters + 1, (--ch->recv_waiter_count) * sizeof(GorgetWaker));
+            pthread_mutex_unlock(&ch->mtx);
+            w.wake(&w);
+        } else {
+            pthread_cond_signal(&ch->not_empty);
+            pthread_mutex_unlock(&ch->mtx);
+        }
+        return 1;
+    }
+    // Channel full — register waker and return pending
+    if (ch->send_waiter_count == ch->send_waiter_cap) {
+        ch->send_waiter_cap = ch->send_waiter_cap ? ch->send_waiter_cap * 2 : 4;
+        ch->send_waiters = (GorgetWaker*)realloc(ch->send_waiters, ch->send_waiter_cap * sizeof(GorgetWaker));
+    }
+    ch->send_waiters[ch->send_waiter_count++] = *waker;
     pthread_mutex_unlock(&ch->mtx);
+    return 0;
+}
+
+// Poll-based channel recv for async contexts. Returns 1 if received, 0 if would block (waker registered).
+static int gorget_channel_poll_recv(GorgetChannel* ch, void* out, GorgetWaker* waker) {
+    pthread_mutex_lock(&ch->mtx);
+    if (ch->count > 0) {
+        memcpy(out, (char*)ch->buf + ch->head * ch->elem_size, ch->elem_size);
+        ch->head = (ch->head + 1) % ch->capacity;
+        ch->count--;
+        if (ch->send_waiter_count > 0) {
+            GorgetWaker w = ch->send_waiters[0];
+            memmove(ch->send_waiters, ch->send_waiters + 1, (--ch->send_waiter_count) * sizeof(GorgetWaker));
+            pthread_mutex_unlock(&ch->mtx);
+            w.wake(&w);
+        } else {
+            pthread_cond_signal(&ch->not_full);
+            pthread_mutex_unlock(&ch->mtx);
+        }
+        return 1;
+    }
+    if (ch->closed) {
+        pthread_mutex_unlock(&ch->mtx);
+        fprintf(stderr, "gorget: panic: recv on closed empty channel\n");
+        exit(1);
+    }
+    // Channel empty — register waker and return pending
+    if (ch->recv_waiter_count == ch->recv_waiter_cap) {
+        ch->recv_waiter_cap = ch->recv_waiter_cap ? ch->recv_waiter_cap * 2 : 4;
+        ch->recv_waiters = (GorgetWaker*)realloc(ch->recv_waiters, ch->recv_waiter_cap * sizeof(GorgetWaker));
+    }
+    ch->recv_waiters[ch->recv_waiter_count++] = *waker;
+    pthread_mutex_unlock(&ch->mtx);
+    return 0;
 }
 
 static void gorget_channel_close(GorgetChannel* ch) {
     pthread_mutex_lock(&ch->mtx);
     ch->closed = 1;
+    // Wake all async waiters
+    for (size_t i = 0; i < ch->send_waiter_count; i++) {
+        ch->send_waiters[i].wake(&ch->send_waiters[i]);
+    }
+    ch->send_waiter_count = 0;
+    for (size_t i = 0; i < ch->recv_waiter_count; i++) {
+        ch->recv_waiters[i].wake(&ch->recv_waiters[i]);
+    }
+    ch->recv_waiter_count = 0;
     pthread_cond_broadcast(&ch->not_full);
     pthread_cond_broadcast(&ch->not_empty);
     pthread_mutex_unlock(&ch->mtx);
@@ -692,6 +789,8 @@ static void gorget_channel_free(GorgetChannel* ch) {
     pthread_cond_destroy(&ch->not_full);
     pthread_cond_destroy(&ch->not_empty);
     free(ch->buf);
+    free(ch->send_waiters);
+    free(ch->recv_waiters);
     free(ch);
 }
 "#;

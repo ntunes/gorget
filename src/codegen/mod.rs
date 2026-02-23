@@ -368,6 +368,8 @@ pub struct CodegenContext<'a> {
     pub async_break_flag: Option<String>,
     /// Counter for unique `__for_broke_N` names across multiple for/else loops in same async function.
     pub async_for_else_counter: usize,
+    /// Counter for unique `__ch_send_tmp_N` names across channel send operations in same async function.
+    pub async_channel_op_counter: usize,
     /// Span-start → state field reference for expression-position await temps.
     /// When non-empty, gen_expr replaces Await nodes with these references.
     pub async_await_replacements: FxHashMap<usize, String>,
@@ -625,6 +627,7 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
         async_for_counter: 0,
         async_break_flag: None,
         async_for_else_counter: 0,
+        async_channel_op_counter: 0,
         async_await_replacements: FxHashMap::default(),
         future_types: FxHashMap::default(),
         has_spawn: false,

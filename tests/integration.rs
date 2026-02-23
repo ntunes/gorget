@@ -6023,6 +6023,11 @@ fn async_channel() {
 }
 
 #[test]
+fn async_channel_waker() {
+    run_gg("async_channel_waker.gg", "10");
+}
+
+#[test]
 fn async_control_flow() {
     run_gg("async_control_flow.gg", "20\n6\n14\n12");
 }
