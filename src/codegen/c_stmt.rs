@@ -68,7 +68,7 @@ impl CodegenContext<'_> {
 
     /// Emit the C cleanup code for a single drop entry.
     /// `depth` is used for unique loop variable names in nested collection drops.
-    fn emit_drop_entry(entry: &DropEntry, depth: usize, emitter: &mut CEmitter) {
+    pub(super) fn emit_drop_entry(entry: &DropEntry, depth: usize, emitter: &mut CEmitter) {
         let idx = format!("__di{depth}");
         let elem = format!("__de{depth}");
         match &entry.action {
@@ -389,7 +389,7 @@ impl CodegenContext<'_> {
     /// Handles primitives, String, Box (with deep drops), File, collections
     /// (Vector, Dict, HashMap, Set, HashSet), and recursively handles named
     /// structs by checking for explicit Drop impls and/or non-Copy fields.
-    fn drop_action_for_type(&self, ty: &Type) -> Option<DropAction> {
+    pub(super) fn drop_action_for_type(&self, ty: &Type) -> Option<DropAction> {
         match ty {
             Type::Primitive(crate::parser::ast::PrimitiveType::StringType) => {
                 Some(DropAction::StringFree)
@@ -598,6 +598,35 @@ impl CodegenContext<'_> {
             })
         } else {
             None
+        }
+    }
+
+    /// Determine the `DropAction` from a mangled C type string.
+    ///
+    /// Used for async state struct cleanup where only the C type string is available
+    /// (e.g., inferred-type locals). For explicitly-typed locals, `drop_action_for_type()`
+    /// gives full recursive drops including collection element drops.
+    pub(super) fn drop_action_for_c_type(&self, c_type: &str) -> Option<DropAction> {
+        match c_type {
+            "GorgetString" => Some(DropAction::StringFree),
+            ct if ct.starts_with("GorgetArray__") => {
+                Some(DropAction::ArrayFree { element_drop: None, element_c_type: None })
+            }
+            ct if ct.starts_with("GorgetDict__") || ct.starts_with("GorgetMap__") => {
+                Some(DropAction::MapFree { mangled_name: ct.to_string(), key_drop: None, value_drop: None })
+            }
+            ct if ct.starts_with("GorgetSet__") => {
+                Some(DropAction::SetFree { element_drop: None, element_c_type: None })
+            }
+            // Primitives, Future/Task, Channel — no drop
+            "int64_t" | "double" | "bool" | "char" | "const char*"
+            | "uint8_t" | "uint16_t" | "uint32_t" | "uint64_t" | "size_t" | "void" => None,
+            ct if ct.starts_with("Future__") || ct.starts_with("Task__")
+                || ct.starts_with("GorgetChannel") => None,
+            // Pointer types — no drop (borrowed)
+            ct if ct.ends_with('*') => None,
+            // User struct: look up by name
+            ct => self.drop_action_for_struct_name(ct),
         }
     }
 

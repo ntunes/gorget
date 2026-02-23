@@ -6027,6 +6027,11 @@ fn async_control_flow() {
     run_gg("async_control_flow.gg", "20\n6\n14\n12");
 }
 
+#[test]
+fn async_drop() {
+    run_gg("async_drop.gg", "drop compute-local\n42\ndone\ndrop main-local");
+}
+
 // Parser Comparison Test
 // ═══════════════════════════════════════════════════════════════
 

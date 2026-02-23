@@ -1,0 +1,17 @@
+struct Tracked:
+    str label
+
+equip Tracked with Drop:
+    void drop(!self):
+        str l = self.label
+        print("drop {l}")
+
+async int compute(int x):
+    Tracked t = Tracked("compute-local")
+    return x * 2
+
+async void main():
+    int val = await compute(21)
+    print(val)
+    Tracked main_t = Tracked("main-local")
+    print("done")

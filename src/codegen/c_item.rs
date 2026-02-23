@@ -5,17 +5,18 @@ use crate::span::Spanned;
 use super::c_emitter::CEmitter;
 use super::c_mangle;
 use super::c_types;
-use super::{CodegenContext, DropAction, DropScopeKind};
+use super::{CodegenContext, DropAction, DropEntry, DropScopeKind};
 
 /// Analysis result for an async function body.
 #[allow(dead_code)]
 struct AsyncAnalysis {
-    params: Vec<(String, String)>,       // (name, c_type)
-    locals: Vec<(String, String)>,       // (name, c_type)
+    params: Vec<(String, String)>,                  // (name, c_type)
+    locals: Vec<(String, String, Option<Type>)>,    // (name, c_type, ast_type for drop)
     await_count: usize,
-    sub_futures: Vec<(usize, String)>,   // (index, future_c_type)
-    inner_return_c_type: String,         // T, not Future[T]
-    future_type_name: String,            // "Future__int64_t"
+    sub_futures: Vec<(usize, String)>,              // (index, future_c_type)
+    inner_return_c_type: String,                    // T, not Future[T]
+    future_type_name: String,                       // "Future__int64_t"
+    drop_entries: Vec<DropEntry>,                   // non-Copy fields needing cleanup
 }
 
 /// Build a mangled name for a Callable/MutCallable/ConsumeCallable trait signature.
@@ -3282,7 +3283,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         let inner_c_type = c_types::ast_type_to_c(&f.return_type.node, self.scopes);
         let future_type_name = c_mangle::mangle_generic("Future", &[inner_c_type.clone()]);
 
-        let mut locals: Vec<(String, String)> = Vec::new();
+        let mut locals: Vec<(String, String, Option<Type>)> = Vec::new();
         let mut await_count = 0;
         let mut sub_futures: Vec<(usize, String)> = Vec::new();
 
@@ -3297,6 +3298,31 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
             }
         }
 
+        // Compute drop entries for non-Copy params and locals
+        let mut drop_entries: Vec<DropEntry> = Vec::new();
+        for p in &f.params {
+            if p.node.name.node == "self" { continue; }
+            if let Some(action) = self.drop_action_for_type(&p.node.type_.node) {
+                drop_entries.push(DropEntry {
+                    var_name: c_mangle::escape_keyword(&p.node.name.node),
+                    action,
+                });
+            }
+        }
+        for (name, c_type, ast_type) in &locals {
+            let action = if let Some(ty) = ast_type {
+                self.drop_action_for_type(ty)
+            } else {
+                self.drop_action_for_c_type(c_type)
+            };
+            if let Some(action) = action {
+                drop_entries.push(DropEntry {
+                    var_name: c_mangle::escape_keyword(name),
+                    action,
+                });
+            }
+        }
+
         AsyncAnalysis {
             params,
             locals,
@@ -3304,6 +3330,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
             sub_futures,
             inner_return_c_type: inner_c_type,
             future_type_name,
+            drop_entries,
         }
     }
 
@@ -3312,7 +3339,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         &self,
         block: &Block,
         params: &[(String, String)],
-        locals: &mut Vec<(String, String)>,
+        locals: &mut Vec<(String, String, Option<Type>)>,
         await_count: &mut usize,
         sub_futures: &mut Vec<(usize, String)>,
         context_fn: &FunctionDef,
@@ -3327,7 +3354,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         &self,
         stmt: &Stmt,
         params: &[(String, String)],
-        locals: &mut Vec<(String, String)>,
+        locals: &mut Vec<(String, String, Option<Type>)>,
         await_count: &mut usize,
         sub_futures: &mut Vec<(usize, String)>,
         context_fn: &FunctionDef,
@@ -3336,13 +3363,18 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
             Stmt::VarDecl { pattern, type_, value, .. } => {
                 if let Pattern::Binding(name) = &pattern.node {
                     // Deduplicate: don't add if already collected (e.g., same name in multiple branches)
-                    if !locals.iter().any(|(n, _)| n == name) {
+                    if !locals.iter().any(|(n, _, _)| n == name) {
                         let c_type = if matches!(type_.node, Type::Inferred) {
                             self.infer_async_var_type(&value.node, params, locals, context_fn)
                         } else {
                             c_types::ast_type_to_c(&type_.node, self.scopes)
                         };
-                        locals.push((name.clone(), c_type));
+                        let ast_type = if matches!(type_.node, Type::Inferred) {
+                            None
+                        } else {
+                            Some(type_.node.clone())
+                        };
+                        locals.push((name.clone(), c_type, ast_type));
                     }
                 }
                 if Self::expr_contains_await(&value.node) && !Self::is_task_await_static(&value.node) {
@@ -3391,8 +3423,8 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                 if Self::block_contains_await(body) {
                     // Collect loop variable as a local (deduplicate by name)
                     if let Pattern::Binding(name) = &pattern.node {
-                        if !locals.iter().any(|(n, _)| n == name) {
-                            locals.push((name.clone(), "int64_t".to_string()));
+                        if !locals.iter().any(|(n, _, _)| n == name) {
+                            locals.push((name.clone(), "int64_t".to_string(), None));
                         }
                     }
                     self.analyze_async_block(body, params, locals, await_count, sub_futures, context_fn);
@@ -3494,7 +3526,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         &self,
         expr: &Expr,
         params: &[(String, String)],
-        locals: &[(String, String)],
+        locals: &[(String, String, Option<Type>)],
         context_fn: &FunctionDef,
     ) -> String {
         match expr {
@@ -3532,8 +3564,14 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
             Expr::StringLiteral(_) => "const char*".to_string(),
             Expr::CharLiteral(_) => "char".to_string(),
             Expr::Identifier(name) => {
-                // Look up in params or locals
-                for (n, t) in params.iter().chain(locals.iter()) {
+                // Look up in params first
+                for (n, t) in params {
+                    if n == name {
+                        return t.clone();
+                    }
+                }
+                // Then locals (3-tuple)
+                for (n, t, _) in locals {
                     if n == name {
                         return t.clone();
                     }
@@ -3560,6 +3598,38 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         }
     }
 
+    /// Emit cleanup for non-Copy fields in async state struct before freeing.
+    /// `skip_var` is the escaped field name being returned (ownership transferred to result),
+    /// which must not be dropped.
+    fn emit_async_cleanup(
+        drop_entries: &[DropEntry],
+        skip_var: Option<&str>,
+        emitter: &mut CEmitter,
+    ) {
+        for entry in drop_entries.iter().rev() {
+            if let Some(skip) = skip_var {
+                if entry.var_name == skip { continue; }
+            }
+            let prefixed = DropEntry {
+                var_name: format!("__self->{}", entry.var_name),
+                action: entry.action.clone(),
+            };
+            Self::emit_drop_entry(&prefixed, 0, emitter);
+        }
+        emitter.emit_line("free(__self); __future->state = NULL;");
+    }
+
+    /// Determine which state struct field is being returned (for ownership transfer).
+    /// Returns the escaped field name if the return expression is a simple identifier
+    /// or a move of a simple identifier.
+    fn async_return_skip_var(expr: &Expr) -> Option<String> {
+        match expr {
+            Expr::Identifier(name) => Some(c_mangle::escape_keyword(name)),
+            Expr::Move { expr: inner } => Self::async_return_skip_var(&inner.node),
+            _ => None,
+        }
+    }
+
     /// Emit the state struct for an async function.
     fn emit_async_state_struct(
         &self,
@@ -3577,7 +3647,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         }
 
         // Locals
-        for (name, c_type) in &analysis.locals {
+        for (name, c_type, _) in &analysis.locals {
             emitter.emit_line(&format!("{} {};", c_type, c_mangle::escape_keyword(name)));
         }
 
@@ -3616,7 +3686,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         for (name, _) in &analysis.params {
             lifted.insert(c_mangle::escape_keyword(name));
         }
-        for (name, _) in &analysis.locals {
+        for (name, _, _) in &analysis.locals {
             lifted.insert(c_mangle::escape_keyword(name));
         }
 
@@ -3650,7 +3720,8 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                 if inner_c_type != "void" {
                     emitter.emit_line(&format!("__future->result = {e};"));
                 }
-                emitter.emit_line("free(__self); __future->state = NULL;");
+                let skip = Self::async_return_skip_var(&expr.node);
+                Self::emit_async_cleanup(&analysis.drop_entries, skip.as_deref(), emitter);
                 emitter.emit_line("return GORGET_POLL_READY;");
                 emitter.dedent();
                 emitter.dedent();
@@ -3677,7 +3748,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         block: &Block,
         _future_type: &str,
         inner_c_type: &str,
-        _analysis: &AsyncAnalysis,
+        analysis: &AsyncAnalysis,
         emitter: &mut CEmitter,
     ) {
         let mut state_idx: usize = 0;
@@ -3688,11 +3759,11 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         emitter.emit_line(&format!("case {state_idx}:"));
         emitter.indent();
 
-        self.emit_async_stmts(&block.stmts, inner_c_type, &mut state_idx, &mut sub_idx, emitter);
+        self.emit_async_stmts(&block.stmts, inner_c_type, &mut state_idx, &mut sub_idx, &analysis.drop_entries, emitter);
 
         // Implicit return for void functions
         if inner_c_type == "void" {
-            emitter.emit_line("free(__self); __future->state = NULL;");
+            Self::emit_async_cleanup(&analysis.drop_entries, None, emitter);
             emitter.emit_line("return GORGET_POLL_READY;");
         }
 
@@ -3707,10 +3778,11 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         inner_c_type: &str,
         state_idx: &mut usize,
         sub_idx: &mut usize,
+        drop_entries: &[DropEntry],
         emitter: &mut CEmitter,
     ) {
         for stmt in stmts {
-            self.emit_async_stmt(&stmt.node, stmt.span, inner_c_type, state_idx, sub_idx, emitter);
+            self.emit_async_stmt(&stmt.node, stmt.span, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
         }
     }
 
@@ -3724,6 +3796,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         inner_c_type: &str,
         state_idx: &mut usize,
         sub_idx: &mut usize,
+        drop_entries: &[DropEntry],
         emitter: &mut CEmitter,
     ) {
         match stmt {
@@ -3788,6 +3861,10 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
             }
 
             Stmt::Return(Some(expr)) => {
+                // For return-with-await, the sub-future result is already in __future->result,
+                // so no skip_var needed (the value isn't a state struct field).
+                // For return-without-await, the returned expression may reference a state field.
+                let mut skip: Option<String> = None;
                 if Self::expr_contains_await(&expr.node) && !self.is_task_await(&expr.node) {
                     if let Expr::Await { expr: await_inner } = &expr.node {
                         let inner_expr = self.gen_expr(await_inner);
@@ -3810,17 +3887,18 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                         *sub_idx += 1;
                     }
                 } else {
+                    skip = Self::async_return_skip_var(&expr.node);
                     let e = self.gen_expr(expr);
                     if inner_c_type != "void" {
                         emitter.emit_line(&format!("__future->result = {e};"));
                     }
                 }
-                emitter.emit_line("free(__self); __future->state = NULL;");
+                Self::emit_async_cleanup(drop_entries, skip.as_deref(), emitter);
                 emitter.emit_line("return GORGET_POLL_READY;");
             }
 
             Stmt::Return(None) => {
-                emitter.emit_line("free(__self); __future->state = NULL;");
+                Self::emit_async_cleanup(drop_entries, None, emitter);
                 emitter.emit_line("return GORGET_POLL_READY;");
             }
 
@@ -3852,7 +3930,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                 let cond = self.gen_expr(condition);
                 emitter.emit_line(&format!("while ({cond}) {{"));
                 emitter.indent();
-                self.emit_async_stmts(&body.stmts, inner_c_type, state_idx, sub_idx, emitter);
+                self.emit_async_stmts(&body.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
                 emitter.dedent();
                 emitter.emit_line("}");
             }
@@ -3861,7 +3939,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
             Stmt::Loop { body } if Self::block_contains_await(body) => {
                 emitter.emit_line("while (1) {");
                 emitter.indent();
-                self.emit_async_stmts(&body.stmts, inner_c_type, state_idx, sub_idx, emitter);
+                self.emit_async_stmts(&body.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
                 emitter.dedent();
                 emitter.emit_line("}");
             }
@@ -3875,19 +3953,19 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                 let cond = self.gen_expr(condition);
                 emitter.emit_line(&format!("if ({cond}) {{"));
                 emitter.indent();
-                self.emit_async_stmts(&then_body.stmts, inner_c_type, state_idx, sub_idx, emitter);
+                self.emit_async_stmts(&then_body.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
                 emitter.dedent();
                 for (elif_cond, elif_body) in elif_branches {
                     let c = self.gen_expr(elif_cond);
                     emitter.emit_line(&format!("}} else if ({c}) {{"));
                     emitter.indent();
-                    self.emit_async_stmts(&elif_body.stmts, inner_c_type, state_idx, sub_idx, emitter);
+                    self.emit_async_stmts(&elif_body.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
                     emitter.dedent();
                 }
                 if let Some(else_b) = else_body {
                     emitter.emit_line("} else {");
                     emitter.indent();
-                    self.emit_async_stmts(&else_b.stmts, inner_c_type, state_idx, sub_idx, emitter);
+                    self.emit_async_stmts(&else_b.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
                     emitter.dedent();
                 }
                 emitter.emit_line("}");
