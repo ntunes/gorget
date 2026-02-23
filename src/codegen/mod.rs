@@ -360,6 +360,8 @@ pub struct CodegenContext<'a> {
     pub async_sub_counter: usize,
     /// Match scrutinee counter within current async function (for unique __match_scrut_N names).
     pub async_match_counter: usize,
+    /// For-loop counter within current async function (for unique __for_idx_N / __for_oi_N names).
+    pub async_for_counter: usize,
     /// Unique Future[T] types needed: mangled name → inner C type (e.g. "Future__int64_t" → "int64_t").
     pub future_types: FxHashMap<String, String>,
     /// Whether the program uses `spawn` (drives executor runtime emission and Task[T] typedefs).
@@ -609,6 +611,7 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
         async_lifted_vars: None,
         async_sub_counter: 0,
         async_match_counter: 0,
+        async_for_counter: 0,
         future_types: FxHashMap::default(),
         has_spawn: false,
         source_text: opts.source_text,

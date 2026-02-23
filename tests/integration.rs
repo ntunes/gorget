@@ -6042,6 +6042,11 @@ fn async_match() {
     run_gg("async_match.gg", "30\n60\n15\n16\n12\n9");
 }
 
+#[test]
+fn async_for_loop_collections() {
+    run_gg("async_for_loop_collections.gg", "60\n300\n30\n100");
+}
+
 // Parser Comparison Test
 // ═══════════════════════════════════════════════════════════════
 

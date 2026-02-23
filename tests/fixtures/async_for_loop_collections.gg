@@ -1,0 +1,53 @@
+async int process(int x):
+    return x * 10
+
+async void test_vector():
+    Vector[int] items = Vector[int]()
+    items.push(1)
+    items.push(2)
+    items.push(3)
+    int total = 0
+    for item in items:
+        int val = await process(item)
+        total = total + val
+    print(total)
+
+async void test_dict():
+    Dict[str, int] scores = Dict[str, int]()
+    scores["a"] = 10
+    scores["b"] = 20
+    int total = 0
+    for (k, v) in scores:
+        int val = await process(v)
+        total = total + val
+    print(total)
+
+async void test_string():
+    str word = "abc"
+    int count = 0
+    for ch in word:
+        int val = await process(1)
+        count = count + val
+    print(count)
+
+async void test_multiple():
+    Vector[int] a = Vector[int]()
+    a.push(1)
+    a.push(2)
+    Vector[int] b = Vector[int]()
+    b.push(3)
+    b.push(4)
+    int total = 0
+    for x in a:
+        int val = await process(x)
+        total = total + val
+    for y in b:
+        int val = await process(y)
+        total = total + val
+    print(total)
+
+async void main():
+    await test_vector()
+    await test_dict()
+    await test_string()
+    await test_multiple()

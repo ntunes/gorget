@@ -2837,7 +2837,7 @@ impl CodegenContext<'_> {
     }
 
     /// Check if an iterable expression resolves to a GorgetArray type.
-    fn is_gorget_array_expr(&mut self, expr: &Spanned<Expr>) -> bool {
+    pub(super) fn is_gorget_array_expr(&mut self, expr: &Spanned<Expr>) -> bool {
         if let Some(tid) = self.resolve_expr_type_id(expr) {
             let c_type = self.type_id_to_c_substituted(tid);
             if c_type == "GorgetArray" {
@@ -2879,7 +2879,7 @@ impl CodegenContext<'_> {
 
     /// Check if an iterable expression resolves to a GorgetSet (Set) type.
     /// Must use Gorget-level type name since GorgetSet is typedef'd to GorgetMap at C level.
-    fn is_gorget_set_expr(&mut self, expr: &Spanned<Expr>) -> bool {
+    pub(super) fn is_gorget_set_expr(&mut self, expr: &Spanned<Expr>) -> bool {
         if let Some(tid) = self.resolve_expr_type_id(expr) {
             if let crate::semantic::types::ResolvedType::Generic(def_id, _) = self.types.get(tid) {
                 let def_name = &self.scopes.get_def(*def_id).name;
@@ -2890,7 +2890,7 @@ impl CodegenContext<'_> {
     }
 
     /// Infer the element C type for a Set expression.
-    fn infer_set_elem_type(&mut self, expr: &Spanned<Expr>) -> String {
+    pub(super) fn infer_set_elem_type(&mut self, expr: &Spanned<Expr>) -> String {
         if let Some(tid) = self.resolve_expr_type_id(expr) {
             if let crate::semantic::types::ResolvedType::Generic(_, args) = self.types.get(tid) {
                 if let Some(&elem_tid) = args.first() {

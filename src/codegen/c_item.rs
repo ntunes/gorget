@@ -19,6 +19,16 @@ struct AsyncAnalysis {
     drop_entries: Vec<DropEntry>,                   // non-Copy fields needing cleanup
 }
 
+/// Classification of iterable collection types for async for-loop state lifting.
+enum AsyncIterableKind {
+    Vector(String),           // elem C type
+    Dict(String, String),     // (key, val) C types — ordered
+    HashMap(String, String),  // (key, val) C types — unordered
+    String,
+    Set(String),              // elem C type
+    Unknown,                  // fallback to busy-poll
+}
+
 /// Build a mangled name for a Callable/MutCallable/ConsumeCallable trait signature.
 /// E.g., Callable[int(int, float)] → "Callable__int64_t__int64_t__double"
 pub(super) fn callable_sig_name(prefix: &str, param_c_types: &[String], ret_c_type: &str) -> String {
@@ -3419,12 +3429,122 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                     self.analyze_async_block(body, params, locals, await_count, sub_futures, context_fn);
                 }
             }
-            Stmt::For { pattern, body, .. } => {
+            Stmt::For { pattern, iterable, body, .. } => {
                 if Self::block_contains_await(body) {
-                    // Collect loop variable as a local (deduplicate by name)
-                    if let Pattern::Binding(name) = &pattern.node {
-                        if !locals.iter().any(|(n, _, _)| n == name) {
-                            locals.push((name.clone(), "int64_t".to_string(), None));
+                    if let Expr::Range { .. } = &iterable.node {
+                        // Range for-loop: just lift the loop variable as int64_t
+                        if let Pattern::Binding(name) = &pattern.node {
+                            if !locals.iter().any(|(n, _, _)| n == name) {
+                                locals.push((name.clone(), "int64_t".to_string(), None));
+                            }
+                        }
+                    } else {
+                        // Non-range: classify iterable and lift appropriate state vars
+                        let for_n = locals.iter().filter(|(n, _, _)| n.starts_with("__for_idx_")).count();
+                        let kind = self.classify_iterable_readonly(iterable);
+                        match &kind {
+                            AsyncIterableKind::Vector(elem_type) => {
+                                let idx_name = format!("__for_idx_{for_n}");
+                                if !locals.iter().any(|(n, _, _)| n == &idx_name) {
+                                    locals.push((idx_name, "size_t".to_string(), None));
+                                }
+                                if let Pattern::Binding(name) = &pattern.node {
+                                    if !locals.iter().any(|(n, _, _)| n == name) {
+                                        locals.push((name.clone(), elem_type.clone(), None));
+                                    }
+                                }
+                            }
+                            AsyncIterableKind::Dict(key_type, val_type) => {
+                                let oi_name = format!("__for_oi_{for_n}");
+                                let idx_name = format!("__for_idx_{for_n}");
+                                if !locals.iter().any(|(n, _, _)| n == &oi_name) {
+                                    locals.push((oi_name, "size_t".to_string(), None));
+                                }
+                                if !locals.iter().any(|(n, _, _)| n == &idx_name) {
+                                    locals.push((idx_name, "size_t".to_string(), None));
+                                }
+                                // Extract key/value names from tuple pattern
+                                if let Pattern::Tuple(elems) = &pattern.node {
+                                    if let Some(k_pat) = elems.first() {
+                                        if let Pattern::Binding(k_name) = &k_pat.node {
+                                            if !locals.iter().any(|(n, _, _)| n == k_name) {
+                                                locals.push((k_name.clone(), key_type.clone(), None));
+                                            }
+                                        }
+                                    }
+                                    if let Some(v_pat) = elems.get(1) {
+                                        if let Pattern::Binding(v_name) = &v_pat.node {
+                                            if !locals.iter().any(|(n, _, _)| n == v_name) {
+                                                locals.push((v_name.clone(), val_type.clone(), None));
+                                            }
+                                        }
+                                    }
+                                } else if let Pattern::Binding(name) = &pattern.node {
+                                    if !locals.iter().any(|(n, _, _)| n == name) {
+                                        locals.push((name.clone(), key_type.clone(), None));
+                                    }
+                                }
+                            }
+                            AsyncIterableKind::HashMap(key_type, val_type) => {
+                                let idx_name = format!("__for_idx_{for_n}");
+                                if !locals.iter().any(|(n, _, _)| n == &idx_name) {
+                                    locals.push((idx_name, "size_t".to_string(), None));
+                                }
+                                if let Pattern::Tuple(elems) = &pattern.node {
+                                    if let Some(k_pat) = elems.first() {
+                                        if let Pattern::Binding(k_name) = &k_pat.node {
+                                            if !locals.iter().any(|(n, _, _)| n == k_name) {
+                                                locals.push((k_name.clone(), key_type.clone(), None));
+                                            }
+                                        }
+                                    }
+                                    if let Some(v_pat) = elems.get(1) {
+                                        if let Pattern::Binding(v_name) = &v_pat.node {
+                                            if !locals.iter().any(|(n, _, _)| n == v_name) {
+                                                locals.push((v_name.clone(), val_type.clone(), None));
+                                            }
+                                        }
+                                    }
+                                } else if let Pattern::Binding(name) = &pattern.node {
+                                    if !locals.iter().any(|(n, _, _)| n == name) {
+                                        locals.push((name.clone(), key_type.clone(), None));
+                                    }
+                                }
+                            }
+                            AsyncIterableKind::String => {
+                                let idx_name = format!("__for_idx_{for_n}");
+                                let len_name = format!("__for_len_{for_n}");
+                                if !locals.iter().any(|(n, _, _)| n == &idx_name) {
+                                    locals.push((idx_name, "size_t".to_string(), None));
+                                }
+                                if !locals.iter().any(|(n, _, _)| n == &len_name) {
+                                    locals.push((len_name, "size_t".to_string(), None));
+                                }
+                                if let Pattern::Binding(name) = &pattern.node {
+                                    if !locals.iter().any(|(n, _, _)| n == name) {
+                                        locals.push((name.clone(), "char".to_string(), None));
+                                    }
+                                }
+                            }
+                            AsyncIterableKind::Set(elem_type) => {
+                                let idx_name = format!("__for_idx_{for_n}");
+                                if !locals.iter().any(|(n, _, _)| n == &idx_name) {
+                                    locals.push((idx_name, "size_t".to_string(), None));
+                                }
+                                if let Pattern::Binding(name) = &pattern.node {
+                                    if !locals.iter().any(|(n, _, _)| n == name) {
+                                        locals.push((name.clone(), elem_type.clone(), None));
+                                    }
+                                }
+                            }
+                            AsyncIterableKind::Unknown => {
+                                // Busy-poll fallback: just lift the element var
+                                if let Pattern::Binding(name) = &pattern.node {
+                                    if !locals.iter().any(|(n, _, _)| n == name) {
+                                        locals.push((name.clone(), "int64_t".to_string(), None));
+                                    }
+                                }
+                            }
                         }
                     }
                     self.analyze_async_block(body, params, locals, await_count, sub_futures, context_fn);
@@ -3790,6 +3910,107 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         }
     }
 
+    /// Classify the iterable collection kind for async state lifting (read-only analysis pass).
+    /// Uses expr_types and resolution_map to resolve TypeId without &mut self.
+    fn classify_iterable_readonly(&self, iterable: &Spanned<Expr>) -> AsyncIterableKind {
+        use crate::semantic::types::ResolvedType;
+
+        // Check for string literal or str-typed expression
+        if matches!(&iterable.node, Expr::StringLiteral(_)) {
+            return AsyncIterableKind::String;
+        }
+
+        if let Some(tid) = self.resolve_iterable_type_id_readonly(iterable) {
+            match self.types.get(tid) {
+                ResolvedType::Primitive(crate::parser::ast::PrimitiveType::Str) => {
+                    return AsyncIterableKind::String;
+                }
+                ResolvedType::Generic(def_id, args) => {
+                    let def_name = self.scopes.get_def(*def_id).name.clone();
+                    match def_name.as_str() {
+                        "Vector" | "List" | "Array" => {
+                            let elem = if let Some(&elem_tid) = args.first() {
+                                self.type_id_to_c_substituted(elem_tid)
+                            } else {
+                                "int64_t".to_string()
+                            };
+                            return AsyncIterableKind::Vector(elem);
+                        }
+                        "Dict" => {
+                            let (k, v) = if args.len() >= 2 {
+                                (
+                                    self.type_id_to_c_substituted(args[0]),
+                                    self.type_id_to_c_substituted(args[1]),
+                                )
+                            } else {
+                                ("int64_t".to_string(), "int64_t".to_string())
+                            };
+                            return AsyncIterableKind::Dict(k, v);
+                        }
+                        "HashMap" => {
+                            let (k, v) = if args.len() >= 2 {
+                                (
+                                    self.type_id_to_c_substituted(args[0]),
+                                    self.type_id_to_c_substituted(args[1]),
+                                )
+                            } else {
+                                ("int64_t".to_string(), "int64_t".to_string())
+                            };
+                            return AsyncIterableKind::HashMap(k, v);
+                        }
+                        "Set" | "HashSet" => {
+                            let elem = if let Some(&elem_tid) = args.first() {
+                                self.type_id_to_c_substituted(elem_tid)
+                            } else {
+                                "int64_t".to_string()
+                            };
+                            return AsyncIterableKind::Set(elem);
+                        }
+                        _ => {}
+                    }
+                }
+                // Auto-promoted array literals
+                ResolvedType::Array(elem_tid, _) => {
+                    let elem = self.type_id_to_c_substituted(*elem_tid);
+                    return AsyncIterableKind::Vector(elem);
+                }
+                _ => {}
+            }
+        }
+
+        // Check vector_vars as fallback (auto-promoted array literals)
+        if let Expr::Identifier(name) = &iterable.node {
+            if self.vector_vars.contains(&crate::codegen::c_mangle::escape_keyword(name)) {
+                return AsyncIterableKind::Vector("int64_t".to_string());
+            }
+        }
+
+        AsyncIterableKind::Unknown
+    }
+
+    /// Read-only TypeId resolution for iterable expressions during async analysis.
+    /// Tries expr_types first, then resolution_map/scoped_lookup.
+    fn resolve_iterable_type_id_readonly(&self, expr: &Spanned<Expr>) -> Option<crate::semantic::ids::TypeId> {
+        // Try expr_types (Span→TypeId map from type checker) first
+        if let Some(&tid) = self.expr_types.get(&expr.span) {
+            return Some(tid);
+        }
+        // Fall back to resolution_map-based lookup (same as resolve_scrutinee_type_id_readonly)
+        match &expr.node {
+            Expr::Identifier(name) => {
+                self.resolution_map
+                    .get(&expr.span.start)
+                    .filter(|def_id| self.scopes.get_def(**def_id).name == *name)
+                    .and_then(|def_id| self.scopes.get_def(*def_id).type_id)
+                    .or_else(|| {
+                        self.scoped_lookup(name)
+                            .and_then(|def_id| self.scopes.get_def(def_id).type_id)
+                    })
+            }
+            _ => None,
+        }
+    }
+
     /// Emit cleanup for non-Copy fields in async state struct before freeing.
     /// `skip_var` is the escaped field name being returned (ownership transferred to result),
     /// which must not be dropped.
@@ -3925,9 +4146,11 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         let prev_lifted = self.async_lifted_vars.take();
         let prev_sub_counter = self.async_sub_counter;
         let prev_match_counter = self.async_match_counter;
+        let prev_for_counter = self.async_for_counter;
         self.async_lifted_vars = Some(lifted);
         self.async_sub_counter = 0;
         self.async_match_counter = 0;
+        self.async_for_counter = 0;
 
         // Track which params are pointer params (none for async — all are in state struct)
         let prev_pointer_params = std::mem::take(&mut self.pointer_params);
@@ -3966,6 +4189,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         self.async_lifted_vars = prev_lifted;
         self.async_sub_counter = prev_sub_counter;
         self.async_match_counter = prev_match_counter;
+        self.async_for_counter = prev_for_counter;
         self.pointer_params = prev_pointer_params;
         self.current_function_scope = prev_function_scope;
 
@@ -4230,8 +4454,157 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                             self.emit_async_stmts(&else_b.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
                         }
                     }
+                } else if self.is_gorget_array_expr(iterable) {
+                    // Vector[T] with await in body
+                    let for_n = self.async_for_counter;
+                    self.async_for_counter += 1;
+                    let idx_field = format!("__for_idx_{for_n}");
+                    let iter_expr = self.gen_expr(iterable);
+                    let elem_type = self.infer_vector_elem_type(iterable);
+                    if let Pattern::Binding(name) = &pattern.node {
+                        let var = c_mangle::escape_keyword(name);
+                        emitter.emit_line(&format!(
+                            "for (__self->{idx_field} = 0; __self->{idx_field} < gorget_array_len(&{iter_expr}); __self->{idx_field}++) {{"
+                        ));
+                        emitter.indent();
+                        emitter.emit_line(&format!(
+                            "__self->{var} = GORGET_ARRAY_AT({elem_type}, {iter_expr}, __self->{idx_field});"
+                        ));
+                        self.emit_async_stmts(&body.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
+                        emitter.dedent();
+                        emitter.emit_line("}");
+                        if let Some(else_b) = else_body {
+                            if Self::block_contains_await(else_b) {
+                                self.emit_async_stmts(&else_b.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
+                            } else {
+                                self.gen_block(else_b, emitter);
+                            }
+                        }
+                    }
+                } else if self.is_gorget_map_expr(iterable) {
+                    // Dict[K,V] or HashMap[K,V] with await in body
+                    let for_n = self.async_for_counter;
+                    self.async_for_counter += 1;
+                    let ordered = self.is_ordered_map_expr(iterable);
+                    let iter_expr = self.gen_expr(iterable);
+                    let idx_field = format!("__for_idx_{for_n}");
+
+                    // Extract key/value names from pattern
+                    let (k_name, v_name) = if let Pattern::Tuple(elems) = &pattern.node {
+                        let k = match elems.first().map(|e| &e.node) {
+                            Some(Pattern::Binding(name)) => c_mangle::escape_keyword(name),
+                            _ => "__gorget_k".to_string(),
+                        };
+                        let v = match elems.get(1).map(|e| &e.node) {
+                            Some(Pattern::Binding(name)) => c_mangle::escape_keyword(name),
+                            _ => "__gorget_v".to_string(),
+                        };
+                        (k, v)
+                    } else if let Pattern::Binding(name) = &pattern.node {
+                        (c_mangle::escape_keyword(name), "__gorget_v".to_string())
+                    } else {
+                        ("__gorget_k".to_string(), "__gorget_v".to_string())
+                    };
+
+                    if ordered {
+                        let oi_field = format!("__for_oi_{for_n}");
+                        emitter.emit_line(&format!(
+                            "for (__self->{oi_field} = 0; __self->{oi_field} < {iter_expr}.order_len; __self->{oi_field}++) {{"
+                        ));
+                        emitter.indent();
+                        emitter.emit_line(&format!(
+                            "__self->{idx_field} = {iter_expr}.order[__self->{oi_field}];"
+                        ));
+                        emitter.emit_line(&format!(
+                            "if ({iter_expr}.states[__self->{idx_field}] != 1) continue;"
+                        ));
+                    } else {
+                        emitter.emit_line(&format!(
+                            "for (__self->{idx_field} = 0; __self->{idx_field} < {iter_expr}.cap; __self->{idx_field}++) {{"
+                        ));
+                        emitter.indent();
+                        emitter.emit_line(&format!(
+                            "if ({iter_expr}.states[__self->{idx_field}] != 1) continue;"
+                        ));
+                    }
+                    emitter.emit_line(&format!(
+                        "__self->{k_name} = {iter_expr}.keys[__self->{idx_field}];"
+                    ));
+                    emitter.emit_line(&format!(
+                        "__self->{v_name} = {iter_expr}.values[__self->{idx_field}];"
+                    ));
+                    self.emit_async_stmts(&body.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
+                    emitter.dedent();
+                    emitter.emit_line("}");
+                    if let Some(else_b) = else_body {
+                        if Self::block_contains_await(else_b) {
+                            self.emit_async_stmts(&else_b.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
+                        } else {
+                            self.gen_block(else_b, emitter);
+                        }
+                    }
+                } else if self.is_string_expr(iterable) {
+                    // String iteration with await in body
+                    let for_n = self.async_for_counter;
+                    self.async_for_counter += 1;
+                    let idx_field = format!("__for_idx_{for_n}");
+                    let len_field = format!("__for_len_{for_n}");
+                    let iter_expr = self.gen_expr(iterable);
+                    if let Pattern::Binding(name) = &pattern.node {
+                        let var = c_mangle::escape_keyword(name);
+                        emitter.emit_line(&format!(
+                            "__self->{len_field} = strlen({iter_expr});"
+                        ));
+                        emitter.emit_line(&format!(
+                            "for (__self->{idx_field} = 0; __self->{idx_field} < __self->{len_field}; __self->{idx_field}++) {{"
+                        ));
+                        emitter.indent();
+                        emitter.emit_line(&format!(
+                            "__self->{var} = {iter_expr}[__self->{idx_field}];"
+                        ));
+                        self.emit_async_stmts(&body.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
+                        emitter.dedent();
+                        emitter.emit_line("}");
+                        if let Some(else_b) = else_body {
+                            if Self::block_contains_await(else_b) {
+                                self.emit_async_stmts(&else_b.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
+                            } else {
+                                self.gen_block(else_b, emitter);
+                            }
+                        }
+                    }
+                } else if self.is_gorget_set_expr(iterable) {
+                    // Set[T] with await in body
+                    let for_n = self.async_for_counter;
+                    self.async_for_counter += 1;
+                    let idx_field = format!("__for_idx_{for_n}");
+                    let iter_expr = self.gen_expr(iterable);
+                    let elem_type = self.infer_set_elem_type(iterable);
+                    if let Pattern::Binding(name) = &pattern.node {
+                        let var = c_mangle::escape_keyword(name);
+                        emitter.emit_line(&format!(
+                            "for (__self->{idx_field} = 0; __self->{idx_field} < {iter_expr}.cap; __self->{idx_field}++) {{"
+                        ));
+                        emitter.indent();
+                        emitter.emit_line(&format!(
+                            "if ({iter_expr}.states[__self->{idx_field}] != 1) continue;"
+                        ));
+                        emitter.emit_line(&format!(
+                            "__self->{var} = *({elem_type}*)((char*){iter_expr}.keys + __self->{idx_field} * {iter_expr}.key_size);"
+                        ));
+                        self.emit_async_stmts(&body.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
+                        emitter.dedent();
+                        emitter.emit_line("}");
+                        if let Some(else_b) = else_body {
+                            if Self::block_contains_await(else_b) {
+                                self.emit_async_stmts(&else_b.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
+                            } else {
+                                self.gen_block(else_b, emitter);
+                            }
+                        }
+                    }
                 } else {
-                    // Non-range iterable with await: delegate to gen_stmt (busy-poll fallback)
+                    // Unknown iterable with await: busy-poll fallback
                     self.gen_stmt(stmt, span, emitter);
                 }
             }
