@@ -1,0 +1,144 @@
+# Canonical output formatter for name resolution results.
+# Produces deterministic output for comparison testing.
+#
+# Output format (sorted by numeric key):
+#   DEF <id> <kind> "<name>" <span_start>:<span_end>
+#   SCOPE <id> <kind> parent:<parent_id>
+#   RES <span_start> -> <def_id>
+
+from std.collections import Vector, Dict
+from std.conv import int_to_str
+from scope import ScopeTable, DefInfo, DefKind, ScopeKind, Scope
+from scope import get_def_at, get_scope_at
+from resolve import ResolveContext
+
+# ── DefKind to string ───────────────────────────────────────
+
+str def_kind_str(DefKind kind):
+    match kind:
+        case DkFunction():
+            return "Function"
+        case DkStruct():
+            return "Struct"
+        case DkEnum():
+            return "Enum"
+        case DkVariant():
+            return "Variant"
+        case DkTrait():
+            return "Trait"
+        case DkTypeAlias():
+            return "TypeAlias"
+        case DkNewtype():
+            return "Newtype"
+        case DkVariable():
+            return "Variable"
+        case DkConst():
+            return "Const"
+        case DkStatic():
+            return "Static"
+        case DkGenericParam():
+            return "GenericParam"
+        case DkImport():
+            return "Import"
+
+# ── ScopeKind to string ────────────────────────────────────
+
+str scope_kind_str(ScopeKind kind):
+    match kind:
+        case SkModule():
+            return "Module"
+        case SkFunction():
+            return "Function"
+        case SkBlock():
+            return "Block"
+        case SkEquipBlock():
+            return "EquipBlock"
+        case SkTraitDef():
+            return "TraitDef"
+        case SkForLoop():
+            return "ForLoop"
+
+# ── Format definitions ──────────────────────────────────────
+
+str format_definitions(ScopeTable scopes):
+    Vector[str] lines = Vector[str]()
+    int i = 0
+    while i < scopes.def_count():
+        DefInfo d = scopes.get_def(i)
+        str kind = def_kind_str(d.kind)
+        str line = "DEF " + int_to_str(i) + " " + kind + " " + quote(d.name) + " " + int_to_str(d.span.start) + ":" + int_to_str(d.span.end)
+        lines.push(line)
+        i = i + 1
+    return join_lines(lines)
+
+# ── Format scopes ───────────────────────────────────────────
+
+str format_scopes(ScopeTable scopes):
+    Vector[str] lines = Vector[str]()
+    int i = 0
+    while i < scopes.scope_count():
+        ScopeKind kind = scopes.scope_kind(i)
+        int parent = scopes.scope_parent(i)
+        str kind_str = scope_kind_str(kind)
+        str line = "SCOPE " + int_to_str(i) + " " + kind_str + " parent:" + int_to_str(parent)
+        lines.push(line)
+        i = i + 1
+    return join_lines(lines)
+
+# ── Format resolution map ──────────────────────────────────
+
+str format_resolution_map(Dict[int, int] res_map):
+    Vector[str] lines = Vector[str]()
+    Vector[int] keys = Vector[int]()
+    for (key, value) in res_map:
+        keys.push(key)
+    sort_ints(&keys)
+    int i = 0
+    while i < keys.len():
+        int span_start = keys.get(i).unwrap()
+        int def_id = res_map.get(span_start).unwrap()
+        str line = "RES " + int_to_str(span_start) + " -> " + int_to_str(def_id)
+        lines.push(line)
+        i = i + 1
+    return join_lines(lines)
+
+# ── Format all ──────────────────────────────────────────────
+
+str format_all(ScopeTable scopes, ResolveContext ctx):
+    str defs = format_definitions(scopes)
+    str scope_str = format_scopes(scopes)
+    str res = format_resolution_map(ctx.resolution_map)
+    str result = defs
+    if scope_str != "":
+        result = result + "\n" + scope_str
+    if res != "":
+        result = result + "\n" + res
+    return result
+
+# ── Helpers ─────────────────────────────────────────────────
+
+str quote(str s):
+    str dq = "\""
+    return dq + s + dq
+
+str join_lines(Vector[str] lines):
+    if lines.len() == 0:
+        return ""
+    str result = lines.get(0).unwrap()
+    int i = 1
+    while i < lines.len():
+        result = result + "\n" + lines.get(i).unwrap()
+        i = i + 1
+    return result
+
+void sort_ints(Vector[int] &v):
+    # Simple insertion sort — sufficient for canonical output
+    int i = 1
+    while i < v.len():
+        int key = v.get(i).unwrap()
+        int j = i - 1
+        while j >= 0 and v.get(j).unwrap() > key:
+            v.set(j + 1, v.get(j).unwrap())
+            j = j - 1
+        v.set(j + 1, key)
+        i = i + 1

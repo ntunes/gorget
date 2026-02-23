@@ -1,0 +1,41 @@
+# Self-hosting resolver standalone test.
+# Resolves small code fragments and prints canonical output.
+
+from std.collections import Vector
+from parser import parse_source
+from ast import Module
+from scope import ScopeTable
+from types import TypeTable
+from resolve import resolve_module, ResolveContext
+from format_resolve import format_all
+
+void test_resolve(str label, str source):
+    Module m = parse_source(source)
+    ScopeTable scopes = ScopeTable.new_scope_table()
+    scopes.init()
+    TypeTable types = TypeTable.new_type_table()
+    ResolveContext ctx = resolve_module(m, &scopes, &types)
+    print(label)
+    print(format_all(scopes, ctx))
+    print("")
+
+void main():
+    test_resolve("=== empty ===", "")
+
+    test_resolve("=== function ===", "int add(int a, int b):\n    return a + b\n")
+
+    test_resolve("=== struct ===", "struct Point:\n    int x\n    int y\n")
+
+    test_resolve("=== enum ===", "enum Color:\n    Red\n    Green\n    Blue(int)\n")
+
+    test_resolve("=== forward_ref ===", "void main():\n    auto x = helper()\nint helper() = 42\n")
+
+    test_resolve("=== shadowing ===", "void f():\n    int x = 1\n    if true:\n        int x = 2\n        print(x)\n")
+
+    test_resolve("=== import ===", "from std.collections import Vector\n")
+
+    test_resolve("=== match ===", "void f():\n    match x:\n        case Some(v):\n            print(v)\n        else:\n            pass\n")
+
+    test_resolve("=== closure ===", "void f():\n    auto add = (int a, int b): return a + b\n")
+
+    test_resolve("=== for_loop ===", "void f():\n    for i in range(10):\n        print(i)\n")

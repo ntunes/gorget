@@ -6172,3 +6172,295 @@ fn parser_comparison() {
     // Diagnostic test — always passes. Mismatches guide development.
     eprintln!("\n================================\n");
 }
+
+// ═══════════════════════════════════════════════════════════════
+// Resolver Canonical Formatter (Rust side)
+// ═══════════════════════════════════════════════════════════════
+
+fn format_def_kind_canonical(kind: &gorget::semantic::scope::DefKind) -> &'static str {
+    use gorget::semantic::scope::DefKind::*;
+    match kind {
+        Function => "Function",
+        Struct => "Struct",
+        Enum => "Enum",
+        Variant => "Variant",
+        Trait => "Trait",
+        TypeAlias => "TypeAlias",
+        Newtype => "Newtype",
+        Variable => "Variable",
+        Const => "Const",
+        Static => "Static",
+        GenericParam => "GenericParam",
+        Import => "Import",
+    }
+}
+
+fn format_scope_kind_canonical(kind: &gorget::semantic::scope::ScopeKind) -> &'static str {
+    use gorget::semantic::scope::ScopeKind::*;
+    match kind {
+        Module => "Module",
+        Function => "Function",
+        Block => "Block",
+        EquipBlock { .. } => "EquipBlock",
+        TraitDef => "TraitDef",
+        ForLoop => "ForLoop",
+    }
+}
+
+fn format_resolution_canonical(
+    scopes: &gorget::semantic::scope::ScopeTable,
+    resolution_map: &gorget::semantic::resolve::ResolutionMap,
+) -> String {
+    use gorget::semantic::ids::{DefId, ScopeId};
+
+    let mut lines = Vec::new();
+
+    // DEF lines — sorted by DefId (natural order)
+    for i in 0..scopes.def_count() {
+        let def = scopes.get_def(DefId(i as u32));
+        let kind = format_def_kind_canonical(&def.kind);
+        lines.push(format!(
+            "DEF {} {} \"{}\" {}:{}",
+            i, kind, def.name, def.span.start, def.span.end
+        ));
+    }
+
+    // SCOPE lines — sorted by ScopeId (natural order)
+    for i in 0..scopes.scope_count() {
+        let sid = ScopeId(i as u32);
+        let kind = format_scope_kind_canonical(scopes.scope_kind(sid));
+        let parent = match scopes.scope_parent(sid) {
+            Some(p) => p.0 as i32,
+            None => -1,
+        };
+        lines.push(format!("SCOPE {} {} parent:{}", i, kind, parent));
+    }
+
+    // RES lines — sorted by span_start
+    let mut res_entries: Vec<(usize, u32)> = resolution_map
+        .iter()
+        .map(|(&span, &def_id)| (span, def_id.0))
+        .collect();
+    res_entries.sort_by_key(|&(span, _)| span);
+    for (span_start, def_id) in res_entries {
+        lines.push(format!("RES {} -> {}", span_start, def_id));
+    }
+
+    lines.join("\n")
+}
+
+/// Normalize resolver canonical output for comparison.
+///
+/// Differences between Rust and Gorget AST representations mean certain
+/// lines can't be compared verbatim:
+/// - DEF spans: Gorget AST doesn't store name spans → strip `start:end` from DEF lines
+/// - SCOPE lines: Rust `Expr::Block` creates extra scopes absent in Gorget AST → skip SCOPE lines
+/// - RES lines: compared exactly (this is the core correctness check)
+///
+/// Returns (def_lines, res_lines) — SCOPE lines are excluded.
+fn normalize_resolver_output(output: &str) -> (Vec<String>, Vec<String>) {
+    let mut defs = Vec::new();
+    let mut res = Vec::new();
+    for line in output.lines() {
+        if line.starts_with("DEF ") {
+            // Strip the trailing ` start:end` span from DEF lines.
+            if let Some(last_quote) = line.rfind('"') {
+                defs.push(line[..=last_quote].to_string());
+            } else {
+                defs.push(line.to_string());
+            }
+        } else if line.starts_with("RES ") {
+            res.push(line.to_string());
+        }
+        // SCOPE lines are skipped — structural differences between ASTs
+    }
+    (defs, res)
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Resolver Comparison Test
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn resolver_comparison() {
+    use gorget::parser::Parser;
+    use gorget::semantic::resolve;
+    use gorget::semantic::scope::ScopeTable;
+    use gorget::semantic::types::TypeTable;
+
+    // 1. Build the Gorget resolver driver
+    let (driver_exe, driver_c) = build_gg_dir("self_host_resolver", "driver.gg");
+
+    // 2. Discover all top-level .gg fixture files
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixtures_dir = manifest_dir.join("tests/fixtures");
+    let mut fixtures: Vec<PathBuf> = std::fs::read_dir(&fixtures_dir)
+        .expect("failed to read fixtures dir")
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && p.extension().map_or(false, |ext| ext == "gg"))
+        .collect();
+    fixtures.sort();
+
+    assert!(
+        !fixtures.is_empty(),
+        "No .gg fixtures found in {}",
+        fixtures_dir.display()
+    );
+
+    struct Mismatch {
+        fixture: String,
+        first_diff_line: usize,
+        rust_line: String,
+        gorget_line: String,
+        rust_total: usize,
+        gorget_total: usize,
+    }
+
+    let mut matched = 0;
+    let mut mismatches: Vec<Mismatch> = Vec::new();
+    let mut crashes: Vec<(String, String)> = Vec::new();
+    let mut compared = 0;
+
+    // 3. For each fixture, compare Rust vs Gorget resolver output
+    for fixture in &fixtures {
+        let source = match std::fs::read_to_string(fixture) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!(
+                    "  SKIP {}: read error: {e}",
+                    fixture.file_name().unwrap().to_string_lossy()
+                );
+                continue;
+            }
+        };
+
+        // Rust side: parse, resolve, format canonically
+        let mut parser = Parser::new(&source);
+        let module = parser.parse_module();
+        let mut scopes = ScopeTable::new();
+        let mut types = TypeTable::new();
+        let mut errors = Vec::new();
+        let mut resolve_ctx =
+            resolve::collect_top_level(&module, &mut scopes, &mut types, &mut errors);
+        let mut resolution_map = resolve::resolve_bodies(
+            &module,
+            &mut scopes,
+            &mut types,
+            &mut errors,
+            &mut resolve_ctx.function_info,
+            &mut resolve_ctx.function_body_scopes,
+        );
+        resolution_map.extend(resolve_ctx.resolution_map);
+        let rust_output = format_resolution_canonical(&scopes, &resolution_map);
+        let fname = fixture.file_name().unwrap().to_string_lossy().to_string();
+
+        // Gorget side: run the driver binary
+        let output = Command::new(&driver_exe).arg(fixture).output();
+
+        match output {
+            Ok(out) if out.status.success() => {
+                let gorget_output = String::from_utf8_lossy(&out.stdout)
+                    .trim_end()
+                    .to_string();
+
+                // Normalize: extract DEF + RES lines (skip SCOPE — structural AST diffs)
+                let (rust_defs, rust_res) = normalize_resolver_output(&rust_output);
+                let (gorget_defs, gorget_res) = normalize_resolver_output(&gorget_output);
+
+                // Combine DEF + RES for comparison
+                let mut rust_lines = rust_defs;
+                rust_lines.extend(rust_res);
+                let mut gorget_lines = gorget_defs;
+                gorget_lines.extend(gorget_res);
+
+                // Find first line divergence
+                let mut first_diff = None;
+                let max_lines = rust_lines.len().max(gorget_lines.len());
+                for i in 0..max_lines {
+                    let r = rust_lines.get(i).map(|s| s.as_str()).unwrap_or("<missing>");
+                    let g = gorget_lines.get(i).map(|s| s.as_str()).unwrap_or("<missing>");
+                    if r != g {
+                        first_diff = Some(i);
+                        break;
+                    }
+                }
+
+                if let Some(diff_line) = first_diff {
+                    mismatches.push(Mismatch {
+                        fixture: fname.clone(),
+                        first_diff_line: diff_line,
+                        rust_line: rust_lines
+                            .get(diff_line)
+                            .cloned()
+                            .unwrap_or_else(|| "<missing>".to_string()),
+                        gorget_line: gorget_lines
+                            .get(diff_line)
+                            .cloned()
+                            .unwrap_or_else(|| "<missing>".to_string()),
+                        rust_total: rust_lines.len(),
+                        gorget_total: gorget_lines.len(),
+                    });
+                } else {
+                    matched += 1;
+                }
+            }
+            Ok(out) => {
+                let name = fixture
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string();
+                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                crashes.push((name, stderr));
+            }
+            Err(e) => {
+                let name = fixture
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string();
+                crashes.push((name, format!("exec error: {e}")));
+            }
+        }
+        compared += 1;
+    }
+
+    // 4. Cleanup
+    let _ = std::fs::remove_file(&driver_c);
+    let _ = std::fs::remove_file(&driver_exe);
+
+    // 5. Report
+    eprintln!("\n=== Resolver Comparison Results ===");
+    eprintln!(
+        "Fixtures compared: {compared}, matched: {matched}, mismatched: {}, crashed: {}",
+        mismatches.len(),
+        crashes.len()
+    );
+
+    if !crashes.is_empty() {
+        eprintln!("\n--- Crashes ({}) ---", crashes.len());
+        for (name, err) in &crashes {
+            let first_line = err.lines().next().unwrap_or("(no stderr)");
+            eprintln!("  {name}: {first_line}");
+        }
+    }
+
+    if !mismatches.is_empty() {
+        eprintln!("\n--- Mismatches ({}) ---", mismatches.len());
+        for m in mismatches.iter().take(200) {
+            eprintln!(
+                "\n  {} (line {}, rust={} gorget={} lines)",
+                m.fixture, m.first_diff_line, m.rust_total, m.gorget_total
+            );
+            eprintln!("    Rust:   {}", m.rust_line);
+            eprintln!("    Gorget: {}", m.gorget_line);
+        }
+        if mismatches.len() > 30 {
+            eprintln!("\n  ... and {} more", mismatches.len() - 30);
+        }
+    }
+
+    // Diagnostic test — always passes. Mismatches guide development.
+    eprintln!("\n================================\n");
+}

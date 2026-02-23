@@ -280,6 +280,14 @@ impl ScopeTable {
         self.definitions.len()
     }
 
+    pub fn scope_count(&self) -> usize {
+        self.scopes.len()
+    }
+
+    pub fn scope_parent(&self, id: ScopeId) -> Option<ScopeId> {
+        self.scopes[id.0 as usize].parent
+    }
+
     /// Look up a definition by name and definition span. This is reliable even with
     /// shadowing because each definition has a unique (name, span) pair.
     pub fn lookup_def_by_span(&self, name: &str, span: Span) -> Option<DefId> {

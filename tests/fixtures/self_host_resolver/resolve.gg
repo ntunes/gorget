@@ -1,0 +1,858 @@
+# Two-pass name resolution for the self-hosting Gorget compiler.
+# Pass 1: collect_top_level — register all top-level definitions.
+# Pass 2: resolve_bodies — resolve name uses inside function/method bodies.
+
+from std.collections import Vector, Dict
+from ast import Span, Module, Item, Stmt, Expr, Type, Pattern
+from ast import SpannedExpr, SpannedType, SpannedPattern
+from ast import FunctionDef, StructDef, EnumDef, EnumVariant, TraitDef, EquipBlock
+from ast import MatchArm, ElseBranch, Param, ImportStmt
+from ids import NO_DEF, NO_TYPE, NO_SCOPE
+from scope import ScopeTable, DefKind, DefInfo, ScopeKind, Scope
+from scope import DkFunction, DkStruct, DkEnum, DkVariant, DkTrait
+from scope import DkTypeAlias, DkNewtype, DkVariable, DkConst, DkStatic
+from scope import DkGenericParam, DkImport
+from scope import SkModule, SkFunction, SkBlock, SkEquipBlock, SkTraitDef, SkForLoop
+from scope import get_def_at
+from types import TypeTable, ast_type_to_resolved, ResolvedType, get_stype_at
+
+# ── Typed accessors ─────────────────────────────────────────
+
+Item get_item_at(Vector[Item] v, int i):
+    return v.get(i).unwrap()
+
+Stmt get_stmt_at(Vector[Stmt] v, int i):
+    return v.get(i).unwrap()
+
+Param get_param_at(Vector[Param] v, int i):
+    return v.get(i).unwrap()
+
+FunctionDef get_fndef_at(Vector[FunctionDef] v, int i):
+    return v.get(i).unwrap()
+
+EnumVariant get_variant_at(Vector[EnumVariant] v, int i):
+    return v.get(i).unwrap()
+
+SpannedExpr get_sexpr_at(Vector[SpannedExpr] v, int i):
+    return v.get(i).unwrap()
+
+SpannedPattern get_spat_at(Vector[SpannedPattern] v, int i):
+    return v.get(i).unwrap()
+
+ElseBranch get_else_at(Vector[ElseBranch] v, int i):
+    return v.get(i).unwrap()
+
+MatchArm get_arm_at(Vector[MatchArm] v, int i):
+    return v.get(i).unwrap()
+
+str get_str_at(Vector[str] v, int i):
+    return v.get(i).unwrap()
+
+# ── Typed len helpers (codegen workaround for pattern-destructured vectors) ──
+
+int else_vec_len(Vector[ElseBranch] v):
+    return v.len()
+
+int spat_vec_len(Vector[SpannedPattern] v):
+    return v.len()
+
+int sexpr_vec_len(Vector[SpannedExpr] v):
+    return v.len()
+
+# ── Typed Option helpers (codegen workaround for pattern-destructured Options) ──
+
+bool has_opt_sexpr(Option[SpannedExpr] opt):
+    match opt:
+        case Some(_):
+            return true
+        else:
+            return false
+
+SpannedExpr unwrap_opt_sexpr(Option[SpannedExpr] opt):
+    return opt.unwrap()
+
+bool has_opt_box_sexpr(Option[Box[SpannedExpr]] opt):
+    match opt:
+        case Some(_):
+            return true
+        else:
+            return false
+
+Box[SpannedExpr] unwrap_opt_box_sexpr(Option[Box[SpannedExpr]] opt):
+    return opt.unwrap()
+
+# ── Dict set helpers (codegen workaround for Dict.set through mutable borrows) ──
+
+void res_map_set(ResolveContext &ctx, int key, int val):
+    Dict[int, int] m = !ctx.resolution_map
+    m.put(key, val)
+    ctx.resolution_map = !m
+
+void fn_scope_set(ResolveContext &ctx, str name, int scope_id):
+    Dict[str, int] m = !ctx.function_body_scopes
+    m.put(name, scope_id)
+    ctx.function_body_scopes = !m
+
+# ── Resolve context ─────────────────────────────────────────
+
+struct ResolveContext:
+    Dict[int, int] resolution_map
+    Dict[str, int] function_body_scopes
+
+# ── Built-in check ──────────────────────────────────────────
+
+bool is_builtin(str name):
+    if name == "print":
+        return true
+    if name == "format":
+        return true
+    if name == "len":
+        return true
+    if name == "type":
+        return true
+    if name == "int":
+        return true
+    if name == "int8":
+        return true
+    if name == "int16":
+        return true
+    if name == "int32":
+        return true
+    if name == "int64":
+        return true
+    if name == "uint":
+        return true
+    if name == "uint8":
+        return true
+    if name == "uint16":
+        return true
+    if name == "uint32":
+        return true
+    if name == "uint64":
+        return true
+    if name == "float":
+        return true
+    if name == "float32":
+        return true
+    if name == "float64":
+        return true
+    if name == "bool":
+        return true
+    if name == "char":
+        return true
+    if name == "str":
+        return true
+    return false
+
+# ═══════════════════════════════════════════════════════════
+# Pass 1: collect_top_level
+# ═══════════════════════════════════════════════════════════
+
+ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable &types):
+    ResolveContext ctx = ResolveContext(Dict[int, int](), Dict[str, int]())
+
+    # Register built-in core traits
+    Vector[str] trait_names = Vector[str]()
+    trait_names.push("Displayable")
+    trait_names.push("Equatable")
+    trait_names.push("Cloneable")
+    trait_names.push("Hashable")
+    trait_names.push("Drop")
+    trait_names.push("Iterator")
+    trait_names.push("Iterable")
+    trait_names.push("Add")
+    trait_names.push("Sub")
+    trait_names.push("Mul")
+    trait_names.push("Div")
+    trait_names.push("Rem")
+    trait_names.push("Neg")
+    trait_names.push("Comparable")
+    trait_names.push("Index")
+    trait_names.push("IndexMut")
+    trait_names.push("Default")
+    trait_names.push("From")
+    trait_names.push("TryFrom")
+    trait_names.push("Measurable")
+    trait_names.push("Parseable")
+    int ti = 0
+    while ti < trait_names.len():
+        str tname = get_str_at(trait_names, ti)
+        scopes.define(tname, DkTrait(), Span(0, 0))
+        ti = ti + 1
+
+    # Register String constructor as built-in function
+    scopes.define("String", DkFunction(), Span(0, 0))
+
+    # Register built-in collection types as Import placeholders
+    Vector[str] col_names = Vector[str]()
+    col_names.push("Vector")
+    col_names.push("List")
+    col_names.push("Array")
+    col_names.push("Dict")
+    col_names.push("HashMap")
+    col_names.push("Set")
+    col_names.push("HashSet")
+    col_names.push("Box")
+    int ci = 0
+    while ci < col_names.len():
+        str cname = get_str_at(col_names, ci)
+        scopes.define(cname, DkImport(), Span(0, 0))
+        ci = ci + 1
+
+    # Register Option[T] and Result[T,E] enum types with variants
+    int opt_def = scopes.define("Option", DkEnum(), Span(0, 0))
+    if opt_def >= 0:
+        scopes.define("Some", DkVariant(), Span(0, 0))
+        scopes.define("None", DkVariant(), Span(0, 0))
+
+    int res_def = scopes.define("Result", DkEnum(), Span(0, 0))
+    if res_def >= 0:
+        scopes.define("Ok", DkVariant(), Span(0, 0))
+        scopes.define("Error", DkVariant(), Span(0, 0))
+
+    # Collect all top-level items
+    int i = 0
+    while i < module.items.len():
+        Item item = get_item_at(module.items, i)
+        collect_item(item, &scopes, &types)
+        i = i + 1
+
+    return ctx
+
+
+void collect_item(Item item, ScopeTable &scopes, TypeTable &types):
+    match item:
+        case IFunction(f):
+            scopes.define(f.name, DkFunction(), Span(0, 0))
+
+        case IStruct(s):
+            scopes.define(s.name, DkStruct(), Span(0, 0))
+
+        case IEnum(e):
+            scopes.define(e.name, DkEnum(), Span(0, 0))
+            int vi = 0
+            while vi < e.variants.len():
+                EnumVariant v = get_variant_at(e.variants, vi)
+                scopes.define(v.name, DkVariant(), Span(0, 0))
+                vi = vi + 1
+
+        case ITrait(t):
+            scopes.define(t.name, DkTrait(), Span(0, 0))
+
+        case IEquip(eq):
+            scopes.push_scope(SkEquipBlock())
+            int mi = 0
+            while mi < eq.methods.len():
+                FunctionDef m = get_fndef_at(eq.methods, mi)
+                scopes.define(m.name, DkFunction(), Span(0, 0))
+                mi = mi + 1
+            scopes.pop_scope()
+
+        case IImport(imp):
+            collect_import(imp, &scopes)
+
+        case IDirective(_, _):
+            pass
+
+        case ITypeAlias(name, _, _):
+            scopes.define(name, DkTypeAlias(), Span(0, 0))
+
+        case INewtype(name, _):
+            scopes.define(name, DkNewtype(), Span(0, 0))
+
+        case IConstDecl(_, name, _):
+            scopes.define(name, DkConst(), Span(0, 0))
+
+        case IExternBlock(fns):
+            int fi = 0
+            while fi < fns.len():
+                FunctionDef f = get_fndef_at(fns, fi)
+                scopes.define(f.name, DkFunction(), Span(0, 0))
+                fi = fi + 1
+
+        case ITest(_, _):
+            pass
+
+        case ISuiteSetup(_):
+            pass
+
+        case ISuiteTeardown(_):
+            pass
+
+
+void collect_import(ImportStmt imp, ScopeTable &scopes):
+    int i = 0
+    while i < imp.names.len():
+        str name = get_str_at(imp.names, i)
+        scopes.define(name, DkImport(), Span(0, 0))
+        i = i + 1
+
+# ═══════════════════════════════════════════════════════════
+# Pass 2: resolve_bodies
+# ═══════════════════════════════════════════════════════════
+
+void resolve_bodies(Module module, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
+    int i = 0
+    while i < module.items.len():
+        Item item = get_item_at(module.items, i)
+        resolve_item_body(item, &scopes, &types, &ctx)
+        i = i + 1
+
+
+void resolve_item_body(Item item, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
+    match item:
+        case IFunction(f):
+            resolve_function(f, &scopes, &types, &ctx)
+
+        case IEquip(eq):
+            resolve_equip_block(eq, &scopes, &types, &ctx)
+
+        case IConstDecl(_, _, val):
+            resolve_expr(val, &scopes, &ctx)
+
+        case ITest(_, body):
+            scopes.push_scope(SkFunction())
+            resolve_block(body, &scopes, &types, &ctx)
+            scopes.pop_scope()
+
+        case ISuiteSetup(body):
+            scopes.push_scope(SkFunction())
+            resolve_block(body, &scopes, &types, &ctx)
+            scopes.pop_scope()
+
+        case ISuiteTeardown(body):
+            scopes.push_scope(SkFunction())
+            resolve_block(body, &scopes, &types, &ctx)
+            scopes.pop_scope()
+
+        else:
+            pass
+
+
+void resolve_function(FunctionDef f, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
+    int body_scope = scopes.push_scope(SkFunction())
+
+    # Record body scope for this function
+    fn_scope_set(&ctx, f.name, body_scope)
+
+    # Define generic type params
+    int gi = 0
+    while gi < f.type_params.len():
+        str gp = get_str_at(f.type_params, gi)
+        scopes.define(gp, DkGenericParam(), Span(0, 0))
+        gi = gi + 1
+
+    # Define parameters (always mutable — can reassign params in body)
+    int pi = 0
+    while pi < f.params.len():
+        Param p = get_param_at(f.params, pi)
+        int def_id = scopes.define_with_mutability(p.param_name, DkVariable(), Span(0, 0), true)
+        if def_id >= 0:
+            scopes.set_def_param(def_id, true)
+        pi = pi + 1
+
+    # Resolve body
+    resolve_block(f.body, &scopes, &types, &ctx)
+
+    scopes.pop_scope()
+
+
+void resolve_equip_block(EquipBlock eq, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
+    scopes.push_scope(SkEquipBlock())
+
+    # Define equip generic params
+    int gi = 0
+    while gi < eq.type_params.len():
+        str gp = get_str_at(eq.type_params, gi)
+        scopes.define(gp, DkGenericParam(), Span(0, 0))
+        gi = gi + 1
+
+    # Resolve each method
+    int mi = 0
+    while mi < eq.methods.len():
+        FunctionDef m = get_fndef_at(eq.methods, mi)
+        resolve_function(m, &scopes, &types, &ctx)
+        mi = mi + 1
+
+    scopes.pop_scope()
+
+
+void resolve_block(Vector[Stmt] stmts, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
+    int i = 0
+    while i < stmts.len():
+        Stmt stmt = get_stmt_at(stmts, i)
+        resolve_stmt(stmt, &scopes, &types, &ctx)
+        i = i + 1
+
+
+void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
+    match stmt:
+        case SVarDecl(var_type, name, value, ownership):
+            resolve_expr(value, &scopes, &ctx)
+            scopes.define(name, DkVariable(), Span(0, 0))
+
+        case SExpr(expr):
+            resolve_expr(expr, &scopes, &ctx)
+
+        case SAssign(target, value):
+            resolve_expr(target, &scopes, &ctx)
+            resolve_expr(value, &scopes, &ctx)
+
+        case SCompoundAssign(target, _, value):
+            resolve_expr(target, &scopes, &ctx)
+            resolve_expr(value, &scopes, &ctx)
+
+        case SReturn(opt_expr):
+            if has_opt_sexpr(opt_expr):
+                resolve_expr(unwrap_opt_sexpr(opt_expr), &scopes, &ctx)
+
+        case SThrow(expr):
+            resolve_expr(expr, &scopes, &ctx)
+
+        case SBreak(opt_expr):
+            if has_opt_sexpr(opt_expr):
+                resolve_expr(unwrap_opt_sexpr(opt_expr), &scopes, &ctx)
+
+        case SContinue():
+            pass
+
+        case SPass():
+            pass
+
+        case SFor(pattern, iterable, body, _):
+            resolve_expr(iterable, &scopes, &ctx)
+            scopes.push_scope(SkForLoop())
+            define_pattern_bindings(pattern, &scopes)
+            resolve_block(body, &scopes, &types, &ctx)
+            scopes.pop_scope()
+
+        case SWhile(condition, body):
+            scopes.push_scope(SkBlock())
+            if has_is_patterns(condition.expr):
+                resolve_is_condition(condition, &scopes, &ctx)
+            else:
+                resolve_expr(condition, &scopes, &ctx)
+            resolve_block(body, &scopes, &types, &ctx)
+            scopes.pop_scope()
+
+        case SLoop(body):
+            scopes.push_scope(SkForLoop())
+            resolve_block(body, &scopes, &types, &ctx)
+            scopes.pop_scope()
+
+        case SIf(condition, then_body, elif_branches):
+            scopes.push_scope(SkBlock())
+            if has_is_patterns(condition.expr):
+                resolve_is_condition(condition, &scopes, &ctx)
+            else:
+                resolve_expr(condition, &scopes, &ctx)
+            resolve_block(then_body, &scopes, &types, &ctx)
+            scopes.pop_scope()
+
+            int ei = 0
+            while ei < else_vec_len(elif_branches):
+                ElseBranch branch = get_else_at(elif_branches, ei)
+                scopes.push_scope(SkBlock())
+                if has_opt_sexpr(branch.condition):
+                    SpannedExpr cond = unwrap_opt_sexpr(branch.condition)
+                    if has_is_patterns(cond.expr):
+                        resolve_is_condition(cond, &scopes, &ctx)
+                    else:
+                        resolve_expr(cond, &scopes, &ctx)
+                resolve_block(branch.body, &scopes, &types, &ctx)
+                scopes.pop_scope()
+                ei = ei + 1
+
+        case SMatch(scrutinee, arms):
+            resolve_expr(scrutinee, &scopes, &ctx)
+            int ai = 0
+            while ai < arms.len():
+                MatchArm arm = get_arm_at(arms, ai)
+                scopes.push_scope(SkBlock())
+                define_pattern_bindings(arm.pattern, &scopes)
+                resolve_block(arm.body, &scopes, &types, &ctx)
+                scopes.pop_scope()
+                ai = ai + 1
+
+        case SWith(expr, name, body):
+            scopes.push_scope(SkBlock())
+            resolve_expr(expr, &scopes, &ctx)
+            scopes.define(name, DkVariable(), Span(0, 0))
+            resolve_block(body, &scopes, &types, &ctx)
+            scopes.pop_scope()
+
+        case SAssert(condition, _):
+            resolve_expr(condition, &scopes, &ctx)
+
+        case SItem(item):
+            collect_item(item, &scopes, &types)
+            resolve_item_body(item, &scopes, &types, &ctx)
+
+
+# ── Expression resolution ───────────────────────────────────
+
+void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
+    match expr.expr:
+        case EIntLiteral(_):
+            pass
+        case EFloatLiteral(_):
+            pass
+        case EBoolLiteral(_):
+            pass
+        case ECharLiteral(_):
+            pass
+        case ENoneLiteral():
+            pass
+        case ESelfExpr():
+            pass
+        case EStringLiteral(_):
+            pass
+
+        case EIdentifier(name):
+            int def_id = scopes.lookup(name)
+            if def_id >= 0:
+                res_map_set(&ctx, expr.span.start, def_id)
+            elif not is_builtin(name):
+                pass
+
+        case EBinaryOp(left, op, right):
+            resolve_expr(*left, &scopes, &ctx)
+            resolve_expr(*right, &scopes, &ctx)
+
+        case EUnaryOp(_, operand):
+            resolve_expr(*operand, &scopes, &ctx)
+
+        case ECall(callee, args, _):
+            resolve_expr(*callee, &scopes, &ctx)
+            int ai = 0
+            while ai < args.len():
+                SpannedExpr arg = get_sexpr_at(args, ai)
+                resolve_expr(arg, &scopes, &ctx)
+                ai = ai + 1
+
+        case EMethodCall(receiver, _, args, _):
+            resolve_expr(*receiver, &scopes, &ctx)
+            int ai = 0
+            while ai < args.len():
+                SpannedExpr arg = get_sexpr_at(args, ai)
+                resolve_expr(arg, &scopes, &ctx)
+                ai = ai + 1
+
+        case EFieldAccess(object, _):
+            resolve_expr(*object, &scopes, &ctx)
+
+        case EIndex(object, index):
+            resolve_expr(*object, &scopes, &ctx)
+            resolve_expr(*index, &scopes, &ctx)
+
+        case ERange(opt_start, opt_end):
+            if has_opt_box_sexpr(opt_start):
+                resolve_expr(*unwrap_opt_box_sexpr(opt_start), &scopes, &ctx)
+            if has_opt_box_sexpr(opt_end):
+                resolve_expr(*unwrap_opt_box_sexpr(opt_end), &scopes, &ctx)
+
+        case ENilCoalescing(lhs, rhs):
+            resolve_expr(*lhs, &scopes, &ctx)
+            resolve_expr(*rhs, &scopes, &ctx)
+
+        case ETry(inner):
+            resolve_expr(*inner, &scopes, &ctx)
+
+        case ETryCapture(inner):
+            resolve_expr(*inner, &scopes, &ctx)
+
+        case EMove(inner):
+            resolve_expr(*inner, &scopes, &ctx)
+
+        case EMutableBorrow(inner):
+            resolve_expr(*inner, &scopes, &ctx)
+
+        case EDeref(inner):
+            resolve_expr(*inner, &scopes, &ctx)
+
+        case EAs(inner, _):
+            resolve_expr(*inner, &scopes, &ctx)
+
+        case EIs(inner, _, _):
+            resolve_expr(*inner, &scopes, &ctx)
+
+        case EIf(condition, then_body, elif_branches):
+            resolve_expr(*condition, &scopes, &ctx)
+            resolve_block_expr(then_body, &scopes, &ctx)
+            int ei = 0
+            while ei < else_vec_len(elif_branches):
+                ElseBranch branch = get_else_at(elif_branches, ei)
+                if has_opt_sexpr(branch.condition):
+                    resolve_expr(unwrap_opt_sexpr(branch.condition), &scopes, &ctx)
+                resolve_block_expr(branch.body, &scopes, &ctx)
+                ei = ei + 1
+
+        case EMatch(scrutinee, arms):
+            resolve_expr(*scrutinee, &scopes, &ctx)
+            int ai = 0
+            while ai < arms.len():
+                MatchArm arm = get_arm_at(arms, ai)
+                scopes.push_scope(SkBlock())
+                define_pattern_bindings(arm.pattern, &scopes)
+                resolve_block_expr(arm.body, &scopes, &ctx)
+                scopes.pop_scope()
+                ai = ai + 1
+
+        case EBlock(stmts):
+            scopes.push_scope(SkBlock())
+            resolve_block_expr(stmts, &scopes, &ctx)
+            scopes.pop_scope()
+
+        case EDo(stmts):
+            scopes.push_scope(SkBlock())
+            resolve_block_expr(stmts, &scopes, &ctx)
+            scopes.pop_scope()
+
+        case EClosure(params, body):
+            scopes.push_scope(SkFunction())
+            int pi = 0
+            while pi < params.len():
+                Param p = get_param_at(params, pi)
+                scopes.define(p.param_name, DkVariable(), Span(0, 0))
+                pi = pi + 1
+            resolve_block_expr(body, &scopes, &ctx)
+            scopes.pop_scope()
+
+        case EListComp(comp_expr, var_name, iterable, opt_cond):
+            resolve_expr(*iterable, &scopes, &ctx)
+            scopes.push_scope(SkForLoop())
+            scopes.define(var_name, DkVariable(), Span(0, 0))
+            resolve_expr(*comp_expr, &scopes, &ctx)
+            if has_opt_box_sexpr(opt_cond):
+                resolve_expr(*unwrap_opt_box_sexpr(opt_cond), &scopes, &ctx)
+            scopes.pop_scope()
+
+        case ESetComp(comp_expr, var_name, iterable, cond):
+            resolve_expr(*iterable, &scopes, &ctx)
+            scopes.push_scope(SkForLoop())
+            scopes.define(var_name, DkVariable(), Span(0, 0))
+            resolve_expr(*comp_expr, &scopes, &ctx)
+            resolve_expr(*cond, &scopes, &ctx)
+            scopes.pop_scope()
+
+        case EDictComp(key, value, var_name, iterable):
+            resolve_expr(*iterable, &scopes, &ctx)
+            scopes.push_scope(SkForLoop())
+            scopes.define(var_name, DkVariable(), Span(0, 0))
+            resolve_expr(*key, &scopes, &ctx)
+            resolve_expr(*value, &scopes, &ctx)
+            scopes.pop_scope()
+
+        case EArrayLiteral(elements):
+            int ei = 0
+            while ei < sexpr_vec_len(elements):
+                SpannedExpr elem = get_sexpr_at(elements, ei)
+                resolve_expr(elem, &scopes, &ctx)
+                ei = ei + 1
+
+        case ETupleLiteral(elements):
+            int ei = 0
+            while ei < sexpr_vec_len(elements):
+                SpannedExpr elem = get_sexpr_at(elements, ei)
+                resolve_expr(elem, &scopes, &ctx)
+                ei = ei + 1
+
+        case EDictLiteral(keys, values):
+            int di = 0
+            while di < sexpr_vec_len(keys):
+                SpannedExpr k = get_sexpr_at(keys, di)
+                resolve_expr(k, &scopes, &ctx)
+                SpannedExpr v = get_sexpr_at(values, di)
+                resolve_expr(v, &scopes, &ctx)
+                di = di + 1
+
+        case EStructLiteral(name, _, args):
+            int def_id = scopes.lookup(name)
+            if def_id >= 0:
+                res_map_set(&ctx, expr.span.start, def_id)
+            int ai = 0
+            while ai < sexpr_vec_len(args):
+                SpannedExpr arg = get_sexpr_at(args, ai)
+                resolve_expr(arg, &scopes, &ctx)
+                ai = ai + 1
+
+
+# ── Block expr resolution (no TypeTable needed) ────────────
+
+void resolve_block_expr(Vector[Stmt] stmts, ScopeTable &scopes, ResolveContext &ctx):
+    int i = 0
+    while i < stmts.len():
+        Stmt stmt = get_stmt_at(stmts, i)
+        resolve_stmt_expr(stmt, &scopes, &ctx)
+        i = i + 1
+
+
+void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
+    match stmt:
+        case SVarDecl(var_type, name, value, ownership):
+            resolve_expr(value, &scopes, &ctx)
+            scopes.define(name, DkVariable(), Span(0, 0))
+
+        case SExpr(expr):
+            resolve_expr(expr, &scopes, &ctx)
+
+        case SAssign(target, value):
+            resolve_expr(target, &scopes, &ctx)
+            resolve_expr(value, &scopes, &ctx)
+
+        case SCompoundAssign(target, _, value):
+            resolve_expr(target, &scopes, &ctx)
+            resolve_expr(value, &scopes, &ctx)
+
+        case SReturn(opt_expr):
+            if has_opt_sexpr(opt_expr):
+                resolve_expr(unwrap_opt_sexpr(opt_expr), &scopes, &ctx)
+
+        case SThrow(expr):
+            resolve_expr(expr, &scopes, &ctx)
+
+        case SBreak(opt_expr):
+            if has_opt_sexpr(opt_expr):
+                resolve_expr(unwrap_opt_sexpr(opt_expr), &scopes, &ctx)
+
+        case SContinue():
+            pass
+
+        case SPass():
+            pass
+
+        case SFor(pattern, iterable, body, _):
+            resolve_expr(iterable, &scopes, &ctx)
+            scopes.push_scope(SkForLoop())
+            define_pattern_bindings(pattern, &scopes)
+            resolve_block_expr(body, &scopes, &ctx)
+            scopes.pop_scope()
+
+        case SWhile(condition, body):
+            scopes.push_scope(SkBlock())
+            resolve_expr(condition, &scopes, &ctx)
+            resolve_block_expr(body, &scopes, &ctx)
+            scopes.pop_scope()
+
+        case SLoop(body):
+            scopes.push_scope(SkForLoop())
+            resolve_block_expr(body, &scopes, &ctx)
+            scopes.pop_scope()
+
+        case SIf(condition, then_body, elif_branches):
+            scopes.push_scope(SkBlock())
+            resolve_expr(condition, &scopes, &ctx)
+            resolve_block_expr(then_body, &scopes, &ctx)
+            scopes.pop_scope()
+            int ei = 0
+            while ei < else_vec_len(elif_branches):
+                ElseBranch branch = get_else_at(elif_branches, ei)
+                scopes.push_scope(SkBlock())
+                if has_opt_sexpr(branch.condition):
+                    resolve_expr(unwrap_opt_sexpr(branch.condition), &scopes, &ctx)
+                resolve_block_expr(branch.body, &scopes, &ctx)
+                scopes.pop_scope()
+                ei = ei + 1
+
+        case SMatch(scrutinee, arms):
+            resolve_expr(scrutinee, &scopes, &ctx)
+            int ai = 0
+            while ai < arms.len():
+                MatchArm arm = get_arm_at(arms, ai)
+                scopes.push_scope(SkBlock())
+                define_pattern_bindings(arm.pattern, &scopes)
+                resolve_block_expr(arm.body, &scopes, &ctx)
+                scopes.pop_scope()
+                ai = ai + 1
+
+        case SWith(expr, name, body):
+            scopes.push_scope(SkBlock())
+            resolve_expr(expr, &scopes, &ctx)
+            scopes.define(name, DkVariable(), Span(0, 0))
+            resolve_block_expr(body, &scopes, &ctx)
+            scopes.pop_scope()
+
+        case SAssert(condition, _):
+            resolve_expr(condition, &scopes, &ctx)
+
+        else:
+            pass
+
+
+# ── Pattern bindings ────────────────────────────────────────
+
+void define_pattern_bindings(SpannedPattern pattern, ScopeTable &scopes):
+    match pattern.pat:
+        case PBinding(name):
+            scopes.define(name, DkVariable(), Span(0, 0))
+
+        case PConstructor(_, fields):
+            int i = 0
+            while i < spat_vec_len(fields):
+                SpannedPattern field = get_spat_at(fields, i)
+                define_pattern_bindings(field, &scopes)
+                i = i + 1
+
+        case PTuple(elements):
+            int i = 0
+            while i < spat_vec_len(elements):
+                SpannedPattern elem = get_spat_at(elements, i)
+                define_pattern_bindings(elem, &scopes)
+                i = i + 1
+
+        case POr(alternatives):
+            if spat_vec_len(alternatives) > 0:
+                SpannedPattern first = get_spat_at(alternatives, 0)
+                define_pattern_bindings(first, &scopes)
+
+        case PWildcard():
+            pass
+        case PLiteral(_):
+            pass
+        case PRest():
+            pass
+
+
+# ── Is-pattern handling ─────────────────────────────────────
+
+bool has_is_patterns(Expr e):
+    match e:
+        case EIs(_, negated, _):
+            if not negated:
+                return true
+            return false
+        case EBinaryOp(left, op, right):
+            if op == "and":
+                return has_is_patterns((*left).expr) or has_is_patterns((*right).expr)
+            return false
+        else:
+            return false
+
+void resolve_is_condition(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
+    match expr.expr:
+        case EBinaryOp(left, op, right):
+            if op == "and":
+                resolve_is_condition(*left, &scopes, &ctx)
+                resolve_is_condition(*right, &scopes, &ctx)
+                return
+            resolve_expr(expr, &scopes, &ctx)
+
+        case EIs(inner, negated, pattern):
+            if not negated:
+                resolve_expr(*inner, &scopes, &ctx)
+                define_pattern_bindings(*pattern, &scopes)
+                return
+            resolve_expr(expr, &scopes, &ctx)
+
+        else:
+            resolve_expr(expr, &scopes, &ctx)
+
+
+# ═══════════════════════════════════════════════════════════
+# Public entry point
+# ═══════════════════════════════════════════════════════════
+
+ResolveContext resolve_module(Module module, ScopeTable &scopes, TypeTable &types):
+    ResolveContext ctx = collect_top_level(module, &scopes, &types)
+    resolve_bodies(module, &scopes, &types, &ctx)
+    return ctx

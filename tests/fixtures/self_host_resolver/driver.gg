@@ -1,0 +1,24 @@
+# CLI driver for resolver comparison testing.
+# Reads a .gg file, parses it, resolves names, and prints canonical output.
+# Usage: driver <path-to-file.gg>
+
+from parser import parse_source
+from ast import Module
+from scope import ScopeTable
+from types import TypeTable
+from resolve import resolve_module, ResolveContext
+from format_resolve import format_all
+from std.fs import read_file
+from std.os import args
+from std.collections import Vector
+
+void main():
+    Vector[str] cmd_args = args()
+    str path = cmd_args.get(1).unwrap()
+    String source = read_file(path)
+    Module m = parse_source(source)
+    ScopeTable scopes = ScopeTable.new_scope_table()
+    scopes.init()
+    TypeTable types = TypeTable.new_type_table()
+    ResolveContext ctx = resolve_module(m, &scopes, &types)
+    print(format_all(scopes, ctx))

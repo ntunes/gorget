@@ -1,0 +1,244 @@
+# Simplified type table for the resolution phase.
+# Mirrors src/semantic/types.rs but only what name resolution needs.
+
+from std.collections import Vector, Dict
+from ast import Span, Type, SpannedType, SpannedExpr, Expr
+from ids import NO_DEF, NO_TYPE
+from scope import ScopeTable, DefKind, NO_DEF
+
+# ── Resolved type variants ──────────────────────────────────
+
+enum ResolvedType:
+    RTPrimitive(str)
+    RTDefined(int)
+    RTGeneric(int, Vector[int])
+    RTTuple(Vector[int])
+    RTArray(int, int)
+    RTSlice(int)
+    RTFunction(Vector[int], Vector[int], int)
+    RTTraitObject(int)
+    RTCallableTrait(int)
+    RTMutCallableTrait(int)
+    RTConsumeCallableTrait(int)
+    RTVar(int)
+    RTError
+    RTVoid
+    RTNever
+
+# ── Typed accessors ─────────────────────────────────────────
+
+ResolvedType get_rtype_at(Vector[ResolvedType] v, int i):
+    return v.get(i).unwrap()
+
+SpannedType get_stype_at(Vector[SpannedType] v, int i):
+    return v.get(i).unwrap()
+
+int get_int_at(Vector[int] v, int i):
+    return v.get(i).unwrap()
+
+# ── Type table ──────────────────────────────────────────────
+
+struct TypeTable:
+    Vector[ResolvedType] types
+    Dict[int, int] defined_cache
+    int void_id
+    int bool_id
+    int int_id
+    int float_id
+    int char_id
+    int string_id
+    int owned_string_id
+    int error_id
+    int never_id
+
+equip TypeTable:
+
+    TypeTable new_type_table():
+        Vector[ResolvedType] types = Vector[ResolvedType]()
+        # Pre-allocate well-known types (order must match Rust's TypeTable::new)
+        # 0: void
+        types.push(RTVoid())
+        # 1: bool
+        types.push(RTPrimitive("bool"))
+        # 2: int
+        types.push(RTPrimitive("int"))
+        # 3: float
+        types.push(RTPrimitive("float"))
+        # 4: char
+        types.push(RTPrimitive("char"))
+        # 5: str
+        types.push(RTPrimitive("str"))
+        # 6: String (owned)
+        types.push(RTPrimitive("String"))
+        # 7: error
+        types.push(RTError())
+        # 8: never
+        types.push(RTNever())
+        return TypeTable(types, Dict[int, int](), 0, 1, 2, 3, 4, 5, 6, 7, 8)
+
+    int add_type(&self, ResolvedType ty):
+        int id = self.types.len()
+        self.types.push(ty)
+        return id
+
+    int defined_id(&self, int def_id):
+        if self.defined_cache.contains(def_id):
+            return self.defined_cache.get(def_id).unwrap()
+        int tid = self.add_type(RTDefined(def_id))
+        # Extract-modify-putback: Dict.set through &self loses type
+        Dict[int, int] cache = !self.defined_cache
+        cache.put(def_id, tid)
+        self.defined_cache = !cache
+        return tid
+
+    ResolvedType get(self, int id):
+        return get_rtype_at(self.types, id)
+
+    int primitive_id(&self, str prim_name):
+        if prim_name == "bool":
+            return self.bool_id
+        if prim_name == "int":
+            return self.int_id
+        if prim_name == "float":
+            return self.float_id
+        if prim_name == "char":
+            return self.char_id
+        if prim_name == "str":
+            return self.string_id
+        if prim_name == "String":
+            return self.owned_string_id
+        if prim_name == "void":
+            return self.void_id
+        # Other numeric types — search or insert
+        int i = 0
+        while i < self.types.len():
+            ResolvedType t = get_rtype_at(self.types, i)
+            match t:
+                case RTPrimitive(name):
+                    if name == prim_name:
+                        return i
+                else:
+                    pass
+            i = i + 1
+        return self.add_type(RTPrimitive(prim_name))
+
+# ── AST Type → TypeId conversion ────────────────────────────
+
+int ast_type_to_resolved(Type ast_ty, Span span, ScopeTable scopes, TypeTable &types):
+    match ast_ty:
+        case TPrimitive(name):
+            return types.primitive_id(name)
+
+        case TNamed(name, generic_args):
+            # Callable[sig] / MutCallable[sig] / ConsumeCallable[sig]
+            if generic_args.len() == 1:
+                if name == "Callable" or name == "MutCallable" or name == "ConsumeCallable":
+                    SpannedType arg0 = get_stype_at(generic_args, 0)
+                    int inner = ast_type_to_resolved(arg0.ty, arg0.span, scopes, &types)
+                    ResolvedType inner_ty = get_rtype_at(types.types, inner)
+                    bool is_fn = false
+                    match inner_ty:
+                        case RTFunction(_, _, _):
+                            is_fn = true
+                        else:
+                            pass
+                    if is_fn:
+                        if name == "Callable":
+                            return types.add_type(RTCallableTrait(inner))
+                        if name == "MutCallable":
+                            return types.add_type(RTMutCallableTrait(inner))
+                        return types.add_type(RTConsumeCallableTrait(inner))
+                    return types.error_id
+
+            int def_id = scopes.lookup(name)
+            if def_id >= 0:
+                DefKind dk = scopes.get_def(def_id).kind
+                bool is_type_def = false
+                match dk:
+                    case DkStruct():
+                        is_type_def = true
+                    case DkEnum():
+                        is_type_def = true
+                    case DkTrait():
+                        is_type_def = true
+                    case DkTypeAlias():
+                        is_type_def = true
+                    case DkNewtype():
+                        is_type_def = true
+                    case DkGenericParam():
+                        is_type_def = true
+                    case DkImport():
+                        is_type_def = true
+                    else:
+                        pass
+                if is_type_def:
+                    if generic_args.len() == 0:
+                        return types.defined_id(def_id)
+                    Vector[int] resolved_args = Vector[int]()
+                    int i = 0
+                    while i < generic_args.len():
+                        SpannedType arg = get_stype_at(generic_args, i)
+                        int arg_id = ast_type_to_resolved(arg.ty, arg.span, scopes, &types)
+                        resolved_args.push(arg_id)
+                        i = i + 1
+                    # Box[Trait] → TraitObject
+                    if name == "Box" and resolved_args.len() == 1:
+                        int inner_tid = get_int_at(resolved_args, 0)
+                        ResolvedType inner_rt = get_rtype_at(types.types, inner_tid)
+                        match inner_rt:
+                            case RTDefined(inner_def_id):
+                                DefKind inner_dk = scopes.get_def(inner_def_id).kind
+                                bool is_trait = false
+                                match inner_dk:
+                                    case DkTrait():
+                                        is_trait = true
+                                    else:
+                                        pass
+                                if is_trait:
+                                    return types.add_type(RTTraitObject(inner_def_id))
+                            case RTCallableTrait(func_id):
+                                return types.add_type(RTCallableTrait(func_id))
+                            case RTMutCallableTrait(func_id):
+                                return types.add_type(RTMutCallableTrait(func_id))
+                            case RTConsumeCallableTrait(func_id):
+                                return types.add_type(RTConsumeCallableTrait(func_id))
+                            else:
+                                pass
+                    return types.add_type(RTGeneric(def_id, resolved_args))
+                # Not a type
+                return types.error_id
+            # Unknown type
+            return types.error_id
+
+        case TArray(element, size):
+            int elem_id = ast_type_to_resolved((*element).ty, (*element).span, scopes, &types)
+            return types.add_type(RTArray(elem_id, size))
+
+        case TSlice(element):
+            int elem_id = ast_type_to_resolved((*element).ty, (*element).span, scopes, &types)
+            return types.add_type(RTSlice(elem_id))
+
+        case TTuple(elements):
+            Vector[int] elem_ids = Vector[int]()
+            int i = 0
+            while i < elements.len():
+                SpannedType elem = get_stype_at(elements, i)
+                elem_ids.push(ast_type_to_resolved(elem.ty, elem.span, scopes, &types))
+                i = i + 1
+            return types.add_type(RTTuple(elem_ids))
+
+        case TFunction(return_type, params, param_ownerships):
+            int ret_id = ast_type_to_resolved((*return_type).ty, (*return_type).span, scopes, &types)
+            Vector[int] param_ids = Vector[int]()
+            int i = 0
+            while i < params.len():
+                SpannedType p = get_stype_at(params, i)
+                param_ids.push(ast_type_to_resolved(p.ty, p.span, scopes, &types))
+                i = i + 1
+            return types.add_type(RTFunction(param_ids, param_ownerships, ret_id))
+
+        case TSelf():
+            return types.error_id
+
+        case TInferred():
+            return types.error_id
