@@ -77,6 +77,9 @@ pub enum SemanticErrorKind {
     /// `spawn` applied to a non-`Future[T]` value.
     SpawnNonFuture,
 
+    /// Reference-typed variable used across an `await` suspension point.
+    BorrowAcrossAwait { name: String },
+
     // ── Borrow checking errors ──
 
     /// Variable used after ownership was moved.
@@ -283,6 +286,9 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::SpawnNonFuture => {
                 write!(f, "`spawn` requires a `Future[T]` value (an async function call)")
+            }
+            SemanticErrorKind::BorrowAcrossAwait { name } => {
+                write!(f, "cannot use reference `{name}` across `await` — move owned data instead")
             }
             SemanticErrorKind::UseAfterMove { name, .. } => {
                 write!(f, "use of moved value `{name}`")

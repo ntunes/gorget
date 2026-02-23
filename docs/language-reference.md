@@ -1578,7 +1578,54 @@ spawn_expr = "spawn" expr ;
 ```
 
 - `await` suspends until an async operation completes. Must appear inside an `async` function.
-- `spawn` launches an async task concurrently.
+- `spawn` launches an async task concurrently, returning a `Task[T]`.
+
+#### Suspension-Point Safety
+
+An `await` expression is a **suspension point** — execution may pause and resume later, potentially on a different thread. To prevent dangling references and data races, the compiler enforces that **no references are live across `await` points**.
+
+**What can cross an `await`:**
+- **Owned types** (`String`, structs, enums, collections) — they own their data, so the data moves with the suspended state.
+- **Copy types** (`int`, `float`, `bool`, `char`) — trivially duplicated, no pointers involved.
+- **Static string literals** (`str s = "hello"`) — point to program-global storage that is always valid.
+
+**What cannot cross an `await`:**
+- **Borrowed references** — `str` variables that borrow from parameters or local data, `&T` references, or any value whose underlying data is owned elsewhere. The referent may be invalidated during suspension.
+
+```gorget
+# OK: owned int crosses await
+async int compute():
+    int x = 42
+    await some_task()
+    return x               # fine: int is Copy
+
+# OK: static str crosses await
+async void greet():
+    str msg = "hello"
+    await some_task()
+    print(msg)             # fine: "hello" is a static literal
+
+# ERROR: borrowed str crosses await
+async void process(str name):
+    await some_task()
+    print(name)            # error: `name` borrows from caller
+
+# FIX: copy to owned String before await
+async void process_fixed(str name):
+    String owned = String(name)
+    await some_task()
+    print(owned)           # fine: String owns its data
+```
+
+**`spawn` is not a suspension point.** The current function continues immediately after `spawn`, so references remain valid:
+
+```gorget
+async void example(str s):
+    auto task = spawn some_async_fn()
+    print(s)               # fine: spawn doesn't suspend
+```
+
+See [4.6 Copy vs. Non-Copy Types](#46-copy-vs-non-copy-types) for the full type classification and [4.3 Ownership Rules](#43-ownership-rules) for borrow semantics.
 
 ---
 

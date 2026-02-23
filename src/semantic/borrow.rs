@@ -120,6 +120,7 @@ struct BranchState {
     origins: OriginSnapshot,
     invalidated: FxHashSet<DefId>,
     reassignment_invalidated: FxHashMap<DefId, (String, Span)>,
+    await_invalidated: FxHashSet<DefId>,
     /// Whether this branch always diverges (return/break/continue/throw).
     diverges: bool,
 }
@@ -306,6 +307,12 @@ struct BorrowChecker<'a> {
     /// Whether we are inside a return expression (for allowing implicit
     /// constructor moves of non-loop-local vars — return exits the function).
     in_return_expr: bool,
+
+    /// Whether the current function is `async`.
+    current_function_is_async: bool,
+    /// Variables with non-static borrow origins that were Live before an `await`.
+    /// Using these after the await triggers BorrowAcrossAwait.
+    await_invalidated: FxHashSet<DefId>,
 }
 
 impl<'a> BorrowChecker<'a> {
@@ -345,6 +352,8 @@ impl<'a> BorrowChecker<'a> {
             reassignment_invalidated: FxHashMap::default(),
             diverged: false,
             in_return_expr: false,
+            current_function_is_async: false,
+            await_invalidated: FxHashSet::default(),
         }
     }
 
@@ -415,6 +424,14 @@ impl<'a> BorrowChecker<'a> {
                     return;
                 }
             }
+        }
+
+        // Async: check if variable was alive before an await suspension point.
+        if self.await_invalidated.contains(&def_id) {
+            let name = self.scopes.get_def(def_id).name.clone();
+            self.error(SemanticErrorKind::BorrowAcrossAwait { name }, span);
+            self.await_invalidated.remove(&def_id); // prevent duplicate errors
+            return;
         }
     }
 
@@ -843,6 +860,7 @@ impl<'a> BorrowChecker<'a> {
             origins: self.var_origins.clone(),
             invalidated: self.invalidated_origins.clone(),
             reassignment_invalidated: self.reassignment_invalidated.clone(),
+            await_invalidated: self.await_invalidated.clone(),
             diverges: self.diverged,
         }
     }
@@ -853,6 +871,7 @@ impl<'a> BorrowChecker<'a> {
         self.var_origins = state.origins.clone();
         self.invalidated_origins = state.invalidated.clone();
         self.reassignment_invalidated = state.reassignment_invalidated.clone();
+        self.await_invalidated = state.await_invalidated.clone();
         self.diverged = state.diverges;
     }
 
@@ -875,6 +894,7 @@ impl<'a> BorrowChecker<'a> {
             self.var_origins = states[0].origins.clone();
             self.invalidated_origins = states[0].invalidated.clone();
             self.reassignment_invalidated = states[0].reassignment_invalidated.clone();
+            self.await_invalidated = states[0].await_invalidated.clone();
             self.diverged = true;
             return;
         }
@@ -883,6 +903,7 @@ impl<'a> BorrowChecker<'a> {
         let mut merged_origins = live[0].origins.clone();
         let mut merged_invalidated = live[0].invalidated.clone();
         let mut merged_reassignment_invalidated = live[0].reassignment_invalidated.clone();
+        let mut merged_await_invalidated = live[0].await_invalidated.clone();
 
         for state in &live[1..] {
             // Merge var states: moved in either = moved
@@ -905,12 +926,15 @@ impl<'a> BorrowChecker<'a> {
             for (def_id, info) in &state.reassignment_invalidated {
                 merged_reassignment_invalidated.entry(*def_id).or_insert_with(|| info.clone());
             }
+            // Merge await_invalidated: union (conservative — if any branch has await, use after merge is suspect)
+            merged_await_invalidated.extend(&state.await_invalidated);
         }
 
         self.var_states = merged_vars;
         self.var_origins = merged_origins;
         self.invalidated_origins = merged_invalidated;
         self.reassignment_invalidated = merged_reassignment_invalidated;
+        self.await_invalidated = merged_await_invalidated;
         self.diverged = false;
     }
 
@@ -1145,8 +1169,27 @@ impl<'a> BorrowChecker<'a> {
                 self.check_expr(rhs);
             }
 
+            Expr::Await { expr: inner } => {
+                self.check_expr(inner);
+                if self.current_function_is_async {
+                    let to_invalidate: Vec<DefId> = self.var_origins.iter()
+                        .filter(|(_, origin)| !matches!(origin, BorrowOrigin::Static))
+                        .filter_map(|(def_id, _)| {
+                            // Not in var_states = never moved = implicitly live (e.g. params).
+                            if !matches!(self.var_states.get(def_id), Some(VarState::Moved { .. })) {
+                                Some(*def_id)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    for def_id in to_invalidate {
+                        self.await_invalidated.insert(def_id);
+                    }
+                }
+            }
+
             Expr::Try { expr: inner }
-            | Expr::Await { expr: inner }
             | Expr::Spawn { expr: inner }
             | Expr::TryCapture { expr: inner } => {
                 self.check_expr(inner);
@@ -1230,13 +1273,16 @@ impl<'a> BorrowChecker<'a> {
                 let saved_loop_depth = self.loop_depth;
                 let saved_loop_locals = std::mem::take(&mut self.loop_local_defs);
                 let saved_in_return = self.in_return_expr;
+                let saved_is_async = self.current_function_is_async;
                 self.loop_depth = 0;
                 self.in_return_expr = false;
+                self.current_function_is_async = false; // closures are not async (async closures deferred)
                 self.check_expr(body);
                 self.restore_branch_state(&saved);
                 self.loop_depth = saved_loop_depth;
                 self.loop_local_defs = saved_loop_locals;
                 self.in_return_expr = saved_in_return;
+                self.current_function_is_async = saved_is_async;
             }
 
             Expr::ImplicitClosure { body } => {
@@ -1244,13 +1290,16 @@ impl<'a> BorrowChecker<'a> {
                 let saved_loop_depth = self.loop_depth;
                 let saved_loop_locals = std::mem::take(&mut self.loop_local_defs);
                 let saved_in_return = self.in_return_expr;
+                let saved_is_async = self.current_function_is_async;
                 self.loop_depth = 0;
                 self.in_return_expr = false;
+                self.current_function_is_async = false;
                 self.check_expr(body);
                 self.restore_branch_state(&saved);
                 self.loop_depth = saved_loop_depth;
                 self.loop_local_defs = saved_loop_locals;
                 self.in_return_expr = saved_in_return;
+                self.current_function_is_async = saved_is_async;
             }
 
             Expr::ListComprehension {
@@ -1460,6 +1509,9 @@ impl<'a> BorrowChecker<'a> {
                             // Phase 11: If the dependent variable itself is reassigned,
                             // clear its stale-borrow entry — it now has a fresh value.
                             self.reassignment_invalidated.remove(&def_id);
+
+                            // Async: reassignment after await clears suspension-point invalidation.
+                            self.await_invalidated.remove(&def_id);
 
                             // Phase 11: Reassignment invalidation.
                             // When a non-Copy owning variable is reassigned, all existing
@@ -2113,6 +2165,8 @@ impl<'a> BorrowChecker<'a> {
         self.invalidated_origins.clear();
         self.current_param_def_ids.clear();
         self.active_outlives.clear();
+        self.current_function_is_async = func.qualifiers.is_async;
+        self.await_invalidated.clear();
 
         // Set scope-aware lookup context for this function
         self.current_fn_scope = self.function_body_scopes
@@ -2821,6 +2875,7 @@ pub fn check_module(
                 checker.loop_local_defs.clear();
                 checker.var_origins.clear();
                 checker.invalidated_origins.clear();
+                checker.await_invalidated.clear();
                 for binding in &t.with_bindings {
                     checker.check_expr(&binding.expr);
                 }
@@ -2832,6 +2887,7 @@ pub fn check_module(
                 checker.loop_local_defs.clear();
                 checker.var_origins.clear();
                 checker.invalidated_origins.clear();
+                checker.await_invalidated.clear();
                 checker.check_block(&s.body);
             }
             Item::SuiteTeardown(s) => {
@@ -2840,6 +2896,7 @@ pub fn check_module(
                 checker.loop_local_defs.clear();
                 checker.var_origins.clear();
                 checker.invalidated_origins.clear();
+                checker.await_invalidated.clear();
                 checker.check_block(&s.body);
             }
             _ => {}
@@ -4809,6 +4866,160 @@ str wrapper():
                     | SemanticErrorKind::UnresolvedBorrowOrigin { .. }
             )),
             "unexpected error for owned return coercion: {:?}", errors
+        );
+    }
+
+    // ─── Async/Await Borrow-Across-Await Tests ──────────────
+
+    #[test]
+    fn borrow_across_await_param_rejected() {
+        // str param used after await → BorrowAcrossAwait
+        let source = "\
+async int do_work():
+    return 1
+
+async void process(str name):
+    await do_work()
+    print(name)
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::BorrowAcrossAwait { name } if name == "name")),
+            "expected BorrowAcrossAwait for name, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn borrow_across_await_local_rejected() {
+        // Local str borrowing from param, used after await → error
+        let source = "\
+str get_slice(str input):
+    return input
+
+async int do_work():
+    return 1
+
+async void process(str data):
+    str s = get_slice(data)
+    await do_work()
+    print(s)
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::BorrowAcrossAwait { .. })),
+            "expected BorrowAcrossAwait for s or data, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn owned_across_await_ok() {
+        // int (Copy) used after await → no error
+        let source = "\
+async int do_work():
+    return 1
+
+async int compute():
+    int x = 42
+    await do_work()
+    return x
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::BorrowAcrossAwait { .. })),
+            "unexpected BorrowAcrossAwait for Copy type: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn static_str_across_await_ok() {
+        // str from literal used after await → no error (Static origin)
+        let source = "\
+async int do_work():
+    return 1
+
+async void greet():
+    str msg = \"hello\"
+    await do_work()
+    print(msg)
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::BorrowAcrossAwait { .. })),
+            "unexpected BorrowAcrossAwait for static str: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn borrow_used_before_await_only_ok() {
+        // str param used before await, not after → no error
+        let source = "\
+async int do_work():
+    return 1
+
+async void process(str name):
+    print(name)
+    await do_work()
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::BorrowAcrossAwait { .. })),
+            "unexpected BorrowAcrossAwait for use-before-await: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn reassigned_after_await_ok() {
+        // str param reassigned after await, then used → no error
+        let source = "\
+async int do_work():
+    return 1
+
+async void process(str name):
+    await do_work()
+    name = \"fresh\"
+    print(name)
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::BorrowAcrossAwait { .. })),
+            "unexpected BorrowAcrossAwait for reassigned-after-await: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn borrow_across_await_in_branch() {
+        // await in one if branch, use after merge → error (conservative)
+        let source = "\
+async int do_work():
+    return 1
+
+async void process(str name, bool cond):
+    if cond:
+        await do_work()
+    print(name)
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::BorrowAcrossAwait { name } if name == "name")),
+            "expected BorrowAcrossAwait for branch-await, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn spawn_is_not_suspension_point() {
+        // str param used after spawn → no error (spawn doesn't suspend)
+        let source = "\
+async int do_work():
+    return 1
+
+async void process(str name):
+    auto task = spawn do_work()
+    print(name)
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::BorrowAcrossAwait { .. })),
+            "unexpected BorrowAcrossAwait for spawn: {:?}", errors
         );
     }
 }
