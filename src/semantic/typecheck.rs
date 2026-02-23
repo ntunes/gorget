@@ -1142,16 +1142,19 @@ impl<'a> TypeChecker<'a> {
                     self.error(SemanticErrorKind::AwaitOutsideAsync, expr.span);
                 }
                 let resolved = self.resolve_type(inner_type);
-                let future_type = if let ResolvedType::Generic(def_id, args) = self.types.get(resolved).clone() {
-                    if self.scopes.get_def(def_id).name == "Future" && args.len() == 1 {
+                let future_or_task_type = if let ResolvedType::Generic(def_id, args) = self.types.get(resolved).clone() {
+                    let name = self.scopes.get_def(def_id).name.clone();
+                    if (name == "Future" || name == "Task") && args.len() == 1 {
                         Some((resolved, args))
                     } else {
                         None
                     }
                 } else {
+                    // Try Future first, then Task
                     self.try_resolve_call_generic_type(inner, "Future", 1)
+                        .or_else(|| self.try_resolve_call_generic_type(inner, "Task", 1))
                 };
-                if let Some((type_id, args)) = future_type {
+                if let Some((type_id, args)) = future_or_task_type {
                     self.expr_types.insert(inner.span, type_id);
                     args[0]
                 } else {

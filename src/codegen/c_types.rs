@@ -95,12 +95,11 @@ pub fn ast_type_to_c(ty: &crate::parser::ast::Type, scopes: &ScopeTable) -> Stri
                         super::c_mangle::mangle_generic("Future", &c_args)
                     }
                     "Task" => {
-                        // Phase 3: Task[T] = Future[T]
                         let c_args: Vec<String> = generic_args
                             .iter()
                             .map(|a| ast_type_to_c(&a.node, scopes))
                             .collect();
-                        super::c_mangle::mangle_generic("Future", &c_args)
+                        super::c_mangle::mangle_generic("Task", &c_args)
                     }
                     _ => {
                         // User-defined generic type → mangled name
@@ -264,12 +263,11 @@ pub fn type_id_to_c(type_id: TypeId, types: &TypeTable, scopes: &ScopeTable) -> 
                     super::c_mangle::mangle_generic("GorgetMap", &c_args)
                 }
                 "Task" => {
-                    // Phase 3: Task[T] = Future[T]
                     let c_args: Vec<String> = args
                         .iter()
                         .map(|tid| type_id_to_c(*tid, types, scopes))
                         .collect();
-                    super::c_mangle::mangle_generic("Future", &c_args)
+                    super::c_mangle::mangle_generic("Task", &c_args)
                 }
                 "Box" if args.len() == 1 => {
                     // Check if the inner type is a trait object (Box[Trait] → TraitObj)

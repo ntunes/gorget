@@ -2666,6 +2666,26 @@ impl CodegenContext<'_> {
                 }
                 "void".to_string()
             }
+            Expr::Spawn { expr: inner } => {
+                let future_type = self.infer_c_type_from_expr(&inner.node);
+                // Future__T → Task__T
+                if let Some(suffix) = future_type.strip_prefix("Future__") {
+                    format!("Task__{suffix}")
+                } else {
+                    future_type.replacen("Future", "Task", 1)
+                }
+            }
+            Expr::Await { expr: inner } => {
+                let inner_type = self.infer_c_type_from_expr(&inner.node);
+                // Future__T → T, Task__T → T
+                if let Some(suffix) = inner_type.strip_prefix("Future__")
+                    .or_else(|| inner_type.strip_prefix("Task__"))
+                {
+                    suffix.to_string()
+                } else {
+                    inner_type
+                }
+            }
             _ => "int64_t".to_string(),
         }
     }

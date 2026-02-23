@@ -669,16 +669,59 @@ impl CodegenContext<'_> {
             }
 
             Expr::Await { expr: await_expr } => {
-                // Inside async poll body: await is handled by emit_async_poll_body, not gen_expr.
-                // Sync fallback: busy-poll (GCC statement expression)
-                let inner = self.gen_expr(await_expr);
-                let future_type = self.infer_c_type_from_expr(&await_expr.node);
-                format!("({{ {future_type} __af = {inner}; while (__af.poll(&__af) != GORGET_POLL_READY) {{}} __af.result; }})")
+                let inner_c_type = self.infer_c_type_from_expr(&await_expr.node);
+                if inner_c_type.starts_with("Task__") {
+                    // Await on Task[T] → blocking condvar wait
+                    let suffix = &inner_c_type["Task__".len()..];
+                    let ctx_name = format!("__SpawnCtx__{suffix}");
+                    let inner = self.gen_expr(await_expr);
+                    if suffix == "void" {
+                        format!(
+                            "({{ GorgetTask* __td = {inner}._task; \
+                            pthread_mutex_lock(&__td->mtx); \
+                            while (!__td->done) pthread_cond_wait(&__td->cond, &__td->mtx); \
+                            pthread_mutex_unlock(&__td->mtx); \
+                            pthread_mutex_destroy(&__td->mtx); \
+                            pthread_cond_destroy(&__td->cond); \
+                            free(__td); (void)0; }})"
+                        )
+                    } else {
+                        format!(
+                            "({{ GorgetTask* __td = {inner}._task; \
+                            pthread_mutex_lock(&__td->mtx); \
+                            while (!__td->done) pthread_cond_wait(&__td->cond, &__td->mtx); \
+                            pthread_mutex_unlock(&__td->mtx); \
+                            {suffix} __r = (({ctx_name}*)__td)->future.result; \
+                            pthread_mutex_destroy(&__td->mtx); \
+                            pthread_cond_destroy(&__td->cond); \
+                            free(__td); __r; }})"
+                        )
+                    }
+                } else {
+                    // Await on Future[T] → busy-poll (existing Phase 3 behavior)
+                    let inner = self.gen_expr(await_expr);
+                    let future_type = inner_c_type;
+                    format!("({{ {future_type} __af = {inner}; while (__af.poll(&__af) != GORGET_POLL_READY) {{}} __af.result; }})")
+                }
             }
 
             Expr::Spawn { expr: spawn_expr } => {
-                // Phase 3: Task[T] = Future[T], spawn is identity
-                self.gen_expr(spawn_expr)
+                let inner = self.gen_expr(spawn_expr);
+                let future_type = self.infer_c_type_from_expr(&spawn_expr.node);
+                let suffix = &future_type["Future__".len()..];
+                let ctx_name = format!("__SpawnCtx__{suffix}");
+                let task_type = format!("Task__{suffix}");
+                format!(
+                    "({{ \
+                    {ctx_name}* __sc = ({ctx_name}*)calloc(1, sizeof({ctx_name})); \
+                    __sc->base.run = {ctx_name}__run; \
+                    pthread_mutex_init(&__sc->base.mtx, NULL); \
+                    pthread_cond_init(&__sc->base.cond, NULL); \
+                    __sc->future = {inner}; \
+                    __gorget_executor_submit((GorgetTask*)__sc); \
+                    ({task_type}){{._task = (GorgetTask*)__sc}}; \
+                    }})"
+                )
             }
         }
     }

@@ -6012,6 +6012,11 @@ fn async_basic() {
     run_gg("async_basic.gg", "14");
 }
 
+#[test]
+fn async_spawn() {
+    run_gg("async_spawn.gg", "25");
+}
+
 // Parser Comparison Test
 // ═══════════════════════════════════════════════════════════════
 

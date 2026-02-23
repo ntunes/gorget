@@ -187,6 +187,14 @@ fn add_crypto_flags(cmd: &mut Command, needs_crypto: bool) {
     }
 }
 
+/// Add pthread linker flags for programs that use `spawn`.
+/// On macOS, pthreads are part of libc — no extra flag needed.
+fn add_thread_flags(_cmd: &mut Command, needs_threads: bool) {
+    if !needs_threads { return; }
+    #[cfg(not(target_os = "macos"))]
+    _cmd.arg("-lpthread");
+}
+
 /// Add PCRE2 linker flags to a cc command (for std.regex).
 fn add_regex_flags(cmd: &mut Command, needs_regex: bool) {
     if !needs_regex { return; }
@@ -384,6 +392,7 @@ fn try_build(
     let needs_tls = codegen_output.needs_tls;
     let needs_crypto = codegen_output.needs_crypto;
     let needs_regex = codegen_output.needs_regex;
+    let needs_threads = codegen_output.needs_threads;
     let c_path = dir.join(format!("{stem}.c"));
     // Canonicalize to an absolute path so Command::new() doesn't search $PATH.
     // For a bare filename like "hello.gg", dir is "." and exe_path would be "hello",
@@ -420,6 +429,7 @@ fn try_build(
         add_tls_flags(&mut cc_cmd, needs_tls);
         add_crypto_flags(&mut cc_cmd, needs_crypto);
         add_regex_flags(&mut cc_cmd, needs_regex);
+        add_thread_flags(&mut cc_cmd, needs_threads);
 
         let status = cc_cmd.status();
         return match status {
@@ -468,6 +478,7 @@ fn try_build(
         add_tls_flags(&mut guest_cmd, needs_tls);
         add_crypto_flags(&mut guest_cmd, needs_crypto);
         add_regex_flags(&mut guest_cmd, needs_regex);
+        add_thread_flags(&mut guest_cmd, needs_threads);
 
         let guest_status = guest_cmd.status();
         match guest_status {
@@ -494,6 +505,7 @@ fn try_build(
         add_tls_flags(&mut host_cmd, needs_tls);
         add_crypto_flags(&mut host_cmd, needs_crypto);
         add_regex_flags(&mut host_cmd, needs_regex);
+        add_thread_flags(&mut host_cmd, needs_threads);
 
         let host_status = host_cmd.status();
         return match host_status {
@@ -531,6 +543,7 @@ fn try_build(
     add_tls_flags(&mut cc_cmd, needs_tls);
     add_crypto_flags(&mut cc_cmd, needs_crypto);
     add_regex_flags(&mut cc_cmd, needs_regex);
+    add_thread_flags(&mut cc_cmd, needs_threads);
 
     let status = cc_cmd.status();
 

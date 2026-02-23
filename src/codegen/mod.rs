@@ -360,6 +360,8 @@ pub struct CodegenContext<'a> {
     pub async_sub_counter: usize,
     /// Unique Future[T] types needed: mangled name → inner C type (e.g. "Future__int64_t" → "int64_t").
     pub future_types: FxHashMap<String, String>,
+    /// Whether the program uses `spawn` (drives executor runtime emission and Task[T] typedefs).
+    pub has_spawn: bool,
     /// Original Gorget source text, used to extract verbatim source lines for trace events.
     pub source_text: String,
     /// The scope of the function currently being emitted, for scope-aware variable lookup.
@@ -462,6 +464,8 @@ pub struct CodegenOutput {
     pub needs_tls: bool,
     pub needs_crypto: bool,
     pub needs_regex: bool,
+    /// Whether the program uses `spawn` (requires pthread linking on non-macOS).
+    pub needs_threads: bool,
     /// Host C source for hot-reload mode (contains main loop + file watcher).
     pub host_code: Option<String>,
     /// Guest C source for hot-reload mode (contains user functions as shared lib).
@@ -603,6 +607,7 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
         async_lifted_vars: None,
         async_sub_counter: 0,
         future_types: FxHashMap::default(),
+        has_spawn: false,
         source_text: opts.source_text,
         current_function_scope: None,
         function_body_scopes: &analysis.function_body_scopes,
@@ -638,6 +643,52 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
     if has_async {
         emitter.emit(c_runtime::ASYNC_RUNTIME);
     }
+
+    // 1b3. Executor runtime (thread pool for spawn)
+    let has_spawn = {
+        use crate::parser::ast::Expr as AstExpr;
+        use crate::parser::visitor::{ExprVisitor, walk_expr};
+        struct SpawnDetector { found: bool }
+        impl ExprVisitor for SpawnDetector {
+            fn visit_expr(&mut self, expr: &crate::span::Spanned<AstExpr>) {
+                if matches!(expr.node, AstExpr::Spawn { .. }) { self.found = true; return; }
+                walk_expr(self, expr);
+            }
+        }
+        let mut det = SpawnDetector { found: false };
+        for item in &module.items {
+            if let Item::Function(f) = &item.node {
+                match &f.body {
+                    FunctionBody::Block(block) => {
+                        for stmt in &block.stmts {
+                            crate::parser::visitor::walk_stmt(&mut det, stmt);
+                        }
+                    }
+                    FunctionBody::Expression(e) => det.visit_expr(e),
+                    _ => {}
+                }
+            }
+            if let Item::Equip(equip) = &item.node {
+                for method in &equip.items {
+                    match &method.node.body {
+                        FunctionBody::Block(block) => {
+                            for stmt in &block.stmts {
+                                crate::parser::visitor::walk_stmt(&mut det, stmt);
+                            }
+                        }
+                        FunctionBody::Expression(e) => det.visit_expr(e),
+                        _ => {}
+                    }
+                }
+            }
+            if det.found { break; }
+        }
+        det.found
+    };
+    if has_spawn {
+        emitter.emit(c_runtime::EXECUTOR_RUNTIME);
+    }
+    ctx.has_spawn = has_spawn;
 
     // 1c. Process runtime (when std.process is imported)
     let has_process = module.items.iter().any(|i| {
@@ -718,6 +769,9 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
 
     // 2a2. Future[T] typedefs (after forward declarations, before tuples)
     ctx.emit_future_typedefs(&mut emitter);
+
+    // 2a3. Task[T] typedefs + SpawnCtx + worker functions (after Future[T])
+    ctx.emit_task_typedefs(&mut emitter);
 
     // 2b. Tuple typedefs (after forward declarations, before type definitions)
     ctx.emit_tuple_typedefs(&mut emitter);
@@ -822,12 +876,12 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
             combined.push_str(&output[..pos]);
             combined.push_str(&splice_buf.finish());
             combined.push_str(&output[pos..]);
-            return CodegenOutput { c_code: combined, needs_sdl: has_sdl, needs_tls: has_tls, needs_crypto: has_crypto, needs_regex: has_regex, host_code: None, guest_code: None };
+            return CodegenOutput { c_code: combined, needs_sdl: has_sdl, needs_tls: has_tls, needs_crypto: has_crypto, needs_regex: has_regex, needs_threads: has_spawn, host_code: None, guest_code: None };
         }
-        return CodegenOutput { c_code: output + &splice_buf.finish(), needs_sdl: has_sdl, needs_tls: has_tls, needs_crypto: has_crypto, needs_regex: has_regex, host_code: None, guest_code: None };
+        return CodegenOutput { c_code: output + &splice_buf.finish(), needs_sdl: has_sdl, needs_tls: has_tls, needs_crypto: has_crypto, needs_regex: has_regex, needs_threads: has_spawn, host_code: None, guest_code: None };
     }
 
-    let mut output = CodegenOutput { c_code: emitter.finish(), needs_sdl: has_sdl, needs_tls: has_tls, needs_crypto: has_crypto, needs_regex: has_regex, host_code: None, guest_code: None };
+    let mut output = CodegenOutput { c_code: emitter.finish(), needs_sdl: has_sdl, needs_tls: has_tls, needs_crypto: has_crypto, needs_regex: has_regex, needs_threads: has_spawn, host_code: None, guest_code: None };
 
     // Hot-reload: generate split host/guest C sources
     if hot_reload {
@@ -1489,7 +1543,7 @@ async void main():
     }
 
     #[test]
-    fn spawn_identity() {
+    fn spawn_executor() {
         let source = "\
 async int fetch():
     return 42
@@ -1497,8 +1551,11 @@ async void main():
     auto x = spawn fetch()
 ";
         let c_code = compile_to_c(source);
-        // spawn should generate a call to the constructor (identity)
-        assert!(c_code.contains("gg_fetch("), "spawn should call the async constructor");
+        // spawn should allocate SpawnCtx and submit to executor
+        assert!(c_code.contains("calloc(1, sizeof(__SpawnCtx__int64_t))"), "spawn should allocate SpawnCtx");
+        assert!(c_code.contains("__gorget_executor_submit"), "spawn should submit to executor");
+        assert!(c_code.contains("Task__int64_t"), "spawn should produce Task type");
+        assert!(c_code.contains("GorgetTask"), "should include executor runtime");
     }
 
     #[test]

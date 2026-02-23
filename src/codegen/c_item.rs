@@ -3154,6 +3154,54 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         }
     }
 
+    /// Emit Task[T] typedefs, SpawnCtx structs, and worker functions for each Future[T].
+    /// Only emitted when `has_spawn` is true.
+    pub fn emit_task_typedefs(&self, emitter: &mut CEmitter) {
+        if !self.has_spawn || self.future_types.is_empty() {
+            return;
+        }
+        emitter.emit_line("// ── Task Types (Spawn Infrastructure) ──");
+        for (future_mangled, inner_c_type) in &self.future_types {
+            // future_mangled is e.g. "Future__int64_t", suffix is "int64_t"
+            let suffix = &future_mangled["Future__".len()..];
+            let ctx_name = format!("__SpawnCtx__{suffix}");
+            let task_name = format!("Task__{suffix}");
+
+            // SpawnCtx: GorgetTask base + embedded Future
+            emitter.emit_line(&format!("typedef struct {ctx_name} {{"));
+            emitter.indent();
+            emitter.emit_line("GorgetTask base;");
+            emitter.emit_line(&format!("{future_mangled} future;"));
+            emitter.dedent();
+            emitter.emit_line(&format!("}} {ctx_name};"));
+            emitter.blank_line();
+
+            // Worker function: polls future to completion, signals done
+            emitter.emit_line(&format!("static void {ctx_name}__run(GorgetTask* __base) {{"));
+            emitter.indent();
+            emitter.emit_line(&format!("{ctx_name}* __ctx = ({ctx_name}*)__base;"));
+            emitter.emit_line("while (__ctx->future.poll(&__ctx->future) != GORGET_POLL_READY) {}");
+            emitter.emit_line("pthread_mutex_lock(&__base->mtx);");
+            emitter.emit_line("__base->done = 1;");
+            emitter.emit_line("pthread_cond_broadcast(&__base->cond);");
+            emitter.emit_line("pthread_mutex_unlock(&__base->mtx);");
+            emitter.dedent();
+            emitter.emit_line("}");
+            emitter.blank_line();
+
+            // Task handle typedef
+            emitter.emit_line(&format!("typedef struct {{"));
+            emitter.indent();
+            emitter.emit_line("GorgetTask* _task;");
+            if inner_c_type != "void" {
+                // Not stored here — result lives in SpawnCtx.future.result
+            }
+            emitter.dedent();
+            emitter.emit_line(&format!("}} {task_name};"));
+            emitter.blank_line();
+        }
+    }
+
     /// Top-level async function handler: analyze → emit state struct → poll → constructor.
     fn emit_async_function(
         &mut self,
@@ -3206,6 +3254,9 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
             emitter.emit_line(&format!("{future_type} __f = gg__async_main();"));
             emitter.emit_line("while (__f.poll(&__f) != GORGET_POLL_READY) {}");
             emitter.emit_line("if (__f.state) free(__f.state);");
+            if self.has_spawn {
+                emitter.emit_line("__gorget_executor_shutdown();");
+            }
             emitter.emit_line("return 0;");
             emitter.dedent();
             emitter.emit_line("}");
@@ -3245,22 +3296,22 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                             };
                             locals.push((name.clone(), c_type));
                         }
-                        // Check for await in value
-                        if Self::expr_contains_await(&value.node) {
+                        // Check for Future-await in value (Task-await is blocking, not a suspension)
+                        if Self::expr_contains_await(&value.node) && !Self::is_task_await_static(&value.node) {
                             let sub_future_type = self.infer_await_future_type(&value.node, f);
                             sub_futures.push((await_count, sub_future_type));
                             await_count += 1;
                         }
                     }
                     Stmt::Return(Some(expr)) => {
-                        if Self::expr_contains_await(&expr.node) {
+                        if Self::expr_contains_await(&expr.node) && !Self::is_task_await_static(&expr.node) {
                             let sub_future_type = self.infer_await_future_type(&expr.node, f);
                             sub_futures.push((await_count, sub_future_type));
                             await_count += 1;
                         }
                     }
                     Stmt::Expr(expr) => {
-                        if Self::expr_contains_await(&expr.node) {
+                        if Self::expr_contains_await(&expr.node) && !Self::is_task_await_static(&expr.node) {
                             let sub_future_type = self.infer_await_future_type(&expr.node, f);
                             sub_futures.push((await_count, sub_future_type));
                             await_count += 1;
@@ -3287,6 +3338,19 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         }
     }
 
+    /// Check if an Await expression is awaiting a Task (not a Future).
+    /// Task-await inner expressions are Identifiers (variables) or Spawn expressions,
+    /// NOT Call expressions (which produce Futures from async functions).
+    fn is_task_await_static(expr: &Expr) -> bool {
+        if let Expr::Await { expr: inner } = expr {
+            // If the inner expression is a Call to an async function, it's a Future-await.
+            // If it's an Identifier (a Task variable), Spawn, etc., it's a Task-await.
+            !matches!(inner.node, Expr::Call { .. })
+        } else {
+            false
+        }
+    }
+
     /// Check if an expression contains an Await node.
     fn expr_contains_await(expr: &Expr) -> bool {
         match expr {
@@ -3296,6 +3360,17 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                     || args.iter().any(|a| Self::expr_contains_await(&a.node.value.node))
             }
             _ => false,
+        }
+    }
+
+    /// Check if an expression is `await <task>` where the inner expression is a Task[T],
+    /// not a Future[T]. Task-await is blocking (condvar wait), NOT a suspension point.
+    fn is_task_await(&mut self, expr: &Expr) -> bool {
+        if let Expr::Await { expr: inner } = expr {
+            let c_type = self.infer_c_type_from_expr(&inner.node);
+            c_type.starts_with("Task__")
+        } else {
+            false
         }
     }
 
@@ -3530,8 +3605,8 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         for stmt in &block.stmts {
             match &stmt.node {
                 Stmt::VarDecl { pattern, type_: _, value, is_const: _, .. } => {
-                    if Self::expr_contains_await(&value.node) {
-                        // VarDecl with await RHS: emit sub-future → state transition → poll check
+                    if Self::expr_contains_await(&value.node) && !self.is_task_await(&value.node) {
+                        // VarDecl with Future-await RHS: emit sub-future → state transition → poll check
                         if let Expr::Await { expr: await_inner } = &value.node {
                             let inner_expr = self.gen_expr(await_inner);
                             let sub_field = format!("__sub{sub_idx}");
@@ -3557,7 +3632,8 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                             sub_idx += 1;
                         }
                     } else {
-                        // VarDecl without await: assign to state struct field
+                        // VarDecl without await (or with Task-await which is blocking, not a suspension):
+                        // assign to state struct field via gen_expr
                         if let Pattern::Binding(name) = &pattern.node {
                             let escaped = c_mangle::escape_keyword(name);
                             let val = self.gen_expr(value);
@@ -3566,8 +3642,8 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                     }
                 }
                 Stmt::Return(Some(expr)) => {
-                    if Self::expr_contains_await(&expr.node) {
-                        // Return with await
+                    if Self::expr_contains_await(&expr.node) && !self.is_task_await(&expr.node) {
+                        // Return with Future-await
                         if let Expr::Await { expr: await_inner } = &expr.node {
                             let inner_expr = self.gen_expr(await_inner);
                             let sub_field = format!("__sub{sub_idx}");
@@ -3603,8 +3679,8 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                     emitter.emit_line("return GORGET_POLL_READY;");
                 }
                 Stmt::Expr(expr) => {
-                    if Self::expr_contains_await(&expr.node) {
-                        // Expression-statement with await (discard result)
+                    if Self::expr_contains_await(&expr.node) && !self.is_task_await(&expr.node) {
+                        // Expression-statement with Future-await (discard result)
                         if let Expr::Await { expr: await_inner } = &expr.node {
                             let inner_expr = self.gen_expr(await_inner);
                             let sub_field = format!("__sub{sub_idx}");

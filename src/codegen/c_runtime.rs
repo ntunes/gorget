@@ -484,6 +484,93 @@ pub const ASYNC_RUNTIME: &str = r#"
 #define GORGET_POLL_PENDING 1
 "#;
 
+/// Thread-pool executor runtime for `spawn` (pthread-based).
+pub const EXECUTOR_RUNTIME: &str = r#"
+// ── Thread-Pool Executor ──
+#include <pthread.h>
+
+typedef struct GorgetTask {
+    void (*run)(struct GorgetTask*);
+    pthread_mutex_t mtx;
+    pthread_cond_t cond;
+    volatile int done;
+} GorgetTask;
+
+typedef struct {
+    pthread_t* threads;
+    int thread_count;
+    GorgetTask** queue;
+    int queue_len, queue_cap;
+    pthread_mutex_t mtx;
+    pthread_cond_t cond;
+    volatile int shutdown;
+} GorgetExecutor;
+
+static GorgetExecutor __gorget_exec;
+static int __gorget_exec_init_done = 0;
+
+static void* __gorget_worker(void* arg) {
+    (void)arg;
+    for (;;) {
+        pthread_mutex_lock(&__gorget_exec.mtx);
+        while (__gorget_exec.queue_len == 0 && !__gorget_exec.shutdown)
+            pthread_cond_wait(&__gorget_exec.cond, &__gorget_exec.mtx);
+        if (__gorget_exec.shutdown && __gorget_exec.queue_len == 0) {
+            pthread_mutex_unlock(&__gorget_exec.mtx);
+            return NULL;
+        }
+        GorgetTask* task = __gorget_exec.queue[0];
+        memmove(__gorget_exec.queue, __gorget_exec.queue + 1,
+                (size_t)(--__gorget_exec.queue_len) * sizeof(GorgetTask*));
+        pthread_mutex_unlock(&__gorget_exec.mtx);
+        task->run(task);
+    }
+}
+
+static void __gorget_executor_init(void) {
+    if (__gorget_exec_init_done) return;
+    __gorget_exec_init_done = 1;
+    long n = sysconf(_SC_NPROCESSORS_ONLN);
+    if (n < 1) n = 4;
+    __gorget_exec.thread_count = (int)n;
+    __gorget_exec.threads = (pthread_t*)malloc((size_t)n * sizeof(pthread_t));
+    __gorget_exec.queue_cap = 64;
+    __gorget_exec.queue = (GorgetTask**)malloc(64 * sizeof(GorgetTask*));
+    pthread_mutex_init(&__gorget_exec.mtx, NULL);
+    pthread_cond_init(&__gorget_exec.cond, NULL);
+    for (int i = 0; i < (int)n; i++)
+        pthread_create(&__gorget_exec.threads[i], NULL, __gorget_worker, NULL);
+}
+
+static void __gorget_executor_submit(GorgetTask* task) {
+    __gorget_executor_init();
+    pthread_mutex_lock(&__gorget_exec.mtx);
+    if (__gorget_exec.queue_len == __gorget_exec.queue_cap) {
+        __gorget_exec.queue_cap *= 2;
+        __gorget_exec.queue = (GorgetTask**)realloc(__gorget_exec.queue,
+            (size_t)__gorget_exec.queue_cap * sizeof(GorgetTask*));
+    }
+    __gorget_exec.queue[__gorget_exec.queue_len++] = task;
+    pthread_cond_signal(&__gorget_exec.cond);
+    pthread_mutex_unlock(&__gorget_exec.mtx);
+}
+
+static void __gorget_executor_shutdown(void) {
+    if (!__gorget_exec_init_done) return;
+    pthread_mutex_lock(&__gorget_exec.mtx);
+    __gorget_exec.shutdown = 1;
+    pthread_cond_broadcast(&__gorget_exec.cond);
+    pthread_mutex_unlock(&__gorget_exec.mtx);
+    for (int i = 0; i < __gorget_exec.thread_count; i++)
+        pthread_join(__gorget_exec.threads[i], NULL);
+    free(__gorget_exec.threads);
+    free(__gorget_exec.queue);
+    pthread_mutex_destroy(&__gorget_exec.mtx);
+    pthread_cond_destroy(&__gorget_exec.cond);
+    __gorget_exec_init_done = 0;
+}
+"#;
+
 /// Everything after the panic helper — checked arithmetic, collections, etc.
 pub const RUNTIME_CORE: &str = r#"
 // ── Checked Arithmetic ──────────────────────────────────────
