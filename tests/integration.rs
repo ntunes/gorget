@@ -6022,6 +6022,11 @@ fn async_channel() {
     run_gg("async_channel.gg", "21");
 }
 
+#[test]
+fn async_control_flow() {
+    run_gg("async_control_flow.gg", "20\n6\n14\n12");
+}
+
 // Parser Comparison Test
 // ═══════════════════════════════════════════════════════════════
 

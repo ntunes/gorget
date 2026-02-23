@@ -1,6 +1,7 @@
 /// Top-level item codegen: functions, structs, enums, impl blocks, const/static.
 use std::collections::{HashMap, HashSet, VecDeque};
 use crate::parser::ast::*;
+use crate::span::Spanned;
 use super::c_emitter::CEmitter;
 use super::c_mangle;
 use super::c_types;
@@ -3285,44 +3286,9 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         let mut await_count = 0;
         let mut sub_futures: Vec<(usize, String)> = Vec::new();
 
-        // Walk the body to collect locals and count awaits
+        // Walk the body recursively to collect locals and count awaits
         if let FunctionBody::Block(block) = &f.body {
-            for stmt in &block.stmts {
-                match &stmt.node {
-                    Stmt::VarDecl { pattern, type_, value, .. } => {
-                        if let Pattern::Binding(name) = &pattern.node {
-                            let c_type = if matches!(type_.node, Type::Inferred) {
-                                // For auto-typed variables, infer from the value expression
-                                self.infer_async_var_type(&value.node, &params, &locals, f)
-                            } else {
-                                c_types::ast_type_to_c(&type_.node, self.scopes)
-                            };
-                            locals.push((name.clone(), c_type));
-                        }
-                        // Check for Future-await in value (Task-await is blocking, not a suspension)
-                        if Self::expr_contains_await(&value.node) && !Self::is_task_await_static(&value.node) {
-                            let sub_future_type = self.infer_await_future_type(&value.node, f);
-                            sub_futures.push((await_count, sub_future_type));
-                            await_count += 1;
-                        }
-                    }
-                    Stmt::Return(Some(expr)) => {
-                        if Self::expr_contains_await(&expr.node) && !Self::is_task_await_static(&expr.node) {
-                            let sub_future_type = self.infer_await_future_type(&expr.node, f);
-                            sub_futures.push((await_count, sub_future_type));
-                            await_count += 1;
-                        }
-                    }
-                    Stmt::Expr(expr) => {
-                        if Self::expr_contains_await(&expr.node) && !Self::is_task_await_static(&expr.node) {
-                            let sub_future_type = self.infer_await_future_type(&expr.node, f);
-                            sub_futures.push((await_count, sub_future_type));
-                            await_count += 1;
-                        }
-                    }
-                    _ => {}
-                }
-            }
+            self.analyze_async_block(block, &params, &mut locals, &mut await_count, &mut sub_futures, f);
         } else if let FunctionBody::Expression(expr) = &f.body {
             if Self::expr_contains_await(&expr.node) {
                 let sub_future_type = self.infer_await_future_type(&expr.node, f);
@@ -3341,6 +3307,101 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         }
     }
 
+    /// Recursively analyze a block in an async function, collecting locals and await points.
+    fn analyze_async_block(
+        &self,
+        block: &Block,
+        params: &[(String, String)],
+        locals: &mut Vec<(String, String)>,
+        await_count: &mut usize,
+        sub_futures: &mut Vec<(usize, String)>,
+        context_fn: &FunctionDef,
+    ) {
+        for stmt in &block.stmts {
+            self.analyze_async_stmt(&stmt.node, params, locals, await_count, sub_futures, context_fn);
+        }
+    }
+
+    /// Analyze a single statement in an async function, recursing into control flow bodies.
+    fn analyze_async_stmt(
+        &self,
+        stmt: &Stmt,
+        params: &[(String, String)],
+        locals: &mut Vec<(String, String)>,
+        await_count: &mut usize,
+        sub_futures: &mut Vec<(usize, String)>,
+        context_fn: &FunctionDef,
+    ) {
+        match stmt {
+            Stmt::VarDecl { pattern, type_, value, .. } => {
+                if let Pattern::Binding(name) = &pattern.node {
+                    // Deduplicate: don't add if already collected (e.g., same name in multiple branches)
+                    if !locals.iter().any(|(n, _)| n == name) {
+                        let c_type = if matches!(type_.node, Type::Inferred) {
+                            self.infer_async_var_type(&value.node, params, locals, context_fn)
+                        } else {
+                            c_types::ast_type_to_c(&type_.node, self.scopes)
+                        };
+                        locals.push((name.clone(), c_type));
+                    }
+                }
+                if Self::expr_contains_await(&value.node) && !Self::is_task_await_static(&value.node) {
+                    let sub_future_type = self.infer_await_future_type(&value.node, context_fn);
+                    sub_futures.push((*await_count, sub_future_type));
+                    *await_count += 1;
+                }
+            }
+            Stmt::Assign { value, .. } => {
+                if Self::expr_contains_await(&value.node) && !Self::is_task_await_static(&value.node) {
+                    let sub_future_type = self.infer_await_future_type(&value.node, context_fn);
+                    sub_futures.push((*await_count, sub_future_type));
+                    *await_count += 1;
+                }
+            }
+            Stmt::Return(Some(expr)) | Stmt::Expr(expr) => {
+                if Self::expr_contains_await(&expr.node) && !Self::is_task_await_static(&expr.node) {
+                    let sub_future_type = self.infer_await_future_type(&expr.node, context_fn);
+                    sub_futures.push((*await_count, sub_future_type));
+                    *await_count += 1;
+                }
+            }
+            // Only recurse into control flow bodies that contain await.
+            // Variables in non-await bodies stay as normal C locals (not state struct fields).
+            Stmt::If { then_body, elif_branches, else_body, .. } => {
+                if Self::block_contains_await(then_body) {
+                    self.analyze_async_block(then_body, params, locals, await_count, sub_futures, context_fn);
+                }
+                for (_, elif_body) in elif_branches {
+                    if Self::block_contains_await(elif_body) {
+                        self.analyze_async_block(elif_body, params, locals, await_count, sub_futures, context_fn);
+                    }
+                }
+                if let Some(else_b) = else_body {
+                    if Self::block_contains_await(else_b) {
+                        self.analyze_async_block(else_b, params, locals, await_count, sub_futures, context_fn);
+                    }
+                }
+            }
+            Stmt::While { body, .. } | Stmt::Loop { body } => {
+                if Self::block_contains_await(body) {
+                    self.analyze_async_block(body, params, locals, await_count, sub_futures, context_fn);
+                }
+            }
+            Stmt::For { pattern, body, .. } => {
+                if Self::block_contains_await(body) {
+                    // Collect loop variable as a local (deduplicate by name)
+                    if let Pattern::Binding(name) = &pattern.node {
+                        if !locals.iter().any(|(n, _)| n == name) {
+                            locals.push((name.clone(), "int64_t".to_string()));
+                        }
+                    }
+                    self.analyze_async_block(body, params, locals, await_count, sub_futures, context_fn);
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Check if an Await expression is awaiting a Task (not a Future).
     /// Task-await inner expressions are Identifiers (variables) or Spawn expressions,
     /// NOT Call expressions (which produce Futures from async functions).
@@ -3351,6 +3412,28 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
             !matches!(inner.node, Expr::Call { .. })
         } else {
             false
+        }
+    }
+
+    /// Check if a block contains any Await expression (recursive into control flow).
+    fn block_contains_await(block: &Block) -> bool {
+        block.stmts.iter().any(|s| Self::stmt_contains_await(&s.node))
+    }
+
+    /// Check if a statement (or its sub-blocks) contains any Await expression.
+    fn stmt_contains_await(stmt: &Stmt) -> bool {
+        match stmt {
+            Stmt::VarDecl { value, .. } => Self::expr_contains_await(&value.node),
+            Stmt::Assign { value, .. } => Self::expr_contains_await(&value.node),
+            Stmt::CompoundAssign { value, .. } => Self::expr_contains_await(&value.node),
+            Stmt::Expr(e) | Stmt::Return(Some(e)) => Self::expr_contains_await(&e.node),
+            Stmt::If { then_body, elif_branches, else_body, .. } =>
+                Self::block_contains_await(then_body)
+                || elif_branches.iter().any(|(_, b)| Self::block_contains_await(b))
+                || else_body.as_ref().map_or(false, Self::block_contains_await),
+            Stmt::While { body, .. } | Stmt::Loop { body } => Self::block_contains_await(body),
+            Stmt::For { body, .. } => Self::block_contains_await(body),
+            _ => false,
         }
     }
 
@@ -3597,120 +3680,15 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         _analysis: &AsyncAnalysis,
         emitter: &mut CEmitter,
     ) {
-        let mut state_idx = 0;
-        let mut sub_idx = 0;
+        let mut state_idx: usize = 0;
+        let mut sub_idx: usize = 0;
 
         // Start case 0
         emitter.indent();
         emitter.emit_line(&format!("case {state_idx}:"));
         emitter.indent();
 
-        for stmt in &block.stmts {
-            match &stmt.node {
-                Stmt::VarDecl { pattern, type_: _, value, is_const: _, .. } => {
-                    if Self::expr_contains_await(&value.node) && !self.is_task_await(&value.node) {
-                        // VarDecl with Future-await RHS: emit sub-future → state transition → poll check
-                        if let Expr::Await { expr: await_inner } = &value.node {
-                            let inner_expr = self.gen_expr(await_inner);
-                            let sub_field = format!("__sub{sub_idx}");
-                            emitter.emit_line(&format!("__self->{sub_field} = {inner_expr};"));
-                            state_idx += 1;
-                            emitter.emit_line(&format!("__self->__state = {state_idx};"));
-                            emitter.dedent();
-
-                            // Next case: poll the sub-future
-                            emitter.emit_line(&format!("case {state_idx}:"));
-                            emitter.indent();
-                            emitter.emit_line(&format!(
-                                "if (__self->{sub_field}.poll(&__self->{sub_field}) != GORGET_POLL_READY) return GORGET_POLL_PENDING;"
-                            ));
-
-                            // Extract result into the variable
-                            if let Pattern::Binding(name) = &pattern.node {
-                                let escaped = c_mangle::escape_keyword(name);
-                                emitter.emit_line(&format!(
-                                    "__self->{escaped} = __self->{sub_field}.result;"
-                                ));
-                            }
-                            sub_idx += 1;
-                        }
-                    } else {
-                        // VarDecl without await (or with Task-await which is blocking, not a suspension):
-                        // assign to state struct field via gen_expr
-                        if let Pattern::Binding(name) = &pattern.node {
-                            let escaped = c_mangle::escape_keyword(name);
-                            let val = self.gen_expr(value);
-                            emitter.emit_line(&format!("__self->{escaped} = {val};"));
-                        }
-                    }
-                }
-                Stmt::Return(Some(expr)) => {
-                    if Self::expr_contains_await(&expr.node) && !self.is_task_await(&expr.node) {
-                        // Return with Future-await
-                        if let Expr::Await { expr: await_inner } = &expr.node {
-                            let inner_expr = self.gen_expr(await_inner);
-                            let sub_field = format!("__sub{sub_idx}");
-                            emitter.emit_line(&format!("__self->{sub_field} = {inner_expr};"));
-                            state_idx += 1;
-                            emitter.emit_line(&format!("__self->__state = {state_idx};"));
-                            emitter.dedent();
-
-                            emitter.emit_line(&format!("case {state_idx}:"));
-                            emitter.indent();
-                            emitter.emit_line(&format!(
-                                "if (__self->{sub_field}.poll(&__self->{sub_field}) != GORGET_POLL_READY) return GORGET_POLL_PENDING;"
-                            ));
-                            if inner_c_type != "void" {
-                                emitter.emit_line(&format!(
-                                    "__future->result = __self->{sub_field}.result;"
-                                ));
-                            }
-                            sub_idx += 1;
-                        }
-                    } else {
-                        // Return without await
-                        let e = self.gen_expr(expr);
-                        if inner_c_type != "void" {
-                            emitter.emit_line(&format!("__future->result = {e};"));
-                        }
-                    }
-                    emitter.emit_line("free(__self); __future->state = NULL;");
-                    emitter.emit_line("return GORGET_POLL_READY;");
-                }
-                Stmt::Return(None) => {
-                    emitter.emit_line("free(__self); __future->state = NULL;");
-                    emitter.emit_line("return GORGET_POLL_READY;");
-                }
-                Stmt::Expr(expr) => {
-                    if Self::expr_contains_await(&expr.node) && !self.is_task_await(&expr.node) {
-                        // Expression-statement with Future-await (discard result)
-                        if let Expr::Await { expr: await_inner } = &expr.node {
-                            let inner_expr = self.gen_expr(await_inner);
-                            let sub_field = format!("__sub{sub_idx}");
-                            emitter.emit_line(&format!("__self->{sub_field} = {inner_expr};"));
-                            state_idx += 1;
-                            emitter.emit_line(&format!("__self->__state = {state_idx};"));
-                            emitter.dedent();
-
-                            emitter.emit_line(&format!("case {state_idx}:"));
-                            emitter.indent();
-                            emitter.emit_line(&format!(
-                                "if (__self->{sub_field}.poll(&__self->{sub_field}) != GORGET_POLL_READY) return GORGET_POLL_PENDING;"
-                            ));
-                            sub_idx += 1;
-                        }
-                    } else {
-                        // Regular expression statement — delegate to gen_expr
-                        let e = self.gen_expr(expr);
-                        emitter.emit_line(&format!("{e};"));
-                    }
-                }
-                _ => {
-                    // Other statements: delegate to gen_stmt
-                    self.gen_stmt(&stmt.node, stmt.span, emitter);
-                }
-            }
-        }
+        self.emit_async_stmts(&block.stmts, inner_c_type, &mut state_idx, &mut sub_idx, emitter);
 
         // Implicit return for void functions
         if inner_c_type == "void" {
@@ -3720,6 +3698,214 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
 
         emitter.dedent();
         emitter.dedent();
+    }
+
+    /// Emit a list of statements in async poll body context, handling await suspension points.
+    fn emit_async_stmts(
+        &mut self,
+        stmts: &[Spanned<Stmt>],
+        inner_c_type: &str,
+        state_idx: &mut usize,
+        sub_idx: &mut usize,
+        emitter: &mut CEmitter,
+    ) {
+        for stmt in stmts {
+            self.emit_async_stmt(&stmt.node, stmt.span, inner_c_type, state_idx, sub_idx, emitter);
+        }
+    }
+
+    /// Emit a single statement in async poll body context.
+    /// For statements with await, emits Duff's device case labels.
+    /// For control flow with await in bodies, recurses into bodies.
+    fn emit_async_stmt(
+        &mut self,
+        stmt: &Stmt,
+        span: crate::span::Span,
+        inner_c_type: &str,
+        state_idx: &mut usize,
+        sub_idx: &mut usize,
+        emitter: &mut CEmitter,
+    ) {
+        match stmt {
+            Stmt::VarDecl { pattern, type_: _, value, is_const: _, .. } => {
+                if Self::expr_contains_await(&value.node) && !self.is_task_await(&value.node) {
+                    // VarDecl with Future-await RHS: sub-future → state transition → poll
+                    if let Expr::Await { expr: await_inner } = &value.node {
+                        let inner_expr = self.gen_expr(await_inner);
+                        let sub_field = format!("__sub{}", *sub_idx);
+                        emitter.emit_line(&format!("__self->{sub_field} = {inner_expr};"));
+                        *state_idx += 1;
+                        emitter.emit_line(&format!("__self->__state = {};", *state_idx));
+                        emitter.dedent();
+
+                        emitter.emit_line(&format!("case {}:", *state_idx));
+                        emitter.indent();
+                        emitter.emit_line(&format!(
+                            "if (__self->{sub_field}.poll(&__self->{sub_field}) != GORGET_POLL_READY) return GORGET_POLL_PENDING;"
+                        ));
+
+                        if let Pattern::Binding(name) = &pattern.node {
+                            let escaped = c_mangle::escape_keyword(name);
+                            emitter.emit_line(&format!(
+                                "__self->{escaped} = __self->{sub_field}.result;"
+                            ));
+                        }
+                        *sub_idx += 1;
+                    }
+                } else {
+                    // VarDecl without await (or Task-await which is blocking)
+                    if let Pattern::Binding(name) = &pattern.node {
+                        let escaped = c_mangle::escape_keyword(name);
+                        let val = self.gen_expr(value);
+                        emitter.emit_line(&format!("__self->{escaped} = {val};"));
+                    }
+                }
+            }
+
+            Stmt::Assign { target, value } if Self::expr_contains_await(&value.node) && !self.is_task_await(&value.node) => {
+                // Assign with Future-await RHS
+                if let Expr::Await { expr: await_inner } = &value.node {
+                    let inner_expr = self.gen_expr(await_inner);
+                    let sub_field = format!("__sub{}", *sub_idx);
+                    emitter.emit_line(&format!("__self->{sub_field} = {inner_expr};"));
+                    *state_idx += 1;
+                    emitter.emit_line(&format!("__self->__state = {};", *state_idx));
+                    emitter.dedent();
+
+                    emitter.emit_line(&format!("case {}:", *state_idx));
+                    emitter.indent();
+                    emitter.emit_line(&format!(
+                        "if (__self->{sub_field}.poll(&__self->{sub_field}) != GORGET_POLL_READY) return GORGET_POLL_PENDING;"
+                    ));
+
+                    // Assign result to the target (which is a state struct field)
+                    let target_c = self.gen_expr(target);
+                    emitter.emit_line(&format!(
+                        "{target_c} = __self->{sub_field}.result;"
+                    ));
+                    *sub_idx += 1;
+                }
+            }
+
+            Stmt::Return(Some(expr)) => {
+                if Self::expr_contains_await(&expr.node) && !self.is_task_await(&expr.node) {
+                    if let Expr::Await { expr: await_inner } = &expr.node {
+                        let inner_expr = self.gen_expr(await_inner);
+                        let sub_field = format!("__sub{}", *sub_idx);
+                        emitter.emit_line(&format!("__self->{sub_field} = {inner_expr};"));
+                        *state_idx += 1;
+                        emitter.emit_line(&format!("__self->__state = {};", *state_idx));
+                        emitter.dedent();
+
+                        emitter.emit_line(&format!("case {}:", *state_idx));
+                        emitter.indent();
+                        emitter.emit_line(&format!(
+                            "if (__self->{sub_field}.poll(&__self->{sub_field}) != GORGET_POLL_READY) return GORGET_POLL_PENDING;"
+                        ));
+                        if inner_c_type != "void" {
+                            emitter.emit_line(&format!(
+                                "__future->result = __self->{sub_field}.result;"
+                            ));
+                        }
+                        *sub_idx += 1;
+                    }
+                } else {
+                    let e = self.gen_expr(expr);
+                    if inner_c_type != "void" {
+                        emitter.emit_line(&format!("__future->result = {e};"));
+                    }
+                }
+                emitter.emit_line("free(__self); __future->state = NULL;");
+                emitter.emit_line("return GORGET_POLL_READY;");
+            }
+
+            Stmt::Return(None) => {
+                emitter.emit_line("free(__self); __future->state = NULL;");
+                emitter.emit_line("return GORGET_POLL_READY;");
+            }
+
+            Stmt::Expr(expr) => {
+                if Self::expr_contains_await(&expr.node) && !self.is_task_await(&expr.node) {
+                    if let Expr::Await { expr: await_inner } = &expr.node {
+                        let inner_expr = self.gen_expr(await_inner);
+                        let sub_field = format!("__sub{}", *sub_idx);
+                        emitter.emit_line(&format!("__self->{sub_field} = {inner_expr};"));
+                        *state_idx += 1;
+                        emitter.emit_line(&format!("__self->__state = {};", *state_idx));
+                        emitter.dedent();
+
+                        emitter.emit_line(&format!("case {}:", *state_idx));
+                        emitter.indent();
+                        emitter.emit_line(&format!(
+                            "if (__self->{sub_field}.poll(&__self->{sub_field}) != GORGET_POLL_READY) return GORGET_POLL_PENDING;"
+                        ));
+                        *sub_idx += 1;
+                    }
+                } else {
+                    let e = self.gen_expr(expr);
+                    emitter.emit_line(&format!("{e};"));
+                }
+            }
+
+            // While with await in body — Duff's device: case labels inside while body
+            Stmt::While { condition, body, .. } if Self::block_contains_await(body) => {
+                let cond = self.gen_expr(condition);
+                emitter.emit_line(&format!("while ({cond}) {{"));
+                emitter.indent();
+                self.emit_async_stmts(&body.stmts, inner_c_type, state_idx, sub_idx, emitter);
+                emitter.dedent();
+                emitter.emit_line("}");
+            }
+
+            // Loop with await in body — Duff's device: case labels inside while(1) body
+            Stmt::Loop { body } if Self::block_contains_await(body) => {
+                emitter.emit_line("while (1) {");
+                emitter.indent();
+                self.emit_async_stmts(&body.stmts, inner_c_type, state_idx, sub_idx, emitter);
+                emitter.dedent();
+                emitter.emit_line("}");
+            }
+
+            // If/elif/else with await in any branch — Duff's device
+            Stmt::If { condition, then_body, elif_branches, else_body }
+                if Self::block_contains_await(then_body)
+                || elif_branches.iter().any(|(_, b)| Self::block_contains_await(b))
+                || else_body.as_ref().map_or(false, Self::block_contains_await) =>
+            {
+                let cond = self.gen_expr(condition);
+                emitter.emit_line(&format!("if ({cond}) {{"));
+                emitter.indent();
+                self.emit_async_stmts(&then_body.stmts, inner_c_type, state_idx, sub_idx, emitter);
+                emitter.dedent();
+                for (elif_cond, elif_body) in elif_branches {
+                    let c = self.gen_expr(elif_cond);
+                    emitter.emit_line(&format!("}} else if ({c}) {{"));
+                    emitter.indent();
+                    self.emit_async_stmts(&elif_body.stmts, inner_c_type, state_idx, sub_idx, emitter);
+                    emitter.dedent();
+                }
+                if let Some(else_b) = else_body {
+                    emitter.emit_line("} else {");
+                    emitter.indent();
+                    self.emit_async_stmts(&else_b.stmts, inner_c_type, state_idx, sub_idx, emitter);
+                    emitter.dedent();
+                }
+                emitter.emit_line("}");
+            }
+
+            // Break/Continue pass through directly
+            Stmt::Break(_) => {
+                emitter.emit_line("break;");
+            }
+            Stmt::Continue => {
+                emitter.emit_line("continue;");
+            }
+
+            _ => {
+                // Other statements: delegate to gen_stmt
+                self.gen_stmt(stmt, span, emitter);
+            }
+        }
     }
 
     /// Emit the constructor function for an async function.
