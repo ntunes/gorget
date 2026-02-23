@@ -1,0 +1,18 @@
+async bool check(int i):
+    return i < 5
+
+async int get_value(int x):
+    return x * 2
+
+async void main():
+    int i = 0
+    int total = 0
+    while check(i).await():
+        int v = get_value(i).await()
+        total = total + v
+        i = i + 1
+    print(total)
+    if get_value(3).await() > 5:
+        print("yes")
+    else:
+        print("no")

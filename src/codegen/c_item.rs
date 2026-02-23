@@ -105,6 +105,10 @@ fn collect_awaits_from_spanned<'a>(expr: &'a Spanned<Expr>, out: &mut Vec<Collec
             collect_awaits_from_spanned(lhs, out);
             collect_awaits_from_spanned(rhs, out);
         }
+        Expr::Range { start, end, .. } => {
+            if let Some(s) = start { collect_awaits_from_spanned(s, out); }
+            if let Some(e) = end { collect_awaits_from_spanned(e, out); }
+        }
         _ => {}
     }
 }
@@ -3546,6 +3550,30 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         }
     }
 
+    /// Analyze an expression for awaits and allocate sub-future fields + temp locals.
+    /// Used for conditions, iterables, and other expression-position awaits in control flow.
+    fn analyze_expr_awaits(
+        &self,
+        expr: &Spanned<Expr>,
+        locals: &mut Vec<(String, String, Option<Type>)>,
+        await_count: &mut usize,
+        sub_futures: &mut Vec<(usize, String)>,
+        context_fn: &FunctionDef,
+    ) {
+        let collected = collect_awaits_vec(expr);
+        for ca in &collected {
+            let sub_future_type = self.infer_await_future_type(&ca.inner_expr.node, context_fn);
+            sub_futures.push((*await_count, sub_future_type));
+            // Always allocate temps for expression-position awaits (result is used in expression context)
+            let result_c_type = self.infer_await_result_c_type(&ca.inner_expr.node, context_fn);
+            let tmp_name = format!("__await_tmp_{}", *await_count);
+            if !locals.iter().any(|(n, _, _)| n == &tmp_name) {
+                locals.push((tmp_name, result_c_type, None));
+            }
+            *await_count += 1;
+        }
+    }
+
     /// Analyze a single statement in an async function, recursing into control flow bodies.
     fn analyze_async_stmt(
         &self,
@@ -3629,11 +3657,19 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
             }
             // Only recurse into control flow bodies that contain await.
             // Variables in non-await bodies stay as normal C locals (not state struct fields).
-            Stmt::If { then_body, elif_branches, else_body, .. } => {
+            Stmt::If { condition, then_body, elif_branches, else_body } => {
+                // Analyze condition for awaits (always expression-position)
+                if Self::expr_contains_await(&condition.node) && !Self::is_task_await_static(&condition.node) {
+                    self.analyze_expr_awaits(condition, locals, await_count, sub_futures, context_fn);
+                }
                 if Self::block_contains_await(then_body) {
                     self.analyze_async_block(then_body, params, locals, await_count, sub_futures, context_fn);
                 }
-                for (_, elif_body) in elif_branches {
+                for (elif_cond, elif_body) in elif_branches {
+                    // Analyze each elif condition for awaits
+                    if Self::expr_contains_await(&elif_cond.node) && !Self::is_task_await_static(&elif_cond.node) {
+                        self.analyze_expr_awaits(elif_cond, locals, await_count, sub_futures, context_fn);
+                    }
                     if Self::block_contains_await(elif_body) {
                         self.analyze_async_block(elif_body, params, locals, await_count, sub_futures, context_fn);
                     }
@@ -3644,13 +3680,29 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                     }
                 }
             }
-            Stmt::While { body, .. } | Stmt::Loop { body } => {
+            Stmt::While { condition, body, .. } => {
+                let cond_has_await = Self::expr_contains_await(&condition.node) && !Self::is_task_await_static(&condition.node);
+                let body_has_await = Self::block_contains_await(body);
+                if cond_has_await {
+                    self.analyze_expr_awaits(condition, locals, await_count, sub_futures, context_fn);
+                }
+                if body_has_await || cond_has_await {
+                    // If condition has await, body locals must be lifted too (whole stmt crosses suspension points)
+                    self.analyze_async_block(body, params, locals, await_count, sub_futures, context_fn);
+                }
+            }
+            Stmt::Loop { body } => {
                 if Self::block_contains_await(body) {
                     self.analyze_async_block(body, params, locals, await_count, sub_futures, context_fn);
                 }
             }
             Stmt::For { pattern, iterable, body, .. } => {
-                if Self::block_contains_await(body) {
+                let body_has_await = Self::block_contains_await(body);
+                let iterable_has_await = Self::expr_contains_await(&iterable.node) && !Self::is_task_await_static(&iterable.node);
+                if iterable_has_await {
+                    self.analyze_expr_awaits(iterable, locals, await_count, sub_futures, context_fn);
+                }
+                if body_has_await || iterable_has_await {
                     if let Expr::Range { .. } = &iterable.node {
                         // Range for-loop: just lift the loop variable as int64_t
                         if let Pattern::Binding(name) = &pattern.node {
@@ -3842,12 +3894,16 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
             Stmt::Assign { value, .. } => Self::expr_contains_await(&value.node),
             Stmt::CompoundAssign { value, .. } => Self::expr_contains_await(&value.node),
             Stmt::Expr(e) | Stmt::Return(Some(e)) => Self::expr_contains_await(&e.node),
-            Stmt::If { then_body, elif_branches, else_body, .. } =>
-                Self::block_contains_await(then_body)
-                || elif_branches.iter().any(|(_, b)| Self::block_contains_await(b))
+            Stmt::If { condition, then_body, elif_branches, else_body } =>
+                Self::expr_contains_await(&condition.node)
+                || Self::block_contains_await(then_body)
+                || elif_branches.iter().any(|(c, b)| Self::expr_contains_await(&c.node) || Self::block_contains_await(b))
                 || else_body.as_ref().map_or(false, Self::block_contains_await),
-            Stmt::While { body, .. } | Stmt::Loop { body } => Self::block_contains_await(body),
-            Stmt::For { body, .. } => Self::block_contains_await(body),
+            Stmt::While { condition, body, .. } =>
+                Self::expr_contains_await(&condition.node) || Self::block_contains_await(body),
+            Stmt::Loop { body } => Self::block_contains_await(body),
+            Stmt::For { iterable, body, .. } =>
+                Self::expr_contains_await(&iterable.node) || Self::block_contains_await(body),
             Stmt::Match { arms, else_arm, .. } => {
                 arms.iter().any(|arm| match &arm.body.node {
                     Expr::Block(block) => Self::block_contains_await(block),
@@ -3891,6 +3947,10 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
             }
             Expr::NilCoalescing { lhs, rhs } => {
                 Self::expr_contains_await(&lhs.node) || Self::expr_contains_await(&rhs.node)
+            }
+            Expr::Range { start, end, .. } => {
+                start.as_ref().map_or(false, |s| Self::expr_contains_await(&s.node))
+                    || end.as_ref().map_or(false, |e| Self::expr_contains_await(&e.node))
             }
             _ => false,
         }
@@ -4913,14 +4973,32 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                 }
             }
 
-            // While with await in body — Duff's device: case labels inside while body
-            Stmt::While { condition, body, .. } if Self::block_contains_await(body) => {
-                let cond = self.gen_expr(condition);
-                emitter.emit_line(&format!("while ({cond}) {{"));
-                emitter.indent();
-                self.emit_async_stmts(&body.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
-                emitter.dedent();
-                emitter.emit_line("}");
+            // While with await in condition or body — Duff's device
+            Stmt::While { condition, body, .. }
+                if Self::expr_contains_await(&condition.node) || Self::block_contains_await(body) =>
+            {
+                let cond_has_await = Self::expr_contains_await(&condition.node);
+                if cond_has_await {
+                    // Transform into for(;;) { await-cond; if (!cond) break; body }
+                    // so condition awaits re-evaluate each iteration via Duff's device
+                    emitter.emit_line("for (;;) {");
+                    emitter.indent();
+                    self.emit_expr_position_awaits(condition, emitter, state_idx, sub_idx);
+                    let cond = self.gen_expr(condition);
+                    self.async_await_replacements.clear();
+                    emitter.emit_line(&format!("if (!({cond})) break;"));
+                    self.emit_async_stmts(&body.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
+                    emitter.dedent();
+                    emitter.emit_line("}");
+                } else {
+                    // Only body has await — existing codegen
+                    let cond = self.gen_expr(condition);
+                    emitter.emit_line(&format!("while ({cond}) {{"));
+                    emitter.indent();
+                    self.emit_async_stmts(&body.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
+                    emitter.dedent();
+                    emitter.emit_line("}");
+                }
             }
 
             // Loop with await in body — Duff's device: case labels inside while(1) body
@@ -4932,23 +5010,44 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                 emitter.emit_line("}");
             }
 
-            // If/elif/else with await in any branch — Duff's device
+            // If/elif/else with await in condition or any branch — Duff's device
             Stmt::If { condition, then_body, elif_branches, else_body }
-                if Self::block_contains_await(then_body)
-                || elif_branches.iter().any(|(_, b)| Self::block_contains_await(b))
+                if Self::expr_contains_await(&condition.node)
+                || Self::block_contains_await(then_body)
+                || elif_branches.iter().any(|(c, b)| Self::expr_contains_await(&c.node) || Self::block_contains_await(b))
                 || else_body.as_ref().map_or(false, Self::block_contains_await) =>
             {
+                // Pre-evaluate condition awaits before the if
+                if Self::expr_contains_await(&condition.node) {
+                    self.emit_expr_position_awaits(condition, emitter, state_idx, sub_idx);
+                }
                 let cond = self.gen_expr(condition);
+                self.async_await_replacements.clear();
                 emitter.emit_line(&format!("if ({cond}) {{"));
                 emitter.indent();
                 self.emit_async_stmts(&then_body.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
                 emitter.dedent();
+                let mut extra_nesting: usize = 0;
                 for (elif_cond, elif_body) in elif_branches {
-                    let c = self.gen_expr(elif_cond);
-                    emitter.emit_line(&format!("}} else if ({c}) {{"));
-                    emitter.indent();
-                    self.emit_async_stmts(&elif_body.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
-                    emitter.dedent();
+                    if Self::expr_contains_await(&elif_cond.node) {
+                        // Elif condition has await: nest inside else { await; if (cond) { ... } }
+                        emitter.emit_line("} else {");
+                        emitter.indent();
+                        self.emit_expr_position_awaits(elif_cond, emitter, state_idx, sub_idx);
+                        let c = self.gen_expr(elif_cond);
+                        self.async_await_replacements.clear();
+                        emitter.emit_line(&format!("if ({c}) {{"));
+                        emitter.indent();
+                        self.emit_async_stmts(&elif_body.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
+                        emitter.dedent();
+                        extra_nesting += 1;
+                    } else {
+                        let c = self.gen_expr(elif_cond);
+                        emitter.emit_line(&format!("}} else if ({c}) {{"));
+                        emitter.indent();
+                        self.emit_async_stmts(&elif_body.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
+                        emitter.dedent();
+                    }
                 }
                 if let Some(else_b) = else_body {
                     emitter.emit_line("} else {");
@@ -4957,13 +5056,23 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                     emitter.dedent();
                 }
                 emitter.emit_line("}");
+                // Close extra nesting from elif-with-await
+                for _ in 0..extra_nesting {
+                    emitter.dedent();
+                    emitter.emit_line("}");
+                }
             }
 
-            // For with await in body — Duff's device
+            // For with await in iterable or body — Duff's device
             Stmt::For { pattern, iterable, body, else_body, .. }
-                if Self::block_contains_await(body) =>
+                if Self::expr_contains_await(&iterable.node) || Self::block_contains_await(body) =>
             {
                 if let Expr::Range { start, end, inclusive } = &iterable.node {
+                    // Pre-evaluate iterable awaits (range bounds) before the loop
+                    let iterable_has_await = Self::expr_contains_await(&iterable.node);
+                    if iterable_has_await {
+                        self.emit_expr_position_awaits(iterable, emitter, state_idx, sub_idx);
+                    }
                     if let Pattern::Binding(name) = &pattern.node {
                         let var = c_mangle::escape_keyword(name);
                         let start_expr = start.as_ref()
@@ -4976,6 +5085,9 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                         emitter.emit_line(&format!(
                             "for (__self->{var} = {start_expr}; __self->{var} {cmp} {end_expr}; __self->{var}++) {{"
                         ));
+                        if iterable_has_await {
+                            self.async_await_replacements.clear();
+                        }
                         emitter.indent();
                         self.emit_async_stmts(&body.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
                         emitter.dedent();
