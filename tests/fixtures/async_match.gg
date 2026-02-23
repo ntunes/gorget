@@ -1,0 +1,58 @@
+enum Op:
+    Add(int)
+    Mul(int)
+
+async int compute(int x):
+    return x * 3
+
+async int process_literal(int code):
+    match code:
+        case 1:
+            int v = await compute(10)
+            return v
+        case 2:
+            int v = await compute(20)
+            return v
+        else:
+            int v = await compute(code)
+            return v
+
+async int process_enum(Op op):
+    match op:
+        case Add(x):
+            int base = await compute(x)
+            return base + x
+        case Mul(x):
+            int base = await compute(x)
+            return base * x
+
+async int double_match(int a, int b):
+    int x = 0
+    match a:
+        case 1:
+            x = await compute(1)
+        else:
+            x = await compute(a)
+    int y = 0
+    match b:
+        case 1:
+            y = await compute(1)
+        else:
+            y = await compute(b)
+    return x + y
+
+async void main():
+    int r1 = await process_literal(1)
+    print(r1)
+    int r2 = await process_literal(2)
+    print(r2)
+    int r3 = await process_literal(5)
+    print(r3)
+    Op add = Add(4)
+    int r4 = await process_enum(add)
+    print(r4)
+    Op mul = Mul(2)
+    int r5 = await process_enum(mul)
+    print(r5)
+    int r6 = await double_match(1, 2)
+    print(r6)

@@ -3417,7 +3417,7 @@ impl CodegenContext<'_> {
     /// Convert a pattern to a C boolean condition (for if-else chain).
     /// `enum_c_type` overrides the enum name used for tag constants (needed for generic enums
     /// where the monomorphized name like `Option__int64_t` differs from the raw name `Option`).
-    fn pattern_to_condition(&mut self, pattern: &Pattern, scrutinee: &str, enum_c_type: Option<&str>) -> String {
+    pub(super) fn pattern_to_condition(&mut self, pattern: &Pattern, scrutinee: &str, enum_c_type: Option<&str>) -> String {
         match pattern {
             Pattern::Literal(lit) if matches!(lit.node, Expr::NoneLiteral) => {
                 // None literal as pattern: generate tag check for the None variant
@@ -3775,7 +3775,7 @@ impl CodegenContext<'_> {
     }
 
     /// Emit variable bindings from a pattern into the current scope.
-    fn emit_pattern_bindings(&mut self, pattern: &Pattern, scrutinee: &str, emitter: &mut CEmitter) {
+    pub(super) fn emit_pattern_bindings(&mut self, pattern: &Pattern, scrutinee: &str, emitter: &mut CEmitter) {
         match pattern {
             Pattern::Binding(name) => {
                 let escaped = c_mangle::escape_keyword(name);
@@ -3865,7 +3865,7 @@ impl CodegenContext<'_> {
     /// Register TypeIds for variables bound by pattern matching on enum variants.
     /// This fills `pattern_var_types` so downstream codegen (method calls, print, etc.)
     /// can resolve the concrete type of pattern-bound variables.
-    fn register_pattern_var_types(
+    pub(super) fn register_pattern_var_types(
         &mut self,
         pattern: &Pattern,
         scrutinee: &Spanned<Expr>,
@@ -4009,7 +4009,7 @@ impl CodegenContext<'_> {
 
     /// Return inline pattern bindings as a string (for use in GCC statement expressions).
     /// Uses statement-context enum variant lookup (vs expression-context in c_expr.rs).
-    fn stmt_pattern_bindings_inline(&mut self, pattern: &Pattern, scrutinee: &str) -> String {
+    pub(super) fn stmt_pattern_bindings_inline(&mut self, pattern: &Pattern, scrutinee: &str) -> String {
         match pattern {
             Pattern::Binding(name) => {
                 let escaped = c_mangle::escape_keyword(name);
@@ -4183,7 +4183,7 @@ impl CodegenContext<'_> {
     }
 
     /// Look up which enum owns a variant given a path (e.g., ["Some"] or ["Color", "Red"]).
-    fn find_enum_for_variant_path(&self, path: &[Spanned<String>]) -> Option<(String, String)> {
+    pub(super) fn find_enum_for_variant_path(&self, path: &[Spanned<String>]) -> Option<(String, String)> {
         let variant_name = if path.len() == 1 {
             &path[0].node
         } else if path.len() == 2 {

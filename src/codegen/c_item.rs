@@ -3430,6 +3430,49 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                     self.analyze_async_block(body, params, locals, await_count, sub_futures, context_fn);
                 }
             }
+            Stmt::Match { scrutinee, arms, else_arm } => {
+                let any_arm_has_await = arms.iter().any(|arm| match &arm.body.node {
+                    Expr::Block(block) => Self::block_contains_await(block),
+                    other => Self::expr_contains_await(other),
+                });
+                let else_has_await = else_arm.as_ref().map_or(false, Self::block_contains_await);
+
+                if any_arm_has_await || else_has_await {
+                    // Add scrutinee temp variable
+                    let match_idx = locals.iter().filter(|(n, _, _)| n.starts_with("__match_scrut_")).count();
+                    let scrut_name = format!("__match_scrut_{match_idx}");
+                    let scrut_c_type = self.infer_async_var_type(&scrutinee.node, params, locals, context_fn);
+                    locals.push((scrut_name, scrut_c_type.clone(), None));
+
+                    // Collect pattern-bound variables from arms that contain await
+                    for arm in arms {
+                        let arm_has_await = match &arm.body.node {
+                            Expr::Block(block) => Self::block_contains_await(block),
+                            other => Self::expr_contains_await(other),
+                        };
+                        if arm_has_await {
+                            let bindings = self.collect_async_pattern_binding_c_types(
+                                &arm.pattern.node, scrutinee, &scrut_c_type,
+                            );
+                            for (name, c_type) in bindings {
+                                if !locals.iter().any(|(n, _, _)| n == &name) {
+                                    locals.push((name, c_type, None));
+                                }
+                            }
+                            // Recurse into arm body
+                            if let Expr::Block(block) = &arm.body.node {
+                                self.analyze_async_block(block, params, locals, await_count, sub_futures, context_fn);
+                            }
+                        }
+                    }
+                    // Recurse into else arm if it has await
+                    if let Some(else_b) = else_arm {
+                        if else_has_await {
+                            self.analyze_async_block(else_b, params, locals, await_count, sub_futures, context_fn);
+                        }
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -3465,6 +3508,12 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                 || else_body.as_ref().map_or(false, Self::block_contains_await),
             Stmt::While { body, .. } | Stmt::Loop { body } => Self::block_contains_await(body),
             Stmt::For { body, .. } => Self::block_contains_await(body),
+            Stmt::Match { arms, else_arm, .. } => {
+                arms.iter().any(|arm| match &arm.body.node {
+                    Expr::Block(block) => Self::block_contains_await(block),
+                    other => Self::expr_contains_await(other),
+                }) || else_arm.as_ref().map_or(false, Self::block_contains_await)
+            }
             _ => false,
         }
     }
@@ -3598,6 +3647,149 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         }
     }
 
+    /// Check if a name matches a known enum variant (to distinguish genuine bindings from
+    /// unit-variant pattern matches like `case None:`).
+    fn is_enum_variant_name(&self, name: &str) -> bool {
+        self.enum_variants.values().any(|info| info.variants.iter().any(|(vname, _)| vname == name))
+    }
+
+    /// Collect pattern-bound variable names and their C types for async state struct lifting.
+    /// Returns `Vec<(name, c_type)>` for all bindings in the pattern.
+    fn collect_async_pattern_binding_c_types(
+        &self,
+        pattern: &Pattern,
+        scrutinee: &Spanned<Expr>,
+        scrutinee_c_type: &str,
+    ) -> Vec<(String, String)> {
+        let mut result = Vec::new();
+        self.collect_async_pattern_bindings_inner(pattern, scrutinee, scrutinee_c_type, &mut result);
+        result
+    }
+
+    fn collect_async_pattern_bindings_inner(
+        &self,
+        pattern: &Pattern,
+        scrutinee: &Spanned<Expr>,
+        scrutinee_c_type: &str,
+        out: &mut Vec<(String, String)>,
+    ) {
+        match pattern {
+            Pattern::Binding(name) => {
+                // Skip if this is actually an enum variant name (e.g., `None`)
+                if self.is_enum_variant_name(name) {
+                    return;
+                }
+                out.push((name.clone(), scrutinee_c_type.to_string()));
+            }
+            Pattern::Constructor { path, fields } => {
+                // Resolve variant field types from enum_variants + generic substitution
+                let variant_name = if path.len() == 1 {
+                    &path[0].node
+                } else if path.len() >= 2 {
+                    &path[1].node
+                } else {
+                    return;
+                };
+
+                // Find the enum that owns this variant
+                let mut enum_def_id = None;
+                for (def_id, info) in self.enum_variants {
+                    if info.variants.iter().any(|(v, _)| v == variant_name) {
+                        enum_def_id = Some(*def_id);
+                        break;
+                    }
+                }
+                let Some(enum_def_id) = enum_def_id else { return };
+                let Some(info) = self.enum_variants.get(&enum_def_id) else { return };
+
+                // Build generic substitution map: param_name → concrete TypeId
+                let subst_tids = if let Some(scrut_tid) = self.resolve_scrutinee_type_id_readonly(scrutinee) {
+                    match self.types.get(scrut_tid) {
+                        crate::semantic::types::ResolvedType::Generic(_, args) => args.clone(),
+                        _ => vec![],
+                    }
+                } else {
+                    vec![]
+                };
+
+                let subst: HashMap<String, crate::semantic::ids::TypeId> = info
+                    .generic_param_names
+                    .iter()
+                    .zip(subst_tids.iter())
+                    .map(|(name, &tid)| (name.clone(), tid))
+                    .collect();
+
+                // Find variant's field AST types
+                let field_types = info
+                    .variant_field_types
+                    .iter()
+                    .find(|(name, _)| name == variant_name)
+                    .map(|(_, types)| types.as_slice());
+
+                for (i, field_pat) in fields.iter().enumerate() {
+                    let field_c_type = if let Some(field_types) = field_types {
+                        if let Some(spanned_ty) = field_types.get(i) {
+                            self.resolve_field_c_type_with_subst(&spanned_ty.node, &subst)
+                        } else {
+                            "int64_t".to_string()
+                        }
+                    } else {
+                        "int64_t".to_string()
+                    };
+                    self.collect_async_pattern_bindings_inner(&field_pat.node, scrutinee, &field_c_type, out);
+                }
+            }
+            Pattern::Tuple(elements) => {
+                // For tuples, we don't have easy type info per element — use int64_t fallback
+                for elem in elements {
+                    self.collect_async_pattern_bindings_inner(&elem.node, scrutinee, "int64_t", out);
+                }
+            }
+            Pattern::Or(alternatives) => {
+                // Bind from first alternative (all must bind same names)
+                if let Some(first) = alternatives.first() {
+                    self.collect_async_pattern_bindings_inner(&first.node, scrutinee, scrutinee_c_type, out);
+                }
+            }
+            Pattern::Wildcard | Pattern::Literal(_) | Pattern::Rest => {}
+        }
+    }
+
+    /// Resolve a variant field's AST Type to a C type string, substituting generic params.
+    fn resolve_field_c_type_with_subst(
+        &self,
+        ast_type: &Type,
+        subst: &HashMap<String, crate::semantic::ids::TypeId>,
+    ) -> String {
+        if let Type::Named { name, generic_args } = ast_type {
+            if generic_args.is_empty() {
+                // Check if this is a generic param that needs substitution
+                if let Some(&tid) = subst.get(&name.node) {
+                    return c_types::type_id_to_c(tid, self.types, self.scopes);
+                }
+            }
+        }
+        c_types::ast_type_to_c(ast_type, self.scopes)
+    }
+
+    /// Read-only TypeId resolution for scrutinee expressions during async analysis.
+    /// Uses resolution_map (not scoped_lookup which needs function scope set).
+    fn resolve_scrutinee_type_id_readonly(&self, scrutinee: &Spanned<Expr>) -> Option<crate::semantic::ids::TypeId> {
+        match &scrutinee.node {
+            Expr::Identifier(name) => {
+                self.resolution_map
+                    .get(&scrutinee.span.start)
+                    .filter(|def_id| self.scopes.get_def(**def_id).name == *name)
+                    .and_then(|def_id| self.scopes.get_def(*def_id).type_id)
+                    .or_else(|| {
+                        self.scoped_lookup(name)
+                            .and_then(|def_id| self.scopes.get_def(def_id).type_id)
+                    })
+            }
+            _ => None,
+        }
+    }
+
     /// Emit cleanup for non-Copy fields in async state struct before freeing.
     /// `skip_var` is the escaped field name being returned (ownership transferred to result),
     /// which must not be dropped.
@@ -3627,6 +3819,45 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
             Expr::Identifier(name) => Some(c_mangle::escape_keyword(name)),
             Expr::Move { expr: inner } => Self::async_return_skip_var(&inner.node),
             _ => None,
+        }
+    }
+
+    /// Emit pattern bindings for async match arms, assigning to state struct fields
+    /// (`__self->x = ...`) instead of local declarations.
+    fn emit_async_pattern_bindings(
+        &mut self,
+        pattern: &Pattern,
+        scrutinee: &str,
+        emitter: &mut CEmitter,
+    ) {
+        match pattern {
+            Pattern::Binding(name) => {
+                if self.is_enum_variant_name(name) {
+                    return; // Unit variant, not a binding
+                }
+                let escaped = c_mangle::escape_keyword(name);
+                emitter.emit_line(&format!("__self->{escaped} = {scrutinee};"));
+            }
+            Pattern::Constructor { path, fields } => {
+                if let Some((_enum_name, variant_name)) = self.find_enum_for_variant_path(path) {
+                    for (i, field_pat) in fields.iter().enumerate() {
+                        let field_access = format!("{scrutinee}.data.{variant_name}._{i}");
+                        self.emit_async_pattern_bindings(&field_pat.node, &field_access, emitter);
+                    }
+                }
+            }
+            Pattern::Tuple(elements) => {
+                for (i, elem) in elements.iter().enumerate() {
+                    let field_access = format!("{scrutinee}._{i}");
+                    self.emit_async_pattern_bindings(&elem.node, &field_access, emitter);
+                }
+            }
+            Pattern::Or(alternatives) => {
+                if let Some(first) = alternatives.first() {
+                    self.emit_async_pattern_bindings(&first.node, scrutinee, emitter);
+                }
+            }
+            Pattern::Wildcard | Pattern::Literal(_) | Pattern::Rest => {}
         }
     }
 
@@ -3693,8 +3924,10 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         // Save and set async context
         let prev_lifted = self.async_lifted_vars.take();
         let prev_sub_counter = self.async_sub_counter;
+        let prev_match_counter = self.async_match_counter;
         self.async_lifted_vars = Some(lifted);
         self.async_sub_counter = 0;
+        self.async_match_counter = 0;
 
         // Track which params are pointer params (none for async — all are in state struct)
         let prev_pointer_params = std::mem::take(&mut self.pointer_params);
@@ -3732,6 +3965,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         // Restore context
         self.async_lifted_vars = prev_lifted;
         self.async_sub_counter = prev_sub_counter;
+        self.async_match_counter = prev_match_counter;
         self.pointer_params = prev_pointer_params;
         self.current_function_scope = prev_function_scope;
 
@@ -3999,6 +4233,105 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                 } else {
                     // Non-range iterable with await: delegate to gen_stmt (busy-poll fallback)
                     self.gen_stmt(stmt, span, emitter);
+                }
+            }
+
+            // Match with await in any arm — Duff's device
+            Stmt::Match { scrutinee, arms, else_arm }
+                if arms.iter().any(|arm| match &arm.body.node {
+                    Expr::Block(block) => Self::block_contains_await(block),
+                    other => Self::expr_contains_await(other),
+                }) || else_arm.as_ref().map_or(false, Self::block_contains_await) =>
+            {
+                let match_idx = self.async_match_counter;
+                self.async_match_counter += 1;
+                let scrut_field = format!("__match_scrut_{match_idx}");
+
+                // Evaluate scrutinee into state struct
+                let scrut_expr = self.gen_expr(scrutinee);
+                emitter.emit_line(&format!("__self->{scrut_field} = {scrut_expr};"));
+
+                // Resolve enum C type for tag comparison
+                let enum_c_type = self.resolve_enum_c_type_for_scrutinee(scrutinee);
+
+                let mut first = true;
+                for arm in arms {
+                    let arm_has_await = match &arm.body.node {
+                        Expr::Block(block) => Self::block_contains_await(block),
+                        other => Self::expr_contains_await(other),
+                    };
+
+                    let pattern_cond = self.pattern_to_condition(
+                        &arm.pattern.node,
+                        &format!("__self->{scrut_field}"),
+                        enum_c_type.as_deref(),
+                    );
+
+                    let full_cond = if let Some(guard) = &arm.guard {
+                        let guard_expr = self.gen_expr(guard);
+                        let bindings = self.stmt_pattern_bindings_inline(
+                            &arm.pattern.node,
+                            &format!("__self->{scrut_field}"),
+                        );
+                        if bindings.is_empty() {
+                            format!("({pattern_cond}) && ({guard_expr})")
+                        } else {
+                            format!("({pattern_cond}) && ({{ {bindings}({guard_expr}); }})")
+                        }
+                    } else {
+                        pattern_cond
+                    };
+
+                    if first {
+                        emitter.emit_line(&format!("if ({full_cond}) {{"));
+                        first = false;
+                    } else {
+                        emitter.emit_line(&format!("}} else if ({full_cond}) {{"));
+                    }
+                    emitter.indent();
+
+                    if arm_has_await {
+                        // Async arm: emit bindings to state struct, then async stmts
+                        self.emit_async_pattern_bindings(
+                            &arm.pattern.node,
+                            &format!("__self->{scrut_field}"),
+                            emitter,
+                        );
+                        self.register_pattern_var_types(&arm.pattern.node, scrutinee);
+                        if let Expr::Block(block) = &arm.body.node {
+                            self.emit_async_stmts(&block.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
+                        }
+                    } else {
+                        // Non-async arm: normal local bindings + gen_block
+                        self.emit_pattern_bindings(
+                            &arm.pattern.node,
+                            &format!("__self->{scrut_field}"),
+                            emitter,
+                        );
+                        self.register_pattern_var_types(&arm.pattern.node, scrutinee);
+                        if let Expr::Block(block) = &arm.body.node {
+                            self.gen_block(block, emitter);
+                        } else {
+                            let body = self.gen_expr(&arm.body);
+                            emitter.emit_line(&format!("{body};"));
+                        }
+                    }
+                    emitter.dedent();
+                }
+
+                if let Some(else_b) = else_arm {
+                    let else_has_await = Self::block_contains_await(else_b);
+                    emitter.emit_line("} else {");
+                    emitter.indent();
+                    if else_has_await {
+                        self.emit_async_stmts(&else_b.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
+                    } else {
+                        self.gen_block(else_b, emitter);
+                    }
+                    emitter.dedent();
+                }
+                if !arms.is_empty() || else_arm.is_some() {
+                    emitter.emit_line("}");
                 }
             }
 
