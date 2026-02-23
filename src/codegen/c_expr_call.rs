@@ -338,6 +338,12 @@ impl CodegenContext<'_> {
                             return format!("gorget_sleep_ms({ms})");
                         }
                     }
+                    "sleep" => {
+                        if let Some(arg) = args.first() {
+                            let seconds = self.gen_expr(&arg.node.value);
+                            return format!("gorget_async_sleep({seconds})");
+                        }
+                    }
                     "ord" => {
                         if let Some(arg) = args.first() {
                             let c = self.gen_expr(&arg.node.value);

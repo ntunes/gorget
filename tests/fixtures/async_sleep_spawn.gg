@@ -1,0 +1,12 @@
+from std.time import sleep
+
+async int slow_compute(int x):
+    sleep(0.05).await()
+    return x * x
+
+async void main():
+    Task[int] a = spawn slow_compute(3)
+    Task[int] b = spawn slow_compute(4)
+    int ra = a.await()
+    int rb = b.await()
+    print(ra + rb)

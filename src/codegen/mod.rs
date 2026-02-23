@@ -369,6 +369,8 @@ pub struct CodegenContext<'a> {
     pub future_types: FxHashMap<String, String>,
     /// Whether the program uses `spawn` (drives executor runtime emission and Task[T] typedefs).
     pub has_spawn: bool,
+    /// Whether the program uses async `sleep` (drives sleep runtime + threading emission).
+    pub has_async_sleep: bool,
     /// Original Gorget source text, used to extract verbatim source lines for trace events.
     pub source_text: String,
     /// The scope of the function currently being emitted, for scope-aware variable lookup.
@@ -618,6 +620,7 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
         async_await_replacements: FxHashMap::default(),
         future_types: FxHashMap::default(),
         has_spawn: false,
+        has_async_sleep: false,
         source_text: opts.source_text,
         current_function_scope: None,
         function_body_scopes: &analysis.function_body_scopes,
@@ -695,23 +698,75 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
         }
         det.found
     };
+    // 1b3b. Detect async sleep usage
+    let has_async_sleep = {
+        use crate::parser::ast::Expr as AstExpr;
+        use crate::parser::visitor::{ExprVisitor, walk_expr};
+        struct SleepDetector { found: bool }
+        impl ExprVisitor for SleepDetector {
+            fn visit_expr(&mut self, expr: &crate::span::Spanned<AstExpr>) {
+                if let AstExpr::Call { callee, .. } = &expr.node {
+                    if let AstExpr::Identifier(name) = &callee.node {
+                        if name == "sleep" { self.found = true; return; }
+                    }
+                }
+                walk_expr(self, expr);
+            }
+        }
+        let mut det = SleepDetector { found: false };
+        for item in &module.items {
+            if let Item::Function(f) = &item.node {
+                match &f.body {
+                    FunctionBody::Block(block) => {
+                        for stmt in &block.stmts {
+                            crate::parser::visitor::walk_stmt(&mut det, stmt);
+                        }
+                    }
+                    FunctionBody::Expression(e) => det.visit_expr(e),
+                    _ => {}
+                }
+            }
+            if let Item::Equip(equip) = &item.node {
+                for method in &equip.items {
+                    match &method.node.body {
+                        FunctionBody::Block(block) => {
+                            for stmt in &block.stmts {
+                                crate::parser::visitor::walk_stmt(&mut det, stmt);
+                            }
+                        }
+                        FunctionBody::Expression(e) => det.visit_expr(e),
+                        _ => {}
+                    }
+                }
+            }
+            if det.found { break; }
+        }
+        det.found
+    };
+
     if has_spawn {
         emitter.emit(c_runtime::EXECUTOR_RUNTIME);
+    }
+    if has_spawn || has_async_sleep {
+        if !has_spawn {
+            emitter.emit("#include <pthread.h>\n");
+        }
         emitter.emit(c_runtime::MAIN_WAKER_RUNTIME);
     }
     ctx.has_spawn = has_spawn;
+    ctx.has_async_sleep = has_async_sleep;
 
     // 1b4. Channel runtime (when std.channel is imported)
     let has_channel = module.items.iter().any(|i| {
         matches!(&i.node, Item::Struct(s) if s.name.node == "Channel" && s.span == crate::span::Span::dummy())
     });
     if has_channel {
-        if !has_spawn {
+        if !has_spawn && !has_async_sleep {
             emitter.emit("#include <pthread.h>\n");
         }
         emitter.emit(c_runtime::CHANNEL_RUNTIME);
     }
-    let needs_threads = has_spawn || has_channel;
+    let needs_threads = has_spawn || has_channel || has_async_sleep;
 
     // 1c. Process runtime (when std.process is imported)
     let has_process = module.items.iter().any(|i| {
@@ -795,6 +850,9 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
 
     // 2a3. Task[T] typedefs + SpawnCtx + worker functions (after Future[T])
     ctx.emit_task_typedefs(&mut emitter);
+
+    // 2a4. Async sleep runtime (after Future[T] typedefs)
+    ctx.emit_sleep_runtime(&mut emitter);
 
     // 2b. Tuple typedefs (after forward declarations, before type definitions)
     ctx.emit_tuple_typedefs(&mut emitter);

@@ -6052,6 +6052,16 @@ fn async_expr_await() {
     run_gg("async_expr_await.gg", "11\n14\n10\n-10\n20");
 }
 
+#[test]
+fn async_sleep() {
+    run_gg("async_sleep.gg", "sleep works\n10");
+}
+
+#[test]
+fn async_sleep_spawn() {
+    run_gg("async_sleep_spawn.gg", "25");
+}
+
 // Parser Comparison Test
 // ═══════════════════════════════════════════════════════════════
 

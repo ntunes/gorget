@@ -212,6 +212,7 @@ fn gen_time_module() -> Module {
         decl_fn("time", &[], ty_int()),
         decl_fn("time_ms", &[], ty_int()),
         decl_fn("sleep_ms", &[("ms", ty_int())], ty_void()),
+        decl_async_fn("sleep", &[("seconds", ty_float())], ty_void()),
         decl_fn("format_time", &[("epoch", ty_int()), ("fmt", ty_str())], ty_string()),
         decl_fn("parse_time", &[("s", ty_str()), ("fmt", ty_str())], ty_int()),
     ])
@@ -636,6 +637,12 @@ fn decl_fn(name: &str, params: &[(&str, Type)], ret: Type) -> FunctionDef {
         doc_comment: None,
         span: Span::dummy(),
     }
+}
+
+fn decl_async_fn(name: &str, params: &[(&str, Type)], ret: Type) -> FunctionDef {
+    let mut f = decl_fn(name, params, ret);
+    f.qualifiers.is_async = true;
+    f
 }
 
 fn ty_str() -> Type {
@@ -1254,13 +1261,14 @@ mod tests {
     #[test]
     fn generate_time() {
         let m = generate_stdlib_module(&["std".into(), "time".into()]).unwrap();
-        assert_eq!(m.items.len(), 5);
+        assert_eq!(m.items.len(), 6);
         let names: Vec<_> = m.items.iter().map(|i| match &i.node {
             Item::Function(f) => f.name.node.clone(),
             _ => panic!("expected function"),
         }).collect();
         assert!(names.contains(&"time".to_string()));
         assert!(names.contains(&"sleep_ms".to_string()));
+        assert!(names.contains(&"sleep".to_string()));
         assert!(names.contains(&"time_ms".to_string()));
         assert!(names.contains(&"format_time".to_string()));
         assert!(names.contains(&"parse_time".to_string()));

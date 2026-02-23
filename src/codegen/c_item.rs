@@ -715,7 +715,9 @@ impl CodegenContext<'_> {
         let is_main = f.name.node == "main" && method_info.is_none();
 
         // Async functions get state-machine transformation instead of normal codegen.
-        if f.qualifiers.is_async {
+        // Declaration-bodied async functions (stdlib builtins like sleep) are skipped —
+        // their codegen happens via call-site dispatch in c_expr_call.rs.
+        if f.qualifiers.is_async && !matches!(f.body, FunctionBody::Declaration) {
             self.emit_async_function(f, method_info, is_main, emitter);
             return;
         }
@@ -3292,6 +3294,78 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         }
     }
 
+    /// Emit the hand-written C runtime for `async sleep()`.
+    /// Must be called after `emit_future_typedefs()` since it references `Future__void`.
+    pub fn emit_sleep_runtime(&self, emitter: &mut CEmitter) {
+        if !self.has_async_sleep { return; }
+        emitter.emit_line("// ── Async Sleep Runtime ──");
+        // State struct
+        emitter.emit_line("typedef struct {");
+        emitter.indent();
+        emitter.emit_line("double seconds;");
+        emitter.emit_line("int started;");
+        emitter.emit_line("GorgetWaker waker;");
+        emitter.emit_line("volatile int done;");
+        emitter.dedent();
+        emitter.emit_line("} __GorgetSleepState;");
+        emitter.blank_line();
+
+        // Background thread function
+        emitter.emit_line("static void* __gorget_sleep_thread(void* arg) {");
+        emitter.indent();
+        emitter.emit_line("__GorgetSleepState* __s = (__GorgetSleepState*)arg;");
+        emitter.emit_line("struct timespec __ts;");
+        emitter.emit_line("__ts.tv_sec = (time_t)__s->seconds;");
+        emitter.emit_line("__ts.tv_nsec = (long)((__s->seconds - (double)__ts.tv_sec) * 1e9);");
+        emitter.emit_line("nanosleep(&__ts, NULL);");
+        emitter.emit_line("__s->done = 1;");
+        emitter.emit_line("GorgetWaker __w = __s->waker;");
+        emitter.emit_line("if (__w.wake) __w.wake(&__w);");
+        emitter.emit_line("return NULL;");
+        emitter.dedent();
+        emitter.emit_line("}");
+        emitter.blank_line();
+
+        // Poll function
+        emitter.emit_line("static int __gorget_sleep_poll(Future__void* __future, GorgetWaker* __waker) {");
+        emitter.indent();
+        emitter.emit_line("__GorgetSleepState* __s = (__GorgetSleepState*)__future->state;");
+        emitter.emit_line("if (__s->done) {");
+        emitter.indent();
+        emitter.emit_line("free(__s);");
+        emitter.emit_line("__future->state = NULL;");
+        emitter.emit_line("return GORGET_POLL_READY;");
+        emitter.dedent();
+        emitter.emit_line("}");
+        emitter.emit_line("if (!__s->started) {");
+        emitter.indent();
+        emitter.emit_line("__s->started = 1;");
+        emitter.emit_line("__s->waker = *__waker;");
+        emitter.emit_line("pthread_t __th;");
+        emitter.emit_line("pthread_create(&__th, NULL, __gorget_sleep_thread, __s);");
+        emitter.emit_line("pthread_detach(__th);");
+        emitter.dedent();
+        emitter.emit_line("} else {");
+        emitter.indent();
+        emitter.emit_line("__s->waker = *__waker;");
+        emitter.dedent();
+        emitter.emit_line("}");
+        emitter.emit_line("return GORGET_POLL_PENDING;");
+        emitter.dedent();
+        emitter.emit_line("}");
+        emitter.blank_line();
+
+        // Constructor
+        emitter.emit_line("static Future__void gorget_async_sleep(double seconds) {");
+        emitter.indent();
+        emitter.emit_line("__GorgetSleepState* __s = (__GorgetSleepState*)calloc(1, sizeof(__GorgetSleepState));");
+        emitter.emit_line("__s->seconds = seconds;");
+        emitter.emit_line("return (Future__void){.poll = __gorget_sleep_poll, .state = __s};");
+        emitter.dedent();
+        emitter.emit_line("}");
+        emitter.blank_line();
+    }
+
     /// Top-level async function handler: analyze → emit state struct → poll → constructor.
     fn emit_async_function(
         &mut self,
@@ -3342,8 +3416,8 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
             emitter.indent();
             emitter.emit_line("gorget_init_args(argc, argv);");
             emitter.emit_line(&format!("{future_type} __f = gg__async_main();"));
-            if self.has_spawn {
-                // Event-driven: sleep on condvar, woken by worker via parent_waker
+            if self.has_spawn || self.has_async_sleep {
+                // Event-driven: sleep on condvar, woken by worker/sleep thread via waker
                 emitter.emit_line("while (__f.poll(&__f, &__gorget_main_waker) != GORGET_POLL_READY) {");
                 emitter.indent();
                 emitter.emit_line("pthread_mutex_lock(&__gorget_main_mtx);");
@@ -3353,7 +3427,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                 emitter.dedent();
                 emitter.emit_line("}");
             } else {
-                // No spawn: noop waker, simple busy-poll
+                // No spawn or sleep: noop waker, simple busy-poll
                 emitter.emit_line("while (__f.poll(&__f, &__gorget_noop_waker) != GORGET_POLL_READY) {}");
             }
             emitter.emit_line("if (__f.state) free(__f.state);");

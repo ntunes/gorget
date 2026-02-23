@@ -1,0 +1,14 @@
+from std.time import sleep, time_ms
+
+async int delayed_value(int x):
+    sleep(0.05).await()
+    return x * 2
+
+async void main():
+    int t0 = time_ms()
+    sleep(0.05).await()
+    int t1 = time_ms()
+    int elapsed = t1 - t0
+    if elapsed >= 40:
+        print("sleep works")
+    print(delayed_value(5).await())
