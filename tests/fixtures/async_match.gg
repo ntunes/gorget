@@ -8,51 +8,51 @@ async int compute(int x):
 async int process_literal(int code):
     match code:
         case 1:
-            int v = await compute(10)
+            int v = compute(10).await()
             return v
         case 2:
-            int v = await compute(20)
+            int v = compute(20).await()
             return v
         else:
-            int v = await compute(code)
+            int v = compute(code).await()
             return v
 
 async int process_enum(Op op):
     match op:
         case Add(x):
-            int base = await compute(x)
+            int base = compute(x).await()
             return base + x
         case Mul(x):
-            int base = await compute(x)
+            int base = compute(x).await()
             return base * x
 
 async int double_match(int a, int b):
     int x = 0
     match a:
         case 1:
-            x = await compute(1)
+            x = compute(1).await()
         else:
-            x = await compute(a)
+            x = compute(a).await()
     int y = 0
     match b:
         case 1:
-            y = await compute(1)
+            y = compute(1).await()
         else:
-            y = await compute(b)
+            y = compute(b).await()
     return x + y
 
 async void main():
-    int r1 = await process_literal(1)
+    int r1 = process_literal(1).await()
     print(r1)
-    int r2 = await process_literal(2)
+    int r2 = process_literal(2).await()
     print(r2)
-    int r3 = await process_literal(5)
+    int r3 = process_literal(5).await()
     print(r3)
     Op add = Add(4)
-    int r4 = await process_enum(add)
+    int r4 = process_enum(add).await()
     print(r4)
     Op mul = Mul(2)
-    int r5 = await process_enum(mul)
+    int r5 = process_enum(mul).await()
     print(r5)
-    int r6 = await double_match(1, 2)
+    int r6 = double_match(1, 2).await()
     print(r6)

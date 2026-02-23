@@ -17,7 +17,7 @@ async void main():
         int val = ch.recv()
         total = total + val
         received = received + 1
-    int n1 = await t1
-    int n2 = await t2
+    int n1 = t1.await()
+    int n2 = t2.await()
     ch.close()
     print(total)

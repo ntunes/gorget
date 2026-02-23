@@ -5,17 +5,17 @@ async int sum_loop(int n):
     int total = 0
     int i = 0
     while i < n:
-        int val = await double(i)
+        int val = double(i).await()
         total = total + val
         i = i + 1
     return total
 
 async int pick(bool flag, int a, int b):
     if flag:
-        int va = await double(a)
+        int va = double(a).await()
         return va
     else:
-        int vb = await double(b)
+        int vb = double(b).await()
         return vb
 
 async int even_sum(int n):
@@ -23,17 +23,17 @@ async int even_sum(int n):
     int i = 0
     while i < n:
         if i % 2 == 0:
-            int val = await double(i)
+            int val = double(i).await()
             total = total + val
         i = i + 1
     return total
 
 async void main():
-    int s = await sum_loop(5)
+    int s = sum_loop(5).await()
     print(s)
-    int p1 = await pick(true, 3, 7)
+    int p1 = pick(true, 3, 7).await()
     print(p1)
-    int p2 = await pick(false, 3, 7)
+    int p2 = pick(false, 3, 7).await()
     print(p2)
-    int e = await even_sum(6)
+    int e = even_sum(6).await()
     print(e)

@@ -344,19 +344,6 @@ impl Parser {
                 ))
             }
 
-            // Await — binds like unary ops (tighter than binary +/- etc.)
-            Token::Keyword(Keyword::Await) => {
-                self.advance();
-                let operand = self.parse_expr_bp(33)?;
-                let end = operand.span;
-                Ok(Spanned::new(
-                    Expr::Await {
-                        expr: Box::new(operand),
-                    },
-                    start.merge(end),
-                ))
-            }
-
             // Try capture
             Token::Keyword(Keyword::Try) => {
                 self.advance();
@@ -738,6 +725,19 @@ impl Parser {
                 }
 
                 let field = self.expect_name()?;
+
+                // Postfix .await() → Expr::Await
+                if field.node == "await" {
+                    self.expect(&Token::LParen)?;
+                    self.expect(&Token::RParen)?;
+                    let end = self.previous_span();
+                    return Ok(Spanned::new(
+                        Expr::Await {
+                            expr: Box::new(lhs),
+                        },
+                        start.merge(end),
+                    ));
+                }
 
                 // Check for method call: expr.method(args) or expr.method[T](args)
                 if self.check(&Token::LBracket) || self.check(&Token::LParen) {

@@ -2,10 +2,10 @@ async int double_it(int x):
     return x * 2
 
 async int add_async(int a, int b):
-    int x = await double_it(a)
-    int y = await double_it(b)
+    int x = double_it(a).await()
+    int y = double_it(b).await()
     return x + y
 
 async void main():
-    int result = await add_async(3, 4)
+    int result = add_async(3, 4).await()
     print(result)

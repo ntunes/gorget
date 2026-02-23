@@ -1453,8 +1453,8 @@ impl Formatter {
                 self.format_type(type_);
             }
             Expr::Await { expr } => {
-                self.emitter.write("await ");
                 self.format_expr(expr);
+                self.emitter.write(".await()");
             }
             Expr::Spawn { expr } => {
                 self.emitter.write("spawn ");

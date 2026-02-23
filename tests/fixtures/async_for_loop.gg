@@ -4,7 +4,7 @@ async int double_it(int x):
 async int sum_range(int n):
     int total = 0
     for i in 0..n:
-        int val = await double_it(i)
+        int val = double_it(i).await()
         total = total + val
     return total
 
@@ -13,7 +13,7 @@ async int sum_with_break(int n, int stop):
     for i in 0..n:
         if i == stop:
             break
-        int val = await double_it(i)
+        int val = double_it(i).await()
         total = total + val
     return total
 
@@ -22,14 +22,14 @@ async int sum_skip_even(int n):
     for i in 0..n:
         if i % 2 == 0:
             continue
-        int val = await double_it(i)
+        int val = double_it(i).await()
         total = total + val
     return total
 
 async void main():
-    int r1 = await sum_range(5)
+    int r1 = sum_range(5).await()
     print(r1)
-    int r2 = await sum_with_break(10, 3)
+    int r2 = sum_with_break(10, 3).await()
     print(r2)
-    int r3 = await sum_skip_even(6)
+    int r3 = sum_skip_even(6).await()
     print(r3)

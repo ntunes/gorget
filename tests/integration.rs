@@ -5568,7 +5568,7 @@ fn format_expr_canonical(expr: &Expr) -> String {
             }
         }
         Expr::Await { expr } => {
-            format!("await {}", format_expr_canonical(&expr.node))
+            format!("{}.await()", format_expr_canonical(&expr.node))
         }
         Expr::Spawn { expr } => {
             format!("spawn {}", format_expr_canonical(&expr.node))

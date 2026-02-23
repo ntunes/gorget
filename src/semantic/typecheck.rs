@@ -3509,7 +3509,7 @@ void main():
     fn await_extracts_type() {
         // await on an async call inside an async function should work
         let errors = check(
-            "async int fetch():\n    return 1\nasync int caller():\n    return await fetch()\n"
+            "async int fetch():\n    return 1\nasync int caller():\n    return fetch().await()\n"
         );
         assert!(
             !errors.iter().any(|e| matches!(
@@ -3525,7 +3525,7 @@ void main():
     #[test]
     fn await_outside_async_rejected() {
         let errors = check(
-            "async int fetch():\n    return 1\nint caller():\n    return await fetch()\n"
+            "async int fetch():\n    return 1\nint caller():\n    return fetch().await()\n"
         );
         assert!(
             errors.iter().any(|e| matches!(
@@ -3539,7 +3539,7 @@ void main():
 
     #[test]
     fn await_non_future_rejected() {
-        let errors = check("async int caller():\n    return await 42\n");
+        let errors = check("async int caller():\n    return 42.await()\n");
         assert!(
             errors.iter().any(|e| matches!(
                 &e.kind,

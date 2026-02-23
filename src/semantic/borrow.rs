@@ -4883,7 +4883,7 @@ async int do_work():
     return 1
 
 async void process(str name):
-    await do_work()
+    do_work().await()
     print(name)
 ";
         let errors = check(source);
@@ -4905,7 +4905,7 @@ async int do_work():
 
 async void process(str data):
     str s = get_slice(data)
-    await do_work()
+    do_work().await()
     print(s)
 ";
         let errors = check(source);
@@ -4924,7 +4924,7 @@ async int do_work():
 
 async int compute():
     int x = 42
-    await do_work()
+    do_work().await()
     return x
 ";
         let errors = check(source);
@@ -4943,7 +4943,7 @@ async int do_work():
 
 async void greet():
     str msg = \"hello\"
-    await do_work()
+    do_work().await()
     print(msg)
 ";
         let errors = check(source);
@@ -4962,7 +4962,7 @@ async int do_work():
 
 async void process(str name):
     print(name)
-    await do_work()
+    do_work().await()
 ";
         let errors = check(source);
         assert!(
@@ -4979,7 +4979,7 @@ async int do_work():
     return 1
 
 async void process(str name):
-    await do_work()
+    do_work().await()
     name = \"fresh\"
     print(name)
 ";
@@ -4999,7 +4999,7 @@ async int do_work():
 
 async void process(str name, bool cond):
     if cond:
-        await do_work()
+        do_work().await()
     print(name)
 ";
         let errors = check(source);

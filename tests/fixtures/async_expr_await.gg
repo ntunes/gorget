@@ -5,18 +5,18 @@ async int add(int a, int b):
     return a + b
 
 async void main():
-    int x = await double(5) + 1
+    int x = double(5).await() + 1
     print(x)
 
-    int y = await double(3) + await double(4)
+    int y = double(3).await() + double(4).await()
     print(y)
 
-    int z = await add(await double(2), await double(3))
+    int z = add(double(2).await(), double(3).await()).await()
     print(z)
 
-    int w = -await double(5)
+    int w = -double(5).await()
     print(w)
 
     int total = 0
-    total = total + await double(10)
+    total = total + double(10).await()
     print(total)

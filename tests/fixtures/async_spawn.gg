@@ -4,6 +4,6 @@ async int compute(int x):
 async void main():
     Task[int] a = spawn compute(3)
     Task[int] b = spawn compute(4)
-    int ra = await a
-    int rb = await b
+    int ra = a.await()
+    int rb = b.await()
     print(ra + rb)

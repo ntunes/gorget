@@ -1573,47 +1573,56 @@ Person alice = Person("Alice", 30)
 ### 7.25 Await and Spawn
 
 ```ebnf
-await_expr = "await" expr ;
+await_expr = expr ".await()" ;
 spawn_expr = "spawn" expr ;
 ```
 
-- `await` suspends until an async operation completes. Must appear inside an `async` function.
+- `.await()` suspends until an async operation completes. It is a postfix operator written as a method-call suffix on the expression being awaited. Must appear inside an `async` function.
 - `spawn` launches an async task concurrently, returning a `Task[T]`.
+
+The postfix syntax chains naturally with method calls and keeps the data-flow direction left-to-right:
+
+```gorget
+# Postfix .await() chains naturally
+String body = http.get(url).await().text()
+String data = fetch("https://example.com").await()
+int result = add(f().await(), g().await()).await()
+```
 
 #### Suspension-Point Safety
 
-An `await` expression is a **suspension point** — execution may pause and resume later, potentially on a different thread. To prevent dangling references and data races, the compiler enforces that **no references are live across `await` points**.
+An `.await()` expression is a **suspension point** — execution may pause and resume later, potentially on a different thread. To prevent dangling references and data races, the compiler enforces that **no references are live across `.await()` points**.
 
-**What can cross an `await`:**
+**What can cross an `.await()`:**
 - **Owned types** (`String`, structs, enums, collections) — they own their data, so the data moves with the suspended state.
 - **Copy types** (`int`, `float`, `bool`, `char`) — trivially duplicated, no pointers involved.
 - **Static string literals** (`str s = "hello"`) — point to program-global storage that is always valid.
 
-**What cannot cross an `await`:**
+**What cannot cross an `.await()`:**
 - **Borrowed references** — `str` variables that borrow from parameters or local data, `&T` references, or any value whose underlying data is owned elsewhere. The referent may be invalidated during suspension.
 
 ```gorget
 # OK: owned int crosses await
 async int compute():
     int x = 42
-    await some_task()
+    some_task().await()
     return x               # fine: int is Copy
 
 # OK: static str crosses await
 async void greet():
     str msg = "hello"
-    await some_task()
+    some_task().await()
     print(msg)             # fine: "hello" is a static literal
 
 # ERROR: borrowed str crosses await
 async void process(str name):
-    await some_task()
+    some_task().await()
     print(name)            # error: `name` borrows from caller
 
 # FIX: copy to owned String before await
 async void process_fixed(str name):
     String owned = String(name)
-    await some_task()
+    some_task().await()
     print(owned)           # fine: String owns its data
 ```
 

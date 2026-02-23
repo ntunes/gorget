@@ -11,7 +11,7 @@ async int compute(int x):
     return x * 2
 
 async void main():
-    int val = await compute(21)
+    int val = compute(21).await()
     print(val)
     Tracked main_t = Tracked("main-local")
     print("done")

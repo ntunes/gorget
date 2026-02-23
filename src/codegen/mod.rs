@@ -1554,7 +1554,7 @@ void main():
 async int fetch():
     return 42
 async void main():
-    auto x = await fetch()
+    auto x = fetch().await()
 ";
         let c_code = compile_to_c(source);
         // Should emit Future types, state structs, and poll functions

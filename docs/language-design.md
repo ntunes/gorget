@@ -1168,22 +1168,22 @@ void main():
 
 ### Async/Await
 
-Python-style `await` as a prefix keyword (not postfix like Rust). Composes naturally with `throws`.
+Postfix `.await()` as a method-call suffix (similar to Rust's `.await` but with parentheses for visual consistency with method calls). The postfix style keeps data flow left-to-right and chains naturally with method calls and `throws`.
 
 ```gorget
 # async + throws compose naturally
 async String fetch(str url) throws HttpError:
-    Response resp = await http.get(url)        # await is a prefix keyword
-    return await resp.text()
+    Response resp = http.get(url).await()      # .await() is postfix
+    return resp.text().await()
 
 # async without throws (infallible async)
 async int compute_slowly():
-    await sleep(Duration.seconds(1))
+    sleep(Duration.seconds(1)).await()
     return 42
 
 # Calling async functions
 async void main():
-    String data = await fetch("https://example.com")
+    String data = fetch("https://example.com").await()
     print(data)
 
 # Concurrent execution
@@ -1193,17 +1193,17 @@ async void fetch_all():
     auto task2 = spawn fetch("https://api.example.com/b")
 
     # Await results
-    String a = await task1
-    String b = await task2
+    String a = task1.await()
+    String b = task2.await()
     print("{a}, {b}")
 
 # async closures
 auto fetcher = async (str url):
-    return await http.get(url)
+    return http.get(url).await()
 
 # async with error handling (throws + try)
 async void resilient_fetch(str url):
-    match try await fetch(url):
+    match try fetch(url).await():
         case Ok(data): print(data)
         case Error(e): print("Failed: {e}")
 ```
@@ -2755,8 +2755,8 @@ async void main():
     auto task1 = async.spawn(fetch("https://api.example.com/a"))
     auto task2 = async.spawn(fetch("https://api.example.com/b"))
 
-    String a = await task1
-    String b = await task2
+    String a = task1.await()
+    String b = task2.await()
 
 # Select (wait for first completion)
 async void race():
@@ -2774,7 +2774,7 @@ async void producer_consumer():
             sender.send(i)
     )
 
-    while await receiver.recv() is Some(value):
+    while receiver.recv().await() is Some(value):
         print("Got: {value}")
 
 # Timeouts
@@ -2792,12 +2792,12 @@ import std.http
 # HTTP client — simple
 async void fetch_example() throws HttpError:
     # Simple GET
-    String body = await http.get("https://api.example.com/data").text()
+    String body = http.get("https://api.example.com/data").await().text()
 
     # POST with JSON
-    auto resp = await http.post("https://api.example.com/users")
+    auto resp = http.post("https://api.example.com/users")
         .json(User("Alice", 30))
-        .send()
+        .send().await()
 
     User user = resp.json[User]()
 

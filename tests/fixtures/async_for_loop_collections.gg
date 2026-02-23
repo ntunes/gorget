@@ -8,7 +8,7 @@ async void test_vector():
     items.push(3)
     int total = 0
     for item in items:
-        int val = await process(item)
+        int val = process(item).await()
         total = total + val
     print(total)
 
@@ -18,7 +18,7 @@ async void test_dict():
     scores["b"] = 20
     int total = 0
     for (k, v) in scores:
-        int val = await process(v)
+        int val = process(v).await()
         total = total + val
     print(total)
 
@@ -26,7 +26,7 @@ async void test_string():
     str word = "abc"
     int count = 0
     for ch in word:
-        int val = await process(1)
+        int val = process(1).await()
         count = count + val
     print(count)
 
@@ -39,15 +39,15 @@ async void test_multiple():
     b.push(4)
     int total = 0
     for x in a:
-        int val = await process(x)
+        int val = process(x).await()
         total = total + val
     for y in b:
-        int val = await process(y)
+        int val = process(y).await()
         total = total + val
     print(total)
 
 async void main():
-    await test_vector()
-    await test_dict()
-    await test_string()
-    await test_multiple()
+    test_vector().await()
+    test_dict().await()
+    test_string().await()
+    test_multiple().await()
