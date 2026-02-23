@@ -6007,6 +6007,11 @@ fn format_module_canonical(m: &Module) -> String {
 }
 
 // ═══════════════════════════════════════════════════════════════
+#[test]
+fn async_basic() {
+    run_gg("async_basic.gg", "14");
+}
+
 // Parser Comparison Test
 // ═══════════════════════════════════════════════════════════════
 

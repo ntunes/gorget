@@ -79,6 +79,12 @@ impl CodegenContext<'_> {
                     return c_mangle::escape_function(name);
                 }
                 let escaped = c_mangle::escape_keyword(name);
+                // Async poll body: access lifted variables through __self->
+                if let Some(ref lifted) = self.async_lifted_vars {
+                    if lifted.contains(&escaped) {
+                        return format!("__self->{escaped}");
+                    }
+                }
                 if self.mutable_captures.contains(&escaped) {
                     format!("(*__env->{escaped})")
                 } else if self.pointer_params.contains(&escaped) {
@@ -663,13 +669,16 @@ impl CodegenContext<'_> {
             }
 
             Expr::Await { expr: await_expr } => {
+                // Inside async poll body: await is handled by emit_async_poll_body, not gen_expr.
+                // Sync fallback: busy-poll (GCC statement expression)
                 let inner = self.gen_expr(await_expr);
-                format!("/* await */ {inner}")
+                let future_type = self.infer_c_type_from_expr(&await_expr.node);
+                format!("({{ {future_type} __af = {inner}; while (__af.poll(&__af) != GORGET_POLL_READY) {{}} __af.result; }})")
             }
 
             Expr::Spawn { expr: spawn_expr } => {
-                let inner = self.gen_expr(spawn_expr);
-                format!("/* spawn */ {inner}")
+                // Phase 3: Task[T] = Future[T], spawn is identity
+                self.gen_expr(spawn_expr)
             }
         }
     }

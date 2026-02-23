@@ -354,6 +354,12 @@ pub struct CodegenContext<'a> {
     pub test_name_filter: Option<String>,
     /// True while generating code inside a `test` block body (for cleanup registration).
     pub in_test_body: bool,
+    /// When Some, inside async poll body: variable names in this set get `__self->` prefix.
+    pub async_lifted_vars: Option<HashSet<String>>,
+    /// Sub-future counter within current async function.
+    pub async_sub_counter: usize,
+    /// Unique Future[T] types needed: mangled name → inner C type (e.g. "Future__int64_t" → "int64_t").
+    pub future_types: FxHashMap<String, String>,
     /// Original Gorget source text, used to extract verbatim source lines for trace events.
     pub source_text: String,
     /// The scope of the function currently being emitted, for scope-aware variable lookup.
@@ -594,6 +600,9 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
         test_exclude_tags: opts.test_exclude_tags,
         test_name_filter: opts.test_name_filter,
         in_test_body: false,
+        async_lifted_vars: None,
+        async_sub_counter: 0,
+        future_types: FxHashMap::default(),
         source_text: opts.source_text,
         current_function_scope: None,
         function_body_scopes: &analysis.function_body_scopes,
@@ -609,6 +618,7 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
     ctx.discover_generic_type_usages_from_semantic(module);
     ctx.discover_generic_function_usages(module);
     ctx.discover_tuple_types(module);
+    ctx.discover_future_types(module);
 
     // 1. Runtime preamble (includes, types, string helpers)
     emitter.emit(c_runtime::RUNTIME_PREAMBLE);
@@ -622,6 +632,12 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
 
     // 1b. Runtime core (checked arithmetic, collections, etc.)
     emitter.emit(c_runtime::RUNTIME_CORE);
+
+    // 1b2. Async runtime (poll protocol constants)
+    let has_async = module.items.iter().any(|i| matches!(&i.node, Item::Function(f) if f.qualifiers.is_async));
+    if has_async {
+        emitter.emit(c_runtime::ASYNC_RUNTIME);
+    }
 
     // 1c. Process runtime (when std.process is imported)
     let has_process = module.items.iter().any(|i| {
@@ -699,6 +715,9 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
 
     // 2. Forward declarations
     ctx.emit_forward_declarations(module, &mut emitter);
+
+    // 2a2. Future[T] typedefs (after forward declarations, before tuples)
+    ctx.emit_future_typedefs(&mut emitter);
 
     // 2b. Tuple typedefs (after forward declarations, before type definitions)
     ctx.emit_tuple_typedefs(&mut emitter);
@@ -1454,7 +1473,7 @@ void main():
     }
 
     #[test]
-    fn await_stub() {
+    fn async_state_machine() {
         let source = "\
 async int fetch():
     return 42
@@ -1462,11 +1481,15 @@ async void main():
     auto x = await fetch()
 ";
         let c_code = compile_to_c(source);
-        assert!(c_code.contains("/* await */"));
+        // Should emit Future types, state structs, and poll functions
+        assert!(c_code.contains("Future__int64_t"), "Should emit Future__int64_t type");
+        assert!(c_code.contains("__AsyncState_fetch"), "Should emit state struct");
+        assert!(c_code.contains("__poll"), "Should emit poll function");
+        assert!(c_code.contains("GORGET_POLL_READY"), "Should use poll protocol");
     }
 
     #[test]
-    fn spawn_stub() {
+    fn spawn_identity() {
         let source = "\
 async int fetch():
     return 42
@@ -1474,7 +1497,8 @@ async void main():
     auto x = spawn fetch()
 ";
         let c_code = compile_to_c(source);
-        assert!(c_code.contains("/* spawn */"));
+        // spawn should generate a call to the constructor (identity)
+        assert!(c_code.contains("gg_fetch("), "spawn should call the async constructor");
     }
 
     #[test]

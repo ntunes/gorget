@@ -6,6 +6,17 @@ use super::c_mangle;
 use super::c_types;
 use super::{CodegenContext, DropAction, DropScopeKind};
 
+/// Analysis result for an async function body.
+#[allow(dead_code)]
+struct AsyncAnalysis {
+    params: Vec<(String, String)>,       // (name, c_type)
+    locals: Vec<(String, String)>,       // (name, c_type)
+    await_count: usize,
+    sub_futures: Vec<(usize, String)>,   // (index, future_c_type)
+    inner_return_c_type: String,         // T, not Future[T]
+    future_type_name: String,            // "Future__int64_t"
+}
+
 /// Build a mangled name for a Callable/MutCallable/ConsumeCallable trait signature.
 /// E.g., Callable[int(int, float)] → "Callable__int64_t__int64_t__double"
 pub(super) fn callable_sig_name(prefix: &str, param_c_types: &[String], ret_c_type: &str) -> String {
@@ -617,6 +628,12 @@ impl CodegenContext<'_> {
             return; // Generic template — emitted per-instantiation
         }
         let is_main = f.name.node == "main" && method_info.is_none();
+
+        // Async functions get state-machine transformation instead of normal codegen.
+        if f.qualifiers.is_async {
+            self.emit_async_function(f, method_info, is_main, emitter);
+            return;
+        }
         let (ret_type, func_name, params) = if is_main {
             ("int".to_string(), "main".to_string(), "int argc, char** argv".to_string())
         } else {
@@ -859,7 +876,11 @@ impl CodegenContext<'_> {
         f: &FunctionDef,
         method_info: Option<(&str, Option<&str>, &[String])>,
     ) -> (String, String, String) {
-        let ret_type = if matches!(f.return_type.node, Type::SelfType) {
+        let ret_type = if f.qualifiers.is_async {
+            // Async functions return Future[T] where T is the declared return type
+            let inner = c_types::ast_type_to_c(&f.return_type.node, self.scopes);
+            c_mangle::mangle_generic("Future", &[inner])
+        } else if matches!(f.return_type.node, Type::SelfType) {
             if let Some((type_name, _, _)) = method_info {
                 type_name.to_string()
             } else {
@@ -3096,6 +3117,581 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
     }
 
     // ─── Tuple Typedefs ──────────────────────────────────────
+
+    // ─── Async/Await State Machine Codegen ────────────────────
+
+    /// Pre-scan the module for async functions and register Future[T] types.
+    pub fn discover_future_types(&mut self, module: &crate::parser::ast::Module) {
+        for item in &module.items {
+            if let Item::Function(f) = &item.node {
+                if f.qualifiers.is_async {
+                    let inner_c = c_types::ast_type_to_c(&f.return_type.node, self.scopes);
+                    let mangled = c_mangle::mangle_generic("Future", &[inner_c.clone()]);
+                    self.future_types.entry(mangled).or_insert(inner_c);
+                }
+            }
+        }
+    }
+
+    /// Emit typedefs for all registered Future[T] types.
+    pub fn emit_future_typedefs(&self, emitter: &mut CEmitter) {
+        if self.future_types.is_empty() {
+            return;
+        }
+        emitter.emit_line("// ── Future Types ──");
+        for (mangled, inner_c_type) in &self.future_types {
+            emitter.emit_line(&format!("typedef struct {mangled} {mangled};"));
+            emitter.emit_line(&format!("struct {mangled} {{"));
+            emitter.indent();
+            emitter.emit_line(&format!("int (*poll)({mangled}*);"));
+            emitter.emit_line("void* state;");
+            if inner_c_type != "void" {
+                emitter.emit_line(&format!("{inner_c_type} result;"));
+            }
+            emitter.dedent();
+            emitter.emit_line("};");
+            emitter.blank_line();
+        }
+    }
+
+    /// Top-level async function handler: analyze → emit state struct → poll → constructor.
+    fn emit_async_function(
+        &mut self,
+        f: &FunctionDef,
+        method_info: Option<(&str, Option<&str>, &[String])>,
+        is_main: bool,
+        emitter: &mut CEmitter,
+    ) {
+        let inner_c_type = c_types::ast_type_to_c(&f.return_type.node, self.scopes);
+        let future_type = c_mangle::mangle_generic("Future", &[inner_c_type.clone()]);
+
+        // Register the future type if not already registered
+        self.future_types.entry(future_type.clone()).or_insert(inner_c_type.clone());
+
+        let func_name = if is_main {
+            "gg__async_main".to_string()
+        } else if let Some((type_name, trait_name, trait_type_args)) = method_info {
+            if let Some(tname) = trait_name {
+                c_mangle::mangle_trait_method(tname, type_name, &f.name.node, trait_type_args)
+            } else {
+                c_mangle::mangle_method(type_name, &f.name.node)
+            }
+        } else {
+            c_mangle::escape_function(&f.name.node)
+        };
+
+        // Analyze the async body
+        let analysis = self.analyze_async_function(f);
+        let state_name = format!("__AsyncState_{}", f.name.node);
+
+        // 1. Emit state struct
+        self.emit_async_state_struct(&state_name, &analysis, emitter);
+
+        // 2. Emit poll function
+        let poll_name = format!("{func_name}__poll");
+        self.emit_async_poll_function(
+            f, &poll_name, &state_name, &future_type, &inner_c_type, &analysis, emitter,
+        );
+
+        // 3. Emit constructor
+        self.emit_async_constructor(
+            &func_name, &state_name, &future_type, &poll_name, f, emitter,
+        );
+
+        // 4. Emit C main wrapper for async main
+        if is_main {
+            emitter.emit_line("int main(int argc, char** argv) {");
+            emitter.indent();
+            emitter.emit_line("gorget_init_args(argc, argv);");
+            emitter.emit_line(&format!("{future_type} __f = gg__async_main();"));
+            emitter.emit_line("while (__f.poll(&__f) != GORGET_POLL_READY) {}");
+            emitter.emit_line("if (__f.state) free(__f.state);");
+            emitter.emit_line("return 0;");
+            emitter.dedent();
+            emitter.emit_line("}");
+            emitter.blank_line();
+        }
+    }
+
+    /// Analyze an async function body to collect params, locals, and await points.
+    fn analyze_async_function(&self, f: &FunctionDef) -> AsyncAnalysis {
+        let mut params: Vec<(String, String)> = Vec::new();
+        for p in &f.params {
+            if p.node.name.node == "self" {
+                continue;
+            }
+            let c_type = c_types::ast_type_to_c(&p.node.type_.node, self.scopes);
+            params.push((p.node.name.node.clone(), c_type));
+        }
+
+        let inner_c_type = c_types::ast_type_to_c(&f.return_type.node, self.scopes);
+        let future_type_name = c_mangle::mangle_generic("Future", &[inner_c_type.clone()]);
+
+        let mut locals: Vec<(String, String)> = Vec::new();
+        let mut await_count = 0;
+        let mut sub_futures: Vec<(usize, String)> = Vec::new();
+
+        // Walk the body to collect locals and count awaits
+        if let FunctionBody::Block(block) = &f.body {
+            for stmt in &block.stmts {
+                match &stmt.node {
+                    Stmt::VarDecl { pattern, type_, value, .. } => {
+                        if let Pattern::Binding(name) = &pattern.node {
+                            let c_type = if matches!(type_.node, Type::Inferred) {
+                                // For auto-typed variables, infer from the value expression
+                                self.infer_async_var_type(&value.node, &params, &locals, f)
+                            } else {
+                                c_types::ast_type_to_c(&type_.node, self.scopes)
+                            };
+                            locals.push((name.clone(), c_type));
+                        }
+                        // Check for await in value
+                        if Self::expr_contains_await(&value.node) {
+                            let sub_future_type = self.infer_await_future_type(&value.node, f);
+                            sub_futures.push((await_count, sub_future_type));
+                            await_count += 1;
+                        }
+                    }
+                    Stmt::Return(Some(expr)) => {
+                        if Self::expr_contains_await(&expr.node) {
+                            let sub_future_type = self.infer_await_future_type(&expr.node, f);
+                            sub_futures.push((await_count, sub_future_type));
+                            await_count += 1;
+                        }
+                    }
+                    Stmt::Expr(expr) => {
+                        if Self::expr_contains_await(&expr.node) {
+                            let sub_future_type = self.infer_await_future_type(&expr.node, f);
+                            sub_futures.push((await_count, sub_future_type));
+                            await_count += 1;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        } else if let FunctionBody::Expression(expr) = &f.body {
+            if Self::expr_contains_await(&expr.node) {
+                let sub_future_type = self.infer_await_future_type(&expr.node, f);
+                sub_futures.push((await_count, sub_future_type));
+                await_count += 1;
+            }
+        }
+
+        AsyncAnalysis {
+            params,
+            locals,
+            await_count,
+            sub_futures,
+            inner_return_c_type: inner_c_type,
+            future_type_name,
+        }
+    }
+
+    /// Check if an expression contains an Await node.
+    fn expr_contains_await(expr: &Expr) -> bool {
+        match expr {
+            Expr::Await { .. } => true,
+            Expr::Call { callee, args, .. } => {
+                Self::expr_contains_await(&callee.node)
+                    || args.iter().any(|a| Self::expr_contains_await(&a.node.value.node))
+            }
+            _ => false,
+        }
+    }
+
+    /// Infer the Future[T] C type for an await expression.
+    /// For `await callee(args)`, the callee is an async function returning Future[T].
+    /// The return_type_id for async functions is already Future[T], so we use it directly.
+    fn infer_await_future_type(&self, expr: &Expr, _context_fn: &FunctionDef) -> String {
+        // Unwrap Await to get the inner call expression
+        let inner = match expr {
+            Expr::Await { expr: inner } => &inner.node,
+            _ => expr,
+        };
+
+        // For Call expressions, look up the callee's return type
+        if let Expr::Call { callee, .. } = inner {
+            if let Expr::Identifier(name) = &callee.node {
+                // Look up the function info to find its return type
+                if let Some(def_id) = self.scoped_lookup(name) {
+                    if let Some(fn_info) = self.function_info.get(&def_id) {
+                        if let Some(ret_tid) = fn_info.return_type_id {
+                            // return_type_id is already Future[T] for async functions
+                            return c_types::type_id_to_c(ret_tid, self.types, self.scopes);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fallback: Future__void
+        "Future__void".to_string()
+    }
+
+    /// Infer the C type for an auto-typed variable in an async function body.
+    fn infer_async_var_type(
+        &self,
+        expr: &Expr,
+        params: &[(String, String)],
+        locals: &[(String, String)],
+        context_fn: &FunctionDef,
+    ) -> String {
+        match expr {
+            Expr::Await { expr: inner } => {
+                // `auto x = await callee(args)` — type is the inner T of the callee's Future[T]
+                if let Expr::Call { callee, .. } = &inner.node {
+                    if let Expr::Identifier(name) = &callee.node {
+                        if let Some(def_id) = self.scoped_lookup(name) {
+                            if let Some(fn_info) = self.function_info.get(&def_id) {
+                                if let Some(ret_tid) = fn_info.return_type_id {
+                                    // ret_tid is Future[T] — extract inner T
+                                    return self.extract_future_inner_c_type(ret_tid);
+                                }
+                            }
+                        }
+                    }
+                }
+                "int64_t".to_string()
+            }
+            Expr::Call { callee, .. } => {
+                if let Expr::Identifier(name) = &callee.node {
+                    if let Some(def_id) = self.scoped_lookup(name) {
+                        if let Some(fn_info) = self.function_info.get(&def_id) {
+                            if let Some(ret_tid) = fn_info.return_type_id {
+                                return c_types::type_id_to_c(ret_tid, self.types, self.scopes);
+                            }
+                        }
+                    }
+                }
+                "int64_t".to_string()
+            }
+            Expr::IntLiteral(_) => "int64_t".to_string(),
+            Expr::FloatLiteral(_) => "double".to_string(),
+            Expr::BoolLiteral(_) => "bool".to_string(),
+            Expr::StringLiteral(_) => "const char*".to_string(),
+            Expr::CharLiteral(_) => "char".to_string(),
+            Expr::Identifier(name) => {
+                // Look up in params or locals
+                for (n, t) in params.iter().chain(locals.iter()) {
+                    if n == name {
+                        return t.clone();
+                    }
+                }
+                "int64_t".to_string()
+            }
+            Expr::BinaryOp { left, .. } => {
+                self.infer_async_var_type(&left.node, params, locals, context_fn)
+            }
+            _ => "int64_t".to_string(),
+        }
+    }
+
+    /// Extract the inner T from a Future[T] type id, returning the C type string.
+    /// If the type is Generic(Future_def_id, [inner_tid]), returns type_id_to_c(inner_tid).
+    /// Otherwise falls back to the full type.
+    fn extract_future_inner_c_type(&self, tid: crate::semantic::ids::TypeId) -> String {
+        use crate::semantic::types::ResolvedType;
+        match self.types.get(tid) {
+            ResolvedType::Generic(_def_id, args) if !args.is_empty() => {
+                c_types::type_id_to_c(args[0], self.types, self.scopes)
+            }
+            _ => c_types::type_id_to_c(tid, self.types, self.scopes),
+        }
+    }
+
+    /// Emit the state struct for an async function.
+    fn emit_async_state_struct(
+        &self,
+        state_name: &str,
+        analysis: &AsyncAnalysis,
+        emitter: &mut CEmitter,
+    ) {
+        emitter.emit_line(&format!("typedef struct {{"));
+        emitter.indent();
+        emitter.emit_line("int __state;");
+
+        // Parameters
+        for (name, c_type) in &analysis.params {
+            emitter.emit_line(&format!("{} {};", c_type, c_mangle::escape_keyword(name)));
+        }
+
+        // Locals
+        for (name, c_type) in &analysis.locals {
+            emitter.emit_line(&format!("{} {};", c_type, c_mangle::escape_keyword(name)));
+        }
+
+        // Sub-future fields
+        for (idx, future_c_type) in &analysis.sub_futures {
+            emitter.emit_line(&format!("{future_c_type} __sub{idx};"));
+        }
+
+        emitter.dedent();
+        emitter.emit_line(&format!("}} {state_name};"));
+        emitter.blank_line();
+    }
+
+    /// Emit the poll function for an async function.
+    fn emit_async_poll_function(
+        &mut self,
+        f: &FunctionDef,
+        poll_name: &str,
+        state_name: &str,
+        future_type: &str,
+        inner_c_type: &str,
+        analysis: &AsyncAnalysis,
+        emitter: &mut CEmitter,
+    ) {
+        emitter.emit_line(&format!(
+            "static int {poll_name}({future_type}* __future) {{"
+        ));
+        emitter.indent();
+        emitter.emit_line(&format!(
+            "{state_name}* __self = ({state_name}*)__future->state;"
+        ));
+        emitter.emit_line("switch (__self->__state) {");
+
+        // Build the set of lifted variable names (params + locals)
+        let mut lifted = HashSet::new();
+        for (name, _) in &analysis.params {
+            lifted.insert(c_mangle::escape_keyword(name));
+        }
+        for (name, _) in &analysis.locals {
+            lifted.insert(c_mangle::escape_keyword(name));
+        }
+
+        // Save and set async context
+        let prev_lifted = self.async_lifted_vars.take();
+        let prev_sub_counter = self.async_sub_counter;
+        self.async_lifted_vars = Some(lifted);
+        self.async_sub_counter = 0;
+
+        // Track which params are pointer params (none for async — all are in state struct)
+        let prev_pointer_params = std::mem::take(&mut self.pointer_params);
+
+        // Set current function scope for scope-aware variable lookup.
+        let prev_function_scope = self.current_function_scope.take();
+        let scope_key = (f.name.node.clone(), f.name.span.start);
+        if let Some(&scope_id) = self.function_body_scopes.get(&scope_key) {
+            self.current_function_scope = Some(scope_id);
+        }
+
+        // Emit poll body states
+        match &f.body {
+            FunctionBody::Block(block) => {
+                self.emit_async_poll_body(block, future_type, inner_c_type, analysis, emitter);
+            }
+            FunctionBody::Expression(expr) => {
+                // Expression-body: single case 0 with immediate result
+                emitter.indent();
+                emitter.emit_line("case 0:");
+                emitter.indent();
+                let e = self.gen_expr(expr);
+                if inner_c_type != "void" {
+                    emitter.emit_line(&format!("__future->result = {e};"));
+                }
+                emitter.emit_line("free(__self); __future->state = NULL;");
+                emitter.emit_line("return GORGET_POLL_READY;");
+                emitter.dedent();
+                emitter.dedent();
+            }
+            FunctionBody::Declaration | FunctionBody::Extern(_) => {}
+        }
+
+        // Restore context
+        self.async_lifted_vars = prev_lifted;
+        self.async_sub_counter = prev_sub_counter;
+        self.pointer_params = prev_pointer_params;
+        self.current_function_scope = prev_function_scope;
+
+        emitter.emit_line("}");
+        emitter.emit_line("return GORGET_POLL_READY;");
+        emitter.dedent();
+        emitter.emit_line("}");
+        emitter.blank_line();
+    }
+
+    /// Emit the body of the poll function as a series of switch cases.
+    fn emit_async_poll_body(
+        &mut self,
+        block: &Block,
+        _future_type: &str,
+        inner_c_type: &str,
+        _analysis: &AsyncAnalysis,
+        emitter: &mut CEmitter,
+    ) {
+        let mut state_idx = 0;
+        let mut sub_idx = 0;
+
+        // Start case 0
+        emitter.indent();
+        emitter.emit_line(&format!("case {state_idx}:"));
+        emitter.indent();
+
+        for stmt in &block.stmts {
+            match &stmt.node {
+                Stmt::VarDecl { pattern, type_: _, value, is_const: _, .. } => {
+                    if Self::expr_contains_await(&value.node) {
+                        // VarDecl with await RHS: emit sub-future → state transition → poll check
+                        if let Expr::Await { expr: await_inner } = &value.node {
+                            let inner_expr = self.gen_expr(await_inner);
+                            let sub_field = format!("__sub{sub_idx}");
+                            emitter.emit_line(&format!("__self->{sub_field} = {inner_expr};"));
+                            state_idx += 1;
+                            emitter.emit_line(&format!("__self->__state = {state_idx};"));
+                            emitter.dedent();
+
+                            // Next case: poll the sub-future
+                            emitter.emit_line(&format!("case {state_idx}:"));
+                            emitter.indent();
+                            emitter.emit_line(&format!(
+                                "if (__self->{sub_field}.poll(&__self->{sub_field}) != GORGET_POLL_READY) return GORGET_POLL_PENDING;"
+                            ));
+
+                            // Extract result into the variable
+                            if let Pattern::Binding(name) = &pattern.node {
+                                let escaped = c_mangle::escape_keyword(name);
+                                emitter.emit_line(&format!(
+                                    "__self->{escaped} = __self->{sub_field}.result;"
+                                ));
+                            }
+                            sub_idx += 1;
+                        }
+                    } else {
+                        // VarDecl without await: assign to state struct field
+                        if let Pattern::Binding(name) = &pattern.node {
+                            let escaped = c_mangle::escape_keyword(name);
+                            let val = self.gen_expr(value);
+                            emitter.emit_line(&format!("__self->{escaped} = {val};"));
+                        }
+                    }
+                }
+                Stmt::Return(Some(expr)) => {
+                    if Self::expr_contains_await(&expr.node) {
+                        // Return with await
+                        if let Expr::Await { expr: await_inner } = &expr.node {
+                            let inner_expr = self.gen_expr(await_inner);
+                            let sub_field = format!("__sub{sub_idx}");
+                            emitter.emit_line(&format!("__self->{sub_field} = {inner_expr};"));
+                            state_idx += 1;
+                            emitter.emit_line(&format!("__self->__state = {state_idx};"));
+                            emitter.dedent();
+
+                            emitter.emit_line(&format!("case {state_idx}:"));
+                            emitter.indent();
+                            emitter.emit_line(&format!(
+                                "if (__self->{sub_field}.poll(&__self->{sub_field}) != GORGET_POLL_READY) return GORGET_POLL_PENDING;"
+                            ));
+                            if inner_c_type != "void" {
+                                emitter.emit_line(&format!(
+                                    "__future->result = __self->{sub_field}.result;"
+                                ));
+                            }
+                            sub_idx += 1;
+                        }
+                    } else {
+                        // Return without await
+                        let e = self.gen_expr(expr);
+                        if inner_c_type != "void" {
+                            emitter.emit_line(&format!("__future->result = {e};"));
+                        }
+                    }
+                    emitter.emit_line("free(__self); __future->state = NULL;");
+                    emitter.emit_line("return GORGET_POLL_READY;");
+                }
+                Stmt::Return(None) => {
+                    emitter.emit_line("free(__self); __future->state = NULL;");
+                    emitter.emit_line("return GORGET_POLL_READY;");
+                }
+                Stmt::Expr(expr) => {
+                    if Self::expr_contains_await(&expr.node) {
+                        // Expression-statement with await (discard result)
+                        if let Expr::Await { expr: await_inner } = &expr.node {
+                            let inner_expr = self.gen_expr(await_inner);
+                            let sub_field = format!("__sub{sub_idx}");
+                            emitter.emit_line(&format!("__self->{sub_field} = {inner_expr};"));
+                            state_idx += 1;
+                            emitter.emit_line(&format!("__self->__state = {state_idx};"));
+                            emitter.dedent();
+
+                            emitter.emit_line(&format!("case {state_idx}:"));
+                            emitter.indent();
+                            emitter.emit_line(&format!(
+                                "if (__self->{sub_field}.poll(&__self->{sub_field}) != GORGET_POLL_READY) return GORGET_POLL_PENDING;"
+                            ));
+                            sub_idx += 1;
+                        }
+                    } else {
+                        // Regular expression statement — delegate to gen_expr
+                        let e = self.gen_expr(expr);
+                        emitter.emit_line(&format!("{e};"));
+                    }
+                }
+                _ => {
+                    // Other statements: delegate to gen_stmt
+                    self.gen_stmt(&stmt.node, stmt.span, emitter);
+                }
+            }
+        }
+
+        // Implicit return for void functions
+        if inner_c_type == "void" {
+            emitter.emit_line("free(__self); __future->state = NULL;");
+            emitter.emit_line("return GORGET_POLL_READY;");
+        }
+
+        emitter.dedent();
+        emitter.dedent();
+    }
+
+    /// Emit the constructor function for an async function.
+    fn emit_async_constructor(
+        &self,
+        func_name: &str,
+        state_name: &str,
+        future_type: &str,
+        poll_name: &str,
+        f: &FunctionDef,
+        emitter: &mut CEmitter,
+    ) {
+        // Build parameter list
+        let mut params_vec: Vec<String> = Vec::new();
+        for p in &f.params {
+            if p.node.name.node == "self" {
+                continue;
+            }
+            let c_type = c_types::ast_type_to_c(&p.node.type_.node, self.scopes);
+            let escaped = c_mangle::escape_keyword(&p.node.name.node);
+            params_vec.push(format!("{c_type} {escaped}"));
+        }
+        let params_str = if params_vec.is_empty() {
+            "void".to_string()
+        } else {
+            params_vec.join(", ")
+        };
+
+        emitter.emit_line(&format!("{future_type} {func_name}({params_str}) {{"));
+        emitter.indent();
+        emitter.emit_line(&format!(
+            "{state_name}* __s = ({state_name}*)malloc(sizeof({state_name}));"
+        ));
+        emitter.emit_line(&format!("memset(__s, 0, sizeof({state_name}));"));
+
+        // Copy parameters into state struct
+        for p in &f.params {
+            if p.node.name.node == "self" {
+                continue;
+            }
+            let escaped = c_mangle::escape_keyword(&p.node.name.node);
+            emitter.emit_line(&format!("__s->{escaped} = {escaped};"));
+        }
+
+        emitter.emit_line(&format!(
+            "return ({future_type}){{.poll = {poll_name}, .state = __s}};"
+        ));
+        emitter.dedent();
+        emitter.emit_line("}");
+        emitter.blank_line();
+    }
 
     /// Register a tuple typedef, deduplicating by name. Returns the mangled name.
     // Linear dedup is fine here — typical programs have <30 tuple types,

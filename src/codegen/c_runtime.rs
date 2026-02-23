@@ -477,6 +477,13 @@ static inline void __gorget_cleanup_run(int mark) {
 }
 "#;
 
+/// Async runtime constants (polling protocol).
+pub const ASYNC_RUNTIME: &str = r#"
+// ── Async Runtime ──
+#define GORGET_POLL_READY 0
+#define GORGET_POLL_PENDING 1
+"#;
+
 /// Everything after the panic helper — checked arithmetic, collections, etc.
 pub const RUNTIME_CORE: &str = r#"
 // ── Checked Arithmetic ──────────────────────────────────────
