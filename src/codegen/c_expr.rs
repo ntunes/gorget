@@ -669,6 +669,9 @@ impl CodegenContext<'_> {
             }
 
             Expr::Await { expr: await_expr } => {
+                if let Some(replacement) = self.async_await_replacements.get(&expr.span.start) {
+                    return replacement.clone();
+                }
                 let inner_c_type = self.infer_c_type_from_expr(&await_expr.node);
                 if inner_c_type.starts_with("Task__") {
                     // Await on Task[T] → blocking condvar wait

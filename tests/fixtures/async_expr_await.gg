@@ -1,0 +1,22 @@
+async int double(int x):
+    return x * 2
+
+async int add(int a, int b):
+    return a + b
+
+async void main():
+    int x = await double(5) + 1
+    print(x)
+
+    int y = await double(3) + await double(4)
+    print(y)
+
+    int z = await add(await double(2), await double(3))
+    print(z)
+
+    int w = -await double(5)
+    print(w)
+
+    int total = 0
+    total = total + await double(10)
+    print(total)

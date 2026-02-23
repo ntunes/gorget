@@ -344,10 +344,10 @@ impl Parser {
                 ))
             }
 
-            // Await
+            // Await — binds like unary ops (tighter than binary +/- etc.)
             Token::Keyword(Keyword::Await) => {
                 self.advance();
-                let operand = self.parse_expr_bp(2)?;
+                let operand = self.parse_expr_bp(33)?;
                 let end = operand.span;
                 Ok(Spanned::new(
                     Expr::Await {

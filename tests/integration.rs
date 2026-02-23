@@ -6047,6 +6047,11 @@ fn async_for_loop_collections() {
     run_gg("async_for_loop_collections.gg", "60\n300\n30\n100");
 }
 
+#[test]
+fn async_expr_await() {
+    run_gg("async_expr_await.gg", "11\n14\n10\n-10\n20");
+}
+
 // Parser Comparison Test
 // ═══════════════════════════════════════════════════════════════
 
