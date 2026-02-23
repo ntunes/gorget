@@ -6017,6 +6017,11 @@ fn async_spawn() {
     run_gg("async_spawn.gg", "25");
 }
 
+#[test]
+fn async_channel() {
+    run_gg("async_channel.gg", "21");
+}
+
 // Parser Comparison Test
 // ═══════════════════════════════════════════════════════════════
 

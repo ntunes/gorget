@@ -461,8 +461,8 @@ static inline void gorget_panic(const char* msg) {
 // ── Cleanup stack (survives longjmp) ─────────────────────────
 typedef void (*__gorget_cleanup_fn)(void*);
 typedef struct { __gorget_cleanup_fn fn; void* ptr; } __gorget_cleanup_entry;
-static __gorget_cleanup_entry __gorget_cleanup[256];
-static int __gorget_cleanup_top = 0;
+static _Thread_local __gorget_cleanup_entry __gorget_cleanup[256];
+static _Thread_local int __gorget_cleanup_top = 0;
 
 static inline void __gorget_cleanup_push(__gorget_cleanup_fn fn, void* ptr) {
     if (__gorget_cleanup_top < 256)
@@ -568,6 +568,89 @@ static void __gorget_executor_shutdown(void) {
     pthread_mutex_destroy(&__gorget_exec.mtx);
     pthread_cond_destroy(&__gorget_exec.cond);
     __gorget_exec_init_done = 0;
+}
+"#;
+
+/// Bounded MPMC channel runtime (mutex + condvar ring buffer).
+pub const CHANNEL_RUNTIME: &str = r#"
+// ── Channel (bounded MPMC) ──
+typedef struct GorgetChannel {
+    void*           buf;
+    size_t          elem_size;
+    size_t          capacity;
+    size_t          head;
+    size_t          tail;
+    size_t          count;
+    pthread_mutex_t mtx;
+    pthread_cond_t  not_full;
+    pthread_cond_t  not_empty;
+    volatile int    closed;
+} GorgetChannel;
+
+static GorgetChannel* gorget_channel_new(size_t capacity, size_t elem_size) {
+    if (capacity == 0) capacity = 1;
+    GorgetChannel* ch = (GorgetChannel*)calloc(1, sizeof(GorgetChannel));
+    ch->buf = malloc(capacity * elem_size);
+    ch->elem_size = elem_size;
+    ch->capacity = capacity;
+    pthread_mutex_init(&ch->mtx, NULL);
+    pthread_cond_init(&ch->not_full, NULL);
+    pthread_cond_init(&ch->not_empty, NULL);
+    return ch;
+}
+
+static void gorget_channel_send(GorgetChannel* ch, const void* data) {
+    pthread_mutex_lock(&ch->mtx);
+    if (ch->closed) {
+        pthread_mutex_unlock(&ch->mtx);
+        fprintf(stderr, "gorget: panic: send on closed channel\n");
+        exit(1);
+    }
+    while (ch->count == ch->capacity && !ch->closed)
+        pthread_cond_wait(&ch->not_full, &ch->mtx);
+    if (ch->closed) {
+        pthread_mutex_unlock(&ch->mtx);
+        fprintf(stderr, "gorget: panic: send on closed channel\n");
+        exit(1);
+    }
+    memcpy((char*)ch->buf + ch->tail * ch->elem_size, data, ch->elem_size);
+    ch->tail = (ch->tail + 1) % ch->capacity;
+    ch->count++;
+    pthread_cond_signal(&ch->not_empty);
+    pthread_mutex_unlock(&ch->mtx);
+}
+
+static void gorget_channel_recv(GorgetChannel* ch, void* out) {
+    pthread_mutex_lock(&ch->mtx);
+    while (ch->count == 0 && !ch->closed)
+        pthread_cond_wait(&ch->not_empty, &ch->mtx);
+    if (ch->count == 0 && ch->closed) {
+        pthread_mutex_unlock(&ch->mtx);
+        fprintf(stderr, "gorget: panic: recv on closed empty channel\n");
+        exit(1);
+    }
+    memcpy(out, (char*)ch->buf + ch->head * ch->elem_size, ch->elem_size);
+    ch->head = (ch->head + 1) % ch->capacity;
+    ch->count--;
+    pthread_cond_signal(&ch->not_full);
+    pthread_mutex_unlock(&ch->mtx);
+}
+
+static void gorget_channel_close(GorgetChannel* ch) {
+    pthread_mutex_lock(&ch->mtx);
+    ch->closed = 1;
+    pthread_cond_broadcast(&ch->not_full);
+    pthread_cond_broadcast(&ch->not_empty);
+    pthread_mutex_unlock(&ch->mtx);
+}
+
+static void gorget_channel_free(GorgetChannel* ch) {
+    if (!ch) return;
+    pthread_mutex_destroy(&ch->mtx);
+    pthread_cond_destroy(&ch->not_full);
+    pthread_cond_destroy(&ch->not_empty);
+    free(ch->buf);
+    free(ch);
 }
 "#;
 
@@ -1061,9 +1144,9 @@ typedef struct {
     int code;
 } GorgetError;
 
-static jmp_buf __gorget_jmp_stack[64];
-static int __gorget_jmp_top = -1;
-static GorgetError __gorget_last_error;
+static _Thread_local jmp_buf __gorget_jmp_stack[64];
+static _Thread_local int __gorget_jmp_top = -1;
+static _Thread_local GorgetError __gorget_last_error;
 
 #define GORGET_TRY (__gorget_jmp_top >= 63 ? (fprintf(stderr, "gorget: try stack overflow\n"), exit(1), 0) : (__gorget_jmp_top++, setjmp(__gorget_jmp_stack[__gorget_jmp_top]) == 0))
 #define GORGET_CATCH_END (__gorget_jmp_top--)

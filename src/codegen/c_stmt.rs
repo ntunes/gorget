@@ -2570,6 +2570,7 @@ impl CodegenContext<'_> {
                     // Builtin return types (compiler builtins only; stdlib uses function_info)
                     match name.as_str() {
                         "format" => return "GorgetString".to_string(),
+                        "Channel" => return "GorgetChannel*".to_string(),
                         _ => {}
                     }
                     if let Some(def_id) = self.scoped_lookup(name) {

@@ -1808,9 +1808,12 @@ impl CodegenContext<'_> {
         let is_char = c_type.as_deref() == Some("char")
             && matches!(method_name, "is_alpha" | "is_digit" | "is_alphanumeric" | "is_whitespace" | "is_hex_digit" | "to_upper" | "to_lower" | "is_upper" | "is_lower");
 
+        let is_channel = type_name == "Channel"
+            || c_type.as_deref() == Some("GorgetChannel*");
+
         let is_primitive_hashable = !is_vector && !is_map && !is_set && !is_string
             && !is_option && !is_result && !is_box && !is_file && !is_iterator
-            && !is_char
+            && !is_char && !is_channel
             && method_name == "hash"
             && matches!(c_type.as_deref(), Some(
                 "int64_t" | "int8_t" | "int16_t" | "int32_t" |
@@ -1819,7 +1822,7 @@ impl CodegenContext<'_> {
                 "bool" | "char32_t"
             ));
 
-        if !is_vector && !is_map && !is_set && !is_string && !is_option && !is_result && !is_box && !is_file && !is_iterator && !is_primitive_hashable && !is_char {
+        if !is_vector && !is_map && !is_set && !is_string && !is_option && !is_result && !is_box && !is_file && !is_iterator && !is_primitive_hashable && !is_char && !is_channel {
             return None;
         }
 
@@ -1885,7 +1888,44 @@ impl CodegenContext<'_> {
         if is_file {
             return Some(self.gen_file_method(&recv, method_name, args, needs_temp));
         }
+        if is_channel {
+            return Some(self.gen_channel_method(&recv, method_name, args, receiver));
+        }
         None
+    }
+
+    fn gen_channel_method(
+        &mut self,
+        recv: &str,
+        method_name: &str,
+        args: &[Spanned<crate::parser::ast::CallArg>],
+        receiver: &Spanned<Expr>,
+    ) -> String {
+        match method_name {
+            "send" => {
+                let val = self.gen_expr(&args[0].node.value);
+                format!("({{ __typeof__({val}) __ch_tmp = {val}; gorget_channel_send({recv}, &__ch_tmp); }})")
+            }
+            "recv" => {
+                // Infer the element type from the receiver's generic type arg
+                let elem_c = if let Some(tid) = self.resolve_expr_type_id(receiver) {
+                    if let crate::semantic::types::ResolvedType::Generic(_, type_args) = self.types.get(tid) {
+                        if let Some(&elem_tid) = type_args.first() {
+                            crate::codegen::c_types::type_id_to_c(elem_tid, self.types, self.scopes)
+                        } else {
+                            "int64_t".to_string()
+                        }
+                    } else {
+                        "int64_t".to_string()
+                    }
+                } else {
+                    "int64_t".to_string()
+                };
+                format!("({{ {elem_c} __ch_tmp; gorget_channel_recv({recv}, &__ch_tmp); __ch_tmp; }})")
+            }
+            "close" => format!("gorget_channel_close({recv})"),
+            _ => format!("/* unknown channel method: {method_name} */ 0"),
+        }
     }
 
     /// Generate code for `needle in collection` expressions.

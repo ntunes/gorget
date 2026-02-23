@@ -162,6 +162,17 @@ impl CodegenContext<'_> {
                     .unwrap_or_else(|| "sizeof(int64_t)".to_string());
                 return format!("gorget_set_new({elem_size})");
             }
+            "Channel" => {
+                let elem_size = c_type_args.first()
+                    .map(|t| format!("sizeof({t})"))
+                    .unwrap_or_else(|| "sizeof(int64_t)".to_string());
+                let cap = if !args.is_empty() {
+                    self.gen_expr(&args[0].node.value)
+                } else {
+                    "1".to_string()
+                };
+                return format!("gorget_channel_new((size_t)({cap}), {elem_size})");
+            }
             _ => {}
         }
 

@@ -690,6 +690,18 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
     }
     ctx.has_spawn = has_spawn;
 
+    // 1b4. Channel runtime (when std.channel is imported)
+    let has_channel = module.items.iter().any(|i| {
+        matches!(&i.node, Item::Struct(s) if s.name.node == "Channel" && s.span == crate::span::Span::dummy())
+    });
+    if has_channel {
+        if !has_spawn {
+            emitter.emit("#include <pthread.h>\n");
+        }
+        emitter.emit(c_runtime::CHANNEL_RUNTIME);
+    }
+    let needs_threads = has_spawn || has_channel;
+
     // 1c. Process runtime (when std.process is imported)
     let has_process = module.items.iter().any(|i| {
         matches!(&i.node, Item::Struct(s) if s.name.node == "ExecResult" && s.span == crate::span::Span::dummy())
@@ -876,12 +888,12 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
             combined.push_str(&output[..pos]);
             combined.push_str(&splice_buf.finish());
             combined.push_str(&output[pos..]);
-            return CodegenOutput { c_code: combined, needs_sdl: has_sdl, needs_tls: has_tls, needs_crypto: has_crypto, needs_regex: has_regex, needs_threads: has_spawn, host_code: None, guest_code: None };
+            return CodegenOutput { c_code: combined, needs_sdl: has_sdl, needs_tls: has_tls, needs_crypto: has_crypto, needs_regex: has_regex, needs_threads, host_code: None, guest_code: None };
         }
-        return CodegenOutput { c_code: output + &splice_buf.finish(), needs_sdl: has_sdl, needs_tls: has_tls, needs_crypto: has_crypto, needs_regex: has_regex, needs_threads: has_spawn, host_code: None, guest_code: None };
+        return CodegenOutput { c_code: output + &splice_buf.finish(), needs_sdl: has_sdl, needs_tls: has_tls, needs_crypto: has_crypto, needs_regex: has_regex, needs_threads, host_code: None, guest_code: None };
     }
 
-    let mut output = CodegenOutput { c_code: emitter.finish(), needs_sdl: has_sdl, needs_tls: has_tls, needs_crypto: has_crypto, needs_regex: has_regex, needs_threads: has_spawn, host_code: None, guest_code: None };
+    let mut output = CodegenOutput { c_code: emitter.finish(), needs_sdl: has_sdl, needs_tls: has_tls, needs_crypto: has_crypto, needs_regex: has_regex, needs_threads, host_code: None, guest_code: None };
 
     // Hot-reload: generate split host/guest C sources
     if hot_reload {

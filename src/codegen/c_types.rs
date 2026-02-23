@@ -101,6 +101,7 @@ pub fn ast_type_to_c(ty: &crate::parser::ast::Type, scopes: &ScopeTable) -> Stri
                             .collect();
                         super::c_mangle::mangle_generic("Task", &c_args)
                     }
+                    "Channel" => "GorgetChannel*".to_string(),
                     _ => {
                         // User-defined generic type → mangled name
                         let c_args: Vec<String> = generic_args
@@ -269,6 +270,7 @@ pub fn type_id_to_c(type_id: TypeId, types: &TypeTable, scopes: &ScopeTable) -> 
                         .collect();
                     super::c_mangle::mangle_generic("Task", &c_args)
                 }
+                "Channel" => "GorgetChannel*".to_string(),
                 "Box" if args.len() == 1 => {
                     // Check if the inner type is a trait object (Box[Trait] → TraitObj)
                     let inner_resolved = types.get(args[0]);

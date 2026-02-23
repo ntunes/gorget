@@ -132,7 +132,7 @@ struct BranchState {
 /// `str` is Copy — an immutable view (`const char*`) that never owns memory.
 /// `String` (PrimitiveType::StringType) is non-Copy — it owns a heap buffer
 /// (GorgetString struct) and must be moved with `!`.
-fn is_copy_type(type_id: TypeId, types: &TypeTable) -> bool {
+fn is_copy_type(type_id: TypeId, types: &TypeTable, scopes: &ScopeTable) -> bool {
     match types.get(type_id) {
         ResolvedType::Primitive(prim) => {
             use PrimitiveType::*;
@@ -158,7 +158,11 @@ fn is_copy_type(type_id: TypeId, types: &TypeTable) -> bool {
         ResolvedType::Void | ResolvedType::Never | ResolvedType::Error => true,
         ResolvedType::Tuple(elems) => {
             let elems = elems.clone();
-            elems.iter().all(|e| is_copy_type(*e, types))
+            elems.iter().all(|e| is_copy_type(*e, types, scopes))
+        }
+        ResolvedType::Generic(def_id, _) => {
+            // Channel[T] is Copy — it's a pointer (shared access across tasks)
+            matches!(scopes.get_def(*def_id).name.as_str(), "Channel")
         }
         // Everything else is non-Copy (String, structs, enums, etc.)
         _ => false,
@@ -1086,7 +1090,7 @@ impl<'a> BorrowChecker<'a> {
                                         let def = self.scopes.get_def(var_def_id);
                                         if def.kind == DefKind::Variable && !def.is_param {
                                             if let Some(type_id) = def.type_id {
-                                                if !is_copy_type(type_id, self.types) {
+                                                if !is_copy_type(type_id, self.types, self.scopes) {
                                                     // Skip implicit move check only when
                                                     // we are in a return expression — return
                                                     // exits the function so the move happens
@@ -1386,7 +1390,7 @@ impl<'a> BorrowChecker<'a> {
                             let def = self.scopes.get_def(var_def_id);
                             if def.kind == DefKind::Variable && !def.is_param {
                                 if let Some(type_id) = def.type_id {
-                                    if !is_copy_type(type_id, self.types) {
+                                    if !is_copy_type(type_id, self.types, self.scopes) {
                                         let skip_implicit_move = self.loop_depth > 0
                                             && !self.loop_local_defs.last()
                                                 .map_or(false, |s| s.contains(&var_def_id))
@@ -1517,7 +1521,7 @@ impl<'a> BorrowChecker<'a> {
                             // When a non-Copy owning variable is reassigned, all existing
                             // references borrowing from the old value become dangling.
                             let is_copy = self.scopes.get_def(def_id).type_id
-                                .map_or(false, |tid| is_copy_type(tid, self.types));
+                                .map_or(false, |tid| is_copy_type(tid, self.types, self.scopes));
                             if !is_copy {
                                 let source_name = self.scopes.get_def(def_id).name.clone();
                                 let dependents: Vec<DefId> = self.var_origins.iter()
@@ -1815,7 +1819,7 @@ impl<'a> BorrowChecker<'a> {
                 // re-binding them is just copying a pointer, not transferring ownership.
                 if def.kind == DefKind::Variable && !def.is_param {
                     if let Some(type_id) = def.type_id {
-                        if !is_copy_type(type_id, self.types) {
+                        if !is_copy_type(type_id, self.types, self.scopes) {
                             self.error(
                                 SemanticErrorKind::MoveWithoutOperator {
                                     name: def.name.clone(),

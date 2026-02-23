@@ -1636,7 +1636,7 @@ impl CodegenContext<'_> {
                 }
                 // Runtime-provided types don't need monomorphization
                 match name.node.as_str() {
-                    "Vector" | "List" | "Array" | "Set" | "Box" => return,
+                    "Vector" | "List" | "Array" | "Set" | "Box" | "Channel" => return,
                     "Dict" => {
                         let c_args: Vec<String> = generic_args.iter()
                             .map(|a| c_types::ast_type_to_c(&a.node, self.scopes))
@@ -1980,8 +1980,11 @@ impl CodegenContext<'_> {
         for item in &module.items {
             match &item.node {
                 Item::Struct(s) if s.generic_params.is_some() => {
-                    self.generic_struct_templates
-                        .insert(s.name.node.clone(), s.clone());
+                    // Skip runtime-handled generics (their codegen is hardcoded, not monomorphized)
+                    if s.name.node != "Channel" {
+                        self.generic_struct_templates
+                            .insert(s.name.node.clone(), s.clone());
+                    }
                 }
                 Item::Enum(e) if e.generic_params.is_some() => {
                     self.generic_enum_templates

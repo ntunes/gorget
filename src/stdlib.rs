@@ -54,7 +54,7 @@ pub fn is_stdlib_module(segments: &[String]) -> bool {
         return false;
     }
     match segments.len() {
-        2 => matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv" | "io" | "random" | "time" | "collections" | "math" | "fmt" | "process" | "sdl" | "gfx" | "ecs" | "json" | "toml" | "xml" | "yaml" | "bytes" | "crypto" | "ssh" | "http" | "regex" | "encoding" | "csv" | "p2p"),
+        2 => matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv" | "io" | "random" | "time" | "collections" | "math" | "fmt" | "process" | "sdl" | "gfx" | "ecs" | "json" | "toml" | "xml" | "yaml" | "bytes" | "crypto" | "ssh" | "http" | "regex" | "encoding" | "csv" | "p2p" | "channel"),
         3 => segments[1] == "net" && matches!(segments[2].as_str(), "socket" | "tls" | "udp"),
         _ => false,
     }
@@ -93,6 +93,7 @@ pub fn generate_stdlib_module(segments: &[String]) -> Option<Module> {
             "http" => None, // file-based module — loaded via stdlib_module_source()
             "regex" => Some(gen_regex_module()),
             "p2p" => None, // file-based module — loaded via stdlib_module_source()
+            "channel" => Some(gen_channel_module()),
             _ => None,
         },
         3 if segments[1] == "net" && segments[2] == "socket" => Some(gen_socket_module()),
@@ -1114,6 +1115,44 @@ fn decl_method(
         where_clause: None,
         body: FunctionBody::Declaration,
         doc_comment: None,
+        span: Span::dummy(),
+    }
+}
+
+fn gen_channel_module() -> Module {
+    let ty_t = || Type::Named {
+        name: Spanned::dummy("T".to_string()),
+        generic_args: vec![],
+    };
+    let channel_struct = Spanned::dummy(Item::Struct(StructDef {
+        attributes: vec![],
+        visibility: Visibility::Public,
+        name: Spanned::dummy("Channel".to_string()),
+        generic_params: Some(Spanned::dummy(GenericParams {
+            params: vec![Spanned::dummy(GenericParam::Type(Spanned::dummy("T".to_string())))],
+        })),
+        fields: vec![],
+        doc_comment: None,
+        span: Span::dummy(),
+    }));
+    let channel_equip = Spanned::dummy(Item::Equip(EquipBlock {
+        generic_params: None,
+        trait_: None,
+        type_: Spanned::dummy(Type::Named {
+            name: Spanned::dummy("Channel".to_string()),
+            generic_args: vec![],
+        }),
+        via_field: None,
+        where_clause: None,
+        items: vec![
+            Spanned::dummy(decl_method("send", Ownership::Borrow, &[("value", ty_t())], ty_void())),
+            Spanned::dummy(decl_method("recv", Ownership::Borrow, &[], ty_t())),
+            Spanned::dummy(decl_method("close", Ownership::Borrow, &[], ty_void())),
+        ],
+        span: Span::dummy(),
+    }));
+    Module {
+        items: vec![channel_struct, channel_equip],
         span: Span::dummy(),
     }
 }
