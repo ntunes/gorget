@@ -578,6 +578,21 @@ static void __gorget_executor_shutdown(void) {
     pthread_cond_destroy(&__gorget_exec.cond);
     __gorget_exec_init_done = 0;
 }
+
+// ── Worker Waker (event-driven sub-future polling) ──
+typedef struct {
+    pthread_mutex_t mtx;
+    pthread_cond_t cond;
+    volatile int woken;
+} __GorgetWorkerWakerCtx;
+
+static void __gorget_worker_waker_wake(GorgetWaker* w) {
+    __GorgetWorkerWakerCtx* ctx = (__GorgetWorkerWakerCtx*)w->data;
+    pthread_mutex_lock(&ctx->mtx);
+    ctx->woken = 1;
+    pthread_cond_signal(&ctx->cond);
+    pthread_mutex_unlock(&ctx->mtx);
+}
 "#;
 
 /// Main-thread waker for event-driven async main loop.
