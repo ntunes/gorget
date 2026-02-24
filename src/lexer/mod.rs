@@ -294,8 +294,8 @@ impl<'src> Lexer<'src> {
                     i = new_end;
                 }
 
-                // Raw string r"..." or byte string b"..."
-                b'r' | b'b' if i + 1 < bytes.len() && bytes[i + 1] == b'"' => {
+                // Raw string r"...", byte string b"...", or cstr string c"..."
+                b'r' | b'b' | b'c' if i + 1 < bytes.len() && bytes[i + 1] == b'"' => {
                     let (tok, new_end) = self.scan_string_literal(i);
                     let span = self.span(i, new_end);
                     self.pending.push_back(Spanned::new(tok, span));
@@ -323,6 +323,9 @@ impl<'src> Lexer<'src> {
                             && i + 1 < bytes.len()
                             && bytes[i + 1] == b'"')
                         && !(bytes[i] == b'b'
+                            && i + 1 < bytes.len()
+                            && bytes[i + 1] == b'"')
+                        && !(bytes[i] == b'c'
                             && i + 1 < bytes.len()
                             && bytes[i + 1] == b'"')
                     {
@@ -553,6 +556,9 @@ impl<'src> Lexer<'src> {
         } else if i < bytes.len() && bytes[i] == b'b' {
             i += 1; // skip 'b'
             StringKind::Byte
+        } else if i < bytes.len() && bytes[i] == b'c' {
+            i += 1; // skip 'c'
+            StringKind::CStr
         } else {
             StringKind::Normal
         };
@@ -627,7 +633,7 @@ impl<'src> Lexer<'src> {
             }
 
             // String interpolation: {expr}
-            if bytes[i] == b'{' && actual_kind != StringKind::Raw {
+            if bytes[i] == b'{' && actual_kind != StringKind::Raw && actual_kind != StringKind::CStr {
                 // Check for escaped brace: {{
                 if i + 1 < bytes.len() && bytes[i + 1] == b'{' {
                     current_literal.push('{');
@@ -683,6 +689,7 @@ impl<'src> Lexer<'src> {
             // Escaped brace: }}
             if bytes[i] == b'}'
                 && actual_kind != StringKind::Raw
+                && actual_kind != StringKind::CStr
                 && i + 1 < bytes.len()
                 && bytes[i + 1] == b'}'
             {
@@ -1373,5 +1380,51 @@ void main():
                 Token::Newline,
             ]
         );
+    }
+
+    #[test]
+    fn cstr_literal() {
+        let tokens = lex(r#"c"hello""#);
+        assert_eq!(tokens.len(), 2); // StringLiteral + Newline
+        match &tokens[0] {
+            Token::StringLiteral(s) => {
+                assert_eq!(s.kind, StringKind::CStr);
+                assert_eq!(s.segments, vec![StringSegment::Literal("hello".to_string())]);
+            }
+            other => panic!("expected StringLiteral, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn cstr_no_interpolation() {
+        let tokens = lex(r#"c"{x}""#);
+        assert_eq!(tokens.len(), 2);
+        match &tokens[0] {
+            Token::StringLiteral(s) => {
+                assert_eq!(s.kind, StringKind::CStr);
+                // {x} should be literal text, not interpolation
+                assert_eq!(s.segments, vec![StringSegment::Literal("{x}".to_string())]);
+            }
+            other => panic!("expected StringLiteral, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn cstr_escape_sequences() {
+        let tokens = lex(r#"c"hello\nworld""#);
+        assert_eq!(tokens.len(), 2);
+        match &tokens[0] {
+            Token::StringLiteral(s) => {
+                assert_eq!(s.kind, StringKind::CStr);
+                assert_eq!(s.segments, vec![StringSegment::Literal("hello\nworld".to_string())]);
+            }
+            other => panic!("expected StringLiteral, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn cstr_keyword() {
+        let tokens = lex("cstr");
+        assert_eq!(tokens[0], Token::Keyword(Keyword::CStr));
     }
 }

@@ -37,7 +37,7 @@ impl TypeMapper {
             PrimitiveType::Float | PrimitiveType::Float64 => F64_TYPE,
             PrimitiveType::Float32 => F32_TYPE,
             PrimitiveType::Bool => BOOL_TYPE,
-            PrimitiveType::Str => self.str_type,
+            PrimitiveType::Str | PrimitiveType::CStr => self.str_type,
             PrimitiveType::Char => U32_TYPE, // char as u32 codepoint
             PrimitiveType::StringType => self.str_type, // Phase 1: treat String as str
             PrimitiveType::Void => UNIT_TYPE,

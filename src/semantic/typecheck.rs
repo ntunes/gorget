@@ -536,6 +536,16 @@ impl<'a> TypeChecker<'a> {
             | (ResolvedType::Primitive(PrimitiveType::StringType), ResolvedType::Primitive(PrimitiveType::Str)) => {
                 a // accept the expected (lhs) type
             }
+            // cstr ↔ str coercion (both are const char* in S0)
+            (ResolvedType::Primitive(PrimitiveType::Str), ResolvedType::Primitive(PrimitiveType::CStr))
+            | (ResolvedType::Primitive(PrimitiveType::CStr), ResolvedType::Primitive(PrimitiveType::Str)) => {
+                a
+            }
+            // cstr ↔ String coercion
+            (ResolvedType::Primitive(PrimitiveType::CStr), ResolvedType::Primitive(PrimitiveType::StringType))
+            | (ResolvedType::Primitive(PrimitiveType::StringType), ResolvedType::Primitive(PrimitiveType::CStr)) => {
+                a
+            }
             _ => {
                 if a_ty != b_ty {
                     self.error(
@@ -625,6 +635,8 @@ impl<'a> TypeChecker<'a> {
                 }
                 if s.segments.iter().any(|seg| matches!(seg, StringSegment::Interpolation(_))) {
                     self.types.owned_string_id
+                } else if s.kind == crate::lexer::token::StringKind::CStr {
+                    self.types.cstr_id
                 } else {
                     self.types.string_id
                 }

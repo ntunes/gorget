@@ -173,6 +173,7 @@ fn format_type(ty: &crate::parser::ast::Type) -> String {
             PrimitiveType::Bool => "bool".to_string(),
             PrimitiveType::Char => "char".to_string(),
             PrimitiveType::Str => "str".to_string(),
+            PrimitiveType::CStr => "cstr".to_string(),
             PrimitiveType::StringType => "String".to_string(),
             PrimitiveType::Void => "void".to_string(),
         },

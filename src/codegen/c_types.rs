@@ -24,6 +24,7 @@ pub fn primitive_to_c(prim: PrimitiveType) -> &'static str {
         PrimitiveType::Float64 => "double",
         PrimitiveType::Char => "char",
         PrimitiveType::Str => "const char*",
+        PrimitiveType::CStr => "const char*",
         PrimitiveType::StringType => "GorgetString",
     }
 }
@@ -381,6 +382,7 @@ pub fn printf_format_for_primitive(prim: PrimitiveType) -> &'static str {
         PrimitiveType::Bool => "%s",
         PrimitiveType::Char => "%c",
         PrimitiveType::Str => "%s",
+        PrimitiveType::CStr => "%s",
         PrimitiveType::StringType => "%s",
         PrimitiveType::Void => "",
     }
@@ -449,6 +451,7 @@ fn primitive_to_gorget(prim: PrimitiveType) -> &'static str {
         PrimitiveType::Float32 => "float32",
         PrimitiveType::Char => "char",
         PrimitiveType::Str => "str",
+        PrimitiveType::CStr => "cstr",
         PrimitiveType::StringType => "String",
     }
 }

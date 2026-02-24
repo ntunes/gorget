@@ -153,6 +153,7 @@ fn is_copy_type(type_id: TypeId, types: &TypeTable, scopes: &ScopeTable) -> bool
                     | Bool
                     | Char
                     | Str
+                    | CStr
             )
         }
         ResolvedType::Void | ResolvedType::Never | ResolvedType::Error => true,

@@ -652,7 +652,7 @@ impl CodegenContext<'_> {
                 | PrimitiveType::Uint32 | PrimitiveType::Uint64 => "uint".to_string(),
                 PrimitiveType::Float | PrimitiveType::Float32 | PrimitiveType::Float64 => "float".to_string(),
                 PrimitiveType::Bool => "bool".to_string(),
-                PrimitiveType::Str | PrimitiveType::StringType => "str".to_string(),
+                PrimitiveType::Str | PrimitiveType::CStr | PrimitiveType::StringType => "str".to_string(),
                 PrimitiveType::Char => "char".to_string(),
                 PrimitiveType::Void => "void".to_string(),
             },
@@ -713,7 +713,7 @@ impl CodegenContext<'_> {
             Expr::StringLiteral(_) => true,
             Expr::Identifier(_) => {
                 let type_name = self.infer_receiver_type(expr);
-                if type_name == "str" || type_name == "String" {
+                if type_name == "str" || type_name == "cstr" || type_name == "String" {
                     return true;
                 }
                 let c_type = self.infer_receiver_c_type(expr);

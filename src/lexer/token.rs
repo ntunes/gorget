@@ -225,6 +225,7 @@ pub enum Keyword {
     Bool,
     Char,
     Str,
+    CStr,
     StringType,
     Void,
     Auto,
@@ -354,6 +355,7 @@ impl Keyword {
             Keyword::Bool => "bool",
             Keyword::Char => "char",
             Keyword::Str => "str",
+            Keyword::CStr => "cstr",
             Keyword::StringType => "String",
             Keyword::Void => "void",
             Keyword::Auto => "auto",
@@ -449,6 +451,7 @@ impl Keyword {
             "bool" => Some(Keyword::Bool),
             "char" => Some(Keyword::Char),
             "str" => Some(Keyword::Str),
+            "cstr" => Some(Keyword::CStr),
             "String" => Some(Keyword::StringType),
             "void" => Some(Keyword::Void),
             "auto" => Some(Keyword::Auto),
@@ -732,6 +735,7 @@ pub enum StringKind {
     Raw,
     MultiLine,
     Byte,
+    CStr,
 }
 
 #[derive(Debug, Clone, PartialEq)]

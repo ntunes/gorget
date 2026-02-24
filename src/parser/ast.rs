@@ -400,6 +400,7 @@ pub enum PrimitiveType {
     Bool,
     Char,
     Str,
+    CStr,
     StringType,
     Void,
 }

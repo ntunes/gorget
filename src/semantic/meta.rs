@@ -377,6 +377,7 @@ fn validate_type(ty: &Type, value: &MetaValue, span: Span) -> Result<(), Semanti
         (Type::Primitive(PrimitiveType::Float64), MetaValue::Float(_)) => true,
         (Type::Primitive(PrimitiveType::Bool), MetaValue::Bool(_)) => true,
         (Type::Primitive(PrimitiveType::Str), MetaValue::Str(_)) => true,
+        (Type::Primitive(PrimitiveType::CStr), MetaValue::Str(_)) => true,
         _ => false,
     };
     if ok {
@@ -812,6 +813,7 @@ fn type_name(ty: &Type) -> &'static str {
         Type::Primitive(PrimitiveType::Float64) => "float64",
         Type::Primitive(PrimitiveType::Bool) => "bool",
         Type::Primitive(PrimitiveType::Str) => "str",
+        Type::Primitive(PrimitiveType::CStr) => "cstr",
         Type::Primitive(PrimitiveType::StringType) => "String",
         Type::Primitive(PrimitiveType::Void) => "void",
         Type::Primitive(PrimitiveType::Char) => "char",

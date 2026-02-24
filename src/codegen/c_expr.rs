@@ -804,6 +804,8 @@ impl CodegenContext<'_> {
                 use crate::lexer::token::StringSegment;
                 if s.segments.iter().any(|seg| matches!(seg, StringSegment::Interpolation(_))) {
                     Some(self.types.owned_string_id)
+                } else if s.kind == crate::lexer::token::StringKind::CStr {
+                    Some(self.types.cstr_id)
                 } else {
                     Some(self.types.string_id)
                 }

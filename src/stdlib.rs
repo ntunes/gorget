@@ -650,6 +650,10 @@ fn ty_str() -> Type {
     Type::Primitive(PrimitiveType::Str)
 }
 
+fn ty_cstr() -> Type {
+    Type::Primitive(PrimitiveType::CStr)
+}
+
 fn ty_string() -> Type {
     Type::Primitive(PrimitiveType::StringType)
 }

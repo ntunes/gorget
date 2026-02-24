@@ -308,6 +308,7 @@ impl CodegenContext<'_> {
                 PrimitiveType::Bool => Some(self.types.bool_id),
                 PrimitiveType::Char => Some(self.types.char_id),
                 PrimitiveType::Str => Some(self.types.string_id),
+                PrimitiveType::CStr => Some(self.types.cstr_id),
                 PrimitiveType::StringType => Some(self.types.owned_string_id),
                 PrimitiveType::Void => Some(self.types.void_id),
                 _ => None,

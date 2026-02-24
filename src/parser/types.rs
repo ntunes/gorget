@@ -37,6 +37,7 @@ impl Parser {
                     Keyword::Bool => Some(PrimitiveType::Bool),
                     Keyword::Char => Some(PrimitiveType::Char),
                     Keyword::Str => Some(PrimitiveType::Str),
+                    Keyword::CStr => Some(PrimitiveType::CStr),
                     Keyword::StringType => Some(PrimitiveType::StringType),
                     Keyword::Void => Some(PrimitiveType::Void),
                     _ => None,

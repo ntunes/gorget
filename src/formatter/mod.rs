@@ -1574,6 +1574,7 @@ impl Formatter {
         match s.kind {
             StringKind::Raw => self.emitter.write("r\""),
             StringKind::Byte => self.emitter.write("b\""),
+            StringKind::CStr => self.emitter.write("c\""),
             StringKind::MultiLine => self.emitter.write("\"\"\""),
             StringKind::Normal => self.emitter.write("\""),
         }
@@ -1709,6 +1710,7 @@ fn primitive_type_str(p: PrimitiveType) -> &'static str {
         PrimitiveType::Bool => "bool",
         PrimitiveType::Char => "char",
         PrimitiveType::Str => "str",
+        PrimitiveType::CStr => "cstr",
         PrimitiveType::StringType => "String",
         PrimitiveType::Void => "void",
     }

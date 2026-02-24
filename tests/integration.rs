@@ -149,6 +149,18 @@ escape: \\n is newline",
 }
 
 #[test]
+fn cstr_basic() {
+    run_gg(
+        "cstr_basic.gg",
+        "\
+Hello from C
+via function
+coerced to str
+str to cstr",
+    );
+}
+
+#[test]
 fn expressions() {
     run_gg(
         "expressions.gg",
@@ -4837,6 +4849,7 @@ fn describe_string_canonical_rust(slit: &StringLiteral) -> String {
         StringKind::Raw => "rstr:",
         StringKind::MultiLine => "mstr:",
         StringKind::Byte => "bstr:",
+        StringKind::CStr => "cstr:",
     };
     let mut result = prefix.to_string();
     for seg in &slit.segments {
@@ -5162,6 +5175,7 @@ fn format_primitive_canonical(p: &PrimitiveType) -> &'static str {
         PrimitiveType::Bool => "bool",
         PrimitiveType::Char => "char",
         PrimitiveType::Str => "str",
+        PrimitiveType::CStr => "cstr",
         PrimitiveType::StringType => "String",
         PrimitiveType::Void => "void",
     }
