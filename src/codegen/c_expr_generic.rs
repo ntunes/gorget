@@ -134,44 +134,77 @@ impl CodegenContext<'_> {
         // Check if the callee is a built-in collection constructor
         match base_name.as_str() {
             "Vector" | "List" | "Array" => {
+                let alloc_expr = self.extract_alloc_arg(args);
+                let pos_args = Self::filter_alloc_arg(args);
                 let elem_size = if c_type_args.is_empty() {
                     "sizeof(int64_t)".to_string()
                 } else {
                     format!("sizeof({})", c_type_args[0])
                 };
-                if args.len() == 1 {
+                let ctor = if pos_args.len() == 1 {
                     // Vector[T](n) → with_capacity
-                    let cap = self.gen_expr(&args[0].node.value);
-                    return format!("gorget_array_with_capacity({elem_size}, (size_t)({cap}))");
-                }
-                return format!("gorget_array_new({elem_size})");
+                    let cap = self.gen_expr(&pos_args[0].node.value);
+                    format!("gorget_array_with_capacity({elem_size}, (size_t)({cap}))")
+                } else {
+                    format!("gorget_array_new({elem_size})")
+                };
+                return if let Some(alloc) = alloc_expr {
+                    self.wrap_with_alloc(&alloc, &ctor, "GorgetArray")
+                } else {
+                    ctor
+                };
             }
             "Dict" => {
+                let alloc_expr = self.extract_alloc_arg(args);
                 let mangled = c_mangle::mangle_generic("GorgetDict", &c_type_args);
                 self.register_generic("GorgetDict", &c_type_args, super::GenericInstanceKind::Map { ordered: true });
-                return format!("{mangled}__new()");
+                let ctor = format!("{mangled}__new()");
+                return if let Some(alloc) = alloc_expr {
+                    self.wrap_with_alloc(&alloc, &ctor, &mangled)
+                } else {
+                    ctor
+                };
             }
             "HashMap" => {
+                let alloc_expr = self.extract_alloc_arg(args);
                 let mangled = c_mangle::mangle_generic("GorgetMap", &c_type_args);
                 self.register_generic("GorgetMap", &c_type_args, super::GenericInstanceKind::Map { ordered: false });
-                return format!("{mangled}__new()");
+                let ctor = format!("{mangled}__new()");
+                return if let Some(alloc) = alloc_expr {
+                    self.wrap_with_alloc(&alloc, &ctor, &mangled)
+                } else {
+                    ctor
+                };
             }
             "Set" | "HashSet" => {
+                let alloc_expr = self.extract_alloc_arg(args);
                 let elem_size = c_type_args.first()
                     .map(|t| format!("sizeof({t})"))
                     .unwrap_or_else(|| "sizeof(int64_t)".to_string());
-                return format!("gorget_set_new({elem_size})");
+                let ctor = format!("gorget_set_new({elem_size})");
+                return if let Some(alloc) = alloc_expr {
+                    self.wrap_with_alloc(&alloc, &ctor, "GorgetSet")
+                } else {
+                    ctor
+                };
             }
             "Channel" => {
+                let alloc_expr = self.extract_alloc_arg(args);
+                let pos_args = Self::filter_alloc_arg(args);
                 let elem_size = c_type_args.first()
                     .map(|t| format!("sizeof({t})"))
                     .unwrap_or_else(|| "sizeof(int64_t)".to_string());
-                let cap = if !args.is_empty() {
-                    self.gen_expr(&args[0].node.value)
+                let cap = if !pos_args.is_empty() {
+                    self.gen_expr(&pos_args[0].node.value)
                 } else {
                     "1".to_string()
                 };
-                return format!("gorget_channel_new((size_t)({cap}), {elem_size})");
+                let ctor = format!("gorget_channel_new((size_t)({cap}), {elem_size})");
+                return if let Some(alloc) = alloc_expr {
+                    self.wrap_with_alloc(&alloc, &ctor, "GorgetChannel*")
+                } else {
+                    ctor
+                };
             }
             _ => {}
         }

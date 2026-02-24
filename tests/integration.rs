@@ -6120,6 +6120,36 @@ fn arena_escape_assign() {
     );
 }
 
+#[test]
+fn alloc_keyword() {
+    run_gg(
+        "alloc_keyword.gg",
+        "\
+len: 2
+used > 0: true
+done",
+    );
+}
+
+#[test]
+fn tracking_basic() {
+    run_gg(
+        "tracking_basic.gg",
+        "\
+bytes > 0: true
+current > 0: true
+done",
+    );
+}
+
+#[test]
+fn alloc_keyword_escape() {
+    check_gg_fails(
+        "alloc_keyword_escape.gg",
+        "cannot assign arena-scoped value",
+    );
+}
+
 // Parser Comparison Test
 // ═══════════════════════════════════════════════════════════════
 

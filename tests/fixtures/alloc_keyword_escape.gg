@@ -1,0 +1,12 @@
+from std.alloc import Arena
+from std.collections import Vector
+
+void leak_via_alloc():
+    Vector[int] outer = Vector[int]()
+    with Arena(4096) as pool:
+        Vector[int] inner = Vector[int](alloc=pool)
+        inner.push(42)
+        outer = !inner
+
+void main():
+    print("done")

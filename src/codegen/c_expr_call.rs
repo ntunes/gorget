@@ -126,6 +126,35 @@ impl CodegenContext<'_> {
         }
     }
 
+    /// Extract the `alloc=` named arg from a call's args list.
+    /// Returns the generated C expression for the allocator if found.
+    pub(super) fn extract_alloc_arg(&mut self, args: &[Spanned<crate::parser::ast::CallArg>]) -> Option<String> {
+        for arg in args {
+            if arg.node.name.as_ref().map_or(false, |n| n.node == "alloc") {
+                return Some(self.gen_expr(&arg.node.value));
+            }
+        }
+        None
+    }
+
+    /// Filter out the `alloc=` named arg, returning only positional args.
+    pub(super) fn filter_alloc_arg<'b>(args: &'b [Spanned<crate::parser::ast::CallArg>]) -> Vec<&'b Spanned<crate::parser::ast::CallArg>> {
+        args.iter().filter(|a| !a.node.name.as_ref().map_or(false, |n| n.node == "alloc")).collect()
+    }
+
+    /// Wrap a constructor expression in alloc save/push/pop/restore.
+    pub(super) fn wrap_with_alloc(&mut self, alloc_expr: &str, constructor_code: &str, result_c_type: &str) -> String {
+        let n = self.alloc_tmp_counter;
+        self.alloc_tmp_counter += 1;
+        format!(
+            "({{ GorgetAllocator* __saved_alloc_{n} = __gorget_current_alloc; \
+             __gorget_current_alloc = &{alloc_expr}->__alloc; \
+             {result_c_type} __alloc_tmp_{n} = {constructor_code}; \
+             __gorget_current_alloc = __saved_alloc_{n}; \
+             __alloc_tmp_{n}; }})"
+        )
+    }
+
     /// Generate a function/builtin call.
     pub(super) fn gen_call(
         &mut self,
@@ -147,28 +176,40 @@ impl CodegenContext<'_> {
                 "format" => return self.gen_format_call(args),
                 "String" => {
                     // String() → empty owned string, String(val) → owned copy
-                    if args.is_empty() {
-                        return "gorget_string_new(\"\")".to_string();
-                    }
-                    let arg = self.gen_expr(&args[0].node.value);
-                    let arg_type = self.infer_c_type_from_expr(&args[0].node.value.node);
-                    // String(1024) → capacity constructor
-                    if matches!(arg_type.as_str(), "int64_t" | "int8_t" | "int16_t" | "int32_t"
-                        | "uint64_t" | "uint8_t" | "uint16_t" | "uint32_t") {
-                        return format!("gorget_string_with_capacity({arg})");
-                    }
-                    if arg_type == "GorgetString" {
-                        return format!("gorget_string_new({arg}.data)");
-                    }
-                    return format!("gorget_string_new({arg})");
+                    let alloc_expr = self.extract_alloc_arg(args);
+                    let pos_args = Self::filter_alloc_arg(args);
+                    let ctor = if pos_args.is_empty() {
+                        "gorget_string_new(\"\")".to_string()
+                    } else {
+                        let arg = self.gen_expr(&pos_args[0].node.value);
+                        let arg_type = self.infer_c_type_from_expr(&pos_args[0].node.value.node);
+                        // String(1024) → capacity constructor
+                        if matches!(arg_type.as_str(), "int64_t" | "int8_t" | "int16_t" | "int32_t"
+                            | "uint64_t" | "uint8_t" | "uint16_t" | "uint32_t") {
+                            format!("gorget_string_with_capacity({arg})")
+                        } else if arg_type == "GorgetString" {
+                            format!("gorget_string_new({arg}.data)")
+                        } else {
+                            format!("gorget_string_new({arg})")
+                        }
+                    };
+                    return if let Some(alloc) = alloc_expr {
+                        self.wrap_with_alloc(&alloc, &ctor, "GorgetString")
+                    } else {
+                        ctor
+                    };
                 }
                 "Arena" => {
-                    let cap = if !args.is_empty() {
-                        self.gen_expr(&args[0].node.value)
+                    let pos_args = Self::filter_alloc_arg(args);
+                    let cap = if !pos_args.is_empty() {
+                        self.gen_expr(&pos_args[0].node.value)
                     } else {
                         "4096".to_string()
                     };
                     return format!("gorget_arena_new((size_t)({cap}))");
+                }
+                "TrackingAllocator" => {
+                    return "gorget_tracking_new()".to_string();
                 }
                 "len" => {
                     if let Some(arg) = args.first() {
@@ -1828,9 +1869,12 @@ impl CodegenContext<'_> {
         let is_arena = type_name == "Arena"
             || c_type.as_deref() == Some("GorgetArena*");
 
+        let is_tracking_allocator = type_name == "TrackingAllocator"
+            || c_type.as_deref() == Some("GorgetTrackingAllocator*");
+
         let is_primitive_hashable = !is_vector && !is_map && !is_set && !is_string
             && !is_option && !is_result && !is_box && !is_file && !is_iterator
-            && !is_char && !is_channel && !is_arena
+            && !is_char && !is_channel && !is_arena && !is_tracking_allocator
             && method_name == "hash"
             && matches!(c_type.as_deref(), Some(
                 "int64_t" | "int8_t" | "int16_t" | "int32_t" |
@@ -1839,7 +1883,7 @@ impl CodegenContext<'_> {
                 "bool" | "char32_t"
             ));
 
-        if !is_vector && !is_map && !is_set && !is_string && !is_option && !is_result && !is_box && !is_file && !is_iterator && !is_primitive_hashable && !is_char && !is_channel && !is_arena {
+        if !is_vector && !is_map && !is_set && !is_string && !is_option && !is_result && !is_box && !is_file && !is_iterator && !is_primitive_hashable && !is_char && !is_channel && !is_arena && !is_tracking_allocator {
             return None;
         }
 
@@ -1911,6 +1955,9 @@ impl CodegenContext<'_> {
         if is_arena {
             return Some(self.gen_arena_method(&recv, method_name));
         }
+        if is_tracking_allocator {
+            return Some(self.gen_tracking_method(&recv, method_name));
+        }
         None
     }
 
@@ -1954,6 +2001,20 @@ impl CodegenContext<'_> {
             "reset" => format!("gorget_arena_reset({recv})"),
             "destroy" => format!("gorget_arena_destroy({recv})"),
             _ => format!("/* unknown arena method: {method_name} */ 0"),
+        }
+    }
+
+    fn gen_tracking_method(&self, recv: &str, method_name: &str) -> String {
+        match method_name {
+            "alloc_count" => format!("gorget_tracking_alloc_count({recv})"),
+            "free_count" => format!("gorget_tracking_free_count({recv})"),
+            "bytes_allocated" => format!("gorget_tracking_bytes_allocated({recv})"),
+            "bytes_freed" => format!("gorget_tracking_bytes_freed({recv})"),
+            "current_bytes" => format!("gorget_tracking_current_bytes({recv})"),
+            "peak_bytes" => format!("gorget_tracking_peak_bytes({recv})"),
+            "reset" => format!("gorget_tracking_reset({recv})"),
+            "destroy" => format!("gorget_tracking_destroy({recv})"),
+            _ => format!("/* unknown tracking allocator method: {method_name} */ 0"),
         }
     }
 

@@ -123,8 +123,8 @@ pub enum DropAction {
     },
     /// free_fn(&var) for opaque types with a C free function (e.g., Regex, Match)
     OpaqueFree { free_fn: String },
-    /// Restore thread-local allocator and destroy arena on scope exit (RAII for `with Arena`)
-    AllocRestore { save_var: String, arena_var: String },
+    /// Restore thread-local allocator and destroy allocator on scope exit (RAII for `with Arena`/`with TrackingAllocator`)
+    AllocRestore { save_var: String, arena_var: String, destroy_fn: String },
 }
 
 impl DropAction {
@@ -401,6 +401,8 @@ pub struct CodegenContext<'a> {
     pub pattern_var_types: FxHashMap<String, TypeId>,
     /// Counter for unique `__saved_alloc_N` variable names in `with Arena` codegen.
     pub alloc_save_counter: usize,
+    /// Counter for unique `__saved_alloc_N` / `__alloc_tmp_N` variable names in `alloc=` codegen.
+    pub alloc_tmp_counter: usize,
 }
 
 impl CodegenContext<'_> {
@@ -644,6 +646,7 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
         emitted_in_type_defs: HashSet::new(),
         pattern_var_types: FxHashMap::default(),
         alloc_save_counter: 0,
+        alloc_tmp_counter: 0,
     };
 
     let mut emitter = CEmitter::new();

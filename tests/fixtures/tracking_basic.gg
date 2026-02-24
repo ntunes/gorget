@@ -1,0 +1,12 @@
+from std.alloc import TrackingAllocator
+from std.collections import Vector
+
+void main():
+    with TrackingAllocator() as tracker:
+        Vector[int] v = Vector[int]()
+        v.push(1)
+        v.push(2)
+        v.push(3)
+        print("bytes > 0: {tracker.bytes_allocated() > 0}")
+        print("current > 0: {tracker.current_bytes() > 0}")
+    print("done")

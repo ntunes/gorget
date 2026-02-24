@@ -738,7 +738,44 @@ impl<'a> TypeChecker<'a> {
                 let callee_type = self.infer_expr(callee);
                 let resolved = self.resolve_type(callee_type);
 
-
+                // Validate `alloc=` named arg on builtin constructors
+                if let Expr::Identifier(cname) = &callee.node {
+                    let is_builtin_ctor = matches!(cname.as_str(),
+                        "Vector" | "List" | "Array" | "Dict" | "HashMap"
+                        | "Set" | "HashSet" | "Channel" | "String" | "Arena"
+                    );
+                    if is_builtin_ctor {
+                        for arg in args {
+                            if let Some(ref name) = arg.node.name {
+                                if name.node != "alloc" {
+                                    self.error(
+                                        SemanticErrorKind::UnknownNamedArg { name: name.node.clone() },
+                                        arg.span,
+                                    );
+                                } else {
+                                    // Validate the alloc= value type is an allocator
+                                    let alloc_type = self.infer_expr(&arg.node.value);
+                                    let alloc_resolved = self.resolve_type(alloc_type);
+                                    let is_alloc = match self.types.get(alloc_resolved) {
+                                        ResolvedType::Defined(def_id) => {
+                                            matches!(self.scopes.get_def(*def_id).name.as_str(), "Arena" | "TrackingAllocator")
+                                        }
+                                        _ => false,
+                                    };
+                                    if !is_alloc {
+                                        self.error(
+                                            SemanticErrorKind::TypeMismatch {
+                                                expected: "allocator type (Arena or TrackingAllocator)".to_string(),
+                                                found: format!("{:?}", self.types.get(alloc_resolved)),
+                                            },
+                                            arg.node.value.span,
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
 
                 // Check where-clause trait bounds for generic calls
                 if let Some(type_args) = generic_args {

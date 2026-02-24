@@ -165,8 +165,8 @@ fn is_copy_type(type_id: TypeId, types: &TypeTable, scopes: &ScopeTable) -> bool
             matches!(scopes.get_def(*def_id).name.as_str(), "Channel")
         }
         ResolvedType::Defined(def_id) => {
-            // Arena is Copy — it's a pointer (GorgetArena*)
-            matches!(scopes.get_def(*def_id).name.as_str(), "Arena")
+            // Arena/TrackingAllocator are Copy — they're pointers (GorgetArena*/GorgetTrackingAllocator*)
+            matches!(scopes.get_def(*def_id).name.as_str(), "Arena" | "TrackingAllocator")
         }
         // Everything else is non-Copy (String, structs, enums, etc.)
         _ => false,
@@ -1462,6 +1462,32 @@ impl<'a> BorrowChecker<'a> {
                     }
                 }
 
+                // Track `alloc=` arena propagation: if the value is a Call with
+                // alloc=<arena_scoped_var>, mark the new variable as arena-scoped.
+                if let Pattern::Binding(name) = &pattern.node {
+                    if let Expr::Call { args, .. } = &value.node {
+                        for arg in args {
+                            if arg.node.name.as_ref().map_or(false, |n| n.node == "alloc") {
+                                if let Expr::Identifier(alloc_name) = &arg.node.value.node {
+                                    let alloc_def = self.scopes.lookup_def_by_span(alloc_name, arg.node.value.span)
+                                        .or_else(|| self.find_def_by_name(alloc_name));
+                                    if let Some(alloc_did) = alloc_def {
+                                        if self.arena_scoped_vars.contains(&alloc_did)
+                                            || (self.arena_depth > 0 && self.is_allocator_type(alloc_did))
+                                        {
+                                            if let Some(var_did) = self.scopes.lookup_def_by_span(name, pattern.span)
+                                                .or_else(|| self.find_def_by_name(name))
+                                            {
+                                                self.arena_scoped_vars.insert(var_did);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Track origin for reference-typed variables
                 if let Pattern::Binding(name) = &pattern.node {
                     let def_id_opt = self.scopes.lookup_def_by_span(name, pattern.span)
@@ -1867,10 +1893,10 @@ impl<'a> BorrowChecker<'a> {
                     self.check_expr(&binding.expr);
                 }
 
-                // Detect if any binding is an Arena type
+                // Detect if any binding is an allocator type (Arena or TrackingAllocator)
                 let is_arena_with = bindings.iter().any(|b| {
                     self.scopes.lookup_def_by_span(&b.name.node, b.name.span)
-                        .map_or(false, |did| self.is_arena_type(did))
+                        .map_or(false, |did| self.is_allocator_type(did))
                 });
 
                 if is_arena_with {
@@ -2239,10 +2265,11 @@ impl<'a> BorrowChecker<'a> {
         }
     }
 
-    /// Check if a DefId refers to the Arena type.
-    fn is_arena_type(&self, def_id: DefId) -> bool {
+    /// Check if a DefId refers to any allocator type (Arena or TrackingAllocator).
+    fn is_allocator_type(&self, def_id: DefId) -> bool {
         self.scopes.get_def(def_id).type_id.map_or(false, |tid| {
-            matches!(self.types.get(tid), ResolvedType::Defined(d) if self.scopes.get_def(*d).name == "Arena")
+            matches!(self.types.get(tid), ResolvedType::Defined(d)
+                if matches!(self.scopes.get_def(*d).name.as_str(), "Arena" | "TrackingAllocator"))
         })
     }
 

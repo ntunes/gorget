@@ -66,13 +66,48 @@ impl CodegenContext<'_> {
             .any(|(_, entries)| !entries.is_empty())
     }
 
-    /// Check if a binding expression is an allocator (currently: Arena constructor call).
+    /// Check if a binding expression is an allocator (Arena or TrackingAllocator constructor call).
     fn is_allocator_expr(expr: &Expr) -> bool {
         match expr {
             Expr::Call { callee, .. } => {
-                matches!(&callee.node, Expr::Identifier(name) if name == "Arena")
+                matches!(&callee.node, Expr::Identifier(name) if matches!(name.as_str(), "Arena" | "TrackingAllocator"))
             }
             _ => false,
+        }
+    }
+
+    /// Get the C type for an allocator expression.
+    fn allocator_c_type(expr: &Expr) -> &'static str {
+        match expr {
+            Expr::Call { callee, .. } => {
+                if let Expr::Identifier(name) = &callee.node {
+                    match name.as_str() {
+                        "Arena" => "GorgetArena*",
+                        "TrackingAllocator" => "GorgetTrackingAllocator*",
+                        _ => "void*",
+                    }
+                } else {
+                    "void*"
+                }
+            }
+            _ => "void*",
+        }
+    }
+
+    /// Get the C destroy function name for an allocator expression.
+    fn allocator_destroy_fn(expr: &Expr) -> &'static str {
+        match expr {
+            Expr::Call { callee, .. } => {
+                if let Expr::Identifier(name) = &callee.node {
+                    match name.as_str() {
+                        "TrackingAllocator" => "gorget_tracking_destroy",
+                        _ => "gorget_arena_destroy",
+                    }
+                } else {
+                    "gorget_arena_destroy"
+                }
+            }
+            _ => "gorget_arena_destroy",
         }
     }
 
@@ -120,9 +155,9 @@ impl CodegenContext<'_> {
             DropAction::OpaqueFree { free_fn } => {
                 emitter.emit_line(&format!("{free_fn}(&{});", entry.var_name));
             }
-            DropAction::AllocRestore { save_var, arena_var } => {
+            DropAction::AllocRestore { save_var, arena_var, destroy_fn } => {
                 emitter.emit_line(&format!("__gorget_current_alloc = {save_var};"));
-                emitter.emit_line(&format!("gorget_arena_destroy({arena_var});"));
+                emitter.emit_line(&format!("{destroy_fn}({arena_var});"));
             }
             DropAction::StructDrop { type_name, has_user_drop, field_drops } => {
                 if *has_user_drop {
@@ -500,6 +535,11 @@ impl CodegenContext<'_> {
                 Some(DropAction::OpaqueFree { free_fn: "gorget_arena_free".into() })
             }
             Type::Named { name, generic_args }
+                if name.node == "TrackingAllocator" && generic_args.is_empty() =>
+            {
+                Some(DropAction::OpaqueFree { free_fn: "gorget_tracking_free".into() })
+            }
+            Type::Named { name, generic_args }
                 if name.node == "Regex" && generic_args.is_empty() =>
             {
                 Some(DropAction::OpaqueFree { free_fn: "gorget_regex_free".into() })
@@ -642,8 +682,9 @@ impl CodegenContext<'_> {
             | "uint8_t" | "uint16_t" | "uint32_t" | "uint64_t" | "size_t" | "void" => None,
             ct if ct.starts_with("Future__") || ct.starts_with("Task__")
                 || ct.starts_with("GorgetChannel") => None,
-            // Arena pointer — standalone drop via free function
+            // Arena/TrackingAllocator pointer — standalone drop via free function
             "GorgetArena*" => Some(DropAction::OpaqueFree { free_fn: "gorget_arena_free".into() }),
+            "GorgetTrackingAllocator*" => Some(DropAction::OpaqueFree { free_fn: "gorget_tracking_free".into() }),
             // Pointer types — no drop (borrowed)
             ct if ct.ends_with('*') => None,
             // User struct: look up by name
@@ -1389,7 +1430,7 @@ impl CodegenContext<'_> {
                     "__gorget_cleanup_push((__gorget_cleanup_fn){free_fn}, (void*)&{var_name});"
                 ));
             }
-            DropAction::AllocRestore { save_var, arena_var } => {
+            DropAction::AllocRestore { save_var, arena_var, .. } => {
                 // For test cleanup, we inline the restore+destroy (no single fn pointer form)
                 emitter.emit_line(&format!(
                     "/* alloc restore (test cleanup): {save_var} → {arena_var} */"
@@ -1973,16 +2014,19 @@ impl CodegenContext<'_> {
                     let e = self.gen_expr(&binding.expr);
                     let name = c_mangle::escape_keyword(&binding.name.node);
                     if Self::is_allocator_expr(&binding.expr.node) {
-                        // Arena allocator binding — typed declaration + push thread-local
-                        emitter.emit_line(&format!("GorgetArena* {name} = {e};"));
+                        // Allocator binding — typed declaration + push thread-local
+                        let alloc_c_type = Self::allocator_c_type(&binding.expr.node);
+                        emitter.emit_line(&format!("{alloc_c_type} {name} = {e};"));
                         let save_var = format!("__saved_alloc_{}", self.alloc_save_counter);
                         self.alloc_save_counter += 1;
                         emitter.emit_line(&format!("GorgetAllocator* {save_var} = __gorget_current_alloc;"));
                         emitter.emit_line(&format!("__gorget_current_alloc = &{name}->__alloc;"));
-                        // Register RAII cleanup: restore allocator + destroy arena
+                        // Register RAII cleanup: restore allocator + destroy allocator
+                        let destroy_fn = Self::allocator_destroy_fn(&binding.expr.node).to_string();
                         self.register_droppable(&name, DropAction::AllocRestore {
                             save_var: save_var.clone(),
                             arena_var: name.to_string(),
+                            destroy_fn,
                         });
                     } else {
                         emitter.emit_line(&format!("/* with */ void* {name} = (void*)({e});"));
@@ -4214,14 +4258,17 @@ impl CodegenContext<'_> {
                     let e = self.gen_expr(&binding.expr);
                     let name = c_mangle::escape_keyword(&binding.name.node);
                     if Self::is_allocator_expr(&binding.expr.node) {
-                        emitter.emit_line(&format!("GorgetArena* {name} = {e};"));
+                        let alloc_c_type = Self::allocator_c_type(&binding.expr.node);
+                        emitter.emit_line(&format!("{alloc_c_type} {name} = {e};"));
                         let save_var = format!("__saved_alloc_{}", self.alloc_save_counter);
                         self.alloc_save_counter += 1;
                         emitter.emit_line(&format!("GorgetAllocator* {save_var} = __gorget_current_alloc;"));
                         emitter.emit_line(&format!("__gorget_current_alloc = &{name}->__alloc;"));
+                        let destroy_fn = Self::allocator_destroy_fn(&binding.expr.node).to_string();
                         self.register_droppable(&name, DropAction::AllocRestore {
                             save_var: save_var.clone(),
                             arena_var: name.to_string(),
+                            destroy_fn,
                         });
                     } else {
                         emitter.emit_line(&format!("/* with */ void* {name} = (void*)({e});"));
