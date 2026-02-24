@@ -1690,7 +1690,14 @@ impl<'a> TypeChecker<'a> {
 
             Stmt::With { bindings, body } => {
                 for binding in bindings {
-                    self.infer_expr(&binding.expr);
+                    let expr_type = self.infer_expr(&binding.expr);
+                    // Assign the inferred type to the binding variable
+                    let resolved = self.resolve_type(expr_type);
+                    if resolved != self.types.error_id {
+                        if let Some(def_id) = self.scopes.lookup_def_by_span(&binding.name.node, binding.name.span) {
+                            self.scopes.get_def_mut(def_id).type_id = Some(resolved);
+                        }
+                    }
                 }
                 self.check_block(body);
             }

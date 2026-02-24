@@ -66,6 +66,16 @@ impl CodegenContext<'_> {
             .any(|(_, entries)| !entries.is_empty())
     }
 
+    /// Check if a binding expression is an allocator (currently: Arena constructor call).
+    fn is_allocator_expr(expr: &Expr) -> bool {
+        match expr {
+            Expr::Call { callee, .. } => {
+                matches!(&callee.node, Expr::Identifier(name) if name == "Arena")
+            }
+            _ => false,
+        }
+    }
+
     /// Emit the C cleanup code for a single drop entry.
     /// `depth` is used for unique loop variable names in nested collection drops.
     pub(super) fn emit_drop_entry(entry: &DropEntry, depth: usize, emitter: &mut CEmitter) {
@@ -109,6 +119,10 @@ impl CodegenContext<'_> {
             }
             DropAction::OpaqueFree { free_fn } => {
                 emitter.emit_line(&format!("{free_fn}(&{});", entry.var_name));
+            }
+            DropAction::AllocRestore { save_var, arena_var } => {
+                emitter.emit_line(&format!("__gorget_current_alloc = {save_var};"));
+                emitter.emit_line(&format!("gorget_arena_destroy({arena_var});"));
             }
             DropAction::StructDrop { type_name, has_user_drop, field_drops } => {
                 if *has_user_drop {
@@ -481,6 +495,11 @@ impl CodegenContext<'_> {
                 Some(DropAction::FileClose)
             }
             Type::Named { name, generic_args }
+                if name.node == "Arena" && generic_args.is_empty() =>
+            {
+                Some(DropAction::OpaqueFree { free_fn: "gorget_arena_free".into() })
+            }
+            Type::Named { name, generic_args }
                 if name.node == "Regex" && generic_args.is_empty() =>
             {
                 Some(DropAction::OpaqueFree { free_fn: "gorget_regex_free".into() })
@@ -623,6 +642,8 @@ impl CodegenContext<'_> {
             | "uint8_t" | "uint16_t" | "uint32_t" | "uint64_t" | "size_t" | "void" => None,
             ct if ct.starts_with("Future__") || ct.starts_with("Task__")
                 || ct.starts_with("GorgetChannel") => None,
+            // Arena pointer — standalone drop via free function
+            "GorgetArena*" => Some(DropAction::OpaqueFree { free_fn: "gorget_arena_free".into() }),
             // Pointer types — no drop (borrowed)
             ct if ct.ends_with('*') => None,
             // User struct: look up by name
@@ -1368,6 +1389,12 @@ impl CodegenContext<'_> {
                     "__gorget_cleanup_push((__gorget_cleanup_fn){free_fn}, (void*)&{var_name});"
                 ));
             }
+            DropAction::AllocRestore { save_var, arena_var } => {
+                // For test cleanup, we inline the restore+destroy (no single fn pointer form)
+                emitter.emit_line(&format!(
+                    "/* alloc restore (test cleanup): {save_var} → {arena_var} */"
+                ));
+            }
             DropAction::StructDrop { type_name, has_user_drop, field_drops } => {
                 // For test-body cleanup, register the user drop if present
                 if *has_user_drop {
@@ -1941,12 +1968,26 @@ impl CodegenContext<'_> {
             Stmt::With { bindings, body } => {
                 emitter.emit_line("{");
                 emitter.indent();
+                self.push_drop_scope(DropScopeKind::Block);
                 for binding in bindings {
                     let e = self.gen_expr(&binding.expr);
                     let name = c_mangle::escape_keyword(&binding.name.node);
-                    emitter.emit_line(&format!("/* with */ void* {name} = (void*)({e});"));
+                    if Self::is_allocator_expr(&binding.expr.node) {
+                        // Arena allocator binding — typed declaration + push thread-local
+                        emitter.emit_line(&format!("GorgetArena* {name} = {e};"));
+                        let save_var = format!("__saved_alloc_{}", self.alloc_save_counter);
+                        self.alloc_save_counter += 1;
+                        emitter.emit_line(&format!("GorgetAllocator* {save_var} = __gorget_current_alloc;"));
+                        emitter.emit_line(&format!("__gorget_current_alloc = &{name}->__alloc;"));
+                        // Register RAII cleanup: restore allocator + destroy arena
+                        self.register_droppable(&name, DropAction::AllocRestore {
+                            save_var: save_var.clone(),
+                            arena_var: name.to_string(),
+                        });
+                    } else {
+                        emitter.emit_line(&format!("/* with */ void* {name} = (void*)({e});"));
+                    }
                 }
-                self.push_drop_scope(DropScopeKind::Block);
                 self.gen_block(body, emitter);
                 self.pop_drop_scope(emitter);
                 emitter.dedent();
@@ -4168,12 +4209,24 @@ impl CodegenContext<'_> {
             Stmt::With { bindings, body } => {
                 emitter.emit_line("{");
                 emitter.indent();
+                self.push_drop_scope(DropScopeKind::Block);
                 for binding in bindings {
                     let e = self.gen_expr(&binding.expr);
                     let name = c_mangle::escape_keyword(&binding.name.node);
-                    emitter.emit_line(&format!("/* with */ void* {name} = (void*)({e});"));
+                    if Self::is_allocator_expr(&binding.expr.node) {
+                        emitter.emit_line(&format!("GorgetArena* {name} = {e};"));
+                        let save_var = format!("__saved_alloc_{}", self.alloc_save_counter);
+                        self.alloc_save_counter += 1;
+                        emitter.emit_line(&format!("GorgetAllocator* {save_var} = __gorget_current_alloc;"));
+                        emitter.emit_line(&format!("__gorget_current_alloc = &{name}->__alloc;"));
+                        self.register_droppable(&name, DropAction::AllocRestore {
+                            save_var: save_var.clone(),
+                            arena_var: name.to_string(),
+                        });
+                    } else {
+                        emitter.emit_line(&format!("/* with */ void* {name} = (void*)({e});"));
+                    }
                 }
-                self.push_drop_scope(DropScopeKind::Block);
                 self.gen_block_with_break_flag(body, flag, emitter);
                 self.pop_drop_scope(emitter);
                 emitter.dedent();

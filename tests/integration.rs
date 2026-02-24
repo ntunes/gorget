@@ -6087,6 +6087,23 @@ fn async_for_else() {
     run_gg("async_for_else.gg", "6\n-1");
 }
 
+// Arena Allocator
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn arena_basic() {
+    run_gg(
+        "arena_basic.gg",
+        "\
+bytes used > 0: true
+len: 3
+after reset: 99
+inner: 20
+outer: 10
+done",
+    );
+}
+
 // Parser Comparison Test
 // ═══════════════════════════════════════════════════════════════
 

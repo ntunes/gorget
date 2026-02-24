@@ -822,6 +822,36 @@ void critical_section():
         panic("invariant violated")
 ```
 
+#### Panic vs Result: When to Use Which
+
+**Panic** = programmer errors, internal invariant violations, and resource exhaustion:
+- Index out of bounds, integer overflow, division by zero
+- Unwrap on `None` / `Error`
+- Assertion failures
+- Send/recv on closed channel
+- OOM (constructors, arena overflow, any allocation failure)
+- Unreachable code paths
+
+**Result** = environmental failures (the external world didn't cooperate):
+- File I/O (open, read, write — file might not exist, permissions, disk full)
+- Network (connect, send, recv — host unreachable, timeout)
+- Parsing external data (JSON, TOML, regex compile, `str.to_int`)
+- Process spawn (command not found, permission denied)
+- TLS/crypto (handshake failure, invalid certificate)
+
+**Rule of thumb:** Can the caller prevent this failure by writing correct code? Yes → panic. No → Result.
+
+**`try:` as universal escape hatch:** Any panic can be caught as `Result[T, str]` via `try:` blocks. This means graceful OOM handling is always possible without making every allocation return Result.
+
+```gorget
+# OOM panics by default — but try: catches it
+Result[Vector[int], str] safe_alloc():
+    try:
+        Vector[int] v = Vector[int]()
+        v.push(42)
+        return v
+```
+
 ### 6.5 Assert (Always-On)
 
 `assert` checks a condition and panics with a message if it fails. Unlike C/Java, **assertions are always enabled** — they are never stripped in release builds.

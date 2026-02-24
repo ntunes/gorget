@@ -164,6 +164,10 @@ fn is_copy_type(type_id: TypeId, types: &TypeTable, scopes: &ScopeTable) -> bool
             // Channel[T] is Copy — it's a pointer (shared access across tasks)
             matches!(scopes.get_def(*def_id).name.as_str(), "Channel")
         }
+        ResolvedType::Defined(def_id) => {
+            // Arena is Copy — it's a pointer (GorgetArena*)
+            matches!(scopes.get_def(*def_id).name.as_str(), "Arena")
+        }
         // Everything else is non-Copy (String, structs, enums, etc.)
         _ => false,
     }

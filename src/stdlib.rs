@@ -54,7 +54,7 @@ pub fn is_stdlib_module(segments: &[String]) -> bool {
         return false;
     }
     match segments.len() {
-        2 => matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv" | "io" | "random" | "time" | "collections" | "math" | "fmt" | "process" | "sdl" | "gfx" | "ecs" | "json" | "toml" | "xml" | "yaml" | "bytes" | "crypto" | "ssh" | "http" | "regex" | "encoding" | "csv" | "p2p" | "channel"),
+        2 => matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv" | "io" | "random" | "time" | "collections" | "math" | "fmt" | "process" | "sdl" | "gfx" | "ecs" | "json" | "toml" | "xml" | "yaml" | "bytes" | "crypto" | "ssh" | "http" | "regex" | "encoding" | "csv" | "p2p" | "channel" | "alloc"),
         3 => segments[1] == "net" && matches!(segments[2].as_str(), "socket" | "tls" | "udp"),
         _ => false,
     }
@@ -94,6 +94,7 @@ pub fn generate_stdlib_module(segments: &[String]) -> Option<Module> {
             "regex" => Some(gen_regex_module()),
             "p2p" => None, // file-based module — loaded via stdlib_module_source()
             "channel" => Some(gen_channel_module()),
+            "alloc" => Some(gen_alloc_module()),
             _ => None,
         },
         3 if segments[1] == "net" && segments[2] == "socket" => Some(gen_socket_module()),
@@ -1126,6 +1127,38 @@ fn decl_method(
     }
 }
 
+fn gen_alloc_module() -> Module {
+    let arena_struct = Spanned::dummy(Item::Struct(StructDef {
+        attributes: vec![],
+        visibility: Visibility::Public,
+        name: Spanned::dummy("Arena".to_string()),
+        generic_params: None,
+        fields: vec![],
+        doc_comment: None,
+        span: Span::dummy(),
+    }));
+    let arena_equip = Spanned::dummy(Item::Equip(EquipBlock {
+        generic_params: None,
+        trait_: None,
+        type_: Spanned::dummy(Type::Named {
+            name: Spanned::dummy("Arena".to_string()),
+            generic_args: vec![],
+        }),
+        via_field: None,
+        where_clause: None,
+        items: vec![
+            Spanned::dummy(decl_method("bytes_used", Ownership::Borrow, &[], ty_int())),
+            Spanned::dummy(decl_method("reset", Ownership::Borrow, &[], ty_void())),
+            Spanned::dummy(decl_method("destroy", Ownership::Borrow, &[], ty_void())),
+        ],
+        span: Span::dummy(),
+    }));
+    Module {
+        items: vec![arena_struct, arena_equip],
+        span: Span::dummy(),
+    }
+}
+
 fn gen_channel_module() -> Module {
     let ty_t = || Type::Named {
         name: Spanned::dummy("T".to_string()),
@@ -1204,6 +1237,7 @@ mod tests {
         assert!(is_stdlib_module(&["std".into(), "bytes".into()]));
         assert!(is_stdlib_module(&["std".into(), "http".into()]));
         assert!(is_stdlib_module(&["std".into(), "regex".into()]));
+        assert!(is_stdlib_module(&["std".into(), "alloc".into()]));
         assert!(is_stdlib_module(&["std".into(), "net".into(), "tls".into()]));
         assert!(!is_stdlib_module(&["std".into(), "http".into(), "client".into()]));
         assert!(!is_stdlib_module(&["std".into(), "test".into(), "process".into()]));

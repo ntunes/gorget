@@ -162,6 +162,14 @@ impl CodegenContext<'_> {
                     }
                     return format!("gorget_string_new({arg})");
                 }
+                "Arena" => {
+                    let cap = if !args.is_empty() {
+                        self.gen_expr(&args[0].node.value)
+                    } else {
+                        "4096".to_string()
+                    };
+                    return format!("gorget_arena_new((size_t)({cap}))");
+                }
                 "len" => {
                     if let Some(arg) = args.first() {
                         let len_method = Spanned::dummy("len".to_string());
@@ -1817,9 +1825,12 @@ impl CodegenContext<'_> {
         let is_channel = type_name == "Channel"
             || c_type.as_deref() == Some("GorgetChannel*");
 
+        let is_arena = type_name == "Arena"
+            || c_type.as_deref() == Some("GorgetArena*");
+
         let is_primitive_hashable = !is_vector && !is_map && !is_set && !is_string
             && !is_option && !is_result && !is_box && !is_file && !is_iterator
-            && !is_char && !is_channel
+            && !is_char && !is_channel && !is_arena
             && method_name == "hash"
             && matches!(c_type.as_deref(), Some(
                 "int64_t" | "int8_t" | "int16_t" | "int32_t" |
@@ -1828,7 +1839,7 @@ impl CodegenContext<'_> {
                 "bool" | "char32_t"
             ));
 
-        if !is_vector && !is_map && !is_set && !is_string && !is_option && !is_result && !is_box && !is_file && !is_iterator && !is_primitive_hashable && !is_char && !is_channel {
+        if !is_vector && !is_map && !is_set && !is_string && !is_option && !is_result && !is_box && !is_file && !is_iterator && !is_primitive_hashable && !is_char && !is_channel && !is_arena {
             return None;
         }
 
@@ -1897,6 +1908,9 @@ impl CodegenContext<'_> {
         if is_channel {
             return Some(self.gen_channel_method(&recv, method_name, args, receiver));
         }
+        if is_arena {
+            return Some(self.gen_arena_method(&recv, method_name));
+        }
         None
     }
 
@@ -1931,6 +1945,15 @@ impl CodegenContext<'_> {
             }
             "close" => format!("gorget_channel_close({recv})"),
             _ => format!("/* unknown channel method: {method_name} */ 0"),
+        }
+    }
+
+    fn gen_arena_method(&self, recv: &str, method_name: &str) -> String {
+        match method_name {
+            "bytes_used" => format!("gorget_arena_bytes_used({recv})"),
+            "reset" => format!("gorget_arena_reset({recv})"),
+            "destroy" => format!("gorget_arena_destroy({recv})"),
+            _ => format!("/* unknown arena method: {method_name} */ 0"),
         }
     }
 

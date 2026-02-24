@@ -1,0 +1,35 @@
+from std.alloc import Arena
+from std.collections import Vector
+
+void main():
+    # Basic arena: allocate a Vector inside arena scope
+    with Arena(4096) as pool:
+        Vector[int] v = Vector[int]()
+        v.push(1)
+        v.push(2)
+        v.push(3)
+        int used = pool.bytes_used()
+        assert used > 0, "arena should have bytes used"
+        print("bytes used > 0: true")
+        print("len: {v.len()}")
+
+    # Arena with reset
+    with Arena(1024) as pool:
+        Vector[int] a = Vector[int]()
+        a.push(42)
+        pool.reset()
+        Vector[int] b = Vector[int]()
+        b.push(99)
+        print("after reset: {b.get(0).unwrap()}")
+
+    # Nested arenas
+    with Arena(4096) as outer:
+        Vector[int] v1 = Vector[int]()
+        v1.push(10)
+        with Arena(1024) as inner:
+            Vector[int] v2 = Vector[int]()
+            v2.push(20)
+            print("inner: {v2.get(0).unwrap()}")
+        print("outer: {v1.get(0).unwrap()}")
+
+    print("done")
