@@ -7,6 +7,13 @@ pub struct SemanticError {
     pub span: Span,
 }
 
+/// How an arena-scoped value escapes its `with` block.
+#[derive(Debug, Clone)]
+pub enum ArenaEscapeKind {
+    Return,
+    AssignOuter { target: String },
+}
+
 #[derive(Debug, Clone)]
 pub enum SemanticErrorKind {
     /// Name not found in any enclosing scope.
@@ -202,6 +209,11 @@ pub enum SemanticErrorKind {
 
     /// Returning a value whose borrow origin could not be determined.
     UnresolvedBorrowOrigin { name: String },
+
+    // ── Arena escape errors ──
+
+    /// Arena-scoped value escaping its `with` block.
+    ArenaEscape { name: String, kind: ArenaEscapeKind },
 }
 
 impl std::fmt::Display for SemanticError {
@@ -415,6 +427,16 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::UnresolvedBorrowOrigin { name } => {
                 write!(f, "cannot return `{name}`: borrow origin could not be determined — consider adding `live` annotation to the source function")
+            }
+            SemanticErrorKind::ArenaEscape { name, kind } => {
+                match kind {
+                    ArenaEscapeKind::Return => {
+                        write!(f, "cannot return arena-scoped value `{name}` — memory will be freed when arena is destroyed")
+                    }
+                    ArenaEscapeKind::AssignOuter { target } => {
+                        write!(f, "cannot assign arena-scoped value `{name}` to outer variable `{target}` — memory will be freed when arena is destroyed")
+                    }
+                }
             }
         }
     }

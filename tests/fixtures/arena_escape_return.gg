@@ -1,0 +1,11 @@
+from std.alloc import Arena
+from std.collections import Vector
+
+Vector[int] make_in_arena():
+    with Arena(4096) as pool:
+        Vector[int] v = Vector[int]()
+        v.push(1)
+        return v
+
+void main():
+    print("done")

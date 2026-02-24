@@ -3,7 +3,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::parser::ast::*;
 use crate::span::{Span, Spanned};
 
-use super::errors::{SemanticError, SemanticErrorKind};
+use super::errors::{ArenaEscapeKind, SemanticError, SemanticErrorKind};
 use super::ids::{DefId, ScopeId, TypeId};
 use super::resolve::{FunctionInfo, ResolutionMap};
 use super::scope::{DefKind, ScopeTable};
@@ -270,6 +270,11 @@ struct BorrowChecker<'a> {
     /// and can safely be moved. Only variables from OUTSIDE the innermost
     /// loop are rejected.
     loop_local_defs: Vec<FxHashSet<DefId>>,
+    /// Nesting depth inside arena `with` blocks (for escape detection).
+    arena_depth: usize,
+    /// Variables declared while arena_depth > 0 that hold non-Copy types.
+    /// These must not escape the arena scope.
+    arena_scoped_vars: FxHashSet<DefId>,
     /// Whether the file has `directive immutable-by-default`.
     immutable_by_default: bool,
     /// Expression type map from the type checker (for lifetime tracking).
@@ -346,6 +351,8 @@ impl<'a> BorrowChecker<'a> {
             var_states: FxHashMap::default(),
             loop_depth: 0,
             loop_local_defs: Vec::new(),
+            arena_depth: 0,
+            arena_scoped_vars: FxHashSet::default(),
             immutable_by_default,
             _expr_types: expr_types,
             current_fn_scope: None,
@@ -1282,7 +1289,9 @@ impl<'a> BorrowChecker<'a> {
                 let saved_loop_locals = std::mem::take(&mut self.loop_local_defs);
                 let saved_in_return = self.in_return_expr;
                 let saved_is_async = self.current_function_is_async;
+                let saved_arena_depth = self.arena_depth;
                 self.loop_depth = 0;
+                self.arena_depth = 0;
                 self.in_return_expr = false;
                 self.current_function_is_async = false; // closures are not async (async closures deferred)
                 self.check_expr(body);
@@ -1291,6 +1300,7 @@ impl<'a> BorrowChecker<'a> {
                 self.loop_local_defs = saved_loop_locals;
                 self.in_return_expr = saved_in_return;
                 self.current_function_is_async = saved_is_async;
+                self.arena_depth = saved_arena_depth;
             }
 
             Expr::ImplicitClosure { body } => {
@@ -1299,7 +1309,9 @@ impl<'a> BorrowChecker<'a> {
                 let saved_loop_locals = std::mem::take(&mut self.loop_local_defs);
                 let saved_in_return = self.in_return_expr;
                 let saved_is_async = self.current_function_is_async;
+                let saved_arena_depth = self.arena_depth;
                 self.loop_depth = 0;
+                self.arena_depth = 0;
                 self.in_return_expr = false;
                 self.current_function_is_async = false;
                 self.check_expr(body);
@@ -1308,6 +1320,7 @@ impl<'a> BorrowChecker<'a> {
                 self.loop_local_defs = saved_loop_locals;
                 self.in_return_expr = saved_in_return;
                 self.current_function_is_async = saved_is_async;
+                self.arena_depth = saved_arena_depth;
             }
 
             Expr::ListComprehension {
@@ -1434,6 +1447,21 @@ impl<'a> BorrowChecker<'a> {
                 // Mark new bindings as Live
                 self.mark_pattern_live_spanned(pattern);
 
+                // Track non-Copy variables declared inside arena scope
+                if self.arena_depth > 0 {
+                    if let Pattern::Binding(name) = &pattern.node {
+                        if let Some(def_id) = self.scopes.lookup_def_by_span(name, pattern.span)
+                            .or_else(|| self.find_def_by_name(name))
+                        {
+                            if let Some(type_id) = self.scopes.get_def(def_id).type_id {
+                                if !is_copy_type(type_id, self.types, self.scopes) {
+                                    self.arena_scoped_vars.insert(def_id);
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Track origin for reference-typed variables
                 if let Pattern::Binding(name) = &pattern.node {
                     let def_id_opt = self.scopes.lookup_def_by_span(name, pattern.span)
@@ -1488,6 +1516,38 @@ impl<'a> BorrowChecker<'a> {
 
                 // Check: if value is a bare identifier of non-Copy type, needs `!`
                 self.check_value_needs_move(value);
+
+                // Arena escape check: cannot assign arena-scoped value to outer variable
+                if self.arena_depth > 0 {
+                    if let Expr::Identifier(target_name) = &target.node {
+                        if let Some(&target_def_id) = self.resolution_map.get(&target.span.start) {
+                            let rhs_def_id = match &value.node {
+                                Expr::Identifier(_) => self.resolution_map.get(&value.span.start).copied(),
+                                Expr::Move { expr: inner } => {
+                                    if let Expr::Identifier(_) = &inner.node {
+                                        self.resolution_map.get(&inner.span.start).copied()
+                                    } else { None }
+                                }
+                                _ => None,
+                            };
+                            if let Some(rhs_id) = rhs_def_id {
+                                if self.arena_scoped_vars.contains(&rhs_id)
+                                    && !self.arena_scoped_vars.contains(&target_def_id)
+                                {
+                                    self.error(
+                                        SemanticErrorKind::ArenaEscape {
+                                            name: self.scopes.get_def(rhs_id).name.clone(),
+                                            kind: ArenaEscapeKind::AssignOuter {
+                                                target: target_name.clone(),
+                                            },
+                                        },
+                                        value.span,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
 
                 // Check immutability/const constraints on identifier targets
                 match &target.node {
@@ -1590,6 +1650,23 @@ impl<'a> BorrowChecker<'a> {
                     self.in_return_expr = true;
                     self.check_expr(expr);
                     self.in_return_expr = saved_in_return;
+
+                    // Arena escape check: cannot return arena-scoped values
+                    if self.arena_depth > 0 {
+                        if let Expr::Identifier(name) = &expr.node {
+                            if let Some(&def_id) = self.resolution_map.get(&expr.span.start) {
+                                if self.arena_scoped_vars.contains(&def_id) {
+                                    self.error(
+                                        SemanticErrorKind::ArenaEscape {
+                                            name: name.clone(),
+                                            kind: ArenaEscapeKind::Return,
+                                        },
+                                        expr.span,
+                                    );
+                                }
+                            }
+                        }
+                    }
 
                     // Lifetime check: if the function returns a reference or callable type,
                     // verify the return expression doesn't reference local data.
@@ -1789,7 +1866,20 @@ impl<'a> BorrowChecker<'a> {
                 for binding in bindings {
                     self.check_expr(&binding.expr);
                 }
+
+                // Detect if any binding is an Arena type
+                let is_arena_with = bindings.iter().any(|b| {
+                    self.scopes.lookup_def_by_span(&b.name.node, b.name.span)
+                        .map_or(false, |did| self.is_arena_type(did))
+                });
+
+                if is_arena_with {
+                    self.arena_depth += 1;
+                }
                 self.check_block(body);
+                if is_arena_with {
+                    self.arena_depth -= 1;
+                }
             }
 
             Stmt::Unsafe { body } => {
@@ -2149,6 +2239,13 @@ impl<'a> BorrowChecker<'a> {
         }
     }
 
+    /// Check if a DefId refers to the Arena type.
+    fn is_arena_type(&self, def_id: DefId) -> bool {
+        self.scopes.get_def(def_id).type_id.map_or(false, |tid| {
+            matches!(self.types.get(tid), ResolvedType::Defined(d) if self.scopes.get_def(*d).name == "Arena")
+        })
+    }
+
     /// Check if a variable is a reference type, using its type annotation or resolved type.
     fn is_var_reference_type(&self, def_id: DefId, type_annotation: Option<&Spanned<Type>>) -> bool {
         // Try the type annotation first (works even before type checking)
@@ -2168,6 +2265,8 @@ impl<'a> BorrowChecker<'a> {
         self.var_states.clear();
         self.loop_depth = 0;
         self.loop_local_defs.clear();
+        self.arena_depth = 0;
+        self.arena_scoped_vars.clear();
         self.diverged = false;
         self.var_origins.clear();
         self.invalidated_origins.clear();
@@ -2881,6 +2980,8 @@ pub fn check_module(
                 checker.var_states.clear();
                 checker.loop_depth = 0;
                 checker.loop_local_defs.clear();
+                checker.arena_depth = 0;
+                checker.arena_scoped_vars.clear();
                 checker.var_origins.clear();
                 checker.invalidated_origins.clear();
                 checker.await_invalidated.clear();
@@ -2893,6 +2994,8 @@ pub fn check_module(
                 checker.var_states.clear();
                 checker.loop_depth = 0;
                 checker.loop_local_defs.clear();
+                checker.arena_depth = 0;
+                checker.arena_scoped_vars.clear();
                 checker.var_origins.clear();
                 checker.invalidated_origins.clear();
                 checker.await_invalidated.clear();
@@ -2902,6 +3005,8 @@ pub fn check_module(
                 checker.var_states.clear();
                 checker.loop_depth = 0;
                 checker.loop_local_defs.clear();
+                checker.arena_depth = 0;
+                checker.arena_scoped_vars.clear();
                 checker.var_origins.clear();
                 checker.invalidated_origins.clear();
                 checker.await_invalidated.clear();

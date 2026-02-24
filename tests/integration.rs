@@ -6104,6 +6104,22 @@ done",
     );
 }
 
+#[test]
+fn arena_escape_return() {
+    check_gg_fails(
+        "arena_escape_return.gg",
+        "cannot return arena-scoped value",
+    );
+}
+
+#[test]
+fn arena_escape_assign() {
+    check_gg_fails(
+        "arena_escape_assign.gg",
+        "cannot assign arena-scoped value",
+    );
+}
+
 // Parser Comparison Test
 // ═══════════════════════════════════════════════════════════════
 
