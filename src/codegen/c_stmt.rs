@@ -70,7 +70,7 @@ impl CodegenContext<'_> {
     fn is_allocator_expr(expr: &Expr) -> bool {
         match expr {
             Expr::Call { callee, .. } => {
-                matches!(&callee.node, Expr::Identifier(name) if matches!(name.as_str(), "Arena" | "TrackingAllocator"))
+                matches!(&callee.node, Expr::Identifier(name) if matches!(name.as_str(), "Arena" | "TrackingAllocator" | "PoolAllocator"))
             }
             _ => false,
         }
@@ -84,6 +84,7 @@ impl CodegenContext<'_> {
                     match name.as_str() {
                         "Arena" => "GorgetArena*",
                         "TrackingAllocator" => "GorgetTrackingAllocator*",
+                        "PoolAllocator" => "GorgetPoolAllocator*",
                         _ => "void*",
                     }
                 } else {
@@ -101,6 +102,7 @@ impl CodegenContext<'_> {
                 if let Expr::Identifier(name) = &callee.node {
                     match name.as_str() {
                         "TrackingAllocator" => "gorget_tracking_destroy",
+                        "PoolAllocator" => "gorget_pool_destroy",
                         _ => "gorget_arena_destroy",
                     }
                 } else {
@@ -540,6 +542,11 @@ impl CodegenContext<'_> {
                 Some(DropAction::OpaqueFree { free_fn: "gorget_tracking_free".into() })
             }
             Type::Named { name, generic_args }
+                if name.node == "PoolAllocator" && generic_args.is_empty() =>
+            {
+                Some(DropAction::OpaqueFree { free_fn: "gorget_pool_free".into() })
+            }
+            Type::Named { name, generic_args }
                 if name.node == "Regex" && generic_args.is_empty() =>
             {
                 Some(DropAction::OpaqueFree { free_fn: "gorget_regex_free".into() })
@@ -682,9 +689,10 @@ impl CodegenContext<'_> {
             | "uint8_t" | "uint16_t" | "uint32_t" | "uint64_t" | "size_t" | "void" => None,
             ct if ct.starts_with("Future__") || ct.starts_with("Task__")
                 || ct.starts_with("GorgetChannel") => None,
-            // Arena/TrackingAllocator pointer — standalone drop via free function
+            // Arena/TrackingAllocator/PoolAllocator pointer — standalone drop via free function
             "GorgetArena*" => Some(DropAction::OpaqueFree { free_fn: "gorget_arena_free".into() }),
             "GorgetTrackingAllocator*" => Some(DropAction::OpaqueFree { free_fn: "gorget_tracking_free".into() }),
+            "GorgetPoolAllocator*" => Some(DropAction::OpaqueFree { free_fn: "gorget_pool_free".into() }),
             // Pointer types — no drop (borrowed)
             ct if ct.ends_with('*') => None,
             // User struct: look up by name

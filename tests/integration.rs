@@ -6170,6 +6170,28 @@ fn alloc_keyword_escape() {
     );
 }
 
+#[test]
+fn pool_basic() {
+    run_gg(
+        "pool_basic.gg",
+        "\
+used > 0: true
+block_size: 64
+total >= 256: true
+done",
+    );
+}
+
+#[test]
+fn pool_composable() {
+    run_gg(
+        "pool_composable.gg",
+        "\
+alloc= works: true
+done",
+    );
+}
+
 // Parser Comparison Test
 // ═══════════════════════════════════════════════════════════════
 

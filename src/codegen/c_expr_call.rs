@@ -211,6 +211,20 @@ impl CodegenContext<'_> {
                 "TrackingAllocator" => {
                     return "gorget_tracking_new()".to_string();
                 }
+                "PoolAllocator" => {
+                    let pool_args = Self::filter_alloc_arg(args);
+                    let block_size = if !pool_args.is_empty() {
+                        self.gen_expr(&pool_args[0].node.value)
+                    } else {
+                        "64".to_string()
+                    };
+                    let initial_count = if pool_args.len() > 1 {
+                        self.gen_expr(&pool_args[1].node.value)
+                    } else {
+                        "256".to_string()
+                    };
+                    return format!("gorget_pool_new((size_t)({block_size}), (int64_t)({initial_count}))");
+                }
                 "len" => {
                     if let Some(arg) = args.first() {
                         let len_method = Spanned::dummy("len".to_string());
@@ -1872,9 +1886,12 @@ impl CodegenContext<'_> {
         let is_tracking_allocator = type_name == "TrackingAllocator"
             || c_type.as_deref() == Some("GorgetTrackingAllocator*");
 
+        let is_pool_allocator = type_name == "PoolAllocator"
+            || c_type.as_deref() == Some("GorgetPoolAllocator*");
+
         let is_primitive_hashable = !is_vector && !is_map && !is_set && !is_string
             && !is_option && !is_result && !is_box && !is_file && !is_iterator
-            && !is_char && !is_channel && !is_arena && !is_tracking_allocator
+            && !is_char && !is_channel && !is_arena && !is_tracking_allocator && !is_pool_allocator
             && method_name == "hash"
             && matches!(c_type.as_deref(), Some(
                 "int64_t" | "int8_t" | "int16_t" | "int32_t" |
@@ -1883,7 +1900,7 @@ impl CodegenContext<'_> {
                 "bool" | "char32_t"
             ));
 
-        if !is_vector && !is_map && !is_set && !is_string && !is_option && !is_result && !is_box && !is_file && !is_iterator && !is_primitive_hashable && !is_char && !is_channel && !is_arena && !is_tracking_allocator {
+        if !is_vector && !is_map && !is_set && !is_string && !is_option && !is_result && !is_box && !is_file && !is_iterator && !is_primitive_hashable && !is_char && !is_channel && !is_arena && !is_tracking_allocator && !is_pool_allocator {
             return None;
         }
 
@@ -1958,6 +1975,9 @@ impl CodegenContext<'_> {
         if is_tracking_allocator {
             return Some(self.gen_tracking_method(&recv, method_name));
         }
+        if is_pool_allocator {
+            return Some(self.gen_pool_method(&recv, method_name));
+        }
         None
     }
 
@@ -2017,6 +2037,18 @@ impl CodegenContext<'_> {
             "reset" => format!("gorget_tracking_reset({recv})"),
             "destroy" => format!("gorget_tracking_destroy({recv})"),
             _ => format!("/* unknown tracking allocator method: {method_name} */ 0"),
+        }
+    }
+
+    fn gen_pool_method(&self, recv: &str, method_name: &str) -> String {
+        match method_name {
+            "used_blocks" => format!("gorget_pool_used_blocks({recv})"),
+            "free_blocks" => format!("gorget_pool_free_blocks({recv})"),
+            "total_blocks" => format!("gorget_pool_total_blocks({recv})"),
+            "block_size" => format!("gorget_pool_block_size({recv})"),
+            "reset" => format!("gorget_pool_reset({recv})"),
+            "destroy" => format!("gorget_pool_destroy({recv})"),
+            _ => format!("/* unknown pool allocator method: {method_name} */ 0"),
         }
     }
 

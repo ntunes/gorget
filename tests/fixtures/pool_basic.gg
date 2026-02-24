@@ -1,0 +1,15 @@
+from std.alloc import PoolAllocator
+from std.collections import Vector
+
+void main():
+    with PoolAllocator(64, 256) as pool:
+        Vector[int] v = Vector[int]()
+        v.push(1)
+        v.push(2)
+        v.push(3)
+        assert pool.used_blocks() > 0, "pool should have used blocks"
+        print("used > 0: true")
+        print("block_size: {pool.block_size()}")
+        assert pool.total_blocks() >= 256, "total should be >= initial"
+        print("total >= 256: true")
+    print("done")

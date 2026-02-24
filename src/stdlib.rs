@@ -1185,8 +1185,36 @@ fn gen_alloc_module() -> Module {
         ],
         span: Span::dummy(),
     }));
+    let pool_struct = Spanned::dummy(Item::Struct(StructDef {
+        attributes: vec![],
+        visibility: Visibility::Public,
+        name: Spanned::dummy("PoolAllocator".to_string()),
+        generic_params: None,
+        fields: vec![],
+        doc_comment: None,
+        span: Span::dummy(),
+    }));
+    let pool_equip = Spanned::dummy(Item::Equip(EquipBlock {
+        generic_params: None,
+        trait_: None,
+        type_: Spanned::dummy(Type::Named {
+            name: Spanned::dummy("PoolAllocator".to_string()),
+            generic_args: vec![],
+        }),
+        via_field: None,
+        where_clause: None,
+        items: vec![
+            Spanned::dummy(decl_method("used_blocks", Ownership::Borrow, &[], ty_int())),
+            Spanned::dummy(decl_method("free_blocks", Ownership::Borrow, &[], ty_int())),
+            Spanned::dummy(decl_method("total_blocks", Ownership::Borrow, &[], ty_int())),
+            Spanned::dummy(decl_method("block_size", Ownership::Borrow, &[], ty_int())),
+            Spanned::dummy(decl_method("reset", Ownership::Borrow, &[], ty_void())),
+            Spanned::dummy(decl_method("destroy", Ownership::Borrow, &[], ty_void())),
+        ],
+        span: Span::dummy(),
+    }));
     Module {
-        items: vec![arena_struct, arena_equip, tracking_struct, tracking_equip],
+        items: vec![arena_struct, arena_equip, tracking_struct, tracking_equip, pool_struct, pool_equip],
         span: Span::dummy(),
     }
 }

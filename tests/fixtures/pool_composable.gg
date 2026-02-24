@@ -1,0 +1,11 @@
+from std.alloc import PoolAllocator
+from std.collections import Vector
+
+void main():
+    PoolAllocator pool = PoolAllocator(128, 32)
+    Vector[int] v = Vector[int](alloc=pool)
+    v.push(10)
+    v.push(20)
+    assert pool.used_blocks() > 0, "alloc= should use pool"
+    print("alloc= works: true")
+    print("done")

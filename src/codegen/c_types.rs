@@ -115,6 +115,8 @@ pub fn ast_type_to_c(ty: &crate::parser::ast::Type, scopes: &ScopeTable) -> Stri
                 return "GorgetArena*".to_string();
             } else if name.node == "TrackingAllocator" {
                 return "GorgetTrackingAllocator*".to_string();
+            } else if name.node == "PoolAllocator" {
+                return "GorgetPoolAllocator*".to_string();
             } else if name.node == "File" {
                 return "GorgetFile".to_string();
             } else if name.node == "SDLWindow" {
@@ -350,6 +352,7 @@ pub(super) fn def_name_to_c(def_id: DefId, scopes: &ScopeTable) -> String {
         "Match" => "GorgetRegexMatch".to_string(),
         "Arena" => "GorgetArena*".to_string(),
         "TrackingAllocator" => "GorgetTrackingAllocator*".to_string(),
+        "PoolAllocator" => "GorgetPoolAllocator*".to_string(),
         _ => name,
     }
 }
