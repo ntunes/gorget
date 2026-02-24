@@ -611,6 +611,93 @@ fn build(
         })
 }
 
+/// Build a .gg source file using the GIR pipeline (--ir mode).
+/// Parses, analyzes, lowers to GIR, generates C via the GIR backend, compiles to binary.
+fn try_build_ir(
+    filename: &str,
+    source: &str,
+    dep_paths: HashMap<String, PathBuf>,
+    output_dir: Option<&Path>,
+) -> Result<PathBuf, String> {
+    let mut parser = Parser::new(source);
+    let module = parser.parse_module();
+
+    if !parser.errors.is_empty() {
+        let reporter = ErrorReporter::new(filename.to_string(), source.to_string());
+        for err in &parser.errors {
+            reporter.report_parse_error(err);
+        }
+        return Err(format!("{} parse error(s) found", parser.errors.len()));
+    }
+
+    // Load imported modules recursively and merge
+    let (mut module, concat_source) = load_imports(filename, source, module, dep_paths);
+
+    let result = gorget::semantic::analyze(&mut module);
+
+    if !result.errors.is_empty() {
+        let reporter = ErrorReporter::new(filename.to_string(), concat_source);
+        for err in &result.errors {
+            reporter.report_semantic_error(err);
+        }
+        return Err(format!("{} semantic error(s) found", result.errors.len()));
+    }
+
+    // Lower AST to GIR
+    let gir_module = gorget::ir::lowering::lower_module(&module, &result);
+
+    // Generate C from GIR
+    let c_code = gorget::backend::c::generate_c(&gir_module);
+
+    // Determine output paths
+    let input_path = Path::new(filename);
+    let default_dir = input_path.parent().unwrap_or(Path::new("."));
+    let dir = output_dir.unwrap_or(default_dir);
+    let stem = input_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("output");
+
+    let c_path = dir.join(format!("{stem}.c"));
+    let exe_path = dir.join(stem);
+    let exe_path = std::path::absolute(&exe_path).unwrap_or(exe_path);
+
+    // Write .c file
+    if let Err(e) = fs::write(&c_path, &c_code) {
+        return Err(format!("Error writing {}: {e}", c_path.display()));
+    }
+
+    // Invoke C compiler
+    let cc = env::var("CC").unwrap_or_else(|_| "cc".to_string());
+    let mut cc_cmd = Command::new(&cc);
+    cc_cmd
+        .arg("-std=c11")
+        .arg("-Wall")
+        .arg("-Wextra")
+        .arg("-Wno-unused-parameter")
+        .arg("-Wno-unused-variable")
+        .arg("-Wno-unused-function")
+        .arg("-Wno-unused-label")
+        .arg("-o")
+        .arg(&exe_path)
+        .arg(&c_path)
+        .arg("-lm");
+
+    let status = cc_cmd.status();
+
+    match status {
+        Ok(s) if s.success() => Ok(exe_path),
+        Ok(s) => Err(format!(
+            "C compiler exited with: {s}\nGenerated C file: {}",
+            c_path.display()
+        )),
+        Err(e) => Err(format!(
+            "Failed to run C compiler '{cc}': {e}\nGenerated C file: {}",
+            c_path.display()
+        )),
+    }
+}
+
 /// Returns true if a line starts a top-level definition (function, struct, enum, etc.)
 fn is_definition_line(line: &str) -> bool {
     let trimmed = line.trim();
@@ -1202,6 +1289,7 @@ fn main() {
     let hot_reload_flag = args.iter().any(|a| a == "--hot-reload");
     let shared_mode = args.iter().any(|a| a == "--shared");
     let show_borrows = args.iter().any(|a| a == "--show-borrows");
+    let ir_mode = args.iter().any(|a| a == "--ir");
     // Parse -o <path> for shared output
     let shared_output_path: Option<PathBuf> = {
         let mut path = None;
@@ -1311,7 +1399,17 @@ fn main() {
         }
         "build" => {
             let dep_paths = resolve_deps_for_file(filename);
-            if shared_mode {
+            if ir_mode {
+                // --ir: use the GIR pipeline
+                let result = try_build_ir(filename, &source, dep_paths, None);
+                match result {
+                    Ok(p) => println!("Built (GIR): {}", p.display()),
+                    Err(e) => {
+                        eprintln!("{e}");
+                        process::exit(1);
+                    }
+                }
+            } else if shared_mode {
                 // --shared: build as shared library
                 let default_shared_path = {
                     let input_path = Path::new(filename);
@@ -1349,7 +1447,29 @@ fn main() {
         }
         "run" => {
             let dep_paths = resolve_deps_for_file(filename);
-            if hot_reload_flag {
+            if ir_mode {
+                // --ir: use the GIR pipeline
+                let tmp_dir = tempfile::tempdir().unwrap_or_else(|e| {
+                    eprintln!("Failed to create temp directory: {e}");
+                    process::exit(1);
+                });
+                let result = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()));
+                match result {
+                    Ok(exe_path) => {
+                        let status = Command::new(&exe_path)
+                            .status()
+                            .unwrap_or_else(|e| {
+                                eprintln!("Failed to execute {}: {e}", exe_path.display());
+                                process::exit(1);
+                            });
+                        process::exit(status.code().unwrap_or(1));
+                    }
+                    Err(e) => {
+                        eprintln!("{e}");
+                        process::exit(1);
+                    }
+                }
+            } else if hot_reload_flag {
                 // --hot-reload: build with hot-reload and run
                 let result = try_build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, None, dep_paths, None, true, show_borrows);
                 match result {

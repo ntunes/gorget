@@ -1,3 +1,4 @@
+pub mod backend;
 pub mod codegen;
 pub mod errors;
 pub mod formatter;

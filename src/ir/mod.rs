@@ -1,6 +1,7 @@
 pub mod types;
 pub mod instructions;
 pub mod builder;
+pub mod lowering;
 pub mod printer;
 pub mod validate;
 
