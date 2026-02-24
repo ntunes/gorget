@@ -3,6 +3,7 @@ pub mod derive;
 pub mod errors;
 pub mod ids;
 pub mod intern;
+pub mod meta;
 pub mod resolve;
 pub mod rewrite;
 pub mod scope;
@@ -46,6 +47,9 @@ pub fn analyze(module: &mut Module) -> AnalysisResult {
     let mut scopes = ScopeTable::new();
     let mut types = TypeTable::new();
     let mut errors = Vec::new();
+
+    // Pass 0: Evaluate and substitute meta constants
+    errors.extend(meta::evaluate_meta_consts(module));
 
     // Expand @derive(...) attributes into equip blocks
     derive::expand_derives(module, &mut errors);

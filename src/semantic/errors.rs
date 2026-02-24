@@ -217,6 +217,9 @@ pub enum SemanticErrorKind {
 
     /// Arena-scoped value escaping its `with` block.
     ArenaEscape { name: String, kind: ArenaEscapeKind },
+
+    /// Compile-time meta evaluation error.
+    MetaEvalError { message: String },
 }
 
 impl std::fmt::Display for SemanticError {
@@ -443,6 +446,9 @@ impl std::fmt::Display for SemanticError {
                         write!(f, "cannot assign arena-scoped value `{name}` to outer variable `{target}` — memory will be freed when arena is destroyed")
                     }
                 }
+            }
+            SemanticErrorKind::MetaEvalError { message } => {
+                write!(f, "meta evaluation error: {message}")
             }
         }
     }
