@@ -297,6 +297,7 @@ pub enum Keyword {
     Async,
     Await,
     Spawn,
+    Select,
 
     // Safety
     Unsafe,
@@ -402,6 +403,7 @@ impl Keyword {
             Keyword::Async => "async",
             Keyword::Await => "await",
             Keyword::Spawn => "spawn",
+            Keyword::Select => "select",
             Keyword::Unsafe => "unsafe",
             Keyword::Extern => "extern",
             Keyword::SelfLower => "self",
@@ -495,6 +497,7 @@ impl Keyword {
             "async" => Some(Keyword::Async),
             "await" => Some(Keyword::Await),
             "spawn" => Some(Keyword::Spawn),
+            "select" => Some(Keyword::Select),
             "unsafe" => Some(Keyword::Unsafe),
             "extern" => Some(Keyword::Extern),
             "self" => Some(Keyword::SelfLower),

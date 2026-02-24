@@ -1888,6 +1888,36 @@ impl<'a> BorrowChecker<'a> {
                 self.merge_branch_states(&branch_states);
             }
 
+            Stmt::Select { arms, else_arm } => {
+                let before = self.save_branch_state();
+                let mut branch_states = Vec::new();
+
+                for arm in arms {
+                    self.restore_branch_state(&before);
+                    match &arm.op {
+                        SelectOp::Recv { channel, .. } => {
+                            self.check_expr(channel);
+                        }
+                        SelectOp::Send { channel, value } => {
+                            self.check_expr(channel);
+                            self.check_expr(value);
+                        }
+                    }
+                    self.check_block(&arm.body);
+                    branch_states.push(self.save_branch_state());
+                }
+
+                if let Some(else_arm) = else_arm {
+                    self.restore_branch_state(&before);
+                    self.check_block(else_arm);
+                    branch_states.push(self.save_branch_state());
+                } else {
+                    branch_states.push(before);
+                }
+
+                self.merge_branch_states(&branch_states);
+            }
+
             Stmt::With { bindings, body } => {
                 for binding in bindings {
                     self.check_expr(&binding.expr);
@@ -2721,6 +2751,14 @@ fn build_aliases_from_stmt(
                 build_aliases_from_block(else_arm, param_names, aliases, function_info, resolution_map, scopes);
             }
         }
+        Stmt::Select { arms, else_arm } => {
+            for arm in arms {
+                build_aliases_from_block(&arm.body, param_names, aliases, function_info, resolution_map, scopes);
+            }
+            if let Some(else_arm) = else_arm {
+                build_aliases_from_block(else_arm, param_names, aliases, function_info, resolution_map, scopes);
+            }
+        }
         Stmt::For { body, .. } | Stmt::While { body, .. } | Stmt::Loop { body } => {
             build_aliases_from_block(body, param_names, aliases, function_info, resolution_map, scopes);
         }
@@ -2949,6 +2987,14 @@ fn trace_stmt_returns_to_params(
                 if let Expr::Block(block) = &arm.body.node {
                     trace_block_returns_to_params(block, param_names, local_aliases, function_info, resolution_map, scopes, result);
                 }
+            }
+            if let Some(else_arm) = else_arm {
+                trace_block_returns_to_params(else_arm, param_names, local_aliases, function_info, resolution_map, scopes, result);
+            }
+        }
+        Stmt::Select { arms, else_arm } => {
+            for arm in arms {
+                trace_block_returns_to_params(&arm.body, param_names, local_aliases, function_info, resolution_map, scopes, result);
             }
             if let Some(else_arm) = else_arm {
                 trace_block_returns_to_params(else_arm, param_names, local_aliases, function_info, resolution_map, scopes, result);
@@ -4773,16 +4819,16 @@ Outer find(Vector[String] items):
 
     #[test]
     fn return_through_local_two_ref_params() {
-        // `str select(str a, str b)` with local alias — Pass 5a should trace `result` back to `a`
+        // `str pick(str a, str b)` with local alias — Pass 5a should trace `result` back to `a`
         let source = "\
-str select(str a, str b):
+str pick(str a, str b):
     str result = a
     return result
 
 void main():
     str x = \"hello\"
     str y = \"world\"
-    str r = select(x, y)
+    str r = pick(x, y)
     print(r)
 ";
         let errors = check(source);
@@ -4799,13 +4845,13 @@ void main():
 str id(str x):
     return x
 
-str select(str a, str b):
+str pick(str a, str b):
     str result = a
     return result
 
 void main():
     String s = \"hello\"
-    str r = select(s, \"world\")
+    str r = pick(s, \"world\")
     String s2 = !s
     print(r)
 ";
@@ -4820,7 +4866,7 @@ void main():
     fn return_through_local_branch_union() {
         // result assigned from a or b depending on branch — both should flow
         let source = "\
-str select(str a, str b, bool flag):
+str pick(str a, str b, bool flag):
     str result = a
     if flag:
         result = b
@@ -4829,7 +4875,7 @@ str select(str a, str b, bool flag):
 void main():
     str x = \"hello\"
     str y = \"world\"
-    str r = select(x, y, true)
+    str r = pick(x, y, true)
     print(r)
 ";
         let errors = check(source);

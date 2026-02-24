@@ -668,6 +668,30 @@ pub struct MatchArm {
 }
 
 // ══════════════════════════════════════════════════════════════
+// Select (channel multiplexing)
+// ══════════════════════════════════════════════════════════════
+
+#[derive(Debug, Clone)]
+pub enum SelectOp {
+    Recv {
+        type_: Spanned<Type>,
+        name: Spanned<String>,
+        channel: Spanned<Expr>,
+    },
+    Send {
+        channel: Spanned<Expr>,
+        value: Spanned<Expr>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct SelectArm {
+    pub op: SelectOp,
+    pub body: Block,
+    pub span: Span,
+}
+
+// ══════════════════════════════════════════════════════════════
 // Patterns
 // ══════════════════════════════════════════════════════════════
 
@@ -777,6 +801,12 @@ pub enum Stmt {
     Match {
         scrutinee: Spanned<Expr>,
         arms: Vec<MatchArm>,
+        else_arm: Option<Block>,
+    },
+
+    /// select/case statement for channel multiplexing
+    Select {
+        arms: Vec<SelectArm>,
         else_arm: Option<Block>,
     },
 

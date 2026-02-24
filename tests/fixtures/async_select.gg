@@ -1,0 +1,27 @@
+from std.channel import Channel
+
+async void producer(Channel[int] ch, int start, int count):
+    int i = 0
+    while i < count:
+        ch.send(start + i)
+        i = i + 1
+
+async void main():
+    Channel[int] ch1 = Channel[int](1)
+    Channel[int] ch2 = Channel[int](1)
+    Task[void] t1 = spawn producer(ch1, 0, 3)
+    Task[void] t2 = spawn producer(ch2, 10, 3)
+    int total = 0
+    int count = 0
+    while count < 6:
+        select:
+            case int v = ch1.recv():
+                total = total + v
+            case int v = ch2.recv():
+                total = total + v
+        count = count + 1
+    t1.await()
+    t2.await()
+    ch1.close()
+    ch2.close()
+    print(total)

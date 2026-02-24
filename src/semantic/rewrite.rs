@@ -118,6 +118,19 @@ fn rewrite_stmt(stmt: &mut Stmt, res: &ResolutionMap, scopes: &ScopeTable) {
             }
             if let Some(ea) = else_arm { rewrite_block(ea, res, scopes); }
         }
+        Stmt::Select { arms, else_arm } => {
+            for arm in arms {
+                match &mut arm.op {
+                    SelectOp::Recv { channel, .. } => rewrite_expr(channel, res, scopes),
+                    SelectOp::Send { channel, value } => {
+                        rewrite_expr(channel, res, scopes);
+                        rewrite_expr(value, res, scopes);
+                    }
+                }
+                rewrite_block(&mut arm.body, res, scopes);
+            }
+            if let Some(ea) = else_arm { rewrite_block(ea, res, scopes); }
+        }
         Stmt::With { bindings, body } => {
             for binding in bindings {
                 rewrite_expr(&mut binding.expr, res, scopes);

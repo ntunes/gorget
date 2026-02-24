@@ -5751,6 +5751,29 @@ fn format_stmt_canonical(stmt: &Stmt) -> String {
                 format!("assert {cond}")
             }
         }
+        Stmt::Select { arms, else_arm } => {
+            let mut s = "select:".to_string();
+            for arm in arms {
+                let op_str = match &arm.op {
+                    SelectOp::Recv { type_: _, name, channel } => {
+                        let ch = format_expr_canonical(&channel.node);
+                        format!("case {} = {ch}.recv()", name.node)
+                    }
+                    SelectOp::Send { channel, value } => {
+                        let ch = format_expr_canonical(&channel.node);
+                        let val = format_expr_canonical(&value.node);
+                        format!("case {ch}.send({val})")
+                    }
+                };
+                let body = format_block_canonical(&arm.body.stmts);
+                s.push_str(&format!(" {op_str}:{body}"));
+            }
+            if let Some(eb) = else_arm {
+                let body = format_block_canonical(&eb.stmts);
+                s.push_str(&format!(" else:{body}"));
+            }
+            s
+        }
         Stmt::Item(item) => format_item_canonical(item),
     }
 }
@@ -6025,6 +6048,11 @@ fn async_channel() {
 #[test]
 fn async_channel_waker() {
     run_gg("async_channel_waker.gg", "10");
+}
+
+#[test]
+fn async_select() {
+    run_gg("async_select.gg", "36");
 }
 
 #[test]

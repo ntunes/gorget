@@ -857,6 +857,31 @@ fn resolve_stmt(
             }
         }
 
+        Stmt::Select { arms, else_arm } => {
+            for arm in arms {
+                scopes.push_scope(super::scope::ScopeKind::Block);
+                match &arm.op {
+                    SelectOp::Recv { name, channel, .. } => {
+                        resolve_expr(channel, scopes, errors, resolution_map);
+                        if let Ok(def_id) = scopes.define(name.node.clone(), super::scope::DefKind::Variable, name.span) {
+                            resolution_map.insert(name.span.start, def_id);
+                        }
+                    }
+                    SelectOp::Send { channel, value } => {
+                        resolve_expr(channel, scopes, errors, resolution_map);
+                        resolve_expr(value, scopes, errors, resolution_map);
+                    }
+                }
+                resolve_block(&arm.body, scopes, types, errors, resolution_map);
+                scopes.pop_scope();
+            }
+            if let Some(else_arm) = else_arm {
+                scopes.push_scope(super::scope::ScopeKind::Block);
+                resolve_block(else_arm, scopes, types, errors, resolution_map);
+                scopes.pop_scope();
+            }
+        }
+
         Stmt::With { bindings, body } => {
             scopes.push_scope(super::scope::ScopeKind::Block);
             for binding in bindings {

@@ -2006,6 +2006,12 @@ impl CodegenContext<'_> {
                 self.gen_match_stmt(scrutinee, arms, else_arm, emitter);
             }
 
+            Stmt::Select { .. } => {
+                // select is only valid in async functions; typecheck enforces this.
+                // Async codegen handles it via emit_async_stmt in c_item.rs.
+                panic!("select statement in non-async codegen should have been rejected by typecheck");
+            }
+
             Stmt::Throw(expr) => {
                 let e = self.gen_expr(expr);
                 let str_temps = self.flush_string_temps(emitter);

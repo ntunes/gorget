@@ -912,6 +912,41 @@ impl Formatter {
                 }
                 self.emitter.dedent();
             }
+            Stmt::Select { arms, else_arm } => {
+                self.emitter.write("select:");
+                self.emitter.newline();
+                self.emitter.indent();
+                for arm in arms {
+                    self.emitter.write("case ");
+                    match &arm.op {
+                        SelectOp::Recv { type_, name, channel } => {
+                            self.format_type(type_);
+                            self.emitter.write(&format!(" {} = ", name.node));
+                            self.format_expr(channel);
+                            self.emitter.write(".recv()");
+                        }
+                        SelectOp::Send { channel, value } => {
+                            self.format_expr(channel);
+                            self.emitter.write(".send(");
+                            self.format_expr(value);
+                            self.emitter.write(")");
+                        }
+                    }
+                    self.emitter.write(":");
+                    self.emitter.newline();
+                    self.emitter.indent();
+                    self.format_block_stmts(&arm.body);
+                    self.emitter.dedent();
+                }
+                if let Some(else_body) = else_arm {
+                    self.emitter.write("else:");
+                    self.emitter.newline();
+                    self.emitter.indent();
+                    self.format_block_stmts(else_body);
+                    self.emitter.dedent();
+                }
+                self.emitter.dedent();
+            }
             Stmt::With { bindings, body } => {
                 self.emitter.write("with ");
                 for (i, binding) in bindings.iter().enumerate() {

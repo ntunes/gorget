@@ -1,5 +1,5 @@
 /// Closure codegen: lambda lifting, free variable collection, and mutation detection.
-use crate::parser::ast::Expr;
+use crate::parser::ast::{Expr, SelectOp};
 use crate::span::Spanned;
 
 use super::c_mangle;
@@ -362,6 +362,26 @@ impl crate::parser::visitor::ExprVisitor for FreeVarCollector<'_, '_> {
                         self.visit_expr(guard);
                     }
                     self.visit_expr(&arm.body);
+                    self.bound = saved;
+                }
+                if let Some(eb) = else_arm {
+                    self.visit_block(eb);
+                }
+            }
+            Stmt::Select { arms, else_arm } => {
+                for arm in arms {
+                    let saved = self.bound.clone();
+                    match &arm.op {
+                        SelectOp::Recv { channel, name, .. } => {
+                            self.visit_expr(channel);
+                            self.bound.insert(name.node.clone());
+                        }
+                        SelectOp::Send { channel, value } => {
+                            self.visit_expr(channel);
+                            self.visit_expr(value);
+                        }
+                    }
+                    self.visit_block(&arm.body);
                     self.bound = saved;
                 }
                 if let Some(eb) = else_arm {

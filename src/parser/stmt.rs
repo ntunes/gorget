@@ -56,6 +56,7 @@ impl Parser {
             Token::Keyword(Keyword::While) => self.parse_while_stmt(),
             Token::Keyword(Keyword::Loop) => self.parse_loop_stmt(),
             Token::Keyword(Keyword::Match) => self.parse_match_stmt(),
+            Token::Keyword(Keyword::Select) => self.parse_select_stmt(),
             Token::Keyword(Keyword::With) => self.parse_with_stmt(),
             Token::Keyword(Keyword::Unsafe) => self.parse_unsafe_stmt(),
 
@@ -294,6 +295,93 @@ impl Parser {
             },
             start.merge(end),
         ))
+    }
+
+    fn parse_select_stmt(&mut self) -> Result<Spanned<Stmt>, ParseError> {
+        let start = self.peek_span();
+        self.expect_keyword(Keyword::Select)?;
+        self.expect(&Token::Colon)?;
+        self.expect(&Token::Newline)?;
+        self.expect(&Token::Indent)?;
+
+        let mut arms = Vec::new();
+        let mut else_arm = None;
+
+        while !self.check(&Token::Dedent) && !self.at_end() {
+            if self.check(&Token::Newline) {
+                self.advance();
+                continue;
+            }
+
+            if self.match_keyword(Keyword::Else) {
+                else_arm = Some(self.parse_block()?);
+                continue;
+            }
+
+            let arm_start = self.peek_span();
+            self.expect_keyword(Keyword::Case)?;
+
+            let op = self.parse_select_op()?;
+
+            self.expect(&Token::Colon)?;
+            let body = self.parse_block_body(arm_start)?;
+
+            let arm_end = body.span;
+            arms.push(SelectArm {
+                op,
+                body,
+                span: arm_start.merge(arm_end),
+            });
+        }
+
+        self.expect(&Token::Dedent)?;
+        let end = self.previous_span();
+
+        Ok(Spanned::new(
+            Stmt::Select { arms, else_arm },
+            start.merge(end),
+        ))
+    }
+
+    fn parse_select_op(&mut self) -> Result<SelectOp, ParseError> {
+        // Try recv: Type name = expr.recv()
+        if let Some(recv_op) = self.try_parse(|p| {
+            let type_ = p.parse_type().ok()?;
+            let name_span = p.peek_span();
+            let name = p.expect_identifier().ok()?;
+            let name = Spanned::new(name.node, name_span);
+            p.match_token(&Token::Eq).then_some(())?;
+            let channel = p.parse_expr().ok()?;
+            // Validate it's a .recv() call
+            match &channel.node {
+                Expr::MethodCall { method, args, .. } if method.node == "recv" && args.is_empty() => {}
+                _ => return None,
+            }
+            // Extract receiver from the MethodCall
+            if let Expr::MethodCall { receiver, .. } = channel.node {
+                Some(SelectOp::Recv { type_, name, channel: *receiver })
+            } else {
+                None
+            }
+        }) {
+            return Ok(recv_op);
+        }
+
+        // Otherwise: expr.send(value)
+        let expr = self.parse_expr()?;
+        match expr.node {
+            Expr::MethodCall { receiver, method, args, .. } if method.node == "send" && args.len() == 1 => {
+                let value = args.into_iter().next().unwrap().node.value;
+                Ok(SelectOp::Send { channel: *receiver, value })
+            }
+            _ => Err(ParseError {
+                kind: crate::errors::ParseErrorKind::UnexpectedToken {
+                    expected: "channel.recv() or channel.send()".to_string(),
+                    got: "other expression".to_string(),
+                },
+                span: expr.span,
+            }),
+        }
     }
 
     fn parse_with_stmt(&mut self) -> Result<Spanned<Stmt>, ParseError> {

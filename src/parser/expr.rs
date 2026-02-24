@@ -146,6 +146,14 @@ fn stmt_contains_it(stmt: &Stmt) -> bool {
                 })
                 || else_arm.as_ref().is_some_and(block_contains_it)
         }
+        Stmt::Select { arms, else_arm } => {
+            arms.iter().any(|arm| {
+                (match &arm.op {
+                    SelectOp::Recv { channel, .. } => contains_it(channel),
+                    SelectOp::Send { channel, value } => contains_it(channel) || contains_it(value),
+                }) || block_contains_it(&arm.body)
+            }) || else_arm.as_ref().is_some_and(block_contains_it)
+        }
         Stmt::With { bindings, body } => {
             bindings.iter().any(|b| contains_it(&b.expr))
                 || block_contains_it(body)

@@ -156,6 +156,28 @@ impl ExprVisitor for CapturedMutationDetector {
                     self.visit_block(eb);
                 }
             }
+            Stmt::Select { arms, else_arm } => {
+                for arm in arms {
+                    if self.found { return; }
+                    match &arm.op {
+                        SelectOp::Recv { channel, name, .. } => {
+                            self.visit_expr(channel);
+                            let saved = self.locals.clone();
+                            self.locals.insert(name.node.clone());
+                            self.visit_block(&arm.body);
+                            self.locals = saved;
+                        }
+                        SelectOp::Send { channel, value } => {
+                            self.visit_expr(channel);
+                            self.visit_expr(value);
+                            self.visit_block(&arm.body);
+                        }
+                    }
+                }
+                if let Some(eb) = else_arm {
+                    self.visit_block(eb);
+                }
+            }
             Stmt::With { bindings, body } => {
                 for b in bindings {
                     self.locals.insert(b.name.node.clone());
@@ -1723,6 +1745,36 @@ impl<'a> TypeChecker<'a> {
                     self.check_block(else_arm);
                 }
                 self.check_match_exhaustiveness(scrutinee_type, arms, else_arm.is_some(), stmt.span);
+            }
+
+            Stmt::Select { arms, else_arm } => {
+                if !self.current_function_is_async {
+                    self.error(SemanticErrorKind::SelectOutsideAsync, stmt.span);
+                }
+                for arm in arms {
+                    match &arm.op {
+                        SelectOp::Recv { type_, name, channel } => {
+                            self.infer_expr(channel);
+                            // Resolve the declared type and assign to the recv variable
+                            if let Ok(type_id) = super::types::ast_type_to_resolved(
+                                &type_.node, type_.span, self.scopes, self.types,
+                            ) {
+                                if let Some(def_id) = self.scopes.lookup_def_by_span(&name.node, name.span) {
+                                    self.scopes.get_def_mut(def_id).type_id = Some(type_id);
+                                }
+                            }
+                            self.check_block(&arm.body);
+                        }
+                        SelectOp::Send { channel, value } => {
+                            self.infer_expr(channel);
+                            self.infer_expr(value);
+                            self.check_block(&arm.body);
+                        }
+                    }
+                }
+                if let Some(else_arm) = else_arm {
+                    self.check_block(else_arm);
+                }
             }
 
             Stmt::With { bindings, body } => {

@@ -334,6 +334,19 @@ pub fn walk_stmt<V: ExprVisitor + ?Sized>(v: &mut V, stmt: &Spanned<Stmt>) {
                 v.visit_block(eb);
             }
         }
+        Stmt::Select { arms, else_arm } => {
+            for arm in arms {
+                match &arm.op {
+                    SelectOp::Recv { channel, .. } => v.visit_expr(channel),
+                    SelectOp::Send { channel, value } => {
+                        v.visit_expr(channel);
+                        v.visit_expr(value);
+                    }
+                }
+                v.visit_block(&arm.body);
+            }
+            if let Some(eb) = else_arm { v.visit_block(eb); }
+        }
         Stmt::With { bindings, body } => {
             for binding in bindings {
                 v.visit_expr(&binding.expr);

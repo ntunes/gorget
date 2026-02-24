@@ -362,6 +362,8 @@ pub struct CodegenContext<'a> {
     pub async_sub_counter: usize,
     /// Match scrutinee counter within current async function (for unique __match_scrut_N names).
     pub async_match_counter: usize,
+    /// Select statement counter within current async function (for unique send-tmp field names).
+    pub async_select_counter: usize,
     /// For-loop counter within current async function (for unique __for_idx_N / __for_oi_N names).
     pub async_for_counter: usize,
     /// When inside an async for-loop body that has an else clause, holds the
@@ -630,6 +632,7 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
         async_lifted_vars: None,
         async_sub_counter: 0,
         async_match_counter: 0,
+        async_select_counter: 0,
         async_for_counter: 0,
         async_break_flag: None,
         async_for_else_counter: 0,

@@ -78,6 +78,9 @@ pub enum SemanticErrorKind {
     /// `await` used outside an `async` function.
     AwaitOutsideAsync,
 
+    /// `select` used outside an `async` function.
+    SelectOutsideAsync,
+
     /// `await` applied to a non-`Future[T]` value.
     AwaitNonFuture,
 
@@ -292,6 +295,9 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::AwaitOutsideAsync => {
                 write!(f, "`await` can only be used inside an `async` function")
+            }
+            SemanticErrorKind::SelectOutsideAsync => {
+                write!(f, "`select` can only be used inside an `async` function")
             }
             SemanticErrorKind::AwaitNonFuture => {
                 write!(f, "`await` requires a `Future[T]` value")

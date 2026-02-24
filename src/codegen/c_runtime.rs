@@ -1161,13 +1161,15 @@ static int gorget_channel_poll_send(GorgetChannel* ch, const void* data, GorgetW
         }
         return 1;
     }
-    // Channel full — register waker and return pending
-    if (ch->send_waiter_count == ch->send_waiter_cap) {
-        size_t old_cap = ch->send_waiter_cap;
-        ch->send_waiter_cap = old_cap ? old_cap * 2 : 4;
-        ch->send_waiters = (GorgetWaker*)ch->alloc->realloc(ch->alloc->ctx, ch->send_waiters, old_cap * sizeof(GorgetWaker), ch->send_waiter_cap * sizeof(GorgetWaker));
+    // Channel full — register waker (if non-NULL) and return pending
+    if (waker) {
+        if (ch->send_waiter_count == ch->send_waiter_cap) {
+            size_t old_cap = ch->send_waiter_cap;
+            ch->send_waiter_cap = old_cap ? old_cap * 2 : 4;
+            ch->send_waiters = (GorgetWaker*)ch->alloc->realloc(ch->alloc->ctx, ch->send_waiters, old_cap * sizeof(GorgetWaker), ch->send_waiter_cap * sizeof(GorgetWaker));
+        }
+        ch->send_waiters[ch->send_waiter_count++] = *waker;
     }
-    ch->send_waiters[ch->send_waiter_count++] = *waker;
     pthread_mutex_unlock(&ch->mtx);
     return 0;
 }
@@ -1195,13 +1197,15 @@ static int gorget_channel_poll_recv(GorgetChannel* ch, void* out, GorgetWaker* w
         fprintf(stderr, "gorget: panic: recv on closed empty channel\n");
         exit(1);
     }
-    // Channel empty — register waker and return pending
-    if (ch->recv_waiter_count == ch->recv_waiter_cap) {
-        size_t old_cap = ch->recv_waiter_cap;
-        ch->recv_waiter_cap = old_cap ? old_cap * 2 : 4;
-        ch->recv_waiters = (GorgetWaker*)ch->alloc->realloc(ch->alloc->ctx, ch->recv_waiters, old_cap * sizeof(GorgetWaker), ch->recv_waiter_cap * sizeof(GorgetWaker));
+    // Channel empty — register waker (if non-NULL) and return pending
+    if (waker) {
+        if (ch->recv_waiter_count == ch->recv_waiter_cap) {
+            size_t old_cap = ch->recv_waiter_cap;
+            ch->recv_waiter_cap = old_cap ? old_cap * 2 : 4;
+            ch->recv_waiters = (GorgetWaker*)ch->alloc->realloc(ch->alloc->ctx, ch->recv_waiters, old_cap * sizeof(GorgetWaker), ch->recv_waiter_cap * sizeof(GorgetWaker));
+        }
+        ch->recv_waiters[ch->recv_waiter_count++] = *waker;
     }
-    ch->recv_waiters[ch->recv_waiter_count++] = *waker;
     pthread_mutex_unlock(&ch->mtx);
     return 0;
 }

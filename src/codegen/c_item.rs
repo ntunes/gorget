@@ -1903,6 +1903,21 @@ impl CodegenContext<'_> {
                     self.scan_block_for_generic_calls(else_body);
                 }
             }
+            Stmt::Select { arms, else_arm } => {
+                for arm in arms {
+                    match &arm.op {
+                        SelectOp::Recv { channel, .. } => self.scan_expr_for_generic_calls(channel),
+                        SelectOp::Send { channel, value } => {
+                            self.scan_expr_for_generic_calls(channel);
+                            self.scan_expr_for_generic_calls(value);
+                        }
+                    }
+                    self.scan_block_for_generic_calls(&arm.body);
+                }
+                if let Some(else_body) = else_arm {
+                    self.scan_block_for_generic_calls(else_body);
+                }
+            }
             Stmt::With { bindings, body } => {
                 for binding in bindings {
                     self.scan_expr_for_generic_calls(&binding.expr);
@@ -3906,6 +3921,32 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                     self.analyze_async_block(body, params, locals, await_count, sub_futures, context_fn);
                 }
             }
+            Stmt::Select { arms, else_arm } => {
+                let mut send_tmp_count = 0;
+                for arm in arms {
+                    match &arm.op {
+                        SelectOp::Recv { type_, name, .. } => {
+                            let c_type = self.type_to_c(&type_.node);
+                            let escaped = c_mangle::escape_keyword(&name.node);
+                            if !locals.iter().any(|(n, _, _)| n == &escaped) {
+                                locals.push((escaped, c_type, None));
+                            }
+                        }
+                        SelectOp::Send { channel, .. } => {
+                            let tmp_name = format!("__sel_send_tmp_{}", self.async_select_counter * 100 + send_tmp_count);
+                            send_tmp_count += 1;
+                            let elem_c_type = self.infer_channel_elem_c_type_readonly(channel);
+                            if !locals.iter().any(|(n, _, _)| n == &tmp_name) {
+                                locals.push((tmp_name, elem_c_type, None));
+                            }
+                        }
+                    }
+                    self.analyze_async_block(&arm.body, params, locals, await_count, sub_futures, context_fn);
+                }
+                if let Some(else_arm) = else_arm {
+                    self.analyze_async_block(else_arm, params, locals, await_count, sub_futures, context_fn);
+                }
+            }
             Stmt::Match { scrutinee, arms, else_arm } => {
                 let any_arm_has_suspend = arms.iter().any(|arm| match &arm.body.node {
                     Expr::Block(block) => Self::block_contains_await(block) || Self::block_contains_channel_op(block),
@@ -3994,6 +4035,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                     other => Self::expr_contains_await(other),
                 }) || else_arm.as_ref().map_or(false, Self::block_contains_await)
             }
+            Stmt::Select { .. } => true,
             _ => false,
         }
     }
@@ -4120,6 +4162,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                     other => Self::expr_contains_channel_op(other),
                 }) || else_arm.as_ref().map_or(false, Self::block_contains_channel_op)
             }
+            Stmt::Select { .. } => true,
             _ => false,
         }
     }
@@ -4788,6 +4831,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         let prev_lifted = self.async_lifted_vars.take();
         let prev_sub_counter = self.async_sub_counter;
         let prev_match_counter = self.async_match_counter;
+        let prev_select_counter = self.async_select_counter;
         let prev_for_counter = self.async_for_counter;
         let prev_for_else_counter = self.async_for_else_counter;
         let prev_channel_op_counter = self.async_channel_op_counter;
@@ -4795,6 +4839,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         self.async_lifted_vars = Some(lifted);
         self.async_sub_counter = 0;
         self.async_match_counter = 0;
+        self.async_select_counter = 0;
         self.async_for_counter = 0;
         self.async_for_else_counter = 0;
         self.async_channel_op_counter = 0;
@@ -4868,6 +4913,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         self.async_lifted_vars = prev_lifted;
         self.async_sub_counter = prev_sub_counter;
         self.async_match_counter = prev_match_counter;
+        self.async_select_counter = prev_select_counter;
         self.async_for_counter = prev_for_counter;
         self.async_for_else_counter = prev_for_else_counter;
         self.async_channel_op_counter = prev_channel_op_counter;
@@ -5770,6 +5816,84 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                 }
             }
 
+            // Select: channel multiplexing with probe-then-register pattern
+            Stmt::Select { arms, else_arm } => {
+                let sel_n = self.async_select_counter;
+                self.async_select_counter += 1;
+
+                // Build arm info: for each arm, generate channel expr and field name
+                let mut arm_infos: Vec<(&str, String, String)> = Vec::new();
+                let mut send_tmp_idx = 0;
+                for arm in arms {
+                    match &arm.op {
+                        SelectOp::Send { channel, value } => {
+                            let ch_c = self.gen_expr(channel);
+                            let val_c = self.gen_expr(value);
+                            let tmp = format!("__sel_send_tmp_{}", sel_n * 100 + send_tmp_idx);
+                            send_tmp_idx += 1;
+                            emitter.emit_line(&format!("__self->{tmp} = {val_c};"));
+                            arm_infos.push(("send", ch_c, tmp));
+                        }
+                        SelectOp::Recv { name, channel, .. } => {
+                            let ch_c = self.gen_expr(channel);
+                            let escaped = c_mangle::escape_keyword(&name.node);
+                            arm_infos.push(("recv", ch_c, escaped));
+                        }
+                    }
+                }
+
+                // Suspension point
+                *state_idx += 1;
+                emitter.emit_line(&format!("__self->__state = {};", *state_idx));
+                emitter.dedent();
+                emitter.emit_line(&format!("case {}:", *state_idx));
+                emitter.indent();
+
+                // Probe phase — try each arm with NULL waker
+                let mut first = true;
+                for (i, (kind, ch, field)) in arm_infos.iter().enumerate() {
+                    let poll_call = match *kind {
+                        "recv" => format!("gorget_channel_poll_recv({ch}, &__self->{field}, NULL)"),
+                        "send" => format!("gorget_channel_poll_send({ch}, &__self->{field}, NULL)"),
+                        _ => unreachable!(),
+                    };
+
+                    if first {
+                        emitter.emit_line(&format!("if ({poll_call}) {{"));
+                        first = false;
+                    } else {
+                        emitter.emit_line(&format!("}} else if ({poll_call}) {{"));
+                    }
+                    emitter.indent();
+
+                    // Emit arm body
+                    self.emit_async_stmts(&arms[i].body.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
+
+                    emitter.dedent();
+                }
+
+                // else branch
+                emitter.emit_line("} else {");
+                emitter.indent();
+                if let Some(else_body) = else_arm {
+                    // Non-blocking: execute else body
+                    self.emit_async_stmts(&else_body.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
+                } else {
+                    // Blocking: register waker with all channels, suspend
+                    for (kind, ch, field) in &arm_infos {
+                        let register_call = match *kind {
+                            "recv" => format!("gorget_channel_poll_recv({ch}, &__self->{field}, __waker);"),
+                            "send" => format!("gorget_channel_poll_send({ch}, &__self->{field}, __waker);"),
+                            _ => unreachable!(),
+                        };
+                        emitter.emit_line(&register_call);
+                    }
+                    emitter.emit_line("return GORGET_POLL_PENDING;");
+                }
+                emitter.dedent();
+                emitter.emit_line("}");
+            }
+
             // Break: set break-flag if inside async for/else, then break
             Stmt::Break(_) => {
                 if let Some(flag) = &self.async_break_flag {
@@ -5951,6 +6075,21 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                     if let Some(guard) = &arm.guard {
                         self.scan_expr_for_tuples(guard);
                     }
+                }
+                if let Some(else_body) = else_arm {
+                    self.scan_block_for_tuples(else_body);
+                }
+            }
+            Stmt::Select { arms, else_arm } => {
+                for arm in arms {
+                    match &arm.op {
+                        SelectOp::Recv { channel, .. } => self.scan_expr_for_tuples(channel),
+                        SelectOp::Send { channel, value } => {
+                            self.scan_expr_for_tuples(channel);
+                            self.scan_expr_for_tuples(value);
+                        }
+                    }
+                    self.scan_block_for_tuples(&arm.body);
                 }
                 if let Some(else_body) = else_arm {
                     self.scan_block_for_tuples(else_body);
