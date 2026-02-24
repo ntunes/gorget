@@ -6230,7 +6230,7 @@ done",
 
 #[test]
 fn meta_basic() {
-    run_gg("meta_basic.gg", "1024\n512\n1.0\ntrue\n70");
+    run_gg("meta_basic.gg", "1024\n512\n1.0\ntrue\n70\n99\n100");
 }
 
 // Parser Comparison Test

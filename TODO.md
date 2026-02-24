@@ -118,7 +118,7 @@
 
 - **Const evaluation**: No compile-time expression evaluation. Needed for const declarations, array sizes, and const generics. [from roadmap, added: 2026-02-16]
 
-- **Conditional compilation (`@cfg`)**: Platform/feature-gated code blocks. [from roadmap, added: 2026-02-16]
+- **Conditional compilation — built-in functions**: `meta if` infrastructure is done but needs built-in meta functions like `platform()`, `arch()`, `feature()` to be truly useful. Currently conditions must reference meta consts only. [updated: 2026-02-24]
 
 - **`gg fmt` (code formatter)**: Auto-formatter for `.gg` source files. [from roadmap, added: 2026-02-16]
 

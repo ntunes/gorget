@@ -5,9 +5,17 @@ meta bool ENABLED = true
 meta int COMPUTED = 10 + 20 * 3
 meta assert MAX > 0, "MAX must be positive"
 
+meta type Num = int
+
+meta if ENABLED:
+    meta int BONUS = 100
+
 void main():
     print(MAX)
     print(HALF)
     print(VERSION)
     print(ENABLED)
     print(COMPUTED)
+    Num x = 99
+    print(x)
+    print(BONUS)
