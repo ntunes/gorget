@@ -1,0 +1,13 @@
+from std.alloc import TrackingAllocator
+from std.collections import Vector
+
+void main():
+    with TrackingAllocator() as tracker:
+        Vector[int] v = Vector[int]()
+        v.push(1)
+        v.push(2)
+        v.push(3)
+        int rc = tracker.realloc_count()
+        print("realloc_count > 0: {rc > 0}")
+        tracker.report()
+    print("done")

@@ -1178,6 +1178,8 @@ fn gen_alloc_module() -> Module {
             Spanned::dummy(decl_method("bytes_freed", Ownership::Borrow, &[], ty_int())),
             Spanned::dummy(decl_method("current_bytes", Ownership::Borrow, &[], ty_int())),
             Spanned::dummy(decl_method("peak_bytes", Ownership::Borrow, &[], ty_int())),
+            Spanned::dummy(decl_method("realloc_count", Ownership::Borrow, &[], ty_int())),
+            Spanned::dummy(decl_method("report", Ownership::Borrow, &[], ty_void())),
             Spanned::dummy(decl_method("reset", Ownership::Borrow, &[], ty_void())),
             Spanned::dummy(decl_method("destroy", Ownership::Borrow, &[], ty_void())),
         ],

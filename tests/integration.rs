@@ -6143,6 +6143,26 @@ done",
 }
 
 #[test]
+fn tracking_report() {
+    run_gg(
+        "tracking_report.gg",
+        "\
+realloc_count > 0: true
+done",
+    );
+}
+
+#[test]
+fn tracking_composable() {
+    run_gg(
+        "tracking_composable.gg",
+        "\
+bytes > 0: true
+done",
+    );
+}
+
+#[test]
 fn alloc_keyword_escape() {
     check_gg_fails(
         "alloc_keyword_escape.gg",

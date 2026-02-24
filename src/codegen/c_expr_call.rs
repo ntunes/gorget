@@ -2012,6 +2012,8 @@ impl CodegenContext<'_> {
             "bytes_freed" => format!("gorget_tracking_bytes_freed({recv})"),
             "current_bytes" => format!("gorget_tracking_current_bytes({recv})"),
             "peak_bytes" => format!("gorget_tracking_peak_bytes({recv})"),
+            "realloc_count" => format!("gorget_tracking_realloc_count({recv})"),
+            "report" => format!("gorget_tracking_report({recv})"),
             "reset" => format!("gorget_tracking_reset({recv})"),
             "destroy" => format!("gorget_tracking_destroy({recv})"),
             _ => format!("/* unknown tracking allocator method: {method_name} */ 0"),

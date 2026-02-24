@@ -250,6 +250,7 @@ static int64_t gorget_tracking_bytes_allocated(GorgetTrackingAllocator* t) { ret
 static int64_t gorget_tracking_bytes_freed(GorgetTrackingAllocator* t) { return t->bytes_freed; }
 static int64_t gorget_tracking_current_bytes(GorgetTrackingAllocator* t) { return t->current_bytes; }
 static int64_t gorget_tracking_peak_bytes(GorgetTrackingAllocator* t) { return t->peak_bytes; }
+static int64_t gorget_tracking_realloc_count(GorgetTrackingAllocator* t) { return t->realloc_count; }
 
 static void gorget_tracking_reset(GorgetTrackingAllocator* t) {
     t->alloc_count = 0;
@@ -261,8 +262,25 @@ static void gorget_tracking_reset(GorgetTrackingAllocator* t) {
     t->peak_bytes = 0;
 }
 
+static void gorget_tracking_report(GorgetTrackingAllocator* t) {
+    fprintf(stderr, "── TrackingAllocator Report ──\\n");
+    fprintf(stderr, "  allocs:     %lld\\n", (long long)t->alloc_count);
+    fprintf(stderr, "  frees:      %lld\\n", (long long)t->free_count);
+    fprintf(stderr, "  reallocs:   %lld\\n", (long long)t->realloc_count);
+    fprintf(stderr, "  bytes in:   %lld\\n", (long long)t->bytes_allocated);
+    fprintf(stderr, "  bytes out:  %lld\\n", (long long)t->bytes_freed);
+    fprintf(stderr, "  current:    %lld\\n", (long long)t->current_bytes);
+    fprintf(stderr, "  peak:       %lld\\n", (long long)t->peak_bytes);
+    fprintf(stderr, "─────────────────────────────\\n");
+}
+
 static void gorget_tracking_destroy(GorgetTrackingAllocator* t) {
     if (!t) return;
+    if (t->current_bytes > 0) {
+        fprintf(stderr, "gorget: warning: TrackingAllocator destroyed with %lld bytes still allocated "
+                "(%lld allocs, %lld frees)\\n",
+                (long long)t->current_bytes, (long long)t->alloc_count, (long long)t->free_count);
+    }
     GorgetAllocator* pa = t->inner;
     pa->dealloc(pa->ctx, t, sizeof(GorgetTrackingAllocator));
 }
