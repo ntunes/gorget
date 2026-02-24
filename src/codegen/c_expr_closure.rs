@@ -121,7 +121,7 @@ impl CodegenContext<'_> {
             // Also emit GorgetClosure for backward compat during transition — the
             // per-closure struct is heap-allocated and wrapped in GorgetClosure.
             format!(
-                "({{ {env_name}* __heap_env = ({env_name}*)malloc(sizeof({env_name})); \
+                "({{ {env_name}* __heap_env = ({env_name}*)GORGET_ALLOC(sizeof({env_name})); \
                 *__heap_env = ({env_name}){{{field_init}}}; \
                 (GorgetClosure){{.fn_ptr = (void*){fn_name}, .env = (void*)__heap_env}}; }})"
             )

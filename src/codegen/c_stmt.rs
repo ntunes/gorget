@@ -2176,7 +2176,7 @@ impl CodegenContext<'_> {
                     let inner_val = self.gen_expr(inner_expr);
 
                     emitter.emit_line(&format!(
-                        "{concrete_type}* __box_{escaped} = ({concrete_type}*)malloc(sizeof({concrete_type}));"
+                        "{concrete_type}* __box_{escaped} = ({concrete_type}*)GORGET_ALLOC(sizeof({concrete_type}));"
                     ));
                     emitter.emit_line(&format!("*__box_{escaped} = {inner_val};"));
                     emitter.emit_line(&format!(

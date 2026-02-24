@@ -165,7 +165,7 @@ impl CodegenContext<'_> {
                     "({{ GorgetArray __sorted_src = {recv}; \
                     GorgetArray __sorted_dst = gorget_array_new(sizeof({elem_type})); \
                     if (__sorted_src.len > 0) {{ \
-                        __sorted_dst.data = malloc(__sorted_src.len * sizeof({elem_type})); \
+                        __sorted_dst.data = GORGET_ALLOC(__sorted_src.len * sizeof({elem_type})); \
                         memcpy(__sorted_dst.data, __sorted_src.data, __sorted_src.len * sizeof({elem_type})); \
                         __sorted_dst.len = __sorted_src.len; \
                         __sorted_dst.cap = __sorted_src.len; \
@@ -1041,7 +1041,7 @@ impl CodegenContext<'_> {
                     let inner = self.gen_expr(&arg.node.value);
                     let inner_type = self.box_inner_c_type(&arg.node.value);
                     format!(
-                        "({{ {inner_type}* __box_tmp = ({inner_type}*)malloc(sizeof({inner_type})); *__box_tmp = {inner}; __box_tmp; }})"
+                        "({{ {inner_type}* __box_tmp = ({inner_type}*)GORGET_ALLOC(sizeof({inner_type})); *__box_tmp = {inner}; __box_tmp; }})"
                     )
                 } else {
                     format!("/* Box.new() missing arg */")

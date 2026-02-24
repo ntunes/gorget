@@ -716,7 +716,7 @@ impl CodegenContext<'_> {
                 let task_type = format!("Task__{suffix}");
                 format!(
                     "({{ \
-                    {ctx_name}* __sc = ({ctx_name}*)calloc(1, sizeof({ctx_name})); \
+                    {ctx_name}* __sc = ({ctx_name}*)GORGET_CALLOC(1, sizeof({ctx_name})); \
                     __sc->base.run = {ctx_name}__run; \
                     pthread_mutex_init(&__sc->base.mtx, NULL); \
                     pthread_cond_init(&__sc->base.cond, NULL); \

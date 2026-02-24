@@ -974,7 +974,7 @@ impl CodegenContext<'_> {
                     let inner = self.gen_expr(&arg.node.value);
                     let inner_type = self.box_inner_c_type(&arg.node.value);
                     return format!(
-                        "({{ {inner_type}* __box_tmp = ({inner_type}*)malloc(sizeof({inner_type})); *__box_tmp = {inner}; __box_tmp; }})"
+                        "({{ {inner_type}* __box_tmp = ({inner_type}*)GORGET_ALLOC(sizeof({inner_type})); *__box_tmp = {inner}; __box_tmp; }})"
                     );
                 }
             }
@@ -1169,7 +1169,7 @@ impl CodegenContext<'_> {
                         let inner = self.gen_expr(&arg.node.value);
                         let inner_type = self.box_inner_c_type(&arg.node.value);
                         return format!(
-                            "({{ {inner_type}* __box_tmp = ({inner_type}*)malloc(sizeof({inner_type})); *__box_tmp = {inner}; __box_tmp; }})"
+                            "({{ {inner_type}* __box_tmp = ({inner_type}*)GORGET_ALLOC(sizeof({inner_type})); *__box_tmp = {inner}; __box_tmp; }})"
                         );
                     }
                 }

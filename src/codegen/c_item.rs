@@ -2469,6 +2469,7 @@ impl CodegenContext<'_> {
                  \x20   size_t* order;\n\
                  \x20   size_t order_len;\n\
                  \x20   size_t tombstones;\n\
+                 \x20   GorgetAllocator* alloc;\n\
                  }};\n\n"
             ));
         } else {
@@ -2480,6 +2481,7 @@ impl CodegenContext<'_> {
                  \x20   uint8_t* states;\n\
                  \x20   size_t count;\n\
                  \x20   size_t cap;\n\
+                 \x20   GorgetAllocator* alloc;\n\
                  }};\n\n"
             ));
         }
@@ -2522,6 +2524,7 @@ impl CodegenContext<'_> {
         // ── __grow ──
         if ordered {
             emitter.emit(&format!(r#"static inline void {mangled}__grow({mangled}* m) {{
+    GorgetAllocator* __a = m->alloc;
     size_t old_cap = m->cap;
     {key_type}* old_keys = m->keys;
     {val_type}* old_values = m->values;
@@ -2529,10 +2532,10 @@ impl CodegenContext<'_> {
     size_t* old_order = m->order;
     size_t old_order_len = m->order_len;
     size_t new_cap = old_cap == 0 ? 16 : old_cap * 2;
-    m->keys = ({key_type}*)calloc(new_cap, sizeof({key_type}));
-    m->values = ({val_type}*)calloc(new_cap, sizeof({val_type}));
-    m->states = (uint8_t*)calloc(new_cap, 1);
-    m->order = (size_t*)calloc(new_cap, sizeof(size_t));
+    m->keys = ({key_type}*)GORGET_CALLOC(new_cap, sizeof({key_type}));
+    m->values = ({val_type}*)GORGET_CALLOC(new_cap, sizeof({val_type}));
+    m->states = (uint8_t*)GORGET_CALLOC(new_cap, 1);
+    m->order = (size_t*)GORGET_CALLOC(new_cap, sizeof(size_t));
     m->cap = new_cap;
     m->count = 0;
     m->order_len = 0;
@@ -2549,20 +2552,24 @@ impl CodegenContext<'_> {
         m->order[m->order_len++] = idx;
         m->count++;
     }}
-    free(old_keys); free(old_values); free(old_states); free(old_order);
+    __a->dealloc(__a->ctx, old_keys, old_cap * sizeof({key_type}));
+    __a->dealloc(__a->ctx, old_values, old_cap * sizeof({val_type}));
+    __a->dealloc(__a->ctx, old_states, old_cap);
+    __a->dealloc(__a->ctx, old_order, old_cap * sizeof(size_t));
 }}
 
 "#));
         } else {
             emitter.emit(&format!(r#"static inline void {mangled}__grow({mangled}* m) {{
+    GorgetAllocator* __a = m->alloc;
     size_t old_cap = m->cap;
     {key_type}* old_keys = m->keys;
     {val_type}* old_values = m->values;
     uint8_t* old_states = m->states;
     size_t new_cap = old_cap == 0 ? 16 : old_cap * 2;
-    m->keys = ({key_type}*)calloc(new_cap, sizeof({key_type}));
-    m->values = ({val_type}*)calloc(new_cap, sizeof({val_type}));
-    m->states = (uint8_t*)calloc(new_cap, 1);
+    m->keys = ({key_type}*)GORGET_CALLOC(new_cap, sizeof({key_type}));
+    m->values = ({val_type}*)GORGET_CALLOC(new_cap, sizeof({val_type}));
+    m->states = (uint8_t*)GORGET_CALLOC(new_cap, 1);
     m->cap = new_cap;
     m->count = 0;
     for (size_t i = 0; i < old_cap; i++) {{
@@ -2576,7 +2583,9 @@ impl CodegenContext<'_> {
             m->count++;
         }}
     }}
-    free(old_keys); free(old_values); free(old_states);
+    __a->dealloc(__a->ctx, old_keys, old_cap * sizeof({key_type}));
+    __a->dealloc(__a->ctx, old_values, old_cap * sizeof({val_type}));
+    __a->dealloc(__a->ctx, old_states, old_cap);
 }}
 
 "#));
@@ -2586,13 +2595,13 @@ impl CodegenContext<'_> {
         if ordered {
             emitter.emit(&format!(
                 "static inline {mangled} {mangled}__new(void) {{\n\
-                 \x20   return ({mangled}){{NULL, NULL, NULL, 0, 0, NULL, 0, 0}};\n\
+                 \x20   return ({mangled}){{NULL, NULL, NULL, 0, 0, NULL, 0, 0, __gorget_current_alloc}};\n\
                  }}\n\n"
             ));
         } else {
             emitter.emit(&format!(
                 "static inline {mangled} {mangled}__new(void) {{\n\
-                 \x20   return ({mangled}){{NULL, NULL, NULL, 0, 0}};\n\
+                 \x20   return ({mangled}){{NULL, NULL, NULL, 0, 0, __gorget_current_alloc}};\n\
                  }}\n\n"
             ));
         }
@@ -2741,7 +2750,11 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         if ordered {
             emitter.emit(&format!(
                 "static inline void {mangled}__free({mangled}* m) {{\n\
-                 \x20   free(m->keys); free(m->values); free(m->states); free(m->order);\n\
+                 \x20   GorgetAllocator* __a = m->alloc;\n\
+                 \x20   if (m->keys) __a->dealloc(__a->ctx, m->keys, m->cap * sizeof({key_type}));\n\
+                 \x20   if (m->values) __a->dealloc(__a->ctx, m->values, m->cap * sizeof({val_type}));\n\
+                 \x20   if (m->states) __a->dealloc(__a->ctx, m->states, m->cap);\n\
+                 \x20   if (m->order) __a->dealloc(__a->ctx, m->order, m->cap * sizeof(size_t));\n\
                  \x20   m->keys = NULL; m->values = NULL; m->states = NULL; m->order = NULL;\n\
                  \x20   m->count = 0; m->cap = 0; m->order_len = 0; m->tombstones = 0;\n\
                  }}\n\n"
@@ -2749,7 +2762,10 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         } else {
             emitter.emit(&format!(
                 "static inline void {mangled}__free({mangled}* m) {{\n\
-                 \x20   free(m->keys); free(m->values); free(m->states);\n\
+                 \x20   GorgetAllocator* __a = m->alloc;\n\
+                 \x20   if (m->keys) __a->dealloc(__a->ctx, m->keys, m->cap * sizeof({key_type}));\n\
+                 \x20   if (m->values) __a->dealloc(__a->ctx, m->values, m->cap * sizeof({val_type}));\n\
+                 \x20   if (m->states) __a->dealloc(__a->ctx, m->states, m->cap);\n\
                  \x20   m->keys = NULL; m->values = NULL; m->states = NULL;\n\
                  \x20   m->count = 0; m->cap = 0;\n\
                  }}\n\n"
@@ -2760,20 +2776,22 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         if ordered {
             emitter.emit(&format!(
                 "static inline {mangled} {mangled}__clone(const {mangled}* src) {{\n\
+                 \x20   GorgetAllocator* __a = __gorget_current_alloc;\n\
                  \x20   {mangled} dst;\n\
+                 \x20   dst.alloc = __a;\n\
                  \x20   dst.count = src->count; dst.cap = src->cap;\n\
                  \x20   dst.order_len = src->order_len; dst.tombstones = src->tombstones;\n\
                  \x20   if (src->cap == 0) {{\n\
                  \x20       dst.keys = NULL; dst.values = NULL; dst.states = NULL; dst.order = NULL;\n\
                  \x20       return dst;\n\
                  \x20   }}\n\
-                 \x20   dst.keys = ({key_type}*)malloc(src->cap * sizeof({key_type}));\n\
+                 \x20   dst.keys = ({key_type}*)__a->alloc(__a->ctx, src->cap * sizeof({key_type}));\n\
                  \x20   memcpy(dst.keys, src->keys, src->cap * sizeof({key_type}));\n\
-                 \x20   dst.values = ({val_type}*)malloc(src->cap * sizeof({val_type}));\n\
+                 \x20   dst.values = ({val_type}*)__a->alloc(__a->ctx, src->cap * sizeof({val_type}));\n\
                  \x20   memcpy(dst.values, src->values, src->cap * sizeof({val_type}));\n\
-                 \x20   dst.states = (uint8_t*)malloc(src->cap);\n\
+                 \x20   dst.states = (uint8_t*)__a->alloc(__a->ctx, src->cap);\n\
                  \x20   memcpy(dst.states, src->states, src->cap);\n\
-                 \x20   dst.order = (size_t*)malloc(src->cap * sizeof(size_t));\n\
+                 \x20   dst.order = (size_t*)__a->alloc(__a->ctx, src->cap * sizeof(size_t));\n\
                  \x20   memcpy(dst.order, src->order, src->cap * sizeof(size_t));\n\
                  \x20   return dst;\n\
                  }}\n\n"
@@ -2781,17 +2799,19 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         } else {
             emitter.emit(&format!(
                 "static inline {mangled} {mangled}__clone(const {mangled}* src) {{\n\
+                 \x20   GorgetAllocator* __a = __gorget_current_alloc;\n\
                  \x20   {mangled} dst;\n\
+                 \x20   dst.alloc = __a;\n\
                  \x20   dst.count = src->count; dst.cap = src->cap;\n\
                  \x20   if (src->cap == 0) {{\n\
                  \x20       dst.keys = NULL; dst.values = NULL; dst.states = NULL;\n\
                  \x20       return dst;\n\
                  \x20   }}\n\
-                 \x20   dst.keys = ({key_type}*)malloc(src->cap * sizeof({key_type}));\n\
+                 \x20   dst.keys = ({key_type}*)__a->alloc(__a->ctx, src->cap * sizeof({key_type}));\n\
                  \x20   memcpy(dst.keys, src->keys, src->cap * sizeof({key_type}));\n\
-                 \x20   dst.values = ({val_type}*)malloc(src->cap * sizeof({val_type}));\n\
+                 \x20   dst.values = ({val_type}*)__a->alloc(__a->ctx, src->cap * sizeof({val_type}));\n\
                  \x20   memcpy(dst.values, src->values, src->cap * sizeof({val_type}));\n\
-                 \x20   dst.states = (uint8_t*)malloc(src->cap);\n\
+                 \x20   dst.states = (uint8_t*)__a->alloc(__a->ctx, src->cap);\n\
                  \x20   memcpy(dst.states, src->states, src->cap);\n\
                  \x20   return dst;\n\
                  }}\n\n"
@@ -3351,7 +3371,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         emitter.emit_line("__GorgetSleepState* __s = (__GorgetSleepState*)__future->state;");
         emitter.emit_line("if (__s->done) {");
         emitter.indent();
-        emitter.emit_line("free(__s);");
+        emitter.emit_line("GORGET_FREE(__s, sizeof(__GorgetSleepState));");
         emitter.emit_line("__future->state = NULL;");
         emitter.emit_line("return GORGET_POLL_READY;");
         emitter.dedent();
@@ -3377,7 +3397,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         // Constructor
         emitter.emit_line("static Future__void gorget_async_sleep(double seconds) {");
         emitter.indent();
-        emitter.emit_line("__GorgetSleepState* __s = (__GorgetSleepState*)calloc(1, sizeof(__GorgetSleepState));");
+        emitter.emit_line("__GorgetSleepState* __s = (__GorgetSleepState*)GORGET_CALLOC(1, sizeof(__GorgetSleepState));");
         emitter.emit_line("__s->seconds = seconds;");
         emitter.emit_line("return (Future__void){.poll = __gorget_sleep_poll, .state = __s};");
         emitter.dedent();
@@ -3449,7 +3469,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                 // No spawn or sleep: noop waker, simple busy-poll
                 emitter.emit_line("while (__f.poll(&__f, &__gorget_noop_waker) != GORGET_POLL_READY) {}");
             }
-            emitter.emit_line("if (__f.state) free(__f.state);");
+            emitter.emit_line("if (__f.state) GORGET_FREE(__f.state, 0);");
             if self.has_spawn {
                 emitter.emit_line("__gorget_executor_shutdown();");
             }
@@ -4602,7 +4622,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                 }
                 emitter.emit_line("pthread_mutex_destroy(&__td->mtx);");
                 emitter.emit_line("pthread_cond_destroy(&__td->cond);");
-                emitter.emit_line("free(__td);");
+                emitter.emit_line("GORGET_FREE(__td, 0);");
                 emitter.dedent();
                 emitter.emit_line("}");
             } else {
@@ -4651,7 +4671,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
             };
             Self::emit_drop_entry(&prefixed, 0, emitter);
         }
-        emitter.emit_line("free(__self); __future->state = NULL;");
+        emitter.emit_line("GORGET_FREE(__self, 0); __future->state = NULL;");
     }
 
     /// Determine which state struct field is being returned (for ownership transfer).
@@ -5010,7 +5030,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                         }
                         emitter.emit_line("pthread_mutex_destroy(&__td->mtx);");
                         emitter.emit_line("pthread_cond_destroy(&__td->cond);");
-                        emitter.emit_line("free(__td);");
+                        emitter.emit_line("GORGET_FREE(__td, 0);");
                         emitter.dedent();
                         emitter.emit_line("}");
                     }
@@ -5109,7 +5129,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                     }
                     emitter.emit_line("pthread_mutex_destroy(&__td->mtx);");
                     emitter.emit_line("pthread_cond_destroy(&__td->cond);");
-                    emitter.emit_line("free(__td);");
+                    emitter.emit_line("GORGET_FREE(__td, 0);");
                     emitter.dedent();
                     emitter.emit_line("}");
                 }
@@ -5184,7 +5204,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                         }
                         emitter.emit_line("pthread_mutex_destroy(&__td->mtx);");
                         emitter.emit_line("pthread_cond_destroy(&__td->cond);");
-                        emitter.emit_line("free(__td);");
+                        emitter.emit_line("GORGET_FREE(__td, 0);");
                         emitter.dedent();
                         emitter.emit_line("}");
                     }
@@ -5297,7 +5317,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                         let _ = suffix; // result discarded for expr-stmt
                         emitter.emit_line("pthread_mutex_destroy(&__td->mtx);");
                         emitter.emit_line("pthread_cond_destroy(&__td->cond);");
-                        emitter.emit_line("free(__td);");
+                        emitter.emit_line("GORGET_FREE(__td, 0);");
                         emitter.dedent();
                         emitter.emit_line("}");
                     }
@@ -5797,7 +5817,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
         emitter.emit_line(&format!("{future_type} {func_name}({params_str}) {{"));
         emitter.indent();
         emitter.emit_line(&format!(
-            "{state_name}* __s = ({state_name}*)malloc(sizeof({state_name}));"
+            "{state_name}* __s = ({state_name}*)GORGET_ALLOC(sizeof({state_name}));"
         ));
         emitter.emit_line(&format!("memset(__s, 0, sizeof({state_name}));"));
 

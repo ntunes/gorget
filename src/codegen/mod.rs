@@ -1644,7 +1644,7 @@ async void main():
 ";
         let c_code = compile_to_c(source);
         // spawn should allocate SpawnCtx and submit to executor
-        assert!(c_code.contains("calloc(1, sizeof(__SpawnCtx__int64_t))"), "spawn should allocate SpawnCtx");
+        assert!(c_code.contains("GORGET_CALLOC(1, sizeof(__SpawnCtx__int64_t))"), "spawn should allocate SpawnCtx");
         assert!(c_code.contains("__gorget_executor_submit"), "spawn should submit to executor");
         assert!(c_code.contains("Task__int64_t"), "spawn should produce Task type");
         assert!(c_code.contains("GorgetTask"), "should include executor runtime");
