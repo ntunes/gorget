@@ -1,6 +1,7 @@
 pub mod codegen;
 pub mod errors;
 pub mod formatter;
+pub mod ir;
 pub mod lexer;
 pub mod loader;
 pub mod lockfile;

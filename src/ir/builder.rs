@@ -1,0 +1,570 @@
+use super::instructions::*;
+use super::types::*;
+use super::{BasicBlock, Function, Local};
+
+/// Ergonomic builder for constructing GIR functions.
+pub struct FunctionBuilder {
+    pub name: String,
+    pub params: Vec<TypeId>,
+    pub return_type: TypeId,
+    pub locals: Vec<Local>,
+    pub blocks: Vec<BasicBlock>,
+    pub current_block: BlockId,
+}
+
+impl FunctionBuilder {
+    /// Create a new function builder.
+    ///
+    /// Sets up `_0` as the return place and `_1.._N` as parameters.
+    /// Creates the entry block (bb0).
+    pub fn new(
+        name: impl Into<String>,
+        return_type: TypeId,
+        params: &[(TypeId, Option<&str>)],
+    ) -> Self {
+        let mut locals = Vec::new();
+
+        // _0 = return place
+        locals.push(Local {
+            type_id: return_type,
+            name_hint: None,
+        });
+
+        // _1.._N = parameters
+        let mut param_types = Vec::new();
+        for (ty, hint) in params {
+            param_types.push(*ty);
+            locals.push(Local {
+                type_id: *ty,
+                name_hint: hint.map(|s| s.to_string()),
+            });
+        }
+
+        let blocks = vec![BasicBlock::new()];
+
+        Self {
+            name: name.into(),
+            params: param_types,
+            return_type,
+            locals,
+            blocks,
+            current_block: BlockId(0),
+        }
+    }
+
+    // ---- Local management ----
+
+    /// Allocate a new local variable and return its LocalId.
+    pub fn add_local(&mut self, type_id: TypeId, name_hint: Option<&str>) -> LocalId {
+        let id = LocalId(self.locals.len() as u32);
+        self.locals.push(Local {
+            type_id,
+            name_hint: name_hint.map(|s| s.to_string()),
+        });
+        id
+    }
+
+    // ---- Block management ----
+
+    /// Create a new empty basic block and return its BlockId.
+    pub fn new_block(&mut self) -> BlockId {
+        let id = BlockId(self.blocks.len() as u32);
+        self.blocks.push(BasicBlock::new());
+        id
+    }
+
+    /// Switch emission to a different block.
+    pub fn switch_to(&mut self, block: BlockId) {
+        self.current_block = block;
+    }
+
+    /// Finalize and return the completed Function.
+    pub fn build(self) -> Function {
+        Function {
+            name: self.name,
+            params: self.params,
+            return_type: self.return_type,
+            locals: self.locals,
+            blocks: self.blocks,
+        }
+    }
+
+    // ---- Helpers ----
+
+    fn emit(&mut self, inst: Instruction) {
+        let block = &mut self.blocks[self.current_block.0 as usize];
+        block.instructions.push(inst);
+    }
+
+    fn set_terminator(&mut self, term: Terminator) {
+        let block = &mut self.blocks[self.current_block.0 as usize];
+        block.terminator = Some(term);
+    }
+
+    /// Allocate a temp local, emit an instruction targeting it, return the LocalId.
+    fn emit_with_temp(&mut self, type_id: TypeId, inst_fn: impl FnOnce(LocalId) -> Instruction) -> LocalId {
+        let id = self.add_local(type_id, None);
+        self.emit(inst_fn(id));
+        id
+    }
+
+    // ---- Place / Operand helpers ----
+
+    pub fn local(&self, id: LocalId) -> Place {
+        Place::local(id)
+    }
+
+    pub fn field(&self, id: LocalId, idx: u32) -> Place {
+        Place::field(id, idx)
+    }
+
+    pub fn const_bool(b: bool) -> Operand {
+        Operand::Constant(Constant::Bool(b))
+    }
+
+    pub fn const_i32(n: i32) -> Operand {
+        Operand::Constant(Constant::I32(n))
+    }
+
+    pub fn const_i64(n: i64) -> Operand {
+        Operand::Constant(Constant::I64(n))
+    }
+
+    pub fn const_f64(n: f64) -> Operand {
+        Operand::Constant(Constant::F64(n))
+    }
+
+    pub fn const_str(s: impl Into<String>) -> Operand {
+        Operand::Constant(Constant::Str(s.into()))
+    }
+
+    pub fn const_unit() -> Operand {
+        Operand::Constant(Constant::Unit)
+    }
+
+    pub fn const_null() -> Operand {
+        Operand::Constant(Constant::Null)
+    }
+
+    pub fn copy(id: LocalId) -> Operand {
+        Operand::Copy(Place::local(id))
+    }
+
+    pub fn mov(id: LocalId) -> Operand {
+        Operand::Move(Place::local(id))
+    }
+
+    // ---- Instruction emitters ----
+
+    pub fn assign(&mut self, dst: Place, value: Operand) {
+        self.emit(Instruction::Assign { dst, value });
+    }
+
+    pub fn field_load(&mut self, base: Place, field: u32, type_id: TypeId) -> LocalId {
+        self.emit_with_temp(type_id, |dst| Instruction::FieldLoad { dst, base, field })
+    }
+
+    pub fn index_load(&mut self, base: Place, index: Operand, type_id: TypeId) -> LocalId {
+        self.emit_with_temp(type_id, |dst| Instruction::IndexLoad { dst, base, index })
+    }
+
+    pub fn bin_op(&mut self, op: BinOp, type_id: TypeId, lhs: Operand, rhs: Operand) -> LocalId {
+        self.emit_with_temp(type_id, |dst| Instruction::BinOp {
+            dst,
+            op,
+            type_id,
+            lhs,
+            rhs,
+        })
+    }
+
+    pub fn un_op(&mut self, op: UnOp, type_id: TypeId, operand: Operand) -> LocalId {
+        self.emit_with_temp(type_id, |dst| Instruction::UnOp {
+            dst,
+            op,
+            type_id,
+            operand,
+        })
+    }
+
+    pub fn cmp(&mut self, op: CmpOp, type_id: TypeId, lhs: Operand, rhs: Operand) -> LocalId {
+        self.emit_with_temp(BOOL_TYPE, |dst| Instruction::Cmp {
+            dst,
+            op,
+            type_id,
+            lhs,
+            rhs,
+        })
+    }
+
+    pub fn cast(&mut self, target_type: TypeId, value: Operand) -> LocalId {
+        self.emit_with_temp(target_type, |dst| Instruction::Cast {
+            dst,
+            target_type,
+            value,
+        })
+    }
+
+    pub fn bitcast(&mut self, target_type: TypeId, value: Operand) -> LocalId {
+        self.emit_with_temp(target_type, |dst| Instruction::BitCast {
+            dst,
+            target_type,
+            value,
+        })
+    }
+
+    pub fn ptr_cast(&mut self, target_type: TypeId, value: Operand) -> LocalId {
+        self.emit_with_temp(target_type, |dst| Instruction::PtrCast {
+            dst,
+            target_type,
+            value,
+        })
+    }
+
+    pub fn call(&mut self, func: impl Into<String>, args: Vec<Operand>, return_type: TypeId) -> LocalId {
+        let func = func.into();
+        self.emit_with_temp(return_type, |dst| Instruction::Call {
+            dst: Some(dst),
+            func,
+            args,
+        })
+    }
+
+    pub fn call_void(&mut self, func: impl Into<String>, args: Vec<Operand>) {
+        self.emit(Instruction::Call {
+            dst: None,
+            func: func.into(),
+            args,
+        });
+    }
+
+    pub fn call_indirect(
+        &mut self,
+        callee: Operand,
+        args: Vec<Operand>,
+        return_type: TypeId,
+    ) -> LocalId {
+        self.emit_with_temp(return_type, |dst| Instruction::CallIndirect {
+            dst: Some(dst),
+            callee,
+            args,
+        })
+    }
+
+    pub fn call_extern(
+        &mut self,
+        func: impl Into<String>,
+        args: Vec<Operand>,
+        return_type: TypeId,
+    ) -> LocalId {
+        let func = func.into();
+        self.emit_with_temp(return_type, |dst| Instruction::CallExtern {
+            dst: Some(dst),
+            func,
+            args,
+        })
+    }
+
+    pub fn struct_init(
+        &mut self,
+        type_name: impl Into<String>,
+        type_id: TypeId,
+        fields: Vec<Operand>,
+    ) -> LocalId {
+        let type_name = type_name.into();
+        self.emit_with_temp(type_id, |dst| Instruction::StructInit {
+            dst,
+            type_name,
+            fields,
+        })
+    }
+
+    pub fn enum_init(
+        &mut self,
+        type_name: impl Into<String>,
+        variant: impl Into<String>,
+        type_id: TypeId,
+        fields: Vec<Operand>,
+    ) -> LocalId {
+        let type_name = type_name.into();
+        let variant = variant.into();
+        self.emit_with_temp(type_id, |dst| Instruction::EnumInit {
+            dst,
+            type_name,
+            variant,
+            fields,
+        })
+    }
+
+    pub fn tuple_init(&mut self, elements: Vec<Operand>, type_id: TypeId) -> LocalId {
+        self.emit_with_temp(type_id, |dst| Instruction::TupleInit { dst, elements })
+    }
+
+    pub fn tag_of(&mut self, operand: Operand) -> LocalId {
+        self.emit_with_temp(I32_TYPE, |dst| Instruction::TagOf { dst, operand })
+    }
+
+    pub fn heap_alloc(&mut self, type_id: TypeId, allocator: Operand) -> LocalId {
+        let ptr_type = type_id; // caller provides the pointer type
+        self.emit_with_temp(ptr_type, |dst| Instruction::HeapAlloc {
+            dst,
+            type_id,
+            allocator,
+        })
+    }
+
+    pub fn heap_alloc_array(
+        &mut self,
+        type_id: TypeId,
+        count: Operand,
+        allocator: Operand,
+    ) -> LocalId {
+        self.emit_with_temp(type_id, |dst| Instruction::HeapAllocArray {
+            dst,
+            type_id,
+            count,
+            allocator,
+        })
+    }
+
+    pub fn dealloc(&mut self, ptr: Operand, allocator: Operand) {
+        self.emit(Instruction::Dealloc { ptr, allocator });
+    }
+
+    pub fn borrow(&mut self, place: Place, ptr_type: TypeId) -> LocalId {
+        self.emit_with_temp(ptr_type, |dst| Instruction::Borrow { dst, place })
+    }
+
+    pub fn borrow_mut(&mut self, place: Place, ptr_type: TypeId) -> LocalId {
+        self.emit_with_temp(ptr_type, |dst| Instruction::BorrowMut { dst, place })
+    }
+
+    pub fn drop(&mut self, place: Place) {
+        self.emit(Instruction::Drop { place });
+    }
+
+    pub fn drop_if_alive(&mut self, place: Place) {
+        self.emit(Instruction::DropIfAlive { place });
+    }
+
+    pub fn move_zero(&mut self, place: Place) {
+        self.emit(Instruction::MoveZero { place });
+    }
+
+    pub fn load_thread_local(&mut self, name: impl Into<String>, type_id: TypeId) -> LocalId {
+        let name = name.into();
+        self.emit_with_temp(type_id, |dst| Instruction::LoadThreadLocal { dst, name })
+    }
+
+    pub fn push_allocator(&mut self, allocator: Operand) {
+        self.emit(Instruction::PushAllocator { allocator });
+    }
+
+    pub fn pop_allocator(&mut self) {
+        self.emit(Instruction::PopAllocator);
+    }
+
+    pub fn nop(&mut self) {
+        self.emit(Instruction::Nop);
+    }
+
+    // ---- Terminator emitters ----
+
+    pub fn ret(&mut self, value: Operand) {
+        self.set_terminator(Terminator::Return(value));
+    }
+
+    pub fn jump(&mut self, target: BlockId) {
+        self.set_terminator(Terminator::Jump(target));
+    }
+
+    pub fn branch(&mut self, cond: Operand, then_block: BlockId, else_block: BlockId) {
+        self.set_terminator(Terminator::Branch {
+            cond,
+            then_block,
+            else_block,
+        });
+    }
+
+    pub fn switch(&mut self, value: Operand, cases: Vec<(i64, BlockId)>, default: BlockId) {
+        self.set_terminator(Terminator::Switch {
+            value,
+            cases,
+            default,
+        });
+    }
+
+    pub fn invoke(
+        &mut self,
+        func: impl Into<String>,
+        args: Vec<Operand>,
+        dst: Option<LocalId>,
+        normal: BlockId,
+        error: BlockId,
+    ) {
+        self.set_terminator(Terminator::Invoke {
+            func: func.into(),
+            args,
+            dst,
+            normal,
+            error,
+        });
+    }
+
+    pub fn unreachable(&mut self) {
+        self.set_terminator(Terminator::Unreachable);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builder_creates_return_place() {
+        let b = FunctionBuilder::new("test", I32_TYPE, &[]);
+        assert_eq!(b.locals.len(), 1);
+        assert_eq!(b.locals[0].type_id, I32_TYPE);
+    }
+
+    #[test]
+    fn builder_params_are_locals() {
+        let b = FunctionBuilder::new(
+            "add",
+            I64_TYPE,
+            &[(I64_TYPE, Some("a")), (I64_TYPE, Some("b"))],
+        );
+        assert_eq!(b.locals.len(), 3); // _0=ret, _1=a, _2=b
+        assert_eq!(b.locals[1].type_id, I64_TYPE);
+        assert_eq!(b.locals[1].name_hint.as_deref(), Some("a"));
+        assert_eq!(b.locals[2].name_hint.as_deref(), Some("b"));
+        assert_eq!(b.params, vec![I64_TYPE, I64_TYPE]);
+    }
+
+    #[test]
+    fn builder_add_local() {
+        let mut b = FunctionBuilder::new("f", UNIT_TYPE, &[]);
+        let l1 = b.add_local(I64_TYPE, Some("x"));
+        let l2 = b.add_local(F64_TYPE, None);
+        assert_eq!(l1, LocalId(1));
+        assert_eq!(l2, LocalId(2));
+        assert_eq!(b.locals.len(), 3);
+    }
+
+    #[test]
+    fn builder_emit_instructions() {
+        let mut b = FunctionBuilder::new(
+            "compute",
+            I64_TYPE,
+            &[(I64_TYPE, Some("a")), (I64_TYPE, Some("b"))],
+        );
+
+        let sum = b.bin_op(
+            BinOp::Add,
+            I64_TYPE,
+            FunctionBuilder::copy(LocalId(1)),
+            FunctionBuilder::copy(LocalId(2)),
+        );
+        let result = b.call(
+            "double",
+            vec![FunctionBuilder::copy(sum)],
+            I64_TYPE,
+        );
+        b.assign(
+            Place::local(LocalId(0)),
+            FunctionBuilder::copy(result),
+        );
+        b.ret(FunctionBuilder::copy(LocalId(0)));
+
+        let func = b.build();
+        assert_eq!(func.blocks.len(), 1);
+        assert_eq!(func.blocks[0].instructions.len(), 3); // binop + call + assign
+        assert!(func.blocks[0].terminator.is_some());
+    }
+
+    #[test]
+    fn builder_multiple_blocks() {
+        let mut b = FunctionBuilder::new("f", UNIT_TYPE, &[]);
+        let bb1 = b.new_block();
+
+        // bb0 jumps to bb1
+        b.jump(bb1);
+
+        // bb1 returns
+        b.switch_to(bb1);
+        b.ret(FunctionBuilder::const_unit());
+
+        let func = b.build();
+        assert_eq!(func.blocks.len(), 2);
+        assert!(matches!(
+            func.blocks[0].terminator,
+            Some(Terminator::Jump(BlockId(1)))
+        ));
+        assert!(matches!(
+            func.blocks[1].terminator,
+            Some(Terminator::Return(_))
+        ));
+    }
+
+    #[test]
+    fn builder_branch_and_merge() {
+        let mut b = FunctionBuilder::new(
+            "abs",
+            I64_TYPE,
+            &[(I64_TYPE, Some("x"))],
+        );
+
+        let then_bb = b.new_block();  // bb1
+        let else_bb = b.new_block();  // bb2
+        let merge_bb = b.new_block(); // bb3
+
+        // bb0: branch on x >= 0
+        let cond = b.cmp(
+            CmpOp::Ge,
+            I64_TYPE,
+            FunctionBuilder::copy(LocalId(1)),
+            FunctionBuilder::const_i64(0),
+        );
+        b.branch(FunctionBuilder::copy(cond), then_bb, else_bb);
+
+        // bb1 (then): _0 = x, jump merge
+        b.switch_to(then_bb);
+        b.assign(
+            Place::local(LocalId(0)),
+            FunctionBuilder::copy(LocalId(1)),
+        );
+        b.jump(merge_bb);
+
+        // bb2 (else): _0 = -x, jump merge
+        b.switch_to(else_bb);
+        let neg = b.un_op(UnOp::Neg, I64_TYPE, FunctionBuilder::copy(LocalId(1)));
+        b.assign(
+            Place::local(LocalId(0)),
+            FunctionBuilder::copy(neg),
+        );
+        b.jump(merge_bb);
+
+        // bb3 (merge): return _0
+        b.switch_to(merge_bb);
+        b.ret(FunctionBuilder::copy(LocalId(0)));
+
+        let func = b.build();
+        assert_eq!(func.blocks.len(), 4);
+        assert!(matches!(
+            func.blocks[0].terminator,
+            Some(Terminator::Branch { .. })
+        ));
+        assert!(matches!(
+            func.blocks[1].terminator,
+            Some(Terminator::Jump(BlockId(3)))
+        ));
+        assert!(matches!(
+            func.blocks[2].terminator,
+            Some(Terminator::Jump(BlockId(3)))
+        ));
+        assert!(matches!(
+            func.blocks[3].terminator,
+            Some(Terminator::Return(_))
+        ));
+    }
+}
