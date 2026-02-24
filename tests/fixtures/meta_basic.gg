@@ -1,0 +1,5 @@
+meta int MAX = 1024
+meta assert MAX > 0, "MAX must be positive"
+
+void main():
+    print("meta parsed ok")

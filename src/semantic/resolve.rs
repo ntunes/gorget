@@ -482,6 +482,11 @@ fn collect_item(
         Item::Test(_) | Item::SuiteSetup(_) | Item::SuiteTeardown(_) => {
             // Test items don't define top-level names.
         }
+
+        Item::MetaConst(_) | Item::MetaType(_) | Item::MetaTypeFunc(_)
+        | Item::MetaAssert(_) | Item::MetaIf(_) => {
+            // Meta items resolved during meta evaluation pass (not yet implemented).
+        }
     }
 }
 

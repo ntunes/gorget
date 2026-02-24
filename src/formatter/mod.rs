@@ -166,6 +166,10 @@ impl Formatter {
             Item::Test(t) => self.format_test(t),
             Item::SuiteSetup(s) => self.format_suite_setup(s),
             Item::SuiteTeardown(s) => self.format_suite_teardown(s),
+            Item::MetaConst(_) | Item::MetaType(_) | Item::MetaTypeFunc(_)
+            | Item::MetaAssert(_) | Item::MetaIf(_) => {
+                // TODO: meta formatting not yet implemented
+            }
         }
     }
 

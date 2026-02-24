@@ -325,6 +325,9 @@ pub enum Keyword {
     Test,
     Suite,
 
+    // Compile-time
+    Meta,
+
     // Special identifiers
     It,
     Panic,
@@ -420,6 +423,7 @@ impl Keyword {
             Keyword::Mutable => "mutable",
             Keyword::Test => "test",
             Keyword::Suite => "suite",
+            Keyword::Meta => "meta",
             Keyword::It => "it",
             Keyword::Panic => "panic",
             Keyword::Assert => "assert",
@@ -514,6 +518,7 @@ impl Keyword {
             "mutable" => Some(Keyword::Mutable),
             "test" => Some(Keyword::Test),
             "suite" => Some(Keyword::Suite),
+            "meta" => Some(Keyword::Meta),
             "it" => Some(Keyword::It),
             "panic" => Some(Keyword::Panic),
             "assert" => Some(Keyword::Assert),

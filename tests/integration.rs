@@ -6018,6 +6018,11 @@ fn format_item_canonical(item: &Item) -> String {
             let body = format_block_canonical(&st.body.stmts);
             format!("suite_teardown:{body}")
         }
+        Item::MetaConst(mc) => format!("meta {} {} = {}", format_type_canonical(&mc.type_.node), mc.name.node, format_expr_canonical(&mc.value.node)),
+        Item::MetaType(mt) => format!("meta type {} = {}", mt.name.node, format_type_canonical(&mt.type_.node)),
+        Item::MetaTypeFunc(mtf) => format!("meta type {}(...)", mtf.name.node),
+        Item::MetaAssert(_) => "meta assert ...".to_string(),
+        Item::MetaIf(_) => "meta if ...".to_string(),
     }
 }
 
@@ -6218,6 +6223,14 @@ fn pool_composable() {
 alloc= works: true
 done",
     );
+}
+
+// Meta (Compile-Time) Tests
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn meta_basic() {
+    run_gg("meta_basic.gg", "meta parsed ok");
 }
 
 // Parser Comparison Test

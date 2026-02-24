@@ -29,6 +29,11 @@ pub enum Item {
     Test(TestDef),
     SuiteSetup(SuiteSetup),
     SuiteTeardown(SuiteTeardown),
+    MetaConst(MetaConst),
+    MetaType(MetaType),
+    MetaTypeFunc(MetaTypeFunc),
+    MetaAssert(MetaAssert),
+    MetaIf(MetaIf),
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -883,5 +888,54 @@ pub struct StaticDecl {
 pub struct ExternBlock {
     pub abi: Option<Spanned<String>>,
     pub items: Vec<Spanned<FunctionDef>>,
+    pub span: Span,
+}
+
+// ══════════════════════════════════════════════════════════════
+// Meta (Compile-Time) Declarations
+// ══════════════════════════════════════════════════════════════
+
+/// `meta int X = 1024` — compile-time constant.
+#[derive(Debug, Clone)]
+pub struct MetaConst {
+    pub type_: Spanned<Type>,
+    pub name: Spanned<String>,
+    pub value: Spanned<Expr>,
+    pub span: Span,
+}
+
+/// `meta type Vec = Vector[int]` — compile-time type alias.
+#[derive(Debug, Clone)]
+pub struct MetaType {
+    pub name: Spanned<String>,
+    pub type_: Spanned<Type>,
+    pub span: Span,
+}
+
+/// `meta type sized_int(int bits): ...` — compile-time type function.
+#[derive(Debug, Clone)]
+pub struct MetaTypeFunc {
+    pub name: Spanned<String>,
+    pub params: Vec<Spanned<Param>>,
+    pub body: Block,
+    pub span: Span,
+}
+
+/// `meta assert X > 0, "msg"` — compile-time assertion.
+#[derive(Debug, Clone)]
+pub struct MetaAssert {
+    pub condition: Spanned<Expr>,
+    pub message: Option<Spanned<Expr>>,
+    pub span: Span,
+}
+
+/// `meta if <expr>: <block> [elif <expr>: <block>]* [else: <block>]`
+/// Conditional compilation — only the taken branch is emitted.
+#[derive(Debug, Clone)]
+pub struct MetaIf {
+    pub condition: Spanned<Expr>,
+    pub then_items: Vec<Spanned<Item>>,
+    pub elif_branches: Vec<(Spanned<Expr>, Vec<Spanned<Item>>)>,
+    pub else_items: Option<Vec<Spanned<Item>>>,
     pub span: Span,
 }

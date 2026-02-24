@@ -1193,6 +1193,100 @@ fn test_live_bare_no_group() {
     }
 }
 
+// ── Meta ──────────────────────────────────────────────────
+
+#[test]
+fn test_meta_const() {
+    let module = parse("meta int MAX = 1024\n");
+    assert_eq!(module.items.len(), 1);
+    assert!(matches!(&module.items[0].node, Item::MetaConst(_)));
+    if let Item::MetaConst(mc) = &module.items[0].node {
+        assert_eq!(mc.name.node, "MAX");
+    }
+}
+
+#[test]
+fn test_meta_type_alias() {
+    let module = parse("meta type Vec = Vector[int]\n");
+    assert_eq!(module.items.len(), 1);
+    assert!(matches!(&module.items[0].node, Item::MetaType(_)));
+    if let Item::MetaType(mt) = &module.items[0].node {
+        assert_eq!(mt.name.node, "Vec");
+    }
+}
+
+#[test]
+fn test_meta_type_func() {
+    let source = "meta type sized_int(int bits):\n    return int\n";
+    let module = parse(source);
+    assert_eq!(module.items.len(), 1);
+    assert!(matches!(&module.items[0].node, Item::MetaTypeFunc(_)));
+    if let Item::MetaTypeFunc(mtf) = &module.items[0].node {
+        assert_eq!(mtf.name.node, "sized_int");
+        assert_eq!(mtf.params.len(), 1);
+    }
+}
+
+#[test]
+fn test_meta_assert() {
+    let module = parse("meta assert true, \"ok\"\n");
+    assert_eq!(module.items.len(), 1);
+    assert!(matches!(&module.items[0].node, Item::MetaAssert(_)));
+    if let Item::MetaAssert(ma) = &module.items[0].node {
+        assert!(ma.message.is_some());
+    }
+}
+
+#[test]
+fn test_meta_assert_no_message() {
+    let module = parse("meta assert true\n");
+    assert_eq!(module.items.len(), 1);
+    if let Item::MetaAssert(ma) = &module.items[0].node {
+        assert!(ma.message.is_none());
+    } else {
+        panic!("expected MetaAssert");
+    }
+}
+
+#[test]
+fn test_meta_if() {
+    let source = "meta if true:\n    void f():\n        pass\n";
+    let module = parse(source);
+    assert_eq!(module.items.len(), 1);
+    assert!(matches!(&module.items[0].node, Item::MetaIf(_)));
+    if let Item::MetaIf(mi) = &module.items[0].node {
+        assert_eq!(mi.then_items.len(), 1);
+        assert!(matches!(&mi.then_items[0].node, Item::Function(_)));
+        assert!(mi.elif_branches.is_empty());
+        assert!(mi.else_items.is_none());
+    }
+}
+
+#[test]
+fn test_meta_if_elif_else() {
+    let source = "\
+meta if true:
+    void f():
+        pass
+elif false:
+    void g():
+        pass
+else:
+    void h():
+        pass
+";
+    let module = parse(source);
+    assert_eq!(module.items.len(), 1);
+    if let Item::MetaIf(mi) = &module.items[0].node {
+        assert_eq!(mi.then_items.len(), 1);
+        assert_eq!(mi.elif_branches.len(), 1);
+        assert!(mi.else_items.is_some());
+        assert_eq!(mi.else_items.as_ref().unwrap().len(), 1);
+    } else {
+        panic!("expected MetaIf");
+    }
+}
+
 #[test]
 fn test_where_mixed_bounds() {
     let source = "str pick[T](live(a) T x, live(b) T y) where T is Displayable, a outlives b:\n    return x\n";

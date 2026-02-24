@@ -1819,7 +1819,9 @@ impl CodegenContext<'_> {
                 Item::Struct(_) | Item::Enum(_) | Item::Trait(_) | Item::TypeAlias(_)
                 | Item::Newtype(_) | Item::ExternBlock(_) | Item::ConstDecl(_)
                 | Item::StaticDecl(_) | Item::Import(_) | Item::Directive(_)
-                | Item::Test(_) | Item::SuiteSetup(_) | Item::SuiteTeardown(_) => {}
+                | Item::Test(_) | Item::SuiteSetup(_) | Item::SuiteTeardown(_)
+                | Item::MetaConst(_) | Item::MetaType(_) | Item::MetaTypeFunc(_)
+                | Item::MetaAssert(_) | Item::MetaIf(_) => {}
             }
         }
     }

@@ -1338,6 +1338,22 @@ void main():
     }
 
     #[test]
+    fn test_meta_keyword() {
+        let tokens = lex("meta int X = 1024\n");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Keyword(Keyword::Meta),
+                Token::Keyword(Keyword::Int),
+                Token::Identifier("X".to_string()),
+                Token::Eq,
+                Token::IntLiteral(1024),
+                Token::Newline,
+            ]
+        );
+    }
+
+    #[test]
     fn test_wrapping_compound_assignment() {
         let tokens = lex("x +%= 1\ny -%= 2\nz *%= 3\n");
         assert_eq!(

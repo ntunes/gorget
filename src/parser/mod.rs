@@ -459,6 +459,9 @@ impl Parser {
                 let span = start.merge(item_span);
                 Ok(Spanned::new(item, span))
             }
+            Token::Keyword(Keyword::Meta) => {
+                return self.parse_meta_item();
+            }
             // Function definition (starts with return type, qualifiers, or `fn` in name-first mode)
             _ => {
                 let func = self.parse_function_def(attributes, visibility, doc_comment)?;
@@ -500,6 +503,165 @@ impl Parser {
             value,
             span: start.merge(end),
         })
+    }
+
+    // ── Meta (Compile-Time) Items ─────────────────────────────
+
+    /// Dispatch `meta` to the appropriate sub-parser.
+    fn parse_meta_item(&mut self) -> Result<Spanned<Item>, ParseError> {
+        let start = self.peek_span();
+        self.expect_keyword(Keyword::Meta)?;
+
+        match self.peek() {
+            Token::Keyword(Keyword::Type) => self.parse_meta_type(start),
+            Token::Keyword(Keyword::Assert) => self.parse_meta_assert(start),
+            Token::Keyword(Keyword::If) => self.parse_meta_if(start),
+            _ => self.parse_meta_const(start),
+        }
+    }
+
+    /// `meta <type> <name> = <expr>`
+    fn parse_meta_const(&mut self, start: Span) -> Result<Spanned<Item>, ParseError> {
+        let type_ = self.parse_type()?;
+        let name = self.expect_identifier()?;
+        self.expect(&Token::Eq)?;
+        let value = self.parse_expr()?;
+        let end = self.previous_span();
+        self.consume_newline();
+        let span = start.merge(end);
+        Ok(Spanned::new(
+            Item::MetaConst(MetaConst {
+                type_,
+                name,
+                value,
+                span,
+            }),
+            span,
+        ))
+    }
+
+    /// `meta type <name> = <type>` or `meta type <name>(<params>): <block>`
+    fn parse_meta_type(&mut self, start: Span) -> Result<Spanned<Item>, ParseError> {
+        self.expect_keyword(Keyword::Type)?;
+        let name = self.expect_identifier()?;
+
+        if self.check(&Token::LParen) {
+            // MetaTypeFunc: meta type name(params): block
+            self.advance(); // consume (
+            let params = self.parse_param_list()?;
+            self.expect(&Token::RParen)?;
+            let body = self.parse_block()?;
+            let end = self.previous_span();
+            let span = start.merge(end);
+            Ok(Spanned::new(
+                Item::MetaTypeFunc(MetaTypeFunc {
+                    name,
+                    params,
+                    body,
+                    span,
+                }),
+                span,
+            ))
+        } else {
+            // MetaType: meta type name = type
+            self.expect(&Token::Eq)?;
+            let type_ = self.parse_type()?;
+            let end = self.previous_span();
+            self.consume_newline();
+            let span = start.merge(end);
+            Ok(Spanned::new(
+                Item::MetaType(MetaType {
+                    name,
+                    type_,
+                    span,
+                }),
+                span,
+            ))
+        }
+    }
+
+    /// `meta assert <expr> [, <msg>]`
+    fn parse_meta_assert(&mut self, start: Span) -> Result<Spanned<Item>, ParseError> {
+        self.expect_keyword(Keyword::Assert)?;
+        let condition = self.parse_expr()?;
+        let message = if self.match_token(&Token::Comma) {
+            Some(self.parse_expr()?)
+        } else {
+            None
+        };
+        let end = self.previous_span();
+        self.consume_newline();
+        let span = start.merge(end);
+        Ok(Spanned::new(
+            Item::MetaAssert(MetaAssert {
+                condition,
+                message,
+                span,
+            }),
+            span,
+        ))
+    }
+
+    /// `meta if <expr>: <items> [elif <expr>: <items>]* [else: <items>]`
+    fn parse_meta_if(&mut self, start: Span) -> Result<Spanned<Item>, ParseError> {
+        self.expect_keyword(Keyword::If)?;
+        let condition = self.parse_expr()?;
+        let then_items = self.parse_meta_block()?;
+
+        let mut elif_branches = Vec::new();
+        while self.match_keyword(Keyword::Elif) {
+            let elif_cond = self.parse_expr()?;
+            let elif_items = self.parse_meta_block()?;
+            elif_branches.push((elif_cond, elif_items));
+        }
+
+        let else_items = if self.match_keyword(Keyword::Else) {
+            Some(self.parse_meta_block()?)
+        } else {
+            None
+        };
+
+        let end = self.previous_span();
+        let span = start.merge(end);
+        Ok(Spanned::new(
+            Item::MetaIf(MetaIf {
+                condition,
+                then_items,
+                elif_branches,
+                else_items,
+                span,
+            }),
+            span,
+        ))
+    }
+
+    /// Parse `: NEWLINE INDENT item* DEDENT` — a block of items (not statements).
+    fn parse_meta_block(&mut self) -> Result<Vec<Spanned<Item>>, ParseError> {
+        self.expect(&Token::Colon)?;
+        self.expect(&Token::Newline)?;
+        self.expect(&Token::Indent)?;
+
+        let mut items = Vec::new();
+        while !self.check(&Token::Dedent) && !self.at_end() {
+            // Skip stray newlines
+            if self.match_token(&Token::Newline) {
+                continue;
+            }
+            match self.parse_item() {
+                Ok(item) => items.push(item),
+                Err(e) => {
+                    self.errors.push(e);
+                    let pos_before = self.pos;
+                    self.synchronize();
+                    if self.pos == pos_before {
+                        self.advance();
+                    }
+                }
+            }
+        }
+
+        self.expect(&Token::Dedent)?;
+        Ok(items)
     }
 
     // ── Attributes ────────────────────────────────────────────
