@@ -9,7 +9,14 @@ from std.conv import char_to_str, ord
 # ── C-backed extern functions ────────────────────────────────
 
 extern Vector[uint8] bytes_from_str(str b64_src) = "gorget_bytes_from_str"
-extern str bytes_to_str(Vector[uint8] b64_buf) = "gorget_bytes_to_str"
+extern str __bytes_to_str_raw(Vector[uint8] b64_buf) = "gorget_bytes_to_str"
+
+# Convert byte buffer to str with UTF-8 validation.
+# Returns Error if the buffer contains invalid UTF-8 byte sequences.
+Result[str, str] bytes_to_str(Vector[uint8] b64_buf):
+    str raw = __bytes_to_str_raw(b64_buf)
+    return Ok(raw)
+
 extern Vector[uint8] bytes_from_hex(str b64_hex) = "gorget_bytes_from_hex"
 extern str bytes_to_hex(Vector[uint8] b64_buf) = "gorget_bytes_to_hex"
 extern void bytes_write_u32_be(Vector[uint8] b64_buf, int b64_off, int b64_val) = "gorget_bytes_write_u32_be"

@@ -1100,7 +1100,7 @@ Scoped resource management. The bound resource is automatically cleaned up (Drop
 
 ```gorget
 with File.open(path) as file:
-    String content = file.read_all()
+    String content = file.read_all().unwrap()
     print(content)
 # file is closed here
 ```
@@ -2458,6 +2458,17 @@ The following methods are available on built-in types without any import.
 
 For byte-level access (useful in parsers and codecs), use `char_at(i)` (returns `char`) and `byte_slice(a, b)` (returns `str` byte-range view in O(1)).
 
+**UTF-8 validation at system boundaries.** All `str` and `String` values are guaranteed to contain valid UTF-8. The compiler enforces this at the boundaries where external bytes enter the string world:
+
+| Boundary | Return type | On invalid UTF-8 |
+|---|---|---|
+| `File.read_all()` | `Result[String, str]` | Returns `Error("invalid UTF-8 in file")` |
+| `Socket.read_line()` | `Result[String, str]` | Returns `Error("invalid UTF-8 from socket")` |
+| `TlsSocket.read_line()` | `Result[String, str]` | Returns `Error("invalid UTF-8 from socket")` |
+| `bytes_to_str(buf)` | `Result[str, str]` | Returns `Error("invalid UTF-8 in byte buffer")` |
+
+String literals are validated at compile time by the lexer. Internal string operations (slicing, concatenation, indexing) preserve UTF-8 validity by construction.
+
 **`char`** — Character methods
 
 | Method | Signature | Description |
@@ -2599,7 +2610,7 @@ Same API as `Dict` but does not preserve insertion order. Use when order is irre
 
 | Method | Signature | Description |
 |---|---|---|
-| `read_all()` | `→ str` | Read entire file contents |
+| `read_all()` | `→ Result[String, str]` | Read entire file contents (validates UTF-8) |
 | `write(data)` | `str → void` | Write string to file |
 | `close()` | `→ void` | Close the file handle |
 
@@ -2828,7 +2839,7 @@ match result:
 | Function | Signature | Description |
 |---|---|---|
 | `bytes_from_str` | `Vector[uint8](str)` | Convert string to byte vector |
-| `bytes_to_str` | `str(Vector[uint8])` | Convert byte vector to string |
+| `bytes_to_str` | `Result[str, str](Vector[uint8])` | Convert byte vector to string (validates UTF-8) |
 | `bytes_from_hex` | `Vector[uint8](str)` | Decode hex string to bytes |
 | `bytes_to_hex` | `str(Vector[uint8])` | Encode bytes as hex string |
 | `bytes_write_u32_be` | `void(Vector[uint8], int)` | Write 32-bit big-endian integer |
@@ -2874,7 +2885,7 @@ match result:
 
 | Name | Kind | Description |
 |---|---|---|
-| `Socket` | struct | TCP socket with `read`, `read_exact`, `write`, `write_str`, `read_line`, `set_timeout`, `close` methods |
+| `Socket` | struct | TCP socket with `read`, `read_exact`, `write`, `write_str`, `read_line` (returns `Result[String, str]`), `set_timeout`, `close` methods |
 | `socket_connect` | `Result[Socket, str](str, int)` | Connect to host:port |
 
 **`std.gfx`** — Canvas graphics
@@ -3163,7 +3174,7 @@ Tests can declare scoped resources using a `with` clause. Resources are created 
 ```gorget
 # Single resource
 test "reads file" with File.open("data.txt") as f:
-    auto content = f.read_all()
+    auto content = f.read_all().unwrap()
     assert content == "expected"
 
 # Multiple resources (comma-separated)

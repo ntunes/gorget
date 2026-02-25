@@ -60,14 +60,14 @@ void main():
             int a_data_sid = bytes_read_u32_be(aev.data, 0)
             Vector[uint8] a_data = p2p_stream_recv(&nodeA, a_data_sid)
             if a_data.len() > 0:
-                a_received = bytes_to_str(a_data)
+                a_received = bytes_to_str(a_data).unwrap()
 
         P2PEvent bev = p2p_poll(&nodeB, 50)
         if bev.event_type == 10:
             int b_data_sid = bytes_read_u32_be(bev.data, 0)
             Vector[uint8] b_data = p2p_stream_recv(&nodeB, b_data_sid)
             if b_data.len() > 0:
-                b_received = bytes_to_str(b_data)
+                b_received = bytes_to_str(b_data).unwrap()
 
         if a_received != "" and b_received != "":
             rounds = 20

@@ -17,7 +17,7 @@ void main():
     bool ready = receiver.poll(1000)
     if ready:
         UdpPacket pkt = receiver.recvfrom(1024).unwrap()
-        print(bytes_to_str(pkt.data))
+        print(bytes_to_str(pkt.data).unwrap())
 
     sender.close()
     receiver.close()

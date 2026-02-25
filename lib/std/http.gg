@@ -79,13 +79,13 @@ str http_read_body_fixed(TlsSocket &http_conn, int http_clen):
     if http_clen <= 0:
         return ""
     Vector[uint8] http_raw = http_conn.read_exact(http_clen)
-    return bytes_to_str(http_raw)
+    return bytes_to_str(http_raw).unwrap()
 
 str http_read_body_chunked(TlsSocket &http_conn):
     Vector[uint8] http_buf = Vector[uint8]()
     bool http_reading = true
     while http_reading:
-        str http_size_line = http_conn.read_line()
+        str http_size_line = http_conn.read_line().unwrap()
         # Strip any chunk extensions after ";"
         Option[int] http_semi = http_size_line.index_of(";")
         if http_semi.is_some():
@@ -98,12 +98,12 @@ str http_read_body_chunked(TlsSocket &http_conn):
             Vector[uint8] http_chunk = http_conn.read_exact(http_chunk_sz)
             http_buf = bytes_concat(http_buf, http_chunk)
             # Consume trailing \r\n after chunk data
-            http_conn.read_line()
+            http_conn.read_line().unwrap()
     # Consume optional trailers until empty line
-    str http_trailer = http_conn.read_line()
+    str http_trailer = http_conn.read_line().unwrap()
     while http_trailer != "":
-        http_trailer = http_conn.read_line()
-    return bytes_to_str(http_buf)
+        http_trailer = http_conn.read_line().unwrap()
+    return bytes_to_str(http_buf).unwrap()
 
 str http_read_body_close(TlsSocket &http_conn):
     Vector[uint8] http_buf = Vector[uint8]()
@@ -114,7 +114,7 @@ str http_read_body_close(TlsSocket &http_conn):
             http_reading = false
         else:
             http_buf = bytes_concat(http_buf, http_chunk)
-    return bytes_to_str(http_buf)
+    return bytes_to_str(http_buf).unwrap()
 
 # ── Single-shot request (no redirect following) ───────────
 
@@ -159,7 +159,7 @@ Result[HttpResponse, str] http_single(str http_method, str http_url, str http_bo
     # ── Read response ────────────────────────────────────────
 
     # Status line: "HTTP/1.1 200 OK"
-    str http_status_line = http_conn.read_line()
+    str http_status_line = http_conn.read_line()?
     Option[int] http_sp1 = http_status_line.index_of(" ")
     int http_code = 0
     if http_sp1.is_some():
@@ -179,7 +179,7 @@ Result[HttpResponse, str] http_single(str http_method, str http_url, str http_bo
     Dict[str, str] http_resp_hdrs = Dict[str, str]()
     bool http_in_hdrs = true
     while http_in_hdrs:
-        str http_hdr_line = http_conn.read_line()
+        str http_hdr_line = http_conn.read_line()?
         if http_hdr_line == "":
             http_in_hdrs = false
         else:

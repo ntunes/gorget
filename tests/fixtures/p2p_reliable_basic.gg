@@ -49,7 +49,7 @@ void main():
     if data_ev.event_type == 10:
         int data_sid = bytes_read_u32_be(data_ev.data, 0)
         Vector[uint8] received = p2p_stream_recv(&nodeB, data_sid)
-        print(bytes_to_str(received))
+        print(bytes_to_str(received).unwrap())
 
     # A polls to receive ACK (no event expected for user)
     p2p_poll(&nodeA, 100)

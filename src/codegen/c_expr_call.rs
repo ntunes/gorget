@@ -1262,6 +1262,33 @@ impl CodegenContext<'_> {
             }
         }
 
+        // UTF-8 validation wrapper: bytes_to_str() → Result[str, str]
+        if let Expr::Identifier(name) = &callee.node {
+            if name == "bytes_to_str" {
+                if let Some(arg) = args.first() {
+                    let expr = self.gen_expr(&arg.node.value);
+                    let arg_ref = addr_of(&expr, &arg.node.value.node);
+                    let result_type = self.register_generic(
+                        "Result", &["Str".into(), "Str".into()],
+                        super::GenericInstanceKind::Enum,
+                    );
+                    let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
+                    let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
+                    return format!(
+                        "({{ const char* __bs = gorget_bytes_to_str({arg_ref}); \
+                        size_t __bslen = strlen(__bs); \
+                        {result_type} __rv; \
+                        if (!gorget_utf8_validate(__bs, __bslen)) {{ \
+                            GORGET_FREE((void*)__bs, __bslen + 1); \
+                            __rv = {err_ctor}(gorget_str_from_literal(\"invalid UTF-8 in byte buffer\", 28)); \
+                        }} else {{ \
+                            __rv = {ok_ctor}(gorget_str_from_cstr(__bs)); \
+                        }} __rv; }})"
+                    );
+                }
+            }
+        }
+
         // Check extern free function bindings
         if let Expr::Identifier(name) = &callee.node {
             if let Some(binding) = self.extern_symbols.get(&("".to_string(), name.clone())).cloned() {
@@ -1691,6 +1718,68 @@ impl CodegenContext<'_> {
                     }
                     _ => {} // fall through to extern_symbols for text, start, end_pos, etc.
                 }
+            }
+        }
+
+        // UTF-8 validation wrappers: File.read_all, Socket/TlsSocket.read_line
+        {
+            let type_name = self.infer_receiver_type(receiver);
+            if (type_name == "File" || type_name == "GorgetFile") && method_name == "read_all" {
+                let recv = self.gen_expr(receiver);
+                let result_type = self.register_generic(
+                    "Result", &["GorgetString".into(), "Str".into()],
+                    super::GenericInstanceKind::Enum,
+                );
+                let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
+                let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
+                return format!(
+                    "({{ GorgetString __ra = gorget_file_read_all(&{recv}); \
+                    {result_type} __rv; \
+                    if (!gorget_utf8_validate(__ra.data, __ra.len)) {{ \
+                        gorget_string_free(&__ra); \
+                        __rv = {err_ctor}(gorget_str_from_literal(\"invalid UTF-8 in file\", 21)); \
+                    }} else {{ \
+                        __rv = {ok_ctor}(__ra); \
+                    }} __rv; }})"
+                );
+            }
+            if (type_name == "Socket" || type_name == "GorgetSocket") && method_name == "read_line" {
+                let recv = self.gen_expr(receiver);
+                let result_type = self.register_generic(
+                    "Result", &["GorgetString".into(), "Str".into()],
+                    super::GenericInstanceKind::Enum,
+                );
+                let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
+                let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
+                return format!(
+                    "({{ GorgetString __rl = gorget_socket_read_line(&{recv}); \
+                    {result_type} __rv; \
+                    if (!gorget_utf8_validate(__rl.data, __rl.len)) {{ \
+                        gorget_string_free(&__rl); \
+                        __rv = {err_ctor}(gorget_str_from_literal(\"invalid UTF-8 from socket\", 24)); \
+                    }} else {{ \
+                        __rv = {ok_ctor}(__rl); \
+                    }} __rv; }})"
+                );
+            }
+            if (type_name == "TlsSocket" || type_name == "GorgetTlsSocket") && method_name == "read_line" {
+                let recv = self.gen_expr(receiver);
+                let result_type = self.register_generic(
+                    "Result", &["GorgetString".into(), "Str".into()],
+                    super::GenericInstanceKind::Enum,
+                );
+                let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
+                let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
+                return format!(
+                    "({{ GorgetString __rl = gorget_tls_read_line(&{recv}); \
+                    {result_type} __rv; \
+                    if (!gorget_utf8_validate(__rl.data, __rl.len)) {{ \
+                        gorget_string_free(&__rl); \
+                        __rv = {err_ctor}(gorget_str_from_literal(\"invalid UTF-8 from socket\", 24)); \
+                    }} else {{ \
+                        __rv = {ok_ctor}(__rl); \
+                    }} __rv; }})"
+                );
             }
         }
 

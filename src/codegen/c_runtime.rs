@@ -993,6 +993,11 @@ static inline bool gorget_utf8_validate(const char* data, size_t len) {
     return true;
 }
 
+// Validate GorgetString contents as UTF-8 (convenience wrapper for codegen).
+static inline bool gorget_string_is_valid_utf8(const GorgetString* s) {
+    return gorget_utf8_validate(s->data, s->len);
+}
+
 // ── Codepoint-level Str operations ──────────────────────────
 // Count codepoints — O(n) UTF-8 walk
 static inline int64_t gorget_str_codepoint_count(Str s) {

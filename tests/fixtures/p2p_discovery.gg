@@ -48,7 +48,7 @@ void main():
     while attempts < 10:
         P2PEvent ev3 = p2p_poll(&node2, 500)
         if ev3.event_type == 1:
-            print(bytes_to_str(ev3.data))
+            print(bytes_to_str(ev3.data).unwrap())
             attempts = 10
         attempts = attempts + 1
 

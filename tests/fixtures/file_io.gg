@@ -28,7 +28,7 @@ void main():
 
     # File with read_all
     File reader = File.open("_test_output2.txt")
-    str all = reader.read_all()
+    String all = reader.read_all().unwrap()
     print(all)
     reader.close()
 

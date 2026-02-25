@@ -59,7 +59,7 @@ void main():
     while tries < 5:
         P2PEvent relay_ev = p2p_poll(&node_c, 500)
         if relay_ev.event_type == 6:
-            print(bytes_to_str(relay_ev.data))
+            print(bytes_to_str(relay_ev.data).unwrap())
             tries = 5
         tries = tries + 1
 

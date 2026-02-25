@@ -11,12 +11,12 @@ void main():
     # str → bytes → str roundtrip
     Vector[uint8] b = bytes_from_str("Hello")
     print("{b.len()}")
-    str s = bytes_to_str(b)
+    str s = bytes_to_str(b).unwrap()
     print(s)
 
     # hex roundtrip
     Vector[uint8] h = bytes_from_hex("48656c6c6f")
-    str hs = bytes_to_str(h)
+    str hs = bytes_to_str(h).unwrap()
     print(hs)
 
     # bytes_to_hex
@@ -62,11 +62,11 @@ void main():
     Vector[uint8] a = bytes_from_str("Hello")
     Vector[uint8] c = bytes_from_str(" World")
     Vector[uint8] cat = bytes_concat(a, c)
-    print(bytes_to_str(cat))
+    print(bytes_to_str(cat).unwrap())
 
     # slice
     Vector[uint8] sl = bytes_slice(cat, 0, 5)
-    print(bytes_to_str(sl))
+    print(bytes_to_str(sl).unwrap())
 
     # random_bytes produces correct length
     Vector[uint8] r = random_bytes(16)
@@ -80,7 +80,7 @@ void main():
     auto b64_dec = base64_decode("SGVsbG8=")
     match b64_dec:
         case Ok(b64_decoded):
-            print(bytes_to_str(b64_decoded))
+            print(bytes_to_str(b64_decoded).unwrap())
         else:
             print("error")
 

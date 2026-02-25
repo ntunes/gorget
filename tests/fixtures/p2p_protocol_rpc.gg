@@ -53,7 +53,7 @@ void main():
         P2PEvent bev = p2p_poll(&nodeB, 10)
         RpcMessage req = p2p_rpc_recv_request(&nodeB, b_sid1)
         if req.msg_type == 1:
-            str req_body = bytes_to_str(req.payload)
+            str req_body = bytes_to_str(req.payload).unwrap()
             print("request: " + req_body)
             # B responds with "pong"
             p2p_rpc_send_response(&nodeB, b_sid1, req.correlation_id, bytes_from_str("pong"))
@@ -68,7 +68,7 @@ void main():
         P2PEvent bev2 = p2p_poll(&nodeB, 10)
         RpcMessage resp = p2p_rpc_recv_response(&nodeA, s1)
         if resp.msg_type == 2:
-            str resp_body = bytes_to_str(resp.payload)
+            str resp_body = bytes_to_str(resp.payload).unwrap()
             print("response: " + resp_body)
             got_resp = true
         rr2 = rr2 + 1
@@ -99,7 +99,7 @@ void main():
         P2PEvent bev4 = p2p_poll(&nodeB, 10)
         RpcMessage err_resp = p2p_rpc_recv_response(&nodeA, s1)
         if err_resp.msg_type == 2:
-            str err_body = bytes_to_str(err_resp.payload)
+            str err_body = bytes_to_str(err_resp.payload).unwrap()
             print("error: " + err_body)
             got_err = true
         rr4 = rr4 + 1

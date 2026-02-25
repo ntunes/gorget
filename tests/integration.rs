@@ -4240,6 +4240,18 @@ done",
 }
 
 #[test]
+fn utf8_validation() {
+    run_gg(
+        "utf8_validation.gg",
+        "\
+hi
+invalid UTF-8 in byte buffer
+café
+invalid UTF-8 in byte buffer",
+    );
+}
+
+#[test]
 fn hot_reload_basic() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fixture_path = manifest_dir.join("tests/fixtures/hot_reload_basic.gg");

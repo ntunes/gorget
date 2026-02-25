@@ -35,12 +35,12 @@ void main():
     P2PEvent ev_b = p2p_poll(&node_b, 1000)
     if ev_b.event_type == 7:
         print(ev_b.topic)
-        print(bytes_to_str(ev_b.data))
+        print(bytes_to_str(ev_b.data).unwrap())
 
     # C processes gossip: receives from B
     P2PEvent ev_c = p2p_poll(&node_c, 1000)
     if ev_c.event_type == 7:
-        print(bytes_to_str(ev_c.data))
+        print(bytes_to_str(ev_c.data).unwrap())
 
     # Dedup test: B forwards to C, but if C somehow got the same msg again
     # it would be deduplicated. Let's verify B also marked it seen by
@@ -49,7 +49,7 @@ void main():
     P2PEvent ev_b2 = p2p_poll(&node_b, 1000)
     P2PEvent ev_c2 = p2p_poll(&node_c, 1000)
     if ev_c2.event_type == 7:
-        print(bytes_to_str(ev_c2.data))
+        print(bytes_to_str(ev_c2.data).unwrap())
 
     node_a.socket.close()
     node_b.socket.close()

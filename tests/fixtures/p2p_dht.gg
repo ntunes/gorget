@@ -37,7 +37,7 @@ void main():
     str key_hex = bytes_to_hex(key)
     Result[Vector[uint8], str] b_result = p2p_dht_local_get(node_b, key_hex)
     if b_result.is_ok():
-        print(bytes_to_str(b_result.unwrap()))
+        print(bytes_to_str(b_result.unwrap()).unwrap())
 
     # C queries via DHT: send FIND_VALUE(23) to its known peer B
     int ci = 0
@@ -52,7 +52,7 @@ void main():
     # Poll C to receive FIND_VALUE_REPLY (event_type 4 = DHT_RESULT)
     P2PEvent dht_ev = p2p_poll(&node_c, 1000)
     if dht_ev.event_type == 4:
-        print(bytes_to_str(dht_ev.data))
+        print(bytes_to_str(dht_ev.data).unwrap())
 
     node_a.socket.close()
     node_b.socket.close()

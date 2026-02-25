@@ -35,4 +35,4 @@ void main():
         print("ciphertext size correct")
 
     Vector[uint8] decrypted = crypto_aes_gcm_decrypt(key, encrypted).unwrap()
-    print(bytes_to_str(decrypted))
+    print(bytes_to_str(decrypted).unwrap())

@@ -300,7 +300,7 @@ Vector[uint8] read_packet(Session &session):
 
 str version_exchange(Socket &sock):
     sock.write_str("SSH-2.0-Gorget_1.0\r\n")
-    str server_version = sock.read_line()
+    str server_version = sock.read_line().unwrap()
     return server_version
 
 # ── Key Exchange ─────────────────────────────────────────────
@@ -507,7 +507,7 @@ CommandResult channel_exec(Session &session, str cmd):
                     int req_name_len = bytes_read_u32_be(msg, 5)
                     ssh_check_len(msg, 9 + req_name_len, "channel_exec request name")
                     Vector[uint8] req_name = bytes_slice(msg, 9, 9 + req_name_len)
-                    str req_str = bytes_to_str(req_name)
+                    str req_str = bytes_to_str(req_name).unwrap()
                     if req_str == "exit-status":
                         ssh_check_len(msg, 9 + req_name_len + 1 + 4, "channel_exec exit-status")
                         exit_code = bytes_read_u32_be(msg, 9 + req_name_len + 1)
@@ -522,7 +522,7 @@ CommandResult channel_exec(Session &session, str cmd):
                             send_packet(&session, close_msg)
                             done = true
 
-    str stdout_str = bytes_to_str(stdout_data)
+    str stdout_str = bytes_to_str(stdout_data).unwrap()
     return CommandResult(stdout_str, "", exit_code)
 
 # ── Interactive channel operations ───────────────────────────
@@ -574,7 +574,7 @@ str channel_read_until(Session &session, str delimiter):
                 int data_len = bytes_read_u32_be(msg, 5)
                 ssh_check_len(msg, 9 + data_len, "channel_read_until data payload")
                 Vector[uint8] chunk = bytes_slice(msg, 9, 9 + data_len)
-                buffer = buffer + bytes_to_str(chunk)
+                buffer = buffer + bytes_to_str(chunk).unwrap()
                 # Send window adjust to keep receiving data
                 Vector[uint8] adj = bytes_from_hex("5d")
                 adj = bytes_concat(adj, make_u32(session.channel_id))

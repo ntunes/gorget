@@ -59,7 +59,7 @@ void main():
             int data_sid = bytes_read_u32_be(bev.data, 0)
             Vector[uint8] d = p2p_stream_recv(&nodeB, data_sid)
             if d.len() > 0:
-                str msg = bytes_to_str(d)
+                str msg = bytes_to_str(d).unwrap()
                 if msg == "data channel":
                     recv1 = msg
                 elif msg == "control channel":

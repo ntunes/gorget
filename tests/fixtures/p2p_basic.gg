@@ -31,7 +31,7 @@ void main():
     # event_type 1 = MESSAGE
     P2PEvent ev3 = p2p_poll(&node2, 1000)
     if ev3.event_type == 1:
-        print(bytes_to_str(ev3.data))
+        print(bytes_to_str(ev3.data).unwrap())
 
     node1.socket.close()
     node2.socket.close()

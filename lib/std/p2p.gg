@@ -106,7 +106,7 @@ Result[AnnounceInfo, str] p2p_decode_announce_payload(Vector[uint8] payload):
     if payload.len() < 2 + host_len + 2:
         return Error("announce truncated")
     Vector[uint8] host_bytes = bytes_slice(payload, 2, 2 + host_len)
-    str host = bytes_to_str(host_bytes)
+    str host = bytes_to_str(host_bytes).unwrap()
     int port = bytes_read_u16_be(payload, 2 + host_len)
     return Ok(AnnounceInfo(host, port))
 
@@ -118,7 +118,7 @@ Result[Message, str] p2p_decode_message(Vector[uint8] raw):
 
     # Check magic
     Vector[uint8] magic = bytes_slice(raw, 0, 4)
-    str magic_str = bytes_to_str(magic)
+    str magic_str = bytes_to_str(magic).unwrap()
     if magic_str != "GG01":
         return Error("invalid magic")
 
@@ -532,7 +532,7 @@ Result[ExternalAddr, str] p2p_discover_external_addr(Node &node, str probe_host,
         P2PEvent ev = p2p_poll(&node, remaining)
         # event_type 5 = ADDR_DISCOVERED
         if ev.event_type == 5:
-            str addr_str = bytes_to_str(ev.data)
+            str addr_str = bytes_to_str(ev.data).unwrap()
             # Parse "host:port"
             int colon = -1
             int j = 0
@@ -1109,7 +1109,7 @@ P2PEvent p2p_handle_syn(Node &node, str sender_hex, Vector[uint8] payload):
                 int proto_len = bytes_read_u16_be(payload, base_off)
                 if payload.len() >= base_off + 2 + proto_len:
                     Vector[uint8] proto_bytes = bytes_slice(payload, base_off + 2, base_off + 2 + proto_len)
-                    syn_protocol = bytes_to_str(proto_bytes)
+                    syn_protocol = bytes_to_str(proto_bytes).unwrap()
     s.protocol = syn_protocol
     node.streams.push(!s)
     # Return STREAM_SYN event with our local stream_id in data, protocol in topic
@@ -1952,7 +1952,7 @@ P2PEvent p2p_poll_socket(Node &node, UdpSocket &sock):
             int topic_len = bytes_read_u16_be(msg.payload, 1)
             if msg.payload.len() >= 3 + topic_len + 32:
                 Vector[uint8] topic_bytes = bytes_slice(msg.payload, 3, 3 + topic_len)
-                str topic = bytes_to_str(topic_bytes)
+                str topic = bytes_to_str(topic_bytes).unwrap()
                 Vector[uint8] gossip_msg_id = bytes_slice(msg.payload, 3 + topic_len, 3 + topic_len + 32)
                 str msg_id_hex = bytes_to_hex(gossip_msg_id)
                 # Dedup: skip if already seen

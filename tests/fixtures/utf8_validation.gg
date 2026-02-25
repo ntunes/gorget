@@ -1,0 +1,49 @@
+from std.bytes import bytes_to_str
+from std.collections import Vector
+
+void main():
+    # Valid UTF-8
+    Vector[uint8] valid = Vector[uint8]()
+    valid.push(104)
+    valid.push(105)
+    Result[str, str] r1 = bytes_to_str(valid)
+    match r1:
+        case Ok(s):
+            print(s)
+        case Error(e):
+            print(e)
+
+    # Invalid UTF-8 (0xFF is never valid)
+    Vector[uint8] invalid = Vector[uint8]()
+    invalid.push(255)
+    invalid.push(254)
+    Result[str, str] r2 = bytes_to_str(invalid)
+    match r2:
+        case Ok(s):
+            print(s)
+        case Error(e):
+            print(e)
+
+    # Valid multibyte UTF-8 (é = 0xC3 0xA9)
+    Vector[uint8] multi = Vector[uint8]()
+    multi.push(99)
+    multi.push(97)
+    multi.push(102)
+    multi.push(195)
+    multi.push(169)
+    Result[str, str] r3 = bytes_to_str(multi)
+    match r3:
+        case Ok(s):
+            print(s)
+        case Error(e):
+            print(e)
+
+    # Truncated multibyte (0xC3 alone is incomplete 2-byte)
+    Vector[uint8] trunc = Vector[uint8]()
+    trunc.push(195)
+    Result[str, str] r4 = bytes_to_str(trunc)
+    match r4:
+        case Ok(s):
+            print(s)
+        case Error(e):
+            print(e)

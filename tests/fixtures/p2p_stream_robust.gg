@@ -50,7 +50,7 @@ void main():
         while got_frame:
             Vector[uint8] frame = p2p_stream_recv_frame(&nodeB, b_sid1)
             if frame.len() > 0:
-                print(bytes_to_str(frame))
+                print(bytes_to_str(frame).unwrap())
                 frame_count = frame_count + 1
             else:
                 got_frame = false
@@ -111,7 +111,7 @@ void main():
         if gev_b.event_type == 10:
             Vector[uint8] d = p2p_stream_recv(&nodeB, b_sid2)
             if d.len() > 0:
-                recv_data = bytes_to_str(d)
+                recv_data = bytes_to_str(d).unwrap()
         if gev_b.event_type == 11:
             got_close = true
         if recv_data != "" and got_close:
