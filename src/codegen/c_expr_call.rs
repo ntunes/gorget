@@ -187,7 +187,7 @@ impl CodegenContext<'_> {
                         } else if arg_type == "GorgetString" {
                             format!("gorget_string_new({arg}.data)")
                         } else if arg_type == "Str" {
-                            format!("gorget_string_new({arg}.data)")
+                            format!("gorget_string_from_str({arg})")
                         } else {
                             format!("gorget_string_new({arg})")
                         }
@@ -1331,9 +1331,9 @@ impl CodegenContext<'_> {
             if arg_type == "GorgetString" && ptid == self.types.string_id {
                 return self.coerce_string_to_str(&expr);
             }
-            // str (Str) arg → String param: wrap with gorget_string_new
+            // str (Str) arg → String param: safe copy using len (non-null-terminated safe)
             if arg_type == "Str" && ptid == self.types.owned_string_id {
-                return format!("gorget_string_new({expr}.data)");
+                return format!("gorget_string_from_str({expr})");
             }
             // cstr (const char*) arg → str param: wrap with gorget_str_from_cstr
             if arg_type == "const char*" && ptid == self.types.string_id {

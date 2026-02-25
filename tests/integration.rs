@@ -4252,6 +4252,30 @@ invalid UTF-8 in byte buffer",
 }
 
 #[test]
+fn unicode_strings() {
+    run_gg(
+        "unicode_strings.gg",
+        "\
+CAF\u{c9}
+\u{03b5}\u{03bb}\u{03bb}\u{03b7}\u{03bd}\u{03b9}\u{03ba}\u{03ac}
+\u{043c}\u{043e}\u{0441}\u{043a}\u{0432}\u{0430}
+hello
+hello
+3
+true
+caf\u{e9}
+hi
+HELLO
+cafe
+true
+true
+3
+3
+\u{e9}",
+    );
+}
+
+#[test]
 fn hot_reload_basic() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fixture_path = manifest_dir.join("tests/fixtures/hot_reload_basic.gg");

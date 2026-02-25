@@ -1,0 +1,64 @@
+void main():
+    # Latin Extended: café → CAFÉ
+    str cafe = "caf\u{E9}"
+    String upper_cafe = cafe.to_upper()
+    print(upper_cafe)
+
+    # Greek: Ελληνικά to_lower
+    str greek_upper = "\u{395}\u{3BB}\u{3BB}\u{3B7}\u{3BD}\u{3B9}\u{3BA}\u{3AC}"
+    String greek_lower = greek_upper.to_lower()
+    print(greek_lower)
+
+    # Cyrillic: МОСКВА to_lower
+    str moscow = "\u{41C}\u{41E}\u{421}\u{41A}\u{412}\u{410}"
+    String moscow_lower = moscow.to_lower()
+    print(moscow_lower)
+
+    # ASCII trim
+    str padded = "  hello  "
+    str trimmed = padded.trim()
+    print(trimmed)
+
+    # Unicode whitespace trim (NBSP = U+00A0)
+    str nbsp_padded = "\u{A0}hello\u{A0}"
+    str nbsp_trimmed = nbsp_padded.trim()
+    print(nbsp_trimmed)
+
+    # index_of returns codepoint index
+    Option[int] idx = cafe.index_of("\u{E9}")
+    print(idx.unwrap())
+
+    # contains on non-null-terminated view (byte_slice produces non-null-terminated)
+    str slice = cafe[1..3]
+    print(slice.contains("af"))
+
+    # Roundtrip: to_upper then to_lower
+    String upper = cafe.to_upper()
+    String roundtrip = upper.to_lower()
+    print(roundtrip)
+
+    # trim returns str (view)
+    str view = "  hi  ".trim()
+    print(view)
+
+    # to_upper returns String (owned)
+    String owned = "hello".to_upper()
+    print(owned)
+
+    # replace with unicode
+    String replaced = cafe.replace("\u{E9}", "e")
+    print(replaced)
+
+    # starts_with / ends_with on multibyte
+    print(cafe.starts_with("caf"))
+    print(cafe.ends_with("\u{E9}"))
+
+    # count with unicode needle
+    str repeated = "\u{E9}\u{E9}\u{E9}"
+    print(repeated.count("\u{E9}"))
+
+    # split preserves unicode views
+    str csv = "a,\u{E9},c"
+    auto parts = csv.split(",")
+    print(parts.len())
+    print(parts[1])

@@ -582,8 +582,11 @@ impl CodegenContext<'_> {
             return match method {
                 "len" | "hash" | "count" | "capacity" => Some(self.types.int_id),
                 "contains" | "starts_with" | "ends_with" | "is_empty" => Some(self.types.bool_id),
-                "trim" | "strip" | "lstrip" | "rstrip" | "to_upper" | "to_lower" | "replace"
-                | "substring" | "repeat" | "join" | "removeprefix" | "removesuffix"
+                // View returns — return str (Str)
+                "trim" | "strip" | "lstrip" | "rstrip" | "removeprefix" | "removesuffix"
+                    => Some(self.types.string_id),
+                // Allocating returns — return String (GorgetString)
+                "to_upper" | "to_lower" | "replace" | "substring" | "repeat" | "join"
                 | "pad_left" | "pad_right" => Some(self.types.owned_string_id),
                 "str" => Some(self.types.string_id),
                 "char_at" => Some(self.types.char_id),
@@ -596,7 +599,12 @@ impl CodegenContext<'_> {
             ("Str" | "const char*", "contains" | "starts_with" | "ends_with" | "is_empty") => {
                 Some(self.types.bool_id)
             }
-            ("Str" | "const char*", "trim" | "strip" | "lstrip" | "rstrip" | "to_upper" | "to_lower" | "replace" | "substring" | "repeat" | "join" | "removeprefix" | "removesuffix" | "pad_left" | "pad_right") => {
+            // View returns — return str (Str)
+            ("Str" | "const char*", "trim" | "strip" | "lstrip" | "rstrip" | "removeprefix" | "removesuffix") => {
+                Some(self.types.string_id)
+            }
+            // Allocating returns — return String (GorgetString)
+            ("Str" | "const char*", "to_upper" | "to_lower" | "replace" | "substring" | "repeat" | "join" | "pad_left" | "pad_right") => {
                 Some(self.types.owned_string_id)
             }
             ("Str" | "const char*", "char_at") => Some(self.types.char_id),

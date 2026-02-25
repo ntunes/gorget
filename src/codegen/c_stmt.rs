@@ -1232,9 +1232,9 @@ impl CodegenContext<'_> {
                 }
                 return format!("(Str){{ .data = {expr}.data, .len = {expr}.len }}");
             }
-            // Str → GorgetString
+            // Str → GorgetString (safe for non-null-terminated views)
             if ret_type == "GorgetString" && val_type == "Str" {
-                return format!("gorget_string_new({expr}.data)");
+                return format!("gorget_string_from_str({expr})");
             }
             // const char* (cstr) → Str
             if ret_type == "Str" && val_type == "const char*" {
@@ -1671,7 +1671,7 @@ impl CodegenContext<'_> {
                         // Intentionally leak the GorgetString — Str borrows the buffer
                         format!("({{ GorgetString __gs = {v}; (Str){{ .data = __gs.data, .len = __gs.len }}; }})")
                     }
-                    ("GorgetString", "Str") => format!("gorget_string_new({v}.data)"),
+                    ("GorgetString", "Str") => format!("gorget_string_from_str({v})"),
                     ("Str", "const char*") => format!("gorget_str_from_cstr({v})"),
                     ("const char*", "Str") => format!("{v}.data"),
                     _ => v,
@@ -2566,7 +2566,7 @@ impl CodegenContext<'_> {
                         // Str ← const char* (cstr)
                         ("Str", "const char*") => format!("gorget_str_from_cstr({val})"),
                         // GorgetString ← Str
-                        ("GorgetString", "Str") => format!("gorget_string_new({val}.data)"),
+                        ("GorgetString", "Str") => format!("gorget_string_from_str({val})"),
                         // GorgetString ← const char*
                         ("GorgetString", "const char*") => format!("gorget_string_new({val})"),
                         // const char* ← GorgetString

@@ -1069,6 +1069,551 @@ static inline char gorget_str_byte_at(Str s, int64_t index) {
     return s.data[index];
 }
 
+// ── UTF-8 encode helper ─────────────────────────────────────
+// Encode a Unicode codepoint to UTF-8. Writes 1-4 bytes to out[]. Returns bytes written.
+static inline int gorget_utf8_encode(int64_t cp, char* out) {
+    if (cp < 0x80) {
+        out[0] = (char)cp;
+        return 1;
+    }
+    if (cp < 0x800) {
+        out[0] = (char)(0xC0 | (cp >> 6));
+        out[1] = (char)(0x80 | (cp & 0x3F));
+        return 2;
+    }
+    if (cp < 0x10000) {
+        out[0] = (char)(0xE0 | (cp >> 12));
+        out[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        out[2] = (char)(0x80 | (cp & 0x3F));
+        return 3;
+    }
+    if (cp <= 0x10FFFF) {
+        out[0] = (char)(0xF0 | (cp >> 18));
+        out[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+        out[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        out[3] = (char)(0x80 | (cp & 0x3F));
+        return 4;
+    }
+    // Invalid codepoint — emit U+FFFD
+    out[0] = (char)0xEF; out[1] = (char)0xBF; out[2] = (char)0xBD;
+    return 3;
+}
+
+// ── Unicode case mapping tables ─────────────────────────────
+// Simple 1:1 case mappings for Latin (Basic + Extended-A/B), Greek, Cyrillic.
+// Each range maps [lo..hi] by adding delta to convert.
+
+struct GorgetCaseRange { uint32_t lo, hi; int32_t delta; };
+
+static const struct GorgetCaseRange gorget_tolower_ranges[] = {
+    // Latin Basic: A-Z → a-z
+    { 0x0041, 0x005A, 32 },
+    // Latin-1 Supplement: À-Ö → à-ö
+    { 0x00C0, 0x00D6, 32 },
+    // Latin-1 Supplement: Ø-Þ → ø-þ
+    { 0x00D8, 0x00DE, 32 },
+    // Latin Extended-A (even codepoints: Ā-Ķ upper → lower via +1)
+    // These are handled as paired chars below in exceptions
+    // Greek: Α-Ρ → α-ρ
+    { 0x0391, 0x03A1, 32 },
+    // Greek: Σ-Ω → σ-ω
+    { 0x03A3, 0x03A9, 32 },
+    // Cyrillic: А-Я → а-я
+    { 0x0410, 0x042F, 32 },
+    // Cyrillic: Ѐ-Ѐ → ѐ-ѐ (U+0400-040F → U+0450-045F)
+    { 0x0400, 0x040F, 80 },
+};
+
+static const struct GorgetCaseRange gorget_toupper_ranges[] = {
+    // Latin Basic: a-z → A-Z
+    { 0x0061, 0x007A, -32 },
+    // Latin-1 Supplement: à-ö → À-Ö
+    { 0x00E0, 0x00F6, -32 },
+    // Latin-1 Supplement: ø-þ → Ø-Þ
+    { 0x00F8, 0x00FE, -32 },
+    // Greek: α-ρ → Α-Ρ
+    { 0x03B1, 0x03C1, -32 },
+    // Greek: σ-ω → Σ-Ω
+    { 0x03C3, 0x03C9, -32 },
+    // Cyrillic: а-я → А-Я
+    { 0x0430, 0x044F, -32 },
+    // Cyrillic: ѐ-ѐ (U+0450-045F → U+0400-040F)
+    { 0x0450, 0x045F, -80 },
+};
+
+// Exception tables for individual codepoints (Latin Extended-A pairs, special Greek/Cyrillic)
+static const struct { uint32_t from, to; } gorget_tolower_exceptions[] = {
+    // Latin Extended-A paired letters (upper → lower = +1)
+    { 0x0100, 0x0101 }, { 0x0102, 0x0103 }, { 0x0104, 0x0105 }, { 0x0106, 0x0107 },
+    { 0x0108, 0x0109 }, { 0x010A, 0x010B }, { 0x010C, 0x010D }, { 0x010E, 0x010F },
+    { 0x0110, 0x0111 }, { 0x0112, 0x0113 }, { 0x0114, 0x0115 }, { 0x0116, 0x0117 },
+    { 0x0118, 0x0119 }, { 0x011A, 0x011B }, { 0x011C, 0x011D }, { 0x011E, 0x011F },
+    { 0x0120, 0x0121 }, { 0x0122, 0x0123 }, { 0x0124, 0x0125 }, { 0x0126, 0x0127 },
+    { 0x0128, 0x0129 }, { 0x012A, 0x012B }, { 0x012C, 0x012D }, { 0x012E, 0x012F },
+    { 0x0130, 0x0069 }, // İ → i (Turkish I special case — simple mapping)
+    { 0x0132, 0x0133 }, { 0x0134, 0x0135 }, { 0x0136, 0x0137 },
+    { 0x0139, 0x013A }, { 0x013B, 0x013C }, { 0x013D, 0x013E }, { 0x013F, 0x0140 },
+    { 0x0141, 0x0142 }, { 0x0143, 0x0144 }, { 0x0145, 0x0146 }, { 0x0147, 0x0148 },
+    { 0x014A, 0x014B }, { 0x014C, 0x014D }, { 0x014E, 0x014F }, { 0x0150, 0x0151 },
+    { 0x0152, 0x0153 }, { 0x0154, 0x0155 }, { 0x0156, 0x0157 }, { 0x0158, 0x0159 },
+    { 0x015A, 0x015B }, { 0x015C, 0x015D }, { 0x015E, 0x015F }, { 0x0160, 0x0161 },
+    { 0x0162, 0x0163 }, { 0x0164, 0x0165 }, { 0x0166, 0x0167 }, { 0x0168, 0x0169 },
+    { 0x016A, 0x016B }, { 0x016C, 0x016D }, { 0x016E, 0x016F }, { 0x0170, 0x0171 },
+    { 0x0172, 0x0173 }, { 0x0174, 0x0175 }, { 0x0176, 0x0177 },
+    { 0x0178, 0x00FF }, // Ÿ → ÿ
+    { 0x0179, 0x017A }, { 0x017B, 0x017C }, { 0x017D, 0x017E },
+    // Greek specials
+    { 0x0386, 0x03AC }, // Ά → ά
+    { 0x0388, 0x03AD }, // Έ → έ
+    { 0x0389, 0x03AE }, // Ή → ή
+    { 0x038A, 0x03AF }, // Ί → ί
+    { 0x038C, 0x03CC }, // Ό → ό
+    { 0x038E, 0x03CD }, // Ύ → ύ
+    { 0x038F, 0x03CE }, // Ώ → ώ
+    // Cyrillic specials
+    { 0x0460, 0x0461 }, { 0x0462, 0x0463 }, { 0x0464, 0x0465 }, { 0x0466, 0x0467 },
+    { 0x0468, 0x0469 }, { 0x046A, 0x046B }, { 0x046C, 0x046D }, { 0x046E, 0x046F },
+    { 0x0470, 0x0471 }, { 0x0472, 0x0473 }, { 0x0474, 0x0475 }, { 0x0476, 0x0477 },
+    { 0x0478, 0x0479 }, { 0x047A, 0x047B }, { 0x047C, 0x047D }, { 0x047E, 0x047F },
+    { 0x0480, 0x0481 },
+    { 0x048A, 0x048B }, { 0x048C, 0x048D }, { 0x048E, 0x048F },
+    { 0x0490, 0x0491 }, { 0x0492, 0x0493 }, { 0x0494, 0x0495 }, { 0x0496, 0x0497 },
+    { 0x0498, 0x0499 }, { 0x049A, 0x049B }, { 0x049C, 0x049D }, { 0x049E, 0x049F },
+    { 0x04A0, 0x04A1 }, { 0x04A2, 0x04A3 }, { 0x04A4, 0x04A5 }, { 0x04A6, 0x04A7 },
+    { 0x04A8, 0x04A9 }, { 0x04AA, 0x04AB }, { 0x04AC, 0x04AD }, { 0x04AE, 0x04AF },
+    { 0x04B0, 0x04B1 }, { 0x04B2, 0x04B3 }, { 0x04B4, 0x04B5 }, { 0x04B6, 0x04B7 },
+    { 0x04B8, 0x04B9 }, { 0x04BA, 0x04BB }, { 0x04BC, 0x04BD }, { 0x04BE, 0x04BF },
+    { 0x04C1, 0x04C2 }, { 0x04C3, 0x04C4 }, { 0x04C5, 0x04C6 }, { 0x04C7, 0x04C8 },
+    { 0x04C9, 0x04CA }, { 0x04CB, 0x04CC }, { 0x04CD, 0x04CE },
+    { 0x04D0, 0x04D1 }, { 0x04D2, 0x04D3 }, { 0x04D4, 0x04D5 }, { 0x04D6, 0x04D7 },
+    { 0x04D8, 0x04D9 }, { 0x04DA, 0x04DB }, { 0x04DC, 0x04DD }, { 0x04DE, 0x04DF },
+    { 0x04E0, 0x04E1 }, { 0x04E2, 0x04E3 }, { 0x04E4, 0x04E5 }, { 0x04E6, 0x04E7 },
+    { 0x04E8, 0x04E9 }, { 0x04EA, 0x04EB }, { 0x04EC, 0x04ED }, { 0x04EE, 0x04EF },
+    { 0x04F0, 0x04F1 }, { 0x04F2, 0x04F3 }, { 0x04F4, 0x04F5 }, { 0x04F6, 0x04F7 },
+    { 0x04F8, 0x04F9 },
+};
+
+static const struct { uint32_t from, to; } gorget_toupper_exceptions[] = {
+    // Latin Extended-A paired letters (lower → upper = -1)
+    { 0x0101, 0x0100 }, { 0x0103, 0x0102 }, { 0x0105, 0x0104 }, { 0x0107, 0x0106 },
+    { 0x0109, 0x0108 }, { 0x010B, 0x010A }, { 0x010D, 0x010C }, { 0x010F, 0x010E },
+    { 0x0111, 0x0110 }, { 0x0113, 0x0112 }, { 0x0115, 0x0114 }, { 0x0117, 0x0116 },
+    { 0x0119, 0x0118 }, { 0x011B, 0x011A }, { 0x011D, 0x011C }, { 0x011F, 0x011E },
+    { 0x0121, 0x0120 }, { 0x0123, 0x0122 }, { 0x0125, 0x0124 }, { 0x0127, 0x0126 },
+    { 0x0129, 0x0128 }, { 0x012B, 0x012A }, { 0x012D, 0x012C }, { 0x012F, 0x012E },
+    { 0x0131, 0x0049 }, // ı → I (Turkish dotless i)
+    { 0x0133, 0x0132 }, { 0x0135, 0x0134 }, { 0x0137, 0x0136 },
+    { 0x013A, 0x0139 }, { 0x013C, 0x013B }, { 0x013E, 0x013D }, { 0x0140, 0x013F },
+    { 0x0142, 0x0141 }, { 0x0144, 0x0143 }, { 0x0146, 0x0145 }, { 0x0148, 0x0147 },
+    { 0x014B, 0x014A }, { 0x014D, 0x014C }, { 0x014F, 0x014E }, { 0x0151, 0x0150 },
+    { 0x0153, 0x0152 }, { 0x0155, 0x0154 }, { 0x0157, 0x0156 }, { 0x0159, 0x0158 },
+    { 0x015B, 0x015A }, { 0x015D, 0x015C }, { 0x015F, 0x015E }, { 0x0161, 0x0160 },
+    { 0x0163, 0x0162 }, { 0x0165, 0x0164 }, { 0x0167, 0x0166 }, { 0x0169, 0x0168 },
+    { 0x016B, 0x016A }, { 0x016D, 0x016C }, { 0x016F, 0x016E }, { 0x0171, 0x0170 },
+    { 0x0173, 0x0172 }, { 0x0175, 0x0174 }, { 0x0177, 0x0176 },
+    { 0x00FF, 0x0178 }, // ÿ → Ÿ
+    { 0x017A, 0x0179 }, { 0x017C, 0x017B }, { 0x017E, 0x017D },
+    // Greek specials
+    { 0x03AC, 0x0386 }, // ά → Ά
+    { 0x03AD, 0x0388 }, // έ → Έ
+    { 0x03AE, 0x0389 }, // ή → Ή
+    { 0x03AF, 0x038A }, // ί → Ί
+    { 0x03CC, 0x038C }, // ό → Ό
+    { 0x03CD, 0x038E }, // ύ → Ύ
+    { 0x03CE, 0x038F }, // ώ → Ώ
+    { 0x03C2, 0x03A3 }, // ς (final sigma) → Σ
+    // Cyrillic specials (same pairs reversed)
+    { 0x0461, 0x0460 }, { 0x0463, 0x0462 }, { 0x0465, 0x0464 }, { 0x0467, 0x0466 },
+    { 0x0469, 0x0468 }, { 0x046B, 0x046A }, { 0x046D, 0x046C }, { 0x046F, 0x046E },
+    { 0x0471, 0x0470 }, { 0x0473, 0x0472 }, { 0x0475, 0x0474 }, { 0x0477, 0x0476 },
+    { 0x0479, 0x0478 }, { 0x047B, 0x047A }, { 0x047D, 0x047C }, { 0x047F, 0x047E },
+    { 0x0481, 0x0480 },
+    { 0x048B, 0x048A }, { 0x048D, 0x048C }, { 0x048F, 0x048E },
+    { 0x0491, 0x0490 }, { 0x0493, 0x0492 }, { 0x0495, 0x0494 }, { 0x0497, 0x0496 },
+    { 0x0499, 0x0498 }, { 0x049B, 0x049A }, { 0x049D, 0x049C }, { 0x049F, 0x049E },
+    { 0x04A1, 0x04A0 }, { 0x04A3, 0x04A2 }, { 0x04A5, 0x04A4 }, { 0x04A7, 0x04A6 },
+    { 0x04A9, 0x04A8 }, { 0x04AB, 0x04AA }, { 0x04AD, 0x04AC }, { 0x04AF, 0x04AE },
+    { 0x04B1, 0x04B0 }, { 0x04B3, 0x04B2 }, { 0x04B5, 0x04B4 }, { 0x04B7, 0x04B6 },
+    { 0x04B9, 0x04B8 }, { 0x04BB, 0x04BA }, { 0x04BD, 0x04BC }, { 0x04BF, 0x04BE },
+    { 0x04C2, 0x04C1 }, { 0x04C4, 0x04C3 }, { 0x04C6, 0x04C5 }, { 0x04C8, 0x04C7 },
+    { 0x04CA, 0x04C9 }, { 0x04CC, 0x04CB }, { 0x04CE, 0x04CD },
+    { 0x04D1, 0x04D0 }, { 0x04D3, 0x04D2 }, { 0x04D5, 0x04D4 }, { 0x04D7, 0x04D6 },
+    { 0x04D9, 0x04D8 }, { 0x04DB, 0x04DA }, { 0x04DD, 0x04DC }, { 0x04DF, 0x04DE },
+    { 0x04E1, 0x04E0 }, { 0x04E3, 0x04E2 }, { 0x04E5, 0x04E4 }, { 0x04E7, 0x04E6 },
+    { 0x04E9, 0x04E8 }, { 0x04EB, 0x04EA }, { 0x04ED, 0x04EC }, { 0x04EF, 0x04EE },
+    { 0x04F1, 0x04F0 }, { 0x04F3, 0x04F2 }, { 0x04F5, 0x04F4 }, { 0x04F7, 0x04F6 },
+    { 0x04F9, 0x04F8 },
+};
+
+static inline int64_t gorget_unicode_tolower(int64_t cp) {
+    uint32_t u = (uint32_t)cp;
+    // Check range tables first
+    for (size_t i = 0; i < sizeof(gorget_tolower_ranges)/sizeof(gorget_tolower_ranges[0]); i++) {
+        if (u >= gorget_tolower_ranges[i].lo && u <= gorget_tolower_ranges[i].hi)
+            return cp + gorget_tolower_ranges[i].delta;
+    }
+    // Check exception table
+    for (size_t i = 0; i < sizeof(gorget_tolower_exceptions)/sizeof(gorget_tolower_exceptions[0]); i++) {
+        if (u == gorget_tolower_exceptions[i].from)
+            return (int64_t)gorget_tolower_exceptions[i].to;
+    }
+    return cp;
+}
+
+static inline int64_t gorget_unicode_toupper(int64_t cp) {
+    uint32_t u = (uint32_t)cp;
+    // Check range tables first
+    for (size_t i = 0; i < sizeof(gorget_toupper_ranges)/sizeof(gorget_toupper_ranges[0]); i++) {
+        if (u >= gorget_toupper_ranges[i].lo && u <= gorget_toupper_ranges[i].hi)
+            return cp + gorget_toupper_ranges[i].delta;
+    }
+    // Check exception table
+    for (size_t i = 0; i < sizeof(gorget_toupper_exceptions)/sizeof(gorget_toupper_exceptions[0]); i++) {
+        if (u == gorget_toupper_exceptions[i].from)
+            return (int64_t)gorget_toupper_exceptions[i].to;
+    }
+    return cp;
+}
+
+// ── Unicode whitespace predicate ─────────────────────────────
+// All 25 Unicode whitespace codepoints (Zs category + control chars).
+static inline bool gorget_is_unicode_whitespace(int64_t cp) {
+    if (cp <= 0x20) return cp == 0x09 || cp == 0x0A || cp == 0x0B || cp == 0x0C || cp == 0x0D || cp == 0x20;
+    if (cp == 0x85 || cp == 0xA0) return true;
+    if (cp == 0x1680) return true;
+    if (cp >= 0x2000 && cp <= 0x200A) return true;
+    if (cp == 0x2028 || cp == 0x2029) return true;
+    if (cp == 0x202F || cp == 0x205F) return true;
+    if (cp == 0x3000) return true;
+    return false;
+}
+
+// ── Str-native search primitives ─────────────────────────────
+// memmem implementation (always available, no _GNU_SOURCE dependency)
+static inline const char* gorget_memmem(const char* h, size_t hlen, const char* n, size_t nlen) {
+    if (nlen == 0) return h;
+    if (nlen > hlen) return NULL;
+    const char first = n[0];
+    const char* end = h + hlen - nlen + 1;
+    for (const char* p = h; p < end; p++) {
+        p = (const char*)memchr(p, first, (size_t)(end - p));
+        if (!p) return NULL;
+        if (memcmp(p, n, nlen) == 0) return p;
+    }
+    return NULL;
+}
+
+static inline bool gorget_str_contains(Str s, Str needle) {
+    return gorget_memmem(s.data, s.len, needle.data, needle.len) != NULL;
+}
+
+static inline bool gorget_str_starts_with(Str s, Str prefix) {
+    if (prefix.len > s.len) return false;
+    return memcmp(s.data, prefix.data, prefix.len) == 0;
+}
+
+static inline bool gorget_str_ends_with(Str s, Str suffix) {
+    if (suffix.len > s.len) return false;
+    return memcmp(s.data + s.len - suffix.len, suffix.data, suffix.len) == 0;
+}
+
+// Returns byte offset of needle in s, or -1 if not found.
+static inline int64_t gorget_str_find(Str s, Str needle) {
+    const char* p = gorget_memmem(s.data, s.len, needle.data, needle.len);
+    if (!p) return -1;
+    return (int64_t)(p - s.data);
+}
+
+// ── Str-native string methods ────────────────────────────────
+// Group A: View returns (no allocation) — return Str views into the original data.
+
+static inline Str gorget_str_trim(Str s) {
+    // Skip leading whitespace
+    size_t start = 0;
+    while (start < s.len) {
+        size_t pos = start;
+        int64_t cp = gorget_utf8_decode(s.data, s.len, &pos);
+        if (!gorget_is_unicode_whitespace(cp)) break;
+        start = pos;
+    }
+    // Skip trailing whitespace — walk forward, track last non-ws end
+    size_t end = start;
+    size_t pos = start;
+    while (pos < s.len) {
+        size_t cp_start = pos;
+        int64_t cp = gorget_utf8_decode(s.data, s.len, &pos);
+        if (!gorget_is_unicode_whitespace(cp)) end = pos;
+        (void)cp_start;
+    }
+    return (Str){ .data = s.data + start, .len = end - start };
+}
+
+static inline Str gorget_str_lstrip_ws(Str s) {
+    size_t start = 0;
+    while (start < s.len) {
+        size_t pos = start;
+        int64_t cp = gorget_utf8_decode(s.data, s.len, &pos);
+        if (!gorget_is_unicode_whitespace(cp)) break;
+        start = pos;
+    }
+    return (Str){ .data = s.data + start, .len = s.len - start };
+}
+
+static inline Str gorget_str_rstrip_ws(Str s) {
+    size_t end = 0;
+    size_t pos = 0;
+    while (pos < s.len) {
+        size_t cp_start = pos;
+        int64_t cp = gorget_utf8_decode(s.data, s.len, &pos);
+        if (!gorget_is_unicode_whitespace(cp)) end = pos;
+        (void)cp_start;
+    }
+    return (Str){ .data = s.data, .len = end };
+}
+
+// Check if a codepoint is in a set of codepoints given as a Str.
+static inline bool gorget_cp_in_str(int64_t cp, Str chars) {
+    size_t pos = 0;
+    while (pos < chars.len) {
+        int64_t c = gorget_utf8_decode(chars.data, chars.len, &pos);
+        if (c == cp) return true;
+    }
+    return false;
+}
+
+static inline Str gorget_str_strip(Str s, Str chars) {
+    size_t start = 0;
+    while (start < s.len) {
+        size_t pos = start;
+        int64_t cp = gorget_utf8_decode(s.data, s.len, &pos);
+        if (!gorget_cp_in_str(cp, chars)) break;
+        start = pos;
+    }
+    size_t end = start;
+    size_t pos = start;
+    while (pos < s.len) {
+        size_t cp_start = pos;
+        int64_t cp = gorget_utf8_decode(s.data, s.len, &pos);
+        if (!gorget_cp_in_str(cp, chars)) end = pos;
+        (void)cp_start;
+    }
+    return (Str){ .data = s.data + start, .len = end - start };
+}
+
+static inline Str gorget_str_lstrip(Str s, Str chars) {
+    size_t start = 0;
+    while (start < s.len) {
+        size_t pos = start;
+        int64_t cp = gorget_utf8_decode(s.data, s.len, &pos);
+        if (!gorget_cp_in_str(cp, chars)) break;
+        start = pos;
+    }
+    return (Str){ .data = s.data + start, .len = s.len - start };
+}
+
+static inline Str gorget_str_rstrip(Str s, Str chars) {
+    size_t end = 0;
+    size_t pos = 0;
+    while (pos < s.len) {
+        size_t cp_start = pos;
+        int64_t cp = gorget_utf8_decode(s.data, s.len, &pos);
+        if (!gorget_cp_in_str(cp, chars)) end = pos;
+        (void)cp_start;
+    }
+    return (Str){ .data = s.data, .len = end };
+}
+
+static inline Str gorget_str_removeprefix(Str s, Str prefix) {
+    if (gorget_str_starts_with(s, prefix))
+        return (Str){ .data = s.data + prefix.len, .len = s.len - prefix.len };
+    return s;
+}
+
+static inline Str gorget_str_removesuffix(Str s, Str suffix) {
+    if (gorget_str_ends_with(s, suffix))
+        return (Str){ .data = s.data, .len = s.len - suffix.len };
+    return s;
+}
+
+// Group B: Allocating returns — return GorgetString.
+
+static inline GorgetString gorget_str_to_upper(Str s) {
+    // Worst case: each byte could become 4 bytes (but realistically ~1:1 for BMP)
+    GorgetAllocator* al = __gorget_current_alloc;
+    size_t cap = s.len * 2 + 1; // 2x is generous for Latin/Greek/Cyrillic
+    char* out = (char*)al->alloc(al->ctx, cap);
+    size_t out_len = 0;
+    size_t pos = 0;
+    while (pos < s.len) {
+        int64_t cp = gorget_utf8_decode(s.data, s.len, &pos);
+        int64_t upper = gorget_unicode_toupper(cp);
+        if (out_len + 4 >= cap) {
+            size_t old_cap = cap;
+            cap = cap * 2;
+            out = (char*)al->realloc(al->ctx, out, old_cap, cap);
+        }
+        out_len += (size_t)gorget_utf8_encode(upper, out + out_len);
+    }
+    out[out_len] = '\0';
+    return (GorgetString){ out, out_len, cap, al };
+}
+
+static inline GorgetString gorget_str_to_lower(Str s) {
+    GorgetAllocator* al = __gorget_current_alloc;
+    size_t cap = s.len * 2 + 1;
+    char* out = (char*)al->alloc(al->ctx, cap);
+    size_t out_len = 0;
+    size_t pos = 0;
+    while (pos < s.len) {
+        int64_t cp = gorget_utf8_decode(s.data, s.len, &pos);
+        int64_t lower = gorget_unicode_tolower(cp);
+        if (out_len + 4 >= cap) {
+            size_t old_cap = cap;
+            cap = cap * 2;
+            out = (char*)al->realloc(al->ctx, out, old_cap, cap);
+        }
+        out_len += (size_t)gorget_utf8_encode(lower, out + out_len);
+    }
+    out[out_len] = '\0';
+    return (GorgetString){ out, out_len, cap, al };
+}
+
+static inline GorgetString gorget_str_replace(Str s, Str old, Str new_s) {
+    GorgetAllocator* al = __gorget_current_alloc;
+    if (old.len == 0) {
+        // Empty pattern — return copy of input
+        char* out = (char*)al->alloc(al->ctx, s.len + 1);
+        if (s.len > 0) memcpy(out, s.data, s.len);
+        out[s.len] = '\0';
+        return (GorgetString){ out, s.len, s.len + 1, al };
+    }
+    // Count occurrences
+    size_t count = 0;
+    const char* p = s.data;
+    size_t remaining = s.len;
+    while (remaining >= old.len) {
+        const char* found = gorget_memmem(p, remaining, old.data, old.len);
+        if (!found) break;
+        count++;
+        size_t skip = (size_t)(found - p) + old.len;
+        p += skip;
+        remaining -= skip;
+    }
+    // Build result
+    size_t result_len = s.len + count * (new_s.len > old.len ? new_s.len - old.len : 0)
+                              - count * (old.len > new_s.len ? old.len - new_s.len : 0);
+    size_t cap = result_len + 1;
+    char* out = (char*)al->alloc(al->ctx, cap);
+    char* dst = out;
+    p = s.data;
+    remaining = s.len;
+    while (remaining >= old.len) {
+        const char* found = gorget_memmem(p, remaining, old.data, old.len);
+        if (!found) break;
+        size_t chunk = (size_t)(found - p);
+        if (chunk > 0) memcpy(dst, p, chunk);
+        dst += chunk;
+        if (new_s.len > 0) memcpy(dst, new_s.data, new_s.len);
+        dst += new_s.len;
+        size_t skip = chunk + old.len;
+        p += skip;
+        remaining -= skip;
+    }
+    // Copy remainder
+    if (remaining > 0) memcpy(dst, p, remaining);
+    dst += remaining;
+    *dst = '\0';
+    return (GorgetString){ out, (size_t)(dst - out), cap, al };
+}
+
+static inline GorgetString gorget_str_repeat(Str s, int64_t n) {
+    GorgetAllocator* al = __gorget_current_alloc;
+    if (n <= 0 || s.len == 0) {
+        char* empty = (char*)al->alloc(al->ctx, 1);
+        empty[0] = '\0';
+        return (GorgetString){ empty, 0, 1, al };
+    }
+    size_t total = s.len * (size_t)n;
+    size_t cap = total + 1;
+    char* out = (char*)al->alloc(al->ctx, cap);
+    for (int64_t i = 0; i < n; i++) {
+        memcpy(out + (size_t)i * s.len, s.data, s.len);
+    }
+    out[total] = '\0';
+    return (GorgetString){ out, total, cap, al };
+}
+
+static inline GorgetString gorget_str_pad_left(Str s, int64_t width, char fill) {
+    GorgetAllocator* al = __gorget_current_alloc;
+    int64_t cp_count = gorget_str_codepoint_count(s);
+    if (cp_count >= width) {
+        // No padding needed — return copy
+        size_t cap = s.len + 1;
+        char* out = (char*)al->alloc(al->ctx, cap);
+        if (s.len > 0) memcpy(out, s.data, s.len);
+        out[s.len] = '\0';
+        return (GorgetString){ out, s.len, cap, al };
+    }
+    size_t pad = (size_t)(width - cp_count);
+    size_t cap = pad + s.len + 1;
+    char* out = (char*)al->alloc(al->ctx, cap);
+    memset(out, fill, pad);
+    if (s.len > 0) memcpy(out + pad, s.data, s.len);
+    out[pad + s.len] = '\0';
+    return (GorgetString){ out, pad + s.len, cap, al };
+}
+
+static inline GorgetString gorget_str_pad_right(Str s, int64_t width, char fill) {
+    GorgetAllocator* al = __gorget_current_alloc;
+    int64_t cp_count = gorget_str_codepoint_count(s);
+    if (cp_count >= width) {
+        size_t cap = s.len + 1;
+        char* out = (char*)al->alloc(al->ctx, cap);
+        if (s.len > 0) memcpy(out, s.data, s.len);
+        out[s.len] = '\0';
+        return (GorgetString){ out, s.len, cap, al };
+    }
+    size_t pad = (size_t)(width - cp_count);
+    size_t cap = s.len + pad + 1;
+    char* out = (char*)al->alloc(al->ctx, cap);
+    if (s.len > 0) memcpy(out, s.data, s.len);
+    memset(out + s.len, fill, pad);
+    out[s.len + pad] = '\0';
+    return (GorgetString){ out, s.len + pad, cap, al };
+}
+
+// Group C: Non-string returns.
+
+// Returns codepoint index of needle in s, or -1 if not found.
+static inline int64_t gorget_str_index_of(Str s, Str needle) {
+    int64_t byte_off = gorget_str_find(s, needle);
+    if (byte_off < 0) return -1;
+    // Convert byte offset to codepoint index
+    int64_t cp_idx = 0;
+    size_t pos = 0;
+    while (pos < (size_t)byte_off) {
+        pos += (size_t)gorget_utf8_codepoint_len((unsigned char)s.data[pos]);
+        cp_idx++;
+    }
+    return cp_idx;
+}
+
+static inline int64_t gorget_str_count(Str s, Str needle) {
+    if (needle.len == 0) return 0;
+    int64_t count = 0;
+    const char* p = s.data;
+    size_t remaining = s.len;
+    while (remaining >= needle.len) {
+        const char* found = gorget_memmem(p, remaining, needle.data, needle.len);
+        if (!found) break;
+        count++;
+        size_t skip = (size_t)(found - p) + needle.len;
+        p += skip;
+        remaining -= skip;
+    }
+    return count;
+}
+
 // ── Str-aware GorgetString operations ───────────────────────
 
 // Str-aware concatenation (handles non-null-terminated views).
@@ -1094,6 +1639,21 @@ static inline void gorget_string_append_str(GorgetString* s, Str rhs) {
     if (rhs.len > 0) memcpy(s->data + s->len, rhs.data, rhs.len);
     s->data[new_len] = '\0';
     s->len = new_len;
+}
+
+// Create a GorgetString from a Str view (copies len bytes, safe for non-null-terminated views).
+static inline GorgetString gorget_string_from_str(Str s) {
+    GorgetAllocator* a = __gorget_current_alloc;
+    if (s.len == 0) {
+        char* data = (char*)a->alloc(a->ctx, 1);
+        data[0] = '\0';
+        return (GorgetString){data, 0, 1, a};
+    }
+    size_t cap = s.len + 1;
+    char* data = (char*)a->alloc(a->ctx, cap);
+    memcpy(data, s.data, s.len);
+    data[s.len] = '\0';
+    return (GorgetString){data, s.len, cap, a};
 }
 
 // ── cstr ↔ Str conversion ───────────────────────────────────
@@ -1701,37 +2261,34 @@ static inline GorgetArray gorget_array_slice(const GorgetArray* arr, int64_t sta
     return result;
 }
 
-static inline GorgetArray gorget_string_split(const char* s, const char* delim) {
+static inline GorgetArray gorget_str_split(Str s, Str delim) {
     GorgetArray arr = gorget_array_new(sizeof(Str));
-    size_t dlen = strlen(delim);
-    if (dlen == 0) {
-        size_t slen = strlen(s);
-        for (size_t i = 0; i < slen; i++) {
-            char* ch = (char*)GORGET_ALLOC(2);
-            ch[0] = s[i]; ch[1] = '\0';
-            Str sv = { .data = ch, .len = 1 };
+    if (delim.len == 0) {
+        // Split into individual codepoints
+        size_t pos = 0;
+        while (pos < s.len) {
+            size_t cp_len = (size_t)gorget_utf8_codepoint_len((unsigned char)s.data[pos]);
+            Str sv = { .data = s.data + pos, .len = cp_len };
             gorget_array_push(&arr, &sv);
+            pos += cp_len;
         }
         return arr;
     }
-    const char* p = s;
+    const char* p = s.data;
+    size_t remaining = s.len;
     while (1) {
-        const char* found = strstr(p, delim);
+        const char* found = gorget_memmem(p, remaining, delim.data, delim.len);
         if (!found) {
-            size_t rem = strlen(p);
-            char* part = (char*)GORGET_ALLOC(rem + 1);
-            memcpy(part, p, rem + 1);
-            Str sv = { .data = part, .len = rem };
+            Str sv = { .data = p, .len = remaining };
             gorget_array_push(&arr, &sv);
             break;
         }
         size_t chunk = (size_t)(found - p);
-        char* part = (char*)GORGET_ALLOC(chunk + 1);
-        memcpy(part, p, chunk);
-        part[chunk] = '\0';
-        Str sv = { .data = part, .len = chunk };
+        Str sv = { .data = p, .len = chunk };
         gorget_array_push(&arr, &sv);
-        p = found + dlen;
+        size_t skip = chunk + delim.len;
+        p += skip;
+        remaining -= skip;
     }
     return arr;
 }
@@ -1740,33 +2297,34 @@ static inline GorgetArray gorget_string_split(const char* s, const char* delim) 
 #define GORGET_ARRAY_AT(type, arr, i) (*(type*)gorget_array_get(&(arr), (i)))
 
 // ── String join (needs GorgetArray) ─────────────────────────
-static inline const char* gorget_string_join(const char* sep, GorgetArray parts) {
+static inline GorgetString gorget_str_join(Str sep, GorgetArray parts) {
+    GorgetAllocator* al = __gorget_current_alloc;
     if (parts.len == 0) {
-        char* empty = (char*)GORGET_ALLOC(1);
+        char* empty = (char*)al->alloc(al->ctx, 1);
         empty[0] = '\0';
-        return empty;
+        return (GorgetString){ empty, 0, 1, al };
     }
-    size_t sep_len = strlen(sep);
+    // Elements are Str structs
     size_t total = 0;
     for (size_t i = 0; i < parts.len; i++) {
-        const char* part = *(const char**)((char*)parts.data + i * parts.elem_size);
-        total += strlen(part);
+        Str* part = (Str*)((char*)parts.data + i * parts.elem_size);
+        total += part->len;
     }
-    total += sep_len * (parts.len - 1);
-    char* result = (char*)GORGET_ALLOC(total + 1);
+    total += sep.len * (parts.len - 1);
+    size_t cap = total + 1;
+    char* result = (char*)al->alloc(al->ctx, cap);
     char* dst = result;
     for (size_t i = 0; i < parts.len; i++) {
-        if (i > 0) {
-            memcpy(dst, sep, sep_len);
-            dst += sep_len;
+        if (i > 0 && sep.len > 0) {
+            memcpy(dst, sep.data, sep.len);
+            dst += sep.len;
         }
-        const char* part = *(const char**)((char*)parts.data + i * parts.elem_size);
-        size_t plen = strlen(part);
-        memcpy(dst, part, plen);
-        dst += plen;
+        Str* part = (Str*)((char*)parts.data + i * parts.elem_size);
+        if (part->len > 0) memcpy(dst, part->data, part->len);
+        dst += part->len;
     }
     *dst = '\0';
-    return result;
+    return (GorgetString){ result, total, cap, al };
 }
 
 // ── GorgetMap (open-addressing hash map) ─────────────────────

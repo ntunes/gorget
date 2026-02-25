@@ -2426,26 +2426,33 @@ The following methods are available on built-in types without any import.
 | `contains(needle)` | `str → bool` | True if `needle` is a substring |
 | `starts_with(prefix)` | `str → bool` | True if string starts with `prefix` |
 | `ends_with(suffix)` | `str → bool` | True if string ends with `suffix` |
-| `index_of(needle)` | `str → Option[int]` | Offset of first occurrence (`None` if not found) |
+| `index_of(needle)` | `str → Option[int]` | Codepoint index of first occurrence (`None` if not found) |
 | `count(needle)` | `str → int` | Number of non-overlapping occurrences |
 | `char_at(index)` | `int → char` | Byte at byte index (panics if out of bounds; for parser/codec use) |
 | `byte_slice(start, end)` | `int, int → str` | Byte-range substring view (O(1), for parser/codec use) |
-| `substring(start, end)` | `int, int → str` | Substring from `start` to `end` (panics if out of bounds) |
-| `trim()` | `→ str` | Strip leading and trailing whitespace |
-| `strip(chars?)` | `str? → str` | Strip chars (or whitespace) from both ends |
-| `lstrip(chars?)` | `str? → str` | Strip chars (or whitespace) from left |
-| `rstrip(chars?)` | `str? → str` | Strip chars (or whitespace) from right |
-| `to_upper()` | `→ str` | Convert to uppercase |
-| `to_lower()` | `→ str` | Convert to lowercase |
-| `replace(old, new)` | `str, str → str` | Replace all occurrences of `old` with `new` |
+| `substring(start, end)` | `int, int → String` | Substring from `start` to `end` (panics if out of bounds) |
+| `trim()` | `→ str` | Strip leading/trailing Unicode whitespace (view, no allocation) |
+| `strip(chars?)` | `str? → str` | Strip codepoints (or whitespace) from both ends (view) |
+| `lstrip(chars?)` | `str? → str` | Strip codepoints (or whitespace) from left (view) |
+| `rstrip(chars?)` | `str? → str` | Strip codepoints (or whitespace) from right (view) |
+| `to_upper()` | `→ String` | Unicode-aware uppercase (Latin/Greek/Cyrillic) |
+| `to_lower()` | `→ String` | Unicode-aware lowercase (Latin/Greek/Cyrillic) |
+| `replace(old, new)` | `str, str → String` | Replace all occurrences of `old` with `new` |
 | `split(delim)` | `str → Vector[str]` | Split into parts by delimiter |
-| `join(parts)` | `Vector[str] → str` | Join strings with receiver as separator |
-| `repeat(n)` | `int → str` | Repeat string `n` times |
-| `removeprefix(prefix)` | `str → str` | Remove `prefix` if present, otherwise return unchanged |
-| `removesuffix(suffix)` | `str → str` | Remove `suffix` if present, otherwise return unchanged |
-| `pad_left(n, char)` | `int, char → str` | Left-pad to width `n` with fill character |
-| `pad_right(n, char)` | `int, char → str` | Right-pad to width `n` with fill character |
+| `join(parts)` | `Vector[str] → String` | Join strings with receiver as separator |
+| `repeat(n)` | `int → String` | Repeat string `n` times |
+| `removeprefix(prefix)` | `str → str` | Remove `prefix` if present, otherwise return unchanged (view) |
+| `removesuffix(suffix)` | `str → str` | Remove `suffix` if present, otherwise return unchanged (view) |
+| `pad_left(n, char)` | `int, char → String` | Left-pad to width `n` with fill character |
+| `pad_right(n, char)` | `int, char → String` | Right-pad to width `n` with fill character |
 | `hash()` | `→ int` | Hash value |
+
+**Unicode support scope:**
+- `to_upper()`/`to_lower()` handle 1:1 simple case mappings for Latin (U+0000–024F), Greek (U+0370–03FF), and Cyrillic (U+0400–04FF). Locale-dependent mappings (e.g., Turkish İ/ı) and one-to-many mappings (e.g., ß→SS) are not yet supported.
+- `trim()`/`strip()`/`lstrip()`/`rstrip()` recognize all 25 Unicode whitespace codepoints (Unicode Zs category + control chars: HT, LF, VT, FF, CR, SP, NBSP, OGHAM, EN/EM spaces, etc.).
+- `index_of()` returns a **codepoint index**, not a byte offset.
+- All search methods (`contains`, `starts_with`, `ends_with`, `index_of`, `count`, `replace`, `split`) are safe on non-null-terminated `str` views (from `byte_slice()`, `s[i..j]`).
+- **Deferred**: grapheme cluster segmentation, Unicode normalization (NFC/NFD), locale-dependent case mappings.
 
 **String indexing, slicing, and iteration** operate at the Unicode codepoint level:
 
