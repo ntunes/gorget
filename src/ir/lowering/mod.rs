@@ -49,6 +49,33 @@ pub fn lower_module(
         }
     }
 
+    // Register runtime types needed by expression lowering
+    // GorgetArray: opaque runtime array (element_size, data, len, cap)
+    {
+        let array_type_id = module.type_registry.insert(GirType::Named("GorgetArray".to_string()));
+        type_mapper.register_named("GorgetArray".to_string(), array_type_id);
+    }
+    // GorgetRange: standalone range value (start, end, inclusive)
+    {
+        let range_def = TypeDef {
+            name: "GorgetRange".to_string(),
+            kind: TypeDefKind::Struct(StructDef {
+                fields: vec![
+                    StructField { name: "start".to_string(), type_id: I64_TYPE },
+                    StructField { name: "end".to_string(), type_id: I64_TYPE },
+                    StructField { name: "inclusive".to_string(), type_id: BOOL_TYPE },
+                ],
+            }),
+            metadata: TypeMetadata {
+                copy_semantics: CopySemantics::Copy,
+                ..TypeMetadata::default()
+            },
+        };
+        module.type_registry.add_type_def(range_def);
+        let range_type_id = module.type_registry.insert(GirType::Named("GorgetRange".to_string()));
+        type_mapper.register_named("GorgetRange".to_string(), range_type_id);
+    }
+
     // P2.3: Generic monomorphization — collect templates, discover usages, monomorphize
     let mut generic_collector = GenericCollector::new();
     generic_collector.collect_templates(ast_module);

@@ -8,6 +8,8 @@ use crate::span::Spanned;
 pub struct TypeMapper {
     /// `str` maps to `Ptr(U8)` in GIR (Phase 1 compat) — will be Named("Str") later.
     pub str_type: TypeId,
+    /// `String` (owned) maps to Named("GorgetString") for string interpolation results.
+    pub owned_string_type: TypeId,
     /// Cache of Named type → GIR TypeId.
     pub named_types: FxHashMap<String, TypeId>,
 }
@@ -15,8 +17,10 @@ pub struct TypeMapper {
 impl TypeMapper {
     pub fn new(registry: &mut TypeRegistry) -> Self {
         let str_type = registry.insert(GirType::Ptr(U8_TYPE));
+        let owned_string_type = registry.insert(GirType::Named("GorgetString".to_string()));
         Self {
             str_type,
+            owned_string_type,
             named_types: FxHashMap::default(),
         }
     }
@@ -154,7 +158,7 @@ impl TypeMapper {
             "%.17g"
         } else if type_id == BOOL_TYPE {
             "%s"
-        } else if type_id == self.str_type {
+        } else if type_id == self.str_type || type_id == self.owned_string_type {
             "%s"
         } else {
             "%lld" // fallback

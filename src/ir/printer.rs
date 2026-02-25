@@ -604,6 +604,7 @@ fn format_constant(c: &Constant) -> String {
         Constant::Str(s) => format!("\"{}\"", s),
         Constant::Null => "null".into(),
         Constant::Unit => "unit".into(),
+        Constant::SizeOf(type_id) => format!("sizeof(Type{})", type_id.0),
     }
 }
 

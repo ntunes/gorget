@@ -842,6 +842,10 @@ fn format_constant(constant: &Constant, _func: &Function, _registry: &TypeRegist
         Constant::Str(s) => format!("\"{}\"", escape_c_string(s)),
         Constant::Null => "NULL".to_string(),
         Constant::Unit => "/* unit */".to_string(),
+        Constant::SizeOf(type_id) => {
+            let c_type = format_type(*type_id, _registry);
+            format!("sizeof({c_type})")
+        }
     }
 }
 

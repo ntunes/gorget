@@ -62,6 +62,8 @@ pub enum Constant {
     Str(String),
     Null,
     Unit,
+    /// sizeof(type) — emitted as `sizeof(C_type_name)` by the C backend.
+    SizeOf(TypeId),
 }
 
 /// Instructions that don't transfer control flow.
