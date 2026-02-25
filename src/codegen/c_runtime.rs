@@ -865,6 +865,201 @@ static inline const char* gorget_string_repeat(const char* s, int64_t n) {
     return result;
 }
 
+// ── Str (UTF-8 immutable view) ──────────────────────────────
+// Forward declaration — defined in the panic handler section.
+static void gorget_panic(const char* msg);
+
+typedef struct {
+    const char* data;
+    size_t len;           // byte length (NOT codepoint count)
+} Str;
+
+static inline Str gorget_str_from_literal(const char* data, size_t len) {
+    return (Str){ .data = data, .len = len };
+}
+
+static inline Str gorget_str_from_cstr(const char* s) {
+    if (s == NULL) return (Str){ .data = NULL, .len = 0 };
+    return (Str){ .data = s, .len = strlen(s) };
+}
+
+static inline Str gorget_str_empty(void) {
+    return (Str){ .data = "", .len = 0 };
+}
+
+// ── Str field access + comparison ───────────────────────────
+static inline size_t gorget_str_byte_len(Str s) { return s.len; }
+static inline bool gorget_str_is_empty(Str s) { return s.len == 0; }
+
+static inline bool gorget_str_eq(Str a, Str b) {
+    if (a.len != b.len) return false;
+    if (a.len == 0) return true;
+    return memcmp(a.data, b.data, a.len) == 0;
+}
+
+static inline int gorget_str_cmp(Str a, Str b) {
+    size_t min_len = a.len < b.len ? a.len : b.len;
+    int r = min_len > 0 ? memcmp(a.data, b.data, min_len) : 0;
+    if (r != 0) return r;
+    if (a.len < b.len) return -1;
+    if (a.len > b.len) return 1;
+    return 0;
+}
+
+// ── UTF-8 utilities ─────────────────────────────────────────
+// Byte count for a UTF-8 codepoint from its first byte (1-4, or 1 for invalid)
+static inline int gorget_utf8_codepoint_len(unsigned char b) {
+    if (b < 0x80) return 1;
+    if ((b & 0xE0) == 0xC0) return 2;
+    if ((b & 0xF0) == 0xE0) return 3;
+    if ((b & 0xF8) == 0xF0) return 4;
+    return 1;  // invalid lead byte — treat as single byte to advance
+}
+
+// Decode one codepoint starting at data[*pos]. Advances *pos past it.
+// Returns the Unicode codepoint value, or 0xFFFD (replacement char) on error.
+static inline int64_t gorget_utf8_decode(const char* data, size_t len, size_t* pos) {
+    if (*pos >= len) return 0xFFFD;
+    unsigned char b0 = (unsigned char)data[*pos];
+
+    if (b0 < 0x80) {
+        (*pos)++;
+        return (int64_t)b0;
+    }
+
+    int expected;
+    int64_t cp;
+    if ((b0 & 0xE0) == 0xC0) {
+        expected = 2; cp = b0 & 0x1F;
+    } else if ((b0 & 0xF0) == 0xE0) {
+        expected = 3; cp = b0 & 0x0F;
+    } else if ((b0 & 0xF8) == 0xF0) {
+        expected = 4; cp = b0 & 0x07;
+    } else {
+        // Invalid lead byte
+        (*pos)++;
+        return 0xFFFD;
+    }
+
+    if (*pos + (size_t)expected > len) {
+        // Truncated sequence
+        (*pos)++;
+        return 0xFFFD;
+    }
+
+    for (int i = 1; i < expected; i++) {
+        unsigned char cb = (unsigned char)data[*pos + (size_t)i];
+        if ((cb & 0xC0) != 0x80) {
+            // Invalid continuation byte
+            (*pos)++;
+            return 0xFFFD;
+        }
+        cp = (cp << 6) | (cb & 0x3F);
+    }
+
+    *pos += (size_t)expected;
+
+    // Reject overlong encodings
+    if (expected == 2 && cp < 0x80) return 0xFFFD;
+    if (expected == 3 && cp < 0x800) return 0xFFFD;
+    if (expected == 4 && cp < 0x10000) return 0xFFFD;
+
+    // Reject surrogates and values > U+10FFFF
+    if (cp >= 0xD800 && cp <= 0xDFFF) return 0xFFFD;
+    if (cp > 0x10FFFF) return 0xFFFD;
+
+    return cp;
+}
+
+// Validate entire byte sequence as valid UTF-8.
+static inline bool gorget_utf8_validate(const char* data, size_t len) {
+    size_t pos = 0;
+    while (pos < len) {
+        size_t saved = pos;
+        int64_t cp = gorget_utf8_decode(data, len, &pos);
+        if (cp == 0xFFFD && (pos - saved != 1 || (unsigned char)data[saved] != 0xFD)) {
+            // Got replacement char and it wasn't from a literal 0xFD byte at ASCII
+            // Actually, 0xFFFD is only a valid decode for the actual byte 0xEF 0xBF 0xBD
+            // Simpler: if decode returned 0xFFFD, check if source bytes actually encode U+FFFD
+            if (saved + 3 <= len &&
+                (unsigned char)data[saved] == 0xEF &&
+                (unsigned char)data[saved + 1] == 0xBF &&
+                (unsigned char)data[saved + 2] == 0xBD) {
+                continue;  // Legitimate U+FFFD in input
+            }
+            return false;
+        }
+    }
+    return true;
+}
+
+// ── Codepoint-level Str operations ──────────────────────────
+// Count codepoints — O(n) UTF-8 walk
+static inline int64_t gorget_str_codepoint_count(Str s) {
+    int64_t count = 0;
+    size_t i = 0;
+    while (i < s.len) {
+        i += (size_t)gorget_utf8_codepoint_len((unsigned char)s.data[i]);
+        count++;
+    }
+    return count;
+}
+
+// Return Str view of ith codepoint (0-based). Supports negative indexing.
+static inline Str gorget_str_index(Str s, int64_t idx) {
+    int64_t cp_count = gorget_str_codepoint_count(s);
+    if (idx < 0) idx += cp_count;
+    if (idx < 0 || idx >= cp_count) {
+        gorget_panic("str index out of bounds");
+    }
+    size_t byte_off = 0;
+    int64_t i = 0;
+    while (i < idx) {
+        byte_off += (size_t)gorget_utf8_codepoint_len((unsigned char)s.data[byte_off]);
+        i++;
+    }
+    int cplen = gorget_utf8_codepoint_len((unsigned char)s.data[byte_off]);
+    return (Str){ .data = s.data + byte_off, .len = (size_t)cplen };
+}
+
+// Return Str view of codepoint range [start, end). Supports negative indices.
+static inline Str gorget_str_slice(Str s, int64_t start, int64_t end) {
+    int64_t cp_count = gorget_str_codepoint_count(s);
+    if (start < 0) start += cp_count;
+    if (end < 0) end += cp_count;
+    if (start < 0) start = 0;
+    if (end > cp_count) end = cp_count;
+    if (start >= end) return gorget_str_empty();
+    if (start > cp_count || end < 0) {
+        gorget_panic("str slice out of bounds");
+    }
+    // Walk to start byte offset
+    size_t start_byte = 0;
+    for (int64_t i = 0; i < start; i++) {
+        start_byte += (size_t)gorget_utf8_codepoint_len((unsigned char)s.data[start_byte]);
+    }
+    // Walk from start to end byte offset
+    size_t end_byte = start_byte;
+    for (int64_t i = start; i < end; i++) {
+        end_byte += (size_t)gorget_utf8_codepoint_len((unsigned char)s.data[end_byte]);
+    }
+    return (Str){ .data = s.data + start_byte, .len = end_byte - start_byte };
+}
+
+// ── cstr ↔ Str conversion ───────────────────────────────────
+// Allocate a null-terminated copy (Str may not be null-terminated)
+static inline const char* gorget_str_to_cstr(Str s) {
+    char* out = (char*)GORGET_ALLOC(s.len + 1);
+    if (s.len > 0) memcpy(out, s.data, s.len);
+    out[s.len] = '\0';
+    return out;
+}
+
+// Check for embedded null bytes (safety check before cstr conversion)
+static inline bool gorget_str_has_null(Str s) {
+    return memchr(s.data, '\0', s.len) != NULL;
+}
+
 "#;
 
 /// Normal panic handler — exits the process.

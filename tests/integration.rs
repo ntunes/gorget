@@ -161,6 +161,16 @@ str to cstr",
 }
 
 #[test]
+fn str_fat_ptr() {
+    run_gg(
+        "str_fat_ptr.gg",
+        "\
+hello
+world",
+    );
+}
+
+#[test]
 fn expressions() {
     run_gg(
         "expressions.gg",
