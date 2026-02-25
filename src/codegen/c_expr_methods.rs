@@ -806,7 +806,6 @@ impl CodegenContext<'_> {
         if is_owned {
             match method_name {
                 "push" | "push_line" => {
-                    let base = recv.strip_suffix(".data").unwrap_or(recv);
                     let arg = args.first()
                         .map(|a| self.gen_expr(&a.node.value))
                         .unwrap_or_else(|| "\"\"".to_string());
@@ -825,119 +824,164 @@ impl CodegenContext<'_> {
                         ("push_line", "double" | "float") => "gorget_string_push_line_float",
                         ("push_line", "bool") => "gorget_string_push_line_bool",
                         (_, "GorgetString") => {
-                            let rhs = self.coerce_string_to_str(&arg);
+                            let rhs = self.extract_cstr_data(&arg, "GorgetString");
                             let func = if method_name == "push_line" { "gorget_string_push_line" } else { "gorget_string_append" };
-                            return Some(format!("{func}(&{base}, {rhs})"));
+                            return Some(format!("{func}(&{recv}, {rhs})"));
+                        }
+                        (_, "Str") => {
+                            let rhs_data = format!("{arg}.data");
+                            let func = if method_name == "push_line" { "gorget_string_push_line" } else { "gorget_string_append" };
+                            return Some(format!("{func}(&{recv}, {rhs_data})"));
                         }
                         ("push_line", _) => "gorget_string_push_line",
                         _ => "gorget_string_append",
                     };
-                    return Some(format!("{func}(&{base}, {arg})"));
+                    return Some(format!("{func}(&{recv}, {arg})"));
                 }
                 "push_char" => {
                     let arg = args.first()
                         .map(|a| self.gen_expr(&a.node.value))
                         .unwrap_or_else(|| "'\\0'".to_string());
-                    let base = recv.strip_suffix(".data").unwrap_or(recv);
-                    return Some(format!("gorget_string_push_char(&{base}, {arg})"));
+                    return Some(format!("gorget_string_push_char(&{recv}, {arg})"));
                 }
                 "str" => {
-                    // Explicit coercion to str: .data
-                    return Some(recv.to_string());
+                    // Explicit coercion to str: GorgetString → Str
+                    return Some(self.coerce_string_to_str(recv));
                 }
                 "clear" => {
-                    let base = recv.strip_suffix(".data").unwrap_or(recv);
-                    return Some(format!("({{ {base}.len = 0; if ({base}.data) {base}.data[0] = '\\0'; }})"));
+                    return Some(format!("({{ {recv}.len = 0; if ({recv}.data) {recv}.data[0] = '\\0'; }})"));
                 }
                 "capacity" => {
-                    let base = recv.strip_suffix(".data").unwrap_or(recv);
-                    return Some(format!("(int64_t){base}.cap"));
+                    return Some(format!("(int64_t){recv}.cap"));
                 }
                 _ => {} // Fall through to shared str methods
             }
         }
+
+        // For shared str methods, get a const char* for C library calls.
+        // If is_owned, recv is GorgetString — extract .data.
+        // If not is_owned, recv is Str — extract .data.
+        // Both have a .data field that's const char*.
+        let recv_data = format!("{recv}.data");
+
         match method_name {
             "len" => {
-                if needs_temp {
-                    Some(format!("({{ const char* __s = {recv}; (int64_t)strlen(__s); }})"))
+                if is_owned {
+                    Some(format!("(int64_t){recv}.len"))
+                } else if needs_temp {
+                    Some(format!("({{ Str __s = {recv}; (int64_t)__s.len; }})"))
                 } else {
-                    Some(format!("(int64_t)strlen({recv})"))
+                    Some(format!("(int64_t){recv}.len"))
                 }
             }
             "contains" => {
                 let arg = args.first()
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "\"\"".to_string());
-                Some(format!("(strstr({recv}, {arg}) != NULL)"))
+                let arg_type = args.first()
+                    .map(|a| self.infer_c_type_from_expr(&a.node.value.node))
+                    .unwrap_or_default();
+                let arg_data = self.extract_cstr_data(&arg, &arg_type);
+                Some(format!("(strstr({recv_data}, {arg_data}) != NULL)"))
             }
             "starts_with" => {
                 let arg = args.first()
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "\"\"".to_string());
-                Some(format!("gorget_string_starts_with({recv}, {arg})"))
+                let arg_type = args.first()
+                    .map(|a| self.infer_c_type_from_expr(&a.node.value.node))
+                    .unwrap_or_default();
+                let arg_data = self.extract_cstr_data(&arg, &arg_type);
+                Some(format!("gorget_string_starts_with({recv_data}, {arg_data})"))
             }
             "ends_with" => {
                 let arg = args.first()
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "\"\"".to_string());
-                Some(format!("gorget_string_ends_with({recv}, {arg})"))
+                let arg_type = args.first()
+                    .map(|a| self.infer_c_type_from_expr(&a.node.value.node))
+                    .unwrap_or_default();
+                let arg_data = self.extract_cstr_data(&arg, &arg_type);
+                Some(format!("gorget_string_ends_with({recv_data}, {arg_data})"))
             }
             "is_empty" => {
-                Some(format!("(strlen({recv}) == 0)"))
+                if is_owned {
+                    Some(format!("({recv}.len == 0)"))
+                } else {
+                    Some(format!("({recv}.len == 0)"))
+                }
             }
             "trim" => {
-                Some(format!("gorget_string_adopt((char*)gorget_string_trim({recv}))"))
+                Some(format!("gorget_string_adopt((char*)gorget_string_trim({recv_data}))"))
             }
             "strip" => {
                 if let Some(arg) = args.first() {
-                    let arg = self.gen_expr(&arg.node.value);
-                    Some(format!("gorget_string_adopt((char*)gorget_string_strip({recv}, {arg}))"))
+                    let arg_expr = self.gen_expr(&arg.node.value);
+                    let arg_type = self.infer_c_type_from_expr(&arg.node.value.node);
+                    let arg_data = self.extract_cstr_data(&arg_expr, &arg_type);
+                    Some(format!("gorget_string_adopt((char*)gorget_string_strip({recv_data}, {arg_data}))"))
                 } else {
-                    Some(format!("gorget_string_adopt((char*)gorget_string_trim({recv}))"))
+                    Some(format!("gorget_string_adopt((char*)gorget_string_trim({recv_data}))"))
                 }
             }
             "lstrip" => {
                 if let Some(arg) = args.first() {
-                    let arg = self.gen_expr(&arg.node.value);
-                    Some(format!("gorget_string_adopt((char*)gorget_string_lstrip({recv}, {arg}))"))
+                    let arg_expr = self.gen_expr(&arg.node.value);
+                    let arg_type = self.infer_c_type_from_expr(&arg.node.value.node);
+                    let arg_data = self.extract_cstr_data(&arg_expr, &arg_type);
+                    Some(format!("gorget_string_adopt((char*)gorget_string_lstrip({recv_data}, {arg_data}))"))
                 } else {
-                    Some(format!("gorget_string_adopt((char*)gorget_string_lstrip_ws({recv}))"))
+                    Some(format!("gorget_string_adopt((char*)gorget_string_lstrip_ws({recv_data}))"))
                 }
             }
             "rstrip" => {
                 if let Some(arg) = args.first() {
-                    let arg = self.gen_expr(&arg.node.value);
-                    Some(format!("gorget_string_adopt((char*)gorget_string_rstrip({recv}, {arg}))"))
+                    let arg_expr = self.gen_expr(&arg.node.value);
+                    let arg_type = self.infer_c_type_from_expr(&arg.node.value.node);
+                    let arg_data = self.extract_cstr_data(&arg_expr, &arg_type);
+                    Some(format!("gorget_string_adopt((char*)gorget_string_rstrip({recv_data}, {arg_data}))"))
                 } else {
-                    Some(format!("gorget_string_adopt((char*)gorget_string_rstrip_ws({recv}))"))
+                    Some(format!("gorget_string_adopt((char*)gorget_string_rstrip_ws({recv_data}))"))
                 }
             }
             "to_upper" => {
-                Some(format!("gorget_string_adopt((char*)gorget_string_to_upper({recv}))"))
+                Some(format!("gorget_string_adopt((char*)gorget_string_to_upper({recv_data}))"))
             }
             "to_lower" => {
-                Some(format!("gorget_string_adopt((char*)gorget_string_to_lower({recv}))"))
+                Some(format!("gorget_string_adopt((char*)gorget_string_to_lower({recv_data}))"))
             }
             "replace" => {
                 let old_arg = args.first()
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "\"\"".to_string());
+                let old_type = args.first()
+                    .map(|a| self.infer_c_type_from_expr(&a.node.value.node))
+                    .unwrap_or_default();
+                let old_data = self.extract_cstr_data(&old_arg, &old_type);
                 let new_arg = args.get(1)
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "\"\"".to_string());
-                Some(format!("gorget_string_adopt((char*)gorget_string_replace({recv}, {old_arg}, {new_arg}))"))
+                let new_type = args.get(1)
+                    .map(|a| self.infer_c_type_from_expr(&a.node.value.node))
+                    .unwrap_or_default();
+                let new_data = self.extract_cstr_data(&new_arg, &new_type);
+                Some(format!("gorget_string_adopt((char*)gorget_string_replace({recv_data}, {old_data}, {new_data}))"))
             }
             "split" => {
                 let arg = args.first()
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "\"\"".to_string());
-                Some(format!("gorget_string_split({recv}, {arg})"))
+                let arg_type = args.first()
+                    .map(|a| self.infer_c_type_from_expr(&a.node.value.node))
+                    .unwrap_or_default();
+                let arg_data = self.extract_cstr_data(&arg, &arg_type);
+                Some(format!("gorget_string_split({recv_data}, {arg_data})"))
             }
             "hash" => {
                 if needs_temp {
-                    Some(format!("({{ const char* __s = {recv}; (int64_t)__gorget_hash_str(__s); }})"))
+                    Some(format!("({{ const char* __s = {recv_data}; (int64_t)__gorget_hash_str(__s); }})"))
                 } else {
-                    Some(format!("(int64_t)__gorget_hash_str({recv})"))
+                    Some(format!("(int64_t)__gorget_hash_str({recv_data})"))
                 }
             }
             "substring" => {
@@ -947,53 +991,69 @@ impl CodegenContext<'_> {
                 let end_arg = args.get(1)
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "0".to_string());
-                Some(format!("gorget_string_adopt((char*)gorget_string_slice({recv}, {start_arg}, {end_arg}))"))
+                Some(format!("gorget_string_adopt((char*)gorget_string_slice({recv_data}, {start_arg}, {end_arg}))"))
             }
             "char_at" => {
                 let arg = args.first()
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "0".to_string());
-                Some(format!("gorget_string_at({recv}, {arg})"))
+                Some(format!("gorget_string_at({recv_data}, {arg})"))
             }
             "index_of" => {
                 let arg = args.first()
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "\"\"".to_string());
+                let arg_type = args.first()
+                    .map(|a| self.infer_c_type_from_expr(&a.node.value.node))
+                    .unwrap_or_default();
+                let arg_data = self.extract_cstr_data(&arg, &arg_type);
                 let opt = self.register_generic("Option", &["int64_t".to_string()], super::GenericInstanceKind::Enum);
                 let ctor_some = c_mangle::mangle_variant(&opt, "Some");
                 let ctor_none = c_mangle::mangle_variant(&opt, "None");
-                Some(format!("({{ int64_t __si = gorget_string_index_of({recv}, {arg}); \
+                Some(format!("({{ int64_t __si = gorget_string_index_of({recv_data}, {arg_data}); \
                 __si >= 0 ? {ctor_some}(__si) : {ctor_none}(); }})"))
             }
             "count" => {
                 let arg = args.first()
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "\"\"".to_string());
-                Some(format!("gorget_string_count({recv}, {arg})"))
+                let arg_type = args.first()
+                    .map(|a| self.infer_c_type_from_expr(&a.node.value.node))
+                    .unwrap_or_default();
+                let arg_data = self.extract_cstr_data(&arg, &arg_type);
+                Some(format!("gorget_string_count({recv_data}, {arg_data})"))
             }
             "repeat" => {
                 let arg = args.first()
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "0".to_string());
-                Some(format!("gorget_string_adopt((char*)gorget_string_repeat({recv}, {arg}))"))
+                Some(format!("gorget_string_adopt((char*)gorget_string_repeat({recv_data}, {arg}))"))
             }
             "join" => {
                 let arg = args.first()
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "gorget_array_new(sizeof(const char*))".to_string());
-                Some(format!("gorget_string_adopt((char*)gorget_string_join({recv}, {arg}))"))
+                Some(format!("gorget_string_adopt((char*)gorget_string_join({recv_data}, {arg}))"))
             }
             "removeprefix" => {
                 let arg = args.first()
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "\"\"".to_string());
-                Some(format!("gorget_string_adopt((char*)gorget_string_removeprefix({recv}, {arg}))"))
+                let arg_type = args.first()
+                    .map(|a| self.infer_c_type_from_expr(&a.node.value.node))
+                    .unwrap_or_default();
+                let arg_data = self.extract_cstr_data(&arg, &arg_type);
+                Some(format!("gorget_string_adopt((char*)gorget_string_removeprefix({recv_data}, {arg_data}))"))
             }
             "removesuffix" => {
                 let arg = args.first()
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "\"\"".to_string());
-                Some(format!("gorget_string_adopt((char*)gorget_string_removesuffix({recv}, {arg}))"))
+                let arg_type = args.first()
+                    .map(|a| self.infer_c_type_from_expr(&a.node.value.node))
+                    .unwrap_or_default();
+                let arg_data = self.extract_cstr_data(&arg, &arg_type);
+                Some(format!("gorget_string_adopt((char*)gorget_string_removesuffix({recv_data}, {arg_data}))"))
             }
             "pad_left" => {
                 let width = args.first()
@@ -1002,7 +1062,7 @@ impl CodegenContext<'_> {
                 let fill = args.get(1)
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "' '".to_string());
-                Some(format!("gorget_string_adopt((char*)gorget_string_pad_left({recv}, {width}, {fill}))"))
+                Some(format!("gorget_string_adopt((char*)gorget_string_pad_left({recv_data}, {width}, {fill}))"))
             }
             "pad_right" => {
                 let width = args.first()
@@ -1011,7 +1071,7 @@ impl CodegenContext<'_> {
                 let fill = args.get(1)
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "' '".to_string());
-                Some(format!("gorget_string_adopt((char*)gorget_string_pad_right({recv}, {width}, {fill}))"))
+                Some(format!("gorget_string_adopt((char*)gorget_string_pad_right({recv_data}, {width}, {fill}))"))
             }
             _ => None, // Not a known string method — fall through
         }
@@ -1063,7 +1123,7 @@ impl CodegenContext<'_> {
         match method_name {
             "open" => {
                 if let Some(arg) = args.first() {
-                    let path_arg = self.gen_expr(&arg.node.value);
+                    let path_arg = self.gen_str_arg(&arg.node.value);
                     format!("gorget_file_open({path_arg}, \"r\")")
                 } else {
                     format!("/* File.open() missing arg */")
@@ -1071,7 +1131,7 @@ impl CodegenContext<'_> {
             }
             "create" => {
                 if let Some(arg) = args.first() {
-                    let path_arg = self.gen_expr(&arg.node.value);
+                    let path_arg = self.gen_str_arg(&arg.node.value);
                     format!("gorget_file_open({path_arg}, \"w\")")
                 } else {
                     format!("/* File.create() missing arg */")

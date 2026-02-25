@@ -228,6 +228,9 @@ pub struct ExternBinding {
     /// For each non-self parameter, whether to pass by reference (&addr_of).
     /// True for struct types (Vector, Dict, opaque types), false for scalars/pointers.
     pub params_need_ref: Vec<bool>,
+    /// Whether the C function returns `const char*` for a Gorget `str` return type.
+    /// When true, codegen wraps the return in `gorget_str_from_cstr()`.
+    pub returns_str: bool,
 }
 
 /// Whether an AST type needs to be passed by reference (&) to the C runtime.
@@ -539,9 +542,10 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
                     let params_need_ref: Vec<bool> = f.params.iter()
                         .map(|p| ast_type_needs_ref(&p.node.type_.node))
                         .collect();
+                    let returns_str = matches!(&f.return_type.node, Type::Primitive(crate::parser::ast::PrimitiveType::Str));
                     extern_symbols.insert(
                         ("".to_string(), f.name.node.clone()),
-                        ExternBinding { c_symbol: sym.clone(), params_need_ref },
+                        ExternBinding { c_symbol: sym.clone(), params_need_ref, returns_str },
                     );
                 }
             }
@@ -557,9 +561,10 @@ pub fn generate_c(module: &Module, analysis: &AnalysisResult, opts: CodegenOptio
                             .filter(|p| p.node.name.node != "self")
                             .map(|p| ast_type_needs_ref(&p.node.type_.node))
                             .collect();
+                        let returns_str = matches!(&method.node.return_type.node, Type::Primitive(crate::parser::ast::PrimitiveType::Str));
                         extern_symbols.insert(
                             (type_name.clone(), method.node.name.node.clone()),
-                            ExternBinding { c_symbol: sym.clone(), params_need_ref },
+                            ExternBinding { c_symbol: sym.clone(), params_need_ref, returns_str },
                         );
                     }
                 }
@@ -1939,7 +1944,7 @@ void main():
             ],
         };
         let result = c_types::ast_type_to_c(&ty2, &scopes);
-        assert_eq!(result, "Pair__int64_t__const_char_ptr");
+        assert_eq!(result, "Pair__int64_t__Str");
     }
 
     #[test]

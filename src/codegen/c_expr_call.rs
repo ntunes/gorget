@@ -115,15 +115,12 @@ impl CodegenContext<'_> {
         }
     }
 
-    /// Generate a C expression for an argument that expects `const char*` (str).
-    /// If the argument is a String (GorgetString), coerces via `.data`.
+    /// Generate a C expression for an argument that expects `const char*` (for C library calls).
+    /// Extracts `.data` from Str or GorgetString operands.
     pub(super) fn gen_str_arg(&mut self, arg: &Spanned<Expr>) -> String {
         let expr = self.gen_expr(arg);
-        if self.infer_c_type_from_expr(&arg.node) == "GorgetString" {
-            self.coerce_string_to_str(&expr)
-        } else {
-            expr
-        }
+        let c_type = self.infer_c_type_from_expr(&arg.node);
+        self.extract_cstr_data(&expr, &c_type)
     }
 
     /// Extract the `alloc=` named arg from a call's args list.
@@ -188,6 +185,8 @@ impl CodegenContext<'_> {
                             | "uint64_t" | "uint8_t" | "uint16_t" | "uint32_t") {
                             format!("gorget_string_with_capacity({arg})")
                         } else if arg_type == "GorgetString" {
+                            format!("gorget_string_new({arg}.data)")
+                        } else if arg_type == "Str" {
                             format!("gorget_string_new({arg}.data)")
                         } else {
                             format!("gorget_string_new({arg})")
@@ -446,7 +445,7 @@ impl CodegenContext<'_> {
                     "bool_to_str" => {
                         if let Some(arg) = args.first() {
                             let b = self.gen_expr(&arg.node.value);
-                            return format!("gorget_bool_to_str({b})");
+                            return format!("gorget_str_from_cstr(gorget_bool_to_str({b}))");
                         }
                     }
                     "char_to_str" => {
@@ -464,7 +463,7 @@ impl CodegenContext<'_> {
                     "getenv" => {
                         if let Some(arg) = args.first() {
                             let name_expr = self.gen_str_arg(&arg.node.value);
-                            return format!("gorget_getenv({name_expr})");
+                            return format!("gorget_str_from_cstr(gorget_getenv({name_expr}))");
                         }
                     }
                     "setenv" => {
@@ -475,7 +474,7 @@ impl CodegenContext<'_> {
                         }
                     }
                     "getcwd" => return "gorget_string_adopt((char*)gorget_getcwd())".to_string(),
-                    "platform" => return "gorget_platform()".to_string(),
+                    "platform" => return "gorget_str_from_cstr(gorget_platform())".to_string(),
                     // std.math — abs/min/max dispatch to float or int variant
                     "abs" => {
                         if let Some(arg) = args.first() {
@@ -735,13 +734,13 @@ impl CodegenContext<'_> {
                         if let Some(arg) = args.first() {
                             let kb = self.gen_expr(&arg.node.value);
                             let kb_addr = addr_of(&kb, &arg.node.value.node);
-                            let result_type = c_mangle::mangle_generic("Result", &["GorgetRSAKey".into(), "const char*".into()]);
+                            let result_type = c_mangle::mangle_generic("Result", &["GorgetRSAKey".into(), "Str".into()]);
                             let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
                             let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
                             return format!(
                                 "({{ GorgetRSAKey __rk = gorget_crypto_rsa_load_public({kb_addr}); \
                                 const char* __re = gorget_crypto_last_error(); \
-                                __re ? {err_ctor}(__re) : {ok_ctor}(__rk); }})"
+                                __re ? {err_ctor}(gorget_str_from_cstr(__re)) : {ok_ctor}(__rk); }})"
                             );
                         }
                     }
@@ -751,13 +750,13 @@ impl CodegenContext<'_> {
                             let iv = self.gen_expr(&args[1].node.value);
                             let key_addr = addr_of(&key, &args[0].node.value.node);
                             let iv_addr = addr_of(&iv, &args[1].node.value.node);
-                            let result_type = self.register_generic("Result", &["GorgetCipherContext".into(), "const char*".into()], super::GenericInstanceKind::Enum);
+                            let result_type = self.register_generic("Result", &["GorgetCipherContext".into(), "Str".into()], super::GenericInstanceKind::Enum);
                             let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
                             let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
                             return format!(
                                 "({{ GorgetCipherContext __rk = gorget_crypto_aes_ctr_new({key_addr}, {iv_addr}); \
                                 const char* __re = gorget_crypto_last_error(); \
-                                __re ? {err_ctor}(__re) : {ok_ctor}(__rk); }})"
+                                __re ? {err_ctor}(gorget_str_from_cstr(__re)) : {ok_ctor}(__rk); }})"
                             );
                         }
                     }
@@ -768,38 +767,38 @@ impl CodegenContext<'_> {
                             let data = self.gen_expr(&args[2].node.value);
                             let key_addr = addr_of(&key, &args[1].node.value.node);
                             let data_addr = addr_of(&data, &args[2].node.value.node);
-                            let result_type = self.register_generic("Result", &["GorgetArray".into(), "const char*".into()], super::GenericInstanceKind::Enum);
+                            let result_type = self.register_generic("Result", &["GorgetArray".into(), "Str".into()], super::GenericInstanceKind::Enum);
                             let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
                             let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
                             return format!(
                                 "({{ GorgetArray __rk = gorget_crypto_hmac({algo}, {key_addr}, {data_addr}); \
                                 const char* __re = gorget_crypto_last_error(); \
-                                __re ? {err_ctor}(__re) : {ok_ctor}(__rk); }})"
+                                __re ? {err_ctor}(gorget_str_from_cstr(__re)) : {ok_ctor}(__rk); }})"
                             );
                         }
                     }
                     "crypto_random_bytes" => {
                         if let Some(arg) = args.first() {
                             let n = self.gen_expr(&arg.node.value);
-                            let result_type = self.register_generic("Result", &["GorgetArray".into(), "const char*".into()], super::GenericInstanceKind::Enum);
+                            let result_type = self.register_generic("Result", &["GorgetArray".into(), "Str".into()], super::GenericInstanceKind::Enum);
                             let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
                             let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
                             return format!(
                                 "({{ GorgetArray __rk = gorget_crypto_random_bytes({n}); \
                                 const char* __re = gorget_crypto_last_error(); \
-                                __re ? {err_ctor}(__re) : {ok_ctor}(__rk); }})"
+                                __re ? {err_ctor}(gorget_str_from_cstr(__re)) : {ok_ctor}(__rk); }})"
                             );
                         }
                     }
                     // std.crypto — Ed25519
                     "crypto_ed25519_keygen" => {
-                        let result_type = self.register_generic("Result", &["GorgetEd25519KeyPair".into(), "const char*".into()], super::GenericInstanceKind::Enum);
+                        let result_type = self.register_generic("Result", &["GorgetEd25519KeyPair".into(), "Str".into()], super::GenericInstanceKind::Enum);
                         let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
                         let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
                         return format!(
                             "({{ GorgetEd25519KeyPair __rk = gorget_crypto_ed25519_keygen(); \
                             const char* __re = gorget_crypto_last_error(); \
-                            __re ? {err_ctor}(__re) : {ok_ctor}(__rk); }})"
+                            __re ? {err_ctor}(gorget_str_from_cstr(__re)) : {ok_ctor}(__rk); }})"
                         );
                     }
                     "crypto_ed25519_sign" => {
@@ -808,25 +807,25 @@ impl CodegenContext<'_> {
                             let data = self.gen_expr(&args[1].node.value);
                             let pk_addr = addr_of(&pk, &args[0].node.value.node);
                             let data_addr = addr_of(&data, &args[1].node.value.node);
-                            let result_type = self.register_generic("Result", &["GorgetArray".into(), "const char*".into()], super::GenericInstanceKind::Enum);
+                            let result_type = self.register_generic("Result", &["GorgetArray".into(), "Str".into()], super::GenericInstanceKind::Enum);
                             let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
                             let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
                             return format!(
                                 "({{ GorgetArray __rk = gorget_crypto_ed25519_sign({pk_addr}, {data_addr}); \
                                 const char* __re = gorget_crypto_last_error(); \
-                                __re ? {err_ctor}(__re) : {ok_ctor}(__rk); }})"
+                                __re ? {err_ctor}(gorget_str_from_cstr(__re)) : {ok_ctor}(__rk); }})"
                             );
                         }
                     }
                     // std.crypto — X25519
                     "crypto_x25519_keygen" => {
-                        let result_type = self.register_generic("Result", &["GorgetX25519KeyPair".into(), "const char*".into()], super::GenericInstanceKind::Enum);
+                        let result_type = self.register_generic("Result", &["GorgetX25519KeyPair".into(), "Str".into()], super::GenericInstanceKind::Enum);
                         let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
                         let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
                         return format!(
                             "({{ GorgetX25519KeyPair __rk = gorget_crypto_x25519_keygen(); \
                             const char* __re = gorget_crypto_last_error(); \
-                            __re ? {err_ctor}(__re) : {ok_ctor}(__rk); }})"
+                            __re ? {err_ctor}(gorget_str_from_cstr(__re)) : {ok_ctor}(__rk); }})"
                         );
                     }
                     "crypto_x25519_shared_secret" => {
@@ -835,13 +834,13 @@ impl CodegenContext<'_> {
                             let peer_pub = self.gen_expr(&args[1].node.value);
                             let pk_addr = addr_of(&pk, &args[0].node.value.node);
                             let peer_pub_addr = addr_of(&peer_pub, &args[1].node.value.node);
-                            let result_type = self.register_generic("Result", &["GorgetArray".into(), "const char*".into()], super::GenericInstanceKind::Enum);
+                            let result_type = self.register_generic("Result", &["GorgetArray".into(), "Str".into()], super::GenericInstanceKind::Enum);
                             let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
                             let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
                             return format!(
                                 "({{ GorgetArray __rk = gorget_crypto_x25519_shared_secret({pk_addr}, {peer_pub_addr}); \
                                 const char* __re = gorget_crypto_last_error(); \
-                                __re ? {err_ctor}(__re) : {ok_ctor}(__rk); }})"
+                                __re ? {err_ctor}(gorget_str_from_cstr(__re)) : {ok_ctor}(__rk); }})"
                             );
                         }
                     }
@@ -851,13 +850,13 @@ impl CodegenContext<'_> {
                             let peer_pub = self.gen_expr(&args[1].node.value);
                             let pk_addr = addr_of(&pk, &args[0].node.value.node);
                             let peer_pub_addr = addr_of(&peer_pub, &args[1].node.value.node);
-                            let result_type = self.register_generic("Result", &["GorgetArray".into(), "const char*".into()], super::GenericInstanceKind::Enum);
+                            let result_type = self.register_generic("Result", &["GorgetArray".into(), "Str".into()], super::GenericInstanceKind::Enum);
                             let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
                             let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
                             return format!(
                                 "({{ GorgetArray __rk = gorget_crypto_x25519_dh({pk_addr}, {peer_pub_addr}); \
                                 const char* __re = gorget_crypto_last_error(); \
-                                __re ? {err_ctor}(__re) : {ok_ctor}(__rk); }})"
+                                __re ? {err_ctor}(gorget_str_from_cstr(__re)) : {ok_ctor}(__rk); }})"
                             );
                         }
                     }
@@ -871,13 +870,13 @@ impl CodegenContext<'_> {
                             let salt_addr = addr_of(&salt, &args[0].node.value.node);
                             let ikm_addr = addr_of(&ikm, &args[1].node.value.node);
                             let info_addr = addr_of(&info, &args[2].node.value.node);
-                            let result_type = self.register_generic("Result", &["GorgetArray".into(), "const char*".into()], super::GenericInstanceKind::Enum);
+                            let result_type = self.register_generic("Result", &["GorgetArray".into(), "Str".into()], super::GenericInstanceKind::Enum);
                             let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
                             let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
                             return format!(
                                 "({{ GorgetArray __rk = gorget_crypto_hkdf_sha256({salt_addr}, {ikm_addr}, {info_addr}, {length}); \
                                 const char* __re = gorget_crypto_last_error(); \
-                                __re ? {err_ctor}(__re) : {ok_ctor}(__rk); }})"
+                                __re ? {err_ctor}(gorget_str_from_cstr(__re)) : {ok_ctor}(__rk); }})"
                             );
                         }
                     }
@@ -890,13 +889,13 @@ impl CodegenContext<'_> {
                             let key_addr = addr_of(&key, &args[0].node.value.node);
                             let nonce_addr = addr_of(&nonce, &args[1].node.value.node);
                             let pt_addr = addr_of(&pt, &args[2].node.value.node);
-                            let result_type = self.register_generic("Result", &["GorgetArray".into(), "const char*".into()], super::GenericInstanceKind::Enum);
+                            let result_type = self.register_generic("Result", &["GorgetArray".into(), "Str".into()], super::GenericInstanceKind::Enum);
                             let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
                             let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
                             return format!(
                                 "({{ GorgetArray __rk = gorget_crypto_aes_gcm_encrypt({key_addr}, {nonce_addr}, {pt_addr}); \
                                 const char* __re = gorget_crypto_last_error(); \
-                                __re ? {err_ctor}(__re) : {ok_ctor}(__rk); }})"
+                                __re ? {err_ctor}(gorget_str_from_cstr(__re)) : {ok_ctor}(__rk); }})"
                             );
                         }
                     }
@@ -906,13 +905,13 @@ impl CodegenContext<'_> {
                             let ct = self.gen_expr(&args[1].node.value);
                             let key_addr = addr_of(&key, &args[0].node.value.node);
                             let ct_addr = addr_of(&ct, &args[1].node.value.node);
-                            let result_type = self.register_generic("Result", &["GorgetArray".into(), "const char*".into()], super::GenericInstanceKind::Enum);
+                            let result_type = self.register_generic("Result", &["GorgetArray".into(), "Str".into()], super::GenericInstanceKind::Enum);
                             let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
                             let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
                             return format!(
                                 "({{ GorgetArray __rk = gorget_crypto_aes_gcm_decrypt({key_addr}, {ct_addr}); \
                                 const char* __re = gorget_crypto_last_error(); \
-                                __re ? {err_ctor}(__re) : {ok_ctor}(__rk); }})"
+                                __re ? {err_ctor}(gorget_str_from_cstr(__re)) : {ok_ctor}(__rk); }})"
                             );
                         }
                     }
@@ -921,13 +920,13 @@ impl CodegenContext<'_> {
                         if args.len() >= 2 {
                             let addr = self.gen_str_arg(&args[0].node.value);
                             let port = self.gen_expr(&args[1].node.value);
-                            let result_type = self.register_generic("Result", &["GorgetUdpSocket".into(), "const char*".into()], super::GenericInstanceKind::Enum);
+                            let result_type = self.register_generic("Result", &["GorgetUdpSocket".into(), "Str".into()], super::GenericInstanceKind::Enum);
                             let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
                             let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
                             return format!(
                                 "({{ GorgetUdpSocket __us = gorget_udp_bind({addr}, {port}); \
                                 const char* __ue = gorget_udp_last_error(); \
-                                __ue ? {err_ctor}(__ue) : {ok_ctor}(__us); }})"
+                                __ue ? {err_ctor}(gorget_str_from_cstr(__ue)) : {ok_ctor}(__us); }})"
                             );
                         }
                     }
@@ -936,13 +935,13 @@ impl CodegenContext<'_> {
                         if args.len() >= 2 {
                             let host = self.gen_str_arg(&args[0].node.value);
                             let port = self.gen_expr(&args[1].node.value);
-                            let result_type = c_mangle::mangle_generic("Result", &["GorgetSocket".into(), "const char*".into()]);
+                            let result_type = c_mangle::mangle_generic("Result", &["GorgetSocket".into(), "Str".into()]);
                             let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
                             let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
                             return format!(
                                 "({{ GorgetSocket __sk = gorget_socket_connect({host}, {port}); \
                                 const char* __se = gorget_socket_last_error(); \
-                                __se ? {err_ctor}(__se) : {ok_ctor}(__sk); }})"
+                                __se ? {err_ctor}(gorget_str_from_cstr(__se)) : {ok_ctor}(__sk); }})"
                             );
                         }
                     }
@@ -951,13 +950,13 @@ impl CodegenContext<'_> {
                         if args.len() >= 2 {
                             let host = self.gen_str_arg(&args[0].node.value);
                             let port = self.gen_expr(&args[1].node.value);
-                            let result_type = c_mangle::mangle_generic("Result", &["GorgetTlsSocket".into(), "const char*".into()]);
+                            let result_type = c_mangle::mangle_generic("Result", &["GorgetTlsSocket".into(), "Str".into()]);
                             let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
                             let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
                             return format!(
                                 "({{ GorgetTlsSocket __ts = gorget_tls_connect({host}, {port}); \
                                 const char* __te = gorget_tls_last_error(); \
-                                __te ? {err_ctor}(__te) : {ok_ctor}(__ts); }})"
+                                __te ? {err_ctor}(gorget_str_from_cstr(__te)) : {ok_ctor}(__ts); }})"
                             );
                         }
                     }
@@ -965,13 +964,13 @@ impl CodegenContext<'_> {
                     "regex_compile" => {
                         if let Some(arg) = args.first() {
                             let pat = self.gen_str_arg(&arg.node.value);
-                            let result_type = self.register_generic("Result", &["GorgetRegex".into(), "const char*".into()], super::GenericInstanceKind::Enum);
+                            let result_type = self.register_generic("Result", &["GorgetRegex".into(), "Str".into()], super::GenericInstanceKind::Enum);
                             let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
                             let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
                             return format!(
                                 "({{ GorgetRegex __rx = gorget_regex_compile({pat}, NULL); \
                                 const char* __re = gorget_regex_last_error(); \
-                                __re ? {err_ctor}(__re) : {ok_ctor}(__rx); }})"
+                                __re ? {err_ctor}(gorget_str_from_cstr(__re)) : {ok_ctor}(__rx); }})"
                             );
                         }
                     }
@@ -979,13 +978,13 @@ impl CodegenContext<'_> {
                         if args.len() >= 2 {
                             let pat = self.gen_str_arg(&args[0].node.value);
                             let flags = self.gen_str_arg(&args[1].node.value);
-                            let result_type = self.register_generic("Result", &["GorgetRegex".into(), "const char*".into()], super::GenericInstanceKind::Enum);
+                            let result_type = self.register_generic("Result", &["GorgetRegex".into(), "Str".into()], super::GenericInstanceKind::Enum);
                             let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
                             let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
                             return format!(
                                 "({{ GorgetRegex __rx = gorget_regex_compile({pat}, {flags}); \
                                 const char* __re = gorget_regex_last_error(); \
-                                __re ? {err_ctor}(__re) : {ok_ctor}(__rx); }})"
+                                __re ? {err_ctor}(gorget_str_from_cstr(__re)) : {ok_ctor}(__rx); }})"
                             );
                         }
                     }
@@ -1271,10 +1270,17 @@ impl CodegenContext<'_> {
                     if binding.params_need_ref.get(i) == Some(&true) {
                         addr_of(&expr, &a.node.value.node)
                     } else {
-                        expr
+                        // Extern functions take const char* for strings — extract .data
+                        let arg_type = self.infer_c_type_from_expr(&a.node.value.node);
+                        self.extract_cstr_data(&expr, &arg_type)
                     }
                 }).collect();
-                return format!("{}({})", binding.c_symbol, arg_exprs.join(", "));
+                let call = format!("{}({})", binding.c_symbol, arg_exprs.join(", "));
+                // Extern C functions return const char* for str — wrap in gorget_str_from_cstr
+                if binding.returns_str {
+                    return format!("gorget_str_from_cstr({call})");
+                }
+                return call;
             }
         }
 
@@ -1285,7 +1291,7 @@ impl CodegenContext<'_> {
         format!("{callee_str}({})", arg_exprs.join(", "))
     }
 
-    /// Coerce between GorgetString and const char* at function call sites.
+    /// Coerce between string types at function call sites.
     pub(super) fn coerce_arg_to_str(
         &mut self,
         expr: String,
@@ -1294,11 +1300,19 @@ impl CodegenContext<'_> {
     ) -> String {
         let arg_type = self.infer_c_type_from_expr(&arg_expr.node);
         if let Some(ptid) = param_type_id {
-            // String arg → str param: coerce via .data
+            // String arg → str param: coerce GorgetString to Str
             if arg_type == "GorgetString" && ptid == self.types.string_id {
                 return self.coerce_string_to_str(&expr);
             }
-            // str arg → String param: wrap with gorget_string_new
+            // str (Str) arg → String param: wrap with gorget_string_new
+            if arg_type == "Str" && ptid == self.types.owned_string_id {
+                return format!("gorget_string_new({expr}.data)");
+            }
+            // cstr (const char*) arg → str param: wrap with gorget_str_from_cstr
+            if arg_type == "const char*" && ptid == self.types.string_id {
+                return format!("gorget_str_from_cstr({expr})");
+            }
+            // cstr (const char*) arg → String param: wrap with gorget_string_new
             if arg_type == "const char*" && ptid == self.types.owned_string_id {
                 return format!("gorget_string_new({expr})");
             }
@@ -1654,24 +1668,24 @@ impl CodegenContext<'_> {
                     "group" => {
                         if let Some(arg) = args.first() {
                             let n = self.gen_expr(&arg.node.value);
-                            let opt = self.register_generic("Option", &["const char*".into()], super::GenericInstanceKind::Enum);
+                            let opt = self.register_generic("Option", &["Str".into()], super::GenericInstanceKind::Enum);
                             let ctor_some = c_mangle::mangle_variant(&opt, "Some");
                             let ctor_none = c_mangle::mangle_variant(&opt, "None");
                             return format!(
                                 "({{ const char* __mg = gorget_regex_match_group({recv_ref}, {n}); \
-                                __mg ? {ctor_some}(__mg) : {ctor_none}(); }})"
+                                __mg ? {ctor_some}(gorget_str_from_cstr(__mg)) : {ctor_none}(); }})"
                             );
                         }
                     }
                     "group_by_name" => {
                         if let Some(arg) = args.first() {
                             let name = self.gen_str_arg(&arg.node.value);
-                            let opt = self.register_generic("Option", &["const char*".into()], super::GenericInstanceKind::Enum);
+                            let opt = self.register_generic("Option", &["Str".into()], super::GenericInstanceKind::Enum);
                             let ctor_some = c_mangle::mangle_variant(&opt, "Some");
                             let ctor_none = c_mangle::mangle_variant(&opt, "None");
                             return format!(
                                 "({{ const char* __mg = gorget_regex_match_group_by_name({recv_ref}, {name}); \
-                                __mg ? {ctor_some}(__mg) : {ctor_none}(); }})"
+                                __mg ? {ctor_some}(gorget_str_from_cstr(__mg)) : {ctor_none}(); }})"
                             );
                         }
                     }
@@ -1693,39 +1707,39 @@ impl CodegenContext<'_> {
                             let data_addr = addr_of(&data, &args[0].node.value.node);
                             let host = self.gen_str_arg(&args[1].node.value);
                             let port = self.gen_expr(&args[2].node.value);
-                            let result_type = self.register_generic("Result", &["int64_t".into(), "const char*".into()], super::GenericInstanceKind::Enum);
+                            let result_type = self.register_generic("Result", &["int64_t".into(), "Str".into()], super::GenericInstanceKind::Enum);
                             let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
                             let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
                             return format!(
                                 "({{ int64_t __us = gorget_udp_sendto({recv_ref}, {data_addr}, {host}, {port}); \
                                 const char* __ue = gorget_udp_last_error(); \
-                                __ue ? {err_ctor}(__ue) : {ok_ctor}(__us); }})"
+                                __ue ? {err_ctor}(gorget_str_from_cstr(__ue)) : {ok_ctor}(__us); }})"
                             );
                         }
                     }
                     "recvfrom" => {
                         if let Some(arg) = args.first() {
                             let max_bytes = self.gen_expr(&arg.node.value);
-                            let result_type = self.register_generic("Result", &["GorgetUdpPacket".into(), "const char*".into()], super::GenericInstanceKind::Enum);
+                            let result_type = self.register_generic("Result", &["GorgetUdpPacket".into(), "Str".into()], super::GenericInstanceKind::Enum);
                             let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
                             let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
                             return format!(
                                 "({{ GorgetUdpPacket __up = gorget_udp_recvfrom({recv_ref}, {max_bytes}); \
                                 const char* __ue = gorget_udp_last_error(); \
-                                __ue ? {err_ctor}(__ue) : {ok_ctor}(__up); }})"
+                                __ue ? {err_ctor}(gorget_str_from_cstr(__ue)) : {ok_ctor}(__up); }})"
                             );
                         }
                     }
                     "join_multicast" => {
                         if let Some(arg) = args.first() {
                             let group = self.gen_str_arg(&arg.node.value);
-                            let result_type = self.register_generic("Result", &["bool".into(), "const char*".into()], super::GenericInstanceKind::Enum);
+                            let result_type = self.register_generic("Result", &["bool".into(), "Str".into()], super::GenericInstanceKind::Enum);
                             let ok_ctor = c_mangle::mangle_variant(&result_type, "Ok");
                             let err_ctor = c_mangle::mangle_variant(&result_type, "Error");
                             return format!(
                                 "({{ bool __uj = gorget_udp_join_multicast({recv_ref}, {group}); \
                                 const char* __ue = gorget_udp_last_error(); \
-                                __ue ? {err_ctor}(__ue) : {ok_ctor}(__uj); }})"
+                                __ue ? {err_ctor}(gorget_str_from_cstr(__ue)) : {ok_ctor}(__uj); }})"
                             );
                         }
                     }
@@ -1750,33 +1764,41 @@ impl CodegenContext<'_> {
                 };
                 let c_symbol = &binding.c_symbol;
                 let needs_temp = !is_lvalue(&receiver.node);
+                // Helper: coerce string args for extern C functions
+                let coerce_extern_arg = |ctx: &mut Self, a: &Spanned<crate::parser::ast::CallArg>, needs_ref: bool| -> String {
+                    let expr = ctx.gen_expr(&a.node.value);
+                    if needs_ref {
+                        addr_of(&expr, &a.node.value.node)
+                    } else {
+                        // Extern functions take const char* for strings — extract .data
+                        let arg_type = ctx.infer_c_type_from_expr(&a.node.value.node);
+                        ctx.extract_cstr_data(&expr, &arg_type)
+                    }
+                };
+                let wrap_str = binding.returns_str;
                 if needs_temp {
                     let arg_exprs: Vec<String> = args.iter().enumerate().map(|(i, a)| {
-                        let expr = self.gen_expr(&a.node.value);
-                        if binding.params_need_ref.get(i) == Some(&true) {
-                            addr_of(&expr, &a.node.value.node)
-                        } else {
-                            expr
-                        }
+                        coerce_extern_arg(self, a, binding.params_need_ref.get(i) == Some(&true))
                     }).collect();
                     let mut call_args = String::from("&__recv");
                     for a in &arg_exprs {
                         call_args.push_str(", ");
                         call_args.push_str(a);
                     }
-                    return format!("({{ __typeof__({recv}) __recv = {recv}; {c_symbol}({call_args}); }})");
+                    let call = format!("{c_symbol}({call_args})");
+                    let call = if wrap_str { format!("gorget_str_from_cstr({call})") } else { call };
+                    return format!("({{ __typeof__({recv}) __recv = {recv}; {call}; }})");
                 } else {
                     let self_arg = if is_self_ptr { recv.clone() } else { format!("&{recv}") };
                     let mut all_args = vec![self_arg];
                     for (i, arg) in args.iter().enumerate() {
-                        let expr = self.gen_expr(&arg.node.value);
-                        if binding.params_need_ref.get(i) == Some(&true) {
-                            all_args.push(addr_of(&expr, &arg.node.value.node));
-                        } else {
-                            all_args.push(expr);
-                        }
+                        all_args.push(coerce_extern_arg(self, arg, binding.params_need_ref.get(i) == Some(&true)));
                     }
-                    return format!("{c_symbol}({})", all_args.join(", "));
+                    let call = format!("{c_symbol}({})", all_args.join(", "));
+                    if wrap_str {
+                        return format!("gorget_str_from_cstr({call})");
+                    }
+                    return call;
                 }
             }
         }
@@ -1859,7 +1881,7 @@ impl CodegenContext<'_> {
         let is_set = matches!(type_name.as_str(), "Set" | "HashSet")
             || c_type.as_deref() == Some("GorgetSet");
         let is_string = matches!(type_name.as_str(), "str" | "String")
-            || matches!(c_type.as_deref(), Some("const char*") | Some("GorgetString"));
+            || matches!(c_type.as_deref(), Some("const char*") | Some("Str") | Some("GorgetString"));
         let is_option = type_name == "Option"
             || c_type.as_deref().map_or(false, |t| t.starts_with("Option__"));
         let is_result = type_name == "Result"
@@ -1945,14 +1967,8 @@ impl CodegenContext<'_> {
             return Some(self.gen_set_method(&recv, method_name, args, receiver, needs_temp));
         }
         if is_string {
-            // Coerce GorgetString receiver to const char* for str methods
-            let str_recv = if c_type.as_deref() == Some("GorgetString") {
-                self.coerce_string_to_str(&recv)
-            } else {
-                recv.clone()
-            };
             let is_owned = c_type.as_deref() == Some("GorgetString");
-            return self.gen_string_method(&str_recv, method_name, args, needs_temp, is_owned);
+            return self.gen_string_method(&recv, method_name, args, needs_temp, is_owned);
         }
         if is_option {
             return Some(self.gen_option_method(&recv, method_name, args, receiver, needs_temp));
@@ -2066,7 +2082,7 @@ impl CodegenContext<'_> {
         let is_set = matches!(type_name.as_str(), "Set" | "HashSet")
             || c_type.as_deref() == Some("GorgetSet");
         let is_string = matches!(type_name.as_str(), "str" | "String")
-            || matches!(c_type.as_deref(), Some("const char*") | Some("GorgetString"));
+            || matches!(c_type.as_deref(), Some("const char*") | Some("Str") | Some("GorgetString"));
 
         let coll = self.gen_expr(collection);
         let elem = self.gen_expr(needle);
@@ -2090,13 +2106,12 @@ impl CodegenContext<'_> {
             let elem_type = self.infer_c_type_from_expr(&needle.node);
             format!("({{ {elem_type} __needle = {elem}; gorget_set_contains({coll_ref}, &__needle); }})")
         } else if is_string {
-            // Coerce GorgetString to const char* for strstr
-            let coll_str = if c_type.as_deref() == Some("GorgetString") {
-                self.coerce_string_to_str(&coll)
-            } else {
-                coll.clone()
-            };
-            format!("(strstr({coll_str}, {elem}) != NULL)")
+            // Extract const char* from any string type for strstr
+            let coll_type_str = c_type.as_deref().unwrap_or("const char*");
+            let coll_data = self.extract_cstr_data(&coll, coll_type_str);
+            let elem_type = self.infer_c_type_from_expr(&needle.node);
+            let elem_data = self.extract_cstr_data(&elem, &elem_type);
+            format!("(strstr({coll_data}, {elem_data}) != NULL)")
         } else {
             format!("/* unsupported `in` for type {type_name} */ false")
         }
@@ -2117,7 +2132,7 @@ impl CodegenContext<'_> {
             "float32" => "0.0f".to_string(),
             "bool" => "false".to_string(),
             "char" => "((char)0)".to_string(),
-            "str" => "\"\"".to_string(),
+            "str" => "gorget_str_from_literal(\"\", 0)".to_string(),
             "String" => "gorget_string_new(\"\")".to_string(),
             _ => {
                 let func = c_mangle::mangle_trait_method("Default", type_name, "default", &[]);

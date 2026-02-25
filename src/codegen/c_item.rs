@@ -2516,18 +2516,26 @@ impl CodegenContext<'_> {
     ) {
         let key_type = c_type_args.first().map(|s| s.as_str()).unwrap_or("int64_t");
         let val_type = c_type_args.get(1).map(|s| s.as_str()).unwrap_or("int64_t");
-        let is_str_key = key_type == "const char*";
+        let is_str_key = key_type == "const char*" || key_type == "Str";
 
         let hash_expr = |var: &str| -> String {
             if is_str_key {
-                format!("__gorget_hash_str({var})")
+                if key_type == "Str" {
+                    format!("__gorget_hash_str({var}.data)")
+                } else {
+                    format!("__gorget_hash_str({var})")
+                }
             } else {
                 format!("__gorget_fnv1a(&{var}, sizeof({key_type}))")
             }
         };
         let eq_expr = |a: &str, b: &str| -> String {
             if is_str_key {
-                format!("strcmp({a}, {b}) == 0")
+                if key_type == "Str" {
+                    format!("gorget_str_eq({a}, {b})")
+                } else {
+                    format!("strcmp({a}, {b}) == 0")
+                }
             } else {
                 format!("memcmp(&{a}, &{b}, sizeof({key_type})) == 0")
             }
@@ -5644,14 +5652,14 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                     if let Pattern::Binding(name) = &pattern.node {
                         let var = c_mangle::escape_keyword(name);
                         emitter.emit_line(&format!(
-                            "__self->{len_field} = strlen({iter_expr});"
+                            "__self->{len_field} = {iter_expr}.len;"
                         ));
                         emitter.emit_line(&format!(
                             "for (__self->{idx_field} = 0; __self->{idx_field} < __self->{len_field}; __self->{idx_field}++) {{"
                         ));
                         emitter.indent();
                         emitter.emit_line(&format!(
-                            "__self->{var} = {iter_expr}[__self->{idx_field}];"
+                            "__self->{var} = {iter_expr}.data[__self->{idx_field}];"
                         ));
                         self.emit_async_stmts(&body.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
                         emitter.dedent();
@@ -6487,7 +6495,8 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                             "int64_t" => Type::Primitive(PrimitiveType::Int),
                             "double" => Type::Primitive(PrimitiveType::Float),
                             "bool" => Type::Primitive(PrimitiveType::Bool),
-                            "const char*" => Type::Primitive(PrimitiveType::Str),
+                            "Str" => Type::Primitive(PrimitiveType::Str),
+                            "const char*" => Type::Primitive(PrimitiveType::CStr),
                             "char" => Type::Primitive(PrimitiveType::Char),
                             _ => Type::Named {
                                 name: crate::span::Spanned::dummy(c_type.clone()),

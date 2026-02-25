@@ -717,15 +717,15 @@ impl CodegenContext<'_> {
                     return true;
                 }
                 let c_type = self.infer_receiver_c_type(expr);
-                matches!(c_type.as_deref(), Some("const char*") | Some("GorgetString"))
+                matches!(c_type.as_deref(), Some("const char*") | Some("Str") | Some("GorgetString"))
             }
             Expr::MethodCall { .. } | Expr::Call { .. } => {
                 let c_type = self.infer_c_type_from_expr(&expr.node);
-                c_type == "const char*" || c_type == "GorgetString"
+                c_type == "const char*" || c_type == "Str" || c_type == "GorgetString"
             }
             Expr::FieldAccess { .. } => {
                 let c_type = self.infer_c_type_from_expr(&expr.node);
-                c_type == "const char*" || c_type == "GorgetString"
+                c_type == "const char*" || c_type == "Str" || c_type == "GorgetString"
             }
             Expr::Index { object, index } => {
                 // str[range] returns str

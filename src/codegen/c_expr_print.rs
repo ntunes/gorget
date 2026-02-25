@@ -57,6 +57,14 @@ impl CodegenContext<'_> {
         let nl = if newline { "\\n" } else { "" };
 
         if let Some(type_id) = self.infer_interp_expr_type(arg) {
+            // Check C-level type to avoid double .data on already-extracted pointers
+            let c_type = self.infer_c_type_from_expr(&arg.node);
+            if c_type == "const char*" {
+                return match &stream {
+                    Some(s) => format!("fprintf({s}, \"%s{nl}\", {expr})"),
+                    None => format!("printf(\"%s{nl}\", {expr})"),
+                };
+            }
             let (fmt, arg_expr) = self.format_for_type_id(type_id, &expr);
             return match &stream {
                 Some(s) => format!("fprintf({s}, \"{fmt}{nl}\", {arg_expr})"),
@@ -241,6 +249,20 @@ impl CodegenContext<'_> {
             if let Some(tid) = type_id {
                 return self.format_for_type_id(tid, &c_expr);
             }
+            // Fallback: use C type inference for expressions whose TypeId can't be resolved
+            let c_type = self.infer_c_type_from_expr(&parsed_expr.node);
+            match c_type.as_str() {
+                "Str" => return ("%s".to_string(), format!("{c_expr}.data")),
+                "const char*" => return ("%s".to_string(), c_expr),
+                "GorgetString" => {
+                    let data = self.extract_cstr_data(&c_expr, "GorgetString");
+                    return ("%s".to_string(), data);
+                }
+                "bool" => return ("%s".to_string(), format!("{c_expr} ? \"true\" : \"false\"")),
+                "char" => return ("%c".to_string(), c_expr),
+                "double" | "float" => return ("%f".to_string(), c_expr),
+                _ => {}
+            }
             // Default: assume int for unknown expression types
             return ("%lld".to_string(), format!("(long long){c_expr}"));
         }
@@ -412,7 +434,9 @@ impl CodegenContext<'_> {
                     PrimitiveType::Uint | PrimitiveType::Uint64 => {
                         format!("(unsigned long long){expr}")
                     }
-                    PrimitiveType::StringType => self.coerce_string_to_str(expr),
+                    PrimitiveType::Str => format!("{expr}.data"),
+                    PrimitiveType::CStr => expr.to_string(),
+                    PrimitiveType::StringType => self.extract_cstr_data(expr, "GorgetString"),
                     _ => expr.to_string(),
                 };
                 (fmt.to_string(), arg)
@@ -438,7 +462,8 @@ impl CodegenContext<'_> {
                     };
                     let mangled = c_mangle::mangle_trait_method("Displayable", &mangled_name, "display", &[]);
                     // Use a GCC statement expression to handle non-lvalue exprs
-                    let call = format!("({{ __typeof__({expr}) __tmp = {expr}; {mangled}(&__tmp); }})");
+                    // display() returns Str — extract .data for printf %s
+                    let call = format!("({{ __typeof__({expr}) __tmp = {expr}; {mangled}(&__tmp); }}).data");
                     ("%s".to_string(), call)
                 } else {
                     // Fallback: print the type name
@@ -566,14 +591,14 @@ impl CodegenContext<'_> {
             };
         }
         match (receiver_type, method) {
-            ("const char*", "len" | "hash" | "count") => Some(self.types.int_id),
-            ("const char*", "contains" | "starts_with" | "ends_with" | "is_empty") => {
+            ("Str" | "const char*", "len" | "hash" | "count") => Some(self.types.int_id),
+            ("Str" | "const char*", "contains" | "starts_with" | "ends_with" | "is_empty") => {
                 Some(self.types.bool_id)
             }
-            ("const char*", "trim" | "strip" | "lstrip" | "rstrip" | "to_upper" | "to_lower" | "replace" | "substring" | "repeat" | "join" | "removeprefix" | "removesuffix" | "pad_left" | "pad_right") => {
+            ("Str" | "const char*", "trim" | "strip" | "lstrip" | "rstrip" | "to_upper" | "to_lower" | "replace" | "substring" | "repeat" | "join" | "removeprefix" | "removesuffix" | "pad_left" | "pad_right") => {
                 Some(self.types.owned_string_id)
             }
-            ("const char*", "char_at") => Some(self.types.char_id),
+            ("Str" | "const char*", "char_at") => Some(self.types.char_id),
             (
                 "int64_t" | "int8_t" | "int16_t" | "int32_t" |
                 "uint64_t" | "uint8_t" | "uint16_t" | "uint32_t" |

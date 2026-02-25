@@ -1652,14 +1652,15 @@ static inline GorgetArray gorget_array_slice(const GorgetArray* arr, int64_t sta
 }
 
 static inline GorgetArray gorget_string_split(const char* s, const char* delim) {
-    GorgetArray arr = gorget_array_new(sizeof(const char*));
+    GorgetArray arr = gorget_array_new(sizeof(Str));
     size_t dlen = strlen(delim);
     if (dlen == 0) {
         size_t slen = strlen(s);
         for (size_t i = 0; i < slen; i++) {
             char* ch = (char*)GORGET_ALLOC(2);
             ch[0] = s[i]; ch[1] = '\0';
-            gorget_array_push(&arr, &ch);
+            Str sv = { .data = ch, .len = 1 };
+            gorget_array_push(&arr, &sv);
         }
         return arr;
     }
@@ -1670,14 +1671,16 @@ static inline GorgetArray gorget_string_split(const char* s, const char* delim) 
             size_t rem = strlen(p);
             char* part = (char*)GORGET_ALLOC(rem + 1);
             memcpy(part, p, rem + 1);
-            gorget_array_push(&arr, &part);
+            Str sv = { .data = part, .len = rem };
+            gorget_array_push(&arr, &sv);
             break;
         }
         size_t chunk = (size_t)(found - p);
         char* part = (char*)GORGET_ALLOC(chunk + 1);
         memcpy(part, p, chunk);
         part[chunk] = '\0';
-        gorget_array_push(&arr, &part);
+        Str sv = { .data = part, .len = chunk };
+        gorget_array_push(&arr, &sv);
         p = found + dlen;
     }
     return arr;
@@ -2151,7 +2154,7 @@ static inline const char* gorget_path_join(const char* a, const char* b) {
 
 // ── readdir ─────────────────────────────────────────────────
 static inline GorgetArray gorget_readdir(const char* path) {
-    GorgetArray arr = gorget_array_new(sizeof(const char*));
+    GorgetArray arr = gorget_array_new(sizeof(Str));
     DIR* d = opendir(path);
     if (!d) { fprintf(stderr, "Error: cannot open directory '%s'\n", path); exit(1); }
     struct dirent* ent;
@@ -2160,7 +2163,8 @@ static inline GorgetArray gorget_readdir(const char* path) {
         size_t nlen = strlen(ent->d_name);
         char* name = (char*)GORGET_ALLOC(nlen + 1);
         memcpy(name, ent->d_name, nlen + 1);
-        gorget_array_push(&arr, &name);
+        Str s = { .data = name, .len = nlen };
+        gorget_array_push(&arr, &s);
     }
     closedir(d);
     return arr;
@@ -2176,9 +2180,9 @@ static inline void gorget_init_args(int argc, char** argv) {
 }
 
 static inline GorgetArray gorget_args(void) {
-    GorgetArray arr = gorget_array_new(sizeof(const char*));
+    GorgetArray arr = gorget_array_new(sizeof(Str));
     for (int i = 0; i < gorget_argc; i++) {
-        const char* s = gorget_argv[i];
+        Str s = gorget_str_from_cstr(gorget_argv[i]);
         gorget_array_push(&arr, &s);
     }
     return arr;
@@ -2436,6 +2440,14 @@ static int __gorget_cmp_str(const void* a, const void* b) {
     const char* sb = *(const char* const*)b;
     return strcmp(sa, sb);
 }
+static int __gorget_cmp_Str(const void* a, const void* b) {
+    const Str* sa = (const Str*)a;
+    const Str* sb = (const Str*)b;
+    size_t min_len = sa->len < sb->len ? sa->len : sb->len;
+    int cmp = memcmp(sa->data, sb->data, min_len);
+    if (cmp != 0) return cmp;
+    return (sa->len > sb->len) - (sa->len < sb->len);
+}
 static int __gorget_cmp_char(const void* a, const void* b) {
     char ca = *(const char*)a, cb = *(const char*)b;
     return (ca > cb) - (ca < cb);
@@ -2510,6 +2522,7 @@ static void __gorget_trace_val_str(FILE* fp, const char* v) {
     }
     fputc('"', fp);
 }
+static void __gorget_trace_val_Str(FILE* fp, Str v) { __gorget_trace_val_str(fp, v.data); }
 static void __gorget_trace_val_char(FILE* fp, char v) { fprintf(fp, "'%c'", v); }
 static void __gorget_trace_val_void(FILE* fp) { (void)fp; }
 
@@ -2836,19 +2849,19 @@ static inline int64_t gorget_exec(const char* cmd) {
 }
 
 typedef struct ExecResult {
-    const char* output;
-    const char* errors;
+    Str output;
+    Str errors;
     int64_t exit_code;
 } ExecResult;
 
 static inline ExecResult gorget_exec_output(const char* cmd) {
     ExecResult result;
-    result.errors = "";
+    result.errors = gorget_str_from_literal("", 0);
 
     // Capture stdout via popen
     FILE* __proc_fp = popen(cmd, "r");
     if (!__proc_fp) {
-        result.output = "";
+        result.output = gorget_str_from_literal("", 0);
         result.exit_code = -1;
         return result;
     }
@@ -2869,7 +2882,7 @@ static inline ExecResult gorget_exec_output(const char* cmd) {
 
     int status = pclose(__proc_fp);
     result.exit_code = WIFEXITED(status) ? (int64_t)WEXITSTATUS(status) : -1;
-    result.output = buf;
+    result.output = (Str){ .data = buf, .len = len };
     return result;
 }
 "#;
@@ -3650,7 +3663,7 @@ typedef struct {
 } GorgetUdpSocket;
 
 typedef struct {
-    const char* host;
+    Str host;
     int64_t port;
 } GorgetUdpAddr;
 
@@ -3750,7 +3763,7 @@ static GorgetUdpPacket gorget_udp_recvfrom(GorgetUdpSocket* sock, int64_t max_by
     // Build sender address
     static __thread char sender_host[INET_ADDRSTRLEN];
     inet_ntop(AF_INET, &sender_addr.sin_addr, sender_host, sizeof(sender_host));
-    pkt.sender.host = sender_host;
+    pkt.sender.host = gorget_str_from_cstr(sender_host);
     pkt.sender.port = (int64_t)ntohs(sender_addr.sin_port);
 
     return pkt;
@@ -3811,7 +3824,7 @@ static GorgetUdpAddr gorget_udp_local_addr(GorgetUdpSocket* sock) {
     if (getsockname(sock->fd, (struct sockaddr*)&sa, &len) == 0) {
         static __thread char host_buf[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &sa.sin_addr, host_buf, sizeof(host_buf));
-        addr.host = host_buf;
+        addr.host = gorget_str_from_cstr(host_buf);
         addr.port = (int64_t)ntohs(sa.sin_port);
     }
     return addr;
@@ -4494,10 +4507,11 @@ static GorgetString gorget_regex_replace_all(GorgetRegex* rx, const char* subjec
 // ── Split ───────────────────────────────────────────────────────
 
 static GorgetArray gorget_regex_split(GorgetRegex* rx, const char* subject, int64_t limit) {
-    GorgetArray arr = {NULL, 0, 0, sizeof(const char*), __gorget_current_alloc};
+    GorgetArray arr = {NULL, 0, 0, sizeof(Str), __gorget_current_alloc};
     if (!rx->code || !subject) {
         const char* copy = strdup(subject ? subject : "");
-        gorget_array_push(&arr, &copy);
+        Str sv = gorget_str_from_cstr(copy);
+        gorget_array_push(&arr, &sv);
         return arr;
     }
     size_t subject_len = strlen(subject);
@@ -4513,8 +4527,8 @@ static GorgetArray gorget_regex_split(GorgetRegex* rx, const char* subject, int6
         char* seg = (char*)GORGET_ALLOC(seg_len + 1);
         memcpy(seg, subject + offset, seg_len);
         seg[seg_len] = '\0';
-        const char* seg_ptr = seg;
-        gorget_array_push(&arr, &seg_ptr);
+        Str sv = { .data = seg, .len = seg_len };
+        gorget_array_push(&arr, &sv);
         count++;
         if (ov[1] == ov[0]) offset = ov[0] + 1;
         else offset = ov[1];
@@ -4525,8 +4539,8 @@ static GorgetArray gorget_regex_split(GorgetRegex* rx, const char* subject, int6
     char* tail = (char*)GORGET_ALLOC(tail_len + 1);
     memcpy(tail, subject + offset, tail_len);
     tail[tail_len] = '\0';
-    const char* tail_ptr = tail;
-    gorget_array_push(&arr, &tail_ptr);
+    Str sv = { .data = tail, .len = tail_len };
+    gorget_array_push(&arr, &sv);
     return arr;
 }
 
@@ -4554,7 +4568,7 @@ static int64_t gorget_regex_capture_count(GorgetRegex* rx) {
 // ── Group names ─────────────────────────────────────────────────
 
 static GorgetArray gorget_regex_group_names(GorgetRegex* rx) {
-    GorgetArray arr = {NULL, 0, 0, sizeof(const char*), __gorget_current_alloc};
+    GorgetArray arr = {NULL, 0, 0, sizeof(Str), __gorget_current_alloc};
     if (!rx->code) return arr;
     uint32_t namecount;
     pcre2_pattern_info(rx->code, PCRE2_INFO_NAMECOUNT, &namecount);
@@ -4566,7 +4580,8 @@ static GorgetArray gorget_regex_group_names(GorgetRegex* rx) {
     for (uint32_t i = 0; i < namecount; i++) {
         PCRE2_SPTR entry = nametable + i * name_entry_size;
         const char* name = strdup((const char*)(entry + 2));
-        gorget_array_push(&arr, &name);
+        Str sv = gorget_str_from_cstr(name);
+        gorget_array_push(&arr, &sv);
     }
     return arr;
 }
@@ -4606,12 +4621,13 @@ static const char* gorget_regex_match_group_by_name(GorgetRegexMatch* m, const c
 
 // groups() → Vector[str] of all group values
 static GorgetArray gorget_regex_match_groups(GorgetRegexMatch* m) {
-    GorgetArray arr = {NULL, 0, 0, sizeof(const char*), __gorget_current_alloc};
+    GorgetArray arr = {NULL, 0, 0, sizeof(Str), __gorget_current_alloc};
     if (!m->groups) return arr;
     for (int64_t i = 0; i < m->group_count; i++) {
         const char* g = m->groups[i] ? m->groups[i] : "";
         const char* copy = strdup(g);
-        gorget_array_push(&arr, &copy);
+        Str sv = gorget_str_from_cstr(copy);
+        gorget_array_push(&arr, &sv);
     }
     return arr;
 }

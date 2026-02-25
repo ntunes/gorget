@@ -13,6 +13,7 @@ pub(super) fn sort_comparator_for_type(elem_type: &str) -> &'static str {
         "int64_t" | "int32_t" | "int16_t" | "int8_t" => "__gorget_cmp_i64",
         "uint64_t" | "uint32_t" | "uint16_t" | "uint8_t" => "__gorget_cmp_i64",
         "double" | "float" => "__gorget_cmp_f64",
+        "Str" => "__gorget_cmp_Str",
         "const char*" => "__gorget_cmp_str",
         "char" => "__gorget_cmp_char",
         "bool" => "__gorget_cmp_bool",
@@ -52,6 +53,8 @@ impl CodegenContext<'_> {
             Expr::StringLiteral(s) => {
                 if s.segments.iter().any(|seg| matches!(seg, StringSegment::Interpolation(_))) {
                     self.gen_gorget_format_from_string_lit(s)
+                } else if s.kind == crate::lexer::token::StringKind::CStr {
+                    self.gen_cstr_literal(s)
                 } else {
                     self.gen_string_literal(s)
                 }
@@ -156,15 +159,23 @@ impl CodegenContext<'_> {
                     if is_str {
                         let l = self.gen_expr(left);
                         let r = self.gen_expr(right);
-                        // Coerce GorgetString operands to .data for strcmp
-                        let l_type = self.infer_c_type_from_expr(&left.node);
-                        let r_type = self.infer_c_type_from_expr(&right.node);
-                        let l_str = if l_type == "GorgetString" { self.coerce_string_to_str(&l) } else { l };
-                        let r_str = if r_type == "GorgetString" { self.coerce_string_to_str(&r) } else { r };
+                        // Coerce both operands to Str for gorget_str_eq
+                        let l_type = self.infer_spanned_string_c_type(left);
+                        let r_type = self.infer_spanned_string_c_type(right);
+                        let l_str = match l_type.as_str() {
+                            "GorgetString" => self.coerce_string_to_str(&l),
+                            "const char*" => format!("gorget_str_from_cstr({l})"),
+                            _ => l, // already Str
+                        };
+                        let r_str = match r_type.as_str() {
+                            "GorgetString" => self.coerce_string_to_str(&r),
+                            "const char*" => format!("gorget_str_from_cstr({r})"),
+                            _ => r, // already Str
+                        };
                         return if *op == BinaryOp::Neq {
-                            format!("(strcmp({l_str}, {r_str}) != 0)")
+                            format!("(!gorget_str_eq({l_str}, {r_str}))")
                         } else {
-                            format!("(strcmp({l_str}, {r_str}) == 0)")
+                            format!("gorget_str_eq({l_str}, {r_str})")
                         };
                     }
                 }
@@ -177,12 +188,14 @@ impl CodegenContext<'_> {
                     if left_is_str || right_is_str {
                         let l = self.gen_expr(left);
                         let r = self.gen_expr(right);
-                        // Coerce both operands to const char*
-                        let l_type = self.infer_c_type_from_expr(&left.node);
-                        let r_type = self.infer_c_type_from_expr(&right.node);
-                        let l_str = if l_type == "GorgetString" { self.coerce_string_to_str(&l) } else { l };
-                        let r_str = if r_type == "GorgetString" { self.coerce_string_to_str(&r) } else { r };
-                        return format!("gorget_string_from_concat({l_str}, {r_str})");
+                        // Extract const char* from each operand for gorget_string_from_concat.
+                        // Use span-based resolution when spanless inference returns a non-string type
+                        // (e.g., pattern-bound variables in match arms with scoped_lookup conflicts).
+                        let l_type = self.infer_spanned_string_c_type(left);
+                        let r_type = self.infer_spanned_string_c_type(right);
+                        let l_cstr = self.extract_cstr_data(&l, &l_type);
+                        let r_cstr = self.extract_cstr_data(&r, &r_type);
+                        return format!("gorget_string_from_concat({l_cstr}, {r_cstr})");
                     }
                 }
                 // Vector concatenation: vec + vec → clone left, extend with right
@@ -299,6 +312,8 @@ impl CodegenContext<'_> {
                 let obj = self.gen_expr(object);
                 // Detect string receiver for runtime-checked indexing/slicing
                 if self.is_string_expr(object) {
+                    let obj_c_type = self.infer_spanned_string_c_type(object);
+                    let obj_data = self.extract_cstr_data(&obj, &obj_c_type);
                     if let Expr::Range { start, end, inclusive } = &index.node {
                         let s = start.as_ref().map(|e| self.gen_expr(e)).unwrap_or_else(|| "INT64_C(0)".to_string());
                         let e = if let Some(end_expr) = end.as_ref() {
@@ -309,12 +324,16 @@ impl CodegenContext<'_> {
                                 ev
                             }
                         } else {
-                            format!("(int64_t)strlen({obj})")
+                            // Use .len for Str/GorgetString, strlen for cstr
+                            match obj_c_type.as_str() {
+                                "Str" | "GorgetString" => format!("(int64_t){obj}.len"),
+                                _ => format!("(int64_t)strlen({obj})"),
+                            }
                         };
-                        format!("gorget_string_slice({obj}, {s}, {e})")
+                        format!("gorget_str_from_cstr(gorget_string_slice({obj_data}, {s}, {e}))")
                     } else {
                         let idx = self.gen_expr(index);
-                        format!("gorget_string_at({obj}, {idx})")
+                        format!("gorget_string_at({obj_data}, {idx})")
                     }
                 } else if self.is_vector_expr(object) {
                     if let Expr::Range { start, end, inclusive } = &index.node {
@@ -757,8 +776,8 @@ impl CodegenContext<'_> {
         )
     }
 
-    /// Generate a plain C string literal (no interpolation).
-    fn gen_string_literal(&mut self, s: &StringLiteral) -> String {
+    /// Generate a bare C string literal for cstr type (no fat pointer).
+    fn gen_cstr_literal(&mut self, s: &StringLiteral) -> String {
         let mut result = String::from("\"");
         for segment in &s.segments {
             match segment {
@@ -766,12 +785,29 @@ impl CodegenContext<'_> {
                     result.push_str(&escape_string(text));
                 }
                 StringSegment::Interpolation(_) => {
-                    unreachable!("gen_string_literal called with interpolation segment; should use gen_gorget_format_from_string_lit");
+                    unreachable!("gen_cstr_literal called with interpolation segment");
                 }
             }
         }
         result.push('"');
         result
+    }
+
+    /// Generate a Str fat pointer literal from a plain string (no interpolation).
+    fn gen_string_literal(&mut self, s: &StringLiteral) -> String {
+        let mut escaped = String::new();
+        for segment in &s.segments {
+            match segment {
+                StringSegment::Literal(text) => {
+                    escaped.push_str(&escape_string(text));
+                }
+                StringSegment::Interpolation(_) => {
+                    unreachable!("gen_string_literal called with interpolation segment; should use gen_gorget_format_from_string_lit");
+                }
+            }
+        }
+        let byte_len = compute_escaped_byte_len(&escaped);
+        format!("gorget_str_from_literal(\"{escaped}\", {byte_len})")
     }
 
     /// Canonical TypeId resolution for any expression.
@@ -1181,6 +1217,21 @@ pub(super) fn escape_string(s: &str) -> String {
         }
     }
     result
+}
+
+/// Compute the byte length of an already-escaped C string literal body.
+/// Handles escape sequences: `\\`, `\"`, `\n`, `\t`, `\r`, `\0` each count as 1 byte.
+fn compute_escaped_byte_len(escaped: &str) -> usize {
+    let mut len = 0;
+    let mut chars = escaped.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            // consume the escape character
+            chars.next();
+        }
+        len += 1;
+    }
+    len
 }
 
 /// Escape a string for use inside a printf/fprintf format string.
