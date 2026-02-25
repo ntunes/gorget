@@ -983,7 +983,7 @@ impl CodegenContext<'_> {
                 let end_arg = args.get(1)
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "0".to_string());
-                Some(format!("gorget_string_adopt((char*)gorget_string_slice({recv}.data, {start_arg}, {end_arg}))"))
+                Some(format!("gorget_string_from_str(gorget_str_byte_slice({str_recv}, {start_arg}, {end_arg}))"))
             }
             // Group C: split, index_of, count — non-string returns
             "split" => {
@@ -1001,6 +1001,16 @@ impl CodegenContext<'_> {
             "count" => {
                 let str_arg = self.gen_str_arg_from_call_arg(args.first());
                 Some(format!("gorget_str_count({str_recv}, {str_arg})"))
+            }
+            // Group D: iterator methods — return GorgetArray
+            "bytes" => {
+                Some(format!("gorget_str_bytes({str_recv})"))
+            }
+            "codepoints" => {
+                Some(format!("gorget_str_codepoints({str_recv})"))
+            }
+            "chars" => {
+                Some(format!("gorget_str_chars({str_recv})"))
             }
             // Unchanged methods
             "hash" => {

@@ -2445,6 +2445,9 @@ The following methods are available on built-in types without any import.
 | `removesuffix(suffix)` | `str → str` | Remove `suffix` if present, otherwise return unchanged (view) |
 | `pad_left(n, char)` | `int, char → String` | Left-pad to width `n` with fill character |
 | `pad_right(n, char)` | `int, char → String` | Right-pad to width `n` with fill character |
+| `bytes()` | `→ Vector[uint8]` | Raw UTF-8 bytes as a vector |
+| `codepoints()` | `→ Vector[int]` | Unicode codepoint values as a vector |
+| `chars()` | `→ Vector[str]` | Individual characters (codepoints) as `str` views |
 | `hash()` | `→ int` | Hash value |
 
 **Unicode support scope:**

@@ -151,7 +151,7 @@ impl CodegenContext<'_> {
                             eq_call
                         };
                     }
-                    // String Eq/Neq: use strcmp instead of pointer comparison
+                    // String Eq/Neq: use gorget_str_eq instead of pointer comparison
                     let is_str = self.resolve_expr_type_id(left).map_or(false, |t| t == self.types.string_id || t == self.types.owned_string_id)
                         || self.resolve_expr_type_id(right).map_or(false, |t| t == self.types.string_id || t == self.types.owned_string_id)
                         || matches!(&left.node, Expr::StringLiteral(_))

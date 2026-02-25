@@ -169,7 +169,7 @@
 - **Topological sort silent fallback for cycles**: `c_item.rs:166-172` comment says "cycles — shouldn't happen" but code silently handles them. Should `debug_assert!` or warn. [added: 2026-02-16]
 
 
-- **`c_runtime.rs` monolithic string constant**: 2,505-line single string constant is hard to navigate and edit. Split into separate const blocks or `.c` files. [added: 2026-02-16]
+- **`c_runtime.rs` monolithic string constant**: ~5,200-line single string constant is hard to navigate and edit. Split into separate const blocks or `.c` files. [added: 2026-02-16, updated: 2026-02-25]
 
 ## Best Effort
 

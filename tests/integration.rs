@@ -4276,6 +4276,33 @@ true
 }
 
 #[test]
+fn string_iterators() {
+    run_gg(
+        "string_iterators.gg",
+        "\
+3
+97
+98
+99
+5
+169
+3
+97
+98
+99
+4
+233
+3
+a
+b
+c
+4
+\u{e9}
+c-a-f-\u{e9}-",
+    );
+}
+
+#[test]
 fn hot_reload_basic() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fixture_path = manifest_dir.join("tests/fixtures/hot_reload_basic.gg");

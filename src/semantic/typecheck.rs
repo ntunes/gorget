@@ -2525,7 +2525,7 @@ impl<'a> TypeChecker<'a> {
             ResolvedType::Defined(def_id) => {
                 (self.scopes.get_def(*def_id).name.clone(), vec![])
             }
-            ResolvedType::Primitive(PrimitiveType::Str | PrimitiveType::StringType) => {
+            ResolvedType::Primitive(PrimitiveType::Str | PrimitiveType::StringType | PrimitiveType::CStr) => {
                 ("str".to_string(), vec![])
             }
             ResolvedType::Primitive(
@@ -2649,6 +2649,31 @@ impl<'a> TypeChecker<'a> {
                         Some(self.types.string_id) // fallback
                     }
                 }
+                "bytes" => {
+                    // Return Vector[uint8]
+                    if let Some(vec_def_id) = self.scopes.lookup("Vector") {
+                        let uint8_tid = self.types.insert(ResolvedType::Primitive(PrimitiveType::Uint8));
+                        Some(self.types.insert(ResolvedType::Generic(vec_def_id, vec![uint8_tid])))
+                    } else {
+                        Some(self.types.int_id)
+                    }
+                }
+                "codepoints" => {
+                    // Return Vector[int]
+                    if let Some(vec_def_id) = self.scopes.lookup("Vector") {
+                        Some(self.types.insert(ResolvedType::Generic(vec_def_id, vec![self.types.int_id])))
+                    } else {
+                        Some(self.types.int_id)
+                    }
+                }
+                "chars" => {
+                    // Return Vector[str]
+                    if let Some(vec_def_id) = self.scopes.lookup("Vector") {
+                        Some(self.types.insert(ResolvedType::Generic(vec_def_id, vec![self.types.string_id])))
+                    } else {
+                        Some(self.types.string_id)
+                    }
+                }
                 _ => None,
             },
             "Option" => match method {
@@ -2681,9 +2706,33 @@ impl<'a> TypeChecker<'a> {
                 _ => None,
             },
             "File" => match method {
-                "read_all" => Some(self.types.string_id),
+                "read_all" => {
+                    // Returns Result[String, str]
+                    if let Some(result_def_id) = self.scopes.lookup("Result") {
+                        Some(self.types.insert(ResolvedType::Generic(
+                            result_def_id,
+                            vec![self.types.owned_string_id, self.types.string_id],
+                        )))
+                    } else {
+                        Some(self.types.owned_string_id)
+                    }
+                }
                 "write" => Some(self.types.void_id),
                 "close" => Some(self.types.void_id),
+                _ => None,
+            },
+            "Socket" | "TlsSocket" => match method {
+                "read_line" => {
+                    // Returns Result[String, str]
+                    if let Some(result_def_id) = self.scopes.lookup("Result") {
+                        Some(self.types.insert(ResolvedType::Generic(
+                            result_def_id,
+                            vec![self.types.owned_string_id, self.types.string_id],
+                        )))
+                    } else {
+                        Some(self.types.owned_string_id)
+                    }
+                }
                 _ => None,
             },
             _ => None,
