@@ -279,7 +279,7 @@ equip Lexer:
 
     # ── Primitives ────────────────────────────────────────────
 
-    bool lex_at_end(self) = self.lex_pos >= self.lex_source.len()
+    bool lex_at_end(self) = self.lex_pos >= self.lex_source.byte_len()
 
     char lex_peek(self):
         return self.lex_source[self.lex_pos]
@@ -297,7 +297,7 @@ equip Lexer:
 
     int lex_count_leading_spaces(&self):
         int count = 0
-        while self.lex_pos < self.lex_source.len():
+        while self.lex_pos < self.lex_source.byte_len():
             char c = self.lex_source[self.lex_pos]
             if c == ' ':
                 count = count + 1
@@ -331,7 +331,7 @@ equip Lexer:
         if self.lex_finished:
             return
         self.lex_finished = true
-        int pos = self.lex_source.len()
+        int pos = self.lex_source.byte_len()
         if self.lex_need_newline:
             self.lex_emit(TkNewline(), pos, pos)
         while self.lex_indent_stack.len() > 1:
@@ -342,7 +342,7 @@ equip Lexer:
     # ── Skip helpers ──────────────────────────────────────────
 
     void lex_skip_to_eol(&self):
-        while self.lex_pos < self.lex_source.len() and self.lex_source[self.lex_pos] != '\n':
+        while self.lex_pos < self.lex_source.byte_len() and self.lex_source[self.lex_pos] != '\n':
             self.lex_pos = self.lex_pos + 1
 
     # ── Escape sequence parsing ───────────────────────────────
@@ -378,13 +378,13 @@ equip Lexer:
         elif c == '}':
             self.lex_advance()
             return Some('}')
-        elif c == 'u' and self.lex_pos + 1 < self.lex_source.len() and self.lex_peek_at(1) == '{':
+        elif c == 'u' and self.lex_pos + 1 < self.lex_source.byte_len() and self.lex_peek_at(1) == '{':
             self.lex_pos = self.lex_pos + 2
             int hex_start = self.lex_pos
-            while self.lex_pos < self.lex_source.len() and self.lex_peek() != '}':
+            while self.lex_pos < self.lex_source.byte_len() and self.lex_peek() != '}':
                 self.lex_advance()
             str hex_str = self.lex_source[hex_start..self.lex_pos]
-            if self.lex_pos < self.lex_source.len():
+            if self.lex_pos < self.lex_source.byte_len():
                 self.lex_advance()
             int code = lex_parse_int_radix(hex_str, 16)
             return Some(chr(code))
@@ -396,7 +396,7 @@ equip Lexer:
 
     void lex_scan_identifier(&self):
         int start = self.lex_pos
-        while self.lex_pos < self.lex_source.len():
+        while self.lex_pos < self.lex_source.byte_len():
             char c = self.lex_source[self.lex_pos]
             if c.is_alphanumeric() or c == '_':
                 self.lex_pos = self.lex_pos + 1
@@ -420,11 +420,11 @@ equip Lexer:
         char first = self.lex_peek()
 
         # Check for 0x, 0o, 0b prefixes
-        if first == '0' and self.lex_pos + 1 < self.lex_source.len():
+        if first == '0' and self.lex_pos + 1 < self.lex_source.byte_len():
             char prefix = self.lex_peek_at(1)
             if prefix == 'x' or prefix == 'X':
                 self.lex_pos = self.lex_pos + 2
-                while self.lex_pos < self.lex_source.len():
+                while self.lex_pos < self.lex_source.byte_len():
                     char c = self.lex_source[self.lex_pos]
                     if c.is_hex_digit() or c == '_':
                         self.lex_pos = self.lex_pos + 1
@@ -437,7 +437,7 @@ equip Lexer:
                 return
             elif prefix == 'o' or prefix == 'O':
                 self.lex_pos = self.lex_pos + 2
-                while self.lex_pos < self.lex_source.len():
+                while self.lex_pos < self.lex_source.byte_len():
                     char c = self.lex_source[self.lex_pos]
                     if c >= '0' and c <= '7' or c == '_':
                         self.lex_pos = self.lex_pos + 1
@@ -450,7 +450,7 @@ equip Lexer:
                 return
             elif prefix == 'b' or prefix == 'B':
                 self.lex_pos = self.lex_pos + 2
-                while self.lex_pos < self.lex_source.len():
+                while self.lex_pos < self.lex_source.byte_len():
                     char c = self.lex_source[self.lex_pos]
                     if c == '0' or c == '1' or c == '_':
                         self.lex_pos = self.lex_pos + 1
@@ -463,7 +463,7 @@ equip Lexer:
                 return
 
         # Decimal digits
-        while self.lex_pos < self.lex_source.len():
+        while self.lex_pos < self.lex_source.byte_len():
             char c = self.lex_source[self.lex_pos]
             if c.is_digit() or c == '_':
                 self.lex_pos = self.lex_pos + 1
@@ -472,11 +472,11 @@ equip Lexer:
 
         # Check for float (decimal point followed by digit)
         bool is_float = false
-        if self.lex_pos < self.lex_source.len() and self.lex_peek() == '.':
-            if self.lex_pos + 1 < self.lex_source.len() and self.lex_peek_at(1).is_digit():
+        if self.lex_pos < self.lex_source.byte_len() and self.lex_peek() == '.':
+            if self.lex_pos + 1 < self.lex_source.byte_len() and self.lex_peek_at(1).is_digit():
                 is_float = true
                 self.lex_pos = self.lex_pos + 1
-                while self.lex_pos < self.lex_source.len():
+                while self.lex_pos < self.lex_source.byte_len():
                     char c = self.lex_source[self.lex_pos]
                     if c.is_digit() or c == '_':
                         self.lex_pos = self.lex_pos + 1
@@ -484,16 +484,16 @@ equip Lexer:
                         break
 
         # Check for exponent
-        if self.lex_pos < self.lex_source.len():
+        if self.lex_pos < self.lex_source.byte_len():
             char ec = self.lex_peek()
             if ec == 'e' or ec == 'E':
                 is_float = true
                 self.lex_pos = self.lex_pos + 1
-                if self.lex_pos < self.lex_source.len():
+                if self.lex_pos < self.lex_source.byte_len():
                     char sign = self.lex_peek()
                     if sign == '+' or sign == '-':
                         self.lex_pos = self.lex_pos + 1
-                while self.lex_pos < self.lex_source.len():
+                while self.lex_pos < self.lex_source.byte_len():
                     char exp_d = self.lex_source[self.lex_pos]
                     if not exp_d.is_digit():
                         break
@@ -528,17 +528,17 @@ equip Lexer:
 
         # Check for triple-quote
         bool triple = false
-        if self.lex_pos + 1 < self.lex_source.len() and self.lex_peek() == '"' and self.lex_peek_at(1) == '"':
+        if self.lex_pos + 1 < self.lex_source.byte_len() and self.lex_peek() == '"' and self.lex_peek_at(1) == '"':
             triple = true
             self.lex_pos = self.lex_pos + 2
 
         Vector[StringSegment] segments = Vector[StringSegment]()
         str current_lit = ""
 
-        while self.lex_pos < self.lex_source.len():
+        while self.lex_pos < self.lex_source.byte_len():
             # Check for closing quote(s)
             if triple:
-                if self.lex_pos + 2 < self.lex_source.len() and self.lex_peek() == '"' and self.lex_peek_at(1) == '"' and self.lex_peek_at(2) == '"':
+                if self.lex_pos + 2 < self.lex_source.byte_len() and self.lex_peek() == '"' and self.lex_peek_at(1) == '"' and self.lex_peek_at(2) == '"':
                     self.lex_pos = self.lex_pos + 3
                     break
             else:
@@ -566,7 +566,7 @@ equip Lexer:
             # String interpolation: {expr}
             if self.lex_peek() == '{' and not is_raw:
                 # Check for escaped brace: {{
-                if self.lex_pos + 1 < self.lex_source.len() and self.lex_peek_at(1) == '{':
+                if self.lex_pos + 1 < self.lex_source.byte_len() and self.lex_peek_at(1) == '{':
                     current_lit = current_lit + char_to_str('{')
                     self.lex_pos = self.lex_pos + 2
                     continue
@@ -580,7 +580,7 @@ equip Lexer:
                 self.lex_advance()
                 int expr_start = self.lex_pos
                 int brace_depth = 1
-                while self.lex_pos < self.lex_source.len() and brace_depth > 0:
+                while self.lex_pos < self.lex_source.byte_len() and brace_depth > 0:
                     char bc = self.lex_peek()
                     if bc == '{':
                         brace_depth = brace_depth + 1
@@ -591,7 +591,7 @@ equip Lexer:
                     elif bc == '"':
                         # Skip nested string
                         self.lex_advance()
-                        while self.lex_pos < self.lex_source.len() and self.lex_peek() != '"':
+                        while self.lex_pos < self.lex_source.byte_len() and self.lex_peek() != '"':
                             if self.lex_peek() == '\\':
                                 self.lex_advance()
                             self.lex_advance()
@@ -599,13 +599,13 @@ equip Lexer:
 
                 str expr_text = self.lex_source[expr_start..self.lex_pos]
                 segments.push(SegInterpolation(expr_text))
-                if self.lex_pos < self.lex_source.len():
+                if self.lex_pos < self.lex_source.byte_len():
                     self.lex_advance()
                 continue
 
             # Escaped brace: }}
             if self.lex_peek() == '}' and not is_raw:
-                if self.lex_pos + 1 < self.lex_source.len() and self.lex_peek_at(1) == '}':
+                if self.lex_pos + 1 < self.lex_source.byte_len() and self.lex_peek_at(1) == '}':
                     current_lit = current_lit + char_to_str('}')
                     self.lex_pos = self.lex_pos + 2
                     continue
@@ -653,7 +653,7 @@ equip Lexer:
             ch = self.lex_peek()
             self.lex_advance()
 
-        if self.lex_pos < self.lex_source.len() and self.lex_peek() == '\'':
+        if self.lex_pos < self.lex_source.byte_len() and self.lex_peek() == '\'':
             self.lex_advance()
             self.lex_emit(TkChar(ch), start, self.lex_pos)
         else:
@@ -664,7 +664,7 @@ equip Lexer:
     void lex_scan_operator(&self):
         int start = self.lex_pos
         char c = self.lex_peek()
-        int remaining = self.lex_source.len() - self.lex_pos
+        int remaining = self.lex_source.byte_len() - self.lex_pos
 
         # Three-char operators
         if remaining >= 3:
@@ -852,10 +852,10 @@ equip Lexer:
         self.lex_advance()
 
         # Check for doc comment (## ...)
-        if self.lex_pos < self.lex_source.len() and self.lex_peek() == '#':
+        if self.lex_pos < self.lex_source.byte_len() and self.lex_peek() == '#':
             self.lex_advance()
             # Skip leading space
-            if self.lex_pos < self.lex_source.len() and self.lex_peek() == ' ':
+            if self.lex_pos < self.lex_source.byte_len() and self.lex_peek() == ' ':
                 self.lex_advance()
             int content_start = self.lex_pos
             self.lex_skip_to_eol()
@@ -864,7 +864,7 @@ equip Lexer:
             return
 
         # Regular comment: skip leading space
-        if self.lex_pos < self.lex_source.len() and self.lex_peek() == ' ':
+        if self.lex_pos < self.lex_source.byte_len() and self.lex_peek() == ' ':
             self.lex_advance()
         int content_start = self.lex_pos
         self.lex_skip_to_eol()
@@ -874,7 +874,7 @@ equip Lexer:
     # ── Tokenize one line's content ───────────────────────────
 
     void lex_tokenize_line(&self):
-        while self.lex_pos < self.lex_source.len():
+        while self.lex_pos < self.lex_source.byte_len():
             char c = self.lex_source[self.lex_pos]
 
             # End of line
@@ -895,10 +895,10 @@ equip Lexer:
             if c == '"':
                 self.lex_scan_string()
                 continue
-            if c == 'r' and self.lex_pos + 1 < self.lex_source.len() and self.lex_peek_at(1) == '"':
+            if c == 'r' and self.lex_pos + 1 < self.lex_source.byte_len() and self.lex_peek_at(1) == '"':
                 self.lex_scan_string()
                 continue
-            if c == 'b' and self.lex_pos + 1 < self.lex_source.len() and self.lex_peek_at(1) == '"':
+            if c == 'b' and self.lex_pos + 1 < self.lex_source.byte_len() and self.lex_peek_at(1) == '"':
                 self.lex_scan_string()
                 continue
 
@@ -923,16 +923,16 @@ equip Lexer:
     # ── Main loop: scan line by line ──────────────────────────
 
     void lex_scan_next_line(&self):
-        if self.lex_pos >= self.lex_source.len():
+        if self.lex_pos >= self.lex_source.byte_len():
             self.lex_emit_eof()
             return
 
         # Skip blank lines and comment-only lines
-        while self.lex_pos < self.lex_source.len():
+        while self.lex_pos < self.lex_source.byte_len():
             int line_start = self.lex_pos
             int spaces = self.lex_count_leading_spaces()
 
-            if self.lex_pos >= self.lex_source.len():
+            if self.lex_pos >= self.lex_source.byte_len():
                 self.lex_emit_eof()
                 return
 
@@ -945,22 +945,22 @@ equip Lexer:
 
             # Comment-only line (not doc comment)
             if c == '#':
-                if self.lex_pos + 1 < self.lex_source.len() and self.lex_peek_at(1) == '#':
+                if self.lex_pos + 1 < self.lex_source.byte_len() and self.lex_peek_at(1) == '#':
                     # Doc comment — treat as content
                     pass
                 else:
                     # Regular comment — emit and skip line
                     self.lex_scan_comment()
-                    if self.lex_pos < self.lex_source.len() and self.lex_peek() == '\n':
+                    if self.lex_pos < self.lex_source.byte_len() and self.lex_peek() == '\n':
                         self.lex_pos = self.lex_pos + 1
                     continue
 
             # Leading dot continuation (suppress indentation processing)
             if c == '.' and self.lex_bracket_depth == 0:
-                if self.lex_pos + 1 < self.lex_source.len() and self.lex_peek_at(1) != '.':
+                if self.lex_pos + 1 < self.lex_source.byte_len() and self.lex_peek_at(1) != '.':
                     self.lex_emit_newline_if_needed(line_start)
                     self.lex_tokenize_line()
-                    if self.lex_pos < self.lex_source.len() and self.lex_peek() == '\n':
+                    if self.lex_pos < self.lex_source.byte_len() and self.lex_peek() == '\n':
                         self.lex_pos = self.lex_pos + 1
                     self.lex_need_newline = true
                     return
@@ -972,7 +972,7 @@ equip Lexer:
 
             # Tokenize the line content
             self.lex_tokenize_line()
-            if self.lex_pos < self.lex_source.len() and self.lex_peek() == '\n':
+            if self.lex_pos < self.lex_source.byte_len() and self.lex_peek() == '\n':
                 self.lex_pos = self.lex_pos + 1
             self.lex_need_newline = true
             return
@@ -988,7 +988,7 @@ equip Lexer:
 str str_remove_char(str s, char target):
     str result = ""
     int i = 0
-    while i < s.len():
+    while i < s.byte_len():
         char c = s[i]
         if c != target:
             result = result + char_to_str(c)
@@ -998,7 +998,7 @@ str str_remove_char(str s, char target):
 int lex_parse_int_radix(str s, int radix):
     int result = 0
     int i = 0
-    while i < s.len():
+    while i < s.byte_len():
         char c = s[i]
         int digit = 0
         if c >= '0' and c <= '9':

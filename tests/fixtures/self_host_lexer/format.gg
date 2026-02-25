@@ -21,7 +21,7 @@ str escape_char_canonical(char c):
 str escape_canonical(str s):
     str result = ""
     int i = 0
-    while i < s.len():
+    while i < s.byte_len():
         char c = s[i]
         result = result + escape_char_canonical(c)
         i = i + 1

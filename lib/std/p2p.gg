@@ -371,16 +371,16 @@ Result[bool, str] p2p_bootstrap(Node &node, Vector[str] addrs):
         # Parse "host:port" — find last colon
         int colon = -1
         int j = 0
-        while j < addr_str.len():
+        while j < addr_str.byte_len():
             if addr_str[j] == ':':
                 colon = j
             j = j + 1
         if colon > 0:
             str host = addr_str[0..colon]
-            str port_str = addr_str[colon + 1..addr_str.len()]
+            str port_str = addr_str[colon + 1..addr_str.byte_len()]
             int port = 0
             int k = 0
-            while k < port_str.len():
+            while k < port_str.byte_len():
                 int d = port_str[k] as int - 48
                 port = port * 10 + d
                 k = k + 1
@@ -536,16 +536,16 @@ Result[ExternalAddr, str] p2p_discover_external_addr(Node &node, str probe_host,
             # Parse "host:port"
             int colon = -1
             int j = 0
-            while j < addr_str.len():
+            while j < addr_str.byte_len():
                 if addr_str[j] == ':':
                     colon = j
                 j = j + 1
             if colon > 0:
                 str ext_host = addr_str[0..colon]
-                str port_str = addr_str[colon + 1..addr_str.len()]
+                str port_str = addr_str[colon + 1..addr_str.byte_len()]
                 int ext_port = 0
                 int k = 0
-                while k < port_str.len():
+                while k < port_str.byte_len():
                     int d = port_str[k] as int - 48
                     ext_port = ext_port * 10 + d
                     k = k + 1

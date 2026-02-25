@@ -2624,7 +2624,7 @@ impl<'a> TypeChecker<'a> {
                 _ => None,
             },
             "str" | "String" => match method {
-                "len" | "hash" | "count" => Some(self.types.int_id),
+                "len" | "hash" | "count" | "byte_len" => Some(self.types.int_id),
                 "index_of" => {
                     if let Some(option_def_id) = self.scopes.lookup("Option") {
                         Some(self.types.insert(ResolvedType::Generic(option_def_id, vec![self.types.int_id])))

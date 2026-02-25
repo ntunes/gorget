@@ -48,14 +48,14 @@ equip TomlParser:
             self.err = consuming msg
 
     char peek(self):
-        if self.pos < self.source.len():
+        if self.pos < self.source.byte_len():
             return self.source[self.pos]
         return '\0'
 
-    bool at_end(self) = self.pos >= self.source.len()
+    bool at_end(self) = self.pos >= self.source.byte_len()
 
     void skip_ws(&self):
-        while self.pos < self.source.len():
+        while self.pos < self.source.byte_len():
             char ch = self.source[self.pos]
             if ch == ' ' or ch == '\t':
                 self.pos = self.pos + 1
@@ -63,7 +63,7 @@ equip TomlParser:
                 return
 
     void skip_ws_and_newlines(&self):
-        while self.pos < self.source.len():
+        while self.pos < self.source.byte_len():
             char ch = self.source[self.pos]
             if ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r':
                 self.pos = self.pos + 1
@@ -73,27 +73,27 @@ equip TomlParser:
                 return
 
     void skip_comment(&self):
-        while self.pos < self.source.len() and self.source[self.pos] != '\n':
+        while self.pos < self.source.byte_len() and self.source[self.pos] != '\n':
             self.pos = self.pos + 1
 
     void skip_to_newline(&self):
         self.skip_ws()
-        if self.pos < self.source.len():
+        if self.pos < self.source.byte_len():
             char ch = self.source[self.pos]
             if ch == '#':
                 self.skip_comment()
-            if self.pos < self.source.len() and self.source[self.pos] == '\n':
+            if self.pos < self.source.byte_len() and self.source[self.pos] == '\n':
                 self.pos = self.pos + 1
-            elif self.pos < self.source.len() and self.source[self.pos] == '\r':
+            elif self.pos < self.source.byte_len() and self.source[self.pos] == '\r':
                 self.pos = self.pos + 1
-                if self.pos < self.source.len() and self.source[self.pos] == '\n':
+                if self.pos < self.source.byte_len() and self.source[self.pos] == '\n':
                     self.pos = self.pos + 1
 
     # ── Key parsing ─────────────────────────────────────────
 
     str parse_bare_key(&self):
         int start = self.pos
-        while self.pos < self.source.len():
+        while self.pos < self.source.byte_len():
             char ch = self.source[self.pos]
             if ch >= 'a' and ch <= 'z':
                 self.pos = self.pos + 1
@@ -111,7 +111,7 @@ equip TomlParser:
         return self.source[start..self.pos]
 
     str parse_key_part(&self):
-        if self.pos >= self.source.len():
+        if self.pos >= self.source.byte_len():
             self.fail("expected key")
             return ""
         char ch = self.source[self.pos]
@@ -127,7 +127,7 @@ equip TomlParser:
         if self.failed():
             return parts
         parts.push(first_part)
-        while self.pos < self.source.len() and self.source[self.pos] == '.':
+        while self.pos < self.source.byte_len() and self.source[self.pos] == '.':
             self.pos = self.pos + 1
             str next_part = self.parse_key_part()
             if self.failed():
@@ -141,11 +141,11 @@ equip TomlParser:
         # Skip opening "
         self.pos = self.pos + 1
         # Check for multi-line """
-        if self.pos + 1 < self.source.len() and self.source[self.pos] == '"' and self.source[self.pos + 1] == '"':
+        if self.pos + 1 < self.source.byte_len() and self.source[self.pos] == '"' and self.source[self.pos + 1] == '"':
             self.pos = self.pos + 2
             return self.parse_ml_basic_string()
         str toml_result = ""
-        while self.pos < self.source.len():
+        while self.pos < self.source.byte_len():
             char ch = self.source[self.pos]
             if ch == '"':
                 self.pos = self.pos + 1
@@ -160,19 +160,19 @@ equip TomlParser:
 
     str parse_ml_basic_string(&self):
         # Skip optional first newline after """
-        if self.pos < self.source.len() and self.source[self.pos] == '\n':
+        if self.pos < self.source.byte_len() and self.source[self.pos] == '\n':
             self.pos = self.pos + 1
-        elif self.pos + 1 < self.source.len() and self.source[self.pos] == '\r' and self.source[self.pos + 1] == '\n':
+        elif self.pos + 1 < self.source.byte_len() and self.source[self.pos] == '\r' and self.source[self.pos + 1] == '\n':
             self.pos = self.pos + 2
         str toml_result = ""
-        while self.pos < self.source.len():
-            if self.pos + 2 < self.source.len() and self.source[self.pos] == '"' and self.source[self.pos + 1] == '"' and self.source[self.pos + 2] == '"':
+        while self.pos < self.source.byte_len():
+            if self.pos + 2 < self.source.byte_len() and self.source[self.pos] == '"' and self.source[self.pos + 1] == '"' and self.source[self.pos + 2] == '"':
                 self.pos = self.pos + 3
                 return toml_result
             char ch = self.source[self.pos]
             if ch == '\\':
                 self.pos = self.pos + 1
-                if self.pos < self.source.len():
+                if self.pos < self.source.byte_len():
                     char next_ch = self.source[self.pos]
                     if next_ch == '\n' or next_ch == '\r':
                         self.skip_ws_and_newlines()
@@ -190,7 +190,7 @@ equip TomlParser:
 
     str parse_escape(&self):
         self.pos = self.pos + 1
-        if self.pos >= self.source.len():
+        if self.pos >= self.source.byte_len():
             self.fail("unterminated escape sequence")
             return ""
         char esc = self.source[self.pos]
@@ -215,7 +215,7 @@ equip TomlParser:
                 toml_hex_len = 8
             int toml_uni_cp = 0
             int toml_uni_cnt = 0
-            while toml_uni_cnt < toml_hex_len and self.pos < self.source.len():
+            while toml_uni_cnt < toml_hex_len and self.pos < self.source.byte_len():
                 char toml_uhc = self.source[self.pos]
                 int toml_uhv = -1
                 if toml_uhc >= '0' and toml_uhc <= '9':
@@ -239,11 +239,11 @@ equip TomlParser:
 
     str parse_literal_string(&self):
         self.pos = self.pos + 1
-        if self.pos + 1 < self.source.len() and self.source[self.pos] == '\'' and self.source[self.pos + 1] == '\'':
+        if self.pos + 1 < self.source.byte_len() and self.source[self.pos] == '\'' and self.source[self.pos + 1] == '\'':
             self.pos = self.pos + 2
             return self.parse_ml_literal_string()
         str toml_result = ""
-        while self.pos < self.source.len():
+        while self.pos < self.source.byte_len():
             char ch = self.source[self.pos]
             if ch == '\'':
                 self.pos = self.pos + 1
@@ -254,13 +254,13 @@ equip TomlParser:
         return ""
 
     str parse_ml_literal_string(&self):
-        if self.pos < self.source.len() and self.source[self.pos] == '\n':
+        if self.pos < self.source.byte_len() and self.source[self.pos] == '\n':
             self.pos = self.pos + 1
-        elif self.pos + 1 < self.source.len() and self.source[self.pos] == '\r' and self.source[self.pos + 1] == '\n':
+        elif self.pos + 1 < self.source.byte_len() and self.source[self.pos] == '\r' and self.source[self.pos + 1] == '\n':
             self.pos = self.pos + 2
         str toml_result = ""
-        while self.pos < self.source.len():
-            if self.pos + 2 < self.source.len() and self.source[self.pos] == '\'' and self.source[self.pos + 1] == '\'' and self.source[self.pos + 2] == '\'':
+        while self.pos < self.source.byte_len():
+            if self.pos + 2 < self.source.byte_len() and self.source[self.pos] == '\'' and self.source[self.pos + 1] == '\'' and self.source[self.pos + 2] == '\'':
                 self.pos = self.pos + 3
                 return toml_result
             toml_result = toml_result + char_to_str(self.source[self.pos])
@@ -295,20 +295,20 @@ equip TomlParser:
         return self.parse_number_or_date()
 
     TomlValue parse_bool(&self):
-        if self.pos + 4 <= self.source.len() and self.source[self.pos..self.pos + 4] == "true":
+        if self.pos + 4 <= self.source.byte_len() and self.source[self.pos..self.pos + 4] == "true":
             self.pos = self.pos + 4
             return Bool(true)
-        if self.pos + 5 <= self.source.len() and self.source[self.pos..self.pos + 5] == "false":
+        if self.pos + 5 <= self.source.byte_len() and self.source[self.pos..self.pos + 5] == "false":
             self.pos = self.pos + 5
             return Bool(false)
         self.fail("expected boolean")
         return Str("")
 
     TomlValue parse_special_float(&self):
-        if self.pos + 3 <= self.source.len() and self.source[self.pos..self.pos + 3] == "inf":
+        if self.pos + 3 <= self.source.byte_len() and self.source[self.pos..self.pos + 3] == "inf":
             self.pos = self.pos + 3
             return Float(1.0 / 0.0)
-        if self.pos + 3 <= self.source.len() and self.source[self.pos..self.pos + 3] == "nan":
+        if self.pos + 3 <= self.source.byte_len() and self.source[self.pos..self.pos + 3] == "nan":
             self.pos = self.pos + 3
             return Float(0.0 / 0.0)
         self.fail("unexpected keyword")
@@ -318,23 +318,23 @@ equip TomlParser:
         self.pos = self.pos + 1
         Vector[TomlValue] elems = Vector[TomlValue]()
         self.skip_ws_and_newlines()
-        if self.pos < self.source.len() and self.source[self.pos] == ']':
+        if self.pos < self.source.byte_len() and self.source[self.pos] == ']':
             self.pos = self.pos + 1
             return Arr(elems)
-        while self.pos < self.source.len():
+        while self.pos < self.source.byte_len():
             self.skip_ws_and_newlines()
             TomlValue elem = self.parse_value()
             if self.failed():
                 return Str("")
             elems.push(elem)
             self.skip_ws_and_newlines()
-            if self.pos >= self.source.len():
+            if self.pos >= self.source.byte_len():
                 self.fail("unterminated array")
                 return Str("")
             if self.source[self.pos] == ',':
                 self.pos = self.pos + 1
                 self.skip_ws_and_newlines()
-                if self.pos < self.source.len() and self.source[self.pos] == ']':
+                if self.pos < self.source.byte_len() and self.source[self.pos] == ']':
                     self.pos = self.pos + 1
                     return Arr(elems)
             elif self.source[self.pos] == ']':
@@ -350,16 +350,16 @@ equip TomlParser:
         self.pos = self.pos + 1
         Dict[str, TomlValue] tbl = Dict[str, TomlValue]()
         self.skip_ws()
-        if self.pos < self.source.len() and self.source[self.pos] == '}':
+        if self.pos < self.source.byte_len() and self.source[self.pos] == '}':
             self.pos = self.pos + 1
             return Tbl(tbl)
-        while self.pos < self.source.len():
+        while self.pos < self.source.byte_len():
             self.skip_ws()
             Vector[str] key_parts = self.parse_key()
             if self.failed():
                 return Str("")
             self.skip_ws()
-            if self.pos >= self.source.len() or self.source[self.pos] != '=':
+            if self.pos >= self.source.byte_len() or self.source[self.pos] != '=':
                 self.fail("expected '=' after key in inline table")
                 return Str("")
             self.pos = self.pos + 1
@@ -375,7 +375,7 @@ equip TomlParser:
                 TomlValue nested = toml_wrap_dotted(key_parts, 0, tbl_val)
                 tbl.put(key_parts.get(0).unwrap(), nested)
             self.skip_ws()
-            if self.pos >= self.source.len():
+            if self.pos >= self.source.byte_len():
                 self.fail("unterminated inline table")
                 return Str("")
             if self.source[self.pos] == ',':
@@ -394,13 +394,13 @@ equip TomlParser:
     TomlValue parse_number_or_date(&self):
         int start = self.pos
         bool is_negative = false
-        if self.pos < self.source.len() and self.source[self.pos] == '-':
+        if self.pos < self.source.byte_len() and self.source[self.pos] == '-':
             is_negative = true
             self.pos = self.pos + 1
-        elif self.pos < self.source.len() and self.source[self.pos] == '+':
+        elif self.pos < self.source.byte_len() and self.source[self.pos] == '+':
             self.pos = self.pos + 1
         # Check for hex/oct/bin prefixes
-        if self.pos + 1 < self.source.len() and self.source[self.pos] == '0':
+        if self.pos + 1 < self.source.byte_len() and self.source[self.pos] == '0':
             char num_prefix = self.source[self.pos + 1]
             if num_prefix == 'x' or num_prefix == 'o' or num_prefix == 'b':
                 return self.parse_prefixed_int(start, is_negative, num_prefix)
@@ -408,7 +408,7 @@ equip TomlParser:
         bool has_dot = false
         bool has_exp = false
         bool could_be_date = false
-        while self.pos < self.source.len():
+        while self.pos < self.source.byte_len():
             char ch = self.source[self.pos]
             if ch >= '0' and ch <= '9':
                 self.pos = self.pos + 1
@@ -420,7 +420,7 @@ equip TomlParser:
             elif ch == 'e' or ch == 'E':
                 has_exp = true
                 self.pos = self.pos + 1
-                if self.pos < self.source.len():
+                if self.pos < self.source.byte_len():
                     char sign_ch = self.source[self.pos]
                     if sign_ch == '+' or sign_ch == '-':
                         self.pos = self.pos + 1
@@ -451,7 +451,7 @@ equip TomlParser:
         elif num_prefix == 'b':
             base = 2
         bool has_digits = false
-        while self.pos < self.source.len():
+        while self.pos < self.source.byte_len():
             char ch = self.source[self.pos]
             if ch == '_':
                 self.pos = self.pos + 1
@@ -512,7 +512,7 @@ equip TomlParser:
 
     void parse_document(&self):
         self.skip_ws_and_newlines()
-        while self.pos < self.source.len() and not self.failed():
+        while self.pos < self.source.byte_len() and not self.failed():
             char ch = self.source[self.pos]
             if ch == '#':
                 self.skip_comment()
@@ -527,7 +527,7 @@ equip TomlParser:
                 if self.failed():
                     return
                 self.skip_ws()
-                if self.pos >= self.source.len() or self.source[self.pos] != '=':
+                if self.pos >= self.source.byte_len() or self.source[self.pos] != '=':
                     self.fail("expected '=' after key")
                     return
                 self.pos = self.pos + 1
@@ -542,7 +542,7 @@ equip TomlParser:
     void parse_table_header(&self):
         self.pos = self.pos + 1
         bool is_array_table = false
-        if self.pos < self.source.len() and self.source[self.pos] == '[':
+        if self.pos < self.source.byte_len() and self.source[self.pos] == '[':
             is_array_table = true
             self.pos = self.pos + 1
         self.skip_ws()
@@ -550,12 +550,12 @@ equip TomlParser:
         if self.failed():
             return
         self.skip_ws()
-        if self.pos >= self.source.len() or self.source[self.pos] != ']':
+        if self.pos >= self.source.byte_len() or self.source[self.pos] != ']':
             self.fail("expected ']' in table header")
             return
         self.pos = self.pos + 1
         if is_array_table:
-            if self.pos >= self.source.len() or self.source[self.pos] != ']':
+            if self.pos >= self.source.byte_len() or self.source[self.pos] != ']':
                 self.fail("expected ']]' in array-of-tables header")
                 return
             self.pos = self.pos + 1
@@ -580,7 +580,7 @@ TomlValue toml_wrap_dotted(Vector[str] key_parts, int from_idx, TomlValue leaf_v
 str toml_strip_underscores(str txt):
     str cleaned = ""
     int ti = 0
-    while ti < txt.len():
+    while ti < txt.byte_len():
         char tc = txt[ti]
         if tc != '_':
             cleaned = cleaned + char_to_str(tc)
@@ -720,7 +720,7 @@ Result[TomlValue, str] toml_parse(str input):
 str toml_escape_string(str sv):
     str toml_out = "\""
     int si = 0
-    while si < sv.len():
+    while si < sv.byte_len():
         char sc = sv[si]
         if sc == '"':
             toml_out = toml_out + "\\\""

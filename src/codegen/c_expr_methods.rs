@@ -867,6 +867,16 @@ impl CodegenContext<'_> {
         match method_name {
             "len" => {
                 if is_owned {
+                    // GorgetString → coerce to Str, then count codepoints
+                    Some(format!("gorget_str_codepoint_count((Str){{ .data = {recv}.data, .len = {recv}.len }})"))
+                } else if needs_temp {
+                    Some(format!("({{ Str __s = {recv}; gorget_str_codepoint_count(__s); }})"))
+                } else {
+                    Some(format!("gorget_str_codepoint_count({recv})"))
+                }
+            }
+            "byte_len" => {
+                if is_owned {
                     Some(format!("(int64_t){recv}.len"))
                 } else if needs_temp {
                     Some(format!("({{ Str __s = {recv}; (int64_t)__s.len; }})"))

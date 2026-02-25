@@ -26,9 +26,9 @@ struct HttpResponse:
     int http_port = 443
 
     if url.starts_with("https://"):
-        http_rest = url[8..url.len()]
+        http_rest = url[8..url.byte_len()]
     elif url.starts_with("http://"):
-        http_rest = url[7..url.len()]
+        http_rest = url[7..url.byte_len()]
         http_port = 80
 
     # Split host from path at the first "/"
@@ -38,7 +38,7 @@ struct HttpResponse:
     if http_sl.is_some():
         int http_sl_v = http_sl.unwrap()
         http_hp = http_rest[0..http_sl_v]
-        http_path = http_rest[http_sl_v..http_rest.len()]
+        http_path = http_rest[http_sl_v..http_rest.byte_len()]
 
     # Split host:port
     Option[int] http_cp = http_hp.index_of(":")
@@ -46,7 +46,7 @@ struct HttpResponse:
     if http_cp.is_some():
         int http_cp_v = http_cp.unwrap()
         http_host = http_hp[0..http_cp_v]
-        str http_ps = http_hp[http_cp_v + 1..http_hp.len()]
+        str http_ps = http_hp[http_cp_v + 1..http_hp.byte_len()]
         Option[int] http_port_parsed = int.parse(http_ps)
         if http_port_parsed is Some(http_pv):
             http_port = http_pv
@@ -58,7 +58,7 @@ struct HttpResponse:
 int http_parse_hex(str http_hex):
     int http_val = 0
     int http_hi = 0
-    while http_hi < http_hex.len():
+    while http_hi < http_hex.byte_len():
         char http_hc = http_hex[http_hi]
         int http_hv = 0
         if http_hc >= '0' and http_hc <= '9':
@@ -134,8 +134,8 @@ Result[HttpResponse, str] http_single(str http_method, str http_url, str http_bo
     http_req = http_req + "Host: " + http_host + "\r\n"
 
     # Content-Length if body is non-empty
-    if http_body.len() > 0:
-        http_req = http_req + "Content-Length: " + int_to_str(http_body.len()) + "\r\n"
+    if http_body.byte_len() > 0:
+        http_req = http_req + "Content-Length: " + int_to_str(http_body.byte_len()) + "\r\n"
 
     # User-supplied headers — copy parameter into local for codegen type resolution
     Dict[str, str] http_local_hdrs = http_hdrs
@@ -151,7 +151,7 @@ Result[HttpResponse, str] http_single(str http_method, str http_url, str http_bo
     http_req = http_req + "\r\n"
 
     # Append body
-    if http_body.len() > 0:
+    if http_body.byte_len() > 0:
         http_req = http_req + http_body
 
     http_conn.write_str(http_req)
@@ -163,7 +163,7 @@ Result[HttpResponse, str] http_single(str http_method, str http_url, str http_bo
     Option[int] http_sp1 = http_status_line.index_of(" ")
     int http_code = 0
     if http_sp1.is_some():
-        str http_after = http_status_line[http_sp1.unwrap() + 1..http_status_line.len()]
+        str http_after = http_status_line[http_sp1.unwrap() + 1..http_status_line.byte_len()]
         Option[int] http_sp2 = http_after.index_of(" ")
         if http_sp2.is_some():
             str http_code_str = http_after[0..http_sp2.unwrap()]
@@ -187,7 +187,7 @@ Result[HttpResponse, str] http_single(str http_method, str http_url, str http_bo
             if http_colon.is_some():
                 int http_colon_v = http_colon.unwrap()
                 str http_hname = http_hdr_line[0..http_colon_v].trim().to_lower()
-                str http_hval = http_hdr_line[http_colon_v + 1..http_hdr_line.len()].trim()
+                str http_hval = http_hdr_line[http_colon_v + 1..http_hdr_line.byte_len()].trim()
                 http_resp_hdrs.put(http_hname, http_hval)
 
     # Body

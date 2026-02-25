@@ -171,6 +171,22 @@ world",
 }
 
 #[test]
+fn str_codepoint_len() {
+    run_gg(
+        "str_codepoint_len.gg",
+        "\
+5
+5
+4
+5
+2
+6
+0
+0",
+    );
+}
+
+#[test]
 fn expressions() {
     run_gg(
         "expressions.gg",

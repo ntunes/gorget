@@ -1226,10 +1226,13 @@ fn compute_escaped_byte_len(escaped: &str) -> usize {
     let mut chars = escaped.chars();
     while let Some(c) = chars.next() {
         if c == '\\' {
-            // consume the escape character
+            // Escape sequence — always 1 byte in C output
             chars.next();
+            len += 1;
+        } else {
+            // Non-escaped character: count its UTF-8 byte length
+            len += c.len_utf8();
         }
-        len += 1;
     }
     len
 }

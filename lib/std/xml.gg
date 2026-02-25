@@ -19,11 +19,11 @@ enum XmlNode:
 # ── Hex parsing helper ────────────────────────────────────
 
 int xml_hex_to_int(str hex_str):
-    if hex_str.len() == 0:
+    if hex_str.byte_len() == 0:
         return -1
     int result = 0
     int hi = 0
-    while hi < hex_str.len():
+    while hi < hex_str.byte_len():
         char hc = hex_str[hi]
         int digit = -1
         if hc >= '0' and hc <= '9':
@@ -43,13 +43,13 @@ int xml_hex_to_int(str hex_str):
 str xml_decode_entities(str raw):
     str decoded = ""
     int ei = 0
-    while ei < raw.len():
+    while ei < raw.byte_len():
         char ec = raw[ei]
         if ec == '&':
             int semi_pos = ei + 1
-            while semi_pos < raw.len() and raw[semi_pos] != ';':
+            while semi_pos < raw.byte_len() and raw[semi_pos] != ';':
                 semi_pos = semi_pos + 1
-            if semi_pos < raw.len():
+            if semi_pos < raw.byte_len():
                 str entity_name = raw[ei + 1..semi_pos]
                 if entity_name == "amp":
                     decoded = decoded + "&"
@@ -68,18 +68,18 @@ str xml_decode_entities(str raw):
                     ei = semi_pos + 1
                 else:
                     int nc_code = -1
-                    if entity_name.len() > 1:
+                    if entity_name.byte_len() > 1:
                         char en_first = entity_name[0]
                         if en_first == '#':
-                            str ref_body = entity_name[1..entity_name.len()]
-                            if ref_body.len() > 1:
+                            str ref_body = entity_name[1..entity_name.byte_len()]
+                            if ref_body.byte_len() > 1:
                                 char rb_first = ref_body[0]
                                 if rb_first == 'x' or rb_first == 'X':
-                                    nc_code = xml_hex_to_int(ref_body[1..ref_body.len()])
-                            if nc_code < 0 and ref_body.len() > 0:
+                                    nc_code = xml_hex_to_int(ref_body[1..ref_body.byte_len()])
+                            if nc_code < 0 and ref_body.byte_len() > 0:
                                 bool all_digits = true
                                 int di = 0
-                                while di < ref_body.len():
+                                while di < ref_body.byte_len():
                                     char dc = ref_body[di]
                                     if dc < '0' or dc > '9':
                                         all_digits = false
@@ -103,7 +103,7 @@ str xml_decode_entities(str raw):
 str xml_encode_text(str raw_text):
     str encoded = ""
     int ti = 0
-    while ti < raw_text.len():
+    while ti < raw_text.byte_len():
         char tc = raw_text[ti]
         if tc == '&':
             encoded = encoded + "&amp;"
@@ -119,7 +119,7 @@ str xml_encode_text(str raw_text):
 str xml_encode_attr(str raw_attr):
     str encoded = ""
     int ai = 0
-    while ai < raw_attr.len():
+    while ai < raw_attr.byte_len():
         char ac = raw_attr[ai]
         if ac == '&':
             encoded = encoded + "&amp;"
@@ -151,16 +151,16 @@ equip XmlParser:
             self.err = consuming msg
 
     char peek(self):
-        if self.pos < self.xml_input.len():
+        if self.pos < self.xml_input.byte_len():
             return self.xml_input[self.pos]
         return '\0'
 
     void advance(&self):
-        if self.pos < self.xml_input.len():
+        if self.pos < self.xml_input.byte_len():
             self.pos = self.pos + 1
 
     void skip_ws(&self):
-        while self.pos < self.xml_input.len():
+        while self.pos < self.xml_input.byte_len():
             char wc = self.xml_input[self.pos]
             if wc == ' ' or wc == '\t' or wc == '\n' or wc == '\r':
                 self.pos = self.pos + 1
@@ -168,14 +168,14 @@ equip XmlParser:
                 return
 
     bool starts_with_at(self, str prefix):
-        int plen = prefix.len()
-        if self.pos + plen > self.xml_input.len():
+        int plen = prefix.byte_len()
+        if self.pos + plen > self.xml_input.byte_len():
             return false
         return self.xml_input[self.pos..self.pos + plen] == prefix
 
     void consume_str(&self, str expected):
-        int elen = expected.len()
-        if self.pos + elen > self.xml_input.len():
+        int elen = expected.byte_len()
+        if self.pos + elen > self.xml_input.byte_len():
             str cs_err = "expected {expected}"
             self.fail(cs_err)
             return
@@ -189,7 +189,7 @@ equip XmlParser:
 
     str parse_tag_name(&self):
         int start = self.pos
-        while self.pos < self.xml_input.len():
+        while self.pos < self.xml_input.byte_len():
             char tc = self.xml_input[self.pos]
             if tc >= 'a' and tc <= 'z':
                 self.pos = self.pos + 1
@@ -209,7 +209,7 @@ equip XmlParser:
     # ── Attribute parsing ───────────────────────────────────
 
     str parse_attr_value(&self):
-        if self.pos >= self.xml_input.len():
+        if self.pos >= self.xml_input.byte_len():
             self.fail("expected attribute value")
             return ""
         char quote_ch = self.xml_input[self.pos]
@@ -218,7 +218,7 @@ equip XmlParser:
             return ""
         self.pos = self.pos + 1
         str attr_val = ""
-        while self.pos < self.xml_input.len():
+        while self.pos < self.xml_input.byte_len():
             char vc = self.xml_input[self.pos]
             if vc == quote_ch:
                 self.pos = self.pos + 1
@@ -230,9 +230,9 @@ equip XmlParser:
 
     Dict[str, str] parse_attributes(&self):
         Dict[str, str] attr_map = Dict[str, str]()
-        while self.pos < self.xml_input.len():
+        while self.pos < self.xml_input.byte_len():
             self.skip_ws()
-            if self.pos >= self.xml_input.len():
+            if self.pos >= self.xml_input.byte_len():
                 break
             char ac = self.xml_input[self.pos]
             if ac == '>' or ac == '/' or ac == '?':
@@ -254,7 +254,7 @@ equip XmlParser:
     # ── Comment handling ────────────────────────────────────
 
     void skip_comment(&self):
-        while self.pos < self.xml_input.len():
+        while self.pos < self.xml_input.byte_len():
             if self.starts_with_at("-->"):
                 self.pos = self.pos + 3
                 return
@@ -265,7 +265,7 @@ equip XmlParser:
 
     XmlNode parse_text(&self):
         str text_val = ""
-        while self.pos < self.xml_input.len():
+        while self.pos < self.xml_input.byte_len():
             char xc = self.xml_input[self.pos]
             if xc == '<':
                 break
@@ -288,13 +288,13 @@ equip XmlParser:
             self.pos = self.pos + 2
             return Element(elem_tag, elem_attrs, Vector[XmlNode]())
         # Consume '>'
-        if self.pos >= self.xml_input.len() or self.xml_input[self.pos] != '>':
+        if self.pos >= self.xml_input.byte_len() or self.xml_input[self.pos] != '>':
             self.fail("expected >")
             return Text("")
         self.pos = self.pos + 1
         # Parse children
         Vector[XmlNode] child_list = Vector[XmlNode]()
-        while self.pos < self.xml_input.len():
+        while self.pos < self.xml_input.byte_len():
             if self.starts_with_at("</"):
                 break
             XmlNode child_nd = self.parse_node()
@@ -318,7 +318,7 @@ equip XmlParser:
             self.fail(tag_err)
             return Text("")
         self.skip_ws()
-        if self.pos >= self.xml_input.len() or self.xml_input[self.pos] != '>':
+        if self.pos >= self.xml_input.byte_len() or self.xml_input[self.pos] != '>':
             self.fail("expected > in closing tag")
             return Text("")
         self.pos = self.pos + 1
@@ -327,7 +327,7 @@ equip XmlParser:
     XmlNode parse_node(&self):
         if self.failed():
             return Text("")
-        if self.pos >= self.xml_input.len():
+        if self.pos >= self.xml_input.byte_len():
             return Text("")
         if self.xml_input[self.pos] != '<':
             return self.parse_text()
@@ -339,7 +339,7 @@ equip XmlParser:
         # Check for XML declaration <?xml ... ?>
         if self.starts_with_at("<?"):
             self.pos = self.pos + 2
-            while self.pos < self.xml_input.len():
+            while self.pos < self.xml_input.byte_len():
                 if self.starts_with_at("?>"):
                     self.pos = self.pos + 2
                     break

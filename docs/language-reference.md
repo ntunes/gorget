@@ -1796,7 +1796,7 @@ The compiler automatically infers which parameters' data flows into a function's
 
 ```gorget
 str trim_prefix(str s):
-    return s[1..s.len()]
+    return s[1..s.byte_len()]
 ```
 
 **`self` methods** — methods returning a reference type are assumed to borrow from `self`:
@@ -2420,7 +2420,8 @@ The following methods are available on built-in types without any import.
 
 | Method | Signature | Description |
 |---|---|---|
-| `len()` | `→ int` | String length in bytes |
+| `len()` | `→ int` | Number of Unicode codepoints (O(n) UTF-8 walk) |
+| `byte_len()` | `→ int` | Byte length of the UTF-8 representation (O(1)) |
 | `is_empty()` | `→ bool` | True if length is zero |
 | `contains(needle)` | `str → bool` | True if `needle` is a substring |
 | `starts_with(prefix)` | `str → bool` | True if string starts with `prefix` |

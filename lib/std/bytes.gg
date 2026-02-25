@@ -98,7 +98,7 @@ str base64_encode(Vector[uint8] b64_data):
 
 Result[Vector[uint8], str] base64_decode(str b64_encoded):
     Vector[uint8] b64_out = Vector[uint8]()
-    int b64_len = b64_encoded.len()
+    int b64_len = b64_encoded.byte_len()
     if b64_len == 0:
         return Ok(b64_out)
     if b64_len % 4 != 0:
