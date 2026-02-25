@@ -420,8 +420,28 @@ impl CodegenContext<'_> {
                     format!("{temp}.data")
                 }
             }
-            "Str" => format!("{expr}.data"),
+            "Str" => format!("gorget_str_to_cstr({expr})"),
             _ => expr.to_string(), // already const char* (cstr)
+        }
+    }
+
+    /// Coerce an expression to a `Str` value (handles Str, GorgetString, const char*).
+    pub fn coerce_to_str(&mut self, expr: &str, c_type: &str) -> String {
+        match c_type {
+            "Str" => expr.to_string(),
+            "GorgetString" => {
+                let is_func_call = expr.contains('(') && !expr.starts_with('(');
+                if !is_func_call {
+                    format!("(Str){{ .data = {expr}.data, .len = {expr}.len }}")
+                } else {
+                    let id = self.string_temp_counter;
+                    self.string_temp_counter += 1;
+                    let temp = format!("__strtmp_{id}");
+                    self.string_temps.push((temp.clone(), expr.to_string()));
+                    format!("(Str){{ .data = {temp}.data, .len = {temp}.len }}")
+                }
+            }
+            _ => format!("gorget_str_from_cstr({expr})"), // const char* → Str
         }
     }
 
@@ -1724,13 +1744,11 @@ impl CodegenContext<'_> {
                         let t = self.gen_expr(target);
                         let v = self.gen_expr(value);
                         let rhs_type = self.infer_c_type_from_expr(&value.node);
-                        let t_data = format!("{t}.data");
-                        let rhs_data = self.extract_cstr_data(&v, &rhs_type);
+                        let rhs_str = self.coerce_to_str(&v, &rhs_type);
                         let str_temps = self.flush_string_temps(emitter);
                         // Note: this creates a GorgetString that leaks — same as old const char* behavior.
-                        // Proper solution: use gorget_string_from_concat and coerce to Str.
                         emitter.emit_line(&format!(
-                            "{{ GorgetString __cat = gorget_string_from_concat({t_data}, {rhs_data}); \
+                            "{{ GorgetString __cat = gorget_str_cat({t}, {rhs_str}); \
                              {t} = (Str){{ .data = __cat.data, .len = __cat.len }}; }}"
                         ));
                         Self::emit_string_temp_frees(&str_temps, emitter);

@@ -372,16 +372,16 @@ Result[bool, str] p2p_bootstrap(Node &node, Vector[str] addrs):
         int colon = -1
         int j = 0
         while j < addr_str.byte_len():
-            if addr_str[j] == ':':
+            if addr_str.char_at(j) == ':':
                 colon = j
             j = j + 1
         if colon > 0:
-            str host = addr_str[0..colon]
-            str port_str = addr_str[colon + 1..addr_str.byte_len()]
+            str host = addr_str.byte_slice(0, colon)
+            str port_str = addr_str.byte_slice(colon + 1, addr_str.byte_len())
             int port = 0
             int k = 0
             while k < port_str.byte_len():
-                int d = port_str[k] as int - 48
+                int d = port_str.char_at(k) as int - 48
                 port = port * 10 + d
                 k = k + 1
             p2p_send_raw(&node, host, port, 1, Vector[uint8]())
@@ -537,16 +537,16 @@ Result[ExternalAddr, str] p2p_discover_external_addr(Node &node, str probe_host,
             int colon = -1
             int j = 0
             while j < addr_str.byte_len():
-                if addr_str[j] == ':':
+                if addr_str.char_at(j) == ':':
                     colon = j
                 j = j + 1
             if colon > 0:
-                str ext_host = addr_str[0..colon]
-                str port_str = addr_str[colon + 1..addr_str.byte_len()]
+                str ext_host = addr_str.byte_slice(0, colon)
+                str port_str = addr_str.byte_slice(colon + 1, addr_str.byte_len())
                 int ext_port = 0
                 int k = 0
                 while k < port_str.byte_len():
-                    int d = port_str[k] as int - 48
+                    int d = port_str.char_at(k) as int - 48
                     ext_port = ext_port * 10 + d
                     k = k + 1
                 return Ok(ExternalAddr(ext_host, ext_port))

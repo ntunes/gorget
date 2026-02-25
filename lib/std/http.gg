@@ -26,9 +26,9 @@ struct HttpResponse:
     int http_port = 443
 
     if url.starts_with("https://"):
-        http_rest = url[8..url.byte_len()]
+        http_rest = url.byte_slice(8, url.byte_len())
     elif url.starts_with("http://"):
-        http_rest = url[7..url.byte_len()]
+        http_rest = url.byte_slice(7, url.byte_len())
         http_port = 80
 
     # Split host from path at the first "/"
@@ -37,16 +37,16 @@ struct HttpResponse:
     str http_path = "/"
     if http_sl.is_some():
         int http_sl_v = http_sl.unwrap()
-        http_hp = http_rest[0..http_sl_v]
-        http_path = http_rest[http_sl_v..http_rest.byte_len()]
+        http_hp = http_rest.byte_slice(0, http_sl_v)
+        http_path = http_rest.byte_slice(http_sl_v, http_rest.byte_len())
 
     # Split host:port
     Option[int] http_cp = http_hp.index_of(":")
     str http_host = http_hp
     if http_cp.is_some():
         int http_cp_v = http_cp.unwrap()
-        http_host = http_hp[0..http_cp_v]
-        str http_ps = http_hp[http_cp_v + 1..http_hp.byte_len()]
+        http_host = http_hp.byte_slice(0, http_cp_v)
+        str http_ps = http_hp.byte_slice(http_cp_v + 1, http_hp.byte_len())
         Option[int] http_port_parsed = int.parse(http_ps)
         if http_port_parsed is Some(http_pv):
             http_port = http_pv
@@ -59,7 +59,7 @@ int http_parse_hex(str http_hex):
     int http_val = 0
     int http_hi = 0
     while http_hi < http_hex.byte_len():
-        char http_hc = http_hex[http_hi]
+        char http_hc = http_hex.char_at(http_hi)
         int http_hv = 0
         if http_hc >= '0' and http_hc <= '9':
             http_hv = http_hc as int - '0' as int
@@ -89,7 +89,7 @@ str http_read_body_chunked(TlsSocket &http_conn):
         # Strip any chunk extensions after ";"
         Option[int] http_semi = http_size_line.index_of(";")
         if http_semi.is_some():
-            http_size_line = http_size_line[0..http_semi.unwrap()]
+            http_size_line = http_size_line.byte_slice(0, http_semi.unwrap())
         http_size_line = http_size_line.trim()
         int http_chunk_sz = http_parse_hex(http_size_line)
         if http_chunk_sz == 0:
@@ -163,10 +163,10 @@ Result[HttpResponse, str] http_single(str http_method, str http_url, str http_bo
     Option[int] http_sp1 = http_status_line.index_of(" ")
     int http_code = 0
     if http_sp1.is_some():
-        str http_after = http_status_line[http_sp1.unwrap() + 1..http_status_line.byte_len()]
+        str http_after = http_status_line.byte_slice(http_sp1.unwrap() + 1, http_status_line.byte_len())
         Option[int] http_sp2 = http_after.index_of(" ")
         if http_sp2.is_some():
-            str http_code_str = http_after[0..http_sp2.unwrap()]
+            str http_code_str = http_after.byte_slice(0, http_sp2.unwrap())
             Option[int] http_code_opt = int.parse(http_code_str)
             if http_code_opt is Some(http_cv):
                 http_code = http_cv
@@ -186,8 +186,8 @@ Result[HttpResponse, str] http_single(str http_method, str http_url, str http_bo
             Option[int] http_colon = http_hdr_line.index_of(":")
             if http_colon.is_some():
                 int http_colon_v = http_colon.unwrap()
-                str http_hname = http_hdr_line[0..http_colon_v].trim().to_lower()
-                str http_hval = http_hdr_line[http_colon_v + 1..http_hdr_line.byte_len()].trim()
+                str http_hname = http_hdr_line.byte_slice(0, http_colon_v).trim().to_lower()
+                str http_hval = http_hdr_line.byte_slice(http_colon_v + 1, http_hdr_line.byte_len()).trim()
                 http_resp_hdrs.put(http_hname, http_hval)
 
     # Body

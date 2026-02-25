@@ -1,4 +1,4 @@
 void main():
     str s = "hi"
-    char c = s[5]
+    char c = s.char_at(5)
     print("{c}")

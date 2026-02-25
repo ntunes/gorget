@@ -1046,6 +1046,51 @@ static inline Str gorget_str_slice(Str s, int64_t start, int64_t end) {
     return (Str){ .data = s.data + start_byte, .len = end_byte - start_byte };
 }
 
+// Return a byte-level Str view of s[start..end]. No allocation.
+static inline Str gorget_str_byte_slice(Str s, int64_t start, int64_t end) {
+    if (start < 0 || end < 0 || (size_t)start > s.len || (size_t)end > s.len || start > end) {
+        fprintf(stderr, "gorget: panic: string byte_slice out of bounds: [%" PRId64 "..%" PRId64 "], byte length %zu\n", start, end, s.len);
+        exit(1);
+    }
+    return (Str){ .data = s.data + start, .len = (size_t)(end - start) };
+}
+
+// Return the byte at index (byte-level). Bounds-checked against byte length.
+static inline char gorget_str_byte_at(Str s, int64_t index) {
+    if (index < 0 || (size_t)index >= s.len) {
+        fprintf(stderr, "gorget: panic: string byte index out of bounds: index %" PRId64 ", byte length %zu\n", index, s.len);
+        exit(1);
+    }
+    return s.data[index];
+}
+
+// ── Str-aware GorgetString operations ───────────────────────
+
+// Str-aware concatenation (handles non-null-terminated views).
+static inline GorgetString gorget_str_cat(Str a, Str b) {
+    GorgetAllocator* al = __gorget_current_alloc;
+    size_t cap = a.len + b.len + 1;
+    char* data = (char*)al->alloc(al->ctx, cap);
+    if (a.len > 0) memcpy(data, a.data, a.len);
+    if (b.len > 0) memcpy(data + a.len, b.data, b.len);
+    data[a.len + b.len] = '\0';
+    return (GorgetString){data, a.len + b.len, cap, al};
+}
+
+// Str-aware append (handles non-null-terminated views).
+static inline void gorget_string_append_str(GorgetString* s, Str rhs) {
+    size_t new_len = s->len + rhs.len;
+    if (new_len + 1 > s->cap) {
+        size_t old_cap = s->cap;
+        size_t new_cap = (new_len + 1) * 2;
+        s->data = (char*)s->alloc->realloc(s->alloc->ctx, s->data, old_cap, new_cap);
+        s->cap = new_cap;
+    }
+    if (rhs.len > 0) memcpy(s->data + s->len, rhs.data, rhs.len);
+    s->data[new_len] = '\0';
+    s->len = new_len;
+}
+
 // ── cstr ↔ Str conversion ───────────────────────────────────
 // Allocate a null-terminated copy (Str may not be null-terminated)
 static inline const char* gorget_str_to_cstr(Str s) {
@@ -1744,6 +1789,12 @@ static inline uint64_t __gorget_fnv1a(const void* data, size_t len) {
 static inline uint64_t __gorget_hash_str(const char* s) {
     uint64_t hash = 14695981039346656037ULL;
     while (*s) { hash ^= (uint8_t)*s++; hash *= 1099511628211ULL; }
+    return hash;
+}
+
+static inline uint64_t __gorget_hash_str_len(const char* s, size_t len) {
+    uint64_t hash = 14695981039346656037ULL;
+    for (size_t i = 0; i < len; i++) { hash ^= (uint8_t)s[i]; hash *= 1099511628211ULL; }
     return hash;
 }
 

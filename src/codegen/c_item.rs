@@ -2521,7 +2521,7 @@ impl CodegenContext<'_> {
         let hash_expr = |var: &str| -> String {
             if is_str_key {
                 if key_type == "Str" {
-                    format!("__gorget_hash_str({var}.data)")
+                    format!("__gorget_hash_str_len({var}.data, {var}.len)")
                 } else {
                     format!("__gorget_hash_str({var})")
                 }

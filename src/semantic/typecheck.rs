@@ -2633,7 +2633,7 @@ impl<'a> TypeChecker<'a> {
                     }
                 }
                 "contains" | "starts_with" | "ends_with" | "is_empty" => Some(self.types.bool_id),
-                "trim" | "strip" | "lstrip" | "rstrip" | "to_upper" | "to_lower" | "replace" | "substring" | "repeat" | "join" | "removeprefix" | "removesuffix" | "pad_left" | "pad_right" => Some(self.types.string_id),
+                "trim" | "strip" | "lstrip" | "rstrip" | "to_upper" | "to_lower" | "replace" | "substring" | "repeat" | "join" | "removeprefix" | "removesuffix" | "pad_left" | "pad_right" | "byte_slice" => Some(self.types.string_id),
                 "enumerate" => Some(receiver_type),
                 "char_at" => Some(self.types.char_id),
                 "split" => {

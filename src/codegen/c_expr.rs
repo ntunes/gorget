@@ -188,14 +188,14 @@ impl CodegenContext<'_> {
                     if left_is_str || right_is_str {
                         let l = self.gen_expr(left);
                         let r = self.gen_expr(right);
-                        // Extract const char* from each operand for gorget_string_from_concat.
+                        // Coerce both operands to Str for gorget_str_cat.
                         // Use span-based resolution when spanless inference returns a non-string type
                         // (e.g., pattern-bound variables in match arms with scoped_lookup conflicts).
                         let l_type = self.infer_spanned_string_c_type(left);
                         let r_type = self.infer_spanned_string_c_type(right);
-                        let l_cstr = self.extract_cstr_data(&l, &l_type);
-                        let r_cstr = self.extract_cstr_data(&r, &r_type);
-                        return format!("gorget_string_from_concat({l_cstr}, {r_cstr})");
+                        let l_str = self.coerce_to_str(&l, &l_type);
+                        let r_str = self.coerce_to_str(&r, &r_type);
+                        return format!("gorget_str_cat({l_str}, {r_str})");
                     }
                 }
                 // Vector concatenation: vec + vec → clone left, extend with right

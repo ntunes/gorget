@@ -252,7 +252,7 @@ impl CodegenContext<'_> {
             // Fallback: use C type inference for expressions whose TypeId can't be resolved
             let c_type = self.infer_c_type_from_expr(&parsed_expr.node);
             match c_type.as_str() {
-                "Str" => return ("%s".to_string(), format!("{c_expr}.data")),
+                "Str" => return ("%.*s".to_string(), format!("(int){c_expr}.len, {c_expr}.data")),
                 "const char*" => return ("%s".to_string(), c_expr),
                 "GorgetString" => {
                     let data = self.extract_cstr_data(&c_expr, "GorgetString");
@@ -434,7 +434,7 @@ impl CodegenContext<'_> {
                     PrimitiveType::Uint | PrimitiveType::Uint64 => {
                         format!("(unsigned long long){expr}")
                     }
-                    PrimitiveType::Str => format!("{expr}.data"),
+                    PrimitiveType::Str => format!("(int){expr}.len, {expr}.data"),
                     PrimitiveType::CStr => expr.to_string(),
                     PrimitiveType::StringType => self.extract_cstr_data(expr, "GorgetString"),
                     _ => expr.to_string(),
@@ -462,9 +462,10 @@ impl CodegenContext<'_> {
                     };
                     let mangled = c_mangle::mangle_trait_method("Displayable", &mangled_name, "display", &[]);
                     // Use a GCC statement expression to handle non-lvalue exprs
-                    // display() returns Str — extract .data for printf %s
-                    let call = format!("({{ __typeof__({expr}) __tmp = {expr}; {mangled}(&__tmp); }}).data");
-                    ("%s".to_string(), call)
+                    // display() returns Str — use %.*s to respect length
+                    // Embed both args in a single comma expression to avoid double evaluation
+                    let call = format!("({{ __typeof__({expr}) __tmp = {expr}; {mangled}(&__tmp); }})");
+                    ("%.*s".to_string(), format!("(int){call}.len, {call}.data"))
                 } else {
                     // Fallback: print the type name
                     ("%s".to_string(), format!("\"<{name}>\""))

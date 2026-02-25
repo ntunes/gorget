@@ -282,10 +282,10 @@ equip Lexer:
     bool lex_at_end(self) = self.lex_pos >= self.lex_source.byte_len()
 
     char lex_peek(self):
-        return self.lex_source[self.lex_pos]
+        return self.lex_source.char_at(self.lex_pos)
 
     char lex_peek_at(self, int offset):
-        return self.lex_source[self.lex_pos + offset]
+        return self.lex_source.char_at(self.lex_pos + offset)
 
     void lex_advance(&self):
         self.lex_pos = self.lex_pos + 1
@@ -298,7 +298,7 @@ equip Lexer:
     int lex_count_leading_spaces(&self):
         int count = 0
         while self.lex_pos < self.lex_source.byte_len():
-            char c = self.lex_source[self.lex_pos]
+            char c = self.lex_source.char_at(self.lex_pos)
             if c == ' ':
                 count = count + 1
                 self.lex_pos = self.lex_pos + 1
@@ -342,7 +342,7 @@ equip Lexer:
     # ── Skip helpers ──────────────────────────────────────────
 
     void lex_skip_to_eol(&self):
-        while self.lex_pos < self.lex_source.byte_len() and self.lex_source[self.lex_pos] != '\n':
+        while self.lex_pos < self.lex_source.byte_len() and self.lex_source.char_at(self.lex_pos) != '\n':
             self.lex_pos = self.lex_pos + 1
 
     # ── Escape sequence parsing ───────────────────────────────
@@ -383,7 +383,7 @@ equip Lexer:
             int hex_start = self.lex_pos
             while self.lex_pos < self.lex_source.byte_len() and self.lex_peek() != '}':
                 self.lex_advance()
-            str hex_str = self.lex_source[hex_start..self.lex_pos]
+            str hex_str = self.lex_source.byte_slice(hex_start, self.lex_pos)
             if self.lex_pos < self.lex_source.byte_len():
                 self.lex_advance()
             int code = lex_parse_int_radix(hex_str, 16)
@@ -397,12 +397,12 @@ equip Lexer:
     void lex_scan_identifier(&self):
         int start = self.lex_pos
         while self.lex_pos < self.lex_source.byte_len():
-            char c = self.lex_source[self.lex_pos]
+            char c = self.lex_source.char_at(self.lex_pos)
             if c.is_alphanumeric() or c == '_':
                 self.lex_pos = self.lex_pos + 1
             else:
                 break
-        str word = self.lex_source[start..self.lex_pos]
+        str word = self.lex_source.byte_slice(start, self.lex_pos)
         Option[Keyword] kw = keyword_from_str(word)
         match kw:
             case Some(k):
@@ -425,12 +425,12 @@ equip Lexer:
             if prefix == 'x' or prefix == 'X':
                 self.lex_pos = self.lex_pos + 2
                 while self.lex_pos < self.lex_source.byte_len():
-                    char c = self.lex_source[self.lex_pos]
+                    char c = self.lex_source.char_at(self.lex_pos)
                     if c.is_hex_digit() or c == '_':
                         self.lex_pos = self.lex_pos + 1
                     else:
                         break
-                str hex_body = self.lex_source[start + 2..self.lex_pos]
+                str hex_body = self.lex_source.byte_slice(start + 2, self.lex_pos)
                 str clean = str_remove_char(hex_body, '_')
                 int val = lex_parse_int_radix(clean, 16)
                 self.lex_emit(TkInt(val), start, self.lex_pos)
@@ -438,12 +438,12 @@ equip Lexer:
             elif prefix == 'o' or prefix == 'O':
                 self.lex_pos = self.lex_pos + 2
                 while self.lex_pos < self.lex_source.byte_len():
-                    char c = self.lex_source[self.lex_pos]
+                    char c = self.lex_source.char_at(self.lex_pos)
                     if c >= '0' and c <= '7' or c == '_':
                         self.lex_pos = self.lex_pos + 1
                     else:
                         break
-                str oct_body = self.lex_source[start + 2..self.lex_pos]
+                str oct_body = self.lex_source.byte_slice(start + 2, self.lex_pos)
                 str clean = str_remove_char(oct_body, '_')
                 int val = lex_parse_int_radix(clean, 8)
                 self.lex_emit(TkInt(val), start, self.lex_pos)
@@ -451,12 +451,12 @@ equip Lexer:
             elif prefix == 'b' or prefix == 'B':
                 self.lex_pos = self.lex_pos + 2
                 while self.lex_pos < self.lex_source.byte_len():
-                    char c = self.lex_source[self.lex_pos]
+                    char c = self.lex_source.char_at(self.lex_pos)
                     if c == '0' or c == '1' or c == '_':
                         self.lex_pos = self.lex_pos + 1
                     else:
                         break
-                str bin_body = self.lex_source[start + 2..self.lex_pos]
+                str bin_body = self.lex_source.byte_slice(start + 2, self.lex_pos)
                 str clean = str_remove_char(bin_body, '_')
                 int val = lex_parse_int_radix(clean, 2)
                 self.lex_emit(TkInt(val), start, self.lex_pos)
@@ -464,7 +464,7 @@ equip Lexer:
 
         # Decimal digits
         while self.lex_pos < self.lex_source.byte_len():
-            char c = self.lex_source[self.lex_pos]
+            char c = self.lex_source.char_at(self.lex_pos)
             if c.is_digit() or c == '_':
                 self.lex_pos = self.lex_pos + 1
             else:
@@ -477,7 +477,7 @@ equip Lexer:
                 is_float = true
                 self.lex_pos = self.lex_pos + 1
                 while self.lex_pos < self.lex_source.byte_len():
-                    char c = self.lex_source[self.lex_pos]
+                    char c = self.lex_source.char_at(self.lex_pos)
                     if c.is_digit() or c == '_':
                         self.lex_pos = self.lex_pos + 1
                     else:
@@ -494,12 +494,12 @@ equip Lexer:
                     if sign == '+' or sign == '-':
                         self.lex_pos = self.lex_pos + 1
                 while self.lex_pos < self.lex_source.byte_len():
-                    char exp_d = self.lex_source[self.lex_pos]
+                    char exp_d = self.lex_source.char_at(self.lex_pos)
                     if not exp_d.is_digit():
                         break
                     self.lex_pos = self.lex_pos + 1
 
-        str num_str = self.lex_source[start..self.lex_pos]
+        str num_str = self.lex_source.byte_slice(start, self.lex_pos)
         str clean = str_remove_char(num_str, '_')
         if is_float:
             float fval = parse_float(clean)
@@ -597,7 +597,7 @@ equip Lexer:
                             self.lex_advance()
                     self.lex_advance()
 
-                str expr_text = self.lex_source[expr_start..self.lex_pos]
+                str expr_text = self.lex_source.byte_slice(expr_start, self.lex_pos)
                 segments.push(SegInterpolation(expr_text))
                 if self.lex_pos < self.lex_source.byte_len():
                     self.lex_advance()
@@ -859,7 +859,7 @@ equip Lexer:
                 self.lex_advance()
             int content_start = self.lex_pos
             self.lex_skip_to_eol()
-            str content = self.lex_source[content_start..self.lex_pos]
+            str content = self.lex_source.byte_slice(content_start, self.lex_pos)
             self.lex_emit(TkDocComment(content), start, self.lex_pos)
             return
 
@@ -868,14 +868,14 @@ equip Lexer:
             self.lex_advance()
         int content_start = self.lex_pos
         self.lex_skip_to_eol()
-        str content = self.lex_source[content_start..self.lex_pos]
+        str content = self.lex_source.byte_slice(content_start, self.lex_pos)
         self.lex_emit(TkComment(content), start, self.lex_pos)
 
     # ── Tokenize one line's content ───────────────────────────
 
     void lex_tokenize_line(&self):
         while self.lex_pos < self.lex_source.byte_len():
-            char c = self.lex_source[self.lex_pos]
+            char c = self.lex_source.char_at(self.lex_pos)
 
             # End of line
             if c == '\n':
@@ -936,7 +936,7 @@ equip Lexer:
                 self.lex_emit_eof()
                 return
 
-            char c = self.lex_source[self.lex_pos]
+            char c = self.lex_source.char_at(self.lex_pos)
 
             # Blank line
             if c == '\n':
@@ -989,7 +989,7 @@ str str_remove_char(str s, char target):
     str result = ""
     int i = 0
     while i < s.byte_len():
-        char c = s[i]
+        char c = s.char_at(i)
         if c != target:
             result = result + char_to_str(c)
         i = i + 1
@@ -999,7 +999,7 @@ int lex_parse_int_radix(str s, int radix):
     int result = 0
     int i = 0
     while i < s.byte_len():
-        char c = s[i]
+        char c = s.char_at(i)
         int digit = 0
         if c >= '0' and c <= '9':
             digit = ord(c) - ord('0')

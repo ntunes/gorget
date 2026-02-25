@@ -829,9 +829,10 @@ impl CodegenContext<'_> {
                             return Some(format!("{func}(&{recv}, {rhs})"));
                         }
                         (_, "Str") => {
-                            let rhs_data = format!("{arg}.data");
-                            let func = if method_name == "push_line" { "gorget_string_push_line" } else { "gorget_string_append" };
-                            return Some(format!("{func}(&{recv}, {rhs_data})"));
+                            if method_name == "push_line" {
+                                return Some(format!("({{ gorget_string_append_str(&{recv}, {arg}); gorget_string_push_char(&{recv}, '\\n'); }})"));
+                            }
+                            return Some(format!("gorget_string_append_str(&{recv}, {arg})"));
                         }
                         ("push_line", _) => "gorget_string_push_line",
                         _ => "gorget_string_append",
@@ -989,9 +990,9 @@ impl CodegenContext<'_> {
             }
             "hash" => {
                 if needs_temp {
-                    Some(format!("({{ const char* __s = {recv_data}; (int64_t)__gorget_hash_str(__s); }})"))
+                    Some(format!("({{ Str __s = {recv}; (int64_t)__gorget_hash_str_len(__s.data, __s.len); }})"))
                 } else {
-                    Some(format!("(int64_t)__gorget_hash_str({recv_data})"))
+                    Some(format!("(int64_t)__gorget_hash_str_len({recv_data}, {recv}.len)"))
                 }
             }
             "substring" => {
@@ -1007,7 +1008,28 @@ impl CodegenContext<'_> {
                 let arg = args.first()
                     .map(|a| self.gen_expr(&a.node.value))
                     .unwrap_or_else(|| "0".to_string());
-                Some(format!("gorget_string_at({recv_data}, {arg})"))
+                if is_owned {
+                    Some(format!("gorget_str_byte_at((Str){{ .data = {recv}.data, .len = {recv}.len }}, {arg})"))
+                } else if needs_temp {
+                    Some(format!("({{ Str __s = {recv}; gorget_str_byte_at(__s, {arg}); }})"))
+                } else {
+                    Some(format!("gorget_str_byte_at({recv}, {arg})"))
+                }
+            }
+            "byte_slice" => {
+                let start_arg = args.first()
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "0".to_string());
+                let end_arg = args.get(1)
+                    .map(|a| self.gen_expr(&a.node.value))
+                    .unwrap_or_else(|| "0".to_string());
+                if is_owned {
+                    Some(format!("gorget_str_byte_slice((Str){{ .data = {recv}.data, .len = {recv}.len }}, {start_arg}, {end_arg})"))
+                } else if needs_temp {
+                    Some(format!("({{ Str __s = {recv}; gorget_str_byte_slice(__s, {start_arg}, {end_arg}); }})"))
+                } else {
+                    Some(format!("gorget_str_byte_slice({recv}, {start_arg}, {end_arg})"))
+                }
             }
             "index_of" => {
                 let arg = args.first()

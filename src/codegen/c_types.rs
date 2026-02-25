@@ -381,7 +381,7 @@ pub fn printf_format_for_primitive(prim: PrimitiveType) -> &'static str {
         PrimitiveType::Float | PrimitiveType::Float32 | PrimitiveType::Float64 => "%f",
         PrimitiveType::Bool => "%s",
         PrimitiveType::Char => "%c",
-        PrimitiveType::Str => "%s",
+        PrimitiveType::Str => "%.*s",
         PrimitiveType::CStr => "%s",
         PrimitiveType::StringType => "%s",
         PrimitiveType::Void => "",

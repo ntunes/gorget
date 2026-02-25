@@ -1796,7 +1796,7 @@ The compiler automatically infers which parameters' data flows into a function's
 
 ```gorget
 str trim_prefix(str s):
-    return s[1..s.byte_len()]
+    return s.byte_slice(1, s.byte_len())
 ```
 
 **`self` methods** — methods returning a reference type are assumed to borrow from `self`:
@@ -2429,6 +2429,7 @@ The following methods are available on built-in types without any import.
 | `index_of(needle)` | `str → Option[int]` | Offset of first occurrence (`None` if not found) |
 | `count(needle)` | `str → int` | Number of non-overlapping occurrences |
 | `char_at(index)` | `int → char` | Character at byte index (panics if out of bounds) |
+| `byte_slice(start, end)` | `int, int → str` | Byte-range substring view (O(1), for parser/codec use) |
 | `substring(start, end)` | `int, int → str` | Substring from `start` to `end` (panics if out of bounds) |
 | `trim()` | `→ str` | Strip leading and trailing whitespace |
 | `strip(chars?)` | `str? → str` | Strip chars (or whitespace) from both ends |

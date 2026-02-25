@@ -59,7 +59,7 @@ str url_encode(str enc_input):
     int enc_i = 0
     int enc_slen = enc_input.byte_len()
     while enc_i < enc_slen:
-        char enc_ch = enc_input[enc_i]
+        char enc_ch = enc_input.char_at(enc_i)
         if enc_is_url_unreserved(enc_ch):
             enc_out = enc_out + char_to_str(enc_ch)
         else:
@@ -72,12 +72,12 @@ Result[str, str] url_decode(str enc_input):
     int enc_i = 0
     int enc_slen = enc_input.byte_len()
     while enc_i < enc_slen:
-        char enc_ch = enc_input[enc_i]
+        char enc_ch = enc_input.char_at(enc_i)
         if enc_ch == '%':
             if enc_i + 2 >= enc_slen:
                 return Error("incomplete percent encoding")
-            int enc_hi = enc_hex_value(enc_input[enc_i + 1])
-            int enc_lo = enc_hex_value(enc_input[enc_i + 2])
+            int enc_hi = enc_hex_value(enc_input.char_at(enc_i + 1))
+            int enc_lo = enc_hex_value(enc_input.char_at(enc_i + 2))
             if enc_hi < 0 or enc_lo < 0:
                 return Error("invalid hex in percent encoding")
             enc_out = enc_out + char_to_str(chr(enc_hi * 16 + enc_lo))
@@ -92,7 +92,7 @@ str form_encode(str enc_input):
     int enc_i = 0
     int enc_slen = enc_input.byte_len()
     while enc_i < enc_slen:
-        char enc_ch = enc_input[enc_i]
+        char enc_ch = enc_input.char_at(enc_i)
         if enc_ch == ' ':
             enc_out = enc_out + "+"
         elif enc_is_url_unreserved(enc_ch):
@@ -107,15 +107,15 @@ Result[str, str] form_decode(str enc_input):
     int enc_i = 0
     int enc_slen = enc_input.byte_len()
     while enc_i < enc_slen:
-        char enc_ch = enc_input[enc_i]
+        char enc_ch = enc_input.char_at(enc_i)
         if enc_ch == '+':
             enc_out = enc_out + " "
             enc_i = enc_i + 1
         elif enc_ch == '%':
             if enc_i + 2 >= enc_slen:
                 return Error("incomplete percent encoding")
-            int enc_hi = enc_hex_value(enc_input[enc_i + 1])
-            int enc_lo = enc_hex_value(enc_input[enc_i + 2])
+            int enc_hi = enc_hex_value(enc_input.char_at(enc_i + 1))
+            int enc_lo = enc_hex_value(enc_input.char_at(enc_i + 2))
             if enc_hi < 0 or enc_lo < 0:
                 return Error("invalid hex in percent encoding")
             enc_out = enc_out + char_to_str(chr(enc_hi * 16 + enc_lo))
@@ -132,7 +132,7 @@ str html_escape(str enc_input):
     int enc_i = 0
     int enc_slen = enc_input.byte_len()
     while enc_i < enc_slen:
-        char enc_ch = enc_input[enc_i]
+        char enc_ch = enc_input.char_at(enc_i)
         if enc_ch == '&':
             enc_out = enc_out + "&amp;"
         elif enc_ch == '<':
@@ -150,13 +150,13 @@ str html_escape(str enc_input):
 
 str enc_decode_entity(str enc_name):
     # Numeric references: &#DDD; or &#xHH;
-    if enc_name.byte_len() > 1 and enc_name[0] == '#':
-        if enc_name[1] == 'x' or enc_name[1] == 'X':
+    if enc_name.byte_len() > 1 and enc_name.char_at(0) == '#':
+        if enc_name.char_at(1) == 'x' or enc_name.char_at(1) == 'X':
             # Hex numeric
             int enc_cp = 0
             int enc_k = 2
             while enc_k < enc_name.byte_len():
-                int enc_hv = enc_hex_value(enc_name[enc_k])
+                int enc_hv = enc_hex_value(enc_name.char_at(enc_k))
                 if enc_hv < 0:
                     return ""
                 enc_cp = enc_cp * 16 + enc_hv
@@ -168,7 +168,7 @@ str enc_decode_entity(str enc_name):
         int enc_cp = 0
         int enc_k = 1
         while enc_k < enc_name.byte_len():
-            int enc_dv = ord(enc_name[enc_k]) - 48
+            int enc_dv = ord(enc_name.char_at(enc_k)) - 48
             if enc_dv < 0 or enc_dv > 9:
                 return ""
             enc_cp = enc_cp * 10 + enc_dv
@@ -229,20 +229,20 @@ str html_unescape(str enc_input):
     int enc_i = 0
     int enc_slen = enc_input.byte_len()
     while enc_i < enc_slen:
-        if enc_input[enc_i] == '&':
+        if enc_input.char_at(enc_i) == '&':
             # Find closing semicolon within reasonable range
             int enc_limit = enc_i + 12
             if enc_limit > enc_slen:
                 enc_limit = enc_slen
             int enc_k = enc_i + 1
-            while enc_k < enc_limit and enc_input[enc_k] != ';':
+            while enc_k < enc_limit and enc_input.char_at(enc_k) != ';':
                 enc_k = enc_k + 1
-            if enc_k < enc_limit and enc_input[enc_k] == ';':
+            if enc_k < enc_limit and enc_input.char_at(enc_k) == ';':
                 # Build entity name between & and ;
                 str enc_entity = ""
                 int enc_j = enc_i + 1
                 while enc_j < enc_k:
-                    enc_entity = enc_entity + char_to_str(enc_input[enc_j])
+                    enc_entity = enc_entity + char_to_str(enc_input.char_at(enc_j))
                     enc_j = enc_j + 1
                 str enc_decoded = enc_decode_entity(enc_entity)
                 if enc_decoded.len() > 0:
@@ -255,7 +255,7 @@ str html_unescape(str enc_input):
                 enc_out = enc_out + "&"
                 enc_i = enc_i + 1
         else:
-            enc_out = enc_out + char_to_str(enc_input[enc_i])
+            enc_out = enc_out + char_to_str(enc_input.char_at(enc_i))
             enc_i = enc_i + 1
     return enc_out
 
@@ -266,7 +266,7 @@ int utf8_len(str enc_s):
     int enc_i = 0
     int enc_slen = enc_s.byte_len()
     while enc_i < enc_slen:
-        int enc_b = enc_byte_val(enc_s[enc_i])
+        int enc_b = enc_byte_val(enc_s.char_at(enc_i))
         # Count bytes that are NOT continuation bytes (10xxxxxx = 128..191)
         if enc_b < 128 or enc_b >= 192:
             enc_count = enc_count + 1
@@ -278,26 +278,26 @@ Vector[int] utf8_codepoints(str enc_s):
     int enc_i = 0
     int enc_slen = enc_s.byte_len()
     while enc_i < enc_slen:
-        int enc_b0 = enc_byte_val(enc_s[enc_i])
+        int enc_b0 = enc_byte_val(enc_s.char_at(enc_i))
         if enc_b0 < 128:
             enc_cps.push(enc_b0)
             enc_i = enc_i + 1
         elif enc_b0 < 224:
             int enc_lead = enc_b0 & 31
-            int enc_cont = enc_byte_val(enc_s[enc_i + 1]) & 63
+            int enc_cont = enc_byte_val(enc_s.char_at(enc_i + 1)) & 63
             enc_cps.push(enc_lead << 6 | enc_cont)
             enc_i = enc_i + 2
         elif enc_b0 < 240:
             int enc_lead = enc_b0 & 15
-            int enc_c1 = enc_byte_val(enc_s[enc_i + 1]) & 63
-            int enc_c2 = enc_byte_val(enc_s[enc_i + 2]) & 63
+            int enc_c1 = enc_byte_val(enc_s.char_at(enc_i + 1)) & 63
+            int enc_c2 = enc_byte_val(enc_s.char_at(enc_i + 2)) & 63
             enc_cps.push(enc_lead << 12 | enc_c1 << 6 | enc_c2)
             enc_i = enc_i + 3
         else:
             int enc_lead = enc_b0 & 7
-            int enc_c1 = enc_byte_val(enc_s[enc_i + 1]) & 63
-            int enc_c2 = enc_byte_val(enc_s[enc_i + 2]) & 63
-            int enc_c3 = enc_byte_val(enc_s[enc_i + 3]) & 63
+            int enc_c1 = enc_byte_val(enc_s.char_at(enc_i + 1)) & 63
+            int enc_c2 = enc_byte_val(enc_s.char_at(enc_i + 2)) & 63
+            int enc_c3 = enc_byte_val(enc_s.char_at(enc_i + 3)) & 63
             enc_cps.push(enc_lead << 18 | enc_c1 << 12 | enc_c2 << 6 | enc_c3)
             enc_i = enc_i + 4
     return enc_cps
@@ -306,21 +306,21 @@ bool utf8_is_valid(str enc_s):
     int enc_i = 0
     int enc_slen = enc_s.byte_len()
     while enc_i < enc_slen:
-        int enc_b = enc_byte_val(enc_s[enc_i])
+        int enc_b = enc_byte_val(enc_s.char_at(enc_i))
         if enc_b < 128:
             enc_i = enc_i + 1
         elif enc_b >= 192 and enc_b < 224:
             if enc_i + 1 >= enc_slen:
                 return false
-            int enc_c1 = enc_byte_val(enc_s[enc_i + 1])
+            int enc_c1 = enc_byte_val(enc_s.char_at(enc_i + 1))
             if enc_c1 < 128 or enc_c1 >= 192:
                 return false
             enc_i = enc_i + 2
         elif enc_b >= 224 and enc_b < 240:
             if enc_i + 2 >= enc_slen:
                 return false
-            int enc_c1 = enc_byte_val(enc_s[enc_i + 1])
-            int enc_c2 = enc_byte_val(enc_s[enc_i + 2])
+            int enc_c1 = enc_byte_val(enc_s.char_at(enc_i + 1))
+            int enc_c2 = enc_byte_val(enc_s.char_at(enc_i + 2))
             if enc_c1 < 128 or enc_c1 >= 192:
                 return false
             if enc_c2 < 128 or enc_c2 >= 192:
@@ -329,9 +329,9 @@ bool utf8_is_valid(str enc_s):
         elif enc_b >= 240 and enc_b < 248:
             if enc_i + 3 >= enc_slen:
                 return false
-            int enc_c1 = enc_byte_val(enc_s[enc_i + 1])
-            int enc_c2 = enc_byte_val(enc_s[enc_i + 2])
-            int enc_c3 = enc_byte_val(enc_s[enc_i + 3])
+            int enc_c1 = enc_byte_val(enc_s.char_at(enc_i + 1))
+            int enc_c2 = enc_byte_val(enc_s.char_at(enc_i + 2))
+            int enc_c3 = enc_byte_val(enc_s.char_at(enc_i + 3))
             if enc_c1 < 128 or enc_c1 >= 192:
                 return false
             if enc_c2 < 128 or enc_c2 >= 192:
@@ -349,25 +349,25 @@ int utf8_char_at(str enc_s, int enc_n):
     int enc_slen = enc_s.byte_len()
     while enc_i < enc_slen:
         if enc_count == enc_n:
-            int enc_cur = enc_byte_val(enc_s[enc_i])
+            int enc_cur = enc_byte_val(enc_s.char_at(enc_i))
             if enc_cur < 128:
                 return enc_cur
             elif enc_cur < 224:
                 int enc_lead = enc_cur & 31
-                int enc_cont = enc_byte_val(enc_s[enc_i + 1]) & 63
+                int enc_cont = enc_byte_val(enc_s.char_at(enc_i + 1)) & 63
                 return enc_lead << 6 | enc_cont
             elif enc_cur < 240:
                 int enc_lead = enc_cur & 15
-                int enc_c1 = enc_byte_val(enc_s[enc_i + 1]) & 63
-                int enc_c2 = enc_byte_val(enc_s[enc_i + 2]) & 63
+                int enc_c1 = enc_byte_val(enc_s.char_at(enc_i + 1)) & 63
+                int enc_c2 = enc_byte_val(enc_s.char_at(enc_i + 2)) & 63
                 return enc_lead << 12 | enc_c1 << 6 | enc_c2
             else:
                 int enc_lead = enc_cur & 7
-                int enc_c1 = enc_byte_val(enc_s[enc_i + 1]) & 63
-                int enc_c2 = enc_byte_val(enc_s[enc_i + 2]) & 63
-                int enc_c3 = enc_byte_val(enc_s[enc_i + 3]) & 63
+                int enc_c1 = enc_byte_val(enc_s.char_at(enc_i + 1)) & 63
+                int enc_c2 = enc_byte_val(enc_s.char_at(enc_i + 2)) & 63
+                int enc_c3 = enc_byte_val(enc_s.char_at(enc_i + 3)) & 63
                 return enc_lead << 18 | enc_c1 << 12 | enc_c2 << 6 | enc_c3
-        int enc_skip = enc_byte_val(enc_s[enc_i])
+        int enc_skip = enc_byte_val(enc_s.char_at(enc_i))
         if enc_skip < 128:
             enc_i = enc_i + 1
         elif enc_skip < 224:

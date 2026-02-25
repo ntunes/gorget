@@ -1688,6 +1688,18 @@ fn string_strip() {
 }
 
 #[test]
+fn str_byte_slice() {
+    run_gg(
+        "str_byte_slice.gg",
+        "\
+hello
+world
+caf
+é",
+    );
+}
+
+#[test]
 fn string_indexing() {
     run_gg(
         "string_indexing.gg",
@@ -1839,7 +1851,7 @@ fn bounds_check() {
 
 #[test]
 fn string_index_oob() {
-    run_gg_panics("string_index_oob.gg", "string index out of bounds");
+    run_gg_panics("string_index_oob.gg", "string byte index out of bounds");
 }
 
 #[test]

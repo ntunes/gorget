@@ -23,7 +23,7 @@ equip CsvParser:
 
     bool csv_at_end(self) = self.csv_pos >= self.csv_input.byte_len()
 
-    char csv_peek(self) = self.csv_input[self.csv_pos]
+    char csv_peek(self) = self.csv_input.char_at(self.csv_pos)
 
     void csv_advance(&self):
         self.csv_pos = self.csv_pos + 1
@@ -162,7 +162,7 @@ str csv_stringify_field(str csv_field, str csv_sep):
     bool csv_need_quote = false
     int csv_fi = 0
     while csv_fi < csv_field.byte_len():
-        char csv_fc = csv_field[csv_fi]
+        char csv_fc = csv_field.char_at(csv_fi)
         if char_to_str(csv_fc) == csv_sep or csv_fc == '"' or csv_fc == '\n' or csv_fc == '\r':
             csv_need_quote = true
         csv_fi = csv_fi + 1
@@ -172,7 +172,7 @@ str csv_stringify_field(str csv_field, str csv_sep):
     str csv_out = "\""
     int csv_fj = 0
     while csv_fj < csv_field.byte_len():
-        char csv_qc = csv_field[csv_fj]
+        char csv_qc = csv_field.char_at(csv_fj)
         if csv_qc == '"':
             csv_out = csv_out + "\"\""
         else:

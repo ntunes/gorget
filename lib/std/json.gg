@@ -220,7 +220,7 @@ equip JsonParser:
 
     void skip_whitespace(&self):
         while self.pos < self.input.byte_len():
-            char c = self.input[self.pos]
+            char c = self.input.char_at(self.pos)
             if c == ' ' or c == '\t' or c == '\n' or c == '\r':
                 self.pos = self.pos + 1
             else:
@@ -233,7 +233,7 @@ equip JsonParser:
         if self.pos >= self.input.byte_len():
             self.fail("unexpected end of input")
             return Null()
-        char c = self.input[self.pos]
+        char c = self.input.char_at(self.pos)
         if c == '"':
             return self.parse_string_value()
         if c == '{':
@@ -258,7 +258,7 @@ equip JsonParser:
         self.pos = self.pos + 1
         str result = ""
         while self.pos < self.input.byte_len():
-            char c = self.input[self.pos]
+            char c = self.input.char_at(self.pos)
             if c == '"':
                 self.pos = self.pos + 1
                 return result
@@ -267,7 +267,7 @@ equip JsonParser:
                 if self.pos >= self.input.byte_len():
                     self.fail("unterminated string escape")
                     return ""
-                char esc = self.input[self.pos]
+                char esc = self.input.char_at(self.pos)
                 self.pos = self.pos + 1
                 if esc == '"':
                     result = result + "\""
@@ -285,7 +285,7 @@ equip JsonParser:
                     int uni_cp = 0
                     int uni_cnt = 0
                     while uni_cnt < 4 and self.pos < self.input.byte_len():
-                        char uni_hc = self.input[self.pos]
+                        char uni_hc = self.input.char_at(self.pos)
                         int uni_hv = -1
                         if uni_hc >= '0' and uni_hc <= '9':
                             uni_hv = uni_hc as int - '0' as int
@@ -304,12 +304,12 @@ equip JsonParser:
                         return ""
                     # Handle UTF-16 surrogate pairs for codepoints > U+FFFF
                     if uni_cp >= 55296 and uni_cp <= 56319:
-                        if self.pos + 1 < self.input.byte_len() and self.input[self.pos] == '\\' and self.input[self.pos + 1] == 'u':
+                        if self.pos + 1 < self.input.byte_len() and self.input.char_at(self.pos) == '\\' and self.input.char_at(self.pos + 1) == 'u':
                             self.pos = self.pos + 2
                             int uni_low = 0
                             int uni_lcnt = 0
                             while uni_lcnt < 4 and self.pos < self.input.byte_len():
-                                char uni_lhc = self.input[self.pos]
+                                char uni_lhc = self.input.char_at(self.pos)
                                 int uni_lhv = -1
                                 if uni_lhc >= '0' and uni_lhc <= '9':
                                     uni_lhv = uni_lhc as int - '0' as int
@@ -348,26 +348,26 @@ equip JsonParser:
         int start = self.pos
         bool is_float = false
         # Optional minus
-        if self.pos < self.input.byte_len() and self.input[self.pos] == '-':
+        if self.pos < self.input.byte_len() and self.input.char_at(self.pos) == '-':
             self.pos = self.pos + 1
         # Integer part
-        while self.pos < self.input.byte_len() and self.input[self.pos] >= '0' and self.input[self.pos] <= '9':
+        while self.pos < self.input.byte_len() and self.input.char_at(self.pos) >= '0' and self.input.char_at(self.pos) <= '9':
             self.pos = self.pos + 1
         # Fractional part
-        if self.pos < self.input.byte_len() and self.input[self.pos] == '.':
+        if self.pos < self.input.byte_len() and self.input.char_at(self.pos) == '.':
             is_float = true
             self.pos = self.pos + 1
-            while self.pos < self.input.byte_len() and self.input[self.pos] >= '0' and self.input[self.pos] <= '9':
+            while self.pos < self.input.byte_len() and self.input.char_at(self.pos) >= '0' and self.input.char_at(self.pos) <= '9':
                 self.pos = self.pos + 1
         # Exponent
-        if self.pos < self.input.byte_len() and self.input[self.pos] == 'e' or self.pos < self.input.byte_len() and self.input[self.pos] == 'E':
+        if self.pos < self.input.byte_len() and self.input.char_at(self.pos) == 'e' or self.pos < self.input.byte_len() and self.input.char_at(self.pos) == 'E':
             is_float = true
             self.pos = self.pos + 1
-            if self.pos < self.input.byte_len() and self.input[self.pos] == '+' or self.pos < self.input.byte_len() and self.input[self.pos] == '-':
+            if self.pos < self.input.byte_len() and self.input.char_at(self.pos) == '+' or self.pos < self.input.byte_len() and self.input.char_at(self.pos) == '-':
                 self.pos = self.pos + 1
-            while self.pos < self.input.byte_len() and self.input[self.pos] >= '0' and self.input[self.pos] <= '9':
+            while self.pos < self.input.byte_len() and self.input.char_at(self.pos) >= '0' and self.input.char_at(self.pos) <= '9':
                 self.pos = self.pos + 1
-        str num_str = self.input[start..self.pos]
+        str num_str = self.input.byte_slice(start, self.pos)
         if is_float:
             float f = parse_float(num_str)
             return Float(f)
@@ -379,7 +379,7 @@ equip JsonParser:
         self.pos = self.pos + 1
         self.skip_whitespace()
         Vector[Json] items = Vector[Json]()
-        if self.pos < self.input.byte_len() and self.input[self.pos] == ']':
+        if self.pos < self.input.byte_len() and self.input.char_at(self.pos) == ']':
             self.pos = self.pos + 1
             return Arr(items)
         while self.pos < self.input.byte_len():
@@ -391,9 +391,9 @@ equip JsonParser:
             if self.pos >= self.input.byte_len():
                 self.fail("unterminated array")
                 return Null()
-            if self.input[self.pos] == ',':
+            if self.input.char_at(self.pos) == ',':
                 self.pos = self.pos + 1
-            elif self.input[self.pos] == ']':
+            elif self.input.char_at(self.pos) == ']':
                 self.pos = self.pos + 1
                 return Arr(items)
             else:
@@ -407,19 +407,19 @@ equip JsonParser:
         self.pos = self.pos + 1
         self.skip_whitespace()
         Dict[str, Json] obj = Dict[str, Json]()
-        if self.pos < self.input.byte_len() and self.input[self.pos] == '}':
+        if self.pos < self.input.byte_len() and self.input.char_at(self.pos) == '}':
             self.pos = self.pos + 1
             return Obj(obj)
         while self.pos < self.input.byte_len():
             self.skip_whitespace()
-            if self.pos >= self.input.byte_len() or self.input[self.pos] != '"':
+            if self.pos >= self.input.byte_len() or self.input.char_at(self.pos) != '"':
                 self.fail("expected string key in object")
                 return Null()
             str key = self.parse_string()
             if self.failed():
                 return Null()
             self.skip_whitespace()
-            if self.pos >= self.input.byte_len() or self.input[self.pos] != ':':
+            if self.pos >= self.input.byte_len() or self.input.char_at(self.pos) != ':':
                 self.fail("expected ':' after key")
                 return Null()
             self.pos = self.pos + 1
@@ -431,9 +431,9 @@ equip JsonParser:
             if self.pos >= self.input.byte_len():
                 self.fail("unterminated object")
                 return Null()
-            if self.input[self.pos] == ',':
+            if self.input.char_at(self.pos) == ',':
                 self.pos = self.pos + 1
-            elif self.input[self.pos] == '}':
+            elif self.input.char_at(self.pos) == '}':
                 self.pos = self.pos + 1
                 return Obj(obj)
             else:
@@ -443,13 +443,13 @@ equip JsonParser:
         return Null()
 
     Json parse_keyword(&self):
-        if self.pos + 4 <= self.input.byte_len() and self.input[self.pos..self.pos + 4] == "true":
+        if self.pos + 4 <= self.input.byte_len() and self.input.byte_slice(self.pos, self.pos + 4) == "true":
             self.pos = self.pos + 4
             return Bool(true)
-        if self.pos + 5 <= self.input.byte_len() and self.input[self.pos..self.pos + 5] == "false":
+        if self.pos + 5 <= self.input.byte_len() and self.input.byte_slice(self.pos, self.pos + 5) == "false":
             self.pos = self.pos + 5
             return Bool(false)
-        if self.pos + 4 <= self.input.byte_len() and self.input[self.pos..self.pos + 4] == "null":
+        if self.pos + 4 <= self.input.byte_len() and self.input.byte_slice(self.pos, self.pos + 4) == "null":
             self.pos = self.pos + 4
             return Null()
         self.fail("unexpected keyword")
@@ -473,7 +473,7 @@ str json_escape_string(str s):
     str result = "\""
     int i = 0
     while i < s.byte_len():
-        char c = s[i]
+        char c = s.char_at(i)
         if c == '"':
             result = result + "\\\""
         elif c == '\\':
