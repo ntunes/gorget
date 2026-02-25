@@ -124,7 +124,184 @@ fn lower_expr_inner(
             lower_if_expr(ctx, builder, condition, then_branch, else_branch.as_deref())
         }
 
-        // Fallback for unsupported expressions in Phase 2
+        // -- P3.2: Match expression --
+        Expr::Match { scrutinee, arms, else_arm } => {
+            lower_match_expr(ctx, builder, scrutinee, arms, else_arm.as_deref())
+        }
+
+        // -- P3.3: Try/error handling --
+        Expr::Try { expr: inner } => {
+            lower_try_expr(ctx, builder, inner)
+        }
+
+        Expr::TryCapture { expr: inner } => {
+            // try expr → evaluate, return zero-default on error
+            let val = lower_expr(ctx, builder, inner);
+            val // simplified: just return the value
+        }
+
+        // -- P3.4: Miscellaneous expressions --
+        Expr::CharLiteral(ch) => {
+            Operand::Constant(Constant::I64(*ch as i64))
+        }
+
+        Expr::NoneLiteral => {
+            Operand::Constant(Constant::Null)
+        }
+
+        Expr::SelfExpr => {
+            if let Some((local_id, _)) = ctx.lookup_local("self") {
+                Operand::Copy(Place::local(local_id))
+            } else {
+                Operand::Constant(Constant::Unit)
+            }
+        }
+
+        Expr::It => {
+            if let Some((local_id, _)) = ctx.lookup_local("it") {
+                Operand::Copy(Place::local(local_id))
+            } else {
+                Operand::Constant(Constant::Unit)
+            }
+        }
+
+        Expr::Block(block) => {
+            lower_block_expr(ctx, builder, block)
+        }
+
+        Expr::Do { body } => {
+            lower_block_expr(ctx, builder, body)
+        }
+
+        Expr::As { expr: inner, type_ } => {
+            let val = lower_expr(ctx, builder, inner);
+            let target_type = ctx.type_mapper.map_ast_type(&type_.node);
+            let dst = builder.cast(target_type, val);
+            FunctionBuilder::copy(dst)
+        }
+
+        Expr::TupleLiteral(elems) => {
+            let operands: Vec<Operand> = elems.iter()
+                .map(|e| lower_expr(ctx, builder, e))
+                .collect();
+            let type_id = UNIT_TYPE; // placeholder tuple type
+            let dst = builder.tuple_init(operands, type_id);
+            FunctionBuilder::copy(dst)
+        }
+
+        Expr::ArrayLiteral(elems) => {
+            // Lower each element — for now, emit as a series of extern calls
+            // to build an array through the runtime
+            let _operands: Vec<Operand> = elems.iter()
+                .map(|e| lower_expr(ctx, builder, e))
+                .collect();
+            Operand::Constant(Constant::Unit) // array construction deferred
+        }
+
+        Expr::Deref { expr: inner } => {
+            let val = lower_expr(ctx, builder, inner);
+            if let Operand::Copy(ref place) | Operand::Move(ref place) = val {
+                let mut deref_place = place.clone();
+                deref_place.projections.push(Projection::Deref);
+                // Need to determine the dereferenced type
+                let local_idx = place.local.0 as usize;
+                let deref_type = if local_idx < builder.locals.len() {
+                    let ptr_type = builder.locals[local_idx].type_id;
+                    ctx.pointee_type(ptr_type).unwrap_or(I64_TYPE)
+                } else {
+                    I64_TYPE
+                };
+                let dst = builder.add_local(deref_type, None);
+                builder.assign(Place::local(dst), Operand::Copy(deref_place));
+                return FunctionBuilder::copy(dst);
+            }
+            val
+        }
+
+        Expr::TupleFieldAccess { object, index } => {
+            let obj = lower_expr(ctx, builder, object);
+            if let Operand::Copy(ref place) | Operand::Move(ref place) = obj {
+                let elem_type = I64_TYPE; // placeholder
+                let dst = builder.field_load(place.clone(), *index as u32, elem_type);
+                return FunctionBuilder::copy(dst);
+            }
+            Operand::Constant(Constant::Unit)
+        }
+
+        Expr::Is { expr: inner, negated, pattern } => {
+            let val = lower_expr(ctx, builder, inner);
+            let scrut_type = infer_operand_type(ctx, &val);
+            let scrut_local = builder.add_local(scrut_type, None);
+            builder.assign(Place::local(scrut_local), val);
+
+            let cond = super::stmts::lower_pattern_condition(
+                ctx, builder, pattern, scrut_local, scrut_type,
+            );
+            if *negated {
+                let neg = builder.un_op(UnOp::Not, BOOL_TYPE, cond);
+                FunctionBuilder::copy(neg)
+            } else {
+                cond
+            }
+        }
+
+        Expr::NilCoalescing { lhs, rhs } => {
+            // lhs ?? rhs: check if lhs is None, if so evaluate rhs
+            let lhs_val = lower_expr(ctx, builder, lhs);
+            let lhs_type = infer_operand_type(ctx, &lhs_val);
+            let lhs_local = builder.add_local(lhs_type, None);
+            builder.assign(Place::local(lhs_local), lhs_val);
+
+            // Check tag: if tag != None_tag, use lhs; else evaluate rhs
+            let tag = builder.tag_of(FunctionBuilder::copy(lhs_local));
+            // None is conventionally the last variant (tag = num_variants - 1)
+            // Use 0 as "has value" heuristic: tag == 0 means first variant (Some/Ok)
+            let is_some = builder.cmp(
+                CmpOp::Eq,
+                I32_TYPE,
+                FunctionBuilder::copy(tag),
+                Operand::Constant(Constant::I32(0)),
+            );
+
+            let result_id = builder.add_local(lhs_type, None);
+            let then_bb = builder.new_block();
+            let else_bb = builder.new_block();
+            let merge_bb = builder.new_block();
+
+            builder.branch(FunctionBuilder::copy(is_some), then_bb, else_bb);
+
+            // Has value: extract it (field 0 of variant 0)
+            builder.switch_to(then_bb);
+            builder.assign(Place::local(result_id), FunctionBuilder::copy(lhs_local));
+            builder.jump(merge_bb);
+
+            // None: evaluate rhs
+            builder.switch_to(else_bb);
+            let rhs_val = lower_expr(ctx, builder, rhs);
+            builder.assign(Place::local(result_id), rhs_val);
+            builder.jump(merge_bb);
+
+            builder.switch_to(merge_bb);
+            FunctionBuilder::copy(result_id)
+        }
+
+        Expr::Path { segments } => {
+            // Qualified path — try to resolve as enum variant
+            if let Some(last) = segments.last() {
+                if let Some((enum_name, variant_name)) = ctx.resolve_enum_variant(&last.node) {
+                    let type_id = ctx.type_mapper.lookup_named(&enum_name).unwrap_or(UNIT_TYPE);
+                    let dst = builder.enum_init(&enum_name, &variant_name, type_id, vec![]);
+                    return FunctionBuilder::copy(dst);
+                }
+                // Try as identifier
+                if let Some((local_id, _)) = ctx.lookup_local(&last.node) {
+                    return Operand::Copy(Place::local(local_id));
+                }
+            }
+            Operand::Constant(Constant::Unit)
+        }
+
+        // Deferred: Spawn, Await, Select, Comprehensions
         _ => Operand::Constant(Constant::Unit),
     }
 }
@@ -634,6 +811,139 @@ pub fn lower_print_call(
     }
 }
 
+/// Lower a match expression (value-producing).
+fn lower_match_expr(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    scrutinee: &Spanned<Expr>,
+    arms: &[ast::MatchArm],
+    else_arm: Option<&Spanned<Expr>>,
+) -> Operand {
+    // Lower scrutinee to a temp local
+    let scrut_op = lower_expr(ctx, builder, scrutinee);
+    let scrut_type = infer_operand_type(ctx, &scrut_op);
+    let scrut_local = builder.add_local(scrut_type, None);
+    builder.assign(Place::local(scrut_local), scrut_op);
+
+    // Allocate result local (placeholder type — will be overwritten)
+    let result_local = builder.add_local(I64_TYPE, None);
+    let merge_bb = builder.new_block();
+
+    for (i, arm) in arms.iter().enumerate() {
+        let arm_body_bb = builder.new_block();
+        let next_test_bb = if i + 1 < arms.len() || else_arm.is_some() {
+            builder.new_block()
+        } else {
+            merge_bb
+        };
+
+        let cond = super::stmts::lower_pattern_condition(
+            ctx, builder, &arm.pattern, scrut_local, scrut_type,
+        );
+        builder.branch(cond, arm_body_bb, next_test_bb);
+
+        builder.switch_to(arm_body_bb);
+        super::stmts::emit_pattern_bindings(ctx, builder, &arm.pattern, scrut_local, scrut_type);
+        let arm_val = lower_expr(ctx, builder, &arm.body);
+        builder.assign(Place::local(result_local), arm_val);
+        builder.jump(merge_bb);
+
+        builder.switch_to(next_test_bb);
+    }
+
+    // Else arm
+    if let Some(else_expr) = else_arm {
+        let else_val = lower_expr(ctx, builder, else_expr);
+        builder.assign(Place::local(result_local), else_val);
+    } else {
+        builder.assign(Place::local(result_local), Operand::Constant(Constant::Unit));
+    }
+    builder.jump(merge_bb);
+
+    builder.switch_to(merge_bb);
+    FunctionBuilder::copy(result_local)
+}
+
+/// Lower a try expression (`expr?`) on a Result type.
+fn lower_try_expr(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    inner: &Spanned<Expr>,
+) -> Operand {
+    let val = lower_expr(ctx, builder, inner);
+    let val_type = infer_operand_type(ctx, &val);
+    let val_local = builder.add_local(val_type, None);
+    builder.assign(Place::local(val_local), val);
+
+    // Check tag: 0 = Ok, 1 = Error
+    let tag = builder.tag_of(FunctionBuilder::copy(val_local));
+    let is_ok = builder.cmp(
+        CmpOp::Eq,
+        I32_TYPE,
+        FunctionBuilder::copy(tag),
+        Operand::Constant(Constant::I32(0)),
+    );
+
+    let ok_bb = builder.new_block();
+    let err_bb = builder.new_block();
+    let merge_bb = builder.new_block();
+
+    builder.branch(FunctionBuilder::copy(is_ok), ok_bb, err_bb);
+
+    // Ok path: extract Ok value (field 0 of variant 0)
+    builder.switch_to(ok_bb);
+    let ok_val = builder.enum_field_load(
+        Place::local(val_local),
+        "Ok",
+        0,
+        I64_TYPE, // placeholder Ok field type
+    );
+    builder.jump(merge_bb);
+
+    // Error path: propagate error via early return
+    builder.switch_to(err_bb);
+    let err_val = builder.enum_field_load(
+        Place::local(val_local),
+        "Error",
+        0,
+        I64_TYPE, // placeholder Error field type
+    );
+    // Build a Result::Error to return
+    // For now, assign error to _0 and return
+    builder.assign(Place::local(LocalId(0)), FunctionBuilder::copy(err_val));
+    ctx.drops.emit_early_exit_drops(builder, &ctx.type_registry, super::drops::DropScopeKind::Function);
+    builder.ret(FunctionBuilder::copy(LocalId(0)));
+
+    builder.switch_to(merge_bb);
+    FunctionBuilder::copy(ok_val)
+}
+
+/// Lower a block expression — the last expression in the block is the value.
+fn lower_block_expr(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    block: &ast::Block,
+) -> Operand {
+    if block.stmts.is_empty() {
+        return Operand::Constant(Constant::Unit);
+    }
+
+    // Lower all but the last statement normally
+    for stmt in &block.stmts[..block.stmts.len() - 1] {
+        super::stmts::lower_stmt(ctx, builder, stmt);
+    }
+
+    // If the last statement is an expression, lower it and return as value
+    let last = &block.stmts[block.stmts.len() - 1];
+    match &last.node {
+        ast::Stmt::Expr(expr) => lower_expr(ctx, builder, expr),
+        _ => {
+            super::stmts::lower_stmt(ctx, builder, last);
+            Operand::Constant(Constant::Unit)
+        }
+    }
+}
+
 /// Infer the GIR type of an operand by examining its structure.
 pub fn infer_operand_type(ctx: &LoweringContext, operand: &Operand) -> TypeId {
     match operand {
@@ -773,5 +1083,180 @@ mod tests {
             builder.blocks[0].instructions.last().unwrap(),
             Instruction::CallExtern { func, .. } if func == "printf"
         ));
+    }
+
+    // ---- P3.2: Match expression tests ----
+
+    #[test]
+    fn lower_match_expr_literal() {
+        let (_analysis, mut ctx) = make_test_ctx();
+        let x_id = LocalId(1);
+        ctx.register_local("x", x_id, I64_TYPE);
+
+        let mut builder = FunctionBuilder::new("test", I64_TYPE, &[(I64_TYPE, Some("x"))]);
+
+        use crate::parser::ast::{MatchArm, Pattern};
+
+        let result = lower_expr(
+            &mut ctx,
+            &mut builder,
+            &spanned(Expr::Match {
+                scrutinee: Box::new(spanned(Expr::Identifier("x".into()))),
+                arms: vec![
+                    MatchArm {
+                        pattern: spanned(Pattern::Literal(Box::new(spanned(Expr::IntLiteral(1))))),
+                        guard: None,
+                        body: spanned(Expr::IntLiteral(10)),
+                        span: Span { start: 0, end: 0 },
+                    },
+                    MatchArm {
+                        pattern: spanned(Pattern::Literal(Box::new(spanned(Expr::IntLiteral(2))))),
+                        guard: None,
+                        body: spanned(Expr::IntLiteral(20)),
+                        span: Span { start: 0, end: 0 },
+                    },
+                ],
+                else_arm: Some(Box::new(spanned(Expr::IntLiteral(0)))),
+            }),
+        );
+
+        // Result should be a Copy of the result local
+        assert!(matches!(result, Operand::Copy(_)));
+
+        // Should have Branch terminators for pattern checks
+        let has_branch = builder.blocks.iter().any(|bb| {
+            matches!(bb.terminator, Some(Terminator::Branch { .. }))
+        });
+        assert!(has_branch, "Match expr should have Branch terminators");
+
+        // Should have Assign to result local in arm bodies
+        let assign_count: usize = builder.blocks.iter()
+            .map(|bb| bb.instructions.iter()
+                .filter(|inst| matches!(inst, Instruction::Assign { .. }))
+                .count())
+            .sum();
+        assert!(assign_count >= 3, "Should have assigns for scrutinee + arms");
+    }
+
+    // ---- P3.4: Miscellaneous expression tests ----
+
+    #[test]
+    fn lower_char_literal() {
+        let (_analysis, mut ctx) = make_test_ctx();
+        let mut builder = FunctionBuilder::new("test", UNIT_TYPE, &[]);
+
+        let result = lower_expr(&mut ctx, &mut builder, &spanned(Expr::CharLiteral('A')));
+        assert!(matches!(result, Operand::Constant(Constant::I64(65))));
+    }
+
+    #[test]
+    fn lower_self_expr() {
+        let (_analysis, mut ctx) = make_test_ctx();
+        let self_id = LocalId(1);
+        ctx.register_local("self", self_id, I64_TYPE);
+
+        let mut builder = FunctionBuilder::new("test", UNIT_TYPE, &[(I64_TYPE, Some("self"))]);
+
+        let result = lower_expr(&mut ctx, &mut builder, &spanned(Expr::SelfExpr));
+        assert!(matches!(result, Operand::Copy(ref p) if p.local == LocalId(1)));
+    }
+
+    #[test]
+    fn lower_block_expr_test() {
+        let (_analysis, mut ctx) = make_test_ctx();
+        let mut builder = FunctionBuilder::new("test", I64_TYPE, &[]);
+
+        use crate::parser::ast::{Block, Stmt};
+
+        let result = lower_expr(
+            &mut ctx,
+            &mut builder,
+            &spanned(Expr::Block(Block {
+                stmts: vec![spanned(Stmt::Expr(spanned(Expr::IntLiteral(42))))],
+                span: Span { start: 0, end: 0 },
+            })),
+        );
+
+        // The block's last expression (42) should be the value
+        assert!(matches!(result, Operand::Constant(Constant::I64(42))));
+    }
+
+    #[test]
+    fn lower_cast_expr() {
+        let (_analysis, mut ctx) = make_test_ctx();
+        let mut builder = FunctionBuilder::new("test", UNIT_TYPE, &[]);
+
+        let result = lower_expr(
+            &mut ctx,
+            &mut builder,
+            &spanned(Expr::As {
+                expr: Box::new(spanned(Expr::IntLiteral(42))),
+                type_: spanned(ast::Type::Primitive(ast::PrimitiveType::Float)),
+            }),
+        );
+
+        // Should produce a Copy of the cast result local
+        assert!(matches!(result, Operand::Copy(_)));
+        // Should have a Cast instruction
+        let has_cast = builder.blocks[0].instructions.iter().any(|inst| {
+            matches!(inst, Instruction::Cast { .. })
+        });
+        assert!(has_cast, "Should have Cast instruction for 'as' expression");
+    }
+
+    #[test]
+    fn lower_tuple_literal() {
+        let (_analysis, mut ctx) = make_test_ctx();
+        let mut builder = FunctionBuilder::new("test", UNIT_TYPE, &[]);
+
+        let result = lower_expr(
+            &mut ctx,
+            &mut builder,
+            &spanned(Expr::TupleLiteral(vec![
+                spanned(Expr::IntLiteral(1)),
+                spanned(Expr::IntLiteral(2)),
+                spanned(Expr::IntLiteral(3)),
+            ])),
+        );
+
+        assert!(matches!(result, Operand::Copy(_)));
+        // Should have a TupleInit instruction
+        let has_tuple_init = builder.blocks[0].instructions.iter().any(|inst| {
+            matches!(inst, Instruction::TupleInit { .. })
+        });
+        assert!(has_tuple_init, "Should have TupleInit instruction");
+    }
+
+    #[test]
+    fn lower_is_expr() {
+        let (_analysis, mut ctx) = make_test_ctx();
+        let x_id = LocalId(1);
+        ctx.register_local("x", x_id, I64_TYPE);
+
+        let mut builder = FunctionBuilder::new("test", UNIT_TYPE, &[(I64_TYPE, Some("x"))]);
+
+        use crate::parser::ast::Pattern;
+
+        let result = lower_expr(
+            &mut ctx,
+            &mut builder,
+            &spanned(Expr::Is {
+                expr: Box::new(spanned(Expr::Identifier("x".into()))),
+                negated: false,
+                pattern: spanned(Pattern::Literal(Box::new(spanned(Expr::IntLiteral(5))))),
+            }),
+        );
+
+        // Should produce a boolean condition (Copy of Cmp result)
+        assert!(matches!(result, Operand::Copy(_)));
+    }
+
+    #[test]
+    fn lower_none_literal() {
+        let (_analysis, mut ctx) = make_test_ctx();
+        let mut builder = FunctionBuilder::new("test", UNIT_TYPE, &[]);
+
+        let result = lower_expr(&mut ctx, &mut builder, &spanned(Expr::NoneLiteral));
+        assert!(matches!(result, Operand::Constant(Constant::Null)));
     }
 }

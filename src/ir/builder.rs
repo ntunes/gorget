@@ -304,6 +304,22 @@ impl FunctionBuilder {
         self.emit_with_temp(I32_TYPE, |dst| Instruction::TagOf { dst, operand })
     }
 
+    pub fn enum_field_load(
+        &mut self,
+        base: Place,
+        variant: impl Into<String>,
+        field: u32,
+        type_id: TypeId,
+    ) -> LocalId {
+        let variant = variant.into();
+        self.emit_with_temp(type_id, |dst| Instruction::EnumFieldLoad {
+            dst,
+            base,
+            variant,
+            field,
+        })
+    }
+
     pub fn heap_alloc(&mut self, type_id: TypeId, allocator: Operand) -> LocalId {
         let ptr_type = type_id; // caller provides the pointer type
         self.emit_with_temp(ptr_type, |dst| Instruction::HeapAlloc {

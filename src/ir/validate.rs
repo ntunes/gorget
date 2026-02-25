@@ -297,6 +297,10 @@ fn check_instruction_locals(
             check_local_id(*dst, max, ctx, errors);
             check_operand_locals(operand, max, ctx, errors);
         }
+        Instruction::EnumFieldLoad { dst, base, .. } => {
+            check_local_id(*dst, max, ctx, errors);
+            check_place_locals(base, max, ctx, errors);
+        }
         Instruction::Call { dst, args, .. } | Instruction::CallExtern { dst, args, .. } => {
             if let Some(d) = dst {
                 check_local_id(*d, max, ctx, errors);

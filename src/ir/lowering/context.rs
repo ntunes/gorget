@@ -9,6 +9,14 @@ use super::closures::ClosureLowering;
 use super::drops::DropElaborator;
 use super::types::TypeMapper;
 
+use crate::ir::types::BlockId;
+
+/// Information about a loop for break/continue targeting.
+pub struct LoopInfo {
+    pub header_bb: BlockId,  // target for continue
+    pub exit_bb: BlockId,    // target for break
+}
+
 /// Tracks lowering state within a function.
 pub struct LoweringContext<'a> {
     pub analysis: &'a AnalysisResult,
@@ -29,6 +37,8 @@ pub struct LoweringContext<'a> {
     pub struct_fields: FxHashMap<(String, String), (u32, TypeId)>,
     /// Closure info: struct_name → (call_fn_name, struct_type_id).
     pub closure_info: FxHashMap<String, (String, TypeId)>,
+    /// Stack of active loops for break/continue targeting.
+    loop_stack: Vec<LoopInfo>,
 }
 
 impl<'a> LoweringContext<'a> {
@@ -44,6 +54,7 @@ impl<'a> LoweringContext<'a> {
             enum_variants: FxHashMap::default(),
             struct_fields: FxHashMap::default(),
             closure_info: FxHashMap::default(),
+            loop_stack: Vec::new(),
         }
     }
 
@@ -194,6 +205,39 @@ impl<'a> LoweringContext<'a> {
     /// Look up closure info by struct name.
     pub fn lookup_closure_info(&self, struct_name: &str) -> Option<(&str, TypeId)> {
         self.closure_info.get(struct_name).map(|(name, tid)| (name.as_str(), *tid))
+    }
+
+    // ---- Loop stack for break/continue ----
+
+    /// Push a loop onto the stack (called when entering a while/for/loop).
+    pub fn push_loop(&mut self, header_bb: BlockId, exit_bb: BlockId) {
+        self.loop_stack.push(LoopInfo { header_bb, exit_bb });
+    }
+
+    /// Pop the current loop off the stack.
+    pub fn pop_loop(&mut self) {
+        self.loop_stack.pop();
+    }
+
+    /// Get the current (innermost) loop info for break/continue.
+    pub fn current_loop(&self) -> Option<&LoopInfo> {
+        self.loop_stack.last()
+    }
+
+    // ---- Enum variant tag resolution ----
+
+    /// Resolve the tag index for an enum variant.
+    pub fn resolve_variant_tag(&self, type_name: &str, variant_name: &str) -> Option<i64> {
+        if let Some(type_def) = self.type_registry.get_type_def(type_name) {
+            if let TypeDefKind::Enum(ref e) = type_def.kind {
+                for (i, v) in e.variants.iter().enumerate() {
+                    if v.name == variant_name {
+                        return Some(i as i64);
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// Resolve a pointer type to its pointee: Ptr(T) or MutPtr(T) → Some(T), else None.

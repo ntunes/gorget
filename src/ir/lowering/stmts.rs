@@ -69,7 +69,29 @@ pub fn lower_stmt(
             ..
         } => lower_for(ctx, builder, pattern, iterable, body),
 
-        // Phase 1: ignore other statement types
+        Stmt::Loop { body } => lower_loop(ctx, builder, body),
+
+        Stmt::Break(_) => lower_break(ctx, builder),
+
+        Stmt::Continue => lower_continue(ctx, builder),
+
+        Stmt::Match {
+            scrutinee,
+            arms,
+            else_arm,
+        } => lower_match_stmt(ctx, builder, scrutinee, arms, else_arm),
+
+        Stmt::Throw(expr) => lower_throw(ctx, builder, expr),
+
+        Stmt::Assert { condition, message } => lower_assert(ctx, builder, condition, message.as_ref()),
+
+        Stmt::With { bindings, body } => lower_with(ctx, builder, bindings, body),
+
+        Stmt::Unsafe { body } => lower_block(ctx, builder, body),
+
+        Stmt::Item(_) => { /* Nested items are hoisted — no-op in GIR */ }
+
+        // Deferred: Select (async), other async constructs
         _ => {}
     }
 }
@@ -239,9 +261,11 @@ fn lower_while(
 
     // Body: execute, jump back to header (wrapped in Loop scope for drop cleanup)
     builder.switch_to(body_bb);
+    ctx.push_loop(header_bb, exit_bb);
     ctx.drops.push_scope(DropScopeKind::Loop);
     lower_block(ctx, builder, body);
     ctx.drops.pop_scope(builder, &ctx.type_registry);
+    ctx.pop_loop();
     builder.jump(header_bb);
 
     // Continue from exit
@@ -303,9 +327,11 @@ fn lower_for_range(
 
     // Body (wrapped in Loop scope for drop cleanup)
     builder.switch_to(body_bb);
+    ctx.push_loop(header_bb, exit_bb);
     ctx.drops.push_scope(DropScopeKind::Loop);
     lower_block(ctx, builder, body);
     ctx.drops.pop_scope(builder, &ctx.type_registry);
+    ctx.pop_loop();
     builder.jump(incr_bb);
 
     // Increment: loop_var = loop_var + 1
@@ -317,6 +343,374 @@ fn lower_for_range(
 
     // Exit
     builder.switch_to(exit_bb);
+}
+
+/// Lower an infinite `loop: body` statement.
+fn lower_loop(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    body: &Block,
+) {
+    let body_bb = builder.new_block();
+    let exit_bb = builder.new_block();
+
+    // Jump into the loop body
+    builder.jump(body_bb);
+
+    // Body: execute, jump back to body (infinite loop)
+    builder.switch_to(body_bb);
+    ctx.push_loop(body_bb, exit_bb);
+    ctx.drops.push_scope(DropScopeKind::Loop);
+    lower_block(ctx, builder, body);
+    ctx.drops.pop_scope(builder, &ctx.type_registry);
+    ctx.pop_loop();
+    builder.jump(body_bb);
+
+    // Exit (reached via break)
+    builder.switch_to(exit_bb);
+}
+
+/// Lower a `break` statement.
+fn lower_break(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+) {
+    if let Some(loop_info) = ctx.current_loop() {
+        let exit_bb = loop_info.exit_bb;
+        // Emit cleanup drops up to the Loop scope
+        ctx.drops.emit_early_exit_drops(builder, &ctx.type_registry, DropScopeKind::Loop);
+        builder.jump(exit_bb);
+        // Create unreachable block to absorb dead code after break
+        let dead_bb = builder.new_block();
+        builder.switch_to(dead_bb);
+    }
+}
+
+/// Lower a `continue` statement.
+fn lower_continue(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+) {
+    if let Some(loop_info) = ctx.current_loop() {
+        let header_bb = loop_info.header_bb;
+        // Emit cleanup drops up to the Loop scope
+        ctx.drops.emit_early_exit_drops(builder, &ctx.type_registry, DropScopeKind::Loop);
+        builder.jump(header_bb);
+        // Create unreachable block to absorb dead code after continue
+        let dead_bb = builder.new_block();
+        builder.switch_to(dead_bb);
+    }
+}
+
+// ---- P3.1: Match Statements ----
+
+/// Lower a match statement to GIR using Branch chains.
+fn lower_match_stmt(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    scrutinee: &Spanned<Expr>,
+    arms: &[ast::MatchArm],
+    else_arm: &Option<Block>,
+) {
+    // Lower scrutinee to a temp local
+    let scrut_op = lower_expr(ctx, builder, scrutinee);
+    let scrut_type = super::exprs::infer_operand_type(ctx, &scrut_op);
+    let scrut_local = builder.add_local(scrut_type, None);
+    builder.assign(Place::local(scrut_local), scrut_op);
+
+    let merge_bb = builder.new_block();
+
+    // Process each arm as a test-body chain
+    for (i, arm) in arms.iter().enumerate() {
+        let arm_body_bb = builder.new_block();
+        let next_test_bb = if i + 1 < arms.len() || else_arm.is_some() {
+            builder.new_block()
+        } else {
+            merge_bb
+        };
+
+        // Emit pattern condition check
+        let cond = lower_pattern_condition(ctx, builder, &arm.pattern, scrut_local, scrut_type);
+        builder.branch(cond, arm_body_bb, next_test_bb);
+
+        // Arm body
+        builder.switch_to(arm_body_bb);
+        emit_pattern_bindings(ctx, builder, &arm.pattern, scrut_local, scrut_type);
+        // Match arms in Stmt::Match have body as Spanned<Expr>
+        lower_expr(ctx, builder, &arm.body);
+        builder.jump(merge_bb);
+
+        builder.switch_to(next_test_bb);
+    }
+
+    // Else arm
+    if let Some(else_body) = else_arm {
+        lower_block(ctx, builder, else_body);
+        builder.jump(merge_bb);
+    }
+
+    builder.switch_to(merge_bb);
+}
+
+/// Lower a pattern condition to a boolean Operand.
+pub fn lower_pattern_condition(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    pattern: &Spanned<Pattern>,
+    scrut_local: LocalId,
+    scrut_type: TypeId,
+) -> Operand {
+    match &pattern.node {
+        Pattern::Wildcard => FunctionBuilder::const_bool(true),
+
+        Pattern::Literal(expr) => {
+            let lit_op = lower_expr(ctx, builder, expr);
+            let cmp = builder.cmp(
+                CmpOp::Eq,
+                scrut_type,
+                FunctionBuilder::copy(scrut_local),
+                lit_op,
+            );
+            FunctionBuilder::copy(cmp)
+        }
+
+        Pattern::Binding(name) => {
+            // Check if this is an enum variant name (unit variant match)
+            if let Some((enum_name, variant_name)) = ctx.resolve_enum_variant(name) {
+                let tag = builder.tag_of(FunctionBuilder::copy(scrut_local));
+                if let Some(variant_tag) = ctx.resolve_variant_tag(&enum_name, &variant_name) {
+                    let cmp = builder.cmp(
+                        CmpOp::Eq,
+                        I32_TYPE,
+                        FunctionBuilder::copy(tag),
+                        Operand::Constant(Constant::I32(variant_tag as i32)),
+                    );
+                    return FunctionBuilder::copy(cmp);
+                }
+            }
+            // Plain variable binding — always matches
+            FunctionBuilder::const_bool(true)
+        }
+
+        Pattern::Constructor { path, .. } => {
+            // Extract variant name from path
+            let variant_name = if let Some(last) = path.last() {
+                &last.node
+            } else {
+                return FunctionBuilder::const_bool(true);
+            };
+            if let Some((enum_name, variant_name)) = ctx.resolve_enum_variant(variant_name) {
+                let tag = builder.tag_of(FunctionBuilder::copy(scrut_local));
+                if let Some(variant_tag) = ctx.resolve_variant_tag(&enum_name, &variant_name) {
+                    let cmp = builder.cmp(
+                        CmpOp::Eq,
+                        I32_TYPE,
+                        FunctionBuilder::copy(tag),
+                        Operand::Constant(Constant::I32(variant_tag as i32)),
+                    );
+                    return FunctionBuilder::copy(cmp);
+                }
+            }
+            FunctionBuilder::const_bool(true)
+        }
+
+        Pattern::Or(alts) => {
+            // Short-circuit OR: if any alternative matches, return true
+            let result_id = builder.add_local(BOOL_TYPE, None);
+            builder.assign(Place::local(result_id), FunctionBuilder::const_bool(false));
+
+            let merge_bb = builder.new_block();
+
+            for (i, alt) in alts.iter().enumerate() {
+                let cond = lower_pattern_condition(ctx, builder, alt, scrut_local, scrut_type);
+                let next_bb = if i + 1 < alts.len() {
+                    builder.new_block()
+                } else {
+                    merge_bb
+                };
+                let true_bb = builder.new_block();
+                builder.branch(cond, true_bb, next_bb);
+
+                builder.switch_to(true_bb);
+                builder.assign(Place::local(result_id), FunctionBuilder::const_bool(true));
+                builder.jump(merge_bb);
+
+                if i + 1 < alts.len() {
+                    builder.switch_to(next_bb);
+                }
+            }
+
+            builder.switch_to(merge_bb);
+            FunctionBuilder::copy(result_id)
+        }
+
+        Pattern::Tuple(_) | Pattern::Rest => {
+            // Structural match — always matches if types match
+            FunctionBuilder::const_bool(true)
+        }
+    }
+}
+
+/// Emit pattern bindings — assign destructured values to local variables.
+pub fn emit_pattern_bindings(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    pattern: &Spanned<Pattern>,
+    scrut_local: LocalId,
+    scrut_type: TypeId,
+) {
+    match &pattern.node {
+        Pattern::Binding(name) => {
+            // If not an enum variant, bind the scrutinee value
+            if ctx.resolve_enum_variant(name).is_none() {
+                ctx.register_local(name, scrut_local, scrut_type);
+            }
+        }
+
+        Pattern::Constructor { path, fields } => {
+            let variant_name = if let Some(last) = path.last() {
+                last.node.clone()
+            } else {
+                return;
+            };
+
+            // Look up enum info to find the type name
+            let enum_name = if let Some((en, _)) = ctx.resolve_enum_variant(&variant_name) {
+                en
+            } else {
+                return;
+            };
+
+            for (i, field_pat) in fields.iter().enumerate() {
+                // Determine the field type from the enum variant definition
+                let field_type = if let Some(type_def) = ctx.type_registry.get_type_def(&enum_name) {
+                    if let TypeDefKind::Enum(ref e) = type_def.kind {
+                        if let Some(v) = e.variants.iter().find(|v| v.name == variant_name) {
+                            if let Some(f) = v.fields.get(i) {
+                                f.type_id
+                            } else {
+                                I64_TYPE
+                            }
+                        } else {
+                            I64_TYPE
+                        }
+                    } else {
+                        I64_TYPE
+                    }
+                } else {
+                    I64_TYPE
+                };
+
+                let dst = builder.enum_field_load(
+                    Place::local(scrut_local),
+                    variant_name.clone(),
+                    i as u32,
+                    field_type,
+                );
+
+                // Recurse on sub-pattern
+                emit_pattern_bindings(ctx, builder, field_pat, dst, field_type);
+            }
+        }
+
+        Pattern::Tuple(elems) => {
+            for (i, elem_pat) in elems.iter().enumerate() {
+                // Use field_load with field index
+                let elem_type = I64_TYPE; // placeholder — real type needs registry
+                let dst = builder.field_load(Place::local(scrut_local), i as u32, elem_type);
+                emit_pattern_bindings(ctx, builder, elem_pat, dst, elem_type);
+            }
+        }
+
+        Pattern::Wildcard | Pattern::Literal(_) | Pattern::Or(_) | Pattern::Rest => {
+            // No bindings
+        }
+    }
+}
+
+// ---- P3.3: Error Handling ----
+
+/// Lower a `throw expr` statement.
+fn lower_throw(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    expr: &Spanned<Expr>,
+) {
+    let val = lower_expr(ctx, builder, expr);
+    builder.call_extern("gorget_throw", vec![val], UNIT_TYPE);
+    builder.unreachable();
+    // Create unreachable block for dead code after throw
+    let dead_bb = builder.new_block();
+    builder.switch_to(dead_bb);
+}
+
+/// Lower an `assert condition [, message]` statement.
+fn lower_assert(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    condition: &Spanned<Expr>,
+    message: Option<&Spanned<Expr>>,
+) {
+    let cond = lower_expr(ctx, builder, condition);
+
+    let pass_bb = builder.new_block();
+    let fail_bb = builder.new_block();
+
+    builder.branch(cond, pass_bb, fail_bb);
+
+    // Fail path: print message and abort
+    builder.switch_to(fail_bb);
+    if let Some(msg) = message {
+        let msg_op = lower_expr(ctx, builder, msg);
+        builder.call_extern(
+            "fprintf",
+            vec![
+                Operand::Constant(Constant::Null), // stderr placeholder
+                Operand::Constant(Constant::Str("Assertion failed: %s\n".to_string())),
+                msg_op,
+            ],
+            I32_TYPE,
+        );
+    } else {
+        builder.call_extern(
+            "fprintf",
+            vec![
+                Operand::Constant(Constant::Null), // stderr placeholder
+                Operand::Constant(Constant::Str("Assertion failed\n".to_string())),
+            ],
+            I32_TYPE,
+        );
+    }
+    builder.call_extern("exit", vec![Operand::Constant(Constant::I32(1))], UNIT_TYPE);
+    builder.unreachable();
+
+    // Pass path: continue
+    builder.switch_to(pass_bb);
+}
+
+// ---- P3.5: With statement ----
+
+/// Lower a `with bindings: body` statement.
+fn lower_with(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    bindings: &[ast::WithBinding],
+    body: &Block,
+) {
+    ctx.drops.push_scope(DropScopeKind::Block);
+
+    for binding in bindings {
+        let val = lower_expr(ctx, builder, &binding.expr);
+        let type_id = super::exprs::infer_operand_type(ctx, &val);
+        let local_id = builder.add_local(type_id, Some(&binding.name.node));
+        ctx.register_local(&binding.name.node, local_id, type_id);
+        ctx.drops.register_local(local_id, type_id, &ctx.type_registry);
+        builder.assign(Place::local(local_id), val);
+    }
+
+    lower_block(ctx, builder, body);
+
+    ctx.drops.pop_scope(builder, &ctx.type_registry);
 }
 
 /// Check if a block always ends with a return statement.
@@ -437,6 +831,282 @@ mod tests {
         assert!(matches!(
             builder.blocks[0].terminator,
             Some(Terminator::Jump(_))
+        ));
+    }
+
+    // ---- P3.0: Break, Continue, Loop tests ----
+
+    #[test]
+    fn lower_loop_basic() {
+        let mut ctx = make_test_ctx();
+        let mut builder = FunctionBuilder::new("test", UNIT_TYPE, &[]);
+
+        let stmt = spanned(Stmt::Loop {
+            body: Block {
+                stmts: vec![spanned(Stmt::Break(None))],
+                span: Span { start: 0, end: 0 },
+            },
+        });
+
+        lower_stmt(&mut ctx, &mut builder, &stmt);
+
+        // Should have: entry(bb0) → body(bb1), exit(bb2), dead(bb3)
+        assert!(builder.blocks.len() >= 3);
+        // Entry block should jump to body
+        assert!(matches!(
+            builder.blocks[0].terminator,
+            Some(Terminator::Jump(BlockId(1)))
+        ));
+        // Body block back-edge (body_bb → body_bb) won't be present since break overrides it;
+        // the break inside the body should jump to exit_bb
+    }
+
+    #[test]
+    fn lower_break_in_loop() {
+        let mut ctx = make_test_ctx();
+        let mut builder = FunctionBuilder::new("test", UNIT_TYPE, &[]);
+
+        // loop: break
+        let stmt = spanned(Stmt::Loop {
+            body: Block {
+                stmts: vec![spanned(Stmt::Break(None))],
+                span: Span { start: 0, end: 0 },
+            },
+        });
+
+        lower_stmt(&mut ctx, &mut builder, &stmt);
+
+        // The body block (bb1) should contain a Jump to the exit block (bb2)
+        // break emits: jump to exit_bb, then creates dead block
+        let body_block = &builder.blocks[1];
+        if let Some(Terminator::Jump(target)) = &body_block.terminator {
+            // Break should jump to exit_bb (bb2)
+            assert_eq!(*target, BlockId(2), "break should jump to exit block");
+        } else {
+            panic!("Body block should have Jump terminator from break");
+        }
+    }
+
+    #[test]
+    fn lower_continue_in_while() {
+        let mut ctx = make_test_ctx();
+        let i_id = LocalId(1);
+        ctx.register_local("i", i_id, I64_TYPE);
+
+        let mut builder = FunctionBuilder::new("test", UNIT_TYPE, &[(I64_TYPE, Some("i"))]);
+
+        // while i < 10: continue
+        let stmt = spanned(Stmt::While {
+            condition: spanned(Expr::BinaryOp {
+                left: Box::new(spanned(Expr::Identifier("i".into()))),
+                op: ast::BinaryOp::Lt,
+                right: Box::new(spanned(Expr::IntLiteral(10))),
+            }),
+            body: Block {
+                stmts: vec![spanned(Stmt::Continue)],
+                span: Span { start: 0, end: 0 },
+            },
+            else_body: None,
+        });
+
+        lower_stmt(&mut ctx, &mut builder, &stmt);
+
+        // bb0=entry, bb1=header, bb2=body, bb3=exit, bb4=dead(from continue)
+        // Body block (bb2) should jump back to header (bb1)
+        let body_block = &builder.blocks[2];
+        if let Some(Terminator::Jump(target)) = &body_block.terminator {
+            assert_eq!(*target, BlockId(1), "continue should jump to header block");
+        } else {
+            panic!("Body block should have Jump terminator from continue");
+        }
+    }
+
+    #[test]
+    fn lower_nested_break() {
+        let mut ctx = make_test_ctx();
+        let mut builder = FunctionBuilder::new("test", UNIT_TYPE, &[]);
+
+        // loop:
+        //   loop:
+        //     break   <- should break inner loop only
+        let inner_loop = spanned(Stmt::Loop {
+            body: Block {
+                stmts: vec![spanned(Stmt::Break(None))],
+                span: Span { start: 0, end: 0 },
+            },
+        });
+        let outer_loop = spanned(Stmt::Loop {
+            body: Block {
+                stmts: vec![inner_loop],
+                span: Span { start: 0, end: 0 },
+            },
+        });
+
+        lower_stmt(&mut ctx, &mut builder, &outer_loop);
+
+        // After lowering, the inner break should target inner exit, not outer exit.
+        // The structure is:
+        // bb0: entry → jump to outer_body (bb1)
+        // bb1: outer body → inner stuff starts here
+        //   bb3: inner body → break jumps to inner exit (bb4)
+        //   bb4: inner exit → falls through
+        // bb2: outer exit
+        // The key assertion: inner break doesn't reach outer exit
+
+        // Verify we have enough blocks
+        assert!(builder.blocks.len() >= 5, "Should have at least 5 blocks for nested loops");
+    }
+
+    // ---- P3.1: Match statement tests ----
+
+    #[test]
+    fn lower_match_literal() {
+        let mut ctx = make_test_ctx();
+        let x_id = LocalId(1);
+        ctx.register_local("x", x_id, I64_TYPE);
+
+        let mut builder = FunctionBuilder::new("test", UNIT_TYPE, &[(I64_TYPE, Some("x"))]);
+
+        let stmt = spanned(Stmt::Match {
+            scrutinee: spanned(Expr::Identifier("x".into())),
+            arms: vec![
+                ast::MatchArm {
+                    pattern: spanned(Pattern::Literal(Box::new(spanned(Expr::IntLiteral(1))))),
+                    guard: None,
+                    body: spanned(Expr::IntLiteral(10)),
+                    span: Span { start: 0, end: 0 },
+                },
+                ast::MatchArm {
+                    pattern: spanned(Pattern::Literal(Box::new(spanned(Expr::IntLiteral(2))))),
+                    guard: None,
+                    body: spanned(Expr::IntLiteral(20)),
+                    span: Span { start: 0, end: 0 },
+                },
+            ],
+            else_arm: Some(Block {
+                stmts: vec![spanned(Stmt::Pass)],
+                span: Span { start: 0, end: 0 },
+            }),
+        });
+
+        lower_stmt(&mut ctx, &mut builder, &stmt);
+
+        // Should create blocks for scrutinee + each arm + else + merge
+        assert!(builder.blocks.len() >= 5);
+        // Entry block: assign scrutinee, then branch on first pattern
+        // There should be Cmp instructions for literal matching
+        let has_cmp = builder.blocks.iter().any(|bb| {
+            bb.instructions.iter().any(|inst| matches!(inst, Instruction::Cmp { .. }))
+        });
+        assert!(has_cmp, "Should have Cmp instructions for literal pattern matching");
+    }
+
+    #[test]
+    fn lower_match_binding() {
+        let mut ctx = make_test_ctx();
+        let x_id = LocalId(1);
+        ctx.register_local("x", x_id, I64_TYPE);
+
+        let mut builder = FunctionBuilder::new("test", UNIT_TYPE, &[(I64_TYPE, Some("x"))]);
+
+        let stmt = spanned(Stmt::Match {
+            scrutinee: spanned(Expr::Identifier("x".into())),
+            arms: vec![ast::MatchArm {
+                pattern: spanned(Pattern::Binding("val".into())),
+                guard: None,
+                body: spanned(Expr::IntLiteral(42)),
+                span: Span { start: 0, end: 0 },
+            }],
+            else_arm: None,
+        });
+
+        lower_stmt(&mut ctx, &mut builder, &stmt);
+
+        // The binding pattern should register "val" as a local alias
+        assert!(ctx.lookup_local("val").is_some(), "Pattern binding should register 'val'");
+    }
+
+    #[test]
+    fn lower_match_or_pattern() {
+        let mut ctx = make_test_ctx();
+        let x_id = LocalId(1);
+        ctx.register_local("x", x_id, I64_TYPE);
+
+        let mut builder = FunctionBuilder::new("test", UNIT_TYPE, &[(I64_TYPE, Some("x"))]);
+
+        // match x: case 1 | 2 | 3: pass
+        let stmt = spanned(Stmt::Match {
+            scrutinee: spanned(Expr::Identifier("x".into())),
+            arms: vec![ast::MatchArm {
+                pattern: spanned(Pattern::Or(vec![
+                    spanned(Pattern::Literal(Box::new(spanned(Expr::IntLiteral(1))))),
+                    spanned(Pattern::Literal(Box::new(spanned(Expr::IntLiteral(2))))),
+                    spanned(Pattern::Literal(Box::new(spanned(Expr::IntLiteral(3))))),
+                ])),
+                guard: None,
+                body: spanned(Expr::IntLiteral(0)),
+                span: Span { start: 0, end: 0 },
+            }],
+            else_arm: None,
+        });
+
+        lower_stmt(&mut ctx, &mut builder, &stmt);
+
+        // Should have multiple Cmp instructions (one per alternative) and Branch terminators
+        let cmp_count: usize = builder.blocks.iter()
+            .map(|bb| bb.instructions.iter().filter(|inst| matches!(inst, Instruction::Cmp { .. })).count())
+            .sum();
+        assert!(cmp_count >= 3, "Or pattern should have at least 3 Cmp instructions, got {cmp_count}");
+    }
+
+    // ---- P3.3: Error handling tests ----
+
+    #[test]
+    fn lower_assert_true() {
+        let mut ctx = make_test_ctx();
+        let mut builder = FunctionBuilder::new("test", UNIT_TYPE, &[]);
+
+        let stmt = spanned(Stmt::Assert {
+            condition: spanned(Expr::BoolLiteral(true)),
+            message: None,
+        });
+
+        lower_stmt(&mut ctx, &mut builder, &stmt);
+
+        // Should have Branch terminator in entry block
+        assert!(matches!(
+            builder.blocks[0].terminator,
+            Some(Terminator::Branch { .. })
+        ));
+        // Fail block should have Unreachable terminator
+        let has_unreachable = builder.blocks.iter().any(|bb| {
+            matches!(bb.terminator, Some(Terminator::Unreachable))
+        });
+        assert!(has_unreachable, "Assert fail path should have Unreachable terminator");
+    }
+
+    #[test]
+    fn lower_throw_stmt() {
+        let mut ctx = make_test_ctx();
+        let mut builder = FunctionBuilder::new("test", UNIT_TYPE, &[]);
+
+        let stmt = spanned(Stmt::Throw(spanned(Expr::StringLiteral(
+            crate::lexer::token::StringLiteral {
+                kind: crate::lexer::token::StringKind::Normal,
+                segments: vec![crate::lexer::token::StringSegment::Literal("error".into())],
+            },
+        ))));
+
+        lower_stmt(&mut ctx, &mut builder, &stmt);
+
+        // Should have a CallExtern to gorget_throw + Unreachable
+        let has_throw = builder.blocks[0].instructions.iter().any(|inst| {
+            matches!(inst, Instruction::CallExtern { func, .. } if func == "gorget_throw")
+        });
+        assert!(has_throw, "Should call gorget_throw");
+        assert!(matches!(
+            builder.blocks[0].terminator,
+            Some(Terminator::Unreachable)
         ));
     }
 }

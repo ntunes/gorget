@@ -158,6 +158,14 @@ pub enum Instruction {
         dst: LocalId,
         operand: Operand,
     },
+    /// Load a field from an enum variant's data (union access).
+    /// C: `type _N = base.data.{variant}._{field};`
+    EnumFieldLoad {
+        dst: LocalId,
+        base: Place,
+        variant: String,
+        field: u32,
+    },
 
     // -- Calls --
     Call {

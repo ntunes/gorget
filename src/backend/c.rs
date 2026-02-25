@@ -431,6 +431,16 @@ fn emit_instruction(out: &mut String, inst: &Instruction, func: &Function, regis
             let _ = writeln!(out, "        int _{id} = {val}.tag;", id = dst.0);
         }
 
+        Instruction::EnumFieldLoad { dst, base, variant, field } => {
+            let base_str = format_place(base, registry);
+            let c_type = format_local_type(func, dst.0 as usize, registry);
+            let _ = writeln!(
+                out,
+                "        {c_type} _{id} = {base_str}.data.{variant}._{field};",
+                id = dst.0
+            );
+        }
+
         Instruction::FieldLoad { dst, base, field } => {
             let base_str = format_place(base, registry);
             // Look up field name from type def
