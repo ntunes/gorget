@@ -5870,7 +5870,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                 emitter.emit_line(&format!("case {}:", *state_idx));
                 emitter.indent();
 
-                // Probe phase — try each arm with NULL waker
+                // Probe phase — try each arm with NULL waker, goto arm label on success
                 let mut first = true;
                 for (i, (kind, ch, field)) in arm_infos.iter().enumerate() {
                     let poll_call = match *kind {
@@ -5886,10 +5886,7 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                         emitter.emit_line(&format!("}} else if ({poll_call}) {{"));
                     }
                     emitter.indent();
-
-                    // Emit arm body
-                    self.emit_async_stmts(&arms[i].body.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
-
+                    emitter.emit_line(&format!("goto __sel_{sel_n}_arm_{i};"));
                     emitter.dedent();
                 }
 
@@ -5899,20 +5896,36 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                 if let Some(else_body) = else_arm {
                     // Non-blocking: execute else body
                     self.emit_async_stmts(&else_body.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
+                    emitter.emit_line(&format!("goto __sel_{sel_n}_done;"));
                 } else {
-                    // Blocking: register waker with all channels, suspend
-                    for (kind, ch, field) in &arm_infos {
+                    // Register phase — try each channel with real waker.
+                    // If any succeeds (data arrived between probe and register),
+                    // goto that arm's body instead of returning PENDING.
+                    for (i, (kind, ch, field)) in arm_infos.iter().enumerate() {
                         let register_call = match *kind {
-                            "recv" => format!("gorget_channel_poll_recv({ch}, &__self->{field}, __waker);"),
-                            "send" => format!("gorget_channel_poll_send({ch}, &__self->{field}, __waker);"),
+                            "recv" => format!("gorget_channel_poll_recv({ch}, &__self->{field}, __waker)"),
+                            "send" => format!("gorget_channel_poll_send({ch}, &__self->{field}, __waker)"),
                             _ => unreachable!(),
                         };
-                        emitter.emit_line(&register_call);
+                        emitter.emit_line(&format!("if ({register_call}) goto __sel_{sel_n}_arm_{i};"));
                     }
                     emitter.emit_line("return GORGET_POLL_PENDING;");
                 }
                 emitter.dedent();
                 emitter.emit_line("}");
+
+                // Arm bodies — emitted after the if/else chain with goto labels
+                for (i, arm) in arms.iter().enumerate() {
+                    emitter.emit_line(&format!("goto __sel_{sel_n}_done;")); // skip fall-through
+                    emitter.dedent();
+                    emitter.emit_line(&format!("__sel_{sel_n}_arm_{i}: ;"));
+                    emitter.indent();
+                    self.emit_async_stmts(&arm.body.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
+                }
+                emitter.emit_line(&format!("goto __sel_{sel_n}_done;")); // after last arm
+                emitter.dedent();
+                emitter.emit_line(&format!("__sel_{sel_n}_done: ;"));
+                emitter.indent();
             }
 
             // Break: set break-flag if inside async for/else, then break
