@@ -313,7 +313,12 @@ impl CodegenContext<'_> {
                 // Detect string receiver for runtime-checked indexing/slicing
                 if self.is_string_expr(object) {
                     let obj_c_type = self.infer_spanned_string_c_type(object);
-                    let obj_data = self.extract_cstr_data(&obj, &obj_c_type);
+                    // Coerce to Str for codepoint-level runtime functions
+                    let str_expr = match obj_c_type.as_str() {
+                        "Str" => obj.clone(),
+                        "GorgetString" => format!("(Str){{ .data = {obj}.data, .len = {obj}.len }}"),
+                        _ => format!("gorget_str_from_cstr({obj})"),
+                    };
                     if let Expr::Range { start, end, inclusive } = &index.node {
                         let s = start.as_ref().map(|e| self.gen_expr(e)).unwrap_or_else(|| "INT64_C(0)".to_string());
                         let e = if let Some(end_expr) = end.as_ref() {
@@ -324,16 +329,13 @@ impl CodegenContext<'_> {
                                 ev
                             }
                         } else {
-                            // Use .len for Str/GorgetString, strlen for cstr
-                            match obj_c_type.as_str() {
-                                "Str" | "GorgetString" => format!("(int64_t){obj}.len"),
-                                _ => format!("(int64_t)strlen({obj})"),
-                            }
+                            // Open-ended: use codepoint count
+                            format!("gorget_str_codepoint_count({str_expr})")
                         };
-                        format!("gorget_str_from_cstr(gorget_string_slice({obj_data}, {s}, {e}))")
+                        format!("gorget_str_slice({str_expr}, {s}, {e})")
                     } else {
                         let idx = self.gen_expr(index);
-                        format!("gorget_string_at({obj_data}, {idx})")
+                        format!("gorget_str_index({str_expr}, {idx})")
                     }
                 } else if self.is_vector_expr(object) {
                     if let Expr::Range { start, end, inclusive } = &index.node {
@@ -956,7 +958,7 @@ impl CodegenContext<'_> {
                 // Fallback: use semantic expr_types map (populated by the type checker)
                 self.expr_types.get(&expr.span).copied()
             }
-            Expr::Index { object, index } => {
+            Expr::Index { object, .. } => {
                 if let Some(tid) = self.resolve_expr_type_id(object) {
                     if let crate::semantic::types::ResolvedType::Generic(def_id, args) = self.types.get(tid) {
                         let def_name = self.scopes.get_def(*def_id).name.clone();
@@ -970,12 +972,9 @@ impl CodegenContext<'_> {
                         }
                     }
                 }
-                // String slicing with range → str; single index → char
+                // String indexing/slicing → str (codepoint view)
                 if self.is_string_expr(object) {
-                    if matches!(&index.node, Expr::Range { .. }) {
-                        return Some(self.types.string_id);
-                    }
-                    return Some(self.types.char_id);
+                    return Some(self.types.string_id);
                 }
                 None
             }

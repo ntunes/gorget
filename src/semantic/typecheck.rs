@@ -1076,14 +1076,14 @@ impl<'a> TypeChecker<'a> {
                 let object_type = self.infer_expr(object);
                 let index_type = self.infer_expr(index);
                 let resolved_obj = self.resolve_type(object_type);
-                // str[int] → char, str[Range] → str
+                // str[int] → str (codepoint view), str[Range] → str (codepoint range)
                 if resolved_obj == self.types.string_id {
                     if matches!(&index.node, Expr::Range { .. }) {
                         // Range bounds already inferred recursively
                         self.types.string_id
                     } else {
                         self.unify(index_type, self.types.int_id, expr.span);
-                        self.types.char_id
+                        self.types.string_id
                     }
                 } else {
                     // Check for Vector[T] indexing/slicing
@@ -1647,7 +1647,7 @@ impl<'a> TypeChecker<'a> {
 
                 // Determine the element type from the iterable
                 let elem_type = if resolved_iter == self.types.string_id {
-                    Some(self.types.char_id)
+                    Some(self.types.string_id)
                 } else {
                     match self.types.get(resolved_iter).clone() {
                         ResolvedType::Generic(def_id, args) => {

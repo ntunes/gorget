@@ -1710,7 +1710,34 @@ el
 he
 a
 b
-c",
+c
+é
+4
+caf
+o",
+    );
+}
+
+#[test]
+fn str_codepoint_index() {
+    run_gg(
+        "str_codepoint_index.gg",
+        "\
+c
+a
+f
+é
+4
+ca
+fé
+你
+好
+2
+é
+f
+a
+é
+b",
     );
 }
 

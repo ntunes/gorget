@@ -2428,7 +2428,7 @@ The following methods are available on built-in types without any import.
 | `ends_with(suffix)` | `str → bool` | True if string ends with `suffix` |
 | `index_of(needle)` | `str → Option[int]` | Offset of first occurrence (`None` if not found) |
 | `count(needle)` | `str → int` | Number of non-overlapping occurrences |
-| `char_at(index)` | `int → char` | Character at byte index (panics if out of bounds) |
+| `char_at(index)` | `int → char` | Byte at byte index (panics if out of bounds; for parser/codec use) |
 | `byte_slice(start, end)` | `int, int → str` | Byte-range substring view (O(1), for parser/codec use) |
 | `substring(start, end)` | `int, int → str` | Substring from `start` to `end` (panics if out of bounds) |
 | `trim()` | `→ str` | Strip leading and trailing whitespace |
@@ -2446,6 +2446,17 @@ The following methods are available on built-in types without any import.
 | `pad_left(n, char)` | `int, char → str` | Left-pad to width `n` with fill character |
 | `pad_right(n, char)` | `int, char → str` | Right-pad to width `n` with fill character |
 | `hash()` | `→ int` | Hash value |
+
+**String indexing, slicing, and iteration** operate at the Unicode codepoint level:
+
+| Operation | Result type | Description |
+|---|---|---|
+| `s[i]` | `str` | Returns the i-th Unicode codepoint as a string view (O(n) walk) |
+| `s[i..j]` | `str` | Returns codepoint range [i, j) as a non-allocating view (O(n) walk) |
+| `s[-1]` | `str` | Negative indexing counts from end |
+| `for ch in s:` | yields `str` | Iterates Unicode codepoints (O(n) total, single UTF-8 pass) |
+
+For byte-level access (useful in parsers and codecs), use `char_at(i)` (returns `char`) and `byte_slice(a, b)` (returns `str` byte-range view in O(1)).
 
 **`char`** — Character methods
 

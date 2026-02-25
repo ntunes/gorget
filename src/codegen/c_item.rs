@@ -3895,15 +3895,19 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                             AsyncIterableKind::String => {
                                 let idx_name = format!("__for_idx_{for_n}");
                                 let len_name = format!("__for_len_{for_n}");
+                                let cplen_name = format!("__for_cplen_{for_n}");
                                 if !locals.iter().any(|(n, _, _)| n == &idx_name) {
                                     locals.push((idx_name, "size_t".to_string(), None));
                                 }
                                 if !locals.iter().any(|(n, _, _)| n == &len_name) {
                                     locals.push((len_name, "size_t".to_string(), None));
                                 }
+                                if !locals.iter().any(|(n, _, _)| n == &cplen_name) {
+                                    locals.push((cplen_name, "int".to_string(), None));
+                                }
                                 if let Pattern::Binding(name) = &pattern.node {
                                     if !locals.iter().any(|(n, _, _)| n == name) {
-                                        locals.push((name.clone(), "char".to_string(), None));
+                                        locals.push((name.clone(), "Str".to_string(), None));
                                     }
                                 }
                             }
@@ -5643,11 +5647,12 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                         }
                     }
                 } else if self.is_string_expr(iterable) {
-                    // String iteration with await in body
+                    // String iteration with await in body — codepoint walk
                     let for_n = self.async_for_counter;
                     self.async_for_counter += 1;
                     let idx_field = format!("__for_idx_{for_n}");
                     let len_field = format!("__for_len_{for_n}");
+                    let cplen_field = format!("__for_cplen_{for_n}");
                     let iter_expr = self.gen_expr(iterable);
                     if let Pattern::Binding(name) = &pattern.node {
                         let var = c_mangle::escape_keyword(name);
@@ -5655,11 +5660,17 @@ static inline bool {mangled}__contains({mangled}* m, {key_type} key) {{
                             "__self->{len_field} = {iter_expr}.len;"
                         ));
                         emitter.emit_line(&format!(
-                            "for (__self->{idx_field} = 0; __self->{idx_field} < __self->{len_field}; __self->{idx_field}++) {{"
+                            "for (__self->{idx_field} = 0; __self->{idx_field} < __self->{len_field}; ) {{"
                         ));
                         emitter.indent();
                         emitter.emit_line(&format!(
-                            "__self->{var} = {iter_expr}.data[__self->{idx_field}];"
+                            "__self->{cplen_field} = gorget_utf8_codepoint_len((unsigned char){iter_expr}.data[__self->{idx_field}]);"
+                        ));
+                        emitter.emit_line(&format!(
+                            "__self->{var} = (Str){{ .data = {iter_expr}.data + __self->{idx_field}, .len = (size_t)__self->{cplen_field} }};"
+                        ));
+                        emitter.emit_line(&format!(
+                            "__self->{idx_field} += (size_t)__self->{cplen_field};"
                         ));
                         self.emit_async_stmts(&body.stmts, inner_c_type, state_idx, sub_idx, drop_entries, emitter);
                         emitter.dedent();

@@ -2922,6 +2922,15 @@ impl CodegenContext<'_> {
                 }
                 "void".to_string()
             }
+            Expr::Index { object, .. } => {
+                if self.is_string_expr(object) {
+                    return "Str".to_string();
+                }
+                if self.is_vector_expr(object) {
+                    return self.infer_vector_elem_type(object);
+                }
+                "int64_t".to_string()
+            }
             Expr::Spawn { expr: inner } => {
                 let future_type = self.infer_c_type_from_expr(&inner.node);
                 // Future__T → Task__T
@@ -3343,7 +3352,7 @@ impl CodegenContext<'_> {
             let iter = self.gen_expr(iterable);
             let iter_c_type = self.infer_c_type_from_expr(&iterable.node);
             let len_var = emitter.fresh_temp();
-            let idx = emitter.fresh_temp();
+            let byte_pos = emitter.fresh_temp();
             let len_expr = match iter_c_type.as_str() {
                 "Str" | "GorgetString" => format!("{iter}.len"),
                 _ => format!("strlen({iter})"),
@@ -3354,12 +3363,19 @@ impl CodegenContext<'_> {
             };
             emitter.emit_line(&format!("size_t {len_var} = {len_expr};"));
             emitter.emit_line(&format!(
-                "for (size_t {idx} = 0; {idx} < {len_var}; {idx}++) {{"
+                "for (size_t {byte_pos} = 0; {byte_pos} < {len_var}; ) {{"
             ));
             emitter.indent();
             if !has_else { self.push_drop_scope(DropScopeKind::Loop); }
-            emitter.emit_line(&format!("char {var_name} = {data_expr}[{idx}];"));
-            var_name_holds_element = false; // char element, no tuple destructuring
+            let cplen_var = emitter.fresh_temp();
+            emitter.emit_line(&format!(
+                "int {cplen_var} = gorget_utf8_codepoint_len((unsigned char){data_expr}[{byte_pos}]);"
+            ));
+            emitter.emit_line(&format!(
+                "Str {var_name} = (Str){{ .data = {data_expr} + {byte_pos}, .len = (size_t){cplen_var} }};"
+            ));
+            emitter.emit_line(&format!("{byte_pos} += (size_t){cplen_var};"));
+            var_name_holds_element = false; // Str element, no tuple destructuring
         } else if self.is_gorget_array_expr(iterable) {
             let iter = self.gen_expr(iterable);
             let idx = emitter.fresh_temp();

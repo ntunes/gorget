@@ -1,0 +1,27 @@
+void main():
+    # Multi-byte string: "café" = 4 codepoints, 5 bytes
+    str s = "café"
+    print(s[0])
+    print(s[1])
+    print(s[2])
+    print(s[3])
+    print(s.len())
+
+    # Slicing
+    print(s[0..2])
+    print(s[2..4])
+
+    # CJK: "你好" = 2 codepoints, 6 bytes
+    str cjk = "你好"
+    print(cjk[0])
+    print(cjk[1])
+    print(cjk.len())
+
+    # Negative indexing
+    print(s[-1])
+    print(s[-2])
+
+    # For-in yields codepoints
+    str word = "aéb"
+    for ch in word:
+        print(ch)

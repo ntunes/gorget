@@ -22,7 +22,7 @@ str escape_canonical(str s):
     str result = ""
     int i = 0
     while i < s.byte_len():
-        char c = s[i]
+        char c = s.char_at(i)
         result = result + escape_char_canonical(c)
         i = i + 1
     return result
