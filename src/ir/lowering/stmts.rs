@@ -5,6 +5,7 @@ use crate::parser::ast::{self, Block, Expr, Pattern, Stmt};
 use crate::span::Spanned;
 
 use super::context::LoweringContext;
+use super::drops::DropScopeKind;
 use super::exprs::lower_expr;
 
 /// Lower a block of statements.
@@ -85,6 +86,8 @@ fn lower_var_decl(
         let gir_type = ctx.resolve_var_type(type_, value);
         let local_id = builder.add_local(gir_type, Some(name));
         ctx.register_local(name, local_id, gir_type);
+        // P2.6: Register Move-type locals for drop at scope exit
+        ctx.drops.register_local(local_id, gir_type, &ctx.type_registry);
         let operand = lower_expr(ctx, builder, value);
         builder.assign(Place::local(local_id), operand);
     }
@@ -139,8 +142,12 @@ fn lower_return(
     if let Some(expr) = expr {
         let operand = lower_expr(ctx, builder, expr);
         builder.assign(Place::local(LocalId(0)), operand);
+        // P2.6: Emit cleanup drops for all scopes being exited
+        ctx.drops.emit_early_exit_drops(builder, &ctx.type_registry, DropScopeKind::Function);
         builder.ret(FunctionBuilder::copy(LocalId(0)));
     } else {
+        // P2.6: Emit cleanup drops for all scopes being exited
+        ctx.drops.emit_early_exit_drops(builder, &ctx.type_registry, DropScopeKind::Function);
         builder.ret(FunctionBuilder::const_unit());
     }
 }
@@ -230,9 +237,11 @@ fn lower_while(
     let cond = lower_expr(ctx, builder, condition);
     builder.branch(cond, body_bb, exit_bb);
 
-    // Body: execute, jump back to header
+    // Body: execute, jump back to header (wrapped in Loop scope for drop cleanup)
     builder.switch_to(body_bb);
+    ctx.drops.push_scope(DropScopeKind::Loop);
     lower_block(ctx, builder, body);
+    ctx.drops.pop_scope(builder, &ctx.type_registry);
     builder.jump(header_bb);
 
     // Continue from exit
@@ -292,9 +301,11 @@ fn lower_for_range(
     let cond = builder.cmp(cmp_op, I64_TYPE, FunctionBuilder::copy(loop_var), end_val);
     builder.branch(FunctionBuilder::copy(cond), body_bb, exit_bb);
 
-    // Body
+    // Body (wrapped in Loop scope for drop cleanup)
     builder.switch_to(body_bb);
+    ctx.drops.push_scope(DropScopeKind::Loop);
     lower_block(ctx, builder, body);
+    ctx.drops.pop_scope(builder, &ctx.type_registry);
     builder.jump(incr_bb);
 
     // Increment: loop_var = loop_var + 1
@@ -334,7 +345,7 @@ mod tests {
         let analysis = Box::leak(Box::new(crate::ir::lowering::empty_analysis_for_test()));
         let mut reg = TypeRegistry::new();
         let mapper = super::super::types::TypeMapper::new(&mut reg);
-        LoweringContext::new(analysis, mapper)
+        LoweringContext::new(analysis, mapper, reg)
     }
 
     #[test]

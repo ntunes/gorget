@@ -182,6 +182,12 @@ impl Clone for TypeRegistry {
     }
 }
 
+impl Default for TypeRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TypeRegistry {
     /// Create a new registry with pre-allocated primitive types at indices 0–11.
     pub fn new() -> Self {

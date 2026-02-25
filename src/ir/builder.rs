@@ -339,6 +339,16 @@ impl FunctionBuilder {
         self.emit_with_temp(ptr_type, |dst| Instruction::BorrowMut { dst, place })
     }
 
+    /// Emit a Borrow instruction targeting a pre-allocated local.
+    pub fn emit_borrow(&mut self, dst: LocalId, place: Place) {
+        self.emit(Instruction::Borrow { dst, place });
+    }
+
+    /// Emit a BorrowMut instruction targeting a pre-allocated local.
+    pub fn emit_borrow_mut(&mut self, dst: LocalId, place: Place) {
+        self.emit(Instruction::BorrowMut { dst, place });
+    }
+
     pub fn drop(&mut self, place: Place) {
         self.emit(Instruction::Drop { place });
     }

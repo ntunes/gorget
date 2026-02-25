@@ -2,7 +2,7 @@ use std::fmt::Write;
 
 use crate::ir::instructions::*;
 use crate::ir::types::*;
-use crate::ir::{Function, Module};
+use crate::ir::{Function, Global, GlobalInit, Module};
 
 /// Minimal C preamble for the GIR pipeline.
 /// Only includes what Phase 1 needs (no collections, no ownership, no async).
@@ -47,6 +47,12 @@ pub fn generate_c(module: &Module) -> String {
     out.push_str(GIR_PREAMBLE);
     out.push('\n');
 
+    // Type definitions (structs and enums)
+    emit_type_definitions(&mut out, module);
+
+    // Global constants
+    emit_globals(&mut out, module);
+
     // Forward declarations for all functions
     for func in &module.functions {
         emit_forward_decl(&mut out, func, &module.type_registry);
@@ -60,6 +66,133 @@ pub fn generate_c(module: &Module) -> String {
     }
 
     out
+}
+
+/// Emit type definitions (struct typedefs and enum tagged unions).
+fn emit_type_definitions(out: &mut String, module: &Module) {
+    let type_defs = module.type_registry.type_defs();
+    if type_defs.is_empty() {
+        return;
+    }
+
+    // Forward declare all struct types first (for mutual references)
+    for def in type_defs {
+        match &def.kind {
+            TypeDefKind::Struct(_) => {
+                let _ = writeln!(out, "typedef struct {name} {name};", name = def.name);
+            }
+            TypeDefKind::Enum(_) => {
+                let _ = writeln!(out, "typedef struct {name} {name};", name = def.name);
+            }
+            TypeDefKind::Alias(_) => {}
+        }
+    }
+    out.push('\n');
+
+    // Emit full struct definitions
+    for def in type_defs {
+        match &def.kind {
+            TypeDefKind::Struct(s) => {
+                let _ = writeln!(out, "struct {name} {{", name = def.name);
+                for field in &s.fields {
+                    let decl = format_field_decl(field.type_id, &field.name, &module.type_registry);
+                    let _ = writeln!(out, "    {decl};");
+                }
+                out.push_str("};\n\n");
+            }
+            TypeDefKind::Enum(e) => {
+                let _ = writeln!(out, "struct {name} {{", name = def.name);
+                out.push_str("    int tag;\n");
+                out.push_str("    union {\n");
+                for variant in &e.variants {
+                    if variant.fields.is_empty() {
+                        // Unit variant — no data
+                        continue;
+                    }
+                    let _ = writeln!(out, "        struct {{");
+                    for field in &variant.fields {
+                        let c_type = format_type(field.type_id, &module.type_registry);
+                        let _ = writeln!(out, "            {c_type} {name};", name = field.name);
+                    }
+                    let _ = writeln!(out, "        }} {name};", name = variant.name);
+                }
+                out.push_str("    } data;\n");
+                out.push_str("};\n\n");
+            }
+            TypeDefKind::Alias(target) => {
+                let c_type = format_type(*target, &module.type_registry);
+                let _ = writeln!(out, "typedef {c_type} {name};\n", name = def.name);
+            }
+        }
+    }
+}
+
+/// Emit global constant/variable definitions.
+fn emit_globals(out: &mut String, module: &Module) {
+    for global in &module.globals {
+        emit_global(out, global, &module.type_registry);
+    }
+    if !module.globals.is_empty() {
+        out.push('\n');
+    }
+}
+
+/// Emit a single global variable/constant.
+fn emit_global(out: &mut String, global: &Global, registry: &TypeRegistry) {
+    let c_type = format_type(global.type_id, registry);
+    match &global.init {
+        GlobalInit::Zeroed => {
+            let _ = writeln!(out, "static {c_type} {name} = {{0}};", name = global.name);
+        }
+        GlobalInit::Struct { type_name, fields } => {
+            let _ = write!(out, "static const {c_type} {name} = ({type_name}){{", name = global.name);
+            for (i, (fname, init)) in fields.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                let _ = write!(out, ".{fname} = ");
+                emit_global_init(out, init);
+            }
+            out.push_str("};\n");
+        }
+        GlobalInit::FnRef(fn_name) => {
+            let mangled = mangle_name(fn_name);
+            let _ = writeln!(out, "static const {c_type} {name} = &{mangled};", name = global.name);
+        }
+        GlobalInit::Bytes(bytes) => {
+            let _ = write!(out, "static const uint8_t {name}[] = {{", name = global.name);
+            for (i, b) in bytes.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                let _ = write!(out, "0x{b:02x}");
+            }
+            out.push_str("};\n");
+        }
+    }
+}
+
+/// Emit a global initializer expression.
+fn emit_global_init(out: &mut String, init: &GlobalInit) {
+    match init {
+        GlobalInit::Zeroed => out.push_str("{0}"),
+        GlobalInit::FnRef(fn_name) => {
+            let mangled = mangle_name(fn_name);
+            let _ = write!(out, "&{mangled}");
+        }
+        GlobalInit::Struct { type_name, fields } => {
+            let _ = write!(out, "({type_name}){{");
+            for (i, (fname, sub_init)) in fields.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                let _ = write!(out, ".{fname} = ");
+                emit_global_init(out, sub_init);
+            }
+            out.push('}');
+        }
+        GlobalInit::Bytes(_) => out.push_str("/* bytes */"),
+    }
 }
 
 /// Emit a forward declaration for a function.
@@ -173,7 +306,7 @@ fn emit_function(out: &mut String, func: &Function, registry: &TypeRegistry) {
 fn emit_instruction(out: &mut String, inst: &Instruction, func: &Function, registry: &TypeRegistry) {
     match inst {
         Instruction::Assign { dst, value } => {
-            let dst_str = format_place(dst);
+            let dst_str = format_place(dst, registry);
             let val_str = format_operand(value, func, registry);
             let _ = writeln!(out, "        {dst_str} = {val_str};");
         }
@@ -225,13 +358,217 @@ fn emit_instruction(out: &mut String, inst: &Instruction, func: &Function, regis
             }
         }
 
-        Instruction::Nop => {
-            out.push_str("        /* nop */\n");
+        // -- Aggregates (P2.0/P2.1) --
+        Instruction::StructInit { dst, type_name, fields } => {
+            let type_def = registry.get_type_def(type_name);
+            let _ = write!(out, "        {type_name} _{id} = ({type_name}){{", id = dst.0);
+            if let Some(def) = type_def {
+                if let TypeDefKind::Struct(ref s) = def.kind {
+                    for (i, (field_val, field_def)) in fields.iter().zip(s.fields.iter()).enumerate() {
+                        if i > 0 {
+                            out.push_str(", ");
+                        }
+                        let val = format_operand(field_val, func, registry);
+                        let _ = write!(out, ".{name} = {val}", name = field_def.name);
+                    }
+                }
+            } else {
+                // Fallback: positional
+                for (i, field_val) in fields.iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    let val = format_operand(field_val, func, registry);
+                    let _ = write!(out, "{val}");
+                }
+            }
+            out.push_str("};\n");
         }
 
-        // Phase 1: skip ownership, heap, aggregate, cast instructions
-        _ => {
-            out.push_str("        /* unhandled instruction */\n");
+        Instruction::EnumInit { dst, type_name, variant, fields } => {
+            let type_def = registry.get_type_def(type_name);
+            let tag = if let Some(def) = type_def {
+                if let TypeDefKind::Enum(ref e) = def.kind {
+                    e.variants.iter().position(|v| v.name == *variant).unwrap_or(0)
+                } else { 0 }
+            } else { 0 };
+
+            let _ = write!(out, "        {type_name} _{id} = ({type_name}){{.tag = {tag}", id = dst.0);
+            if !fields.is_empty() {
+                let _ = write!(out, ", .data.{variant} = {{");
+                for (i, field_val) in fields.iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    let val = format_operand(field_val, func, registry);
+                    let _ = write!(out, "{val}");
+                }
+                out.push('}');
+            }
+            out.push_str("};\n");
+        }
+
+        Instruction::TupleInit { dst, elements } => {
+            // Determine tuple type name from the local's type
+            let local_type = if (dst.0 as usize) < func.locals.len() {
+                format_type(func.locals[dst.0 as usize].type_id, registry)
+            } else {
+                "void".to_string()
+            };
+            let _ = write!(out, "        {local_type} _{id} = ({local_type}){{", id = dst.0);
+            for (i, elem) in elements.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                let val = format_operand(elem, func, registry);
+                let _ = write!(out, "._{i} = {val}");
+            }
+            out.push_str("};\n");
+        }
+
+        Instruction::TagOf { dst, operand } => {
+            let val = format_operand(operand, func, registry);
+            let _ = writeln!(out, "        int _{id} = {val}.tag;", id = dst.0);
+        }
+
+        Instruction::FieldLoad { dst, base, field } => {
+            let base_str = format_place(base, registry);
+            // Look up field name from type def
+            let field_name = resolve_field_name(func, base, *field, registry);
+            let c_type = format_local_type(func, dst.0 as usize, registry);
+            let _ = writeln!(out, "        {c_type} _{id} = {base_str}.{field_name};", id = dst.0);
+        }
+
+        Instruction::IndexLoad { dst, base, index } => {
+            let base_str = format_place(base, registry);
+            let idx_str = format_operand(index, func, registry);
+            let c_type = format_local_type(func, dst.0 as usize, registry);
+            let _ = writeln!(out, "        {c_type} _{id} = {base_str}[{idx_str}];", id = dst.0);
+        }
+
+        // -- Type conversions --
+        Instruction::Cast { dst, target_type, value } => {
+            let c_type = format_type(*target_type, registry);
+            let val = format_operand(value, func, registry);
+            let _ = writeln!(out, "        {c_type} _{id} = ({c_type}){val};", id = dst.0);
+        }
+
+        Instruction::BitCast { dst, target_type, value } => {
+            let c_type = format_type(*target_type, registry);
+            let val = format_operand(value, func, registry);
+            let _ = writeln!(out, "        {c_type} _{id} = ({c_type}){val};", id = dst.0);
+        }
+
+        Instruction::PtrCast { dst, target_type, value } => {
+            let c_type = format_type(*target_type, registry);
+            let val = format_operand(value, func, registry);
+            let _ = writeln!(out, "        {c_type} _{id} = ({c_type}){val};", id = dst.0);
+        }
+
+        // -- Ownership (P2.6) --
+        Instruction::Borrow { dst, place } => {
+            let place_str = format_place(place, registry);
+            let c_type = format_local_type(func, dst.0 as usize, registry);
+            let _ = writeln!(out, "        {c_type} _{id} = &{place_str};", id = dst.0);
+        }
+
+        Instruction::BorrowMut { dst, place } => {
+            let place_str = format_place(place, registry);
+            let c_type = format_local_type(func, dst.0 as usize, registry);
+            let _ = writeln!(out, "        {c_type} _{id} = &{place_str};", id = dst.0);
+        }
+
+        Instruction::Drop { place } => {
+            let place_str = format_place(place, registry);
+            // Look up drop strategy from TypeDef
+            let local_type = func.locals[place.local.0 as usize].type_id;
+            let strategy = lookup_drop_strategy(local_type, registry);
+            match strategy {
+                DropStrategy::None => {
+                    // No-op
+                }
+                DropStrategy::Trivial(ref fn_name) => {
+                    let _ = writeln!(out, "        {fn_name}(&{place_str});");
+                }
+                DropStrategy::Custom(ref fn_name) => {
+                    let _ = writeln!(out, "        {fn_name}(&{place_str});");
+                }
+                DropStrategy::Recursive => {
+                    let _ = writeln!(out, "        /* recursive drop of {place_str} */");
+                }
+            }
+        }
+
+        Instruction::DropIfAlive { place } => {
+            let place_str = format_place(place, registry);
+            let local_type = func.locals[place.local.0 as usize].type_id;
+            let type_name = format_type(local_type, registry);
+            let strategy = lookup_drop_strategy(local_type, registry);
+            match strategy {
+                DropStrategy::None => {}
+                DropStrategy::Trivial(ref fn_name) | DropStrategy::Custom(ref fn_name) => {
+                    let _ = writeln!(out, "        if (memcmp(&{place_str}, &({type_name}){{0}}, sizeof({type_name})) != 0) {{");
+                    let _ = writeln!(out, "            {fn_name}(&{place_str});");
+                    out.push_str("        }\n");
+                }
+                DropStrategy::Recursive => {
+                    let _ = writeln!(out, "        /* conditional recursive drop of {place_str} */");
+                }
+            }
+        }
+
+        Instruction::MoveZero { place } => {
+            let place_str = format_place(place, registry);
+            let local_type = func.locals[place.local.0 as usize].type_id;
+            let type_name = format_type(local_type, registry);
+            let _ = writeln!(out, "        memset(&{place_str}, 0, sizeof({type_name}));");
+        }
+
+        // -- Calls (P2.4) --
+        Instruction::CallIndirect { dst, callee, args } => {
+            let callee_str = format_operand(callee, func, registry);
+            let args_str = format_args(args, func, registry);
+            if let Some(dst_id) = dst {
+                let c_type = format_local_type(func, dst_id.0 as usize, registry);
+                let _ = writeln!(out, "        {c_type} _{id} = {callee_str}({args_str});", id = dst_id.0);
+            } else {
+                let _ = writeln!(out, "        {callee_str}({args_str});");
+            }
+        }
+
+        // -- Heap --
+        Instruction::HeapAlloc { dst, type_id, .. } => {
+            let c_type = format_type(*type_id, registry);
+            let _ = writeln!(out, "        {c_type}* _{id} = ({c_type}*)malloc(sizeof({c_type}));", id = dst.0);
+        }
+
+        Instruction::HeapAllocArray { dst, type_id, count, .. } => {
+            let c_type = format_type(*type_id, registry);
+            let count_str = format_operand(count, func, registry);
+            let _ = writeln!(out, "        {c_type}* _{id} = ({c_type}*)malloc(sizeof({c_type}) * {count_str});", id = dst.0);
+        }
+
+        Instruction::Dealloc { ptr, .. } => {
+            let ptr_str = format_operand(ptr, func, registry);
+            let _ = writeln!(out, "        free({ptr_str});");
+        }
+
+        // -- Allocator --
+        Instruction::LoadThreadLocal { dst, name } => {
+            let c_type = format_local_type(func, dst.0 as usize, registry);
+            let _ = writeln!(out, "        {c_type} _{id} = {name};", id = dst.0);
+        }
+
+        Instruction::PushAllocator { .. } => {
+            out.push_str("        /* push allocator */\n");
+        }
+
+        Instruction::PopAllocator => {
+            out.push_str("        /* pop allocator */\n");
+        }
+
+        Instruction::Nop => {
+            out.push_str("        /* nop */\n");
         }
     }
 }
@@ -346,6 +683,13 @@ fn format_type(type_id: TypeId, registry: &TypeRegistry) -> String {
                 format!("{}*", format_type(*inner, registry))
             }
             GirType::Named(name) => name.clone(),
+            GirType::FnPtr { params, return_type } => {
+                let ret = format_type(*return_type, registry);
+                let params_str: Vec<String> = params.iter()
+                    .map(|p| format_type(*p, registry))
+                    .collect();
+                format!("{ret}(*)({})", params_str.join(", "))
+            }
             _ => "int64_t".to_string(), // fallback
         }
     } else {
@@ -353,21 +697,40 @@ fn format_type(type_id: TypeId, registry: &TypeRegistry) -> String {
     }
 }
 
+/// Format a struct field declaration as valid C.
+///
+/// Function pointer types need special syntax: `RetType (*name)(Params)` instead of
+/// the standalone `RetType(*)(Params)` format.
+fn format_field_decl(type_id: TypeId, field_name: &str, registry: &TypeRegistry) -> String {
+    if let Some(GirType::FnPtr { params, return_type }) = registry.get(type_id) {
+        let ret = format_type(*return_type, registry);
+        let params_str: Vec<String> = params.iter()
+            .map(|p| format_type(*p, registry))
+            .collect();
+        format!("{ret} (*{field_name})({})", params_str.join(", "))
+    } else {
+        let c_type = format_type(type_id, registry);
+        format!("{c_type} {field_name}")
+    }
+}
+
 /// Format an operand as a C expression.
 fn format_operand(operand: &Operand, func: &Function, registry: &TypeRegistry) -> String {
     match operand {
-        Operand::Copy(place) | Operand::Move(place) => format_place(place),
+        Operand::Copy(place) | Operand::Move(place) => format_place(place, registry),
 
         Operand::Constant(constant) => format_constant(constant, func, registry),
     }
 }
 
 /// Format a place as a C lvalue.
-fn format_place(place: &Place) -> String {
+fn format_place(place: &Place, _registry: &TypeRegistry) -> String {
     let mut s = format!("_{}", place.local.0);
     for proj in &place.projections {
         match proj {
             Projection::Field(idx) => {
+                // Try to look up field name from registry
+                // For now use positional fallback — field_load instruction handles named fields
                 let _ = write!(s, ".f{idx}");
             }
             Projection::Index(local) => {
@@ -381,12 +744,73 @@ fn format_place(place: &Place) -> String {
     s
 }
 
+/// Resolve a field name from its index, looking up the TypeDef.
+fn resolve_field_name(func: &Function, base: &Place, field_idx: u32, registry: &TypeRegistry) -> String {
+    let local_type_id = func.locals[base.local.0 as usize].type_id;
+
+    // Walk through projections to find the innermost type
+    let mut current_type_id = local_type_id;
+    for proj in &base.projections {
+        match proj {
+            Projection::Deref => {
+                // Dereference pointer: Ptr(T) or MutPtr(T) → T
+                if let Some(gir_type) = registry.get(current_type_id) {
+                    match gir_type {
+                        GirType::Ptr(inner) | GirType::MutPtr(inner) => {
+                            current_type_id = *inner;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Projection::Field(idx) => {
+                if let Some(gir_type) = registry.get(current_type_id) {
+                    if let GirType::Named(name) = gir_type {
+                        if let Some(type_def) = registry.get_type_def(name) {
+                            if let TypeDefKind::Struct(ref s) = type_def.kind {
+                                if let Some(field) = s.fields.get(*idx as usize) {
+                                    current_type_id = field.type_id;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Projection::Index(_) => {}
+        }
+    }
+
+    // Now resolve the final field name
+    if let Some(gir_type) = registry.get(current_type_id) {
+        if let GirType::Named(name) = gir_type {
+            if let Some(type_def) = registry.get_type_def(name) {
+                if let TypeDefKind::Struct(ref s) = type_def.kind {
+                    if let Some(field) = s.fields.get(field_idx as usize) {
+                        return field.name.clone();
+                    }
+                }
+            }
+        }
+    }
+
+    // Fallback to positional
+    format!("f{field_idx}")
+}
+
+/// Look up a type's DropStrategy from the registry.
+fn lookup_drop_strategy(type_id: TypeId, registry: &TypeRegistry) -> DropStrategy {
+    if let Some(GirType::Named(name)) = registry.get(type_id) {
+        if let Some(type_def) = registry.get_type_def(name) {
+            return type_def.metadata.drop_strategy.clone();
+        }
+    }
+    DropStrategy::None
+}
+
 /// Format a constant as a C literal.
 fn format_constant(constant: &Constant, _func: &Function, _registry: &TypeRegistry) -> String {
     match constant {
         Constant::Bool(b) => {
-            // For bool in printf context, we need "true"/"false"
-            // But as a general constant, just use true/false
             if *b { "true".to_string() } else { "false".to_string() }
         }
         Constant::I8(n) => format!("(int8_t){n}"),
@@ -582,5 +1006,95 @@ mod tests {
         assert!(c_code.contains("bb3:"));
         assert!(c_code.contains("goto bb"));
         assert!(c_code.contains("if ("));
+    }
+
+    #[test]
+    fn emit_struct_typedef() {
+        let mut module = Module::new();
+        module.type_registry.add_type_def(TypeDef {
+            name: "Point".into(),
+            kind: TypeDefKind::Struct(StructDef {
+                fields: vec![
+                    StructField { name: "x".into(), type_id: F64_TYPE },
+                    StructField { name: "y".into(), type_id: F64_TYPE },
+                ],
+            }),
+            metadata: TypeMetadata::default(),
+        });
+        let point_id = module.type_registry.insert(GirType::Named("Point".into()));
+
+        // Add a main function that uses the struct
+        let mut b = FunctionBuilder::new("main", I32_TYPE, &[]);
+        let _ = b.struct_init("Point", point_id, vec![
+            FunctionBuilder::const_f64(1.0),
+            FunctionBuilder::const_f64(2.0),
+        ]);
+        b.assign(Place::local(LocalId(0)), FunctionBuilder::const_i32(0));
+        b.ret(FunctionBuilder::copy(LocalId(0)));
+        module.functions.push(b.build());
+
+        let c_code = generate_c(&module);
+        assert!(c_code.contains("typedef struct Point Point;"));
+        assert!(c_code.contains("struct Point {"));
+        assert!(c_code.contains("double x;"));
+        assert!(c_code.contains("double y;"));
+        assert!(c_code.contains("Point _1 = (Point){.x = 1.0, .y = 2.0}"));
+    }
+
+    #[test]
+    fn emit_enum_typedef() {
+        let mut module = Module::new();
+        module.type_registry.add_type_def(TypeDef {
+            name: "Shape".into(),
+            kind: TypeDefKind::Enum(EnumDef {
+                variants: vec![
+                    EnumVariant {
+                        name: "Circle".into(),
+                        fields: vec![StructField { name: "_0".into(), type_id: F64_TYPE }],
+                    },
+                    EnumVariant {
+                        name: "Rect".into(),
+                        fields: vec![
+                            StructField { name: "_0".into(), type_id: F64_TYPE },
+                            StructField { name: "_1".into(), type_id: F64_TYPE },
+                        ],
+                    },
+                    EnumVariant { name: "Empty".into(), fields: vec![] },
+                ],
+            }),
+            metadata: TypeMetadata::default(),
+        });
+
+        // Need a function for valid module
+        let mut b = FunctionBuilder::new("main", I32_TYPE, &[]);
+        b.assign(Place::local(LocalId(0)), FunctionBuilder::const_i32(0));
+        b.ret(FunctionBuilder::copy(LocalId(0)));
+        module.functions.push(b.build());
+
+        let c_code = generate_c(&module);
+        assert!(c_code.contains("typedef struct Shape Shape;"));
+        assert!(c_code.contains("struct Shape {"));
+        assert!(c_code.contains("int tag;"));
+        assert!(c_code.contains("union {"));
+        assert!(c_code.contains("} Circle;"));
+        assert!(c_code.contains("} Rect;"));
+    }
+
+    #[test]
+    fn emit_global_constant() {
+        let mut module = Module::new();
+        module.globals.push(Global {
+            name: "my_vtable".into(),
+            type_id: I64_TYPE,
+            init: GlobalInit::Zeroed,
+        });
+
+        let mut b = FunctionBuilder::new("main", I32_TYPE, &[]);
+        b.assign(Place::local(LocalId(0)), FunctionBuilder::const_i32(0));
+        b.ret(FunctionBuilder::copy(LocalId(0)));
+        module.functions.push(b.build());
+
+        let c_code = generate_c(&module);
+        assert!(c_code.contains("static int64_t my_vtable = {0};"));
     }
 }
