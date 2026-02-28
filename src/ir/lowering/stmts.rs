@@ -128,6 +128,10 @@ fn lower_var_decl(
                 if inferred != gir_type {
                     builder.locals[local_id.0 as usize].type_id = inferred;
                     ctx.register_local(name, local_id, inferred);
+                    // Also update the drop elaborator with the correct type — the initial
+                    // registration used `gir_type` which may have been I64_TYPE (no-drop),
+                    // but the real type (e.g., Wrapper, Container) does need dropping.
+                    ctx.drops.update_or_register_type(local_id, inferred, &ctx.type_registry);
                 }
             }
             builder.assign(Place::local(local_id), operand);

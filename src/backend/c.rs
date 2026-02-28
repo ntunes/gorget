@@ -138,10 +138,11 @@ fn map_stdlib_name(name: &str) -> &str {
         // CipherContext methods
         "CipherContext__encrypt" => "gorget_crypto_aes_ctr_encrypt",
         "CipherContext__decrypt" => "gorget_crypto_aes_ctr_decrypt",
-        // Regex free functions
+        // Regex free functions (compile+use+free wrappers)
         "regex_compile" => "gorget_regex_compile",
         "regex_compile_with" => "gorget_regex_compile",
-        "regex_is_match" => "gorget_regex_is_match",
+        "regex_is_match" => "gorget_regex_is_match_pat",
+        "regex_find" => "gorget_regex_find_pat",
         // Socket
         "socket_connect" => "gorget_socket_connect",
         "socket_listen" => "gorget_socket_listen",
@@ -169,10 +170,10 @@ fn map_stdlib_name(name: &str) -> &str {
         "hex_decode" => "gorget_hex_decode",
         "url_encode" => "gorget_url_encode",
         "url_decode" => "gorget_url_decode",
-        // Regex
+        // Regex free functions (string-based, non-compiled)
         "regex_match" => "gorget_regex_match",
         "regex_find_all" => "gorget_regex_find_all",
-        "regex_replace" => "gorget_regex_replace",
+        "regex_replace" => "gorget_regex_replace_pat",
         // Allocator methods
         "Arena__bytes_used" => "gorget_arena_bytes_used",
         "Arena__reset" => "gorget_arena_reset",
@@ -222,10 +223,10 @@ fn map_stdlib_name(name: &str) -> &str {
         "Regex__is_match" => "gorget_regex_is_match",
         "Regex__find" => "gorget_regex_find",
         "Regex__find_at" => "gorget_regex_find_at",
-        "Regex__find_all" => "gorget_regex_find_all_compiled",
-        "Regex__replace" => "gorget_regex_replace_compiled",
-        "Regex__split" => "gorget_regex_split_compiled",
-        "Regex__splitn" => "gorget_regex_splitn_compiled",
+        "Regex__find_all" => "gorget_regex_find_all",
+        "Regex__replace" => "gorget_regex_replace",
+        "Regex__split" => "gorget_regex_split",
+        "Regex__splitn" => "gorget_regex_split",
         "Regex__fullmatch" => "gorget_regex_fullmatch",
         "Regex__groups" => "gorget_regex_groups",
         "Regex__free" => "gorget_regex_free",
@@ -271,10 +272,8 @@ fn is_cstr_param_fn(name: &str) -> bool {
         | "gorget_regex_match" | "gorget_regex_find_all" | "gorget_regex_replace"
         | "gorget_regex_is_match" | "gorget_regex_fullmatch"
         | "gorget_regex_compile" | "gorget_regex_escape" | "gorget_regex_parse_flags"
-        | "gorget_regex_replace_all" | "gorget_regex_split"
-        | "gorget_regex_match_group_by_name"
-        | "gorget_regex_find_all_compiled" | "gorget_regex_replace_compiled"
-        | "gorget_regex_split_compiled" | "gorget_regex_splitn_compiled"
+        | "gorget_regex_replace_all" | "gorget_regex_split" | "gorget_regex_find"
+        | "gorget_regex_is_match_pat" | "gorget_regex_find_pat" | "gorget_regex_replace_pat"
         | "gorget_bytes_from_str" | "gorget_bytes_from_hex"
         | "puts" | "fputs" | "system" | "getenv"
         | "gorget_string_new"
@@ -315,6 +314,7 @@ fn returns_cstr(name: &str) -> bool {
         | "gorget_bytes_to_str" | "gorget_bytes_to_hex"
         | "gorget_url_encode"
         | "getenv" | "gorget_getenv"
+        | "gorget_regex_match_text" | "gorget_regex_pattern_str"
     )
 }
 
@@ -339,6 +339,30 @@ pub fn generate_c(module: &Module) -> String {
     }
     if all_call_names.iter().any(|n| n.starts_with("gorget_regex_") || n.starts_with("regex_") || n == "Regex") {
         out.push_str(c_runtime::REGEX_RUNTIME);
+        // Wrapper functions for free-function regex calls (compile-use-free pattern)
+        out.push_str(r#"
+static bool gorget_regex_is_match_pat(const char* pattern, const char* subject) {
+    GorgetRegex _rx = gorget_regex_compile(pattern, NULL);
+    if (!_rx.code) return false;
+    bool _r = gorget_regex_is_match(&_rx, subject);
+    gorget_regex_free(&_rx);
+    return _r;
+}
+static GorgetRegexMatch gorget_regex_find_pat(const char* pattern, const char* subject) {
+    GorgetRegex _rx = gorget_regex_compile(pattern, NULL);
+    if (!_rx.code) { GorgetRegexMatch _m; _m.start = -1; return _m; }
+    GorgetRegexMatch _m = gorget_regex_find(&_rx, subject, 0);
+    gorget_regex_free(&_rx);
+    return _m;
+}
+static GorgetString gorget_regex_replace_pat(const char* pattern, const char* subject, const char* replacement) {
+    GorgetRegex _rx = gorget_regex_compile(pattern, NULL);
+    if (!_rx.code) return gorget_string_new(subject);
+    GorgetString _gs = gorget_regex_replace(&_rx, subject, replacement);
+    gorget_regex_free(&_rx);
+    return _gs;
+}
+"#);
     }
     if all_call_names.iter().any(|n| n.starts_with("gorget_crypto_") || n.starts_with("crypto_")) {
         out.push_str(c_runtime::CRYPTO_RUNTIME);
@@ -2166,6 +2190,67 @@ fn emit_instruction(
                     }
                 }
             }
+            // Special handling for Regex__ and Match__ decl_method calls.
+            // These need custom arg coercion (Str → .data) and option wrapping.
+            else if (func_name.starts_with("Regex__") || func_name.starts_with("Match__"))
+                && !all_functions.iter().any(|f| f.name.as_str() == func_name)
+            {
+                let c_func = map_stdlib_name(func_name);
+                // Format args: arg[0] = self pointer (pass as-is), arg[1+] coerce Str → .data
+                let mut arg_parts: Vec<String> = Vec::new();
+                for (i, arg) in args.iter().enumerate() {
+                    let arg_str = format_operand(arg, func, registry);
+                    if i == 0 {
+                        arg_parts.push(arg_str); // self is already GorgetRegex*/GorgetRegexMatch*
+                    } else {
+                        let is_str = if let Operand::Copy(p) | Operand::Move(p) = arg {
+                            let ct = effective_c_type(p.local.0 as usize, func, registry, type_overrides);
+                            ct == "Str" || ct == "GorgetString"
+                        } else {
+                            // Constant::Str literals are already const char* in C — do NOT append .data
+                            false
+                        };
+                        if is_str {
+                            arg_parts.push(format!("{arg_str}.data"));
+                        } else {
+                            arg_parts.push(arg_str);
+                        }
+                    }
+                }
+                // Inject trailing args for methods with implicit parameters
+                match func_name.as_str() {
+                    "Regex__find" => arg_parts.push("0".to_string()),   // start_offset = 0
+                    "Regex__split" => arg_parts.push("-1".to_string()),  // limit = -1 (no limit)
+                    _ => {}
+                }
+                let args_str = arg_parts.join(", ");
+                if let Some(dst_id) = dst {
+                    let c_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
+                    if c_type.starts_with("Option__") {
+                        // GorgetRegexMatch sentinel: .start == -1 means no match
+                        if matches!(c_func, "gorget_regex_find" | "gorget_regex_find_at" | "gorget_regex_fullmatch") {
+                            let _ = writeln!(out,
+                                "        _{id} = ({{ GorgetRegexMatch __raw = {c_func}({args_str}); \
+                                {c_type} __opt; if (__raw.start != -1) {{ __opt.tag = 0; __opt.data.Some._0 = __raw; }} \
+                                else {{ __opt.tag = 1; }} __opt; }});",
+                                id = dst_id.0);
+                        } else {
+                            // const char* nullable → Option[str] (gorget_regex_match_group etc.)
+                            let _ = writeln!(out,
+                                "        _{id} = ({{ const char* __raw = {c_func}({args_str}); \
+                                {c_type} __opt; if (__raw) {{ __opt.tag = 0; __opt.data.Some._0 = gorget_str_from_cstr(__raw); }} \
+                                else {{ __opt.tag = 1; }} __opt; }});",
+                                id = dst_id.0);
+                        }
+                    } else if returns_cstr(c_func) {
+                        let _ = writeln!(out, "        _{id} = gorget_str_from_cstr({c_func}({args_str}));", id = dst_id.0);
+                    } else {
+                        let _ = writeln!(out, "        _{id} = {c_func}({args_str});", id = dst_id.0);
+                    }
+                } else {
+                    let _ = writeln!(out, "        {c_func}({args_str});");
+                }
+            }
             // Stdlib functions that return Result via last_error pattern (udp_bind, socket_connect, crypto_*, etc.)
             else if let Some(code) = try_emit_result_wrapped_call(func_name, dst, args, func, registry, type_overrides) {
                 out.push_str(&code);
@@ -2342,12 +2427,23 @@ fn emit_instruction(
                         } else if ret_cstr && c_type == "Str" {
                             let _ = writeln!(out, "        _{id} = gorget_str_from_cstr({c_name}({args_str}));", id = dst_id.0);
                         } else if c_type.starts_with("Option__") && !is_user_fn {
-                            // Option wrapping for runtime functions that return raw int (index_of, etc.)
-                            let _ = writeln!(out,
-                                "        _{id} = ({{ __typeof__(_{id}.data.Some._0) __raw = {c_name}({args_str}); \
-                                {c_type} __opt; if (__raw >= 0) {{ __opt.tag = 0; __opt.data.Some._0 = __raw; }} \
-                                else {{ __opt.tag = 1; }} __opt; }});",
-                                id = dst_id.0);
+                            // Option wrapping for runtime functions.
+                            // GorgetRegexMatch uses .start == -1 sentinel; int options use >= 0.
+                            let inner_is_match = c_type == "Option__Match"
+                                || c_type == "Option__GorgetRegexMatch";
+                            if inner_is_match {
+                                let _ = writeln!(out,
+                                    "        _{id} = ({{ GorgetRegexMatch __raw = {c_name}({args_str}); \
+                                    {c_type} __opt; if (__raw.start != -1) {{ __opt.tag = 0; __opt.data.Some._0 = __raw; }} \
+                                    else {{ __opt.tag = 1; }} __opt; }});",
+                                    id = dst_id.0);
+                            } else {
+                                let _ = writeln!(out,
+                                    "        _{id} = ({{ __typeof__(_{id}.data.Some._0) __raw = {c_name}({args_str}); \
+                                    {c_type} __opt; if (__raw >= 0) {{ __opt.tag = 0; __opt.data.Some._0 = __raw; }} \
+                                    else {{ __opt.tag = 1; }} __opt; }});",
+                                    id = dst_id.0);
+                            }
                         } else {
                             let _ = writeln!(out, "        _{id} = {c_name}({args_str});", id = dst_id.0);
                         }
@@ -2752,6 +2848,27 @@ fn emit_instruction(
                 out.push('}');
             }
             out.push_str("};\n");
+            // Post-init zero: after moving a non-Copy local into an enum variant (e.g., Some(x)),
+            // zero the source local to prevent double-free. The enum owns the data now.
+            for field_op in fields.iter() {
+                if let Operand::Copy(place) | Operand::Move(place) = field_op {
+                    if place.projections.is_empty() {
+                        let local_id = place.local.0 as usize;
+                        if local_id < func.locals.len() {
+                            let local_type = func.locals[local_id].type_id;
+                            if let Some(gir_name) = gir_type_name(local_type, registry) {
+                                if needs_drop_by_name(&gir_name, registry) {
+                                    let c_type = gir_to_c_type(&gir_name);
+                                    let _ = writeln!(
+                                        out,
+                                        "        memset(&_{local_id}, 0, sizeof({c_type}));"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         Instruction::TupleInit { dst, elements } => {
@@ -2946,6 +3063,8 @@ fn emit_instruction(
             // Look up drop strategy from TypeDef
             let local_type = func.locals[place.local.0 as usize].type_id;
             let type_name_str = format_type(local_type, registry);
+            // Get the full GIR name (e.g., "Vector__Tracked" instead of "GorgetArray")
+            let gir_name = gir_type_name(local_type, registry);
 
             // Special handling for Box types: call inner Drop (if any) then free
             if let Some(inner_name) = type_name_str.strip_prefix("Box__") {
@@ -2963,6 +3082,20 @@ fn emit_instruction(
                     }
                     let _ = writeln!(out, "        free({place_str});");
                 }
+            } else if let Some(elem_name) = gir_name.as_deref().and_then(extract_vector_elem_name) {
+                // Vector type: per-element drops (if needed) then free the array
+                if needs_drop_by_name(elem_name, registry) {
+                    let elem_c_type = gir_to_c_type(elem_name);
+                    let _ = writeln!(out, "        for (size_t __di = 0; __di < {place_str}.len; __di++) {{");
+                    let _ = writeln!(
+                        out,
+                        "            {elem_c_type}* __de = ({elem_c_type}*)gorget_array_get(&{place_str}, __di);"
+                    );
+                    // Outer loop uses __di/__de (unnumbered); recursive call starts at depth 1
+                    emit_drop_for_type_via_ptr(out, "__de", elem_name, registry, "            ", 1);
+                    let _ = writeln!(out, "        }}");
+                }
+                let _ = writeln!(out, "        gorget_array_free(&{place_str});");
             } else {
                 let strategy = lookup_drop_strategy(local_type, registry);
                 match strategy {
@@ -2973,13 +3106,19 @@ fn emit_instruction(
                         let _ = writeln!(out, "        {fn_name}(&{place_str});");
                     }
                     DropStrategy::Custom(ref fn_name) => {
-                        let _ = writeln!(out, "        {fn_name}(&{place_str});");
+                        // Zero-check: if the struct was synthetically zeroed after being
+                        // moved into a collection, skip the drop — nothing to free.
+                        let _ = writeln!(out, "        if (memcmp(&{place_str}, &({type_name_str}){{0}}, sizeof({type_name_str})) != 0) {{");
+                        let _ = writeln!(out, "            {fn_name}(&{place_str});");
                         // After custom drop, also drop fields that have their own drops
-                        emit_field_drops(out, &place_str, local_type, registry, "        ");
+                        emit_field_drops(out, &place_str, local_type, registry, "            ", 0);
+                        out.push_str("        }\n");
                     }
                     DropStrategy::Recursive => {
-                        // No custom drop — just recursively drop fields
-                        emit_field_drops(out, &place_str, local_type, registry, "        ");
+                        // Zero-check: same rationale as Custom above.
+                        let _ = writeln!(out, "        if (memcmp(&{place_str}, &({type_name_str}){{0}}, sizeof({type_name_str})) != 0) {{");
+                        emit_field_drops(out, &place_str, local_type, registry, "            ", 0);
+                        out.push_str("        }\n");
                     }
                 }
             }
@@ -2989,6 +3128,8 @@ fn emit_instruction(
             let place_str = format_place(place, registry);
             let local_type = func.locals[place.local.0 as usize].type_id;
             let type_name = format_type(local_type, registry);
+            // Get the full GIR name (e.g., "Vector__Tracked" instead of "GorgetArray")
+            let gir_name = gir_type_name(local_type, registry);
 
             // Special handling for Box types: null-check, call inner Drop, free
             if let Some(inner_name) = type_name.strip_prefix("Box__") {
@@ -3009,6 +3150,22 @@ fn emit_instruction(
                     let _ = writeln!(out, "            free({place_str});");
                     out.push_str("        }\n");
                 }
+            } else if let Some(elem_name) = gir_name.as_deref().and_then(extract_vector_elem_name) {
+                // Vector type: check .data (null = zeroed/moved), then per-element drops + free
+                let _ = writeln!(out, "        if ({place_str}.data != NULL) {{");
+                if needs_drop_by_name(elem_name, registry) {
+                    let elem_c_type = gir_to_c_type(elem_name);
+                    let _ = writeln!(out, "            for (size_t __di = 0; __di < {place_str}.len; __di++) {{");
+                    let _ = writeln!(
+                        out,
+                        "                {elem_c_type}* __de = ({elem_c_type}*)gorget_array_get(&{place_str}, __di);"
+                    );
+                    // Outer loop uses __di/__de (unnumbered); recursive call starts at depth 1
+                    emit_drop_for_type_via_ptr(out, "__de", elem_name, registry, "                ", 1);
+                    let _ = writeln!(out, "            }}");
+                }
+                let _ = writeln!(out, "            gorget_array_free(&{place_str});");
+                out.push_str("        }\n");
             } else {
                 let strategy = lookup_drop_strategy(local_type, registry);
                 match strategy {
@@ -3021,12 +3178,12 @@ fn emit_instruction(
                     DropStrategy::Custom(ref fn_name) => {
                         let _ = writeln!(out, "        if (memcmp(&{place_str}, &({type_name}){{0}}, sizeof({type_name})) != 0) {{");
                         let _ = writeln!(out, "            {fn_name}(&{place_str});");
-                        emit_field_drops(out, &place_str, local_type, registry, "            ");
+                        emit_field_drops(out, &place_str, local_type, registry, "            ", 0);
                         out.push_str("        }\n");
                     }
                     DropStrategy::Recursive => {
                         let _ = writeln!(out, "        if (memcmp(&{place_str}, &({type_name}){{0}}, sizeof({type_name})) != 0) {{");
-                        emit_field_drops(out, &place_str, local_type, registry, "            ");
+                        emit_field_drops(out, &place_str, local_type, registry, "            ", 0);
                         out.push_str("        }\n");
                     }
                 }
@@ -3599,23 +3756,26 @@ fn infer_runtime_return_type(name: &str) -> Option<&'static str> {
         "gorget_crypto_cipher_new" | "crypto_cipher_new" => Some("CipherContext"),
         // Regex
         "regex_match" | "gorget_regex_match" => Some("GorgetArray"),
-        "regex_find_all" | "gorget_regex_find_all"
-        | "gorget_regex_find_all_compiled" => Some("GorgetArray"),
-        "regex_replace" | "gorget_regex_replace"
-        | "gorget_regex_replace_all" | "gorget_regex_replace_compiled" => Some("GorgetString"),
-        "gorget_regex_split" | "gorget_regex_split_compiled"
-        | "gorget_regex_splitn_compiled" => Some("GorgetArray"),
+        "regex_find_all" | "gorget_regex_find_all" => Some("GorgetArray"),
+        "gorget_regex_replace_all" => Some("GorgetString"),
+        "gorget_regex_split" => Some("GorgetArray"),
         "gorget_regex_compile" => Some("GorgetRegex*"),
-        "gorget_regex_is_match" | "gorget_regex_fullmatch" => Some("bool"),
-        "gorget_regex_find" => Some("GorgetRegexMatch"),
-        "gorget_regex_escape" | "gorget_regex_pattern_str"
-        | "gorget_regex_match_text" | "gorget_regex_match_group"
-        | "gorget_regex_match_group_by_name"
-        | "gorget_regex_last_error" => Some("const char*"),
+        "gorget_regex_is_match" => Some("bool"),
+        // gorget_regex_find / gorget_regex_fullmatch return GorgetRegexMatch,
+        // but wrapped as Option in GIR (Option__Match) — return None to let GIR type stand.
+        // gorget_regex_match_group / _by_name also return Option__Str in GIR — let GIR type stand.
+        "gorget_regex_escape" => Some("GorgetString"),
+        "gorget_regex_last_error" => Some("const char*"),
+        // gorget_regex_match_text / pattern_str return Str (via returns_cstr wrapping)
+        "gorget_regex_match_text" | "gorget_regex_pattern_str" => Some("Str"),
         "gorget_regex_capture_count" | "gorget_regex_match_start"
         | "gorget_regex_match_end" | "gorget_regex_match_group_count" => Some("int64_t"),
         "gorget_regex_group_names" | "gorget_regex_extract_names"
         | "gorget_regex_match_groups" => Some("GorgetArray"),
+        // Free function wrappers (compile+use+free)
+        "gorget_regex_is_match_pat" => Some("bool"),
+        "gorget_regex_replace_pat" => Some("GorgetString"),
+        // gorget_regex_find_pat returns Option__Match in GIR — return None to let GIR type stand
         // Allocators (return pointers in C runtime)
         "gorget_arena_new" | "Arena" => Some("GorgetArena*"),
         "gorget_tracking_new" | "TrackingAllocator" => Some("GorgetTrackingAllocator*"),
@@ -3787,9 +3947,10 @@ fn try_emit_higher_order_method(
     if !matches!(method, "filter" | "map" | "fold" | "reduce" | "enumerate" | "any" | "all" | "each" | "find" | "count" | "get_or_put" | "keys" | "values") {
         return None;
     }
-    // Don't treat Option/Result combinator methods as collection higher-order methods.
-    // These types are NOT collections — their map/filter/etc. have different semantics.
-    if func_name.starts_with("Option__") || func_name.starts_with("Result__") {
+    // Don't treat Option/Result/Regex/Match methods as collection higher-order methods.
+    if func_name.starts_with("Option__") || func_name.starts_with("Result__")
+        || func_name.starts_with("Regex__") || func_name.starts_with("Match__")
+    {
         return None;
     }
 
@@ -5923,7 +6084,7 @@ fn emit_collection_method_call(
         return;
     }
     if rewrite.runtime_fn == "__INLINE_ARRAY_GET__" {
-        // Vector.get(idx) → Option[T] with bounds check
+        // Vector.get(idx) → Option[T] with bounds check (with deep clone for droppable elements)
         let self_val = deref_self(&self_str, self_ptr);
         let idx_str = if args.len() > 1 {
             format_operand(&args[1], func, registry)
@@ -5933,20 +6094,54 @@ fn emit_collection_method_call(
         if let Some(dst_id) = dst {
             // Get the Option type from the destination local's type (matches GIR registration)
             let option_type = format_type(func.locals[dst_id.0 as usize].type_id, registry);
-            // Element type: strip "Option__" prefix, then resolve to C type
-            let elem_c_type = option_type.strip_prefix("Option__")
-                .map(|inner| {
-                    // Map GIR names to C types: Vector__T → GorgetArray, Dict → GorgetMap
-                    if inner.starts_with("Vector__") || inner.starts_with("List__") { "GorgetArray" }
-                    else if inner.starts_with("Dict__") || inner.starts_with("HashMap__") { "GorgetMap" }
-                    else if inner.starts_with("Set__") || inner.starts_with("HashSet__") { "GorgetSet" }
-                    else { inner }
-                })
-                .unwrap_or_else(|| extract_collection_elem_type(original_name));
-            let _ = writeln!(out, "        _{id} = ({{ int64_t __gi = {idx_str}; GorgetArray __gr_src = {self_val}; {option_type} __gr; \
-                if (__gi >= 0 && (size_t)__gi < __gr_src.len) {{ __gr = ({option_type}){{.tag = 0, .data.Some = {{*({elem_c_type}*)gorget_array_get(&__gr_src, (size_t)__gi)}}}}; }} \
-                else {{ __gr = ({option_type}){{.tag = 1}}; }} __gr; }});",
-                id = dst_id.0);
+            // Element C type: strip "Option__" prefix, then resolve to C type
+            let inner_type_str = option_type.strip_prefix("Option__").unwrap_or("");
+            let elem_c_type: &str =
+                if inner_type_str.starts_with("Vector__") || inner_type_str.starts_with("List__") {
+                    "GorgetArray"
+                } else if inner_type_str.starts_with("Dict__") || inner_type_str.starts_with("HashMap__") {
+                    "GorgetMap"
+                } else if inner_type_str.starts_with("Set__") || inner_type_str.starts_with("HashSet__") {
+                    "GorgetSet"
+                } else if !inner_type_str.is_empty() {
+                    inner_type_str
+                } else {
+                    extract_collection_elem_type(original_name)
+                };
+            if elem_c_type == "GorgetArray" {
+                // Collection element: deep clone via gorget_array_clone to prevent double-free
+                let _ = writeln!(out, "        _{id} = ({{ int64_t __gi = {idx_str}; GorgetArray __gr_src = {self_val}; {option_type} __gr; \
+                    if (__gi >= 0 && (size_t)__gi < __gr_src.len) {{ GorgetArray __elem = gorget_array_clone((GorgetArray*)gorget_array_get(&__gr_src, (size_t)__gi)); \
+                    __gr = ({option_type}){{.tag = 0, .data.Some = {{__elem}}}}; }} \
+                    else {{ __gr = ({option_type}){{.tag = 1}}; }} __gr; }});",
+                    id = dst_id.0);
+            } else if elem_c_type == "GorgetSet" {
+                // Set element: deep clone via gorget_set_clone
+                let _ = writeln!(out, "        _{id} = ({{ int64_t __gi = {idx_str}; GorgetArray __gr_src = {self_val}; {option_type} __gr; \
+                    if (__gi >= 0 && (size_t)__gi < __gr_src.len) {{ GorgetSet __elem = gorget_set_clone((GorgetSet*)gorget_array_get(&__gr_src, (size_t)__gi)); \
+                    __gr = ({option_type}){{.tag = 0, .data.Some = {{__elem}}}}; }} \
+                    else {{ __gr = ({option_type}){{.tag = 1}}; }} __gr; }});",
+                    id = dst_id.0);
+            } else {
+                // Struct or primitive element: collect field clone operations
+                let mut clone_ops: Vec<String> = Vec::new();
+                collect_clone_ops(elem_c_type, "__elem", &mut clone_ops, registry);
+                if clone_ops.is_empty() {
+                    // Simple shallow copy (no droppable fields)
+                    let _ = writeln!(out, "        _{id} = ({{ int64_t __gi = {idx_str}; GorgetArray __gr_src = {self_val}; {option_type} __gr; \
+                        if (__gi >= 0 && (size_t)__gi < __gr_src.len) {{ __gr = ({option_type}){{.tag = 0, .data.Some = {{*({elem_c_type}*)gorget_array_get(&__gr_src, (size_t)__gi)}}}}; }} \
+                        else {{ __gr = ({option_type}){{.tag = 1}}; }} __gr; }});",
+                        id = dst_id.0);
+                } else {
+                    // Deep clone: copy struct value, then clone GorgetArray fields
+                    let clone_stmts = clone_ops.join(" ");
+                    let _ = writeln!(out, "        _{id} = ({{ int64_t __gi = {idx_str}; GorgetArray __gr_src = {self_val}; {option_type} __gr; \
+                        if (__gi >= 0 && (size_t)__gi < __gr_src.len) {{ {elem_c_type} __elem = *({elem_c_type}*)gorget_array_get(&__gr_src, (size_t)__gi); {clone_stmts} \
+                        __gr = ({option_type}){{.tag = 0, .data.Some = {{__elem}}}}; }} \
+                        else {{ __gr = ({option_type}){{.tag = 1}}; }} __gr; }});",
+                        id = dst_id.0);
+                }
+            }
         }
         return;
     }
@@ -6173,7 +6368,55 @@ fn emit_collection_method_call(
             let _ = writeln!(out, "        {runtime_fn}({args_str});");
         }
     } else {
+        // Pre-drop for gorget_array_set: drop old element before overwriting
+        if runtime_fn == "gorget_array_set" && call_args.len() >= 2 {
+            let elem_name = extract_collection_elem_type_full(original_name);
+            if needs_drop_by_name(&elem_name, registry) {
+                let arr_ptr = &call_args[0].clone();
+                let idx_arg = &call_args[1].clone();
+                let elem_c_type = gir_to_c_type(&elem_name).to_string();
+                let _ = writeln!(out, "        {{");
+                let _ = writeln!(
+                    out,
+                    "            {elem_c_type}* __old = ({elem_c_type}*)gorget_array_get({arr_ptr}, {idx_arg});"
+                );
+                // "__old" is a fresh pointer, not inside any outer loop → depth 0
+                emit_drop_for_type_via_ptr(out, "__old", &elem_name, registry, "            ", 0);
+                let _ = writeln!(out, "        }}");
+            }
+        }
         let _ = writeln!(out, "        {runtime_fn}({args_str});");
+        // Post-call zero: after consuming an element/value into a collection, zero the source
+        // local to prevent double-free. The collection owns the data now; the source's
+        // DropIfAlive/Drop will be a no-op once its data pointer is set to NULL.
+        // For push/set_add: element is args[1].
+        // For insert/set/map_put: element is args[2] (args[1] is index or key).
+        let consuming_arg_idx = match runtime_fn {
+            "gorget_array_push" | "gorget_set_add" => Some(1usize),
+            "gorget_array_insert" | "gorget_array_set" | "gorget_map_put" => Some(2usize),
+            _ => None,
+        };
+        if let Some(idx) = consuming_arg_idx {
+            if let Some(arg) = args.get(idx) {
+                if let Operand::Copy(place) | Operand::Move(place) = arg {
+                    if place.projections.is_empty() {
+                        let local_id = place.local.0 as usize;
+                        if local_id < func.locals.len() {
+                            let local_type = func.locals[local_id].type_id;
+                            if let Some(gir_name) = gir_type_name(local_type, registry) {
+                                if needs_drop_by_name(&gir_name, registry) {
+                                    let c_type = gir_to_c_type(&gir_name);
+                                    let _ = writeln!(
+                                        out,
+                                        "        memset(&_{local_id}, 0, sizeof({c_type}));"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -6196,6 +6439,7 @@ fn emit_field_drops(
     type_id: TypeId,
     registry: &TypeRegistry,
     indent: &str,
+    depth: usize,
 ) {
     let type_name = if let Some(GirType::Named(name)) = registry.get(type_id) {
         name.clone()
@@ -6211,23 +6455,194 @@ fn emit_field_drops(
 
     if let TypeDefKind::Struct(ref sdef) = type_def.kind {
         for field in &sdef.fields {
-            let field_strategy = lookup_drop_strategy(field.type_id, registry);
-            match field_strategy {
-                DropStrategy::None => {}
-                DropStrategy::Trivial(ref fn_name) => {
-                    let _ = writeln!(out, "{indent}{fn_name}(&{parent_expr}.{});", field.name);
-                }
-                DropStrategy::Custom(ref fn_name) => {
-                    let _ = writeln!(out, "{indent}{fn_name}(&{parent_expr}.{});", field.name);
-                    // Recurse for fields of fields
-                    emit_field_drops(out, &format!("{parent_expr}.{}", field.name), field.type_id, registry, indent);
-                }
-                DropStrategy::Recursive => {
-                    emit_field_drops(out, &format!("{parent_expr}.{}", field.name), field.type_id, registry, indent);
-                }
+            let Some(field_type_name) = gir_type_name(field.type_id, registry) else { continue };
+            if needs_drop_by_name(&field_type_name, registry) {
+                // Take address of struct field, then use pointer-based emit to handle
+                // all collection and custom-drop types uniformly (including Vector prefix fast path).
+                emit_drop_for_type_via_ptr(
+                    out,
+                    &format!("&{parent_expr}.{}", field.name),
+                    &field_type_name,
+                    registry,
+                    indent,
+                    depth,
+                );
             }
         }
     }
+}
+
+/// Get the GIR type name for a TypeId (e.g., "Vector__Tracked" instead of "GorgetArray").
+fn gir_type_name(type_id: TypeId, registry: &TypeRegistry) -> Option<String> {
+    if let Some(GirType::Named(name)) = registry.get(type_id) {
+        Some(name.clone())
+    } else {
+        None
+    }
+}
+
+/// Check whether a GIR type name requires drop/cleanup.
+fn needs_drop_by_name(type_name: &str, registry: &TypeRegistry) -> bool {
+    if type_name.starts_with("Vector__")
+        || type_name.starts_with("List__")
+        || type_name.starts_with("Dict__")
+        || type_name.starts_with("HashMap__")
+        || type_name.starts_with("Set__")
+        || type_name.starts_with("HashSet__")
+        || matches!(type_name, "GorgetArray" | "GorgetMap" | "GorgetSet" | "GorgetString")
+    {
+        return true;
+    }
+    registry
+        .get_type_def(type_name)
+        .map(|td| !matches!(td.metadata.drop_strategy, DropStrategy::None))
+        .unwrap_or(false)
+}
+
+/// Map a GIR type name to its C type name (for casts and declarations).
+fn gir_to_c_type(type_name: &str) -> &str {
+    if type_name.starts_with("Vector__") || type_name.starts_with("List__") || type_name == "GorgetArray" {
+        "GorgetArray"
+    } else if type_name.starts_with("Dict__") || type_name.starts_with("HashMap__") {
+        "GorgetMap"
+    } else if type_name.starts_with("Set__") || type_name.starts_with("HashSet__") || type_name == "GorgetSet" {
+        "GorgetSet"
+    } else {
+        type_name
+    }
+}
+
+/// Extract the element GIR type name from a Vector/List type ("Vector__X" → Some("X")).
+fn extract_vector_elem_name(type_name: &str) -> Option<&str> {
+    for prefix in ["Vector__", "List__", "Array__"] {
+        if let Some(rest) = type_name.strip_prefix(prefix) {
+            if !rest.is_empty() {
+                return Some(rest);
+            }
+        }
+    }
+    None
+}
+
+/// Emit drop code for a value accessed via pointer `ptr_expr` of GIR type `type_name`.
+/// For Vector types: iterate elements + gorget_array_free.
+/// For structs: dispatch on drop strategy.
+fn emit_drop_for_type_via_ptr(
+    out: &mut String,
+    ptr_expr: &str,
+    type_name: &str,
+    registry: &TypeRegistry,
+    indent: &str,
+    depth: usize,
+) {
+    // Vector/List type: per-element drops + free
+    if let Some(elem_name) = extract_vector_elem_name(type_name) {
+        if needs_drop_by_name(elem_name, registry) {
+            let elem_c_type = gir_to_c_type(elem_name);
+            // Use numbered loop variables to avoid shadowing in nested drop loops.
+            // ({ptr_expr}) parenthesizes address-of exprs like "&struct.field" so
+            // "(&struct.field)->len" is valid C (vs "&struct.field->len" which is not).
+            let di = format!("__di{depth}");
+            let de = format!("__de{depth}");
+            let _ = writeln!(out, "{indent}for (size_t {di} = 0; {di} < ({ptr_expr})->len; {di}++) {{");
+            let _ = writeln!(
+                out,
+                "{indent}    {elem_c_type}* {de} = ({elem_c_type}*)gorget_array_get(({ptr_expr}), {di});"
+            );
+            emit_drop_for_type_via_ptr(out, &de, elem_name, registry, &format!("{indent}    "), depth + 1);
+            let _ = writeln!(out, "{indent}}}");
+        }
+        let _ = writeln!(out, "{indent}gorget_array_free({ptr_expr});");
+        return;
+    }
+    // Struct/enum: dispatch on drop strategy
+    let Some(td) = registry.get_type_def(type_name) else { return };
+    match td.metadata.drop_strategy.clone() {
+        DropStrategy::None => {}
+        DropStrategy::Trivial(fn_name) => {
+            let _ = writeln!(out, "{indent}{fn_name}({ptr_expr});");
+        }
+        DropStrategy::Custom(fn_name) => {
+            let _ = writeln!(out, "{indent}{fn_name}({ptr_expr});");
+            emit_field_drops_via_ptr(out, ptr_expr, type_name, registry, indent, depth);
+        }
+        DropStrategy::Recursive => {
+            emit_field_drops_via_ptr(out, ptr_expr, type_name, registry, indent, depth);
+        }
+    }
+}
+
+/// Emit drops for struct fields accessible via pointer (`->` notation).
+fn emit_field_drops_via_ptr(
+    out: &mut String,
+    ptr_expr: &str,
+    type_name: &str,
+    registry: &TypeRegistry,
+    indent: &str,
+    depth: usize,
+) {
+    let Some(td) = registry.get_type_def(type_name) else { return };
+    let kind = td.kind.clone();
+    let TypeDefKind::Struct(ref sdef) = kind else { return };
+    for field in &sdef.fields {
+        let Some(field_type_name) = gir_type_name(field.type_id, registry) else { continue };
+        if needs_drop_by_name(&field_type_name, registry) {
+            // Parenthesize ptr_expr to avoid "&&expr->field" when ptr_expr itself starts with &
+            emit_drop_for_type_via_ptr(
+                out,
+                &format!("&({ptr_expr})->{}", field.name),
+                &field_type_name,
+                registry,
+                indent,
+                depth,
+            );
+        }
+    }
+}
+
+/// Collect clone operations for struct fields that are GorgetArrays (or contain them).
+/// `path` is the C expression for the value (dot-notation), e.g., "__elem".
+/// Pushes "path.field = gorget_array_clone(&path.field);" or recurses for nested structs.
+fn collect_clone_ops(type_name: &str, path: &str, ops: &mut Vec<String>, registry: &TypeRegistry) {
+    let Some(td) = registry.get_type_def(type_name) else { return };
+    let kind = td.kind.clone();
+    let TypeDefKind::Struct(ref sdef) = kind else { return };
+    for field in &sdef.fields {
+        let Some(field_type_name) = gir_type_name(field.type_id, registry) else { continue };
+        let field_path = format!("{path}.{}", field.name);
+        if field_type_name.starts_with("Vector__")
+            || field_type_name.starts_with("List__")
+            || field_type_name == "GorgetArray"
+        {
+            ops.push(format!("{field_path} = gorget_array_clone(&{field_path});"));
+        } else if needs_drop_by_name(&field_type_name, registry) {
+            collect_clone_ops(&field_type_name, &field_path, ops, registry);
+        }
+    }
+}
+
+/// Like extract_collection_elem_type but preserves full GIR names for nested collections.
+/// e.g., "Vector__Vector__Container__set" → "Vector__Container"
+fn extract_collection_elem_type_full(name: &str) -> String {
+    for prefix in &["Vector__", "List__", "Array__", "Set__", "HashSet__"] {
+        if let Some(rest) = name.strip_prefix(*prefix) {
+            if rest.is_empty() {
+                return "int64_t".to_string();
+            }
+            // Strip method suffix: rightmost "__" where suffix is all ASCII lowercase letters
+            if let Some(pos) = rest.rfind("__") {
+                let suffix = &rest[pos + 2..];
+                if !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_lowercase()) {
+                    let elem = &rest[..pos];
+                    if !elem.is_empty() {
+                        return elem.to_string();
+                    }
+                }
+            }
+            return rest.to_string();
+        }
+    }
+    "int64_t".to_string()
 }
 
 /// Format a constant as a C literal.

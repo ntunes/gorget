@@ -707,6 +707,12 @@ fn lower_field_access(
 
             // Look up the type name, then the field info
             if let Some(type_name) = ctx.type_name_for_id(effective_type_id) {
+                // Special case: GorgetString.data — return the GorgetString itself.
+                // GorgetString TypeDef has no registered fields in GIR (it's opaque),
+                // but accessing .data is valid for printf (%.*s handles it correctly).
+                if type_name == "GorgetString" && field_name == "data" {
+                    return obj;
+                }
                 // First try the struct_fields cache
                 if let Some((field_idx, field_type)) = ctx.lookup_field(type_name, field_name) {
                     let dst = builder.field_load(base_place, field_idx, field_type);
@@ -1334,8 +1340,9 @@ fn lower_method_call(
                 ctx.ensure_option_type_registered(&option_name, inner_type);
             }
         }
-        // For index_of/find on strings/collections, register Option[int] return type
-        if matches!(method_name, "index_of" | "find") {
+        // For index_of/find on strings/collections (NOT Regex), register Option[int] return type
+        let is_regex_receiver = type_name == "Regex" || type_name == "GorgetRegex";
+        if matches!(method_name, "index_of" | "find") && !is_regex_receiver {
             let option_name = "Option__int64_t";
             if ctx.lookup_type_by_name(option_name).is_none() {
                 ctx.ensure_option_type_registered(option_name, I64_TYPE);
@@ -1349,7 +1356,8 @@ fn lower_method_call(
                 let elem_type_name = type_name.strip_prefix("Vector__").unwrap_or("int64_t");
                 let option_name = format!("Option__{elem_type_name}");
                 ctx.lookup_type_by_name(&option_name).unwrap_or(ret)
-            } else if matches!(method_name, "index_of" | "find") {
+            } else if matches!(method_name, "index_of" | "find") && !is_regex_receiver {
+                // Only override to Option__int64_t for collection/string find, NOT Regex.find()
                 ctx.lookup_type_by_name("Option__int64_t").unwrap_or(ret)
             } else {
                 ret

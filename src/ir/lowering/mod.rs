@@ -516,7 +516,7 @@ pub fn lower_module(
                     let method_def = &method.node;
                     let mangled = format!("{}__{}", type_name.node, method_def.name.node);
 
-                    let ret_type = ctx.type_mapper.map_ast_type(&method_def.return_type.node);
+                    let ret_type = ctx.type_mapper.map_ast_type_mut(&method_def.return_type.node, &mut ctx.type_registry);
                     let has_self = method_def.params.first()
                         .map(|p| p.node.name.node == "self")
                         .unwrap_or(false);

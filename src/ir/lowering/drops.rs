@@ -95,6 +95,26 @@ impl DropElaborator {
         }
     }
 
+    /// Update the recorded type for a local after type re-inference.
+    ///
+    /// Called in VarDecl when `auto` or closure types are re-inferred after lowering
+    /// the RHS: the initial registration used the pre-inference type (often I64_TYPE),
+    /// but now we know the real type. If the local wasn't yet registered (because the
+    /// original type had no drop semantics), this registers it fresh.
+    pub fn update_or_register_type(&mut self, local: LocalId, type_id: TypeId, registry: &TypeRegistry) {
+        // Try to find and update an existing entry
+        for scope in self.scopes.iter_mut().rev() {
+            for entry in &mut scope.entries {
+                if entry.local == local {
+                    entry.type_id = type_id;
+                    return;
+                }
+            }
+        }
+        // Not yet registered — register it now (only if the new type needs dropping)
+        self.register_local(local, type_id, registry);
+    }
+
     /// Emit cleanup drops for an early exit (return, break, continue).
     ///
     /// Drops all locals from the current scope back to (and excluding)

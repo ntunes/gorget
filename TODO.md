@@ -8,12 +8,6 @@
 
 - **GIR: Dict items() tuple field access lowered as Unit (affects dict_items)**: `item._1` (TupleFieldAccess) on Dict `.items()` results falls through to `Constant::Unit`. Needs tuple type tracking through collection methods so field projection can resolve. [added: 2026-02-28, updated: 2026-02-28]
 
-- **GIR: No per-element Drop calls during collection cleanup (affects drop_collections, drop_struct_collection_fields)**: `gorget_array_free` only frees the buffer, doesn't iterate elements to call custom `Drop` impls. Also missing: pre-drop on `.set()` overwrite, Box inner drop before free. [added: 2026-02-28]
-
-- **GIR: Nested collection `.get()` does shallow copy → double-free (affects nested_generics)**: `.get()` on `Vector[Vector[int]]` does `*(GorgetArray*)gorget_array_get(...)` (shallow bitwise copy) instead of `gorget_array_clone()` (deep clone). Aliased `.data` pointers → double-free at cleanup. [added: 2026-02-28]
-
-- **GIR: Regex callable/iterator adapter issues (affects regex_basic)**: Regex return type overrides added, cstr param functions added, but iterator adapters (find/map/filter) on regex results generate broken closure dispatch (`void*__call(...)`) and Str/const char* coercions for match text are incomplete. ~28 C compile errors remain. [added: 2026-02-28, updated: 2026-02-28]
-
 ## Medium
 
 

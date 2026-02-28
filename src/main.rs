@@ -696,6 +696,9 @@ fn try_build_ir(
         || source.contains("std.p2p");
     add_crypto_flags(&mut cc_cmd, needs_crypto);
 
+    let needs_regex = source.contains("std.regex");
+    add_regex_flags(&mut cc_cmd, needs_regex);
+
     // Add pthread for async/p2p
     if source.contains("std.async") || source.contains("std.p2p") {
         cc_cmd.arg("-lpthread");
