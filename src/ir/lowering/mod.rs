@@ -495,7 +495,7 @@ pub fn lower_module(
     }
 
     // Register monomorphized function signatures
-    generic_collector.register_fn_sigs(&ctx.type_mapper, &mut ctx.fn_sigs);
+    generic_collector.register_fn_sigs(&ctx.type_mapper, &mut ctx.type_registry, &mut ctx.fn_sigs);
 
     // Pre-scan: register non-generic equip method signatures
     for item in &ast_module.items {

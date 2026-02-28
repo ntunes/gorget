@@ -161,7 +161,7 @@ impl GenericCollector {
                     self.register_instance(base, generic_args, TemplateKind::Struct);
                 } else if self.enum_templates.contains_key(base) {
                     self.register_instance(base, generic_args, TemplateKind::Enum);
-                } else if matches!(base.as_str(), "Vector" | "List" | "Array" | "Dict" | "HashMap" | "Set" | "HashSet") {
+                } else if matches!(base.as_str(), "Vector" | "List" | "Array" | "Dict" | "HashMap" | "Set" | "HashSet" | "Box") {
                     // Runtime collection types — register as Struct so the type name is
                     // available for method call mangling (no struct template to monomorphize)
                     self.register_instance(base, generic_args, TemplateKind::Struct);
@@ -347,6 +347,11 @@ impl GenericCollector {
                 TemplateKind::Struct => {
                     if let Some(template) = self.struct_templates.get(base_name) {
                         monomorphize_struct(template, type_args, mangled_name, mapper, registry);
+                    } else if matches!(base_name.as_str(), "Vector" | "List" | "Array" | "Dict" | "HashMap" | "Set" | "HashSet" | "Box") {
+                        // Runtime collection types — no template to monomorphize, register alias
+                        if !mapper.named_types.contains_key(mangled_name) {
+                            super::types::register_collection_alias(mapper, registry, base_name, type_args, mangled_name);
+                        }
                     }
                 }
                 TemplateKind::Enum => {
@@ -365,6 +370,7 @@ impl GenericCollector {
     pub fn register_fn_sigs(
         &self,
         mapper: &TypeMapper,
+        registry: &mut TypeRegistry,
         fn_sigs: &mut FxHashMap<String, (Vec<TypeId>, TypeId)>,
     ) {
         for (base_name, type_args, mangled_name, kind) in &self.instances {
@@ -375,7 +381,15 @@ impl GenericCollector {
                 let subs = build_type_substitutions(template.generic_params.as_ref(), type_args);
                 let ret_type = substitute_and_map(mapper, &template.return_type.node, &subs);
                 let param_types: Vec<TypeId> = template.params.iter()
-                    .map(|p| substitute_and_map(mapper, &p.node.type_.node, &subs))
+                    .map(|p| {
+                        let base = substitute_and_map(mapper, &p.node.type_.node, &subs);
+                        // MutableBorrow params become MutPtr in the GIR
+                        if matches!(p.node.ownership, crate::parser::ast::Ownership::MutableBorrow) {
+                            registry.insert(GirType::MutPtr(base))
+                        } else {
+                            base
+                        }
+                    })
                     .collect();
                 fn_sigs.insert(mangled_name.clone(), (param_types, ret_type));
             }
@@ -553,10 +567,23 @@ fn monomorphize_struct(
         });
     }
 
+    // Box types need Move + Trivial("free") drop metadata for RAII.
+    // Collection types (Vector, Dict, etc.) get their own drop strategies.
+    let metadata = if template.name.node == "Box" {
+        TypeMetadata {
+            size: None,
+            align: None,
+            copy_semantics: CopySemantics::Move,
+            drop_strategy: DropStrategy::Trivial("free".to_string()),
+        }
+    } else {
+        TypeMetadata::default()
+    };
+
     let type_def = TypeDef {
         name: mangled_name.to_string(),
         kind: TypeDefKind::Struct(StructDef { fields }),
-        metadata: TypeMetadata::default(),
+        metadata,
     };
 
     registry.add_type_def(type_def);

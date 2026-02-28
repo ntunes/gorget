@@ -459,7 +459,7 @@ fn register_builtin_result(
 /// Register a collection type alias (Vector[T], Dict[K,V], etc.) as a named GIR type.
 /// These all map to the same runtime struct (GorgetArray, GorgetMap, etc.) but need
 /// unique TypeIds so that fields referencing them don't resolve to UNIT_TYPE.
-fn register_collection_alias(
+pub(super) fn register_collection_alias(
     mapper: &mut TypeMapper,
     registry: &mut TypeRegistry,
     base_name: &str,
@@ -480,7 +480,12 @@ fn register_collection_alias(
             kind: TypeDefKind::Struct(StructDef {
                 fields: vec![StructField { name: "_0".to_string(), type_id: inner_type }],
             }),
-            metadata: TypeMetadata::default(),
+            metadata: TypeMetadata {
+                size: None,
+                align: None,
+                copy_semantics: CopySemantics::Move,
+                drop_strategy: DropStrategy::Trivial("free".to_string()),
+            },
         };
         registry.add_type_def(type_def);
     } else {

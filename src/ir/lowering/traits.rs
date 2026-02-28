@@ -381,9 +381,32 @@ pub fn lower_trait_equip_methods(
                 );
             }
 
-            // Emit default implementations for methods NOT in the equip block
-            // Find the trait definition in the AST
-            if let Some(trait_def) = find_trait_def(ast_module, &trait_name) {
+            // Emit implementations for methods NOT in the equip block.
+            // If `via` delegation is active, forward through the field; otherwise
+            // look for default implementations in the trait definition.
+            if let Some(ref via_field) = equip.via_field {
+                // Via delegation: forward un-overridden methods through the field
+                let field_name = &via_field.node;
+                // Look up the field type from struct_fields cache
+                let field_info = ctx.lookup_field(&type_name, field_name);
+                let field_type_name = field_info.and_then(|(_, type_id)| {
+                    ctx.type_name_for_id(type_id).map(|s| s.to_string())
+                });
+
+                if let Some(field_type_name) = field_type_name {
+                    for vtable_method in &vtable_info.methods {
+                        if implemented_methods.contains(&vtable_method.name) {
+                            continue;
+                        }
+                        emit_via_forwarding_function(
+                            ctx, module, &trait_name, &type_name,
+                            &field_type_name, field_name,
+                            vtable_method, vtable_info,
+                            concrete_ptr_type, concrete_mut_ptr_type,
+                        );
+                    }
+                }
+            } else if let Some(trait_def) = find_trait_def(ast_module, &trait_name) {
                 emit_default_methods_from_trait(
                     ctx, module, trait_def, &type_name, &equip.type_.node,
                     &implemented_methods, vtable_info,
@@ -446,6 +469,106 @@ fn emit_default_methods_from_trait(
             }
         }
     }
+}
+
+/// Emit a forwarding function for a `via`-delegated trait method.
+///
+/// For `equip Outer with Showable via inner:`, un-overridden methods get:
+/// ```c
+/// Str Showable_for_Outer__show(const void* _1) {
+///     const Outer* _2 = (const Outer*)_1;
+///     const Inner* _3 = &_2->inner;
+///     const void* _4 = (const void*)_3;
+///     Str _5 = Showable_for_Inner__show(_4);
+///     return _5;
+/// }
+/// ```
+fn emit_via_forwarding_function(
+    ctx: &mut LoweringContext,
+    module: &mut crate::ir::Module,
+    trait_name: &str,
+    type_name: &str,
+    field_type_name: &str,
+    field_name: &str,
+    vtable_method: &VTableMethod,
+    vtable_info: &TraitVTableInfo,
+    concrete_ptr_type: TypeId,
+    concrete_mut_ptr_type: TypeId,
+) {
+    let method_name = &vtable_method.name;
+    let mangled = format!("{trait_name}_for_{type_name}__{method_name}");
+    let target_fn = format!("{trait_name}_for_{field_type_name}__{method_name}");
+    let return_type = vtable_method.return_type;
+
+    // Build parameter list: same as the vtable method signature
+    let params: Vec<(TypeId, Option<&str>)> = vtable_method.param_types.iter()
+        .enumerate()
+        .map(|(i, &ty)| {
+            if i == 0 { (ty, Some("self_void")) }
+            else { (ty, None) }
+        })
+        .collect();
+
+    let mut builder = FunctionBuilder::new(mangled, return_type, &params);
+
+    // _1 = self_void parameter (void*)
+    // _2 = PtrCast<const TypeName*>(self_void)
+    let cast_type = if vtable_method.self_is_mutable {
+        concrete_mut_ptr_type
+    } else {
+        concrete_ptr_type
+    };
+    let self_cast = builder.ptr_cast(cast_type, FunctionBuilder::copy(LocalId(1)));
+
+    // Look up field index
+    let field_idx = ctx.lookup_field(type_name, field_name)
+        .map(|(idx, _)| idx)
+        .unwrap_or(0);
+
+    // _3 = Borrow(&self_cast->field)  → gives us a pointer to the embedded field
+    let field_type_id = ctx.lookup_field(type_name, field_name)
+        .map(|(_, ty)| ty)
+        .unwrap_or(UNIT_TYPE);
+    let field_ptr_type = if vtable_method.self_is_mutable {
+        ctx.register_mut_ptr_type(field_type_id)
+    } else {
+        ctx.register_ptr_type(field_type_id)
+    };
+    let field_place = Place {
+        local: self_cast,
+        projections: vec![Projection::Deref, Projection::Field(field_idx)],
+    };
+    let field_borrow_local = if vtable_method.self_is_mutable {
+        builder.borrow_mut(field_place, field_ptr_type)
+    } else {
+        builder.borrow(field_place, field_ptr_type)
+    };
+
+    // _4 = PtrCast<void*>(field_ptr)  → cast back to void* for the target call
+    let void_ptr_local = builder.ptr_cast(
+        vtable_method.param_types[0], // same void* type as the vtable expects
+        FunctionBuilder::copy(field_borrow_local),
+    );
+
+    // Build call arguments: void* field_ptr + any extra params forwarded
+    let mut call_args = vec![FunctionBuilder::copy(void_ptr_local)];
+    // Forward extra params (indices 2.. in the local list = params beyond self)
+    for (i, &_param_type) in vtable_method.param_types.iter().enumerate().skip(1) {
+        // Extra params start at LocalId(2) since _1 is self_void
+        call_args.push(FunctionBuilder::copy(LocalId((i + 1) as u32)));
+    }
+
+    // _5 = Call target_fn(args)
+    let result = if return_type == UNIT_TYPE {
+        builder.call_void(target_fn, call_args);
+        FunctionBuilder::const_unit()
+    } else {
+        let result_local = builder.call(target_fn, call_args, return_type);
+        FunctionBuilder::copy(result_local)
+    };
+
+    builder.ret(result);
+    module.functions.push(builder.build());
 }
 
 /// Find a trait definition by name in the AST module.

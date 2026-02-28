@@ -269,6 +269,12 @@ fn is_cstr_param_fn(name: &str) -> bool {
         | "gorget_hex_encode" | "gorget_hex_decode"
         | "gorget_url_encode" | "gorget_url_decode"
         | "gorget_regex_match" | "gorget_regex_find_all" | "gorget_regex_replace"
+        | "gorget_regex_is_match" | "gorget_regex_fullmatch"
+        | "gorget_regex_compile" | "gorget_regex_escape" | "gorget_regex_parse_flags"
+        | "gorget_regex_replace_all" | "gorget_regex_split"
+        | "gorget_regex_match_group_by_name"
+        | "gorget_regex_find_all_compiled" | "gorget_regex_replace_compiled"
+        | "gorget_regex_split_compiled" | "gorget_regex_splitn_compiled"
         | "gorget_bytes_from_str" | "gorget_bytes_from_hex"
         | "puts" | "fputs" | "system" | "getenv"
         | "gorget_string_new"
@@ -524,7 +530,7 @@ fn emit_type_definitions(out: &mut String, module: &Module) {
         // Trait types don't have struct definitions, only VTable/TraitObj wrappers.
         let is_trait = type_defs.iter().any(|d| d.name == format!("{inner}_VTable") || d.name == format!("{inner}_TraitObj"));
         if is_trait {
-            let _ = writeln!(out, "typedef void* {box_name};");
+            let _ = writeln!(out, "typedef {inner}_TraitObj {box_name};");
         } else {
             let _ = writeln!(out, "typedef {inner}* {box_name};");
         }
@@ -583,8 +589,45 @@ fn emit_type_definitions(out: &mut String, module: &Module) {
             let _ = writeln!(out, "static inline {inner} {box_name}__get({box_name} b) {{ return *b; }}");
             let _ = writeln!(out, "static inline void {box_name}__set({box_name}* b_ptr, {inner} val) {{ **b_ptr = val; }}");
         } else {
-            // Trait-erased Box — alloc is a no-op wrapper (trait objects manage their own memory)
-            let _ = writeln!(out, "/* Box[{inner}] is type-erased (void*) */");
+            // Trait-erased Box — emit dispatch wrappers through the vtable
+            let _ = writeln!(out, "/* Box[{inner}] — trait object dispatch wrappers */");
+            // Read the VTable struct to get method signatures
+            let vtable_name = format!("{inner}_VTable");
+            if let Some(vtable_def) = module.type_registry.get_type_def(&vtable_name) {
+                if let TypeDefKind::Struct(ref s) = vtable_def.kind {
+                    for field in &s.fields {
+                        let method_name = &field.name;
+                        // Extract function pointer type to get params and return type
+                        if let Some(GirType::FnPtr { params: param_types, return_type: ret_type }) = module.type_registry.get(field.type_id) {
+                            let ret_c = format_type(*ret_type, &module.type_registry);
+                            // Build parameter list (skip first param which is void* self)
+                            let mut param_decls = Vec::new();
+                            let mut param_names = Vec::new();
+                            for (i, &pt) in param_types.iter().enumerate().skip(1) {
+                                let pt_c = format_type(pt, &module.type_registry);
+                                param_decls.push(format!("{pt_c} __p{i}"));
+                                param_names.push(format!("__p{i}"));
+                            }
+                            let params_str = if param_decls.is_empty() {
+                                String::new()
+                            } else {
+                                format!(", {}", param_decls.join(", "))
+                            };
+                            let args_str = if param_names.is_empty() {
+                                String::new()
+                            } else {
+                                format!(", {}", param_names.join(", "))
+                            };
+                            let call_expr = format!("self->vtable->{method_name}(self->data{args_str})");
+                            if ret_c == "void" {
+                                let _ = writeln!(out, "static inline void {box_name}__{method_name}(const {box_name}* self{params_str}) {{ {call_expr}; }}");
+                            } else {
+                                let _ = writeln!(out, "static inline {ret_c} {box_name}__{method_name}(const {box_name}* self{params_str}) {{ return {call_expr}; }}");
+                            }
+                        }
+                    }
+                }
+            }
         }
         out.push('\n');
     }
@@ -1818,6 +1861,16 @@ fn emit_instruction(
             } else {
                 let dst_type = func.locals[dst.local.0 as usize].type_id;
                 let src_type = operand_type(value, func);
+                // Box[Trait] ← Box[ConcreteType]: wrap in TraitObj for vtable dispatch
+                if dst_c_type.starts_with("Box__") && src_c_type.starts_with("Box__") {
+                    let dst_inner = &dst_c_type[5..];
+                    let src_inner = &src_c_type[5..];
+                    if dst_inner != src_inner && registry.get_type_def(&format!("{dst_inner}_VTable")).is_some() {
+                        let vtable_inst = format!("{dst_inner}_for_{src_inner}_vtable");
+                        let _ = writeln!(out, "        {dst_str} = ({dst_inner}_TraitObj){{.data = (void*){val_str}, .vtable = &{vtable_inst}}};");
+                        return;
+                    }
+                }
                 if needs_string_coercion(dst_type, src_type, registry) {
                     let _ = writeln!(out, "        {dst_str} = (Str){{ .data = {val_str}.data, .len = {val_str}.len }};");
                 } else {
@@ -2892,22 +2945,42 @@ fn emit_instruction(
             let place_str = format_place(place, registry);
             // Look up drop strategy from TypeDef
             let local_type = func.locals[place.local.0 as usize].type_id;
-            let strategy = lookup_drop_strategy(local_type, registry);
-            match strategy {
-                DropStrategy::None => {
-                    // No-op
+            let type_name_str = format_type(local_type, registry);
+
+            // Special handling for Box types: call inner Drop (if any) then free
+            if let Some(inner_name) = type_name_str.strip_prefix("Box__") {
+                // Check if this Box wraps a trait object (struct) vs concrete type (pointer)
+                let is_trait_box = registry.get_type_def(&format!("{inner_name}_TraitObj")).is_some();
+                if is_trait_box {
+                    // Trait object Box: free the heap data via .data field
+                    let _ = writeln!(out, "        free({place_str}.data);");
+                } else {
+                    // Concrete Box: call inner Drop (if any) then free the pointer
+                    if let Some(inner_def) = registry.get_type_def(inner_name) {
+                        if let DropStrategy::Custom(ref fn_name) = inner_def.metadata.drop_strategy {
+                            let _ = writeln!(out, "        {fn_name}({place_str});");
+                        }
+                    }
+                    let _ = writeln!(out, "        free({place_str});");
                 }
-                DropStrategy::Trivial(ref fn_name) => {
-                    let _ = writeln!(out, "        {fn_name}(&{place_str});");
-                }
-                DropStrategy::Custom(ref fn_name) => {
-                    let _ = writeln!(out, "        {fn_name}(&{place_str});");
-                    // After custom drop, also drop fields that have their own drops
-                    emit_field_drops(out, &place_str, local_type, registry, "        ");
-                }
-                DropStrategy::Recursive => {
-                    // No custom drop — just recursively drop fields
-                    emit_field_drops(out, &place_str, local_type, registry, "        ");
+            } else {
+                let strategy = lookup_drop_strategy(local_type, registry);
+                match strategy {
+                    DropStrategy::None => {
+                        // No-op
+                    }
+                    DropStrategy::Trivial(ref fn_name) => {
+                        let _ = writeln!(out, "        {fn_name}(&{place_str});");
+                    }
+                    DropStrategy::Custom(ref fn_name) => {
+                        let _ = writeln!(out, "        {fn_name}(&{place_str});");
+                        // After custom drop, also drop fields that have their own drops
+                        emit_field_drops(out, &place_str, local_type, registry, "        ");
+                    }
+                    DropStrategy::Recursive => {
+                        // No custom drop — just recursively drop fields
+                        emit_field_drops(out, &place_str, local_type, registry, "        ");
+                    }
                 }
             }
         }
@@ -2916,24 +2989,46 @@ fn emit_instruction(
             let place_str = format_place(place, registry);
             let local_type = func.locals[place.local.0 as usize].type_id;
             let type_name = format_type(local_type, registry);
-            let strategy = lookup_drop_strategy(local_type, registry);
-            match strategy {
-                DropStrategy::None => {}
-                DropStrategy::Trivial(ref fn_name) => {
-                    let _ = writeln!(out, "        if (memcmp(&{place_str}, &({type_name}){{0}}, sizeof({type_name})) != 0) {{");
-                    let _ = writeln!(out, "            {fn_name}(&{place_str});");
+
+            // Special handling for Box types: null-check, call inner Drop, free
+            if let Some(inner_name) = type_name.strip_prefix("Box__") {
+                let is_trait_box = registry.get_type_def(&format!("{inner_name}_TraitObj")).is_some();
+                if is_trait_box {
+                    // Trait object Box: check .data for null, then free
+                    let _ = writeln!(out, "        if ({place_str}.data != NULL) {{");
+                    let _ = writeln!(out, "            free({place_str}.data);");
+                    out.push_str("        }\n");
+                } else {
+                    // Concrete Box: null-check the pointer, call inner Drop, free
+                    let _ = writeln!(out, "        if ({place_str} != NULL) {{");
+                    if let Some(inner_def) = registry.get_type_def(inner_name) {
+                        if let DropStrategy::Custom(ref fn_name) = inner_def.metadata.drop_strategy {
+                            let _ = writeln!(out, "            {fn_name}({place_str});");
+                        }
+                    }
+                    let _ = writeln!(out, "            free({place_str});");
                     out.push_str("        }\n");
                 }
-                DropStrategy::Custom(ref fn_name) => {
-                    let _ = writeln!(out, "        if (memcmp(&{place_str}, &({type_name}){{0}}, sizeof({type_name})) != 0) {{");
-                    let _ = writeln!(out, "            {fn_name}(&{place_str});");
-                    emit_field_drops(out, &place_str, local_type, registry, "            ");
-                    out.push_str("        }\n");
-                }
-                DropStrategy::Recursive => {
-                    let _ = writeln!(out, "        if (memcmp(&{place_str}, &({type_name}){{0}}, sizeof({type_name})) != 0) {{");
-                    emit_field_drops(out, &place_str, local_type, registry, "            ");
-                    out.push_str("        }\n");
+            } else {
+                let strategy = lookup_drop_strategy(local_type, registry);
+                match strategy {
+                    DropStrategy::None => {}
+                    DropStrategy::Trivial(ref fn_name) => {
+                        let _ = writeln!(out, "        if (memcmp(&{place_str}, &({type_name}){{0}}, sizeof({type_name})) != 0) {{");
+                        let _ = writeln!(out, "            {fn_name}(&{place_str});");
+                        out.push_str("        }\n");
+                    }
+                    DropStrategy::Custom(ref fn_name) => {
+                        let _ = writeln!(out, "        if (memcmp(&{place_str}, &({type_name}){{0}}, sizeof({type_name})) != 0) {{");
+                        let _ = writeln!(out, "            {fn_name}(&{place_str});");
+                        emit_field_drops(out, &place_str, local_type, registry, "            ");
+                        out.push_str("        }\n");
+                    }
+                    DropStrategy::Recursive => {
+                        let _ = writeln!(out, "        if (memcmp(&{place_str}, &({type_name}){{0}}, sizeof({type_name})) != 0) {{");
+                        emit_field_drops(out, &place_str, local_type, registry, "            ");
+                        out.push_str("        }\n");
+                    }
                 }
             }
         }
@@ -3504,8 +3599,23 @@ fn infer_runtime_return_type(name: &str) -> Option<&'static str> {
         "gorget_crypto_cipher_new" | "crypto_cipher_new" => Some("CipherContext"),
         // Regex
         "regex_match" | "gorget_regex_match" => Some("GorgetArray"),
-        "regex_find_all" | "gorget_regex_find_all" => Some("GorgetArray"),
-        "regex_replace" | "gorget_regex_replace" => Some("GorgetString"),
+        "regex_find_all" | "gorget_regex_find_all"
+        | "gorget_regex_find_all_compiled" => Some("GorgetArray"),
+        "regex_replace" | "gorget_regex_replace"
+        | "gorget_regex_replace_all" | "gorget_regex_replace_compiled" => Some("GorgetString"),
+        "gorget_regex_split" | "gorget_regex_split_compiled"
+        | "gorget_regex_splitn_compiled" => Some("GorgetArray"),
+        "gorget_regex_compile" => Some("GorgetRegex*"),
+        "gorget_regex_is_match" | "gorget_regex_fullmatch" => Some("bool"),
+        "gorget_regex_find" => Some("GorgetRegexMatch"),
+        "gorget_regex_escape" | "gorget_regex_pattern_str"
+        | "gorget_regex_match_text" | "gorget_regex_match_group"
+        | "gorget_regex_match_group_by_name"
+        | "gorget_regex_last_error" => Some("const char*"),
+        "gorget_regex_capture_count" | "gorget_regex_match_start"
+        | "gorget_regex_match_end" | "gorget_regex_match_group_count" => Some("int64_t"),
+        "gorget_regex_group_names" | "gorget_regex_extract_names"
+        | "gorget_regex_match_groups" => Some("GorgetArray"),
         // Allocators (return pointers in C runtime)
         "gorget_arena_new" | "Arena" => Some("GorgetArena*"),
         "gorget_tracking_new" | "TrackingAllocator" => Some("GorgetTrackingAllocator*"),
@@ -4040,7 +4150,7 @@ fn try_emit_higher_order_method(
                 __gop_ptr = ({val_type}*)gorget_map_get(__gop_m, &__gop_k); \
                 }} *__gop_ptr; }});");
         }
-        "keys" => {
+        "keys" if is_dict => {
             // Dict/HashMap: extract all keys into a GorgetArray
             let key_type = extract_map_key_type(func_name).unwrap_or("int64_t");
             use std::fmt::Write;
@@ -4062,7 +4172,7 @@ fn try_emit_higher_order_method(
                     }} }} __keys; }});");
             }
         }
-        "values" => {
+        "values" if is_dict => {
             // Dict/HashMap: extract all values into a GorgetArray
             use std::fmt::Write;
             if is_ordered_dict {

@@ -691,6 +691,16 @@ fn try_build_ir(
         .arg(&c_path)
         .arg("-lm");
 
+    // Detect library dependencies from source imports
+    let needs_crypto = source.contains("std.crypto") || source.contains("std.net.tls")
+        || source.contains("std.p2p");
+    add_crypto_flags(&mut cc_cmd, needs_crypto);
+
+    // Add pthread for async/p2p
+    if source.contains("std.async") || source.contains("std.p2p") {
+        cc_cmd.arg("-lpthread");
+    }
+
     let status = cc_cmd.status();
 
     match status {

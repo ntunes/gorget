@@ -254,12 +254,16 @@ pub fn lower_generic_function(
     // Map return type with substitutions
     let return_type = substitute_and_map_type(ctx, &template.return_type.node, &subs);
 
-    // Map parameters with substitutions
+    // Map parameters with substitutions — MutableBorrow params become MutPtr
     let params: Vec<(TypeId, Option<String>)> = template
         .params
         .iter()
         .map(|p| {
-            let gir_type = substitute_and_map_type(ctx, &p.node.type_.node, &subs);
+            let base_type = substitute_and_map_type(ctx, &p.node.type_.node, &subs);
+            let gir_type = match p.node.ownership {
+                Ownership::MutableBorrow => ctx.register_mut_ptr_type(base_type),
+                _ => base_type,
+            };
             (gir_type, Some(p.node.name.node.clone()))
         })
         .collect();
@@ -277,8 +281,16 @@ pub fn lower_generic_function(
     ctx.callable_return_types.clear();
     for (i, p) in template.params.iter().enumerate() {
         let local_id = LocalId((i + 1) as u32);
-        let gir_type = substitute_and_map_type(ctx, &p.node.type_.node, &subs);
+        let base_type = substitute_and_map_type(ctx, &p.node.type_.node, &subs);
+        let gir_type = match p.node.ownership {
+            Ownership::MutableBorrow => ctx.register_mut_ptr_type(base_type),
+            _ => base_type,
+        };
         ctx.register_local(&p.node.name.node, local_id, gir_type);
+        // Register mutable borrow params for auto-deref at use sites
+        if matches!(p.node.ownership, Ownership::MutableBorrow) {
+            ctx.mut_capture_locals.insert(local_id, base_type);
+        }
         // Track callable parameter return types for indirect call lowering
         if let Some(ret_type) = extract_callable_return_type(&p.node.type_.node, &subs, ctx) {
             ctx.callable_return_types.insert(local_id, ret_type);

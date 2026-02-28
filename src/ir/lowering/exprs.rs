@@ -122,6 +122,15 @@ fn lower_expr_inner(
         }
 
         Expr::MutableBorrow { expr: inner } => {
+            // Special case: &name where name is already a MutableBorrow param (pointer).
+            // Skip the auto-deref that Identifier normally does — just forward the pointer.
+            if let Expr::Identifier(name) = &inner.node {
+                if let Some((local_id, _)) = ctx.lookup_local(name) {
+                    if ctx.mut_capture_locals.contains_key(&local_id) {
+                        return FunctionBuilder::copy(local_id);
+                    }
+                }
+            }
             let val = lower_expr(ctx, builder, inner);
             if let Operand::Copy(ref place) | Operand::Move(ref place) = val {
                 let local_type = if (place.local.0 as usize) < builder.locals.len() {
@@ -129,6 +138,15 @@ fn lower_expr_inner(
                 } else {
                     UNIT_TYPE
                 };
+                // If the value is already a pointer (e.g., &self where self is Node*),
+                // just forward it — don't create a double pointer.
+                let is_already_ptr = matches!(
+                    ctx.type_registry.get(local_type),
+                    Some(GirType::Ptr(_)) | Some(GirType::MutPtr(_))
+                );
+                if is_already_ptr {
+                    return FunctionBuilder::copy(place.local);
+                }
                 let ptr_type = ctx.register_mut_ptr_type(local_type);
                 let dst = builder.add_local(ptr_type, None);
                 builder.emit_borrow_mut(dst, place.clone());
@@ -583,7 +601,14 @@ fn lower_struct_literal(
                 .to_string()
         };
         let box_mangled = format!("Box__{inner_c}");
-        let box_type = ctx.type_mapper.lookup_named(&box_mangled).unwrap_or(I64_TYPE);
+        let box_type = if let Some(tid) = ctx.type_mapper.lookup_named(&box_mangled) {
+            tid
+        } else {
+            let tid = ctx.type_registry.insert(crate::ir::types::GirType::Named(box_mangled.clone()));
+            ctx.type_mapper.register_named(box_mangled.clone(), tid);
+            super::exprs::ensure_box_type_def(ctx, &box_mangled, val_type);
+            tid
+        };
         // Emit: __gorget_box_alloc_T(value) → T* with heap alloc
         let alloc_fn = format!("__gorget_box_alloc_{inner_c}");
         let dst = builder.call_extern(&alloc_fn, vec![val_op], box_type);
@@ -825,6 +850,8 @@ fn lower_method_call(
                 } else {
                     let tid = ctx.type_registry.insert(crate::ir::types::GirType::Named(box_type_name.clone()));
                     ctx.type_mapper.register_named(box_type_name.clone(), tid);
+                    // Also create TypeDef so C backend emits typedef
+                    ensure_box_type_def(ctx, &box_type_name, inner_type);
                     tid
                 };
                 let alloc_fn = format!("__gorget_box_alloc_{inner_c}");
@@ -914,7 +941,29 @@ fn lower_method_call(
         None
     };
 
-    let recv = lower_expr(ctx, builder, receiver);
+    // For mutable borrow params used as method receivers, pass the raw pointer directly.
+    // Auto-deref would copy the struct, and mutations to the copy wouldn't propagate back.
+    let borrow_param_local = if let Expr::Identifier(name) = &receiver.node {
+        if let Some((local_id, _)) = ctx.lookup_local(name) {
+            if ctx.mut_capture_locals.contains_key(&local_id) {
+                Some(local_id)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let recv = if borrow_param_local.is_some() {
+        // Skip auto-deref — use the raw pointer
+        let local_id = borrow_param_local.unwrap();
+        Operand::Copy(Place::local(local_id))
+    } else {
+        lower_expr(ctx, builder, receiver)
+    };
 
     // .await() → pass-through (GIR runs everything synchronously)
     if method_name == "await" {
@@ -1105,6 +1154,77 @@ fn lower_method_call(
             let recv_ref = builder.borrow_mut(recv_place, ptr_type);
             builder.call_void(mangled, vec![FunctionBuilder::copy(recv_ref), val]);
             return Operand::Constant(Constant::Unit);
+        }
+
+        // Box[Trait] method dispatch — look up return type from VTable TypeDef
+        if type_name.starts_with("Box__") {
+            let inner = &type_name["Box__".len()..];
+            let vtable_name = format!("{inner}_VTable");
+            if let Some(vtable_def) = ctx.type_registry.get_type_def(&vtable_name) {
+                if let crate::ir::types::TypeDefKind::Struct(ref s) = vtable_def.kind {
+                    for field in &s.fields {
+                        if field.name == method_name {
+                            // Found the method in the VTable — extract return type from FnPtr
+                            if let Some(crate::ir::types::GirType::FnPtr { return_type, .. }) = ctx.type_registry.get(field.type_id) {
+                                let ret_type = *return_type;
+                                let mangled = format!("{type_name}__{method_name}");
+                                // Pass borrow of the Box local
+                                let recv_place = match &recv {
+                                    Operand::Copy(p) | Operand::Move(p) => p.clone(),
+                                    _ => {
+                                        let box_type = ctx.type_mapper.lookup_named(&type_name).unwrap_or(I64_TYPE);
+                                        let tmp = builder.add_local(box_type, None);
+                                        builder.assign(Place::local(tmp), recv);
+                                        Place::local(tmp)
+                                    }
+                                };
+                                let ptr_type = ctx.register_ptr_type(
+                                    ctx.type_mapper.lookup_named(&type_name).unwrap_or(I64_TYPE)
+                                );
+                                let recv_ref = builder.borrow(recv_place, ptr_type);
+                                let mut call_args = vec![FunctionBuilder::copy(recv_ref)];
+                                for arg in args {
+                                    call_args.push(lower_expr(ctx, builder, &arg.node.value));
+                                }
+                                if ret_type == UNIT_TYPE {
+                                    builder.call_void(mangled, call_args);
+                                    return Operand::Constant(Constant::Unit);
+                                } else {
+                                    let dst = builder.call(mangled, call_args, ret_type);
+                                    return FunctionBuilder::copy(dst);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Dict/HashMap .items() → register tuple type for (K, V) and return Vector[tuple]
+        if method_name == "items" && (type_name.starts_with("Dict__") || type_name.starts_with("HashMap__")) {
+            // Extract key and value type names from Dict__K__V
+            let prefix = if type_name.starts_with("Dict__") { "Dict__" } else { "HashMap__" };
+            let rest = &type_name[prefix.len()..];
+            // Split at first __ to get key type
+            if let Some(sep_pos) = rest.find("__") {
+                let key_name = &rest[..sep_pos];
+                let val_name = &rest[sep_pos + 2..];
+                let key_type = ctx.type_mapper.lookup_named(key_name).unwrap_or(I64_TYPE);
+                let val_type = ctx.type_mapper.lookup_named(val_name).unwrap_or(I64_TYPE);
+                let tuple_type_id = register_tuple_type(ctx, &[key_type, val_type]);
+                let tuple_name = ctx.type_name_for_id(tuple_type_id).unwrap_or("int64_t").to_string();
+                // Register Vector[tuple] type name
+                let vec_name = format!("Vector__{tuple_name}");
+                if ctx.lookup_type_by_name(&vec_name).is_none() {
+                    let vec_type = ctx.type_registry.insert(crate::ir::types::GirType::Named(vec_name.clone()));
+                    ctx.type_mapper.register_named(vec_name.clone(), vec_type);
+                }
+                // Also register Option[tuple] for .get() calls
+                let option_name = format!("Option__{tuple_name}");
+                if ctx.lookup_type_by_name(&option_name).is_none() {
+                    ctx.ensure_option_type_registered(&option_name, tuple_type_id);
+                }
+            }
         }
 
         // Iterator adapter expansion: fold/map/filter/collect on Iterator types
@@ -1337,12 +1457,28 @@ fn infer_collection_method_return_type(
             ctx.lookup_type_by_name("Vector__int64_t")
                 .unwrap_or_else(|| ctx.lookup_type_by_name("GorgetArray").unwrap_or(UNIT_TYPE))
         }
-        // Dict/HashMap .keys() / .values() / .items() → GorgetArray
-        "keys" | "values" | "items" if is_dict => {
+        // Dict/HashMap .keys() / .values() → GorgetArray
+        "keys" | "values" if is_dict => {
             if let Some(type_id) = ctx.lookup_type_by_name("GorgetArray") {
                 type_id
             } else {
                 UNIT_TYPE
+            }
+        }
+        // Dict/HashMap .items() → Vector[Tuple[K, V]] (with registered tuple type)
+        "items" if is_dict => {
+            let prefix = if type_name.starts_with("Dict__") { "Dict__" } else { "HashMap__" };
+            let rest = &type_name[prefix.len()..];
+            if let Some(sep_pos) = rest.find("__") {
+                let key_name = &rest[..sep_pos];
+                let val_name = &rest[sep_pos + 2..];
+                let tuple_name = format!("Tuple__{key_name}__{val_name}");
+                let vec_name = format!("Vector__{tuple_name}");
+                ctx.lookup_type_by_name(&vec_name)
+                    .or_else(|| ctx.lookup_type_by_name("GorgetArray"))
+                    .unwrap_or(UNIT_TYPE)
+            } else {
+                ctx.lookup_type_by_name("GorgetArray").unwrap_or(UNIT_TYPE)
             }
         }
         // Higher-order methods returning new collections
@@ -2416,6 +2552,17 @@ fn lower_call_arg(
     builder: &mut FunctionBuilder,
     arg: &Spanned<ast::CallArg>,
 ) -> Operand {
+    // Special case: &name where name is already a MutableBorrow param (pointer).
+    // Skip the auto-deref that Identifier would do — just forward the pointer.
+    if matches!(arg.node.ownership, Ownership::MutableBorrow) {
+        if let Expr::Identifier(name) = &arg.node.value.node {
+            if let Some((local_id, _)) = ctx.lookup_local(name) {
+                if ctx.mut_capture_locals.contains_key(&local_id) {
+                    return FunctionBuilder::copy(local_id);
+                }
+            }
+        }
+    }
     let val = lower_expr(ctx, builder, &arg.node.value);
     match arg.node.ownership {
         Ownership::MutableBorrow => {
@@ -2539,7 +2686,14 @@ fn lower_call(
                     .to_string()
             };
             let box_mangled = format!("Box__{inner_c}");
-            let box_type = ctx.type_mapper.lookup_named(&box_mangled).unwrap_or(I64_TYPE);
+            let box_type = if let Some(tid) = ctx.type_mapper.lookup_named(&box_mangled) {
+                tid
+            } else {
+                let tid = ctx.type_registry.insert(crate::ir::types::GirType::Named(box_mangled.clone()));
+                ctx.type_mapper.register_named(box_mangled.clone(), tid);
+                ensure_box_type_def(ctx, &box_mangled, val_type);
+                tid
+            };
             let alloc_fn = format!("__gorget_box_alloc_{inner_c}");
             let dst = builder.call_extern(&alloc_fn, vec![val_op], box_type);
             return FunctionBuilder::copy(dst);
@@ -2726,6 +2880,16 @@ fn lower_call(
             if local_type_id == UNIT_TYPE {
                 let mut call_args = vec![FunctionBuilder::copy(local_id)];
                 for arg in args {
+                    // For borrow params passed to callable, preserve the pointer
+                    // (don't auto-deref). The adapter function expects the pointer type.
+                    if let Expr::Identifier(arg_name) = &arg.node.value.node {
+                        if let Some((arg_local, _)) = ctx.lookup_local(arg_name) {
+                            if ctx.mut_capture_locals.contains_key(&arg_local) {
+                                call_args.push(FunctionBuilder::copy(arg_local));
+                                continue;
+                            }
+                        }
+                    }
                     call_args.push(lower_expr(ctx, builder, &arg.node.value));
                 }
                 let callable_name = format!("__callable_{}", local_id.0);
@@ -3885,6 +4049,28 @@ fn consumed_local_id(operand: &Operand) -> Option<LocalId> {
 fn mark_consumed_local_by_id(ctx: &mut LoweringContext, builder: &mut FunctionBuilder, local: LocalId) {
     builder.move_zero(Place::local(local));
     ctx.drops.mark_moved(local);
+}
+
+/// Ensure a Box type has a TypeDef in the registry so the C backend can emit its typedef.
+pub fn ensure_box_type_def(ctx: &mut LoweringContext, box_type_name: &str, inner_type: TypeId) {
+    use crate::ir::types::{TypeDef, TypeDefKind, StructDef, StructField, TypeMetadata, CopySemantics, DropStrategy};
+    // Check if TypeDef already exists
+    if ctx.type_registry.get_type_def(box_type_name).is_some() {
+        return;
+    }
+    let type_def = TypeDef {
+        name: box_type_name.to_string(),
+        kind: TypeDefKind::Struct(StructDef {
+            fields: vec![StructField { name: "_0".to_string(), type_id: inner_type }],
+        }),
+        metadata: TypeMetadata {
+            size: None,
+            align: None,
+            copy_semantics: CopySemantics::Move,
+            drop_strategy: DropStrategy::Trivial("free".to_string()),
+        },
+    };
+    ctx.type_registry.add_type_def(type_def);
 }
 
 pub fn infer_operand_type_full(ctx: &LoweringContext, operand: &Operand, builder: &FunctionBuilder) -> TypeId {
