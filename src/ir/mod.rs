@@ -15,6 +15,10 @@ pub struct Module {
     pub functions: Vec<Function>,
     pub globals: Vec<Global>,
     pub externs: Vec<ExternDecl>,
+    /// Test functions: (fn_name, test_display_name) pairs for test runner generation.
+    pub test_fns: Vec<(String, String)>,
+    /// When true, arithmetic wraps on overflow instead of aborting.
+    pub overflow_wrap: bool,
 }
 
 impl Module {
@@ -25,6 +29,8 @@ impl Module {
             functions: Vec::new(),
             globals: Vec::new(),
             externs: Vec::new(),
+            test_fns: Vec::new(),
+            overflow_wrap: false,
         }
     }
 
@@ -117,7 +123,7 @@ mod tests {
         assert!(module.functions.is_empty());
         assert!(module.globals.is_empty());
         assert!(module.externs.is_empty());
-        assert_eq!(module.type_registry.len(), 12); // primitives
+        assert_eq!(module.type_registry.len(), 13); // primitives
     }
 
     #[test]

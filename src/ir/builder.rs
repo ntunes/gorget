@@ -390,6 +390,10 @@ impl FunctionBuilder {
         self.emit(Instruction::PopAllocator);
     }
 
+    pub fn inline_c(&mut self, code: String) {
+        self.emit(Instruction::InlineC { code });
+    }
+
     pub fn nop(&mut self) {
         self.emit(Instruction::Nop);
     }

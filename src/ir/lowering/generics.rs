@@ -13,7 +13,7 @@ use super::types::{mangle_generic_name, TypeMapper};
 
 /// The kind of generic template being instantiated.
 #[derive(Debug, Clone, Copy)]
-enum TemplateKind {
+pub enum TemplateKind {
     Struct,
     Enum,
     Function,
@@ -161,8 +161,15 @@ impl GenericCollector {
                     self.register_instance(base, generic_args, TemplateKind::Struct);
                 } else if self.enum_templates.contains_key(base) {
                     self.register_instance(base, generic_args, TemplateKind::Enum);
+                } else if matches!(base.as_str(), "Vector" | "List" | "Array" | "Dict" | "HashMap" | "Set" | "HashSet") {
+                    // Runtime collection types — register as Struct so the type name is
+                    // available for method call mangling (no struct template to monomorphize)
+                    self.register_instance(base, generic_args, TemplateKind::Struct);
+                } else if matches!(base.as_str(), "Option" | "Result") {
+                    // Option/Result generic types — register as Enum so the type definition
+                    // is emitted in C output (auto-registered by map_ast_type_mut)
+                    self.register_instance(base, generic_args, TemplateKind::Enum);
                 }
-                // Otherwise it might be a runtime-handled generic (Vector, Dict, etc.) — skip
             }
             Type::Tuple(elems) => {
                 for elem in elems {
@@ -382,6 +389,18 @@ impl GenericCollector {
         registry: &mut TypeRegistry,
         fn_sigs: &mut FxHashMap<String, (Vec<TypeId>, TypeId)>,
     ) {
+        self.register_equip_sigs_with_defaults(mapper, registry, fn_sigs, None);
+    }
+
+    /// Register monomorphized equip method signatures, including default trait methods.
+    pub fn register_equip_sigs_with_defaults(
+        &self,
+        mapper: &TypeMapper,
+        registry: &mut TypeRegistry,
+        fn_sigs: &mut FxHashMap<String, (Vec<TypeId>, TypeId)>,
+        ast_module: Option<&crate::parser::ast::Module>,
+    ) {
+        use crate::parser::ast::{Item, TraitItem, FunctionBody};
         for (base_name, type_args, mangled_type_name, kind) in &self.instances {
             if !matches!(kind, TemplateKind::Struct | TemplateKind::Enum) {
                 continue;
@@ -389,6 +408,7 @@ impl GenericCollector {
             if let Some(equip_blocks) = self.equip_templates.get(base_name) {
                 for equip in equip_blocks {
                     let subs = build_equip_type_substitutions(equip, type_args);
+                    let mut implemented = Vec::new();
                     for method in &equip.items {
                         let method_mangled = format!("{mangled_type_name}__{}", method.node.name.node);
                         let ret_type = substitute_and_map(mapper, &method.node.return_type.node, &subs);
@@ -402,6 +422,38 @@ impl GenericCollector {
                             param_types.push(substitute_and_map(mapper, &p.node.type_.node, &subs));
                         }
                         fn_sigs.insert(method_mangled, (param_types, ret_type));
+                        implemented.push(method.node.name.node.clone());
+                    }
+                    // Also register signatures for default trait methods
+                    if let (Some(ast_mod), Some(trait_ref)) = (ast_module, &equip.trait_) {
+                        let trait_name = super::traits::extract_trait_name(&trait_ref.trait_name.node);
+                        if !trait_name.is_empty() {
+                            for item in &ast_mod.items {
+                                if let Item::Trait(trait_def) = &item.node {
+                                    if trait_def.name.node == trait_name {
+                                        for trait_item in &trait_def.items {
+                                            if let TraitItem::Method(dm) = &trait_item.node {
+                                                if implemented.contains(&dm.name.node) { continue; }
+                                                match &dm.body {
+                                                    FunctionBody::Declaration | FunctionBody::Extern(_) => continue,
+                                                    _ => {}
+                                                }
+                                                let m_mangled = format!("{mangled_type_name}__{}", dm.name.node);
+                                                let ret_type = substitute_and_map(mapper, &dm.return_type.node, &subs);
+                                                let self_type_id = mapper.lookup_named(mangled_type_name).unwrap_or(UNIT_TYPE);
+                                                let self_ptr_type = registry.insert(GirType::Ptr(self_type_id));
+                                                let mut param_types = vec![self_ptr_type];
+                                                for p in &dm.params {
+                                                    if p.node.name.node == "self" { continue; }
+                                                    param_types.push(substitute_and_map(mapper, &p.node.type_.node, &subs));
+                                                }
+                                                fn_sigs.insert(m_mangled, (param_types, ret_type));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -437,6 +489,11 @@ impl GenericCollector {
         self.equip_templates.get(base_name)
     }
 
+    /// Get raw access to all instances for iteration.
+    pub fn instances_raw(&self) -> &[(String, Vec<Spanned<Type>>, String, TemplateKind)] {
+        &self.instances
+    }
+
     /// Get all type instances (struct + enum) with their mangled names.
     pub fn type_instances(&self) -> Vec<(&str, &str)> {
         self.instances.iter()
@@ -449,6 +506,26 @@ impl GenericCollector {
                 (base, mangled.as_str())
             })
             .collect()
+    }
+}
+
+/// Public entry point for on-demand monomorphization of a generic type.
+/// Used when struct fields reference generic types that haven't been registered yet.
+pub fn monomorphize_generic_type(
+    mapper: &mut TypeMapper,
+    registry: &mut TypeRegistry,
+    template_item: &ast::Item,
+    type_args: &[Spanned<Type>],
+    mangled_name: &str,
+) {
+    match template_item {
+        ast::Item::Struct(struct_def) => {
+            monomorphize_struct(struct_def, type_args, mangled_name, mapper, registry);
+        }
+        ast::Item::Enum(enum_def) => {
+            monomorphize_enum(enum_def, type_args, mangled_name, mapper, registry);
+        }
+        _ => {}
     }
 }
 
@@ -467,15 +544,14 @@ fn monomorphize_struct(
 
     let subs = build_type_substitutions(template.generic_params.as_ref(), type_args);
 
-    let fields: Vec<StructField> = template.fields.iter()
-        .map(|f| {
-            let field_type = substitute_and_map(mapper, &f.node.type_.node, &subs);
-            StructField {
-                name: f.node.name.node.clone(),
-                type_id: field_type,
-            }
-        })
-        .collect();
+    let mut fields: Vec<StructField> = Vec::new();
+    for f in &template.fields {
+        let field_type = substitute_and_map_mut(mapper, registry, &f.node.type_.node, &subs);
+        fields.push(StructField {
+            name: f.node.name.node.clone(),
+            type_id: field_type,
+        });
+    }
 
     let type_def = TypeDef {
         name: mangled_name.to_string(),
@@ -502,28 +578,27 @@ fn monomorphize_enum(
 
     let subs = build_type_substitutions(template.generic_params.as_ref(), type_args);
 
-    let variants: Vec<EnumVariant> = template.variants.iter()
-        .map(|v| {
-            let fields = match &v.node.fields {
-                ast::VariantFields::Unit => vec![],
-                ast::VariantFields::Tuple(types) => {
-                    types.iter().enumerate()
-                        .map(|(i, t)| {
-                            let field_type = substitute_and_map(mapper, &t.node, &subs);
-                            StructField {
-                                name: format!("_{i}"),
-                                type_id: field_type,
-                            }
-                        })
-                        .collect()
+    let mut variants: Vec<EnumVariant> = Vec::new();
+    for v in &template.variants {
+        let fields = match &v.node.fields {
+            ast::VariantFields::Unit => vec![],
+            ast::VariantFields::Tuple(types) => {
+                let mut fs = Vec::new();
+                for (i, t) in types.iter().enumerate() {
+                    let field_type = substitute_and_map_mut(mapper, registry, &t.node, &subs);
+                    fs.push(StructField {
+                        name: format!("_{i}"),
+                        type_id: field_type,
+                    });
                 }
-            };
-            EnumVariant {
-                name: v.node.name.node.clone(),
-                fields,
+                fs
             }
-        })
-        .collect();
+        };
+        variants.push(EnumVariant {
+            name: v.node.name.node.clone(),
+            fields,
+        });
+    }
 
     let type_def = TypeDef {
         name: mangled_name.to_string(),
@@ -588,6 +663,18 @@ fn substitute_and_map(
 ) -> TypeId {
     let substituted = substitute_type(ty, subs);
     mapper.map_ast_type(&substituted)
+}
+
+/// Like substitute_and_map, but auto-registers new collection/Option/Result types.
+/// Used in monomorphize_struct/enum where field types may reference derived collections.
+fn substitute_and_map_mut(
+    mapper: &mut TypeMapper,
+    registry: &mut TypeRegistry,
+    ty: &Type,
+    subs: &[(String, Type)],
+) -> TypeId {
+    let substituted = substitute_type(ty, subs);
+    mapper.map_ast_type_mut(&substituted, registry)
 }
 
 /// Public entry point for type substitution (used by functions.rs).

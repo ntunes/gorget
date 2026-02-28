@@ -10,7 +10,7 @@ pub mod types;
 
 use crate::ir::types::*;
 use crate::ir::{ExternDecl, Module};
-use crate::parser::ast::{self, Item};
+use crate::parser::ast::{self, FunctionBody, Item};
 use crate::semantic::AnalysisResult;
 
 use context::LoweringContext;
@@ -28,6 +28,16 @@ pub fn lower_module(
     // Create type mapper
     let mut type_mapper = TypeMapper::new(&mut module.type_registry);
 
+    // Pre-scan: collect generic templates for monomorphization of field types
+    let generic_templates: Vec<&ast::Item> = ast_module.items.iter()
+        .filter(|item| match &item.node {
+            Item::Struct(s) => s.generic_params.is_some(),
+            Item::Enum(e) => e.generic_params.is_some(),
+            _ => false,
+        })
+        .map(|item| &item.node)
+        .collect();
+
     // Pre-scan: register non-generic struct and enum type definitions
     for item in &ast_module.items {
         match &item.node {
@@ -36,6 +46,7 @@ pub fn lower_module(
                     &mut type_mapper,
                     &mut module.type_registry,
                     struct_def,
+                    &generic_templates,
                 );
             }
             Item::Enum(enum_def) => {
@@ -43,18 +54,182 @@ pub fn lower_module(
                     &mut type_mapper,
                     &mut module.type_registry,
                     enum_def,
+                    &generic_templates,
+                );
+            }
+            Item::Newtype(nt) => {
+                types::register_newtype(
+                    &mut type_mapper,
+                    &mut module.type_registry,
+                    nt,
                 );
             }
             _ => {}
         }
     }
 
+    // Register opaque allocator pointer types (runtime types not defined in .gg source).
+    // These C functions return pointers (e.g., gorget_pool_new → GorgetPoolAllocator*),
+    // so we register them as Ptr(Named(...)) so that method-call lowering skips the
+    // extra borrow (is_ptr check in lower_method_call).
+    {
+        let alloc_types: &[(&str, &str)] = &[
+            ("Arena", "GorgetArena"),
+            ("TrackingAllocator", "GorgetTrackingAllocator"),
+            ("PoolAllocator", "GorgetPoolAllocator"),
+        ];
+        for &(gorget_name, c_name) in alloc_types {
+            let inner = module.type_registry.insert(GirType::Named(c_name.to_string()));
+            // Use MutPtr since allocators are passed to non-const functions (destroy, bytes_used, etc.)
+            let ptr = module.type_registry.insert(GirType::MutPtr(inner));
+            type_mapper.register_named(gorget_name.to_string(), ptr);
+        }
+    }
+
+    // Scan for `equip T with Drop:` blocks and upgrade type metadata to Move + Custom drop
+    for item in &ast_module.items {
+        if let Item::Equip(equip) = &item.node {
+            if let Some(trait_ref) = &equip.trait_ {
+                let trait_name_str = match &trait_ref.trait_name.node {
+                    ast::Type::Named { name, .. } => name.node.as_str(),
+                    _ => "",
+                };
+                if trait_name_str == "Drop" {
+                    if let ast::Type::Named { name: type_name, .. } = &equip.type_.node {
+                        let name_str = &type_name.node;
+                        // Upgrade the TypeDef metadata
+                        if let Some(type_def) = module.type_registry.get_type_def_mut(name_str) {
+                            type_def.metadata.copy_semantics = CopySemantics::Move;
+                            type_def.metadata.drop_strategy = DropStrategy::Custom(format!("{name_str}__drop"));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Scan for structs with droppable fields — mark as Recursive drop if not already Custom
+    // This ensures auto field drops fire for structs like `Wrapper { inner: Inner }` where
+    // Inner has Drop but Wrapper does not.
+    {
+        // First collect which type names need dropping
+        let droppable_names: Vec<String> = module.type_registry.all_type_def_names()
+            .filter(|name| {
+                if let Some(td) = module.type_registry.get_type_def(name) {
+                    td.metadata.copy_semantics == CopySemantics::Move
+                        || td.metadata.drop_strategy != DropStrategy::None
+                } else {
+                    false
+                }
+            })
+            .cloned()
+            .collect();
+
+        // Now scan all structs for fields whose type name is in droppable_names
+        let struct_names: Vec<String> = module.type_registry.all_type_def_names().cloned().collect();
+        for name in &struct_names {
+            let needs_upgrade = {
+                let td = match module.type_registry.get_type_def(name) {
+                    Some(td) => td,
+                    None => continue,
+                };
+                // Skip if already has a drop strategy (Custom or Recursive)
+                if td.metadata.drop_strategy != DropStrategy::None {
+                    // But check if Custom drop also needs field drops
+                    if matches!(td.metadata.drop_strategy, DropStrategy::Custom(_)) {
+                        // Check if it has droppable fields — if so, we need to know at codegen time
+                        if let TypeDefKind::Struct(ref sdef) = td.kind {
+                            let has_droppable_fields = sdef.fields.iter().any(|f| {
+                                if let Some(GirType::Named(field_type_name)) = module.type_registry.get(f.type_id) {
+                                    droppable_names.contains(field_type_name)
+                                } else {
+                                    false
+                                }
+                            });
+                            has_droppable_fields // need to upgrade so C backend emits field drops
+                        } else {
+                            false
+                        }
+                    } else {
+                        continue; // Already Trivial or Recursive, skip
+                    }
+                } else if let TypeDefKind::Struct(ref sdef) = td.kind {
+                    sdef.fields.iter().any(|f| {
+                        if let Some(GirType::Named(field_type_name)) = module.type_registry.get(f.type_id) {
+                            droppable_names.contains(field_type_name)
+                        } else {
+                            false
+                        }
+                    })
+                } else {
+                    false
+                }
+            };
+
+            if needs_upgrade {
+                if let Some(td) = module.type_registry.get_type_def_mut(name) {
+                    if td.metadata.drop_strategy == DropStrategy::None {
+                        td.metadata.drop_strategy = DropStrategy::Recursive;
+                    }
+                    td.metadata.copy_semantics = CopySemantics::Move;
+                }
+            }
+        }
+    }
+
     // Register runtime types needed by expression lowering
+    // Str and GorgetString: register in named_types so method dispatch can find them
+    type_mapper.register_named("Str".to_string(), type_mapper.str_type);
+    type_mapper.register_named("GorgetString".to_string(), type_mapper.owned_string_type);
+
     // GorgetArray: opaque runtime array (element_size, data, len, cap)
     {
+        module.type_registry.add_type_def(TypeDef {
+            name: "GorgetArray".to_string(),
+            kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
+            metadata: TypeMetadata {
+                size: None,
+                align: None,
+                drop_strategy: DropStrategy::Trivial("gorget_array_free".to_string()),
+                copy_semantics: CopySemantics::Move,
+            },
+        });
         let array_type_id = module.type_registry.insert(GirType::Named("GorgetArray".to_string()));
         type_mapper.register_named("GorgetArray".to_string(), array_type_id);
     }
+    // GorgetMap: runtime hash-map (Dict/HashMap both map to this)
+    {
+        module.type_registry.add_type_def(TypeDef {
+            name: "GorgetMap".to_string(),
+            kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
+            metadata: TypeMetadata {
+                size: None,
+                align: None,
+                drop_strategy: DropStrategy::Trivial("gorget_map_free".to_string()),
+                copy_semantics: CopySemantics::Move,
+            },
+        });
+        let map_type_id = module.type_registry.insert(GirType::Named("GorgetMap".to_string()));
+        type_mapper.register_named("GorgetMap".to_string(), map_type_id);
+    }
+    // GorgetSet: runtime hash-set (thin wrapper over GorgetMap)
+    {
+        module.type_registry.add_type_def(TypeDef {
+            name: "GorgetSet".to_string(),
+            kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
+            metadata: TypeMetadata {
+                size: None,
+                align: None,
+                drop_strategy: DropStrategy::Trivial("gorget_set_free".to_string()),
+                copy_semantics: CopySemantics::Move,
+            },
+        });
+        let set_type_id = module.type_registry.insert(GirType::Named("GorgetSet".to_string()));
+        type_mapper.register_named("GorgetSet".to_string(), set_type_id);
+    }
+    // NOTE: Typed vector aliases (Vector__Str, etc.) are registered AFTER generic
+    // monomorphization to avoid conflicting with the generic collector's type registration.
+    // See post-monomorphization section below.
     // GorgetRange: standalone range value (start, end, inclusive)
     {
         let range_def = TypeDef {
@@ -80,7 +255,63 @@ pub fn lower_module(
     let mut generic_collector = GenericCollector::new();
     generic_collector.collect_templates(ast_module);
     generic_collector.discover_usages(ast_module);
+
+    // Pre-register collection type names BEFORE monomorphization so that
+    // monomorphize_enum can resolve inner types like Vector[int] in Option[Vector[int]].
+    for (base_name, _type_args, mangled_name, kind) in generic_collector.instances_raw() {
+        if !matches!(kind, generics::TemplateKind::Struct | generics::TemplateKind::Enum) {
+            continue;
+        }
+        let is_collection = matches!(base_name.as_str(),
+            "Vector" | "List" | "Array" | "Dict" | "HashMap" | "Set" | "HashSet");
+        if is_collection && !type_mapper.named_types.contains_key(mangled_name) {
+            let drop_fn = match base_name.as_str() {
+                "Dict" | "HashMap" => "gorget_map_free",
+                "Set" | "HashSet" => "gorget_set_free",
+                _ => "gorget_array_free",
+            };
+            module.type_registry.add_type_def(TypeDef {
+                name: mangled_name.clone(),
+                kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
+                metadata: TypeMetadata {
+                    size: None,
+                    align: None,
+                    drop_strategy: DropStrategy::Trivial(drop_fn.to_string()),
+                    copy_semantics: CopySemantics::Move,
+                },
+            });
+            let tid = module.type_registry.insert(GirType::Named(mangled_name.clone()));
+            type_mapper.register_named(mangled_name.clone(), tid);
+        }
+    }
+
     generic_collector.monomorphize_types(&mut type_mapper, &mut module.type_registry);
+
+    // Register typed vector aliases AFTER generic monomorphization so we reuse
+    // any TypeIds already created by the generic collector (e.g., Vector__Str from
+    // explicit Vector[str] usage in source code).
+    for (name, gir_name) in &[
+        ("Vector__Str", "Vector__Str"),
+        ("Vector__uint8_t", "Vector__uint8_t"),
+        ("Vector__int64_t", "Vector__int64_t"),
+    ] {
+        if !type_mapper.named_types.contains_key(*name) {
+            if !module.type_registry.has_type_def(gir_name) {
+                module.type_registry.add_type_def(TypeDef {
+                    name: gir_name.to_string(),
+                    kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
+                    metadata: TypeMetadata {
+                        size: None,
+                        align: None,
+                        drop_strategy: DropStrategy::Trivial("gorget_array_free".to_string()),
+                        copy_semantics: CopySemantics::Move,
+                    },
+                });
+            }
+            let tid = module.type_registry.insert(GirType::Named(gir_name.to_string()));
+            type_mapper.register_named(name.to_string(), tid);
+        }
+    }
 
     // Register printf as an extern (variadic)
     module.externs.push(ExternDecl {
@@ -93,6 +324,57 @@ pub fn lower_module(
     // Move type_registry into LoweringContext for the lowering phase
     let type_registry = std::mem::take(&mut module.type_registry);
     let mut ctx = LoweringContext::new(analysis, type_mapper, type_registry);
+
+    // Extract directive flags from AST
+    for item in &ast_module.items {
+        if let Item::Directive(d) = &item.node {
+            match d.name.as_str() {
+                "strip-asserts" => ctx.strip_asserts = true,
+                "overflow" if d.value.as_deref() == Some("wrap") => ctx.overflow_wrap = true,
+                _ => {}
+            }
+        }
+    }
+
+    // Register well-known stdlib constants
+    {
+        use crate::ir::instructions::Constant;
+        ctx.module_constants.insert("PI".into(), Constant::F64(std::f64::consts::PI));
+        ctx.module_constants.insert("E".into(), Constant::F64(std::f64::consts::E));
+        ctx.module_constants.insert("TAU".into(), Constant::F64(std::f64::consts::TAU));
+        ctx.module_constants.insert("INFINITY".into(), Constant::F64(f64::INFINITY));
+        ctx.module_constants.insert("NAN".into(), Constant::F64(f64::NAN));
+        ctx.module_constants.insert("INT_MAX".into(), Constant::I64(i64::MAX));
+        ctx.module_constants.insert("INT_MIN".into(), Constant::I64(i64::MIN));
+    }
+    // Scan for module-level const and meta declarations
+    for item in &ast_module.items {
+        if let Item::ConstDecl(const_def) = &item.node {
+            if let Some(val) = eval_const_expr(&const_def.value.node, &ctx.module_constants) {
+                ctx.module_constants.insert(const_def.name.node.clone(), val);
+            }
+        }
+        if let Item::MetaConst(mc) = &item.node {
+            if let Some(val) = eval_const_expr(&mc.value.node, &ctx.module_constants) {
+                ctx.module_constants.insert(mc.name.node.clone(), val);
+            }
+        }
+        // Handle meta if blocks — extract nested meta constants
+        if let Item::MetaIf(meta_if) = &item.node {
+            // Evaluate condition
+            let cond = eval_const_expr(&meta_if.condition.node, &ctx.module_constants);
+            let active = matches!(cond, Some(crate::ir::instructions::Constant::Bool(true)));
+            if active {
+                for sub_item in &meta_if.then_items {
+                    if let Item::MetaConst(mc) = &sub_item.node {
+                        if let Some(val) = eval_const_expr(&mc.value.node, &ctx.module_constants) {
+                            ctx.module_constants.insert(mc.name.node.clone(), val);
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     // P2.5: Register VTable and TraitObj types for all trait definitions
     let trait_info = traits::register_trait_types(&mut ctx, ast_module);
@@ -143,17 +425,72 @@ pub fn lower_module(
 
             let ret_type = if is_main {
                 I32_TYPE
+            } else if func.throws.is_some() {
+                // `int foo() throws str` → Result[int, str]
+                let ok_type = ctx.type_mapper.map_ast_type_mut(&func.return_type.node, &mut ctx.type_registry);
+                let err_type = ctx.type_mapper.map_ast_type_mut(&func.throws.as_ref().unwrap().node, &mut ctx.type_registry);
+                let ok_c = crate::ir::lowering::types::mangle_type_for_name(&func.return_type.node);
+                let err_c = crate::ir::lowering::types::mangle_type_for_name(&func.throws.as_ref().unwrap().node);
+                let result_name = format!("Result__{ok_c}__{err_c}");
+                if let Some(&id) = ctx.type_mapper.named_types.get(&result_name) {
+                    id
+                } else {
+                    use crate::ir::types::*;
+                    let type_def = TypeDef {
+                        name: result_name.clone(),
+                        kind: TypeDefKind::Enum(EnumDef {
+                            variants: vec![
+                                EnumVariant {
+                                    name: "Ok".to_string(),
+                                    fields: vec![StructField { name: "_0".to_string(), type_id: ok_type }],
+                                },
+                                EnumVariant {
+                                    name: "Error".to_string(),
+                                    fields: vec![StructField { name: "_0".to_string(), type_id: err_type }],
+                                },
+                            ],
+                        }),
+                        metadata: TypeMetadata::default(),
+                    };
+                    ctx.type_registry.add_type_def(type_def);
+                    let type_id = ctx.type_registry.insert(GirType::Named(result_name.clone()));
+                    ctx.type_mapper.register_named(result_name, type_id);
+                    type_id
+                }
             } else {
-                ctx.type_mapper.map_ast_type(&func.return_type.node)
+                // Use map_ast_type_mut so tuple return types get registered on the fly
+                ctx.type_mapper.map_ast_type_mut(&func.return_type.node, &mut ctx.type_registry)
             };
 
             let param_types: Vec<TypeId> = func
                 .params
                 .iter()
-                .map(|p| ctx.type_mapper.map_ast_type(&p.node.type_.node))
+                .map(|p| ctx.type_mapper.map_ast_type_mut(&p.node.type_.node, &mut ctx.type_registry))
                 .collect();
 
             ctx.fn_sigs.insert(name.clone(), (param_types, ret_type));
+
+            // Record parameter names for named-arg reordering
+            let param_names: Vec<String> = func.params.iter()
+                .map(|p| p.node.name.node.clone())
+                .collect();
+            ctx.fn_param_names.insert(name.clone(), param_names);
+
+            // Record default parameter values
+            let defaults: Vec<(usize, ast::Expr)> = func.params.iter()
+                .enumerate()
+                .filter_map(|(i, p)| {
+                    p.node.default.as_ref().map(|d| (i, d.node.clone()))
+                })
+                .collect();
+            if !defaults.is_empty() {
+                ctx.fn_defaults.insert(name.clone(), defaults);
+            }
+
+            // Record extern binding: Gorget name → C symbol
+            if let FunctionBody::Extern(c_symbol) = &func.body {
+                ctx.extern_bindings.insert(name.clone(), c_symbol.clone());
+            }
         }
     }
 
@@ -180,26 +517,155 @@ pub fn lower_module(
                     let mangled = format!("{}__{}", type_name.node, method_def.name.node);
 
                     let ret_type = ctx.type_mapper.map_ast_type(&method_def.return_type.node);
-                    // First param is self (pointer to the type)
-                    let self_type_id = ctx.type_mapper.map_ast_type(&equip.type_.node);
-                    let self_ptr_type = ctx.register_ptr_type(self_type_id);
+                    let has_self = method_def.params.first()
+                        .map(|p| p.node.name.node == "self")
+                        .unwrap_or(false);
 
-                    let mut param_types = vec![self_ptr_type];
+                    let mut param_types = Vec::new();
+                    if has_self {
+                        let self_type_id = ctx.type_mapper.map_ast_type(&equip.type_.node);
+                        let self_is_mutable = method_def.params.first()
+                            .map(|p| matches!(p.node.ownership, ast::Ownership::MutableBorrow))
+                            .unwrap_or(false);
+                        let self_ptr_type = if self_is_mutable {
+                            ctx.register_mut_ptr_type(self_type_id)
+                        } else {
+                            ctx.register_ptr_type(self_type_id)
+                        };
+                        param_types.push(self_ptr_type);
+                    }
                     for p in &method_def.params {
+                        if p.node.name.node == "self" {
+                            continue; // self handled above
+                        }
                         param_types.push(ctx.type_mapper.map_ast_type(&p.node.type_.node));
                     }
 
-                    ctx.fn_sigs.insert(mangled, (param_types, ret_type));
+                    ctx.fn_sigs.insert(mangled.clone(), (param_types, ret_type));
+
+                    // Register extern binding for equip methods (e.g., UdpSocket__local_addr → gorget_udp_local_addr)
+                    if let FunctionBody::Extern(c_symbol) = &method_def.body {
+                        ctx.extern_bindings.insert(mangled, c_symbol.clone());
+                    }
                 }
             }
         }
     }
 
-    // Register monomorphized equip method signatures
-    generic_collector.register_equip_sigs(&ctx.type_mapper, &mut ctx.type_registry, &mut ctx.fn_sigs);
+    // Register monomorphized equip method signatures (including default trait methods)
+    generic_collector.register_equip_sigs_with_defaults(
+        &ctx.type_mapper, &mut ctx.type_registry, &mut ctx.fn_sigs, Some(ast_module));
+
+    // Register built-in method signatures for Option/Result instantiations.
+    // These methods are inlined by the C backend (not real functions), but
+    // fn_sigs must know about them so the lowering creates properly-typed locals.
+    register_builtin_enum_method_sigs(&mut ctx, &generic_collector);
+    // Register built-in collection method signatures (Vector, Dict, HashMap, etc.)
+    register_collection_method_sigs(&mut ctx, &generic_collector);
 
     // P2.5: Register trait equip method signatures
     traits::register_trait_equip_sigs(&mut ctx, &trait_info, ast_module);
+
+    // Register fn_sigs for trait equip blocks with unregistered traits
+    // (built-in traits like From, Default, Equatable, Displayable, etc.)
+    traits::register_unregistered_trait_equip_sigs(&mut ctx, &trait_info, ast_module);
+
+    // Register runtime built-in method signatures (Str methods, etc.)
+    {
+        let str_type = ctx.type_mapper.str_type;
+        let owned_str_type = ctx.type_mapper.owned_string_type;
+        let array_type = ctx.type_mapper.named_types.get("GorgetArray").copied()
+            .unwrap_or(UNIT_TYPE);
+
+        // Str methods taking (self) returning various types
+        let str_self = vec![str_type]; // &self lowered as Str ptr, but sig says Str
+        let str_str = vec![str_type, str_type];
+
+        // Methods returning typed Vector (element type embedded in name)
+        let vec_str_type = ctx.type_mapper.named_types.get("Vector__Str").copied()
+            .unwrap_or(array_type);
+        let vec_u8_type = ctx.type_mapper.named_types.get("Vector__uint8_t").copied()
+            .unwrap_or(array_type);
+        let vec_i64_type = ctx.type_mapper.named_types.get("Vector__int64_t").copied()
+            .unwrap_or(array_type);
+        ctx.fn_sigs.insert("Str__bytes".to_string(), (str_self.clone(), vec_u8_type));
+        ctx.fn_sigs.insert("Str__codepoints".to_string(), (str_self.clone(), vec_i64_type));
+        ctx.fn_sigs.insert("Str__chars".to_string(), (str_self.clone(), vec_str_type));
+        ctx.fn_sigs.insert("Str__split".to_string(), (str_str.clone(), vec_str_type));
+        // Methods returning Str
+        for m in &["trim", "strip", "lstrip", "rstrip", "removeprefix", "removesuffix"] {
+            ctx.fn_sigs.insert(format!("Str__{m}"), (str_self.clone(), str_type));
+        }
+        ctx.fn_sigs.insert("Str__byte_slice".to_string(), (vec![str_type, I64_TYPE, I64_TYPE], str_type));
+        // char_at returns char (uint32_t) at the semantic level.
+        // The C backend handles the Str→uint32_t conversion via inline helper.
+        ctx.fn_sigs.insert("Str__char_at".to_string(), (vec![str_type, I64_TYPE], CHAR_TYPE));
+        // Methods returning GorgetString
+        for m in &["to_upper", "to_lower"] {
+            ctx.fn_sigs.insert(format!("Str__{m}"), (str_self.clone(), owned_str_type));
+        }
+        ctx.fn_sigs.insert("Str__replace".to_string(), (vec![str_type, str_type, str_type], owned_str_type));
+        ctx.fn_sigs.insert("Str__repeat".to_string(), (vec![str_type, I64_TYPE], owned_str_type));
+        ctx.fn_sigs.insert("Str__pad_left".to_string(), (vec![str_type, I64_TYPE, str_type], owned_str_type));
+        ctx.fn_sigs.insert("Str__pad_right".to_string(), (vec![str_type, I64_TYPE, str_type], owned_str_type));
+        // Methods returning int64_t
+        for m in &["len", "byte_len", "index_of", "count", "find"] {
+            let params = if *m == "len" || *m == "byte_len" {
+                str_self.clone()
+            } else {
+                str_str.clone()
+            };
+            ctx.fn_sigs.insert(format!("Str__{m}"), (params, I64_TYPE));
+        }
+        // Methods returning bool
+        for m in &["contains", "starts_with", "ends_with", "is_empty"] {
+            let params = if *m == "is_empty" { str_self.clone() } else { str_str.clone() };
+            ctx.fn_sigs.insert(format!("Str__{m}"), (params, BOOL_TYPE));
+        }
+        ctx.fn_sigs.insert("Str__eq".to_string(), (str_str.clone(), BOOL_TYPE));
+        ctx.fn_sigs.insert("Str__join".to_string(), (vec![str_type, array_type], owned_str_type));
+    }
+
+    // Register char builtin method signatures
+    {
+        let char_self = vec![CHAR_TYPE];
+        for m in &["is_alpha", "is_digit", "is_alphanumeric", "is_whitespace",
+                    "is_upper", "is_lower", "is_ascii", "is_hex_digit"] {
+            ctx.fn_sigs.insert(format!("char__{m}"), (char_self.clone(), BOOL_TYPE));
+        }
+        ctx.fn_sigs.insert("char__to_upper".to_string(), (char_self.clone(), CHAR_TYPE));
+        ctx.fn_sigs.insert("char__to_lower".to_string(), (char_self.clone(), CHAR_TYPE));
+    }
+
+    // Register primitive static method signatures (int.parse, int.default, etc.)
+    {
+        let str_type = ctx.type_mapper.str_type;
+        // Create Option TypeIds for parse results WITHOUT registering in named_types
+        // (registering in named_types would cause infer_collection_method_return_type
+        // to find these types when looking up Vector.get etc., even when the
+        // Option type definitions haven't been emitted in C)
+        let opt_int_type = ctx.type_mapper.named_types.get("Option__int64_t").copied()
+            .unwrap_or_else(|| {
+                module.type_registry.insert(GirType::Named("Option__int64_t".to_string()))
+            });
+        let opt_float_type = ctx.type_mapper.named_types.get("Option__double").copied()
+            .unwrap_or_else(|| {
+                module.type_registry.insert(GirType::Named("Option__double".to_string()))
+            });
+        let opt_bool_type = ctx.type_mapper.named_types.get("Option__bool").copied()
+            .unwrap_or_else(|| {
+                module.type_registry.insert(GirType::Named("Option__bool".to_string()))
+            });
+        // int.parse(str) → Option[int], int.default() → int
+        ctx.fn_sigs.insert("int64_t__parse".to_string(), (vec![str_type], opt_int_type));
+        ctx.fn_sigs.insert("int64_t__default".to_string(), (vec![], I64_TYPE));
+        // float.parse(str) → Option[float], float.default() → float
+        ctx.fn_sigs.insert("double__parse".to_string(), (vec![str_type], opt_float_type));
+        ctx.fn_sigs.insert("double__default".to_string(), (vec![], F64_TYPE));
+        // bool.parse(str) → Option[bool], bool.default() → bool
+        ctx.fn_sigs.insert("bool__parse".to_string(), (vec![str_type], opt_bool_type));
+        ctx.fn_sigs.insert("bool__default".to_string(), (vec![], BOOL_TYPE));
+    }
 
     // Lower all non-generic functions
     for item in &ast_module.items {
@@ -256,20 +722,31 @@ pub fn lower_module(
         if let Some(equip_blocks) = generic_collector.get_equip_templates(base_name) {
             let equip_blocks = equip_blocks.clone();
             for equip in &equip_blocks {
-                functions::lower_generic_equip_methods(
+                functions::lower_generic_equip_methods_with_defaults(
                     &mut ctx,
                     &mut module,
                     equip,
                     type_args,
                     mangled_type_name,
+                    Some(ast_module),
                 );
             }
         }
     }
 
+    // Lower test items: each test becomes a void function, then generate test runner main
+    let has_tests = ast_module.items.iter().any(|item| matches!(&item.node, Item::Test(_)));
+    let has_main = ast_module.items.iter().any(|item| matches!(&item.node, Item::Function(f) if f.name.node == "main"));
+    if has_tests && !has_main {
+        lower_test_items(&mut ctx, &mut module, ast_module);
+    }
+
     // P2.5: Lower trait equip methods and emit vtable globals
     traits::lower_trait_equip_methods(&mut ctx, &mut module, &trait_info, ast_module);
     traits::emit_vtable_globals(&mut module, &trait_info, ast_module);
+
+    // Lower trait equip blocks with unregistered traits (From, Default, Equatable, etc.)
+    traits::lower_unregistered_trait_equip_methods(&mut ctx, &mut module, &trait_info, ast_module);
 
     // P2.4: Emit lifted closure call functions
     let closures = std::mem::take(&mut ctx.closures);
@@ -281,6 +758,11 @@ pub fn lower_module(
     // Move type_registry back to module for validation
     module.type_registry = std::mem::take(&mut ctx.type_registry);
 
+    // Auto-register all CallExtern targets as externs if not already known.
+    // This handles runtime functions (gorget_throw, gorget_array_new, etc.)
+    // without needing to enumerate each one manually.
+    auto_register_externs(&mut module);
+
     // Validate the resulting module
     let errors = crate::ir::validate::validate(&module);
     if !errors.is_empty() {
@@ -291,7 +773,305 @@ pub fn lower_module(
         panic!("GIR module failed validation ({} errors)", errors.len());
     }
 
+    // Propagate directive flags to module
+    module.overflow_wrap = ctx.overflow_wrap;
+
     module
+}
+
+/// Lower test items into test functions and generate a test runner main().
+fn lower_test_items(
+    ctx: &mut LoweringContext,
+    module: &mut Module,
+    ast_module: &ast::Module,
+) {
+    use crate::ir::builder::FunctionBuilder;
+
+    let mut test_fn_names: Vec<(String, String)> = Vec::new(); // (fn_name, test_name)
+
+    // Lower each test body as a standalone void function
+    for (idx, item) in ast_module.items.iter().enumerate() {
+        if let Item::Test(test_def) = &item.node {
+            let fn_name = format!("__test_{idx}");
+            let test_name = test_def.name.node.clone();
+
+            let mut builder = FunctionBuilder::new(&fn_name, UNIT_TYPE, &[]);
+            ctx.clear_locals();
+
+            ctx.drops.push_scope(drops::DropScopeKind::Function);
+            stmts::lower_block(ctx, &mut builder, &test_def.body);
+
+            let last_block_idx = builder.current_block.0 as usize;
+            if builder.blocks[last_block_idx].terminator.is_none() {
+                ctx.drops.pop_scope(&mut builder, &ctx.type_registry);
+                builder.ret(FunctionBuilder::const_unit());
+            } else {
+                ctx.drops.pop_scope(&mut builder, &ctx.type_registry);
+            }
+
+            module.functions.push(builder.build());
+            test_fn_names.push((fn_name, test_name));
+        }
+    }
+
+    // Store test function names in module metadata for C backend to generate test runner main.
+    for (fn_name, test_name) in test_fn_names {
+        module.test_fns.push((fn_name, test_name));
+    }
+}
+
+/// Scan all functions for `CallExtern` and `Invoke` targets and auto-register
+/// any that aren't already declared as functions or externs.
+fn auto_register_externs(module: &mut Module) {
+    use crate::ir::instructions::{Instruction, Terminator};
+    use rustc_hash::FxHashSet;
+
+    // Collect known callables
+    let mut known: FxHashSet<String> = FxHashSet::default();
+    for f in &module.functions {
+        known.insert(f.name.clone());
+    }
+    for e in &module.externs {
+        known.insert(e.name.clone());
+    }
+
+    // Collect all call targets that are missing
+    let mut missing: FxHashSet<String> = FxHashSet::default();
+    for func in &module.functions {
+        // Build a set of parameter local name hints for this function
+        // (Callable params get lowered as void* locals with the param name)
+        let param_names: FxHashSet<&str> = func.locals.iter()
+            .filter_map(|l| l.name_hint.as_deref())
+            .collect();
+        for block in &func.blocks {
+            for inst in &block.instructions {
+                match inst {
+                    Instruction::CallExtern { func: name, .. }
+                    | Instruction::Call { func: name, .. } => {
+                        if !known.contains(name.as_str())
+                            && !param_names.contains(name.as_str())
+                        {
+                            missing.insert(name.clone());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(ref term) = block.terminator {
+                if let Terminator::Invoke { func: name, .. } = term {
+                    if !known.contains(name.as_str())
+                        && !param_names.contains(name.as_str())
+                    {
+                        missing.insert(name.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    // Register each missing target as a variadic extern (safe fallback)
+    for name in missing {
+        module.externs.push(ExternDecl {
+            name,
+            params: vec![],
+            return_type: I32_TYPE,
+            is_variadic: true,
+        });
+    }
+}
+
+/// Register fn_sigs for built-in Option/Result methods per discovered instantiation.
+/// These methods are inlined by the C backend as statement expressions, but the
+/// lowering needs their signatures to create properly-typed locals.
+fn register_builtin_enum_method_sigs(
+    ctx: &mut LoweringContext,
+    collector: &GenericCollector,
+) {
+    use crate::ir::types::TypeDefKind;
+
+    // Collect signatures first (to avoid borrow conflicts on ctx)
+    let mut sigs_to_add: Vec<(String, Vec<TypeId>, TypeId)> = Vec::new();
+
+    for (base_name, mangled_name) in collector.type_instances() {
+        let type_def = ctx.type_registry.get_type_def(mangled_name);
+        let type_def = match type_def {
+            Some(td) => td.clone(),
+            None => continue,
+        };
+        let variants = match &type_def.kind {
+            TypeDefKind::Enum(e) => e.variants.clone(),
+            _ => continue,
+        };
+
+        let self_type = ctx.type_mapper.lookup_named(mangled_name).unwrap_or(UNIT_TYPE);
+        let self_ptr = ctx.register_ptr_type(self_type);
+
+        if base_name == "Option" {
+            let inner_type = variants.iter()
+                .find(|v| v.name == "Some")
+                .and_then(|v| v.fields.first())
+                .map(|f| f.type_id)
+                .unwrap_or(I64_TYPE);
+
+            let self_param = vec![self_ptr];
+            sigs_to_add.push((format!("{mangled_name}__unwrap"), self_param.clone(), inner_type));
+            sigs_to_add.push((format!("{mangled_name}__expect"), vec![self_ptr, ctx.type_mapper.str_type], inner_type));
+            sigs_to_add.push((format!("{mangled_name}__unwrap_or"), vec![self_ptr, inner_type], inner_type));
+            sigs_to_add.push((format!("{mangled_name}__is_some"), self_param.clone(), BOOL_TYPE));
+            sigs_to_add.push((format!("{mangled_name}__is_none"), self_param, BOOL_TYPE));
+        } else if base_name == "Result" {
+            let ok_type = variants.iter()
+                .find(|v| v.name == "Ok")
+                .and_then(|v| v.fields.first())
+                .map(|f| f.type_id)
+                .unwrap_or(I64_TYPE);
+
+            let self_param = vec![self_ptr];
+            sigs_to_add.push((format!("{mangled_name}__unwrap"), self_param.clone(), ok_type));
+            sigs_to_add.push((format!("{mangled_name}__expect"), vec![self_ptr, ctx.type_mapper.str_type], ok_type));
+            sigs_to_add.push((format!("{mangled_name}__unwrap_or"), vec![self_ptr, ok_type], ok_type));
+            sigs_to_add.push((format!("{mangled_name}__is_ok"), self_param.clone(), BOOL_TYPE));
+            sigs_to_add.push((format!("{mangled_name}__is_err"), self_param, BOOL_TYPE));
+        }
+    }
+
+    for (name, params, ret) in sigs_to_add {
+        ctx.fn_sigs.insert(name, (params, ret));
+    }
+}
+
+/// Register fn_sigs for built-in collection methods (Vector, Dict, HashMap, etc.)
+fn register_collection_method_sigs(
+    ctx: &mut LoweringContext,
+    collector: &GenericCollector,
+) {
+    use crate::ir::types::TypeDefKind;
+
+    let array_type = ctx.type_mapper.named_types.get("GorgetArray").copied()
+        .unwrap_or(UNIT_TYPE);
+
+    for (base_name, mangled_name) in collector.type_instances() {
+        let self_type = ctx.type_mapper.lookup_named(mangled_name).unwrap_or(UNIT_TYPE);
+        let self_ptr = ctx.register_ptr_type(self_type);
+
+        // Get element type from the struct's first generic field
+        let elem_type = ctx.type_registry.get_type_def(mangled_name)
+            .and_then(|td| match &td.kind {
+                TypeDefKind::Struct(s) => s.fields.first().map(|f| f.type_id),
+                _ => None,
+            })
+            .unwrap_or(I64_TYPE);
+
+        match base_name {
+            "Vector" => {
+                let sigs = vec![
+                    (format!("{mangled_name}__push"), vec![self_ptr, elem_type], UNIT_TYPE),
+                    (format!("{mangled_name}__pop"), vec![self_ptr], elem_type),
+                    (format!("{mangled_name}__get"), vec![self_ptr, I64_TYPE], elem_type),
+                    (format!("{mangled_name}__set"), vec![self_ptr, I64_TYPE, elem_type], UNIT_TYPE),
+                    (format!("{mangled_name}__len"), vec![self_ptr], I64_TYPE),
+                    (format!("{mangled_name}__contains"), vec![self_ptr, elem_type], BOOL_TYPE),
+                    (format!("{mangled_name}__remove"), vec![self_ptr, I64_TYPE], elem_type),
+                    (format!("{mangled_name}__insert"), vec![self_ptr, I64_TYPE, elem_type], UNIT_TYPE),
+                    (format!("{mangled_name}__clear"), vec![self_ptr], UNIT_TYPE),
+                    (format!("{mangled_name}__clone"), vec![self_ptr], array_type),
+                    (format!("{mangled_name}__iter"), vec![self_ptr], array_type),
+                ];
+                for (name, params, ret) in sigs {
+                    ctx.fn_sigs.insert(name, (params, ret));
+                }
+            }
+            "Dict" | "HashMap" => {
+                // Dict/HashMap have key and value types
+                // (GorgetDict/GorgetMap are opaque C types, not struct-based in GIR)
+                let sigs = vec![
+                    (format!("{mangled_name}__len"), vec![self_ptr], I64_TYPE),
+                    (format!("{mangled_name}__contains"), vec![self_ptr, I64_TYPE], BOOL_TYPE),
+                    (format!("{mangled_name}__clear"), vec![self_ptr], UNIT_TYPE),
+                ];
+                for (name, params, ret) in sigs {
+                    ctx.fn_sigs.insert(name, (params, ret));
+                }
+            }
+            "Set" | "HashSet" => {
+                let sigs = vec![
+                    (format!("{mangled_name}__add"), vec![self_ptr, elem_type], UNIT_TYPE),
+                    (format!("{mangled_name}__contains"), vec![self_ptr, elem_type], BOOL_TYPE),
+                    (format!("{mangled_name}__remove"), vec![self_ptr, elem_type], BOOL_TYPE),
+                    (format!("{mangled_name}__len"), vec![self_ptr], I64_TYPE),
+                    (format!("{mangled_name}__clear"), vec![self_ptr], UNIT_TYPE),
+                ];
+                for (name, params, ret) in sigs {
+                    ctx.fn_sigs.insert(name, (params, ret));
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Evaluate a compile-time constant expression (for `const` and `meta` declarations).
+fn eval_const_expr(
+    expr: &ast::Expr,
+    known: &rustc_hash::FxHashMap<String, crate::ir::instructions::Constant>,
+) -> Option<crate::ir::instructions::Constant> {
+    use crate::ir::instructions::Constant;
+    use crate::parser::ast::{BinaryOp, Expr};
+
+    match expr {
+        Expr::IntLiteral(v) => Some(Constant::I64(*v)),
+        Expr::FloatLiteral(v) => Some(Constant::F64(*v)),
+        Expr::BoolLiteral(v) => Some(Constant::Bool(*v)),
+        Expr::StringLiteral(lit) => {
+            // Simple non-interpolated string
+            use crate::lexer::token::StringSegment;
+            if lit.segments.len() == 1 {
+                if let StringSegment::Literal(s) = &lit.segments[0] {
+                    return Some(Constant::Str(s.clone()));
+                }
+            }
+            None
+        }
+        Expr::Identifier(name) => known.get(name).cloned(),
+        Expr::BinaryOp { left, op, right } => {
+            let l = eval_const_expr(&left.node, known)?;
+            let r = eval_const_expr(&right.node, known)?;
+            match (l, r) {
+                (Constant::I64(a), Constant::I64(b)) => match op {
+                    BinaryOp::Add => Some(Constant::I64(a.wrapping_add(b))),
+                    BinaryOp::Sub => Some(Constant::I64(a.wrapping_sub(b))),
+                    BinaryOp::Mul => Some(Constant::I64(a.wrapping_mul(b))),
+                    BinaryOp::Div if b != 0 => Some(Constant::I64(a / b)),
+                    BinaryOp::Mod if b != 0 => Some(Constant::I64(a % b)),
+                    BinaryOp::Gt => Some(Constant::Bool(a > b)),
+                    BinaryOp::Lt => Some(Constant::Bool(a < b)),
+                    BinaryOp::GtEq => Some(Constant::Bool(a >= b)),
+                    BinaryOp::LtEq => Some(Constant::Bool(a <= b)),
+                    BinaryOp::Eq => Some(Constant::Bool(a == b)),
+                    BinaryOp::Neq => Some(Constant::Bool(a != b)),
+                    _ => None,
+                },
+                (Constant::F64(a), Constant::F64(b)) => match op {
+                    BinaryOp::Add => Some(Constant::F64(a + b)),
+                    BinaryOp::Sub => Some(Constant::F64(a - b)),
+                    BinaryOp::Mul => Some(Constant::F64(a * b)),
+                    BinaryOp::Div if b != 0.0 => Some(Constant::F64(a / b)),
+                    _ => None,
+                },
+                _ => None,
+            }
+        }
+        Expr::UnaryOp { op, operand } => {
+            let val = eval_const_expr(&operand.node, known)?;
+            match (op, val) {
+                (ast::UnaryOp::Neg, Constant::I64(v)) => Some(Constant::I64(-v)),
+                (ast::UnaryOp::Neg, Constant::F64(v)) => Some(Constant::F64(-v)),
+                (ast::UnaryOp::Not, Constant::Bool(v)) => Some(Constant::Bool(!v)),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
 }
 
 /// Create an empty AnalysisResult for testing by parsing an empty module.

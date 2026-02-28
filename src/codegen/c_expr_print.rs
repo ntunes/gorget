@@ -594,6 +594,20 @@ impl CodegenContext<'_> {
                 _ => None,
             };
         }
+        // Option methods — is_some/is_none always return bool
+        if receiver_type.starts_with("Option__") {
+            return match method {
+                "is_some" | "is_none" => Some(self.types.bool_id),
+                _ => None,
+            };
+        }
+        // Result methods — is_ok/is_err always return bool
+        if receiver_type.starts_with("Result__") {
+            return match method {
+                "is_ok" | "is_err" => Some(self.types.bool_id),
+                _ => None,
+            };
+        }
         match (receiver_type, method) {
             ("Str" | "const char*", "len" | "hash" | "count" | "byte_len") => Some(self.types.int_id),
             ("Str" | "const char*", "contains" | "starts_with" | "ends_with" | "is_empty") => {

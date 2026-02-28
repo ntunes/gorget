@@ -3,7 +3,7 @@
 //! Generates VTable struct types, TraitObj fat-pointer types, static vtable
 //! instances, and trait implementation methods.
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::ir::builder::FunctionBuilder;
 use crate::ir::instructions::*;
@@ -12,6 +12,7 @@ use crate::ir::{Global, GlobalInit};
 use crate::parser::ast::{self, FunctionBody, Item, Ownership, TraitItem, Type};
 
 use super::context::LoweringContext;
+use super::drops::DropScopeKind;
 use super::exprs::lower_expr;
 use super::stmts::lower_block;
 
@@ -210,10 +211,13 @@ pub fn register_trait_equip_sigs(
                 None => continue,
             };
 
+            let mut implemented_methods: Vec<String> = Vec::new();
+
             for method in &equip.items {
                 let method_name = &method.node.name.node;
                 let mangled =
                     format!("{trait_name}_for_{type_name}__{method_name}");
+                implemented_methods.push(method_name.to_string());
 
                 if let Some(vtable_method) = vtable_info
                     .methods
@@ -227,6 +231,76 @@ pub fn register_trait_equip_sigs(
                             vtable_method.return_type,
                         ),
                     );
+                } else {
+                    // Method not in this trait's vtable — likely inherited from parent trait.
+                    // Register as Type__method for direct dispatch.
+                    let method_def = &method.node;
+                    let has_self = method_def.params.first()
+                        .map(|p| p.node.name.node == "self")
+                        .unwrap_or(false);
+                    let ret_type = ctx.type_mapper.map_ast_type(&method_def.return_type.node);
+                    let mut param_types = Vec::new();
+                    if has_self {
+                        let self_type_id = ctx.type_mapper.map_ast_type(&equip.type_.node);
+                        let self_ptr_type = ctx.register_ptr_type(self_type_id);
+                        param_types.push(self_ptr_type);
+                    }
+                    for p in &method_def.params {
+                        if p.node.name.node == "self" { continue; }
+                        param_types.push(ctx.type_mapper.map_ast_type(&p.node.type_.node));
+                    }
+                    let direct_name = format!("{type_name}__{method_name}");
+                    ctx.fn_sigs.insert(direct_name, (param_types, ret_type));
+                }
+            }
+
+            // Register sigs for trait default methods NOT overridden in the equip block
+            for vtable_method in &vtable_info.methods {
+                if implemented_methods.contains(&vtable_method.name) {
+                    continue;
+                }
+                let mangled = format!(
+                    "{trait_name}_for_{type_name}__{}",
+                    vtable_method.name
+                );
+                ctx.fn_sigs.insert(
+                    mangled,
+                    (
+                        vtable_method.param_types.clone(),
+                        vtable_method.return_type,
+                    ),
+                );
+            }
+
+            // Register sigs for parent trait default methods as Type__method
+            if let Some(trait_def) = find_trait_def(ast_module, &trait_name) {
+                for parent in &trait_def.extends {
+                    let parent_name = parent.node.name.node.clone();
+                    if let Some(parent_def) = find_trait_def(ast_module, &parent_name) {
+                        for trait_item in &parent_def.items {
+                            if let TraitItem::Method(method_def) = &trait_item.node {
+                                let method_name = &method_def.name.node;
+                                if implemented_methods.contains(method_name) {
+                                    continue;
+                                }
+                                match &method_def.body {
+                                    FunctionBody::Declaration | FunctionBody::Extern(_) => continue,
+                                    _ => {}
+                                }
+                                // Register as Type__method for direct dispatch
+                                let direct_name = format!("{type_name}__{method_name}");
+                                let ret_type = ctx.type_mapper.map_ast_type(&method_def.return_type.node);
+                                let self_type_id = ctx.type_mapper.map_ast_type(&equip.type_.node);
+                                let self_ptr_type = ctx.register_ptr_type(self_type_id);
+                                let mut param_types = vec![self_ptr_type];
+                                for p in &method_def.params {
+                                    if p.node.name.node == "self" { continue; }
+                                    param_types.push(ctx.type_mapper.map_ast_type(&p.node.type_.node));
+                                }
+                                ctx.fn_sigs.insert(direct_name, (param_types, ret_type));
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -270,11 +344,16 @@ pub fn lower_trait_equip_methods(
             let concrete_mut_ptr_type =
                 ctx.register_mut_ptr_type(concrete_type_id);
 
+            // Track which methods are explicitly implemented in the equip block
+            let mut implemented_methods: Vec<String> = Vec::new();
+
             for method in &equip.items {
                 let method_def = &method.node;
                 let method_name = &method_def.name.node;
                 let mangled =
                     format!("{trait_name}_for_{type_name}__{method_name}");
+
+                implemented_methods.push(method_name.clone());
 
                 let vtable_method = match vtable_info
                     .methods
@@ -282,89 +361,192 @@ pub fn lower_trait_equip_methods(
                     .find(|m| m.name == *method_name)
                 {
                     Some(m) => m,
-                    None => continue,
-                };
-
-                let return_type = vtable_method.return_type;
-
-                // Build parameter list: void* self + other params
-                let mut params: Vec<(TypeId, Option<&str>)> =
-                    vec![(vtable_method.param_types[0], Some("self_void"))];
-                for p in &method_def.params {
-                    if p.node.name.node == "self" {
+                    None => {
+                        // Not in vtable — inherited from parent trait.
+                        // Lower as a regular Type__method equip method.
+                        super::functions::lower_equip_method(
+                            ctx,
+                            module,
+                            method_def,
+                            &type_name,
+                            &equip.type_.node,
+                        );
                         continue;
                     }
-                    let gir_type =
-                        ctx.type_mapper.map_ast_type(&p.node.type_.node);
-                    params.push((gir_type, Some(p.node.name.node.as_str())));
-                }
+                };
 
-                let mut builder =
-                    FunctionBuilder::new(mangled, return_type, &params);
-                ctx.clear_locals();
-
-                // Register self_void as local _1
-                ctx.register_local(
-                    "self_void",
-                    LocalId(1),
-                    vtable_method.param_types[0],
+                lower_trait_method_body(
+                    ctx, module, &mangled, method_def, vtable_method,
+                    concrete_ptr_type, concrete_mut_ptr_type,
                 );
+            }
 
-                // Cast void* self to concrete type pointer
-                let cast_type = if vtable_method.self_is_mutable {
-                    concrete_mut_ptr_type
-                } else {
-                    concrete_ptr_type
-                };
-                let self_cast = builder
-                    .ptr_cast(cast_type, FunctionBuilder::copy(LocalId(1)));
-                ctx.register_local("self", self_cast, cast_type);
-
-                // Register other params
-                let mut param_idx = 2u32;
-                for p in &method_def.params {
-                    if p.node.name.node == "self" {
-                        continue;
-                    }
-                    let gir_type =
-                        ctx.type_mapper.map_ast_type(&p.node.type_.node);
-                    ctx.register_local(
-                        &p.node.name.node,
-                        LocalId(param_idx),
-                        gir_type,
-                    );
-                    param_idx += 1;
-                }
-
-                // Lower the body
-                match &method_def.body {
-                    FunctionBody::Block(block) => {
-                        lower_block(ctx, &mut builder, block);
-
-                        let last_block_idx = builder.current_block.0 as usize;
-                        if builder.blocks[last_block_idx].terminator.is_none() {
-                            if return_type == UNIT_TYPE {
-                                builder.ret(FunctionBuilder::const_unit());
-                            } else {
-                                builder
-                                    .ret(FunctionBuilder::copy(LocalId(0)));
-                            }
-                        }
-                    }
-                    FunctionBody::Expression(expr) => {
-                        let operand = lower_expr(ctx, &mut builder, expr);
-                        builder.assign(Place::local(LocalId(0)), operand);
-                        builder.ret(FunctionBuilder::copy(LocalId(0)));
-                    }
-                    FunctionBody::Declaration | FunctionBody::Extern(_) => {
-                        continue;
+            // Emit default implementations for methods NOT in the equip block
+            // Find the trait definition in the AST
+            if let Some(trait_def) = find_trait_def(ast_module, &trait_name) {
+                emit_default_methods_from_trait(
+                    ctx, module, trait_def, &type_name, &equip.type_.node,
+                    &implemented_methods, vtable_info,
+                    concrete_ptr_type, concrete_mut_ptr_type,
+                );
+                // Also scan parent traits for default methods
+                for parent in &trait_def.extends {
+                    let parent_name = parent.node.name.node.clone();
+                    if let Some(parent_def) = find_trait_def(ast_module, &parent_name) {
+                        emit_default_methods_from_trait(
+                            ctx, module, parent_def, &type_name, &equip.type_.node,
+                            &implemented_methods, vtable_info,
+                            concrete_ptr_type, concrete_mut_ptr_type,
+                        );
                     }
                 }
-
-                module.functions.push(builder.build());
             }
         }
     }
+}
+
+/// Emit default method implementations from a trait definition for a concrete type.
+/// Methods already in `implemented_methods` are skipped. If the method is in the vtable,
+/// it's emitted with trait-mangled name. Otherwise it's emitted as Type__method.
+fn emit_default_methods_from_trait(
+    ctx: &mut LoweringContext,
+    module: &mut crate::ir::Module,
+    trait_def: &ast::TraitDef,
+    type_name: &str,
+    equipped_type: &ast::Type,
+    implemented_methods: &[String],
+    vtable_info: &TraitVTableInfo,
+    concrete_ptr_type: TypeId,
+    concrete_mut_ptr_type: TypeId,
+) {
+    use crate::parser::ast::TraitItem;
+    for trait_item in &trait_def.items {
+        if let TraitItem::Method(default_method) = &trait_item.node {
+            let method_name = &default_method.name.node;
+            if implemented_methods.contains(method_name) {
+                continue; // Already overridden
+            }
+            // Only emit if the method has a body (default implementation)
+            match &default_method.body {
+                FunctionBody::Declaration | FunctionBody::Extern(_) => continue,
+                FunctionBody::Block(_) | FunctionBody::Expression(_) => {}
+            }
+            if let Some(vtable_method) = vtable_info.methods.iter().find(|m| m.name == *method_name) {
+                let trait_name = &trait_def.name.node;
+                let mangled = format!("{trait_name}_for_{type_name}__{method_name}");
+                lower_trait_method_body(
+                    ctx, module, &mangled, default_method, vtable_method,
+                    concrete_ptr_type, concrete_mut_ptr_type,
+                );
+            } else {
+                // Not in vtable (inherited from parent) — emit as Type__method
+                super::functions::lower_equip_method(
+                    ctx, module, default_method, type_name, equipped_type,
+                );
+            }
+        }
+    }
+}
+
+/// Find a trait definition by name in the AST module.
+fn find_trait_def<'a>(ast_module: &'a ast::Module, name: &str) -> Option<&'a ast::TraitDef> {
+    for item in &ast_module.items {
+        if let Item::Trait(trait_def) = &item.node {
+            if trait_def.name.node == name {
+                return Some(trait_def);
+            }
+        }
+    }
+    None
+}
+
+/// Lower a single trait method body into a GIR function.
+fn lower_trait_method_body(
+    ctx: &mut LoweringContext,
+    module: &mut crate::ir::Module,
+    mangled: &str,
+    method_def: &ast::FunctionDef,
+    vtable_method: &VTableMethod,
+    concrete_ptr_type: TypeId,
+    concrete_mut_ptr_type: TypeId,
+) {
+    let return_type = vtable_method.return_type;
+
+    // Build parameter list: void* self + other params
+    let mut params: Vec<(TypeId, Option<&str>)> =
+        vec![(vtable_method.param_types[0], Some("self_void"))];
+    for p in &method_def.params {
+        if p.node.name.node == "self" {
+            continue;
+        }
+        let gir_type =
+            ctx.type_mapper.map_ast_type(&p.node.type_.node);
+        params.push((gir_type, Some(p.node.name.node.as_str())));
+    }
+
+    let mut builder =
+        FunctionBuilder::new(mangled.to_string(), return_type, &params);
+    ctx.clear_locals();
+
+    // Register self_void as local _1
+    ctx.register_local(
+        "self_void",
+        LocalId(1),
+        vtable_method.param_types[0],
+    );
+
+    // Cast void* self to concrete type pointer
+    let cast_type = if vtable_method.self_is_mutable {
+        concrete_mut_ptr_type
+    } else {
+        concrete_ptr_type
+    };
+    let self_cast = builder
+        .ptr_cast(cast_type, FunctionBuilder::copy(LocalId(1)));
+    ctx.register_local("self", self_cast, cast_type);
+
+    // Register other params
+    let mut param_idx = 2u32;
+    for p in &method_def.params {
+        if p.node.name.node == "self" {
+            continue;
+        }
+        let gir_type =
+            ctx.type_mapper.map_ast_type(&p.node.type_.node);
+        ctx.register_local(
+            &p.node.name.node,
+            LocalId(param_idx),
+            gir_type,
+        );
+        param_idx += 1;
+    }
+
+    // Lower the body
+    match &method_def.body {
+        FunctionBody::Block(block) => {
+            lower_block(ctx, &mut builder, block);
+
+            let last_block_idx = builder.current_block.0 as usize;
+            if builder.blocks[last_block_idx].terminator.is_none() {
+                if return_type == UNIT_TYPE {
+                    builder.ret(FunctionBuilder::const_unit());
+                } else {
+                    builder
+                        .ret(FunctionBuilder::copy(LocalId(0)));
+                }
+            }
+        }
+        FunctionBody::Expression(expr) => {
+            let operand = lower_expr(ctx, &mut builder, expr);
+            builder.assign(Place::local(LocalId(0)), operand);
+            builder.ret(FunctionBuilder::copy(LocalId(0)));
+        }
+        FunctionBody::Declaration | FunctionBody::Extern(_) => {
+            return;
+        }
+    }
+
+    module.functions.push(builder.build());
 }
 
 /// Generate vtable global constants for all trait equip blocks.
@@ -425,8 +607,337 @@ pub fn emit_vtable_globals(
     }
 }
 
+/// Register fn_sigs for trait equip blocks whose trait is not in `trait_info`.
+///
+/// These are built-in traits (From, Default, Equatable, Displayable, etc.) that
+/// are not defined as `trait` items in the module AST. Uses fully mangled names
+/// like `From__double_for_Celsius__from` or `Default_for_Point__default`.
+pub fn register_unregistered_trait_equip_sigs(
+    ctx: &mut LoweringContext,
+    trait_info: &FxHashMap<String, TraitVTableInfo>,
+    ast_module: &ast::Module,
+) {
+    for item in &ast_module.items {
+        if let Item::Equip(equip) = &item.node {
+            let trait_name = match &equip.trait_ {
+                Some(t) => extract_trait_name(&t.trait_name.node),
+                None => continue,
+            };
+            if trait_name.is_empty() || equip.generic_params.is_some() {
+                continue;
+            }
+            // Only handle traits NOT already in trait_info
+            if trait_info.contains_key(&trait_name) {
+                continue;
+            }
+            let type_name = match extract_type_name(&equip.type_.node) {
+                Some(n) => n,
+                None => continue,
+            };
+
+            let trait_type = &equip.trait_.as_ref().unwrap().trait_name.node;
+
+            for method in &equip.items {
+                let method_def = &method.node;
+                let ret_type =
+                    ctx.type_mapper.map_ast_type(&method_def.return_type.node);
+
+                let has_self = method_def
+                    .params
+                    .first()
+                    .map(|p| p.node.name.node == "self")
+                    .unwrap_or(false);
+
+                let mut param_types = Vec::new();
+                if has_self {
+                    let self_type_id =
+                        ctx.type_mapper.map_ast_type(&equip.type_.node);
+                    let self_is_mutable = method_def
+                        .params
+                        .first()
+                        .map(|p| {
+                            p.node.name.node == "self"
+                                && matches!(
+                                    p.node.ownership,
+                                    Ownership::MutableBorrow
+                                )
+                        })
+                        .unwrap_or(false);
+                    let self_ptr_type = if self_is_mutable {
+                        ctx.register_mut_ptr_type(self_type_id)
+                    } else {
+                        ctx.register_ptr_type(self_type_id)
+                    };
+                    param_types.push(self_ptr_type);
+                }
+                for p in &method_def.params {
+                    if p.node.name.node == "self" {
+                        continue;
+                    }
+                    param_types.push(
+                        ctx.type_mapper.map_ast_type(&p.node.type_.node),
+                    );
+                }
+
+                if has_self {
+                    // Instance methods: use Type__method name (same as regular equip)
+                    let mangled = format!(
+                        "{type_name}__{}",
+                        method_def.name.node
+                    );
+                    ctx.fn_sigs
+                        .insert(mangled, (param_types, ret_type));
+                } else {
+                    // Static methods: use Trait_for_Type__method to avoid conflicts
+                    let mangled = mangle_trait_equip_name(
+                        trait_type,
+                        &type_name,
+                        &method_def.name.node,
+                        ctx,
+                    );
+                    ctx.fn_sigs
+                        .insert(mangled, (param_types, ret_type));
+                }
+            }
+        }
+    }
+}
+
+/// Lower trait equip blocks whose trait is not in `trait_info`.
+///
+/// Uses fully-mangled names (e.g. `From__double_for_Celsius__from`) to avoid
+/// conflicts when a type has multiple trait impls with the same method name.
+pub fn lower_unregistered_trait_equip_methods(
+    ctx: &mut LoweringContext,
+    module: &mut crate::ir::Module,
+    trait_info: &FxHashMap<String, TraitVTableInfo>,
+    ast_module: &ast::Module,
+) {
+    for item in &ast_module.items {
+        if let Item::Equip(equip) = &item.node {
+            let trait_name = match &equip.trait_ {
+                Some(t) => extract_trait_name(&t.trait_name.node),
+                None => continue,
+            };
+            if trait_name.is_empty() || equip.generic_params.is_some() {
+                continue;
+            }
+            if trait_info.contains_key(&trait_name) {
+                continue;
+            }
+            let type_name = match extract_type_name(&equip.type_.node) {
+                Some(n) => n,
+                None => continue,
+            };
+
+            let trait_type =
+                &equip.trait_.as_ref().unwrap().trait_name.node;
+
+            for method in &equip.items {
+                let has_self = method
+                    .node
+                    .params
+                    .first()
+                    .map(|p| p.node.name.node == "self")
+                    .unwrap_or(false);
+
+                if has_self {
+                    // Instance method — use Type__method name (same as regular equip)
+                    super::functions::lower_equip_method(
+                        ctx,
+                        module,
+                        &method.node,
+                        &type_name,
+                        &equip.type_.node,
+                    );
+                } else {
+                    // Static method — use trait-mangled name for overload safety
+                    let mangled = mangle_trait_equip_name(
+                        trait_type,
+                        &type_name,
+                        &method.node.name.node,
+                        ctx,
+                    );
+                    lower_static_trait_method(
+                        ctx, module, &method.node, &mangled,
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Lower an instance trait method (with `self`) using a concrete type pointer.
+///
+/// Like `lower_equip_method` but uses the trait-mangled name.
+fn lower_instance_trait_method(
+    ctx: &mut LoweringContext,
+    module: &mut crate::ir::Module,
+    method: &ast::FunctionDef,
+    type_name: &str,
+    equipped_type: &Type,
+    mangled_name: &str,
+) {
+    let return_type = ctx.type_mapper.map_ast_type(&method.return_type.node);
+
+    let self_type_id = ctx.type_mapper.map_ast_type(equipped_type);
+    let self_is_mutable = method
+        .params
+        .first()
+        .map(|p| {
+            p.node.name.node == "self"
+                && matches!(p.node.ownership, Ownership::MutableBorrow)
+        })
+        .unwrap_or(false);
+
+    let self_ptr_type = if self_is_mutable {
+        ctx.register_mut_ptr_type(self_type_id)
+    } else {
+        ctx.register_ptr_type(self_type_id)
+    };
+
+    let mut params: Vec<(TypeId, Option<&str>)> =
+        vec![(self_ptr_type, Some("self"))];
+    for p in &method.params {
+        if p.node.name.node == "self" {
+            continue;
+        }
+        let gir_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+        params.push((gir_type, Some(p.node.name.node.as_str())));
+    }
+
+    let mut builder =
+        FunctionBuilder::new(mangled_name, return_type, &params);
+    ctx.clear_locals();
+
+    ctx.register_local("self", LocalId(1), self_ptr_type);
+
+    let mut param_idx = 2u32;
+    for p in &method.params {
+        if p.node.name.node == "self" {
+            continue;
+        }
+        let gir_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+        ctx.register_local(
+            &p.node.name.node,
+            LocalId(param_idx),
+            gir_type,
+        );
+        param_idx += 1;
+    }
+
+    ctx.drops.push_scope(DropScopeKind::Function);
+
+    match &method.body {
+        FunctionBody::Block(block) => {
+            lower_block(ctx, &mut builder, block);
+
+            let last_block_idx = builder.current_block.0 as usize;
+            if builder.blocks[last_block_idx].terminator.is_none() {
+                ctx.drops
+                    .pop_scope(&mut builder, &ctx.type_registry);
+                if return_type == UNIT_TYPE {
+                    builder.ret(FunctionBuilder::const_unit());
+                } else {
+                    builder.ret(FunctionBuilder::copy(LocalId(0)));
+                }
+            } else {
+                ctx.drops
+                    .pop_scope(&mut builder, &ctx.type_registry);
+            }
+        }
+        FunctionBody::Expression(expr) => {
+            let operand = lower_expr(ctx, &mut builder, expr);
+            builder.assign(Place::local(LocalId(0)), operand);
+            ctx.drops
+                .pop_scope(&mut builder, &ctx.type_registry);
+            builder.ret(FunctionBuilder::copy(LocalId(0)));
+        }
+        FunctionBody::Declaration | FunctionBody::Extern(_) => {
+            ctx.drops
+                .pop_scope(&mut builder, &ctx.type_registry);
+            return;
+        }
+    }
+
+    module.functions.push(builder.build());
+}
+
+/// Lower a static trait method (no `self` parameter) into a GIR function.
+///
+/// Used for `From::from`, `Default::default`, and similar static trait methods.
+fn lower_static_trait_method(
+    ctx: &mut LoweringContext,
+    module: &mut crate::ir::Module,
+    method: &ast::FunctionDef,
+    mangled: &str,
+) {
+    let return_type = ctx.type_mapper.map_ast_type(&method.return_type.node);
+
+    // Build parameters (skip self if somehow present)
+    let params: Vec<(TypeId, Option<&str>)> = method
+        .params
+        .iter()
+        .filter(|p| p.node.name.node != "self")
+        .map(|p| {
+            let gir_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+            (gir_type, Some(p.node.name.node.as_str()))
+        })
+        .collect();
+
+    let mut builder = FunctionBuilder::new(mangled, return_type, &params);
+    ctx.clear_locals();
+
+    // Register params starting at _1
+    let mut param_idx = 1u32;
+    for p in &method.params {
+        if p.node.name.node == "self" {
+            continue;
+        }
+        let gir_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+        ctx.register_local(
+            &p.node.name.node,
+            LocalId(param_idx),
+            gir_type,
+        );
+        param_idx += 1;
+    }
+
+    ctx.drops.push_scope(DropScopeKind::Function);
+
+    match &method.body {
+        FunctionBody::Block(block) => {
+            lower_block(ctx, &mut builder, block);
+
+            let last_block_idx = builder.current_block.0 as usize;
+            if builder.blocks[last_block_idx].terminator.is_none() {
+                ctx.drops.pop_scope(&mut builder, &ctx.type_registry);
+                if return_type == UNIT_TYPE {
+                    builder.ret(FunctionBuilder::const_unit());
+                } else {
+                    builder.ret(FunctionBuilder::copy(LocalId(0)));
+                }
+            } else {
+                ctx.drops.pop_scope(&mut builder, &ctx.type_registry);
+            }
+        }
+        FunctionBody::Expression(expr) => {
+            let operand = lower_expr(ctx, &mut builder, expr);
+            builder.assign(Place::local(LocalId(0)), operand);
+            ctx.drops.pop_scope(&mut builder, &ctx.type_registry);
+            builder.ret(FunctionBuilder::copy(LocalId(0)));
+        }
+        FunctionBody::Declaration | FunctionBody::Extern(_) => {
+            ctx.drops.pop_scope(&mut builder, &ctx.type_registry);
+            return;
+        }
+    }
+
+    module.functions.push(builder.build());
+}
+
 /// Extract a trait name from an AST Type.
-fn extract_trait_name(ty: &Type) -> String {
+pub fn extract_trait_name(ty: &Type) -> String {
     match ty {
         Type::Named { name, .. } => name.node.clone(),
         _ => String::new(),
@@ -446,6 +957,62 @@ fn extract_type_name(ty: &Type) -> Option<String> {
             }
         }
         _ => None,
+    }
+}
+
+/// Build a fully-mangled trait equip method name.
+///
+/// Examples:
+/// - `From[float]` on `Celsius`, method `from` → `From__double_for_Celsius__from`
+/// - `Default` on `Point`, method `default` → `Default_for_Point__default`
+/// - `Equatable` on `Circle`, method `eq` → `Equatable_for_Circle__eq`
+fn mangle_trait_equip_name(
+    trait_type: &Type,
+    type_name: &str,
+    method_name: &str,
+    ctx: &LoweringContext,
+) -> String {
+    let trait_name = extract_trait_name(trait_type);
+
+    let generic_suffix = match trait_type {
+        Type::Named { generic_args, .. } if !generic_args.is_empty() => {
+            let args: Vec<String> = generic_args
+                .iter()
+                .map(|a| mangle_c_type_name(&a.node, ctx))
+                .collect();
+            format!("__{}", args.join("__"))
+        }
+        _ => String::new(),
+    };
+
+    format!("{trait_name}{generic_suffix}_for_{type_name}__{method_name}")
+}
+
+/// Convert an AST type to a C-compatible name for mangling.
+fn mangle_c_type_name(ty: &Type, _ctx: &LoweringContext) -> String {
+    use ast::PrimitiveType;
+    match ty {
+        Type::Primitive(p) => match p {
+            PrimitiveType::Int | PrimitiveType::Int64 => "int64_t".into(),
+            PrimitiveType::Int8 => "int8_t".into(),
+            PrimitiveType::Int16 => "int16_t".into(),
+            PrimitiveType::Int32 => "int32_t".into(),
+            PrimitiveType::Uint => "uint64_t".into(),
+            PrimitiveType::Uint8 => "uint8_t".into(),
+            PrimitiveType::Uint16 => "uint16_t".into(),
+            PrimitiveType::Uint32 => "uint32_t".into(),
+            PrimitiveType::Uint64 => "uint64_t".into(),
+            PrimitiveType::Float | PrimitiveType::Float64 => "double".into(),
+            PrimitiveType::Float32 => "float".into(),
+            PrimitiveType::Bool => "bool".into(),
+            PrimitiveType::Char => "int32_t".into(),
+            PrimitiveType::Str => "Str".into(),
+            PrimitiveType::CStr => "const_char_ptr".into(),
+            PrimitiveType::StringType => "GorgetString".into(),
+            PrimitiveType::Void => "void".into(),
+        },
+        Type::Named { name, .. } => name.node.clone(),
+        _ => "void".into(),
     }
 }
 

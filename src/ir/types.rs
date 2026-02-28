@@ -152,6 +152,8 @@ pub const U64_TYPE: TypeId = TypeId(8);
 pub const F32_TYPE: TypeId = TypeId(9);
 pub const F64_TYPE: TypeId = TypeId(10);
 pub const UNIT_TYPE: TypeId = TypeId(11);
+/// Char type (stored as uint32_t codepoint, but prints with %c)
+pub const CHAR_TYPE: TypeId = TypeId(12);
 
 /// Registry of all GIR types in a module.
 pub struct TypeRegistry {
@@ -189,7 +191,7 @@ impl Default for TypeRegistry {
 }
 
 impl TypeRegistry {
-    /// Create a new registry with pre-allocated primitive types at indices 0–11.
+    /// Create a new registry with pre-allocated primitive types at indices 0–12.
     pub fn new() -> Self {
         let types = vec![
             GirType::Bool, // 0
@@ -204,6 +206,7 @@ impl TypeRegistry {
             GirType::F32,  // 9
             GirType::F64,  // 10
             GirType::Unit, // 11
+            GirType::U32,  // 12 = CHAR (stored as u32, but printed as character)
         ];
         Self {
             types,
@@ -224,6 +227,14 @@ impl TypeRegistry {
         self.types.get(id.0 as usize)
     }
 
+    /// Get the type name for a Named type, or None if not Named.
+    pub fn type_name(&self, id: TypeId) -> Option<String> {
+        match self.get(id)? {
+            GirType::Named(name) => Some(name.clone()),
+            _ => None,
+        }
+    }
+
     /// Total number of types (including primitives).
     pub fn len(&self) -> usize {
         self.types.len()
@@ -231,7 +242,7 @@ impl TypeRegistry {
 
     /// Whether the registry contains only the pre-allocated primitives.
     pub fn is_empty(&self) -> bool {
-        self.types.len() <= 12
+        self.types.len() <= 13
     }
 
     /// Register a named type definition. Returns its index.
@@ -247,6 +258,11 @@ impl TypeRegistry {
         self.name_to_def.get(name).map(|&idx| &self.type_defs[idx])
     }
 
+    /// Get a mutable reference to a type definition by name.
+    pub fn get_type_def_mut(&mut self, name: &str) -> Option<&mut TypeDef> {
+        self.name_to_def.get(name).copied().map(|idx| &mut self.type_defs[idx])
+    }
+
     /// Iterate over all type definitions.
     pub fn type_defs(&self) -> &[TypeDef] {
         &self.type_defs
@@ -256,6 +272,33 @@ impl TypeRegistry {
     pub fn has_type_def(&self, name: &str) -> bool {
         self.name_to_def.contains_key(name)
     }
+
+    /// Iterate over all type definition names.
+    pub fn all_type_def_names(&self) -> impl Iterator<Item = &String> {
+        self.name_to_def.keys()
+    }
+}
+
+/// Format a TypeId as a mangle-safe string fragment (for tuple/generic type names).
+pub fn format_type_for_mangle(type_id: TypeId, registry: &TypeRegistry) -> String {
+    if type_id == BOOL_TYPE { return "bool".to_string(); }
+    if type_id == I8_TYPE { return "int8_t".to_string(); }
+    if type_id == I16_TYPE { return "int16_t".to_string(); }
+    if type_id == I32_TYPE { return "int32_t".to_string(); }
+    if type_id == I64_TYPE { return "int64_t".to_string(); }
+    if type_id == U8_TYPE { return "uint8_t".to_string(); }
+    if type_id == U16_TYPE { return "uint16_t".to_string(); }
+    if type_id == U32_TYPE { return "uint32_t".to_string(); }
+    if type_id == U64_TYPE { return "uint64_t".to_string(); }
+    if type_id == F32_TYPE { return "float".to_string(); }
+    if type_id == F64_TYPE { return "double".to_string(); }
+    if type_id == UNIT_TYPE { return "void".to_string(); }
+    if let Some(gir_type) = registry.get(type_id) {
+        if let GirType::Named(name) = gir_type {
+            return name.clone();
+        }
+    }
+    format!("T{}", type_id.0)
 }
 
 #[cfg(test)]
@@ -265,7 +308,7 @@ mod tests {
     #[test]
     fn type_registry_primitives() {
         let reg = TypeRegistry::new();
-        assert_eq!(reg.len(), 12);
+        assert_eq!(reg.len(), 13);
         assert_eq!(reg.get(BOOL_TYPE), Some(&GirType::Bool));
         assert_eq!(reg.get(I8_TYPE), Some(&GirType::I8));
         assert_eq!(reg.get(I16_TYPE), Some(&GirType::I16));
@@ -278,15 +321,16 @@ mod tests {
         assert_eq!(reg.get(F32_TYPE), Some(&GirType::F32));
         assert_eq!(reg.get(F64_TYPE), Some(&GirType::F64));
         assert_eq!(reg.get(UNIT_TYPE), Some(&GirType::Unit));
+        assert_eq!(reg.get(CHAR_TYPE), Some(&GirType::U32));
     }
 
     #[test]
     fn type_registry_insert() {
         let mut reg = TypeRegistry::new();
         let ptr_id = reg.insert(GirType::Ptr(I32_TYPE));
-        assert_eq!(ptr_id, TypeId(12));
+        assert_eq!(ptr_id, TypeId(13));
         assert_eq!(reg.get(ptr_id), Some(&GirType::Ptr(I32_TYPE)));
-        assert_eq!(reg.len(), 13);
+        assert_eq!(reg.len(), 14);
     }
 
     #[test]

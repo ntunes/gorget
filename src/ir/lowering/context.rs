@@ -39,6 +39,37 @@ pub struct LoweringContext<'a> {
     pub closure_info: FxHashMap<String, (String, TypeId)>,
     /// Stack of active loops for break/continue targeting.
     loop_stack: Vec<LoopInfo>,
+    /// Type name substitutions for generic monomorphization.
+    /// Maps template type names (e.g., "Container__T") to monomorphized names
+    /// (e.g., "Container__int64_t") during generic function body lowering.
+    pub type_name_subs: FxHashMap<String, String>,
+    /// Generic type parameter → concrete TypeId substitutions.
+    /// Maps bare type parameters (e.g., "T") to their concrete TypeIds (e.g., I64_TYPE)
+    /// during generic function body lowering.
+    pub generic_type_params: FxHashMap<String, TypeId>,
+    /// Module-level constants: name → Constant value (for imports like PI, E, etc.)
+    pub module_constants: FxHashMap<String, crate::ir::instructions::Constant>,
+    /// Whether `directive strip-asserts` is active (asserts become no-ops).
+    pub strip_asserts: bool,
+    /// Whether `directive overflow wrap` is active (integer overflow wraps).
+    pub overflow_wrap: bool,
+    /// LocalIds that are mutable capture pointers (need deref on read/write in closure bodies).
+    pub mut_capture_locals: FxHashMap<LocalId, TypeId>,
+    /// Extern binding: Gorget name → C symbol name (e.g., "llabs_wrapper" → "llabs").
+    pub extern_bindings: FxHashMap<String, String>,
+    /// Default parameter values: fn_name → Vec<(param_index, default_expr)>.
+    pub fn_defaults: FxHashMap<String, Vec<(usize, crate::parser::ast::Expr)>>,
+    /// Function parameter names: fn_name → Vec<param_name> (in declaration order).
+    pub fn_param_names: FxHashMap<String, Vec<String>>,
+    /// If current function uses `throws`, the Result TypeId for wrapping return/throw.
+    pub current_throws_result_type: Option<TypeId>,
+    /// Target type hint for the current expression being lowered.
+    /// Set by VarDecl/Assign handlers so enum variant constructors (Some, None, Ok, Error)
+    /// can pick the correctly-monomorphized type.
+    pub expected_type: Option<TypeId>,
+    /// Callable parameter return types: LocalId → return TypeId.
+    /// Populated during function setup for parameters with Callable/function types.
+    pub callable_return_types: FxHashMap<LocalId, TypeId>,
 }
 
 impl<'a> LoweringContext<'a> {
@@ -55,7 +86,46 @@ impl<'a> LoweringContext<'a> {
             struct_fields: FxHashMap::default(),
             closure_info: FxHashMap::default(),
             loop_stack: Vec::new(),
+            type_name_subs: FxHashMap::default(),
+            generic_type_params: FxHashMap::default(),
+            module_constants: FxHashMap::default(),
+            strip_asserts: false,
+            overflow_wrap: false,
+            mut_capture_locals: FxHashMap::default(),
+            extern_bindings: FxHashMap::default(),
+            fn_defaults: FxHashMap::default(),
+            fn_param_names: FxHashMap::default(),
+            current_throws_result_type: None,
+            expected_type: None,
+            callable_return_types: FxHashMap::default(),
         }
+    }
+
+    /// Resolve a type name, applying any active substitutions.
+    pub fn resolve_type_name(&self, name: &str) -> String {
+        self.type_name_subs.get(name).cloned().unwrap_or_else(|| name.to_string())
+    }
+
+    /// Map an AST type to a GIR TypeId, applying any active type name substitutions.
+    /// Use this instead of `type_mapper.map_ast_type()` when inside generic body lowering.
+    pub fn map_type_with_subs(&self, ty: &crate::parser::ast::Type) -> TypeId {
+        use crate::parser::ast::Type;
+        // Check bare type parameter substitution (e.g., T → int64_t)
+        if let Type::Named { name, generic_args } = ty {
+            if generic_args.is_empty() {
+                if let Some(&id) = self.generic_type_params.get(name.node.as_str()) {
+                    return id;
+                }
+            } else if !self.type_name_subs.is_empty() {
+                // For generic named types, check if the mangled name needs substitution
+                let mangled = super::types::mangle_generic_name(&name.node, generic_args);
+                let resolved = self.resolve_type_name(&mangled);
+                if let Some(&id) = self.type_mapper.named_types.get(&resolved) {
+                    return id;
+                }
+            }
+        }
+        self.type_mapper.map_ast_type(ty)
     }
 
     /// Register a variable in the current function scope.
@@ -71,6 +141,7 @@ impl<'a> LoweringContext<'a> {
     /// Reset locals for the next function.
     pub fn clear_locals(&mut self) {
         self.locals.clear();
+        self.mut_capture_locals.clear();
     }
 
     /// Iterate over all locals (for type inference).
@@ -87,7 +158,7 @@ impl<'a> LoweringContext<'a> {
     ) -> TypeId {
         match &type_.node {
             Type::Inferred => self.infer_type_from_expr(&value.node),
-            other => self.type_mapper.map_ast_type(other),
+            other => self.map_type_with_subs(other),
         }
     }
 
@@ -246,5 +317,44 @@ impl<'a> LoweringContext<'a> {
             GirType::Ptr(inner) | GirType::MutPtr(inner) => Some(*inner),
             _ => None,
         }
+    }
+
+    /// Look up a TypeId for a named type in the registry.
+    pub fn lookup_type_by_name(&self, name: &str) -> Option<TypeId> {
+        for i in 0..self.type_registry.len() {
+            let tid = TypeId(i as u32);
+            if let Some(GirType::Named(n)) = self.type_registry.get(tid) {
+                if n == name { return Some(tid); }
+            }
+        }
+        None
+    }
+
+    /// Auto-register an Option[T] type if it doesn't exist yet.
+    /// Used when Vector.get() is called and Option[T] wasn't pre-registered.
+    pub fn ensure_option_type_registered(&mut self, option_name: &str, inner_type: TypeId) {
+        use crate::ir::types::*;
+        if self.type_mapper.named_types.contains_key(option_name) {
+            return;
+        }
+        let type_def = TypeDef {
+            name: option_name.to_string(),
+            kind: TypeDefKind::Enum(EnumDef {
+                variants: vec![
+                    EnumVariant {
+                        name: "Some".to_string(),
+                        fields: vec![StructField { name: "_0".to_string(), type_id: inner_type }],
+                    },
+                    EnumVariant {
+                        name: "None".to_string(),
+                        fields: vec![],
+                    },
+                ],
+            }),
+            metadata: TypeMetadata::default(),
+        };
+        self.type_registry.add_type_def(type_def);
+        let type_id = self.type_registry.insert(GirType::Named(option_name.to_string()));
+        self.type_mapper.register_named(option_name.to_string(), type_id);
     }
 }

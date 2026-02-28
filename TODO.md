@@ -2,6 +2,17 @@
 
 ## High
 
+- **GIR: Unresolved identifiers fall through to zero (affects 10+ tests)**: `Expr::Identifier` in `exprs.rs:43-49` returns `Constant::I64(0)` when a name is not in local scope. This breaks stdlib constants (`PI`, `E`, `TAU`, `INFINITY`), trait static methods (`UserId.from(42)`), and any imported names. Affects: `math_constants`, `from_trait`, `from_trait_multi`, `meta_basic`, `is_bindings`, and any test using imported constants. Fix: resolve module-level constants, imported names, and static method calls. [added: 2026-02-27]
+
+- **GIR: Compound assignment operators only map Add/Sub/Mul/Div/Mod (affects bitwise_ops + more)**: `lower_compound_assign` in `stmts.rs:172-181` maps `BitAnd`, `BitOr`, `BitXor`, `Shl`, `Shr` to `BinOp::Add` via `_ => BinOp::Add` fallback. The `BinOp` enum already has the correct variants. One-line fix: add the missing arms. Affects: `bitwise_ops` and any test using `&=`, `|=`, `^=`, `<<=`, `>>=`. [added: 2026-02-27]
+
+- **GIR: `.await()` method calls silently dropped (affects 12+ async tests)**: `lower_method_call` can't infer the receiver type for function call results, so `.await()` returns `Unit` instead of the inner call's result. Since GIR strips async (everything is synchronous), `.await()` should be a pass-through returning the receiver value. Affects: all `async_*` tests. [added: 2026-02-27]
+
+- **GIR: Mutable borrow parameters (`&T`) passed by value (affects mutable_borrow_params + more)**: Function signatures with `Counter &c` generate `void increment(Counter _1, ...)` instead of `void increment(Counter* _1, ...)`. Field assignment through borrow references not lowered. Call sites pass by value instead of by reference. Affects: `mutable_borrow_params`, `ownership_showcase`, and any function using `&` params. [added: 2026-02-27]
+
+- **GIR: Mutable captures in closures don't dereference pointers (affects closures tests)**: Closure bodies with mutable captures (`count = count + 1`) generate pointer arithmetic (`_2 + 1` where `_2` is `int64_t*`) instead of load/add/store (`*_2 = *_2 + 1`). Affects: `closures` lines 8-10, any test with mutable closure captures. [added: 2026-02-27]
+
+- **GIR: Dict items() returns flat elements instead of tuples (affects dict_items)**: `DictItems` codegen packs key+value bytes into a flat buffer, and `.get(i).unwrap()` extracts as plain `int64_t` (the element type). But `item._1` (TupleFieldAccess) expects a tuple struct type. Needs tuple type tracking through collection methods. [added: 2026-02-28]
 
 ## Medium
 

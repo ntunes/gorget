@@ -2154,6 +2154,8 @@ static inline GorgetArray gorget_str_chars(Str s) {
 }
 
 // ── GorgetMap (open-addressing hash map) ─────────────────────
+typedef uint64_t (*__gorget_hash_fn)(const void*);
+typedef bool (*__gorget_eq_fn)(const void*, const void*);
 typedef struct {
     void* keys;
     void* values;
@@ -2163,6 +2165,11 @@ typedef struct {
     size_t key_size;
     size_t val_size;
     GorgetAllocator* alloc;
+    size_t* order;      // insertion-order index array (used by Dict, ignored by HashMap)
+    size_t order_len;
+    size_t tombstones;
+    __gorget_hash_fn hash_fn;  // NULL = default __gorget_fnv1a
+    __gorget_eq_fn eq_fn;      // NULL = default memcmp
 } GorgetMap;
 
 static inline uint64_t __gorget_fnv1a(const void* data, size_t len) {
@@ -2187,52 +2194,141 @@ static inline uint64_t __gorget_hash_str_len(const char* s, size_t len) {
     return hash;
 }
 
+// Str key hash/eq for GorgetMap — content-based instead of byte-based
+static inline uint64_t __gorget_str_key_hash(const void* key) {
+    const Str* s = (const Str*)key;
+    return __gorget_hash_str_len(s->data, s->len);
+}
+static inline bool __gorget_str_key_eq(const void* a, const void* b) {
+    const Str* sa = (const Str*)a;
+    const Str* sb = (const Str*)b;
+    return sa->len == sb->len && (sa->data == sb->data || memcmp(sa->data, sb->data, sa->len) == 0);
+}
+
+// Hash/eq dispatch: use custom functions if set, otherwise default
+#define __GORGET_MAP_HASH(m, key) ((m)->hash_fn ? (m)->hash_fn(key) : __gorget_fnv1a(key, (m)->key_size))
+#define __GORGET_MAP_EQ(m, idx, key) ((m)->eq_fn ? (m)->eq_fn((const char*)(m)->keys + (idx) * (m)->key_size, key) : memcmp((const char*)(m)->keys + (idx) * (m)->key_size, key, (m)->key_size) == 0)
+
 static inline void __gorget_map_grow(GorgetMap* m) {
     GorgetAllocator* a = m->alloc;
     size_t old_cap = m->cap;
     void* old_keys = m->keys;
     void* old_values = m->values;
     uint8_t* old_states = m->states;
+    size_t* old_order = m->order;
+    size_t old_order_len = m->order_len;
 
     size_t new_cap = old_cap == 0 ? 16 : old_cap * 2;
     m->keys = GORGET_CALLOC(new_cap, m->key_size);
     m->values = m->val_size > 0 ? GORGET_CALLOC(new_cap, m->val_size) : NULL;
     m->states = (uint8_t*)GORGET_CALLOC(new_cap, 1);
+    m->order = (size_t*)GORGET_CALLOC(new_cap, sizeof(size_t));
     m->cap = new_cap;
     m->count = 0;
+    m->order_len = 0;
+    m->tombstones = 0;
 
-    for (size_t i = 0; i < old_cap; i++) {
-        if (old_states[i] == 1) {
-            const void* key = (const char*)old_keys + i * m->key_size;
-            uint64_t h = __gorget_fnv1a(key, m->key_size);
-            size_t idx = (size_t)(h % new_cap);
-            while (m->states[idx] != 0) {
-                idx = (idx + 1) % new_cap;
-            }
-            memcpy((char*)m->keys + idx * m->key_size, key, m->key_size);
-            if (m->val_size > 0) {
-                const void* val = (const char*)old_values + i * m->val_size;
-                memcpy((char*)m->values + idx * m->val_size, val, m->val_size);
-            }
-            m->states[idx] = 1;
-            m->count++;
+    // Reinsert in insertion order to preserve ordering
+    for (size_t oi = 0; oi < old_order_len; oi++) {
+        size_t i = old_order[oi];
+        if (old_states[i] != 1) continue;
+        const void* key = (const char*)old_keys + i * m->key_size;
+        uint64_t h = __GORGET_MAP_HASH(m, key);
+        size_t idx = (size_t)(h % new_cap);
+        while (m->states[idx] != 0) {
+            idx = (idx + 1) % new_cap;
         }
+        memcpy((char*)m->keys + idx * m->key_size, key, m->key_size);
+        if (m->val_size > 0) {
+            const void* val = (const char*)old_values + i * m->val_size;
+            memcpy((char*)m->values + idx * m->val_size, val, m->val_size);
+        }
+        m->states[idx] = 1;
+        m->order[m->order_len++] = idx;
+        m->count++;
     }
 
     a->dealloc(a->ctx, old_keys, old_cap * m->key_size);
     if (old_values) a->dealloc(a->ctx, old_values, old_cap * m->val_size);
     a->dealloc(a->ctx, old_states, old_cap);
+    if (old_order) a->dealloc(a->ctx, old_order, old_cap * sizeof(size_t));
 }
 
 static inline GorgetMap gorget_map_new(size_t key_size, size_t val_size) {
-    return (GorgetMap){NULL, NULL, NULL, 0, 0, key_size, val_size, __gorget_current_alloc};
+    return (GorgetMap){NULL, NULL, NULL, 0, 0, key_size, val_size, __gorget_current_alloc, NULL, 0, 0, NULL, NULL};
+}
+
+// Ordered Dict: pre-allocates order array so put() tracks insertion order
+static inline GorgetMap gorget_dict_new(size_t key_size, size_t val_size) {
+    GorgetAllocator* a = __gorget_current_alloc;
+    size_t init_cap = 16;
+    GorgetMap m;
+    m.keys = GORGET_CALLOC(init_cap, key_size);
+    m.values = val_size > 0 ? GORGET_CALLOC(init_cap, val_size) : NULL;
+    m.states = (uint8_t*)GORGET_CALLOC(init_cap, 1);
+    m.count = 0;
+    m.cap = init_cap;
+    m.key_size = key_size;
+    m.val_size = val_size;
+    m.alloc = a;
+    m.order = (size_t*)GORGET_CALLOC(init_cap, sizeof(size_t));
+    m.order_len = 0;
+    m.tombstones = 0;
+    m.hash_fn = NULL;
+    m.eq_fn = NULL;
+    return m;
+}
+
+// Str-key variants: content-based hash/eq instead of byte-based
+static inline GorgetMap gorget_map_new_str(size_t val_size) {
+    GorgetMap m = gorget_map_new(sizeof(Str), val_size);
+    m.hash_fn = __gorget_str_key_hash;
+    m.eq_fn = __gorget_str_key_eq;
+    return m;
+}
+static inline GorgetMap gorget_dict_new_str(size_t val_size) {
+    GorgetMap m = gorget_dict_new(sizeof(Str), val_size);
+    m.hash_fn = __gorget_str_key_hash;
+    m.eq_fn = __gorget_str_key_eq;
+    return m;
 }
 
 static inline void gorget_map_put(GorgetMap* m, const void* key, const void* value) {
+    // Ordered mode (order != NULL): count tombstones in load factor to force grow,
+    // and never reuse tombstone slots. This ensures stale order-array entries
+    // pointing to tombstoned slots are correctly skipped during iteration.
+    if (m->order) {
+        if (m->cap == 0 || (m->count + m->tombstones) * 4 >= m->cap * 3) {
+            __gorget_map_grow(m);
+        }
+        uint64_t h = __GORGET_MAP_HASH(m, key);
+        size_t idx = (size_t)(h % m->cap);
+        for (size_t __probes = 0; __probes < m->cap; __probes++) {
+            if (m->states[idx] == 0) {
+                memcpy((char*)m->keys + idx * m->key_size, key, m->key_size);
+                if (m->val_size > 0 && value != NULL) {
+                    memcpy((char*)m->values + idx * m->val_size, value, m->val_size);
+                }
+                m->states[idx] = 1;
+                m->count++;
+                m->order[m->order_len++] = idx;
+                return;
+            }
+            if (m->states[idx] == 1 && __GORGET_MAP_EQ(m, idx, key)) {
+                if (m->val_size > 0 && value != NULL) {
+                    memcpy((char*)m->values + idx * m->val_size, value, m->val_size);
+                }
+                return;
+            }
+            idx = (idx + 1) % m->cap;
+        }
+        return;
+    }
+    // Unordered mode (HashMap/Set): reuse tombstones for efficiency
     if (m->cap == 0 || m->count * 4 >= m->cap * 3) {
         __gorget_map_grow(m);
     }
-    uint64_t h = __gorget_fnv1a(key, m->key_size);
+    uint64_t h = __GORGET_MAP_HASH(m, key);
     size_t idx = (size_t)(h % m->cap);
     size_t first_tombstone = (size_t)-1;
     for (size_t __probes = 0; __probes < m->cap; __probes++) {
@@ -2249,7 +2345,7 @@ static inline void gorget_map_put(GorgetMap* m, const void* key, const void* val
         if (m->states[idx] == 2 && first_tombstone == (size_t)-1) {
             first_tombstone = idx;
         }
-        if (m->states[idx] == 1 && memcmp((const char*)m->keys + idx * m->key_size, key, m->key_size) == 0) {
+        if (m->states[idx] == 1 && __GORGET_MAP_EQ(m, idx, key)) {
             if (m->val_size > 0 && value != NULL) {
                 memcpy((char*)m->values + idx * m->val_size, value, m->val_size);
             }
@@ -2269,11 +2365,11 @@ static inline void gorget_map_put(GorgetMap* m, const void* key, const void* val
 
 static inline void* gorget_map_get(const GorgetMap* m, const void* key) {
     if (m->cap == 0) return NULL;
-    uint64_t h = __gorget_fnv1a(key, m->key_size);
+    uint64_t h = __GORGET_MAP_HASH(m, key);
     size_t idx = (size_t)(h % m->cap);
     for (size_t __probes = 0; __probes < m->cap; __probes++) {
         if (m->states[idx] == 0) return NULL;
-        if (m->states[idx] == 1 && memcmp((const char*)m->keys + idx * m->key_size, key, m->key_size) == 0) {
+        if (m->states[idx] == 1 && __GORGET_MAP_EQ(m, idx, key)) {
             if (m->val_size == 0) return (void*)1;  // Set mode: non-NULL means present
             return (char*)m->values + idx * m->val_size;
         }
@@ -2292,13 +2388,14 @@ static inline size_t gorget_map_len(const GorgetMap* m) {
 
 static inline bool gorget_map_remove(GorgetMap* m, const void* key) {
     if (m->cap == 0) return false;
-    uint64_t h = __gorget_fnv1a(key, m->key_size);
+    uint64_t h = __GORGET_MAP_HASH(m, key);
     size_t idx = (size_t)(h % m->cap);
     for (size_t __probes = 0; __probes < m->cap; __probes++) {
         if (m->states[idx] == 0) return false;
-        if (m->states[idx] == 1 && memcmp((const char*)m->keys + idx * m->key_size, key, m->key_size) == 0) {
+        if (m->states[idx] == 1 && __GORGET_MAP_EQ(m, idx, key)) {
             m->states[idx] = 2;  // tombstone
             m->count--;
+            m->tombstones++;
             return true;
         }
         idx = (idx + 1) % m->cap;
@@ -2309,6 +2406,8 @@ static inline bool gorget_map_remove(GorgetMap* m, const void* key) {
 static inline void gorget_map_clear(GorgetMap* m) {
     if (m->states) memset(m->states, 0, m->cap);
     m->count = 0;
+    m->order_len = 0;
+    m->tombstones = 0;
 }
 
 static inline void gorget_map_free(GorgetMap* m) {
@@ -2316,11 +2415,15 @@ static inline void gorget_map_free(GorgetMap* m) {
     if (m->keys) a->dealloc(a->ctx, m->keys, m->cap * m->key_size);
     if (m->values) a->dealloc(a->ctx, m->values, m->cap * m->val_size);
     if (m->states) a->dealloc(a->ctx, m->states, m->cap);
+    if (m->order) a->dealloc(a->ctx, m->order, m->cap * sizeof(size_t));
     m->keys = NULL;
     m->values = NULL;
     m->states = NULL;
+    m->order = NULL;
     m->count = 0;
     m->cap = 0;
+    m->order_len = 0;
+    m->tombstones = 0;
 }
 
 // ── GorgetSet (thin wrapper over GorgetMap) ───────────────────
@@ -2357,11 +2460,15 @@ static inline void gorget_set_free(GorgetSet* s) {
 static inline GorgetSet gorget_set_clone(const GorgetSet* src) {
     GorgetAllocator* a = __gorget_current_alloc;
     GorgetSet dst;
+    memset(&dst, 0, sizeof(dst));
     dst.key_size = src->key_size;
     dst.val_size = 0;
     dst.count = src->count;
     dst.cap = src->cap;
     dst.alloc = a;
+    dst.order = NULL;
+    dst.order_len = 0;
+    dst.tombstones = 0;
     if (src->cap == 0) {
         dst.keys = NULL; dst.values = NULL; dst.states = NULL;
         return dst;

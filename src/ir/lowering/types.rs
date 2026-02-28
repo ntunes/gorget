@@ -16,7 +16,19 @@ pub struct TypeMapper {
 
 impl TypeMapper {
     pub fn new(registry: &mut TypeRegistry) -> Self {
-        let str_type = registry.insert(GirType::Ptr(U8_TYPE));
+        // Register Str as a named type matching the runtime's fat pointer struct
+        let str_type = registry.insert(GirType::Named("Str".to_string()));
+        // Register GorgetString with Move semantics + trivial drop (gorget_string_free)
+        registry.add_type_def(TypeDef {
+            name: "GorgetString".to_string(),
+            kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
+            metadata: TypeMetadata {
+                size: None,
+                align: None,
+                drop_strategy: DropStrategy::Trivial("gorget_string_free".to_string()),
+                copy_semantics: CopySemantics::Move,
+            },
+        });
         let owned_string_type = registry.insert(GirType::Named("GorgetString".to_string()));
         Self {
             str_type,
@@ -32,6 +44,10 @@ impl TypeMapper {
             Type::Inferred => panic!("BUG: Inferred type should be resolved before GIR lowering"),
             Type::Named { name, generic_args } => {
                 if !generic_args.is_empty() {
+                    // Task[T] → T in synchronous GIR mode (spawn is a no-op)
+                    if name.node == "Task" && generic_args.len() == 1 {
+                        return self.map_ast_type(&generic_args[0].node);
+                    }
                     // Generic type — look up monomorphized name
                     let mangled = mangle_generic_name(&name.node, generic_args);
                     if let Some(&id) = self.named_types.get(&mangled) {
@@ -78,6 +94,76 @@ impl TypeMapper {
                     if let Some(&id) = self.named_types.get(&mangled) {
                         return id;
                     }
+                    // Auto-register Option[T] and Result[T, E] types
+                    let base = name.node.as_str();
+                    if base == "Option" && generic_args.len() == 1 {
+                        let inner_type = self.map_ast_type_mut(&generic_args[0].node, registry);
+                        let type_def = TypeDef {
+                            name: mangled.clone(),
+                            kind: TypeDefKind::Enum(EnumDef {
+                                variants: vec![
+                                    EnumVariant {
+                                        name: "Some".to_string(),
+                                        fields: vec![StructField { name: "_0".to_string(), type_id: inner_type }],
+                                    },
+                                    EnumVariant {
+                                        name: "None".to_string(),
+                                        fields: vec![],
+                                    },
+                                ],
+                            }),
+                            metadata: TypeMetadata::default(),
+                        };
+                        registry.add_type_def(type_def);
+                        let type_id = registry.insert(GirType::Named(mangled.clone()));
+                        self.named_types.insert(mangled, type_id);
+                        return type_id;
+                    }
+                    if base == "Result" && generic_args.len() == 2 {
+                        let ok_type = self.map_ast_type_mut(&generic_args[0].node, registry);
+                        let err_type = self.map_ast_type_mut(&generic_args[1].node, registry);
+                        let type_def = TypeDef {
+                            name: mangled.clone(),
+                            kind: TypeDefKind::Enum(EnumDef {
+                                variants: vec![
+                                    EnumVariant {
+                                        name: "Ok".to_string(),
+                                        fields: vec![StructField { name: "_0".to_string(), type_id: ok_type }],
+                                    },
+                                    EnumVariant {
+                                        name: "Error".to_string(),
+                                        fields: vec![StructField { name: "_0".to_string(), type_id: err_type }],
+                                    },
+                                ],
+                            }),
+                            metadata: TypeMetadata::default(),
+                        };
+                        registry.add_type_def(type_def);
+                        let type_id = registry.insert(GirType::Named(mangled.clone()));
+                        self.named_types.insert(mangled, type_id);
+                        return type_id;
+                    }
+                    // Auto-register collection types (Vector[T], etc.) with proper drop metadata
+                    if matches!(base, "Vector" | "Set" | "HashSet" | "Dict" | "HashMap") {
+                        let drop_fn = match base {
+                            "Dict" | "HashMap" => "gorget_map_free",
+                            "Set" | "HashSet" => "gorget_set_free",
+                            _ => "gorget_array_free",
+                        };
+                        registry.add_type_def(TypeDef {
+                            name: mangled.clone(),
+                            kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
+                            metadata: TypeMetadata {
+                                size: None,
+                                align: None,
+                                drop_strategy: DropStrategy::Trivial(drop_fn.to_string()),
+                                copy_semantics: CopySemantics::Move,
+                            },
+                        });
+                        let type_id = registry.insert(GirType::Named(mangled.clone()));
+                        self.named_types.insert(mangled, type_id);
+                        return type_id;
+                    }
                     return UNIT_TYPE;
                 }
                 if let Some(&id) = self.named_types.get(name.node.as_str()) {
@@ -113,6 +199,13 @@ impl TypeMapper {
                 self.named_types.insert(mangled, type_id);
                 type_id
             }
+            Type::Function { return_type, params, .. } => {
+                let ret = self.map_ast_type_mut(&return_type.node, registry);
+                let param_types: Vec<TypeId> = params.iter()
+                    .map(|p| self.map_ast_type_mut(&p.node, registry))
+                    .collect();
+                registry.insert(GirType::FnPtr { params: param_types, return_type: ret })
+            }
             _ => self.map_ast_type(ty),
         }
     }
@@ -142,20 +235,22 @@ impl TypeMapper {
             PrimitiveType::Float32 => F32_TYPE,
             PrimitiveType::Bool => BOOL_TYPE,
             PrimitiveType::Str | PrimitiveType::CStr => self.str_type,
-            PrimitiveType::Char => U32_TYPE, // char as u32 codepoint
-            PrimitiveType::StringType => self.str_type, // Phase 1: treat String as str
+            PrimitiveType::Char => CHAR_TYPE, // char as u32 codepoint, but prints as character
+            PrimitiveType::StringType => self.owned_string_type,
             PrimitiveType::Void => UNIT_TYPE,
         }
     }
 
     /// Return the printf format specifier for a GIR type.
     pub fn format_specifier(&self, type_id: TypeId) -> &str {
-        if type_id == I64_TYPE || type_id == I32_TYPE || type_id == I16_TYPE || type_id == I8_TYPE {
+        if type_id == CHAR_TYPE {
+            "%c"
+        } else if type_id == I64_TYPE || type_id == I32_TYPE || type_id == I16_TYPE || type_id == I8_TYPE {
             "%lld"
         } else if type_id == U64_TYPE || type_id == U32_TYPE || type_id == U16_TYPE || type_id == U8_TYPE {
             "%llu"
         } else if type_id == F64_TYPE || type_id == F32_TYPE {
-            "%.17g"
+            "%f"
         } else if type_id == BOOL_TYPE {
             "%s"
         } else if type_id == self.str_type || type_id == self.owned_string_type {
@@ -164,6 +259,11 @@ impl TypeMapper {
             "%lld" // fallback
         }
     }
+
+    /// Returns true if this type needs special printf handling (e.g., Str → two args).
+    pub fn is_str_type(&self, type_id: TypeId) -> bool {
+        type_id == self.str_type || type_id == self.owned_string_type
+    }
 }
 
 /// Register a user-defined struct from AST into the TypeRegistry and TypeMapper.
@@ -171,6 +271,7 @@ pub fn register_struct_type(
     mapper: &mut TypeMapper,
     registry: &mut TypeRegistry,
     struct_def: &ast::StructDef,
+    generic_templates: &[&ast::Item],
 ) {
     let name = &struct_def.name.node;
 
@@ -182,6 +283,15 @@ pub fn register_struct_type(
     // Already registered?
     if mapper.named_types.contains_key(name.as_str()) {
         return;
+    }
+
+    // Pre-register the struct name so recursive references resolve
+    let placeholder_id = registry.insert(GirType::Named(name.clone()));
+    mapper.named_types.insert(name.clone(), placeholder_id);
+
+    // Pre-register any generic types used as field types (e.g., Option[Color])
+    for f in &struct_def.fields {
+        ensure_generic_field_type_registered(mapper, registry, &f.node.type_.node, generic_templates);
     }
 
     // Map fields
@@ -202,8 +312,186 @@ pub fn register_struct_type(
     };
 
     registry.add_type_def(type_def);
-    let type_id = registry.insert(GirType::Named(name.clone()));
-    mapper.named_types.insert(name.clone(), type_id);
+    // TypeId already registered via placeholder above — no need to insert again
+}
+
+/// Register a newtype (single-field wrapper struct) as a GIR type.
+pub fn register_newtype(
+    mapper: &mut TypeMapper,
+    registry: &mut TypeRegistry,
+    nt: &ast::NewtypeDef,
+) {
+    let name = &nt.name.node;
+    if mapper.named_types.contains_key(name.as_str()) {
+        return;
+    }
+    // Pre-register the newtype name so recursive references resolve
+    let _placeholder_id = registry.insert(GirType::Named(name.clone()));
+    mapper.named_types.insert(name.clone(), _placeholder_id);
+
+    let inner_type = mapper.map_ast_type(&nt.inner_type.node);
+    let fields = vec![StructField {
+        name: "_0".to_string(),
+        type_id: inner_type,
+    }];
+    let type_def = TypeDef {
+        name: name.clone(),
+        kind: TypeDefKind::Struct(StructDef { fields }),
+        metadata: TypeMetadata::default(),
+    };
+    registry.add_type_def(type_def);
+}
+
+/// Ensure a generic type used in a struct field (like Option[Color]) is registered.
+pub fn ensure_generic_field_type_registered(
+    mapper: &mut TypeMapper,
+    registry: &mut TypeRegistry,
+    ty: &ast::Type,
+    generic_templates: &[&ast::Item],
+) {
+    use crate::parser::ast::Type;
+    if let Type::Named { name, generic_args } = ty {
+        if generic_args.is_empty() {
+            return;
+        }
+        let mangled = mangle_generic_name(&name.node, generic_args);
+        if mapper.named_types.contains_key(&mangled) {
+            return; // Already registered
+        }
+        // Handle built-in generic types: Option[T], Result[T, E], and collections
+        match name.node.as_str() {
+            "Option" if generic_args.len() == 1 => {
+                register_builtin_option(mapper, registry, generic_args, &mangled);
+                return;
+            }
+            "Result" if generic_args.len() == 2 => {
+                register_builtin_result(mapper, registry, generic_args, &mangled);
+                return;
+            }
+            // Collection types: all resolve to GorgetArray/GorgetMap/etc. but need
+            // a registered TypeId so fields referencing them don't get UNIT_TYPE.
+            "Vector" | "Dict" | "HashMap" | "Set" | "HashSet" | "Box" => {
+                register_collection_alias(mapper, registry, &name.node, generic_args, &mangled);
+                return;
+            }
+            _ => {}
+        }
+        // Find the template in user-defined generics
+        for template in generic_templates {
+            match template {
+                ast::Item::Enum(enum_def) if enum_def.name.node == name.node => {
+                    super::generics::monomorphize_generic_type(
+                        mapper, registry, template, generic_args, &mangled,
+                    );
+                    return;
+                }
+                ast::Item::Struct(struct_def) if struct_def.name.node == name.node => {
+                    super::generics::monomorphize_generic_type(
+                        mapper, registry, template, generic_args, &mangled,
+                    );
+                    return;
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// Register a monomorphized Option[T] type (built-in: Some(T) | None).
+fn register_builtin_option(
+    mapper: &mut TypeMapper,
+    registry: &mut TypeRegistry,
+    type_args: &[crate::span::Spanned<ast::Type>],
+    mangled_name: &str,
+) {
+    let inner_type = mapper.map_ast_type(&type_args[0].node);
+    let type_def = TypeDef {
+        name: mangled_name.to_string(),
+        kind: TypeDefKind::Enum(EnumDef {
+            variants: vec![
+                EnumVariant {
+                    name: "Some".to_string(),
+                    fields: vec![StructField { name: "_0".to_string(), type_id: inner_type }],
+                },
+                EnumVariant {
+                    name: "None".to_string(),
+                    fields: vec![],
+                },
+            ],
+        }),
+        metadata: TypeMetadata::default(),
+    };
+    registry.add_type_def(type_def);
+    let type_id = registry.insert(GirType::Named(mangled_name.to_string()));
+    mapper.named_types.insert(mangled_name.to_string(), type_id);
+}
+
+/// Register a monomorphized Result[T, E] type (built-in: Ok(T) | Error(E)).
+fn register_builtin_result(
+    mapper: &mut TypeMapper,
+    registry: &mut TypeRegistry,
+    type_args: &[crate::span::Spanned<ast::Type>],
+    mangled_name: &str,
+) {
+    let ok_type = mapper.map_ast_type(&type_args[0].node);
+    let err_type = mapper.map_ast_type(&type_args[1].node);
+    let type_def = TypeDef {
+        name: mangled_name.to_string(),
+        kind: TypeDefKind::Enum(EnumDef {
+            variants: vec![
+                EnumVariant {
+                    name: "Ok".to_string(),
+                    fields: vec![StructField { name: "_0".to_string(), type_id: ok_type }],
+                },
+                EnumVariant {
+                    name: "Error".to_string(),
+                    fields: vec![StructField { name: "_0".to_string(), type_id: err_type }],
+                },
+            ],
+        }),
+        metadata: TypeMetadata::default(),
+    };
+    registry.add_type_def(type_def);
+    let type_id = registry.insert(GirType::Named(mangled_name.to_string()));
+    mapper.named_types.insert(mangled_name.to_string(), type_id);
+}
+
+/// Register a collection type alias (Vector[T], Dict[K,V], etc.) as a named GIR type.
+/// These all map to the same runtime struct (GorgetArray, GorgetMap, etc.) but need
+/// unique TypeIds so that fields referencing them don't resolve to UNIT_TYPE.
+fn register_collection_alias(
+    mapper: &mut TypeMapper,
+    registry: &mut TypeRegistry,
+    base_name: &str,
+    _type_args: &[crate::span::Spanned<ast::Type>],
+    mangled_name: &str,
+) {
+    // All collection instances are structurally identical at runtime.
+    // We register them as named types without a TypeDef — the C backend handles
+    // collection_type_alias for the actual C type name.
+    let type_id = registry.insert(GirType::Named(mangled_name.to_string()));
+    mapper.named_types.insert(mangled_name.to_string(), type_id);
+
+    // For Box types, also register a TypeDef so the C backend can emit the typedef
+    if base_name == "Box" {
+        let inner_type = mapper.map_ast_type(&_type_args[0].node);
+        let type_def = TypeDef {
+            name: mangled_name.to_string(),
+            kind: TypeDefKind::Struct(StructDef {
+                fields: vec![StructField { name: "_0".to_string(), type_id: inner_type }],
+            }),
+            metadata: TypeMetadata::default(),
+        };
+        registry.add_type_def(type_def);
+    } else {
+        // Register a simple struct TypeDef so the C backend can find it and emit collection alias
+        let type_def = TypeDef {
+            name: mangled_name.to_string(),
+            kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
+            metadata: TypeMetadata::default(),
+        };
+        registry.add_type_def(type_def);
+    }
 }
 
 /// Register a user-defined enum from AST into the TypeRegistry and TypeMapper.
@@ -211,6 +499,7 @@ pub fn register_enum_type(
     mapper: &mut TypeMapper,
     registry: &mut TypeRegistry,
     enum_def: &ast::EnumDef,
+    generic_templates: &[&ast::Item],
 ) {
     let name = &enum_def.name.node;
 
@@ -222,6 +511,19 @@ pub fn register_enum_type(
     // Already registered?
     if mapper.named_types.contains_key(name.as_str()) {
         return;
+    }
+
+    // Pre-register the enum name so recursive references (e.g., Box[Json] in Json) resolve
+    let placeholder_id = registry.insert(GirType::Named(name.clone()));
+    mapper.named_types.insert(name.clone(), placeholder_id);
+
+    // Pre-register generic types used in variant fields (e.g., Vector[Json], Dict[str, Json])
+    for v in &enum_def.variants {
+        if let ast::VariantFields::Tuple(types) = &v.node.fields {
+            for t in types {
+                ensure_generic_field_type_registered(mapper, registry, &t.node, generic_templates);
+            }
+        }
     }
 
     // Map variants
@@ -255,8 +557,7 @@ pub fn register_enum_type(
     };
 
     registry.add_type_def(type_def);
-    let type_id = registry.insert(GirType::Named(name.clone()));
-    mapper.named_types.insert(name.clone(), type_id);
+    // TypeId already registered via placeholder above — no need to insert again
 }
 
 /// Mangle a generic name: `Vector[int]` → `Vector__int64_t`.
@@ -280,7 +581,7 @@ fn mangle_tuple_name(elems: &[Spanned<Type>]) -> String {
 }
 
 /// Produce a C-compatible name fragment for a type (used in name mangling).
-fn mangle_type_for_name(ty: &Type) -> String {
+pub fn mangle_type_for_name(ty: &Type) -> String {
     match ty {
         Type::Primitive(prim) => match prim {
             PrimitiveType::Int | PrimitiveType::Int64 => "int64_t".to_string(),
@@ -329,10 +630,10 @@ mod tests {
         assert_eq!(mapper.map_primitive(&PrimitiveType::Float), F64_TYPE);
         assert_eq!(mapper.map_primitive(&PrimitiveType::Bool), BOOL_TYPE);
         assert_eq!(mapper.map_primitive(&PrimitiveType::Void), UNIT_TYPE);
-        // str maps to a Ptr(U8) type
+        // str maps to a Named("Str") type (matches the runtime fat pointer struct)
         let str_id = mapper.map_primitive(&PrimitiveType::Str);
         assert_eq!(str_id, mapper.str_type);
-        assert!(matches!(reg.get(str_id), Some(GirType::Ptr(U8_TYPE))));
+        assert!(matches!(reg.get(str_id), Some(GirType::Named(name)) if name == "Str"));
     }
 
     #[test]
@@ -357,7 +658,7 @@ mod tests {
         let mapper = TypeMapper::new(&mut reg);
 
         assert_eq!(mapper.format_specifier(I64_TYPE), "%lld");
-        assert_eq!(mapper.format_specifier(F64_TYPE), "%.17g");
+        assert_eq!(mapper.format_specifier(F64_TYPE), "%f");
         assert_eq!(mapper.format_specifier(mapper.str_type), "%s");
         assert_eq!(mapper.format_specifier(BOOL_TYPE), "%s");
         assert_eq!(mapper.format_specifier(U64_TYPE), "%llu");

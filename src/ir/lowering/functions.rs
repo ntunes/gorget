@@ -19,19 +19,25 @@ pub fn lower_function(
     let name = &func.name.node;
     let is_main = name == "main";
 
-    // Map return type
+    // Map return type — use fn_sigs if available (handles `throws` → Result)
     let return_type = if is_main {
         I32_TYPE
+    } else if let Some((_, ret_ty)) = ctx.fn_sigs.get(name) {
+        *ret_ty
     } else {
         ctx.type_mapper.map_ast_type(&func.return_type.node)
     };
 
-    // Map parameters
+    // Map parameters — MutableBorrow params become MutPtr types
     let params: Vec<(TypeId, Option<&str>)> = func
         .params
         .iter()
         .map(|p| {
-            let gir_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+            let base_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+            let gir_type = match p.node.ownership {
+                Ownership::MutableBorrow => ctx.register_mut_ptr_type(base_type),
+                _ => base_type,
+            };
             let param_name = p.node.name.node.as_str();
             (gir_type, Some(param_name))
         })
@@ -43,11 +49,31 @@ pub fn lower_function(
     ctx.clear_locals();
 
     // Register parameters as locals
+    ctx.callable_return_types.clear();
     for (i, p) in func.params.iter().enumerate() {
         let local_id = LocalId((i + 1) as u32); // _1, _2, ...
-        let gir_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+        let base_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+        let gir_type = match p.node.ownership {
+            Ownership::MutableBorrow => ctx.register_mut_ptr_type(base_type),
+            _ => base_type,
+        };
         ctx.register_local(&p.node.name.node, local_id, gir_type);
+        // Register mutable borrow params for auto-deref at use sites
+        if matches!(p.node.ownership, Ownership::MutableBorrow) {
+            ctx.mut_capture_locals.insert(local_id, base_type);
+        }
+        // Track callable parameter return types
+        if let Some(ret_type) = extract_callable_return_type(&p.node.type_.node, &[], ctx) {
+            ctx.callable_return_types.insert(local_id, ret_type);
+        }
     }
+
+    // Track throws context for Result wrapping in return/throw
+    ctx.current_throws_result_type = if func.throws.is_some() {
+        Some(return_type)
+    } else {
+        None
+    };
 
     // P2.6: Push Function drop scope
     ctx.drops.push_scope(DropScopeKind::Function);
@@ -75,8 +101,9 @@ pub fn lower_function(
                     builder.ret(FunctionBuilder::copy(LocalId(0)));
                 }
             } else {
-                // Explicit return already handled drops — just pop scope tracking
-                ctx.drops.pop_scope(&mut builder, &ctx.type_registry);
+                // Explicit return already handled drops via emit_early_exit_drops.
+                // Just pop the scope tracking without emitting more drops.
+                ctx.drops.pop_scope_no_emit();
             }
         }
 
@@ -112,23 +139,28 @@ pub fn lower_equip_method(
 
     let return_type = ctx.type_mapper.map_ast_type(&method.return_type.node);
 
-    // Determine self parameter type based on ownership
-    let self_type_id = ctx.type_mapper.map_ast_type(equipped_type);
-    let self_is_mutable = method.params.first()
-        .map(|p| {
-            p.node.name.node == "self" &&
-            matches!(p.node.ownership, Ownership::MutableBorrow)
-        })
+    // Check if method has a self parameter (static methods don't)
+    let has_self = method.params.first()
+        .map(|p| p.node.name.node == "self")
         .unwrap_or(false);
 
-    let self_ptr_type = if self_is_mutable {
-        ctx.register_mut_ptr_type(self_type_id)
+    // Build parameters: optional self pointer + explicit params
+    let mut params: Vec<(TypeId, Option<&str>)> = Vec::new();
+    let self_ptr_type = if has_self {
+        let self_type_id = ctx.type_mapper.map_ast_type(equipped_type);
+        let self_is_mutable = method.params.first()
+            .map(|p| matches!(p.node.ownership, Ownership::MutableBorrow))
+            .unwrap_or(false);
+        let spt = if self_is_mutable {
+            ctx.register_mut_ptr_type(self_type_id)
+        } else {
+            ctx.register_ptr_type(self_type_id)
+        };
+        params.push((spt, Some("self")));
+        Some(spt)
     } else {
-        ctx.register_ptr_type(self_type_id)
+        None
     };
-
-    // Build parameters: self pointer + explicit params
-    let mut params: Vec<(TypeId, Option<&str>)> = vec![(self_ptr_type, Some("self"))];
     for p in &method.params {
         if p.node.name.node == "self" {
             continue; // self handled above
@@ -142,11 +174,15 @@ pub fn lower_equip_method(
     // Clear and register locals
     ctx.clear_locals();
 
-    // Register self as local _1
-    ctx.register_local("self", LocalId(1), self_ptr_type);
+    // Register self as local _1 (only if method has self)
+    let mut param_idx = if let Some(spt) = self_ptr_type {
+        ctx.register_local("self", LocalId(1), spt);
+        2u32
+    } else {
+        1u32
+    };
 
     // Register other params
-    let mut param_idx = 2u32;
     for p in &method.params {
         if p.node.name.node == "self" {
             continue;
@@ -173,7 +209,7 @@ pub fn lower_equip_method(
                     builder.ret(FunctionBuilder::copy(LocalId(0)));
                 }
             } else {
-                ctx.drops.pop_scope(&mut builder, &ctx.type_registry);
+                ctx.drops.pop_scope_no_emit();
             }
         }
 
@@ -185,7 +221,7 @@ pub fn lower_equip_method(
         }
 
         FunctionBody::Declaration | FunctionBody::Extern(_) => {
-            ctx.drops.pop_scope(&mut builder, &ctx.type_registry);
+            ctx.drops.pop_scope_no_emit();
             return;
         }
     }
@@ -208,6 +244,12 @@ pub fn lower_generic_function(
     mangled_name: &str,
 ) {
     let subs = build_subs(template.generic_params.as_ref(), type_args);
+
+    // Build type name substitutions for struct init/method calls in the body
+    build_type_name_subs(ctx, &subs);
+
+    // Build generic type parameter → concrete TypeId substitutions
+    build_generic_type_params(ctx, &subs);
 
     // Map return type with substitutions
     let return_type = substitute_and_map_type(ctx, &template.return_type.node, &subs);
@@ -232,10 +274,15 @@ pub fn lower_generic_function(
     // Clear and register locals
     ctx.clear_locals();
 
+    ctx.callable_return_types.clear();
     for (i, p) in template.params.iter().enumerate() {
         let local_id = LocalId((i + 1) as u32);
         let gir_type = substitute_and_map_type(ctx, &p.node.type_.node, &subs);
         ctx.register_local(&p.node.name.node, local_id, gir_type);
+        // Track callable parameter return types for indirect call lowering
+        if let Some(ret_type) = extract_callable_return_type(&p.node.type_.node, &subs, ctx) {
+            ctx.callable_return_types.insert(local_id, ret_type);
+        }
     }
 
     // P2.6: Push Function drop scope
@@ -255,7 +302,7 @@ pub fn lower_generic_function(
                     builder.ret(FunctionBuilder::copy(LocalId(0)));
                 }
             } else {
-                ctx.drops.pop_scope(&mut builder, &ctx.type_registry);
+                ctx.drops.pop_scope_no_emit();
             }
         }
 
@@ -267,11 +314,15 @@ pub fn lower_generic_function(
         }
 
         FunctionBody::Declaration | FunctionBody::Extern(_) => {
-            ctx.drops.pop_scope(&mut builder, &ctx.type_registry);
+            ctx.drops.pop_scope_no_emit();
+            ctx.type_name_subs.clear();
+            ctx.generic_type_params.clear();
             return;
         }
     }
 
+    ctx.type_name_subs.clear();
+    ctx.generic_type_params.clear();
     module.functions.push(builder.build());
 }
 
@@ -286,7 +337,41 @@ pub fn lower_generic_equip_methods(
     type_args: &[Spanned<Type>],
     mangled_type_name: &str,
 ) {
+    lower_generic_equip_methods_with_defaults(ctx, module, equip, type_args, mangled_type_name, None);
+}
+
+/// Lower monomorphized equip methods for a generic type instantiation,
+/// with optional AST module for default trait method emission.
+pub fn lower_generic_equip_methods_with_defaults(
+    ctx: &mut LoweringContext,
+    module: &mut crate::ir::Module,
+    equip: &ast::EquipBlock,
+    type_args: &[Spanned<Type>],
+    mangled_type_name: &str,
+    ast_module: Option<&ast::Module>,
+) {
     let subs = build_equip_subs(equip, type_args);
+
+    // Build type name substitutions for struct init/method calls in the body
+    build_type_name_subs(ctx, &subs);
+
+    // Add substitution for the equipped type itself (e.g., Pair__T → Pair__int64_t)
+    // This handles cases where the method body references the struct/enum being equipped
+    if let Type::Named { name, generic_args } = &equip.type_.node {
+        let base_name = &name.node;
+        if !generic_args.is_empty() {
+            // Mangle the template name (with generic params as wildcards)
+            // For Pair[T], we want "Pair__T"
+            let template_mangled = super::types::mangle_generic_name(base_name, generic_args);
+            // mangled_type_name is already the concrete name (e.g., "Pair__int64_t")
+            if template_mangled != mangled_type_name {
+                ctx.type_name_subs.insert(template_mangled, mangled_type_name.to_string());
+            }
+        }
+    }
+
+    // Build generic type parameter → concrete TypeId substitutions
+    build_generic_type_params(ctx, &subs);
 
     for method in &equip.items {
         let method_def = &method.node;
@@ -349,7 +434,7 @@ pub fn lower_generic_equip_methods(
                         builder.ret(FunctionBuilder::copy(LocalId(0)));
                     }
                 } else {
-                    ctx.drops.pop_scope(&mut builder, &ctx.type_registry);
+                    ctx.drops.pop_scope_no_emit();
                 }
             }
             FunctionBody::Expression(expr) => {
@@ -359,13 +444,53 @@ pub fn lower_generic_equip_methods(
                 builder.ret(FunctionBuilder::copy(LocalId(0)));
             }
             FunctionBody::Declaration | FunctionBody::Extern(_) => {
-                ctx.drops.pop_scope(&mut builder, &ctx.type_registry);
+                ctx.drops.pop_scope_no_emit();
                 continue;
             }
         }
 
         module.functions.push(builder.build());
     }
+
+    // Emit default trait methods that aren't overridden in the equip block
+    if let (Some(ast_mod), Some(trait_ref)) = (ast_module, &equip.trait_) {
+        use crate::parser::ast::{Item, TraitItem};
+        let trait_name = super::traits::extract_trait_name(&trait_ref.trait_name.node);
+        if !trait_name.is_empty() {
+            let implemented: Vec<String> = equip.items.iter()
+                .map(|m| m.node.name.node.clone())
+                .collect();
+            // Reconstruct the substituted equipped type for lower_equip_method
+            let substituted_type = generics::substitute_type_pub(&equip.type_.node, &subs);
+            // Find trait def and emit defaults
+            for item in &ast_mod.items {
+                if let Item::Trait(trait_def) = &item.node {
+                    if trait_def.name.node == trait_name {
+                        for trait_item in &trait_def.items {
+                            if let TraitItem::Method(default_method) = &trait_item.node {
+                                let method_name = &default_method.name.node;
+                                if implemented.contains(method_name) {
+                                    continue;
+                                }
+                                match &default_method.body {
+                                    FunctionBody::Declaration | FunctionBody::Extern(_) => continue,
+                                    FunctionBody::Block(_) | FunctionBody::Expression(_) => {}
+                                }
+                                // Emit as {mangled_type_name}__{method_name}
+                                lower_equip_method(
+                                    ctx, module, default_method,
+                                    mangled_type_name, &substituted_type,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    ctx.type_name_subs.clear();
+    ctx.generic_type_params.clear();
 }
 
 /// Build type parameter substitutions from generic params + concrete type args.
@@ -418,4 +543,93 @@ fn substitute_and_map_type(
 ) -> TypeId {
     let substituted = generics::substitute_type_pub(ty, subs);
     ctx.type_mapper.map_ast_type(&substituted)
+}
+
+/// Extract the return type of a callable/function parameter type.
+///
+/// For parameters like `Callable[T(int)]` or `int(int)`, extracts the return type
+/// after applying generic substitutions. Returns None if the type isn't a callable.
+fn extract_callable_return_type(
+    ty: &Type,
+    subs: &[(String, Type)],
+    ctx: &LoweringContext,
+) -> Option<TypeId> {
+    match ty {
+        // Callable[RetType(Params...)] or MutCallable[...] or ConsumeCallable[...]
+        Type::Named { name, generic_args } => {
+            let name_str = name.node.as_str();
+            if name_str == "Callable" || name_str == "MutCallable" || name_str == "ConsumeCallable" {
+                // The generic_args should contain a single Function type
+                if let Some(func_type) = generic_args.first() {
+                    if let Type::Function { return_type, .. } = &func_type.node {
+                        let ret_type = substitute_and_map_type(ctx, &return_type.node, subs);
+                        return Some(ret_type);
+                    }
+                }
+            }
+            None
+        }
+        // Direct function type: RetType(Params...)
+        Type::Function { return_type, .. } => {
+            let ret_type = substitute_and_map_type(ctx, &return_type.node, subs);
+            Some(ret_type)
+        }
+        _ => None,
+    }
+}
+
+/// Build generic type parameter → concrete TypeId substitutions.
+///
+/// For each type parameter (e.g., T), maps it to the concrete TypeId
+/// (e.g., I64_TYPE for int). This enables `map_type_with_subs` to resolve
+/// bare type parameters in variable declarations inside generic bodies.
+fn build_generic_type_params(ctx: &mut LoweringContext, subs: &[(String, Type)]) {
+    ctx.generic_type_params.clear();
+    for (param_name, concrete_ty) in subs {
+        let type_id = ctx.type_mapper.map_ast_type(concrete_ty);
+        ctx.generic_type_params.insert(param_name.clone(), type_id);
+    }
+}
+
+/// Build type name substitution map for generic body lowering.
+///
+/// For each registered type name that contains a type parameter placeholder
+/// (e.g., `Container__T`), computes the concrete mangled name (e.g.,
+/// `Container__int64_t`) and stores the mapping in ctx.type_name_subs.
+fn build_type_name_subs(ctx: &mut LoweringContext, subs: &[(String, Type)]) {
+    ctx.type_name_subs.clear();
+
+    // Build a map of param-mangled-fragment → concrete-mangled-fragment.
+    // E.g., for sub T → int:  "T" → "int64_t"
+    // For sub T → str:  "T" → "Str"
+    let fragment_subs: Vec<(String, String)> = subs.iter().map(|(param, concrete_ty)| {
+        let concrete_name = super::types::mangle_type_for_name(concrete_ty);
+        (param.clone(), concrete_name)
+    }).collect();
+
+    // Scan all known type names in the registry for template patterns.
+    // For each name like "Container__T", substitute "T" → "int64_t" to get "Container__int64_t".
+    let type_names: Vec<String> = ctx.type_registry.type_defs().iter()
+        .map(|def| def.name.clone())
+        .collect();
+    for name in type_names {
+        let mut substituted = name.clone();
+        let mut changed = false;
+        for (param, concrete) in &fragment_subs {
+            // Match `__T` at end of name or `__T__` in middle
+            let pattern_end = format!("__{param}");
+            let pattern_mid = format!("__{param}__");
+            if substituted.ends_with(&pattern_end) {
+                let prefix = &substituted[..substituted.len() - pattern_end.len()];
+                substituted = format!("{prefix}__{concrete}");
+                changed = true;
+            } else if substituted.contains(&pattern_mid) {
+                substituted = substituted.replace(&pattern_mid, &format!("__{concrete}__"));
+                changed = true;
+            }
+        }
+        if changed && name != substituted {
+            ctx.type_name_subs.insert(name, substituted);
+        }
+    }
 }

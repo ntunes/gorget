@@ -618,6 +618,7 @@ fn try_build_ir(
     source: &str,
     dep_paths: HashMap<String, PathBuf>,
     output_dir: Option<&Path>,
+    output_exe: Option<&Path>,
 ) -> Result<PathBuf, String> {
     let mut parser = Parser::new(source);
     let module = parser.parse_module();
@@ -650,17 +651,24 @@ fn try_build_ir(
     let c_code = gorget::backend::c::generate_c(&gir_module);
 
     // Determine output paths
-    let input_path = Path::new(filename);
-    let default_dir = input_path.parent().unwrap_or(Path::new("."));
-    let dir = output_dir.unwrap_or(default_dir);
-    let stem = input_path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("output");
+    let (c_path, exe_path) = if let Some(out) = output_exe {
+        let out = std::path::absolute(out).unwrap_or(out.to_path_buf());
+        let c_path = out.with_extension("c");
+        (c_path, out)
+    } else {
+        let input_path = Path::new(filename);
+        let default_dir = input_path.parent().unwrap_or(Path::new("."));
+        let dir = output_dir.unwrap_or(default_dir);
+        let stem = input_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("output");
 
-    let c_path = dir.join(format!("{stem}.c"));
-    let exe_path = dir.join(stem);
-    let exe_path = std::path::absolute(&exe_path).unwrap_or(exe_path);
+        let c_path = dir.join(format!("{stem}.c"));
+        let exe_path = dir.join(stem);
+        let exe_path = std::path::absolute(&exe_path).unwrap_or(exe_path);
+        (c_path, exe_path)
+    };
 
     // Write .c file
     if let Err(e) = fs::write(&c_path, &c_code) {
@@ -1401,7 +1409,7 @@ fn main() {
             let dep_paths = resolve_deps_for_file(filename);
             if ir_mode {
                 // --ir: use the GIR pipeline
-                let result = try_build_ir(filename, &source, dep_paths, None);
+                let result = try_build_ir(filename, &source, dep_paths, None, shared_output_path.as_deref());
                 match result {
                     Ok(p) => println!("Built (GIR): {}", p.display()),
                     Err(e) => {
@@ -1453,7 +1461,7 @@ fn main() {
                     eprintln!("Failed to create temp directory: {e}");
                     process::exit(1);
                 });
-                let result = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()));
+                let result = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None);
                 match result {
                     Ok(exe_path) => {
                         let status = Command::new(&exe_path)

@@ -1873,7 +1873,7 @@ fn assert_fails() {
 
 #[test]
 fn bounds_check() {
-    run_gg("bounds_check.gg", "1\n20\n1\n1\n");
+    run_gg("bounds_check.gg", "true\n20\ntrue\ntrue\n");
 }
 
 #[test]

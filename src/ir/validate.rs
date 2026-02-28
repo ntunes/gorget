@@ -335,7 +335,7 @@ fn check_instruction_locals(
         Instruction::PushAllocator { allocator } => {
             check_operand_locals(allocator, max, ctx, errors);
         }
-        Instruction::PopAllocator | Instruction::Nop => {}
+        Instruction::PopAllocator | Instruction::Nop | Instruction::InlineC { .. } => {}
     }
 }
 
@@ -347,7 +347,7 @@ fn check_instruction_calls(
 ) {
     match inst {
         Instruction::Call { func, .. } | Instruction::CallExtern { func, .. } => {
-            if !callables.contains(func.as_str()) {
+            if !callables.contains(func.as_str()) && !func.starts_with("__callable_") {
                 errors.push(ValidationError {
                     kind: ValidationErrorKind::UndefinedFunction(func.clone()),
                     context: ctx.into(),

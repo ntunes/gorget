@@ -57,6 +57,7 @@ pub enum Constant {
     U16(u16),
     U32(u32),
     U64(u64),
+    Char(u32),
     F32(f32),
     F64(f64),
     Str(String),
@@ -64,6 +65,8 @@ pub enum Constant {
     Unit,
     /// sizeof(type) — emitted as `sizeof(C_type_name)` by the C backend.
     SizeOf(TypeId),
+    /// Reference to a named function (for passing functions as Callable arguments).
+    FuncRef(String),
 }
 
 /// Instructions that don't transfer control flow.
@@ -215,6 +218,11 @@ pub enum Instruction {
     },
     PopAllocator,
 
+    // -- Inline C code (for patterns that can't be expressed in GIR) --
+    InlineC {
+        code: String,
+    },
+
     // -- No-op (for source mapping) --
     Nop,
 }
@@ -232,6 +240,12 @@ pub enum BinOp {
     BitXor,
     Shl,
     Shr,
+    /// Wrapping (modular) addition: cast to unsigned, add, cast back.
+    AddWrap,
+    /// Wrapping (modular) subtraction.
+    SubWrap,
+    /// Wrapping (modular) multiplication.
+    MulWrap,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

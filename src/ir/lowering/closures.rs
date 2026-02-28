@@ -240,16 +240,17 @@ pub fn emit_closure_call_function(
                 ctx.register_local(&cap.name, dst, cap.type_id);
             }
             CaptureMode::ByMutRef => {
-                // Load pointer field, then deref
+                // Load pointer field from env struct
                 let ptr_type = ctx.type_registry.insert(GirType::MutPtr(cap.type_id));
                 let ptr_local = builder.field_load(
                     Place::local(env_local),
                     i as u32,
                     ptr_type,
                 );
-                // For now, register the pointer as the local
-                // (dereferencing happens at use sites in a full implementation)
-                ctx.register_local(&cap.name, ptr_local, cap.type_id);
+                // Register with pointer type; reads/writes in the body will
+                // go through Deref projections (checked via mut_capture_locals).
+                ctx.register_local(&cap.name, ptr_local, ptr_type);
+                ctx.mut_capture_locals.insert(ptr_local, cap.type_id);
             }
         }
     }
@@ -280,12 +281,24 @@ pub fn emit_closure_call_function(
         _ => {
             // Expression body
             let result = lower_expr(ctx, &mut builder, &closure.body);
+            // Re-infer return type from the actual body result (the pre-inference
+            // may have returned I64_TYPE for variant constructors like Some(x+1))
+            let actual_type = super::exprs::infer_operand_type_full(ctx, &result, &builder);
+            if actual_type != closure.return_type && actual_type != UNIT_TYPE {
+                builder.locals[0].type_id = actual_type;
+            }
             builder.assign(Place::local(LocalId(0)), result);
             builder.ret(FunctionBuilder::copy(LocalId(0)));
         }
     }
 
-    builder.build()
+    let mut func = builder.build();
+    // Update the function's return_type to match the actual local[0] type
+    let actual_ret = func.locals[0].type_id;
+    if actual_ret != func.return_type {
+        func.return_type = actual_ret;
+    }
+    func
 }
 
 /// Collect free variables referenced in a closure body.
@@ -562,10 +575,42 @@ fn infer_closure_return_type(ctx: &LoweringContext, body: &Spanned<Expr>) -> Typ
                 I64_TYPE
             }
         }
-        Expr::Call { callee, .. } => {
+        Expr::Call { callee, args, .. } => {
             if let Expr::Identifier(name) = &callee.node {
                 if let Some((_, ret_type)) = ctx.fn_sigs.get(name.as_str()) {
                     return *ret_type;
+                }
+                // Enum variant constructors: Some(x), Ok(x), Error(x)
+                if name == "Some" && args.len() == 1 {
+                    let inner_type = infer_closure_return_type(ctx, &args[0].node.value);
+                    let mangled = format!("Option__{}", crate::ir::types::format_type_for_mangle(inner_type, &ctx.type_registry));
+                    if let Some(&tid) = ctx.type_mapper.named_types.get(&mangled) {
+                        return tid;
+                    }
+                }
+                if (name == "Ok" || name == "Error") && args.len() == 1 {
+                    // Check expected_type from context
+                    if let Some(et) = ctx.expected_type {
+                        let tn = ctx.type_registry.type_name(et).unwrap_or_default();
+                        if tn.starts_with("Result__") {
+                            return et;
+                        }
+                    }
+                }
+                // Check enum_variants for user-defined enums
+                if let Some((enum_name, _)) = ctx.enum_variants.get(name.as_str()) {
+                    if let Some(&type_id) = ctx.type_mapper.named_types.get(enum_name.as_str()) {
+                        return type_id;
+                    }
+                }
+            }
+            // None() call
+            if matches!(callee.node, Expr::NoneLiteral) {
+                if let Some(et) = ctx.expected_type {
+                    let tn = ctx.type_registry.type_name(et).unwrap_or_default();
+                    if tn.starts_with("Option__") {
+                        return et;
+                    }
                 }
             }
             I64_TYPE

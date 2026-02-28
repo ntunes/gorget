@@ -60,6 +60,12 @@ impl DropElaborator {
         }
     }
 
+    /// Pop the current drop scope WITHOUT emitting drops.
+    /// Used when drops were already emitted via emit_early_exit_drops (e.g., explicit return).
+    pub fn pop_scope_no_emit(&mut self) {
+        self.scopes.pop();
+    }
+
     /// Register an owned (Move-type) local in the current scope.
     ///
     /// Only registers locals whose type has Move semantics — Copy types
@@ -94,15 +100,18 @@ impl DropElaborator {
     /// Drops all locals from the current scope back to (and excluding)
     /// the target scope kind. For `return`, drops everything up to Function.
     /// For `break`/`continue`, drops up to the enclosing Loop.
+    ///
+    /// `exclude` optionally skips a local (e.g., the return value being moved out).
     pub fn emit_early_exit_drops(
         &self,
         builder: &mut FunctionBuilder,
         registry: &TypeRegistry,
         target: DropScopeKind,
+        exclude: Option<LocalId>,
     ) {
         // Walk scopes from innermost to outermost
         for scope in self.scopes.iter().rev() {
-            emit_scope_drops(builder, registry, &scope.entries);
+            emit_scope_drops_excluding(builder, registry, &scope.entries, exclude);
             if scope.kind == target {
                 break;
             }
@@ -139,7 +148,24 @@ fn emit_scope_drops(
     registry: &TypeRegistry,
     entries: &[DropEntry],
 ) {
+    emit_scope_drops_excluding(builder, registry, entries, None);
+}
+
+/// Emit Drop/DropIfAlive for a list of entries in LIFO order,
+/// optionally excluding a specific local (e.g., the return value being moved out).
+fn emit_scope_drops_excluding(
+    builder: &mut FunctionBuilder,
+    registry: &TypeRegistry,
+    entries: &[DropEntry],
+    exclude: Option<LocalId>,
+) {
     for entry in entries.iter().rev() {
+        // Skip excluded local (return value being moved out)
+        if let Some(excl) = exclude {
+            if entry.local == excl {
+                continue;
+            }
+        }
         // Verify the type still needs dropping (defense-in-depth)
         if !needs_drop(entry.type_id, registry) {
             continue;
@@ -194,14 +220,14 @@ mod tests {
     #[test]
     fn needs_drop_move_type() {
         let reg = make_move_registry();
-        let owned_string_id = TypeId(12); // first inserted after primitives
+        let owned_string_id = TypeId(13); // first inserted after primitives
         assert!(needs_drop(owned_string_id, &reg));
     }
 
     #[test]
     fn drop_elaborator_scope_lifecycle() {
         let reg = make_move_registry();
-        let owned_string_id = TypeId(12);
+        let owned_string_id = TypeId(13);
 
         let mut elab = DropElaborator::new();
         let mut builder = FunctionBuilder::new("test", UNIT_TYPE, &[]);
@@ -225,7 +251,7 @@ mod tests {
     #[test]
     fn drop_elaborator_maybe_moved() {
         let reg = make_move_registry();
-        let owned_string_id = TypeId(12);
+        let owned_string_id = TypeId(13);
 
         let mut elab = DropElaborator::new();
         let mut builder = FunctionBuilder::new("test", UNIT_TYPE, &[]);
@@ -254,7 +280,7 @@ mod tests {
     #[test]
     fn drop_elaborator_nested_scopes() {
         let reg = make_move_registry();
-        let owned_string_id = TypeId(12);
+        let owned_string_id = TypeId(13);
 
         let mut elab = DropElaborator::new();
         let mut builder = FunctionBuilder::new("test", UNIT_TYPE, &[]);
@@ -289,7 +315,7 @@ mod tests {
     #[test]
     fn drop_elaborator_early_return() {
         let reg = make_move_registry();
-        let owned_string_id = TypeId(12);
+        let owned_string_id = TypeId(13);
 
         let mut elab = DropElaborator::new();
         let mut builder = FunctionBuilder::new("test", UNIT_TYPE, &[]);
@@ -303,7 +329,7 @@ mod tests {
         elab.register_local(s2, owned_string_id, &reg);
 
         // Early return — should drop s2 (Block) + s1 (Function)
-        elab.emit_early_exit_drops(&mut builder, &reg, DropScopeKind::Function);
+        elab.emit_early_exit_drops(&mut builder, &reg, DropScopeKind::Function, None);
 
         let drop_count = builder.blocks[0].instructions.iter()
             .filter(|inst| matches!(inst, Instruction::Drop { .. }))

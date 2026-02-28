@@ -473,6 +473,9 @@ fn print_instruction(out: &mut String, inst: &Instruction, reg: &TypeRegistry) {
         Instruction::PopAllocator => {
             write!(out, "pop_allocator").unwrap();
         }
+        Instruction::InlineC { code } => {
+            write!(out, "inline_c {code:?}").unwrap();
+        }
         Instruction::Nop => {
             write!(out, "nop").unwrap();
         }
@@ -599,12 +602,14 @@ fn format_constant(c: &Constant) -> String {
         Constant::U16(n) => format!("{}u16", n),
         Constant::U32(n) => format!("{}u32", n),
         Constant::U64(n) => format!("{}u64", n),
+        Constant::Char(n) => format!("'{}'", char::from_u32(*n).unwrap_or('?')),
         Constant::F32(n) => format!("{}f32", n),
         Constant::F64(n) => format!("{}f64", n),
         Constant::Str(s) => format!("\"{}\"", s),
         Constant::Null => "null".into(),
         Constant::Unit => "unit".into(),
         Constant::SizeOf(type_id) => format!("sizeof(Type{})", type_id.0),
+        Constant::FuncRef(name) => format!("@{}", name),
     }
 }
 
@@ -621,6 +626,9 @@ fn format_binop(op: BinOp) -> &'static str {
         BinOp::BitXor => "bit_xor",
         BinOp::Shl => "shl",
         BinOp::Shr => "shr",
+        BinOp::AddWrap => "add_wrap",
+        BinOp::SubWrap => "sub_wrap",
+        BinOp::MulWrap => "mul_wrap",
     }
 }
 
