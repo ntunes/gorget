@@ -13,10 +13,25 @@ def test_one(gg_path):
         ["cargo", "run", "--quiet", "--", "build", gg_path],
         capture_output=True, text=True, timeout=60
     )
-    if r.returncode != 0:
-        return ("SKIP", stem, "", "", "ref build fail")
 
-    # Get expected output
+    if r.returncode != 0:
+        # Reference build failed. If it's a semantic error, both pipelines should reject it.
+        # If it's a linker/C error, it's a test-infra issue — keep skipping.
+        ref_stderr = r.stderr
+        if "semantic error" not in ref_stderr and "error(s) found" not in ref_stderr:
+            return ("SKIP", stem, "", "", "ref build fail (non-semantic)")
+        # Semantic error: verify GIR also rejects the program
+        r_ir = subprocess.run(
+            ["cargo", "run", "--quiet", "--", "build", "--ir", gg_path, "-o", ir_bin],
+            capture_output=True, text=True, timeout=60
+        )
+        if r_ir.returncode != 0:
+            return ("PASS", stem, "", "", "both reject (expected compile error)")
+        else:
+            return ("MISMATCH", stem, "build fail", "build success",
+                    "GIR accepted code that should be rejected")
+
+    # Get expected output from reference run
     try:
         r2 = subprocess.run([ref_bin], capture_output=True, text=True, timeout=10)
         expected = r2.stdout
@@ -25,7 +40,27 @@ def test_one(gg_path):
         return ("SKIP", stem, "", "", f"ref run fail: {e}")
 
     if not ref_ok and expected == "":
-        return ("SKIP", stem, "", "", "ref crashed")
+        # Reference crashed with no stdout (e.g. div_by_zero, overflow, assert_fails).
+        # Verify the GIR binary also crashes.
+        r_ir = subprocess.run(
+            ["cargo", "run", "--quiet", "--", "build", "--ir", gg_path, "-o", ir_bin],
+            capture_output=True, text=True, timeout=60
+        )
+        if r_ir.returncode != 0:
+            err = r_ir.stderr.strip().split('\n')[-1] if r_ir.stderr else ""
+            return ("BUILD_FAIL", stem, "", "", err[-150:])
+        try:
+            r4 = subprocess.run([ir_bin], capture_output=True, text=True, timeout=10)
+            if r4.returncode != 0 and r4.stdout == "":
+                return ("PASS", stem, "", "", "both crash at runtime")
+            elif r4.returncode == 0:
+                return ("MISMATCH", stem, "crash(exit!=0)", "success(exit=0)",
+                        "GIR should have crashed")
+            else:
+                return ("MISMATCH", stem, "", r4.stdout,
+                        "GIR crashed but produced unexpected stdout")
+        except Exception:
+            return ("SKIP", stem, "", "", "ir run fail")
 
     # Build with IR
     r3 = subprocess.run(
@@ -60,7 +95,7 @@ def main():
         status, stem, exp, act, detail = test_one(gg)
         results[status].append((stem, detail))
         if status == "BUILD_FAIL":
-            print(f"  BUILD_FAIL: {stem}  {detail}")
+            print(f"  BUILD_FAIL: {stem}  Generated C file: /tmp/{stem}_ir.c")
         elif status == "MISMATCH":
             print(f"  MISMATCH:  {stem}")
             if exp and act:
@@ -72,6 +107,8 @@ def main():
                         break
                 if len(exp_lines) != len(act_lines):
                     print(f"    exp {len(exp_lines)} lines, got {len(act_lines)} lines")
+        elif status == "SKIP":
+            print(f"  SKIP: {stem}  ({detail})")
 
     print(f"\n=== Results ({len(fixtures)} tests) ===")
     print(f"PASS:       {len(results['PASS'])}")

@@ -308,7 +308,7 @@ fn returns_cstr(name: &str) -> bool {
         | "gorget_path_parent" | "gorget_path_basename" | "gorget_path_extension"
         | "gorget_path_stem" | "gorget_path_join"
         | "gorget_readline" | "gorget_input"
-        | "gorget_exec_output" | "gorget_getcwd" | "gorget_platform"
+        | "gorget_getcwd" | "gorget_platform"
         | "gorget_format_time"
         | "gorget_base64_encode" | "gorget_hex_encode"
         | "gorget_bytes_to_str" | "gorget_bytes_to_hex"
@@ -4038,7 +4038,7 @@ fn infer_runtime_return_type(name: &str) -> Option<&'static str> {
         // Stdlib: CLI / process
         "args" | "gorget_args" => Some("GorgetArray"),
         "exec" | "gorget_exec" => Some("int64_t"),
-        "exec_output" | "gorget_exec_output" => Some("GorgetString"),
+        "exec_output" | "gorget_exec_output" => Some("ExecResult"),
         // Stdlib: environment
         "getenv" | "gorget_getenv" => Some("Str"),
         "platform" | "gorget_platform" => Some("Str"),
