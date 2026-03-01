@@ -1,0 +1,22 @@
+from std.channel import Channel
+
+void use_mutex(Mutex[int] m):
+    Guard[int] g = m.lock()
+    int v = g.get()
+    print(v)
+    g.set(v + 1)
+
+void use_channel(Channel[int] ch):
+    ch.send(99)
+
+void main():
+    Mutex[int] m = Mutex[int](10)
+    use_mutex(m)
+    Guard[int] g2 = m.lock()
+    int final_val = g2.get()
+    print(final_val)
+
+    Channel[int] ch = Channel[int](1)
+    use_channel(ch)
+    int received = ch.recv()
+    print(received)

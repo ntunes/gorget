@@ -164,10 +164,53 @@ impl TypeMapper {
                         self.named_types.insert(mangled, type_id);
                         return type_id;
                     }
+                    // Auto-register concurrency types: Channel[T], Shared[T], Mutex[T], Guard[T].
+                    // These are opaque C pointer typedefs with no GIR-level fields.
+                    // Registering here (in the fn_sigs pre-scan path) means function parameters
+                    // of these types resolve to the correct TypeId before bodies are lowered.
+                    if matches!(base, "Channel" | "Shared" | "Mutex" | "Guard") {
+                        let (copy_sem, drop_strat) = if base == "Guard" {
+                            // Guard[T] is Move + RAII drop that unlocks the mutex.
+                            // The drop function name follows the GIR convention: <mangled>__drop.
+                            (CopySemantics::Move, DropStrategy::Trivial(format!("{mangled}__drop")))
+                        } else {
+                            // Channel, Shared, Mutex: opaque pointer — Copy, no drop in V1.
+                            (CopySemantics::Copy, DropStrategy::None)
+                        };
+                        registry.add_type_def(TypeDef {
+                            name: mangled.clone(),
+                            kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
+                            metadata: TypeMetadata {
+                                size: None,
+                                align: None,
+                                copy_semantics: copy_sem,
+                                drop_strategy: drop_strat,
+                            },
+                        });
+                        let type_id = registry.insert(GirType::Named(mangled.clone()));
+                        self.named_types.insert(mangled, type_id);
+                        return type_id;
+                    }
                     return UNIT_TYPE;
                 }
                 if let Some(&id) = self.named_types.get(name.node.as_str()) {
                     return id;
+                }
+                // Auto-register the non-generic TaskGroup type (Move pointer, RAII join+free).
+                if name.node == "TaskGroup" {
+                    registry.add_type_def(TypeDef {
+                        name: "TaskGroup".to_string(),
+                        kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
+                        metadata: TypeMetadata {
+                            size: None,
+                            align: None,
+                            copy_semantics: CopySemantics::Move,
+                            drop_strategy: DropStrategy::Trivial("gorget_task_group_free".to_string()),
+                        },
+                    });
+                    let type_id = registry.insert(GirType::Named("TaskGroup".to_string()));
+                    self.named_types.insert("TaskGroup".to_string(), type_id);
+                    return type_id;
                 }
                 UNIT_TYPE
             }

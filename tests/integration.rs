@@ -6399,6 +6399,14 @@ fn async_task_group() {
     run_gg("async_task_group.gg", "2");
 }
 
+#[test]
+fn concurrency_params() {
+    // Verifies that Mutex[T], Guard[T], Channel[T] work as function parameters —
+    // the map_ast_type_mut pre-registration fix ensures these types resolve to
+    // correct TypeIds before function bodies are lowered, not UNIT_TYPE.
+    run_gg("concurrency_params.gg", "10\n11\n99");
+}
+
 // Parser Comparison Test
 // ═══════════════════════════════════════════════════════════════
 

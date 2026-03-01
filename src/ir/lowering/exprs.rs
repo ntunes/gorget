@@ -692,7 +692,15 @@ fn lower_struct_literal(
     // by generic struct init, so we route through a named constructor function.
     if effective_name.starts_with("Channel__") && args.len() == 1 {
         let cap = lower_expr(ctx, builder, &args[0]);
-        let chan_type = ctx.type_mapper.lookup_named(&effective_name).unwrap_or(UNIT_TYPE);
+        let chan_type = if let Some(tid) = ctx.type_mapper.lookup_named(&effective_name) {
+            tid
+        } else {
+            // Lazily register if not pre-registered by map_ast_type_mut (body-only usage).
+            let tid = ctx.type_registry.insert(crate::ir::types::GirType::Named(effective_name.clone()));
+            ctx.type_mapper.register_named(effective_name.clone(), tid);
+            ensure_channel_type_def(ctx, &effective_name);
+            tid
+        };
         let new_fn = format!("{effective_name}__new");
         let dst = builder.call(&new_fn, vec![cap], chan_type);
         return FunctionBuilder::copy(dst);
@@ -4606,6 +4614,26 @@ pub fn ensure_guard_type_def(ctx: &mut LoweringContext, guard_type_name: &str, i
         },
     };
     ctx.type_registry.add_type_def(type_def);
+}
+
+/// Ensure a Channel[T] type has a TypeDef in the registry (Copy pointer, no RAII drop in V1).
+/// Channel__T is an opaque GorgetChannel* pointer shared across threads.
+/// This is a no-op if map_ast_type_mut already pre-registered the type during the fn_sigs scan.
+pub fn ensure_channel_type_def(ctx: &mut LoweringContext, channel_type_name: &str) {
+    use crate::ir::types::{TypeDef, TypeDefKind, StructDef, TypeMetadata, CopySemantics, DropStrategy};
+    if ctx.type_registry.get_type_def(channel_type_name).is_some() {
+        return;
+    }
+    ctx.type_registry.add_type_def(TypeDef {
+        name: channel_type_name.to_string(),
+        kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
+        metadata: TypeMetadata {
+            size: None,
+            align: None,
+            copy_semantics: CopySemantics::Copy,
+            drop_strategy: DropStrategy::None,
+        },
+    });
 }
 
 /// Ensure TaskGroup has a TypeDef in the registry (Move pointer, drop waits for all children).
