@@ -90,11 +90,6 @@ fn resolve_deps_for_file(filename: &str) -> HashMap<String, PathBuf> {
     HashMap::new()
 }
 
-/// Check if the source text defines async functions.
-/// Used to fall back to old codegen (GIR doesn't support async yet).
-fn source_has_async(source: &str) -> bool {
-    source.lines().any(|line| line.trim_start().starts_with("async "))
-}
 
 /// Check if the source text uses hot-reload mode.
 /// Used to fall back to old codegen (GIR doesn't support hot-reload yet).
@@ -1241,7 +1236,6 @@ fn main() {
         let legacy = args.iter().any(|a| a == "--legacy-codegen");
         let ir = args.iter().any(|a| a == "--ir");
         let use_legacy = legacy
-            || source_has_async(&source)
             || source_has_hot_reload(&source)
             || trace || strip_asserts || no_strip_asserts
             || overflow_wrap || overflow_checked;
@@ -1525,17 +1519,16 @@ fn main() {
                     }
                 }
             } else if !ir_mode && (legacy_codegen
-                || source_has_async(&source)
                 || trace || source_has_trace(&source)
                 || strip_asserts || no_strip_asserts
                 || overflow_wrap || overflow_checked)
             {
                 // Legacy codegen: explicit request, or features GIR doesn't yet support:
-                //   async functions, --trace/directive trace, --strip-asserts, --overflow=* flags
+                //   --trace/directive trace, --strip-asserts, --overflow=* flags
                 let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, None, dep_paths, &features);
                 println!("Built: {}", exe_path.display());
             } else {
-                // Default: GIR pipeline (--ir or auto-selected for non-async programs)
+                // Default: GIR pipeline
                 let result = try_build_ir(filename, &source, dep_paths, None, shared_output_path.as_deref(), &features);
                 match result {
                     Ok(p) => println!("Built: {}", p.display()),
@@ -1567,7 +1560,6 @@ fn main() {
                     }
                 }
             } else if !ir_mode && (legacy_codegen
-                || source_has_async(&source)
                 || trace || source_has_trace(&source)
                 || strip_asserts || no_strip_asserts
                 || overflow_wrap || overflow_checked)
@@ -1586,7 +1578,7 @@ fn main() {
                     });
                 process::exit(status.code().unwrap_or(1));
             } else {
-                // Default: GIR pipeline (--ir or auto-selected for non-async programs)
+                // Default: GIR pipeline
                 let tmp_dir = tempfile::tempdir().unwrap_or_else(|e| {
                     eprintln!("Failed to create temp directory: {e}");
                     process::exit(1);
