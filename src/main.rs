@@ -1238,13 +1238,10 @@ fn main() {
             process::exit(1);
         });
         let features = parse_features(&args);
-        let legacy = args.iter().any(|a| a == "--legacy-codegen");
         let ir = args.iter().any(|a| a == "--ir");
-        let use_legacy = legacy
-            || source_has_hot_reload(&source)
-            || trace;
+        let use_legacy = source_has_hot_reload(&source) || trace;
         let exe_path = if !ir && use_legacy {
-            // Fall back to old codegen for unsupported features or explicit --legacy-codegen
+            // Fall back to old codegen for hot-reload / trace (GIR deferred)
             build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, Some(tmp_dir.path()), dep_paths, &features)
         } else {
             // Default: GIR pipeline
@@ -1375,10 +1372,6 @@ fn main() {
     let shared_mode = args.iter().any(|a| a == "--shared");
     let show_borrows = args.iter().any(|a| a == "--show-borrows");
     let ir_mode = args.iter().any(|a| a == "--ir");
-    // --legacy-codegen: bypass GIR, use old AST→C codegen directly.
-    // GIR is now the default; this flag is provided for programs that GIR
-    // doesn't yet support (async, hot-reload) or for debugging.
-    let legacy_codegen = args.iter().any(|a| a == "--legacy-codegen");
     let features = parse_features(&args);
     // Parse -o <path> for shared output
     let shared_output_path: Option<PathBuf> = {
@@ -1529,8 +1522,8 @@ fn main() {
                         process::exit(1);
                     }
                 }
-            } else if !ir_mode && (legacy_codegen || trace || source_has_trace(&source)) {
-                // Legacy codegen: explicit request, or features GIR doesn't yet support (--trace)
+            } else if !ir_mode && (trace || source_has_trace(&source)) {
+                // Legacy codegen: features GIR doesn't yet support (--trace)
                 let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, None, dep_paths, &features);
                 println!("Built: {}", exe_path.display());
             } else {
@@ -1572,8 +1565,8 @@ fn main() {
                         process::exit(1);
                     }
                 }
-            } else if !ir_mode && (legacy_codegen || trace || source_has_trace(&source)) {
-                // Legacy codegen: explicit request, or features GIR doesn't yet support (--trace)
+            } else if !ir_mode && (trace || source_has_trace(&source)) {
+                // Legacy codegen: features GIR doesn't yet support (--trace)
                 let tmp_dir = tempfile::tempdir().unwrap_or_else(|e| {
                     eprintln!("Failed to create temp directory: {e}");
                     process::exit(1);
