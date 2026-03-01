@@ -9,7 +9,8 @@ pub mod c_expr_pattern;
 pub mod c_expr_print;
 pub mod c_item;
 pub mod c_mangle;
-pub mod c_runtime;
+// c_runtime now lives in src/backend/c/c_runtime.rs; re-export for legacy codegen compatibility.
+pub use crate::backend::c::c_runtime;
 pub mod c_stmt;
 pub mod c_types;
 

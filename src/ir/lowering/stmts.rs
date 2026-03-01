@@ -1,7 +1,7 @@
 use crate::ir::builder::FunctionBuilder;
 use crate::ir::instructions::*;
 use crate::ir::types::*;
-use crate::parser::ast::{self, Block, Expr, Pattern, SelectOp, Stmt};
+use crate::parser::ast::{self, BinaryOp, Block, Expr, Pattern, SelectOp, Stmt};
 use crate::span::Spanned;
 
 use super::context::LoweringContext;
@@ -1952,6 +1952,39 @@ fn lower_assert(
         return;
     }
 
+    // For binary comparison conditions without a custom message, emit a rich diagnostic
+    // that includes the actual left/right values (like `assert 1 == 2` → shows "left: 1, right: 2").
+    // Only applies to primitive numeric/bool types — strings and structs fall through to the
+    // simple path (they need special comparison logic via gorget_str_eq, etc.).
+    if message.is_none() {
+        if let Expr::BinaryOp { left, op, right } = &condition.node {
+            if let Some((op_str, cmp_op)) = comparison_op_info(*op) {
+                let lhs_op = lower_expr(ctx, builder, left);
+                let rhs_op = lower_expr(ctx, builder, right);
+                let lhs_type = infer_operand_type_full(ctx, &lhs_op, builder);
+                let rhs_type = infer_operand_type_full(ctx, &rhs_op, builder);
+
+                if is_primitive_type_for_assert(lhs_type) && is_primitive_type_for_assert(rhs_type) {
+                    let cond_local = builder.cmp(cmp_op, lhs_type, lhs_op.clone(), rhs_op.clone());
+
+                    let pass_bb = builder.new_block();
+                    let fail_bb = builder.new_block();
+                    builder.branch(Operand::Copy(Place::local(cond_local)), pass_bb, fail_bb);
+                    builder.switch_to(fail_bb);
+
+                    let (lhs_fmt, lhs_arg) = assert_printf_info(&lhs_op, lhs_type);
+                    let (rhs_fmt, rhs_arg) = assert_printf_info(&rhs_op, rhs_type);
+                    builder.inline_c(format!(
+                        "gorget_panic(gorget_format(\"assertion failed: left {op_str} right\\n  left:  {lhs_fmt}\\n  right: {rhs_fmt}\", {lhs_arg}, {rhs_arg}));"
+                    ));
+                    builder.unreachable();
+                    builder.switch_to(pass_bb);
+                    return;
+                }
+            }
+        }
+    }
+
     let cond = lower_expr(ctx, builder, condition);
 
     let pass_bb = builder.new_block();
@@ -1959,32 +1992,113 @@ fn lower_assert(
 
     builder.branch(cond, pass_bb, fail_bb);
 
-    // Fail path: print message and abort
+    // Fail path: panic with message (allows test-mode setjmp to catch it).
     builder.switch_to(fail_bb);
     if let Some(msg) = message {
+        // Custom message provided — lower it and pass to gorget_panic.
         let msg_op = lower_expr(ctx, builder, msg);
-        builder.call_extern(
-            "fprintf_stderr",
-            vec![
-                Operand::Constant(Constant::Str("Assertion failed: %s\n".to_string())),
-                msg_op,
-            ],
-            I32_TYPE,
-        );
-    } else {
-        builder.call_extern(
-            "fprintf_stderr",
-            vec![
-                Operand::Constant(Constant::Str("Assertion failed\n".to_string())),
-            ],
-            I32_TYPE,
-        );
+        builder.call_extern("gorget_panic", vec![msg_op], UNIT_TYPE);
+        builder.unreachable();
+        builder.switch_to(pass_bb);
+        return;
     }
-    builder.call_extern("exit", vec![Operand::Constant(Constant::I32(1))], UNIT_TYPE);
+    // No custom message: generate a static message based on the expression shape.
+    let panic_msg = generate_assert_static_msg(condition);
+    builder.call_extern(
+        "gorget_panic",
+        vec![Operand::Constant(Constant::Str(panic_msg))],
+        UNIT_TYPE,
+    );
     builder.unreachable();
 
     // Pass path: continue
     builder.switch_to(pass_bb);
+}
+
+/// Return `(op_str, CmpOp)` for a comparison BinaryOp, or None for non-comparison ops.
+fn comparison_op_info(op: BinaryOp) -> Option<(&'static str, CmpOp)> {
+    match op {
+        BinaryOp::Eq    => Some(("==", CmpOp::Eq)),
+        BinaryOp::Neq   => Some(("!=", CmpOp::Ne)),
+        BinaryOp::Lt    => Some(("<",  CmpOp::Lt)),
+        BinaryOp::Gt    => Some((">",  CmpOp::Gt)),
+        BinaryOp::LtEq  => Some(("<=", CmpOp::Le)),
+        BinaryOp::GtEq  => Some((">=", CmpOp::Ge)),
+        _ => None,
+    }
+}
+
+/// Return true if type_id is a primitive numeric/bool type suitable for assert rich diagnostics.
+/// Strings and named types need special comparison logic and are excluded.
+fn is_primitive_type_for_assert(type_id: TypeId) -> bool {
+    matches!(type_id,
+        I64_TYPE | I32_TYPE | I16_TYPE | I8_TYPE |
+        U64_TYPE | U32_TYPE | U16_TYPE | U8_TYPE |
+        F64_TYPE | F32_TYPE | BOOL_TYPE | CHAR_TYPE
+    )
+}
+
+/// Return `(printf_format_spec, c_expression)` for an assert diagnostic operand.
+/// Only called for primitive types (guaranteed by is_primitive_type_for_assert).
+fn assert_printf_info(op: &Operand, type_id: TypeId) -> (String, String) {
+    let c_expr = operand_to_c_str(op);
+    if type_id == F64_TYPE || type_id == F32_TYPE {
+        ("%g".to_string(), format!("(double){c_expr}"))
+    } else if type_id == BOOL_TYPE {
+        ("%s".to_string(), format!("({c_expr}) ? \"true\" : \"false\""))
+    } else if type_id == CHAR_TYPE {
+        ("%lld".to_string(), format!("(long long)({c_expr})"))
+    } else {
+        // All integer types: treat as int64_t
+        ("%lld".to_string(), format!("(long long)({c_expr})"))
+    }
+}
+
+/// Convert a GIR operand to its C expression string (for embedding in InlineC).
+fn operand_to_c_str(op: &Operand) -> String {
+    match op {
+        Operand::Copy(place) | Operand::Move(place) => {
+            let mut s = format!("_{}", place.local.0);
+            for proj in &place.projections {
+                match proj {
+                    Projection::Deref => s = format!("(*{s})"),
+                    Projection::Field(i) => s = format!("{s}.__field_{i}"),
+                    _ => {}
+                }
+            }
+            s
+        }
+        Operand::Constant(c) => match c {
+            Constant::I64(n) => format!("{n}LL"),
+            Constant::I32(n) => n.to_string(),
+            Constant::F64(f) => format!("{f}"),
+            Constant::Bool(b) => if *b { "1".to_string() } else { "0".to_string() },
+            Constant::Str(s) => {
+                let escaped = s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n");
+                format!("\"{}\"", escaped)
+            }
+            _ => "0".to_string(),
+        },
+    }
+}
+
+/// Generate a static assertion failure message for an assertion condition.
+/// For binary comparisons, includes the operator name (e.g., "left == right").
+fn generate_assert_static_msg(condition: &Spanned<Expr>) -> String {
+    if let Expr::BinaryOp { op, .. } = &condition.node {
+        let op_str = match op {
+            BinaryOp::Eq => "==",
+            BinaryOp::Neq => "!=",
+            BinaryOp::Lt => "<",
+            BinaryOp::Gt => ">",
+            BinaryOp::LtEq => "<=",
+            BinaryOp::GtEq => ">=",
+            _ => return "assertion failed".to_string(),
+        };
+        format!("assertion failed: left {op_str} right")
+    } else {
+        "assertion failed".to_string()
+    }
 }
 
 // ---- P3.5: With statement ----
@@ -2080,7 +2194,7 @@ pub fn emit_is_bindings(
 }
 
 /// Infer operand type using both ctx locals and builder locals (for intermediates like tuples).
-fn infer_operand_type_with_builder(
+pub fn infer_operand_type_with_builder(
     ctx: &LoweringContext,
     operand: &Operand,
     builder: &FunctionBuilder,

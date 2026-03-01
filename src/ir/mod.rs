@@ -8,6 +8,33 @@ pub mod validate;
 use instructions::{Instruction, Terminator};
 use types::{TypeId, TypeRegistry};
 
+/// A single `with X as y` binding in a test, for the C backend to generate setup code.
+#[derive(Debug, Clone)]
+pub struct TestWithBinding {
+    /// Variable name as used in the test body (e.g. `r`).
+    pub var_name: String,
+    /// GIR function that creates and returns the binding value (no Drop registered).
+    pub init_fn_name: String,
+    /// GIR type of the binding.
+    pub type_id: TypeId,
+}
+
+/// Metadata for a single test function, used by the C backend to generate the test runner.
+#[derive(Debug, Clone)]
+pub struct TestFnInfo {
+    /// GIR function name (e.g. `__test_0`).
+    pub fn_name: String,
+    /// Human-readable test name (e.g. `"addition works"`).
+    pub display_name: String,
+    /// True when `@should_panic` attribute is present — panic = PASS, no panic = FAIL.
+    pub should_panic: bool,
+    /// Expected panic message substring (from `@should_panic("msg")`).
+    pub expected_panic_msg: Option<String>,
+    /// With-bindings for this test (empty when no `with X as y` clause).
+    /// The test function takes pointer parameters for each binding (in order).
+    pub with_bindings: Vec<TestWithBinding>,
+}
+
 /// A complete GIR module.
 #[derive(Debug, Clone)]
 pub struct Module {
@@ -15,8 +42,8 @@ pub struct Module {
     pub functions: Vec<Function>,
     pub globals: Vec<Global>,
     pub externs: Vec<ExternDecl>,
-    /// Test functions: (fn_name, test_display_name) pairs for test runner generation.
-    pub test_fns: Vec<(String, String)>,
+    /// Test functions registered for the test runner.
+    pub test_fns: Vec<TestFnInfo>,
     /// When true, arithmetic wraps on overflow instead of aborting.
     pub overflow_wrap: bool,
     /// Pre-generated C code for async functions (state structs, poll fns, constructors).
@@ -34,6 +61,13 @@ pub struct Module {
     /// Spawned functions: (fn_name, [(param_name, param_type)], return_type).
     /// Used by the C backend to emit __SpawnCtx_fn, __gorget_spawn_fn, __gorget_await_fn.
     pub spawned_fns: Vec<(String, Vec<(String, TypeId)>, TypeId)>,
+    /// True when a `suite setup:` block was lowered as `__suite_setup()`.
+    pub has_suite_setup: bool,
+    /// True when a `suite teardown:` block was lowered as `__suite_teardown()`.
+    pub has_suite_teardown: bool,
+    /// True when the module was lowered in test mode (gg test).
+    /// Forces emission of a test runner main() even when test_fns is empty (all filtered).
+    pub is_test_module: bool,
 }
 
 impl Module {
@@ -52,6 +86,9 @@ impl Module {
             has_sleep: false,
             channel_types: Vec::new(),
             spawned_fns: Vec::new(),
+            has_suite_setup: false,
+            has_suite_teardown: false,
+            is_test_module: false,
         }
     }
 
@@ -80,6 +117,9 @@ pub struct Function {
     /// `_0` = return place, `_1.._N` = params, rest = user/temps.
     pub locals: Vec<Local>,
     pub blocks: Vec<BasicBlock>,
+    /// True for test functions (test "...") — enables cleanup stack registration
+    /// for droppable locals so they're cleaned up on panic/longjmp.
+    pub is_test_fn: bool,
 }
 
 /// A local variable slot.
@@ -159,6 +199,7 @@ mod tests {
                 name_hint: None,
             }],
             blocks: vec![BasicBlock::new()],
+            is_test_fn: false,
         });
         assert_eq!(module.functions.len(), 1);
         let f = module.find_function("main").unwrap();

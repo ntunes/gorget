@@ -8,8 +8,9 @@ pub mod stmts;
 pub mod traits;
 pub mod types;
 
+use crate::ir::instructions::Operand;
 use crate::ir::types::*;
-use crate::ir::{ExternDecl, Module};
+use crate::ir::{ExternDecl, Module, TestFnInfo};
 use crate::parser::ast::{self, FunctionBody, Item};
 use crate::semantic::AnalysisResult;
 
@@ -18,10 +19,32 @@ use functions::lower_function;
 use generics::GenericCollector;
 use types::TypeMapper;
 
+/// Options controlling the GIR lowering pass, typically sourced from CLI flags.
+#[derive(Debug, Default, Clone)]
+pub struct LoweringOptions {
+    /// Override `directive strip-asserts`: asserts become no-ops.
+    pub strip_asserts: bool,
+    /// Override `directive strip-asserts` off: force-keep asserts.
+    pub no_strip_asserts: bool,
+    /// Override `directive overflow wrap`: integer overflow wraps silently.
+    pub overflow_wrap: bool,
+    /// Override overflow to checked mode (abort on overflow).
+    pub overflow_checked: bool,
+    /// When true, lower test items even when a `main()` exists (for `gg test`).
+    pub test_mode: bool,
+    /// Only run tests whose tags include one of these (empty = run all).
+    pub test_tags: Vec<String>,
+    /// Skip tests whose tags include any of these.
+    pub test_exclude_tags: Vec<String>,
+    /// Only run tests whose display name contains this substring.
+    pub test_name_filter: Option<String>,
+}
+
 /// Lower an AST module + analysis result into a GIR module.
 pub fn lower_module(
     ast_module: &ast::Module,
     analysis: &AnalysisResult,
+    options: &LoweringOptions,
 ) -> Module {
     let mut module = Module::new();
 
@@ -367,6 +390,11 @@ pub fn lower_module(
             }
         }
     }
+    // CLI flags override directives
+    if options.strip_asserts { ctx.strip_asserts = true; }
+    if options.no_strip_asserts { ctx.strip_asserts = false; }
+    if options.overflow_wrap { ctx.overflow_wrap = true; }
+    if options.overflow_checked { ctx.overflow_wrap = false; }
 
     // Register well-known stdlib constants
     {
@@ -766,11 +794,15 @@ pub fn lower_module(
         }
     }
 
-    // Lower test items: each test becomes a void function, then generate test runner main
+    // Lower test items: each test becomes a void function, then generate test runner main.
+    // In test_mode (gg test), run even when a main() exists — the C backend will skip it.
     let has_tests = ast_module.items.iter().any(|item| matches!(&item.node, Item::Test(_)));
     let has_main = ast_module.items.iter().any(|item| matches!(&item.node, Item::Function(f) if f.name.node == "main"));
-    if has_tests && !has_main {
-        lower_test_items(&mut ctx, &mut module, ast_module);
+    if has_tests && (options.test_mode || !has_main) {
+        lower_test_items(&mut ctx, &mut module, ast_module, options);
+        // Mark module as a test module so the C backend always emits a test runner,
+        // even when all tests were filtered out (e.g., --tag X --exclude-tag X → 0 tests).
+        module.is_test_module = true;
     }
 
     // P2.5: Lower trait equip methods and emit vtable globals
@@ -842,21 +874,195 @@ fn lower_test_items(
     ctx: &mut LoweringContext,
     module: &mut Module,
     ast_module: &ast::Module,
+    options: &LoweringOptions,
 ) {
     use crate::ir::builder::FunctionBuilder;
+    use crate::ir::TestFnInfo;
+    use crate::parser::ast::AttributeArg;
 
-    let mut test_fn_names: Vec<(String, String)> = Vec::new(); // (fn_name, test_name)
+    /// Check whether a test should run given the filtering options.
+    fn should_run_test(test_def: &ast::TestDef, options: &LoweringOptions) -> bool {
+        // Name filter: skip if test name doesn't contain the substring.
+        if let Some(ref filter) = options.test_name_filter {
+            if !test_def.name.node.contains(filter.as_str()) {
+                return false;
+            }
+        }
+        // Exclusion wins: if any of the test's tags is in exclude_tags, skip.
+        if !options.test_exclude_tags.is_empty() {
+            for attr in &test_def.attributes {
+                if attr.node.name.node == "tag" {
+                    for arg in &attr.node.args {
+                        if let AttributeArg::StringLiteral(s) = arg {
+                            if options.test_exclude_tags.contains(s) {
+                                return false;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Inclusion filter: if --tag was given, only run tests with a matching tag.
+        if !options.test_tags.is_empty() {
+            for attr in &test_def.attributes {
+                if attr.node.name.node == "tag" {
+                    for arg in &attr.node.args {
+                        if let AttributeArg::StringLiteral(s) = arg {
+                            if options.test_tags.contains(s) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+        true
+    }
 
-    // Lower each test body as a standalone void function
+    // Lower suite setup as __suite_setup() void function.
+    for item in &ast_module.items {
+        if let Item::SuiteSetup(setup) = &item.node {
+            let mut builder = FunctionBuilder::new("__suite_setup", UNIT_TYPE, &[]);
+            ctx.clear_locals();
+            ctx.drops.push_scope(drops::DropScopeKind::Function);
+            stmts::lower_block(ctx, &mut builder, &setup.body);
+            let last = builder.current_block.0 as usize;
+            if builder.blocks[last].terminator.is_none() {
+                ctx.drops.pop_scope(&mut builder, &ctx.type_registry);
+                builder.ret(FunctionBuilder::const_unit());
+            } else {
+                ctx.drops.pop_scope(&mut builder, &ctx.type_registry);
+            }
+            module.functions.push(builder.build());
+            module.has_suite_setup = true;
+        }
+    }
+
+    // Lower suite teardown as __suite_teardown() void function.
+    for item in &ast_module.items {
+        if let Item::SuiteTeardown(teardown) = &item.node {
+            let mut builder = FunctionBuilder::new("__suite_teardown", UNIT_TYPE, &[]);
+            ctx.clear_locals();
+            ctx.drops.push_scope(drops::DropScopeKind::Function);
+            stmts::lower_block(ctx, &mut builder, &teardown.body);
+            let last = builder.current_block.0 as usize;
+            if builder.blocks[last].terminator.is_none() {
+                ctx.drops.pop_scope(&mut builder, &ctx.type_registry);
+                builder.ret(FunctionBuilder::const_unit());
+            } else {
+                ctx.drops.pop_scope(&mut builder, &ctx.type_registry);
+            }
+            module.functions.push(builder.build());
+            module.has_suite_teardown = true;
+        }
+    }
+
+    // Lower each matching test body as a standalone void function.
     for (idx, item) in ast_module.items.iter().enumerate() {
         if let Item::Test(test_def) = &item.node {
+            if !should_run_test(test_def, options) {
+                continue;
+            }
+
             let fn_name = format!("__test_{idx}");
             let test_name = test_def.name.node.clone();
 
-            let mut builder = FunctionBuilder::new(&fn_name, UNIT_TYPE, &[]);
-            ctx.clear_locals();
+            // Extract @should_panic metadata
+            let should_panic = test_def.attributes.iter()
+                .any(|a| a.node.name.node == "should_panic");
+            let expected_panic_msg: Option<String> = test_def.attributes.iter()
+                .find(|a| a.node.name.node == "should_panic")
+                .and_then(|a| a.node.args.first())
+                .and_then(|arg| {
+                    if let AttributeArg::StringLiteral(s) = arg { Some(s.clone()) } else { None }
+                });
 
+            // Lower with-bindings as separate init functions + pointer parameters.
+            // This ensures that with-binding storage lives in the TEST RUNNER's stack frame
+            // (not the test function's frame), so drops work correctly even when
+            // gorget_panic() calls longjmp() back to the test runner's setjmp.
+            let mut with_binding_infos: Vec<crate::ir::TestWithBinding> = Vec::new();
+            let mut wb_param_types: Vec<TypeId> = Vec::new();
+            let mut wb_ptr_types: Vec<TypeId> = Vec::new();
+
+            for (wb_idx, binding) in test_def.with_bindings.iter().enumerate() {
+                let init_fn_name = format!("__test_{idx}_wb_{wb_idx}_init");
+
+                // Create init function: lowers the initializer and returns the value.
+                // The value is MOVED out (not dropped by this function).
+                {
+                    // We don't know the return type yet, use UNIT_TYPE as placeholder.
+                    let mut ib = FunctionBuilder::new(&init_fn_name, UNIT_TYPE, &[]);
+                    ctx.clear_locals();
+                    ctx.drops.push_scope(drops::DropScopeKind::Function);
+                    let operand = exprs::lower_expr(ctx, &mut ib, &binding.expr);
+                    let gir_type = stmts::infer_operand_type_with_builder(ctx, &operand, &ib);
+                    // Store the value in a local. The local is the value we will return.
+                    let local_id = ib.add_local(gir_type, Some("__wb_val"));
+                    ctx.drops.register_local(local_id, gir_type, &ctx.type_registry);
+                    ib.assign(crate::ir::instructions::Place::local(local_id), operand);
+                    // Fix up return type and the return place type now that we know it.
+                    ib.return_type = gir_type;
+                    ib.locals[0].type_id = gir_type; // _0 is the return place
+                    // Drop everything in scope EXCEPT local_id — it's being moved out.
+                    // Using emit_early_exit_drops mirrors how lower_return handles exclusion.
+                    ctx.drops.emit_early_exit_drops(&mut ib, &ctx.type_registry, drops::DropScopeKind::Function, Some(local_id));
+                    ctx.drops.pop_scope_no_emit();
+                    ib.ret(Operand::Move(crate::ir::instructions::Place::local(local_id)));
+                    let init_fn = ib.build();
+                    let actual_type = init_fn.return_type;
+
+                    // Create a MutPtr type for the test function parameter.
+                    let ptr_type = ctx.type_registry.insert(crate::ir::types::GirType::MutPtr(actual_type));
+                    wb_param_types.push(actual_type);
+                    wb_ptr_types.push(ptr_type);
+                    with_binding_infos.push(crate::ir::TestWithBinding {
+                        var_name: binding.name.node.clone(),
+                        init_fn_name: init_fn_name.clone(),
+                        type_id: actual_type,
+                    });
+                    module.functions.push(init_fn);
+                }
+
+                // Restore for next iteration
+                ctx.clear_locals();
+            }
+
+            // Build the test function. If there are with-bindings, it takes MutPtr parameters.
+            let param_specs: Vec<(TypeId, Option<&str>)> = wb_ptr_types.iter()
+                .map(|&t| (t, None))
+                .collect();
+
+            let mut builder = FunctionBuilder::new(&fn_name, UNIT_TYPE, &param_specs);
+            ctx.clear_locals();
             ctx.drops.push_scope(drops::DropScopeKind::Function);
+
+            // Register with-binding pointer parameters and expose them as dereferences.
+            // In the test body, `r` refers to `*__wb_ptr_0` (the pointer param).
+            // We register `r` as a local that IS the pointer param, type = T (not *T),
+            // by storing it in a deref local.
+            for (wb_idx, binding_info) in with_binding_infos.iter().enumerate() {
+                // The pointer parameter is local _1, _2, ... (after _0 = return place).
+                // FunctionBuilder params are locals 1..=n.
+                let ptr_local_id = crate::ir::types::LocalId((wb_idx + 1) as u32);
+                let ptr_type = wb_ptr_types[wb_idx];
+                // Dereference: create a local for the dereferenced value
+                let val_local_id = builder.add_local(wb_param_types[wb_idx], Some(&binding_info.var_name));
+                // Emit load: val = *ptr
+                builder.assign(
+                    crate::ir::instructions::Place::local(val_local_id),
+                    Operand::Copy(crate::ir::instructions::Place {
+                        local: ptr_local_id,
+                        projections: vec![crate::ir::instructions::Projection::Deref],
+                    }),
+                );
+                ctx.register_local(&binding_info.var_name, val_local_id, wb_param_types[wb_idx]);
+                // DO NOT register with drop elaborator — with-bindings are dropped by
+                // the test runner via the cleanup stack, not the test function's scope exit.
+                let _ = ptr_type; // suppress unused warning
+            }
+
             stmts::lower_block(ctx, &mut builder, &test_def.body);
 
             let last_block_idx = builder.current_block.0 as usize;
@@ -867,14 +1073,17 @@ fn lower_test_items(
                 ctx.drops.pop_scope(&mut builder, &ctx.type_registry);
             }
 
-            module.functions.push(builder.build());
-            test_fn_names.push((fn_name, test_name));
+            let mut test_fn = builder.build();
+            test_fn.is_test_fn = true;
+            module.functions.push(test_fn);
+            module.test_fns.push(TestFnInfo {
+                fn_name,
+                display_name: test_name,
+                should_panic,
+                expected_panic_msg,
+                with_bindings: with_binding_infos,
+            });
         }
-    }
-
-    // Store test function names in module metadata for C backend to generate test runner main.
-    for (fn_name, test_name) in test_fn_names {
-        module.test_fns.push((fn_name, test_name));
     }
 }
 
@@ -1160,7 +1369,7 @@ mod tests {
     print("Hello, World!")
 "#;
         let (module, result) = parse_and_analyze(source);
-        let gir = lower_module(&module, &result);
+        let gir = lower_module(&module, &result, &LoweringOptions::default());
 
         assert_eq!(gir.functions.len(), 1);
         assert_eq!(gir.functions[0].name, "main");
@@ -1186,7 +1395,7 @@ void main():
     print("{r}")
 "#;
         let (module, result) = parse_and_analyze(source);
-        let gir = lower_module(&module, &result);
+        let gir = lower_module(&module, &result, &LoweringOptions::default());
 
         assert_eq!(gir.functions.len(), 2);
 
@@ -1211,7 +1420,7 @@ void main():
     print("{b}")
 "#;
         let (module, result) = parse_and_analyze(source);
-        let gir = lower_module(&module, &result);
+        let gir = lower_module(&module, &result, &LoweringOptions::default());
 
         assert_eq!(gir.functions.len(), 3);
         assert!(gir.find_function("double").is_some());
@@ -1229,7 +1438,7 @@ void main():
     pass
 "#;
         let (module, result) = parse_and_analyze(source);
-        let gir = lower_module(&module, &result);
+        let gir = lower_module(&module, &result, &LoweringOptions::default());
 
         // Verify the struct type was registered
         let point_def = gir.type_registry.get_type_def("Point").unwrap();
@@ -1256,7 +1465,7 @@ void main():
     pass
 "#;
         let (module, result) = parse_and_analyze(source);
-        let gir = lower_module(&module, &result);
+        let gir = lower_module(&module, &result, &LoweringOptions::default());
 
         let color_def = gir.type_registry.get_type_def("Color").unwrap();
         assert_eq!(color_def.name, "Color");
@@ -1282,7 +1491,7 @@ void main():
     print("{px}")
 "#;
         let (module, result) = parse_and_analyze(source);
-        let gir = lower_module(&module, &result);
+        let gir = lower_module(&module, &result, &LoweringOptions::default());
 
         let main = gir.find_function("main").unwrap();
         // Should have StructInit and FieldLoad instructions
@@ -1313,7 +1522,7 @@ void main():
     pass
 "#;
         let (module, result) = parse_and_analyze(source);
-        let gir = lower_module(&module, &result);
+        let gir = lower_module(&module, &result, &LoweringOptions::default());
 
         let main = gir.find_function("main").unwrap();
         let has_enum_init = main.blocks.iter().any(|bb| {
@@ -1336,7 +1545,7 @@ void main():
     pass
 "#;
         let (module, result) = parse_and_analyze(source);
-        let gir = lower_module(&module, &result);
+        let gir = lower_module(&module, &result, &LoweringOptions::default());
         let c_code = crate::backend::c::generate_c(&gir);
 
         assert!(c_code.contains("typedef struct Point Point;"), "Should forward-declare Point");
@@ -1362,7 +1571,7 @@ void main():
     print("{s}")
 "#;
         let (module, result) = parse_and_analyze(source);
-        let gir = lower_module(&module, &result);
+        let gir = lower_module(&module, &result, &LoweringOptions::default());
 
         // Should have a mangled method function
         let sum_fn = gir.find_function("Point__sum");
@@ -1385,7 +1594,7 @@ void main():
     pass
 "#;
         let (module, result) = parse_and_analyze(source);
-        let gir = lower_module(&module, &result);
+        let gir = lower_module(&module, &result, &LoweringOptions::default());
 
         // Should have a monomorphized TypeDef for Pair__int64_t__double
         let pair_def = gir.type_registry.get_type_def("Pair__int64_t__double");
@@ -1413,7 +1622,7 @@ void main():
     pass
 "#;
         let (module, result) = parse_and_analyze(source);
-        let gir = lower_module(&module, &result);
+        let gir = lower_module(&module, &result, &LoweringOptions::default());
         let c_code = crate::backend::c::generate_c(&gir);
 
         assert!(c_code.contains("Pair__int64_t__double"),
@@ -1429,7 +1638,7 @@ void main():
     pass
 "#;
         let (module, result) = parse_and_analyze(source);
-        let gir = lower_module(&module, &result);
+        let gir = lower_module(&module, &result, &LoweringOptions::default());
 
         // Should have a monomorphized function identity__int64_t
         let fn_name = gir.functions.iter()
@@ -1454,7 +1663,7 @@ void main():
     pass
 "#;
         let (module, result) = parse_and_analyze(source);
-        let gir = lower_module(&module, &result);
+        let gir = lower_module(&module, &result, &LoweringOptions::default());
 
         let maybe_def = gir.type_registry.get_type_def("Maybe__int64_t");
         assert!(maybe_def.is_some(), "Should have monomorphized Maybe__int64_t TypeDef");
@@ -1483,7 +1692,7 @@ void main():
     pass
 "#;
         let (module, result) = parse_and_analyze(source);
-        let gir = lower_module(&module, &result);
+        let gir = lower_module(&module, &result, &LoweringOptions::default());
 
         // Should have three distinct monomorphized types
         assert!(gir.type_registry.get_type_def("Wrapper__int64_t").is_some(),
@@ -1515,7 +1724,7 @@ void main():
     pass
 "#;
         let (module, result) = parse_and_analyze(source);
-        let gir = lower_module(&module, &result);
+        let gir = lower_module(&module, &result, &LoweringOptions::default());
 
         // Verify VTable and TraitObj types were created
         assert!(gir.type_registry.has_type_def("Shape_VTable"),
@@ -1560,7 +1769,7 @@ void main():
     pass
 "#;
         let (module, result) = parse_and_analyze(source);
-        let gir = lower_module(&module, &result);
+        let gir = lower_module(&module, &result, &LoweringOptions::default());
 
         // Verify trait impl function exists
         let area_fn = gir.find_function("Shape_for_Circle__area");
@@ -1592,7 +1801,7 @@ void main():
     pass
 "#;
         let (module, result) = parse_and_analyze(source);
-        let gir = lower_module(&module, &result);
+        let gir = lower_module(&module, &result, &LoweringOptions::default());
 
         // Verify vtable global constant exists
         let vtable_global = gir.globals.iter()
@@ -1634,7 +1843,7 @@ void main():
     pass
 "#;
         let (module, result) = parse_and_analyze(source);
-        let gir = lower_module(&module, &result);
+        let gir = lower_module(&module, &result, &LoweringOptions::default());
         let c_code = crate::backend::c::generate_c(&gir);
 
         // VTable type

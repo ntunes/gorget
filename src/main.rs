@@ -653,6 +653,7 @@ fn try_build_ir(
     output_dir: Option<&Path>,
     output_exe: Option<&Path>,
     features: &[String],
+    options: gorget::ir::lowering::LoweringOptions,
 ) -> Result<PathBuf, String> {
     let mut parser = Parser::new(source);
     let module = parser.parse_module();
@@ -679,7 +680,7 @@ fn try_build_ir(
     }
 
     // Lower AST to GIR
-    let gir_module = gorget::ir::lowering::lower_module(&module, &result);
+    let gir_module = gorget::ir::lowering::lower_module(&module, &result, &options);
 
     // Generate C from GIR
     let c_code = gorget::backend::c::generate_c(&gir_module);
@@ -724,6 +725,11 @@ fn try_build_ir(
         .arg(&exe_path)
         .arg(&c_path)
         .arg("-lm");
+
+    // Overflow wrap: pass -fwrapv so C integer overflow wraps instead of UB.
+    if options.overflow_wrap || gir_module.overflow_wrap {
+        cc_cmd.arg("-fwrapv");
+    }
 
     // Detect library dependencies from source imports
     let needs_crypto = source.contains("std.crypto") || source.contains("std.net.tls")
@@ -1206,7 +1212,6 @@ fn main() {
         println!("Build flags:");
         println!("  --hot-reload            Enable hot code reload (builds host + guest .dylib)");
         println!("  --shared [-o F]         Build as shared library (.dylib/.so)");
-        println!("  --legacy-codegen        Use the legacy AST→C codegen (bypasses GIR)");
         println!("  --ir                    Alias for GIR pipeline (now the default)");
         return;
     }
@@ -1237,14 +1242,20 @@ fn main() {
         let ir = args.iter().any(|a| a == "--ir");
         let use_legacy = legacy
             || source_has_hot_reload(&source)
-            || trace || strip_asserts || no_strip_asserts
-            || overflow_wrap || overflow_checked;
+            || trace;
         let exe_path = if !ir && use_legacy {
             // Fall back to old codegen for unsupported features or explicit --legacy-codegen
             build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, Some(tmp_dir.path()), dep_paths, &features)
         } else {
             // Default: GIR pipeline
-            try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, &features)
+            let lowering_opts = gorget::ir::lowering::LoweringOptions {
+                strip_asserts,
+                no_strip_asserts,
+                overflow_wrap,
+                overflow_checked,
+                ..Default::default()
+            };
+            try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, &features, lowering_opts)
                 .unwrap_or_else(|e| {
                     eprintln!("{e}");
                     process::exit(1);
@@ -1518,18 +1529,20 @@ fn main() {
                         process::exit(1);
                     }
                 }
-            } else if !ir_mode && (legacy_codegen
-                || trace || source_has_trace(&source)
-                || strip_asserts || no_strip_asserts
-                || overflow_wrap || overflow_checked)
-            {
-                // Legacy codegen: explicit request, or features GIR doesn't yet support:
-                //   --trace/directive trace, --strip-asserts, --overflow=* flags
+            } else if !ir_mode && (legacy_codegen || trace || source_has_trace(&source)) {
+                // Legacy codegen: explicit request, or features GIR doesn't yet support (--trace)
                 let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, None, dep_paths, &features);
                 println!("Built: {}", exe_path.display());
             } else {
                 // Default: GIR pipeline
-                let result = try_build_ir(filename, &source, dep_paths, None, shared_output_path.as_deref(), &features);
+                let lowering_opts = gorget::ir::lowering::LoweringOptions {
+                    strip_asserts,
+                    no_strip_asserts,
+                    overflow_wrap,
+                    overflow_checked,
+                    ..Default::default()
+                };
+                let result = try_build_ir(filename, &source, dep_paths, None, shared_output_path.as_deref(), &features, lowering_opts);
                 match result {
                     Ok(p) => println!("Built: {}", p.display()),
                     Err(e) => {
@@ -1559,12 +1572,8 @@ fn main() {
                         process::exit(1);
                     }
                 }
-            } else if !ir_mode && (legacy_codegen
-                || trace || source_has_trace(&source)
-                || strip_asserts || no_strip_asserts
-                || overflow_wrap || overflow_checked)
-            {
-                // Legacy codegen: explicit request, or features GIR doesn't yet support
+            } else if !ir_mode && (legacy_codegen || trace || source_has_trace(&source)) {
+                // Legacy codegen: explicit request, or features GIR doesn't yet support (--trace)
                 let tmp_dir = tempfile::tempdir().unwrap_or_else(|e| {
                     eprintln!("Failed to create temp directory: {e}");
                     process::exit(1);
@@ -1583,7 +1592,14 @@ fn main() {
                     eprintln!("Failed to create temp directory: {e}");
                     process::exit(1);
                 });
-                let result = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, &features);
+                let lowering_opts = gorget::ir::lowering::LoweringOptions {
+                    strip_asserts,
+                    no_strip_asserts,
+                    overflow_wrap,
+                    overflow_checked,
+                    ..Default::default()
+                };
+                let result = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, &features, lowering_opts);
                 match result {
                     Ok(exe_path) => {
                         let status = Command::new(&exe_path)
@@ -1644,7 +1660,23 @@ fn main() {
                 process::exit(1);
             });
             let dep_paths = resolve_deps_for_file(filename);
-            let exe_path = build(filename, &source, false, false, false, false, trace, no_trace, true, &test_tags, &test_exclude_tags, test_name_filter.as_deref(), Some(tmp_dir.path()), dep_paths, &features);
+            // Use GIR pipeline when trace is not needed; fall back to legacy for --trace/--report html.
+            let exe_path = if !trace {
+                let lowering_opts = gorget::ir::lowering::LoweringOptions {
+                    test_mode: true,
+                    test_tags: test_tags.clone(),
+                    test_exclude_tags: test_exclude_tags.clone(),
+                    test_name_filter: test_name_filter.clone(),
+                    ..Default::default()
+                };
+                try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, &features, lowering_opts)
+                    .unwrap_or_else(|e| {
+                        eprintln!("{e}");
+                        process::exit(1);
+                    })
+            } else {
+                build(filename, &source, false, false, false, false, trace, no_trace, true, &test_tags, &test_exclude_tags, test_name_filter.as_deref(), Some(tmp_dir.path()), dep_paths, &features)
+            };
             let status = Command::new(&exe_path)
                 .status()
                 .unwrap_or_else(|e| {
