@@ -1570,7 +1570,7 @@ fn infer_collection_method_return_type(
 
     match method_name {
         // Methods returning int
-        "len" | "count" | "capacity" => I64_TYPE,
+        "len" | "count" | "capacity" | "hash" => I64_TYPE,
         // Methods returning Option[int]
         "index_of" | "find" => {
             ctx.lookup_type_by_name("Option__int64_t").unwrap_or(I64_TYPE)
