@@ -87,6 +87,7 @@ impl FunctionBuilder {
             locals: self.locals,
             blocks: self.blocks,
             is_test_fn: false,
+            display_name: None,
         }
     }
 

@@ -486,6 +486,7 @@ mod tests {
             }],
             blocks: vec![BasicBlock::new()], // no terminator
             is_test_fn: false,
+            display_name: None,
         });
 
         let errors = validate(&module);

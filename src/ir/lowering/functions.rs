@@ -123,7 +123,9 @@ pub fn lower_function(
         }
     }
 
-    module.functions.push(builder.build());
+    let mut func = builder.build();
+    func.display_name = Some(name.clone());
+    module.functions.push(func);
 }
 
 /// Lower an equip method into a standalone GIR function with mangled name.
@@ -226,7 +228,9 @@ pub fn lower_equip_method(
         }
     }
 
-    module.functions.push(builder.build());
+    let mut func = builder.build();
+    func.display_name = Some(format!("{type_name}.{method_name}"));
+    module.functions.push(func);
 }
 
 /// Lower a monomorphized instance of a generic function.

@@ -682,35 +682,112 @@ fn try_build_ir(
     // Lower AST to GIR
     let gir_module = gorget::ir::lowering::lower_module(&module, &result, &options);
 
-    // Generate C from GIR
-    let c_code = gorget::backend::c::generate_c(&gir_module);
-
     // Determine output paths
+    let input_path = Path::new(filename);
+    let default_dir = input_path.parent().unwrap_or(Path::new("."));
+    let dir = output_dir.unwrap_or(default_dir);
+    let stem = input_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("output");
     let (c_path, exe_path) = if let Some(out) = output_exe {
         let out = std::path::absolute(out).unwrap_or(out.to_path_buf());
         let c_path = out.with_extension("c");
         (c_path, out)
     } else {
-        let input_path = Path::new(filename);
-        let default_dir = input_path.parent().unwrap_or(Path::new("."));
-        let dir = output_dir.unwrap_or(default_dir);
-        let stem = input_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("output");
-
         let c_path = dir.join(format!("{stem}.c"));
         let exe_path = dir.join(stem);
         let exe_path = std::path::absolute(&exe_path).unwrap_or(exe_path);
         (c_path, exe_path)
     };
 
-    // Write .c file
-    if let Err(e) = fs::write(&c_path, &c_code) {
+    // Build hot-reload options if needed
+    let hr_opts = if gir_module.hot_reload {
+        let abs_filename = std::path::absolute(Path::new(filename))
+            .unwrap_or_else(|_| PathBuf::from(filename));
+        let guest_lib_name = format!("{stem}_guest");
+        #[cfg(target_os = "macos")]
+        let dylib_ext = ".dylib";
+        #[cfg(not(target_os = "macos"))]
+        let dylib_ext = ".so";
+        let guest_lib_file = format!("{guest_lib_name}{dylib_ext}");
+        let recompile_cmd = format!(
+            "{} build --shared {} -o {}",
+            std::env::current_exe().unwrap_or_else(|_| PathBuf::from("gg")).display(),
+            abs_filename.display(),
+            dir.join(&guest_lib_file).display(),
+        );
+        Some(gorget::backend::c::HotReloadOpts {
+            watch_path: abs_filename.display().to_string(),
+            guest_lib_name: guest_lib_name.clone(),
+            recompile_cmd,
+        })
+    } else {
+        None
+    };
+
+    // Generate C from GIR
+    let gir_output = gorget::backend::c::generate_c_with_opts(&gir_module, hr_opts.as_ref());
+
+    // Hot-reload: two-phase build (host binary + guest shared library).
+    if gir_module.hot_reload {
+        let host_code = gir_output.host_code.as_deref().unwrap_or(&gir_output.c_code);
+        let guest_code = gir_output.guest_code.as_deref().unwrap_or(&gir_output.c_code);
+
+        let host_c_path = dir.join(format!("{stem}_host.c"));
+        let guest_c_path = dir.join(format!("{stem}_guest.c"));
+        let hr = hr_opts.as_ref().unwrap();
+        #[cfg(target_os = "macos")]
+        let dylib_ext = ".dylib";
+        #[cfg(not(target_os = "macos"))]
+        let dylib_ext = ".so";
+        let guest_lib_path = dir.join(format!("{}_guest{dylib_ext}", hr.guest_lib_name.trim_end_matches("_guest")));
+
+        if let Err(e) = fs::write(&host_c_path, host_code) {
+            return Err(format!("Error writing {}: {e}", host_c_path.display()));
+        }
+        if let Err(e) = fs::write(&guest_c_path, guest_code) {
+            return Err(format!("Error writing {}: {e}", guest_c_path.display()));
+        }
+
+        let cc = env::var("CC").unwrap_or_else(|_| "cc".to_string());
+
+        // Compile guest shared library
+        let guest_status = Command::new(&cc)
+            .arg("-std=c11").arg("-shared").arg("-fPIC")
+            .arg("-Wall").arg("-Wextra")
+            .arg("-Wno-unused-parameter").arg("-Wno-unused-variable").arg("-Wno-unused-function")
+            .arg("-o").arg(&guest_lib_path)
+            .arg(&guest_c_path).arg("-lm")
+            .status();
+        match guest_status {
+            Ok(s) if !s.success() => return Err(format!("Guest compilation failed: {s}\nGenerated: {}", guest_c_path.display())),
+            Err(e) => return Err(format!("Failed to run '{cc}': {e}")),
+            _ => {}
+        }
+
+        // Compile host binary
+        let mut host_cmd = Command::new(&cc);
+        host_cmd.arg("-std=c11")
+            .arg("-Wall").arg("-Wextra")
+            .arg("-Wno-unused-parameter").arg("-Wno-unused-variable").arg("-Wno-unused-function")
+            .arg("-o").arg(&exe_path)
+            .arg(&host_c_path).arg("-lm").arg("-ldl");
+        if options.overflow_wrap || gir_module.overflow_wrap { host_cmd.arg("-fwrapv"); }
+        let host_status = host_cmd.status();
+        return match host_status {
+            Ok(s) if s.success() => Ok(exe_path),
+            Ok(s) => Err(format!("Host compilation failed: {s}\nGenerated: {}", host_c_path.display())),
+            Err(e) => Err(format!("Failed to run '{cc}': {e}")),
+        };
+    }
+
+    // Normal single-binary compile.
+    let c_code = &gir_output.c_code;
+    if let Err(e) = fs::write(&c_path, c_code) {
         return Err(format!("Error writing {}: {e}", c_path.display()));
     }
 
-    // Invoke C compiler
     let cc = env::var("CC").unwrap_or_else(|_| "cc".to_string());
     let mut cc_cmd = Command::new(&cc);
     cc_cmd
@@ -726,12 +803,10 @@ fn try_build_ir(
         .arg(&c_path)
         .arg("-lm");
 
-    // Overflow wrap: pass -fwrapv so C integer overflow wraps instead of UB.
     if options.overflow_wrap || gir_module.overflow_wrap {
         cc_cmd.arg("-fwrapv");
     }
 
-    // Detect library dependencies from source imports
     let needs_crypto = source.contains("std.crypto") || source.contains("std.net.tls")
         || source.contains("std.p2p");
     add_crypto_flags(&mut cc_cmd, needs_crypto);
@@ -739,7 +814,6 @@ fn try_build_ir(
     let needs_regex = source.contains("std.regex");
     add_regex_flags(&mut cc_cmd, needs_regex);
 
-    // Add pthread for async/p2p
     if source.contains("std.async") || source.contains("std.p2p") {
         cc_cmd.arg("-lpthread");
     }
@@ -1239,17 +1313,30 @@ fn main() {
         });
         let features = parse_features(&args);
         let ir = args.iter().any(|a| a == "--ir");
-        let use_legacy = source_has_hot_reload(&source) || trace;
-        let exe_path = if !ir && use_legacy {
-            // Fall back to old codegen for hot-reload / trace (GIR deferred)
-            build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, Some(tmp_dir.path()), dep_paths, &features)
+        let hot_reload_flag = args.iter().any(|a| a == "--hot-reload");
+        let has_trace = !no_trace && (trace || source_has_trace(&source));
+        let trace_filename = if has_trace {
+            let trace_path = Path::new(filename).parent().unwrap_or(Path::new("."))
+                .join(format!("{}.trace.jsonl", Path::new(filename).file_stem().and_then(|s| s.to_str()).unwrap_or("output")));
+            let trace_path = std::path::absolute(&trace_path).unwrap_or(trace_path);
+            Some(trace_path.display().to_string())
+        } else {
+            None
+        };
+        let exe_path = if ir {
+            // Explicit --ir: use GIR pipeline
+            let lowering_opts = gorget::ir::lowering::LoweringOptions {
+                strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked,
+                trace_filename, hot_reload: hot_reload_flag || source_has_hot_reload(&source),
+                ..Default::default()
+            };
+            try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, &features, lowering_opts)
+                .unwrap_or_else(|e| { eprintln!("{e}"); process::exit(1); })
         } else {
             // Default: GIR pipeline
             let lowering_opts = gorget::ir::lowering::LoweringOptions {
-                strip_asserts,
-                no_strip_asserts,
-                overflow_wrap,
-                overflow_checked,
+                strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked,
+                trace_filename, hot_reload: hot_reload_flag || source_has_hot_reload(&source),
                 ..Default::default()
             };
             try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, &features, lowering_opts)
@@ -1503,36 +1590,25 @@ fn main() {
                         process::exit(1);
                     }
                 }
-            } else if hot_reload_flag || source_has_hot_reload(&source) {
-                // hot-reload: two-phase build (host + guest); old codegen (GIR deferred)
-                let result = try_build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, None, dep_paths, None, true, show_borrows, &features);
-                match result {
-                    Ok(p) => {
-                        // If -o was given, copy the host binary there so callers like test_ir.py
-                        // find it at the expected path (GIR pipeline uses -o for its output).
-                        if let Some(ref output_path) = shared_output_path {
-                            if let Err(e) = fs::copy(&p, output_path) {
-                                eprintln!("Warning: could not copy binary to {}: {e}", output_path.display());
-                            }
-                        }
-                        println!("Built (hot-reload): {}", p.display());
-                    }
-                    Err(e) => {
-                        eprintln!("{e}");
-                        process::exit(1);
-                    }
-                }
-            } else if !ir_mode && (trace || source_has_trace(&source)) {
-                // Legacy codegen: features GIR doesn't yet support (--trace)
-                let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, None, dep_paths, &features);
-                println!("Built: {}", exe_path.display());
             } else {
-                // Default: GIR pipeline
+                // GIR pipeline (handles hot-reload, trace, and normal builds).
+                let has_trace = !no_trace && (trace || source_has_trace(&source));
+                let trace_filename = if has_trace {
+                    let input_path = Path::new(filename);
+                    let dir = input_path.parent().unwrap_or(Path::new("."));
+                    let stem = input_path.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
+                    let tp = dir.join(format!("{stem}.trace.jsonl"));
+                    Some(std::path::absolute(&tp).unwrap_or(tp).display().to_string())
+                } else {
+                    None
+                };
                 let lowering_opts = gorget::ir::lowering::LoweringOptions {
                     strip_asserts,
                     no_strip_asserts,
                     overflow_wrap,
                     overflow_checked,
+                    trace_filename,
+                    hot_reload: hot_reload_flag || source_has_hot_reload(&source),
                     ..Default::default()
                 };
                 let result = try_build_ir(filename, &source, dep_paths, None, shared_output_path.as_deref(), &features, lowering_opts);
@@ -1547,66 +1623,43 @@ fn main() {
         }
         "run" => {
             let dep_paths = resolve_deps_for_file(filename);
-            if hot_reload_flag || source_has_hot_reload(&source) {
-                // hot-reload: build with hot-reload and run (old codegen; GIR deferred)
-                let result = try_build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, None, dep_paths, None, true, show_borrows, &features);
-                match result {
-                    Ok(exe_path) => {
-                        let status = Command::new(&exe_path)
-                            .status()
-                            .unwrap_or_else(|e| {
-                                eprintln!("Failed to execute {}: {e}", exe_path.display());
-                                process::exit(1);
-                            });
-                        process::exit(status.code().unwrap_or(1));
-                    }
-                    Err(e) => {
-                        eprintln!("{e}");
-                        process::exit(1);
-                    }
-                }
-            } else if !ir_mode && (trace || source_has_trace(&source)) {
-                // Legacy codegen: features GIR doesn't yet support (--trace)
-                let tmp_dir = tempfile::tempdir().unwrap_or_else(|e| {
-                    eprintln!("Failed to create temp directory: {e}");
-                    process::exit(1);
-                });
-                let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, Some(tmp_dir.path()), dep_paths, &features);
-                let status = Command::new(&exe_path)
-                    .status()
-                    .unwrap_or_else(|e| {
-                        eprintln!("Failed to execute {}: {e}", exe_path.display());
-                        process::exit(1);
-                    });
-                process::exit(status.code().unwrap_or(1));
+            let tmp_dir = tempfile::tempdir().unwrap_or_else(|e| {
+                eprintln!("Failed to create temp directory: {e}");
+                process::exit(1);
+            });
+            let has_trace = !no_trace && (trace || source_has_trace(&source));
+            let trace_filename = if has_trace {
+                let input_path = Path::new(filename);
+                let dir = input_path.parent().unwrap_or(Path::new("."));
+                let stem = input_path.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
+                let tp = dir.join(format!("{stem}.trace.jsonl"));
+                Some(std::path::absolute(&tp).unwrap_or(tp).display().to_string())
             } else {
-                // Default: GIR pipeline
-                let tmp_dir = tempfile::tempdir().unwrap_or_else(|e| {
-                    eprintln!("Failed to create temp directory: {e}");
+                None
+            };
+            let lowering_opts = gorget::ir::lowering::LoweringOptions {
+                strip_asserts,
+                no_strip_asserts,
+                overflow_wrap,
+                overflow_checked,
+                trace_filename,
+                hot_reload: hot_reload_flag || source_has_hot_reload(&source),
+                ..Default::default()
+            };
+            let result = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, &features, lowering_opts);
+            match result {
+                Ok(exe_path) => {
+                    let status = Command::new(&exe_path)
+                        .status()
+                        .unwrap_or_else(|e| {
+                            eprintln!("Failed to execute {}: {e}", exe_path.display());
+                            process::exit(1);
+                        });
+                    process::exit(status.code().unwrap_or(1));
+                }
+                Err(e) => {
+                    eprintln!("{e}");
                     process::exit(1);
-                });
-                let lowering_opts = gorget::ir::lowering::LoweringOptions {
-                    strip_asserts,
-                    no_strip_asserts,
-                    overflow_wrap,
-                    overflow_checked,
-                    ..Default::default()
-                };
-                let result = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, &features, lowering_opts);
-                match result {
-                    Ok(exe_path) => {
-                        let status = Command::new(&exe_path)
-                            .status()
-                            .unwrap_or_else(|e| {
-                                eprintln!("Failed to execute {}: {e}", exe_path.display());
-                                process::exit(1);
-                            });
-                        process::exit(status.code().unwrap_or(1));
-                    }
-                    Err(e) => {
-                        eprintln!("{e}");
-                        process::exit(1);
-                    }
                 }
             }
         }

@@ -38,6 +38,10 @@ pub struct LoweringOptions {
     pub test_exclude_tags: Vec<String>,
     /// Only run tests whose display name contains this substring.
     pub test_name_filter: Option<String>,
+    /// Enable trace instrumentation and write events to this file path.
+    pub trace_filename: Option<String>,
+    /// Enable hot-reload mode (directive hot-reload or --hot-reload flag).
+    pub hot_reload: bool,
 }
 
 /// Lower an AST module + analysis result into a GIR module.
@@ -840,6 +844,54 @@ pub fn lower_module(
     // Propagate directive flags to module
     module.overflow_wrap = ctx.overflow_wrap;
 
+    // Trace: filename provided by options (derived from source path in main.rs)
+    module.trace_filename = options.trace_filename.clone();
+
+    // Hot-reload: scan for directive + find state type from init() + compute state hash
+    let mut has_hot_reload_directive = false;
+    for item in &ast_module.items {
+        if let Item::Directive(d) = &item.node {
+            if d.name == "hot-reload" { has_hot_reload_directive = true; }
+        }
+    }
+    module.hot_reload = has_hot_reload_directive || options.hot_reload;
+    if module.hot_reload {
+        // Find state type from init() return type
+        for item in &ast_module.items {
+            if let Item::Function(f) = &item.node {
+                if f.name.node == "init" {
+                    if let crate::parser::ast::Type::Named { name, .. } = &f.return_type.node {
+                        module.hot_reload_state_type = Some(name.node.clone());
+                    }
+                    break;
+                }
+            }
+        }
+        // Compute state hash from the State struct field layout
+        if let Some(ref state_type) = module.hot_reload_state_type.clone() {
+            for item in &ast_module.items {
+                if let Item::Struct(s) = &item.node {
+                    if &s.name.node == state_type {
+                        let mut layout = String::new();
+                        for field in &s.fields {
+                            let field_type = format!("{:?}", field.node.type_.node);
+                            let field_name = &field.node.name.node;
+                            layout.push_str(&format!("{field_type} {field_name};"));
+                        }
+                        module.hot_reload_state_hash = fnv1a_hash(&layout);
+                        break;
+                    }
+                }
+            }
+        }
+        // Check if reload() function exists
+        module.hot_reload_has_reload_fn = ast_module.items.iter().any(|item| {
+            if let Item::Function(f) = &item.node {
+                f.name.node == "reload"
+            } else { false }
+        });
+    }
+
     // Collect channel element types (Channel__T → T) for C backend wrapper emission
     for name in module.type_registry.all_type_def_names() {
         if let Some(elem) = name.strip_prefix("Channel__") {
@@ -1546,7 +1598,7 @@ void main():
 "#;
         let (module, result) = parse_and_analyze(source);
         let gir = lower_module(&module, &result, &LoweringOptions::default());
-        let c_code = crate::backend::c::generate_c(&gir);
+        let c_code = crate::backend::c::generate_c(&gir).c_code;
 
         assert!(c_code.contains("typedef struct Point Point;"), "Should forward-declare Point");
         assert!(c_code.contains("struct Point {"), "Should define Point struct");
@@ -1623,7 +1675,7 @@ void main():
 "#;
         let (module, result) = parse_and_analyze(source);
         let gir = lower_module(&module, &result, &LoweringOptions::default());
-        let c_code = crate::backend::c::generate_c(&gir);
+        let c_code = crate::backend::c::generate_c(&gir).c_code;
 
         assert!(c_code.contains("Pair__int64_t__double"),
             "C output should contain monomorphized Pair type name. C code:\n{c_code}");
@@ -1844,7 +1896,7 @@ void main():
 "#;
         let (module, result) = parse_and_analyze(source);
         let gir = lower_module(&module, &result, &LoweringOptions::default());
-        let c_code = crate::backend::c::generate_c(&gir);
+        let c_code = crate::backend::c::generate_c(&gir).c_code;
 
         // VTable type
         assert!(c_code.contains("typedef struct Shape_VTable Shape_VTable;"),
@@ -1930,4 +1982,14 @@ void main():
         assert_eq!(func.name, "__Closure_0__call");
         assert!(func.params.len() >= 2, "Should have env + y params");
     }
+}
+
+/// FNV-1a 64-bit hash for stable struct layout hashing (used by hot-reload).
+fn fnv1a_hash(s: &str) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for b in s.bytes() {
+        hash ^= b as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
 }

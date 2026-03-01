@@ -6,6 +6,26 @@ use crate::ir::types::*;
 use crate::ir::{Function, Global, GlobalInit, Module};
 use rustc_hash::FxHashSet;
 
+/// Output from the GIR C backend.
+pub struct GirCodegenOutput {
+    /// Full C code (used when not splitting host/guest).
+    pub c_code: String,
+    /// Host binary C code (only `Some` when `module.hot_reload == true`).
+    pub host_code: Option<String>,
+    /// Guest shared library C code (only `Some` when `module.hot_reload == true`).
+    pub guest_code: Option<String>,
+}
+
+/// Options for hot-reload code generation.
+pub struct HotReloadOpts {
+    /// Absolute path to the source file (for the file watcher).
+    pub watch_path: String,
+    /// Base name of the guest shared library (without extension).
+    pub guest_lib_name: String,
+    /// Shell command to recompile the guest library.
+    pub recompile_cmd: String,
+}
+
 /// C reserved words and type names that cannot be used as identifiers.
 const C_RESERVED: &[&str] = &[
     "auto", "break", "case", "char", "const", "continue", "default", "do",
@@ -319,8 +339,17 @@ fn returns_cstr(name: &str) -> bool {
     )
 }
 
-/// Translate a GIR Module into a compilable C string.
-pub fn generate_c(module: &Module) -> String {
+/// Translate a GIR Module into C output (main path; hot-reload opts from `module`).
+pub fn generate_c(module: &Module) -> GirCodegenOutput {
+    generate_c_impl(module, None)
+}
+
+/// Translate a GIR Module into C output with explicit hot-reload opts.
+pub fn generate_c_with_opts(module: &Module, hr_opts: Option<&HotReloadOpts>) -> GirCodegenOutput {
+    generate_c_impl(module, hr_opts)
+}
+
+fn generate_c_impl(module: &Module, hr_opts: Option<&HotReloadOpts>) -> GirCodegenOutput {
     let mut out = String::with_capacity(4096);
 
     // Full runtime preamble (provides Str, GorgetString, GorgetArray, etc.)
@@ -400,8 +429,11 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
         // Emit Channel__T typedefs and wrapper functions (if any), plus Task__T structs.
         emit_channel_and_task_defs(&mut out, module);
     }
-    if all_call_names.iter().any(|n| n.contains("hot_reload") || n.contains("plugin")) {
+    if module.hot_reload || all_call_names.iter().any(|n| n.contains("hot_reload") || n.contains("plugin")) {
         out.push_str(c_runtime::HOT_RELOAD_RUNTIME);
+    }
+    if module.trace_filename.is_some() {
+        out.push_str(c_runtime::TRACE_RUNTIME);
     }
 
     // GIR-specific helpers
@@ -453,7 +485,8 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
     // Global constants
     emit_globals(&mut out, module);
 
-    // Function definitions
+    // ── Function Definitions ──
+    out.push_str("// ── Function Definitions ──\n");
     let has_test_runner = !module.test_fns.is_empty() || module.is_test_module;
     for func in &module.functions {
         if is_template_function(&func.name, &skip_names) {
@@ -472,7 +505,144 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
         emit_test_runner_main(&mut out, module);
     }
 
-    out
+    // Hot-reload: generate split host/guest sources.
+    if module.hot_reload {
+        let (host, guest) = generate_hot_reload_split(module, &out, hr_opts);
+        return GirCodegenOutput { c_code: out, host_code: Some(host), guest_code: Some(guest) };
+    }
+
+    GirCodegenOutput { c_code: out, host_code: None, guest_code: None }
+}
+
+/// Split a full compiled C string into host + guest for hot-reload mode.
+///
+/// - Guest: full code minus main(), plus state hash constant + exported wrappers.
+/// - Host: runtime/type section only + HOT_RELOAD_RUNTIME + a dlopen-based main().
+fn generate_hot_reload_split(module: &Module, full_c: &str, hr_opts: Option<&HotReloadOpts>) -> (String, String) {
+    let state_type = module.hot_reload_state_type.as_deref().unwrap_or("State");
+    let state_hash = module.hot_reload_state_hash;
+    let has_reload = module.hot_reload_has_reload_fn;
+
+    // ── Guest code ──
+    let mut guest = String::with_capacity(full_c.len() + 1024);
+    // Remove main() by finding the marker and stripping through the matching brace.
+    let main_marker = "int main(int argc, char** argv) {";
+    if let Some(main_pos) = full_c.find(main_marker) {
+        guest.push_str(&full_c[..main_pos]);
+        let after_main = &full_c[main_pos..];
+        let mut depth = 0usize;
+        let mut end_pos = 0;
+        for (i, ch) in after_main.char_indices() {
+            if ch == '{' { depth += 1; }
+            if ch == '}' {
+                depth -= 1;
+                if depth == 0 { end_pos = i + 1; break; }
+            }
+        }
+        let remaining = after_main[end_pos..].strip_prefix('\n').unwrap_or(&after_main[end_pos..]);
+        guest.push_str(remaining);
+    } else {
+        guest.push_str(full_c);
+    }
+    // State hash constant
+    guest.push_str(&format!(
+        "\n// ── Hot Reload Guest Exports ──\n\
+         const uint64_t GORGET_STATE_HASH = 0x{state_hash:016X}ULL;\n\n"
+    ));
+    // Exported init() wrapper
+    guest.push_str(&format!(
+        "__attribute__((visibility(\"default\")))\n\
+         {state_type} gorget_guest_init(void) {{\n\
+         \treturn init();\n\
+         }}\n\n"
+    ));
+    // Exported tick() wrapper
+    guest.push_str(&format!(
+        "__attribute__((visibility(\"default\")))\n\
+         bool gorget_guest_tick({state_type}* state) {{\n\
+         \treturn tick(state);\n\
+         }}\n\n"
+    ));
+    // Exported reload() wrapper
+    if has_reload {
+        guest.push_str(&format!(
+            "__attribute__((visibility(\"default\")))\n\
+             void gorget_guest_reload({state_type}* state) {{\n\
+             \treload(state);\n\
+             }}\n\n"
+        ));
+    }
+
+    // ── Host code ──
+    // Use the runtime/types section (before "// ── Function Definitions ──") + host main.
+    let mut host = String::with_capacity(4096);
+    let func_defs_marker = "// ── Function Definitions ──";
+    if let Some(pos) = full_c.find(func_defs_marker) {
+        host.push_str(&full_c[..pos]);
+    } else {
+        host.push_str(c_runtime::RUNTIME_PREAMBLE);
+        host.push_str(c_runtime::PANIC_NORMAL);
+        host.push_str(c_runtime::RUNTIME_CORE);
+    }
+    // HOT_RELOAD_RUNTIME was already emitted in the full code; don't double-emit.
+    // Just emit the function-pointer typedefs and main().
+    host.push_str(&format!(
+        "// ── Hot Reload Host ──\n\
+         typedef {state_type} (*gorget_init_fn_t)(void);\n\
+         typedef bool (*gorget_tick_fn_t)({state_type}*);\n\
+         typedef void (*gorget_reload_fn_t)({state_type}*);\n\n"
+    ));
+
+    let (guest_lib_name, recompile_cmd, watch_path) = if let Some(opts) = hr_opts {
+        (opts.guest_lib_name.as_str(), opts.recompile_cmd.as_str(), opts.watch_path.as_str())
+    } else {
+        ("guest", "gg build --shared", ".")
+    };
+    let watch_c = format!("    const char* __watch_paths[] = {{\"{watch_path}\"}};\n    int __watch_count = 1;\n");
+
+    host.push_str(&format!(
+        r#"int main(int argc, char** argv) {{
+    gorget_init_args(argc, argv);
+{watch_c}
+    GorgetFileWatcher __watcher = gorget_hot_watch_init(__watch_paths, __watch_count);
+
+    if (system("{recompile_cmd}") != 0) {{
+        fprintf(stderr, "[hot-reload] Initial compilation failed\n");
+        return 1;
+    }}
+    GorgetGuestModule __guest = gorget_hot_load("./{guest_lib_name}" GORGET_DYLIB_EXT);
+    if (!__guest.handle) {{
+        fprintf(stderr, "[hot-reload] Failed to load guest module\n");
+        return 1;
+    }}
+
+    gorget_init_fn_t __init_fn = (gorget_init_fn_t)__guest.init;
+    {state_type} __state = __init_fn();
+    gorget_tick_fn_t __tick_fn = (gorget_tick_fn_t)__guest.tick;
+    gorget_reload_fn_t __reload_fn = (gorget_reload_fn_t)__guest.reload;
+    bool __running = true;
+    while (__running) {{
+        if (gorget_hot_watch_check(&__watcher)) {{
+            if (system("{recompile_cmd}") == 0) {{
+                GorgetGuestModule __new = gorget_hot_load("./{guest_lib_name}" GORGET_DYLIB_EXT);
+                if (__new.handle) {{
+                    gorget_hot_unload(&__guest);
+                    __guest = __new;
+                    __tick_fn = (gorget_tick_fn_t)__guest.tick;
+                    __reload_fn = (gorget_reload_fn_t)__guest.reload;
+                    if (__reload_fn) __reload_fn(&__state);
+                }}
+            }}
+        }}
+        __running = __tick_fn(&__state);
+    }}
+    gorget_hot_unload(&__guest);
+    return 0;
+}}
+"#
+    ));
+
+    (host, guest)
 }
 
 /// Emit a test runner main() with timing, @should_panic support, and suite setup/teardown.
@@ -2152,10 +2322,49 @@ fn emit_function(out: &mut String, func: &Function, module: &Module) {
     // Emit `goto bb0;` to start
     if is_main {
         out.push_str("    gorget_init_args(argc, argv);\n");
+        // Trace init: open trace file at program start.
+        if let Some(ref trace_path) = module.trace_filename {
+            let escaped = trace_path.replace('\\', "\\\\").replace('"', "\\\"");
+            let _ = writeln!(out, "    __gorget_trace_init(\"{escaped}\");");
+        }
+    } else if let Some(ref display_name) = func.display_name {
+        // Trace entry: emit call event with function name, parameter values, and depth.
+        if module.trace_filename.is_some() {
+            let escaped = display_name.replace('\\', "\\\\").replace('"', "\\\"");
+            out.push_str("    if (__gorget_trace_fp) {\n");
+            let _ = writeln!(out, "        fprintf(__gorget_trace_fp, \"{{\\\"type\\\":\\\"call\\\",\\\"fn\\\":\\\"{escaped}\\\",\\\"args\\\":{{\");");
+            for (i, &param_type) in func.params.iter().enumerate() {
+                let local_idx = i + 1;
+                let gorget_name = func.locals.get(local_idx)
+                    .and_then(|l| l.name_hint.as_deref())
+                    .unwrap_or("_");
+                let formatter = trace_formatter_for_type(param_type, registry);
+                let comma = if i == 0 { "" } else { "," };
+                let esc_name = gorget_name.replace('\\', "\\\\").replace('"', "\\\"");
+                let _ = writeln!(out, "        fprintf(__gorget_trace_fp, \"{comma}\\\"{}\\\":\");", esc_name);
+                let _ = writeln!(out, "        {formatter}(__gorget_trace_fp, _{local_idx});");
+            }
+            let _ = writeln!(out, "        fprintf(__gorget_trace_fp, \"}},\\\"depth\\\":%d}}\\n\", __gorget_trace_depth++);");
+            out.push_str("    }\n");
+        }
     }
     if !func.blocks.is_empty() {
         out.push_str("    goto bb0;\n");
     }
+
+    // Pre-scan: collect which blocks are the "then" target of Branch terminators.
+    // Branch events are emitted at the start of those blocks (only when actually entered).
+    let trace_then_blocks: std::collections::HashSet<u32> = if module.trace_filename.is_some() {
+        func.blocks.iter().filter_map(|b| {
+            if let Some(crate::ir::instructions::Terminator::Branch { then_block, .. }) = &b.terminator {
+                Some(then_block.0)
+            } else {
+                None
+            }
+        }).collect()
+    } else {
+        std::collections::HashSet::new()
+    };
 
     // Emit basic blocks
     let mut alloc_save_counter: usize = 0;
@@ -2163,19 +2372,62 @@ fn emit_function(out: &mut String, func: &Function, module: &Module) {
     // Track which test-function locals have been registered on the cleanup stack.
     // Only the FIRST assignment to each local triggers a cleanup push.
     let mut test_cleanup_pushed: FxHashSet<u32> = FxHashSet::default();
+    let tracing = module.trace_filename.is_some();
     for (i, block) in func.blocks.iter().enumerate() {
         let _ = writeln!(out, "    bb{i}: ;");
+
+        // Branch event: emitted when a "then" block is actually entered.
+        if tracing && trace_then_blocks.contains(&(i as u32)) {
+            let _ = writeln!(out, "    if (__gorget_trace_fp) {{ fprintf(__gorget_trace_fp, \"{{\\\"type\\\":\\\"branch\\\",\\\"depth\\\":%d}}\\n\", __gorget_trace_depth); }}");
+        }
+
+        // Stmt_start event: emitted at the start of each block.
+        if tracing {
+            let _ = writeln!(out, "    if (__gorget_trace_fp) {{ fprintf(__gorget_trace_fp, \"{{\\\"type\\\":\\\"stmt_start\\\",\\\"depth\\\":%d}}\\n\", __gorget_trace_depth++); }}");
+        }
 
         for inst in &block.instructions {
             emit_instruction(out, inst, func, registry, &type_overrides, &module.functions, module, &mut alloc_save_counter, &mut alloc_save_stack, &mut test_cleanup_pushed);
         }
 
+        // Stmt_end event: emitted after instructions, before the terminator.
+        if tracing {
+            let _ = writeln!(out, "    if (__gorget_trace_fp) {{ fprintf(__gorget_trace_fp, \"{{\\\"type\\\":\\\"stmt_end\\\",\\\"depth\\\":%d}}\\n\", --__gorget_trace_depth); }}");
+        }
+
         if let Some(ref term) = block.terminator {
-            emit_terminator(out, term, func, registry);
+            // For traced non-main functions with a display name, inject a return event
+            // just before each return statement.
+            let trace_name = if tracing && !is_main {
+                func.display_name.as_deref()
+            } else {
+                None
+            };
+            emit_terminator(out, term, func, registry, trace_name);
         }
     }
 
     out.push_str("}\n");
+}
+
+/// Map a GIR TypeId to the appropriate trace formatter function name.
+fn trace_formatter_for_type(type_id: crate::ir::types::TypeId, registry: &TypeRegistry) -> &'static str {
+    use crate::ir::types::*;
+    match type_id {
+        BOOL_TYPE => "__gorget_trace_val_bool",
+        F32_TYPE | F64_TYPE => "__gorget_trace_val_float",
+        _ if type_id == I8_TYPE || type_id == I16_TYPE || type_id == I32_TYPE
+            || type_id == I64_TYPE || type_id == U8_TYPE || type_id == U16_TYPE
+            || type_id == U32_TYPE || type_id == U64_TYPE || type_id == CHAR_TYPE => "__gorget_trace_val_int",
+        _ => {
+            if let Some(crate::ir::types::GirType::Named(name)) = registry.get(type_id) {
+                if name == "Str" || name == "GorgetString" {
+                    return "__gorget_trace_val_Str";
+                }
+            }
+            "__gorget_trace_val_int" // fallback for unknown types
+        }
+    }
 }
 
 /// Emit a single instruction as C code.
@@ -3692,11 +3944,17 @@ fn emit_instruction(
 }
 
 /// Emit a terminator as C code.
-fn emit_terminator(out: &mut String, term: &Terminator, func: &Function, registry: &TypeRegistry) {
+fn emit_terminator(out: &mut String, term: &Terminator, func: &Function, registry: &TypeRegistry, trace_fn_name: Option<&str>) {
     match term {
         Terminator::Return(value) => {
             let is_main = func.name == "main";
             let return_is_void = func.return_type == UNIT_TYPE && !is_main;
+
+            // Trace return event (before the actual return).
+            if let Some(name) = trace_fn_name {
+                let escaped = name.replace('\\', "\\\\").replace('"', "\\\"");
+                let _ = writeln!(out, "        if (__gorget_trace_fp) {{ fprintf(__gorget_trace_fp, \"{{\\\"type\\\":\\\"return\\\",\\\"fn\\\":\\\"{escaped}\\\",\\\"depth\\\":%d}}\\n\", __gorget_trace_depth--); }}");
+            }
 
             if return_is_void {
                 out.push_str("        return;\n");
@@ -7734,7 +7992,7 @@ mod tests {
         b.ret(FunctionBuilder::copy(LocalId(0)));
         module.functions.push(b.build());
 
-        let c_code = generate_c(&module);
+        let c_code = generate_c(&module).c_code;
         assert!(c_code.contains("int main(int argc, char** argv)"));
         assert!(c_code.contains("return _0;"));
     }
@@ -7757,7 +8015,7 @@ mod tests {
         b.ret(FunctionBuilder::copy(LocalId(0)));
         module.functions.push(b.build());
 
-        let c_code = generate_c(&module);
+        let c_code = generate_c(&module).c_code;
         assert!(c_code.contains("int64_t add(int64_t _1, int64_t _2)"));
         assert!(c_code.contains("+"));
         assert!(c_code.contains("return _0;"));
@@ -7798,7 +8056,7 @@ mod tests {
 
         module.functions.push(b.build());
 
-        let c_code = generate_c(&module);
+        let c_code = generate_c(&module).c_code;
         assert!(c_code.contains("bb0:"));
         assert!(c_code.contains("bb1:"));
         assert!(c_code.contains("bb2:"));
@@ -7832,7 +8090,7 @@ mod tests {
         b.ret(FunctionBuilder::copy(LocalId(0)));
         module.functions.push(b.build());
 
-        let c_code = generate_c(&module);
+        let c_code = generate_c(&module).c_code;
         assert!(c_code.contains("typedef struct Point Point;"));
         assert!(c_code.contains("struct Point {"));
         assert!(c_code.contains("double x;"));
@@ -7870,7 +8128,7 @@ mod tests {
         b.ret(FunctionBuilder::copy(LocalId(0)));
         module.functions.push(b.build());
 
-        let c_code = generate_c(&module);
+        let c_code = generate_c(&module).c_code;
         assert!(c_code.contains("typedef struct Shape Shape;"));
         assert!(c_code.contains("struct Shape {"));
         assert!(c_code.contains("int tag;"));
@@ -7893,7 +8151,7 @@ mod tests {
         b.ret(FunctionBuilder::copy(LocalId(0)));
         module.functions.push(b.build());
 
-        let c_code = generate_c(&module);
+        let c_code = generate_c(&module).c_code;
         assert!(c_code.contains("static int64_t my_vtable = {0};"));
     }
 }

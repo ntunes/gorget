@@ -68,6 +68,16 @@ pub struct Module {
     /// True when the module was lowered in test mode (gg test).
     /// Forces emission of a test runner main() even when test_fns is empty (all filtered).
     pub is_test_module: bool,
+    /// When set, emit trace instrumentation and write events to this file path.
+    pub trace_filename: Option<String>,
+    /// When true, this module uses `directive hot-reload`.
+    pub hot_reload: bool,
+    /// Name of the hot-reload State struct (derived from `init()` return type).
+    pub hot_reload_state_type: Option<String>,
+    /// FNV-1a hash of the State struct's field layout (for change detection).
+    pub hot_reload_state_hash: u64,
+    /// True when a `reload()` function exists in the module.
+    pub hot_reload_has_reload_fn: bool,
 }
 
 impl Module {
@@ -89,6 +99,11 @@ impl Module {
             has_suite_setup: false,
             has_suite_teardown: false,
             is_test_module: false,
+            trace_filename: None,
+            hot_reload: false,
+            hot_reload_state_type: None,
+            hot_reload_state_hash: 0,
+            hot_reload_has_reload_fn: false,
         }
     }
 
@@ -120,6 +135,9 @@ pub struct Function {
     /// True for test functions (test "...") — enables cleanup stack registration
     /// for droppable locals so they're cleaned up on panic/longjmp.
     pub is_test_fn: bool,
+    /// Human-readable Gorget function name for trace output (e.g. "add", "Point.distance").
+    /// None for compiler-generated functions (closures, vtable methods, etc.).
+    pub display_name: Option<String>,
 }
 
 /// A local variable slot.
@@ -200,6 +218,7 @@ mod tests {
             }],
             blocks: vec![BasicBlock::new()],
             is_test_fn: false,
+            display_name: None,
         });
         assert_eq!(module.functions.len(), 1);
         let f = module.find_function("main").unwrap();
