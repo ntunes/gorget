@@ -10,7 +10,6 @@ use gorget::errors::ErrorReporter;
 use gorget::lexer::Lexer;
 use gorget::loader::{self, ModuleLoader};
 use gorget::manifest::{self, DepSpec, Manifest};
-use gorget::parser::ast::{Item, Module};
 use gorget::parser::Parser;
 use gorget::resolver;
 
@@ -92,45 +91,13 @@ fn resolve_deps_for_file(filename: &str) -> HashMap<String, PathBuf> {
 
 
 /// Check if the source text uses hot-reload mode.
-/// Used to fall back to old codegen (GIR doesn't support hot-reload yet).
 fn source_has_hot_reload(source: &str) -> bool {
     source.contains("directive hot-reload")
 }
 
 /// Check if the source text uses the trace directive.
-/// Used to fall back to old codegen (GIR doesn't emit trace instrumentation yet).
 fn source_has_trace(source: &str) -> bool {
     source.contains("directive trace")
-}
-
-/// Directive flags extracted from the source module.
-struct DirectiveFlags {
-    strip_asserts: bool,
-    overflow_wrap: bool,
-    trace: bool,
-    hot_reload: bool,
-}
-
-/// Extract directive flags from a parsed module.
-fn extract_directives(module: &Module) -> DirectiveFlags {
-    let mut flags = DirectiveFlags {
-        strip_asserts: false,
-        overflow_wrap: false,
-        trace: false,
-        hot_reload: false,
-    };
-    for item in &module.items {
-        if let Item::Directive(d) = &item.node {
-            match d.name.as_str() {
-                "strip-asserts" => flags.strip_asserts = true,
-                "overflow" if d.value.as_deref() == Some("wrap") => flags.overflow_wrap = true,
-                "trace" => flags.trace = true,
-                "hot-reload" => flags.hot_reload = true,
-                _ => {}
-            }
-        }
-    }
-    flags
 }
 
 /// Add SDL2 linker flags to a cc command.
@@ -295,355 +262,6 @@ fn parse_features(args: &[String]) -> Vec<String> {
     features
 }
 
-/// Build a .gg source file into a binary. Returns the path to the executable,
-/// or an error string if compilation fails.
-///
-/// `shared_output`: if Some, build as a shared library (.dylib/.so) at this path.
-/// `hot_reload_flag`: if true, force hot-reload mode even without `directive hot-reload`.
-fn try_build(
-    filename: &str,
-    source: &str,
-    strip_asserts: bool,
-    no_strip_asserts: bool,
-    overflow_wrap: bool,
-    overflow_checked: bool,
-    trace: bool,
-    no_trace: bool,
-    test_mode: bool,
-    test_tags: &[String],
-    test_exclude_tags: &[String],
-    test_name_filter: Option<&str>,
-    output_dir: Option<&Path>,
-    dep_paths: HashMap<String, PathBuf>,
-    shared_output: Option<&Path>,
-    hot_reload_flag: bool,
-    show_borrows: bool,
-    features: &[String],
-) -> Result<PathBuf, String> {
-    let mut parser = Parser::new(source);
-    let module = parser.parse_module();
-
-    if !parser.errors.is_empty() {
-        let reporter = ErrorReporter::new(filename.to_string(), source.to_string());
-        for err in &parser.errors {
-            reporter.report_parse_error(err);
-        }
-        return Err(format!("{} parse error(s) found", parser.errors.len()));
-    }
-
-    // Load imported modules recursively and merge
-    let (mut module, concat_source) = load_imports(filename, source, module, dep_paths);
-
-    // Merge source directives with CLI flags.
-    let dir_flags = extract_directives(&module);
-    let strip_asserts = if no_strip_asserts {
-        false
-    } else {
-        strip_asserts || dir_flags.strip_asserts
-    };
-    let overflow_wrap = if overflow_checked {
-        false
-    } else {
-        overflow_wrap || dir_flags.overflow_wrap
-    };
-    let trace = if no_trace {
-        false
-    } else {
-        trace || dir_flags.trace
-    };
-    let hot_reload = dir_flags.hot_reload || hot_reload_flag;
-
-    let result = gorget::semantic::analyze(&mut module, features);
-
-    if show_borrows {
-        print_borrow_summary(&result);
-    }
-
-    if !result.errors.is_empty() {
-        let reporter = ErrorReporter::new(filename.to_string(), concat_source.clone());
-        for err in &result.errors {
-            reporter.report_semantic_error(err);
-        }
-        return Err(format!("{} semantic error(s) found", result.errors.len()));
-    }
-
-    // Determine output paths
-    let input_path = Path::new(filename);
-    let default_dir = input_path.parent().unwrap_or(Path::new("."));
-    let dir = output_dir.unwrap_or(default_dir);
-    let stem = input_path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("output");
-
-    // Build trace filename: always next to the source file (not in output_dir)
-    let trace_filename = if trace {
-        let trace_path = default_dir.join(format!("{stem}.trace.jsonl"));
-        let trace_path = std::path::absolute(&trace_path).unwrap_or(trace_path);
-        trace_path.display().to_string()
-    } else {
-        String::new()
-    };
-
-    // Determine guest library name for hot-reload mode
-    let guest_lib_name = format!("{stem}_guest");
-    #[cfg(target_os = "macos")]
-    let dylib_ext = ".dylib";
-    #[cfg(not(target_os = "macos"))]
-    let dylib_ext = ".so";
-
-    // Compute the recompile command for hot-reload
-    let abs_filename = std::path::absolute(Path::new(filename))
-        .unwrap_or_else(|_| PathBuf::from(filename));
-    let guest_lib_file = format!("{guest_lib_name}{dylib_ext}");
-    let recompile_cmd = format!(
-        "{} build --shared {} -o {}",
-        std::env::current_exe().unwrap_or_else(|_| PathBuf::from("gg")).display(),
-        abs_filename.display(),
-        dir.join(&guest_lib_file).display(),
-    );
-
-    // Generate C code
-    let codegen_output = gorget::codegen::generate_c(&module, &result, gorget::codegen::CodegenOptions {
-        strip_asserts,
-        overflow_wrap,
-        trace,
-        trace_filename,
-        test_mode,
-        test_tags: test_tags.to_vec(),
-        test_exclude_tags: test_exclude_tags.to_vec(),
-        test_name_filter: test_name_filter.map(|s| s.to_string()),
-        source_text: concat_source,
-        hot_reload,
-        watch_paths: vec![abs_filename.display().to_string()],
-        guest_lib_path: guest_lib_name.clone(),
-        recompile_cmd: recompile_cmd.clone(),
-    });
-    let c_code = codegen_output.c_code;
-    let needs_sdl = codegen_output.needs_sdl;
-    let needs_tls = codegen_output.needs_tls;
-    let needs_crypto = codegen_output.needs_crypto;
-    let needs_regex = codegen_output.needs_regex;
-    let needs_threads = codegen_output.needs_threads;
-    let c_path = dir.join(format!("{stem}.c"));
-    // Canonicalize to an absolute path so Command::new() doesn't search $PATH.
-    // For a bare filename like "hello.gg", dir is "." and exe_path would be "hello",
-    // which Unix interprets as a $PATH lookup rather than ./hello.
-    let exe_path = dir.join(stem);
-    let exe_path = std::path::absolute(&exe_path).unwrap_or(exe_path);
-
-    // ── --shared: build as shared library (highest priority) ──
-    if let Some(shared_path) = shared_output {
-        // For --shared, emit the guest code (if available) or the full code
-        let shared_c_code = codegen_output.guest_code.as_deref().unwrap_or(&c_code);
-        let shared_c_path = dir.join(format!("{stem}_guest.c"));
-        if let Err(e) = fs::write(&shared_c_path, shared_c_code) {
-            return Err(format!("Error writing {}: {e}", shared_c_path.display()));
-        }
-
-        let cc = env::var("CC").unwrap_or_else(|_| "cc".to_string());
-        let mut cc_cmd = Command::new(&cc);
-        cc_cmd
-            .arg("-std=c11")
-            .arg("-shared")
-            .arg("-fPIC")
-            .arg("-Wall")
-            .arg("-Wextra")
-            .arg("-Wno-unused-parameter")
-            .arg("-Wno-unused-variable")
-            .arg("-Wno-unused-function")
-            .arg("-o")
-            .arg(shared_path)
-            .arg(&shared_c_path)
-            .arg("-lm");
-        if overflow_wrap { cc_cmd.arg("-fwrapv"); }
-        add_sdl_flags(&mut cc_cmd, needs_sdl);
-        add_tls_flags(&mut cc_cmd, needs_tls);
-        add_crypto_flags(&mut cc_cmd, needs_crypto);
-        add_regex_flags(&mut cc_cmd, needs_regex);
-        add_thread_flags(&mut cc_cmd, needs_threads);
-
-        let status = cc_cmd.status();
-        return match status {
-            Ok(s) if s.success() => Ok(shared_path.to_path_buf()),
-            Ok(s) => Err(format!("Shared library compilation failed: {s}\nGenerated: {}", shared_c_path.display())),
-            Err(e) => Err(format!("Failed to run C compiler '{cc}': {e}")),
-        };
-    }
-
-    // ── Hot-reload two-phase build ──────────────────────────────
-    if hot_reload {
-        let host_code = codegen_output.host_code.as_deref().unwrap_or(&c_code);
-        let guest_code = codegen_output.guest_code.as_deref().unwrap_or(&c_code);
-
-        let host_c_path = dir.join(format!("{stem}_host.c"));
-        let guest_c_path = dir.join(format!("{stem}_guest.c"));
-        let guest_lib_path = dir.join(&guest_lib_file);
-
-        // Write host and guest C files
-        if let Err(e) = fs::write(&host_c_path, host_code) {
-            return Err(format!("Error writing {}: {e}", host_c_path.display()));
-        }
-        if let Err(e) = fs::write(&guest_c_path, guest_code) {
-            return Err(format!("Error writing {}: {e}", guest_c_path.display()));
-        }
-
-        let cc = env::var("CC").unwrap_or_else(|_| "cc".to_string());
-
-        // Phase 1: Compile guest as shared library
-        let mut guest_cmd = Command::new(&cc);
-        guest_cmd
-            .arg("-std=c11")
-            .arg("-shared")
-            .arg("-fPIC")
-            .arg("-Wall")
-            .arg("-Wextra")
-            .arg("-Wno-unused-parameter")
-            .arg("-Wno-unused-variable")
-            .arg("-Wno-unused-function")
-            .arg("-o")
-            .arg(&guest_lib_path)
-            .arg(&guest_c_path)
-            .arg("-lm");
-        if overflow_wrap { guest_cmd.arg("-fwrapv"); }
-        add_sdl_flags(&mut guest_cmd, needs_sdl);
-        add_tls_flags(&mut guest_cmd, needs_tls);
-        add_crypto_flags(&mut guest_cmd, needs_crypto);
-        add_regex_flags(&mut guest_cmd, needs_regex);
-        add_thread_flags(&mut guest_cmd, needs_threads);
-
-        let guest_status = guest_cmd.status();
-        match guest_status {
-            Ok(s) if s.success() => {}
-            Ok(s) => return Err(format!("Guest library compilation failed: {s}\nGenerated: {}", guest_c_path.display())),
-            Err(e) => return Err(format!("Failed to run C compiler '{cc}': {e}")),
-        }
-
-        // Phase 2: Compile host as executable
-        let mut host_cmd = Command::new(&cc);
-        host_cmd
-            .arg("-std=c11")
-            .arg("-Wall")
-            .arg("-Wextra")
-            .arg("-Wno-unused-parameter")
-            .arg("-Wno-unused-variable")
-            .arg("-Wno-unused-function")
-            .arg("-o")
-            .arg(&exe_path)
-            .arg(&host_c_path)
-            .arg("-lm");
-        if overflow_wrap { host_cmd.arg("-fwrapv"); }
-        add_sdl_flags(&mut host_cmd, needs_sdl);
-        add_tls_flags(&mut host_cmd, needs_tls);
-        add_crypto_flags(&mut host_cmd, needs_crypto);
-        add_regex_flags(&mut host_cmd, needs_regex);
-        add_thread_flags(&mut host_cmd, needs_threads);
-
-        let host_status = host_cmd.status();
-        return match host_status {
-            Ok(s) if s.success() => Ok(exe_path),
-            Ok(s) => Err(format!("Host compilation failed: {s}\nGenerated: {}", host_c_path.display())),
-            Err(e) => Err(format!("Failed to run C compiler '{cc}': {e}")),
-        };
-    }
-
-    // Write .c file (normal, non-hot-reload path)
-    if let Err(e) = fs::write(&c_path, &c_code) {
-        return Err(format!("Error writing {}: {e}", c_path.display()));
-    }
-
-    // Invoke C compiler
-    let cc = env::var("CC").unwrap_or_else(|_| "cc".to_string());
-    let mut cc_cmd = Command::new(&cc);
-    cc_cmd
-        .arg("-std=c11")
-        .arg("-Wall")
-        .arg("-Wextra")
-        .arg("-Wno-unused-parameter")
-        .arg("-Wno-unused-variable")
-        .arg("-Wno-unused-function");
-    if overflow_wrap {
-        cc_cmd.arg("-fwrapv");
-    }
-    cc_cmd
-        .arg("-o")
-        .arg(&exe_path)
-        .arg(&c_path)
-        .arg("-lm");
-
-    add_sdl_flags(&mut cc_cmd, needs_sdl);
-    add_tls_flags(&mut cc_cmd, needs_tls);
-    add_crypto_flags(&mut cc_cmd, needs_crypto);
-    add_regex_flags(&mut cc_cmd, needs_regex);
-    add_thread_flags(&mut cc_cmd, needs_threads);
-
-    let status = cc_cmd.status();
-
-    match status {
-        Ok(s) if s.success() => Ok(exe_path),
-        Ok(s) => {
-            let mut msg = format!(
-                "C compiler exited with: {s}\nGenerated C file: {}",
-                c_path.display()
-            );
-            if needs_sdl {
-                msg.push_str("\n\nHint: This program uses std.sdl which requires SDL2 development libraries.");
-                msg.push_str("\nInstall them with:");
-                msg.push_str("\n  macOS:   brew install sdl2 sdl2_image sdl2_ttf");
-                msg.push_str("\n  Ubuntu:  apt install libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev");
-            }
-            if needs_tls {
-                msg.push_str("\n\nHint: This program uses std.net.tls which requires OpenSSL.");
-                msg.push_str("\nInstall with:");
-                msg.push_str("\n  macOS:   brew install openssl");
-                msg.push_str("\n  Ubuntu:  apt install libssl-dev");
-            }
-            if needs_crypto {
-                msg.push_str("\n\nHint: This program uses std.crypto which requires OpenSSL.");
-                msg.push_str("\nInstall with:");
-                msg.push_str("\n  macOS:   brew install openssl");
-                msg.push_str("\n  Ubuntu:  apt install libssl-dev");
-            }
-            if needs_regex {
-                msg.push_str("\n\nHint: This program uses std.regex which requires PCRE2.");
-                msg.push_str("\nInstall with:");
-                msg.push_str("\n  macOS:   brew install pcre2");
-                msg.push_str("\n  Ubuntu:  apt install libpcre2-dev");
-            }
-            Err(msg)
-        }
-        Err(e) => Err(format!(
-            "Failed to run C compiler '{cc}': {e}\nGenerated C file: {}",
-            c_path.display()
-        )),
-    }
-}
-
-/// Build a .gg source file into a binary. Exits the process on error.
-fn build(
-    filename: &str,
-    source: &str,
-    strip_asserts: bool,
-    no_strip_asserts: bool,
-    overflow_wrap: bool,
-    overflow_checked: bool,
-    trace: bool,
-    no_trace: bool,
-    test_mode: bool,
-    test_tags: &[String],
-    test_exclude_tags: &[String],
-    test_name_filter: Option<&str>,
-    output_dir: Option<&Path>,
-    dep_paths: HashMap<String, PathBuf>,
-    features: &[String],
-) -> PathBuf {
-    try_build(filename, source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, test_mode, test_tags, test_exclude_tags, test_name_filter, output_dir, dep_paths, None, false, false, features)
-        .unwrap_or_else(|e| {
-            eprintln!("{e}");
-            process::exit(1);
-        })
-}
-
 /// Build a .gg source file using the GIR pipeline (--ir mode).
 /// Parses, analyzes, lowers to GIR, generates C via the GIR backend, compiles to binary.
 fn try_build_ir(
@@ -652,6 +270,7 @@ fn try_build_ir(
     dep_paths: HashMap<String, PathBuf>,
     output_dir: Option<&Path>,
     output_exe: Option<&Path>,
+    shared_output: Option<&Path>,
     features: &[String],
     options: gorget::ir::lowering::LoweringOptions,
 ) -> Result<PathBuf, String> {
@@ -728,6 +347,42 @@ fn try_build_ir(
 
     // Generate C from GIR
     let gir_output = gorget::backend::c::generate_c_with_opts(&gir_module, hr_opts.as_ref());
+
+    // ── --shared: build as shared library (used by hot-reload recompile) ──
+    if let Some(shared_path) = shared_output {
+        let shared_c_code = gir_output.guest_code.as_deref().unwrap_or(&gir_output.c_code);
+        let shared_c_path = dir.join(format!("{stem}_guest.c"));
+        if let Err(e) = fs::write(&shared_c_path, shared_c_code) {
+            return Err(format!("Error writing {}: {e}", shared_c_path.display()));
+        }
+        let cc = env::var("CC").unwrap_or_else(|_| "cc".to_string());
+        let mut cc_cmd = Command::new(&cc);
+        cc_cmd
+            .arg("-std=c11")
+            .arg("-shared")
+            .arg("-fPIC")
+            .arg("-Wall")
+            .arg("-Wextra")
+            .arg("-Wno-unused-parameter")
+            .arg("-Wno-unused-variable")
+            .arg("-Wno-unused-function")
+            .arg("-o")
+            .arg(shared_path)
+            .arg(&shared_c_path)
+            .arg("-lm");
+        if options.overflow_wrap || gir_module.overflow_wrap { cc_cmd.arg("-fwrapv"); }
+        add_sdl_flags(&mut cc_cmd, source.contains("std.sdl") || source.contains("std.gfx"));
+        add_tls_flags(&mut cc_cmd, source.contains("std.net.tls"));
+        add_crypto_flags(&mut cc_cmd, source.contains("std.crypto") || source.contains("std.p2p"));
+        add_regex_flags(&mut cc_cmd, source.contains("std.regex"));
+        add_thread_flags(&mut cc_cmd, source.contains("std.async") || source.contains("std.p2p"));
+        let status = cc_cmd.status();
+        return match status {
+            Ok(s) if s.success() => Ok(shared_path.to_path_buf()),
+            Ok(s) => Err(format!("Shared library compilation failed: {s}\nGenerated: {}", shared_c_path.display())),
+            Err(e) => Err(format!("Failed to run C compiler '{cc}': {e}")),
+        };
+    }
 
     // Hot-reload: two-phase build (host binary + guest shared library).
     if gir_module.hot_reload {
@@ -807,16 +462,11 @@ fn try_build_ir(
         cc_cmd.arg("-fwrapv");
     }
 
-    let needs_crypto = source.contains("std.crypto") || source.contains("std.net.tls")
-        || source.contains("std.p2p");
-    add_crypto_flags(&mut cc_cmd, needs_crypto);
-
-    let needs_regex = source.contains("std.regex");
-    add_regex_flags(&mut cc_cmd, needs_regex);
-
-    if source.contains("std.async") || source.contains("std.p2p") {
-        cc_cmd.arg("-lpthread");
-    }
+    add_sdl_flags(&mut cc_cmd, source.contains("std.sdl") || source.contains("std.gfx"));
+    add_tls_flags(&mut cc_cmd, source.contains("std.net.tls"));
+    add_crypto_flags(&mut cc_cmd, source.contains("std.crypto") || source.contains("std.p2p"));
+    add_regex_flags(&mut cc_cmd, source.contains("std.regex"));
+    add_thread_flags(&mut cc_cmd, source.contains("std.async") || source.contains("std.p2p"));
 
     let status = cc_cmd.status();
 
@@ -975,7 +625,7 @@ fn run_tui() {
                 continue;
             }
             let gg_path_str = gg_path.display().to_string();
-            match try_build(&gg_path_str, &source, false, false, false, false, false, false, false, &[], &[], None, Some(&tmp_dir), HashMap::new(), None, false, false, &[]) {
+            match try_build_ir(&gg_path_str, &source, HashMap::new(), Some(&tmp_dir), None, None, &[], gorget::ir::lowering::LoweringOptions::default()) {
                 Err(e) => {
                     eprintln!("{e}");
                 }
@@ -1011,7 +661,7 @@ fn run_tui() {
                 continue;
             }
             let gg_path_str = gg_path.display().to_string();
-            match try_build(&gg_path_str, &source, false, false, false, false, false, false, false, &[], &[], None, Some(&tmp_dir), HashMap::new(), None, false, false, &[]) {
+            match try_build_ir(&gg_path_str, &source, HashMap::new(), Some(&tmp_dir), None, None, &[], gorget::ir::lowering::LoweringOptions::default()) {
                 Err(e) => {
                     eprintln!("{e}");
                 }
@@ -1286,7 +936,6 @@ fn main() {
         println!("Build flags:");
         println!("  --hot-reload            Enable hot code reload (builds host + guest .dylib)");
         println!("  --shared [-o F]         Build as shared library (.dylib/.so)");
-        println!("  --ir                    Alias for GIR pipeline (now the default)");
         return;
     }
 
@@ -1312,7 +961,6 @@ fn main() {
             process::exit(1);
         });
         let features = parse_features(&args);
-        let ir = args.iter().any(|a| a == "--ir");
         let hot_reload_flag = args.iter().any(|a| a == "--hot-reload");
         let has_trace = !no_trace && (trace || source_has_trace(&source));
         let trace_filename = if has_trace {
@@ -1323,28 +971,13 @@ fn main() {
         } else {
             None
         };
-        let exe_path = if ir {
-            // Explicit --ir: use GIR pipeline
-            let lowering_opts = gorget::ir::lowering::LoweringOptions {
-                strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked,
-                trace_filename, hot_reload: hot_reload_flag || source_has_hot_reload(&source),
-                ..Default::default()
-            };
-            try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, &features, lowering_opts)
-                .unwrap_or_else(|e| { eprintln!("{e}"); process::exit(1); })
-        } else {
-            // Default: GIR pipeline
-            let lowering_opts = gorget::ir::lowering::LoweringOptions {
-                strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked,
-                trace_filename, hot_reload: hot_reload_flag || source_has_hot_reload(&source),
-                ..Default::default()
-            };
-            try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, &features, lowering_opts)
-                .unwrap_or_else(|e| {
-                    eprintln!("{e}");
-                    process::exit(1);
-                })
+        let lowering_opts = gorget::ir::lowering::LoweringOptions {
+            strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked,
+            trace_filename, hot_reload: hot_reload_flag || source_has_hot_reload(&source),
+            ..Default::default()
         };
+        let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts)
+            .unwrap_or_else(|e| { eprintln!("{e}"); process::exit(1); });
         let status = Command::new(&exe_path)
             .status()
             .unwrap_or_else(|e| {
@@ -1458,7 +1091,6 @@ fn main() {
     let hot_reload_flag = args.iter().any(|a| a == "--hot-reload");
     let shared_mode = args.iter().any(|a| a == "--shared");
     let show_borrows = args.iter().any(|a| a == "--show-borrows");
-    let ir_mode = args.iter().any(|a| a == "--ir");
     let features = parse_features(&args);
     // Parse -o <path> for shared output
     let shared_output_path: Option<PathBuf> = {
@@ -1582,7 +1214,26 @@ fn main() {
                     dir.join(format!("{stem}_guest{ext}"))
                 };
                 let shared_path = shared_output_path.as_deref().unwrap_or(&default_shared_path);
-                let result = try_build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, None, dep_paths, Some(shared_path), false, show_borrows, &features);
+                let has_trace = !no_trace && (trace || source_has_trace(&source));
+                let trace_filename = if has_trace {
+                    let input_path = Path::new(filename);
+                    let dir = input_path.parent().unwrap_or(Path::new("."));
+                    let stem = input_path.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
+                    let tp = dir.join(format!("{stem}.trace.jsonl"));
+                    Some(std::path::absolute(&tp).unwrap_or(tp).display().to_string())
+                } else {
+                    None
+                };
+                let lowering_opts = gorget::ir::lowering::LoweringOptions {
+                    strip_asserts,
+                    no_strip_asserts,
+                    overflow_wrap,
+                    overflow_checked,
+                    trace_filename,
+                    hot_reload: hot_reload_flag || source_has_hot_reload(&source),
+                    ..Default::default()
+                };
+                let result = try_build_ir(filename, &source, dep_paths, None, None, Some(shared_path), &features, lowering_opts);
                 match result {
                     Ok(p) => println!("Built shared library: {}", p.display()),
                     Err(e) => {
@@ -1611,7 +1262,7 @@ fn main() {
                     hot_reload: hot_reload_flag || source_has_hot_reload(&source),
                     ..Default::default()
                 };
-                let result = try_build_ir(filename, &source, dep_paths, None, shared_output_path.as_deref(), &features, lowering_opts);
+                let result = try_build_ir(filename, &source, dep_paths, None, shared_output_path.as_deref(), None, &features, lowering_opts);
                 match result {
                     Ok(p) => println!("Built: {}", p.display()),
                     Err(e) => {
@@ -1646,7 +1297,7 @@ fn main() {
                 hot_reload: hot_reload_flag || source_has_hot_reload(&source),
                 ..Default::default()
             };
-            let result = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, &features, lowering_opts);
+            let result = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts);
             match result {
                 Ok(exe_path) => {
                     let status = Command::new(&exe_path)
@@ -1706,23 +1357,29 @@ fn main() {
                 process::exit(1);
             });
             let dep_paths = resolve_deps_for_file(filename);
-            // Use GIR pipeline when trace is not needed; fall back to legacy for --trace/--report html.
-            let exe_path = if !trace {
-                let lowering_opts = gorget::ir::lowering::LoweringOptions {
-                    test_mode: true,
-                    test_tags: test_tags.clone(),
-                    test_exclude_tags: test_exclude_tags.clone(),
-                    test_name_filter: test_name_filter.clone(),
-                    ..Default::default()
-                };
-                try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, &features, lowering_opts)
-                    .unwrap_or_else(|e| {
-                        eprintln!("{e}");
-                        process::exit(1);
-                    })
+            let has_trace = !no_trace && (trace || source_has_trace(&source));
+            let trace_filename = if has_trace {
+                let input_path = Path::new(filename);
+                let dir = input_path.parent().unwrap_or(Path::new("."));
+                let stem = input_path.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
+                let tp = dir.join(format!("{stem}.trace.jsonl"));
+                Some(std::path::absolute(&tp).unwrap_or(tp).display().to_string())
             } else {
-                build(filename, &source, false, false, false, false, trace, no_trace, true, &test_tags, &test_exclude_tags, test_name_filter.as_deref(), Some(tmp_dir.path()), dep_paths, &features)
+                None
             };
+            let lowering_opts = gorget::ir::lowering::LoweringOptions {
+                test_mode: true,
+                test_tags: test_tags.clone(),
+                test_exclude_tags: test_exclude_tags.clone(),
+                test_name_filter: test_name_filter.clone(),
+                trace_filename,
+                ..Default::default()
+            };
+            let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts)
+                .unwrap_or_else(|e| {
+                    eprintln!("{e}");
+                    process::exit(1);
+                });
             let status = Command::new(&exe_path)
                 .status()
                 .unwrap_or_else(|e| {

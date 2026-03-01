@@ -1,7 +1,7 @@
 use std::fs;
 use std::process::Command;
 
-use gorget::codegen::c_runtime::{PANIC_NORMAL, RUNTIME_PREAMBLE};
+use gorget::backend::c::c_runtime::{PANIC_NORMAL, RUNTIME_PREAMBLE};
 
 /// Compile and run a C program that exercises the Str fat pointer runtime
 /// functions directly, without going through the Gorget language pipeline.

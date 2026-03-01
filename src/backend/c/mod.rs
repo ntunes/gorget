@@ -649,8 +649,13 @@ fn generate_hot_reload_split(module: &Module, full_c: &str, hr_opts: Option<&Hot
 fn emit_test_runner_main(out: &mut String, module: &Module) {
     let test_fns = &module.test_fns;
     let registry = &module.type_registry;
+    let tracing = module.trace_filename.is_some();
     let _ = writeln!(out, "int main(int argc, char** argv) {{");
     let _ = writeln!(out, "    gorget_init_args(argc, argv);");
+    if let Some(ref trace_path) = module.trace_filename {
+        let escaped = trace_path.replace('\\', "\\\\").replace('"', "\\\"");
+        let _ = writeln!(out, "    __gorget_trace_init(\"{escaped}\");");
+    }
     let _ = writeln!(out, "    int __test_passed = 0, __test_failed = 0;");
     let _ = writeln!(out, "    struct timespec __total_start, __total_end;");
     let _ = writeln!(out, "    clock_gettime(CLOCK_MONOTONIC, &__total_start);");
@@ -665,6 +670,9 @@ fn emit_test_runner_main(out: &mut String, module: &Module) {
         let escaped = info.display_name.replace('\\', "\\\\").replace('"', "\\\"");
         let _ = writeln!(out, "    printf(\"  test: {escaped} ... \");");
         let _ = writeln!(out, "    fflush(stdout);");
+        if tracing {
+            let _ = writeln!(out, "    if (__gorget_trace_fp) fprintf(__gorget_trace_fp, \"{{\\\"type\\\":\\\"test_start\\\",\\\"name\\\":\\\"{escaped}\\\"}}\\n\");");
+        }
         let _ = writeln!(out, "    {{");
         let _ = writeln!(out, "        __gorget_in_test = 1;");
         let _ = writeln!(out, "        __gorget_test_fail_msg = NULL;");
@@ -719,12 +727,16 @@ fn emit_test_runner_main(out: &mut String, module: &Module) {
 
         let _ = writeln!(out, "        clock_gettime(CLOCK_MONOTONIC, &__t_end);");
         let _ = writeln!(out, "        long __t_ms = (__t_end.tv_sec - __t_start.tv_sec) * 1000 + (__t_end.tv_nsec - __t_start.tv_nsec) / 1000000;");
+        if tracing {
+            let _ = writeln!(out, "        int __test_trace_ok = 0;");
+        }
 
         if info.should_panic {
             if let Some(ref msg) = info.expected_panic_msg {
                 let escaped_msg = msg.replace('\\', "\\\\").replace('"', "\\\"");
                 let _ = writeln!(out, "        if (__gorget_test_fail_msg && strstr(__gorget_test_fail_msg, \"{escaped_msg}\")) {{");
                 let _ = writeln!(out, "            __test_passed++;");
+                if tracing { let _ = writeln!(out, "            __test_trace_ok = 1;"); }
                 let _ = writeln!(out, "            printf(\"PASS (%ldms)\\n\", __t_ms);");
                 let _ = writeln!(out, "        }} else if (__gorget_test_fail_msg) {{");
                 let _ = writeln!(out, "            __test_failed++;");
@@ -736,6 +748,7 @@ fn emit_test_runner_main(out: &mut String, module: &Module) {
             } else {
                 let _ = writeln!(out, "        if (__gorget_test_fail_msg) {{");
                 let _ = writeln!(out, "            __test_passed++;");
+                if tracing { let _ = writeln!(out, "            __test_trace_ok = 1;"); }
                 let _ = writeln!(out, "            printf(\"PASS (%ldms)\\n\", __t_ms);");
                 let _ = writeln!(out, "        }} else {{");
                 let _ = writeln!(out, "            __test_failed++;");
@@ -745,11 +758,15 @@ fn emit_test_runner_main(out: &mut String, module: &Module) {
         } else {
             let _ = writeln!(out, "        if (!__gorget_test_fail_msg) {{");
             let _ = writeln!(out, "            __test_passed++;");
+            if tracing { let _ = writeln!(out, "            __test_trace_ok = 1;"); }
             let _ = writeln!(out, "            printf(\"PASS (%ldms)\\n\", __t_ms);");
             let _ = writeln!(out, "        }} else {{");
             let _ = writeln!(out, "            __test_failed++;");
             let _ = writeln!(out, "            printf(\"FAIL: %s (%ldms)\\n\", __gorget_test_fail_msg, __t_ms);");
             let _ = writeln!(out, "        }}");
+        }
+        if tracing {
+            let _ = writeln!(out, "        if (__gorget_trace_fp) fprintf(__gorget_trace_fp, \"{{\\\"type\\\":\\\"test_end\\\",\\\"name\\\":\\\"{escaped}\\\",\\\"status\\\":\\\"%s\\\",\\\"duration_ms\\\":%ld}}\\n\", __test_trace_ok ? \"pass\" : \"fail\", __t_ms);");
         }
         let _ = writeln!(out, "    }}");
     }
