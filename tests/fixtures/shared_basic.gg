@@ -1,0 +1,18 @@
+struct Config:
+    int max_connections
+    int timeout_ms
+
+void main():
+    Shared[int] counter = Shared[int](42)
+    int val = counter.get()
+    print(val)
+
+    Shared[Config] cfg = Shared[Config](Config(10, 5000))
+    int mc = cfg.get().max_connections
+    int to = cfg.get().timeout_ms
+    print(mc)
+    print(to)
+
+    Shared[int] counter2 = counter.clone()
+    int val2 = counter2.get()
+    print(val2)

@@ -131,9 +131,25 @@ fn lower_var_decl(
             }
             // For auto/inferred types, closure values, and Box[Callable[...]] variables,
             // re-infer from the lowered operand to pick up the actual concrete type.
+            // Also handle Shared[T]/Mutex[T]/Channel[T] and the non-generic TaskGroup,
+            // whose TypeIds are registered lazily inside lower_call — at declaration time
+            // map_ast_type returns UNIT_TYPE, but after the RHS is lowered the TypeId is
+            // registered and the operand carries it.
+            let gir_type_is_lazy_generic = gir_type == crate::ir::types::UNIT_TYPE && {
+                if let ast::Type::Named { ref name, ref generic_args, .. } = type_.node {
+                    // TaskGroup has no generic args; the others require at least one.
+                    name.node.as_str() == "TaskGroup"
+                        || (!generic_args.is_empty()
+                            && matches!(name.node.as_str(),
+                                "Shared" | "Mutex" | "Guard" | "Channel"))
+                } else {
+                    false
+                }
+            };
             let needs_reinfer = matches!(type_.node, ast::Type::Inferred)
                 || matches!(value.node, ast::Expr::Closure { .. } | ast::Expr::ImplicitClosure { .. })
-                || gir_type_is_box_callable;
+                || gir_type_is_box_callable
+                || gir_type_is_lazy_generic;
             if needs_reinfer {
                 let inferred = infer_operand_type_with_builder(ctx, &operand, builder);
                 if inferred != gir_type {

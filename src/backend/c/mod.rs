@@ -466,6 +466,29 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
         // Emit Channel__T typedefs and wrapper functions (if any), plus Task__T structs.
         emit_channel_and_task_defs(&mut out, module);
     }
+    let needs_shared = !module.shared_types.is_empty();
+    if needs_shared {
+        out.push_str(c_runtime::SHARED_RUNTIME);
+        // Wrapper functions (emit_shared_defs) emitted after user type definitions below.
+    }
+    let needs_mutex = !module.mutex_types.is_empty();
+    if needs_mutex {
+        // ASYNC_RUNTIME must be emitted before this (gorget_mutex may use GorgetWaker).
+        if !needs_async_runtime {
+            out.push_str(c_runtime::ASYNC_RUNTIME);
+        }
+        out.push_str(c_runtime::MUTEX_RUNTIME);
+        // Wrapper functions (emit_mutex_defs) emitted after user type definitions below.
+    }
+    if module.has_task_group {
+        if !needs_async_runtime && !needs_mutex {
+            out.push_str(c_runtime::ASYNC_RUNTIME);
+        }
+        if !needs_mutex {
+            out.push_str(c_runtime::MUTEX_RUNTIME);
+        }
+        out.push_str(c_runtime::TASK_GROUP_RUNTIME);
+    }
     if module.hot_reload || all_call_names.iter().any(|n| n.contains("hot_reload") || n.contains("plugin")) {
         out.push_str(c_runtime::HOT_RELOAD_RUNTIME);
     }
@@ -503,6 +526,15 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
 
     // Type definitions (structs and enums), skipping unmonomorphized templates
     emit_type_definitions(&mut out, module);
+
+    // Emit Shared[T] and Mutex[T] wrapper functions AFTER user struct typedefs
+    // so that inner types like 'Config' are already declared when used in wrapper sigs.
+    if needs_shared {
+        emit_shared_defs(&mut out, module);
+    }
+    if needs_mutex {
+        emit_mutex_defs(&mut out, module);
+    }
 
     // Forward declarations for all functions (before globals so vtable refs resolve)
     let skip_names = template_type_names(module);
@@ -945,6 +977,69 @@ fn topo_sorted_body_order(
     order
 }
 
+/// Emit Shared__T typedef + wrapper functions (get, clone).
+fn emit_shared_defs(out: &mut String, module: &Module) {
+    if module.shared_types.is_empty() {
+        return;
+    }
+    out.push_str("\n/* ── Shared[T] wrappers ── */\n");
+    for elem_c in &module.shared_types {
+        let shared_name = format!("Shared__{elem_c}");
+        // Typedef: Shared__T = GorgetShared* (opaque pointer)
+        let _ = writeln!(out, "typedef GorgetShared* {shared_name};");
+        // Constructor: Shared__T__new(val) → allocates, copies val in
+        let _ = writeln!(out,
+            "static inline {shared_name} {shared_name}__new({elem_c} val) {{ \
+             return gorget_shared_new(sizeof({elem_c}), &val); }}");
+        // clone() → returns same pointer (Copy; ref-count tracking deferred to V2)
+        let _ = writeln!(out,
+            "static inline {shared_name} {shared_name}__clone({shared_name} self) {{ \
+             return self; }}");
+        // get() → dereferences inner value
+        let _ = writeln!(out,
+            "static inline {elem_c} {shared_name}__get({shared_name} self) {{ \
+             return *({elem_c}*)gorget_shared_get_ptr(self); }}");
+        out.push('\n');
+    }
+}
+
+/// Emit Mutex__T and Guard__T typedef + wrapper functions.
+fn emit_mutex_defs(out: &mut String, module: &Module) {
+    if module.mutex_types.is_empty() {
+        return;
+    }
+    out.push_str("\n/* ── Mutex[T] + Guard[T] wrappers ── */\n");
+    for elem_c in &module.mutex_types {
+        let mutex_name = format!("Mutex__{elem_c}");
+        let guard_name = format!("Guard__{elem_c}");
+        // Mutex__T typedef (Copy pointer)
+        let _ = writeln!(out, "typedef GorgetMutex* {mutex_name};");
+        // Guard__T typedef (Move value struct holding mutex ptr + data ptr)
+        let _ = writeln!(out, "typedef gorget_guard_t {guard_name};");
+        // Mutex__T__new(val) → allocates mutex, copies initial value in
+        let _ = writeln!(out,
+            "static inline {mutex_name} {mutex_name}__new({elem_c} val) {{ \
+             return gorget_mutex_new(sizeof({elem_c}), &val); }}");
+        // Mutex__T__lock(self) → acquires mutex, returns Guard__T (blocking)
+        let _ = writeln!(out,
+            "static inline {guard_name} {mutex_name}__lock({mutex_name} self) {{ \
+             return gorget_mutex_lock(self); }}");
+        // Guard__T__get(&self) → returns copy of inner value
+        let _ = writeln!(out,
+            "static inline {elem_c} {guard_name}__get({guard_name}* self) {{ \
+             return *({elem_c}*)self->ptr; }}");
+        // Guard__T__set(&self, val) → writes new value
+        let _ = writeln!(out,
+            "static inline void {guard_name}__set({guard_name}* self, {elem_c} val) {{ \
+             *({elem_c}*)self->ptr = val; }}");
+        // Guard__T__drop(&self) → releases the mutex (called by RAII drop)
+        let _ = writeln!(out,
+            "static inline void {guard_name}__drop({guard_name}* self) {{ \
+             gorget_guard_release(self); }}");
+        out.push('\n');
+    }
+}
+
 /// Emit Channel__T typedef + wrapper functions and Task__T structs.
 /// Called after CHANNEL_RUNTIME (which defines GorgetChannel and GorgetWaker).
 fn emit_channel_and_task_defs(out: &mut String, module: &Module) {
@@ -1103,6 +1198,11 @@ fn emit_type_definitions(out: &mut String, module: &Module) {
             // Channel__T and Task__T have hand-emitted C definitions (not GIR struct defs)
             || name.starts_with("Channel__")
             || name.starts_with("Task__")
+            // Shared__T, Mutex__T, Guard__T, TaskGroup: hand-emitted pointer typedefs
+            || name.starts_with("Shared__")
+            || name.starts_with("Mutex__")
+            || name.starts_with("Guard__")
+            || name == "TaskGroup"
     };
     // Collect Box types for special handling (Box__T → T* pointer typedef)
     let mut box_types: Vec<(String, String)> = Vec::new(); // (box_name, inner_c_type)
@@ -1469,6 +1569,9 @@ fn runtime_type_name(name: &str) -> Option<&'static str> {
         // IO types
         "File" => Some("GorgetFile"),
         "Channel" => Some("GorgetChannel*"),
+        // Concurrency types
+        "Shared" => Some("GorgetShared*"),
+        "Mutex" => Some("GorgetMutex*"),
         // Crypto types
         "CipherContext" => Some("GorgetCipherContext"),
         "BigNum" => Some("GorgetBigNum"),
@@ -1502,12 +1605,17 @@ fn collection_type_alias(name: &str) -> Option<&'static str> {
     if name.starts_with("Dict__") || name.starts_with("HashMap__") {
         return Some("GorgetMap");
     }
+    // NOTE: Shared__T, Mutex__T, Guard__T are NOT matched here.
+    // Their typedefs are emitted by emit_shared_defs/emit_mutex_defs AFTER user struct defs.
     // Runtime types with different C names
     match name {
         "Socket" => Some("GorgetSocket"),
         "TlsSocket" => Some("GorgetTlsSocket"),
         "UdpSocket" => Some("GorgetUdpSocket"),
         "Channel" => Some("GorgetChannel"),
+        "Shared" => Some("GorgetShared*"),
+        "Mutex" => Some("GorgetMutex*"),
+        "TaskGroup" => Some("gorget_task_group_t*"),
         "Regex" => Some("GorgetRegex"),
         "RegexMatch" => Some("GorgetRegexMatch"),
         _ => None,

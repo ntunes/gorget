@@ -1,0 +1,8 @@
+void main():
+    Mutex[int] counter = Mutex[int](0)
+    Guard[int] guard = counter.lock()
+    int val = guard.get()
+    print(val)
+    guard.set(42)
+    int val2 = guard.get()
+    print(val2)

@@ -2706,6 +2706,38 @@ impl<'a> TypeChecker<'a> {
                 "set" => Some(self.types.void_id),
                 _ => None,
             },
+            "Shared" => match method {
+                // clone() returns another Shared[T] (same type as receiver)
+                "clone" => Some(receiver_type),
+                // get() returns the inner T
+                "get" => Some(elem_type()),
+                _ => None,
+            },
+            "Mutex" => match method {
+                // lock() returns Guard[T]; the async wrapper is handled in codegen
+                "lock" => {
+                    if let Some(guard_def_id) = self.scopes.lookup("Guard") {
+                        Some(self.types.insert(ResolvedType::Generic(guard_def_id, vec![elem_type()])))
+                    } else {
+                        Some(elem_type())
+                    }
+                }
+                _ => None,
+            },
+            "Guard" => match method {
+                // get() returns a copy of the inner T
+                "get" => Some(elem_type()),
+                // set(val) updates the inner T, returns void
+                "set" => Some(self.types.void_id),
+                _ => None,
+            },
+            "TaskGroup" => match method {
+                // spawn(future) starts a child task, returns void
+                "spawn" => Some(self.types.void_id),
+                // join() returns void (blocks until all children complete)
+                "join" => Some(self.types.void_id),
+                _ => None,
+            },
             "File" => match method {
                 "read_all" => {
                     // Returns Result[String, str]

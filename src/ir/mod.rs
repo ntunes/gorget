@@ -58,6 +58,14 @@ pub struct Module {
     /// Channel element C type names found (e.g., ["int64_t"] for Channel[int]).
     /// Used by the C backend to emit Channel__T wrapper structs and functions.
     pub channel_types: Vec<String>,
+    /// Shared[T] inner C type names found (e.g., ["int64_t"] for Shared[int]).
+    /// Used by the C backend to emit Shared__T wrapper structs and functions.
+    pub shared_types: Vec<String>,
+    /// Mutex[T] inner C type names found (e.g., ["int64_t"] for Mutex[int]).
+    /// Used by the C backend to emit Mutex__T and Guard__T wrapper structs and functions.
+    pub mutex_types: Vec<String>,
+    /// Whether any TaskGroup was used (triggers TaskGroup runtime emission).
+    pub has_task_group: bool,
     /// Spawned functions: (fn_name, [(param_name, param_type)], return_type).
     /// Used by the C backend to emit __SpawnCtx_fn, __gorget_spawn_fn, __gorget_await_fn.
     pub spawned_fns: Vec<(String, Vec<(String, TypeId)>, TypeId)>,
@@ -95,6 +103,9 @@ impl Module {
             has_spawn: false,
             has_sleep: false,
             channel_types: Vec::new(),
+            shared_types: Vec::new(),
+            mutex_types: Vec::new(),
+            has_task_group: false,
             spawned_fns: Vec::new(),
             has_suite_setup: false,
             has_suite_teardown: false,

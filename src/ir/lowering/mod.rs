@@ -894,12 +894,25 @@ pub fn lower_module(
         });
     }
 
-    // Collect channel element types (Channel__T → T) for C backend wrapper emission
+    // Collect channel/shared/mutex element types for C backend wrapper emission
     for name in module.type_registry.all_type_def_names() {
         if let Some(elem) = name.strip_prefix("Channel__") {
             if !module.channel_types.contains(&elem.to_string()) {
                 module.channel_types.push(elem.to_string());
             }
+        }
+        if let Some(elem) = name.strip_prefix("Shared__") {
+            if !module.shared_types.contains(&elem.to_string()) {
+                module.shared_types.push(elem.to_string());
+            }
+        }
+        if let Some(elem) = name.strip_prefix("Mutex__") {
+            if !module.mutex_types.contains(&elem.to_string()) {
+                module.mutex_types.push(elem.to_string());
+            }
+        }
+        if name == "TaskGroup" {
+            module.has_task_group = true;
         }
     }
 

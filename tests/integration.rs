@@ -6381,6 +6381,24 @@ fn meta_builtins() {
     run_gg("meta_builtins.gg", "64\ntrue\nfalse\nfalse\nfeature disabled");
 }
 
+// Concurrency Primitives Tests
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn shared_basic() {
+    run_gg("shared_basic.gg", "42\n10\n5000\n42");
+}
+
+#[test]
+fn mutex_basic() {
+    run_gg("mutex_basic.gg", "0\n42");
+}
+
+#[test]
+fn async_task_group() {
+    run_gg("async_task_group.gg", "2");
+}
+
 // Parser Comparison Test
 // ═══════════════════════════════════════════════════════════════
 

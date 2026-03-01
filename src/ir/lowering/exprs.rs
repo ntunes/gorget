@@ -698,6 +698,67 @@ fn lower_struct_literal(
         return FunctionBuilder::copy(dst);
     }
 
+    // Intercept Shared__T constructor → gorget_shared_new(sizeof(T), &val) → GorgetShared*
+    if (effective_name == "Shared" || effective_name.starts_with("Shared__")) && args.len() == 1 {
+        let val_op = lower_expr(ctx, builder, &args[0]);
+        let val_type = super::exprs::infer_operand_type_full(ctx, &val_op, builder);
+        let inner_c = if let Some(rest) = effective_name.strip_prefix("Shared__") {
+            rest.to_string()
+        } else {
+            ctx.type_name_for_id(val_type).unwrap_or("int64_t").to_string()
+        };
+        let shared_mangled = format!("Shared__{inner_c}");
+        let shared_type = if let Some(tid) = ctx.type_mapper.lookup_named(&shared_mangled) {
+            tid
+        } else {
+            let tid = ctx.type_registry.insert(crate::ir::types::GirType::Named(shared_mangled.clone()));
+            ctx.type_mapper.register_named(shared_mangled.clone(), tid);
+            ensure_shared_type_def(ctx, &shared_mangled, val_type);
+            tid
+        };
+        let new_fn = format!("{shared_mangled}__new");
+        let dst = builder.call(&new_fn, vec![val_op], shared_type);
+        return FunctionBuilder::copy(dst);
+    }
+
+    // Intercept Mutex__T constructor → gorget_mutex_new(sizeof(T), &val) → GorgetMutex*
+    if (effective_name == "Mutex" || effective_name.starts_with("Mutex__")) && args.len() == 1 {
+        let val_op = lower_expr(ctx, builder, &args[0]);
+        let val_type = super::exprs::infer_operand_type_full(ctx, &val_op, builder);
+        let inner_c = if let Some(rest) = effective_name.strip_prefix("Mutex__") {
+            rest.to_string()
+        } else {
+            ctx.type_name_for_id(val_type).unwrap_or("int64_t").to_string()
+        };
+        let mutex_mangled = format!("Mutex__{inner_c}");
+        let mutex_type = if let Some(tid) = ctx.type_mapper.lookup_named(&mutex_mangled) {
+            tid
+        } else {
+            let tid = ctx.type_registry.insert(crate::ir::types::GirType::Named(mutex_mangled.clone()));
+            ctx.type_mapper.register_named(mutex_mangled.clone(), tid);
+            ensure_mutex_type_def(ctx, &mutex_mangled, val_type);
+            tid
+        };
+        let new_fn = format!("{mutex_mangled}__new");
+        let dst = builder.call(&new_fn, vec![val_op], mutex_type);
+        return FunctionBuilder::copy(dst);
+    }
+
+    // Intercept TaskGroup.new() static constructor
+    if effective_name == "TaskGroup" && args.is_empty() {
+        let tg_mangled = "TaskGroup";
+        let tg_type = if let Some(tid) = ctx.type_mapper.lookup_named(tg_mangled) {
+            tid
+        } else {
+            let tid = ctx.type_registry.insert(crate::ir::types::GirType::Named(tg_mangled.to_string()));
+            ctx.type_mapper.register_named(tg_mangled.to_string(), tid);
+            ensure_task_group_type_def(ctx, tg_mangled);
+            tid
+        };
+        let dst = builder.call("gorget_task_group_new", vec![], tg_type);
+        return FunctionBuilder::copy(dst);
+    }
+
     // Check if this is an Option/Result variant constructor — resolve with type-aware logic
     // to avoid ambiguity when multiple monomorphized types share variant names.
     if let Some(result) = resolve_option_result_variant(ctx, builder, name, args) {
@@ -1211,6 +1272,123 @@ fn lower_method_call(
                         let poll_fn = format!("{chan_tn}__poll_recv");
                         let dst = builder.call(&poll_fn, vec![ch_ptr, out_ptr, waker], BOOL_TYPE);
                         return FunctionBuilder::copy(dst);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    // Shared[T] methods: clone, get — dispatch via C wrapper functions.
+    // Shared[T] is a Copy pointer typedef (GorgetShared*); methods pass value directly.
+    {
+        let recv_type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
+        if let Some(ref stn) = recv_type_name {
+            if stn.starts_with("Shared__") {
+                let elem_suffix = stn.strip_prefix("Shared__").unwrap_or("int64_t");
+                let recv_type = infer_operand_type_full(ctx, &recv, builder);
+                match method_name {
+                    "clone" => {
+                        // clone() is a no-op for Copy pointer — return same value
+                        let clone_fn = format!("{stn}__clone");
+                        let dst = builder.call(&clone_fn, vec![recv], recv_type);
+                        return FunctionBuilder::copy(dst);
+                    }
+                    "get" => {
+                        let elem_type = ctx.type_mapper.lookup_named(elem_suffix)
+                            .unwrap_or(I64_TYPE);
+                        let get_fn = format!("{stn}__get");
+                        let dst = builder.call(&get_fn, vec![recv], elem_type);
+                        return FunctionBuilder::copy(dst);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    // Mutex[T] methods: lock — dispatch via C wrapper functions.
+    // Mutex[T] is a Copy pointer typedef (GorgetMutex*).
+    {
+        let recv_type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
+        if let Some(ref mtn) = recv_type_name {
+            if mtn.starts_with("Mutex__") {
+                let elem_suffix = mtn.strip_prefix("Mutex__").unwrap_or("int64_t");
+                let guard_name = format!("Guard__{elem_suffix}");
+                let guard_type = if let Some(tid) = ctx.type_mapper.lookup_named(&guard_name) {
+                    tid
+                } else {
+                    let inner_type = ctx.type_mapper.lookup_named(elem_suffix).unwrap_or(I64_TYPE);
+                    let tid = ctx.type_registry.insert(crate::ir::types::GirType::Named(guard_name.clone()));
+                    ctx.type_mapper.register_named(guard_name.clone(), tid);
+                    ensure_guard_type_def(ctx, &guard_name, inner_type);
+                    tid
+                };
+                if method_name == "lock" {
+                    let lock_fn = format!("{mtn}__lock");
+                    let dst = builder.call(&lock_fn, vec![recv], guard_type);
+                    return FunctionBuilder::copy(dst);
+                }
+            }
+        }
+    }
+
+    // Guard[T] methods: get, set — dispatch via C wrapper functions.
+    // Guard[T] is a Move struct (gorget_guard_t value type).
+    {
+        let recv_type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
+        if let Some(ref gtn) = recv_type_name {
+            if gtn.starts_with("Guard__") {
+                let elem_suffix = gtn.strip_prefix("Guard__").unwrap_or("int64_t");
+                let recv_type = infer_operand_type_full(ctx, &recv, builder);
+                // Get a pointer to the guard local so we can pass by reference
+                let guard_ptr = if let Operand::Copy(ref place) | Operand::Move(ref place) = recv {
+                    let ptr_type = ctx.register_mut_ptr_type(recv_type);
+                    let ptr_local = builder.add_local(ptr_type, None);
+                    builder.emit_borrow_mut(ptr_local, place.clone());
+                    Operand::Copy(Place::local(ptr_local))
+                } else {
+                    let temp = builder.add_local(recv_type, None);
+                    builder.assign(Place::local(temp), recv.clone());
+                    let ptr_type = ctx.register_mut_ptr_type(recv_type);
+                    let ptr_local = builder.add_local(ptr_type, None);
+                    builder.emit_borrow_mut(ptr_local, Place::local(temp));
+                    Operand::Copy(Place::local(ptr_local))
+                };
+                match method_name {
+                    "get" => {
+                        let elem_type = ctx.type_mapper.lookup_named(elem_suffix)
+                            .unwrap_or(I64_TYPE);
+                        let get_fn = format!("{gtn}__get");
+                        let dst = builder.call(&get_fn, vec![guard_ptr], elem_type);
+                        return FunctionBuilder::copy(dst);
+                    }
+                    "set" if !args.is_empty() => {
+                        let val = lower_expr(ctx, builder, &args[0].node.value);
+                        let set_fn = format!("{gtn}__set");
+                        builder.call_void(&set_fn, vec![guard_ptr, val]);
+                        return Operand::Constant(Constant::Unit);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    // TaskGroup methods: spawn, join — dispatch via C runtime functions.
+    {
+        let recv_type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
+        if let Some(ref ttn) = recv_type_name {
+            if ttn == "TaskGroup" {
+                match method_name {
+                    "spawn" if !args.is_empty() => {
+                        let task_op = lower_expr(ctx, builder, &args[0].node.value);
+                        builder.call_void("gorget_task_group_submit", vec![recv, task_op]);
+                        return Operand::Constant(Constant::Unit);
+                    }
+                    "join" => {
+                        builder.call_void("gorget_task_group_join", vec![recv]);
+                        return Operand::Constant(Constant::Unit);
                     }
                     _ => {}
                 }
@@ -2962,6 +3140,75 @@ fn lower_call(
             }
         }
 
+        // Shared[T](value) constructor → Shared__T__new(value)
+        if name == "Shared" {
+            if let Some(type_args) = generic_args {
+                if !type_args.is_empty() {
+                    let val_op = if !args.is_empty() {
+                        lower_expr(ctx, builder, &args[0].node.value)
+                    } else {
+                        Operand::Constant(Constant::I64(0))
+                    };
+                    let val_type = infer_operand_type_full(ctx, &val_op, builder);
+                    let mangled = super::types::mangle_generic_name(name, type_args);
+                    let mangled = ctx.resolve_type_name(&mangled);
+                    let shared_type = if let Some(tid) = ctx.type_mapper.lookup_named(&mangled) {
+                        tid
+                    } else {
+                        let tid = ctx.type_registry.insert(GirType::Named(mangled.clone()));
+                        ctx.type_mapper.register_named(mangled.clone(), tid);
+                        ensure_shared_type_def(ctx, &mangled, val_type);
+                        tid
+                    };
+                    let new_fn = format!("{mangled}__new");
+                    let dst = builder.call(&new_fn, vec![val_op], shared_type);
+                    return FunctionBuilder::copy(dst);
+                }
+            }
+        }
+
+        // Mutex[T](value) constructor → Mutex__T__new(value)
+        if name == "Mutex" {
+            if let Some(type_args) = generic_args {
+                if !type_args.is_empty() {
+                    let val_op = if !args.is_empty() {
+                        lower_expr(ctx, builder, &args[0].node.value)
+                    } else {
+                        Operand::Constant(Constant::I64(0))
+                    };
+                    let val_type = infer_operand_type_full(ctx, &val_op, builder);
+                    let mangled = super::types::mangle_generic_name(name, type_args);
+                    let mangled = ctx.resolve_type_name(&mangled);
+                    let mutex_type = if let Some(tid) = ctx.type_mapper.lookup_named(&mangled) {
+                        tid
+                    } else {
+                        let tid = ctx.type_registry.insert(GirType::Named(mangled.clone()));
+                        ctx.type_mapper.register_named(mangled.clone(), tid);
+                        ensure_mutex_type_def(ctx, &mangled, val_type);
+                        tid
+                    };
+                    let new_fn = format!("{mangled}__new");
+                    let dst = builder.call(&new_fn, vec![val_op], mutex_type);
+                    return FunctionBuilder::copy(dst);
+                }
+            }
+        }
+
+        // TaskGroup.new() static constructor
+        if name == "TaskGroup" && args.is_empty() {
+            let tg_name = "TaskGroup";
+            let tg_type = if let Some(tid) = ctx.type_mapper.lookup_named(tg_name) {
+                tid
+            } else {
+                let tid = ctx.type_registry.insert(GirType::Named(tg_name.to_string()));
+                ctx.type_mapper.register_named(tg_name.to_string(), tid);
+                ensure_task_group_type_def(ctx, tg_name);
+                tid
+            };
+            let dst = builder.call("gorget_task_group_new", vec![], tg_type);
+            return FunctionBuilder::copy(dst);
+        }
+
         // Collection constructors: Dict[K,V](), HashMap[K,V](), Set[K](), HashSet[K](), Vector[T]()
         if matches!(name.as_str(), "Dict" | "HashMap" | "Set" | "HashSet" | "Vector") {
             if let Some(type_args) = generic_args {
@@ -4287,6 +4534,96 @@ pub fn ensure_box_type_def(ctx: &mut LoweringContext, box_type_name: &str, inner
             align: None,
             copy_semantics: CopySemantics::Move,
             drop_strategy: DropStrategy::Trivial("free".to_string()),
+        },
+    };
+    ctx.type_registry.add_type_def(type_def);
+}
+
+/// Ensure a Shared[T] type has a TypeDef in the registry (Copy pointer, no drop in V1).
+pub fn ensure_shared_type_def(ctx: &mut LoweringContext, shared_type_name: &str, inner_type: TypeId) {
+    use crate::ir::types::{TypeDef, TypeDefKind, StructDef, StructField, TypeMetadata, CopySemantics, DropStrategy};
+    if ctx.type_registry.get_type_def(shared_type_name).is_some() {
+        return;
+    }
+    let type_def = TypeDef {
+        name: shared_type_name.to_string(),
+        kind: TypeDefKind::Struct(StructDef {
+            fields: vec![StructField { name: "_0".to_string(), type_id: inner_type }],
+        }),
+        metadata: TypeMetadata {
+            size: None,
+            align: None,
+            // Copy — it's a GorgetShared* pointer, cheap to copy
+            copy_semantics: CopySemantics::Copy,
+            // No drop in V1 (ref counting / free deferred to future work like Channel)
+            drop_strategy: DropStrategy::None,
+        },
+    };
+    ctx.type_registry.add_type_def(type_def);
+}
+
+/// Ensure a Mutex[T] type has a TypeDef in the registry (Copy pointer, no drop).
+pub fn ensure_mutex_type_def(ctx: &mut LoweringContext, mutex_type_name: &str, inner_type: TypeId) {
+    use crate::ir::types::{TypeDef, TypeDefKind, StructDef, StructField, TypeMetadata, CopySemantics, DropStrategy};
+    if ctx.type_registry.get_type_def(mutex_type_name).is_some() {
+        return;
+    }
+    let type_def = TypeDef {
+        name: mutex_type_name.to_string(),
+        kind: TypeDefKind::Struct(StructDef {
+            fields: vec![StructField { name: "_0".to_string(), type_id: inner_type }],
+        }),
+        metadata: TypeMetadata {
+            size: None,
+            align: None,
+            // Copy — it's a GorgetMutex* pointer, shared across tasks
+            copy_semantics: CopySemantics::Copy,
+            // No drop (lifetime managed explicitly by user; same pattern as Channel)
+            drop_strategy: DropStrategy::None,
+        },
+    };
+    ctx.type_registry.add_type_def(type_def);
+}
+
+/// Ensure a Guard[T] type has a TypeDef in the registry (Move value struct, drop releases mutex).
+pub fn ensure_guard_type_def(ctx: &mut LoweringContext, guard_type_name: &str, inner_type: TypeId) {
+    use crate::ir::types::{TypeDef, TypeDefKind, StructDef, StructField, TypeMetadata, CopySemantics, DropStrategy};
+    if ctx.type_registry.get_type_def(guard_type_name).is_some() {
+        return;
+    }
+    let type_def = TypeDef {
+        name: guard_type_name.to_string(),
+        kind: TypeDefKind::Struct(StructDef {
+            fields: vec![StructField { name: "_0".to_string(), type_id: inner_type }],
+        }),
+        metadata: TypeMetadata {
+            size: None,
+            align: None,
+            // Move — Guard is owned; duplicating would break mutual exclusion
+            copy_semantics: CopySemantics::Move,
+            // Drop unlocks the mutex
+            drop_strategy: DropStrategy::Trivial(format!("{guard_type_name}__drop")),
+        },
+    };
+    ctx.type_registry.add_type_def(type_def);
+}
+
+/// Ensure TaskGroup has a TypeDef in the registry (Move pointer, drop waits for all children).
+pub fn ensure_task_group_type_def(ctx: &mut LoweringContext, tg_type_name: &str) {
+    use crate::ir::types::{TypeDef, TypeDefKind, StructDef, TypeMetadata, CopySemantics, DropStrategy};
+    if ctx.type_registry.get_type_def(tg_type_name).is_some() {
+        return;
+    }
+    let type_def = TypeDef {
+        name: tg_type_name.to_string(),
+        kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
+        metadata: TypeMetadata {
+            size: None,
+            align: None,
+            // Move — TaskGroup owns its child tasks
+            copy_semantics: CopySemantics::Move,
+            // Drop blocks until all children complete, then frees
+            drop_strategy: DropStrategy::Trivial("gorget_task_group_free".to_string()),
         },
     };
     ctx.type_registry.add_type_def(type_def);

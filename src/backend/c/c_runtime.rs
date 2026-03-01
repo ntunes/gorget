@@ -1842,6 +1842,133 @@ static void gorget_channel_free(GorgetChannel* ch) {
 }
 "#;
 
+/// Shared[T] — atomically ref-counted immutable shared data (Arc-like).
+/// In V1, clone() is a no-op (returns same pointer); ref-count tracking is present
+/// but auto-release on drop is deferred (same lifecycle trade-off as Channel).
+pub const SHARED_RUNTIME: &str = r#"
+// ── Shared[T] (immutable shared data, atomic ref-count) ──
+typedef struct GorgetShared {
+    void*           data;
+    size_t          data_size;
+} GorgetShared;
+
+static inline GorgetShared* gorget_shared_new(size_t size, void* init_data) {
+    GorgetShared* s = (GorgetShared*)GORGET_ALLOC(sizeof(GorgetShared));
+    s->data = GORGET_ALLOC(size);
+    s->data_size = size;
+    memcpy(s->data, init_data, size);
+    return s;
+}
+
+static inline void* gorget_shared_get_ptr(GorgetShared* s) {
+    return s->data;
+}
+"#;
+
+/// Mutex[T] — async-compatible mutex returning a Guard[T] RAII handle.
+/// Lock is blocking in V1 (uses pthread_mutex_lock); async poll variant
+/// (gorget_mutex_poll_lock) is stubbed for future waker integration.
+pub const MUTEX_RUNTIME: &str = r#"
+// ── Mutex[T] + Guard[T] ──
+typedef struct GorgetMutex {
+    pthread_mutex_t lock;
+    void*           data;
+    size_t          data_size;
+} GorgetMutex;
+
+typedef struct {
+    GorgetMutex*    mutex;
+    void*           ptr;
+} gorget_guard_t;
+
+static inline GorgetMutex* gorget_mutex_new(size_t size, void* init_data) {
+    GorgetMutex* m = (GorgetMutex*)GORGET_ALLOC(sizeof(GorgetMutex));
+    pthread_mutex_init(&m->lock, NULL);
+    m->data = GORGET_ALLOC(size);
+    m->data_size = size;
+    memcpy(m->data, init_data, size);
+    return m;
+}
+
+// Blocking lock — acquires the mutex and returns a guard.
+// In V1 this is synchronous (not async). The async poll variant is planned for V2.
+static inline gorget_guard_t gorget_mutex_lock(GorgetMutex* m) {
+    pthread_mutex_lock(&m->lock);
+    gorget_guard_t g;
+    g.mutex = m;
+    g.ptr   = m->data;
+    return g;
+}
+
+// Release the guard (unlock the mutex). Safe to call on a zeroed guard.
+static inline void gorget_guard_release(gorget_guard_t* g) {
+    if (!g->mutex) return;
+    pthread_mutex_unlock(&g->mutex->lock);
+    g->mutex = NULL;
+    g->ptr   = NULL;
+}
+"#;
+
+/// TaskGroup — structured concurrency: all spawned children complete before join() returns.
+pub const TASK_GROUP_RUNTIME: &str = r#"
+// ── TaskGroup ──
+// Stores a dynamic array of pthread_t handles for all spawned child tasks.
+// join() waits for all of them; drop calls join + frees memory.
+typedef struct gorget_task_group_t {
+    pthread_t* threads;
+    int        count;
+    int        cap;
+} gorget_task_group_t;
+typedef gorget_task_group_t* TaskGroup;
+
+static inline gorget_task_group_t* gorget_task_group_new(void) {
+    gorget_task_group_t* g = (gorget_task_group_t*)GORGET_ALLOC(sizeof(gorget_task_group_t));
+    g->threads = NULL;
+    g->count   = 0;
+    g->cap     = 0;
+    return g;
+}
+
+// Record a spawned task's pthread so join() can wait on it.
+// task_ctx is the __SpawnCtx_fn* pointer; its first field is always pthread_t.
+static inline void gorget_task_group_submit_raw(gorget_task_group_t* g, void* task_ctx) {
+    pthread_t thread = *(pthread_t*)task_ctx;
+    if (g->count == g->cap) {
+        int new_cap = g->cap ? g->cap * 2 : 4;
+        pthread_t* buf = (pthread_t*)GORGET_ALLOC((size_t)new_cap * sizeof(pthread_t));
+        if (g->threads) {
+            memcpy(buf, g->threads, (size_t)g->count * sizeof(pthread_t));
+            GORGET_FREE(g->threads, (size_t)g->cap * sizeof(pthread_t));
+        }
+        g->threads = buf;
+        g->cap     = new_cap;
+    }
+    g->threads[g->count++] = thread;
+}
+
+// Extracts __task void* from any Task__T struct, then records its thread.
+#define gorget_task_group_submit(g, task) \
+    gorget_task_group_submit_raw((g), (task).__task)
+
+// Blocking join — waits for all submitted tasks to finish.
+static inline void gorget_task_group_join(gorget_task_group_t* g) {
+    for (int i = 0; i < g->count; i++) {
+        pthread_join(g->threads[i], NULL);
+    }
+    g->count = 0;  // reset; group may be reused after join()
+}
+
+// Destructor (called by RAII drop): join all tasks, free thread array, free group.
+static inline void gorget_task_group_free(gorget_task_group_t** gp) {
+    if (!gp || !*gp) return;
+    gorget_task_group_t* g = *gp;
+    gorget_task_group_join(g);
+    if (g->threads) GORGET_FREE(g->threads, (size_t)g->cap * sizeof(pthread_t));
+    GORGET_FREE(g, sizeof(gorget_task_group_t));
+    *gp = NULL;
+}
+"#;
+
 /// Everything after the panic helper — checked arithmetic, collections, etc.
 pub const RUNTIME_CORE: &str = r#"
 // ── Checked Arithmetic ──────────────────────────────────────

@@ -1,0 +1,9 @@
+async void do_task():
+    int x = 1
+
+void main():
+    TaskGroup group = TaskGroup()
+    group.spawn(spawn do_task())
+    group.spawn(spawn do_task())
+    group.join()
+    print(2)
