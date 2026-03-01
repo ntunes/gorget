@@ -2635,9 +2635,10 @@ impl<'a> TypeChecker<'a> {
                 "contains" | "starts_with" | "ends_with" | "is_empty" => Some(self.types.bool_id),
                 // View returns — no allocation, return str (Str)
                 "trim" | "strip" | "lstrip" | "rstrip" | "removeprefix" | "removesuffix" | "byte_slice"
+                | "substring"
                     => Some(self.types.string_id),
                 // Allocating returns — return String (GorgetString)
-                "to_upper" | "to_lower" | "replace" | "substring" | "repeat" | "join" | "pad_left" | "pad_right"
+                "to_upper" | "to_lower" | "replace" | "repeat" | "join" | "pad_left" | "pad_right"
                     => Some(self.types.owned_string_id),
                 "enumerate" => Some(receiver_type),
                 "char_at" => Some(self.types.char_id),

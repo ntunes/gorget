@@ -454,7 +454,7 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
     out.push_str("static inline Str codepoint_to_str(int64_t code) { return gorget_str_from_cstr(gorget_codepoint_to_utf8(code)); }\n");
     out.push_str("static inline int64_t gorget_str_hash(Str* s) { return (int64_t)__gorget_hash_str_len(s->data, s->len); }\n");
     out.push_str("static inline int64_t __gorget_hash_int(int64_t v) { return (int64_t)__gorget_fnv1a(&v, sizeof(v)); }\n");
-    out.push_str("static inline GorgetString Str__substring(Str* s, int64_t start, int64_t end) { return gorget_string_from_str(gorget_str_byte_slice(*s, start, end)); }\n");
+    out.push_str("static inline Str Str__substring(Str* s, int64_t start, int64_t end) { return gorget_str_slice(*s, start, end); }\n");
     out.push('\n');
 
     // Emit typedefs for collection aliases BEFORE type definitions
@@ -4545,9 +4545,8 @@ fn infer_method_return_type(name: &str) -> Option<&'static str> {
             | "pad_left" | "pad_right" => Some("GorgetString"),
             "trim" | "strip" | "lstrip" | "rstrip"
             | "removeprefix" | "removesuffix" | "byte_slice"
-            | "slice" => Some("Str"),
+            | "slice" | "substring" => Some("Str"),
             "char_at" => Some("uint32_t"),
-            "substring" => Some("GorgetString"),
             "len" | "byte_len" | "count" | "find" | "hash" => Some("int64_t"),
             "index_of" => Some("Option__int64_t"),
             "contains" | "starts_with" | "ends_with" | "eq" => Some("bool"),
