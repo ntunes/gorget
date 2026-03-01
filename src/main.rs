@@ -90,6 +90,24 @@ fn resolve_deps_for_file(filename: &str) -> HashMap<String, PathBuf> {
     HashMap::new()
 }
 
+/// Check if the source text defines async functions.
+/// Used to fall back to old codegen (GIR doesn't support async yet).
+fn source_has_async(source: &str) -> bool {
+    source.lines().any(|line| line.trim_start().starts_with("async "))
+}
+
+/// Check if the source text uses hot-reload mode.
+/// Used to fall back to old codegen (GIR doesn't support hot-reload yet).
+fn source_has_hot_reload(source: &str) -> bool {
+    source.contains("directive hot-reload")
+}
+
+/// Check if the source text uses the trace directive.
+/// Used to fall back to old codegen (GIR doesn't emit trace instrumentation yet).
+fn source_has_trace(source: &str) -> bool {
+    source.contains("directive trace")
+}
+
 /// Directive flags extracted from the source module.
 struct DirectiveFlags {
     strip_asserts: bool,
@@ -264,6 +282,24 @@ fn print_borrow_summary(result: &gorget::semantic::AnalysisResult) {
     }
 }
 
+/// Extract all `--feature <name>` (and `--feature=<name>`) values from CLI args.
+fn parse_features(args: &[String]) -> Vec<String> {
+    let mut features = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--feature" && i + 1 < args.len() {
+            features.push(args[i + 1].clone());
+            i += 2;
+        } else if let Some(val) = args[i].strip_prefix("--feature=") {
+            features.push(val.to_string());
+            i += 1;
+        } else {
+            i += 1;
+        }
+    }
+    features
+}
+
 /// Build a .gg source file into a binary. Returns the path to the executable,
 /// or an error string if compilation fails.
 ///
@@ -287,6 +323,7 @@ fn try_build(
     shared_output: Option<&Path>,
     hot_reload_flag: bool,
     show_borrows: bool,
+    features: &[String],
 ) -> Result<PathBuf, String> {
     let mut parser = Parser::new(source);
     let module = parser.parse_module();
@@ -321,7 +358,7 @@ fn try_build(
     };
     let hot_reload = dir_flags.hot_reload || hot_reload_flag;
 
-    let result = gorget::semantic::analyze(&mut module);
+    let result = gorget::semantic::analyze(&mut module, features);
 
     if show_borrows {
         print_borrow_summary(&result);
@@ -603,8 +640,9 @@ fn build(
     test_name_filter: Option<&str>,
     output_dir: Option<&Path>,
     dep_paths: HashMap<String, PathBuf>,
+    features: &[String],
 ) -> PathBuf {
-    try_build(filename, source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, test_mode, test_tags, test_exclude_tags, test_name_filter, output_dir, dep_paths, None, false, false)
+    try_build(filename, source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, test_mode, test_tags, test_exclude_tags, test_name_filter, output_dir, dep_paths, None, false, false, features)
         .unwrap_or_else(|e| {
             eprintln!("{e}");
             process::exit(1);
@@ -619,6 +657,7 @@ fn try_build_ir(
     dep_paths: HashMap<String, PathBuf>,
     output_dir: Option<&Path>,
     output_exe: Option<&Path>,
+    features: &[String],
 ) -> Result<PathBuf, String> {
     let mut parser = Parser::new(source);
     let module = parser.parse_module();
@@ -634,7 +673,7 @@ fn try_build_ir(
     // Load imported modules recursively and merge
     let (mut module, concat_source) = load_imports(filename, source, module, dep_paths);
 
-    let result = gorget::semantic::analyze(&mut module);
+    let result = gorget::semantic::analyze(&mut module, features);
 
     if !result.errors.is_empty() {
         let reporter = ErrorReporter::new(filename.to_string(), concat_source);
@@ -861,7 +900,7 @@ fn run_tui() {
                 continue;
             }
             let gg_path_str = gg_path.display().to_string();
-            match try_build(&gg_path_str, &source, false, false, false, false, false, false, false, &[], &[], None, Some(&tmp_dir), HashMap::new(), None, false, false) {
+            match try_build(&gg_path_str, &source, false, false, false, false, false, false, false, &[], &[], None, Some(&tmp_dir), HashMap::new(), None, false, false, &[]) {
                 Err(e) => {
                     eprintln!("{e}");
                 }
@@ -897,7 +936,7 @@ fn run_tui() {
                 continue;
             }
             let gg_path_str = gg_path.display().to_string();
-            match try_build(&gg_path_str, &source, false, false, false, false, false, false, false, &[], &[], None, Some(&tmp_dir), HashMap::new(), None, false, false) {
+            match try_build(&gg_path_str, &source, false, false, false, false, false, false, false, &[], &[], None, Some(&tmp_dir), HashMap::new(), None, false, false, &[]) {
                 Err(e) => {
                     eprintln!("{e}");
                 }
@@ -1171,7 +1210,9 @@ fn main() {
         println!();
         println!("Build flags:");
         println!("  --hot-reload            Enable hot code reload (builds host + guest .dylib)");
-        println!("  --shared [-o F]   Build as shared library (.dylib/.so)");
+        println!("  --shared [-o F]         Build as shared library (.dylib/.so)");
+        println!("  --legacy-codegen        Use the legacy AST→C codegen (bypasses GIR)");
+        println!("  --ir                    Alias for GIR pipeline (now the default)");
         return;
     }
 
@@ -1196,7 +1237,25 @@ fn main() {
             eprintln!("Failed to create temp directory: {e}");
             process::exit(1);
         });
-        let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, Some(tmp_dir.path()), dep_paths);
+        let features = parse_features(&args);
+        let legacy = args.iter().any(|a| a == "--legacy-codegen");
+        let ir = args.iter().any(|a| a == "--ir");
+        let use_legacy = legacy
+            || source_has_async(&source)
+            || source_has_hot_reload(&source)
+            || trace || strip_asserts || no_strip_asserts
+            || overflow_wrap || overflow_checked;
+        let exe_path = if !ir && use_legacy {
+            // Fall back to old codegen for unsupported features or explicit --legacy-codegen
+            build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, Some(tmp_dir.path()), dep_paths, &features)
+        } else {
+            // Default: GIR pipeline
+            try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, &features)
+                .unwrap_or_else(|e| {
+                    eprintln!("{e}");
+                    process::exit(1);
+                })
+        };
         let status = Command::new(&exe_path)
             .status()
             .unwrap_or_else(|e| {
@@ -1311,6 +1370,11 @@ fn main() {
     let shared_mode = args.iter().any(|a| a == "--shared");
     let show_borrows = args.iter().any(|a| a == "--show-borrows");
     let ir_mode = args.iter().any(|a| a == "--ir");
+    // --legacy-codegen: bypass GIR, use old AST→C codegen directly.
+    // GIR is now the default; this flag is provided for programs that GIR
+    // doesn't yet support (async, hot-reload) or for debugging.
+    let legacy_codegen = args.iter().any(|a| a == "--legacy-codegen");
+    let features = parse_features(&args);
     // Parse -o <path> for shared output
     let shared_output_path: Option<PathBuf> = {
         let mut path = None;
@@ -1327,7 +1391,7 @@ fn main() {
     };
     // Find positional filename, skipping values of known flag pairs
     let filename = {
-        let flags_with_values = ["--tag", "--exclude-tag", "--filter", "--report", "--output", "-o"];
+        let flags_with_values = ["--tag", "--exclude-tag", "--filter", "--report", "--output", "-o", "--feature"];
         let mut skip_next = false;
         let mut found = None;
         for arg in args.iter().skip(2) {
@@ -1401,7 +1465,7 @@ fn main() {
             let dep_paths = resolve_deps_for_file(filename);
             let (mut module, concat_source) = load_imports(filename, &source, module, dep_paths);
 
-            let result = gorget::semantic::analyze(&mut module);
+            let result = gorget::semantic::analyze(&mut module, &features);
 
             if show_borrows {
                 print_borrow_summary(&result);
@@ -1420,18 +1484,8 @@ fn main() {
         }
         "build" => {
             let dep_paths = resolve_deps_for_file(filename);
-            if ir_mode {
-                // --ir: use the GIR pipeline
-                let result = try_build_ir(filename, &source, dep_paths, None, shared_output_path.as_deref());
-                match result {
-                    Ok(p) => println!("Built (GIR): {}", p.display()),
-                    Err(e) => {
-                        eprintln!("{e}");
-                        process::exit(1);
-                    }
-                }
-            } else if shared_mode {
-                // --shared: build as shared library
+            if shared_mode {
+                // --shared: build as shared library (old codegen; GIR doesn't split host/guest yet)
                 let default_shared_path = {
                     let input_path = Path::new(filename);
                     let dir = input_path.parent().unwrap_or(Path::new("."));
@@ -1443,7 +1497,7 @@ fn main() {
                     dir.join(format!("{stem}_guest{ext}"))
                 };
                 let shared_path = shared_output_path.as_deref().unwrap_or(&default_shared_path);
-                let result = try_build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, None, dep_paths, Some(shared_path), false, show_borrows);
+                let result = try_build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, None, dep_paths, Some(shared_path), false, show_borrows, &features);
                 match result {
                     Ok(p) => println!("Built shared library: {}", p.display()),
                     Err(e) => {
@@ -1451,9 +1505,9 @@ fn main() {
                         process::exit(1);
                     }
                 }
-            } else if hot_reload_flag {
-                // --hot-reload: two-phase build (host + guest)
-                let result = try_build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, None, dep_paths, None, true, show_borrows);
+            } else if hot_reload_flag || source_has_hot_reload(&source) {
+                // hot-reload: two-phase build (host + guest); old codegen (GIR deferred)
+                let result = try_build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, None, dep_paths, None, true, show_borrows, &features);
                 match result {
                     Ok(p) => println!("Built (hot-reload): {}", p.display()),
                     Err(e) => {
@@ -1461,20 +1515,33 @@ fn main() {
                         process::exit(1);
                     }
                 }
-            } else {
-                let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, None, dep_paths);
+            } else if !ir_mode && (legacy_codegen
+                || source_has_async(&source)
+                || trace || source_has_trace(&source)
+                || strip_asserts || no_strip_asserts
+                || overflow_wrap || overflow_checked)
+            {
+                // Legacy codegen: explicit request, or features GIR doesn't yet support:
+                //   async functions, --trace/directive trace, --strip-asserts, --overflow=* flags
+                let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, None, dep_paths, &features);
                 println!("Built: {}", exe_path.display());
+            } else {
+                // Default: GIR pipeline (--ir or auto-selected for non-async programs)
+                let result = try_build_ir(filename, &source, dep_paths, None, shared_output_path.as_deref(), &features);
+                match result {
+                    Ok(p) => println!("Built: {}", p.display()),
+                    Err(e) => {
+                        eprintln!("{e}");
+                        process::exit(1);
+                    }
+                }
             }
         }
         "run" => {
             let dep_paths = resolve_deps_for_file(filename);
-            if ir_mode {
-                // --ir: use the GIR pipeline
-                let tmp_dir = tempfile::tempdir().unwrap_or_else(|e| {
-                    eprintln!("Failed to create temp directory: {e}");
-                    process::exit(1);
-                });
-                let result = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None);
+            if hot_reload_flag || source_has_hot_reload(&source) {
+                // hot-reload: build with hot-reload and run (old codegen; GIR deferred)
+                let result = try_build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, None, dep_paths, None, true, show_borrows, &features);
                 match result {
                     Ok(exe_path) => {
                         let status = Command::new(&exe_path)
@@ -1490,38 +1557,47 @@ fn main() {
                         process::exit(1);
                     }
                 }
-            } else if hot_reload_flag {
-                // --hot-reload: build with hot-reload and run
-                let result = try_build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, None, dep_paths, None, true, show_borrows);
-                match result {
-                    Ok(exe_path) => {
-                        let status = Command::new(&exe_path)
-                            .status()
-                            .unwrap_or_else(|e| {
-                                eprintln!("Failed to execute {}: {e}", exe_path.display());
-                                process::exit(1);
-                            });
-                        process::exit(status.code().unwrap_or(1));
-                    }
-                    Err(e) => {
-                        eprintln!("{e}");
-                        process::exit(1);
-                    }
-                }
-            } else {
+            } else if !ir_mode && (legacy_codegen
+                || source_has_async(&source)
+                || trace || source_has_trace(&source)
+                || strip_asserts || no_strip_asserts
+                || overflow_wrap || overflow_checked)
+            {
+                // Legacy codegen: explicit request, or features GIR doesn't yet support
                 let tmp_dir = tempfile::tempdir().unwrap_or_else(|e| {
                     eprintln!("Failed to create temp directory: {e}");
                     process::exit(1);
                 });
-                let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, Some(tmp_dir.path()), dep_paths);
+                let exe_path = build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, Some(tmp_dir.path()), dep_paths, &features);
                 let status = Command::new(&exe_path)
                     .status()
                     .unwrap_or_else(|e| {
                         eprintln!("Failed to execute {}: {e}", exe_path.display());
                         process::exit(1);
                     });
-                // tmp_dir is dropped here, cleaning up .c and binary
                 process::exit(status.code().unwrap_or(1));
+            } else {
+                // Default: GIR pipeline (--ir or auto-selected for non-async programs)
+                let tmp_dir = tempfile::tempdir().unwrap_or_else(|e| {
+                    eprintln!("Failed to create temp directory: {e}");
+                    process::exit(1);
+                });
+                let result = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, &features);
+                match result {
+                    Ok(exe_path) => {
+                        let status = Command::new(&exe_path)
+                            .status()
+                            .unwrap_or_else(|e| {
+                                eprintln!("Failed to execute {}: {e}", exe_path.display());
+                                process::exit(1);
+                            });
+                        process::exit(status.code().unwrap_or(1));
+                    }
+                    Err(e) => {
+                        eprintln!("{e}");
+                        process::exit(1);
+                    }
+                }
             }
         }
         "test" => {
@@ -1567,7 +1643,7 @@ fn main() {
                 process::exit(1);
             });
             let dep_paths = resolve_deps_for_file(filename);
-            let exe_path = build(filename, &source, false, false, false, false, trace, no_trace, true, &test_tags, &test_exclude_tags, test_name_filter.as_deref(), Some(tmp_dir.path()), dep_paths);
+            let exe_path = build(filename, &source, false, false, false, false, trace, no_trace, true, &test_tags, &test_exclude_tags, test_name_filter.as_deref(), Some(tmp_dir.path()), dep_paths, &features);
             let status = Command::new(&exe_path)
                 .status()
                 .unwrap_or_else(|e| {

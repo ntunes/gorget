@@ -43,13 +43,14 @@ pub struct AnalysisResult {
 }
 
 /// Run all semantic analysis passes on a parsed module.
-pub fn analyze(module: &mut Module) -> AnalysisResult {
+/// `features` is the list of enabled build-time feature flags (from `--feature` CLI args).
+pub fn analyze(module: &mut Module, features: &[String]) -> AnalysisResult {
     let mut scopes = ScopeTable::new();
     let mut types = TypeTable::new();
     let mut errors = Vec::new();
 
     // Pass 0: Evaluate and substitute meta constants
-    errors.extend(meta::evaluate_meta_consts(module));
+    errors.extend(meta::evaluate_meta_consts(module, features));
 
     // Expand @derive(...) attributes into equip blocks
     derive::expand_derives(module, &mut errors);

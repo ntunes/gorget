@@ -34,23 +34,41 @@ pub enum MetaValue {
     Str(String),
 }
 
+/// Context threaded through meta evaluation for built-in function access.
+struct MetaContext<'a> {
+    /// Build-time feature flags (from `--feature` CLI args).
+    features: &'a [String],
+}
+
+impl<'a> MetaContext<'a> {
+    fn new(features: &'a [String]) -> Self {
+        Self { features }
+    }
+
+    fn empty() -> MetaContext<'static> {
+        MetaContext { features: &[] }
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════
 // Public entry point
 // ═══════════════════════════════════════════════════════════════
 
 /// Evaluate, substitute, and remove all meta constructs from a module.
-pub fn evaluate_meta_consts(module: &mut Module) -> Vec<SemanticError> {
+/// `features` is the list of enabled build-time feature flags (from `--feature` CLI args).
+pub fn evaluate_meta_consts(module: &mut Module, features: &[String]) -> Vec<SemanticError> {
     let mut errors = Vec::new();
     let mut env: FxHashMap<String, MetaValue> = FxHashMap::default();
     let mut type_env: FxHashMap<String, Type> = FxHashMap::default();
+    let ctx = MetaContext::new(features);
 
     // Phase 1: Evaluate meta consts, meta asserts, and meta type aliases
     for item in &module.items {
-        process_meta_item(&item.node, &mut env, &mut type_env, &mut errors);
+        process_meta_item(&item.node, &mut env, &mut type_env, &ctx, &mut errors);
     }
 
     // Phase 1.5: Flatten MetaIf (conditional compilation)
-    module.items = flatten_meta_ifs(module.items.clone(), &mut env, &mut type_env, &mut errors);
+    module.items = flatten_meta_ifs(module.items.clone(), &mut env, &mut type_env, &ctx, &mut errors);
 
     // Phase 2: Substitute meta const references and type aliases throughout the AST
     for item in &mut module.items {
@@ -73,11 +91,12 @@ fn process_meta_item(
     item: &Item,
     env: &mut FxHashMap<String, MetaValue>,
     type_env: &mut FxHashMap<String, Type>,
+    ctx: &MetaContext<'_>,
     errors: &mut Vec<SemanticError>,
 ) {
     match item {
         Item::MetaConst(mc) => {
-            match eval_expr(&mc.value.node, env, mc.value.span) {
+            match eval_expr(&mc.value.node, env, ctx, mc.value.span) {
                 Ok(value) => {
                     if let Err(e) = validate_type(&mc.type_.node, &value, mc.span) {
                         errors.push(e);
@@ -89,11 +108,11 @@ fn process_meta_item(
             }
         }
         Item::MetaAssert(ma) => {
-            match eval_expr(&ma.condition.node, env, ma.condition.span) {
+            match eval_expr(&ma.condition.node, env, ctx, ma.condition.span) {
                 Ok(MetaValue::Bool(true)) => {} // assertion passes
                 Ok(MetaValue::Bool(false)) => {
                     let msg = if let Some(msg_expr) = &ma.message {
-                        match eval_expr(&msg_expr.node, env, msg_expr.span) {
+                        match eval_expr(&msg_expr.node, env, ctx, msg_expr.span) {
                             Ok(v) => meta_value_to_string(&v),
                             Err(_) => "assertion failed".to_string(),
                         }
@@ -133,6 +152,7 @@ fn flatten_meta_ifs(
     items: Vec<Spanned<Item>>,
     env: &mut FxHashMap<String, MetaValue>,
     type_env: &mut FxHashMap<String, Type>,
+    ctx: &MetaContext<'_>,
     errors: &mut Vec<SemanticError>,
 ) -> Vec<Spanned<Item>> {
     let mut result = items;
@@ -142,10 +162,10 @@ fn flatten_meta_ifs(
         for item in result {
             if let Item::MetaIf(meta_if) = &item.node {
                 changed = true;
-                let winning = pick_meta_if_branch(meta_if, env, errors);
+                let winning = pick_meta_if_branch(meta_if, env, ctx, errors);
                 // Process any meta declarations in the winning branch
                 for won_item in &winning {
-                    process_meta_item(&won_item.node, env, type_env, errors);
+                    process_meta_item(&won_item.node, env, type_env, ctx, errors);
                 }
                 new_items.extend(winning);
             } else {
@@ -164,10 +184,11 @@ fn flatten_meta_ifs(
 fn pick_meta_if_branch(
     meta_if: &MetaIf,
     env: &FxHashMap<String, MetaValue>,
+    ctx: &MetaContext<'_>,
     errors: &mut Vec<SemanticError>,
 ) -> Vec<Spanned<Item>> {
     // Try the main condition
-    match eval_expr(&meta_if.condition.node, env, meta_if.condition.span) {
+    match eval_expr(&meta_if.condition.node, env, ctx, meta_if.condition.span) {
         Ok(MetaValue::Bool(true)) => return meta_if.then_items.clone(),
         Ok(MetaValue::Bool(false)) => {} // fall through to elif/else
         Ok(_) => {
@@ -187,7 +208,7 @@ fn pick_meta_if_branch(
 
     // Try elif branches
     for (cond, branch_items) in &meta_if.elif_branches {
-        match eval_expr(&cond.node, env, cond.span) {
+        match eval_expr(&cond.node, env, ctx, cond.span) {
             Ok(MetaValue::Bool(true)) => return branch_items.clone(),
             Ok(MetaValue::Bool(false)) => {} // try next
             Ok(_) => {
@@ -217,6 +238,7 @@ fn pick_meta_if_branch(
 fn eval_expr(
     expr: &Expr,
     env: &FxHashMap<String, MetaValue>,
+    ctx: &MetaContext<'_>,
     span: Span,
 ) -> Result<MetaValue, SemanticError> {
     match expr {
@@ -244,7 +266,7 @@ fn eval_expr(
         }
 
         Expr::UnaryOp { op, operand } => {
-            let val = eval_expr(&operand.node, env, operand.span)?;
+            let val = eval_expr(&operand.node, env, ctx, operand.span)?;
             match (op, &val) {
                 (UnaryOp::Neg, MetaValue::Int(n)) => Ok(MetaValue::Int(-n)),
                 (UnaryOp::Neg, MetaValue::Float(f)) => Ok(MetaValue::Float(-f)),
@@ -258,9 +280,56 @@ fn eval_expr(
         }
 
         Expr::BinaryOp { left, op, right } => {
-            let lhs = eval_expr(&left.node, env, left.span)?;
-            let rhs = eval_expr(&right.node, env, right.span)?;
+            let lhs = eval_expr(&left.node, env, ctx, left.span)?;
+            let rhs = eval_expr(&right.node, env, ctx, right.span)?;
             eval_binary_op(&lhs, *op, &rhs, span)
+        }
+
+        // Built-in meta functions: platform(), arch(), arch_word_bits(), feature(), debug()
+        Expr::Call { callee, args, .. } => {
+            if let Expr::Identifier(name) = &callee.node {
+                match name.as_str() {
+                    "platform" => {
+                        let platform = if cfg!(target_os = "macos") { "macos" }
+                            else if cfg!(target_os = "linux") { "linux" }
+                            else if cfg!(target_os = "windows") { "windows" }
+                            else { "unknown" };
+                        Ok(MetaValue::Str(platform.to_string()))
+                    }
+                    "arch" => {
+                        let arch = if cfg!(target_arch = "x86_64") { "x86_64" }
+                            else if cfg!(target_arch = "aarch64") { "aarch64" }
+                            else if cfg!(target_arch = "arm") { "arm" }
+                            else if cfg!(target_arch = "wasm32") { "wasm32" }
+                            else { "unknown" };
+                        Ok(MetaValue::Str(arch.to_string()))
+                    }
+                    "arch_word_bits" => {
+                        Ok(MetaValue::Int((std::mem::size_of::<usize>() * 8) as i64))
+                    }
+                    "feature" => {
+                        if args.len() != 1 {
+                            return Err(meta_err("feature() takes exactly 1 argument", span));
+                        }
+                        let name_val = eval_expr(&args[0].node.value.node, env, ctx, args[0].node.value.span)?;
+                        match name_val {
+                            MetaValue::Str(feature_name) => {
+                                Ok(MetaValue::Bool(ctx.features.iter().any(|f| f == &feature_name)))
+                            }
+                            _ => Err(meta_err("feature() argument must be a string literal", span)),
+                        }
+                    }
+                    "debug" => {
+                        Ok(MetaValue::Bool(ctx.features.iter().any(|f| f == "debug")))
+                    }
+                    other => Err(meta_err(
+                        &format!("unknown built-in meta function `{other}` — available: platform(), arch(), arch_word_bits(), feature(str), debug()"),
+                        span,
+                    )),
+                }
+            } else {
+                Err(meta_err("meta function calls must use a simple function name", span))
+            }
         }
 
         _ => Err(meta_err("expression cannot be evaluated at compile time", span)),
@@ -837,17 +906,21 @@ mod tests {
         FxHashMap::default()
     }
 
+    fn no_ctx() -> MetaContext<'static> {
+        MetaContext::empty()
+    }
+
     // ── Literal evaluation ──
 
     #[test]
     fn eval_int_literal() {
-        let result = eval_expr(&Expr::IntLiteral(42), &empty_env(), dummy_span());
+        let result = eval_expr(&Expr::IntLiteral(42), &empty_env(), &no_ctx(), dummy_span());
         assert!(matches!(result, Ok(MetaValue::Int(42))));
     }
 
     #[test]
     fn eval_float_literal() {
-        let result = eval_expr(&Expr::FloatLiteral(3.14), &empty_env(), dummy_span());
+        let result = eval_expr(&Expr::FloatLiteral(3.14), &empty_env(), &no_ctx(), dummy_span());
         match result {
             Ok(MetaValue::Float(f)) => assert!((f - 3.14).abs() < f64::EPSILON),
             other => panic!("expected Float, got: {other:?}"),
@@ -856,7 +929,7 @@ mod tests {
 
     #[test]
     fn eval_bool_literal() {
-        let result = eval_expr(&Expr::BoolLiteral(true), &empty_env(), dummy_span());
+        let result = eval_expr(&Expr::BoolLiteral(true), &empty_env(), &no_ctx(), dummy_span());
         assert!(matches!(result, Ok(MetaValue::Bool(true))));
     }
 
@@ -866,7 +939,7 @@ mod tests {
             kind: StringKind::Normal,
             segments: vec![StringSegment::Literal("hello".to_string())],
         });
-        let result = eval_expr(&s, &empty_env(), dummy_span());
+        let result = eval_expr(&s, &empty_env(), &no_ctx(), dummy_span());
         match result {
             Ok(MetaValue::Str(s)) => assert_eq!(s, "hello"),
             other => panic!("expected Str, got: {other:?}"),
@@ -890,7 +963,7 @@ mod tests {
                 dummy_span(),
             )),
         };
-        let result = eval_expr(&expr, &empty_env(), dummy_span());
+        let result = eval_expr(&expr, &empty_env(), &no_ctx(), dummy_span());
         assert!(matches!(result, Ok(MetaValue::Int(70))));
     }
 
@@ -906,7 +979,7 @@ mod tests {
             op: BinaryOp::Mul,
             right: Box::new(Spanned::new(Expr::IntLiteral(2), dummy_span())),
         };
-        let result = eval_expr(&expr, &env, dummy_span());
+        let result = eval_expr(&expr, &env, &no_ctx(), dummy_span());
         assert!(matches!(result, Ok(MetaValue::Int(10))));
     }
 
@@ -919,7 +992,7 @@ mod tests {
             op: BinaryOp::Gt,
             right: Box::new(Spanned::new(Expr::IntLiteral(3), dummy_span())),
         };
-        let result = eval_expr(&expr, &empty_env(), dummy_span());
+        let result = eval_expr(&expr, &empty_env(), &no_ctx(), dummy_span());
         assert!(matches!(result, Ok(MetaValue::Bool(true))));
     }
 
@@ -944,7 +1017,7 @@ mod tests {
                 dummy_span(),
             )),
         };
-        let result = eval_expr(&expr, &empty_env(), dummy_span());
+        let result = eval_expr(&expr, &empty_env(), &no_ctx(), dummy_span());
         match result {
             Ok(MetaValue::Str(s)) => assert_eq!(s, "ab"),
             other => panic!("expected Str, got: {other:?}"),
@@ -959,7 +1032,7 @@ mod tests {
             op: UnaryOp::Neg,
             operand: Box::new(Spanned::new(Expr::IntLiteral(5), dummy_span())),
         };
-        let result = eval_expr(&expr, &empty_env(), dummy_span());
+        let result = eval_expr(&expr, &empty_env(), &no_ctx(), dummy_span());
         assert!(matches!(result, Ok(MetaValue::Int(-5))));
     }
 
@@ -969,7 +1042,7 @@ mod tests {
             op: UnaryOp::Not,
             operand: Box::new(Spanned::new(Expr::BoolLiteral(true), dummy_span())),
         };
-        let result = eval_expr(&expr, &empty_env(), dummy_span());
+        let result = eval_expr(&expr, &empty_env(), &no_ctx(), dummy_span());
         assert!(matches!(result, Ok(MetaValue::Bool(false))));
     }
 
@@ -979,7 +1052,7 @@ mod tests {
             op: UnaryOp::BitNot,
             operand: Box::new(Spanned::new(Expr::IntLiteral(0xFF), dummy_span())),
         };
-        let result = eval_expr(&expr, &empty_env(), dummy_span());
+        let result = eval_expr(&expr, &empty_env(), &no_ctx(), dummy_span());
         assert!(matches!(result, Ok(MetaValue::Int(i)) if i == !0xFFi64));
     }
 
@@ -999,14 +1072,15 @@ mod tests {
 
     #[test]
     fn eval_unsupported_expr() {
+        // Calling an unknown function name in meta context should error
         let expr = Expr::Call {
-            callee: Box::new(Spanned::new(Expr::Identifier("f".to_string()), dummy_span())),
+            callee: Box::new(Spanned::new(Expr::Identifier("unknown_fn".to_string()), dummy_span())),
             generic_args: None,
             args: vec![],
         };
-        let result = eval_expr(&expr, &empty_env(), dummy_span());
+        let result = eval_expr(&expr, &empty_env(), &no_ctx(), dummy_span());
         assert!(result.is_err());
-        assert!(format!("{}", result.unwrap_err()).contains("cannot be evaluated at compile time"));
+        assert!(format!("{}", result.unwrap_err()).contains("unknown built-in meta function"));
     }
 
     #[test]
@@ -1016,7 +1090,7 @@ mod tests {
             op: BinaryOp::Div,
             right: Box::new(Spanned::new(Expr::IntLiteral(0), dummy_span())),
         };
-        let result = eval_expr(&expr, &empty_env(), dummy_span());
+        let result = eval_expr(&expr, &empty_env(), &no_ctx(), dummy_span());
         assert!(result.is_err());
         assert!(format!("{}", result.unwrap_err()).contains("division by zero"));
     }
@@ -1024,7 +1098,7 @@ mod tests {
     #[test]
     fn eval_undefined_meta_const() {
         let expr = Expr::Identifier("UNKNOWN".to_string());
-        let result = eval_expr(&expr, &empty_env(), dummy_span());
+        let result = eval_expr(&expr, &empty_env(), &no_ctx(), dummy_span());
         assert!(result.is_err());
         assert!(format!("{}", result.unwrap_err()).contains("undefined meta constant"));
     }
@@ -1094,7 +1168,7 @@ mod tests {
             span: dummy_span(),
         };
 
-        let errors = evaluate_meta_consts(&mut module);
+        let errors = evaluate_meta_consts(&mut module, &[]);
         assert!(errors.is_empty(), "unexpected errors: {errors:?}");
 
         // MetaConst should be removed
@@ -1190,7 +1264,7 @@ mod tests {
             span: dummy_span(),
         };
 
-        let errors = evaluate_meta_consts(&mut module);
+        let errors = evaluate_meta_consts(&mut module, &[]);
         assert!(errors.is_empty());
 
         // Verify interpolation segment was replaced with literal
@@ -1252,7 +1326,7 @@ mod tests {
             span: dummy_span(),
         };
 
-        let errors = evaluate_meta_consts(&mut module);
+        let errors = evaluate_meta_consts(&mut module, &[]);
         assert!(errors.is_empty());
         // Both meta items should be removed
         assert!(module.items.is_empty());
@@ -1278,7 +1352,7 @@ mod tests {
             span: dummy_span(),
         };
 
-        let errors = evaluate_meta_consts(&mut module);
+        let errors = evaluate_meta_consts(&mut module, &[]);
         assert_eq!(errors.len(), 1);
         assert!(format!("{}", errors[0]).contains("oops"));
     }
@@ -1341,7 +1415,7 @@ mod tests {
             span: dummy_span(),
         };
 
-        let errors = evaluate_meta_consts(&mut module);
+        let errors = evaluate_meta_consts(&mut module, &[]);
         assert!(errors.is_empty(), "unexpected errors: {errors:?}");
 
         // MetaType should be removed
@@ -1430,7 +1504,7 @@ mod tests {
             span: dummy_span(),
         };
 
-        let errors = evaluate_meta_consts(&mut module);
+        let errors = evaluate_meta_consts(&mut module, &[]);
         assert!(errors.is_empty(), "unexpected errors: {errors:?}");
 
         // MetaConst removed, MetaIf replaced with then branch
@@ -1509,7 +1583,7 @@ mod tests {
             span: dummy_span(),
         };
 
-        let errors = evaluate_meta_consts(&mut module);
+        let errors = evaluate_meta_consts(&mut module, &[]);
         assert!(errors.is_empty(), "unexpected errors: {errors:?}");
 
         assert_eq!(module.items.len(), 1);
@@ -1570,7 +1644,7 @@ mod tests {
             span: dummy_span(),
         };
 
-        let errors = evaluate_meta_consts(&mut module);
+        let errors = evaluate_meta_consts(&mut module, &[]);
         assert!(errors.is_empty(), "unexpected errors: {errors:?}");
 
         // MetaConst removed, MetaIf removed, nothing emitted
@@ -1663,7 +1737,7 @@ mod tests {
             span: dummy_span(),
         };
 
-        let errors = evaluate_meta_consts(&mut module);
+        let errors = evaluate_meta_consts(&mut module, &[]);
         assert!(errors.is_empty(), "unexpected errors: {errors:?}");
 
         // All meta items removed, only main() remains

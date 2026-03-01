@@ -101,6 +101,12 @@ impl FunctionBuilder {
         block.terminator = Some(term);
     }
 
+    /// Returns true if the current block already has a terminator set.
+    /// Used to skip redundant `jump(merge_bb)` after `return` statements inside match arms.
+    pub fn is_terminated(&self) -> bool {
+        self.blocks[self.current_block.0 as usize].terminator.is_some()
+    }
+
     /// Allocate a temp local, emit an instruction targeting it, return the LocalId.
     fn emit_with_temp(&mut self, type_id: TypeId, inst_fn: impl FnOnce(LocalId) -> Instruction) -> LocalId {
         let id = self.add_local(type_id, None);

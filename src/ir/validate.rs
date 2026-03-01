@@ -347,7 +347,7 @@ fn check_instruction_calls(
 ) {
     match inst {
         Instruction::Call { func, .. } | Instruction::CallExtern { func, .. } => {
-            if !callables.contains(func.as_str()) && !func.starts_with("__callable_") {
+            if !callables.contains(func.as_str()) && !func.starts_with("__callable_") && !func.starts_with("__gorget_closure_call_") {
                 errors.push(ValidationError {
                     kind: ValidationErrorKind::UndefinedFunction(func.clone()),
                     context: ctx.into(),

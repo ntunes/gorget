@@ -319,6 +319,31 @@ impl<'a> LoweringContext<'a> {
         }
     }
 
+    /// Resolve the inner type of a Box[T] (Named "Box__X" type) or a raw Ptr/MutPtr.
+    /// Box types are stored as GirType::Named("Box__X") with a TypeDef having a single "_0" field.
+    /// This is used for `*box_var` dereferencing where pointee_type() would return None.
+    pub fn deref_inner_type(&self, type_id: TypeId) -> Option<TypeId> {
+        // First try raw pointer types (Ptr/MutPtr)
+        if let Some(inner) = self.pointee_type(type_id) {
+            return Some(inner);
+        }
+        // Then try Named Box types: TypeDef with a single "_0" field
+        if let Some(GirType::Named(name)) = self.type_registry.get(type_id) {
+            if name.starts_with("Box__") {
+                if let Some(type_def) = self.type_registry.get_type_def(name.as_str()) {
+                    if let TypeDefKind::Struct(ref s) = type_def.kind {
+                        if let Some(f) = s.fields.first() {
+                            if f.name == "_0" {
+                                return Some(f.type_id);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Look up a TypeId for a named type in the registry.
     pub fn lookup_type_by_name(&self, name: &str) -> Option<TypeId> {
         for i in 0..self.type_registry.len() {

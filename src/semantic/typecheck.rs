@@ -3080,7 +3080,7 @@ mod tests {
         let mut parser = Parser::new(source);
         let mut module = parser.parse_module();
         assert!(parser.errors.is_empty(), "parse errors: {:?}", parser.errors);
-        let result = semantic::analyze(&mut module);
+        let result = semantic::analyze(&mut module, &[]);
         result.errors
     }
 

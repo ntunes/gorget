@@ -280,14 +280,17 @@ pub fn register_struct_type(
         return;
     }
 
-    // Already registered?
-    if mapper.named_types.contains_key(name.as_str()) {
+    // Already fully registered (TypeDef present)?
+    if registry.get_type_def(name.as_str()).is_some() {
         return;
     }
 
-    // Pre-register the struct name so recursive references resolve
-    let placeholder_id = registry.insert(GirType::Named(name.clone()));
-    mapper.named_types.insert(name.clone(), placeholder_id);
+    // Pre-register the struct name → TypeId if not already done (e.g., by a pre-pass).
+    // This allows recursive references within the same struct's fields.
+    if !mapper.named_types.contains_key(name.as_str()) {
+        let placeholder_id = registry.insert(GirType::Named(name.clone()));
+        mapper.named_types.insert(name.clone(), placeholder_id);
+    }
 
     // Pre-register any generic types used as field types (e.g., Option[Color])
     for f in &struct_def.fields {
@@ -322,12 +325,15 @@ pub fn register_newtype(
     nt: &ast::NewtypeDef,
 ) {
     let name = &nt.name.node;
-    if mapper.named_types.contains_key(name.as_str()) {
+    // Already fully registered?
+    if registry.get_type_def(name.as_str()).is_some() {
         return;
     }
-    // Pre-register the newtype name so recursive references resolve
-    let _placeholder_id = registry.insert(GirType::Named(name.clone()));
-    mapper.named_types.insert(name.clone(), _placeholder_id);
+    // Pre-register name → TypeId if not already done by a pre-pass
+    if !mapper.named_types.contains_key(name.as_str()) {
+        let placeholder_id = registry.insert(GirType::Named(name.clone()));
+        mapper.named_types.insert(name.clone(), placeholder_id);
+    }
 
     let inner_type = mapper.map_ast_type(&nt.inner_type.node);
     let fields = vec![StructField {
@@ -513,14 +519,17 @@ pub fn register_enum_type(
         return;
     }
 
-    // Already registered?
-    if mapper.named_types.contains_key(name.as_str()) {
+    // Already fully registered (TypeDef present)?
+    if registry.get_type_def(name.as_str()).is_some() {
         return;
     }
 
-    // Pre-register the enum name so recursive references (e.g., Box[Json] in Json) resolve
-    let placeholder_id = registry.insert(GirType::Named(name.clone()));
-    mapper.named_types.insert(name.clone(), placeholder_id);
+    // Pre-register the enum name → TypeId if not already done (e.g., by a pre-pass).
+    // This allows recursive references (e.g., Box[Json] in Json) to resolve.
+    if !mapper.named_types.contains_key(name.as_str()) {
+        let placeholder_id = registry.insert(GirType::Named(name.clone()));
+        mapper.named_types.insert(name.clone(), placeholder_id);
+    }
 
     // Pre-register generic types used in variant fields (e.g., Vector[Json], Dict[str, Json])
     for v in &enum_def.variants {

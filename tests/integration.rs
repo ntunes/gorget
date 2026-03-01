@@ -6375,6 +6375,12 @@ fn meta_basic() {
     run_gg("meta_basic.gg", "1024\n512\n1.0\ntrue\n70\n99\n100");
 }
 
+#[test]
+fn meta_builtins() {
+    // arch_word_bits() returns 64 on all 64-bit targets; feature() and debug() return false when no --feature flags are passed
+    run_gg("meta_builtins.gg", "64\ntrue\nfalse\nfalse\nfeature disabled");
+}
+
 // Parser Comparison Test
 // ═══════════════════════════════════════════════════════════════
 

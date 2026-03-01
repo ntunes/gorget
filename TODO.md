@@ -2,12 +2,6 @@
 
 ## High
 
-- **GIR: Closures returned from functions not lowered (affects box_callable, closure_escape)**: Factory functions returning closures cause GIR validation panic — the returned closures are never lowered as standalone GIR functions. [added: 2026-02-28]
-
-- **GIR: Callable dispatch loses borrow param semantics (affects callable_ref_param)**: When dispatching through `Callable[int(&Counter)]`, the cast uses value type (`Counter`) instead of pointer type (`Counter*`). Adapter functions expect pointer params but receive struct values → SIGSEGV. [added: 2026-02-28]
-
-- **GIR: Dict items() tuple field access lowered as Unit (affects dict_items)**: `item._1` (TupleFieldAccess) on Dict `.items()` results falls through to `Constant::Unit`. Needs tuple type tracking through collection methods so field projection can resolve. [added: 2026-02-28, updated: 2026-02-28]
-
 ## Medium
 
 
@@ -123,7 +117,6 @@
 
 - **Const evaluation**: No compile-time expression evaluation. Needed for const declarations, array sizes, and const generics. [from roadmap, added: 2026-02-16]
 
-- **Conditional compilation — built-in functions**: `meta if` infrastructure is done but needs built-in meta functions like `platform()`, `arch()`, `feature()` to be truly useful. Currently conditions must reference meta consts only. [updated: 2026-02-24]
 
 - **`gg fmt` (code formatter)**: Auto-formatter for `.gg` source files. [from roadmap, added: 2026-02-16]
 

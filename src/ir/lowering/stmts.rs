@@ -109,6 +109,11 @@ fn lower_var_decl(
     match &pattern.node {
         Pattern::Binding(name) => {
             let gir_type = ctx.resolve_var_type(type_, value);
+            // Box[Callable[...]] variables pre-register with a "Box__Callable__unknown" type from the
+            // generic collector. We need to reinfer from the actual RHS to get the real closure type.
+            let gir_type_is_box_callable = ctx.type_name_for_id(gir_type)
+                .map(|n| n.starts_with("Box__Callable__") || n.starts_with("Box__MutCallable__") || n.starts_with("Box__ConsumeCallable__"))
+                .unwrap_or(false);
             let local_id = builder.add_local(gir_type, Some(name));
             ctx.register_local(name, local_id, gir_type);
             // P2.6: Register Move-type locals for drop at scope exit
@@ -119,10 +124,11 @@ fn lower_var_decl(
             ctx.expected_type = Some(gir_type);
             let operand = lower_expr(ctx, builder, value);
             ctx.expected_type = prev_expected;
-            // For auto/inferred types and closure values, re-infer from the lowered operand to pick up
-            // tuple types, function return types, closure struct types, etc.
+            // For auto/inferred types, closure values, and Box[Callable[...]] variables,
+            // re-infer from the lowered operand to pick up the actual concrete type.
             let needs_reinfer = matches!(type_.node, ast::Type::Inferred)
-                || matches!(value.node, ast::Expr::Closure { .. } | ast::Expr::ImplicitClosure { .. });
+                || matches!(value.node, ast::Expr::Closure { .. } | ast::Expr::ImplicitClosure { .. })
+                || gir_type_is_box_callable;
             if needs_reinfer {
                 let inferred = infer_operand_type_with_builder(ctx, &operand, builder);
                 if inferred != gir_type {
@@ -1657,8 +1663,13 @@ fn lower_match_stmt(
 
             builder.switch_to(arm_body_bb);
             lower_expr(ctx, builder, &arm.body);
-            ctx.drops.pop_scope(builder, &ctx.type_registry);
-            builder.jump(merge_bb);
+            if builder.is_terminated() {
+                // Return/break/continue already emitted early-exit drops — don't double-drop.
+                ctx.drops.pop_scope_no_emit();
+            } else {
+                ctx.drops.pop_scope(builder, &ctx.type_registry);
+                builder.jump(merge_bb);
+            }
         } else {
             builder.branch(cond, arm_body_bb, next_test_bb);
 
@@ -1667,8 +1678,13 @@ fn lower_match_stmt(
             ctx.drops.push_scope(DropScopeKind::Block);
             emit_pattern_bindings(ctx, builder, &arm.pattern, scrut_local, scrut_type);
             lower_expr(ctx, builder, &arm.body);
-            ctx.drops.pop_scope(builder, &ctx.type_registry);
-            builder.jump(merge_bb);
+            if builder.is_terminated() {
+                // Return/break/continue already emitted early-exit drops — don't double-drop.
+                ctx.drops.pop_scope_no_emit();
+            } else {
+                ctx.drops.pop_scope(builder, &ctx.type_registry);
+                builder.jump(merge_bb);
+            }
         }
 
         builder.switch_to(next_test_bb);
@@ -1678,8 +1694,12 @@ fn lower_match_stmt(
     if let Some(else_body) = else_arm {
         ctx.drops.push_scope(DropScopeKind::Block);
         lower_block(ctx, builder, else_body);
-        ctx.drops.pop_scope(builder, &ctx.type_registry);
-        builder.jump(merge_bb);
+        if builder.is_terminated() {
+            ctx.drops.pop_scope_no_emit();
+        } else {
+            ctx.drops.pop_scope(builder, &ctx.type_registry);
+            builder.jump(merge_bb);
+        }
     }
 
     builder.switch_to(merge_bb);

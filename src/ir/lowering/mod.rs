@@ -38,7 +38,39 @@ pub fn lower_module(
         .map(|item| &item.node)
         .collect();
 
-    // Pre-scan: register non-generic struct and enum type definitions
+    // Pre-scan pass 1: register ALL non-generic type NAMES before filling in fields.
+    // This prevents UNIT_TYPE field values from mutual/forward references (e.g., struct A
+    // has a field of type B, and B is defined later in the file). Without this pre-pass,
+    // the field type resolution falls back to UNIT_TYPE, which marks the type as a
+    // generic template placeholder and suppresses its C output.
+    for item in &ast_module.items {
+        match &item.node {
+            Item::Struct(s) if s.generic_params.is_none() => {
+                let name = &s.name.node;
+                if !type_mapper.named_types.contains_key(name.as_str()) {
+                    let tid = module.type_registry.insert(GirType::Named(name.clone()));
+                    type_mapper.register_named(name.clone(), tid);
+                }
+            }
+            Item::Enum(e) if e.generic_params.is_none() => {
+                let name = &e.name.node;
+                if !type_mapper.named_types.contains_key(name.as_str()) {
+                    let tid = module.type_registry.insert(GirType::Named(name.clone()));
+                    type_mapper.register_named(name.clone(), tid);
+                }
+            }
+            Item::Newtype(nt) => {
+                let name = &nt.name.node;
+                if !type_mapper.named_types.contains_key(name.as_str()) {
+                    let tid = module.type_registry.insert(GirType::Named(name.clone()));
+                    type_mapper.register_named(name.clone(), tid);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Pre-scan pass 2: register non-generic struct and enum type definitions
     for item in &ast_module.items {
         match &item.node {
             Item::Struct(struct_def) => {
@@ -1079,7 +1111,7 @@ fn eval_const_expr(
 pub fn empty_analysis_for_test() -> AnalysisResult {
     let mut parser = crate::parser::Parser::new("void main():\n    pass\n");
     let mut module = parser.parse_module();
-    crate::semantic::analyze(&mut module)
+    crate::semantic::analyze(&mut module, &[])
 }
 
 #[cfg(test)]
@@ -1091,7 +1123,7 @@ mod tests {
         let mut parser = Parser::new(source);
         let mut module = parser.parse_module();
         assert!(parser.errors.is_empty(), "Parse errors: {:?}", parser.errors);
-        let result = crate::semantic::analyze(&mut module);
+        let result = crate::semantic::analyze(&mut module, &[]);
         assert!(result.errors.is_empty(), "Semantic errors: {:?}", result.errors);
         (module, result)
     }

@@ -1371,7 +1371,7 @@ mod tests {
             parser.errors
         );
 
-        let result = semantic::analyze(&mut module);
+        let result = semantic::analyze(&mut module, &[]);
         assert!(
             result.errors.is_empty(),
             "semantic errors: {:?}",

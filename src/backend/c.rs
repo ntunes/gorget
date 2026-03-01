@@ -512,6 +512,102 @@ fn is_template_function(func_name: &str, template_names: &[String]) -> bool {
     template_names.iter().any(|t| func_name.starts_with(&format!("{t}__")))
 }
 
+/// Return TypeDef indices in topological order for struct body emission.
+///
+/// Types must be emitted after all other types they embed by VALUE (not by pointer).
+/// Pointer-based references only need forward declarations, which are emitted earlier.
+/// This avoids "field has incomplete type" errors in C.
+fn topo_sorted_body_order(
+    type_defs: &[TypeDef],
+    registry: &TypeRegistry,
+    should_skip: &impl Fn(&str) -> bool,
+) -> Vec<usize> {
+    let n = type_defs.len();
+
+    // Build a name → index map for fast lookup
+    let name_to_idx: std::collections::HashMap<&str, usize> = type_defs.iter()
+        .enumerate()
+        .map(|(i, d)| (d.name.as_str(), i))
+        .collect();
+
+    // For each type, collect the indices of its value-type (non-pointer) dependencies
+    let get_value_deps = |idx: usize| -> Vec<usize> {
+        let def = &type_defs[idx];
+        if should_skip(&def.name) || def.name.starts_with("Box__") {
+            return vec![];
+        }
+        let field_types: &[StructField] = match &def.kind {
+            TypeDefKind::Struct(s) => &s.fields,
+            TypeDefKind::Enum(e) => {
+                // Flatten variant fields into a single slice isn't trivial; collect instead
+                return e.variants.iter()
+                    .flat_map(|v| v.fields.iter())
+                    .filter_map(|f| {
+                        if let Some(GirType::Named(name)) = registry.get(f.type_id) {
+                            if runtime_type_name(name).is_none() && !should_skip(name)
+                                && !name.starts_with("Box__")
+                            {
+                                return name_to_idx.get(name.as_str()).copied();
+                            }
+                        }
+                        None
+                    })
+                    .collect();
+            }
+            TypeDefKind::Alias(_) => return vec![],
+        };
+        field_types.iter()
+            .filter_map(|f| {
+                if let Some(GirType::Named(name)) = registry.get(f.type_id) {
+                    if runtime_type_name(name).is_none() && !should_skip(name)
+                        && !name.starts_with("Box__")
+                    {
+                        return name_to_idx.get(name.as_str()).copied();
+                    }
+                }
+                None
+            })
+            .collect()
+    };
+
+    // Kahn-like multi-pass: repeatedly emit types whose value deps are already satisfied.
+    // There are no true value-type cycles (that would create infinite-size types),
+    // so this always terminates.
+    let mut emitted = vec![false; n];
+    let mut order: Vec<usize> = Vec::with_capacity(n);
+
+    let mut made_progress = true;
+    while order.len() < n && made_progress {
+        made_progress = false;
+        for i in 0..n {
+            if emitted[i] {
+                continue;
+            }
+            // Skipped and Box types have no ordering constraints — treat as already satisfied
+            let def = &type_defs[i];
+            if should_skip(&def.name) || def.name.starts_with("Box__") {
+                emitted[i] = true;
+                made_progress = true;
+                // Don't add to `order` — these aren't emitted in the body loop
+                continue;
+            }
+            let deps = get_value_deps(i);
+            if deps.iter().all(|&d| emitted[d]) {
+                emitted[i] = true;
+                order.push(i);
+                made_progress = true;
+            }
+        }
+    }
+    // If any remain (shouldn't happen without cycles), emit them in original order
+    for i in 0..n {
+        if !emitted[i] {
+            order.push(i);
+        }
+    }
+    order
+}
+
 /// Emit type definitions (struct typedefs and enum tagged unions).
 fn emit_type_definitions(out: &mut String, module: &Module) {
     let type_defs = module.type_registry.type_defs();
@@ -533,7 +629,8 @@ fn emit_type_definitions(out: &mut String, module: &Module) {
         }
     }
 
-    // Forward declare all struct types first (for mutual references)
+    // Forward declare all struct/enum types first (for mutual references),
+    // and emit alias typedefs here too so Box__Alias typedefs can reference them.
     for def in type_defs {
         if should_skip(&def.name) || def.name.starts_with("Box__") {
             continue;
@@ -545,11 +642,22 @@ fn emit_type_definitions(out: &mut String, module: &Module) {
             TypeDefKind::Enum(_) => {
                 let _ = writeln!(out, "typedef struct {name} {name};", name = def.name);
             }
-            TypeDefKind::Alias(_) => {}
+            TypeDefKind::Alias(target) => {
+                // Emit alias typedef here (before Box typedefs) so that Box__Alias can use the name.
+                let c_type = format_type(*target, &module.type_registry);
+                let _ = writeln!(out, "typedef {c_type} {name};", name = def.name);
+            }
         }
     }
     // Emit Box typedefs as pointer types
     for (box_name, inner) in &box_types {
+        // Skip phantom Box[Callable[...]] types (e.g., Box__Callable__unknown) — these arise
+        // from the generic collector seeing Box[Callable[sig]] declarations, but the GIR path
+        // treats Box[Callable[...]] variables as direct closure structs, so no typedef is needed.
+        // "Callable__unknown" (and variants) are not valid C types.
+        if inner.ends_with("__unknown") || inner.starts_with("Callable__") || inner.starts_with("MutCallable__") || inner.starts_with("ConsumeCallable__") {
+            continue;
+        }
         // Check if the inner type is a trait (has VTable/TraitObj types).
         // Trait types don't have struct definitions, only VTable/TraitObj wrappers.
         let is_trait = type_defs.iter().any(|d| d.name == format!("{inner}_VTable") || d.name == format!("{inner}_TraitObj"));
@@ -561,11 +669,12 @@ fn emit_type_definitions(out: &mut String, module: &Module) {
     }
     out.push('\n');
 
-    // Emit full struct definitions
-    for def in type_defs {
-        if should_skip(&def.name) || def.name.starts_with("Box__") {
-            continue;
-        }
+    // Emit full struct definitions in topological order (value deps before dependents).
+    // This avoids "field has incomplete type" C errors when struct A embeds struct B by value
+    // but B is defined later in the GIR type registry.
+    let topo_order = topo_sorted_body_order(type_defs, &module.type_registry, &should_skip);
+    for &i in &topo_order {
+        let def = &type_defs[i];
         match &def.kind {
             TypeDefKind::Struct(s) => {
                 let _ = writeln!(out, "struct {name} {{", name = def.name);
@@ -603,6 +712,10 @@ fn emit_type_definitions(out: &mut String, module: &Module) {
 
     // Emit Box alloc/get helper functions
     for (box_name, inner) in &box_types {
+        // Skip phantom Box[Callable[...]] types (same reason as typedef skip above)
+        if inner.ends_with("__unknown") || inner.starts_with("Callable__") || inner.starts_with("MutCallable__") || inner.starts_with("ConsumeCallable__") {
+            continue;
+        }
         let is_trait = type_defs.iter().any(|d| d.name == format!("{inner}_VTable") || d.name == format!("{inner}_TraitObj"));
         if !is_trait {
             let _ = writeln!(out, "static inline {box_name} __gorget_box_alloc_{inner}({inner} val) {{");
@@ -1012,7 +1125,13 @@ fn emit_forward_decl(out: &mut String, func: &Function, registry: &TypeRegistry)
     }
 
     let c_name = mangle_name(&func.name);
-    let ret_type = format_type(func.return_type, registry);
+    // FnPtr return type = user-declared closure type (int(int)) → GorgetClosure in C.
+    // (FnPtr struct field types stay as function pointers; this only affects signatures.)
+    let ret_type = if matches!(registry.get(func.return_type), Some(GirType::FnPtr { .. })) {
+        "GorgetClosure".to_string()
+    } else {
+        format_type(func.return_type, registry)
+    };
     let _ = write!(out, "{ret_type} {c_name}(");
 
     if func.params.is_empty() {
@@ -1043,7 +1162,12 @@ fn emit_function(out: &mut String, func: &Function, module: &Module) {
         out.push_str("int main(int argc, char** argv) {\n");
     } else {
         let c_name = mangle_name(&func.name);
-        let ret_type = format_type(func.return_type, registry);
+        // FnPtr return type = user-declared closure type → GorgetClosure in C signature.
+        let ret_type = if matches!(registry.get(func.return_type), Some(GirType::FnPtr { .. })) {
+            "GorgetClosure".to_string()
+        } else {
+            format_type(func.return_type, registry)
+        };
         let _ = write!(out, "{ret_type} {c_name}(");
 
         if func.params.is_empty() {
@@ -1264,7 +1388,14 @@ fn emit_function(out: &mut String, func: &Function, module: &Module) {
                             let lookup_name = call_name.as_str();
                             let user_fn_ret = module.functions.iter()
                                 .find(|f| f.name == lookup_name)
-                                .map(|callee| format_type(callee.return_type, registry));
+                                .map(|callee| {
+                                    // FnPtr return type = escaped closure → GorgetClosure
+                                    if matches!(registry.get(callee.return_type), Some(GirType::FnPtr { .. })) {
+                                        "GorgetClosure".to_string()
+                                    } else {
+                                        format_type(callee.return_type, registry)
+                                    }
+                                });
                             if let Some(ref ret) = user_fn_ret {
                                 if ret != "int64_t" && ret != "void" {
                                     type_overrides.insert(dst_id.0 as usize, ret.clone());
@@ -1745,9 +1876,15 @@ fn emit_function(out: &mut String, func: &Function, module: &Module) {
         let c_type = if let Some(override_type) = type_overrides.get(&local_id) {
             override_type.clone()
         } else {
-            let t = format_type(local.type_id, registry);
-            // UNIT_TYPE locals that are referenced need a concrete type
-            if t == "void" { "int64_t".to_string() } else { t }
+            // FnPtr-typed locals represent escaped closures — declare as GorgetClosure.
+            // (FnPtr in struct fields remains a real function pointer; locals are different.)
+            if matches!(registry.get(local.type_id), Some(GirType::FnPtr { .. })) {
+                "GorgetClosure".to_string()
+            } else {
+                let t = format_type(local.type_id, registry);
+                // UNIT_TYPE locals that are referenced need a concrete type
+                if t == "void" { "int64_t".to_string() } else { t }
+            }
         };
         if let Some(ref hint) = local.name_hint {
             let _ = writeln!(out, "    {c_type} _{local_id}; /* {hint} */");
@@ -1874,6 +2011,22 @@ fn emit_instruction(
             // Implicit unwrap: src is Option__T but dst is T (GIR lowered .unwrap() as no-op)
             if src_c_type.starts_with("Option__") && !dst_c_type.starts_with("Option__") {
                 let _ = writeln!(out, "        {dst_str} = {val_str}.data.Some._0;");
+                return;
+            }
+            // Closure packing: __Closure_N struct → GorgetClosure (escaped closure).
+            // When a closure is returned from a function (return type int(int)),
+            // the GIR local has FnPtr type (declared as GorgetClosure), and the RHS is
+            // a __Closure_N StructInit. Heap-allocate the env and pack into GorgetClosure.
+            // Detect via the local's GIR type (FnPtr) OR override (GorgetClosure from call result).
+            let dst_local_idx = dst.local.0 as usize;
+            let dst_is_escaped_closure = (dst_c_type == "GorgetClosure")
+                || (dst_local_idx < func.locals.len()
+                    && matches!(registry.get(func.locals[dst_local_idx].type_id), Some(GirType::FnPtr { .. })));
+            if dst_is_escaped_closure && src_c_type.starts_with("__Closure_") {
+                let struct_name = &src_c_type;
+                let call_fn_name = format!("{struct_name}__call");
+                let _ = writeln!(out,
+                    "        {dst_str} = ({{ {struct_name}* __heap = ({struct_name}*)GORGET_ALLOC(sizeof({struct_name})); *__heap = {val_str}; (GorgetClosure){{.fn_ptr = (void*){call_fn_name}, .env = (void*)__heap}}; }});");
                 return;
             }
             // Implicit is_none/is_some: src is Option__T but dst is bool
@@ -3986,8 +4139,12 @@ fn try_emit_higher_order_method(
 
     let is_set = bare_type.starts_with("GorgetSet") || bare_type.starts_with("Set__") || bare_type.starts_with("HashSet__");
 
-    // Extract element type
+    // Extract element type — first try the bare C type (e.g., "Vector__Student"),
+    // then fall back to the mangled function name (e.g., "Vector__Student__map"),
+    // which retains the generic parameter even when the runtime type is erased to GorgetArray.
     let elem_type = if let Some(elem) = extract_element_type_from_collection(bare_type) {
+        elem
+    } else if let Some(elem) = extract_element_type_from_method_name(func_name) {
         elem
     } else {
         "int64_t".to_string()
@@ -4986,6 +5143,53 @@ fn try_emit_callable_indirect_call(
     type_overrides: &std::collections::HashMap<usize, String>,
     module: &Module,
 ) -> bool {
+    // Pattern 0: __gorget_closure_call_N — escaped GorgetClosure returned from a function.
+    // args[0] = the GorgetClosure local, args[1..] = actual function arguments.
+    // Emits: ((ret_t(*)(void*, arg_types...))(closure.fn_ptr))(closure.env, args...)
+    if let Some(id_str) = func_name.strip_prefix("__gorget_closure_call_") {
+        if id_str.parse::<u32>().is_ok() {
+            if args.is_empty() { return false; }
+            let closure_str = format_operand(&args[0], func, registry);
+            let mut arg_c_types = Vec::new();
+            let mut arg_strs = Vec::new();
+            for (i, arg) in args.iter().enumerate() {
+                if i == 0 { continue; } // skip the closure itself
+                let arg_str = format_operand(arg, func, registry);
+                let arg_type = match arg {
+                    Operand::Copy(p) | Operand::Move(p) => {
+                        let t = effective_c_type(p.local.0 as usize, func, registry, type_overrides);
+                        if t == "void" { "int64_t".to_string() } else { t }
+                    }
+                    Operand::Constant(c) => match c {
+                        Constant::I64(_) | Constant::I32(_) => "int64_t".to_string(),
+                        Constant::F64(_) => "double".to_string(),
+                        Constant::Bool(_) => "bool".to_string(),
+                        Constant::Str(_) => "const char*".to_string(),
+                        _ => "int64_t".to_string(),
+                    },
+                };
+                arg_c_types.push(arg_type);
+                arg_strs.push(arg_str);
+            }
+            let ret_type = if let Some(dst_id) = dst {
+                effective_c_type(dst_id.0 as usize, func, registry, type_overrides)
+            } else {
+                "void".to_string()
+            };
+            let mut cast_params = vec!["void*".to_string()];
+            cast_params.extend_from_slice(&arg_c_types);
+            let cast = format!("{ret_type}(*)({})", cast_params.join(", "));
+            let mut all_args = vec![format!("{closure_str}.env")];
+            all_args.extend_from_slice(&arg_strs);
+            let call_expr = format!("(({cast})({closure_str}.fn_ptr))({})", all_args.join(", "));
+            if let Some(dst_id) = dst {
+                let _ = writeln!(out, "        _{} = {call_expr};", dst_id.0);
+            } else {
+                let _ = writeln!(out, "        {call_expr};");
+            }
+            return true;
+        }
+    }
     // Pattern 1: __callable_N convention from GIR lowering
     if let Some(id_str) = func_name.strip_prefix("__callable_") {
         if let Ok(param_idx) = id_str.parse::<u32>() {
@@ -6995,6 +7199,11 @@ fn extract_element_type_from_collection(type_name: &str) -> Option<String> {
     if let Some(rest) = type_name.strip_prefix("Vector__") {
         return Some(rest.to_string());
     }
+    // Set__T or HashSet__T
+    if let Some(rest) = type_name.strip_prefix("Set__")
+        .or_else(|| type_name.strip_prefix("HashSet__")) {
+        return Some(rest.to_string());
+    }
     // Dict__K__V → value type V
     if let Some(rest) = type_name.strip_prefix("Dict__") {
         // Find the split between K and V — take everything after first __
@@ -7005,6 +7214,27 @@ fn extract_element_type_from_collection(type_name: &str) -> Option<String> {
     if let Some(rest) = type_name.strip_prefix("Map__") {
         if let Some(pos) = rest.find("__") {
             return Some(rest[pos + 2..].to_string());
+        }
+    }
+    None
+}
+
+/// Extract the element type from a mangled higher-order method name.
+/// E.g., "Vector__Student__map" → "Student", "Vector__int64_t__filter" → "int64_t"
+/// Used as fallback when the collection's runtime C type is erased (e.g., GorgetArray).
+fn extract_element_type_from_method_name(func_name: &str) -> Option<String> {
+    let rest = func_name.strip_prefix("Vector__")
+        .or_else(|| func_name.strip_prefix("Set__"))
+        .or_else(|| func_name.strip_prefix("HashSet__"))?;
+    // rest = "ElemType__method" — find the last __ to separate elem from method
+    if let Some(pos) = rest.rfind("__") {
+        let method = &rest[pos + 2..];
+        // method should start with a lowercase letter
+        if method.chars().next().map(|c| c.is_lowercase()).unwrap_or(false) {
+            let elem = &rest[..pos];
+            if !elem.is_empty() {
+                return Some(elem.to_string());
+            }
         }
     }
     None

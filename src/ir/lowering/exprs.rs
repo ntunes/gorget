@@ -292,11 +292,13 @@ fn lower_expr_inner(
             if let Operand::Copy(ref place) | Operand::Move(ref place) = val {
                 let mut deref_place = place.clone();
                 deref_place.projections.push(Projection::Deref);
-                // Need to determine the dereferenced type
+                // Need to determine the dereferenced type.
+                // Box[T] types are GirType::Named("Box__X"), not GirType::Ptr,
+                // so use deref_inner_type() which handles both.
                 let local_idx = place.local.0 as usize;
                 let deref_type = if local_idx < builder.locals.len() {
                     let ptr_type = builder.locals[local_idx].type_id;
-                    ctx.pointee_type(ptr_type).unwrap_or(I64_TYPE)
+                    ctx.deref_inner_type(ptr_type).unwrap_or(I64_TYPE)
                 } else {
                     I64_TYPE
                 };
@@ -693,8 +695,9 @@ fn lower_field_access(
         if local_idx < builder.locals.len() {
             let local_type_id = builder.locals[local_idx].type_id;
 
-            // If the local is a pointer (e.g., self in equip methods), dereference it
+            // If the local is a raw pointer (e.g., self in equip methods), dereference it
             // to get the underlying struct type for field access.
+            // Box[T] types use explicit `*box` dereference in Gorget, handled by Expr::Deref.
             let (effective_type_id, base_place) =
                 if let Some(pointee) = ctx.pointee_type(local_type_id) {
                     // Pointer type: add Deref projection → (*_N).field
@@ -850,6 +853,15 @@ fn lower_method_call(
                 let val = lower_expr(ctx, builder, &args[0].node.value);
                 let inner_type = infer_operand_type_full(ctx, &val, builder);
                 let inner_c = ctx.type_name_for_id(inner_type).unwrap_or("int64_t").to_string();
+
+                // For Box.new(closure): return the closure struct directly in the GIR path.
+                // Box[Callable[...]] variables use needs_reinfer to pick up the __Closure_N type,
+                // and dispatch via lookup_closure_info at call sites. This avoids the complexity
+                // of tracking heap-allocated callable boxes through the GIR type system.
+                if inner_c.starts_with("__Closure_") {
+                    return val;
+                }
+
                 let box_type_name = format!("Box__{inner_c}");
                 let box_type = if let Some(tid) = ctx.type_mapper.lookup_named(&box_type_name) {
                     tid
@@ -2907,6 +2919,22 @@ fn lower_call(
                     .unwrap_or(I64_TYPE);
                 let dst = builder.call(callable_name, call_args, ret_type);
                 return FunctionBuilder::copy(dst);
+            }
+            // FnPtr-typed local: escaped closure returned from a function, stored as GorgetClosure.
+            // Emit __gorget_closure_call_N; the C backend expands it to fn_ptr+env dispatch.
+            if let Some(GirType::FnPtr { return_type: fn_ret, .. }) = ctx.type_registry.get(local_type_id).cloned() {
+                let mut call_args = vec![FunctionBuilder::copy(local_id)];
+                for arg in args {
+                    call_args.push(lower_expr(ctx, builder, &arg.node.value));
+                }
+                let callable_name = format!("__gorget_closure_call_{}", local_id.0);
+                if fn_ret == UNIT_TYPE {
+                    builder.call_void(callable_name, call_args);
+                    return Operand::Constant(Constant::Unit);
+                } else {
+                    let dst = builder.call(callable_name, call_args, fn_ret);
+                    return FunctionBuilder::copy(dst);
+                }
             }
         }
 
