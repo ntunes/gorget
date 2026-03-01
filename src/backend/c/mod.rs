@@ -262,9 +262,43 @@ fn map_stdlib_name(name: &str) -> &str {
         // Str methods (Type__method → gorget_str_method)
         "Str__char_at" => "gorget_str_char_at",
         "Str__hash" => "gorget_str_hash",
-        // SDL (not common in tests but for completeness)
+        // SDL: sdl_foo → gorget_sdl_foo
         "sdl_init" => "gorget_sdl_init",
         "sdl_quit" => "gorget_sdl_quit",
+        "sdl_create_window" => "gorget_sdl_create_window",
+        "sdl_create_renderer" => "gorget_sdl_create_renderer",
+        "sdl_destroy_window" => "gorget_sdl_destroy_window",
+        "sdl_destroy_renderer" => "gorget_sdl_destroy_renderer",
+        "sdl_set_draw_color" => "gorget_sdl_set_draw_color",
+        "sdl_clear" => "gorget_sdl_clear",
+        "sdl_present" => "gorget_sdl_present",
+        "sdl_draw_rect" => "gorget_sdl_draw_rect",
+        "sdl_fill_rect" => "gorget_sdl_fill_rect",
+        "sdl_draw_line" => "gorget_sdl_draw_line",
+        "sdl_draw_point" => "gorget_sdl_draw_point",
+        "sdl_set_blend_mode" => "gorget_sdl_set_blend_mode",
+        "sdl_load_texture" => "gorget_sdl_load_texture",
+        "sdl_destroy_texture" => "gorget_sdl_destroy_texture",
+        "sdl_render_texture" => "gorget_sdl_render_texture",
+        "sdl_render_texture_sized" => "gorget_sdl_render_texture_sized",
+        "sdl_set_texture_alpha" => "gorget_sdl_set_texture_alpha",
+        "sdl_texture_width" => "gorget_sdl_texture_width",
+        "sdl_texture_height" => "gorget_sdl_texture_height",
+        "sdl_get_window_width" => "gorget_sdl_get_window_width",
+        "sdl_get_window_height" => "gorget_sdl_get_window_height",
+        "sdl_get_display_width" => "gorget_sdl_get_display_width",
+        "sdl_get_display_height" => "gorget_sdl_get_display_height",
+        "sdl_get_ticks" => "gorget_sdl_get_ticks",
+        "sdl_get_performance_counter" => "gorget_sdl_get_performance_counter",
+        "sdl_delay" => "gorget_sdl_delay",
+        "sdl_has_event" => "gorget_sdl_has_event",
+        "sdl_poll_event" => "gorget_sdl_poll_event",
+        "sdl_load_font" => "gorget_sdl_load_font",
+        "sdl_close_font" => "gorget_sdl_close_font",
+        "sdl_draw_text" => "gorget_sdl_draw_text",
+        "sdl_render_text" => "gorget_sdl_render_text",
+        "sdl_text_width" => "gorget_sdl_text_width",
+        "sdl_text_height" => "gorget_sdl_text_height",
         _ => name,
     }
 }
@@ -299,6 +333,9 @@ fn is_cstr_param_fn(name: &str) -> bool {
         | "puts" | "fputs" | "system" | "getenv"
         | "gorget_string_new"
         | "gorget_file_create" | "gorget_file_open" | "gorget_file_write_handle"
+        | "gorget_sdl_create_window" | "gorget_sdl_load_texture" | "gorget_sdl_load_font"
+        | "gorget_sdl_render_text" | "gorget_sdl_draw_text"
+        | "gorget_sdl_text_width" | "gorget_sdl_text_height"
     )
 }
 
@@ -434,6 +471,9 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
     }
     if module.trace_filename.is_some() {
         out.push_str(c_runtime::TRACE_RUNTIME);
+    }
+    if all_call_names.iter().any(|n| n.starts_with("sdl_") || n.starts_with("gorget_sdl_")) {
+        out.push_str(c_runtime::SDL_RUNTIME);
     }
 
     // GIR-specific helpers
