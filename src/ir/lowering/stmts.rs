@@ -1,7 +1,7 @@
 use crate::ir::builder::FunctionBuilder;
 use crate::ir::instructions::*;
 use crate::ir::types::*;
-use crate::parser::ast::{self, Block, Expr, Pattern, Stmt};
+use crate::parser::ast::{self, Block, Expr, Pattern, SelectOp, Stmt};
 use crate::span::Spanned;
 
 use super::context::LoweringContext;
@@ -93,7 +93,8 @@ pub fn lower_stmt(
 
         Stmt::Item(_) => { /* Nested items are hoisted — no-op in GIR */ }
 
-        // Deferred: Select (async), other async constructs
+        Stmt::Select { arms, else_arm: _ } => lower_select(ctx, builder, arms),
+
         _ => {}
     }
 }
@@ -124,6 +125,10 @@ fn lower_var_decl(
             ctx.expected_type = Some(gir_type);
             let operand = lower_expr(ctx, builder, value);
             ctx.expected_type = prev_expected;
+            // If this was a Spawn expression, register the task local → spawned fn mapping
+            if let Some(fn_name) = ctx.pending_spawn_fn.take() {
+                ctx.spawn_result_locals.insert(local_id, fn_name);
+            }
             // For auto/inferred types, closure values, and Box[Callable[...]] variables,
             // re-infer from the lowered operand to pick up the actual concrete type.
             let needs_reinfer = matches!(type_.node, ast::Type::Inferred)
@@ -2106,6 +2111,120 @@ fn block_always_returns(block: &Block) -> bool {
     } else {
         false
     }
+}
+
+/// Stub for `select` statement lowering in synchronous GIR mode.
+/// The async backend handles select via its own codegen path; in the synchronous
+/// GIR path we emit a no-op (the C backend for async will never see this path).
+/// Lower a `select` statement using a spin-wait loop over channel arms.
+///
+/// ```text
+/// loop_header → try_arm_0 → (ready) → body_arm_0 → exit_bb
+///                         → (not ready) → try_arm_1 → (ready) → body_arm_1 → exit_bb
+///                                       → (not ready) → loop_header
+/// ```
+/// Lower a `select` statement using a spin-wait loop over channel arms.
+///
+/// ```text
+/// loop_header → try_arm_0 → (ready) → body_arm_0 → exit_bb
+///                         → (not ready) → try_arm_1 → (ready) → body_arm_1 → exit_bb
+///                                       → (not ready) → loop_header
+/// ```
+fn lower_select(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    arms: &[ast::SelectArm],
+) {
+    let num_arms = arms.len();
+    if num_arms == 0 {
+        return;
+    }
+
+    let loop_header = builder.new_block();
+    let exit_bb = builder.new_block();
+
+    // Allocate try and body blocks for each arm
+    let try_blocks: Vec<_> = (0..num_arms).map(|_| builder.new_block()).collect();
+    let body_blocks: Vec<_> = (0..num_arms).map(|_| builder.new_block()).collect();
+
+    // Entry: jump to spin loop header
+    builder.jump(loop_header);
+
+    // Loop header: jump to first try block
+    builder.switch_to(loop_header);
+    builder.jump(try_blocks[0]);
+
+    for (i, arm) in arms.iter().enumerate() {
+        let next_block = if i + 1 < num_arms { try_blocks[i + 1] } else { loop_header };
+
+        match &arm.op {
+            SelectOp::Recv { channel, name, .. } => {
+                // Try block: poll the channel; if ready, jump to body; else try next arm
+                builder.switch_to(try_blocks[i]);
+
+                // Lower the channel expression
+                let ch_op = lower_expr(ctx, builder, channel);
+                let ch_type = infer_operand_type_full(ctx, &ch_op, builder);
+
+                // Get a mutable pointer to the channel
+                let ch_ptr = if let Operand::Copy(ref place) | Operand::Move(ref place) = ch_op {
+                    let ptr_type = ctx.register_mut_ptr_type(ch_type);
+                    let ptr_local = builder.add_local(ptr_type, None);
+                    builder.emit_borrow_mut(ptr_local, place.clone());
+                    Operand::Copy(Place::local(ptr_local))
+                } else {
+                    let temp = builder.add_local(ch_type, None);
+                    builder.assign(Place::local(temp), ch_op.clone());
+                    let ptr_type = ctx.register_mut_ptr_type(ch_type);
+                    let ptr_local = builder.add_local(ptr_type, None);
+                    builder.emit_borrow_mut(ptr_local, Place::local(temp));
+                    Operand::Copy(Place::local(ptr_local))
+                };
+
+                // Determine element type from Channel__T name
+                let ch_type_name = ctx.type_name_for_id(ch_type)
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "Channel__int64_t".to_string());
+                let elem_suffix = ch_type_name.strip_prefix("Channel__").unwrap_or("int64_t");
+                let elem_type = ctx.type_mapper.lookup_named(elem_suffix).unwrap_or(I64_TYPE);
+
+                // Allocate output slot and get a mutable pointer to it
+                let out_local = builder.add_local(elem_type, None);
+                let out_ptr_type = ctx.register_mut_ptr_type(elem_type);
+                let out_ptr_local = builder.add_local(out_ptr_type, None);
+                builder.emit_borrow_mut(out_ptr_local, Place::local(out_local));
+                let out_ptr_op = Operand::Copy(Place::local(out_ptr_local));
+
+                // Call poll_recv(&ch, &out, NULL) → bool
+                let poll_fn = format!("{ch_type_name}__poll_recv");
+                let result_local = builder.call(
+                    &poll_fn,
+                    vec![ch_ptr, out_ptr_op, Operand::Constant(Constant::Null)],
+                    BOOL_TYPE,
+                );
+                let result_op = Operand::Copy(Place::local(result_local));
+
+                // Branch: if ready → body block, else → next arm (or loop header)
+                builder.branch(result_op, body_blocks[i], next_block);
+
+                // Body block: bind variable, lower body, jump to exit
+                builder.switch_to(body_blocks[i]);
+                let var_name = &name.node;
+                ctx.register_local(var_name, out_local, elem_type);
+                lower_block(ctx, builder, &arm.body);
+                builder.jump(exit_bb);
+            }
+            SelectOp::Send { .. } => {
+                // Send arms not yet implemented — treat as always-not-ready
+                builder.switch_to(try_blocks[i]);
+                builder.jump(next_block);
+                builder.switch_to(body_blocks[i]);
+                builder.jump(exit_bb);
+            }
+        }
+    }
+
+    builder.switch_to(exit_bb);
 }
 
 #[cfg(test)]

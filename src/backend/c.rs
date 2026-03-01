@@ -379,8 +379,25 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
     if all_call_names.iter().any(|n| n == "gorget_exec" || n == "gorget_exec_output" || n == "exec" || n == "exec_output") {
         out.push_str(c_runtime::PROCESS_RUNTIME);
     }
-    if all_call_names.iter().any(|n| n.contains("channel_") || n.contains("Channel")) {
+    let needs_async_runtime = module.has_async || module.has_spawn
+        || all_call_names.iter().any(|n| n.contains("channel_") || n.contains("Channel")
+            || n.contains("gorget_executor_") || n == "gorget_spawn" || n.contains("GorgetTask"));
+    if needs_async_runtime {
+        // ASYNC_RUNTIME must precede CHANNEL_RUNTIME and EXECUTOR_RUNTIME (they use GorgetWaker).
+        out.push_str(c_runtime::ASYNC_RUNTIME);
+    }
+    if all_call_names.iter().any(|n| n.contains("gorget_executor_") || n == "gorget_spawn" || n.contains("GorgetTask"))
+        || module.has_spawn {
+        out.push_str(c_runtime::EXECUTOR_RUNTIME);
+    }
+    let needs_channel = !module.channel_types.is_empty()
+        || all_call_names.iter().any(|n| n.contains("channel_") || n.contains("Channel"));
+    if needs_channel {
         out.push_str(c_runtime::CHANNEL_RUNTIME);
+    }
+    if needs_channel || module.has_spawn {
+        // Emit Channel__T typedefs and wrapper functions (if any), plus Task__T structs.
+        emit_channel_and_task_defs(&mut out, module);
     }
     if all_call_names.iter().any(|n| n.contains("hot_reload") || n.contains("plugin")) {
         out.push_str(c_runtime::HOT_RELOAD_RUNTIME);
@@ -423,6 +440,11 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
         emit_forward_decl(&mut out, func, &module.type_registry);
     }
     out.push('\n');
+
+    // Emit spawn/await helper functions (reference forward-declared GIR functions)
+    if !module.spawned_fns.is_empty() {
+        emit_spawn_helpers(&mut out, module);
+    }
 
     // Emit named-function adapters for Callable dispatch (before function definitions)
     emit_func_ref_adapters(&mut out, module);
@@ -608,6 +630,149 @@ fn topo_sorted_body_order(
     order
 }
 
+/// Emit Channel__T typedef + wrapper functions and Task__T structs.
+/// Called after CHANNEL_RUNTIME (which defines GorgetChannel and GorgetWaker).
+fn emit_channel_and_task_defs(out: &mut String, module: &Module) {
+    if module.channel_types.is_empty() && module.spawned_fns.is_empty() {
+        return;
+    }
+
+    out.push_str("\n/* ── Channel wrappers ── */\n");
+
+    // Collect all unique Task return types for Task__T structs
+    let mut task_ret_c_types: Vec<String> = Vec::new();
+
+    for elem_c in &module.channel_types {
+        let chan_name = format!("Channel__{elem_c}");
+        // Typedef: Channel__T = GorgetChannel* (opaque pointer wrapper)
+        let _ = writeln!(out, "typedef GorgetChannel* {chan_name};");
+        // Constructor: Channel__T__new(cap)
+        let _ = writeln!(out,
+            "static inline {chan_name} {chan_name}__new(int64_t cap) {{ \
+             return gorget_channel_new((size_t)cap, sizeof({elem_c})); }}");
+        // send(&self, val)
+        let _ = writeln!(out,
+            "static inline void {chan_name}__send({chan_name}* self, {elem_c} val) {{ \
+             gorget_channel_send(*self, &val); }}");
+        // recv(&self) → T
+        let _ = writeln!(out,
+            "static inline {elem_c} {chan_name}__recv({chan_name}* self) {{ \
+             {elem_c} __val; gorget_channel_recv(*self, &__val); return __val; }}");
+        // close(&self)
+        let _ = writeln!(out,
+            "static inline void {chan_name}__close({chan_name}* self) {{ \
+             gorget_channel_close(*self); }}");
+        // poll_recv(&self, *out, waker) → bool
+        let _ = writeln!(out,
+            "static inline bool {chan_name}__poll_recv({chan_name}* self, {elem_c}* out, GorgetWaker* waker) {{ \
+             return gorget_channel_poll_recv(*self, out, waker); }}");
+        out.push('\n');
+    }
+
+    // Collect return types of spawned fns for Task__T emission
+    for (_, _, ret_type) in &module.spawned_fns {
+        let ret_c = format_type(*ret_type, &module.type_registry);
+        let task_name = if ret_c == "void" {
+            "Task__void".to_string()
+        } else {
+            format!("Task__{ret_c}")
+        };
+        if !task_ret_c_types.contains(&task_name) {
+            task_ret_c_types.push(task_name);
+        }
+    }
+
+    if !task_ret_c_types.is_empty() {
+        out.push_str("/* ── Task structs ── */\n");
+        for task_name in &task_ret_c_types {
+            let _ = writeln!(out, "typedef struct {{ void* __task; }} {task_name};");
+        }
+        out.push('\n');
+    }
+}
+
+/// Emit per-spawned-function context structs, thread functions, and spawn/await helpers.
+/// Called after GIR function forward declarations (so spawned functions are visible).
+fn emit_spawn_helpers(out: &mut String, module: &Module) {
+    if module.spawned_fns.is_empty() {
+        return;
+    }
+
+    out.push_str("\n/* ── Spawn/await helpers ── */\n");
+
+    for (fn_name, params, ret_type) in &module.spawned_fns {
+        let ret_c = format_type(*ret_type, &module.type_registry);
+        let is_void = ret_c == "void";
+        let mangled_fn = mangle_name(fn_name);
+        let ctx_name = format!("__SpawnCtx_{fn_name}");
+        let task_name = if is_void {
+            "Task__void".to_string()
+        } else {
+            format!("Task__{ret_c}")
+        };
+
+        // Context struct: { pthread_t thread; param_types params; ret_type result; }
+        let _ = writeln!(out, "typedef struct {ctx_name} {{");
+        out.push_str("    pthread_t thread;\n");
+        for (param_name, param_type) in params {
+            let param_c = format_type(*param_type, &module.type_registry);
+            let _ = writeln!(out, "    {param_c} __{param_name};");
+        }
+        if !is_void {
+            let _ = writeln!(out, "    {ret_c} result;");
+        }
+        let _ = writeln!(out, "}} {ctx_name};");
+
+        // Thread function
+        let _ = writeln!(out, "static void* __spawn_thread_{fn_name}(void* __arg) {{");
+        let _ = writeln!(out, "    {ctx_name}* __ctx = ({ctx_name}*)__arg;");
+        let call_args = params.iter()
+            .map(|(name, _)| format!("__ctx->__{name}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        if is_void {
+            let _ = writeln!(out, "    {mangled_fn}({call_args});");
+        } else {
+            let _ = writeln!(out, "    __ctx->result = {mangled_fn}({call_args});");
+        }
+        out.push_str("    return NULL;\n}\n");
+
+        // Spawn function: allocates ctx, fills args, creates thread, returns Task
+        let param_decls = params.iter()
+            .map(|(name, type_id)| {
+                let c = format_type(*type_id, &module.type_registry);
+                format!("{c} {name}")
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(out, "static inline {task_name} __gorget_spawn_{fn_name}({param_decls}) {{");
+        let _ = writeln!(out, "    {ctx_name}* __ctx = ({ctx_name}*)GORGET_CALLOC(1, sizeof({ctx_name}));");
+        for (param_name, _) in params {
+            let _ = writeln!(out, "    __ctx->__{param_name} = {param_name};");
+        }
+        let _ = writeln!(out, "    pthread_create(&__ctx->thread, NULL, __spawn_thread_{fn_name}, __ctx);");
+        let _ = writeln!(out, "    return ({task_name}){{.__task = __ctx}};");
+        out.push_str("}\n");
+
+        // Await function: joins thread, extracts result, frees ctx
+        if is_void {
+            let _ = writeln!(out, "static inline void __gorget_await_{fn_name}({task_name} task) {{");
+        } else {
+            let _ = writeln!(out, "static inline {ret_c} __gorget_await_{fn_name}({task_name} task) {{");
+        }
+        let _ = writeln!(out, "    {ctx_name}* __ctx = ({ctx_name}*)task.__task;");
+        out.push_str("    pthread_join(__ctx->thread, NULL);\n");
+        if !is_void {
+            let _ = writeln!(out, "    {ret_c} result = __ctx->result;");
+        }
+        let _ = writeln!(out, "    GORGET_FREE(__ctx, sizeof({ctx_name}));");
+        if !is_void {
+            out.push_str("    return result;\n");
+        }
+        out.push_str("}\n\n");
+    }
+}
+
 /// Emit type definitions (struct typedefs and enum tagged unions).
 fn emit_type_definitions(out: &mut String, module: &Module) {
     let type_defs = module.type_registry.type_defs();
@@ -620,6 +785,9 @@ fn emit_type_definitions(out: &mut String, module: &Module) {
         skip.iter().any(|s| s == name)
             || runtime_type_name(name).is_some()
             || matches!(name, "ExecResult")
+            // Channel__T and Task__T have hand-emitted C definitions (not GIR struct defs)
+            || name.starts_with("Channel__")
+            || name.starts_with("Task__")
     };
     // Collect Box types for special handling (Box__T → T* pointer typedef)
     let mut box_types: Vec<(String, String)> = Vec::new(); // (box_name, inner_c_type)

@@ -443,14 +443,72 @@ fn lower_expr_inner(
             lower_range_expr(ctx, builder, start.as_deref(), end.as_deref(), *inclusive)
         }
 
-        // Await: in synchronous GIR mode, just lower the inner expression
+        // Await: check if this is awaiting a Task (spawn result) and dispatch via __gorget_await_<fn>.
+        // In synchronous GIR mode for non-task expressions, just lower the inner expression.
         Expr::Await { expr } => {
-            lower_expr(ctx, builder, expr)
+            let inner = lower_expr(ctx, builder, expr);
+            // Check if the inner expression is a known spawn result (Task local)
+            let fn_name_opt = if let Operand::Copy(ref place) | Operand::Move(ref place) = inner {
+                if place.projections.is_empty() {
+                    ctx.spawn_result_locals.get(&place.local).cloned()
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            if let Some(fn_name) = fn_name_opt {
+                let ret_type = ctx.fn_sigs.get(fn_name.as_str())
+                    .map(|(_, r)| *r)
+                    .unwrap_or(UNIT_TYPE);
+                let await_fn = format!("__gorget_await_{fn_name}");
+                if ret_type == UNIT_TYPE {
+                    builder.call_void(&await_fn, vec![inner]);
+                    return Operand::Constant(Constant::Unit);
+                } else {
+                    let dst = builder.call(&await_fn, vec![inner], ret_type);
+                    return FunctionBuilder::copy(dst);
+                }
+            }
+            inner
         }
 
-        // Spawn: in synchronous GIR mode, just lower the inner expression directly
-        // (spawn compute(x) becomes compute(x) — Task is immediately resolved)
+        // Spawn: emit __gorget_spawn_<fn>(args) call, which creates a pthread.
+        // Task result locals are tracked in spawn_result_locals for await dispatch.
         Expr::Spawn { expr } => {
+            if let Expr::Call { callee, args: call_args, .. } = &expr.node {
+                if let Expr::Identifier(fn_name) = &callee.node {
+                    ctx.pending_spawn_fn = Some(fn_name.clone());
+                    ctx.spawned_fn_names.insert(fn_name.clone(), true);
+                    // Get return type from fn_sigs to determine Task type
+                    let fn_ret_type = ctx.fn_sigs.get(fn_name.as_str())
+                        .map(|(_, r)| *r)
+                        .unwrap_or(I64_TYPE);
+                    // Map return TypeId → C type name → Task__<c_type> name
+                    let ret_c = ctx.type_name_for_id(fn_ret_type)
+                        .unwrap_or("int64_t")
+                        .to_string();
+                    let task_name = if fn_ret_type == UNIT_TYPE {
+                        "Task__void".to_string()
+                    } else {
+                        format!("Task__{ret_c}")
+                    };
+                    let task_type = if let Some(tid) = ctx.type_mapper.lookup_named(&task_name) {
+                        tid
+                    } else {
+                        let tid = ctx.type_registry.insert(GirType::Named(task_name.clone()));
+                        ctx.type_mapper.register_named(task_name.clone(), tid);
+                        tid
+                    };
+                    let lowered_args: Vec<Operand> = call_args.iter()
+                        .map(|arg| lower_expr(ctx, builder, &arg.node.value))
+                        .collect();
+                    let spawn_fn = format!("__gorget_spawn_{fn_name}");
+                    let dst = builder.call(&spawn_fn, lowered_args, task_type);
+                    return FunctionBuilder::copy(dst);
+                }
+            }
+            // Fallback: direct call (no tracking)
             lower_expr(ctx, builder, expr)
         }
 
@@ -629,6 +687,16 @@ fn lower_struct_literal(
     } else {
         name.to_string()
     };
+
+    // Intercept Channel__T constructor → Channel__T__new(cap) — capacity arg would be dropped
+    // by generic struct init, so we route through a named constructor function.
+    if effective_name.starts_with("Channel__") && args.len() == 1 {
+        let cap = lower_expr(ctx, builder, &args[0]);
+        let chan_type = ctx.type_mapper.lookup_named(&effective_name).unwrap_or(UNIT_TYPE);
+        let new_fn = format!("{effective_name}__new");
+        let dst = builder.call(&new_fn, vec![cap], chan_type);
+        return FunctionBuilder::copy(dst);
+    }
 
     // Check if this is an Option/Result variant constructor — resolve with type-aware logic
     // to avoid ambiguity when multiple monomorphized types share variant names.
@@ -983,9 +1051,33 @@ fn lower_method_call(
         lower_expr(ctx, builder, receiver)
     };
 
-    // .await() → pass-through (GIR runs everything synchronously)
+    // .await() on Task → dispatch through __gorget_await_<fn> (joins pthread, returns result).
+    // Check spawn_result_locals FIRST, before type check, since the declared type may be I64_TYPE
+    // (lower_type returns I64_TYPE for unknown Task[T] types) even when the local is a spawn result.
     if method_name == "await" {
-        return recv;
+        let fn_name_opt = if let Operand::Copy(ref place) | Operand::Move(ref place) = recv {
+            if place.projections.is_empty() {
+                ctx.spawn_result_locals.get(&place.local).cloned()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if let Some(fn_name) = fn_name_opt {
+            let ret_type = ctx.fn_sigs.get(fn_name.as_str())
+                .map(|(_, r)| *r)
+                .unwrap_or(UNIT_TYPE);
+            let await_fn = format!("__gorget_await_{fn_name}");
+            if ret_type == UNIT_TYPE {
+                builder.call_void(&await_fn, vec![recv]);
+                return Operand::Constant(Constant::Unit);
+            } else {
+                let dst = builder.call(&await_fn, vec![recv], ret_type);
+                return FunctionBuilder::copy(dst);
+            }
+        }
+        return recv; // fallback pass-through (no known spawn source)
     }
 
     // Primitive .hash() → runtime hash functions
@@ -1065,6 +1157,62 @@ fn lower_method_call(
                         inner_type,
                     );
                     return FunctionBuilder::copy(dst);
+                }
+            }
+        }
+    }
+
+    // Channel methods: send, recv, close, poll_recv — dispatch via C wrapper functions.
+    // Channel is emitted as a pointer typedef; methods take &self (Channel__T*).
+    {
+        let recv_type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
+        if let Some(ref chan_tn) = recv_type_name {
+            if chan_tn.starts_with("Channel__") {
+                let elem_suffix = chan_tn.strip_prefix("Channel__").unwrap_or("int64_t");
+                let recv_type = infer_operand_type_full(ctx, &recv, builder);
+                // Get a mutable pointer to the channel local (Channel__T*)
+                let ch_ptr = if let Operand::Copy(ref place) | Operand::Move(ref place) = recv {
+                    let ptr_type = ctx.register_mut_ptr_type(recv_type);
+                    let ptr_local = builder.add_local(ptr_type, None);
+                    builder.emit_borrow_mut(ptr_local, place.clone());
+                    Operand::Copy(Place::local(ptr_local))
+                } else {
+                    // Temp local needed
+                    let temp = builder.add_local(recv_type, None);
+                    builder.assign(Place::local(temp), recv.clone());
+                    let ptr_type = ctx.register_mut_ptr_type(recv_type);
+                    let ptr_local = builder.add_local(ptr_type, None);
+                    builder.emit_borrow_mut(ptr_local, Place::local(temp));
+                    Operand::Copy(Place::local(ptr_local))
+                };
+                match method_name {
+                    "send" if !args.is_empty() => {
+                        let val = lower_expr(ctx, builder, &args[0].node.value);
+                        let send_fn = format!("{chan_tn}__send");
+                        builder.call_void(&send_fn, vec![ch_ptr, val]);
+                        return Operand::Constant(Constant::Unit);
+                    }
+                    "recv" => {
+                        let elem_type = ctx.type_mapper.lookup_named(elem_suffix)
+                            .unwrap_or(I64_TYPE);
+                        let recv_fn = format!("{chan_tn}__recv");
+                        let dst = builder.call(&recv_fn, vec![ch_ptr], elem_type);
+                        return FunctionBuilder::copy(dst);
+                    }
+                    "close" => {
+                        let close_fn = format!("{chan_tn}__close");
+                        builder.call_void(&close_fn, vec![ch_ptr]);
+                        return Operand::Constant(Constant::Unit);
+                    }
+                    "poll_recv" if args.len() >= 2 => {
+                        // poll_recv(&self, &mut out, waker)
+                        let out_ptr = lower_expr(ctx, builder, &args[0].node.value);
+                        let waker = lower_expr(ctx, builder, &args[1].node.value);
+                        let poll_fn = format!("{chan_tn}__poll_recv");
+                        let dst = builder.call(&poll_fn, vec![ch_ptr, out_ptr, waker], BOOL_TYPE);
+                        return FunctionBuilder::copy(dst);
+                    }
+                    _ => {}
                 }
             }
         }
@@ -1409,6 +1557,16 @@ fn infer_collection_method_return_type(
     let is_dict = type_name.starts_with("Dict__") || type_name.starts_with("HashMap__") || type_name == "GorgetMap";
     let is_set = type_name.starts_with("Set__") || type_name == "GorgetSet";
     let is_string = type_name == "Str" || type_name == "GorgetString";
+
+    // Channel.recv() → element type (Channel__T → T)
+    if type_name.starts_with("Channel__") && method_name == "recv" {
+        let elem_suffix = type_name.strip_prefix("Channel__").unwrap_or("int64_t");
+        return ctx.type_mapper.lookup_named(elem_suffix).unwrap_or(I64_TYPE);
+    }
+    // Channel.poll_recv → bool
+    if type_name.starts_with("Channel__") && method_name == "poll_recv" {
+        return BOOL_TYPE;
+    }
 
     match method_name {
         // Methods returning int
@@ -2777,6 +2935,31 @@ fn lower_call(
             let pool_type = ctx.type_mapper.lookup_named("PoolAllocator").unwrap_or(I64_TYPE);
             let dst = builder.call_extern("gorget_pool_new", vec![a1, a2], pool_type);
             return FunctionBuilder::copy(dst);
+        }
+
+        // Channel[T](capacity) constructor → Channel__T__new(capacity)
+        if name == "Channel" {
+            if let Some(type_args) = generic_args {
+                if !type_args.is_empty() {
+                    let mangled = super::types::mangle_generic_name(name, type_args);
+                    let mangled = ctx.resolve_type_name(&mangled);
+                    let chan_type = if let Some(tid) = ctx.type_mapper.lookup_named(&mangled) {
+                        tid
+                    } else {
+                        let tid = ctx.type_registry.insert(GirType::Named(mangled.clone()));
+                        ctx.type_mapper.register_named(mangled.clone(), tid);
+                        tid
+                    };
+                    let cap_op = if !args.is_empty() {
+                        lower_expr(ctx, builder, &args[0].node.value)
+                    } else {
+                        Operand::Constant(Constant::I64(0))
+                    };
+                    let new_fn = format!("{mangled}__new");
+                    let dst = builder.call(&new_fn, vec![cap_op], chan_type);
+                    return FunctionBuilder::copy(dst);
+                }
+            }
         }
 
         // Collection constructors: Dict[K,V](), HashMap[K,V](), Set[K](), HashSet[K](), Vector[T]()

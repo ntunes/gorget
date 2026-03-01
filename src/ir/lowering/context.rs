@@ -70,6 +70,13 @@ pub struct LoweringContext<'a> {
     /// Callable parameter return types: LocalId → return TypeId.
     /// Populated during function setup for parameters with Callable/function types.
     pub callable_return_types: FxHashMap<LocalId, TypeId>,
+    /// Task variable LocalId → spawned fn_name (e.g., local for `t1` → "produce").
+    /// Set by Spawn lowering, consumed by Await lowering.
+    pub spawn_result_locals: FxHashMap<LocalId, String>,
+    /// Set during Spawn lowering; consumed by lower_var_decl to register spawn_result_locals.
+    pub pending_spawn_fn: Option<String>,
+    /// Accumulated set of all spawned fn names (NOT cleared between functions).
+    pub spawned_fn_names: FxHashMap<String, bool>,
 }
 
 impl<'a> LoweringContext<'a> {
@@ -98,6 +105,9 @@ impl<'a> LoweringContext<'a> {
             current_throws_result_type: None,
             expected_type: None,
             callable_return_types: FxHashMap::default(),
+            spawn_result_locals: FxHashMap::default(),
+            pending_spawn_fn: None,
+            spawned_fn_names: FxHashMap::default(),
         }
     }
 
@@ -142,6 +152,8 @@ impl<'a> LoweringContext<'a> {
     pub fn clear_locals(&mut self) {
         self.locals.clear();
         self.mut_capture_locals.clear();
+        self.spawn_result_locals.clear();
+        self.pending_spawn_fn = None;
     }
 
     /// Iterate over all locals (for type inference).

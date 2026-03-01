@@ -808,6 +808,32 @@ pub fn lower_module(
     // Propagate directive flags to module
     module.overflow_wrap = ctx.overflow_wrap;
 
+    // Collect channel element types (Channel__T → T) for C backend wrapper emission
+    for name in module.type_registry.all_type_def_names() {
+        if let Some(elem) = name.strip_prefix("Channel__") {
+            if !module.channel_types.contains(&elem.to_string()) {
+                module.channel_types.push(elem.to_string());
+            }
+        }
+    }
+
+    // Collect spawned function metadata for C backend spawn/await helper emission
+    for (fn_name, _) in &ctx.spawned_fn_names {
+        if let Some((param_types, ret_type)) = ctx.fn_sigs.get(fn_name.as_str()) {
+            let param_names = ctx.fn_param_names.get(fn_name.as_str())
+                .cloned()
+                .unwrap_or_else(|| {
+                    param_types.iter().enumerate().map(|(i, _)| format!("__p{i}")).collect()
+                });
+            let params: Vec<(String, TypeId)> = param_names.iter()
+                .zip(param_types.iter())
+                .map(|(n, &t)| (n.clone(), t))
+                .collect();
+            module.spawned_fns.push((fn_name.clone(), params, *ret_type));
+        }
+    }
+    module.has_spawn = !ctx.spawned_fn_names.is_empty();
+
     module
 }
 

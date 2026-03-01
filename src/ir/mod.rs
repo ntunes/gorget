@@ -19,6 +19,21 @@ pub struct Module {
     pub test_fns: Vec<(String, String)>,
     /// When true, arithmetic wraps on overflow instead of aborting.
     pub overflow_wrap: bool,
+    /// Pre-generated C code for async functions (state structs, poll fns, constructors).
+    /// Emitted verbatim by the C backend before any GIR-derived functions.
+    pub global_inline_c: Vec<String>,
+    /// True if any async function was detected; causes the C backend to emit async runtime.
+    pub has_async: bool,
+    /// True if any `spawn` expression was found; emits executor runtime.
+    pub has_spawn: bool,
+    /// True if any `sleep()` call was found; emits sleep runtime.
+    pub has_sleep: bool,
+    /// Channel element C type names found (e.g., ["int64_t"] for Channel[int]).
+    /// Used by the C backend to emit Channel__T wrapper structs and functions.
+    pub channel_types: Vec<String>,
+    /// Spawned functions: (fn_name, [(param_name, param_type)], return_type).
+    /// Used by the C backend to emit __SpawnCtx_fn, __gorget_spawn_fn, __gorget_await_fn.
+    pub spawned_fns: Vec<(String, Vec<(String, TypeId)>, TypeId)>,
 }
 
 impl Module {
@@ -31,6 +46,12 @@ impl Module {
             externs: Vec::new(),
             test_fns: Vec::new(),
             overflow_wrap: false,
+            global_inline_c: Vec::new(),
+            has_async: false,
+            has_spawn: false,
+            has_sleep: false,
+            channel_types: Vec::new(),
+            spawned_fns: Vec::new(),
         }
     }
 
