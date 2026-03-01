@@ -42,6 +42,8 @@ pub struct LoweringOptions {
     pub trace_filename: Option<String>,
     /// Enable hot-reload mode (directive hot-reload or --hot-reload flag).
     pub hot_reload: bool,
+    /// Compile with AddressSanitizer + UBSan (`-fsanitize=address,undefined`).
+    pub sanitize: bool,
 }
 
 /// Lower an AST module + analysis result into a GIR module.

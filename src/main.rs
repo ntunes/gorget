@@ -371,6 +371,11 @@ fn try_build_ir(
             .arg(&shared_c_path)
             .arg("-lm");
         if options.overflow_wrap || gir_module.overflow_wrap { cc_cmd.arg("-fwrapv"); }
+        if options.sanitize {
+            cc_cmd.arg("-fsanitize=address,undefined");
+            cc_cmd.arg("-fno-omit-frame-pointer");
+            cc_cmd.arg("-g");
+        }
         add_sdl_flags(&mut cc_cmd, source.contains("std.sdl") || source.contains("std.gfx"));
         add_tls_flags(&mut cc_cmd, source.contains("std.net.tls"));
         add_crypto_flags(&mut cc_cmd, source.contains("std.crypto") || source.contains("std.p2p"));
@@ -408,13 +413,19 @@ fn try_build_ir(
         let cc = env::var("CC").unwrap_or_else(|_| "cc".to_string());
 
         // Compile guest shared library
-        let guest_status = Command::new(&cc)
+        let mut guest_cmd = Command::new(&cc);
+        guest_cmd
             .arg("-std=c11").arg("-shared").arg("-fPIC")
             .arg("-Wall").arg("-Wextra")
             .arg("-Wno-unused-parameter").arg("-Wno-unused-variable").arg("-Wno-unused-function")
             .arg("-o").arg(&guest_lib_path)
-            .arg(&guest_c_path).arg("-lm")
-            .status();
+            .arg(&guest_c_path).arg("-lm");
+        if options.sanitize {
+            guest_cmd.arg("-fsanitize=address,undefined");
+            guest_cmd.arg("-fno-omit-frame-pointer");
+            guest_cmd.arg("-g");
+        }
+        let guest_status = guest_cmd.status();
         match guest_status {
             Ok(s) if !s.success() => return Err(format!("Guest compilation failed: {s}\nGenerated: {}", guest_c_path.display())),
             Err(e) => return Err(format!("Failed to run '{cc}': {e}")),
@@ -429,6 +440,11 @@ fn try_build_ir(
             .arg("-o").arg(&exe_path)
             .arg(&host_c_path).arg("-lm").arg("-ldl");
         if options.overflow_wrap || gir_module.overflow_wrap { host_cmd.arg("-fwrapv"); }
+        if options.sanitize {
+            host_cmd.arg("-fsanitize=address,undefined");
+            host_cmd.arg("-fno-omit-frame-pointer");
+            host_cmd.arg("-g");
+        }
         let host_status = host_cmd.status();
         return match host_status {
             Ok(s) if s.success() => Ok(exe_path),
@@ -460,6 +476,12 @@ fn try_build_ir(
 
     if options.overflow_wrap || gir_module.overflow_wrap {
         cc_cmd.arg("-fwrapv");
+    }
+
+    if options.sanitize {
+        cc_cmd.arg("-fsanitize=address,undefined");
+        cc_cmd.arg("-fno-omit-frame-pointer");
+        cc_cmd.arg("-g");
     }
 
     add_sdl_flags(&mut cc_cmd, source.contains("std.sdl") || source.contains("std.gfx"));
@@ -936,6 +958,7 @@ fn main() {
         println!("Build flags:");
         println!("  --hot-reload            Enable hot code reload (builds host + guest .dylib)");
         println!("  --shared [-o F]         Build as shared library (.dylib/.so)");
+        println!("  --sanitize              Enable AddressSanitizer + UBSan for runtime bug detection");
         return;
     }
 
@@ -955,6 +978,7 @@ fn main() {
         let overflow_checked = args.iter().any(|a| a == "--overflow=checked");
         let trace = args.iter().any(|a| a == "--trace");
         let no_trace = args.iter().any(|a| a == "--no-trace");
+        let sanitize = args.iter().any(|a| a == "--sanitize");
         let dep_paths = resolve_deps_for_file(filename);
         let tmp_dir = tempfile::tempdir().unwrap_or_else(|e| {
             eprintln!("Failed to create temp directory: {e}");
@@ -974,6 +998,7 @@ fn main() {
         let lowering_opts = gorget::ir::lowering::LoweringOptions {
             strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked,
             trace_filename, hot_reload: hot_reload_flag || source_has_hot_reload(&source),
+            sanitize,
             ..Default::default()
         };
         let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts)
@@ -1089,6 +1114,7 @@ fn main() {
     let trace = args.iter().any(|a| a == "--trace");
     let no_trace = args.iter().any(|a| a == "--no-trace");
     let hot_reload_flag = args.iter().any(|a| a == "--hot-reload");
+    let sanitize = args.iter().any(|a| a == "--sanitize");
     let shared_mode = args.iter().any(|a| a == "--shared");
     let show_borrows = args.iter().any(|a| a == "--show-borrows");
     let features = parse_features(&args);
@@ -1231,6 +1257,7 @@ fn main() {
                     overflow_checked,
                     trace_filename,
                     hot_reload: hot_reload_flag || source_has_hot_reload(&source),
+                    sanitize,
                     ..Default::default()
                 };
                 let result = try_build_ir(filename, &source, dep_paths, None, None, Some(shared_path), &features, lowering_opts);
@@ -1260,6 +1287,7 @@ fn main() {
                     overflow_checked,
                     trace_filename,
                     hot_reload: hot_reload_flag || source_has_hot_reload(&source),
+                    sanitize,
                     ..Default::default()
                 };
                 let result = try_build_ir(filename, &source, dep_paths, None, shared_output_path.as_deref(), None, &features, lowering_opts);
@@ -1295,6 +1323,7 @@ fn main() {
                 overflow_checked,
                 trace_filename,
                 hot_reload: hot_reload_flag || source_has_hot_reload(&source),
+                sanitize,
                 ..Default::default()
             };
             let result = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts);
@@ -1373,6 +1402,7 @@ fn main() {
                 test_exclude_tags: test_exclude_tags.clone(),
                 test_name_filter: test_name_filter.clone(),
                 trace_filename,
+                sanitize,
                 ..Default::default()
             };
             let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts)
