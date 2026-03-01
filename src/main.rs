@@ -1509,7 +1509,16 @@ fn main() {
                 // hot-reload: two-phase build (host + guest); old codegen (GIR deferred)
                 let result = try_build(filename, &source, strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked, trace, no_trace, false, &[], &[], None, None, dep_paths, None, true, show_borrows, &features);
                 match result {
-                    Ok(p) => println!("Built (hot-reload): {}", p.display()),
+                    Ok(p) => {
+                        // If -o was given, copy the host binary there so callers like test_ir.py
+                        // find it at the expected path (GIR pipeline uses -o for its output).
+                        if let Some(ref output_path) = shared_output_path {
+                            if let Err(e) = fs::copy(&p, output_path) {
+                                eprintln!("Warning: could not copy binary to {}: {e}", output_path.display());
+                            }
+                        }
+                        println!("Built (hot-reload): {}", p.display());
+                    }
                     Err(e) => {
                         eprintln!("{e}");
                         process::exit(1);
