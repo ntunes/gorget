@@ -162,9 +162,9 @@ fn is_copy_type(type_id: TypeId, types: &TypeTable, scopes: &ScopeTable) -> bool
             elems.iter().all(|e| is_copy_type(*e, types, scopes))
         }
         ResolvedType::Generic(def_id, _) => {
-            // Channel[T], Shared[T], and Mutex[T] are Copy — they're opaque pointers.
+            // Channel[T], Shared[T], Weak[T], and Mutex[T] are Copy — they're opaque pointers.
             // Guard[T] and TaskGroup are NOT Copy — they hold exclusive resources.
-            matches!(scopes.get_def(*def_id).name.as_str(), "Channel" | "Shared" | "Mutex")
+            matches!(scopes.get_def(*def_id).name.as_str(), "Channel" | "Shared" | "Weak" | "Mutex")
         }
         ResolvedType::Defined(def_id) => {
             // Arena/TrackingAllocator/PoolAllocator/TlsfAllocator are Copy — they're pointers

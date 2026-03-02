@@ -164,18 +164,24 @@ impl TypeMapper {
                         self.named_types.insert(mangled, type_id);
                         return type_id;
                     }
-                    // Auto-register concurrency types: Channel[T], Shared[T], Mutex[T], Guard[T].
+                    // Auto-register concurrency types: Channel[T], Shared[T], Weak[T], Mutex[T], Guard[T].
                     // These are opaque C pointer typedefs with no GIR-level fields.
                     // Registering here (in the fn_sigs pre-scan path) means function parameters
                     // of these types resolve to the correct TypeId before bodies are lowered.
-                    if matches!(base, "Channel" | "Shared" | "Mutex" | "Guard") {
-                        let (copy_sem, drop_strat) = if base == "Guard" {
-                            // Guard[T] is Move + RAII drop that unlocks the mutex.
-                            // The drop function name follows the GIR convention: <mangled>__drop.
-                            (CopySemantics::Move, DropStrategy::Trivial(format!("{mangled}__drop")))
-                        } else {
-                            // Channel, Shared, Mutex: opaque pointer — Copy, no drop in V1.
-                            (CopySemantics::Copy, DropStrategy::None)
+                    if matches!(base, "Channel" | "Shared" | "Weak" | "Mutex" | "Guard") {
+                        let (copy_sem, drop_strat) = match base {
+                            "Guard" => {
+                                // Guard[T] is Move + RAII drop that unlocks the mutex.
+                                (CopySemantics::Move, DropStrategy::Trivial(format!("{mangled}__drop")))
+                            }
+                            "Shared" | "Weak" => {
+                                // Shared[T] / Weak[T]: Copy pointer + Trivial RAII drop (refcount decrement).
+                                (CopySemantics::Copy, DropStrategy::Trivial(format!("{mangled}__drop")))
+                            }
+                            _ => {
+                                // Channel, Mutex: opaque pointer — Copy, no drop.
+                                (CopySemantics::Copy, DropStrategy::None)
+                            }
                         };
                         registry.add_type_def(TypeDef {
                             name: mangled.clone(),

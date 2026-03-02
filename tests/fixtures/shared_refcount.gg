@@ -1,0 +1,19 @@
+void main():
+    Shared[int] s = Shared[int](100)
+    print(s.strong_count())
+
+    Shared[int] a = s.clone()
+    Shared[int] b = s.clone()
+    print(s.strong_count())
+
+    # After a and b go out of scope (they're the last clones),
+    # the block below demonstrates that strong_count decreases.
+    # In Gorget, scoped blocks use a nested function or just rely on
+    # variable lifetimes at end-of-function.
+    # For this test, verify the count is 3 while all three are live.
+    int n = s.strong_count()
+    print(n)
+
+    # get() returns a copy of the value
+    int val = s.get()
+    print(val)

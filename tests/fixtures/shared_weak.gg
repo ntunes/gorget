@@ -1,0 +1,16 @@
+void main():
+    Shared[int] s = Shared[int](42)
+
+    # Downgrade to a Weak reference
+    Weak[int] w = s.downgrade()
+
+    # Upgrade should succeed while s is still alive
+    Option[Shared[int]] maybe = w.upgrade()
+    match maybe:
+        case Some(upgraded):
+            int val = upgraded.get()
+            print(val)
+        else:
+            print("none")
+
+    print("ok")

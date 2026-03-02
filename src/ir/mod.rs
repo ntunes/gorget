@@ -66,6 +66,9 @@ pub struct Module {
     /// Shared[T] inner C type names found (e.g., ["int64_t"] for Shared[int]).
     /// Used by the C backend to emit Shared__T wrapper structs and functions.
     pub shared_types: Vec<String>,
+    /// Weak[T] inner C type names found (e.g., ["int64_t"] for Weak[int]).
+    /// Used by the C backend to emit Weak__T wrapper structs and functions.
+    pub weak_types: Vec<String>,
     /// Mutex[T] inner C type names found (e.g., ["int64_t"] for Mutex[int]).
     /// Used by the C backend to emit Mutex__T and Guard__T wrapper structs and functions.
     pub mutex_types: Vec<String>,
@@ -126,6 +129,7 @@ impl Module {
             has_sleep: false,
             channel_types: Vec::new(),
             shared_types: Vec::new(),
+            weak_types: Vec::new(),
             mutex_types: Vec::new(),
             has_task_group: false,
             spawned_fns: Vec::new(),

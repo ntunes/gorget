@@ -6632,6 +6632,31 @@ fn shared_basic() {
 }
 
 #[test]
+fn shared_refcount() {
+    run_gg("shared_refcount.gg", "1\n3\n3\n100");
+}
+
+#[test]
+fn shared_weak() {
+    run_gg("shared_weak.gg", "42\nok");
+}
+
+#[test]
+fn shared_struct() {
+    run_gg("shared_struct.gg", "3\n10\n5000\n10\n5000");
+}
+
+#[test]
+fn async_reactor_sleep() {
+    run_gg("async_reactor_sleep.gg", "sleep works\ndone");
+}
+
+#[test]
+fn async_timer_loop() {
+    run_gg("async_timer_loop.gg", "3");
+}
+
+#[test]
 fn mutex_basic() {
     run_gg("mutex_basic.gg", "0\n42");
 }

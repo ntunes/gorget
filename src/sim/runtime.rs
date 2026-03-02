@@ -1444,7 +1444,7 @@ pub fn call_extern(
             Ok(Value::I64(epoch))
         }
 
-        "gorget_sleep_ms" | "sleep_ms" => {
+        "gorget_sleep_ms" | "sleep_ms" | "gorget_reactor_sleep_ms" | "async_sleep" => {
             let ms = args.get(0).map(|v| v.as_i64()).unwrap_or(0).max(0) as u64;
             std::thread::sleep(std::time::Duration::from_millis(ms));
             Ok(Value::Unit)

@@ -63,7 +63,7 @@ pub fn is_builtin_module(segments: &[String]) -> bool {
                 "fs" | "path" | "os" | "conv" | "io" | "random" | "time"
                 | "collections" | "math" | "fmt" | "process" | "bytes"
                 | "encoding" | "channel" | "alloc" | "term" | "heap" | "datetime"
-                | "sync" | "thread"),
+                | "sync" | "thread" | "async"),
             3 => segments[1] == "net" && matches!(segments[2].as_str(), "socket" | "tls" | "udp"),
             _ => false,
         },
@@ -97,6 +97,7 @@ pub fn generate_builtin_module(segments: &[String]) -> Option<Module> {
                 "alloc" => Some(gen_alloc_module()),
                 "sync" => Some(gen_sync_module()),
                 "thread" => Some(gen_thread_module()),
+                "async" => Some(gen_async_module()),
                 "term" => None,     // file-based module — loaded via builtin_module_source()
                 "heap" => None,     // file-based module — loaded via builtin_module_source()
                 "datetime" => None, // file-based module — loaded via builtin_module_source()
@@ -242,6 +243,14 @@ fn gen_time_module() -> Module {
         decl_async_fn("sleep", &[("seconds", ty_float())], ty_void()),
         decl_fn("format_time", &[("epoch", ty_int()), ("fmt", ty_str())], ty_string()),
         decl_fn("parse_time", &[("s", ty_str()), ("fmt", ty_str())], ty_int()),
+    ])
+}
+
+/// std.async — non-blocking I/O helpers backed by the GorgetReactor (timerfd/kqueue).
+/// async_sleep(ms: int) suspends the current task for `ms` milliseconds using the reactor.
+fn gen_async_module() -> Module {
+    make_module(vec![
+        decl_fn("async_sleep", &[("ms", ty_int())], ty_void()),
     ])
 }
 

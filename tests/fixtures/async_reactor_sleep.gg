@@ -1,0 +1,13 @@
+from std.async import async_sleep
+from std.time import time_ms
+
+void main():
+    int t0 = time_ms()
+    async_sleep(50)
+    int t1 = time_ms()
+    int elapsed = t1 - t0
+    if elapsed >= 40:
+        print("sleep works")
+    else:
+        print("too fast")
+    print("done")

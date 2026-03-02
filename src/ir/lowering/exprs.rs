@@ -1404,7 +1404,7 @@ fn lower_method_call(
         }
     }
 
-    // Shared[T] methods: clone, get — dispatch via C wrapper functions.
+    // Shared[T] methods: clone, get, strong_count, downgrade — via C wrapper functions.
     // Shared[T] is a Copy pointer typedef (GorgetShared*); methods pass value directly.
     {
         let recv_type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
@@ -1414,7 +1414,6 @@ fn lower_method_call(
                 let recv_type = infer_operand_type_full(ctx, &recv, builder);
                 match method_name {
                     "clone" => {
-                        // clone() is a no-op for Copy pointer — return same value
                         let clone_fn = format!("{stn}__clone");
                         let dst = builder.call(&clone_fn, vec![recv], recv_type);
                         return FunctionBuilder::copy(dst);
@@ -1424,6 +1423,63 @@ fn lower_method_call(
                             .unwrap_or(I64_TYPE);
                         let get_fn = format!("{stn}__get");
                         let dst = builder.call(&get_fn, vec![recv], elem_type);
+                        return FunctionBuilder::copy(dst);
+                    }
+                    "strong_count" => {
+                        let count_fn = format!("{stn}__strong_count");
+                        let dst = builder.call(&count_fn, vec![recv], I64_TYPE);
+                        return FunctionBuilder::copy(dst);
+                    }
+                    "downgrade" => {
+                        let weak_name = format!("Weak__{elem_suffix}");
+                        let weak_type = if let Some(tid) = ctx.type_mapper.lookup_named(&weak_name) {
+                            tid
+                        } else {
+                            let inner_type = ctx.type_mapper.lookup_named(elem_suffix).unwrap_or(I64_TYPE);
+                            let tid = ctx.type_registry.insert(crate::ir::types::GirType::Named(weak_name.clone()));
+                            ctx.type_mapper.register_named(weak_name.clone(), tid);
+                            ensure_weak_type_def(ctx, &weak_name, inner_type);
+                            tid
+                        };
+                        let downgrade_fn = format!("{stn}__downgrade");
+                        let dst = builder.call(&downgrade_fn, vec![recv], weak_type);
+                        return FunctionBuilder::copy(dst);
+                    }
+                    _ => {}
+                }
+            }
+            // Weak[T] methods: clone, upgrade — via C wrapper functions.
+            if stn.starts_with("Weak__") {
+                let elem_suffix = stn.strip_prefix("Weak__").unwrap_or("int64_t");
+                let recv_type = infer_operand_type_full(ctx, &recv, builder);
+                match method_name {
+                    "clone" => {
+                        let clone_fn = format!("{stn}__clone");
+                        let dst = builder.call(&clone_fn, vec![recv], recv_type);
+                        return FunctionBuilder::copy(dst);
+                    }
+                    "upgrade" => {
+                        // Returns Option[Shared[T]] — need to build the Option type
+                        let shared_name = format!("Shared__{elem_suffix}");
+                        let shared_type = if let Some(tid) = ctx.type_mapper.lookup_named(&shared_name) {
+                            tid
+                        } else {
+                            let inner_type = ctx.type_mapper.lookup_named(elem_suffix).unwrap_or(I64_TYPE);
+                            let tid = ctx.type_registry.insert(crate::ir::types::GirType::Named(shared_name.clone()));
+                            ctx.type_mapper.register_named(shared_name.clone(), tid);
+                            ensure_shared_type_def(ctx, &shared_name, inner_type);
+                            tid
+                        };
+                        let option_name = format!("Option__{shared_name}");
+                        let option_type = if let Some(tid) = ctx.type_mapper.lookup_named(&option_name) {
+                            tid
+                        } else {
+                            let tid = ctx.type_registry.insert(crate::ir::types::GirType::Named(option_name.clone()));
+                            ctx.type_mapper.register_named(option_name.clone(), tid);
+                            tid
+                        };
+                        let upgrade_fn = format!("{stn}__upgrade");
+                        let dst = builder.call(&upgrade_fn, vec![recv], option_type);
                         return FunctionBuilder::copy(dst);
                     }
                     _ => {}
@@ -5048,6 +5104,7 @@ pub fn ensure_shared_type_def(ctx: &mut LoweringContext, shared_type_name: &str,
     if ctx.type_registry.get_type_def(shared_type_name).is_some() {
         return;
     }
+    let drop_fn = format!("{shared_type_name}__drop");
     let type_def = TypeDef {
         name: shared_type_name.to_string(),
         kind: TypeDefKind::Struct(StructDef {
@@ -5056,10 +5113,34 @@ pub fn ensure_shared_type_def(ctx: &mut LoweringContext, shared_type_name: &str,
         metadata: TypeMetadata {
             size: None,
             align: None,
-            // Copy — it's a GorgetShared* pointer, cheap to copy
+            // Copy — Shared[T] is a GorgetShared* pointer, cheap to copy.
+            // Drop decrements the strong ref count and frees data when it hits zero.
             copy_semantics: CopySemantics::Copy,
-            // No drop in V1 (ref counting / free deferred to future work like Channel)
-            drop_strategy: DropStrategy::None,
+            drop_strategy: DropStrategy::Trivial(drop_fn),
+        },
+    };
+    ctx.type_registry.add_type_def(type_def);
+}
+
+/// Ensure a Weak[T] type has a TypeDef in the registry (Copy pointer, drop decrements weak count).
+pub fn ensure_weak_type_def(ctx: &mut LoweringContext, weak_type_name: &str, inner_type: TypeId) {
+    use crate::ir::types::{TypeDef, TypeDefKind, StructDef, StructField, TypeMetadata, CopySemantics, DropStrategy};
+    if ctx.type_registry.get_type_def(weak_type_name).is_some() {
+        return;
+    }
+    let drop_fn = format!("{weak_type_name}__drop");
+    let type_def = TypeDef {
+        name: weak_type_name.to_string(),
+        kind: TypeDefKind::Struct(StructDef {
+            fields: vec![StructField { name: "_0".to_string(), type_id: inner_type }],
+        }),
+        metadata: TypeMetadata {
+            size: None,
+            align: None,
+            // Copy — Weak[T] is a GorgetShared* pointer, cheap to copy.
+            // Drop decrements the weak ref count and frees control block when both hit zero.
+            copy_semantics: CopySemantics::Copy,
+            drop_strategy: DropStrategy::Trivial(drop_fn),
         },
     };
     ctx.type_registry.add_type_def(type_def);

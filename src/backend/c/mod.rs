@@ -137,6 +137,7 @@ fn map_stdlib_name(name: &str) -> &str {
         "format_time" => "gorget_format_time",
         "parse_time" => "gorget_parse_time",
         "sleep_ms" => "gorget_sleep_ms",
+        "async_sleep" => "gorget_reactor_sleep_ms",
         // Random
         "rand" => "gorget_rand",
         "rand_range" => "gorget_rand_range",
@@ -357,7 +358,7 @@ fn is_cstr_param_fn(name: &str) -> bool {
         | "gorget_exec" | "gorget_exec_output"
         | "gorget_getenv" | "gorget_setenv"
         | "gorget_format_time" | "gorget_parse_time"
-        | "gorget_seed" | "gorget_sleep_ms"
+        | "gorget_seed" | "gorget_sleep_ms" | "gorget_reactor_sleep_ms"
         | "gorget_crypto_sha256" | "gorget_crypto_hmac_sha256"
         | "gorget_socket_connect" | "gorget_tls_connect" | "gorget_udp_bind"
         | "gorget_base64_encode" | "gorget_base64_decode"
@@ -519,10 +520,10 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
         // Emit Channel__T typedefs and wrapper functions (if any), plus Task__T structs.
         emit_channel_and_task_defs(&mut out, module);
     }
-    let needs_shared = !module.shared_types.is_empty();
+    let needs_shared = !module.shared_types.is_empty() || !module.weak_types.is_empty();
     if needs_shared {
         out.push_str(c_runtime::SHARED_RUNTIME);
-        // Wrapper functions (emit_shared_defs) emitted after user type definitions below.
+        // Wrapper functions (emit_shared_defs, emit_weak_defs) emitted after user type definitions below.
     }
     let needs_mutex = !module.mutex_types.is_empty();
     if needs_mutex {
@@ -541,6 +542,37 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
             out.push_str(c_runtime::MUTEX_RUNTIME);
         }
         out.push_str(c_runtime::TASK_GROUP_RUNTIME);
+    }
+    // Detect std.async.async_sleep(ms) calls — mapped to gorget_reactor_sleep_ms in KNOWN_MAPPINGS.
+    // Also detect legacy int-arg sleep() calls from std.async import (pre-rename path).
+    let needs_reactor = all_call_names.iter().any(|n| n == "async_sleep" || n == "gorget_reactor_sleep_ms")
+        || module.functions.iter().any(|f| {
+            f.blocks.iter().any(|b| b.instructions.iter().any(|inst| {
+                let (fname, args) = match inst {
+                    Instruction::Call { func, args, .. } => (func.as_str(), args),
+                    Instruction::CallExtern { func, args, .. } => (func.as_str(), args),
+                    _ => return false,
+                };
+                if fname != "sleep" && fname != "gg_sleep" { return false; }
+                args.first().map_or(false, |a| match a {
+                    Operand::Constant(Constant::I64(_)) => true,
+                    Operand::Copy(p) | Operand::Move(p) => {
+                        let t = f.locals[p.local.0 as usize].type_id;
+                        t == I64_TYPE || t == I32_TYPE
+                    }
+                    _ => false,
+                })
+            }))
+        });
+    if needs_reactor {
+        // REACTOR_RUNTIME requires GorgetWaker (ASYNC_RUNTIME) and pthread types (EXECUTOR_RUNTIME).
+        if !needs_async_runtime {
+            out.push_str(c_runtime::ASYNC_RUNTIME);
+        }
+        if !all_call_names.iter().any(|n| n.contains("gorget_executor_") || n == "gorget_spawn") && !module.has_spawn {
+            out.push_str(c_runtime::EXECUTOR_RUNTIME);
+        }
+        out.push_str(c_runtime::REACTOR_RUNTIME);
     }
     if module.hot_reload || all_call_names.iter().any(|n| n.contains("hot_reload") || n.contains("plugin")) {
         out.push_str(c_runtime::HOT_RELOAD_RUNTIME);
@@ -577,13 +609,20 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
     // (struct fields may reference Vector__T etc.)
     emit_collection_typedefs(&mut out, module);
 
+    // Emit Shared__T / Weak__T typedefs BEFORE type definitions so that
+    // Option__Shared__T structs (emitted during type_definitions) can reference them.
+    if needs_shared {
+        emit_shared_weak_typedefs(&mut out, module);
+    }
+
     // Type definitions (structs and enums), skipping unmonomorphized templates
     emit_type_definitions(&mut out, module);
 
-    // Emit Shared[T] and Mutex[T] wrapper functions AFTER user struct typedefs
+    // Emit Shared[T], Weak[T], and Mutex[T] wrapper functions AFTER user struct typedefs
     // so that inner types like 'Config' are already declared when used in wrapper sigs.
     if needs_shared {
         emit_shared_defs(&mut out, module);
+        emit_weak_defs(&mut out, module);
     }
     if needs_mutex {
         emit_mutex_defs(&mut out, module);
@@ -1058,7 +1097,35 @@ fn topo_sorted_body_order(
     order
 }
 
-/// Emit Shared__T typedef + wrapper functions (get, clone).
+/// Emit Shared__T and Weak__T typedefs BEFORE type definitions.
+/// These typedefs are needed early so Option__Shared__T structs can reference Shared__T.
+fn emit_shared_weak_typedefs(out: &mut String, module: &Module) {
+    if module.shared_types.is_empty() && module.weak_types.is_empty() {
+        return;
+    }
+    out.push_str("\n/* ── Shared[T] / Weak[T] forward typedefs ── */\n");
+    // Collect all element types that need a Shared__ typedef
+    for elem_c in &module.shared_types {
+        let _ = writeln!(out, "typedef GorgetShared* Shared__{elem_c};");
+    }
+    // Collect all element types that need a Weak__ typedef
+    // (either from explicit Weak vars OR as companion for downgrade() return type)
+    let mut weak_emitted: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for elem_c in &module.shared_types {
+        // Always emit Weak__T companion for every Shared__T (needed for downgrade() return type)
+        if weak_emitted.insert(elem_c.as_str()) {
+            let _ = writeln!(out, "typedef GorgetShared* Weak__{elem_c};");
+        }
+    }
+    for elem_c in &module.weak_types {
+        if weak_emitted.insert(elem_c.as_str()) {
+            let _ = writeln!(out, "typedef GorgetShared* Weak__{elem_c};");
+        }
+    }
+}
+
+/// Emit Shared__T wrapper functions (new, clone, drop, get, strong_count, downgrade).
+/// Typedefs were already emitted by emit_shared_weak_typedefs.
 fn emit_shared_defs(out: &mut String, module: &Module) {
     if module.shared_types.is_empty() {
         return;
@@ -1066,20 +1133,69 @@ fn emit_shared_defs(out: &mut String, module: &Module) {
     out.push_str("\n/* ── Shared[T] wrappers ── */\n");
     for elem_c in &module.shared_types {
         let shared_name = format!("Shared__{elem_c}");
-        // Typedef: Shared__T = GorgetShared* (opaque pointer)
-        let _ = writeln!(out, "typedef GorgetShared* {shared_name};");
-        // Constructor: Shared__T__new(val) → allocates, copies val in
+        // Typedef already emitted by emit_shared_weak_typedefs — skip here.
+        // Constructor: Shared__T__new(val) → allocates control block, copies val in
         let _ = writeln!(out,
             "static inline {shared_name} {shared_name}__new({elem_c} val) {{ \
              return gorget_shared_new(sizeof({elem_c}), &val); }}");
-        // clone() → returns same pointer (Copy; ref-count tracking deferred to V2)
+        // clone() → atomic increment of strong count, returns same pointer
         let _ = writeln!(out,
             "static inline {shared_name} {shared_name}__clone({shared_name} self) {{ \
-             return self; }}");
-        // get() → dereferences inner value
+             return gorget_shared_clone(self); }}");
+        // drop() → atomic decrement; frees data+control block at zero (called by RAII Drop)
+        let _ = writeln!(out,
+            "static inline void {shared_name}__drop({shared_name}* self) {{ \
+             gorget_shared_drop(*self); }}");
+        // get() → dereferences inner value (returns copy)
         let _ = writeln!(out,
             "static inline {elem_c} {shared_name}__get({shared_name} self) {{ \
              return *({elem_c}*)gorget_shared_get_ptr(self); }}");
+        // strong_count() → current number of strong refs (for debugging/testing)
+        let _ = writeln!(out,
+            "static inline int64_t {shared_name}__strong_count({shared_name} self) {{ \
+             return gorget_shared_strong_count(self); }}");
+        // Weak__T typedef was already emitted by emit_shared_weak_typedefs.
+        let weak_name = format!("Weak__{elem_c}");
+        // downgrade() → Weak[T] (atomic increment of weak count, returns same control block)
+        let _ = writeln!(out,
+            "static inline {weak_name} {shared_name}__downgrade({shared_name} self) {{ \
+             return gorget_shared_downgrade(self); }}");
+        out.push('\n');
+    }
+}
+
+/// Emit Weak__T wrapper functions (clone, drop, upgrade).
+/// Typedefs were already emitted by emit_shared_weak_typedefs.
+fn emit_weak_defs(out: &mut String, module: &Module) {
+    if module.weak_types.is_empty() {
+        return;
+    }
+    out.push_str("\n/* ── Weak[T] wrappers ── */\n");
+    for elem_c in &module.weak_types {
+        let weak_name = format!("Weak__{elem_c}");
+        let shared_name = format!("Shared__{elem_c}");
+        // Typedef already emitted by emit_shared_weak_typedefs — skip here.
+        // clone() → increment weak count
+        let _ = writeln!(out,
+            "static inline {weak_name} {weak_name}__clone({weak_name} self) {{ \
+             return gorget_weak_clone(self); }}");
+        // drop() → decrement weak count; frees control block when both counts hit 0
+        let _ = writeln!(out,
+            "static inline void {weak_name}__drop({weak_name}* self) {{ \
+             gorget_weak_drop(*self); }}");
+        // upgrade() → Option[Shared[T]]: CAS strong N→N+1; returns Some(ptr) or None
+        // Option[Shared[T]] uses tag=0 for Some (first variant), tag=1 for None (second variant).
+        // Member access follows the union layout: data.Some._0
+        let option_name = format!("Option__{shared_name}");
+        let _ = writeln!(out,
+            "static inline {option_name} {weak_name}__upgrade({weak_name} self) {{ \
+             {option_name} __opt; \
+             if (gorget_weak_upgrade(self)) {{ \
+                 __opt.tag = 0; __opt.data.Some._0 = ({shared_name})self; \
+             }} else {{ \
+                 __opt.tag = 1; \
+             }} \
+             return __opt; }}");
         out.push('\n');
     }
 }
@@ -1408,8 +1524,9 @@ fn emit_type_definitions(out: &mut String, module: &Module) {
             // Channel__T and Task__T have hand-emitted C definitions (not GIR struct defs)
             || name.starts_with("Channel__")
             || name.starts_with("Task__")
-            // Shared__T, Mutex__T, Guard__T, TaskGroup: hand-emitted pointer typedefs
+            // Shared__T, Weak__T, Mutex__T, Guard__T, TaskGroup: hand-emitted pointer typedefs
             || name.starts_with("Shared__")
+            || name.starts_with("Weak__")
             || name.starts_with("Mutex__")
             || name.starts_with("Guard__")
             || name == "TaskGroup"
@@ -1812,6 +1929,7 @@ fn runtime_type_name(name: &str) -> Option<&'static str> {
         "Channel" => Some("GorgetChannel*"),
         // Concurrency types
         "Shared" => Some("GorgetShared*"),
+        "Weak" => Some("GorgetShared*"),
         "Mutex" => Some("GorgetMutex*"),
         // std.sync non-generic types
         "AtomicInt" => Some("GorgetAtomicInt*"),
@@ -3352,17 +3470,31 @@ fn emit_instruction(
             else if let Some(code) = try_emit_result_wrapped_call(func_name, dst, args, func, registry, type_overrides) {
                 out.push_str(&code);
             }
-            // sleep(seconds) → gorget_sleep_ms((int64_t)(seconds * 1000))
+            // sleep(arg) — dispatch based on argument type:
+            //   float arg → std.time.sleep(seconds) → gorget_sleep_ms((int64_t)(arg * 1000))
+            //   int arg   → std.async.sleep(ms)     → gorget_reactor_sleep_ms(arg)
             else if func_name == "sleep" || func_name == "gg_sleep" {
-                if let Some(dst_id) = dst {
-                    if !args.is_empty() {
-                        let seconds = format_operand(&args[0], func, registry);
-                        let _ = writeln!(out, "        gorget_sleep_ms((int64_t)({seconds} * 1000));");
-                        let _ = writeln!(out, "        _{id} = 0;", id = dst_id.0);
+                let is_int_arg = !args.is_empty() && {
+                    match &args[0] {
+                        Operand::Constant(Constant::I64(_)) => true,
+                        Operand::Constant(Constant::F64(_)) => false,
+                        Operand::Copy(p) | Operand::Move(p) => {
+                            let t = func.locals[p.local.0 as usize].type_id;
+                            t == I64_TYPE || t == I32_TYPE
+                        }
+                        _ => false,
                     }
-                } else if !args.is_empty() {
-                    let seconds = format_operand(&args[0], func, registry);
-                    let _ = writeln!(out, "        gorget_sleep_ms((int64_t)({seconds} * 1000));");
+                };
+                if !args.is_empty() {
+                    let arg = format_operand(&args[0], func, registry);
+                    if is_int_arg {
+                        let _ = writeln!(out, "        gorget_reactor_sleep_ms({arg});");
+                    } else {
+                        let _ = writeln!(out, "        gorget_sleep_ms((int64_t)({arg} * 1000));");
+                    }
+                }
+                if let Some(dst_id) = dst {
+                    let _ = writeln!(out, "        _{id} = 0;", id = dst_id.0);
                 }
             }
             // Check if this is a collection/Box/String constructor
@@ -3523,9 +3655,11 @@ fn emit_instruction(
                             let _ = writeln!(out, "        _{id} = gorget_string_adopt((char*){c_name}({args_str}));", id = dst_id.0);
                         } else if ret_cstr && c_type == "Str" {
                             let _ = writeln!(out, "        _{id} = gorget_str_from_cstr({c_name}({args_str}));", id = dst_id.0);
-                        } else if c_type.starts_with("Option__") && !is_user_fn {
+                        } else if c_type.starts_with("Option__") && !is_user_fn
+                            && !c_name.ends_with("__upgrade") {
                             // Option wrapping for runtime functions.
                             // GorgetRegexMatch uses .start == -1 sentinel; int options use >= 0.
+                            // Note: __upgrade functions already return Option directly — skip wrapping.
                             let inner_is_match = c_type == "Option__Match"
                                 || c_type == "Option__GorgetRegexMatch";
                             if inner_is_match {
@@ -3590,17 +3724,29 @@ fn emit_instruction(
             else if let Some(code) = try_emit_result_wrapped_call(func_name, dst, args, func, registry, type_overrides) {
                 out.push_str(&code);
             }
-            // sleep(seconds) → gorget_sleep_ms((int64_t)(seconds * 1000))
+            // sleep(arg) — same int/float dispatch as the Call variant above
             else if func_name == "sleep" || func_name == "gg_sleep" {
-                if let Some(dst_id) = dst {
-                    if !args.is_empty() {
-                        let seconds = format_operand(&args[0], func, registry);
-                        let _ = writeln!(out, "        gorget_sleep_ms((int64_t)({seconds} * 1000));");
-                        let _ = writeln!(out, "        _{id} = 0;", id = dst_id.0);
+                let is_int_arg = !args.is_empty() && {
+                    match &args[0] {
+                        Operand::Constant(Constant::I64(_)) => true,
+                        Operand::Constant(Constant::F64(_)) => false,
+                        Operand::Copy(p) | Operand::Move(p) => {
+                            let t = func.locals[p.local.0 as usize].type_id;
+                            t == I64_TYPE || t == I32_TYPE
+                        }
+                        _ => false,
                     }
-                } else if !args.is_empty() {
-                    let seconds = format_operand(&args[0], func, registry);
-                    let _ = writeln!(out, "        gorget_sleep_ms((int64_t)({seconds} * 1000));");
+                };
+                if !args.is_empty() {
+                    let arg = format_operand(&args[0], func, registry);
+                    if is_int_arg {
+                        let _ = writeln!(out, "        gorget_reactor_sleep_ms({arg});");
+                    } else {
+                        let _ = writeln!(out, "        gorget_sleep_ms((int64_t)({arg} * 1000));");
+                    }
+                }
+                if let Some(dst_id) = dst {
+                    let _ = writeln!(out, "        _{id} = 0;", id = dst_id.0);
                 }
             }
             // Apply same collection/method rewrites as for Call instructions.

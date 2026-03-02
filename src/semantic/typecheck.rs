@@ -2762,6 +2762,34 @@ impl<'a> TypeChecker<'a> {
                 "clone" => Some(receiver_type),
                 // get() returns the inner T
                 "get" => Some(elem_type()),
+                // strong_count() returns the number of active strong refs
+                "strong_count" => Some(self.types.int_id),
+                // downgrade() returns Weak[T]
+                "downgrade" => {
+                    if let Some(weak_def_id) = self.scopes.lookup("Weak") {
+                        Some(self.types.insert(ResolvedType::Generic(weak_def_id, vec![elem_type()])))
+                    } else {
+                        Some(receiver_type)
+                    }
+                }
+                _ => None,
+            },
+            "Weak" => match method {
+                // clone() returns another Weak[T]
+                "clone" => Some(receiver_type),
+                // upgrade() returns Option[Shared[T]]
+                "upgrade" => {
+                    let shared_type = if let Some(shared_def_id) = self.scopes.lookup("Shared") {
+                        self.types.insert(ResolvedType::Generic(shared_def_id, vec![elem_type()]))
+                    } else {
+                        receiver_type
+                    };
+                    if let Some(option_def_id) = self.scopes.lookup("Option") {
+                        Some(self.types.insert(ResolvedType::Generic(option_def_id, vec![shared_type])))
+                    } else {
+                        Some(shared_type)
+                    }
+                }
                 _ => None,
             },
             "Mutex" => match method {

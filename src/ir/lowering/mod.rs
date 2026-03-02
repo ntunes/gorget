@@ -942,6 +942,11 @@ pub fn lower_module(
                 module.shared_types.push(elem.to_string());
             }
         }
+        if let Some(elem) = name.strip_prefix("Weak__") {
+            if !is_template(elem) && !module.weak_types.contains(&elem.to_string()) {
+                module.weak_types.push(elem.to_string());
+            }
+        }
         if let Some(elem) = name.strip_prefix("Mutex__") {
             if !is_template(elem) && !module.mutex_types.contains(&elem.to_string()) {
                 module.mutex_types.push(elem.to_string());

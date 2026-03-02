@@ -2253,26 +2253,91 @@ static void gorget_channel_free(GorgetChannel* ch) {
 }
 "#;
 
-/// Shared[T] — atomically ref-counted immutable shared data (Arc-like).
-/// In V1, clone() is a no-op (returns same pointer); ref-count tracking is present
-/// but auto-release on drop is deferred (same lifecycle trade-off as Channel).
+/// Shared[T] / Weak[T] — atomically ref-counted shared data (Arc/Weak-like).
+/// V2: full atomic strong + weak ref-counts with proper RAII drop.
+/// - strong count: number of Shared[T] handles alive
+/// - weak count: number of Weak[T] handles alive, plus 1 (held collectively by all strongs)
+///   The collective strong-held weak ref keeps the control block alive until the last strong drops.
+/// - downgrade(): Shared→Weak (increments weak)
+/// - upgrade(): Weak→Option[Shared[T]] (CAS strong: if >0 bump, else None)
 pub const SHARED_RUNTIME: &str = r#"
-// ── Shared[T] (immutable shared data, atomic ref-count) ──
+// ── Shared[T] / Weak[T] (atomic ref-counted shared data, Arc/Weak pattern) ──
 typedef struct GorgetShared {
-    void*           data;
-    size_t          data_size;
+    volatile int64_t strong;     // atomic strong ref count
+    volatile int64_t weak;       // atomic weak ref count (+1 while any strong exists)
+    void*            data;
+    size_t           data_size;
 } GorgetShared;
 
 static inline GorgetShared* gorget_shared_new(size_t size, void* init_data) {
     GorgetShared* s = (GorgetShared*)GORGET_ALLOC(sizeof(GorgetShared));
+    s->strong = 1;
+    s->weak = 1;  // collective weak ref held by all strongs
     s->data = GORGET_ALLOC(size);
     s->data_size = size;
     memcpy(s->data, init_data, size);
     return s;
 }
 
+// Clone a Shared handle — atomically increments strong count, returns same pointer.
+static inline GorgetShared* gorget_shared_clone(GorgetShared* s) {
+    __atomic_fetch_add(&s->strong, 1, __ATOMIC_SEQ_CST);
+    return s;
+}
+
+// Drop a Shared handle — decrements strong; frees data + releases collective weak at zero.
+static inline void gorget_shared_drop(GorgetShared* s) {
+    if (__atomic_sub_fetch(&s->strong, 1, __ATOMIC_SEQ_CST) == 0) {
+        // Last strong ref — free inner data
+        GORGET_FREE(s->data, s->data_size);
+        s->data = NULL;
+        // Release the collective weak ref that all strongs held
+        if (__atomic_sub_fetch(&s->weak, 1, __ATOMIC_SEQ_CST) == 0) {
+            GORGET_FREE(s, sizeof(GorgetShared));
+        }
+    }
+}
+
 static inline void* gorget_shared_get_ptr(GorgetShared* s) {
     return s->data;
+}
+
+static inline int64_t gorget_shared_strong_count(GorgetShared* s) {
+    return __atomic_load_n(&s->strong, __ATOMIC_SEQ_CST);
+}
+
+// Downgrade Shared → Weak: atomically increments weak count, returns same control block.
+static inline GorgetShared* gorget_shared_downgrade(GorgetShared* s) {
+    __atomic_fetch_add(&s->weak, 1, __ATOMIC_SEQ_CST);
+    return s;
+}
+
+// ── Weak[T] operations ──
+
+// Clone a Weak handle — increments weak count.
+static inline GorgetShared* gorget_weak_clone(GorgetShared* w) {
+    __atomic_fetch_add(&w->weak, 1, __ATOMIC_SEQ_CST);
+    return w;
+}
+
+// Drop a Weak handle — decrements weak; frees control block when both counts hit 0.
+static inline void gorget_weak_drop(GorgetShared* w) {
+    if (__atomic_sub_fetch(&w->weak, 1, __ATOMIC_SEQ_CST) == 0) {
+        GORGET_FREE(w, sizeof(GorgetShared));
+    }
+}
+
+// Upgrade Weak → Shared: CAS strong from N→N+1 (fails if already 0). Returns 1 on success.
+static inline int gorget_weak_upgrade(GorgetShared* w) {
+    int64_t cur = __atomic_load_n(&w->strong, __ATOMIC_SEQ_CST);
+    while (cur > 0) {
+        if (__atomic_compare_exchange_n(&w->strong, &cur, cur + 1,
+                                        0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {
+            return 1;  // success — caller now owns a new strong ref
+        }
+        // CAS reloaded cur on failure — retry
+    }
+    return 0;  // dead — strong already 0, data freed
 }
 "#;
 
@@ -2325,6 +2390,211 @@ static inline void gorget_guard_release(gorget_guard_t* g) {
 static inline void gorget_condvar_wait_guard(void* cv_opaque, gorget_guard_t* g) {
     pthread_cond_t* cond = (pthread_cond_t*)cv_opaque;
     pthread_cond_wait(cond, &g->mutex->lock);
+}
+"#;
+
+/// I/O Reactor: timerfd (Linux) / kqueue (macOS) backed sleep that uses the GorgetWaker protocol.
+/// gorget_reactor_sleep_ms() is emitted when std.async.sleep(ms) is called.
+/// Requires: ASYNC_RUNTIME and EXECUTOR_RUNTIME (for __GorgetWorkerWakerCtx pattern).
+pub const REACTOR_RUNTIME: &str = r#"
+// ── I/O Reactor (timerfd/kqueue) ──
+#ifdef __linux__
+#include <sys/timerfd.h>
+#include <sys/epoll.h>
+#elif defined(__APPLE__) || defined(__FreeBSD__)
+#include <sys/event.h>
+#include <sys/time.h>
+#endif
+
+typedef struct {
+    int              fd;       /* timerfd (Linux) or kqueue ident (macOS) */
+    pthread_mutex_t  mtx;
+    pthread_cond_t   cond;
+    volatile int     woken;
+} GorgetReactorWaiter;
+
+typedef struct {
+    int                  fd;    /* timerfd (Linux) or kqueue ident (macOS) */
+    GorgetReactorWaiter* w;
+} GorgetReactorEntry;
+
+typedef struct {
+    int                  event_fd;   /* epoll fd (Linux) / kqueue fd (macOS) */
+    pthread_t            thread;
+    volatile int         running;
+    pthread_mutex_t      mtx;
+    GorgetReactorEntry*  entries;
+    size_t               len, cap;
+} GorgetReactor;
+
+static GorgetReactor     __gorget_reactor;
+static pthread_once_t    __gorget_reactor_once = PTHREAD_ONCE_INIT;
+
+static void* __gorget_reactor_thread(void* arg) {
+    GorgetReactor* r = (GorgetReactor*)arg;
+#ifdef __linux__
+    struct epoll_event events[32];
+    while (r->running) {
+        int n = epoll_wait(r->event_fd, events, 32, 50 /* ms */);
+        for (int i = 0; i < n; i++) {
+            int fd = events[i].data.fd;
+            uint64_t expirations;
+            /* drain the timerfd */
+            (void)read(fd, &expirations, sizeof(expirations));
+            pthread_mutex_lock(&r->mtx);
+            for (size_t j = 0; j < r->len; j++) {
+                if (r->entries[j].fd == fd) {
+                    GorgetReactorWaiter* w = r->entries[j].w;
+                    r->entries[j] = r->entries[--r->len];
+                    pthread_mutex_unlock(&r->mtx);
+                    /* wake the sleeping task */
+                    pthread_mutex_lock(&w->mtx);
+                    w->woken = 1;
+                    pthread_cond_signal(&w->cond);
+                    pthread_mutex_unlock(&w->mtx);
+                    goto reactor_next;
+                }
+            }
+            pthread_mutex_unlock(&r->mtx);
+            reactor_next: ;
+        }
+    }
+#elif defined(__APPLE__) || defined(__FreeBSD__)
+    struct kevent events[32];
+    while (r->running) {
+        struct timespec timeout = { 0, 50000000 }; /* 50 ms */
+        int n = kevent(r->event_fd, NULL, 0, events, 32, &timeout);
+        for (int i = 0; i < n; i++) {
+            uintptr_t ident = events[i].ident;
+            pthread_mutex_lock(&r->mtx);
+            for (size_t j = 0; j < r->len; j++) {
+                if ((uintptr_t)r->entries[j].fd == ident) {
+                    GorgetReactorWaiter* w = r->entries[j].w;
+                    r->entries[j] = r->entries[--r->len];
+                    pthread_mutex_unlock(&r->mtx);
+                    pthread_mutex_lock(&w->mtx);
+                    w->woken = 1;
+                    pthread_cond_signal(&w->cond);
+                    pthread_mutex_unlock(&w->mtx);
+                    goto reactor_next_apple;
+                }
+            }
+            pthread_mutex_unlock(&r->mtx);
+            reactor_next_apple: ;
+        }
+    }
+#endif
+    return NULL;
+}
+
+static void __gorget_reactor_init(void) {
+#if defined(__linux__)
+    __gorget_reactor.event_fd = epoll_create1(EPOLL_CLOEXEC);
+#elif defined(__APPLE__) || defined(__FreeBSD__)
+    __gorget_reactor.event_fd = kqueue();
+#else
+    __gorget_reactor.event_fd = -1;
+#endif
+    __gorget_reactor.running  = 1;
+    __gorget_reactor.len      = 0;
+    __gorget_reactor.cap      = 16;
+    __gorget_reactor.entries  = (GorgetReactorEntry*)GORGET_ALLOC(
+        16 * sizeof(GorgetReactorEntry));
+    pthread_mutex_init(&__gorget_reactor.mtx, NULL);
+#if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__)
+    pthread_create(&__gorget_reactor.thread, NULL, __gorget_reactor_thread, &__gorget_reactor);
+#endif
+}
+
+/* Register a timer (ms) and block until it fires via the reactor waker protocol. */
+static void gorget_reactor_sleep_ms(int64_t ms) {
+    if (ms <= 0) return;
+    pthread_once(&__gorget_reactor_once, __gorget_reactor_init);
+
+    GorgetReactorWaiter waiter;
+    pthread_mutex_init(&waiter.mtx, NULL);
+    pthread_cond_init(&waiter.cond, NULL);
+    waiter.woken = 0;
+
+#ifdef __linux__
+    int fd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+    if (fd >= 0) {
+        struct itimerspec ts = {{0,0},{0,0}};
+        ts.it_value.tv_sec  = (time_t)(ms / 1000);
+        ts.it_value.tv_nsec = (long)((ms % 1000) * 1000000LL);
+        timerfd_settime(fd, 0, &ts, NULL);
+
+        struct epoll_event ev;
+        ev.events  = EPOLLIN | EPOLLET;
+        ev.data.fd = fd;
+        epoll_ctl(__gorget_reactor.event_fd, EPOLL_CTL_ADD, fd, &ev);
+        waiter.fd = fd;
+
+        /* register */
+        pthread_mutex_lock(&__gorget_reactor.mtx);
+        if (__gorget_reactor.len == __gorget_reactor.cap) {
+            __gorget_reactor.cap *= 2;
+            __gorget_reactor.entries = (GorgetReactorEntry*)GORGET_REALLOC(
+                __gorget_reactor.entries,
+                (__gorget_reactor.cap / 2) * sizeof(GorgetReactorEntry),
+                __gorget_reactor.cap * sizeof(GorgetReactorEntry));
+        }
+        __gorget_reactor.entries[__gorget_reactor.len].fd = fd;
+        __gorget_reactor.entries[__gorget_reactor.len].w  = &waiter;
+        __gorget_reactor.len++;
+        pthread_mutex_unlock(&__gorget_reactor.mtx);
+
+        /* block until woken */
+        pthread_mutex_lock(&waiter.mtx);
+        while (!waiter.woken) pthread_cond_wait(&waiter.cond, &waiter.mtx);
+        pthread_mutex_unlock(&waiter.mtx);
+
+        epoll_ctl(__gorget_reactor.event_fd, EPOLL_CTL_DEL, fd, NULL);
+        close(fd);
+        goto reactor_sleep_cleanup;
+    }
+#elif defined(__APPLE__) || defined(__FreeBSD__)
+    if (__gorget_reactor.event_fd >= 0) {
+        /* Use kqueue EVFILT_TIMER (ms unit) */
+        static _Atomic int __reactor_timer_id = 0;
+        int ident = (int)__atomic_fetch_add(&__reactor_timer_id, 1, __ATOMIC_SEQ_CST) + 100;
+        struct kevent change;
+        EV_SET(&change, (uintptr_t)ident, EVFILT_TIMER, EV_ADD | EV_ONESHOT, NOTE_MSECONDS, ms, NULL);
+        kevent(__gorget_reactor.event_fd, &change, 1, NULL, 0, NULL);
+        waiter.fd = ident;
+
+        pthread_mutex_lock(&__gorget_reactor.mtx);
+        if (__gorget_reactor.len == __gorget_reactor.cap) {
+            __gorget_reactor.cap *= 2;
+            __gorget_reactor.entries = (GorgetReactorEntry*)GORGET_REALLOC(
+                __gorget_reactor.entries,
+                (__gorget_reactor.cap / 2) * sizeof(GorgetReactorEntry),
+                __gorget_reactor.cap * sizeof(GorgetReactorEntry));
+        }
+        __gorget_reactor.entries[__gorget_reactor.len].fd = ident;
+        __gorget_reactor.entries[__gorget_reactor.len].w  = &waiter;
+        __gorget_reactor.len++;
+        pthread_mutex_unlock(&__gorget_reactor.mtx);
+
+        pthread_mutex_lock(&waiter.mtx);
+        while (!waiter.woken) pthread_cond_wait(&waiter.cond, &waiter.mtx);
+        pthread_mutex_unlock(&waiter.mtx);
+        goto reactor_sleep_cleanup;
+    }
+#endif
+    /* Fallback: clock_nanosleep */
+    {
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        int64_t total_ns = (int64_t)ts.tv_nsec + (ms % 1000) * 1000000LL;
+        ts.tv_sec  += (time_t)(ms / 1000 + total_ns / 1000000000LL);
+        ts.tv_nsec  = (long)(total_ns % 1000000000LL);
+        while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &ts, NULL) == EINTR) {}
+    }
+
+reactor_sleep_cleanup:
+    pthread_mutex_destroy(&waiter.mtx);
+    pthread_cond_destroy(&waiter.cond);
 }
 "#;
 

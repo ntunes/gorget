@@ -264,6 +264,9 @@ pub struct Interpreter<'m> {
     regex_map: HashMap<u64, ::regex::Regex>,
     /// Next regex ID.
     regex_next_id: u64,
+    /// Ref-count tracking for Shared[T] / Weak[T]: addr → (strong, weak).
+    /// Mirrors the GorgetShared control block atomic counters.
+    shared_refcounts: HashMap<usize, (i64, i64)>,
 }
 
 impl<'m> Interpreter<'m> {
@@ -297,6 +300,7 @@ impl<'m> Interpreter<'m> {
             socket_inbox: HashMap::new(),
             regex_map: HashMap::new(),
             regex_next_id: 1,
+            shared_refcounts: HashMap::new(),
         }
     }
 
@@ -2369,10 +2373,66 @@ impl<'m> Interpreter<'m> {
                 }
                 return Ok(true);
             }
-            // MutPtr / Ptr: drop the inner value and mark the heap slot dead (P6b).
-            // Box[T] uses this path. Guard[T]/Mutex[T] also pass through here, but since
-            // they don't own the pointed-to allocation, double-drop won't naturally occur.
-            Value::MutPtr(addr) | Value::Ptr(addr) => {
+            // Ref: Weak[T] handle. Decrement weak count; remove entry when it hits 0.
+            // Weak handles use Value::Ref so they can be distinguished from Shared (Value::Ptr).
+            Value::Ref(addr) => {
+                let addr = *addr;
+                if addr != 0 && self.shared_refcounts.contains_key(&addr) {
+                    if let Some(rc) = self.shared_refcounts.get_mut(&addr) {
+                        rc.1 -= 1;
+                        if rc.1 <= 0 {
+                            self.shared_refcounts.remove(&addr);
+                        }
+                    }
+                    return Ok(false);
+                }
+                // Non-Weak Ref — treat as no-op (Ref is typically a borrow, not owning).
+                return Ok(false);
+            }
+            // MutPtr / Ptr: either Box[T] (free inner data) or Shared[T] (decrement strong ref).
+            // Shared[T] handles use Value::Ptr with an entry in shared_refcounts.
+            // Box[T] uses this path without a shared_refcounts entry.
+            // Guard[T]/Mutex[T] also pass through here, but since they don't own the allocation,
+            // double-drop won't naturally occur.
+            Value::Ptr(addr) => {
+                let addr = *addr;
+                if addr != 0 {
+                    // Shared[T] drop: decrement strong count; free data+collective-weak at 0.
+                    if self.shared_refcounts.contains_key(&addr) {
+                        if let Some(rc) = self.shared_refcounts.get_mut(&addr) {
+                            rc.0 -= 1;
+                            if rc.0 <= 0 {
+                                self.heap.remove(&addr);
+                                rc.1 -= 1; // release collective weak ref held by all strongs
+                                if rc.1 <= 0 {
+                                    self.shared_refcounts.remove(&addr);
+                                }
+                            }
+                        }
+                        return Ok(false);
+                    }
+                    // P6b: detect double-free for Box[T].
+                    if self.ub_checks {
+                        if let Some(meta) = self.heap_meta.get(&addr) {
+                            if !meta.alive {
+                                return Err(SimError::DoubleFree {
+                                    addr,
+                                    alloc_fn: meta.alloc_fn.clone(),
+                                });
+                            }
+                        }
+                    }
+                    // Read inner value (UseAfterFree if dead and ub_checks enabled).
+                    let inner = self.heap_read(addr).cloned()?;
+                    self.run_drop_value(&inner, depth)?;
+                    // Mark heap slot dead after dropping Box contents.
+                    if let Some(meta) = self.heap_meta.get_mut(&addr) {
+                        meta.alive = false;
+                    }
+                }
+                return Ok(false); // Don't zero the place for ptr drops
+            }
+            Value::MutPtr(addr) => {
                 let addr = *addr;
                 if addr != 0 {
                     // P6b: detect double-free — if the slot is already dead, this is a
@@ -2866,10 +2926,11 @@ impl<'m> Interpreter<'m> {
         }
 
         // ────────── Shared[T] operations (reference-counted pointer in C, Ptr in sim) ──────────
-        // Shared__T__new(val) → alloc val on heap, return Ptr(addr)
+        // Shared__T__new(val) → alloc val on heap, initialize refcounts (strong=1, weak=1)
         if name.starts_with("Shared__") && name.ends_with("__new") {
             let val = args.first().cloned().unwrap_or(Value::Unit);
             let addr = self.heap_alloc(val);
+            self.shared_refcounts.insert(addr, (1, 1));
             return Ok(Some(Value::Ptr(addr)));
         }
         // Shared__T__get(shared_ptr) → deref to get contained value
@@ -2883,9 +2944,36 @@ impl<'m> Interpreter<'m> {
             };
             return Ok(Some(val));
         }
-        // Shared__T__clone(shared_ptr) → same pointer (ref-counted; sim just clones the Ptr)
+        // Shared__T__clone(shared_ptr) → increment strong count, return same pointer
         if name.starts_with("Shared__") && name.ends_with("__clone") {
-            return Ok(Some(args.first().cloned().unwrap_or(Value::Null)));
+            let ptr = args.first().cloned().unwrap_or(Value::Null);
+            if let Value::Ptr(addr) | Value::MutPtr(addr) = &ptr {
+                if let Some(rc) = self.shared_refcounts.get_mut(addr) {
+                    rc.0 += 1;
+                }
+            }
+            return Ok(Some(ptr));
+        }
+        // Shared__T__strong_count(shared_ptr) → current strong ref count
+        if name.starts_with("Shared__") && name.ends_with("__strong_count") {
+            let ptr = args.first().cloned().unwrap_or(Value::Null);
+            let count = if let Value::Ptr(addr) | Value::MutPtr(addr) = ptr {
+                self.shared_refcounts.get(&addr).map(|rc| rc.0).unwrap_or(0)
+            } else { 0 };
+            return Ok(Some(Value::I64(count)));
+        }
+        // Shared__T__downgrade(shared_ptr) → increment weak count, return Ref (Weak handle)
+        // Weak handles use Value::Ref to distinguish from Shared (Value::Ptr) in run_drop_value.
+        if name.starts_with("Shared__") && name.ends_with("__downgrade") {
+            let ptr = args.first().cloned().unwrap_or(Value::Null);
+            if let Value::Ptr(addr) | Value::MutPtr(addr) = &ptr {
+                let data_addr = *addr;
+                if let Some(rc) = self.shared_refcounts.get_mut(&data_addr) {
+                    rc.1 += 1;
+                }
+                return Ok(Some(Value::Ref(data_addr)));
+            }
+            return Ok(Some(Value::Null));
         }
         // Shared__T__set(shared_ptr, val) → write to heap
         if name.starts_with("Shared__") && name.ends_with("__set") {
@@ -2896,9 +2984,86 @@ impl<'m> Interpreter<'m> {
             }
             return Ok(Some(Value::Unit));
         }
-        // Shared__T__free / __drop → no-op
-        if name.starts_with("Shared__") && (name.ends_with("__free") || name.ends_with("__drop")) {
+        // Shared__T__drop(shared_ptr*) → decrement strong; free data at 0, free ctrl block when weak also 0
+        if name.starts_with("Shared__") && name.ends_with("__drop") {
+            let ptr_to_ptr = args.first().cloned().unwrap_or(Value::Null);
+            let inner_addr = match &ptr_to_ptr {
+                Value::MutPtr(addr) | Value::Ptr(addr) => {
+                    // The drop function takes a pointer-to-pointer (T**); dereference to get the handle
+                    match self.heap.get(addr).cloned() {
+                        Some(Value::Ptr(inner)) | Some(Value::MutPtr(inner)) => Some(inner),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
+            if let Some(addr) = inner_addr {
+                let rc = self.shared_refcounts.get_mut(&addr);
+                if let Some(rc) = rc {
+                    rc.0 -= 1;
+                    if rc.0 <= 0 {
+                        // Free inner data
+                        self.heap.remove(&addr);
+                        rc.1 -= 1; // release collective weak ref
+                        if rc.1 <= 0 {
+                            self.shared_refcounts.remove(&addr);
+                        }
+                    }
+                }
+            }
             return Ok(Some(Value::Unit));
+        }
+        // Shared__T__free (legacy alias) → no-op
+        if name.starts_with("Shared__") && name.ends_with("__free") {
+            return Ok(Some(Value::Unit));
+        }
+        // ────────── Weak[T] operations ──────────
+        // Weak__T__clone(weak_ptr: Ref) → increment weak count, return Ref
+        if name.starts_with("Weak__") && name.ends_with("__clone") {
+            let ptr = args.first().cloned().unwrap_or(Value::Null);
+            if let Value::Ref(addr) | Value::Ptr(addr) | Value::MutPtr(addr) = &ptr {
+                let addr = *addr;
+                if let Some(rc) = self.shared_refcounts.get_mut(&addr) {
+                    rc.1 += 1;
+                }
+                return Ok(Some(Value::Ref(addr)));
+            }
+            return Ok(Some(Value::Null));
+        }
+        // Weak__T__drop → handled by run_drop_value (Ref arm decrements weak).
+        // If called explicitly as a function, also handle here as a fallback.
+        if name.starts_with("Weak__") && name.ends_with("__drop") {
+            return Ok(Some(Value::Unit)); // No-op: RAII handled by run_drop_value
+        }
+        // Weak__T__upgrade(weak_ptr: Ref) → Option[Shared[T]]: Some(Ptr) if strong>0, else None
+        if name.starts_with("Weak__") && name.ends_with("__upgrade") {
+            let ptr = args.first().cloned().unwrap_or(Value::Null);
+            let addr = match &ptr {
+                Value::Ref(a) | Value::Ptr(a) | Value::MutPtr(a) => *a,
+                _ => 0,
+            };
+            let strong = if addr != 0 {
+                self.shared_refcounts.get(&addr).map(|rc| rc.0).unwrap_or(0)
+            } else { 0 };
+            if strong > 0 {
+                // Upgrade: increment strong count, return Some(Ptr — a new Shared handle)
+                if let Some(rc) = self.shared_refcounts.get_mut(&addr) {
+                    rc.0 += 1;
+                }
+                return Ok(Some(Value::Enum {
+                    type_name: "Option".to_string(),
+                    tag: 0,
+                    variant: "Some".to_string(),
+                    fields: vec![Value::Ptr(addr)],
+                }));
+            } else {
+                return Ok(Some(Value::Enum {
+                    type_name: "Option".to_string(),
+                    tag: 1,
+                    variant: "None".to_string(),
+                    fields: vec![],
+                }));
+            }
         }
 
         // ────────── Mutex[T] + Guard[T] operations ──────────

@@ -1,0 +1,24 @@
+struct Config:
+    int max_connections
+    int timeout_ms
+
+void main():
+    Shared[Config] s = Shared[Config](Config(10, 5000))
+    Shared[Config] a = s.clone()
+    Shared[Config] b = s.clone()
+    int count = s.strong_count()
+    print(count)
+    Config c1 = s.get()
+    Config c2 = a.get()
+    Config c3 = b.get()
+    print(c1.max_connections)
+    print(c2.timeout_ms)
+    print(c3.max_connections)
+    Weak[Config] w = s.downgrade()
+    Option[Shared[Config]] maybe = w.upgrade()
+    match maybe:
+        case Some(upgraded):
+            Config val = upgraded.get()
+            print(val.timeout_ms)
+        else:
+            print(-1)
