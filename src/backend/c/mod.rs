@@ -164,7 +164,6 @@ fn map_stdlib_name(name: &str) -> &str {
         // Crypto
         "crypto_sha256" => "gorget_crypto_sha256",
         "crypto_sha1" => "gorget_crypto_sha1",
-        "crypto_hmac_sha256" => "gorget_crypto_hmac_sha256",
         "crypto_hmac" => "gorget_crypto_hmac",
         "crypto_random_bytes" => "gorget_crypto_random_bytes",
         "crypto_aes_ctr_new" => "gorget_crypto_aes_ctr_new",
@@ -359,7 +358,6 @@ fn is_cstr_param_fn(name: &str) -> bool {
         | "gorget_getenv" | "gorget_setenv"
         | "gorget_format_time" | "gorget_parse_time"
         | "gorget_seed" | "gorget_sleep_ms" | "gorget_reactor_sleep_ms"
-        | "gorget_crypto_sha256" | "gorget_crypto_hmac_sha256"
         | "gorget_socket_connect" | "gorget_socket_write_str"
         | "gorget_tls_connect" | "gorget_tls_write_str"
         | "gorget_udp_bind" | "gorget_udp_join_multicast" | "gorget_udp_leave_multicast"
@@ -5014,7 +5012,6 @@ fn infer_runtime_return_type(name: &str) -> Option<&'static str> {
         | "crypto_sha1" | "gorget_crypto_sha1"
         | "crypto_sha512" | "gorget_crypto_sha512"
         | "crypto_md5" | "gorget_crypto_md5"
-        | "crypto_hmac_sha256" | "gorget_crypto_hmac_sha256"
         | "gorget_cipher_encrypt" | "gorget_cipher_decrypt" => Some("GorgetArray"),
         "gorget_crypto_cipher_new" | "crypto_cipher_new" => Some("CipherContext"),
         // Regex

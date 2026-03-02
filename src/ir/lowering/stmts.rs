@@ -1518,11 +1518,14 @@ fn lower_for_range(
     body: &Block,
     else_arm: Option<&Block>,
 ) {
-    // Create loop variable
-    let loop_var = builder.add_local(I64_TYPE, Some(var_name));
+    // Create loop variable — type inferred from the start expression.
+    // For literal bounds (e.g. `0..n`) this gives I64_TYPE; for typed variables
+    // (e.g. `start..end` where start: uint8) it preserves the narrower type.
     let start_val = lower_expr(ctx, builder, start);
+    let loop_type = infer_operand_type_full(ctx, &start_val, builder);
+    let loop_var = builder.add_local(loop_type, Some(var_name));
     builder.assign(Place::local(loop_var), start_val);
-    ctx.register_local(var_name, loop_var, I64_TYPE);
+    ctx.register_local(var_name, loop_var, loop_type);
 
     let header_bb = builder.new_block();
     let body_bb = builder.new_block();
@@ -1545,7 +1548,7 @@ fn lower_for_range(
     builder.switch_to(header_bb);
     let end_val = lower_expr(ctx, builder, end);
     let cmp_op = if inclusive { CmpOp::Le } else { CmpOp::Lt };
-    let cond = builder.cmp(cmp_op, I64_TYPE, FunctionBuilder::copy(loop_var), end_val);
+    let cond = builder.cmp(cmp_op, loop_type, FunctionBuilder::copy(loop_var), end_val);
     let natural_exit = if else_arm.is_some() {
         else_exit_bb.unwrap()
     } else {
@@ -1566,7 +1569,7 @@ fn lower_for_range(
     // Increment: loop_var = loop_var + 1
     builder.switch_to(incr_bb);
     let one = Operand::Constant(Constant::I64(1));
-    let incremented = builder.bin_op(BinOp::Add, I64_TYPE, FunctionBuilder::copy(loop_var), one);
+    let incremented = builder.bin_op(BinOp::Add, loop_type, FunctionBuilder::copy(loop_var), one);
     builder.assign(Place::local(loop_var), FunctionBuilder::copy(incremented));
     builder.jump(header_bb);
 
