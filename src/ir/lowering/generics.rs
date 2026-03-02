@@ -574,6 +574,7 @@ fn monomorphize_struct(
     }
 
     // Box types need Move + Trivial("free") drop metadata for RAII.
+    // ReadGuard[T] / WriteGuard[T] need Move + Trivial drop to release the pthread rwlock.
     // Collection types (Vector, Dict, etc.) get their own drop strategies.
     let metadata = if template.name.node == "Box" {
         TypeMetadata {
@@ -581,6 +582,13 @@ fn monomorphize_struct(
             align: None,
             copy_semantics: CopySemantics::Move,
             drop_strategy: DropStrategy::Trivial("free".to_string()),
+        }
+    } else if matches!(template.name.node.as_str(), "ReadGuard" | "WriteGuard") {
+        TypeMetadata {
+            size: None,
+            align: None,
+            copy_semantics: CopySemantics::Move,
+            drop_strategy: DropStrategy::Trivial(format!("{mangled_name}__drop")),
         }
     } else {
         TypeMetadata::default()

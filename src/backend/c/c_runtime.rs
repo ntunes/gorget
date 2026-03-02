@@ -5512,3 +5512,277 @@ static void gorget_hot_watch_close(GorgetFileWatcher* w) {
 #endif
 
 "#;
+
+/// std.sync — AtomicInt, AtomicBool, Barrier, RWLock[T] + ReadGuard[T]/WriteGuard[T].
+pub const SYNC_RUNTIME: &str = r#"
+// ── std.sync runtime ──────────────────────────────────────────
+#include <pthread.h>
+
+// ── AtomicInt ──
+typedef struct { volatile int64_t __val; } GorgetAtomicInt;
+
+static inline GorgetAtomicInt* gorget_atomic_int_new(int64_t v) {
+    GorgetAtomicInt* a = (GorgetAtomicInt*)GORGET_ALLOC(sizeof(GorgetAtomicInt));
+    __atomic_store_n(&a->__val, v, __ATOMIC_SEQ_CST);
+    return a;
+}
+static inline int64_t gorget_atomic_int_load(GorgetAtomicInt* a) {
+    return __atomic_load_n(&a->__val, __ATOMIC_SEQ_CST);
+}
+static inline void gorget_atomic_int_store(GorgetAtomicInt* a, int64_t v) {
+    __atomic_store_n(&a->__val, v, __ATOMIC_SEQ_CST);
+}
+static inline int64_t gorget_atomic_int_add(GorgetAtomicInt* a, int64_t v) {
+    return __atomic_fetch_add(&a->__val, v, __ATOMIC_SEQ_CST);
+}
+static inline int64_t gorget_atomic_int_sub(GorgetAtomicInt* a, int64_t v) {
+    return __atomic_fetch_sub(&a->__val, v, __ATOMIC_SEQ_CST);
+}
+static inline int gorget_atomic_int_compare_exchange(GorgetAtomicInt* a, int64_t expected, int64_t desired) {
+    return __atomic_compare_exchange_n(&a->__val, &expected, desired, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+}
+
+// ── AtomicBool ──
+typedef struct { volatile int __val; } GorgetAtomicBool;
+
+static inline GorgetAtomicBool* gorget_atomic_bool_new(int v) {
+    GorgetAtomicBool* a = (GorgetAtomicBool*)GORGET_ALLOC(sizeof(GorgetAtomicBool));
+    __atomic_store_n(&a->__val, v ? 1 : 0, __ATOMIC_SEQ_CST);
+    return a;
+}
+static inline int gorget_atomic_bool_load(GorgetAtomicBool* a) {
+    return __atomic_load_n(&a->__val, __ATOMIC_SEQ_CST);
+}
+static inline void gorget_atomic_bool_store(GorgetAtomicBool* a, int v) {
+    __atomic_store_n(&a->__val, v ? 1 : 0, __ATOMIC_SEQ_CST);
+}
+static inline int gorget_atomic_bool_swap(GorgetAtomicBool* a, int v) {
+    return __atomic_exchange_n(&a->__val, v ? 1 : 0, __ATOMIC_SEQ_CST);
+}
+static inline int gorget_atomic_bool_compare_exchange(GorgetAtomicBool* a, int expected, int desired) {
+    int e = expected ? 1 : 0;
+    return __atomic_compare_exchange_n(&a->__val, &e, desired ? 1 : 0, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+}
+
+// ── Barrier ──
+// Portable implementation using mutex+condvar+generation counter.
+typedef struct {
+    pthread_mutex_t mtx;
+    pthread_cond_t  cond;
+    int             count;       // total threads required
+    int             arrived;     // arrived this generation
+    int             generation;  // increments each cycle
+} GorgetBarrier;
+
+static inline GorgetBarrier* gorget_barrier_new(int64_t n) {
+    GorgetBarrier* b = (GorgetBarrier*)GORGET_CALLOC(1, sizeof(GorgetBarrier));
+    pthread_mutex_init(&b->mtx, NULL);
+    pthread_cond_init(&b->cond, NULL);
+    b->count = (int)n;
+    return b;
+}
+static inline void gorget_barrier_wait(GorgetBarrier* b) {
+    int gen;
+    pthread_mutex_lock(&b->mtx);
+    gen = b->generation;
+    b->arrived++;
+    if (b->arrived == b->count) {
+        b->arrived = 0;
+        b->generation++;
+        pthread_cond_broadcast(&b->cond);
+    } else {
+        while (gen == b->generation)
+            pthread_cond_wait(&b->cond, &b->mtx);
+    }
+    pthread_mutex_unlock(&b->mtx);
+}
+
+// ── RWLock[T] + ReadGuard[T] + WriteGuard[T] ──
+typedef struct GorgetRWLock {
+    pthread_rwlock_t lock;
+    void*            data;
+    size_t           data_size;
+} GorgetRWLock;
+
+typedef struct { GorgetRWLock* rwlock; void* ptr; } gorget_read_guard_t;
+typedef struct { GorgetRWLock* rwlock; void* ptr; } gorget_write_guard_t;
+
+static inline GorgetRWLock* gorget_rwlock_new(size_t size, void* init_data) {
+    GorgetRWLock* rw = (GorgetRWLock*)GORGET_ALLOC(sizeof(GorgetRWLock));
+    pthread_rwlock_init(&rw->lock, NULL);
+    rw->data = GORGET_ALLOC(size);
+    rw->data_size = size;
+    memcpy(rw->data, init_data, size);
+    return rw;
+}
+static inline gorget_read_guard_t gorget_rwlock_read(GorgetRWLock* rw) {
+    pthread_rwlock_rdlock(&rw->lock);
+    gorget_read_guard_t g;
+    g.rwlock = rw;
+    g.ptr    = rw->data;
+    return g;
+}
+static inline gorget_write_guard_t gorget_rwlock_write(GorgetRWLock* rw) {
+    pthread_rwlock_wrlock(&rw->lock);
+    gorget_write_guard_t g;
+    g.rwlock = rw;
+    g.ptr    = rw->data;
+    return g;
+}
+static inline void gorget_read_guard_release(gorget_read_guard_t* g) {
+    if (!g->rwlock) return;
+    pthread_rwlock_unlock(&g->rwlock->lock);
+    g->rwlock = NULL; g->ptr = NULL;
+}
+static inline void gorget_write_guard_release(gorget_write_guard_t* g) {
+    if (!g->rwlock) return;
+    pthread_rwlock_unlock(&g->rwlock->lock);
+    g->rwlock = NULL; g->ptr = NULL;
+}
+"#;
+
+/// std.thread — Thread[T], thread_spawn, current_thread_id.
+/// Per-function spawn/join C helpers are emitted by emit_thread_helpers() in the backend.
+pub const THREAD_RUNTIME: &str = r#"
+// ── std.thread runtime ──────────────────────────────────────
+#include <pthread.h>
+
+static inline int64_t gorget_current_thread_id(void) {
+    return (int64_t)(uintptr_t)pthread_self();
+}
+"#;
+
+/// Enhanced std.process runtime — adds Process type with fork+exec+pipes.
+pub const PROCESS_SPAWN_RUNTIME: &str = r#"
+// ── std.process: Process type (fork+exec+pipes) ──────────────
+#include <signal.h>
+#include <fcntl.h>
+
+typedef struct GorgetProcess {
+    pid_t pid;
+    int   stdin_fd;   // parent write end  (-1 if not used)
+    int   stdout_fd;  // parent read end   (-1 if not used)
+    int   stderr_fd;  // parent read end   (-1 if not used)
+} GorgetProcess;
+
+// Spawn a child process with stdin/stdout/stderr pipes.
+// Returns a Result[Process, str]:
+//   Ok  → packed as GorgetProcess* (non-NULL)
+//   Err → packed as NULL (caller reads gorget_process_spawn_err() for message)
+static _Thread_local char __gorget_spawn_errbuf[256];
+
+static inline GorgetProcess* gorget_process_spawn(const char* program, GorgetArray* args) {
+    __gorget_spawn_errbuf[0] = '\0'; // clear stale error
+    int in_pipe[2], out_pipe[2], err_pipe[2];
+    if (pipe(in_pipe)  < 0 ||
+        pipe(out_pipe) < 0 ||
+        pipe(err_pipe) < 0) {
+        snprintf(__gorget_spawn_errbuf, sizeof(__gorget_spawn_errbuf),
+                 "pipe: %s", strerror(errno));
+        return NULL;
+    }
+
+    // Build argv: program + elements from args vector
+    int argc = args ? (int)args->len : 0;
+    char** argv = (char**)GORGET_ALLOC(sizeof(char*) * (size_t)(argc + 2));
+    argv[0] = (char*)program;
+    for (int i = 0; i < argc; i++) {
+        Str* sv = (Str*)gorget_array_get(args, i);
+        char* s = (char*)GORGET_ALLOC(sv->len + 1);
+        memcpy(s, sv->data, sv->len);
+        s[sv->len] = '\0';
+        argv[i + 1] = s;
+    }
+    argv[argc + 1] = NULL;
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        snprintf(__gorget_spawn_errbuf, sizeof(__gorget_spawn_errbuf),
+                 "fork: %s", strerror(errno));
+        close(in_pipe[0]); close(in_pipe[1]);
+        close(out_pipe[0]); close(out_pipe[1]);
+        close(err_pipe[0]); close(err_pipe[1]);
+        GORGET_FREE(argv, 0);
+        return NULL;
+    }
+    if (pid == 0) {
+        // Child: wire pipes then exec
+        dup2(in_pipe[0],  STDIN_FILENO);
+        dup2(out_pipe[1], STDOUT_FILENO);
+        dup2(err_pipe[1], STDERR_FILENO);
+        close(in_pipe[0]); close(in_pipe[1]);
+        close(out_pipe[0]); close(out_pipe[1]);
+        close(err_pipe[0]); close(err_pipe[1]);
+        execvp(argv[0], argv);
+        _exit(127);
+    }
+    // Parent: close child-side fds
+    close(in_pipe[0]);
+    close(out_pipe[1]);
+    close(err_pipe[1]);
+
+    GorgetProcess* proc = (GorgetProcess*)GORGET_ALLOC(sizeof(GorgetProcess));
+    proc->pid       = pid;
+    proc->stdin_fd  = in_pipe[1];
+    proc->stdout_fd = out_pipe[0];
+    proc->stderr_fd = err_pipe[0];
+    GORGET_FREE(argv, 0);
+    return proc;
+}
+
+static inline const char* gorget_process_spawn_err(void) {
+    return __gorget_spawn_errbuf[0] ? __gorget_spawn_errbuf : NULL;
+}
+
+static inline int64_t gorget_process_wait(GorgetProcess* proc) {
+    int status = 0;
+    waitpid(proc->pid, &status, 0);
+    return WIFEXITED(status) ? (int64_t)WEXITSTATUS(status) : (int64_t)-1;
+}
+
+static inline void gorget_process_kill(GorgetProcess* proc) {
+    kill(proc->pid, SIGTERM);
+}
+
+static inline int64_t gorget_process_pid(GorgetProcess* proc) {
+    return (int64_t)proc->pid;
+}
+
+static inline void gorget_process_write_stdin(GorgetProcess* proc, Str data) {
+    if (proc->stdin_fd >= 0) write(proc->stdin_fd, data.data, data.len);
+}
+
+static inline void gorget_process_close_stdin(GorgetProcess* proc) {
+    if (proc->stdin_fd >= 0) { close(proc->stdin_fd); proc->stdin_fd = -1; }
+}
+
+static inline GorgetString gorget_process_read_stdout(GorgetProcess* proc) {
+    if (proc->stdout_fd < 0) return gorget_string_new("");
+    size_t cap = 256, len = 0;
+    char* buf = (char*)GORGET_ALLOC(cap);
+    ssize_t n;
+    while ((n = read(proc->stdout_fd, buf + len, cap - len - 1)) > 0) {
+        len += (size_t)n;
+        if (len + 1 >= cap) { size_t newcap = cap * 2; buf = (char*)GORGET_REALLOC(buf, cap, newcap); cap = newcap; }
+    }
+    buf[len] = '\0';
+    return (GorgetString){buf, len, cap, __gorget_current_alloc};
+}
+
+static inline GorgetString gorget_process_read_stderr(GorgetProcess* proc) {
+    if (proc->stderr_fd < 0) return gorget_string_new("");
+    size_t cap = 256, len = 0;
+    char* buf = (char*)GORGET_ALLOC(cap);
+    ssize_t n;
+    while ((n = read(proc->stderr_fd, buf + len, cap - len - 1)) > 0) {
+        len += (size_t)n;
+        if (len + 1 >= cap) { size_t newcap = cap * 2; buf = (char*)GORGET_REALLOC(buf, cap, newcap); cap = newcap; }
+    }
+    buf[len] = '\0';
+    return (GorgetString){buf, len, cap, __gorget_current_alloc};
+}
+
+static inline int64_t gorget_getpid(void) {
+    return (int64_t)getpid();
+}
+"#;

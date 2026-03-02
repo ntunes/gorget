@@ -6579,6 +6579,38 @@ fn concurrency_params() {
     run_gg("concurrency_params.gg", "10\n11\n99");
 }
 
+#[test]
+fn sync_atomics() {
+    run_gg("sync_atomics.gg", "0\n42\n42\n50\n50\n40\ntrue\n100\nfalse\ntrue\ntrue\nfalse\ntrue\ntrue");
+}
+
+#[test]
+fn thread_basic() {
+    run_gg("thread_basic.gg", "42\nhello from thread\ntrue");
+}
+
+#[test]
+fn sync_barrier() {
+    run_gg("sync_barrier.gg", "barrier passed\nbarrier passed again");
+}
+
+#[test]
+fn sync_rwlock() {
+    run_gg("sync_rwlock.gg", "42\n100");
+}
+
+#[test]
+fn process_spawn() {
+    // echo appends \n, print(out) adds another \n → blank line before exit code
+    run_gg("process_spawn.gg", "hello world\n\n0\ntrue");
+}
+
+#[test]
+fn process_pipe() {
+    // cat echoes stdin back; write_stdin adds \n, print(out) adds another \n
+    run_gg("process_pipe.gg", "hello from gorget\n\n0");
+}
+
 // Parser Comparison Test
 // ═══════════════════════════════════════════════════════════════
 

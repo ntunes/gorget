@@ -800,6 +800,54 @@ fn lower_struct_literal(
         return FunctionBuilder::copy(dst);
     }
 
+    // AtomicInt(val) → gorget_atomic_int_new(val)
+    if effective_name == "AtomicInt" && args.len() == 1 {
+        let val_op = lower_expr(ctx, builder, &args[0]);
+        let at_type = ctx.type_mapper.lookup_named("AtomicInt").unwrap_or(I64_TYPE);
+        let dst = builder.call_extern("gorget_atomic_int_new", vec![val_op], at_type);
+        return FunctionBuilder::copy(dst);
+    }
+
+    // AtomicBool(val) → gorget_atomic_bool_new(val)
+    if effective_name == "AtomicBool" && args.len() == 1 {
+        let val_op = lower_expr(ctx, builder, &args[0]);
+        let at_type = ctx.type_mapper.lookup_named("AtomicBool").unwrap_or(BOOL_TYPE);
+        let dst = builder.call_extern("gorget_atomic_bool_new", vec![val_op], at_type);
+        return FunctionBuilder::copy(dst);
+    }
+
+    // Barrier(n) → gorget_barrier_new(n)
+    if effective_name == "Barrier" && args.len() == 1 {
+        let n_op = lower_expr(ctx, builder, &args[0]);
+        let b_type = ctx.type_mapper.lookup_named("Barrier").unwrap_or(I64_TYPE);
+        let dst = builder.call_extern("gorget_barrier_new", vec![n_op], b_type);
+        return FunctionBuilder::copy(dst);
+    }
+
+    // RWLock[T](val) → RWLock__T__new(val) — follows the Mutex pattern
+    if effective_name == "RWLock" || effective_name.starts_with("RWLock__") {
+        if !args.is_empty() {
+            let val_op = lower_expr(ctx, builder, &args[0]);
+            let val_type = super::exprs::infer_operand_type_full(ctx, &val_op, builder);
+            let inner_c = if let Some(rest) = effective_name.strip_prefix("RWLock__") {
+                rest.to_string()
+            } else {
+                ctx.type_name_for_id(val_type).unwrap_or("int64_t").to_string()
+            };
+            let rw_mangled = format!("RWLock__{inner_c}");
+            let rw_type = if let Some(tid) = ctx.type_mapper.lookup_named(&rw_mangled) {
+                tid
+            } else {
+                let tid = ctx.type_registry.insert(crate::ir::types::GirType::Named(rw_mangled.clone()));
+                ctx.type_mapper.register_named(rw_mangled.clone(), tid);
+                tid
+            };
+            let new_fn = format!("{rw_mangled}__new");
+            let dst = builder.call(&new_fn, vec![val_op], rw_type);
+            return FunctionBuilder::copy(dst);
+        }
+    }
+
     // Intercept TaskGroup.new() static constructor
     if effective_name == "TaskGroup" && args.is_empty() {
         let tg_mangled = "TaskGroup";
@@ -1396,6 +1444,235 @@ fn lower_method_call(
                     let dst = builder.call(&lock_fn, vec![recv], guard_type);
                     return FunctionBuilder::copy(dst);
                 }
+            }
+        }
+    }
+
+    // AtomicInt methods — pass the GorgetAtomicInt* receiver directly by value.
+    // fn_name_map maps AtomicInt__method → gorget_atomic_int_method in the C backend.
+    {
+        let recv_type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
+        if let Some(ref atn) = recv_type_name {
+            if atn == "AtomicInt" {
+                let recv_type = infer_operand_type_full(ctx, &recv, builder);
+                match method_name {
+                    "load" => {
+                        let dst = builder.call("AtomicInt__load", vec![recv], I64_TYPE);
+                        return FunctionBuilder::copy(dst);
+                    }
+                    "store" if !args.is_empty() => {
+                        let val = lower_expr(ctx, builder, &args[0].node.value);
+                        builder.call_void("AtomicInt__store", vec![recv, val]);
+                        return Operand::Constant(Constant::Unit);
+                    }
+                    "add" if !args.is_empty() => {
+                        let val = lower_expr(ctx, builder, &args[0].node.value);
+                        let dst = builder.call("AtomicInt__add", vec![recv, val], I64_TYPE);
+                        return FunctionBuilder::copy(dst);
+                    }
+                    "sub" if !args.is_empty() => {
+                        let val = lower_expr(ctx, builder, &args[0].node.value);
+                        let dst = builder.call("AtomicInt__sub", vec![recv, val], I64_TYPE);
+                        return FunctionBuilder::copy(dst);
+                    }
+                    "compare_exchange" if args.len() == 2 => {
+                        let expected = lower_expr(ctx, builder, &args[0].node.value);
+                        let desired  = lower_expr(ctx, builder, &args[1].node.value);
+                        let dst = builder.call("AtomicInt__compare_exchange", vec![recv, expected, desired], BOOL_TYPE);
+                        return FunctionBuilder::copy(dst);
+                    }
+                    _ => { let _ = recv_type; }
+                }
+            }
+        }
+    }
+
+    // AtomicBool methods — pass the GorgetAtomicBool* receiver directly by value.
+    {
+        let recv_type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
+        if let Some(ref atn) = recv_type_name {
+            if atn == "AtomicBool" {
+                let recv_type = infer_operand_type_full(ctx, &recv, builder);
+                match method_name {
+                    "load" => {
+                        let dst = builder.call("AtomicBool__load", vec![recv], BOOL_TYPE);
+                        return FunctionBuilder::copy(dst);
+                    }
+                    "store" if !args.is_empty() => {
+                        let val = lower_expr(ctx, builder, &args[0].node.value);
+                        builder.call_void("AtomicBool__store", vec![recv, val]);
+                        return Operand::Constant(Constant::Unit);
+                    }
+                    "swap" if !args.is_empty() => {
+                        let val = lower_expr(ctx, builder, &args[0].node.value);
+                        let dst = builder.call("AtomicBool__swap", vec![recv, val], BOOL_TYPE);
+                        return FunctionBuilder::copy(dst);
+                    }
+                    "compare_exchange" if args.len() == 2 => {
+                        let expected = lower_expr(ctx, builder, &args[0].node.value);
+                        let desired  = lower_expr(ctx, builder, &args[1].node.value);
+                        let dst = builder.call("AtomicBool__compare_exchange", vec![recv, expected, desired], BOOL_TYPE);
+                        return FunctionBuilder::copy(dst);
+                    }
+                    _ => { let _ = recv_type; }
+                }
+            }
+        }
+    }
+
+    // Barrier methods — pass the GorgetBarrier* receiver directly by value.
+    {
+        let recv_type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
+        if let Some(ref btn) = recv_type_name {
+            if btn == "Barrier" {
+                if method_name == "wait" {
+                    builder.call_void("Barrier__wait", vec![recv]);
+                    return Operand::Constant(Constant::Unit);
+                }
+            }
+        }
+    }
+
+    // RWLock[T] methods: read, write — pass the GorgetRWLock* receiver directly by value.
+    {
+        let recv_type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
+        if let Some(ref rtn) = recv_type_name {
+            if rtn.starts_with("RWLock__") {
+                let elem_suffix = rtn.strip_prefix("RWLock__").unwrap_or("int64_t");
+                match method_name {
+                    "read" => {
+                        let rg_name = format!("ReadGuard__{elem_suffix}");
+                        let rg_type = ctx.type_mapper.lookup_named(&rg_name).unwrap_or(UNIT_TYPE);
+                        let read_fn = format!("{rtn}__read");
+                        let dst = builder.call(&read_fn, vec![recv], rg_type);
+                        return FunctionBuilder::copy(dst);
+                    }
+                    "write" => {
+                        let wg_name = format!("WriteGuard__{elem_suffix}");
+                        let wg_type = ctx.type_mapper.lookup_named(&wg_name).unwrap_or(UNIT_TYPE);
+                        let write_fn = format!("{rtn}__write");
+                        let dst = builder.call(&write_fn, vec![recv], wg_type);
+                        return FunctionBuilder::copy(dst);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    // ReadGuard[T] / WriteGuard[T] methods: get, set — pass by mutable reference (like Guard).
+    {
+        let recv_type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
+        if let Some(ref gtn) = recv_type_name {
+            if gtn.starts_with("ReadGuard__") || gtn.starts_with("WriteGuard__") {
+                let elem_suffix = if let Some(s) = gtn.strip_prefix("ReadGuard__") { s }
+                    else { gtn.strip_prefix("WriteGuard__").unwrap_or("int64_t") };
+                let elem_type = ctx.type_mapper.lookup_named(elem_suffix).unwrap_or(I64_TYPE);
+                let recv_type = infer_operand_type_full(ctx, &recv, builder);
+                let guard_ptr = if let Operand::Copy(ref place) | Operand::Move(ref place) = recv {
+                    let pt = ctx.register_mut_ptr_type(recv_type);
+                    let pl = builder.add_local(pt, None);
+                    builder.emit_borrow_mut(pl, place.clone());
+                    Operand::Copy(Place::local(pl))
+                } else {
+                    let tmp = builder.add_local(recv_type, None);
+                    builder.assign(Place::local(tmp), recv.clone());
+                    let pt = ctx.register_mut_ptr_type(recv_type);
+                    let pl = builder.add_local(pt, None);
+                    builder.emit_borrow_mut(pl, Place::local(tmp));
+                    Operand::Copy(Place::local(pl))
+                };
+                match method_name {
+                    "get" => {
+                        let get_fn = format!("{gtn}__get");
+                        let dst = builder.call(&get_fn, vec![guard_ptr], elem_type);
+                        return FunctionBuilder::copy(dst);
+                    }
+                    "set" if !args.is_empty() => {
+                        let val = lower_expr(ctx, builder, &args[0].node.value);
+                        let set_fn = format!("{gtn}__set");
+                        builder.call_void(&set_fn, vec![guard_ptr, val]);
+                        return Operand::Constant(Constant::Unit);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    // Thread[T] methods: join (Move, pass by value), id (pass by value — pointer).
+    {
+        let recv_type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
+        if let Some(ref ttn) = recv_type_name {
+            if ttn.starts_with("Thread__") {
+                let elem_suffix = ttn.strip_prefix("Thread__").unwrap_or("int64_t");
+                let is_void = elem_suffix == "void";
+                match method_name {
+                    "join" => {
+                        let join_fn = format!("{ttn}__join");
+                        if is_void {
+                            builder.call_void(&join_fn, vec![recv]);
+                            return Operand::Constant(Constant::Unit);
+                        } else {
+                            // Map C type name back to TypeId (primitives first, then registry)
+                            let ret_type = match elem_suffix {
+                                "int64_t" => I64_TYPE,
+                                "double"  => F64_TYPE,
+                                "bool"    => BOOL_TYPE,
+                                "int32_t" => I32_TYPE,
+                                _ => ctx.type_mapper.lookup_named(elem_suffix).unwrap_or(I64_TYPE),
+                            };
+                            let dst = builder.call(&join_fn, vec![recv], ret_type);
+                            return FunctionBuilder::copy(dst);
+                        }
+                    }
+                    "id" => {
+                        let id_fn = format!("{ttn}__id");
+                        let dst = builder.call(&id_fn, vec![recv], I64_TYPE);
+                        return FunctionBuilder::copy(dst);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    // Process methods — receiver is already GorgetProcess* (pointer), pass directly by value.
+    {
+        let recv_type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
+        if recv_type_name.as_deref() == Some("Process") {
+            let gs_type = ctx.type_mapper.owned_string_type;
+            match method_name {
+                "wait" => {
+                    let dst = builder.call("Process__wait", vec![recv], I64_TYPE);
+                    return FunctionBuilder::copy(dst);
+                }
+                "kill" => {
+                    builder.call_void("Process__kill", vec![recv]);
+                    return Operand::Constant(Constant::Unit);
+                }
+                "pid" => {
+                    let dst = builder.call("Process__pid", vec![recv], I64_TYPE);
+                    return FunctionBuilder::copy(dst);
+                }
+                "write_stdin" if !args.is_empty() => {
+                    let data = lower_expr(ctx, builder, &args[0].node.value);
+                    builder.call_void("Process__write_stdin", vec![recv, data]);
+                    return Operand::Constant(Constant::Unit);
+                }
+                "close_stdin" => {
+                    builder.call_void("Process__close_stdin", vec![recv]);
+                    return Operand::Constant(Constant::Unit);
+                }
+                "read_stdout" => {
+                    let dst = builder.call("Process__read_stdout", vec![recv], gs_type);
+                    return FunctionBuilder::copy(dst);
+                }
+                "read_stderr" => {
+                    let dst = builder.call("Process__read_stderr", vec![recv], gs_type);
+                    return FunctionBuilder::copy(dst);
+                }
+                _ => {}
             }
         }
     }
@@ -3273,6 +3550,93 @@ fn lower_call(
                 tid
             };
             let dst = builder.call("gorget_task_group_new", vec![], tg_type);
+            return FunctionBuilder::copy(dst);
+        }
+
+        // AtomicInt(initial_value) → gorget_atomic_int_new(val)
+        if name == "AtomicInt" && args.len() == 1 {
+            let val_op = lower_expr(ctx, builder, &args[0].node.value);
+            let at_type = ctx.type_mapper.lookup_named("AtomicInt").unwrap_or(I64_TYPE);
+            let dst = builder.call_extern("gorget_atomic_int_new", vec![val_op], at_type);
+            return FunctionBuilder::copy(dst);
+        }
+
+        // AtomicBool(initial_value) → gorget_atomic_bool_new(val)
+        if name == "AtomicBool" && args.len() == 1 {
+            let val_op = lower_expr(ctx, builder, &args[0].node.value);
+            let at_type = ctx.type_mapper.lookup_named("AtomicBool").unwrap_or(BOOL_TYPE);
+            let dst = builder.call_extern("gorget_atomic_bool_new", vec![val_op], at_type);
+            return FunctionBuilder::copy(dst);
+        }
+
+        // Barrier(n) → gorget_barrier_new(n)
+        if name == "Barrier" && args.len() == 1 {
+            let n_op = lower_expr(ctx, builder, &args[0].node.value);
+            let b_type = ctx.type_mapper.lookup_named("Barrier").unwrap_or(I64_TYPE);
+            let dst = builder.call_extern("gorget_barrier_new", vec![n_op], b_type);
+            return FunctionBuilder::copy(dst);
+        }
+
+        // RWLock[T](initial_value) → RWLock__T__new(value)
+        if name == "RWLock" {
+            if let Some(type_args) = generic_args {
+                if !type_args.is_empty() && !args.is_empty() {
+                    let mangled = super::types::mangle_generic_name(name, type_args);
+                    let mangled = ctx.resolve_type_name(&mangled);
+                    let rw_type = if let Some(tid) = ctx.type_mapper.lookup_named(&mangled) {
+                        tid
+                    } else {
+                        let tid = ctx.type_registry.insert(GirType::Named(mangled.clone()));
+                        ctx.type_mapper.register_named(mangled.clone(), tid);
+                        tid
+                    };
+                    let val_op = lower_expr(ctx, builder, &args[0].node.value);
+                    let new_fn = format!("{mangled}__new");
+                    let dst = builder.call(&new_fn, vec![val_op], rw_type);
+                    return FunctionBuilder::copy(dst);
+                }
+            }
+        }
+
+        // thread_spawn(fn_name) → __gorget_thread_spawn_fn_name()
+        // V1: only bare function references supported. Closures are a follow-up (see TODO.md).
+        if name == "thread_spawn" && args.len() == 1 {
+            if let ast::Expr::Identifier(fn_name) = &args[0].node.value.node {
+                let fn_name = fn_name.clone();
+                let fn_ret_type = ctx.fn_sigs.get(fn_name.as_str())
+                    .map(|(_, r)| *r)
+                    .unwrap_or(I64_TYPE);
+                let ret_c = ctx.type_name_for_id(fn_ret_type)
+                    .unwrap_or("int64_t")
+                    .to_string();
+                let thread_name = if fn_ret_type == UNIT_TYPE {
+                    "Thread__void".to_string()
+                } else {
+                    format!("Thread__{ret_c}")
+                };
+                let thread_type = if let Some(tid) = ctx.type_mapper.lookup_named(&thread_name) {
+                    tid
+                } else {
+                    let tid = ctx.type_registry.insert(GirType::Named(thread_name.clone()));
+                    ctx.type_mapper.register_named(thread_name.clone(), tid);
+                    tid
+                };
+                ctx.thread_spawned_fns.entry(fn_name.clone()).or_insert(fn_ret_type);
+                let spawn_fn = format!("__gorget_thread_spawn_{fn_name}");
+                let dst = builder.call(&spawn_fn, vec![], thread_type);
+                return FunctionBuilder::copy(dst);
+            }
+        }
+
+        // current_thread_id() → gorget_current_thread_id()
+        if name == "current_thread_id" && args.is_empty() {
+            let dst = builder.call_extern("gorget_current_thread_id", vec![], I64_TYPE);
+            return FunctionBuilder::copy(dst);
+        }
+
+        // getpid() → gorget_getpid()
+        if name == "getpid" && args.is_empty() {
+            let dst = builder.call_extern("gorget_getpid", vec![], I64_TYPE);
             return FunctionBuilder::copy(dst);
         }
 

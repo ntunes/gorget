@@ -191,6 +191,43 @@ impl TypeMapper {
                         self.named_types.insert(mangled, type_id);
                         return type_id;
                     }
+                    // Auto-register std.sync generic types: RWLock[T], ReadGuard[T], WriteGuard[T].
+                    if matches!(base, "RWLock" | "ReadGuard" | "WriteGuard") {
+                        let (copy_sem, drop_strat) = match base {
+                            "ReadGuard" => (CopySemantics::Move, DropStrategy::Trivial(format!("{mangled}__drop"))),
+                            "WriteGuard" => (CopySemantics::Move, DropStrategy::Trivial(format!("{mangled}__drop"))),
+                            _ => (CopySemantics::Copy, DropStrategy::None), // RWLock is a pointer (Copy)
+                        };
+                        registry.add_type_def(TypeDef {
+                            name: mangled.clone(),
+                            kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
+                            metadata: TypeMetadata {
+                                size: None,
+                                align: None,
+                                copy_semantics: copy_sem,
+                                drop_strategy: drop_strat,
+                            },
+                        });
+                        let type_id = registry.insert(GirType::Named(mangled.clone()));
+                        self.named_types.insert(mangled, type_id);
+                        return type_id;
+                    }
+                    // Auto-register std.thread generic type: Thread[T].
+                    if base == "Thread" {
+                        registry.add_type_def(TypeDef {
+                            name: mangled.clone(),
+                            kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
+                            metadata: TypeMetadata {
+                                size: None,
+                                align: None,
+                                copy_semantics: CopySemantics::Move,
+                                drop_strategy: DropStrategy::None, // join() consumes it
+                            },
+                        });
+                        let type_id = registry.insert(GirType::Named(mangled.clone()));
+                        self.named_types.insert(mangled, type_id);
+                        return type_id;
+                    }
                     return UNIT_TYPE;
                 }
                 if let Some(&id) = self.named_types.get(name.node.as_str()) {
@@ -210,6 +247,39 @@ impl TypeMapper {
                     });
                     let type_id = registry.insert(GirType::Named("TaskGroup".to_string()));
                     self.named_types.insert("TaskGroup".to_string(), type_id);
+                    return type_id;
+                }
+                // Auto-register non-generic std.sync types (AtomicInt, AtomicBool, Barrier).
+                if matches!(name.node.as_str(), "AtomicInt" | "AtomicBool" | "Barrier") {
+                    let n = name.node.clone();
+                    registry.add_type_def(TypeDef {
+                        name: n.clone(),
+                        kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
+                        metadata: TypeMetadata {
+                            size: None,
+                            align: None,
+                            copy_semantics: CopySemantics::Copy, // opaque pointer
+                            drop_strategy: DropStrategy::None,
+                        },
+                    });
+                    let type_id = registry.insert(GirType::Named(n.clone()));
+                    self.named_types.insert(n, type_id);
+                    return type_id;
+                }
+                // Auto-register std.process Process type (non-generic, Move, RAII).
+                if name.node == "Process" {
+                    registry.add_type_def(TypeDef {
+                        name: "Process".to_string(),
+                        kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
+                        metadata: TypeMetadata {
+                            size: None,
+                            align: None,
+                            copy_semantics: CopySemantics::Move,
+                            drop_strategy: DropStrategy::None,
+                        },
+                    });
+                    let type_id = registry.insert(GirType::Named("Process".to_string()));
+                    self.named_types.insert("Process".to_string(), type_id);
                     return type_id;
                 }
                 UNIT_TYPE

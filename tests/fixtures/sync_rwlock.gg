@@ -1,0 +1,17 @@
+from std.sync import RWLock
+
+int read_val(RWLock[int] lock):
+    ReadGuard[int] rg = lock.read()
+    return rg.get()
+
+void write_val(RWLock[int] lock, int v):
+    WriteGuard[int] wg = lock.write()
+    wg.set(v)
+
+void main():
+    RWLock[int] lock = RWLock[int](42)
+    int val = read_val(lock)
+    print(val)
+    write_val(lock, 100)
+    int val2 = read_val(lock)
+    print(val2)

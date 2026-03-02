@@ -1,0 +1,9 @@
+from std.sync import Barrier
+
+void main():
+    # Barrier(1): single thread — wait() returns immediately
+    Barrier b = Barrier(1)
+    b.wait()
+    print("barrier passed")
+    b.wait()
+    print("barrier passed again")

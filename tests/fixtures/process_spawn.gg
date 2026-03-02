@@ -1,0 +1,17 @@
+from std.process import process_spawn, getpid
+
+void main():
+    Vector[str] args = Vector[str]()
+    args.push("hello")
+    args.push("world")
+    Result[Process, str] r = process_spawn("echo", args)
+    match r:
+        case Ok(proc):
+            String out = proc.read_stdout()
+            int code = proc.wait()
+            print(out)
+            print("{code}")
+        case Error(msg):
+            print("spawn failed: {msg}")
+    int mypid = getpid()
+    print("{mypid > 0}")

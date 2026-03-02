@@ -98,6 +98,31 @@ fn map_stdlib_name(name: &str) -> &str {
         "args" => "gorget_args",
         "exec" => "gorget_exec",
         "exec_output" => "gorget_exec_output",
+        "process_spawn" => "gorget_process_spawn",
+        "getpid" => "gorget_getpid",
+        // Process methods
+        "Process__wait" => "gorget_process_wait",
+        "Process__kill" => "gorget_process_kill",
+        "Process__pid" => "gorget_process_pid",
+        "Process__write_stdin" => "gorget_process_write_stdin",
+        "Process__close_stdin" => "gorget_process_close_stdin",
+        "Process__read_stdout" => "gorget_process_read_stdout",
+        "Process__read_stderr" => "gorget_process_read_stderr",
+        // AtomicInt methods
+        "AtomicInt__load" => "gorget_atomic_int_load",
+        "AtomicInt__store" => "gorget_atomic_int_store",
+        "AtomicInt__add" => "gorget_atomic_int_add",
+        "AtomicInt__sub" => "gorget_atomic_int_sub",
+        "AtomicInt__compare_exchange" => "gorget_atomic_int_compare_exchange",
+        // AtomicBool methods
+        "AtomicBool__load" => "gorget_atomic_bool_load",
+        "AtomicBool__store" => "gorget_atomic_bool_store",
+        "AtomicBool__swap" => "gorget_atomic_bool_swap",
+        "AtomicBool__compare_exchange" => "gorget_atomic_bool_compare_exchange",
+        // Barrier methods
+        "Barrier__wait" => "gorget_barrier_wait",
+        // std.thread
+        "current_thread_id" => "gorget_current_thread_id",
         // Environment
         "getenv" => "gorget_getenv",
         "setenv" => "gorget_setenv",
@@ -452,6 +477,19 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
     if all_call_names.iter().any(|n| n == "gorget_exec" || n == "gorget_exec_output" || n == "exec" || n == "exec_output") {
         out.push_str(c_runtime::PROCESS_RUNTIME);
     }
+    if module.has_process
+        || all_call_names.iter().any(|n| n.starts_with("gorget_process_") || n == "process_spawn" || n == "getpid" || n == "gorget_getpid" || n.starts_with("Process__")) {
+        out.push_str(c_runtime::PROCESS_SPAWN_RUNTIME);
+    }
+    if module.has_sync
+        || all_call_names.iter().any(|n| n.starts_with("gorget_atomic_") || n.starts_with("gorget_barrier_") || n.starts_with("gorget_rwlock_") || n.starts_with("AtomicInt__") || n.starts_with("AtomicBool__") || n.starts_with("Barrier__") || n.starts_with("RWLock__") || n.starts_with("ReadGuard__") || n.starts_with("WriteGuard__")) {
+        out.push_str(c_runtime::SYNC_RUNTIME);
+    }
+    if module.has_thread
+        || !module.thread_spawned_fns.is_empty()
+        || all_call_names.iter().any(|n| n == "gorget_current_thread_id" || n == "current_thread_id" || n.starts_with("__gorget_thread_spawn_") || n.starts_with("Thread__")) {
+        out.push_str(c_runtime::THREAD_RUNTIME);
+    }
     let needs_async_runtime = module.has_async || module.has_spawn
         || all_call_names.iter().any(|n| n.contains("channel_") || n.contains("Channel")
             || n.contains("gorget_executor_") || n == "gorget_spawn" || n.contains("GorgetTask"));
@@ -541,6 +579,12 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
     if needs_mutex {
         emit_mutex_defs(&mut out, module);
     }
+    if !module.rwlock_types.is_empty() {
+        emit_rwlock_defs(&mut out, module);
+    }
+    if !module.thread_types.is_empty() || !module.thread_spawned_fns.is_empty() {
+        emit_thread_defs(&mut out, module);
+    }
 
     // Forward declarations for all functions (before globals so vtable refs resolve)
     let skip_names = template_type_names(module);
@@ -556,6 +600,9 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
     if !module.spawned_fns.is_empty() {
         emit_spawn_helpers(&mut out, module);
     }
+
+    // Emit thread spawn helpers (entry functions reference forward-declared GIR functions)
+    emit_thread_helpers(&mut out, module);
 
     // Emit named-function adapters for Callable dispatch (before function definitions)
     emit_func_ref_adapters(&mut out, module);
@@ -1065,6 +1112,135 @@ fn emit_mutex_defs(out: &mut String, module: &Module) {
     }
 }
 
+/// Emit RWLock__T + ReadGuard__T + WriteGuard__T typedef + wrapper functions.
+fn emit_rwlock_defs(out: &mut String, module: &Module) {
+    if module.rwlock_types.is_empty() {
+        return;
+    }
+    out.push_str("\n/* ── RWLock[T] + ReadGuard[T] + WriteGuard[T] wrappers ── */\n");
+    for elem_c in &module.rwlock_types {
+        let rwlock_name = format!("RWLock__{elem_c}");
+        let read_guard  = format!("ReadGuard__{elem_c}");
+        let write_guard = format!("WriteGuard__{elem_c}");
+        // Typedefs
+        let _ = writeln!(out, "typedef GorgetRWLock* {rwlock_name};");
+        let _ = writeln!(out, "typedef gorget_read_guard_t {read_guard};");
+        let _ = writeln!(out, "typedef gorget_write_guard_t {write_guard};");
+        // Constructor: RWLock__T__new(val)
+        let _ = writeln!(out,
+            "static inline {rwlock_name} {rwlock_name}__new({elem_c} val) {{ \
+             return gorget_rwlock_new(sizeof({elem_c}), &val); }}");
+        // read() -> ReadGuard__T
+        let _ = writeln!(out,
+            "static inline {read_guard} {rwlock_name}__read({rwlock_name} self) {{ \
+             return gorget_rwlock_read(self); }}");
+        // write() -> WriteGuard__T
+        let _ = writeln!(out,
+            "static inline {write_guard} {rwlock_name}__write({rwlock_name} self) {{ \
+             return gorget_rwlock_write(self); }}");
+        // ReadGuard__T__get(&self) -> T
+        let _ = writeln!(out,
+            "static inline {elem_c} {read_guard}__get({read_guard}* self) {{ \
+             return *({elem_c}*)self->ptr; }}");
+        // ReadGuard__T__drop(&self)
+        let _ = writeln!(out,
+            "static inline void {read_guard}__drop({read_guard}* self) {{ \
+             gorget_read_guard_release(self); }}");
+        // WriteGuard__T__get(&self) -> T
+        let _ = writeln!(out,
+            "static inline {elem_c} {write_guard}__get({write_guard}* self) {{ \
+             return *({elem_c}*)self->ptr; }}");
+        // WriteGuard__T__set(&self, val)
+        let _ = writeln!(out,
+            "static inline void {write_guard}__set({write_guard}* self, {elem_c} val) {{ \
+             *({elem_c}*)self->ptr = val; }}");
+        // WriteGuard__T__drop(&self)
+        let _ = writeln!(out,
+            "static inline void {write_guard}__drop({write_guard}* self) {{ \
+             gorget_write_guard_release(self); }}");
+        out.push('\n');
+    }
+}
+
+/// Emit Thread__T typedef + join/id methods.
+/// The internal `__GorgetThread__T` context struct is also emitted here.
+/// Per-function spawn helpers (which reference GIR functions) are in emit_thread_helpers.
+fn emit_thread_defs(out: &mut String, module: &Module) {
+    if module.thread_types.is_empty() {
+        return;
+    }
+    out.push_str("\n/* ── Thread[T] wrappers ── */\n");
+    for elem_c in &module.thread_types {
+        let thread_name = format!("Thread__{elem_c}");
+        let is_void = elem_c == "void";
+        // Internal context struct — use _thr/_result (not __thread: reserved GCC keyword)
+        // For void return: no _result field.
+        if is_void {
+            let _ = writeln!(out,
+                "typedef struct {{ pthread_t _thr; }} __GorgetThread__{elem_c};");
+        } else {
+            let _ = writeln!(out,
+                "typedef struct {{ pthread_t _thr; {elem_c} _result; }} __GorgetThread__{elem_c};");
+        }
+        // Thread__T is a pointer to the context struct (Move; join() frees it)
+        let _ = writeln!(out, "typedef __GorgetThread__{elem_c}* {thread_name};");
+        // id(self) -> int64_t: return the pthread_t cast to int (takes by value like join)
+        let _ = writeln!(out,
+            "static inline int64_t {thread_name}__id({thread_name} self) {{ \
+             return (int64_t)(uintptr_t)self->_thr; }}");
+        // join(self) -> T: block until complete, extract result, free context
+        if is_void {
+            let _ = writeln!(out,
+                "static inline void {thread_name}__join({thread_name} self) {{ \
+                 pthread_join(self->_thr, NULL); \
+                 GORGET_FREE(self, sizeof(*self)); }}");
+        } else {
+            let _ = writeln!(out,
+                "static inline {elem_c} {thread_name}__join({thread_name} self) {{ \
+                 pthread_join(self->_thr, NULL); \
+                 {elem_c} _r = self->_result; \
+                 GORGET_FREE(self, sizeof(*self)); \
+                 return _r; }}");
+        }
+        out.push('\n');
+    }
+}
+
+/// Emit per-function Thread entry and spawn helpers.
+/// Called AFTER GIR function forward declarations (entry functions call GIR functions).
+fn emit_thread_helpers(out: &mut String, module: &Module) {
+    if module.thread_spawned_fns.is_empty() {
+        return;
+    }
+    out.push_str("\n/* ── Thread spawn helpers ── */\n");
+    for (fn_name, ret_type) in &module.thread_spawned_fns {
+        let ret_c = format_type(*ret_type, &module.type_registry);
+        let is_void = ret_c == "void";
+        let thread_name = format!("Thread__{ret_c}");
+        let ctx_type    = format!("__GorgetThread__{ret_c}");
+        let mangled_fn  = mangle_name(fn_name);
+        // Thread entry: calls the user function, stores result in ctx
+        let _ = writeln!(out, "static void* __gorget_thread_entry_{fn_name}(void* __arg) {{");
+        let _ = writeln!(out, "    {ctx_type}* __ctx = ({ctx_type}*)__arg;");
+        if is_void {
+            let _ = writeln!(out, "    {mangled_fn}();");
+        } else {
+            let _ = writeln!(out, "    __ctx->_result = {mangled_fn}();");
+        }
+        out.push_str("    return NULL;\n}\n");
+        // Spawn function: allocate context, start thread, return Thread__T
+        let _ = writeln!(out,
+            "static inline {thread_name} __gorget_thread_spawn_{fn_name}(void) {{");
+        let _ = writeln!(out,
+            "    {ctx_type}* __ctx = ({ctx_type}*)GORGET_CALLOC(1, sizeof({ctx_type}));");
+        let _ = writeln!(out,
+            "    pthread_create(&__ctx->_thr, NULL, \
+             __gorget_thread_entry_{fn_name}, __ctx);");
+        out.push_str("    return __ctx;\n}\n");
+        out.push('\n');
+    }
+}
+
 /// Emit Channel__T typedef + wrapper functions and Task__T structs.
 /// Called after CHANNEL_RUNTIME (which defines GorgetChannel and GorgetWaker).
 fn emit_channel_and_task_defs(out: &mut String, module: &Module) {
@@ -1228,6 +1404,12 @@ fn emit_type_definitions(out: &mut String, module: &Module) {
             || name.starts_with("Mutex__")
             || name.starts_with("Guard__")
             || name == "TaskGroup"
+            // std.sync: RWLock__T, ReadGuard__T, WriteGuard__T are hand-emitted
+            || name.starts_with("RWLock__")
+            || name.starts_with("ReadGuard__")
+            || name.starts_with("WriteGuard__")
+            // std.thread: Thread__T is hand-emitted
+            || name.starts_with("Thread__")
     };
     // Collect Box types for special handling (Box__T → T* pointer typedef)
     let mut box_types: Vec<(String, String)> = Vec::new(); // (box_name, inner_c_type)
@@ -1597,6 +1779,13 @@ fn runtime_type_name(name: &str) -> Option<&'static str> {
         // Concurrency types
         "Shared" => Some("GorgetShared*"),
         "Mutex" => Some("GorgetMutex*"),
+        // std.sync non-generic types
+        "AtomicInt" => Some("GorgetAtomicInt*"),
+        "AtomicBool" => Some("GorgetAtomicBool*"),
+        "Barrier" => Some("GorgetBarrier*"),
+        "RWLock" => Some("GorgetRWLock*"),
+        // std.process Process type
+        "Process" => Some("GorgetProcess*"),
         // Crypto types
         "CipherContext" => Some("GorgetCipherContext"),
         "BigNum" => Some("GorgetBigNum"),
@@ -4797,6 +4986,8 @@ fn infer_method_return_type(name: &str) -> Option<&'static str> {
             "contains" | "is_empty" | "is_subset" | "is_superset"
             | "starts_with" | "ends_with" | "any" | "all" => return Some("bool"),
             // Methods returning Str
+            // Thread.join() is NOT a string join — return type determined by GIR, not heuristic
+            "join" if type_prefix.starts_with("Thread__") => return None,
             "join" if type_prefix.contains("Str") || type_prefix.contains("str") => return Some("GorgetString"),
             "join" => return Some("GorgetString"),
             "str" | "to_str" => return Some("Str"),
@@ -6145,6 +6336,10 @@ fn last_error_fn(func_name: &str) -> Option<&'static str> {
     // Crypto
     if func_name.starts_with("gorget_crypto_") || func_name.starts_with("crypto_") {
         return Some("gorget_crypto_last_error");
+    }
+    // Process spawn
+    if func_name == "gorget_process_spawn" || func_name == "process_spawn" {
+        return Some("gorget_process_spawn_err");
     }
     None
 }

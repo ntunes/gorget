@@ -62,7 +62,8 @@ pub fn is_builtin_module(segments: &[String]) -> bool {
             2 => matches!(segments[1].as_str(),
                 "fs" | "path" | "os" | "conv" | "io" | "random" | "time"
                 | "collections" | "math" | "fmt" | "process" | "bytes"
-                | "encoding" | "channel" | "alloc" | "term" | "heap" | "datetime"),
+                | "encoding" | "channel" | "alloc" | "term" | "heap" | "datetime"
+                | "sync" | "thread"),
             3 => segments[1] == "net" && matches!(segments[2].as_str(), "socket" | "tls" | "udp"),
             _ => false,
         },
@@ -94,6 +95,8 @@ pub fn generate_builtin_module(segments: &[String]) -> Option<Module> {
                 "encoding" => None, // file-based module — loaded via builtin_module_source()
                 "channel" => Some(gen_channel_module()),
                 "alloc" => Some(gen_alloc_module()),
+                "sync" => Some(gen_sync_module()),
+                "thread" => Some(gen_thread_module()),
                 "term" => None,     // file-based module — loaded via builtin_module_source()
                 "heap" => None,     // file-based module — loaded via builtin_module_source()
                 "datetime" => None, // file-based module — loaded via builtin_module_source()
@@ -300,6 +303,10 @@ fn gen_process_module() -> Module {
         name: Spanned::dummy("ExecResult".to_string()),
         generic_args: vec![],
     };
+    let ty_process = || Type::Named {
+        name: Spanned::dummy("Process".to_string()),
+        generic_args: vec![],
+    };
     let struct_def = StructDef {
         attributes: vec![],
         visibility: Visibility::Public,
@@ -325,13 +332,237 @@ fn gen_process_module() -> Module {
         doc_comment: None,
         span: Span::dummy(),
     };
+    // Process is an opaque struct wrapping pid + pipe fds.
+    let process_struct = opaque_struct("Process");
+    let process_equip = equip_block("Process", vec![
+        decl_method("wait", Ownership::Borrow, &[], ty_int()),
+        decl_method("kill", Ownership::Borrow, &[], ty_void()),
+        decl_method("pid", Ownership::Borrow, &[], ty_int()),
+        decl_method("write_stdin", Ownership::Borrow, &[("data", ty_str())], ty_void()),
+        decl_method("close_stdin", Ownership::Borrow, &[], ty_void()),
+        decl_method("read_stdout", Ownership::Borrow, &[], ty_string()),
+        decl_method("read_stderr", Ownership::Borrow, &[], ty_string()),
+    ]);
     let items = vec![
         Spanned::dummy(Item::Struct(struct_def)),
+        process_struct,
+        process_equip,
         Spanned::dummy(Item::Function(decl_fn("exec", &[("cmd", ty_str())], ty_int()))),
         Spanned::dummy(Item::Function(decl_fn("exec_output", &[("cmd", ty_str())], exec_result_type))),
+        Spanned::dummy(Item::Function(decl_fn(
+            "process_spawn",
+            &[("program", ty_str()), ("args", ty_vector_str())],
+            ty_result(ty_process(), ty_str()),
+        ))),
+        Spanned::dummy(Item::Function(decl_fn("getpid", &[], ty_int()))),
     ];
     Module {
         items,
+        span: Span::dummy(),
+    }
+}
+
+fn gen_sync_module() -> Module {
+    let ty_t = || Type::Named {
+        name: Spanned::dummy("T".to_string()),
+        generic_args: vec![],
+    };
+    let ty_read_guard = |t: Type| Type::Named {
+        name: Spanned::dummy("ReadGuard".to_string()),
+        generic_args: vec![Spanned::dummy(t)],
+    };
+    let ty_write_guard = |t: Type| Type::Named {
+        name: Spanned::dummy("WriteGuard".to_string()),
+        generic_args: vec![Spanned::dummy(t)],
+    };
+
+    // AtomicInt — non-generic opaque struct
+    let atomic_int_struct = opaque_struct("AtomicInt");
+    let atomic_int_equip = equip_block("AtomicInt", vec![
+        decl_method("load", Ownership::Borrow, &[], ty_int()),
+        decl_method("store", Ownership::Borrow, &[("val", ty_int())], ty_void()),
+        decl_method("add", Ownership::Borrow, &[("val", ty_int())], ty_int()),
+        decl_method("sub", Ownership::Borrow, &[("val", ty_int())], ty_int()),
+        decl_method("compare_exchange", Ownership::Borrow, &[("expected", ty_int()), ("desired", ty_int())], ty_bool()),
+    ]);
+
+    // AtomicBool — non-generic opaque struct
+    let atomic_bool_struct = opaque_struct("AtomicBool");
+    let atomic_bool_equip = equip_block("AtomicBool", vec![
+        decl_method("load", Ownership::Borrow, &[], ty_bool()),
+        decl_method("store", Ownership::Borrow, &[("val", ty_bool())], ty_void()),
+        decl_method("swap", Ownership::Borrow, &[("val", ty_bool())], ty_bool()),
+        decl_method("compare_exchange", Ownership::Borrow, &[("expected", ty_bool()), ("desired", ty_bool())], ty_bool()),
+    ]);
+
+    // Barrier — non-generic opaque struct
+    let barrier_struct = opaque_struct("Barrier");
+    let barrier_equip = equip_block("Barrier", vec![
+        decl_method("wait", Ownership::Borrow, &[], ty_void()),
+    ]);
+
+    // RWLock[T] — generic, follows Mutex[T] pattern
+    let rwlock_struct = Spanned::dummy(Item::Struct(StructDef {
+        attributes: vec![],
+        visibility: Visibility::Public,
+        name: Spanned::dummy("RWLock".to_string()),
+        generic_params: Some(Spanned::dummy(GenericParams {
+            params: vec![Spanned::dummy(GenericParam::Type {
+                name: Spanned::dummy("T".to_string()),
+                bounds: vec![],
+            })],
+        })),
+        fields: vec![],
+        doc_comment: None,
+        span: Span::dummy(),
+    }));
+    let rwlock_equip = Spanned::dummy(Item::Equip(EquipBlock {
+        generic_params: None,
+        trait_: None,
+        type_: Spanned::dummy(Type::Named {
+            name: Spanned::dummy("RWLock".to_string()),
+            generic_args: vec![],
+        }),
+        via_field: None,
+        where_clause: None,
+        items: vec![
+            Spanned::dummy(decl_method("read", Ownership::Borrow, &[], ty_read_guard(ty_t()))),
+            Spanned::dummy(decl_method("write", Ownership::Borrow, &[], ty_write_guard(ty_t()))),
+        ],
+        span: Span::dummy(),
+    }));
+
+    // ReadGuard[T] — generic, Move + RAII unlock
+    let read_guard_struct = Spanned::dummy(Item::Struct(StructDef {
+        attributes: vec![],
+        visibility: Visibility::Public,
+        name: Spanned::dummy("ReadGuard".to_string()),
+        generic_params: Some(Spanned::dummy(GenericParams {
+            params: vec![Spanned::dummy(GenericParam::Type {
+                name: Spanned::dummy("T".to_string()),
+                bounds: vec![],
+            })],
+        })),
+        fields: vec![],
+        doc_comment: None,
+        span: Span::dummy(),
+    }));
+    let read_guard_equip = Spanned::dummy(Item::Equip(EquipBlock {
+        generic_params: None,
+        trait_: None,
+        type_: Spanned::dummy(Type::Named {
+            name: Spanned::dummy("ReadGuard".to_string()),
+            generic_args: vec![],
+        }),
+        via_field: None,
+        where_clause: None,
+        items: vec![
+            Spanned::dummy(decl_method("get", Ownership::Borrow, &[], ty_t())),
+        ],
+        span: Span::dummy(),
+    }));
+
+    // WriteGuard[T] — generic, Move + RAII unlock
+    let write_guard_struct = Spanned::dummy(Item::Struct(StructDef {
+        attributes: vec![],
+        visibility: Visibility::Public,
+        name: Spanned::dummy("WriteGuard".to_string()),
+        generic_params: Some(Spanned::dummy(GenericParams {
+            params: vec![Spanned::dummy(GenericParam::Type {
+                name: Spanned::dummy("T".to_string()),
+                bounds: vec![],
+            })],
+        })),
+        fields: vec![],
+        doc_comment: None,
+        span: Span::dummy(),
+    }));
+    let write_guard_equip = Spanned::dummy(Item::Equip(EquipBlock {
+        generic_params: None,
+        trait_: None,
+        type_: Spanned::dummy(Type::Named {
+            name: Spanned::dummy("WriteGuard".to_string()),
+            generic_args: vec![],
+        }),
+        via_field: None,
+        where_clause: None,
+        items: vec![
+            Spanned::dummy(decl_method("get", Ownership::Borrow, &[], ty_t())),
+            Spanned::dummy(decl_method("set", Ownership::Borrow, &[("val", ty_t())], ty_void())),
+        ],
+        span: Span::dummy(),
+    }));
+
+    Module {
+        items: vec![
+            atomic_int_struct, atomic_int_equip,
+            atomic_bool_struct, atomic_bool_equip,
+            barrier_struct, barrier_equip,
+            rwlock_struct, rwlock_equip,
+            read_guard_struct, read_guard_equip,
+            write_guard_struct, write_guard_equip,
+        ],
+        span: Span::dummy(),
+    }
+}
+
+fn gen_thread_module() -> Module {
+    let ty_t = || Type::Named {
+        name: Spanned::dummy("T".to_string()),
+        generic_args: vec![],
+    };
+    let ty_callable_t = || Type::Function {
+        return_type: Box::new(Spanned::dummy(ty_t())),
+        params: vec![],
+        param_ownerships: vec![],
+    };
+
+    // Thread[T] — generic, Move semantics (must be joined or leaked)
+    let thread_struct = Spanned::dummy(Item::Struct(StructDef {
+        attributes: vec![],
+        visibility: Visibility::Public,
+        name: Spanned::dummy("Thread".to_string()),
+        generic_params: Some(Spanned::dummy(GenericParams {
+            params: vec![Spanned::dummy(GenericParam::Type {
+                name: Spanned::dummy("T".to_string()),
+                bounds: vec![],
+            })],
+        })),
+        fields: vec![],
+        doc_comment: None,
+        span: Span::dummy(),
+    }));
+    let thread_equip = Spanned::dummy(Item::Equip(EquipBlock {
+        generic_params: None,
+        trait_: None,
+        type_: Spanned::dummy(Type::Named {
+            name: Spanned::dummy("Thread".to_string()),
+            generic_args: vec![],
+        }),
+        via_field: None,
+        where_clause: None,
+        items: vec![
+            Spanned::dummy(decl_method("join", Ownership::Move, &[], ty_t())),
+            Spanned::dummy(decl_method("id", Ownership::Borrow, &[], ty_int())),
+        ],
+        span: Span::dummy(),
+    }));
+
+    Module {
+        items: vec![
+            thread_struct,
+            thread_equip,
+            // thread_spawn(fn) → Thread[T]
+            Spanned::dummy(Item::Function(decl_fn(
+                "thread_spawn",
+                &[("fn", ty_callable_t())],
+                Type::Named {
+                    name: Spanned::dummy("Thread".to_string()),
+                    generic_args: vec![Spanned::dummy(ty_t())],
+                },
+            ))),
+            Spanned::dummy(Item::Function(decl_fn("current_thread_id", &[], ty_int()))),
+        ],
         span: Span::dummy(),
     }
 }

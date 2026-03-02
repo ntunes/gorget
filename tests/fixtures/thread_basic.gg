@@ -1,0 +1,18 @@
+from std.thread import Thread, thread_spawn, current_thread_id
+
+int compute():
+    return 42
+
+void say_hello():
+    print("hello from thread")
+
+void main():
+    Thread[int] t = thread_spawn(compute)
+    int result = t.join()
+    print(result)
+
+    Thread[void] t2 = thread_spawn(say_hello)
+    t2.join()
+
+    int main_tid = current_thread_id()
+    print(main_tid > 0)

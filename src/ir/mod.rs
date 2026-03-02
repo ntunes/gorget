@@ -74,6 +74,21 @@ pub struct Module {
     /// Spawned functions: (fn_name, [(param_name, param_type)], return_type).
     /// Used by the C backend to emit __SpawnCtx_fn, __gorget_spawn_fn, __gorget_await_fn.
     pub spawned_fns: Vec<(String, Vec<(String, TypeId)>, TypeId)>,
+    /// RWLock[T] inner C type names (e.g., ["int64_t"] for RWLock[int]).
+    /// Used by the C backend to emit RWLock__T, ReadGuard__T, WriteGuard__T wrappers.
+    pub rwlock_types: Vec<String>,
+    /// Whether any std.sync types are used (AtomicInt, AtomicBool, Barrier, RWLock).
+    pub has_sync: bool,
+    /// Thread[T] return C type names (e.g., ["int64_t"] for Thread[int]).
+    /// Used by the C backend to emit Thread__T wrappers + per-function spawn helpers.
+    pub thread_types: Vec<String>,
+    /// Whether std.thread (Thread, thread_spawn, current_thread_id) is used.
+    pub has_thread: bool,
+    /// Whether std.process Process type (fork+exec) is used.
+    pub has_process: bool,
+    /// Thread-spawned functions: (fn_name, return_type_c_name).
+    /// Used by the C backend to emit __gorget_thread_spawn_fn helpers.
+    pub thread_spawned_fns: Vec<(String, TypeId)>,
     /// True when a `suite setup:` block was lowered as `__suite_setup()`.
     pub has_suite_setup: bool,
     /// True when a `suite teardown:` block was lowered as `__suite_teardown()`.
@@ -114,6 +129,12 @@ impl Module {
             mutex_types: Vec::new(),
             has_task_group: false,
             spawned_fns: Vec::new(),
+            rwlock_types: Vec::new(),
+            has_sync: false,
+            thread_types: Vec::new(),
+            has_thread: false,
+            has_process: false,
+            thread_spawned_fns: Vec::new(),
             has_suite_setup: false,
             has_suite_teardown: false,
             is_test_module: false,

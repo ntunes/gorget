@@ -896,23 +896,60 @@ pub fn lower_module(
 
     // Collect channel/shared/mutex element types for C backend wrapper emission
     for name in module.type_registry.all_type_def_names() {
+        // Skip template placeholders (single uppercase letter = generic param e.g. "T", "K")
+        let is_template = |elem: &str| elem.chars().all(|c| c.is_uppercase());
         if let Some(elem) = name.strip_prefix("Channel__") {
-            if !module.channel_types.contains(&elem.to_string()) {
+            if !is_template(elem) && !module.channel_types.contains(&elem.to_string()) {
                 module.channel_types.push(elem.to_string());
             }
         }
         if let Some(elem) = name.strip_prefix("Shared__") {
-            if !module.shared_types.contains(&elem.to_string()) {
+            if !is_template(elem) && !module.shared_types.contains(&elem.to_string()) {
                 module.shared_types.push(elem.to_string());
             }
         }
         if let Some(elem) = name.strip_prefix("Mutex__") {
-            if !module.mutex_types.contains(&elem.to_string()) {
+            if !is_template(elem) && !module.mutex_types.contains(&elem.to_string()) {
                 module.mutex_types.push(elem.to_string());
             }
         }
         if name == "TaskGroup" {
             module.has_task_group = true;
+        }
+        // std.sync: collect RWLock element types for wrapper emission
+        if let Some(elem) = name.strip_prefix("RWLock__") {
+            // Skip template placeholders (single uppercase letter = generic param e.g. "T")
+            if !elem.chars().all(|c| c.is_uppercase()) && !module.rwlock_types.contains(&elem.to_string()) {
+                module.rwlock_types.push(elem.to_string());
+            }
+        }
+        // Any sync type signals has_sync
+        if matches!(name.as_str(), "AtomicInt" | "AtomicBool" | "Barrier")
+            || name.starts_with("RWLock__")
+            || name.starts_with("ReadGuard__")
+            || name.starts_with("WriteGuard__")
+        {
+            module.has_sync = true;
+        }
+        // std.thread: collect Thread types (skip template placeholders like "T")
+        if let Some(elem) = name.strip_prefix("Thread__") {
+            if !elem.chars().all(|c| c.is_uppercase()) {
+                if !module.thread_types.contains(&elem.to_string()) {
+                    module.thread_types.push(elem.to_string());
+                }
+                module.has_thread = true;
+            }
+        }
+        // std.process: Process type
+        if name == "Process" {
+            module.has_process = true;
+        }
+    }
+
+    // Collect thread-spawned function metadata for C backend helper emission
+    for (fn_name, ret_type) in &ctx.thread_spawned_fns {
+        if !module.thread_spawned_fns.iter().any(|(n, _)| n == fn_name) {
+            module.thread_spawned_fns.push((fn_name.clone(), *ret_type));
         }
     }
 

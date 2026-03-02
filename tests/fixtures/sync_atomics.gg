@@ -1,0 +1,27 @@
+from std.sync import AtomicInt, AtomicBool
+
+void main():
+    AtomicInt counter = AtomicInt(0)
+    print(counter.load())
+    counter.store(42)
+    print(counter.load())
+    int old = counter.add(8)
+    print(old)
+    print(counter.load())
+    int old2 = counter.sub(10)
+    print(old2)
+    print(counter.load())
+    bool ok = counter.compare_exchange(40, 100)
+    print(ok)
+    print(counter.load())
+
+    AtomicBool flag = AtomicBool(false)
+    print(flag.load())
+    flag.store(true)
+    print(flag.load())
+    bool prev = flag.swap(false)
+    print(prev)
+    print(flag.load())
+    bool ok2 = flag.compare_exchange(false, true)
+    print(ok2)
+    print(flag.load())

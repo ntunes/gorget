@@ -1,0 +1,15 @@
+from std.process import process_spawn
+
+void main():
+    Vector[str] args = Vector[str]()
+    Result[Process, str] r = process_spawn("cat", args)
+    match r:
+        case Ok(proc):
+            proc.write_stdin("hello from gorget\n")
+            proc.close_stdin()
+            String out = proc.read_stdout()
+            int code = proc.wait()
+            print(out)
+            print("{code}")
+        case Error(msg):
+            print("spawn failed: {msg}")

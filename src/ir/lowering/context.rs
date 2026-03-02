@@ -77,6 +77,9 @@ pub struct LoweringContext<'a> {
     pub pending_spawn_fn: Option<String>,
     /// Accumulated set of all spawned fn names (NOT cleared between functions).
     pub spawned_fn_names: FxHashMap<String, bool>,
+    /// Accumulated set of thread-spawned fn names: fn_name → return TypeId.
+    /// NOT cleared between functions. Used to emit thread spawn/join helpers.
+    pub thread_spawned_fns: FxHashMap<String, TypeId>,
 }
 
 impl<'a> LoweringContext<'a> {
@@ -108,6 +111,7 @@ impl<'a> LoweringContext<'a> {
             spawn_result_locals: FxHashMap::default(),
             pending_spawn_fn: None,
             spawned_fn_names: FxHashMap::default(),
+            thread_spawned_fns: FxHashMap::default(),
         }
     }
 
