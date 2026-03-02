@@ -5489,25 +5489,50 @@ static void gorget_hot_watch_close(GorgetFileWatcher* w) {
 }
 
 #else
-// Linux stub — TODO: implement inotify watcher
+// Linux — inotify-based watcher
+#include <sys/inotify.h>
+#include <unistd.h>
+#include <poll.h>
 
 typedef struct {
-    int dummy;
+    int ifd;       // inotify file descriptor
+    int* wds;      // array of watch descriptors
+    int wd_count;  // number of watches
 } GorgetFileWatcher;
 
 static GorgetFileWatcher gorget_hot_watch_init(const char** paths, int count) {
-    (void)paths; (void)count;
-    fprintf(stderr, "[hot-reload] File watching not yet implemented on Linux\n");
-    return (GorgetFileWatcher){0};
+    GorgetFileWatcher w = {0};
+    w.ifd = inotify_init1(IN_NONBLOCK);
+    if (w.ifd < 0) {
+        fprintf(stderr, "[hot-reload] inotify_init1() failed\n");
+        return w;
+    }
+    w.wds = (int*)GORGET_ALLOC(sizeof(int) * count);
+    w.wd_count = 0;
+    for (int i = 0; i < count; i++) {
+        int wd = inotify_add_watch(w.ifd, paths[i],
+                                   IN_MODIFY | IN_MOVE_SELF | IN_DELETE_SELF);
+        if (wd < 0) {
+            fprintf(stderr, "[hot-reload] Cannot watch '%s'\n", paths[i]);
+            continue;
+        }
+        w.wds[w.wd_count++] = wd;
+    }
+    return w;
 }
 
 static bool gorget_hot_watch_check(GorgetFileWatcher* w) {
-    (void)w;
-    return false;
+    char buf[4096] __attribute__((aligned(__alignof__(struct inotify_event))));
+    ssize_t len = read(w->ifd, buf, sizeof(buf));
+    return len > 0;
 }
 
 static void gorget_hot_watch_close(GorgetFileWatcher* w) {
-    (void)w;
+    for (int i = 0; i < w->wd_count; i++) {
+        inotify_rm_watch(w->ifd, w->wds[i]);
+    }
+    GORGET_FREE(w->wds, 0);
+    close(w->ifd);
 }
 #endif
 
