@@ -51,7 +51,7 @@ void main():
 
     # xml_stringify round-trip
     XmlNode n9 = xml_parse("<root><child/></root>").unwrap()
-    str xml_str = xml_stringify(n9)
+    auto xml_str = xml_stringify(n9)
     print(xml_str)
 
     # Nested text concatenation

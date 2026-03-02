@@ -3308,6 +3308,19 @@ static inline GorgetSDLWindow gorget_sdl_create_window(const char* title, int64_
     return (GorgetSDLWindow){ win };
 }
 
+static inline GorgetSDLWindow gorget_sdl_create_window_try(const char* title, int64_t w, int64_t h, int64_t flags) {
+    SDL_Window* win = SDL_CreateWindow(title, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, (int)w, (int)h, (Uint32)flags);
+    return (GorgetSDLWindow){ win };
+}
+
+static inline bool gorget_sdl_window_is_null(GorgetSDLWindow win) {
+    return win.ptr == NULL;
+}
+
+static inline const char* gorget_sdl_get_error(void) {
+    return SDL_GetError();
+}
+
 static inline void gorget_sdl_destroy_window(GorgetSDLWindow win) {
     if (win.ptr) SDL_DestroyWindow(win.ptr);
 }
@@ -3329,6 +3342,15 @@ static inline GorgetSDLRenderer gorget_sdl_create_renderer(GorgetSDLWindow win, 
     SDL_Renderer* ren = SDL_CreateRenderer(win.ptr, -1, (Uint32)flags);
     if (!ren) { fprintf(stderr, "gorget: SDL_CreateRenderer failed: %s\n", SDL_GetError()); exit(1); }
     return (GorgetSDLRenderer){ ren };
+}
+
+static inline GorgetSDLRenderer gorget_sdl_create_renderer_try(GorgetSDLWindow win, int64_t flags) {
+    SDL_Renderer* ren = SDL_CreateRenderer(win.ptr, -1, (Uint32)flags);
+    return (GorgetSDLRenderer){ ren };
+}
+
+static inline bool gorget_sdl_renderer_is_null(GorgetSDLRenderer ren) {
+    return ren.ptr == NULL;
 }
 
 static inline void gorget_sdl_destroy_renderer(GorgetSDLRenderer r) {

@@ -146,6 +146,10 @@ const int SSH_MSG_CHANNEL_REQUEST = 98
 const int SSH_MSG_CHANNEL_SUCCESS = 99
 const int SSH_MSG_CHANNEL_FAILURE = 100
 
+# ── Channel size constants ───────────────────────────────────
+const int SSH_CHANNEL_WINDOW_SIZE = 2097152
+const int SSH_MAX_PACKET_SIZE = 32768
+
 # ── Bounds-check helper ─────────────────────────────────────
 
 void ssh_check_len(Vector[uint8] buf, int required, str context):
@@ -464,8 +468,8 @@ CommandResult channel_exec(Session &session, str cmd):
     Vector[uint8] open_msg = bytes_from_hex("5a")
     open_msg = bytes_concat(open_msg, make_name_list("session"))
     open_msg = bytes_concat(open_msg, make_u32(0))
-    open_msg = bytes_concat(open_msg, make_u32(2097152))
-    open_msg = bytes_concat(open_msg, make_u32(32768))
+    open_msg = bytes_concat(open_msg, make_u32(SSH_CHANNEL_WINDOW_SIZE))
+    open_msg = bytes_concat(open_msg, make_u32(SSH_MAX_PACKET_SIZE))
     send_packet(&session, open_msg)
 
     # Read channel open confirmation
@@ -532,8 +536,8 @@ int channel_open_session(Session &session):
     Vector[uint8] open_msg = bytes_from_hex("5a")
     open_msg = bytes_concat(open_msg, make_name_list("session"))
     open_msg = bytes_concat(open_msg, make_u32(0))
-    open_msg = bytes_concat(open_msg, make_u32(2097152))
-    open_msg = bytes_concat(open_msg, make_u32(32768))
+    open_msg = bytes_concat(open_msg, make_u32(SSH_CHANNEL_WINDOW_SIZE))
+    open_msg = bytes_concat(open_msg, make_u32(SSH_MAX_PACKET_SIZE))
     send_packet(&session, open_msg)
 
     Vector[uint8] confirm = read_packet(&session)
@@ -597,6 +601,9 @@ str channel_read_until(Session &session, str delimiter):
 # ── Public API ───────────────────────────────────────────────
 
 equip Session:
+    Result[Session, str] connect(str host, int port, str user, str password):
+        return ssh_connect(host, port, user, password)
+
     CommandResult run(&self, str cmd):
         return channel_exec(&self, cmd)
 

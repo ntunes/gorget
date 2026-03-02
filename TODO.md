@@ -47,9 +47,7 @@
 
 - **Basic orphan rule**: equip block must be in the module that defines the trait or the type. Prevents incoherent trait implementations across modules. [added: 2026-02-10]
 
-- **No SDL/GFX error handling**: `sdl_create_window` and `sdl_create_renderer` can return null but return values are used directly without checks. Null window passed to `sdl_create_renderer` segfaults. (`gfx.gg:31-40`) [added: 2026-02-16]
 
-- **SSH Session initialization is fragile**: Constructor takes 11 positional arguments, several initialized with dummy values (`bytes_from_hex("")`, dummy crypto contexts). Error-prone — needs builder pattern or named-parameter constructor. (`ssh.gg:635`) [added: 2026-02-16]
 
 - **Inconsistent function naming across synthetic stdlib modules**: Modules use different prefixing: `crypto_sha256()`, `bytes_from_str()`, `path_join()`, but HTTP uses bare `get()`/`post()`. Crypto has `crypto_random_bytes()` while bytes has `random_bytes()`. Adopt consistent `module_verb()` convention. (`stdlib.rs`) [added: 2026-02-16]
 
@@ -131,13 +129,10 @@
 
 - **Async/await**: Moved to Medium with structured roadmap. See Medium section. [from roadmap, added: 2026-02-16, promoted: 2026-02-21]
 
-- **`json_stringify` / `json_pretty_internal` duplicate logic**: Nearly identical functions — only difference is whitespace insertion. Merge into single `json_stringify_internal(Json, bool pretty, int indent)` helper. (`json.gg:257-343`) [added: 2026-02-16]
 
 - **TOML DateTime is just a raw string**: `DateTime` variants store unparsed text. Users can't extract year/month/day components. Document limitation or add a structured `TomlDateTime` type. (`toml.gg:21, 378-427`) [added: 2026-02-16]
 
-- **SSH hardcoded magic numbers**: Channel window size `2097152` and max packet size `32768` as bare literals. Should be named constants at module top. (`ssh.gg:441, 502`) [added: 2026-02-16]
 
-- **O(n²) string concatenation in XML stringifier**: `xml_out = xml_out + xml_stringify(child)` in loop creates quadratic allocation for large documents. Future `StringBuffer` type would fix this across stdlib. (`xml.gg:318-343`) [added: 2026-02-16]
 
 
 - **Vector/List/Array declared identically in collections module**: Three collection types declared with identical representations. Either an intentional alias system (document it) or placeholder for future differentiation. (`stdlib.rs:246`) [added: 2026-02-16]

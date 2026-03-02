@@ -266,7 +266,12 @@ fn map_stdlib_name(name: &str) -> &str {
         "sdl_init" => "gorget_sdl_init",
         "sdl_quit" => "gorget_sdl_quit",
         "sdl_create_window" => "gorget_sdl_create_window",
+        "sdl_create_window_try" => "gorget_sdl_create_window_try",
+        "sdl_window_is_null" => "gorget_sdl_window_is_null",
+        "sdl_get_error" => "gorget_sdl_get_error",
         "sdl_create_renderer" => "gorget_sdl_create_renderer",
+        "sdl_create_renderer_try" => "gorget_sdl_create_renderer_try",
+        "sdl_renderer_is_null" => "gorget_sdl_renderer_is_null",
         "sdl_destroy_window" => "gorget_sdl_destroy_window",
         "sdl_destroy_renderer" => "gorget_sdl_destroy_renderer",
         "sdl_set_draw_color" => "gorget_sdl_set_draw_color",
@@ -333,7 +338,8 @@ fn is_cstr_param_fn(name: &str) -> bool {
         | "puts" | "fputs" | "system" | "getenv"
         | "gorget_string_new"
         | "gorget_file_create" | "gorget_file_open" | "gorget_file_write_handle"
-        | "gorget_sdl_create_window" | "gorget_sdl_load_texture" | "gorget_sdl_load_font"
+        | "gorget_sdl_create_window" | "gorget_sdl_create_window_try"
+        | "gorget_sdl_load_texture" | "gorget_sdl_load_font"
         | "gorget_sdl_render_text" | "gorget_sdl_draw_text"
         | "gorget_sdl_text_width" | "gorget_sdl_text_height"
     )
@@ -7112,6 +7118,15 @@ fn emit_collection_method_call(
             }
             "uint32_t" => {
                 let _ = writeln!(out, "        gorget_string_push{suffix}_char({self_ref}, {arg_val});");
+            }
+            "GorgetString" => {
+                // String argument — coerce to Str view
+                if is_push_line {
+                    let _ = writeln!(out, "        gorget_string_append_str({self_ref}, (Str){{ .data = {arg_val}.data, .len = {arg_val}.len }});");
+                    let _ = writeln!(out, "        gorget_string_push_char({self_ref}, '\\n');");
+                } else {
+                    let _ = writeln!(out, "        gorget_string_append_str({self_ref}, (Str){{ .data = {arg_val}.data, .len = {arg_val}.len }});");
+                }
             }
             _ => {
                 // Default: Str argument

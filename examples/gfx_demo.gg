@@ -10,7 +10,7 @@ from gg.gfx import gfx_delay, gfx_width, gfx_height
 from gg.sdl import sdl_poll_event, SDL_QUIT, SDL_KEYDOWN, SDLK_ESCAPE
 
 void main():
-    auto canvas = gfx_open("Gorget GFX Demo", 800, 600)
+    Canvas canvas = gfx_open("Gorget GFX Demo", 800, 600).unwrap()
 
     auto black = Color(0, 0, 0, 255)
     auto white = Color(255, 255, 255, 255)

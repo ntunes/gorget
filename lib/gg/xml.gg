@@ -360,27 +360,35 @@ Result[XmlNode, str] xml_parse(str xml_src):
 
 # ── Serialization ──────────────────────────────────────────
 
-str xml_stringify_node(XmlNode nd, Dict[str, str] nd_attrs, Vector[XmlNode] nd_kids, str nd_tag):
-    str xml_out = "<" + nd_tag
+String xml_stringify_node(XmlNode nd, Dict[str, str] nd_attrs, Vector[XmlNode] nd_kids, str nd_tag):
+    String buf = String()
+    buf.push("<")
+    buf.push(nd_tag)
     Vector[str] attr_keys = nd_attrs.keys()
     int ki = 0
     while ki < attr_keys.len():
         str akey = attr_keys.get(ki).unwrap()
-        str aval = nd_attrs[akey]
-        xml_out = xml_out + " " + akey + "=\"" + xml_encode_attr(aval) + "\""
+        buf.push(" ")
+        buf.push(akey)
+        buf.push("=\"")
+        buf.push(xml_encode_attr(nd_attrs[akey]))
+        buf.push("\"")
         ki = ki + 1
     if nd_kids.len() == 0:
-        return xml_out + "/>"
-    xml_out = xml_out + ">"
+        buf.push("/>")
+        return buf
+    buf.push(">")
     int ci = 0
     while ci < nd_kids.len():
         XmlNode xml_child = nd_kids.get(ci).unwrap()
-        xml_out = xml_out + xml_stringify(xml_child)
+        buf.push(xml_stringify(xml_child))
         ci = ci + 1
-    xml_out = xml_out + "</" + nd_tag + ">"
-    return xml_out
+    buf.push("</")
+    buf.push(nd_tag)
+    buf.push(">")
+    return buf
 
-str xml_stringify(XmlNode nd):
+String xml_stringify(XmlNode nd):
     match nd:
         case Text(xtv):
             return xml_encode_text(xtv)

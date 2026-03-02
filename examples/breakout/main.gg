@@ -4,7 +4,7 @@ from gg.sdl import SDLK_LEFT, SDLK_RIGHT, SDLK_ESCAPE
 from world import BreakoutWorld, new_world
 
 void main():
-    auto canvas = gfx_open("Gorget Breakout", 800, 600)
+    Canvas canvas = gfx_open("Gorget Breakout", 800, 600).unwrap()
     auto world = new_world()
     world.spawn_paddle()
     world.spawn_ball()
