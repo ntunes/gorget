@@ -489,7 +489,8 @@ fn eval_expr(
             eval_binary_op(&lhs, *op, &rhs, span)
         }
 
-        // Built-in meta functions: platform(), arch(), arch_word_bits(), feature(), debug()
+        // Built-in meta functions: platform(), arch(), arch_word_bits(), feature(), debug(),
+        //                          sizeof(Type), alignof(Type), typename(Type)
         Expr::Call { callee, args, .. } => {
             if let Expr::Identifier(name) = &callee.node {
                 match name.as_str() {
@@ -526,8 +527,46 @@ fn eval_expr(
                     "debug" => {
                         Ok(MetaValue::Bool(ctx.features.iter().any(|f| f == "debug")))
                     }
+                    "sizeof" => {
+                        if args.len() != 1 {
+                            return Err(meta_err("sizeof() takes exactly 1 argument", span));
+                        }
+                        let type_name = meta_expr_to_type_name(&args[0].node.value.node);
+                        match meta_type_byte_size(&type_name) {
+                            Some(size) => Ok(MetaValue::Int(size)),
+                            None => Err(meta_err(
+                                &format!("sizeof({type_name}): size unknown at compile time — \
+                                    only primitive types (int, bool, str, cstr, etc.) are \
+                                    supported; for generic types, use a meta type alias"),
+                                span,
+                            )),
+                        }
+                    }
+                    "alignof" => {
+                        if args.len() != 1 {
+                            return Err(meta_err("alignof() takes exactly 1 argument", span));
+                        }
+                        let type_name = meta_expr_to_type_name(&args[0].node.value.node);
+                        match meta_type_align_bytes(&type_name) {
+                            Some(align) => Ok(MetaValue::Int(align)),
+                            None => Err(meta_err(
+                                &format!("alignof({type_name}): alignment unknown at compile time — \
+                                    only primitive types are supported"),
+                                span,
+                            )),
+                        }
+                    }
+                    "typename" => {
+                        if args.len() != 1 {
+                            return Err(meta_err("typename() takes exactly 1 argument", span));
+                        }
+                        let type_name = meta_expr_to_type_name(&args[0].node.value.node);
+                        Ok(MetaValue::Str(type_name))
+                    }
                     other => Err(meta_err(
-                        &format!("unknown built-in meta function `{other}` — available: platform(), arch(), arch_word_bits(), feature(str), debug()"),
+                        &format!("unknown built-in meta function `{other}` — available: \
+                            platform(), arch(), arch_word_bits(), feature(str), debug(), \
+                            sizeof(Type), alignof(Type), typename(Type)"),
                         span,
                     )),
                 }
@@ -537,6 +576,63 @@ fn eval_expr(
         }
 
         _ => Err(meta_err("expression cannot be evaluated at compile time", span)),
+    }
+}
+
+/// Convert a meta-context expression (which the parser has already parsed as a value
+/// expression) back to a type name string. Type keywords appear as `Expr::Identifier`
+/// (e.g. `int` → `Identifier("int")`), and single-arg generic types appear as
+/// `Expr::Index` (e.g. `Vector[int]` → `Index { object: Identifier("Vector"),
+/// index: Identifier("int") }`).
+fn meta_expr_to_type_name(expr: &Expr) -> String {
+    match expr {
+        Expr::Identifier(name) => name.clone(),
+        Expr::Index { object, index } => {
+            let base = meta_expr_to_type_name(&object.node);
+            let idx  = meta_expr_to_type_name(&index.node);
+            format!("{base}[{idx}]")
+        }
+        _ => "?".to_string(),
+    }
+}
+
+/// Byte size of a Gorget type as it is laid out in C on a 64-bit target.
+/// Only primitive and built-in types are supported; user struct sizes are not
+/// known during meta evaluation (which runs before layout computation).
+fn meta_type_byte_size(name: &str) -> Option<i64> {
+    match name {
+        "bool"                          => Some(1),
+        "int8"  | "uint8"              => Some(1),
+        "int16" | "uint16"             => Some(2),
+        "int32" | "uint32" | "float32" => Some(4),
+        // int, uint, float, double — all 64-bit on Gorget's only current target
+        "int"   | "int64"              => Some(8),
+        "uint"  | "uint64"             => Some(8),
+        "float" | "float64"            => Some(8),
+        // str  = Str  { *u8 data, u64 len }            → 16 bytes
+        "str"  => Some(16),
+        // cstr = const char*                           →  8 bytes
+        "cstr" => Some(8),
+        // String = GorgetString { *u8, u64, u64, *Alloc } → 32 bytes
+        "String" => Some(32),
+        _      => None,
+    }
+}
+
+/// Required alignment (in bytes) for a Gorget type on a 64-bit target.
+fn meta_type_align_bytes(name: &str) -> Option<i64> {
+    match name {
+        "bool"                          => Some(1),
+        "int8"  | "uint8"              => Some(1),
+        "int16" | "uint16"             => Some(2),
+        "int32" | "uint32" | "float32" => Some(4),
+        "int"   | "int64"              => Some(8),
+        "uint"  | "uint64"             => Some(8),
+        "float" | "float64"            => Some(8),
+        "str"    => Some(8),   // largest field is a pointer
+        "cstr"   => Some(8),   // pointer-aligned
+        "String" => Some(8),   // largest field is a pointer
+        _        => None,
     }
 }
 

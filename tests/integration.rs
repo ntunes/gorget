@@ -6623,6 +6623,15 @@ fn meta_type_func() {
     run_gg("meta_type_func.gg", "7\n1000\n42");
 }
 
+#[test]
+fn meta_sizeof() {
+    // sizeof/alignof/typename built-in meta functions (M8)
+    // Sizes: int=8, bool=1, str=16, cstr=8, int8=1, int16=2, int32=4, float32=4
+    // Alignments: int=8, bool=1, str=8
+    // typename: "int", "bool", "Vector[int]", "str"
+    run_gg("meta_sizeof.gg", "8\n1\n16\n8\n1\n2\n4\n4\n8\n1\n8\nint\nbool\nVector[int]\nstr");
+}
+
 // Concurrency Primitives Tests
 // ═══════════════════════════════════════════════════════════════
 
