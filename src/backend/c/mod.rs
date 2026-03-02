@@ -4302,7 +4302,7 @@ fn coerce_constructor_arg(
     registry: &TypeRegistry,
 ) -> String {
     let val = format_operand(arg, func, registry);
-    // Check if the field type is GorgetString and the arg is a string literal
+    // String literal → coerce to concrete field type
     if let Operand::Constant(Constant::Str(s)) = arg {
         let field_c_type = format_type(*field_type, registry);
         if field_c_type == "GorgetString" {
@@ -4310,6 +4310,17 @@ fn coerce_constructor_arg(
         }
         if field_c_type == "Str" {
             return format!("gorget_str_from_literal(\"{}\", {})", escape_c_string(s), s.len());
+        }
+    }
+    // Non-literal: coerce GorgetString → Str if the field expects Str
+    if let Operand::Copy(place) | Operand::Move(place) = arg {
+        let local_idx = place.local.0 as usize;
+        if local_idx < func.locals.len() {
+            let arg_c_type = format_type(func.locals[local_idx].type_id, registry);
+            let field_c_type = format_type(*field_type, registry);
+            if arg_c_type == "GorgetString" && field_c_type == "Str" {
+                return format!("(Str){{ .data = {val}.data, .len = {val}.len }}");
+            }
         }
     }
     val

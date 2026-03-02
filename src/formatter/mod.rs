@@ -637,10 +637,6 @@ impl Formatter {
                 self.emitter.write(", ");
             }
             match &bound.node {
-                WhereBound::Trait { .. } => {
-                    // WhereBound::Trait is dead after inline-bounds migration
-                    unreachable!("WhereBound::Trait should not appear in formatted AST")
-                }
                 WhereBound::Outlives { longer, shorter } => {
                     self.emitter.write(&longer.node);
                     self.emitter.write(" outlives ");

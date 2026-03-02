@@ -1188,6 +1188,11 @@ fn result_question_operator() {
 }
 
 #[test]
+fn result_str_concat() {
+    run_gg("result_str_concat.gg", "file not found: test.txt");
+}
+
+#[test]
 fn result_map() {
     run_gg(
         "result_map.gg",

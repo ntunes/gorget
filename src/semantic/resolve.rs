@@ -47,7 +47,7 @@ pub struct FunctionInfo {
     /// Names of generic type parameters, in declaration order.
     pub generic_param_names: Vec<String>,
     /// Where-clause bounds: `(param_name, [trait_name, ...])`.
-    pub where_bounds: Vec<(String, Vec<String>)>,
+    pub trait_bounds: Vec<(String, Vec<String>)>,
     /// Param indices whose data flows to the return value (lifetime inference).
     /// Computed by borrow checker Pass 5a.
     pub return_borrows_from: Vec<usize>,
@@ -273,7 +273,7 @@ fn collect_item(
                     validate_str_param_modes(&f.params, errors);
 
                     let generic_param_names = extract_generic_param_names(&f.generic_params);
-                    let where_bounds = extract_generic_bounds(&f.generic_params);
+                    let trait_bounds = extract_generic_bounds(&f.generic_params);
                     let outlives_bounds = extract_outlives_bounds(&f.where_clause);
                     let param_is_live: Vec<bool> =
                         f.params.iter().map(|p| p.node.is_live).collect();
@@ -293,7 +293,7 @@ fn collect_item(
                             is_async: f.qualifiers.is_async,
                             scope_id: scopes.current_scope(),
                             generic_param_names,
-                            where_bounds,
+                            trait_bounds,
                             return_borrows_from: Vec::new(),
                             param_is_live,
                             param_live_groups,
@@ -460,7 +460,7 @@ fn collect_item(
                             .collect();
                         validate_str_param_modes(&f.params, errors);
                         let generic_param_names = extract_generic_param_names(&f.generic_params);
-                        let where_bounds = extract_generic_bounds(&f.generic_params);
+                        let trait_bounds = extract_generic_bounds(&f.generic_params);
                         let outlives_bounds = extract_outlives_bounds(&f.where_clause);
                         let param_is_live: Vec<bool> =
                             f.params.iter().map(|p| p.node.is_live).collect();
@@ -480,7 +480,7 @@ fn collect_item(
                                 is_async: f.qualifiers.is_async,
                                 scope_id: scopes.current_scope(),
                                 generic_param_names,
-                                where_bounds,
+                                trait_bounds,
                                 return_borrows_from: Vec::new(),
                                 param_is_live,
                                 param_live_groups,
@@ -1433,7 +1433,6 @@ fn extract_outlives_bounds(
                 WhereBound::Outlives { longer, shorter } => {
                     Some((longer.node.clone(), shorter.node.clone()))
                 }
-                WhereBound::Trait { .. } => None,
             })
             .collect(),
         None => Vec::new(),

@@ -1516,3 +1516,11 @@ fn test_parenthesized_tuple_auto_still_works() {
     }
     panic!("unexpected AST shape");
 }
+
+#[test]
+fn test_paren_expr_before_colon_not_closure() {
+    // (A == B or C == D) before a colon must parse as a grouped expression, not a closure.
+    // Regression: looks_like_closure() used to fire here, causing a confusing error.
+    let source = "void f(bool cond, int a, int b, int c, int d):\n    if cond and (a == b or c == d):\n        print(1)\n";
+    parse(source); // must not panic
+}

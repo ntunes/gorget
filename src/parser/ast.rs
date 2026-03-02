@@ -321,11 +321,6 @@ pub struct WhereClause {
 
 #[derive(Debug, Clone)]
 pub enum WhereBound {
-    /// `where T is Trait` — trait bound on a type parameter.
-    Trait {
-        type_name: Spanned<String>,
-        bounds: Vec<Spanned<TraitBound>>,
-    },
     /// `where a outlives b` — borrow group ordering constraint.
     Outlives {
         longer: Spanned<String>,

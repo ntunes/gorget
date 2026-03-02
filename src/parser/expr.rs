@@ -1012,6 +1012,17 @@ impl Parser {
                         );
                     }
                 }
+                // Tokens that cannot appear in closure parameter lists —
+                // if found, this is a parenthesized expression, not a closure.
+                Some(Token::Keyword(Keyword::And))
+                | Some(Token::Keyword(Keyword::Or))
+                | Some(Token::Keyword(Keyword::Not))
+                | Some(Token::EqEq)
+                | Some(Token::BangEq)
+                | Some(Token::LtEq)
+                | Some(Token::GtEq)
+                | Some(Token::Lt)
+                | Some(Token::Gt) => return false,
                 Some(Token::Eof) | None => return false,
                 _ => {}
             }

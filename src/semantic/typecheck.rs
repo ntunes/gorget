@@ -2836,7 +2836,7 @@ impl<'a> TypeChecker<'a> {
             Some(info) => info.clone(),
             None => return,
         };
-        if info.where_bounds.is_empty() {
+        if info.trait_bounds.is_empty() {
             return;
         }
 
@@ -2851,7 +2851,7 @@ impl<'a> TypeChecker<'a> {
         }
 
         // Check each bound
-        for (param_name, required_traits) in &info.where_bounds {
+        for (param_name, required_traits) in &info.trait_bounds {
             if let Some(concrete_type) = param_to_type.get(param_name.as_str()) {
                 for trait_name in required_traits {
                     if !self.traits.has_trait_impl_by_name(concrete_type, trait_name) {

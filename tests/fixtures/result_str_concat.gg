@@ -1,0 +1,10 @@
+Result[int, str] make_error(str prefix, str suffix):
+    return Error(prefix + ": " + suffix)
+
+void main():
+    auto r = make_error("file not found", "test.txt")
+    match r:
+        case Ok(n):
+            print(n)
+        case Error(msg):
+            print(msg)
