@@ -2047,23 +2047,48 @@ Config config = do:
 
 ## 28. Compile-Time Evaluation
 
-```gorget
-const int MAX_SIZE = 1024
-const float PI = 3.14159265358979
-const float TAU = 2.0 * PI
+All compile-time constructs use the `meta` keyword. Meta declarations are evaluated before type-checking, substituted into the AST, and then removed — nothing reaches the runtime binary.
 
-# Const functions (evaluated at compile time when called with const args)
-const int factorial(int n):
+```gorget
+# Constants
+meta int   MAX_SIZE = 1024
+meta float PI       = 3.14159265358979
+meta float TAU      = 2.0 * PI
+
+# Assertion (compile error if false)
+meta assert MAX_SIZE > 0, "MAX_SIZE must be positive"
+
+# Type alias (plain and conditional)
+meta type Index    = int32
+meta type FastMap  = Dict if feature("ordered") else HashMap
+
+# Type function (multi-branch type selection)
+meta type sized_int(int bits):
+    if bits <= 8:   return int8
+    elif bits <= 16: return int16
+    elif bits <= 32: return int32
+    else:           return int64
+
+meta type Word = sized_int(arch_word_bits())
+
+# Conditional compilation — losing branch is never type-checked
+meta if platform() == "linux":
+    from std.net import LinuxSocket as Socket
+else:
+    from std.net import MacSocket as Socket
+
+# Ordinary functions called at compile time (no annotation needed)
+int factorial(int n):
     if n <= 1:
         return 1
     return n * factorial(n - 1)
 
-const int FACT_10 = factorial(10)      # computed at compile time
-
-# Static variables (one instance, global lifetime)
-static int COUNTER = 0                 # mutable static; requires unsafe to mutate (thread safety)
-static Regex EMAIL_RE = Regex.compile(r"^[\w.]+@[\w.]+$")
+meta int FACT_10 = factorial(10)   # computed at compile time
 ```
+
+For full syntax and semantics — including evaluation order, built-in meta functions (`platform()`, `arch()`, `sizeof()`, `feature()`, etc.), compile-time function evaluation rules, and limits — see **Section 19** of the language reference.
+
+Note: `static` is a separate concept (§5.9 of the language reference) — a global variable with program lifetime, not a compile-time constant.
 
 ---
 

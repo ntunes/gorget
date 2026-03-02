@@ -3524,6 +3524,268 @@ Semantic analysis (type checking, name resolution) runs on all code regardless o
 
 ---
 
+## 19. Meta & Compile-Time Evaluation
+
+The `meta` keyword marks declarations evaluated entirely at compile time, before code generation begins. Meta constructs are removed from the output — the runtime binary sees only their substituted results.
+
+### 19.1 Meta Constants
+
+Syntax: `meta <type> <name> = <expr>`
+
+All meta-compatible types: `int`, `int8`–`int64`, `uint`–`uint64`, `float`, `float32`/`float64`, `bool`, `str`.
+
+```gorget
+meta int   MAX_CONNECTIONS = 1024
+meta int   BUFFER_SIZE     = MAX_CONNECTIONS * 64
+meta str   VERSION         = "2.1.0"
+meta float PI              = 3.14159265358979
+meta bool  VERBOSE         = false
+```
+
+Constants compose freely:
+
+```gorget
+meta int PAGE_SIZE = 4096
+meta int PAGES     = 16
+meta int POOL_SIZE = PAGE_SIZE * PAGES   # 65536
+```
+
+After evaluation, every use of `MAX_CONNECTIONS` in the file is replaced by the literal `1024` before type-checking.
+
+### 19.2 Meta Assertions
+
+Syntax: `meta assert <condition> [, <message>]`
+
+Checked at compile time; a failed assertion is a compile error.
+
+```gorget
+meta assert MAX_CONNECTIONS > 0, "MAX_CONNECTIONS must be positive"
+meta assert BUFFER_SIZE <= 1048576, "buffer exceeds 1 MB"
+meta assert TABLE_SIZE == 1024   # no message required
+```
+
+### 19.3 Meta Type Aliases
+
+**Plain alias** — `meta type <Name> = <Type>`
+
+```gorget
+meta type Num      = int
+meta type IntVec   = Vector[int]
+meta type Callback = int(str, int)
+```
+
+Generic args on use sites are preserved:
+
+```gorget
+meta type Pair = Vector   # generic alias
+Pair[int] xs = Pair[int]()   # → Vector[int]
+```
+
+**Conditional alias** — `meta type <Name> = <Type> if <expr> else <Type>`
+
+```gorget
+meta type Map   = Dict if feature("ordered") else HashMap
+meta type Index = int32 if MAX_ENTITIES <= 2147483647 else int64
+```
+
+No `elif` on single-line conditional types; use a type function for multi-branch logic (§19.5).
+
+### 19.4 Conditional Compilation
+
+Syntax mirrors the `if` statement, but the condition and all branches are evaluated at compile time. The losing branch is **completely removed** — its imports, type errors, and platform-specific code are never seen by the type checker.
+
+```gorget
+meta if platform() == "linux":
+    from std.net import LinuxSocket as Socket
+elif platform() == "macos":
+    from std.net import MacSocket as Socket
+else:
+    meta assert false, "unsupported platform"
+```
+
+Any top-level item is valid inside a branch: functions, structs, imports, other `meta` declarations.
+
+Feature-gated code:
+
+```gorget
+meta if feature("metrics"):
+    import std.metrics
+    void record_hit(str key):
+        std.metrics.increment(key)
+else:
+    void record_hit(str key):
+        pass   # no-op in non-metrics build
+```
+
+Build flags are passed on the command line: `gg build --feature metrics`.
+
+### 19.5 Meta Type Functions
+
+Multi-branch type computation. Syntax is identical to a regular function but prefixed `meta type` and returns a type name.
+
+```gorget
+meta type sized_int(int bits):
+    if bits <= 8:
+        return int8
+    elif bits <= 16:
+        return int16
+    elif bits <= 32:
+        return int32
+    else:
+        return int64
+
+meta type Word     = sized_int(arch_word_bits())
+meta type SmallIdx = sized_int(8)
+```
+
+Calling a type function in a type position:
+
+```gorget
+meta type Elem = sized_int(32)   # → int32
+Vector[Elem] data = Vector[Elem]()
+```
+
+Type function parameters follow normal Gorget param syntax. Only meta-compatible types (`int`, `float`, `bool`, `str`) are supported as parameter types.
+
+### 19.6 Compile-Time Function Evaluation (M7)
+
+Any ordinary function with meta-compatible parameter and return types can be called in a meta initializer — no special annotation required. The compiler interprets the body at compile time.
+
+```gorget
+int square(int x) = x * x
+
+int sum_range(int n):
+    int total = 0
+    for i in 0..n:
+        total = total + i + 1
+    return total
+
+meta int FOUR   = square(2)              # 4
+meta int SUM100 = sum_range(100)         # 5050
+meta int NESTED = square(sum_range(3))   # 36
+```
+
+**Supported in compile-time function bodies:**
+
+- Variable declarations (`int x = 0`)
+- Assignment (`x = x + 1`)
+- Compound assignment (`x += 1`)
+- `if / elif / else`
+- `while` loops
+- `loop` (must `break` or `return`)
+- `for` over integer ranges (`0..n`, `1..=n`)
+- `break`, `continue`
+- `return` (mandatory — bare `return` is not allowed)
+- `assert`
+- Nested function calls (including recursive)
+- Expression-body functions (`int double(int x) = x * 2`)
+
+**Not supported:** `match`, `throw`, `select`, `with`, generic functions, `async` functions, `unsafe` functions.
+
+**Limits:**
+
+- Recursion depth: 256 calls
+- Iterations per loop: 100,000 total across all loops in a single invocation
+
+Attempting to exceed either limit is a compile error.
+
+**Types supported as parameters/return values:** `int` (and all int variants), `float` (and variants), `bool`, `str`. Structs, enums, and collections are not supported.
+
+### 19.7 Built-In Meta Functions
+
+These are always available in meta contexts:
+
+| Function | Return | Description |
+|----------|--------|-------------|
+| `platform()` | `str` | `"linux"`, `"macos"`, `"windows"`, `"unknown"` |
+| `arch()` | `str` | `"x86_64"`, `"aarch64"`, `"arm"`, `"wasm32"`, `"unknown"` |
+| `arch_word_bits()` | `int` | Native word size in bits (32 or 64) |
+| `feature(str)` | `bool` | True if `--feature <name>` was passed to `gg build` |
+| `debug()` | `bool` | Shorthand for `feature("debug")` |
+| `sizeof(Type)` | `int` | Size in bytes (primitive types and `str`, `cstr`, `String`) |
+| `alignof(Type)` | `int` | Alignment in bytes (primitive types) |
+| `typename(Type)` | `str` | String representation, e.g. `"int"`, `"Vector[int]"` |
+
+`sizeof` and `alignof` support primitive types and the built-in string types. User-defined struct sizes are not available during meta evaluation (which runs before layout computation).
+
+```gorget
+meta int  INT_SIZE  = sizeof(int)          # 8
+meta int  STR_SIZE  = sizeof(str)          # 16
+meta int  PTR_ALIGN = alignof(cstr)        # 8
+meta str  INT_NAME  = typename(int)        # "int"
+meta bool IS_64     = arch_word_bits() == 64
+meta bool HAS_TLS   = feature("tls")
+```
+
+### 19.8 Evaluation Order and Scoping
+
+Meta declarations are processed **top-to-bottom before any type-checking or code generation**:
+
+1. **Phase 1 — Evaluate:** `MetaConst`, `MetaAssert`, `MetaType`, `MetaTypeFunc` are processed in order. Forward references to functions work (all items are visible), but forward references to other meta constants do not — a constant must be declared before it is used.
+2. **Phase 1.5 — Flatten MetaIf:** Conditions are evaluated, winning branches are spliced in, and any meta declarations in those branches are processed. This repeats until no more `meta if` blocks remain (handles nested conditional compilation).
+3. **Phase 2 — Substitute:** Every occurrence of a meta constant name in the AST is replaced with its literal value. Meta type aliases are substituted in all type annotations.
+4. **Phase 3 — Remove:** All `meta` items are stripped from the module before semantic analysis.
+
+After this pass, the rest of the compiler sees no `meta` constructs.
+
+### 19.9 Interaction with `--feature` Flags
+
+Feature flags are arbitrary strings passed at build time:
+
+```
+gg build --feature tls --feature metrics myapp.gg
+```
+
+Test with `feature("tls")` or `debug()` (shorthand for `feature("debug")`). There is no fixed set of features — any string is valid. The `debug` feature has no special compiler behavior beyond being testable with `debug()`.
+
+### 19.10 Common Patterns
+
+**Sized integer selection:**
+
+```gorget
+meta type sized_int(int bits):
+    if bits <= 8:   return int8
+    elif bits <= 16: return int16
+    elif bits <= 32: return int32
+    else:           return int64
+
+meta type NativeInt = sized_int(arch_word_bits())
+```
+
+**Compile-time lookup table:**
+
+```gorget
+int make_crc_entry(int n):
+    int v = n
+    for i in 0..8:
+        if v & 1 == 1:
+            v = (v >> 1) ^ 0xEDB88320
+        else:
+            v = v >> 1
+    return v
+
+meta int CRC0 = make_crc_entry(0)
+meta int CRC1 = make_crc_entry(1)
+# ... etc.
+```
+
+**Configuration validation:**
+
+```gorget
+meta int MAX_WORKERS = 8
+meta int QUEUE_SIZE  = 256
+meta assert MAX_WORKERS >= 1, "need at least one worker"
+meta assert QUEUE_SIZE > MAX_WORKERS, "queue too small"
+```
+
+**Platform-specific defaults:**
+
+```gorget
+meta str CONFIG_DIR = "/etc/myapp" if platform() == "linux" else "/Library/Application Support/myapp"
+```
+
+---
+
 ## Appendix A: Grammar Summary
 
 This appendix collects the grammar rules from throughout the document.
@@ -3536,7 +3798,8 @@ module = { item } ;
 item = directive | function_def | struct_def | enum_def | trait_def
      | equip_block | import_stmt | type_alias | newtype_def
      | const_decl | static_decl | extern_block
-     | test_def | suite_setup | suite_teardown ;
+     | test_def | suite_setup | suite_teardown
+     | meta_item ;
 
 (* ── Directives ── *)
 directive = "directive" IDENTIFIER { "-" IDENTIFIER } [ "=" IDENTIFIER ] ;
@@ -3596,6 +3859,25 @@ extern_block  = "extern" [ STRING_LITERAL ] ":" NEWLINE INDENT { function_def } 
 test_def       = { attribute } "test" STRING_LITERAL block ;
 suite_setup    = "suite" "setup" block ;
 suite_teardown = "suite" "teardown" block ;
+
+(* ── Meta items ── *)
+meta_item = "meta" ( meta_const | meta_assert | meta_type | meta_type_func | meta_if ) ;
+
+meta_const = type IDENTIFIER "=" expr NEWLINE ;
+
+meta_assert = "assert" expr [ "," expr ] NEWLINE ;
+
+meta_type = "type" IDENTIFIER "=" meta_type_rhs NEWLINE ;
+meta_type_rhs = type [ "if" expr "else" type ]      (* plain or conditional alias *)
+              | IDENTIFIER "(" [ meta_args ] ")" ;   (* type function call *)
+meta_args = expr { "," expr } ;
+
+meta_type_func = "type" IDENTIFIER "(" [ params ] ")" ":" block ;
+
+meta_if = "if" expr ":" meta_block
+          { "elif" expr ":" meta_block }
+          [ "else" ":" meta_block ] ;
+meta_block = NEWLINE INDENT { item } DEDENT ;
 
 (* ── Attributes ── *)
 attribute = "@" IDENTIFIER [ "(" attr_args ")" ] NEWLINE ;
