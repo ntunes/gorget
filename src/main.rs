@@ -1132,9 +1132,12 @@ fn main() {
         }
         path
     };
-    // Find positional filename, skipping values of known flag pairs
+    // Find positional filename, skipping values of known flag pairs.
+    // For `gg sim test <file>`, "test" is a subcommand not the filename.
     let filename = {
         let flags_with_values = ["--tag", "--exclude-tag", "--filter", "--report", "--output", "-o", "--feature"];
+        // Subcommand words that appear after the command and are NOT filenames.
+        let sim_subcommands: &[&str] = if command == "sim" { &["test"] } else { &[] };
         let mut skip_next = false;
         let mut found = None;
         for arg in args.iter().skip(2) {
@@ -1147,6 +1150,9 @@ fn main() {
                 continue;
             }
             if arg.starts_with("--") {
+                continue;
+            }
+            if sim_subcommands.contains(&arg.as_str()) {
                 continue;
             }
             found = Some(arg);
@@ -1448,6 +1454,9 @@ fn main() {
         }
         "sim" => {
             // GIR interpreter: lex → parse → semantic analysis → GIR lowering → interpret
+            // Sub-subcommand: `gg sim test <file>` activates test mode.
+            let is_test_mode = args.iter().skip(2).any(|a| a == "test");
+
             let mut parser = gorget::parser::Parser::new(&source);
             let module = parser.parse_module();
 
@@ -1474,15 +1483,56 @@ fn main() {
                 process::exit(1);
             }
 
+            // Parse test-mode flags (--filter, --tag, --exclude-tag).
+            let mut test_tags: Vec<String> = Vec::new();
+            let mut test_exclude_tags: Vec<String> = Vec::new();
+            let mut test_name_filter: Option<String> = None;
+            if is_test_mode {
+                let mut i = 0;
+                while i < args.len() {
+                    if args[i] == "--tag" && i + 1 < args.len() {
+                        test_tags.push(args[i + 1].clone());
+                        i += 2;
+                    } else if args[i].starts_with("--tag=") {
+                        test_tags.push(args[i]["--tag=".len()..].to_string());
+                        i += 1;
+                    } else if args[i] == "--exclude-tag" && i + 1 < args.len() {
+                        test_exclude_tags.push(args[i + 1].clone());
+                        i += 2;
+                    } else if args[i].starts_with("--exclude-tag=") {
+                        test_exclude_tags.push(args[i]["--exclude-tag=".len()..].to_string());
+                        i += 1;
+                    } else if args[i] == "--filter" && i + 1 < args.len() {
+                        test_name_filter = Some(args[i + 1].clone());
+                        i += 2;
+                    } else if args[i].starts_with("--filter=") {
+                        test_name_filter = Some(args[i]["--filter=".len()..].to_string());
+                        i += 1;
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
+
             let overflow_wrap = args.iter().any(|a| a == "--overflow=wrap");
             let overflow_checked = args.iter().any(|a| a == "--overflow=checked");
             let lowering_opts = gorget::ir::lowering::LoweringOptions {
+                test_mode: is_test_mode,
+                test_tags,
+                test_exclude_tags,
+                test_name_filter,
                 overflow_wrap,
                 overflow_checked,
                 ..Default::default()
             };
 
-            let sim_config = gorget::sim::SimConfig::from_args(&args);
+            let mut sim_config = gorget::sim::SimConfig::from_args(&args);
+            // When running tests via `gg sim test`, enable UB checks by default
+            // unless the user explicitly passed --ub-checks (already handled) or
+            // --no-ub-checks (not yet a flag, so just enable unconditionally here).
+            if is_test_mode {
+                sim_config.ub_checks = true;
+            }
 
             let gir_module = gorget::ir::lowering::lower_module(&module, &result, &lowering_opts);
             let exit_code = gorget::sim::interpret(&gir_module, filename, &sim_config);

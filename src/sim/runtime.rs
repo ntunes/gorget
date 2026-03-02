@@ -24,11 +24,51 @@ thread_local! {
     static RNG_STATE: Cell<u64> = Cell::new(0);
     /// Program name used by gorget_args(). Set to the source file path.
     static PROGRAM_NAME: std::cell::RefCell<String> = std::cell::RefCell::new(String::new());
+    /// Whether isolation mode is active (blocks real I/O). Default: true.
+    static ISOLATION: Cell<bool> = Cell::new(true);
+    /// Monotonically increasing fake time counter for deterministic time in isolation.
+    static FAKE_TIME_MS: Cell<i64> = Cell::new(1_000_000);
 }
 
 /// Set the program name returned by gorget_args(). Call before interpret().
 pub fn set_program_name(name: &str) {
     PROGRAM_NAME.with(|c| *c.borrow_mut() = name.to_string());
+}
+
+/// Seed the interpreter's PRNG. Called from interpret() when --seed=N is given.
+pub fn seed_rng(seed: u64) {
+    RNG_STATE.with(|s| s.set(seed));
+}
+
+/// Set whether isolation mode is active. When true, real I/O operations are blocked.
+pub fn set_isolation(on: bool) {
+    ISOLATION.with(|c| c.set(on));
+    // Reset fake time counter each run for determinism.
+    FAKE_TIME_MS.with(|c| c.set(1_000_000));
+}
+
+/// Check isolation mode; return IsolationViolation error if active.
+/// Also callable from dispatch.rs for network/socket handlers.
+pub fn check_isolation(op: &str) -> SimResult<()> {
+    ISOLATION.with(|c| {
+        if c.get() {
+            Err(SimError::IsolationViolation {
+                operation: op.to_string(),
+                hint: "use --disable-isolation to allow real I/O".to_string(),
+            })
+        } else {
+            Ok(())
+        }
+    })
+}
+
+/// Return the next fake millisecond timestamp (monotonically increasing).
+fn next_fake_time_ms() -> i64 {
+    FAKE_TIME_MS.with(|c| {
+        let t = c.get();
+        c.set(t + 1);
+        t
+    })
 }
 
 fn splitmix64_rand() -> i64 {
@@ -1368,11 +1408,17 @@ pub fn call_extern(
 
         // ── Time ───────────────────────────────────────────────────────────────
         "gorget_time" | "time" => {
+            if ISOLATION.with(|c| c.get()) {
+                return Ok(Value::I64(next_fake_time_ms() / 1000));
+            }
             use std::time::{SystemTime, UNIX_EPOCH};
             let secs = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
             Ok(Value::I64(secs))
         }
         "gorget_time_ms" | "time_ms" => {
+            if ISOLATION.with(|c| c.get()) {
+                return Ok(Value::I64(next_fake_time_ms()));
+            }
             use std::time::{SystemTime, UNIX_EPOCH};
             let ms = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as i64;
             Ok(Value::I64(ms))
@@ -1670,18 +1716,22 @@ pub fn call_extern(
             Ok(Value::Bool(std::path::Path::new(p.as_str()).is_dir()))
         }
         "gorget_mkdir" | "mkdir" => {
+            check_isolation("mkdir")?;
             let p = args.first().map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
             Ok(Value::Bool(std::fs::create_dir_all(p.as_str()).is_ok()))
         }
         "gorget_rmdir" | "rmdir" => {
+            check_isolation("rmdir")?;
             let p = args.first().map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
             Ok(Value::Bool(std::fs::remove_dir_all(p.as_str()).is_ok()))
         }
         "gorget_delete_file" | "delete_file" | "gorget_remove_file" => {
+            check_isolation("delete_file")?;
             let p = args.first().map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
             Ok(Value::Bool(std::fs::remove_file(p.as_str()).is_ok()))
         }
         "gorget_file_size" | "file_size" => {
+            // Read-only metadata — allowed in isolation.
             let p = args.first().map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
             match std::fs::metadata(p.as_str()) {
                 Ok(meta) => Ok(Value::I64(meta.len() as i64)),
@@ -1689,16 +1739,19 @@ pub fn call_extern(
             }
         }
         "gorget_rename_file" | "rename" | "gorget_rename" => {
+            check_isolation("rename_file")?;
             let from = args.get(0).map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
             let to = args.get(1).map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
             Ok(Value::Bool(std::fs::rename(from.as_str(), to.as_str()).is_ok()))
         }
         "gorget_copy_file" | "copy_file" => {
+            check_isolation("copy_file")?;
             let from = args.get(0).map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
             let to = args.get(1).map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
             Ok(Value::Bool(std::fs::copy(from.as_str(), to.as_str()).is_ok()))
         }
         "gorget_readdir" | "readdir" | "gorget_list_dir" | "list_dir" => {
+            check_isolation("readdir")?;
             let p = args.first().map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
             let arr = super::value::SimArray::new("Vector__Str");
             if let Ok(entries) = std::fs::read_dir(p.as_str()) {
@@ -1712,6 +1765,10 @@ pub fn call_extern(
 
         // ── I/O stubs ──────────────────────────────────────────────────────────
         "gorget_input" | "gorget_readline" | "input" | "readline" => {
+            if ISOLATION.with(|c| c.get()) {
+                // In isolation: simulate EOF — return empty string without reading stdin.
+                return Ok(Value::String(SimString::from_string(std::string::String::new())));
+            }
             // Print prompt (for input) to stdout, then read from stdin.
             if name == "input" || name == "gorget_input" {
                 let prompt = args.first().map(|v| v.to_sim_str().as_str().to_string()).unwrap_or_default();
@@ -1724,6 +1781,7 @@ pub fn call_extern(
         }
 
         "gorget_read_file" | "read_file" => {
+            check_isolation("read_file")?;
             // Returns GorgetString directly (not Result) — same as C gorget_read_file
             let path = args.first().map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
             let s = std::fs::read_to_string(path.as_str()).unwrap_or_default();
@@ -1731,6 +1789,7 @@ pub fn call_extern(
         }
 
         "gorget_write_file" | "write_file" => {
+            check_isolation("write_file")?;
             // Standalone write: (path, content) → void
             let path    = args.get(0).map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
             let content = args.get(1).map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
@@ -1739,6 +1798,7 @@ pub fn call_extern(
         }
 
         "gorget_append_file" | "append_file" => {
+            check_isolation("append_file")?;
             use std::io::Write as _;
             let path    = args.get(0).map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
             let content = args.get(1).map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
@@ -1752,6 +1812,7 @@ pub fn call_extern(
         // (handled in dispatch.rs try_collection_dispatch for MutPtr args,
         //  this is the non-pointer variant for direct calls)
         "gorget_file_create" | "File__create" => {
+            check_isolation("file_create")?;
             let path = args.first().map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
             let _ = std::fs::File::create(path.as_str());
             Ok(Value::Struct {
@@ -1761,6 +1822,7 @@ pub fn call_extern(
         }
 
         "gorget_file_open" | "File__open" => {
+            check_isolation("file_open")?;
             let path = args.first().map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
             Ok(Value::Struct {
                 type_name: "GorgetFile".to_string(),
@@ -1970,6 +2032,10 @@ pub fn call_extern(
 
         // ── OS / process ───────────────────────────────────────────────────────
         "gorget_getenv" | "getenv" => {
+            if ISOLATION.with(|c| c.get()) {
+                // In isolation: return empty string (no env access).
+                return Ok(Value::Str(SimStr::from_str("")));
+            }
             let name = args.first().map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
             let val = std::env::var(name.as_str()).unwrap_or_default();
             Ok(Value::Str(SimStr::from_string(val)))
@@ -1999,6 +2065,7 @@ pub fn call_extern(
         }
 
         "gorget_exec" | "exec" => {
+            check_isolation("exec")?;
             let cmd = args.first().map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
             let status = std::process::Command::new("sh")
                 .arg("-c").arg(cmd.as_str())
@@ -2009,6 +2076,7 @@ pub fn call_extern(
         }
 
         "gorget_exec_output" | "exec_output" => {
+            check_isolation("exec_output")?;
             // ExecResult { output: Str, errors: Str, exit_code: i64 }
             let cmd = args.first().map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
             let result = std::process::Command::new("sh")

@@ -28,7 +28,21 @@ use crate::ir::Module;
 /// `source_path` is used as argv[0] for the simulated program.
 /// Writes program output to stdout.
 pub fn interpret(module: &Module, source_path: &str, config: &SimConfig) -> i32 {
+    // P5b: If --many-seeds=from..to, run multiple times and report failures.
+    if let Some((from, to)) = config.many_seeds {
+        return run_many_seeds(module, source_path, config, from, to);
+    }
+
     runtime::set_program_name(source_path);
+
+    // P5a: Seed the PRNG if --seed=N was given.
+    if let Some(seed) = config.seed {
+        runtime::seed_rng(seed);
+    }
+
+    // P5d: Apply isolation mode (default: on).
+    runtime::set_isolation(config.isolation);
+
     let mut interp = Interpreter::new(module, config);
     interp.init_globals();
 
@@ -58,6 +72,60 @@ pub fn interpret(module: &Module, source_path: &str, config: &SimConfig) -> i32 
     }
 
     exit_code
+}
+
+/// Run the program repeatedly with seeds `from..to` to hunt non-deterministic bugs.
+/// Stdout/stderr from each run is discarded; only failures are reported to stderr.
+fn run_many_seeds(module: &Module, source_path: &str, config: &SimConfig, from: u64, to: u64) -> i32 {
+    // Build a single-run config (no recursive many-seeds).
+    let single_config = SimConfig { many_seeds: None, ..config.clone() };
+
+    let mut any_failure = false;
+    for seed in from..to {
+        runtime::seed_rng(seed);
+        runtime::set_isolation(config.isolation);
+        runtime::set_program_name(source_path);
+
+        let mut interp = Interpreter::new(module, &single_config);
+        interp.init_globals();
+
+        let has_main = interp.module.find_function("main").is_some();
+        let result = if !module.test_fns.is_empty() || module.is_test_module {
+            // For test modules, just check if __suite_setup (if any) panics.
+            Ok(Value::Unit)
+        } else if !has_main {
+            Err(SimError::Panic("no main() function".to_string()))
+        } else {
+            interp.call_function("main", vec![], 0)
+        };
+
+        // Discard captured output (don't flush) — seeds are for determinism testing.
+        let code = match result {
+            Ok(_) => 0,
+            Err(SimError::Exit(code)) => code,
+            Err(SimError::Panic(msg)) => {
+                eprintln!("gg sim: seed={seed}: panic: {msg}");
+                1
+            }
+            Err(SimError::Unimplemented(name)) => {
+                eprintln!("gg sim: seed={seed}: unimplemented: {name}");
+                1
+            }
+            Err(e) => {
+                eprintln!("gg sim: seed={seed}: error: {e}");
+                1
+            }
+        };
+
+        if code != 0 {
+            eprintln!("gg sim: seed={seed} FAILED");
+            any_failure = true;
+        } else {
+            eprint!(".");
+        }
+    }
+    eprintln!(); // newline after progress dots
+    if any_failure { 1 } else { 0 }
 }
 
 /// Run a test suite: call each test function and report results.

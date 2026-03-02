@@ -37,6 +37,8 @@ pub enum SimError {
     InvalidEnumTag { type_name: String, tag: i64 },
     /// One or more heap allocations were not freed before program exit.
     MemoryLeak { count: usize },
+    /// Real I/O attempted while isolation mode is active.
+    IsolationViolation { operation: String, hint: String },
 }
 
 pub type SimResult<T> = Result<T, SimError>;
@@ -82,6 +84,9 @@ impl std::fmt::Display for SimError {
             }
             SimError::MemoryLeak { count } => {
                 write!(f, "gg sim: {count} allocation(s) leaked")
+            }
+            SimError::IsolationViolation { operation, hint } => {
+                write!(f, "gg sim: isolation violation: {operation} blocked\n  hint: {hint}")
             }
         }
     }

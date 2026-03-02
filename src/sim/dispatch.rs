@@ -1382,6 +1382,7 @@ impl<'m> Interpreter<'m> {
 
         // ── TCP socket operations ─────────────────────────────────────────────
         if name == "socket_connect" {
+            runtime::check_isolation("socket_connect")?;
             let host = args.get(0).map(|v| v.as_str_lossy()).unwrap_or_default();
             let port = args.get(1).map(|v| v.as_i64() as u16).unwrap_or(0);
             use std::io::BufRead;
@@ -1493,6 +1494,7 @@ impl<'m> Interpreter<'m> {
 
         // ── UDP socket operations ─────────────────────────────────────────────
         if name == "udp_bind" {
+            runtime::check_isolation("udp_bind")?;
             let addr = args.get(0).map(|v| v.as_str_lossy()).unwrap_or_default();
             let port = args.get(1).map(|v| v.as_i64() as u16).unwrap_or(0);
             let bind_addr = format!("{addr}:{port}");

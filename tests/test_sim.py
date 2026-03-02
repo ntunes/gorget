@@ -22,7 +22,7 @@ def test_one(gg_path):
         ref_stderr = r.stderr
         # Semantic error → both pipelines should reject
         if "semantic error" in ref_stderr or "error(s) found" in ref_stderr:
-            r2 = run_gg(["sim", gg_path])
+            r2 = run_gg(["sim", "--disable-isolation", gg_path])
             if r2.returncode != 0:
                 return ("PASS", stem, "", "", "both reject (expected compile error)")
             else:
@@ -48,8 +48,10 @@ def test_one(gg_path):
         return ("SKIP", stem, "", "", f"ref run fail: {e}")
 
     # ── 3. Run gg sim ───────────────────────────────────────────────────────
+    # Use --disable-isolation so I/O fixtures (file, network, exec) work correctly
+    # in the regression harness.  Isolation enforcement is tested separately.
     try:
-        r3 = run_gg(["sim", gg_path], timeout=30)
+        r3 = run_gg(["sim", "--disable-isolation", gg_path], timeout=30)
     except subprocess.TimeoutExpired:
         return ("SIM_FAIL", stem, expected[:300], "", "sim timed out")
 
