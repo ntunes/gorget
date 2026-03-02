@@ -3004,7 +3004,7 @@ pub fn check_module(
                 if let Some(generics) = &impl_block.generic_params {
                     checker.scopes.push_scope(ScopeKind::EquipBlock { self_type: None });
                     for param in &generics.node.params {
-                        if let GenericParam::Type(name) = &param.node {
+                        if let GenericParam::Type { name, .. } = &param.node {
                             let _ = checker.scopes.define(
                                 name.node.clone(), DefKind::GenericParam, name.span,
                             );
@@ -3032,7 +3032,7 @@ pub fn check_module(
                 if let Some(generics) = &impl_block.generic_params {
                     checker.scopes.push_scope(ScopeKind::EquipBlock { self_type: None });
                     for param in &generics.node.params {
-                        if let GenericParam::Type(name) = &param.node {
+                        if let GenericParam::Type { name, .. } = &param.node {
                             let _ = checker.scopes.define(
                                 name.node.clone(), DefKind::GenericParam, name.span,
                             );
@@ -3234,7 +3234,7 @@ equip Num with Printable:
     str show(self):
         return \"num\"
 
-T echo[T](T x) where T is Printable:
+T echo[Printable T](T x):
     return x
 
 void main():
@@ -3261,7 +3261,7 @@ trait Printable:
 struct Point:
     int x
 
-T echo[T](T x) where T is Printable:
+T echo[Printable T](T x):
     return x
 
 void main():
@@ -3297,7 +3297,7 @@ equip Foo with A:
     void a(self):
         pass
 
-T need_ab[T](T x) where T is A + B:
+T need_ab[A & B T](T x):
     return x
 
 void main():

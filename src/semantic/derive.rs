@@ -27,7 +27,7 @@ fn format_generic_params(gp: &Option<Spanned<GenericParams>>) -> String {
                 .params
                 .iter()
                 .map(|p| match &p.node {
-                    GenericParam::Type(name) => name.node.as_str(),
+                    GenericParam::Type { name, .. } => name.node.as_str(),
                     _ => "auto",
                 })
                 .collect();

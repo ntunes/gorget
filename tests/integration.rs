@@ -6066,7 +6066,7 @@ fn format_generic_params_canonical(gp: &Option<Spanned<GenericParams>>) -> Strin
                 .params
                 .iter()
                 .map(|p| match &p.node {
-                    GenericParam::Type(name) => name.node.clone(),
+                    GenericParam::Type { name, .. } => name.node.clone(),
                     GenericParam::Lifetime(name) => name.node.clone(),
                     GenericParam::Const { name, .. } => name.node.clone(),
                 })

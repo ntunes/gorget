@@ -2379,7 +2379,7 @@ equip Parser:
             self.advance()
             self.parse_type()
 
-        # Skip optional 'where T is Trait, ...' clause
+        # Skip optional 'where a outlives b, ...' clause (trait bounds are now inline)
         if self.check_kw(KW_WHERE):
             self.advance()
             # Skip tokens until we hit ':', '=', newline, or EOF

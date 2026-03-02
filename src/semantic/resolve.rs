@@ -253,7 +253,7 @@ fn collect_item(
                     validate_str_param_modes(&f.params, errors);
 
                     let generic_param_names = extract_generic_param_names(&f.generic_params);
-                    let where_bounds = extract_where_bounds(&f.where_clause);
+                    let where_bounds = extract_generic_bounds(&f.generic_params);
                     let outlives_bounds = extract_outlives_bounds(&f.where_clause);
                     let param_is_live: Vec<bool> =
                         f.params.iter().map(|p| p.node.is_live).collect();
@@ -427,7 +427,7 @@ fn collect_item(
                             .collect();
                         validate_str_param_modes(&f.params, errors);
                         let generic_param_names = extract_generic_param_names(&f.generic_params);
-                        let where_bounds = extract_where_bounds(&f.where_clause);
+                        let where_bounds = extract_generic_bounds(&f.generic_params);
                         let outlives_bounds = extract_outlives_bounds(&f.where_clause);
                         let param_is_live: Vec<bool> =
                             f.params.iter().map(|p| p.node.is_live).collect();
@@ -611,7 +611,7 @@ fn resolve_function(
     if let Some(generics) = &f.generic_params {
         for param in &generics.node.params {
             match &param.node {
-                GenericParam::Type(name) => {
+                GenericParam::Type { name, .. } => {
                     if let Err(e) =
                         scopes.define(name.node.clone(), DefKind::GenericParam, name.span)
                     {
@@ -675,7 +675,7 @@ fn resolve_equip_block(
     // Define generic params for the impl block
     if let Some(generics) = &impl_block.generic_params {
         for param in &generics.node.params {
-            if let GenericParam::Type(name) = &param.node {
+            if let GenericParam::Type { name, .. } = &param.node {
                 if let Err(e) =
                     scopes.define(name.node.clone(), DefKind::GenericParam, name.span)
                 {
@@ -1329,7 +1329,7 @@ fn extract_generic_param_names(generics: &Option<Spanned<GenericParams>>) -> Vec
             .params
             .iter()
             .filter_map(|p| match &p.node {
-                GenericParam::Type(name) => Some(name.node.clone()),
+                GenericParam::Type { name, .. } => Some(name.node.clone()),
                 _ => None,
             })
             .collect(),
@@ -1337,24 +1337,23 @@ fn extract_generic_param_names(generics: &Option<Spanned<GenericParams>>) -> Vec
     }
 }
 
-/// Extract where-clause trait bounds as `(param_name, [trait_name, ...])`.
-/// Skips `Outlives` bounds (those are extracted separately).
-fn extract_where_bounds(
-    where_clause: &Option<Spanned<WhereClause>>,
+/// Extract inline trait bounds from generic params as `(param_name, [trait_name, ...])`.
+/// Only includes params that have at least one bound.
+fn extract_generic_bounds(
+    generic_params: &Option<Spanned<GenericParams>>,
 ) -> Vec<(String, Vec<String>)> {
-    match where_clause {
-        Some(wc) => wc
+    match generic_params {
+        Some(gp) => gp
             .node
-            .bounds
+            .params
             .iter()
-            .filter_map(|wb| match &wb.node {
-                WhereBound::Trait { type_name, bounds } => {
-                    let param = type_name.node.clone();
+            .filter_map(|p| match &p.node {
+                GenericParam::Type { name, bounds } if !bounds.is_empty() => {
                     let traits: Vec<String> =
                         bounds.iter().map(|tb| tb.node.name.node.clone()).collect();
-                    Some((param, traits))
+                    Some((name.node.clone(), traits))
                 }
-                WhereBound::Outlives { .. } => None,
+                _ => None,
             })
             .collect(),
         None => Vec::new(),

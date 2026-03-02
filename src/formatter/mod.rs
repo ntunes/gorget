@@ -587,7 +587,18 @@ impl Formatter {
                 self.emitter.write(", ");
             }
             match &param.node {
-                GenericParam::Type(name) => self.emitter.write(&name.node),
+                GenericParam::Type { name, bounds } => {
+                    for (i, tb) in bounds.iter().enumerate() {
+                        if i > 0 {
+                            self.emitter.write(" & ");
+                        }
+                        self.format_trait_bound(tb);
+                    }
+                    if !bounds.is_empty() {
+                        self.emitter.write(" ");
+                    }
+                    self.emitter.write(&name.node);
+                }
                 GenericParam::Lifetime(name) => {
                     self.emitter.write("live ");
                     self.emitter.write(&name.node);
@@ -616,15 +627,9 @@ impl Formatter {
                 self.emitter.write(", ");
             }
             match &bound.node {
-                WhereBound::Trait { type_name, bounds } => {
-                    self.emitter.write(&type_name.node);
-                    self.emitter.write(" is ");
-                    for (j, tb) in bounds.iter().enumerate() {
-                        if j > 0 {
-                            self.emitter.write(" + ");
-                        }
-                        self.format_trait_bound(tb);
-                    }
+                WhereBound::Trait { .. } => {
+                    // WhereBound::Trait is dead after inline-bounds migration
+                    unreachable!("WhereBound::Trait should not appear in formatted AST")
                 }
                 WhereBound::Outlives { longer, shorter } => {
                     self.emitter.write(&longer.node);

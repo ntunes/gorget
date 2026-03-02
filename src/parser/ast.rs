@@ -299,7 +299,10 @@ pub struct GenericParams {
 
 #[derive(Debug, Clone)]
 pub enum GenericParam {
-    Type(Spanned<String>),
+    Type {
+        name: Spanned<String>,
+        bounds: Vec<Spanned<TraitBound>>,
+    },
     Lifetime(Spanned<String>),
     Const {
         type_: Spanned<Type>,

@@ -561,10 +561,18 @@ fn test_public_visibility() {
 
 #[test]
 fn test_generic_function_with_where() {
-    let module = parse("void print_all[T](Vector[T] items) where T is Displayable:\n    pass\n");
+    let module = parse("void print_all[Displayable T](Vector[T] items):\n    pass\n");
     if let Item::Function(ref f) = module.items[0].node {
-        assert!(f.generic_params.is_some());
-        assert!(f.where_clause.is_some());
+        let gp = f.generic_params.as_ref().expect("generic params");
+        assert_eq!(gp.node.params.len(), 1);
+        if let GenericParam::Type { name, bounds } = &gp.node.params[0].node {
+            assert_eq!(name.node, "T");
+            assert_eq!(bounds.len(), 1);
+            assert_eq!(bounds[0].node.name.node, "Displayable");
+        } else {
+            panic!("expected Type param");
+        }
+        assert!(f.where_clause.is_none());
     } else {
         panic!();
     }
@@ -1289,13 +1297,23 @@ else:
 
 #[test]
 fn test_where_mixed_bounds() {
-    let source = "str pick[T](live(a) T x, live(b) T y) where T is Displayable, a outlives b:\n    return x\n";
+    // Trait bound is now inline; only `outlives` remains in the where clause
+    let source = "str pick[Displayable T](live(a) T x, live(b) T y) where a outlives b:\n    return x\n";
     let module = parse(source);
     if let Item::Function(f) = &module.items[0].node {
+        // Inline bound on T
+        let gp = f.generic_params.as_ref().expect("generic params");
+        if let GenericParam::Type { name, bounds } = &gp.node.params[0].node {
+            assert_eq!(name.node, "T");
+            assert_eq!(bounds.len(), 1);
+            assert_eq!(bounds[0].node.name.node, "Displayable");
+        } else {
+            panic!("expected Type param");
+        }
+        // Only the outlives bound remains in the where clause
         let wc = f.where_clause.as_ref().expect("where clause");
-        assert_eq!(wc.node.bounds.len(), 2);
-        assert!(matches!(&wc.node.bounds[0].node, WhereBound::Trait { type_name, .. } if type_name.node == "T"));
-        assert!(matches!(&wc.node.bounds[1].node, WhereBound::Outlives { longer, shorter } if longer.node == "a" && shorter.node == "b"));
+        assert_eq!(wc.node.bounds.len(), 1);
+        assert!(matches!(&wc.node.bounds[0].node, WhereBound::Outlives { longer, shorter } if longer.node == "a" && shorter.node == "b"));
     } else {
         panic!("expected function");
     }

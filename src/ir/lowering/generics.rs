@@ -653,7 +653,7 @@ fn build_type_substitutions(
     if let Some(params) = generic_params {
         for (param, arg) in params.node.params.iter().zip(type_args.iter()) {
             let name = match &param.node {
-                GenericParam::Type(s) => s.node.clone(),
+                GenericParam::Type { name: s, .. } => s.node.clone(),
                 GenericParam::Lifetime(s) => s.node.clone(),
                 GenericParam::Const { name, .. } => name.node.clone(),
             };
@@ -777,7 +777,7 @@ fn inject_builtin_enums(enum_templates: &mut FxHashMap<String, ast::EnumDef>) {
             visibility: Visibility::Public,
             name: Spanned::dummy("Option".to_string()),
             generic_params: Some(Spanned::dummy(GenericParams {
-                params: vec![Spanned::dummy(GenericParam::Type(Spanned::dummy("T".to_string())))],
+                params: vec![Spanned::dummy(GenericParam::Type { name: Spanned::dummy("T".to_string()), bounds: vec![] })],
             })),
             variants: vec![
                 Spanned::dummy(Variant {
@@ -804,8 +804,8 @@ fn inject_builtin_enums(enum_templates: &mut FxHashMap<String, ast::EnumDef>) {
             name: Spanned::dummy("Result".to_string()),
             generic_params: Some(Spanned::dummy(GenericParams {
                 params: vec![
-                    Spanned::dummy(GenericParam::Type(Spanned::dummy("T".to_string()))),
-                    Spanned::dummy(GenericParam::Type(Spanned::dummy("E".to_string()))),
+                    Spanned::dummy(GenericParam::Type { name: Spanned::dummy("T".to_string()), bounds: vec![] }),
+                    Spanned::dummy(GenericParam::Type { name: Spanned::dummy("E".to_string()), bounds: vec![] }),
                 ],
             })),
             variants: vec![

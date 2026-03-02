@@ -1542,10 +1542,27 @@ impl Parser {
                     param_start.merge(end),
                 ));
             } else {
+                // Try to parse inline trait bounds: `Trait [& Trait]* ParamName`
+                // Use try_parse to speculatively attempt this form.
+                let inline_bounds = self.try_parse(|p| {
+                    // Parse one or more trait bounds separated by `&`
+                    let first = p.parse_single_trait_bound().ok()?;
+                    let mut bounds = vec![first];
+                    while p.match_token(&Token::Ampersand) {
+                        bounds.push(p.parse_single_trait_bound().ok()?);
+                    }
+                    // Next must be an identifier (the param name) — not `,` or `]`
+                    if matches!(p.peek(), Token::Identifier(_)) {
+                        Some(bounds)
+                    } else {
+                        None
+                    }
+                });
+                let bounds = inline_bounds.unwrap_or_default();
                 let name = self.expect_identifier()?;
                 let end = self.previous_span();
                 params.push(Spanned::new(
-                    GenericParam::Type(name),
+                    GenericParam::Type { name, bounds },
                     param_start.merge(end),
                 ));
             }
@@ -1622,16 +1639,18 @@ impl Parser {
                     bound_start.merge(bound_end),
                 ));
             } else {
-                // `where T is Trait` — trait bound
-                self.expect_keyword(Keyword::Is)?;
-                let trait_bounds = self.parse_trait_bound_list()?;
-                let bound_end = self.previous_span();
-                bounds.push(Spanned::new(
-                    WhereBound::Trait {
-                        type_name,
-                        bounds: trait_bounds,
-                    },
-                    bound_start.merge(bound_end),
+                // Old `where T is Trait` syntax is no longer valid.
+                // Trait bounds are now written inline in the generic parameter list:
+                //   `[Printable T]` instead of `[T] where T is Printable`
+                //   `[A & B T]` instead of `[T] where T is A + B`
+                return Err(self.error_at(
+                    bound_start.merge(self.peek_span()),
+                    &format!(
+                        "trait bounds in `where` clauses are no longer supported; \
+                         write them inline instead: use `[Trait T]` or `[A & B T]` \
+                         instead of `where {} is Trait`",
+                        type_name.node
+                    ),
                 ));
             }
 
@@ -1759,7 +1778,7 @@ impl Parser {
     pub fn parse_trait_bound_list(&mut self) -> Result<Vec<Spanned<TraitBound>>, ParseError> {
         let mut bounds = Vec::new();
         bounds.push(self.parse_single_trait_bound()?);
-        while self.match_token(&Token::Plus) {
+        while self.match_token(&Token::Ampersand) {
             bounds.push(self.parse_single_trait_bound()?);
         }
         Ok(bounds)

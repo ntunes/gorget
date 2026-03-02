@@ -339,14 +339,14 @@ String n = name.unwrap()                            # String (panics if None!)
 
 ### 4.3 Generics
 
-Square brackets `[]` for type parameters. `where...is` for trait bounds (readable English).
+Square brackets `[]` for type parameters. Trait bounds are written inline before the parameter name, using `&` to combine multiple bounds.
 
 ```gorget
-# [] declares type variables, where constrains them
-T max[T](T a, T b) where T is Comparable:
+# Inline trait bound — Comparable comes before the param name T
+T max[Comparable T](T a, T b):
     if a > b: a else: b
 
-# Unconstrained generic (no where clause)
+# Unconstrained generic
 T identity[T](T x):
     return x
 
@@ -451,33 +451,42 @@ equip Point with Displayable:
     str display(self):
         return "({self.x}, {self.y})"
 
-# Generic implementation with where...is
-equip Vector[T] with Displayable where T is Displayable:
+# Generic implementation — bound on the equip's T
+equip[Displayable T] Vector[T] with Displayable:
     str display(self):
         auto parts = [item.display() for item in self]
         return "[{parts.join(", ")}]"
 
 # Blanket implementation
-equip[T] T with Printable where T is Displayable:
+equip[Displayable T] T with Printable:
     void print(self):
         println(self.display())
 ```
 
-### 4.7 Trait Bounds with `where...is`
+### 4.7 Inline Trait Bounds
+
+Trait bounds are written inline in the generic parameter list, before the parameter name. This follows Gorget's type-first convention: the constraint comes first, then the name it constrains.
 
 ```gorget
-# Single bound
-void print_all[T](Vector[T] items) where T is Displayable:
+# Single bound — Displayable before T
+void print_all[Displayable T](Vector[T] items):
     for item in items:
         print(item.display())
 
-# Multiple bounds
-void process[T](T item) where T is Displayable + Cloneable + Comparable:
+# Multiple bounds on one param — use & to combine
+void process[Displayable & Cloneable & Comparable T](T item):
     ...
 
-# Multiple type variables
-void complex[T, U](T a, U b) where T is Displayable + Cloneable, U is Into[T]:
+# Multiple type variables with different bounds
+void complex[Displayable & Cloneable T, Into[T] U](T a, U b):
     ...
+```
+
+The `where` keyword is only for `outlives` borrow-group ordering:
+
+```gorget
+str pick[Displayable T](live(a) T x, live(b) T y) where a outlives b:
+    return x
 ```
 
 ### 4.8 Method Dispatch
@@ -1276,7 +1285,7 @@ unsafe equip MyFfiHandle with Sendable    # "I guarantee this is safe to send"
 unsafe equip MyFfiHandle with Syncable    # "I guarantee this is safe to share"
 ```
 
-The `thread.spawn` function has an implicit `where F is Sendable` bound, so the compiler rejects any attempt to send non-Sendable types across threads — no data races from accidental sharing.
+The `thread.spawn` function has an implicit `[Sendable F]` bound, so the compiler rejects any attempt to send non-Sendable types across threads — no data races from accidental sharing.
 
 ---
 
@@ -1386,7 +1395,7 @@ public enum List[T]:
     Cons(T, Box[List[T]])
     Nil
 
-equip[T] List[T] where T is Displayable:
+equip[Displayable T] List[T]:
     #/ Creates an empty list.
     public static List[T] new():
         return List.Nil
@@ -1401,7 +1410,7 @@ equip[T] List[T] where T is Displayable:
             case Cons(_, tail): 1 + tail.len()
             case Nil: 0
 
-equip[T] List[T] with Displayable where T is Displayable:
+equip[Displayable T] List[T] with Displayable:
     str display(self):
         match self:
             case Cons(head, tail):
@@ -1701,8 +1710,8 @@ equip CounterIterator with Iterator[int]:
 struct FixedArray[T, const int N]:
     T[N] data
 
-equip[T, const int N] FixedArray[T, N]:
-    static FixedArray[T, N] zeroed() where T is Default:
+equip[Default T, const int N] FixedArray[T, N]:
+    static FixedArray[T, N] zeroed():
         return FixedArray([T.default(); N])
 
     T get(self, int index):
@@ -1993,7 +2002,7 @@ test "user creation":
 #/ assert max(3, 5) == 5
 #/ assert max(10, 2) == 10
 #/ ```
-T max[T](T a, T b) where T is Comparable:
+T max[Comparable T](T a, T b):
     if a > b: a else: b
 
 # Benchmarks — *Not yet implemented*
@@ -2023,9 +2032,8 @@ gg test --filter addition
 
 ```gorget
 # Continuation with hanging indent
-Vector[ProcessedItem] process_all[T](Vector[T] items, Config config,
-        Logger &logger) throws ProcessError
-        where T is Processable:
+Vector[ProcessedItem] process_all[Processable T](Vector[T] items, Config config,
+        Logger &logger) throws ProcessError:
     for item in items:
         ...
 ```
@@ -2061,13 +2069,12 @@ Vector[Point] points = [
 ]                        # trailing comma allowed
 ```
 
-### 30.5 Where Clauses
+### 30.5 Multiline Generic Params with Bounds
 
 ```gorget
-void complex_fn[T, U, V](T a, U b, V c)
-        where T is Displayable + Cloneable,
-              U is Into[T] + Debuggable,
-              V is Iterator[Item = T]:
+void complex_fn[Displayable & Cloneable T,
+                Into[T] & Debuggable U,
+                Iterator[Item = T] V](T a, U b, V c):
     ...
 ```
 
@@ -2320,7 +2327,7 @@ public enum Tree[T]:
     Node(T, Box[Tree[T]], Box[Tree[T]])
     Leaf
 
-equip[T] Tree[T] where T is Comparable + Displayable:
+equip[Comparable & Displayable T] Tree[T]:
     public static Tree[T] new():
         return Tree.Leaf
 
@@ -2524,17 +2531,15 @@ type           = primitive_type | IDENT [ generic_args ]
                | type "[" "]"               (* slice: int[] *)
                | "(" type_list ")"           (* tuple *)
                | type "(" [ type_list ] ")"  (* function type: int(int, int) *) ;
-generic_params = "[" generic_param { "," generic_param } "]" ;
-generic_param  = IDENT [ COLON trait_bound_list ]
-               | "live" IDENT
-               | "const" type IDENT ;
-generic_args   = "[" type { "," type } "]" ;
-where_clause   = "where" where_bound { "," where_bound } ;
-where_bound    = IDENT "is" trait_bound_list
-               | IDENT "has" field_bound { "," field_bound }
-               | IDENT "outlives" IDENT ;
-trait_bound_list = trait_bound { "+" trait_bound } ;
-trait_bound    = IDENT [ "[" assoc_type_binding { "," assoc_type_binding } "]" ] ;
+generic_params   = "[" generic_param { "," generic_param } "]" ;
+generic_param    = [ trait_bound_list " " ] IDENT
+                 | "live" IDENT
+                 | "const" type IDENT ;
+generic_args     = "[" type { "," type } "]" ;
+where_clause     = "where" where_bound { "," where_bound } ;
+where_bound      = IDENT "outlives" IDENT ;
+trait_bound_list = trait_bound { "&" trait_bound } ;
+trait_bound      = IDENT [ "[" assoc_type_binding { "," assoc_type_binding } "]" ] ;
 assoc_type_binding = IDENT "=" type ;
 field_bound    = "." IDENT ":" type ;
 
@@ -2596,7 +2601,7 @@ attribute      = "@" IDENT [ "(" attr_args ")" ] NEWLINE ;
 
 3. **C/Java type declarations are universal**: `int x = 5` is the most widely-understood variable declaration in programming. Rust's `let x: i32 = 5` is alien by comparison.
 
-4. **Zero-cost abstractions without the ceremony**: Rust's `impl<T: Display + Clone> Foo<T> for Bar<'a, T> where T: Send + Sync` becomes `equip[T] Bar[T] with Foo[T] where T is Displayable + Cloneable + Sendable + Syncable:` — significantly less visual noise.
+4. **Zero-cost abstractions without the ceremony**: Rust's `impl<T: Display + Clone + Send + Sync> Foo<T> for Bar<T>` becomes `equip[Displayable & Cloneable & Sendable & Syncable T] Bar[T] with Foo[T]:` — significantly less visual noise.
 
 ---
 

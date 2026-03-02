@@ -362,9 +362,9 @@ fn gen_collections_module() -> Module {
                                 } else {
                                     "T"
                                 };
-                                Spanned::dummy(GenericParam::Type(Spanned::dummy(
+                                Spanned::dummy(GenericParam::Type { name: Spanned::dummy(
                                     param_name.to_string(),
-                                )))
+                                ), bounds: vec![] })
                             })
                             .collect(),
                     }))
@@ -1270,7 +1270,7 @@ fn gen_channel_module() -> Module {
         visibility: Visibility::Public,
         name: Spanned::dummy("Channel".to_string()),
         generic_params: Some(Spanned::dummy(GenericParams {
-            params: vec![Spanned::dummy(GenericParam::Type(Spanned::dummy("T".to_string())))],
+            params: vec![Spanned::dummy(GenericParam::Type { name: Spanned::dummy("T".to_string()), bounds: vec![] })],
         })),
         fields: vec![],
         doc_comment: None,

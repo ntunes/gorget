@@ -520,7 +520,7 @@ fn build_subs(
     if let Some(params) = generic_params {
         for (param, arg) in params.node.params.iter().zip(type_args.iter()) {
             let name = match &param.node {
-                GenericParam::Type(s) => s.node.clone(),
+                GenericParam::Type { name: s, .. } => s.node.clone(),
                 GenericParam::Lifetime(s) => s.node.clone(),
                 GenericParam::Const { name, .. } => name.node.clone(),
             };

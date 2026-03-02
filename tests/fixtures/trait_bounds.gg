@@ -8,7 +8,7 @@ equip Num with Printable:
     str show(self):
         return "num"
 
-T echo[T](T x) where T is Printable:
+T echo[Printable T](T x):
     return x
 
 void main():

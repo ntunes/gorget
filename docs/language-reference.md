@@ -1963,24 +1963,32 @@ Pair[int, String] p = Pair[int, String](1, "hello")
 auto result = max[int](a, b)
 ```
 
-### 11.3 Where Clauses
+### 11.3 Inline Trait Bounds
+
+Trait bounds are written inline in the generic parameter list, before the parameter name. Use `&` to combine multiple bounds.
 
 ```ebnf
-where_clause = "where" where_bound { "," where_bound } ;
-where_bound  = IDENTIFIER "is" trait_bound { "+" trait_bound }
-             | IDENTIFIER "outlives" IDENTIFIER ;
-trait_bound  = IDENTIFIER [ "[" type_or_binding { "," type_or_binding } "]" ] ;
+generic_param     = [trait_bound_list " "] IDENTIFIER
+                  | "live" IDENTIFIER
+                  | "const" type IDENTIFIER ;
+trait_bound_list  = trait_bound { "&" trait_bound } ;
+trait_bound       = IDENTIFIER [ "[" type_or_binding { "," type_or_binding } "]" ] ;
 ```
 
-Constrain generic type parameters or express borrow group ordering:
-
 ```gorget
-void print_all[T](Vector[T] items) where T is Displayable:
+void print_all[Displayable T](Vector[T] items):
     for item in items:
         print(item.to_string())
 
-void process[T](T item) where T is Displayable + Cloneable + Comparable:
+void process[Displayable & Cloneable & Comparable T](T item):
     ...
+```
+
+The `where` keyword is retained solely for `outlives` borrow-group ordering constraints:
+
+```gorget
+str pick[Displayable T](live(a) T x, live(b) T y) where a outlives b:
+    return x
 ```
 
 ### 11.4 Monomorphization
@@ -3411,13 +3419,14 @@ attr_args = attr_arg { "," attr_arg } ;
 attr_arg  = IDENTIFIER | STRING_LITERAL | IDENTIFIER "=" STRING_LITERAL ;
 
 (* ── Generics ── *)
-generic_params = "[" generic_param { "," generic_param } "]" ;
-generic_param  = IDENTIFIER | "live" IDENTIFIER | "const" type IDENTIFIER ;
-where_clause   = "where" where_bound { "," where_bound } ;
-where_bound    = IDENTIFIER "is" trait_bound { "+" trait_bound }
-               | IDENTIFIER "outlives" IDENTIFIER ;
-trait_bound_list = trait_bound { "+" trait_bound } ;
-trait_bound    = IDENTIFIER [ "[" type_or_binding { "," type_or_binding } "]" ] ;
+generic_params   = "[" generic_param { "," generic_param } "]" ;
+generic_param    = [ trait_bound_list " " ] IDENTIFIER
+                 | "live" IDENTIFIER
+                 | "const" type IDENTIFIER ;
+where_clause     = "where" where_bound { "," where_bound } ;
+where_bound      = IDENTIFIER "outlives" IDENTIFIER ;
+trait_bound_list = trait_bound { "&" trait_bound } ;
+trait_bound      = IDENTIFIER [ "[" type_or_binding { "," type_or_binding } "]" ] ;
 
 (* ── Types ── *)
 type = primitive_type | named_type | array_type | slice_type
