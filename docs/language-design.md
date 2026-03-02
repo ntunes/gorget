@@ -2765,8 +2765,8 @@ trait Iterable          # .iter() — produce an Iterator
 trait From[T]           # .from(T) — infallible type conversion (static method)
 trait TryFrom[T]        # .try_from(T) — fallible type conversion (static method)
 trait Parseable          # .parse(str) — fallible string parsing (static method)
-trait Serializable      # .serialize(ser) — serialization (derivable via @derive, import std.json)
-trait Deserializable    # .deserialize(de) — deserialization (derivable via @derive, import std.json)
+trait Serializable      # .serialize(ser) — serialization (derivable via @derive, import gg.json)
+trait Deserializable    # .deserialize(de) — deserialization (derivable via @derive, import gg.json)
 trait Debuggable        # *Not yet implemented* — development/debug representation
 trait Copy              # *Not yet implemented* — marker: bitwise copyable (primitives)
 trait Sendable          # *Not yet implemented* — marker: safe to send across threads
@@ -2817,7 +2817,7 @@ async void with_timeout():
 ### 40.5 HTTP (Built-in)
 
 ```gorget
-import std.http
+import gg.http
 
 # HTTP client — simple
 async void fetch_example() throws HttpError:
@@ -2853,7 +2853,7 @@ void main():
 ### 40.6 JSON (Built-in)
 
 ```gorget
-import std.json
+import gg.json
 
 # Serialize — any type with @derive(Serializable)
 @derive(Serializable, Deserializable)

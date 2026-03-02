@@ -782,7 +782,7 @@ dotted_name    = IDENTIFIER { "." IDENTIFIER } ;
 
 ```gorget
 import std.io
-import std.json
+import gg.json
 from std.conv import int_to_str, parse_int
 ```
 
@@ -2745,7 +2745,7 @@ Re-exports the `Displayable` trait and `format` builtin for discoverability. Bot
 | `exec` | `int(str)` | Run a shell command, return exit code |
 | `exec_output` | `ExecResult(str)` | Run a command, capture stdout and exit code |
 
-**`std.json`** — JSON parsing and serialization
+**`gg.json`** — JSON parsing and serialization
 
 | Name | Kind | Description |
 |---|---|---|
@@ -2758,7 +2758,7 @@ Re-exports the `Displayable` trait and `format` builtin for discoverability. Bot
 | `Deserializer` | trait | Deserialization backend: `read_bool`, `read_int`, `read_float`, `read_str`, `is_null`, `begin_struct`/`end_struct`, `begin_seq`/`end_seq` |
 | `Deserializable` | trait | `void deserialize(&self, Box[Deserializer] de)` — types implement this to be deserialized (derivable via `@derive`) |
 
-**`std.toml`** — TOML parsing and serialization
+**`gg.toml`** — TOML parsing and serialization
 
 | Name | Kind | Description |
 |---|---|---|
@@ -2766,7 +2766,7 @@ Re-exports the `Displayable` trait and `format` builtin for discoverability. Bot
 | `toml_parse` | `TomlValue(str)` | Parse a TOML string into a `TomlValue` |
 | `toml_stringify` | `str(TomlValue)` | Serialize a `TomlValue` to a TOML string |
 
-**`std.xml`** — XML parsing and serialization
+**`gg.xml`** — XML parsing and serialization
 
 | Name | Kind | Description |
 |---|---|---|
@@ -2816,7 +2816,7 @@ auto dec_url = url_decode("hello%20world")      # Ok("hello world")
 str safe = html_escape("<b>Tom & Jerry</b>")    # "&lt;b&gt;Tom &amp; Jerry&lt;/b&gt;"
 ```
 
-**`std.csv`** — RFC 4180 CSV parsing and serialization
+**`gg.csv`** — RFC 4180 CSV parsing and serialization
 
 | Function | Signature | Description |
 |---|---|---|
@@ -2832,7 +2832,7 @@ str safe = html_escape("<b>Tom & Jerry</b>")    # "&lt;b&gt;Tom &amp; Jerry&lt;/
 `CsvTable` methods: `row_count()`, `col_count()`, `headers()`, `row(int)`, `get(int, int)`, `get_named(int, str)`, `has_column(str)`, `column_index(str)`.
 
 ```gorget
-from std.csv import csv_parse_table, csv_stringify, CsvTable
+from gg.csv import csv_parse_table, csv_stringify, CsvTable
 from std.collections import Vector
 
 auto result = csv_parse_table("name,age\nAlice,30\nBob,25\n")
@@ -2860,7 +2860,7 @@ match result:
 | `bytes_slice` | `Vector[uint8](Vector[uint8], int, int)` | Slice a byte vector |
 | `random_bytes` | `Vector[uint8](int)` | Generate random bytes |
 
-**`std.crypto`** — Cryptography
+**`gg.crypto`** — Cryptography
 
 | Name | Kind | Description |
 |---|---|---|
@@ -2878,7 +2878,7 @@ match result:
 | `crypto_rsa_verify` | `bool(RSAKey, Vector[uint8], Vector[uint8])` | RSA signature verification |
 | `crypto_random_bytes` | `Vector[uint8](int)` | Cryptographically secure random bytes |
 
-**`std.http.client`** — HTTP client
+**`gg.http`** — HTTP client
 
 | Name | Kind | Description |
 |---|---|---|
@@ -2898,7 +2898,7 @@ match result:
 | `Socket` | struct | TCP socket with `read`, `read_exact`, `write`, `write_str`, `read_line` (returns `Result[String, str]`), `set_timeout`, `close` methods |
 | `socket_connect` | `Result[Socket, str](str, int)` | Connect to host:port |
 
-**`std.gfx`** — Canvas graphics
+**`gg.gfx`** — Canvas graphics
 
 | Name | Kind | Description |
 |---|---|---|
@@ -2909,7 +2909,7 @@ match result:
 | `gfx_fill_circle` | `void(Canvas, int, int, int, Color)` | Draw filled circle |
 | `gfx_draw_circle` | `void(Canvas, int, int, int, Color)` | Draw circle outline |
 
-**`std.sdl`** — SDL2 bindings
+**`gg.sdl`** — SDL2 bindings
 
 Low-level SDL2 bindings for window management, rendering, input handling, and audio. Provides opaque structs (`SDLWindow`, `SDLRenderer`, `SDLTexture`, `SDLFont`, `SDLEvent`), 40+ constants (`SDL_INIT_VIDEO`, `SDL_QUIT`, `SDLK_*` key codes, etc.), and functions covering:
 
@@ -2920,14 +2920,14 @@ Low-level SDL2 bindings for window management, rendering, input handling, and au
 - **Input:** `sdl_poll_event`, `sdl_event_type`, `sdl_event_key`, `sdl_event_mouse_x`, `sdl_event_mouse_y`, `sdl_event_mouse_button`
 - **Time:** `sdl_delay`, `sdl_ticks`
 
-**`std.ecs`** — Entity Component System
+**`gg.ecs`** — Entity Component System
 
 | Name | Kind | Description |
 |---|---|---|
 | `EntityPool` | struct | Entity ID allocator with `create() → int`, `destroy(int)`, `is_alive(int) → bool` methods |
 | `SparseSet` | struct | Sparse-set storage for component data with `add`, `remove`, `get`, `has`, `len` methods |
 
-**`std.ssh`** — SSH client
+**`gg.ssh`** — SSH client
 
 | Name | Kind | Description |
 |---|---|---|
@@ -2937,7 +2937,7 @@ Low-level SDL2 bindings for window management, rendering, input handling, and au
 
 The SSH module implements the SSH-2 protocol including key exchange, encryption, and SFTP operations.
 
-**`std.regex`** — Regular expressions (PCRE2)
+**`gg.regex`** — Regular expressions (PCRE2)
 
 | Name | Kind | Description |
 |---|---|---|

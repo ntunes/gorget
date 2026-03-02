@@ -1,4 +1,4 @@
-# std.ecs — Entity Component System
+# gg.ecs — Entity Component System
 
 A reusable ECS library providing entity ID management and generic sparse-set
 component storage.
@@ -6,7 +6,7 @@ component storage.
 ## Import
 
 ```gorget
-from std.ecs import EntityPool, SparseSet
+from gg.ecs import EntityPool, SparseSet
 ```
 
 ## EntityPool
@@ -32,7 +32,7 @@ struct EntityPool:
 ### Usage
 
 ```gorget
-from std.ecs import EntityPool
+from gg.ecs import EntityPool
 
 EntityPool pool = EntityPool.new()
 int e1 = pool.create()   # 0
@@ -83,7 +83,7 @@ for eid in health:
 
 ```gorget
 from std.collections import Vector
-from std.ecs import EntityPool, SparseSet
+from gg.ecs import EntityPool, SparseSet
 
 struct Health:
     int hp
@@ -110,7 +110,7 @@ for eid in health:
 Compose an EntityPool with multiple SparseSet stores to form a game world:
 
 ```gorget
-from std.ecs import EntityPool, SparseSet
+from gg.ecs import EntityPool, SparseSet
 
 struct World:
     EntityPool entities
@@ -126,4 +126,4 @@ equip World:
 ```
 
 See `examples/ecs/` for a full battle simulation and `examples/breakout/` for
-a graphical game using std.ecs with std.gfx.
+a graphical game using gg.ecs with gg.gfx.

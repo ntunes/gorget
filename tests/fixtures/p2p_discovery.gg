@@ -1,7 +1,7 @@
-from std.p2p import Node, P2PEvent, DiscoveryConfig, PeerId
-from std.p2p import p2p_create_node, p2p_enable_discovery, p2p_poll
-from std.p2p import p2p_peer_id_hex, p2p_send, p2p_send_raw
-from std.p2p import p2p_default_discovery_config
+from gg.p2p import Node, P2PEvent, DiscoveryConfig, PeerId
+from gg.p2p import p2p_create_node, p2p_enable_discovery, p2p_poll
+from gg.p2p import p2p_peer_id_hex, p2p_send, p2p_send_raw
+from gg.p2p import p2p_default_discovery_config
 from std.bytes import bytes_from_str, bytes_to_str
 from std.collections import Vector
 from std.net.udp import UdpAddr

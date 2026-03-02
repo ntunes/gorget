@@ -1,7 +1,7 @@
-# std.ssh — SSH2 protocol implementation in pure Gorget
+# gg.ssh — SSH2 protocol implementation in pure Gorget
 #
 # Implements RFC 4253 (SSH Transport), RFC 4252 (Authentication),
-# RFC 4254 (Connection Protocol) on top of std.net.socket and std.crypto.
+# RFC 4254 (Connection Protocol) on top of std.net.socket and gg.crypto.
 #
 # MVP scope:
 #   - Key exchange: diffie-hellman-group14-sha256
@@ -15,9 +15,9 @@ from std.net.socket import Socket, socket_connect
 from std.bytes import bytes_from_str, bytes_to_str, bytes_from_hex
 from std.bytes import bytes_write_u32_be, bytes_read_u32_be
 from std.bytes import bytes_concat, bytes_slice, random_bytes
-from std.crypto import crypto_sha256, crypto_hmac
-from std.crypto import crypto_aes_ctr_new, CipherContext
-from std.crypto import crypto_bn_from_bytes, crypto_bn_to_bytes, crypto_bn_mod_exp, BigNum
+from gg.crypto import crypto_sha256, crypto_hmac
+from gg.crypto import crypto_aes_ctr_new, CipherContext
+from gg.crypto import crypto_bn_from_bytes, crypto_bn_to_bytes, crypto_bn_mod_exp, BigNum
 from std.fs import read_file, file_exists
 from std.os import getenv, exit
 from std.path import path_join

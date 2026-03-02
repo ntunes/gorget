@@ -1,4 +1,4 @@
-from std.regex import regex_compile, regex_compile_with, regex_escape, regex_is_match, regex_find, regex_replace, Regex, Match
+from gg.regex import regex_compile, regex_compile_with, regex_escape, regex_is_match, regex_find, regex_replace, Regex, Match
 
 void main():
     # Test 1: compile and is_match

@@ -169,29 +169,29 @@ impl ModuleLoader {
         segments: &[String],
         results: &mut Vec<(PathBuf, String, Module)>,
     ) -> Result<(), LoadError> {
-        // Intercept virtual stdlib modules before filesystem resolution
-        if crate::stdlib::is_stdlib_module(segments) {
+        // Intercept virtual built-in modules (std.* and gg.*) before filesystem resolution
+        if crate::stdlib::is_builtin_module(segments) {
             let virtual_path = PathBuf::from(format!("<{}>", segments.join(".")));
             if self.loaded.contains(&virtual_path) {
                 return Ok(());
             }
 
             // Try synthetic (compiler-generated) module first
-            if let Some(module) = crate::stdlib::generate_stdlib_module(segments) {
+            if let Some(module) = crate::stdlib::generate_builtin_module(segments) {
                 self.loaded.insert(virtual_path.clone());
                 results.push((virtual_path, String::new(), module));
                 return Ok(());
             }
 
-            // Try file-based stdlib module (real .gg source embedded in binary)
-            if let Some(source) = crate::stdlib::stdlib_module_source(segments) {
+            // Try file-based built-in module (real .gg source embedded in binary)
+            if let Some(source) = crate::stdlib::builtin_module_source(segments) {
                 let offset = self.next_offset;
                 self.next_offset = offset + source.len() + 1;
                 let mut parser = Parser::new_with_offset(source, offset);
                 let module = parser.parse_module();
                 assert!(
                     parser.errors.is_empty(),
-                    "parse errors in embedded stdlib module {}: {:?}",
+                    "parse errors in embedded built-in module {}: {:?}",
                     segments.join("."),
                     parser.errors
                 );

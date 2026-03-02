@@ -1,6 +1,6 @@
-from std.p2p import Node, P2PEvent
-from std.p2p import p2p_create_node, p2p_add_peer, p2p_poll
-from std.p2p import p2p_subscribe, p2p_publish
+from gg.p2p import Node, P2PEvent
+from gg.p2p import p2p_create_node, p2p_add_peer, p2p_poll
+from gg.p2p import p2p_subscribe, p2p_publish
 from std.bytes import bytes_from_str, bytes_to_str
 from std.net.udp import UdpAddr
 from std.collections import Vector

@@ -1,7 +1,7 @@
-from std.sdl import sdl_init, sdl_create_window, sdl_create_renderer
-from std.sdl import sdl_set_draw_color, sdl_clear, sdl_present, sdl_fill_rect
-from std.sdl import sdl_poll_event, sdl_delay, sdl_quit, sdl_destroy_renderer, sdl_destroy_window
-from std.sdl import SDL_INIT_VIDEO, SDL_QUIT, SDL_KEYDOWN, SDLK_ESCAPE
+from gg.sdl import sdl_init, sdl_create_window, sdl_create_renderer
+from gg.sdl import sdl_set_draw_color, sdl_clear, sdl_present, sdl_fill_rect
+from gg.sdl import sdl_poll_event, sdl_delay, sdl_quit, sdl_destroy_renderer, sdl_destroy_window
+from gg.sdl import SDL_INIT_VIDEO, SDL_QUIT, SDL_KEYDOWN, SDLK_ESCAPE
 
 void main():
     sdl_init(SDL_INIT_VIDEO)

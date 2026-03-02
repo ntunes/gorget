@@ -1,18 +1,18 @@
-# std.gfx — High-level 2D graphics for Gorget
+# gg.gfx — High-level 2D graphics for Gorget
 #
-# This module wraps std.sdl to provide a simple, Gorget-idiomatic API
-# for 2D drawing. For event handling, import std.sdl directly.
+# This module wraps gg.sdl to provide a simple, Gorget-idiomatic API
+# for 2D drawing. For event handling, import gg.sdl directly.
 
-from std.sdl import sdl_init, sdl_quit, SDL_INIT_VIDEO
-from std.sdl import sdl_create_window, sdl_destroy_window, SDL_WINDOW_SHOWN
-from std.sdl import sdl_create_renderer, sdl_destroy_renderer
-from std.sdl import SDL_RENDERER_ACCELERATED, SDL_RENDERER_PRESENTVSYNC
-from std.sdl import sdl_set_draw_color, sdl_clear, sdl_present
-from std.sdl import sdl_fill_rect, sdl_draw_rect
-from std.sdl import sdl_draw_line, sdl_draw_point
-from std.sdl import sdl_get_window_width, sdl_get_window_height
-from std.sdl import sdl_delay, sdl_get_ticks
-from std.sdl import SDLWindow, SDLRenderer
+from gg.sdl import sdl_init, sdl_quit, SDL_INIT_VIDEO
+from gg.sdl import sdl_create_window, sdl_destroy_window, SDL_WINDOW_SHOWN
+from gg.sdl import sdl_create_renderer, sdl_destroy_renderer
+from gg.sdl import SDL_RENDERER_ACCELERATED, SDL_RENDERER_PRESENTVSYNC
+from gg.sdl import sdl_set_draw_color, sdl_clear, sdl_present
+from gg.sdl import sdl_fill_rect, sdl_draw_rect
+from gg.sdl import sdl_draw_line, sdl_draw_point
+from gg.sdl import sdl_get_window_width, sdl_get_window_height
+from gg.sdl import sdl_delay, sdl_get_ticks
+from gg.sdl import SDLWindow, SDLRenderer
 
 # ── Types ─────────────────────────────────────────────────────
 

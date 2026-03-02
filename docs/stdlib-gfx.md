@@ -1,12 +1,12 @@
-# std.gfx — High-Level 2D Graphics
+# gg.gfx — High-Level 2D Graphics
 
-A simple, Gorget-idiomatic API for 2D drawing. Built on top of [`std.sdl`](stdlib-sdl.md) and written entirely in Gorget (see `lib/std/gfx.gg`).
+A simple, Gorget-idiomatic API for 2D drawing. Built on top of [`gg.sdl`](stdlib-sdl.md) and written entirely in Gorget (see `lib/gg/gfx.gg`).
 
-For event handling, import `std.sdl` directly alongside `std.gfx`.
+For event handling, import `gg.sdl` directly alongside `gg.gfx`.
 
 ## Prerequisites
 
-Same as `std.sdl` — install SDL2 development libraries:
+Same as `gg.sdl` — install SDL2 development libraries:
 
 ```bash
 # macOS
@@ -19,10 +19,10 @@ apt install libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev
 ## Import
 
 ```gorget
-from std.gfx import Canvas, Color, gfx_open, gfx_close
-from std.gfx import gfx_clear, gfx_present, gfx_fill_rect, gfx_fill_circle
-from std.gfx import gfx_delay
-from std.sdl import sdl_poll_event, SDL_QUIT  # events come from std.sdl
+from gg.gfx import Canvas, Color, gfx_open, gfx_close
+from gg.gfx import gfx_clear, gfx_present, gfx_fill_rect, gfx_fill_circle
+from gg.gfx import gfx_delay
+from gg.sdl import sdl_poll_event, SDL_QUIT  # events come from gg.sdl
 ```
 
 ## Types
@@ -96,10 +96,10 @@ int gfx_ticks()           # Milliseconds since SDL was initialized
 A bouncing ball with a trail:
 
 ```gorget
-from std.gfx import Canvas, Color, gfx_open, gfx_close
-from std.gfx import gfx_clear, gfx_present, gfx_fill_circle, gfx_delay
-from std.gfx import gfx_width, gfx_height
-from std.sdl import sdl_poll_event, SDL_QUIT
+from gg.gfx import Canvas, Color, gfx_open, gfx_close
+from gg.gfx import gfx_clear, gfx_present, gfx_fill_circle, gfx_delay
+from gg.gfx import gfx_width, gfx_height
+from gg.sdl import sdl_poll_event, SDL_QUIT
 
 void main():
     auto canvas = gfx_open("Bouncing Ball", 800, 600)
@@ -142,9 +142,9 @@ See `examples/gfx_demo.gg` for a more complete demo.
 
 ## Design Notes
 
-`std.gfx` is implemented as a real Gorget source file (`lib/std/gfx.gg`), not as a compiler-level module. This means:
+`gg.gfx` is implemented as a real Gorget source file (`lib/gg/gfx.gg`), not as a compiler-level module. This means:
 
 - It dogfoods the language — the circle algorithms use Gorget's while loops, arithmetic, and control flow
-- It demonstrates cross-module imports (gfx.gg imports from std.sdl)
+- It demonstrates cross-module imports (gfx.gg imports from gg.sdl)
 - The source is embedded in the compiler binary at build time via `include_str!`
 - No special C runtime or codegen dispatch is needed — gfx functions compile like any other Gorget code

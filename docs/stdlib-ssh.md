@@ -1,19 +1,19 @@
-# std.ssh — SSH Client
+# gg.ssh — SSH Client
 
 An SSH2 client implemented in pure Gorget on top of `std.net.socket` and
-`std.crypto`. Connect to remote servers, run commands, and collect output —
+`gg.crypto`. Connect to remote servers, run commands, and collect output —
 with automatic `~/.ssh/config` resolution.
 
 ## Import
 
 ```gorget
-from std.ssh import ssh_connect, Session, CommandResult
+from gg.ssh import ssh_connect, Session, CommandResult
 ```
 
 ## Quick Start
 
 ```gorget
-from std.ssh import ssh_connect, Session, CommandResult
+from gg.ssh import ssh_connect, Session, CommandResult
 
 void main():
     Result[Session, str] res = ssh_connect("myserver", 22, "deploy", "s3cret")
@@ -201,14 +201,14 @@ The client identifies itself as `SSH-2.0-Gorget_1.0`.
 
 ## Dependencies
 
-`std.ssh` is built on three lower-level stdlib modules:
+`gg.ssh` is built on three lower-level stdlib modules:
 
 - **`std.bytes`** — Byte buffer helpers (hex encoding, big-endian I/O,
   concat/slice)
 - **`std.net.socket`** — POSIX TCP sockets (connect, read, write)
-- **`std.crypto`** — OpenSSL wrappers (SHA-256, HMAC, AES-CTR, BigNum, RSA)
+- **`gg.crypto`** — OpenSSL wrappers (SHA-256, HMAC, AES-CTR, BigNum, RSA)
 
-Programs using `std.ssh` require OpenSSL (`libcrypto`) at link time. The
+Programs using `gg.ssh` require OpenSSL (`libcrypto`) at link time. The
 compiler auto-detects OpenSSL via `pkg-config` with a Homebrew fallback on
 macOS.
 

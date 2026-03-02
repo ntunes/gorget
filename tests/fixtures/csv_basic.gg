@@ -1,4 +1,4 @@
-from std.csv import csv_parse, csv_parse_delim, csv_parse_table, csv_stringify, csv_stringify_delim, csv_stringify_table, CsvTable
+from gg.csv import csv_parse, csv_parse_delim, csv_parse_table, csv_stringify, csv_stringify_delim, csv_stringify_table, CsvTable
 from std.collections import Vector
 
 void main():

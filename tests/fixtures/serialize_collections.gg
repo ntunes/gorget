@@ -1,4 +1,4 @@
-import std.json
+import gg.json
 from std.collections import Box, Vector, Dict
 
 @derive(Serializable, Deserializable)

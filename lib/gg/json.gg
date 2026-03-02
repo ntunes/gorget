@@ -1,4 +1,4 @@
-# std.json — Pure Gorget JSON parser
+# gg.json — Pure Gorget JSON parser
 #
 # Provides a recursive-descent JSON parser, serializer, and accessor methods.
 # No C dependencies — uses only Gorget standard library.

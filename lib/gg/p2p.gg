@@ -1,14 +1,14 @@
-# std.p2p — Peer-to-peer networking over UDP
+# gg.p2p — Peer-to-peer networking over UDP
 #
 # Provides identity (Ed25519), binary wire protocol, peer management,
 # and a poll-based event model for P2P communication.
 # Supports multicast-based LAN discovery, bootstrap nodes, and DHT.
 
 from std.net.udp import UdpSocket, UdpAddr, UdpPacket, udp_bind
-from std.crypto import crypto_sha256, crypto_ed25519_keygen, Ed25519KeyPair
-from std.crypto import crypto_ed25519_sign, crypto_ed25519_verify
-from std.crypto import crypto_x25519_keygen, crypto_x25519_shared_secret, crypto_x25519_dh, X25519KeyPair
-from std.crypto import crypto_hkdf_sha256, crypto_aes_gcm_encrypt, crypto_aes_gcm_decrypt
+from gg.crypto import crypto_sha256, crypto_ed25519_keygen, Ed25519KeyPair
+from gg.crypto import crypto_ed25519_sign, crypto_ed25519_verify
+from gg.crypto import crypto_x25519_keygen, crypto_x25519_shared_secret, crypto_x25519_dh, X25519KeyPair
+from gg.crypto import crypto_hkdf_sha256, crypto_aes_gcm_encrypt, crypto_aes_gcm_decrypt
 from std.bytes import bytes_from_str, bytes_to_str, bytes_to_hex, bytes_concat, bytes_slice
 from std.bytes import bytes_write_u32_be, bytes_read_u32_be, bytes_from_hex
 from std.bytes import bytes_write_u16_be, bytes_read_u16_be

@@ -4,7 +4,7 @@
 # SparseSet), user-defined World struct, system methods, game loop.
 
 from std.collections import Vector
-from std.ecs import EntityPool, SparseSet
+from gg.ecs import EntityPool, SparseSet
 from components import Health
 from components import Attack
 from world import World

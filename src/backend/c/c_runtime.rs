@@ -3208,9 +3208,9 @@ static void __gorget_trace_val_void(FILE* fp) { (void)fp; }
 
 "#;
 
-/// C runtime for std.sdl — SDL2 graphics bindings.
+/// C runtime for gg.sdl — SDL2 graphics bindings.
 pub const SDL_RUNTIME: &str = r#"
-// ── std.sdl runtime ──────────────────────────────────────────
+// ── gg.sdl runtime ──────────────────────────────────────────
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_image.h>
 #include <SDL2/SDL_ttf.h>
@@ -3568,11 +3568,11 @@ static inline ExecResult gorget_exec_output(const char* cmd) {
 "#;
 
 
-/// C runtime for std.http.client — HTTP requests via libcurl.
+/// C runtime for gg.http — HTTP requests via libcurl.
 
-// ── std.crypto runtime ──────────────────────────────────────
+// ── gg.crypto runtime ──────────────────────────────────────
 pub const CRYPTO_RUNTIME: &str = r#"
-// ── Crypto Wrappers (std.crypto) ────────────────────────────
+// ── Crypto Wrappers (gg.crypto) ────────────────────────────
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
 #include <openssl/bn.h>

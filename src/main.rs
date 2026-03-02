@@ -130,7 +130,7 @@ fn add_sdl_flags(cmd: &mut Command, needs_sdl: bool) {
     }
 }
 
-/// Add OpenSSL linker flags to a cc command (for std.net.tls or std.crypto).
+/// Add OpenSSL linker flags to a cc command (for std.net.tls or gg.crypto).
 fn add_tls_flags(cmd: &mut Command, needs_tls: bool) {
     if !needs_tls { return; }
     add_crypto_flags(cmd, true);
@@ -175,7 +175,7 @@ fn add_thread_flags(_cmd: &mut Command, needs_threads: bool) {
     _cmd.arg("-lpthread");
 }
 
-/// Add PCRE2 linker flags to a cc command (for std.regex).
+/// Add PCRE2 linker flags to a cc command (for gg.regex).
 fn add_regex_flags(cmd: &mut Command, needs_regex: bool) {
     if !needs_regex { return; }
     let pkg_ok = Command::new("pkg-config")
@@ -376,11 +376,11 @@ fn try_build_ir(
             cc_cmd.arg("-fno-omit-frame-pointer");
             cc_cmd.arg("-g");
         }
-        add_sdl_flags(&mut cc_cmd, source.contains("std.sdl") || source.contains("std.gfx"));
+        add_sdl_flags(&mut cc_cmd, source.contains("gg.sdl") || source.contains("gg.gfx"));
         add_tls_flags(&mut cc_cmd, source.contains("std.net.tls"));
-        add_crypto_flags(&mut cc_cmd, source.contains("std.crypto") || source.contains("std.p2p"));
-        add_regex_flags(&mut cc_cmd, source.contains("std.regex"));
-        add_thread_flags(&mut cc_cmd, source.contains("std.async") || source.contains("std.p2p"));
+        add_crypto_flags(&mut cc_cmd, source.contains("gg.crypto") || source.contains("gg.p2p"));
+        add_regex_flags(&mut cc_cmd, source.contains("gg.regex"));
+        add_thread_flags(&mut cc_cmd, source.contains("std.async") || source.contains("gg.p2p"));
         let status = cc_cmd.status();
         return match status {
             Ok(s) if s.success() => Ok(shared_path.to_path_buf()),
@@ -484,11 +484,11 @@ fn try_build_ir(
         cc_cmd.arg("-g");
     }
 
-    add_sdl_flags(&mut cc_cmd, source.contains("std.sdl") || source.contains("std.gfx"));
+    add_sdl_flags(&mut cc_cmd, source.contains("gg.sdl") || source.contains("gg.gfx"));
     add_tls_flags(&mut cc_cmd, source.contains("std.net.tls"));
-    add_crypto_flags(&mut cc_cmd, source.contains("std.crypto") || source.contains("std.p2p"));
-    add_regex_flags(&mut cc_cmd, source.contains("std.regex"));
-    add_thread_flags(&mut cc_cmd, source.contains("std.async") || source.contains("std.p2p"));
+    add_crypto_flags(&mut cc_cmd, source.contains("gg.crypto") || source.contains("gg.p2p"));
+    add_regex_flags(&mut cc_cmd, source.contains("gg.regex"));
+    add_thread_flags(&mut cc_cmd, source.contains("std.async") || source.contains("gg.p2p"));
 
     let status = cc_cmd.status();
 

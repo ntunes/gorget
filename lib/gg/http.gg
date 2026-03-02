@@ -1,4 +1,4 @@
-# std.http -- Pure Gorget HTTP/1.1 client over TLS
+# gg.http -- Pure Gorget HTTP/1.1 client over TLS
 #
 # Provides http_get, http_post, http_put, http_delete and the underlying
 # http_request function.  Uses std.net.tls for the transport layer.

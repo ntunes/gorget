@@ -1,8 +1,13 @@
-/// Standard library module system.
+/// Built-in module system — covers both `std` (core) and `gg` (batteries).
 ///
-/// Stdlib modules use one of two strategies:
+/// The namespace split:
+/// - `std.*` — lean, stable building blocks: collections, I/O, math, OS, net, …
+/// - `gg.*`  — batteries-included ecosystem: JSON, TOML, XML, YAML, CSV,
+///              crypto, regex, SDL, GFX, ECS, SSH, HTTP, P2P, …
 ///
-/// ## Synthetic modules (`generate_stdlib_module` returns `Some`)
+/// Both namespaces use one of two module strategies:
+///
+/// ## Synthetic modules (`generate_builtin_module` returns `Some`)
 ///
 /// The module AST is built in Rust via helper functions (`gen_fs_module`, etc.).
 /// Function bodies are either `FunctionBody::Declaration` (codegen emits a
@@ -14,33 +19,35 @@
 /// already exist in the runtime — the Gorget source would just be boilerplate
 /// `extern` declarations with no real logic.
 ///
-/// Examples: `std.fs`, `std.os`, `std.conv`, `std.math`, `std.crypto`,
-/// `std.net.socket`, `std.sdl`, `std.regex`.
+/// Examples: `std.fs`, `std.os`, `std.conv`, `std.math`, `gg.crypto`,
+/// `std.net.socket`, `gg.sdl`, `gg.regex`.
 ///
-/// ## File-based modules (`stdlib_module_source` returns `Some`)
+/// ## File-based modules (`builtin_module_source` returns `Some`)
 ///
-/// The module is written in Gorget as a `.gg` file under `lib/std/`. The loader
-/// reads the source via `include_str!`, parses it, recursively resolves its
-/// imports, and merges the resulting AST into the main module. Semantic analysis
-/// (name resolution, type checking, borrow checking) runs on the merged result
-/// — the file-based module code is fully checked, not trusted.
+/// The module is written in Gorget as a `.gg` file under `lib/std/` (for `std.*`)
+/// or `lib/gg/` (for `gg.*`). The loader reads the source via `include_str!`,
+/// parses it, recursively resolves its imports, and merges the resulting AST into
+/// the main module. Semantic analysis (name resolution, type checking, borrow
+/// checking) runs on the merged result — the file-based module code is fully
+/// checked, not trusted.
 ///
 /// Use file-based modules when the module contains substantial Gorget logic
 /// (parsers, data structures, algorithms) that benefits from being written and
-/// tested in the language itself. File-based modules can import other stdlib
+/// tested in the language itself. File-based modules can import other built-in
 /// modules and use all language features.
 ///
-/// Examples: `std.json`, `std.toml`, `std.xml`, `std.yaml`, `std.csv`,
-/// `std.bytes`, `std.encoding`, `std.gfx`, `std.ecs`, `std.ssh`, `std.http`.
+/// Examples: `gg.json`, `gg.toml`, `gg.xml`, `gg.yaml`, `gg.csv`,
+/// `std.bytes`, `std.encoding`, `gg.gfx`, `gg.ecs`, `gg.ssh`, `gg.http`.
 ///
 /// ## Adding a new module
 ///
 /// 1. Choose synthetic if it's pure C-runtime glue, file-based if it has logic.
-/// 2. Add the module name to `is_stdlib_module`.
+/// 2. Add the module name to `is_builtin_module`.
 /// 3. For synthetic: add a `gen_*_module()` function returning the AST.
-///    For file-based: create `lib/std/<name>.gg`, add `None` to
-///    `generate_stdlib_module`, add `include_str!` to `stdlib_module_source`.
-/// 4. Add unit tests (at minimum: is_stdlib, generate returns correct variant,
+///    For file-based in `std`: create `lib/std/<name>.gg`, add `None` to
+///    `generate_builtin_module`, add `include_str!` to `builtin_module_source`.
+///    For file-based in `gg`: create `lib/gg/<name>.gg` instead.
+/// 4. Add unit tests (at minimum: is_builtin, generate returns correct variant,
 ///    source exists/parses for file-based modules).
 ///
 /// All synthetic defs use `Span::dummy()`, which distinguishes them from
@@ -48,58 +55,67 @@
 use crate::parser::ast::*;
 use crate::span::{Span, Spanned};
 
-/// Check if an import path refers to a stdlib module.
-pub fn is_stdlib_module(segments: &[String]) -> bool {
-    if segments.first().map(|s| s.as_str()) != Some("std") {
-        return false;
-    }
-    match segments.len() {
-        2 => matches!(segments[1].as_str(), "fs" | "path" | "os" | "conv" | "io" | "random" | "time" | "collections" | "math" | "fmt" | "process" | "sdl" | "gfx" | "ecs" | "json" | "toml" | "xml" | "yaml" | "bytes" | "crypto" | "ssh" | "http" | "regex" | "encoding" | "csv" | "p2p" | "channel" | "alloc"),
-        3 => segments[1] == "net" && matches!(segments[2].as_str(), "socket" | "tls" | "udp"),
+/// Check if an import path refers to a built-in module (`std.*` or `gg.*`).
+pub fn is_builtin_module(segments: &[String]) -> bool {
+    match segments.first().map(|s| s.as_str()) {
+        Some("std") => match segments.len() {
+            2 => matches!(segments[1].as_str(),
+                "fs" | "path" | "os" | "conv" | "io" | "random" | "time"
+                | "collections" | "math" | "fmt" | "process" | "bytes"
+                | "encoding" | "channel" | "alloc"),
+            3 => segments[1] == "net" && matches!(segments[2].as_str(), "socket" | "tls" | "udp"),
+            _ => false,
+        },
+        Some("gg") => segments.len() == 2 && matches!(segments[1].as_str(),
+            "json" | "toml" | "xml" | "yaml" | "csv" | "crypto" | "regex"
+            | "sdl" | "gfx" | "ecs" | "ssh" | "http" | "p2p"),
         _ => false,
     }
 }
 
-/// Generate a synthetic `Module` for a stdlib module.
-pub fn generate_stdlib_module(segments: &[String]) -> Option<Module> {
-    if segments.first().map(|s| s.as_str()) != Some("std") {
-        return None;
-    }
-    match segments.len() {
-        2 => match segments[1].as_str() {
-            "fs" => Some(gen_fs_module()),
-            "path" => Some(gen_path_module()),
-            "os" => Some(gen_os_module()),
-            "conv" => Some(gen_conv_module()),
-            "io" => Some(gen_io_module()),
-            "random" => Some(gen_random_module()),
-            "time" => Some(gen_time_module()),
-            "collections" => Some(gen_collections_module()),
-            "math" => Some(gen_math_module()),
-            "fmt" => Some(gen_fmt_module()),
-            "process" => Some(gen_process_module()),
-            "sdl" => Some(gen_sdl_module()),
-            "json" => None, // file-based module — loaded via stdlib_module_source()
-            "toml" => None, // file-based module — loaded via stdlib_module_source()
-            "xml" => None,  // file-based module — loaded via stdlib_module_source()
-            "yaml" => None, // file-based module — loaded via stdlib_module_source()
-            "bytes" => None, // file-based module — loaded via stdlib_module_source()
-            "encoding" => None, // file-based module — loaded via stdlib_module_source()
-            "csv" => None,      // file-based module — loaded via stdlib_module_source()
-            "crypto" => Some(gen_crypto_module()),
-            "gfx" => None, // file-based module — loaded via stdlib_module_source()
-            "ecs" => None, // file-based module — loaded via stdlib_module_source()
-            "ssh" => None, // file-based module — loaded via stdlib_module_source()
-            "http" => None, // file-based module — loaded via stdlib_module_source()
-            "regex" => Some(gen_regex_module()),
-            "p2p" => None, // file-based module — loaded via stdlib_module_source()
-            "channel" => Some(gen_channel_module()),
-            "alloc" => Some(gen_alloc_module()),
+/// Generate a synthetic `Module` for a built-in module.
+pub fn generate_builtin_module(segments: &[String]) -> Option<Module> {
+    match segments.first().map(|s| s.as_str()) {
+        Some("std") => match segments.len() {
+            2 => match segments[1].as_str() {
+                "fs" => Some(gen_fs_module()),
+                "path" => Some(gen_path_module()),
+                "os" => Some(gen_os_module()),
+                "conv" => Some(gen_conv_module()),
+                "io" => Some(gen_io_module()),
+                "random" => Some(gen_random_module()),
+                "time" => Some(gen_time_module()),
+                "collections" => Some(gen_collections_module()),
+                "math" => Some(gen_math_module()),
+                "fmt" => Some(gen_fmt_module()),
+                "process" => Some(gen_process_module()),
+                "bytes" => None, // file-based module — loaded via builtin_module_source()
+                "encoding" => None, // file-based module — loaded via builtin_module_source()
+                "channel" => Some(gen_channel_module()),
+                "alloc" => Some(gen_alloc_module()),
+                _ => None,
+            },
+            3 if segments[1] == "net" && segments[2] == "socket" => Some(gen_socket_module()),
+            3 if segments[1] == "net" && segments[2] == "tls" => Some(gen_tls_socket_module()),
+            3 if segments[1] == "net" && segments[2] == "udp" => Some(gen_udp_socket_module()),
             _ => None,
         },
-        3 if segments[1] == "net" && segments[2] == "socket" => Some(gen_socket_module()),
-        3 if segments[1] == "net" && segments[2] == "tls" => Some(gen_tls_socket_module()),
-        3 if segments[1] == "net" && segments[2] == "udp" => Some(gen_udp_socket_module()),
+        Some("gg") if segments.len() == 2 => match segments[1].as_str() {
+            "sdl" => Some(gen_sdl_module()),
+            "crypto" => Some(gen_crypto_module()),
+            "regex" => Some(gen_regex_module()),
+            "json" => None, // file-based module — loaded via builtin_module_source()
+            "toml" => None, // file-based module — loaded via builtin_module_source()
+            "xml" => None,  // file-based module — loaded via builtin_module_source()
+            "yaml" => None, // file-based module — loaded via builtin_module_source()
+            "csv" => None,  // file-based module — loaded via builtin_module_source()
+            "gfx" => None,  // file-based module — loaded via builtin_module_source()
+            "ecs" => None,  // file-based module — loaded via builtin_module_source()
+            "ssh" => None,  // file-based module — loaded via builtin_module_source()
+            "http" => None, // file-based module — loaded via builtin_module_source()
+            "p2p" => None,  // file-based module — loaded via builtin_module_source()
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -567,28 +583,31 @@ fn gen_sdl_module() -> Module {
     }
 }
 
-// ─── File-based stdlib modules ──────────────────────────────
+// ─── File-based built-in modules ────────────────────────────
 
-/// Get embedded source for file-based stdlib modules.
+/// Get embedded source for file-based built-in modules (`std.*` or `gg.*`).
 /// These are real `.gg` files compiled into the binary, parsed and loaded
 /// by the module loader (including recursive import resolution).
-pub fn stdlib_module_source(segments: &[String]) -> Option<&'static str> {
-    if segments.first().map(|s| s.as_str()) != Some("std") {
-        return None;
-    }
-    match segments.get(1).map(|s| s.as_str()) {
-        Some("gfx") => Some(include_str!("../lib/std/gfx.gg")),
-        Some("ecs") => Some(include_str!("../lib/std/ecs.gg")),
-        Some("ssh") => Some(include_str!("../lib/std/ssh.gg")),
-        Some("http") => Some(include_str!("../lib/std/http.gg")),
-        Some("json") => Some(include_str!("../lib/std/json.gg")),
-        Some("toml") => Some(include_str!("../lib/std/toml.gg")),
-        Some("xml") => Some(include_str!("../lib/std/xml.gg")),
-        Some("yaml") => Some(include_str!("../lib/std/yaml.gg")),
-        Some("bytes") => Some(include_str!("../lib/std/bytes.gg")),
-        Some("encoding") => Some(include_str!("../lib/std/encoding.gg")),
-        Some("csv") => Some(include_str!("../lib/std/csv.gg")),
-        Some("p2p") => Some(include_str!("../lib/std/p2p.gg")),
+pub fn builtin_module_source(segments: &[String]) -> Option<&'static str> {
+    match segments.first().map(|s| s.as_str()) {
+        Some("std") => match segments.get(1).map(|s| s.as_str()) {
+            Some("bytes") => Some(include_str!("../lib/std/bytes.gg")),
+            Some("encoding") => Some(include_str!("../lib/std/encoding.gg")),
+            _ => None,
+        },
+        Some("gg") => match segments.get(1).map(|s| s.as_str()) {
+            Some("gfx") => Some(include_str!("../lib/gg/gfx.gg")),
+            Some("ecs") => Some(include_str!("../lib/gg/ecs.gg")),
+            Some("ssh") => Some(include_str!("../lib/gg/ssh.gg")),
+            Some("http") => Some(include_str!("../lib/gg/http.gg")),
+            Some("json") => Some(include_str!("../lib/gg/json.gg")),
+            Some("toml") => Some(include_str!("../lib/gg/toml.gg")),
+            Some("xml") => Some(include_str!("../lib/gg/xml.gg")),
+            Some("yaml") => Some(include_str!("../lib/gg/yaml.gg")),
+            Some("csv") => Some(include_str!("../lib/gg/csv.gg")),
+            Some("p2p") => Some(include_str!("../lib/gg/p2p.gg")),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -722,7 +741,7 @@ fn opaque_struct(name: &str) -> Spanned<Item> {
     }))
 }
 
-// ─── std.crypto ─────────────────────────────────────────────
+// ─── gg.crypto ──────────────────────────────────────────────
 
 fn gen_crypto_module() -> Module {
     let ty_cipher = || Type::Named {
@@ -982,7 +1001,7 @@ fn gen_tls_socket_module() -> Module {
     }
 }
 
-// ─── std.regex ──────────────────────────────────────────────
+// ─── gg.regex ───────────────────────────────────────────────
 
 fn gen_regex_module() -> Module {
     let ty_regex = || Type::Named {
@@ -1283,36 +1302,51 @@ mod tests {
     use super::*;
 
     #[test]
-    fn is_stdlib() {
-        assert!(is_stdlib_module(&["std".into(), "fs".into()]));
-        assert!(is_stdlib_module(&["std".into(), "path".into()]));
-        assert!(is_stdlib_module(&["std".into(), "os".into()]));
-        assert!(is_stdlib_module(&["std".into(), "conv".into()]));
-        assert!(is_stdlib_module(&["std".into(), "io".into()]));
-        assert!(is_stdlib_module(&["std".into(), "random".into()]));
-        assert!(is_stdlib_module(&["std".into(), "time".into()]));
-        assert!(is_stdlib_module(&["std".into(), "math".into()]));
-        assert!(is_stdlib_module(&["std".into(), "fmt".into()]));
-        assert!(is_stdlib_module(&["std".into(), "process".into()]));
-        assert!(is_stdlib_module(&["std".into(), "sdl".into()]));
-        assert!(is_stdlib_module(&["std".into(), "ecs".into()]));
-        assert!(is_stdlib_module(&["std".into(), "json".into()]));
-        assert!(is_stdlib_module(&["std".into(), "yaml".into()]));
-        assert!(is_stdlib_module(&["std".into(), "bytes".into()]));
-        assert!(is_stdlib_module(&["std".into(), "http".into()]));
-        assert!(is_stdlib_module(&["std".into(), "regex".into()]));
-        assert!(is_stdlib_module(&["std".into(), "alloc".into()]));
-        assert!(is_stdlib_module(&["std".into(), "net".into(), "tls".into()]));
-        assert!(!is_stdlib_module(&["std".into(), "http".into(), "client".into()]));
-        assert!(!is_stdlib_module(&["std".into(), "test".into(), "process".into()]));
-        assert!(!is_stdlib_module(&["std".into(), "foo".into()]));
-        assert!(!is_stdlib_module(&["foo".into(), "fs".into()]));
-        assert!(!is_stdlib_module(&["std".into()]));
+    fn is_builtin() {
+        // std.* core modules
+        assert!(is_builtin_module(&["std".into(), "fs".into()]));
+        assert!(is_builtin_module(&["std".into(), "path".into()]));
+        assert!(is_builtin_module(&["std".into(), "os".into()]));
+        assert!(is_builtin_module(&["std".into(), "conv".into()]));
+        assert!(is_builtin_module(&["std".into(), "io".into()]));
+        assert!(is_builtin_module(&["std".into(), "random".into()]));
+        assert!(is_builtin_module(&["std".into(), "time".into()]));
+        assert!(is_builtin_module(&["std".into(), "math".into()]));
+        assert!(is_builtin_module(&["std".into(), "fmt".into()]));
+        assert!(is_builtin_module(&["std".into(), "process".into()]));
+        assert!(is_builtin_module(&["std".into(), "bytes".into()]));
+        assert!(is_builtin_module(&["std".into(), "encoding".into()]));
+        assert!(is_builtin_module(&["std".into(), "channel".into()]));
+        assert!(is_builtin_module(&["std".into(), "alloc".into()]));
+        assert!(is_builtin_module(&["std".into(), "net".into(), "tls".into()]));
+        // gg.* battery modules
+        assert!(is_builtin_module(&["gg".into(), "sdl".into()]));
+        assert!(is_builtin_module(&["gg".into(), "ecs".into()]));
+        assert!(is_builtin_module(&["gg".into(), "json".into()]));
+        assert!(is_builtin_module(&["gg".into(), "yaml".into()]));
+        assert!(is_builtin_module(&["gg".into(), "http".into()]));
+        assert!(is_builtin_module(&["gg".into(), "regex".into()]));
+        assert!(is_builtin_module(&["gg".into(), "crypto".into()]));
+        assert!(is_builtin_module(&["gg".into(), "toml".into()]));
+        assert!(is_builtin_module(&["gg".into(), "xml".into()]));
+        assert!(is_builtin_module(&["gg".into(), "csv".into()]));
+        assert!(is_builtin_module(&["gg".into(), "gfx".into()]));
+        assert!(is_builtin_module(&["gg".into(), "ssh".into()]));
+        assert!(is_builtin_module(&["gg".into(), "p2p".into()]));
+        // old std.* battery paths are NOT valid anymore
+        assert!(!is_builtin_module(&["std".into(), "sdl".into()]));
+        assert!(!is_builtin_module(&["std".into(), "json".into()]));
+        assert!(!is_builtin_module(&["std".into(), "crypto".into()]));
+        assert!(!is_builtin_module(&["gg".into(), "http".into(), "client".into()]));
+        assert!(!is_builtin_module(&["std".into(), "test".into(), "process".into()]));
+        assert!(!is_builtin_module(&["std".into(), "foo".into()]));
+        assert!(!is_builtin_module(&["foo".into(), "fs".into()]));
+        assert!(!is_builtin_module(&["std".into()]));
     }
 
     #[test]
     fn generate_fs() {
-        let m = generate_stdlib_module(&["std".into(), "fs".into()]).unwrap();
+        let m = generate_builtin_module(&["std".into(), "fs".into()]).unwrap();
         assert_eq!(m.items.len(), 11);
         let names: Vec<_> = m.items.iter().map(|i| match &i.node {
             Item::Function(f) => f.name.node.clone(),
@@ -1333,19 +1367,19 @@ mod tests {
 
     #[test]
     fn generate_conv() {
-        let m = generate_stdlib_module(&["std".into(), "conv".into()]).unwrap();
+        let m = generate_builtin_module(&["std".into(), "conv".into()]).unwrap();
         assert_eq!(m.items.len(), 9);
     }
 
     #[test]
     fn generate_io() {
-        let m = generate_stdlib_module(&["std".into(), "io".into()]).unwrap();
+        let m = generate_builtin_module(&["std".into(), "io".into()]).unwrap();
         assert_eq!(m.items.len(), 8); // stderr, stdout, getchar, term_cols, term_rows, input, readline, stdin_eof
     }
 
     #[test]
     fn generate_random() {
-        let m = generate_stdlib_module(&["std".into(), "random".into()]).unwrap();
+        let m = generate_builtin_module(&["std".into(), "random".into()]).unwrap();
         assert_eq!(m.items.len(), 3);
         let names: Vec<_> = m.items.iter().map(|i| match &i.node {
             Item::Function(f) => f.name.node.clone(),
@@ -1358,7 +1392,7 @@ mod tests {
 
     #[test]
     fn generate_time() {
-        let m = generate_stdlib_module(&["std".into(), "time".into()]).unwrap();
+        let m = generate_builtin_module(&["std".into(), "time".into()]).unwrap();
         assert_eq!(m.items.len(), 6);
         let names: Vec<_> = m.items.iter().map(|i| match &i.node {
             Item::Function(f) => f.name.node.clone(),
@@ -1374,7 +1408,7 @@ mod tests {
 
     #[test]
     fn generate_math() {
-        let m = generate_stdlib_module(&["std".into(), "math".into()]).unwrap();
+        let m = generate_builtin_module(&["std".into(), "math".into()]).unwrap();
         assert_eq!(m.items.len(), 23); // 5 constants + 18 functions
         let mut const_names = vec![];
         let mut fn_names = vec![];
@@ -1399,7 +1433,7 @@ mod tests {
 
     #[test]
     fn generate_collections() {
-        let m = generate_stdlib_module(&["std".into(), "collections".into()]).unwrap();
+        let m = generate_builtin_module(&["std".into(), "collections".into()]).unwrap();
         assert_eq!(m.items.len(), 10); // 9 structs + 1 File equip block
         let names: Vec<_> = m.items.iter().filter_map(|i| match &i.node {
             Item::Struct(s) => Some(s.name.node.clone()),
@@ -1417,23 +1451,23 @@ mod tests {
 
     #[test]
     fn generate_unknown_returns_none() {
-        assert!(generate_stdlib_module(&["std".into(), "foo".into()]).is_none());
+        assert!(generate_builtin_module(&["std".into(), "foo".into()]).is_none());
     }
 
     #[test]
-    fn is_stdlib_gfx() {
-        assert!(is_stdlib_module(&["std".into(), "gfx".into()]));
+    fn is_builtin_gfx() {
+        assert!(is_builtin_module(&["gg".into(), "gfx".into()]));
     }
 
     #[test]
     fn generate_gfx_returns_none() {
-        // std.gfx is file-based, not synthetic — generate returns None
-        assert!(generate_stdlib_module(&["std".into(), "gfx".into()]).is_none());
+        // gg.gfx is file-based, not synthetic — generate returns None
+        assert!(generate_builtin_module(&["gg".into(), "gfx".into()]).is_none());
     }
 
     #[test]
     fn gfx_module_source_exists() {
-        let source = stdlib_module_source(&["std".into(), "gfx".into()]);
+        let source = builtin_module_source(&["gg".into(), "gfx".into()]);
         assert!(source.is_some());
         let src = source.unwrap();
         assert!(src.contains("struct Canvas"));
@@ -1445,7 +1479,7 @@ mod tests {
 
     #[test]
     fn gfx_source_parses() {
-        let source = stdlib_module_source(&["std".into(), "gfx".into()]).unwrap();
+        let source = builtin_module_source(&["gg".into(), "gfx".into()]).unwrap();
         let mut parser = crate::parser::Parser::new(source);
         let module = parser.parse_module();
         assert!(parser.errors.is_empty(), "gfx.gg parse errors: {:?}", parser.errors);
@@ -1469,19 +1503,19 @@ mod tests {
     }
 
     #[test]
-    fn is_stdlib_ecs() {
-        assert!(is_stdlib_module(&["std".into(), "ecs".into()]));
+    fn is_builtin_ecs() {
+        assert!(is_builtin_module(&["gg".into(), "ecs".into()]));
     }
 
     #[test]
     fn generate_ecs_returns_none() {
-        // std.ecs is file-based, not synthetic — generate returns None
-        assert!(generate_stdlib_module(&["std".into(), "ecs".into()]).is_none());
+        // gg.ecs is file-based, not synthetic — generate returns None
+        assert!(generate_builtin_module(&["gg".into(), "ecs".into()]).is_none());
     }
 
     #[test]
     fn ecs_module_source_exists() {
-        let source = stdlib_module_source(&["std".into(), "ecs".into()]);
+        let source = builtin_module_source(&["gg".into(), "ecs".into()]);
         assert!(source.is_some());
         let src = source.unwrap();
         assert!(src.contains("struct EntityPool"));
@@ -1492,7 +1526,7 @@ mod tests {
 
     #[test]
     fn ecs_source_parses() {
-        let source = stdlib_module_source(&["std".into(), "ecs".into()]).unwrap();
+        let source = builtin_module_source(&["gg".into(), "ecs".into()]).unwrap();
         let mut parser = crate::parser::Parser::new(source);
         let module = parser.parse_module();
         assert!(parser.errors.is_empty(), "ecs.gg parse errors: {:?}", parser.errors);
@@ -1514,13 +1548,13 @@ mod tests {
     }
 
     #[test]
-    fn is_stdlib_sdl() {
-        assert!(is_stdlib_module(&["std".into(), "sdl".into()]));
+    fn is_builtin_sdl() {
+        assert!(is_builtin_module(&["gg".into(), "sdl".into()]));
     }
 
     #[test]
     fn generate_sdl() {
-        let m = generate_stdlib_module(&["std".into(), "sdl".into()]).unwrap();
+        let m = generate_builtin_module(&["gg".into(), "sdl".into()]).unwrap();
 
         // Collect item names by type
         let mut struct_names = vec![];
@@ -1571,19 +1605,19 @@ mod tests {
     }
 
     #[test]
-    fn is_stdlib_ssh() {
-        assert!(is_stdlib_module(&["std".into(), "ssh".into()]));
+    fn is_builtin_ssh() {
+        assert!(is_builtin_module(&["gg".into(), "ssh".into()]));
     }
 
     #[test]
     fn generate_ssh_returns_none() {
-        // std.ssh is file-based, not synthetic — generate returns None
-        assert!(generate_stdlib_module(&["std".into(), "ssh".into()]).is_none());
+        // gg.ssh is file-based, not synthetic — generate returns None
+        assert!(generate_builtin_module(&["gg".into(), "ssh".into()]).is_none());
     }
 
     #[test]
     fn ssh_module_source_exists() {
-        let source = stdlib_module_source(&["std".into(), "ssh".into()]);
+        let source = builtin_module_source(&["gg".into(), "ssh".into()]);
         assert!(source.is_some());
         let src = source.unwrap();
         assert!(src.contains("struct Session"));
@@ -1594,7 +1628,7 @@ mod tests {
 
     #[test]
     fn ssh_source_parses() {
-        let source = stdlib_module_source(&["std".into(), "ssh".into()]).unwrap();
+        let source = builtin_module_source(&["gg".into(), "ssh".into()]).unwrap();
         let mut parser = crate::parser::Parser::new(source);
         let module = parser.parse_module();
         assert!(parser.errors.is_empty(), "ssh.gg parse errors: {:?}", parser.errors);
@@ -1620,13 +1654,13 @@ mod tests {
     }
 
     #[test]
-    fn is_stdlib_crypto() {
-        assert!(is_stdlib_module(&["std".into(), "crypto".into()]));
+    fn is_builtin_crypto() {
+        assert!(is_builtin_module(&["gg".into(), "crypto".into()]));
     }
 
     #[test]
     fn generate_crypto() {
-        let m = generate_stdlib_module(&["std".into(), "crypto".into()]).unwrap();
+        let m = generate_builtin_module(&["gg".into(), "crypto".into()]).unwrap();
         let mut struct_names = vec![];
         let mut fn_names = vec![];
         for item in &m.items {
@@ -1652,13 +1686,13 @@ mod tests {
     }
 
     #[test]
-    fn is_stdlib_net_socket() {
-        assert!(is_stdlib_module(&["std".into(), "net".into(), "socket".into()]));
+    fn is_builtin_net_socket() {
+        assert!(is_builtin_module(&["std".into(), "net".into(), "socket".into()]));
     }
 
     #[test]
     fn generate_socket() {
-        let m = generate_stdlib_module(&["std".into(), "net".into(), "socket".into()]).unwrap();
+        let m = generate_builtin_module(&["std".into(), "net".into(), "socket".into()]).unwrap();
         let mut struct_names = vec![];
         let mut fn_names = vec![];
         let mut equip_count = 0;
@@ -1685,19 +1719,19 @@ mod tests {
     }
 
     #[test]
-    fn is_stdlib_bytes() {
-        assert!(is_stdlib_module(&["std".into(), "bytes".into()]));
+    fn is_builtin_bytes() {
+        assert!(is_builtin_module(&["std".into(), "bytes".into()]));
     }
 
     #[test]
     fn generate_bytes_returns_none() {
         // std.bytes is file-based, not synthetic — generate returns None
-        assert!(generate_stdlib_module(&["std".into(), "bytes".into()]).is_none());
+        assert!(generate_builtin_module(&["std".into(), "bytes".into()]).is_none());
     }
 
     #[test]
     fn bytes_module_source_exists() {
-        let source = stdlib_module_source(&["std".into(), "bytes".into()]);
+        let source = builtin_module_source(&["std".into(), "bytes".into()]);
         assert!(source.is_some());
         let src = source.unwrap();
         assert!(src.contains("bytes_from_str"));
@@ -1710,7 +1744,7 @@ mod tests {
 
     #[test]
     fn bytes_source_parses() {
-        let source = stdlib_module_source(&["std".into(), "bytes".into()]).unwrap();
+        let source = builtin_module_source(&["std".into(), "bytes".into()]).unwrap();
         let mut parser = crate::parser::Parser::new(source);
         let module = parser.parse_module();
         assert!(parser.errors.is_empty(), "bytes.gg parse errors: {:?}", parser.errors);
@@ -1731,19 +1765,19 @@ mod tests {
     }
 
     #[test]
-    fn is_stdlib_encoding() {
-        assert!(is_stdlib_module(&["std".into(), "encoding".into()]));
+    fn is_builtin_encoding() {
+        assert!(is_builtin_module(&["std".into(), "encoding".into()]));
     }
 
     #[test]
     fn generate_encoding_returns_none() {
-        // std.encoding is file-based, not synthetic — generate returns None
-        assert!(generate_stdlib_module(&["std".into(), "encoding".into()]).is_none());
+        // std.encoding is file-based (std.*), not synthetic — generate returns None
+        assert!(generate_builtin_module(&["std".into(), "encoding".into()]).is_none());
     }
 
     #[test]
     fn encoding_module_source_exists() {
-        let source = stdlib_module_source(&["std".into(), "encoding".into()]);
+        let source = builtin_module_source(&["std".into(), "encoding".into()]);
         assert!(source.is_some());
         let src = source.unwrap();
         assert!(src.contains("url_encode"));
@@ -1758,7 +1792,7 @@ mod tests {
 
     #[test]
     fn encoding_source_parses() {
-        let source = stdlib_module_source(&["std".into(), "encoding".into()]).unwrap();
+        let source = builtin_module_source(&["std".into(), "encoding".into()]).unwrap();
         let mut parser = crate::parser::Parser::new(source);
         let module = parser.parse_module();
         assert!(parser.errors.is_empty(), "encoding.gg parse errors: {:?}", parser.errors);
@@ -1786,19 +1820,19 @@ mod tests {
     }
 
     #[test]
-    fn is_stdlib_json() {
-        assert!(is_stdlib_module(&["std".into(), "json".into()]));
+    fn is_builtin_json() {
+        assert!(is_builtin_module(&["gg".into(), "json".into()]));
     }
 
     #[test]
     fn generate_json_returns_none() {
-        // std.json is file-based, not synthetic — generate returns None
-        assert!(generate_stdlib_module(&["std".into(), "json".into()]).is_none());
+        // gg.json is file-based, not synthetic — generate returns None
+        assert!(generate_builtin_module(&["gg".into(), "json".into()]).is_none());
     }
 
     #[test]
     fn json_module_source_exists() {
-        let source = stdlib_module_source(&["std".into(), "json".into()]);
+        let source = builtin_module_source(&["gg".into(), "json".into()]);
         assert!(source.is_some());
         let src = source.unwrap();
         assert!(src.contains("enum Json"));
@@ -1810,7 +1844,7 @@ mod tests {
 
     #[test]
     fn json_source_parses() {
-        let source = stdlib_module_source(&["std".into(), "json".into()]).unwrap();
+        let source = builtin_module_source(&["gg".into(), "json".into()]).unwrap();
         let mut parser = crate::parser::Parser::new(source);
         let module = parser.parse_module();
         assert!(parser.errors.is_empty(), "json.gg parse errors: {:?}", parser.errors);
@@ -1841,18 +1875,18 @@ mod tests {
     }
 
     #[test]
-    fn is_stdlib_toml() {
-        assert!(is_stdlib_module(&["std".into(), "toml".into()]));
+    fn is_builtin_toml() {
+        assert!(is_builtin_module(&["gg".into(), "toml".into()]));
     }
 
     #[test]
     fn generate_toml_returns_none() {
-        assert!(generate_stdlib_module(&["std".into(), "toml".into()]).is_none());
+        assert!(generate_builtin_module(&["gg".into(), "toml".into()]).is_none());
     }
 
     #[test]
     fn toml_module_source_exists() {
-        let source = stdlib_module_source(&["std".into(), "toml".into()]);
+        let source = builtin_module_source(&["gg".into(), "toml".into()]);
         assert!(source.is_some());
         let src = source.unwrap();
         assert!(src.contains("enum TomlValue"));
@@ -1865,7 +1899,7 @@ mod tests {
 
     #[test]
     fn toml_source_parses() {
-        let source = stdlib_module_source(&["std".into(), "toml".into()]).unwrap();
+        let source = builtin_module_source(&["gg".into(), "toml".into()]).unwrap();
         let mut parser = crate::parser::Parser::new(source);
         let module = parser.parse_module();
         assert!(parser.errors.is_empty(), "toml.gg parse errors: {:?}", parser.errors);
@@ -1892,19 +1926,19 @@ mod tests {
     }
 
     #[test]
-    fn is_stdlib_xml() {
-        assert!(is_stdlib_module(&["std".into(), "xml".into()]));
+    fn is_builtin_xml() {
+        assert!(is_builtin_module(&["gg".into(), "xml".into()]));
     }
 
     #[test]
     fn generate_xml_returns_none() {
-        // std.xml is file-based, not synthetic — generate returns None
-        assert!(generate_stdlib_module(&["std".into(), "xml".into()]).is_none());
+        // gg.xml is file-based, not synthetic — generate returns None
+        assert!(generate_builtin_module(&["gg".into(), "xml".into()]).is_none());
     }
 
     #[test]
     fn xml_module_source_exists() {
-        let source = stdlib_module_source(&["std".into(), "xml".into()]);
+        let source = builtin_module_source(&["gg".into(), "xml".into()]);
         assert!(source.is_some());
         let src = source.unwrap();
         assert!(src.contains("enum XmlNode"));
@@ -1916,7 +1950,7 @@ mod tests {
 
     #[test]
     fn xml_source_parses() {
-        let source = stdlib_module_source(&["std".into(), "xml".into()]).unwrap();
+        let source = builtin_module_source(&["gg".into(), "xml".into()]).unwrap();
         let mut parser = crate::parser::Parser::new(source);
         let module = parser.parse_module();
         assert!(parser.errors.is_empty(), "xml.gg parse errors: {:?}", parser.errors);
@@ -1943,19 +1977,19 @@ mod tests {
     }
 
     #[test]
-    fn is_stdlib_yaml() {
-        assert!(is_stdlib_module(&["std".into(), "yaml".into()]));
+    fn is_builtin_yaml() {
+        assert!(is_builtin_module(&["gg".into(), "yaml".into()]));
     }
 
     #[test]
     fn generate_yaml_returns_none() {
-        // std.yaml is file-based, not synthetic — generate returns None
-        assert!(generate_stdlib_module(&["std".into(), "yaml".into()]).is_none());
+        // gg.yaml is file-based, not synthetic — generate returns None
+        assert!(generate_builtin_module(&["gg".into(), "yaml".into()]).is_none());
     }
 
     #[test]
     fn yaml_module_source_exists() {
-        let source = stdlib_module_source(&["std".into(), "yaml".into()]);
+        let source = builtin_module_source(&["gg".into(), "yaml".into()]);
         assert!(source.is_some());
         let src = source.unwrap();
         assert!(src.contains("enum Yaml"));
@@ -1968,7 +2002,7 @@ mod tests {
 
     #[test]
     fn yaml_source_parses() {
-        let source = stdlib_module_source(&["std".into(), "yaml".into()]).unwrap();
+        let source = builtin_module_source(&["gg".into(), "yaml".into()]).unwrap();
         let mut parser = crate::parser::Parser::new(source);
         let module = parser.parse_module();
         assert!(parser.errors.is_empty(), "yaml.gg parse errors: {:?}", parser.errors);
@@ -1997,7 +2031,7 @@ mod tests {
 
     #[test]
     fn generate_tls_socket() {
-        let m = generate_stdlib_module(&["std".into(), "net".into(), "tls".into()]).unwrap();
+        let m = generate_builtin_module(&["std".into(), "net".into(), "tls".into()]).unwrap();
         let mut struct_names = vec![];
         let mut fn_names = vec![];
         let mut equip_count = 0;
@@ -2016,7 +2050,7 @@ mod tests {
 
     #[test]
     fn tls_socket_methods_are_extern() {
-        let m = generate_stdlib_module(&["std".into(), "net".into(), "tls".into()]).unwrap();
+        let m = generate_builtin_module(&["std".into(), "net".into(), "tls".into()]).unwrap();
         for item in &m.items {
             if let Item::Equip(eq) = &item.node {
                 if let Type::Named { name, .. } = &eq.type_.node {
@@ -2051,15 +2085,15 @@ mod tests {
 
     #[test]
     fn http_is_file_based_module() {
-        // std.http is file-based, so generate_stdlib_module returns None
-        assert!(generate_stdlib_module(&["std".into(), "http".into()]).is_none());
-        // but stdlib_module_source returns the source
-        assert!(stdlib_module_source(&["std".into(), "http".into()]).is_some());
+        // gg.http is file-based, so generate_builtin_module returns None
+        assert!(generate_builtin_module(&["gg".into(), "http".into()]).is_none());
+        // but builtin_module_source returns the source
+        assert!(builtin_module_source(&["gg".into(), "http".into()]).is_some());
     }
 
     #[test]
     fn socket_methods_are_extern() {
-        let m = generate_stdlib_module(&["std".into(), "net".into(), "socket".into()]).unwrap();
+        let m = generate_builtin_module(&["std".into(), "net".into(), "socket".into()]).unwrap();
         for item in &m.items {
             if let Item::Equip(eq) = &item.node {
                 if let Type::Named { name, .. } = &eq.type_.node {
@@ -2095,7 +2129,7 @@ mod tests {
 
     #[test]
     fn cipher_methods_are_extern() {
-        let m = generate_stdlib_module(&["std".into(), "crypto".into()]).unwrap();
+        let m = generate_builtin_module(&["gg".into(), "crypto".into()]).unwrap();
         for item in &m.items {
             if let Item::Equip(eq) = &item.node {
                 if let Type::Named { name, .. } = &eq.type_.node {
@@ -2120,7 +2154,7 @@ mod tests {
 
     #[test]
     fn file_methods_are_extern() {
-        let m = generate_stdlib_module(&["std".into(), "collections".into()]).unwrap();
+        let m = generate_builtin_module(&["std".into(), "collections".into()]).unwrap();
         for item in &m.items {
             if let Item::Equip(eq) = &item.node {
                 if let Type::Named { name, .. } = &eq.type_.node {
@@ -2145,7 +2179,7 @@ mod tests {
 
     #[test]
     fn crypto_free_functions_are_extern() {
-        let m = generate_stdlib_module(&["std".into(), "crypto".into()]).unwrap();
+        let m = generate_builtin_module(&["gg".into(), "crypto".into()]).unwrap();
         let extern_expected = [
             "crypto_sha256",
             "crypto_sha1",
@@ -2178,22 +2212,22 @@ mod tests {
         }
     }
 
-    // ─── std.csv ──────────────────────────────────────────────────
+    // ─── gg.csv ───────────────────────────────────────────────────
 
     #[test]
-    fn is_stdlib_csv() {
-        assert!(is_stdlib_module(&["std".into(), "csv".into()]));
+    fn is_builtin_csv() {
+        assert!(is_builtin_module(&["gg".into(), "csv".into()]));
     }
 
     #[test]
     fn generate_csv_returns_none() {
-        // std.csv is file-based, not synthetic — generate returns None
-        assert!(generate_stdlib_module(&["std".into(), "csv".into()]).is_none());
+        // gg.csv is file-based, not synthetic — generate returns None
+        assert!(generate_builtin_module(&["gg".into(), "csv".into()]).is_none());
     }
 
     #[test]
     fn csv_module_source_exists() {
-        let source = stdlib_module_source(&["std".into(), "csv".into()]);
+        let source = builtin_module_source(&["gg".into(), "csv".into()]);
         assert!(source.is_some());
         let src = source.unwrap();
         assert!(src.contains("struct CsvParser"));
@@ -2206,7 +2240,7 @@ mod tests {
 
     #[test]
     fn csv_source_parses() {
-        let source = stdlib_module_source(&["std".into(), "csv".into()]).unwrap();
+        let source = builtin_module_source(&["gg".into(), "csv".into()]).unwrap();
         let mut parser = crate::parser::Parser::new(source);
         let module = parser.parse_module();
         assert!(parser.errors.is_empty(), "csv.gg parse errors: {:?}", parser.errors);

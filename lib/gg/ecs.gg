@@ -1,4 +1,4 @@
-# std.ecs — Entity Component System primitives
+# gg.ecs — Entity Component System primitives
 #
 # Provides EntityPool for entity ID management with recycling,
 # and SparseSet[T] for O(1) component storage and lookup.

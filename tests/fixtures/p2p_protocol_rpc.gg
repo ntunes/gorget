@@ -1,8 +1,8 @@
-from std.p2p import Node, P2PEvent, RpcMessage, p2p_create_node, p2p_add_peer, p2p_poll
-from std.p2p import p2p_stream_open_protocol, p2p_stream_accept, p2p_stream_protocol
-from std.p2p import p2p_stream_close, p2p_peer_id_hex
-from std.p2p import p2p_rpc_send_request, p2p_rpc_send_response
-from std.p2p import p2p_rpc_recv, p2p_rpc_recv_request, p2p_rpc_recv_response
+from gg.p2p import Node, P2PEvent, RpcMessage, p2p_create_node, p2p_add_peer, p2p_poll
+from gg.p2p import p2p_stream_open_protocol, p2p_stream_accept, p2p_stream_protocol
+from gg.p2p import p2p_stream_close, p2p_peer_id_hex
+from gg.p2p import p2p_rpc_send_request, p2p_rpc_send_response
+from gg.p2p import p2p_rpc_recv, p2p_rpc_recv_request, p2p_rpc_recv_response
 from std.net.udp import UdpAddr
 from std.bytes import bytes_from_str, bytes_to_str, bytes_read_u32_be
 from std.collections import Vector

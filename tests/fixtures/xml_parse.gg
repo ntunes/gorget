@@ -1,4 +1,4 @@
-from std.xml import XmlNode, xml_parse, xml_stringify
+from gg.xml import XmlNode, xml_parse, xml_stringify
 from std.collections import Vector, Dict
 
 void main():

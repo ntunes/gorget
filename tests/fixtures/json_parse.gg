@@ -1,4 +1,4 @@
-from std.json import Json, json_parse, json_stringify, json_pretty
+from gg.json import Json, json_parse, json_stringify, json_pretty
 from std.collections import Vector, Dict
 
 void main():

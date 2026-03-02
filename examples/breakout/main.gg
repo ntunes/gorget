@@ -1,6 +1,6 @@
-from std.gfx import Canvas, Color, gfx_open, gfx_close, gfx_clear, gfx_present, gfx_delay
-from std.sdl import sdl_poll_event, sdl_has_event, SDL_QUIT, SDL_KEYDOWN, SDL_KEYUP
-from std.sdl import SDLK_LEFT, SDLK_RIGHT, SDLK_ESCAPE
+from gg.gfx import Canvas, Color, gfx_open, gfx_close, gfx_clear, gfx_present, gfx_delay
+from gg.sdl import sdl_poll_event, sdl_has_event, SDL_QUIT, SDL_KEYDOWN, SDL_KEYUP
+from gg.sdl import SDLK_LEFT, SDLK_RIGHT, SDLK_ESCAPE
 from world import BreakoutWorld, new_world
 
 void main():

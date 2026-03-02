@@ -1,4 +1,4 @@
-from std.toml import TomlValue, toml_parse, toml_stringify, toml_stringify_value
+from gg.toml import TomlValue, toml_parse, toml_stringify, toml_stringify_value
 
 void main():
     # ── Test 1: Basic key-value pairs ───────────────────────
