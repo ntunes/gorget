@@ -1,0 +1,74 @@
+# std.fmt — String formatting utilities
+#
+# Practical helpers for padding, centering, repeating, truncating, and joining.
+# All functions operate on Unicode codepoints (not raw bytes).
+
+from std.collections import Vector
+
+# Left-pad `fmt_s` to `fmt_width` codepoints using the first codepoint of `fmt_fill`.
+# If `fmt_s` is already >= `fmt_width` codepoints, returns it unchanged.
+# `fmt_fill` defaults to a space when empty.
+str pad_left(str fmt_s, int fmt_width, str fmt_fill):
+    int fmt_len = fmt_s.len()
+    if fmt_len >= fmt_width:
+        return fmt_s
+    str fmt_unit = fmt_fill
+    if fmt_unit.len() == 0:
+        fmt_unit = " "
+    else:
+        fmt_unit = fmt_unit[0..1]
+    int fmt_pad = fmt_width - fmt_len
+    return fmt_unit.repeat(fmt_pad) + fmt_s
+
+# Right-pad `fmt_s` to `fmt_width` codepoints using the first codepoint of `fmt_fill`.
+str pad_right(str fmt_s, int fmt_width, str fmt_fill):
+    int fmt_len = fmt_s.len()
+    if fmt_len >= fmt_width:
+        return fmt_s
+    str fmt_unit = fmt_fill
+    if fmt_unit.len() == 0:
+        fmt_unit = " "
+    else:
+        fmt_unit = fmt_unit[0..1]
+    int fmt_pad = fmt_width - fmt_len
+    return fmt_s + fmt_unit.repeat(fmt_pad)
+
+# Center `fmt_s` within `fmt_width` codepoints using the first codepoint of `fmt_fill`.
+# When the padding is odd, the extra character goes on the right.
+str center(str fmt_s, int fmt_width, str fmt_fill):
+    int fmt_len = fmt_s.len()
+    if fmt_len >= fmt_width:
+        return fmt_s
+    str fmt_unit = fmt_fill
+    if fmt_unit.len() == 0:
+        fmt_unit = " "
+    else:
+        fmt_unit = fmt_unit[0..1]
+    int fmt_total = fmt_width - fmt_len
+    int fmt_left = fmt_total / 2
+    int fmt_right = fmt_total - fmt_left
+    return fmt_unit.repeat(fmt_left) + fmt_s + fmt_unit.repeat(fmt_right)
+
+# Repeat `fmt_s` exactly `fmt_n` times. Returns "" when `fmt_n` <= 0.
+str repeat(str fmt_s, int fmt_n):
+    return fmt_s.repeat(fmt_n)
+
+# Truncate `fmt_s` to at most `fmt_max` codepoints.
+# If truncated, the returned string ends with `fmt_suffix` (e.g. "...").
+# When `fmt_suffix` is longer than `fmt_max`, it is itself truncated.
+# Note: named `str_truncate` to avoid conflict with POSIX truncate(2).
+str str_truncate(str fmt_s, int fmt_max, str fmt_suffix):
+    int fmt_len = fmt_s.len()
+    if fmt_len <= fmt_max:
+        return fmt_s
+    int fmt_cut = fmt_max - fmt_suffix.len()
+    if fmt_cut <= 0:
+        if fmt_max <= 0:
+            return ""
+        return fmt_suffix[0..fmt_max]
+    return fmt_s[0..fmt_cut] + fmt_suffix
+
+# Join `fmt_parts` with `fmt_sep` as the separator between each element.
+# Equivalent to `fmt_sep.join(fmt_parts)`.
+str join(Vector[str] fmt_parts, str fmt_sep):
+    return fmt_sep.join(fmt_parts)

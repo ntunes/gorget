@@ -1,0 +1,32 @@
+from std.fmt import pad_left, pad_right, center, repeat, str_truncate, join
+from std.collections import Vector
+
+void main():
+    # pad_left: right-align in a field
+    print(pad_left("42", 6, " "))
+    print(pad_left("hello", 3, " "))
+
+    # pad_right: left-align in a field
+    print(pad_right("hi", 5, "."))
+    print(pad_right("toolong", 3, " "))
+
+    # center
+    print(center("ab", 6, "-"))
+    print(center("abc", 7, "*"))
+
+    # repeat
+    print(repeat("ha", 3))
+    print(repeat("x", 0))
+
+    # str_truncate
+    print(str_truncate("hello world", 8, "..."))
+    print(str_truncate("short", 10, "..."))
+    print(str_truncate("hi", 3, "..."))
+
+    # join
+    Vector[str] parts = Vector[str]()
+    parts.push("one")
+    parts.push("two")
+    parts.push("three")
+    print(join(parts, ", "))
+    print(join(parts, "-"))

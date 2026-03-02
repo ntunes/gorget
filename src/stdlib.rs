@@ -89,7 +89,7 @@ pub fn generate_builtin_module(segments: &[String]) -> Option<Module> {
                 "time" => Some(gen_time_module()),
                 "collections" => Some(gen_collections_module()),
                 "math" => Some(gen_math_module()),
-                "fmt" => Some(gen_fmt_module()),
+                "fmt" => None, // file-based module — loaded via builtin_module_source()
                 "process" => Some(gen_process_module()),
                 "bytes" => None, // file-based module — loaded via builtin_module_source()
                 "encoding" => None, // file-based module — loaded via builtin_module_source()
@@ -857,6 +857,7 @@ fn gen_sdl_module() -> Module {
 pub fn builtin_module_source(segments: &[String]) -> Option<&'static str> {
     match segments.first().map(|s| s.as_str()) {
         Some("std") => match segments.get(1).map(|s| s.as_str()) {
+            Some("fmt") => Some(include_str!("../lib/std/fmt.gg")),
             Some("bytes") => Some(include_str!("../lib/std/bytes.gg")),
             Some("encoding") => Some(include_str!("../lib/std/encoding.gg")),
             Some("term") => Some(include_str!("../lib/std/term.gg")),

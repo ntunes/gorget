@@ -6724,6 +6724,11 @@ fn sync_condvar() {
 }
 
 #[test]
+fn fmt_basic() {
+    run_gg("fmt_basic.gg", "    42\nhello\nhi...\ntoolong\n--ab--\n**abc**\nhahaha\n\nhello...\nshort\nhi\none, two, three\none-two-three");
+}
+
+#[test]
 fn process_spawn() {
     // echo appends \n, print(out) adds another \n → blank line before exit code
     run_gg("process_spawn.gg", "hello world\n\n0\ntrue");

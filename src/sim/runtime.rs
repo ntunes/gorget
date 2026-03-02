@@ -1888,6 +1888,17 @@ pub fn call_extern(
             Ok(Value::Str(SimStr::from_string(s)))
         }
 
+        "gorget_bytes_utf8_valid" => {
+            // Validate that a Vector[uint8] is well-formed UTF-8. Returns bool.
+            let arr = args.first().and_then(|v| match v {
+                Value::Array(a) => Some(a.clone()),
+                _ => None,
+            }).unwrap_or_else(|| SimArray::new("uint8_t"));
+            let bytes: Vec<u8> = arr.to_vec().into_iter().map(|v| v.as_i64() as u8).collect();
+            let valid = std::str::from_utf8(&bytes).is_ok();
+            Ok(Value::Bool(valid))
+        }
+
         "gorget_bytes_from_hex" => {
             // Convert hex string to Vector[uint8]
             let hex = args.first().map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));

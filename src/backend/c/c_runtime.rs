@@ -5486,6 +5486,48 @@ static inline const char* gorget_bytes_to_str(const GorgetArray* arr) {
     return s;
 }
 
+// Validate that a Vector[uint8] contains well-formed UTF-8.
+// Returns 1 (true) if valid, 0 (false) if the byte sequence is invalid UTF-8.
+static inline int gorget_bytes_utf8_valid(const GorgetArray* arr) {
+    const uint8_t* p = (const uint8_t*)arr->data;
+    size_t len = arr->len;
+    size_t i = 0;
+    while (i < len) {
+        uint8_t b = p[i];
+        int seq; // expected number of continuation bytes
+        uint32_t cp; // codepoint accumulator for range checks
+        if (b < 0x80) {
+            // ASCII — single byte
+            i++; continue;
+        } else if (b < 0xC2) {
+            // 0x80-0xBF: stray continuation; 0xC0-0xC1: overlong 2-byte
+            return 0;
+        } else if (b < 0xE0) {
+            seq = 1; cp = b & 0x1F;
+        } else if (b < 0xF0) {
+            seq = 2; cp = b & 0x0F;
+        } else if (b <= 0xF4) {
+            seq = 3; cp = b & 0x07;
+        } else {
+            // 0xF5+ are invalid in UTF-8
+            return 0;
+        }
+        i++;
+        for (int j = 0; j < seq; j++, i++) {
+            if (i >= len) return 0; // truncated sequence
+            uint8_t c = p[i];
+            if ((c & 0xC0) != 0x80) return 0; // not a continuation byte
+            cp = (cp << 6) | (c & 0x3F);
+        }
+        // Range checks: reject surrogates and codepoints > U+10FFFF,
+        // and catch overlong 3-byte sequences (cp < 0x800).
+        if (seq == 2 && cp < 0x800) return 0;
+        if (seq == 3 && (cp < 0x10000 || cp > 0x10FFFF)) return 0;
+        if (cp >= 0xD800 && cp <= 0xDFFF) return 0; // UTF-16 surrogates
+    }
+    return 1;
+}
+
 // Convert a hex string to Vector[uint8]
 static inline GorgetArray gorget_bytes_from_hex(const char* hex) {
     GorgetArray arr = gorget_array_new(sizeof(uint8_t));

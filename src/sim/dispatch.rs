@@ -246,6 +246,8 @@ pub struct Interpreter<'m> {
     task_results: HashMap<usize, Value>,
     /// Next task ID.
     task_next_id: usize,
+    /// Next synthetic thread ID (for Thread[T].id() calls).
+    thread_next_id: usize,
     /// TaskGroup pending closures: group_addr → Vec<closure Value>
     task_group_tasks: HashMap<usize, Vec<Value>>,
     /// TCP socket storage: handle_id → TcpStream.
@@ -292,6 +294,7 @@ impl<'m> Interpreter<'m> {
             tracking_next_id: 1,
             task_results: HashMap::new(),
             task_next_id: 1,
+            thread_next_id: 2, // 1 = main thread
             task_group_tasks: HashMap::new(),
             tcp_sockets: HashMap::new(),
             udp_sockets: HashMap::new(),
@@ -1439,6 +1442,26 @@ impl<'m> Interpreter<'m> {
         if name == "gorget_task_group_new" {
             let addr = self.heap_alloc(Value::I64(0));
             return Ok(Value::I64(addr as i64));
+        }
+
+        // ── __gorget_thread_spawn_FN → call FN immediately, return Thread handle (MutPtr to result) ──
+        // Threads are simulated sequentially: the spawned function runs eagerly before join().
+        if let Some(fn_name) = name.strip_prefix("__gorget_thread_spawn_") {
+            let result = self.call_function(fn_name, args, depth + 1)?;
+            let tid = self.thread_next_id;
+            self.thread_next_id += 1;
+            // Store as a Struct { fields: [result, tid] } so join() and id() can both work.
+            // fields[0] = return value, fields[1] = thread ID.
+            let handle = Value::Struct {
+                type_name: "__ThreadHandle".to_string(),
+                fields: vec![result, Value::I64(tid as i64)],
+            };
+            let addr = self.heap_alloc(handle);
+            return Ok(Value::MutPtr(addr));
+        }
+        // ── gorget_current_thread_id → return 1 (main thread; non-zero like pthread_self()) ──
+        if name == "gorget_current_thread_id" {
+            return Ok(Value::I64(1));
         }
 
         // ── TCP socket operations ─────────────────────────────────────────────
@@ -3064,6 +3087,237 @@ impl<'m> Interpreter<'m> {
                     fields: vec![],
                 }));
             }
+        }
+
+        // ────────── RWLock[T] + ReadGuard[T] + WriteGuard[T] operations ──────────
+        // Single-threaded sim: RWLock behaves like Mutex (no real locking).
+        if name.starts_with("RWLock__") && name.ends_with("__new") {
+            let val = args.first().cloned().unwrap_or(Value::Unit);
+            let addr = self.heap_alloc(val);
+            return Ok(Some(Value::MutPtr(addr)));
+        }
+        if name.starts_with("RWLock__") && name.ends_with("__read") {
+            // ReadGuard is just the same MutPtr to the inner value (no actual lock).
+            let rwlock = args.first().cloned().unwrap_or(Value::Null);
+            return Ok(Some(rwlock));
+        }
+        if name.starts_with("RWLock__") && name.ends_with("__write") {
+            // WriteGuard is just the same MutPtr to the inner value (no actual lock).
+            let rwlock = args.first().cloned().unwrap_or(Value::Null);
+            return Ok(Some(rwlock));
+        }
+        if name.starts_with("RWLock__") && (name.ends_with("__drop") || name.ends_with("__free")) {
+            return Ok(Some(Value::Unit));
+        }
+        // ReadGuard[T] / WriteGuard[T] methods — mirrors Guard[T] behaviour.
+        if name.starts_with("ReadGuard__") && name.ends_with("__get") {
+            let guard_arg = args.first().cloned().unwrap_or(Value::Null);
+            let guard_val = match guard_arg {
+                Value::Ptr(a) | Value::MutPtr(a) => self.heap_read(a).cloned().unwrap_or(Value::Unit),
+                other => other,
+            };
+            let inner = match guard_val {
+                Value::Ptr(a) | Value::MutPtr(a) => self.heap_read(a).cloned().unwrap_or(Value::Unit),
+                other => other,
+            };
+            return Ok(Some(inner));
+        }
+        if name.starts_with("WriteGuard__") && name.ends_with("__get") {
+            let guard_arg = args.first().cloned().unwrap_or(Value::Null);
+            let guard_val = match guard_arg {
+                Value::Ptr(a) | Value::MutPtr(a) => self.heap_read(a).cloned().unwrap_or(Value::Unit),
+                other => other,
+            };
+            let inner = match guard_val {
+                Value::Ptr(a) | Value::MutPtr(a) => self.heap_read(a).cloned().unwrap_or(Value::Unit),
+                other => other,
+            };
+            return Ok(Some(inner));
+        }
+        if name.starts_with("WriteGuard__") && name.ends_with("__set") {
+            let guard_arg = args.get(0).cloned().unwrap_or(Value::Null);
+            let new_val = args.get(1).cloned().unwrap_or(Value::Unit);
+            let guard_val = match guard_arg {
+                Value::Ptr(a) | Value::MutPtr(a) => self.heap_read(a).cloned().unwrap_or(Value::Unit),
+                other => other,
+            };
+            match guard_val {
+                Value::Ptr(a) | Value::MutPtr(a) => { self.heap_write(a, new_val); }
+                _ => {}
+            }
+            return Ok(Some(Value::Unit));
+        }
+        if (name.starts_with("ReadGuard__") || name.starts_with("WriteGuard__"))
+            && (name.ends_with("__drop") || name.ends_with("__free"))
+        {
+            return Ok(Some(Value::Unit));
+        }
+
+        // ────────── Thread[T] methods (join, id, drop) ──────────
+        // Thread handles are MutPtr → __ThreadHandle struct { result, tid } allocated during spawn.
+        if name.starts_with("Thread__") && name.ends_with("__join") {
+            let handle = args.first().cloned().unwrap_or(Value::Null);
+            let addr = match handle {
+                Value::Ptr(a) | Value::MutPtr(a) => a,
+                Value::I64(a) => a as usize,
+                _ => return Ok(Some(Value::Unit)),
+            };
+            if let Some(Value::Struct { fields, .. }) = self.heap.get(&addr).cloned() {
+                // fields[0] = return value, fields[1] = thread ID
+                return Ok(Some(fields.into_iter().next().unwrap_or(Value::Unit)));
+            }
+            // Fallback: plain heap slot (void threads)
+            let val = self.heap_read(addr).cloned().unwrap_or(Value::Unit);
+            return Ok(Some(val));
+        }
+        if name.starts_with("Thread__") && name.ends_with("__id") {
+            let handle = args.first().cloned().unwrap_or(Value::Null);
+            let addr = match handle {
+                Value::Ptr(a) | Value::MutPtr(a) => a,
+                Value::I64(a) => a as usize,
+                _ => return Ok(Some(Value::I64(0))),
+            };
+            if let Some(Value::Struct { fields, .. }) = self.heap.get(&addr) {
+                // fields[1] = thread ID
+                let tid = fields.get(1).cloned().unwrap_or(Value::I64(addr as i64));
+                return Ok(Some(tid));
+            }
+            return Ok(Some(Value::I64(addr as i64)));
+        }
+        if name.starts_with("Thread__") && (name.ends_with("__drop") || name.ends_with("__free")) {
+            return Ok(Some(Value::Unit));
+        }
+
+        // ────────── AtomicInt + AtomicBool operations ──────────
+        // Single-threaded sim: atomics are plain heap-allocated integers/bools.
+        if name == "gorget_atomic_int_new" {
+            let val = args.first().cloned().unwrap_or(Value::I64(0));
+            let addr = self.heap_alloc(val);
+            return Ok(Some(Value::MutPtr(addr)));
+        }
+        if name == "AtomicInt__load" {
+            let ptr = args.first().cloned().unwrap_or(Value::Null);
+            let addr = match ptr { Value::Ptr(a) | Value::MutPtr(a) => a, Value::I64(a) => a as usize, _ => return Ok(Some(Value::I64(0))) };
+            return Ok(Some(self.heap_read(addr).cloned().unwrap_or(Value::I64(0))));
+        }
+        if name == "AtomicInt__store" {
+            let ptr = args.get(0).cloned().unwrap_or(Value::Null);
+            let val = args.get(1).cloned().unwrap_or(Value::I64(0));
+            let addr = match ptr { Value::Ptr(a) | Value::MutPtr(a) => a, Value::I64(a) => a as usize, _ => return Ok(Some(Value::Unit)) };
+            self.heap_write(addr, val);
+            return Ok(Some(Value::Unit));
+        }
+        if name == "AtomicInt__add" {
+            let ptr = args.get(0).cloned().unwrap_or(Value::Null);
+            let delta = args.get(1).cloned().unwrap_or(Value::I64(0)).as_i64();
+            let addr = match ptr { Value::Ptr(a) | Value::MutPtr(a) => a, Value::I64(a) => a as usize, _ => return Ok(Some(Value::I64(0))) };
+            let old = self.heap_read(addr).cloned().unwrap_or(Value::I64(0));
+            let new_val = Value::I64(old.as_i64().wrapping_add(delta));
+            self.heap_write(addr, new_val);
+            return Ok(Some(old));
+        }
+        if name == "AtomicInt__sub" {
+            let ptr = args.get(0).cloned().unwrap_or(Value::Null);
+            let delta = args.get(1).cloned().unwrap_or(Value::I64(0)).as_i64();
+            let addr = match ptr { Value::Ptr(a) | Value::MutPtr(a) => a, Value::I64(a) => a as usize, _ => return Ok(Some(Value::I64(0))) };
+            let old = self.heap_read(addr).cloned().unwrap_or(Value::I64(0));
+            let new_val = Value::I64(old.as_i64().wrapping_sub(delta));
+            self.heap_write(addr, new_val);
+            return Ok(Some(old));
+        }
+        if name == "AtomicInt__compare_exchange" {
+            let ptr = args.get(0).cloned().unwrap_or(Value::Null);
+            let expected = args.get(1).cloned().unwrap_or(Value::I64(0)).as_i64();
+            let desired  = args.get(2).cloned().unwrap_or(Value::I64(0));
+            let addr = match ptr { Value::Ptr(a) | Value::MutPtr(a) => a, Value::I64(a) => a as usize, _ => return Ok(Some(Value::Bool(false))) };
+            let current = self.heap_read(addr).cloned().unwrap_or(Value::I64(0)).as_i64();
+            if current == expected {
+                self.heap_write(addr, desired);
+                return Ok(Some(Value::Bool(true)));
+            }
+            return Ok(Some(Value::Bool(false)));
+        }
+        if name == "gorget_atomic_bool_new" {
+            let val = args.first().cloned().unwrap_or(Value::Bool(false));
+            let addr = self.heap_alloc(val);
+            return Ok(Some(Value::MutPtr(addr)));
+        }
+        if name == "AtomicBool__load" {
+            let ptr = args.first().cloned().unwrap_or(Value::Null);
+            let addr = match ptr { Value::Ptr(a) | Value::MutPtr(a) => a, Value::I64(a) => a as usize, _ => return Ok(Some(Value::Bool(false))) };
+            return Ok(Some(self.heap_read(addr).cloned().unwrap_or(Value::Bool(false))));
+        }
+        if name == "AtomicBool__store" {
+            let ptr = args.get(0).cloned().unwrap_or(Value::Null);
+            let val = args.get(1).cloned().unwrap_or(Value::Bool(false));
+            let addr = match ptr { Value::Ptr(a) | Value::MutPtr(a) => a, Value::I64(a) => a as usize, _ => return Ok(Some(Value::Unit)) };
+            self.heap_write(addr, val);
+            return Ok(Some(Value::Unit));
+        }
+        if name == "AtomicBool__swap" {
+            let ptr = args.get(0).cloned().unwrap_or(Value::Null);
+            let new_val = args.get(1).cloned().unwrap_or(Value::Bool(false));
+            let addr = match ptr { Value::Ptr(a) | Value::MutPtr(a) => a, Value::I64(a) => a as usize, _ => return Ok(Some(Value::Bool(false))) };
+            let old = self.heap_read(addr).cloned().unwrap_or(Value::Bool(false));
+            self.heap_write(addr, new_val);
+            return Ok(Some(old));
+        }
+        if name == "AtomicBool__compare_exchange" {
+            let ptr = args.get(0).cloned().unwrap_or(Value::Null);
+            let expected = args.get(1).map(|v| v.as_bool()).unwrap_or(false);
+            let desired  = args.get(2).cloned().unwrap_or(Value::Bool(false));
+            let addr = match ptr { Value::Ptr(a) | Value::MutPtr(a) => a, Value::I64(a) => a as usize, _ => return Ok(Some(Value::Bool(false))) };
+            let current = self.heap_read(addr).cloned().unwrap_or(Value::Bool(false)).as_bool();
+            if current == expected {
+                self.heap_write(addr, desired);
+                return Ok(Some(Value::Bool(true)));
+            }
+            return Ok(Some(Value::Bool(false)));
+        }
+        if name.starts_with("AtomicInt__") && (name.ends_with("__drop") || name.ends_with("__free")) {
+            return Ok(Some(Value::Unit));
+        }
+        if name.starts_with("AtomicBool__") && (name.ends_with("__drop") || name.ends_with("__free")) {
+            return Ok(Some(Value::Unit));
+        }
+
+        // ────────── Thread ID free functions ──────────
+        if name == "gorget_current_thread_id" {
+            return Ok(Some(Value::I64(1))); // main thread; non-zero like pthread_self()
+        }
+
+        // ────────── Barrier operations ──────────
+        // Single-threaded sim: Barrier is a no-op (wait() always succeeds immediately).
+        if name == "gorget_barrier_new" {
+            let addr = self.heap_alloc(Value::I64(1));
+            return Ok(Some(Value::MutPtr(addr)));
+        }
+        if name == "Barrier__wait" {
+            return Ok(Some(Value::Unit));
+        }
+        if name.starts_with("Barrier__") && (name.ends_with("__drop") || name.ends_with("__free")) {
+            return Ok(Some(Value::Unit));
+        }
+
+        // ────────── CondVar operations ──────────
+        // Single-threaded sim: CondVar is a no-op (notify/wait are identity operations).
+        // NOTE: programs that depend on cross-thread signaling via CondVar will not work
+        // correctly in the sim (consumer loops would spin forever). This is an inherent
+        // limitation of single-threaded simulation.
+        if name == "gorget_condvar_new" {
+            let addr = self.heap_alloc(Value::I64(0));
+            return Ok(Some(Value::MutPtr(addr)));
+        }
+        if name == "CondVar__notify_one" || name == "CondVar__notify_all" {
+            return Ok(Some(Value::Unit));
+        }
+        if name == "CondVar__wait" {
+            // No-op in single-threaded sim. Programs relying on this for inter-thread
+            // signaling will fail, but simple single-thread patterns work fine.
+            return Ok(Some(Value::Unit));
+        }
+        if name.starts_with("CondVar__") && (name.ends_with("__drop") || name.ends_with("__free")) {
+            return Ok(Some(Value::Unit));
         }
 
         // ────────── Mutex[T] + Guard[T] operations ──────────

@@ -1,0 +1,15 @@
+from gg.toml import toml_parse, TomlValue
+
+void main():
+    str raw = "[server]\nhost = \"localhost\"\nport = 8080\n\n[database]\nurl = \"postgres://localhost/mydb\"\npool_size = 5"
+    Result[TomlValue, str] result = toml_parse(raw)
+    match result:
+        case Ok(doc):
+            TomlValue server = doc.get("server")
+            print(server.get("host").as_str())
+            print(server.get("port").as_int())
+            TomlValue db = doc.get("database")
+            print(db.get("url").as_str())
+            print(db.get("pool_size").as_int())
+        case Error(e):
+            print("Parse error: {e}")

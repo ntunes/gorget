@@ -1,0 +1,27 @@
+from gg.cli import CliParser
+from std.collections import Vector
+
+void main():
+    CliParser cli = CliParser.new("myapp", "A sample CLI application")
+    cli.add_flag("--verbose", "-v", "Enable verbose output")
+    cli.add_option("--output", "-o", "Output file path", "out.txt")
+    cli.add_positional("input", "Input file")
+
+    # Simulate args: --verbose -o report.txt input.csv
+    Vector[str] argv = Vector[str]()
+    argv.push("--verbose")
+    argv.push("-o")
+    argv.push("report.txt")
+    argv.push("input.csv")
+
+    Result[bool, str] parsed = cli.parse(argv)
+    match parsed:
+        case Ok(_):
+            if cli.has("verbose"):
+                print("Verbose mode enabled")
+            print("Output: {cli.get("output")}")
+            Vector[str] pos = cli.positionals()
+            if pos.len() > 0:
+                print("Input: {pos[0]}")
+        case Error(e):
+            print("Parse error: {e}")

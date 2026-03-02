@@ -10,10 +10,13 @@ from std.conv import char_to_str, ord
 
 extern Vector[uint8] bytes_from_str(str b64_src) = "gorget_bytes_from_str"
 extern str __bytes_to_str_raw(Vector[uint8] b64_buf) = "gorget_bytes_to_str"
+extern bool __bytes_utf8_valid(Vector[uint8] b64_buf) = "gorget_bytes_utf8_valid"
 
 # Convert byte buffer to str with UTF-8 validation.
 # Returns Error if the buffer contains invalid UTF-8 byte sequences.
 Result[str, str] bytes_to_str(Vector[uint8] b64_buf):
+    if not __bytes_utf8_valid(b64_buf):
+        return Error("invalid UTF-8 in byte buffer")
     str raw = __bytes_to_str_raw(b64_buf)
     return Ok(raw)
 
