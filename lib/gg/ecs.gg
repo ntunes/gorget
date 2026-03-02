@@ -69,6 +69,9 @@ struct SparseSet[T]:
     int count
 
 equip SparseSet[T]:
+    SparseSet[T] new():
+        return SparseSet[T](Vector[int](), Vector[Entity](), Vector[T](), 0)
+
     void insert(&self, Entity e, T value):
         int id = e.id
         while self.sparse.len() <= id:
@@ -133,6 +136,19 @@ equip SparseSet[T]:
     T data_at(self, int idx):
         return self.data.get(idx).unwrap()
 
+    Option[T] try_get(self, Entity e):
+        if self.has(e) == false:
+            return None
+        return Some(self.get(e))
+
+    void each(&self, Callable[void(Entity, T)] fn):
+        int i = 0
+        while i < self.count:
+            Entity e = self.entity_ids.get(i).unwrap()
+            T val = self.data.get(i).unwrap()
+            fn(e, val)
+            i = i + 1
+
 struct SparseSetIter:
     Vector[Entity] entity_ids
     int idx
@@ -154,3 +170,21 @@ equip SparseSet[T] with Iterable[Entity]:
             ecs_eids.push(self.entity_ids.get(ecs_i).unwrap())
             ecs_i = ecs_i + 1
         return SparseSetIter(ecs_eids, 0, self.count)
+
+Vector[Entity] query2[A, B](SparseSet[A] store_a, SparseSet[B] store_b):
+    Vector[Entity] result = Vector[Entity]()
+    if store_a.len() <= store_b.len():
+        int i = 0
+        while i < store_a.len():
+            Entity e = store_a.entity_at(i)
+            if store_b.has(e):
+                result.push(e)
+            i = i + 1
+    else:
+        int i = 0
+        while i < store_b.len():
+            Entity e = store_b.entity_at(i)
+            if store_a.has(e):
+                result.push(e)
+            i = i + 1
+    return result

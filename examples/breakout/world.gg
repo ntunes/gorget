@@ -184,9 +184,9 @@ equip BreakoutWorld:
 
 BreakoutWorld new_world():
     EntityPool pool = EntityPool.new()
-    SparseSet[Position] positions = SparseSet[Position](Vector[int](), Vector[Entity](), Vector[Position](), 0)
-    SparseSet[Size] sizes = SparseSet[Size](Vector[int](), Vector[Entity](), Vector[Size](), 0)
-    SparseSet[Velocity] velocities = SparseSet[Velocity](Vector[int](), Vector[Entity](), Vector[Velocity](), 0)
-    SparseSet[Color] colors = SparseSet[Color](Vector[int](), Vector[Entity](), Vector[Color](), 0)
-    SparseSet[bool] blocks = SparseSet[bool](Vector[int](), Vector[Entity](), Vector[bool](), 0)
+    SparseSet[Position] positions = SparseSet[Position].new()
+    SparseSet[Size] sizes = SparseSet[Size].new()
+    SparseSet[Velocity] velocities = SparseSet[Velocity].new()
+    SparseSet[Color] colors = SparseSet[Color].new()
+    SparseSet[bool] blocks = SparseSet[bool].new()
     return BreakoutWorld(pool, positions, sizes, velocities, colors, blocks, Entity(0, 0), Entity(0, 0), 0, false, false)

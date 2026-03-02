@@ -432,9 +432,15 @@ impl GenericCollector {
                     for method in &equip.items {
                         let method_mangled = format!("{mangled_type_name}__{}", method.node.name.node);
                         let ret_type = substitute_and_map_mut(mapper, registry, &method.node.return_type.node, &subs);
-                        let self_type_id = mapper.lookup_named(mangled_type_name).unwrap_or(UNIT_TYPE);
-                        let self_ptr_type = registry.insert(GirType::Ptr(self_type_id));
-                        let mut param_types = vec![self_ptr_type];
+                        let has_self = method.node.params.first()
+                            .map(|p| p.node.name.node == "self")
+                            .unwrap_or(false);
+                        let mut param_types = Vec::new();
+                        if has_self {
+                            let self_type_id = mapper.lookup_named(mangled_type_name).unwrap_or(UNIT_TYPE);
+                            let self_ptr_type = registry.insert(GirType::Ptr(self_type_id));
+                            param_types.push(self_ptr_type);
+                        }
                         for p in &method.node.params {
                             if p.node.name.node == "self" {
                                 continue;

@@ -395,9 +395,16 @@ pub fn lower_generic_equip_methods_with_defaults(
         let method_def = &method.node;
         let method_mangled = format!("{mangled_type_name}__{}", method_def.name.node);
 
-        let return_type = substitute_and_map_type(ctx, &method_def.return_type.node, &subs);
+        // Use map_ast_type_mut so that generic return types like Option[T] get
+        // registered (not silently resolved to UNIT_TYPE) after substitution.
+        let substituted_ret = generics::substitute_type_pub(&method_def.return_type.node, &subs);
+        let return_type = ctx.type_mapper.map_ast_type_mut(&substituted_ret, &mut ctx.type_registry);
 
-        // Self pointer type
+        // Self pointer type — only for methods with a self parameter
+        let has_self = method_def.params.first()
+            .map(|p| p.node.name.node == "self")
+            .unwrap_or(false);
+
         let self_type_id = ctx.type_mapper.lookup_named(mangled_type_name).unwrap_or(UNIT_TYPE);
         let self_is_mutable = method_def.params.first()
             .map(|p| {
@@ -412,7 +419,11 @@ pub fn lower_generic_equip_methods_with_defaults(
             ctx.register_ptr_type(self_type_id)
         };
 
-        let mut params: Vec<(TypeId, Option<&str>)> = vec![(self_ptr_type, Some("self"))];
+        let mut params: Vec<(TypeId, Option<&str>)> = if has_self {
+            vec![(self_ptr_type, Some("self"))]
+        } else {
+            vec![]
+        };
         for p in &method_def.params {
             if p.node.name.node == "self" {
                 continue;
@@ -424,15 +435,23 @@ pub fn lower_generic_equip_methods_with_defaults(
         let mut builder = FunctionBuilder::new(method_mangled, return_type, &params);
 
         ctx.clear_locals();
-        ctx.register_local("self", LocalId(1), self_ptr_type);
-
-        let mut param_idx = 2u32;
+        ctx.callable_return_types.clear();
+        let mut param_idx = if has_self {
+            ctx.register_local("self", LocalId(1), self_ptr_type);
+            2u32
+        } else {
+            1u32
+        };
         for p in &method_def.params {
             if p.node.name.node == "self" {
                 continue;
             }
             let gir_type = substitute_and_map_type(ctx, &p.node.type_.node, &subs);
             ctx.register_local(&p.node.name.node, LocalId(param_idx), gir_type);
+            // Track callable parameter return types for indirect call lowering
+            if let Some(ret_type) = extract_callable_return_type(&p.node.type_.node, &subs, ctx) {
+                ctx.callable_return_types.insert(LocalId(param_idx), ret_type);
+            }
             param_idx += 1;
         }
 

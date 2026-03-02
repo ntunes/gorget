@@ -69,17 +69,9 @@
 
 - **`std.regex` deferred features**: (1) `replace_with(self, str subject, Callable[Match, str] fn)` — callback replacement (requires C→Gorget closure call for user-defined replacement logic). (2) `named_groups(self) -> Dict[str, str]` — requires building a Gorget Dict from C. [added: 2026-02-19]
 
-- **ECS `try_get()` returning `Option[T]`**: Safe accessor for SparseSet that returns `None` instead of panicking on missing entity. Blocked by codegen: `None` and `Some()` in generic equip blocks generate unqualified `Option__Some` / `NULL` instead of fully-qualified constructors (e.g., `Option__Health__None()`). Same root cause as the bare `Some()` assignment issue (TODO line above). Unblock by fixing generic Option constructor codegen first. [added: 2026-02-22]
-
-- **ECS multi-component query/join**: Every "system" manually nests `has()` checks across multiple sparse sets. A `query(SparseSet[A], SparseSet[B])` helper that iterates entities present in both sets would eliminate the most error-prone boilerplate. Even a simple intersection (iterate smaller set, check `has()` on larger) would help. Full query builder needs variadic generics. [added: 2026-02-22]
-
-- **ECS `SparseSet[T].new()` static factory**: Like `EntityPool.new()`, but for generic SparseSet. Needs `Vector[T]()` constructor inside a generic equip method body — currently untested codegen path. Would eliminate verbose `SparseSet[Health](Vector[int](), Vector[int](), Vector[Health](), 0)` boilerplate. [added: 2026-02-22]
-
 - **ECS `(int, T)` pair iteration / `items()` method**: `Iterable[int]` only yields entity IDs, forcing immediate `get(eid)` in every loop. An `items()` method yielding `(int, T)` tuples would eliminate boilerplate. Blocked: tuple return from generic equip methods is untested codegen territory. [added: 2026-02-22]
 
-- **ECS iter() copies entire entity_ids vector**: `SparseSet[T].iter()` allocates a fresh `Vector[int]` and copies all entity IDs. O(n) allocation just to start iteration. Language limitation: `SparseSetIter` can't hold a reference (no lifetime-annotated struct fields). Could improve with index+length snapshot if struct references become available. [added: 2026-02-22]
-
-- **ECS `each()` callback iteration**: `void each(Callable[int, T, void] fn)` would enable `health.each((int id, Health h): ...)` without manual iteration. Needs `Callable` with generic `T` in equip block — untested. [added: 2026-02-22]
+- **ECS iter() copies entire entity_ids vector**: `SparseSet[T].iter()` allocates a fresh `Vector[Entity]` and copies all entity IDs. O(n) allocation just to start iteration. Language limitation: `SparseSetIter` can't hold a reference (no lifetime-annotated struct fields). Could improve with index+length snapshot if struct references become available. [added: 2026-02-22]
 
 ## Low
 

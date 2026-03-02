@@ -1080,6 +1080,32 @@ fn try_resolve_field_place(
     None
 }
 
+/// Convert an index expression to a mangle fragment for generic type name construction.
+/// e.g. `SparseSet[Health].new()` → receiver is `Index { object: "SparseSet", index: "Health" }`
+/// Returns `Some("Health")` for `Identifier("Health")` or `Some("int64_t")` for `Identifier("int")`.
+fn index_expr_to_mangle_fragment(expr: &Expr) -> Option<String> {
+    if let Expr::Identifier(name) = expr {
+        let fragment = match name.as_str() {
+            "int" => "int64_t",
+            "float" => "double",
+            "bool" => "bool",
+            "str" => "Str",
+            "char" => "char",
+            "byte" | "uint8" => "uint8_t",
+            "uint16" => "uint16_t",
+            "uint32" => "uint32_t",
+            "uint64" => "uint64_t",
+            "int8" => "int8_t",
+            "int16" => "int16_t",
+            "int32" => "int32_t",
+            other => other,
+        };
+        Some(fragment.to_string())
+    } else {
+        None
+    }
+}
+
 /// Lower a method call on a concrete (non-trait-object) type.
 fn lower_method_call(
     ctx: &mut LoweringContext,
@@ -1201,6 +1227,34 @@ fn lower_method_call(
                 }
                 let dst = builder.call(effective_name, lowered_args, ret_type);
                 return FunctionBuilder::copy(dst);
+            }
+        }
+    }
+
+    // Static method call on a generic type: SparseSet[Health].new()
+    // Parsed as MethodCall { receiver: Index { object: Identifier("SparseSet"), index: Identifier("Health") }, ... }
+    if let Expr::Index { object, index } = &receiver.node {
+        if let Expr::Identifier(type_name) = &object.node {
+            if let Some(mangled_type) = index_expr_to_mangle_fragment(&index.node)
+                .map(|frag| format!("{type_name}__{frag}"))
+            {
+                if ctx.type_mapper.lookup_named(&mangled_type).is_some() {
+                    let lowered_args: Vec<Operand> = args.iter()
+                        .map(|arg| lower_expr(ctx, builder, &arg.node.value))
+                        .collect();
+                    let mangled_fn = format!("{mangled_type}__{method_name}");
+                    let ret_type = if let Some((_, ret)) = ctx.fn_sigs.get(mangled_fn.as_str()) {
+                        *ret
+                    } else {
+                        ctx.type_mapper.lookup_named(&mangled_type).unwrap_or(I64_TYPE)
+                    };
+                    if ret_type == UNIT_TYPE {
+                        builder.call_void(mangled_fn, lowered_args);
+                        return Operand::Constant(Constant::Unit);
+                    }
+                    let dst = builder.call(mangled_fn, lowered_args, ret_type);
+                    return FunctionBuilder::copy(dst);
+                }
             }
         }
     }
@@ -3893,6 +3947,10 @@ fn lower_call(
                 let ret_type = ctx.callable_return_types.get(&local_id)
                     .copied()
                     .unwrap_or(I64_TYPE);
+                if ret_type == UNIT_TYPE {
+                    builder.call_void(callable_name, call_args);
+                    return Operand::Constant(Constant::Unit);
+                }
                 let dst = builder.call(callable_name, call_args, ret_type);
                 return FunctionBuilder::copy(dst);
             }

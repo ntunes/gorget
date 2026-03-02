@@ -84,14 +84,17 @@ struct SparseSet[T]:
 
 | Signature | Description |
 |---|---|
+| `SparseSet[T] new()` | Static factory — create an empty set (no args needed) |
 | `void insert(&self, Entity e, T value)` | Add or update a component for entity `e` |
 | `void remove(&self, Entity e)` | Remove the component (swap-and-pop) |
 | `bool has(self, Entity e)` | Check if entity `e` has a component |
-| `T get(self, Entity e)` | Get the component value (panics if missing — use `has()` first) |
+| `T get(self, Entity e)` | Get the component value (panics if missing — use `has()` or `try_get()` first) |
+| `Option[T] try_get(self, Entity e)` | Safe get — returns `None` if entity is missing |
 | `void set(&self, Entity e, T value)` | Update in place (silently no-ops if entity missing) |
 | `int len(self)` | Number of stored components |
 | `Entity entity_at(self, int idx)` | Entity handle at dense index `idx` |
 | `T data_at(self, int idx)` | Component value at dense index `idx` |
+| `void each(&self, Callable[void(Entity, T)] fn)` | Iterate all (entity, component) pairs with a callback |
 
 ### Iteration
 
@@ -107,16 +110,14 @@ for e in health:
 ### Construction
 
 ```gorget
-from std.collections import Vector
 from gg.ecs import Entity, EntityPool, SparseSet
 
-SparseSet[Health] health = SparseSet[Health](Vector[int](), Vector[Entity](), Vector[Health](), 0)
+SparseSet[Health] health = SparseSet[Health].new()
 ```
 
 ### Usage
 
 ```gorget
-from std.collections import Vector
 from gg.ecs import Entity, EntityPool, SparseSet
 
 struct Health:
@@ -124,7 +125,7 @@ struct Health:
     int max_hp
 
 EntityPool pool = EntityPool.new()
-SparseSet[Health] health = SparseSet[Health](Vector[int](), Vector[Entity](), Vector[Health](), 0)
+SparseSet[Health] health = SparseSet[Health].new()
 
 Entity e = pool.create()
 health.insert(e, Health(100, 100))
@@ -137,6 +138,31 @@ health.set(e, Health(80, 100))
 for e in health:
     Health val = health.get(e)
     print("Entity {e.id}: {val.hp} HP")
+```
+
+## Free Functions
+
+### `query2[A, B]` — multi-component intersection
+
+```gorget
+Vector[Entity] query2[A, B](SparseSet[A] store_a, SparseSet[B] store_b)
+```
+
+Returns the `Vector[Entity]` of entities present in **both** sparse sets. Iterates
+the smaller set and checks membership in the larger, so the cost is
+`O(min(|A|, |B|))`.
+
+```gorget
+from gg.ecs import Entity, EntityPool, SparseSet, query2
+
+Vector[Entity] movers = query2[Position, Velocity](world.positions, world.velocities)
+int i = 0
+while i < movers.len():
+    Entity e = movers.get(i).unwrap()
+    Position p = world.positions.get(e)
+    Velocity v = world.velocities.get(e)
+    world.positions.set(e, Position(p.x + v.dx, p.y + v.dy))
+    i = i + 1
 ```
 
 ## Building a World

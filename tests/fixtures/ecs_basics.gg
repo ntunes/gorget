@@ -27,7 +27,7 @@ void main():
     print(pool.count())
 
     # SparseSet basics
-    SparseSet[Health] health = SparseSet[Health](Vector[int](), Vector[Entity](), Vector[Health](), 0)
+    SparseSet[Health] health = SparseSet[Health].new()
     health.insert(e2, Health(100, 100))
     health.insert(e3, Health(80, 80))
     print(health.len())
@@ -61,7 +61,7 @@ void main():
     print(health.has(e2))
 
     # iteration via for-in
-    SparseSet[Health] store = SparseSet[Health](Vector[int](), Vector[Entity](), Vector[Health](), 0)
+    SparseSet[Health] store = SparseSet[Health].new()
     Entity se1 = Entity(10, 0)
     Entity se2 = Entity(20, 0)
     Entity se3 = Entity(30, 0)
@@ -85,3 +85,28 @@ void main():
     pool.destroy(e2)
     pool.destroy(e2)
     print(pool.count())
+
+    # SparseSet.new() factory
+    SparseSet[Health] ns = SparseSet[Health].new()
+    ns.insert(e3, Health(50, 100))
+    print(ns.len())
+
+    # try_get — present
+    Option[Health] got = ns.try_get(e3)
+    match got:
+        case Some(h):
+            print(h.hp)
+        case None:
+            print("none")
+
+    # try_get — absent (e2 was removed earlier)
+    Option[Health] miss = ns.try_get(e2)
+    match miss:
+        case Some(h):
+            print(h.hp)
+        case None:
+            print("none")
+
+    # each()
+    ns.insert(Entity(5, 0), Health(99, 100))
+    ns.each((Entity e, Health h): print("{e.id}:{h.hp}"))
