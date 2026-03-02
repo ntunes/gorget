@@ -85,7 +85,18 @@ impl Parser {
         self.expect_keyword(Keyword::Return)?;
 
         let value = if !self.check(&Token::Newline) && !self.check(&Token::Dedent) {
-            Some(self.parse_expr()?)
+            let first = self.parse_expr()?;
+            if self.check(&Token::Comma) {
+                let elem_start = first.span;
+                let mut elements = vec![first];
+                while self.match_token(&Token::Comma) {
+                    elements.push(self.parse_expr()?);
+                }
+                let end = elements.last().unwrap().span;
+                Some(Spanned::new(Expr::TupleLiteral(elements), elem_start.merge(end)))
+            } else {
+                Some(first)
+            }
         } else {
             None
         };
@@ -170,7 +181,7 @@ impl Parser {
         let start = self.peek_span();
         self.expect_keyword(Keyword::For)?;
 
-        let pattern = self.parse_pattern()?;
+        let pattern = self.parse_bare_pattern()?;
         self.expect_keyword(Keyword::In)?;
 
         // Check for ownership modifier on iterable
@@ -446,7 +457,18 @@ impl Parser {
         self.expect_keyword(Keyword::Auto)?;
 
         let type_ = Spanned::new(Type::Inferred, start);
-        let pattern = self.parse_binding_pattern()?;
+        let first_pat = self.parse_binding_pattern()?;
+        let pattern = if self.check(&Token::Comma) {
+            let pat_start = first_pat.span;
+            let mut pats = vec![first_pat];
+            while self.match_token(&Token::Comma) {
+                pats.push(self.parse_binding_pattern()?);
+            }
+            let end = pats.last().unwrap().span;
+            Spanned::new(Pattern::Tuple(pats), pat_start.merge(end))
+        } else {
+            first_pat
+        };
         self.expect(&Token::Eq)?;
         let value = self.parse_expr()?;
         self.consume_newline();

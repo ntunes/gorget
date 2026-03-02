@@ -6,6 +6,24 @@ use super::Parser;
 use crate::errors::ParseError;
 
 impl Parser {
+    /// Parse a bare (possibly comma-separated) pattern.
+    /// Used in `for` loops: `for x, y in items:` → `Pattern::Tuple([x, y])`.
+    /// Terminates naturally when the next token is `in` or another non-pattern token.
+    pub fn parse_bare_pattern(&mut self) -> Result<Spanned<Pattern>, ParseError> {
+        let first = self.parse_pattern()?;
+        if self.check(&Token::Comma) {
+            let start = first.span;
+            let mut pats = vec![first];
+            while self.match_token(&Token::Comma) {
+                pats.push(self.parse_pattern()?);
+            }
+            let end = pats.last().unwrap().span;
+            Ok(Spanned::new(Pattern::Tuple(pats), start.merge(end)))
+        } else {
+            Ok(first)
+        }
+    }
+
     /// Parse a pattern (for match arms, destructuring, is-expressions).
     pub fn parse_pattern(&mut self) -> Result<Spanned<Pattern>, ParseError> {
         let mut pattern = self.parse_single_pattern()?;

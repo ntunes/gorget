@@ -269,7 +269,17 @@ impl Formatter {
             }
         } else {
             // type-first: `ReturnType name(params)`
-            self.format_type(&f.return_type);
+            // Bare tuple return: emit `T1, T2` not `(T1, T2)` in return position
+            if let Type::Tuple(types) = &f.return_type.node {
+                for (i, ty) in types.iter().enumerate() {
+                    if i > 0 {
+                        self.emitter.write(", ");
+                    }
+                    self.format_type(ty);
+                }
+            } else {
+                self.format_type(&f.return_type);
+            }
             self.emitter.write(" ");
             self.emitter.write(&f.name.node);
             if let Some(ref gp) = f.generic_params {
@@ -627,10 +637,6 @@ impl Formatter {
                 self.emitter.write(", ");
             }
             match &bound.node {
-                WhereBound::Trait { .. } => {
-                    // WhereBound::Trait is dead after inline-bounds migration
-                    unreachable!("WhereBound::Trait should not appear in formatted AST")
-                }
                 WhereBound::Outlives { longer, shorter } => {
                     self.emitter.write(&longer.node);
                     self.emitter.write(" outlives ");
@@ -758,7 +764,22 @@ impl Formatter {
                     // type-first: `type name = expr`
                     self.format_type(type_);
                     self.emitter.write(" ");
-                    self.format_pattern(pattern);
+                    // For auto declarations with tuple patterns, emit bare (no parens):
+                    // `auto a, b = ...` not `auto (a, b) = ...`
+                    if matches!(&type_.node, Type::Inferred) {
+                        if let Pattern::Tuple(pats) = &pattern.node {
+                            for (i, p) in pats.iter().enumerate() {
+                                if i > 0 {
+                                    self.emitter.write(", ");
+                                }
+                                self.format_pattern(p);
+                            }
+                        } else {
+                            self.format_pattern(pattern);
+                        }
+                    } else {
+                        self.format_pattern(pattern);
+                    }
                 }
                 self.emitter.write(" = ");
                 self.format_expr(value);
@@ -788,7 +809,17 @@ impl Formatter {
             }
             Stmt::Return(Some(expr)) => {
                 self.emitter.write("return ");
-                self.format_expr(expr);
+                // Bare tuple: emit `a, b` not `(a, b)` in return position
+                if let Expr::TupleLiteral(elems) = &expr.node {
+                    for (i, e) in elems.iter().enumerate() {
+                        if i > 0 {
+                            self.emitter.write(", ");
+                        }
+                        self.format_expr(e);
+                    }
+                } else {
+                    self.format_expr(expr);
+                }
                 self.emitter.newline();
             }
             Stmt::Throw(expr) => {
@@ -821,7 +852,17 @@ impl Formatter {
                 else_body,
             } => {
                 self.emitter.write("for ");
-                self.format_pattern(pattern);
+                // Bare tuple: emit `x, y` not `(x, y)` in for-loop pattern
+                if let Pattern::Tuple(pats) = &pattern.node {
+                    for (i, p) in pats.iter().enumerate() {
+                        if i > 0 {
+                            self.emitter.write(", ");
+                        }
+                        self.format_pattern(p);
+                    }
+                } else {
+                    self.format_pattern(pattern);
+                }
                 self.emitter.write(" in ");
                 match ownership {
                     Ownership::Borrow => {}

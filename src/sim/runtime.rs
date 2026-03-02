@@ -2101,6 +2101,12 @@ pub fn call_extern(
             })
         }
 
+        // ── Terminal ──────────────────────────────────────────────────────────
+        "gorget_is_tty" => {
+            // In the sim, stdout is always captured (never a real tty).
+            Ok(Value::Bool(false))
+        }
+
         // ── Misc stubs ─────────────────────────────────────────────────────────
         "gorget_dbg_print" | "gorget_dbg" => {
             let s = args.first().map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
@@ -2187,24 +2193,12 @@ pub fn call_extern(
         }
 
         other => {
-            // Many stdlib functions are not needed for Phase 0 simple fixtures.
-            // Return a reasonable default rather than crashing — print a warning.
-            // For Phase 0, common patterns are:
-            // - gorget_array_* functions (Phase 1)
-            // - gorget_dict_*/gorget_map_* (Phase 1)
-            // - network/file/async functions (Phase 3)
-            if other.starts_with("gorget_array_") || other.starts_with("gorget_dict_")
-               || other.starts_with("gorget_map_") || other.starts_with("gorget_set_")
-               || other.starts_with("gorget_channel_") || other.starts_with("gorget_tls_")
-               || other.starts_with("gorget_tcp_") || other.starts_with("gorget_udp_")
-               || other.starts_with("gorget_regex_") || other.starts_with("gorget_crypto_")
-               || other.starts_with("gorget_ssl_") || other.starts_with("gorget_http_")
-               || other.starts_with("gorget_hot_") || other.starts_with("gorget_trace_")
-            {
+            // Any gorget_* function that reaches here is unimplemented — report it
+            // clearly so new stdlib additions don't silently return Unit.
+            if other.starts_with("gorget_") {
                 Err(SimError::Unimplemented(other.to_string()))
             } else {
-                // Unknown function — return unit as safe default
-                // This handles many stub-like calls in the stdlib
+                // Non-gorget externs (C stdlib, etc.) — return unit as safe default.
                 Ok(Value::Unit)
             }
         }

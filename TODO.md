@@ -2,11 +2,11 @@
 
 ## High
 
+- **Bare tuples in `match` arms: `case a, b:`**: Extending bare tuple syntax to match arm patterns (`case a, b: ...` instead of `case (a, b): ...`). Requires care to avoid ambiguity with or-patterns (`|`) — commas and pipes overlap in meaning and cannot be mixed naively. Defer until or-pattern disambiguation is resolved. [added: 2026-03-02]
+
+- **Bare tuples in typed variable declarations**: `int, str pair = ...` is ambiguous today — `str` looks like a second type or a variable name. No syntax is known that avoids this ambiguity without look-ahead past the `=`. Defer unless a clean solution is found. [added: 2026-03-02]
+
 ## Medium
-
-- **Inline bounds follow-up — rename `FunctionInfo.where_bounds` → `trait_bounds`**: The field name `where_bounds` is now a misnomer since bounds live inline in generic params, not in where clauses. Rename throughout `semantic/resolve.rs` and all consumers (`typecheck.rs`, `borrow.rs`, codegen). Low risk mechanical rename. [added: 2026-03-02]
-
-- **Inline bounds follow-up — remove dead `WhereBound::Trait` AST variant**: The `WhereBound::Trait` variant in `src/parser/ast.rs` is now dead code (the parser emits an error when it sees `where T is Trait` and `format_where_clause` has it as `unreachable!()`). Remove the variant, the `type_name`/`bounds` fields, and all remaining match arms that reference it. [added: 2026-03-02]
 
 - **Inline bounds follow-up — find new syntax for `outlives` to fully remove `where`**: The `where` keyword is now only used for `where a outlives b`. Options: (1) inline on the lifetime param `live(a outlives b)`, (2) a dedicated `outlives` section, (3) lifetime annotations on the param itself. Survey and decide before removing `where` entirely. [added: 2026-03-02]
 
@@ -16,10 +16,6 @@
 
 - **Self-hosting resolver: 9 remaining comparison mismatches (231/240)**: Categories: (1) `import std.json` whole-module imports not handled — only `from X import Y` is supported (3 fixtures: serializable, serialize_collections, deserializable). (2) `SVarDecl` uses `str` name instead of pattern — tuple destructuring in VarDecl not supported in Gorget parser AST (2 fixtures: pattern_destructure, name_first). (3) `implicit it` variable not registered (1 fixture: implicit_it). (4) Match pattern constructor bindings (`case Some(v)`) — Gorget registers binding differently from Rust (1 fixture: match_option_result). (5) Complex match resolution divergence (1 fixture: match_advanced). (6) Test `with` clause bindings not resolved (1 fixture: test_with_clause). SCOPE lines excluded from comparison — Rust AST's `Expr::Block` creates extra scopes absent in Gorget AST. DEF spans excluded — Gorget AST doesn't store name spans. [added: 2026-02-23]
 
-
-- **Docs: rewrite "99% automatic" borrow inference claim with honest specifics**: Replace vague percentage in docs with concrete breakdown: (1) functions using only owned types — no annotations needed, (2) single ref param return — auto-inferred, (3) methods returning borrow from self — auto-inferred, (4) functions with bodies returning from one of multiple ref params — inferred via body analysis, (5) cases needing `live` — trait declarations, extern FFI, structs holding references, multi-source precision. [added: 2026-02-22]
-
-- **Docs: add Rust lifetime comparison to `language-design.md`**: Document where Gorget differs from Rust's lifetime system. Gorget wins on body-based inference (Rust is signature-only). Gorget matches Rust's elision rule 3 for bodyless declarations (self param → return borrows from self). Helps Rust-experienced users calibrate expectations. [added: 2026-02-22]
 
 - **`Into[T]` conversion trait**: Counterpart to `From[T]` requiring explicit type args (`value.into[Celsius]()`) or return-type inference. Adds complexity (equipping primitives, potential blanket impl pattern). [added: 2026-02-17]
 
@@ -49,10 +45,6 @@
 - **For-loop range bounds validation**: `for n in 0..256` with a `uint8` loop variable silently overflows. Codegen hardcodes `int64_t` for range loop variables (`c_stmt.rs:1210`) — should use the declared type. [added: 2026-02-14]
 
 - **Codegen panics instead of semantic errors**: Several codegen paths panic on invalid input that should be caught earlier — string interpolation of non-primitive types (`c_expr_print.rs:394`), `in` operator fallthrough (`c_expr_call.rs:1225`). Move these checks to semantic analysis or use `unreachable!()`. [added: 2026-02-16]
-
-- **GorgetString→Str coercion in Result/Option compound literals**: `return Error("prefix" + var + "suffix")` fails to compile because `gorget_str_cat()` returns `GorgetString` (owned: `{char* data; size_t len; size_t cap; Allocator a}`) but `Result[T, str].Error._0` is `Str` (borrowed: `{const char* data; size_t len}`). The C backend generates an incompatible compound literal. Assignment coercion already works (line ~2736 in `c_expr.rs`: `(Str){.data = gs.data, .len = gs.len}`) but struct field initialization in Result/Option constructors doesn't apply this conversion. Workaround: use plain string literals (no concatenation) for error messages. Fix: detect `GorgetString` value being stored into a `Str` field during compound literal construction and emit the `(Str){...}` coercion. [added: 2026-03-02]
-
-- **`looks_like_closure()` false positive on `if`-condition parentheses**: The heuristic in `src/parser/expr.rs` scans forward for a matching `)` then checks if `:` follows. In `if cond and (A == B or C == D):`, the `)` is immediately followed by `:` (the `if`-statement colon, not a closure colon), so the parser mis-identifies the expression as a closure and then fails with a confusing parse error. Workaround: extract the parenthesized subexpression to a local bool variable so `(...)` is never the last token before `:` in an `if` condition. Proper fix: make `looks_like_closure()` distinguish closure `:` from statement `:` by checking whether the `:` is at the same indentation level as the `if`. [added: 2026-03-02]
 
 - **Basic orphan rule**: equip block must be in the module that defines the trait or the type. Prevents incoherent trait implementations across modules. [added: 2026-02-10]
 

@@ -387,6 +387,16 @@ A fixed-size, heterogeneous sequence. Fields are accessed by index: `.0`, `.1`, 
 int x = pair.0
 ```
 
+**Bare tuple return types.** In function return position, parentheses are optional — the return type can be written as a comma-separated list of types directly before the function name:
+
+```gorget
+# Equivalent forms:
+(str, int, bool) parse(str line): ...
+str, int, bool parse(str line): ...    # bare form — preferred
+```
+
+The bare form is only valid in the return-type position of a function definition. In all other positions (variable types, function parameters, struct fields), parentheses are required.
+
 #### Arrays
 
 ```ebnf
@@ -555,7 +565,7 @@ function_def = { attribute } [ "public" ] [ qualifiers ]
                [ where_clause ] ( block | "=" expr NEWLINE | NEWLINE ) ;
 
 qualifiers    = { "async" | "const" | "static" | "unsafe" } ;
-return_type   = type | "void" ;
+return_type   = type { "," type } | "void" ;  (* bare tuple: str, int or (str, int) *)
 param_list    = param { "," param } ;
 param         = [ "live" [ "(" IDENTIFIER ")" ] ]
                 type [ "&" | "!" | "mutable" | "consuming" ] IDENTIFIER [ "=" expr ] ;
@@ -958,6 +968,14 @@ const auto pi = 3.14
 
 The pattern on the left side may be a simple binding or a destructuring pattern (see [Patterns](#8-patterns)).
 
+**Bare tuple destructuring with `auto`.** When the type is `auto`, a comma-separated list of bindings can appear directly after `auto` without parentheses:
+
+```gorget
+auto (x, y) = get_pair()   # parenthesized
+auto x, y = get_pair()     # bare — preferred
+auto a, _, c = triple()    # wildcards allowed
+```
+
 ### 6.2 Assignment
 
 ```ebnf
@@ -1010,10 +1028,20 @@ list.push(42)
 ### 6.5 Return
 
 ```ebnf
-return_stmt = "return" [ expr ] NEWLINE ;
+return_stmt = "return" [ expr { "," expr } ] NEWLINE ;
 ```
 
 Exits the enclosing function, optionally with a value. Must appear inside a function.
+
+**Bare tuple return.** Returning multiple values can be written as a comma-separated list without parentheses:
+
+```gorget
+str, int parse(str line):
+    return "key", 42        # bare — preferred
+    # return ("key", 42)    # parenthesized — also valid
+```
+
+The list is desugared into a `TupleLiteral` and the return type must be a matching tuple type.
 
 ### 6.6 Throw
 
@@ -1104,7 +1132,7 @@ match value:
 ### 6.11 For Loop
 
 ```ebnf
-for_stmt = "for" pattern "in" [ "&" | "!" | "mutable" | "consuming" ] expr ":" block
+for_stmt = "for" pattern { "," pattern } "in" [ "&" | "!" | "mutable" | "consuming" ] expr ":" block
            [ "else" ":" block ] ;
 ```
 
@@ -1124,6 +1152,15 @@ for item in collection:
         break
 else:
     print("no match found")
+```
+
+**Bare tuple pattern.** When iterating over a collection of tuples, the loop variable can be a comma-separated list of bindings without parentheses:
+
+```gorget
+Vector[(int, str)] pairs = ...
+for i, s in pairs:          # bare — preferred
+    print("{i}: {s}")
+# for (i, s) in pairs:      # parenthesized — also valid
 ```
 
 ### 6.12 While Loop
@@ -1745,14 +1782,21 @@ match point:
 ### 8.5 Tuple Patterns
 
 ```ebnf
-tuple_pattern = "(" pattern "," pattern { "," pattern } ")" ;
+tuple_pattern = "(" pattern "," pattern { "," pattern } ")"
+              | pattern "," pattern { "," pattern } ;   (* bare form: auto / for only *)
 ```
 
-Destructures a tuple:
+Destructures a tuple. In `auto` declarations and `for` loop headers, parentheses are optional:
 
 ```gorget
-auto (x, y) = get_coordinates()
+auto (x, y) = get_coordinates()    # parenthesized
+auto x, y = get_coordinates()      # bare — preferred
+
+for (a, b) in pairs:               # parenthesized
+for a, b in pairs:                 # bare — preferred
 ```
+
+In `match` arms, parentheses are required: `case (a, b):`
 
 ### 8.6 Or Patterns
 
@@ -3416,7 +3460,7 @@ function_def = { attribute } [ "public" ] { qualifier }
                "(" [ param_list ] ")" [ throws_clause ]
                [ where_clause ] ( block | "=" expr NEWLINE | NEWLINE ) ;
 qualifier     = "async" | "const" | "static" | "unsafe" ;
-return_type   = type | "void" ;
+return_type   = type { "," type } | "void" ;  (* bare tuple: str, int or (str, int) *)
 param_list    = param { "," param } ;
 param         = [ "live" [ "(" IDENTIFIER ")" ] ]
                 type [ "&" | "!" | "mutable" | "consuming" ] IDENTIFIER [ "=" expr ] ;
@@ -3504,13 +3548,13 @@ expr_stmt           = expr NEWLINE ;
 assign_stmt         = expr "=" expr NEWLINE ;
 compound_assign_stmt = expr ( "+=" | "-=" | "*=" | "/=" | "%="
                             | "&=" | "|=" | "^=" | "<<=" | ">>=" ) expr NEWLINE ;
-return_stmt         = "return" [ expr ] NEWLINE ;
+return_stmt         = "return" [ expr { "," expr } ] NEWLINE ;  (* bare tuple: return a, b *)
 throw_stmt          = "throw" expr NEWLINE ;
 break_stmt          = "break" [ expr ] NEWLINE ;
 continue_stmt       = "continue" NEWLINE ;
 pass_stmt           = "pass" NEWLINE ;
 
-for_stmt   = "for" pattern "in" [ "&" | "!" | "mutable" | "consuming" ] expr ":" block [ "else" ":" block ] ;
+for_stmt   = "for" pattern { "," pattern } "in" [ "&" | "!" | "mutable" | "consuming" ] expr ":" block [ "else" ":" block ] ;  (* bare tuple: for x, y in ... *)
 while_stmt = "while" expr ":" block [ "else" ":" block ] ;
 loop_stmt  = "loop" ":" block ;
 if_stmt    = "if" expr ":" block { "elif" expr ":" block } [ "else" ":" block ] ;

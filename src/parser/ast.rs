@@ -321,11 +321,6 @@ pub struct WhereClause {
 
 #[derive(Debug, Clone)]
 pub enum WhereBound {
-    /// `where T is Trait` — trait bound on a type parameter.
-    Trait {
-        type_name: Spanned<String>,
-        bounds: Vec<Spanned<TraitBound>>,
-    },
     /// `where a outlives b` — borrow group ordering constraint.
     Outlives {
         longer: Spanned<String>,
@@ -926,11 +921,29 @@ pub struct MetaConst {
     pub span: Span,
 }
 
+/// The right-hand side of a `meta type` declaration.
+#[derive(Debug, Clone)]
+pub enum MetaTypeRhs {
+    /// `meta type Num = int`
+    Plain(Spanned<Type>),
+    /// `meta type Map = Dict if feature("ordered") else HashMap`
+    Conditional {
+        then_type: Spanned<Type>,
+        condition: Spanned<Expr>,
+        else_type: Spanned<Type>,
+    },
+    /// `meta type Word = sized_int(arch_word_bits())`
+    Call {
+        callee: Spanned<String>,
+        args: Vec<Spanned<Expr>>,
+    },
+}
+
 /// `meta type Vec = Vector[int]` — compile-time type alias.
 #[derive(Debug, Clone)]
 pub struct MetaType {
     pub name: Spanned<String>,
-    pub type_: Spanned<Type>,
+    pub rhs: MetaTypeRhs,
     pub span: Span,
 }
 
