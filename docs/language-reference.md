@@ -1195,6 +1195,8 @@ with File.open(path) as file:
 # file is closed here
 ```
 
+For allocator-specific `with` binding semantics (scoped allocation, escape analysis), see `std.alloc` in §15.3.
+
 ### 6.15 Unsafe Block
 
 ```ebnf
@@ -3172,6 +3174,156 @@ The SSH module implements the SSH-2 protocol including key exchange, encryption,
 | `group_count` | `int(self)` | Number of capture groups |
 
 Flags for `regex_compile_with`: `i` (case-insensitive), `m` (multiline), `s` (dotall), `x` (extended), `u` (Unicode), `U` (ungreedy). Requires PCRE2 (`libpcre2-8`).
+
+**`std.alloc`** — Memory Allocators
+
+Four allocators provide explicit control over memory allocation strategy. All share a common vtable interface and can be composed with collections via scoped binding (`with`) or per-object direction (`alloc=`). The compiler's escape analysis prevents dangling references to allocator-scoped memory at compile time.
+
+```gorget
+from std.alloc import Arena, PoolAllocator, TlsfAllocator, TrackingAllocator
+```
+
+**Arena** — Bump allocator. Fast sequential allocation; all memory freed at once on destroy or reset.
+
+| Name | Signature | Description |
+|---|---|---|
+| *constructor* | `Arena(int capacity)` | Create arena with given byte capacity |
+| `bytes_used` | `int(self)` | Total bytes currently allocated |
+| `reset` | `void(self)` | Free all allocations (reuse arena memory) |
+| `destroy` | `void(self)` | Release the arena and all its memory |
+
+**PoolAllocator** — Fixed-size block pool. Pre-allocated blocks with O(1) alloc/free from a free list.
+
+| Name | Signature | Description |
+|---|---|---|
+| *constructor* | `PoolAllocator(int block_size, int initial_count)` | Create pool with given block size (bytes) and initial block count |
+| `used_blocks` | `int(self)` | Number of currently allocated blocks |
+| `free_blocks` | `int(self)` | Number of available blocks |
+| `total_blocks` | `int(self)` | Total blocks (used + free) |
+| `block_size` | `int(self)` | Size of each block in bytes |
+| `reset` | `void(self)` | Return all blocks to the free list |
+| `destroy` | `void(self)` | Release the pool and all its memory |
+
+**TlsfAllocator** — Two-Level Segregated Fit allocator. Variable-size allocation with O(1) worst-case and automatic coalescing of freed blocks.
+
+| Name | Signature | Description |
+|---|---|---|
+| *constructor* | `TlsfAllocator(int pool_size)` | Create allocator with given pool size in bytes (default 65536) |
+| `bytes_used` | `int(self)` | Total bytes currently allocated |
+| `peak_bytes` | `int(self)` | High-water mark of bytes allocated |
+| `pool_size` | `int(self)` | Total pool capacity in bytes |
+| `reset` | `void(self)` | Free all allocations and reset the pool |
+| `destroy` | `void(self)` | Release the allocator and all its memory |
+
+**TrackingAllocator** — Instrumentation wrapper. Wraps the current active allocator to record allocation statistics.
+
+| Name | Signature | Description |
+|---|---|---|
+| *constructor* | `TrackingAllocator()` | Create tracker wrapping the current active allocator |
+| `bytes_allocated` | `int(self)` | Cumulative bytes allocated |
+| `bytes_freed` | `int(self)` | Cumulative bytes freed |
+| `current_bytes` | `int(self)` | Bytes currently in use (`allocated - freed`) |
+| `peak_bytes` | `int(self)` | High-water mark of concurrent bytes |
+| `alloc_count` | `int(self)` | Total number of allocations |
+| `free_count` | `int(self)` | Total number of frees |
+| `realloc_count` | `int(self)` | Total number of reallocations |
+| `report` | `void(self)` | Print allocation statistics to stderr |
+| `reset` | `void(self)` | Reset all counters to zero |
+| `destroy` | `void(self)` | Release the tracker |
+
+**Scoped binding (`with`)**
+
+The `with` statement binds an allocator to a block scope. All allocations inside the block — including those from collections like `Vector`, `List`, and `Dict` — automatically use the bound allocator. On block exit, the allocator is destroyed and all its memory is freed.
+
+```gorget
+from std.alloc import Arena
+from std.collections import Vector
+
+void main():
+    with Arena(4096) as a:
+        Vector[int] v = Vector[int]()
+        v.push(1)
+        v.push(2)
+        print("bytes: {a.bytes_used()}")
+    # arena destroyed here; all memory freed
+```
+
+**Composable allocation (`alloc=`)**
+
+Collections accept a named `alloc` parameter to direct their allocations to a specific allocator without scoped binding. This is useful when the allocator's lifetime extends beyond a single block.
+
+```gorget
+from std.alloc import PoolAllocator
+from std.collections import Vector
+
+void main():
+    PoolAllocator pool = PoolAllocator(128, 32)
+    Vector[int] v = Vector[int](alloc=pool)
+    v.push(10)
+    v.push(20)
+    print("used: {pool.used_blocks()}")
+```
+
+The `alloc=` parameter is accepted by `Vector`, `List`, `Array`, `Dict`, `HashMap`, `Set`, `HashSet`, `Channel`, and `String` constructors.
+
+**Escape analysis**
+
+The compiler rejects programs where allocator-scoped data escapes the allocator's lifetime. This prevents use-after-free at compile time.
+
+```gorget
+# COMPILE ERROR: cannot assign arena-scoped value to outer variable
+from std.alloc import Arena
+from std.collections import Vector
+
+void main():
+    Vector[int] outer = Vector[int]()
+    with Arena(4096) as a:
+        outer = !Vector[int]()  # error: cannot assign arena-scoped value
+```
+
+Returning an allocator-scoped value from a function is also rejected:
+
+```gorget
+# COMPILE ERROR: cannot return arena-scoped value
+from std.alloc import Arena
+from std.collections import Vector
+
+Vector[int] make_in_arena():
+    with Arena(4096) as a:
+        Vector[int] v = Vector[int]()
+        v.push(1)
+        return v  # error: cannot return arena-scoped value
+```
+
+Escape analysis applies to all allocator types, not just `Arena`.
+
+**Nesting**
+
+Allocator scopes nest naturally. An allocator created inside a `with` block uses the outer allocator for its own internal metadata; each scope's allocations are independent.
+
+```gorget
+from std.alloc import Arena
+from std.collections import Vector
+
+void main():
+    with Arena(4096) as outer:
+        Vector[int] v1 = Vector[int]()
+        v1.push(10)
+        with Arena(1024) as inner:
+            Vector[int] v2 = Vector[int]()
+            v2.push(20)
+            print("inner: {v2.get(0).unwrap()}")
+        print("outer: {v1.get(0).unwrap()}")
+```
+
+**When to use which allocator:**
+
+| Allocator | Category | Best for |
+|---|---|---|
+| `Arena` | Bump (no individual free) | Temporary work buffers, request-scoped data, parsing |
+| `PoolAllocator` | Fixed-size free-list | Object pools, ECS components, list nodes |
+| `TlsfAllocator` | General-purpose O(1) | Real-time systems, embedded, latency-sensitive code |
+| `TrackingAllocator` | Instrumentation wrapper | Profiling, leak detection, allocation auditing |
 
 ---
 
