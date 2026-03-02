@@ -6405,6 +6405,11 @@ fn async_channel_waker() {
 }
 
 #[test]
+fn async_channel_unbuffered() {
+    run_gg("async_channel_unbuffered.gg", "10\n20\n30");
+}
+
+#[test]
 fn async_select() {
     run_gg("async_select.gg", "36");
 }
