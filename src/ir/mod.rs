@@ -7,6 +7,7 @@ pub mod validate;
 
 use instructions::{Instruction, Terminator};
 use types::{TypeId, TypeRegistry};
+use crate::span::Span;
 
 /// A single `with X as y` binding in a test, for the C backend to generate setup code.
 #[derive(Debug, Clone)]
@@ -42,6 +43,10 @@ pub struct Module {
     pub functions: Vec<Function>,
     pub globals: Vec<Global>,
     pub externs: Vec<ExternDecl>,
+    /// Original .gg filename (for backtrace display).
+    pub source_filename: Option<String>,
+    /// Concatenated source text (for source-line display in errors).
+    pub source_code: Option<String>,
     /// Test functions registered for the test runner.
     pub test_fns: Vec<TestFnInfo>,
     /// When true, arithmetic wraps on overflow instead of aborting.
@@ -96,6 +101,8 @@ impl Module {
             functions: Vec::new(),
             globals: Vec::new(),
             externs: Vec::new(),
+            source_filename: None,
+            source_code: None,
             test_fns: Vec::new(),
             overflow_wrap: false,
             global_inline_c: Vec::new(),
@@ -149,6 +156,8 @@ pub struct Function {
     /// Human-readable Gorget function name for trace output (e.g. "add", "Point.distance").
     /// None for compiler-generated functions (closures, vtable methods, etc.).
     pub display_name: Option<String>,
+    /// Byte-span of the function definition in source (for backtrace display).
+    pub def_span: Option<Span>,
 }
 
 /// A local variable slot.
@@ -163,6 +172,10 @@ pub struct Local {
 pub struct BasicBlock {
     pub instructions: Vec<Instruction>,
     pub terminator: Option<Terminator>,
+    /// Parallel source span for each instruction (None for compiler-generated instructions).
+    pub span_map: Vec<Option<Span>>,
+    /// Source span of the terminator instruction.
+    pub terminator_span: Option<Span>,
 }
 
 impl BasicBlock {
@@ -170,6 +183,8 @@ impl BasicBlock {
         Self {
             instructions: Vec::new(),
             terminator: None,
+            span_map: Vec::new(),
+            terminator_span: None,
         }
     }
 }
@@ -230,6 +245,7 @@ mod tests {
             blocks: vec![BasicBlock::new()],
             is_test_fn: false,
             display_name: None,
+            def_span: None,
         });
         assert_eq!(module.functions.len(), 1);
         let f = module.find_function("main").unwrap();

@@ -24,6 +24,7 @@ fn lower_expr_inner(
     expr: &Spanned<Expr>,
     _registry: Option<&mut TypeRegistry>,
 ) -> Operand {
+    builder.set_span(expr.span);
     match &expr.node {
         Expr::IntLiteral(n) => Operand::Constant(Constant::I64(*n)),
 

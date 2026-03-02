@@ -1534,7 +1534,9 @@ fn main() {
                 sim_config.ub_checks = true;
             }
 
-            let gir_module = gorget::ir::lowering::lower_module(&module, &result, &lowering_opts);
+            let mut gir_module = gorget::ir::lowering::lower_module(&module, &result, &lowering_opts);
+            gir_module.source_filename = Some(filename.to_string());
+            gir_module.source_code = Some(concat_source.clone());
             let exit_code = gorget::sim::interpret(&gir_module, filename, &sim_config);
             process::exit(exit_code);
         }

@@ -1,6 +1,7 @@
 use super::instructions::*;
 use super::types::*;
 use super::{BasicBlock, Function, Local};
+use crate::span::Span;
 
 /// Ergonomic builder for constructing GIR functions.
 pub struct FunctionBuilder {
@@ -10,6 +11,8 @@ pub struct FunctionBuilder {
     pub locals: Vec<Local>,
     pub blocks: Vec<BasicBlock>,
     pub current_block: BlockId,
+    /// Current source span — attached to every emitted instruction until changed.
+    pub current_span: Option<Span>,
 }
 
 impl FunctionBuilder {
@@ -49,6 +52,7 @@ impl FunctionBuilder {
             locals,
             blocks,
             current_block: BlockId(0),
+            current_span: None,
         }
     }
 
@@ -88,7 +92,13 @@ impl FunctionBuilder {
             blocks: self.blocks,
             is_test_fn: false,
             display_name: None,
+            def_span: None,
         }
+    }
+
+    /// Set the source span for all subsequent emitted instructions.
+    pub fn set_span(&mut self, span: Span) {
+        self.current_span = Some(span);
     }
 
     // ---- Helpers ----
@@ -96,11 +106,13 @@ impl FunctionBuilder {
     fn emit(&mut self, inst: Instruction) {
         let block = &mut self.blocks[self.current_block.0 as usize];
         block.instructions.push(inst);
+        block.span_map.push(self.current_span);
     }
 
     fn set_terminator(&mut self, term: Terminator) {
         let block = &mut self.blocks[self.current_block.0 as usize];
         block.terminator = Some(term);
+        block.terminator_span = self.current_span;
     }
 
     /// Returns true if the current block already has a terminator set.

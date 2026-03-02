@@ -13,6 +13,7 @@ mod crypto;
 mod dispatch;
 mod error;
 mod runtime;
+mod source_loc;
 mod value;
 
 use std::io::Write;
@@ -151,6 +152,11 @@ fn run_test_suite(interp: &mut Interpreter) -> i32 {
     }
 
     for info in &test_fns {
+        // Reset error context between tests so a prior failure doesn't pollute the next.
+        interp.call_stack.clear();
+        interp.last_error_backtrace = None;
+        interp.last_error_span = None;
+
         let label = format!("  test: {} ... ", info.display_name);
         interp.stdout.extend_from_slice(label.as_bytes());
 
@@ -277,41 +283,55 @@ fn run_test_suite(interp: &mut Interpreter) -> i32 {
 
 /// Run a regular (non-test) program's main() and return exit code.
 fn run_main(interp: &mut Interpreter) -> i32 {
-    let exit_code = match interp.call_function("main", vec![], 0) {
-        Ok(_) => 0,
-        Err(SimError::Exit(code)) => code,
-        Err(SimError::Panic(msg)) => {
-            // Print captured stdout before the panic message
+    let result = interp.call_function("main", vec![], 0);
+
+    match result {
+        Ok(_) => {
             flush_output(&interp.stdout, &interp.stderr);
-            eprintln!("gorget: panic: {msg}");
-            std::process::exit(1);
+            0
         }
-        Err(SimError::Overflow) => {
+        Err(SimError::Exit(code)) => {
             flush_output(&interp.stdout, &interp.stderr);
-            eprintln!("gorget: integer overflow");
-            std::process::exit(1);
-        }
-        Err(SimError::DivisionByZero) => {
-            flush_output(&interp.stdout, &interp.stderr);
-            eprintln!("gorget: division by zero");
-            std::process::exit(1);
+            code
         }
         Err(SimError::Unimplemented(name)) => {
             flush_output(&interp.stdout, &interp.stderr);
             eprintln!("gg sim: unimplemented runtime function: {name}");
             eprintln!("  hint: use `gg run` to compile and execute natively");
-            return 1;
+            1
         }
         Err(e) => {
             flush_output(&interp.stdout, &interp.stderr);
-            eprintln!("gg sim: runtime error: {e}");
-            return 1;
-        }
-    };
 
-    // Flush captured output
-    flush_output(&interp.stdout, &interp.stderr);
-    exit_code
+            // Build a rich error message with source location and backtrace.
+            let bt = interp.last_error_backtrace.take();
+            let err_span = interp.last_error_span.take();
+            let fname = interp.module.source_filename.as_deref().unwrap_or("<unknown>");
+            let li = interp.module.source_code.as_ref()
+                .map(|s| source_loc::LineIndex::new(s));
+            let level = interp.backtrace_level.clone();
+
+            // SimError::Display already includes the correct gorget:/gg sim: prefix.
+            let msg = e.to_string();
+
+            source_loc::format_sim_error(
+                &msg,
+                err_span,
+                bt.as_deref(),
+                fname,
+                interp.module.source_code.as_deref(),
+                li.as_ref(),
+                &level,
+            );
+
+            match e {
+                SimError::Panic(_) | SimError::Overflow | SimError::DivisionByZero => {
+                    std::process::exit(1);
+                }
+                _ => 1,
+            }
+        }
+    }
 }
 
 /// Run a hot-reload program: call init(), then loop calling tick(&state) until false.

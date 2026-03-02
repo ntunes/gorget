@@ -10,7 +10,8 @@ use crate::ir::types::{
     U8_TYPE, U16_TYPE, U32_TYPE, U64_TYPE, F32_TYPE, F64_TYPE, UNIT_TYPE, CHAR_TYPE,
 };
 use crate::ir::Module;
-use super::config::SimConfig;
+use crate::span::Span;
+use super::config::{BacktraceLevel, SimConfig};
 use super::error::{SimError, SimResult};
 use super::value::{SimStr, SimString, SimArray, SimDict, Value};
 use super::runtime;
@@ -25,6 +26,19 @@ pub struct HeapMeta {
     pub alloc_fn: String,
     /// TrackingAllocator ID if inside a `with allocator:` scope at allocation time.
     pub allocator_id: Option<usize>,
+}
+
+/// A single frame on the interpreter's call stack (for backtraces).
+#[derive(Debug, Clone)]
+pub struct StackFrame {
+    pub fn_name: String,
+    pub display_name: Option<String>,
+    /// Span of the Call instruction that entered this frame (where the call happened).
+    pub call_span: Option<Span>,
+    /// Span of the function definition.
+    pub def_span: Option<Span>,
+    /// Span of the most recently executed instruction in this frame.
+    pub current_span: Option<Span>,
 }
 
 /// Maximum call depth to prevent stack overflow.
@@ -198,6 +212,16 @@ pub struct Interpreter<'m> {
     ub_checks: bool,
     /// Name of the currently-executing function (for error context).
     pub current_fn_name: String,
+    /// Call stack for backtrace support (P7c).
+    pub call_stack: Vec<StackFrame>,
+    /// Span of the instruction currently being executed.
+    pub current_instr_span: Option<Span>,
+    /// Backtrace captured at the first error (innermost frame first).
+    pub last_error_backtrace: Option<Vec<StackFrame>>,
+    /// Span where the first error occurred.
+    pub last_error_span: Option<Span>,
+    /// Backtrace verbosity level (from --backtrace flag).
+    pub backtrace_level: BacktraceLevel,
     /// Simulated allocator states keyed by allocator ID (TrackingAllocator / Arena / PoolAllocator).
     tracking_allocs: HashMap<usize, SimAllocState>,
     /// Stack of active allocator IDs (from `with X as y:` or `alloc=` syntax).
@@ -241,6 +265,11 @@ impl<'m> Interpreter<'m> {
             overflow_wrap: module.overflow_wrap,
             ub_checks: config.ub_checks,
             current_fn_name: String::new(),
+            call_stack: Vec::new(),
+            current_instr_span: None,
+            last_error_backtrace: None,
+            last_error_span: None,
+            backtrace_level: config.backtrace.clone(),
             tracking_allocs: HashMap::new(),
             active_tracking: Vec::new(),
             tracking_next_id: 1,
@@ -282,6 +311,11 @@ impl<'m> Interpreter<'m> {
                 state.record_free(bytes);
             }
         }
+    }
+
+    /// Capture the current call stack as a backtrace (innermost frame first).
+    pub fn capture_backtrace(&self) -> Vec<StackFrame> {
+        self.call_stack.iter().rev().cloned().collect()
     }
 
     /// Allocate a heap slot and store a value. Records metadata for P4 UB detection.
@@ -2005,7 +2039,17 @@ impl<'m> Interpreter<'m> {
             let func = func.clone(); // Clone to avoid borrow issues
             // Track current function name for error context (P4 heap allocation recording).
             // Restored after the function returns so callers record correct alloc_fn.
-            let prev_fn_name = std::mem::replace(&mut self.current_fn_name, name.to_string());
+            let mut prev_fn_name = std::mem::replace(&mut self.current_fn_name, name.to_string());
+
+            // P7c: push a stack frame; record depth so we can truncate on error.
+            let stack_depth_before = self.call_stack.len();
+            self.call_stack.push(StackFrame {
+                fn_name: name.to_string(),
+                display_name: func.display_name.clone(),
+                call_span: self.current_instr_span,
+                def_span: func.def_span,
+                current_span: None,
+            });
 
             // Initialize locals: _0 = return slot (Unit), _1..N = params
             let num_args = args.len();
@@ -2023,18 +2067,42 @@ impl<'m> Interpreter<'m> {
                 initialized.insert(i);
             }
 
+            // Helper: capture backtrace on the first error, then restore stack/name.
+            // Used at every error exit path inside this function.
+            // Uses std::mem::take to avoid a move-out-of-captured-variable issue.
+            macro_rules! sim_error_return {
+                ($self:expr, $e:expr, $stack_depth:expr, $prev_name:expr) => {{
+                    if $self.last_error_backtrace.is_none() {
+                        $self.last_error_span = $self.current_instr_span;
+                        // Capture backtrace with a shared borrow, then assign with &mut.
+                        let _bt = $self.capture_backtrace();
+                        $self.last_error_backtrace = Some(_bt);
+                    }
+                    $self.call_stack.truncate($stack_depth);
+                    $self.current_fn_name = std::mem::take(&mut $prev_name);
+                    return Err($e);
+                }};
+            }
+
             // Execute blocks
             let mut current_block = 0usize;
             loop {
                 if current_block >= func.blocks.len() {
-                    self.current_fn_name = prev_fn_name;
-                    return Err(SimError::MissingTerminator(current_block));
+                    sim_error_return!(self, SimError::MissingTerminator(current_block), stack_depth_before, prev_fn_name);
                 }
                 let block = &func.blocks[current_block];
                 let instructions = block.instructions.clone();
+                let span_map = block.span_map.clone();
                 let terminator = block.terminator.clone();
 
-                for inst in &instructions {
+                for (idx, inst) in instructions.iter().enumerate() {
+                    // P7c: update current span for error context.
+                    let instr_span = span_map.get(idx).copied().flatten();
+                    self.current_instr_span = instr_span;
+                    if let Some(frame) = self.call_stack.last_mut() {
+                        frame.current_span = instr_span;
+                    }
+
                     match self.execute_instruction(&mut locals, &mut initialized, inst, depth) {
                         Ok(()) => {
                             // Post-call zero: after consuming an element into a collection,
@@ -2062,27 +2130,35 @@ impl<'m> Interpreter<'m> {
                             // Run cleanup (like __gorget_cleanup_run) before propagating panic.
                             // This drops droppable locals registered via cleanup_push in C.
                             self.cleanup_locals_on_panic(&func, &locals, depth);
-                            self.current_fn_name = prev_fn_name;
-                            return Err(SimError::Panic(msg));
+                            sim_error_return!(self, SimError::Panic(msg), stack_depth_before, prev_fn_name);
                         }
                         Err(e) => {
-                            self.current_fn_name = prev_fn_name;
-                            return Err(e);
+                            sim_error_return!(self, e, stack_depth_before, prev_fn_name);
                         }
                     }
                 }
 
                 match terminator {
                     Some(Terminator::Return(op)) => {
-                        let ret = self.eval_operand(&locals, &op);
-                        self.current_fn_name = prev_fn_name;
-                        return ret;
+                        match self.eval_operand(&locals, &op) {
+                            Ok(ret) => {
+                                self.call_stack.truncate(stack_depth_before);
+                                self.current_fn_name = prev_fn_name;
+                                return Ok(ret);
+                            }
+                            Err(e) => {
+                                sim_error_return!(self, e, stack_depth_before, prev_fn_name);
+                            }
+                        }
                     }
                     Some(Terminator::Jump(bid)) => {
                         current_block = bid.0 as usize;
                     }
                     Some(Terminator::Branch { cond, then_block, else_block }) => {
-                        let cond_val = self.eval_operand(&locals, &cond)?;
+                        let cond_val = match self.eval_operand(&locals, &cond) {
+                            Ok(v) => v,
+                            Err(e) => sim_error_return!(self, e, stack_depth_before, prev_fn_name),
+                        };
                         current_block = if cond_val.as_bool() {
                             then_block.0 as usize
                         } else {
@@ -2090,7 +2166,10 @@ impl<'m> Interpreter<'m> {
                         };
                     }
                     Some(Terminator::Switch { value, cases, default }) => {
-                        let switch_val = self.eval_operand(&locals, &value)?.as_i64();
+                        let switch_val = match self.eval_operand(&locals, &value) {
+                            Ok(v) => v.as_i64(),
+                            Err(e) => sim_error_return!(self, e, stack_depth_before, prev_fn_name),
+                        };
                         current_block = cases.iter()
                             .find(|(k, _)| *k == switch_val)
                             .map(|(_, b)| b.0 as usize)
@@ -2102,8 +2181,14 @@ impl<'m> Interpreter<'m> {
                         let arg_vals: SimResult<Vec<Value>> = inv_args.iter()
                             .map(|op| self.eval_operand(&locals, op))
                             .collect();
-                        let arg_vals = arg_vals?;
-                        let result = self.call_function(&inv_func, arg_vals, depth + 1)?;
+                        let arg_vals = match arg_vals {
+                            Ok(v) => v,
+                            Err(e) => sim_error_return!(self, e, stack_depth_before, prev_fn_name),
+                        };
+                        let result = match self.call_function(&inv_func, arg_vals, depth + 1) {
+                            Ok(v) => v,
+                            Err(e) => sim_error_return!(self, e, stack_depth_before, prev_fn_name),
+                        };
                         if let Some(dst_id) = inv_dst {
                             let i = dst_id.0 as usize;
                             while locals.len() <= i { locals.push(Value::Unit); }
@@ -2112,12 +2197,10 @@ impl<'m> Interpreter<'m> {
                         current_block = normal.0 as usize;
                     }
                     Some(Terminator::Unreachable) => {
-                        self.current_fn_name = prev_fn_name;
-                        return Err(SimError::Unreachable);
+                        sim_error_return!(self, SimError::Unreachable, stack_depth_before, prev_fn_name);
                     }
                     None => {
-                        self.current_fn_name = prev_fn_name;
-                        return Err(SimError::MissingTerminator(current_block));
+                        sim_error_return!(self, SimError::MissingTerminator(current_block), stack_depth_before, prev_fn_name);
                     }
                 }
             }

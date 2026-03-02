@@ -25,6 +25,7 @@ pub fn lower_stmt(
     builder: &mut FunctionBuilder,
     stmt: &Spanned<Stmt>,
 ) {
+    builder.set_span(stmt.span);
     match &stmt.node {
         Stmt::VarDecl {
             type_,

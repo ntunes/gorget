@@ -16,6 +16,7 @@ pub fn lower_function(
     module: &mut crate::ir::Module,
     func: &FunctionDef,
 ) {
+    let func_span = func.span;
     let name = &func.name.node;
     let is_main = name == "main";
 
@@ -125,6 +126,7 @@ pub fn lower_function(
 
     let mut func = builder.build();
     func.display_name = Some(name.clone());
+    func.def_span = Some(func_span);
     module.functions.push(func);
 }
 
