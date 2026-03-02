@@ -1,12 +1,27 @@
-from std.conv import parse_float, int_to_str, float_to_str, bool_to_str, char_to_str
+from std.conv import parse_int, parse_float, int_to_str, float_to_str, bool_to_str, char_to_str
 
 void main():
-    # parse_float
-    float pi = parse_float("3.14")
-    print("{pi}")
+    # parse_int — Result[int, str]
+    Result[int, str] pi_res = parse_int("42")
+    if pi_res is Ok(pi_val):
+        print("{pi_val}")
 
-    float neg = parse_float("-0.5")
-    print("{neg}")
+    Result[int, str] pi_bad = parse_int("hello")
+    if pi_bad is Error(pi_err):
+        print("int_err")
+
+    # parse_float — Result[float, str]
+    Result[float, str] pf_res = parse_float("3.14")
+    if pf_res is Ok(pi):
+        print("{pi}")
+
+    Result[float, str] neg_res = parse_float("-0.5")
+    if neg_res is Ok(neg):
+        print("{neg}")
+
+    Result[float, str] pf_bad = parse_float("xyz")
+    if pf_bad is Error(pf_err):
+        print("float_err")
 
     # int_to_str
     str s1 = int_to_str(42)

@@ -3056,8 +3056,11 @@ name? hello Alice");
 #[test]
 fn conv_stdlib() {
     run_gg("conv_stdlib.gg", "\
+42
+int_err
 3.140000
 -0.500000
+float_err
 42
 -100
 2.5
@@ -5095,6 +5098,11 @@ fn datetime_basic() {
 86400
 61
 60
+2000-01-02T00:00:00Z
+2000-01-02T01:00:00Z
+2000-01-01T00:01:30Z
+1999-12-31T00:00:00Z
+2000-01-01T01:30:00Z
 done",
     );
 }

@@ -3696,24 +3696,38 @@ static inline GorgetArray gorget_args(void) {
     return arr;
 }
 
-// ── parse_int ────────────────────────────────────────────────
+// ── parse_int / parse_float — Result-returning (thread-local error) ──────────
+static __thread const char* __gorget_parse_last_error = NULL;
+static const char* gorget_parse_last_error(void) {
+    const char* e = __gorget_parse_last_error;
+    __gorget_parse_last_error = NULL;
+    return e;
+}
+
 static inline int64_t gorget_parse_int(const char* s) {
     char* endptr;
+    errno = 0;
     long long result = strtoll(s, &endptr, 10);
-    if (*endptr != '\0' && !isspace((unsigned char)*endptr)) {
-        fprintf(stderr, "panic: parse_int: invalid integer '%s'\n", s);
-        exit(1);
+    if (endptr == s || (*endptr != '\0' && !isspace((unsigned char)*endptr)) || errno == ERANGE) {
+        size_t n = strlen(s) + 40;
+        char* msg = (char*)GORGET_ALLOC(n);
+        snprintf(msg, n, "invalid integer: '%s'", s);
+        __gorget_parse_last_error = msg;
+        return 0;
     }
     return (int64_t)result;
 }
 
-// ── parse_float ──────────────────────────────────────────────
 static inline double gorget_parse_float(const char* s) {
     char* endptr;
+    errno = 0;
     double result = strtod(s, &endptr);
-    if (*endptr != '\0' && !isspace((unsigned char)*endptr)) {
-        fprintf(stderr, "panic: parse_float: invalid float '%s'\n", s);
-        exit(1);
+    if (endptr == s || (*endptr != '\0' && !isspace((unsigned char)*endptr)) || errno == ERANGE) {
+        size_t n = strlen(s) + 40;
+        char* msg = (char*)GORGET_ALLOC(n);
+        snprintf(msg, n, "invalid float: '%s'", s);
+        __gorget_parse_last_error = msg;
+        return 0.0;
     }
     return result;
 }

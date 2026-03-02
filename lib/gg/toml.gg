@@ -437,9 +437,9 @@ equip TomlParser:
             return DateTime(num_text)
         str cleaned = toml_strip_underscores(num_text)
         if has_dot or has_exp:
-            float fv = parse_float(cleaned)
+            float fv = parse_float(cleaned).unwrap_or(0.0)
             return Float(fv)
-        int iv = parse_int(cleaned)
+        int iv = parse_int(cleaned).unwrap_or(0)
         return Int(iv)
 
     TomlValue parse_prefixed_int(&self, int start, bool is_negative, char num_prefix):

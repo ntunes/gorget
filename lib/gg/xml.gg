@@ -85,7 +85,7 @@ str xml_decode_entities(str raw):
                                         all_digits = false
                                     di = di + 1
                                 if all_digits:
-                                    nc_code = parse_int(ref_body)
+                                    nc_code = parse_int(ref_body).unwrap_or(0)
                     if nc_code > 0:
                         decoded = decoded + char_to_str(chr(nc_code))
                         ei = semi_pos + 1

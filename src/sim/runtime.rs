@@ -1143,24 +1143,44 @@ pub fn call_extern(
             Ok(Value::String(SimString::from_string(s)))
         }
 
-        // gorget_parse_int / parse_int: mirror gorget_parse_int(const char*) → int64_t
-        // (panics on error, like the C version). The Result-returning version is
-        // gorget_try_parse_int (generated inline by the C backend for `?` expressions).
+        // gorget_parse_int / parse_int → Result[int, str]
         "gorget_parse_int" | "parse_int" => {
             let s = args.first().map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
-            let n = s.as_str().trim().parse::<i64>().unwrap_or_else(|_| {
-                panic!("parse_int: invalid integer: '{}'", s.as_str())
-            });
-            Ok(Value::I64(n))
+            let trimmed = s.as_str().trim();
+            match trimmed.parse::<i64>() {
+                Ok(n) => Ok(Value::Enum {
+                    type_name: "Result__int64_t__Str".to_string(),
+                    tag: 0,
+                    variant: "Ok".to_string(),
+                    fields: vec![Value::I64(n)],
+                }),
+                Err(_) => Ok(Value::Enum {
+                    type_name: "Result__int64_t__Str".to_string(),
+                    tag: 1,
+                    variant: "Error".to_string(),
+                    fields: vec![Value::Str(SimStr::from_string(format!("invalid integer: '{}'", trimmed)))],
+                }),
+            }
         }
 
-        // gorget_parse_float / parse_float: mirror gorget_parse_float(const char*) → double
+        // gorget_parse_float / parse_float → Result[float, str]
         "gorget_parse_float" | "parse_float" => {
             let s = args.first().map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
-            let f = s.as_str().trim().parse::<f64>().unwrap_or_else(|_| {
-                panic!("parse_float: invalid float: '{}'", s.as_str())
-            });
-            Ok(Value::F64(f))
+            let trimmed = s.as_str().trim();
+            match trimmed.parse::<f64>() {
+                Ok(f) => Ok(Value::Enum {
+                    type_name: "Result__double__Str".to_string(),
+                    tag: 0,
+                    variant: "Ok".to_string(),
+                    fields: vec![Value::F64(f)],
+                }),
+                Err(_) => Ok(Value::Enum {
+                    type_name: "Result__double__Str".to_string(),
+                    tag: 1,
+                    variant: "Error".to_string(),
+                    fields: vec![Value::Str(SimStr::from_string(format!("invalid float: '{}'", trimmed)))],
+                }),
+            }
         }
 
         "gorget_str_to_int" => {

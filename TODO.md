@@ -4,6 +4,10 @@
 
 ## Medium
 
+- **`path_normalize(str)` and `path_absolute(str)` stdlib functions**: Missing from `std.fs`. `path_normalize` should resolve `.`/`..` components without touching the filesystem; `path_absolute` should canonicalize relative to `getcwd()`. Both return `str`. [added: 2026-03-02]
+
+- **`gorget_crypto_hmac_sha256` phantom entry in `is_cstr_param_fn`**: The function `gorget_crypto_hmac_sha256` appears in `is_cstr_param_fn` but the actual HMAC implementation takes `Vector[uint8]` args, not `const char*`. The phantom entry causes the first byte-vector argument to be passed as `.data` (losing the length), corrupting the HMAC. Remove `gorget_crypto_hmac_sha256` from `is_cstr_param_fn` and verify the call is handled via `takes_array_ptr_args`. (`src/backend/c/mod.rs:362`) [added: 2026-03-02]
+
 - **Inline bounds follow-up — find new syntax for `outlives` to fully remove `where`**: The `where` keyword is now only used for `where a outlives b`. Options: (1) inline on the lifetime param `live(a outlives b)`, (2) a dedicated `outlives` section, (3) lifetime annotations on the param itself. Survey and decide before removing `where` entirely. [added: 2026-03-02]
 
 - **Async/await — architectural roadmap**: **Settled design decisions**: (a) Colored async: `async fn` returns `Future[T]`, caller must `await`. Matches Gorget's explicit type philosophy. (b) Ban borrows across await for V1: no `&T` or `&mut T` live across await points. Owned + Copy types only. Eliminates self-referential state structs. Revisit later. (c) ~~Thread-pool executor~~ DONE. (d) ~~Channels for inter-task communication~~ DONE. (e) Deferred: work-stealing. **Prerequisites**: ~~(1) fix closure body scope leakage~~ DONE, ~~(2) extract ExprVisitor trait~~ DONE. ~~**Phase 1 — Type system**~~ DONE. ~~**Phase 2 — Borrow checker suspension-point tracking**~~ DONE. ~~**Phase 3 — Codegen: state machine transformation**~~ DONE. ~~**Phase 4 — Runtime: thread-pool executor**~~ DONE. ~~**Phase 5 — Thread-local error handling + std.channel**~~ DONE. ~~**Phase 6 — Await inside control flow (while/loop/if/elif/else)**~~ DONE. ~~**Phase 7 — RAII for async state structs**~~ DONE. ~~**Phase 8 — Await inside for-loops (range)**~~ DONE. ~~**Phase 9 — Await inside match statements**~~ DONE. ~~**Phase 10 — Await inside non-range for-loops**~~ DONE. ~~**Phase 11 — Expression-position await**~~ DONE. ~~**Phase 12 — Postfix `.await()` syntax**~~ DONE. ~~**Phase 13 — Waker protocol + event-driven executor + non-blocking task-await**~~ DONE. **Remaining items**: ~~expression-position task-await~~ DONE, ~~async channels (waker-driven send/recv instead of condvar blocking)~~ DONE, ~~timer/sleep primitive (first I/O-like waker consumer)~~ DONE (`std.async.async_sleep`), ~~I/O reactor (epoll/kqueue integration)~~ DONE (`REACTOR_RUNTIME`, timerfd+epoll on Linux, kqueue on macOS), ~~worker thread wakers~~ DONE, await inside Iterable/Iterator-based for-loops (busy-poll fallback), async closures, sub-future state cleanup, ~~ConsumeCallable single-call enforcement~~ DONE, ~~`select` for multiplexing multiple channels~~ DONE, ~~unbuffered channels (`Channel[T](0)`)~~ DONE, ~~for/else with break-flag in async for-loops~~ DONE, ~~await in `if`/`while` conditions~~ DONE, ~~await in for-loop iterable/range bounds~~ DONE. **V1 limitations**: thread-pool deadlock if all workers block on `await Task`; spawned-but-never-awaited tasks leak memory; `await Task` only in async functions; no `Channel.free()` called automatically (manual close only). **I/O reactor Phase 2**: socket/file readability events (epoll EPOLLIN on socket fd), completing the async I/O story. [added: 2026-02-21, updated: 2026-03-02]
@@ -79,6 +83,15 @@
 
 ## Low
 
+- **`uuid_parse(str) -> Result[UUID, str]`**: Parse UUID strings in the standard `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx` format. `UUID` would be a struct `{ uint64_t hi; uint64_t lo; }` with `to_string()` and `eq()` equip. C backend via sscanf or manual hex parsing. [added: 2026-03-02]
+
+- **`gg.log` level filtering (`Logger.set_level`)**: Currently `Logger` emits all messages regardless of level. Add `Logger.set_level(LogLevel)` to suppress messages below the configured threshold. The log level should be stored as a thread-local or global static in the C runtime. [added: 2026-03-02]
+
+- **`Heap[T]` max-heap variant**: Current `Heap[T]` is a min-heap. Add a max-heap variant (either a `MaxHeap[T]` type or a `Heap[T](reverse=true)` constructor parameter). [added: 2026-03-02]
+
+- **Simulator dispatch for basic File I/O**: `File__create`, `File__open`, `File__read_all`, `File__write_str` have no simulator dispatch — programs that use file I/O can't be run under `gg check`. Add in-memory file table to `src/sim/runtime.rs`. [added: 2026-03-02]
+
+- **`str.contains()` type dispatch audit**: After the GorgetString read-only method fix (Task A), audit all `contains/starts_with/ends_with` call sites in generated C to confirm GorgetString→Str coercion is applied in every code path (closures, match arms, nested expressions). Run the `http_get.gg` example as the primary smoke test. [added: 2026-03-02]
 
 - **Package management phase 2 (`gg update`, registry)**: Semver-aware resolution, central registry, `gg publish`, workspaces. [added: 2026-02-15]
 

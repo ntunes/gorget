@@ -369,9 +369,9 @@ equip JsonParser:
                 self.pos = self.pos + 1
         str num_str = self.input.byte_slice(start, self.pos)
         if is_float:
-            float f = parse_float(num_str)
+            float f = parse_float(num_str).unwrap_or(0.0)
             return Float(f)
-        int n = parse_int(num_str)
+        int n = parse_int(num_str).unwrap_or(0)
         return Int(n)
 
     Json parse_array(&self):

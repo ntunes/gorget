@@ -59,4 +59,29 @@ void main():
     int doy_mar1_2001 = dt_day_of_year_impl(2001, 3, 1)
     print("{doy_mar1_2001}")
 
+    # Arithmetic: add_days(1) on 2000-01-01 → 2000-01-02
+    DateTime dt_add1d = dt2000.add_days(1)
+    str s_add1d = dt_add1d.to_string()
+    print(s_add1d)
+
+    # Arithmetic: add_hours(25) → 2000-01-02T01:00:00Z
+    DateTime dt_add25h = dt2000.add_hours(25)
+    str s_add25h = dt_add25h.to_string()
+    print(s_add25h)
+
+    # Arithmetic: add_seconds(90) → 2000-01-01T00:01:30Z
+    DateTime dt_add90s = dt2000.add_seconds(90)
+    str s_add90s = dt_add90s.to_string()
+    print(s_add90s)
+
+    # Arithmetic: add_days(-1) → 1999-12-31T00:00:00Z
+    DateTime dt_sub1d = dt2000.add_days(-1)
+    str s_sub1d = dt_sub1d.to_string()
+    print(s_sub1d)
+
+    # Arithmetic: add_minutes(90) → 2000-01-01T01:30:00Z
+    DateTime dt_add90m = dt2000.add_minutes(90)
+    str s_add90m = dt_add90m.to_string()
+    print(s_add90m)
+
     print("done")

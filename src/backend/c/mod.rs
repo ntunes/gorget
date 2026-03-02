@@ -5003,8 +5003,8 @@ fn infer_runtime_return_type(name: &str) -> Option<&'static str> {
         | "asin" | "gorget_asin" | "acos" | "gorget_acos" | "atan" | "gorget_atan"
         | "atan2" | "gorget_atan2" => Some("double"),
         // Stdlib: conversion
-        "parse_int" | "gorget_parse_int" | "ord" | "gorget_char_ord" => Some("int64_t"),
-        "parse_float" | "gorget_parse_float" => Some("double"),
+        // parse_int/parse_float now return Result[T, str] — type comes from GIR, not here
+        "ord" | "gorget_char_ord" => Some("int64_t"),
         "int_to_str" | "gorget_int_to_str" | "float_to_str" | "gorget_float_to_str"
         | "char_to_str" | "gorget_char_to_str"
         | "bool_to_str" | "gorget_bool_to_str" => Some("Str"),
@@ -6125,6 +6125,16 @@ fn try_rewrite_collection_method(func_name: &str) -> Option<CollectionMethodCall
     // GorgetString (owned String) methods
     if func_name.starts_with("GorgetString__") {
         let method = &func_name[14..]; // Skip "GorgetString__"
+        let simple = |runtime_fn| Some(CollectionMethodCall {
+            runtime_fn, pass_by_ptr: false, has_return: true,
+            needs_deref_cast: false, field_access: None,
+            ..Default::default()
+        });
+        let void_fn = |runtime_fn| Some(CollectionMethodCall {
+            runtime_fn, pass_by_ptr: false, has_return: false,
+            needs_deref_cast: false, field_access: None,
+            ..Default::default()
+        });
         return match method {
             "len" => Some(CollectionMethodCall {
                 runtime_fn: "", pass_by_ptr: false,
@@ -6137,31 +6147,15 @@ fn try_rewrite_collection_method(func_name: &str) -> Option<CollectionMethodCall
                 has_return: true, needs_deref_cast: false, field_access: None,
                 ..Default::default()
             }),
-            "push" => Some(CollectionMethodCall {
-                runtime_fn: "gorget_string_append_str", pass_by_ptr: false,
-                has_return: false, needs_deref_cast: false, field_access: None,
-                ..Default::default()
-            }),
-            "push_char" => Some(CollectionMethodCall {
-                runtime_fn: "gorget_string_push_char", pass_by_ptr: false,
-                has_return: false, needs_deref_cast: false, field_access: None,
-                ..Default::default()
-            }),
+            "push" => void_fn("gorget_string_append_str"),
+            "push_char" => void_fn("gorget_string_push_char"),
             "clear" => Some(CollectionMethodCall {
                 runtime_fn: "__INLINE_STRING_CLEAR__", pass_by_ptr: false,
                 has_return: false, needs_deref_cast: false, field_access: None,
                 ..Default::default()
             }),
-            "push_line" => Some(CollectionMethodCall {
-                runtime_fn: "gorget_string_push_line", pass_by_ptr: false,
-                has_return: false, needs_deref_cast: false, field_access: None,
-                ..Default::default()
-            }),
-            "push_str" => Some(CollectionMethodCall {
-                runtime_fn: "gorget_string_append_str", pass_by_ptr: false,
-                has_return: false, needs_deref_cast: false, field_access: None,
-                ..Default::default()
-            }),
+            "push_line" => void_fn("gorget_string_push_line"),
+            "push_str" => void_fn("gorget_string_append_str"),
             "capacity" => Some(CollectionMethodCall {
                 runtime_fn: "", pass_by_ptr: false,
                 has_return: true, needs_deref_cast: false, field_access: Some("cap"),
@@ -6172,15 +6166,44 @@ fn try_rewrite_collection_method(func_name: &str) -> Option<CollectionMethodCall
                 has_return: true, needs_deref_cast: false, field_access: Some("len == 0"),
                 ..Default::default()
             }),
-            "to_upper" => Some(CollectionMethodCall {
-                runtime_fn: "gorget_str_to_upper", pass_by_ptr: false,
-                has_return: true, needs_deref_cast: false, field_access: None,
-                ..Default::default()
+            "to_upper" => simple("gorget_str_to_upper"),
+            "to_lower" => simple("gorget_str_to_lower"),
+            // Read-only methods that delegate to gorget_str_* (GorgetString→Str coercion
+            // is handled at line 7591 when runtime_fn starts with "gorget_str_")
+            "contains" => simple("gorget_str_contains"),
+            "starts_with" => simple("gorget_str_starts_with"),
+            "ends_with" => simple("gorget_str_ends_with"),
+            "replace" => simple("gorget_str_replace"),
+            "find" => simple("gorget_str_find"),
+            "index_of" => simple("gorget_str_index_of"),
+            "count" => simple("gorget_str_count"),
+            "split" => simple("gorget_str_split"),
+            "join" => simple("gorget_str_join"),
+            "repeat" => simple("gorget_str_repeat"),
+            "pad_left" => simple("gorget_str_pad_left"),
+            "pad_right" => simple("gorget_str_pad_right"),
+            "trim" => simple("gorget_str_trim"),
+            "removeprefix" => simple("gorget_str_removeprefix"),
+            "removesuffix" => simple("gorget_str_removesuffix"),
+            "byte_slice" => simple("gorget_str_byte_slice"),
+            "bytes" => simple("gorget_str_bytes"),
+            "codepoints" => simple("gorget_str_codepoints"),
+            "chars" => simple("gorget_str_chars"),
+            "byte_len" => simple("gorget_str_byte_len"),
+            "strip" => Some(CollectionMethodCall {
+                runtime_fn: "gorget_str_strip", pass_by_ptr: false, has_return: true,
+                needs_deref_cast: false, field_access: None,
+                ws_variant: Some("gorget_str_trim"), ..Default::default()
             }),
-            "to_lower" => Some(CollectionMethodCall {
-                runtime_fn: "gorget_str_to_lower", pass_by_ptr: false,
-                has_return: true, needs_deref_cast: false, field_access: None,
-                ..Default::default()
+            "lstrip" => Some(CollectionMethodCall {
+                runtime_fn: "gorget_str_lstrip", pass_by_ptr: false, has_return: true,
+                needs_deref_cast: false, field_access: None,
+                ws_variant: Some("gorget_str_lstrip_ws"), ..Default::default()
+            }),
+            "rstrip" => Some(CollectionMethodCall {
+                runtime_fn: "gorget_str_rstrip", pass_by_ptr: false, has_return: true,
+                needs_deref_cast: false, field_access: None,
+                ws_variant: Some("gorget_str_rstrip_ws"), ..Default::default()
             }),
             _ => None,
         };
@@ -6541,6 +6564,11 @@ fn last_error_fn(func_name: &str) -> Option<&'static str> {
     if func_name == "gorget_process_spawn" || func_name == "process_spawn" {
         return Some("gorget_process_spawn_err");
     }
+    // Parse functions (std.conv)
+    if func_name == "gorget_parse_int" || func_name == "parse_int"
+        || func_name == "gorget_parse_float" || func_name == "parse_float" {
+        return Some("gorget_parse_last_error");
+    }
     None
 }
 
@@ -6607,8 +6635,17 @@ fn try_emit_result_wrapped_call(
             if needs_addr {
                 arg_parts.push(format!("&{arg_str}"));
             } else if is_str {
-                // All C runtime functions in this handler take const char*, not Str
-                arg_parts.push(format!("{arg_str}.data"));
+                // C runtime functions in this handler take const char* — use gorget_str_to_cstr
+                // to produce a properly null-terminated copy (Str slices are not null-terminated).
+                // GorgetString: .data IS null-terminated (GorgetString guarantees this).
+                let is_gorget_string = if let Operand::Copy(p) | Operand::Move(p) = arg {
+                    effective_c_type(p.local.0 as usize, func, registry, type_overrides) == "GorgetString"
+                } else { false };
+                if is_gorget_string {
+                    arg_parts.push(format!("{arg_str}.data"));
+                } else {
+                    arg_parts.push(format!("gorget_str_to_cstr({arg_str})"));
+                }
             } else {
                 arg_parts.push(arg_str);
             }

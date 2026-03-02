@@ -502,10 +502,10 @@ equip Lexer:
         str num_str = self.lex_source.byte_slice(start, self.lex_pos)
         str clean = str_remove_char(num_str, '_')
         if is_float:
-            float fval = parse_float(clean)
+            float fval = parse_float(clean).unwrap_or(0.0)
             self.lex_emit(TkFloat(fval), start, self.lex_pos)
         else:
-            int ival = parse_int(clean)
+            int ival = parse_int(clean).unwrap_or(0)
             self.lex_emit(TkInt(ival), start, self.lex_pos)
 
     # ── String scanning ───────────────────────────────────────

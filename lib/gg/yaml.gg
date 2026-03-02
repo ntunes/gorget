@@ -1098,7 +1098,7 @@ Yaml yaml_resolve_scalar(str yaml_text):
         return Int(yaml_ival)
     # Try float
     if yaml_is_float(yaml_text):
-        float yaml_fval = parse_float(yaml_text)
+        float yaml_fval = parse_float(yaml_text).unwrap_or(0.0)
         return Float(yaml_fval)
     return Str(yaml_text)
 

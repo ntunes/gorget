@@ -116,7 +116,7 @@ SshConfig parse_ssh_config(str host, int default_port, str default_user):
                     hostname = value
                 else:
                     if key == "Port":
-                        port = parse_int(value)
+                        port = parse_int(value).unwrap_or(0)
                     else:
                         if key == "User":
                             user = value
