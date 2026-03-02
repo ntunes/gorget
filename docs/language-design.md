@@ -231,17 +231,27 @@ str process(live String &data):
     return data.first()
 ```
 
-**Lifetime design tiers:**
-1. **Auto-inference** (99% of code) - compiler analyzes function body, no annotations needed
-2. **`live` keyword on parameters** (~1% of code) - mark parameters whose data the return value depends on
-3. **`live` on struct fields + `outlives` bounds** (almost never) - for structs holding references and lifetime constraints
+**What requires no annotation (the common case):**
+- Functions using only owned types — no borrowing occurs, no inference needed
+- Functions with a single reference-type parameter returning a reference — compiler assumes the return borrows from that parameter (elision)
+- Methods returning a reference type — compiler assumes the return borrows from `self` (elision)
+- Functions with bodies and multiple reference parameters — compiler traces return expressions through the body to determine which parameters contribute (body analysis)
+- Transitive calls — when the return calls another function, the compiler uses the callee's already-computed metadata
+- Local variable aliases — assignments from parameters to locals are traced through
+
+**What requires `live` annotation:**
+- Trait method declarations (no body to analyze; `self` methods use elision, non-`self` multi-param methods need `live`)
+- Extern FFI declarations (no body; same elision rules as traits)
+- Struct fields holding borrowed data (`live str source` marks the field as a borrow)
+- Multiple independent borrow sources needing precision (named groups: `live(a) str x, live(b) str y`)
+- `outlives` constraints between borrow groups (`where a outlives b`)
 
 ```gorget
-# Tier 2: Explicit on parameters (when compiler can't see the body)
+# Explicit on parameters (when compiler can't see the body)
 trait Container:
     str get(live Container self, int index)
 
-# Tier 3: Struct with borrowed data (live on field)
+# Struct with borrowed data (live on field)
 struct Parser:
     live str source
     int position
@@ -249,15 +259,52 @@ struct Parser:
     str remaining(self):
         return self.source[self.position..]
 
-# Tier 3: Multiple independent borrow sources (named groups)
+# Multiple independent borrow sources (named groups)
 struct Merger:
     live(left) str a
     live(right) str b
 
-# Tier 3: Lifetime bounds
+# Lifetime bounds
 str merge(live Merger m) where left outlives right:
     ...
 ```
+
+---
+
+### 3.5 Comparison with Rust Lifetimes
+
+Gorget's lifetime system covers the same safety guarantees as Rust's but differs in how annotations are inferred. This section is aimed at Rust-experienced users.
+
+| Aspect | Rust | Gorget |
+|--------|------|--------|
+| Inference source | Signature only (elision rules) | Function body analysis + elision fallback |
+| Single ref param | Auto-inferred (elision rule 1) | Auto-inferred (same rule) |
+| `self` methods | Auto-inferred (elision rule 3) | Auto-inferred (same rule) |
+| Multi-param, has body | Must annotate: `fn f<'a>(x: &'a str, y: &str) -> &'a str` | Auto-inferred from body — compiler traces which params reach `return` |
+| Multi-param, no body | Must annotate (same) | Must annotate with `live` keyword |
+| Syntax | `'a`, `'b`, `'static`, `where 'a: 'b` | `live`, `live(a)`, `live(b)`, `where a outlives b` |
+| Named lifetimes | Always named: `'a` | Only when needed for `outlives`; anonymous `live` covers most cases |
+
+**Key difference — body analysis:** Gorget's main advantage is that multi-parameter functions with bodies need no annotation. Rust requires lifetime parameters on the function signature because it never inspects the body for lifetime inference. Gorget's compiler analyzes which return paths reference which parameters, making the common case annotation-free.
+
+```gorget
+# Gorget: no annotation needed — compiler reads the body
+str longer(str x, str y):
+    if x.len() > y.len():
+        return x
+    return y
+```
+
+```rust
+// Rust: must annotate — body is not inspected for lifetime inference
+fn longer<'a>(x: &'a str, y: &'a str) -> &'a str {
+    if x.len() > y.len() { x } else { y }
+}
+```
+
+**Trade-off:** Gorget's body analysis is an extra compilation pass. More importantly, changing a function body can silently change which parameters the return borrows from — there is no stable signature contract. Rust's explicit annotations make the lifetime contract visible at the call site and cannot change without a signature change.
+
+**Where `live` is still required:** Trait method declarations and extern FFI declarations have no body, so Gorget falls back to the same elision rules as Rust. Methods with `self` get automatic elision (return borrows from `self`); non-`self` multi-parameter declarations need explicit `live` annotation.
 
 ---
 
@@ -1481,7 +1528,7 @@ void main():
 
 | # | Question | Decision |
 |---|----------|----------|
-| 1 | **Lifetime syntax** | `live` keyword on params and struct fields; `outlives` for bounds; compiler auto-infers from function bodies (99% of code) |
+| 1 | **Lifetime syntax** | `live` keyword on params and struct fields; `outlives` for bounds; compiler auto-infers from function bodies (body analysis + elision) |
 | 2 | **Implicit borrow at call sites?** | Yes — bare type = immutable borrow, no annotation needed |
 | 3 | **Expression-oriented blocks?** | Both — `return` for explicit early returns, last expression as implicit return value |
 | 4 | **Inheritance?** | None — composition via traits only |
@@ -1511,6 +1558,7 @@ void main():
 | Semicolons | No | Yes | No | Yes |
 | Null | `Option[T]` | `Option<T>` | `None` | `null` |
 | Borrowing | bare / `&` / `!` | `&` / `&mut` / move | N/A | Implicit |
+| Lifetimes | Body-inferred + `live` | Signature-only + `'a` | N/A | N/A |
 | Generics | `[T]` | `<T>` | `[T]` | `<T>` |
 | Mutability | Mutable default + `const` | `let` default + `mut` | Default mutable | `final`/`const` |
 | Error handling | `throws` + `try` | `Result` + `?` | Exceptions | Exceptions |
