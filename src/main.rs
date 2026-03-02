@@ -952,7 +952,7 @@ fn main() {
         println!("       gg                         Interactive TUI");
         println!("       gg --version               Print version");
         println!();
-        println!("Compiler commands: lex, parse, check, build, run, fmt, test, report");
+        println!("Compiler commands: lex, parse, check, build, run, sim, fmt, test, report");
         println!("Package commands:  init, new, add, remove");
         println!();
         println!("Build flags:");
@@ -1446,9 +1446,49 @@ fn main() {
                 print!("{formatted}");
             }
         }
+        "sim" => {
+            // GIR interpreter: lex → parse → semantic analysis → GIR lowering → interpret
+            let mut parser = gorget::parser::Parser::new(&source);
+            let module = parser.parse_module();
+
+            if !parser.errors.is_empty() {
+                let reporter = gorget::errors::ErrorReporter::new(filename.clone(), source.clone());
+                for err in &parser.errors {
+                    reporter.report_parse_error(err);
+                }
+                eprintln!("\n{} parse error(s) found", parser.errors.len());
+                process::exit(1);
+            }
+
+            let dep_paths = resolve_deps_for_file(filename);
+            let (mut module, concat_source) = load_imports(filename, &source, module, dep_paths);
+
+            let result = gorget::semantic::analyze(&mut module, &features);
+
+            if !result.errors.is_empty() {
+                let reporter = gorget::errors::ErrorReporter::new(filename.clone(), concat_source);
+                for err in &result.errors {
+                    reporter.report_semantic_error(err);
+                }
+                eprintln!("\n{} semantic error(s) found", result.errors.len());
+                process::exit(1);
+            }
+
+            let overflow_wrap = args.iter().any(|a| a == "--overflow=wrap");
+            let overflow_checked = args.iter().any(|a| a == "--overflow=checked");
+            let lowering_opts = gorget::ir::lowering::LoweringOptions {
+                overflow_wrap,
+                overflow_checked,
+                ..Default::default()
+            };
+
+            let gir_module = gorget::ir::lowering::lower_module(&module, &result, &lowering_opts);
+            let exit_code = gorget::sim::interpret(&gir_module, filename);
+            process::exit(exit_code);
+        }
         _ => {
             eprintln!("Unknown command: {command}");
-            eprintln!("Compiler commands: lex, parse, check, build, run, test, fmt, report");
+            eprintln!("Compiler commands: lex, parse, check, build, run, sim, test, fmt, report");
             eprintln!("Package commands:  init, new, add, remove");
             process::exit(1);
         }

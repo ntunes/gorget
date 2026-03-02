@@ -10,5 +10,6 @@ pub mod parser;
 pub mod report;
 pub mod resolver;
 pub mod semantic;
+pub mod sim;
 pub mod span;
 pub mod stdlib;
