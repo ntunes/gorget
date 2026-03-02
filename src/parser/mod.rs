@@ -1332,7 +1332,20 @@ impl Parser {
             let name = self.expect_identifier()?;
             (None, name) // return type parsed after params
         } else {
-            let return_type = self.parse_type()?;
+            // Parse potentially comma-separated return types (bare tuple syntax).
+            // e.g. `str, int, bool f(...)` desugars to `(str, int, bool) f(...)`.
+            let first_type = self.parse_type()?;
+            let return_type = if self.check(&Token::Comma) {
+                let start = first_type.span;
+                let mut types = vec![first_type];
+                while self.match_token(&Token::Comma) {
+                    types.push(self.parse_type()?);
+                }
+                let end = types.last().unwrap().span;
+                Spanned::new(Type::Tuple(types), start.merge(end))
+            } else {
+                first_type
+            };
             // Use expect_name() to allow keywords as function/method names
             // (e.g., `from` in `equip Celsius with From[float]`).
             let name = self.expect_name()?;

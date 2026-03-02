@@ -2,6 +2,10 @@
 
 ## High
 
+- **Bare tuples in `match` arms: `case a, b:`**: Extending bare tuple syntax to match arm patterns (`case a, b: ...` instead of `case (a, b): ...`). Requires care to avoid ambiguity with or-patterns (`|`) — commas and pipes overlap in meaning and cannot be mixed naively. Defer until or-pattern disambiguation is resolved. [added: 2026-03-02]
+
+- **Bare tuples in typed variable declarations**: `int, str pair = ...` is ambiguous today — `str` looks like a second type or a variable name. No syntax is known that avoids this ambiguity without look-ahead past the `=`. Defer unless a clean solution is found. [added: 2026-03-02]
+
 ## Medium
 
 - **Inline bounds follow-up — rename `FunctionInfo.where_bounds` → `trait_bounds`**: The field name `where_bounds` is now a misnomer since bounds live inline in generic params, not in where clauses. Rename throughout `semantic/resolve.rs` and all consumers (`typecheck.rs`, `borrow.rs`, codegen). Low risk mechanical rename. [added: 2026-03-02]

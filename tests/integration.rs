@@ -524,6 +524,28 @@ true
 }
 
 #[test]
+fn bare_tuples() {
+    run_gg(
+        "bare_tuples.gg",
+        "\
+10
+20
+hello
+42
+true
+10
+20
+1
+10
+2
+20
+3
+30
+99",
+    );
+}
+
+#[test]
 fn type_casts() {
     run_gg(
         "type_casts.gg",

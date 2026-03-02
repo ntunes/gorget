@@ -1388,3 +1388,131 @@ fn test_dot_shorthand_pattern_with_binding() {
     }
     panic!("unexpected AST shape");
 }
+
+// ── Bare tuple syntax ──────────────────────────────────────────
+
+#[test]
+fn test_bare_tuple_return_type() {
+    // `str, int f():` should parse as return type `(str, int)`
+    let module = parse("str, int f():\n    pass\n");
+    if let Item::Function(f) = &module.items[0].node {
+        assert!(matches!(&f.return_type.node, Type::Tuple(types) if types.len() == 2));
+        return;
+    }
+    panic!("unexpected AST shape");
+}
+
+#[test]
+fn test_bare_tuple_return_type_three() {
+    // Three-element bare tuple return type
+    let module = parse("str, int, bool parse_header():\n    pass\n");
+    if let Item::Function(f) = &module.items[0].node {
+        assert!(matches!(&f.return_type.node, Type::Tuple(types) if types.len() == 3));
+        return;
+    }
+    panic!("unexpected AST shape");
+}
+
+#[test]
+fn test_bare_tuple_return_stmt() {
+    // `return a, b` should parse as TupleLiteral
+    let module = parse("void f():\n    return a, b\n");
+    if let Item::Function(f) = &module.items[0].node {
+        if let FunctionBody::Block(block) = &f.body {
+            if let Stmt::Return(Some(expr)) = &block.stmts[0].node {
+                assert!(matches!(&expr.node, Expr::TupleLiteral(elems) if elems.len() == 2));
+                return;
+            }
+        }
+    }
+    panic!("unexpected AST shape");
+}
+
+#[test]
+fn test_bare_tuple_return_stmt_three() {
+    // Three-element bare tuple return
+    let module = parse("void f():\n    return x, y, z\n");
+    if let Item::Function(f) = &module.items[0].node {
+        if let FunctionBody::Block(block) = &f.body {
+            if let Stmt::Return(Some(expr)) = &block.stmts[0].node {
+                assert!(matches!(&expr.node, Expr::TupleLiteral(elems) if elems.len() == 3));
+                return;
+            }
+        }
+    }
+    panic!("unexpected AST shape");
+}
+
+#[test]
+fn test_bare_tuple_auto_destructure() {
+    // `auto a, b = f()` should parse pattern as Tuple([Binding("a"), Binding("b")])
+    let module = parse("void g():\n    auto a, b = f()\n");
+    if let Item::Function(f) = &module.items[0].node {
+        if let FunctionBody::Block(block) = &f.body {
+            if let Stmt::VarDecl { pattern, .. } = &block.stmts[0].node {
+                assert!(matches!(&pattern.node, Pattern::Tuple(pats) if pats.len() == 2));
+                return;
+            }
+        }
+    }
+    panic!("unexpected AST shape");
+}
+
+#[test]
+fn test_bare_tuple_auto_destructure_wildcard() {
+    // `auto a, _, c = f()` with wildcard
+    let module = parse("void g():\n    auto a, _, c = f()\n");
+    if let Item::Function(f) = &module.items[0].node {
+        if let FunctionBody::Block(block) = &f.body {
+            if let Stmt::VarDecl { pattern, .. } = &block.stmts[0].node {
+                if let Pattern::Tuple(pats) = &pattern.node {
+                    assert_eq!(pats.len(), 3);
+                    assert!(matches!(&pats[1].node, Pattern::Wildcard));
+                    return;
+                }
+            }
+        }
+    }
+    panic!("unexpected AST shape");
+}
+
+#[test]
+fn test_bare_tuple_for_loop() {
+    // `for x, y in items:` should parse pattern as Tuple
+    let module = parse("void g():\n    for x, y in items:\n        pass\n");
+    if let Item::Function(f) = &module.items[0].node {
+        if let FunctionBody::Block(block) = &f.body {
+            if let Stmt::For { pattern, .. } = &block.stmts[0].node {
+                assert!(matches!(&pattern.node, Pattern::Tuple(pats) if pats.len() == 2));
+                return;
+            }
+        }
+    }
+    panic!("unexpected AST shape");
+}
+
+#[test]
+fn test_parenthesized_tuple_return_type_still_works() {
+    // Parenthesized form must still parse correctly (regression)
+    let module = parse("(str, int) f():\n    pass\n");
+    if let Item::Function(f) = &module.items[0].node {
+        assert!(matches!(&f.return_type.node, Type::Tuple(types) if types.len() == 2));
+        return;
+    }
+    panic!("unexpected AST shape");
+}
+
+#[test]
+fn test_parenthesized_tuple_auto_still_works() {
+    // Parenthesized auto destructuring must still parse correctly (regression)
+    let module = parse("void g():\n    auto (a, b) = f()\n");
+    if let Item::Function(f) = &module.items[0].node {
+        if let FunctionBody::Block(block) = &f.body {
+            if let Stmt::VarDecl { pattern, .. } = &block.stmts[0].node {
+                assert!(matches!(&pattern.node, Pattern::Tuple(pats) if pats.len() == 2));
+                return;
+            }
+        }
+    }
+    panic!("unexpected AST shape");
+}
