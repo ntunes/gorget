@@ -1,0 +1,8 @@
+void main():
+    int x = 10
+    int y = x * 2 + 5
+    bool flag = y > 20
+    if flag:
+        print("big: {y}")
+    else:
+        print("small: {y}")

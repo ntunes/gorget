@@ -1,7 +1,7 @@
 /// Main evaluation loop for the GIR interpreter.
 /// Handles instructions, terminators, and function calls.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::ir::instructions::{BinOp, CmpOp, Constant, Instruction, Operand, Place, Projection, Terminator, UnOp};
 use crate::ir::types::{
@@ -10,9 +10,22 @@ use crate::ir::types::{
     U8_TYPE, U16_TYPE, U32_TYPE, U64_TYPE, F32_TYPE, F64_TYPE, UNIT_TYPE, CHAR_TYPE,
 };
 use crate::ir::Module;
+use super::config::SimConfig;
 use super::error::{SimError, SimResult};
 use super::value::{SimStr, SimString, SimArray, SimDict, Value};
 use super::runtime;
+
+/// Per-allocation metadata for UB detection (Phase 4).
+pub struct HeapMeta {
+    /// Whether the slot is still live (not yet freed).
+    pub alive: bool,
+    /// True for internal ref-promoted slots (from get_or_alloc_ref), not user allocations.
+    pub is_ref_promoted: bool,
+    /// Name of the function where this allocation was created.
+    pub alloc_fn: String,
+    /// TrackingAllocator ID if inside a `with allocator:` scope at allocation time.
+    pub allocator_id: Option<usize>,
+}
 
 /// Maximum call depth to prevent stack overflow.
 const MAX_DEPTH: usize = 500;
@@ -20,6 +33,44 @@ const MAX_DEPTH: usize = 500;
 /// Parse `_N` → N from InlineC local references.
 fn parse_inline_local(s: &str) -> Option<usize> {
     s.trim().strip_prefix('_')?.parse().ok()
+}
+
+/// Mark the destination local of an instruction as initialized (P4c).
+/// Called after every instruction to keep the initialized set up to date.
+fn mark_instruction_dst(initialized: &mut HashSet<u32>, inst: &Instruction) {
+    match inst {
+        Instruction::Assign { dst, .. } => {
+            if dst.projections.is_empty() {
+                initialized.insert(dst.local.0);
+            }
+        }
+        Instruction::FieldLoad { dst, .. }
+        | Instruction::IndexLoad { dst, .. }
+        | Instruction::HeapAlloc { dst, .. }
+        | Instruction::HeapAllocArray { dst, .. }
+        | Instruction::BinOp { dst, .. }
+        | Instruction::UnOp { dst, .. }
+        | Instruction::Cmp { dst, .. }
+        | Instruction::Cast { dst, .. }
+        | Instruction::BitCast { dst, .. }
+        | Instruction::PtrCast { dst, .. }
+        | Instruction::StructInit { dst, .. }
+        | Instruction::EnumInit { dst, .. }
+        | Instruction::TupleInit { dst, .. }
+        | Instruction::TagOf { dst, .. }
+        | Instruction::EnumFieldLoad { dst, .. }
+        | Instruction::Borrow { dst, .. }
+        | Instruction::BorrowMut { dst, .. }
+        | Instruction::LoadThreadLocal { dst, .. } => {
+            initialized.insert(dst.0);
+        }
+        Instruction::Call { dst: Some(dst), .. }
+        | Instruction::CallExtern { dst: Some(dst), .. }
+        | Instruction::CallIndirect { dst: Some(dst), .. } => {
+            initialized.insert(dst.0);
+        }
+        _ => {}
+    }
 }
 
 /// Set a local, extending the vec if needed.
@@ -132,6 +183,8 @@ pub struct Interpreter<'m> {
     pub module: &'m Module,
     /// Heap storage: address → Value.
     pub heap: HashMap<usize, Value>,
+    /// Per-allocation metadata for P4 UB detection.
+    pub heap_meta: HashMap<usize, HeapMeta>,
     pub heap_next: usize,
     /// Global variables by name.
     pub globals: HashMap<String, Value>,
@@ -141,6 +194,10 @@ pub struct Interpreter<'m> {
     pub stderr: Vec<u8>,
     /// Whether integer operations wrap on overflow (vs panic).
     pub overflow_wrap: bool,
+    /// Whether UB-detection checks (P4b–P4d) are enabled.
+    ub_checks: bool,
+    /// Name of the currently-executing function (for error context).
+    pub current_fn_name: String,
     /// Simulated allocator states keyed by allocator ID (TrackingAllocator / Arena / PoolAllocator).
     tracking_allocs: HashMap<usize, SimAllocState>,
     /// Stack of active allocator IDs (from `with X as y:` or `alloc=` syntax).
@@ -172,15 +229,18 @@ pub struct Interpreter<'m> {
 }
 
 impl<'m> Interpreter<'m> {
-    pub fn new(module: &'m Module) -> Self {
+    pub fn new(module: &'m Module, config: &SimConfig) -> Self {
         Self {
             module,
             heap: HashMap::new(),
+            heap_meta: HashMap::new(),
             heap_next: 1, // 0 = null
             globals: HashMap::new(),
             stdout: Vec::new(),
             stderr: Vec::new(),
             overflow_wrap: module.overflow_wrap,
+            ub_checks: config.ub_checks,
+            current_fn_name: String::new(),
             tracking_allocs: HashMap::new(),
             active_tracking: Vec::new(),
             tracking_next_id: 1,
@@ -224,27 +284,62 @@ impl<'m> Interpreter<'m> {
         }
     }
 
-    /// Allocate a heap slot and store a value.
+    /// Allocate a heap slot and store a value. Records metadata for P4 UB detection.
     pub fn heap_alloc(&mut self, val: Value) -> usize {
+        self.heap_alloc_inner(val, false)
+    }
+
+    /// Allocate a heap slot marked as ref-promoted (implementation artifact, not a user allocation).
+    fn heap_alloc_ref_promoted(&mut self, val: Value) -> usize {
+        self.heap_alloc_inner(val, true)
+    }
+
+    fn heap_alloc_inner(&mut self, val: Value, is_ref_promoted: bool) -> usize {
         let addr = self.heap_next;
         self.heap_next += 1;
         self.heap.insert(addr, val);
+        self.heap_meta.insert(addr, HeapMeta {
+            alive: true,
+            is_ref_promoted,
+            alloc_fn: self.current_fn_name.clone(),
+            allocator_id: self.active_tracking.last().copied(),
+        });
         addr
     }
 
-    /// Read a value from the heap.
+    /// Read a value from the heap. Returns UseAfterFree if the slot was freed (P4b).
     pub fn heap_read(&self, addr: usize) -> SimResult<&Value> {
+        if self.ub_checks {
+            if let Some(meta) = self.heap_meta.get(&addr) {
+                if !meta.alive {
+                    return Err(SimError::UseAfterFree {
+                        addr,
+                        alloc_fn: meta.alloc_fn.clone(),
+                    });
+                }
+            }
+        }
         self.heap.get(&addr).ok_or(SimError::NullDereference)
     }
 
-    /// Write a value to the heap.
+    /// Write a value to the heap. Returns UseAfterFree if the slot was freed (P4b).
     pub fn heap_write(&mut self, addr: usize, val: Value) {
+        if self.ub_checks {
+            if let Some(meta) = self.heap_meta.get(&addr) {
+                if !meta.alive {
+                    // UAF on write — best-effort: emit to stderr but don't panic
+                    // (heap_write doesn't return SimResult for broad compatibility).
+                    eprintln!("gg sim: use-after-free (write): heap[{addr}] allocated in {}", meta.alloc_fn);
+                }
+            }
+        }
         self.heap.insert(addr, val);
     }
 
     /// Get or create a heap address for a place, making simple locals heap-backed
     /// via `Value::Ref(addr)`. If the local is already `Ref(addr)`, reuse that addr.
     /// For places with projections, always allocates a fresh heap copy.
+    /// Slots created here are marked `is_ref_promoted = true` (implementation artifacts).
     fn get_or_alloc_ref(&mut self, locals: &mut Vec<Value>, place: &Place) -> SimResult<usize> {
         if place.projections.is_empty() {
             let idx = place.local.0 as usize;
@@ -252,7 +347,7 @@ impl<'m> Interpreter<'m> {
             match locals[idx].clone() {
                 Value::Ref(addr) => Ok(addr),
                 other => {
-                    let addr = self.heap_alloc(other);
+                    let addr = self.heap_alloc_ref_promoted(other);
                     locals[idx] = Value::Ref(addr);
                     Ok(addr)
                 }
@@ -260,7 +355,7 @@ impl<'m> Interpreter<'m> {
         } else {
             // For projected places (e.g. struct field borrow), copy the value.
             let val = self.read_place(locals, place)?;
-            Ok(self.heap_alloc(val))
+            Ok(self.heap_alloc_ref_promoted(val))
         }
     }
 
@@ -628,13 +723,26 @@ impl<'m> Interpreter<'m> {
     }
 
     /// Execute a single instruction. Modifies locals in place.
-    pub fn execute_instruction(&mut self, locals: &mut Vec<Value>, inst: &Instruction, depth: usize) -> SimResult<()> {
+    /// `initialized` tracks which local IDs have been written (P4c uninitialized-read detection).
+    pub fn execute_instruction(&mut self, locals: &mut Vec<Value>, initialized: &mut HashSet<u32>, inst: &Instruction, depth: usize) -> SimResult<()> {
         match inst {
             Instruction::Nop => {}
 
             Instruction::Assign { dst, value } => {
+                // P4c: check that operand locals are initialized before reading them.
+                if self.ub_checks {
+                    if let Operand::Copy(place) | Operand::Move(place) = value {
+                        if place.projections.is_empty() && !initialized.contains(&place.local.0) {
+                            return Err(SimError::UninitializedRead {
+                                local: place.local.0,
+                                name: String::new(),
+                            });
+                        }
+                    }
+                }
                 let val = self.eval_operand(locals, value)?;
                 Self::write_place(locals, dst, val, &mut self.heap)?;
+                // Dst marking handled by mark_instruction_dst at the end of execute_instruction.
             }
 
             Instruction::FieldLoad { dst, base, field } => {
@@ -810,6 +918,13 @@ impl<'m> Interpreter<'m> {
             Instruction::Cast { dst, target_type, value } => {
                 let val = self.eval_operand(locals, value)?;
                 let result = self.eval_cast(*target_type, val)?;
+                // P4d: validate bool values after cast.
+                if self.ub_checks && *target_type == BOOL_TYPE {
+                    let raw = result.as_i64();
+                    if raw != 0 && raw != 1 {
+                        return Err(SimError::InvalidBoolValue { got: raw });
+                    }
+                }
                 let i = dst.0 as usize;
                 while locals.len() <= i { locals.push(Value::Unit); }
                 locals[i] = result;
@@ -870,6 +985,17 @@ impl<'m> Interpreter<'m> {
                     .map(|op| self.eval_operand(locals, op))
                     .collect();
                 let tag = self.variant_tag(type_name, variant);
+                // P4d: validate enum tag is in range.
+                if self.ub_checks {
+                    if let Some(def) = self.module.type_registry.get_type_def(type_name) {
+                        if let TypeDefKind::Enum(ref e) = def.kind {
+                            let n = e.variants.len() as i64;
+                            if tag < 0 || tag >= n {
+                                return Err(SimError::InvalidEnumTag { type_name: type_name.clone(), tag });
+                            }
+                        }
+                    }
+                }
                 let i = dst.0 as usize;
                 while locals.len() <= i { locals.push(Value::Unit); }
                 locals[i] = Value::Enum {
@@ -1142,8 +1268,27 @@ impl<'m> Interpreter<'m> {
                 locals[i] = Value::MutPtr(addr);
             }
 
-            Instruction::Dealloc { ptr: _, allocator: _ } => {
-                // Phase 2: track deallocation. For Phase 0, no-op.
+            Instruction::Dealloc { ptr, allocator: _ } => {
+                // P4b: mark the allocation as dead; detect double-free.
+                let ptr_val = self.eval_operand(locals, ptr)?;
+                if let Value::MutPtr(addr) | Value::Ptr(addr) = ptr_val {
+                    if self.ub_checks {
+                        if let Some(meta) = self.heap_meta.get_mut(&addr) {
+                            if !meta.alive {
+                                return Err(SimError::DoubleFree {
+                                    addr,
+                                    alloc_fn: meta.alloc_fn.clone(),
+                                });
+                            }
+                            meta.alive = false;
+                        }
+                    } else {
+                        // Without UB checks, still mark dead for leak detection if ub_checks later enabled.
+                        if let Some(meta) = self.heap_meta.get_mut(&addr) {
+                            meta.alive = false;
+                        }
+                    }
+                }
             }
 
             Instruction::LoadThreadLocal { dst, name } => {
@@ -1173,6 +1318,11 @@ impl<'m> Interpreter<'m> {
                 // All patterns assign to _X from _Y (dict/set local) and optional _Z (index).
                 self.eval_inline_c(locals, code)?;
             }
+        }
+
+        // P4c: mark the instruction's destination local as initialized, regardless of instruction type.
+        if self.ub_checks {
+            mark_instruction_dst(initialized, inst);
         }
 
         Ok(())
@@ -1851,18 +2001,31 @@ impl<'m> Interpreter<'m> {
         // Find the function in the module
         if let Some(func) = self.module.find_function(name) {
             let func = func.clone(); // Clone to avoid borrow issues
+            // Track current function name for error context (P4 heap allocation recording).
+            // Restored after the function returns so callers record correct alloc_fn.
+            let prev_fn_name = std::mem::replace(&mut self.current_fn_name, name.to_string());
+
             // Initialize locals: _0 = return slot (Unit), _1..N = params
-            let mut locals = vec![Value::Unit; func.locals.len().max(args.len() + 1)];
+            let num_args = args.len();
+            let mut locals = vec![Value::Unit; func.locals.len().max(num_args + 1)];
             for (i, arg) in args.into_iter().enumerate() {
                 if i + 1 < locals.len() {
                     locals[i + 1] = arg;
                 }
             }
 
+            // P4c: track initialized locals. _0 (return slot) and params are pre-initialized.
+            let mut initialized: HashSet<u32> = HashSet::new();
+            initialized.insert(0); // _0 = return slot
+            for i in 1..=(num_args as u32) {
+                initialized.insert(i);
+            }
+
             // Execute blocks
             let mut current_block = 0usize;
             loop {
                 if current_block >= func.blocks.len() {
+                    self.current_fn_name = prev_fn_name;
                     return Err(SimError::MissingTerminator(current_block));
                 }
                 let block = &func.blocks[current_block];
@@ -1870,7 +2033,7 @@ impl<'m> Interpreter<'m> {
                 let terminator = block.terminator.clone();
 
                 for inst in &instructions {
-                    match self.execute_instruction(&mut locals, inst, depth) {
+                    match self.execute_instruction(&mut locals, &mut initialized, inst, depth) {
                         Ok(()) => {
                             // Post-call zero: after consuming an element into a collection,
                             // zero the source local to prevent double-free. Mirrors the C
@@ -1897,15 +2060,21 @@ impl<'m> Interpreter<'m> {
                             // Run cleanup (like __gorget_cleanup_run) before propagating panic.
                             // This drops droppable locals registered via cleanup_push in C.
                             self.cleanup_locals_on_panic(&func, &locals, depth);
+                            self.current_fn_name = prev_fn_name;
                             return Err(SimError::Panic(msg));
                         }
-                        Err(e) => return Err(e),
+                        Err(e) => {
+                            self.current_fn_name = prev_fn_name;
+                            return Err(e);
+                        }
                     }
                 }
 
                 match terminator {
                     Some(Terminator::Return(op)) => {
-                        return self.eval_operand(&locals, &op);
+                        let ret = self.eval_operand(&locals, &op);
+                        self.current_fn_name = prev_fn_name;
+                        return ret;
                     }
                     Some(Terminator::Jump(bid)) => {
                         current_block = bid.0 as usize;
@@ -1941,9 +2110,11 @@ impl<'m> Interpreter<'m> {
                         current_block = normal.0 as usize;
                     }
                     Some(Terminator::Unreachable) => {
+                        self.current_fn_name = prev_fn_name;
                         return Err(SimError::Unreachable);
                     }
                     None => {
+                        self.current_fn_name = prev_fn_name;
                         return Err(SimError::MissingTerminator(current_block));
                     }
                 }

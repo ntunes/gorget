@@ -1,0 +1,12 @@
+from std.collections import Vector
+
+void main():
+    Vector[int] v = Vector[int]()
+    v.push(10)
+    v.push(20)
+    v.push(30)
+    int total = 0
+    for x in v:
+        total = total + x
+    print("len: {v.len()}")
+    print("sum: {total}")

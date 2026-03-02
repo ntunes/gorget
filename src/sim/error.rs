@@ -23,6 +23,20 @@ pub enum SimError {
     DivisionByZero,
     /// Integer overflow.
     Overflow,
+
+    // ── UB-detection errors (Phase 4) ────────────────────────────────────────
+    /// Read or write through a pointer to already-freed memory.
+    UseAfterFree { addr: usize, alloc_fn: String },
+    /// Attempt to free memory that was already freed.
+    DoubleFree { addr: usize, alloc_fn: String },
+    /// Read of a local variable before it was initialized.
+    UninitializedRead { local: u32, name: String },
+    /// A bool-typed value holds something other than 0 or 1.
+    InvalidBoolValue { got: i64 },
+    /// An enum tag is outside the valid range for the type.
+    InvalidEnumTag { type_name: String, tag: i64 },
+    /// One or more heap allocations were not freed before program exit.
+    MemoryLeak { count: usize },
 }
 
 pub type SimResult<T> = Result<T, SimError>;
@@ -47,6 +61,28 @@ impl std::fmt::Display for SimError {
             SimError::StackOverflow => write!(f, "gorget: stack overflow"),
             SimError::DivisionByZero => write!(f, "gorget: division by zero"),
             SimError::Overflow => write!(f, "gorget: integer overflow"),
+            SimError::UseAfterFree { addr, alloc_fn } => {
+                write!(f, "gg sim: use-after-free: heap[{addr}] was allocated in {alloc_fn} and already freed")
+            }
+            SimError::DoubleFree { addr, alloc_fn } => {
+                write!(f, "gg sim: double-free: heap[{addr}] (allocated in {alloc_fn}) freed twice")
+            }
+            SimError::UninitializedRead { local, name } => {
+                if name.is_empty() {
+                    write!(f, "gg sim: uninitialized read: local _{local} used before assignment")
+                } else {
+                    write!(f, "gg sim: uninitialized read: `{name}` (_{local}) used before assignment")
+                }
+            }
+            SimError::InvalidBoolValue { got } => {
+                write!(f, "gg sim: invalid bool value: {got} (must be 0 or 1)")
+            }
+            SimError::InvalidEnumTag { type_name, tag } => {
+                write!(f, "gg sim: invalid enum tag: {type_name} tag={tag} is out of range")
+            }
+            SimError::MemoryLeak { count } => {
+                write!(f, "gg sim: {count} allocation(s) leaked")
+            }
         }
     }
 }

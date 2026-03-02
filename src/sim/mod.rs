@@ -8,6 +8,7 @@
 /// - Faster iteration (no C compiler needed)
 /// - A foundation for UB detection (Phase 4)
 
+mod config;
 mod crypto;
 mod dispatch;
 mod error;
@@ -16,6 +17,7 @@ mod value;
 
 use std::io::Write;
 
+pub use config::SimConfig;
 pub use dispatch::Interpreter;
 pub use error::{SimError, SimResult};
 pub use value::Value;
@@ -25,9 +27,9 @@ use crate::ir::Module;
 /// Interpret a GIR module and return the exit code.
 /// `source_path` is used as argv[0] for the simulated program.
 /// Writes program output to stdout.
-pub fn interpret(module: &Module, source_path: &str) -> i32 {
+pub fn interpret(module: &Module, source_path: &str, config: &SimConfig) -> i32 {
     runtime::set_program_name(source_path);
-    let mut interp = Interpreter::new(module);
+    let mut interp = Interpreter::new(module, config);
     interp.init_globals();
 
     // If the module has test functions, run them as the test runner would.
@@ -47,7 +49,15 @@ pub fn interpret(module: &Module, source_path: &str) -> i32 {
     }
 
     // Run the program
-    run_main(&mut interp)
+    let exit_code = run_main(&mut interp);
+
+    // P4e: leak detection — report heap slots that were never freed.
+    // Skips is_ref_promoted slots (implementation-internal heap refs).
+    if !config.ignore_leaks && config.ub_checks {
+        report_leaks(&interp);
+    }
+
+    exit_code
 }
 
 /// Run a test suite: call each test function and report results.
@@ -287,5 +297,19 @@ fn flush_output(stdout: &[u8], stderr: &[u8]) {
     if !stderr.is_empty() {
         let _ = std::io::stderr().write_all(stderr);
         let _ = std::io::stderr().flush();
+    }
+}
+
+/// P4e: report live heap allocations that were not freed.
+/// Skips ref-promoted slots (implementation artifacts, not user allocations).
+fn report_leaks(interp: &Interpreter) {
+    let leaks: Vec<_> = interp.heap_meta.iter()
+        .filter(|(_, meta)| meta.alive && !meta.is_ref_promoted)
+        .collect();
+    if !leaks.is_empty() {
+        eprintln!("gg sim: {} allocation(s) leaked", leaks.len());
+        for (addr, meta) in &leaks {
+            eprintln!("  heap[{addr}]: allocated in {}", meta.alloc_fn);
+        }
     }
 }

@@ -1482,8 +1482,10 @@ fn main() {
                 ..Default::default()
             };
 
+            let sim_config = gorget::sim::SimConfig::from_args(&args);
+
             let gir_module = gorget::ir::lowering::lower_module(&module, &result, &lowering_opts);
-            let exit_code = gorget::sim::interpret(&gir_module, filename);
+            let exit_code = gorget::sim::interpret(&gir_module, filename, &sim_config);
             process::exit(exit_code);
         }
         _ => {
