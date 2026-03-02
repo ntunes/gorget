@@ -2,10 +2,6 @@
 
 ## High
 
-- **Bare tuples in `match` arms: `case a, b:`**: Extending bare tuple syntax to match arm patterns (`case a, b: ...` instead of `case (a, b): ...`). Requires care to avoid ambiguity with or-patterns (`|`) — commas and pipes overlap in meaning and cannot be mixed naively. Defer until or-pattern disambiguation is resolved. [added: 2026-03-02]
-
-- **Bare tuples in typed variable declarations**: `int, str pair = ...` is ambiguous today — `str` looks like a second type or a variable name. No syntax is known that avoids this ambiguity without look-ahead past the `=`. Defer unless a clean solution is found. [added: 2026-03-02]
-
 ## Medium
 
 - **Inline bounds follow-up — find new syntax for `outlives` to fully remove `where`**: The `where` keyword is now only used for `where a outlives b`. Options: (1) inline on the lifetime param `live(a outlives b)`, (2) a dedicated `outlives` section, (3) lifetime annotations on the param itself. Survey and decide before removing `where` entirely. [added: 2026-03-02]
@@ -73,8 +69,6 @@
 
 - **`std.regex` deferred features**: (1) `replace_with(self, str subject, Callable[Match, str] fn)` — callback replacement (requires C→Gorget closure call for user-defined replacement logic). (2) `named_groups(self) -> Dict[str, str]` — requires building a Gorget Dict from C. [added: 2026-02-19]
 
-- **ECS generational entity IDs (ABA problem)**: After `destroy(3)` + `create()` (returns 3), old code holding entity ID 3 silently accesses a different entity's components. Fix: `Entity { int id, int generation }` handle type, generation bump on recycle, `SparseSet` validates generation on access. Significant refactor — changes EntityPool API surface, all stores, and downstream code. [added: 2026-02-22]
-
 - **ECS `try_get()` returning `Option[T]`**: Safe accessor for SparseSet that returns `None` instead of panicking on missing entity. Blocked by codegen: `None` and `Some()` in generic equip blocks generate unqualified `Option__Some` / `NULL` instead of fully-qualified constructors (e.g., `Option__Health__None()`). Same root cause as the bare `Some()` assignment issue (TODO line above). Unblock by fixing generic Option constructor codegen first. [added: 2026-02-22]
 
 - **ECS multi-component query/join**: Every "system" manually nests `has()` checks across multiple sparse sets. A `query(SparseSet[A], SparseSet[B])` helper that iterates entities present in both sets would eliminate the most error-prone boilerplate. Even a simple intersection (iterate smaller set, check `has()` on larger) would help. Full query builder needs variadic generics. [added: 2026-02-22]
@@ -86,8 +80,6 @@
 - **ECS iter() copies entire entity_ids vector**: `SparseSet[T].iter()` allocates a fresh `Vector[int]` and copies all entity IDs. O(n) allocation just to start iteration. Language limitation: `SparseSetIter` can't hold a reference (no lifetime-annotated struct fields). Could improve with index+length snapshot if struct references become available. [added: 2026-02-22]
 
 - **ECS `each()` callback iteration**: `void each(Callable[int, T, void] fn)` would enable `health.each((int id, Health h): ...)` without manual iteration. Needs `Callable` with generic `T` in equip block — untested. [added: 2026-02-22]
-
-- **ECS double-destroy still possible**: `EntityPool.destroy()` now guards against out-of-range IDs (`id < 0 or id >= next_id`) but doesn't prevent destroying the same ID twice (pushes to free_ids twice, corrupts `count()`). Full fix requires generation tracking or an alive bitset. [added: 2026-02-22]
 
 ## Low
 

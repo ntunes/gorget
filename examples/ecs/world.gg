@@ -5,7 +5,7 @@
 # game systems as methods operating on World via &self.
 
 from std.collections import Vector
-from gg.ecs import EntityPool, SparseSet
+from gg.ecs import Entity, EntityPool, SparseSet
 from components import Health
 from components import Attack
 
@@ -17,63 +17,66 @@ struct World:
     SparseSet[str] names
 
 equip World:
-    int add(&self, str name, int hp, int damage, int team):
-        int id = self.entities.create()
-        self.health.insert(id, Health(hp, hp))
-        self.attacks.insert(id, Attack(damage))
-        self.teams.insert(id, team)
-        self.names.insert(id, name)
-        return id
+    Entity add(&self, str name, int hp, int damage, int team):
+        Entity e = self.entities.create()
+        self.health.insert(e, Health(hp, hp))
+        self.attacks.insert(e, Attack(damage))
+        self.teams.insert(e, team)
+        self.names.insert(e, name)
+        return e
 
-    void kill(&self, int id):
-        self.health.remove(id)
-        self.attacks.remove(id)
-        self.teams.remove(id)
-        self.names.remove(id)
-        self.entities.destroy(id)
+    void kill(&self, Entity e):
+        self.health.remove(e)
+        self.attacks.remove(e)
+        self.teams.remove(e)
+        self.names.remove(e)
+        self.entities.destroy(e)
 
-    bool is_alive(self, int id):
-        if self.health.has(id) == false:
+    bool is_alive(self, Entity e):
+        if self.health.has(e) == false:
             return false
-        Health h = self.health.get(id)
+        Health h = self.health.get(e)
         return h.hp > 0
 
     int team_alive_count(self, int team):
         int n = 0
-        for eid in self.health:
-            Health h = self.health.get(eid)
-            if h.hp > 0 and self.teams.get(eid) == team:
+        for e in self.health:
+            Health h = self.health.get(e)
+            if h.hp > 0 and self.teams.get(e) == team:
                 n = n + 1
         return n
 
     void combat_round(&self):
         int max_id = self.entities.max_id()
         for i in 0..max_id:
-            if self.is_alive(i) == false:
+            Entity ei = Entity(i, 0)
+            if self.is_alive(ei) == false:
                 continue
-            if self.attacks.has(i) == false:
+            if self.attacks.has(ei) == false:
                 continue
-            Attack atk = self.attacks.get(i)
-            str attacker_name = self.names.get(i)
-            int attacker_team = self.teams.get(i)
+            Attack atk = self.attacks.get(ei)
+            str attacker_name = self.names.get(ei)
+            int attacker_team = self.teams.get(ei)
             # Find target: living enemy with highest HP, tie-break: lowest ID
-            int target = -1
+            int target_id = -1
             int best_hp = -1
             for j in 0..max_id:
                 if j == i:
                     continue
-                if self.is_alive(j) == false:
+                Entity ej = Entity(j, 0)
+                if self.is_alive(ej) == false:
                     continue
-                if self.teams.has(j) == false:
+                if self.teams.has(ej) == false:
                     continue
-                if self.teams.get(j) == attacker_team:
+                if self.teams.get(ej) == attacker_team:
                     continue
-                Health h = self.health.get(j)
+                Health h = self.health.get(ej)
                 if h.hp > best_hp:
                     best_hp = h.hp
-                    target = j
-            if target == -1:
+                    target_id = j
+            if target_id == -1:
                 continue
+            Entity target = Entity(target_id, 0)
             # Apply damage
             Health target_health = self.health.get(target)
             int new_hp = target_health.hp - atk.damage
@@ -85,17 +88,17 @@ equip World:
                 print("{attacker_name} attacks {target_name} for {atk.damage} damage ({new_hp} HP left)")
 
     void remove_dead(&self):
-        Vector[int] dead = Vector[int]()
-        for eid in self.health:
-            Health h = self.health.get(eid)
+        Vector[Entity] dead = Vector[Entity]()
+        for e in self.health:
+            Health h = self.health.get(e)
             if h.hp <= 0:
-                dead.push(eid)
+                dead.push(e)
         for i in 0..dead.len():
-            int id = dead.get(i).unwrap()
-            self.kill(id)
+            Entity e = dead.get(i).unwrap()
+            self.kill(e)
 
     void print_state(self):
-        for eid in self.health:
-            str name = self.names.get(eid)
-            Health h = self.health.get(eid)
+        for e in self.health:
+            str name = self.names.get(e)
+            Health h = self.health.get(e)
             print("{name}: {h.hp}/{h.max_hp} HP")

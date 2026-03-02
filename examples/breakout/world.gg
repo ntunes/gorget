@@ -1,5 +1,5 @@
 from std.collections import Vector
-from gg.ecs import EntityPool, SparseSet
+from gg.ecs import Entity, EntityPool, SparseSet
 from gg.gfx import Canvas, Color, gfx_fill_rect
 from components import Position, Size, Velocity
 
@@ -10,8 +10,8 @@ struct BreakoutWorld:
     SparseSet[Velocity] velocities
     SparseSet[Color] colors
     SparseSet[bool] blocks
-    int paddle_id
-    int ball_id
+    Entity paddle_id
+    Entity ball_id
     int score
     bool game_over
     bool game_won
@@ -40,14 +40,14 @@ bool aabb_overlap(int x1, int y1, int w1, int h1, int x2, int y2, int w2, int h2
 
 equip BreakoutWorld:
     void spawn_paddle(&self):
-        int id = self.entities.create()
+        Entity id = self.entities.create()
         self.paddle_id = id
         self.positions.insert(id, Position(350, 560))
         self.sizes.insert(id, Size(100, 15))
         self.colors.insert(id, Color(255, 255, 255, 255))
 
     void spawn_ball(&self):
-        int id = self.entities.create()
+        Entity id = self.entities.create()
         self.ball_id = id
         self.positions.insert(id, Position(395, 540))
         self.sizes.insert(id, Size(10, 10))
@@ -58,7 +58,7 @@ equip BreakoutWorld:
         for row in 0..5:
             Color color = row_color(row)
             for col in 0..10:
-                int id = self.entities.create()
+                Entity id = self.entities.create()
                 int x = 14 + col * 78
                 int y = 50 + row * 26
                 self.positions.insert(id, Position(x, y))
@@ -126,7 +126,7 @@ equip BreakoutWorld:
         # Ball vs blocks
         bool bounced = false
         for i in 0..self.blocks.len():
-            int eid = self.blocks.entity_at(i)
+            Entity eid = self.blocks.entity_at(i)
             bool alive = self.blocks.data_at(i)
             if alive:
                 Position bp = self.positions.get(eid)
@@ -143,7 +143,7 @@ equip BreakoutWorld:
     void render_system(self, Canvas canvas):
         # Draw blocks
         for i in 0..self.blocks.len():
-            int eid = self.blocks.entity_at(i)
+            Entity eid = self.blocks.entity_at(i)
             bool alive = self.blocks.data_at(i)
             if alive:
                 Position pos = self.positions.get(eid)
@@ -184,9 +184,9 @@ equip BreakoutWorld:
 
 BreakoutWorld new_world():
     EntityPool pool = EntityPool.new()
-    SparseSet[Position] positions = SparseSet[Position](Vector[int](), Vector[int](), Vector[Position](), 0)
-    SparseSet[Size] sizes = SparseSet[Size](Vector[int](), Vector[int](), Vector[Size](), 0)
-    SparseSet[Velocity] velocities = SparseSet[Velocity](Vector[int](), Vector[int](), Vector[Velocity](), 0)
-    SparseSet[Color] colors = SparseSet[Color](Vector[int](), Vector[int](), Vector[Color](), 0)
-    SparseSet[bool] blocks = SparseSet[bool](Vector[int](), Vector[int](), Vector[bool](), 0)
-    return BreakoutWorld(pool, positions, sizes, velocities, colors, blocks, 0, 0, 0, false, false)
+    SparseSet[Position] positions = SparseSet[Position](Vector[int](), Vector[Entity](), Vector[Position](), 0)
+    SparseSet[Size] sizes = SparseSet[Size](Vector[int](), Vector[Entity](), Vector[Size](), 0)
+    SparseSet[Velocity] velocities = SparseSet[Velocity](Vector[int](), Vector[Entity](), Vector[Velocity](), 0)
+    SparseSet[Color] colors = SparseSet[Color](Vector[int](), Vector[Entity](), Vector[Color](), 0)
+    SparseSet[bool] blocks = SparseSet[bool](Vector[int](), Vector[Entity](), Vector[bool](), 0)
+    return BreakoutWorld(pool, positions, sizes, velocities, colors, blocks, Entity(0, 0), Entity(0, 0), 0, false, false)

@@ -4,7 +4,7 @@
 # SparseSet), user-defined World struct, system methods, game loop.
 
 from std.collections import Vector
-from gg.ecs import EntityPool, SparseSet
+from gg.ecs import Entity, EntityPool, SparseSet
 from components import Health
 from components import Attack
 from world import World
@@ -12,10 +12,10 @@ from world import World
 void main():
     # Build an empty world
     EntityPool pool = EntityPool.new()
-    SparseSet[Health] health = SparseSet[Health](Vector[int](), Vector[int](), Vector[Health](), 0)
-    SparseSet[Attack] attacks = SparseSet[Attack](Vector[int](), Vector[int](), Vector[Attack](), 0)
-    SparseSet[int] teams = SparseSet[int](Vector[int](), Vector[int](), Vector[int](), 0)
-    SparseSet[str] names = SparseSet[str](Vector[int](), Vector[int](), Vector[str](), 0)
+    SparseSet[Health] health = SparseSet[Health](Vector[int](), Vector[Entity](), Vector[Health](), 0)
+    SparseSet[Attack] attacks = SparseSet[Attack](Vector[int](), Vector[Entity](), Vector[Attack](), 0)
+    SparseSet[int] teams = SparseSet[int](Vector[int](), Vector[Entity](), Vector[int](), 0)
+    SparseSet[str] names = SparseSet[str](Vector[int](), Vector[Entity](), Vector[str](), 0)
     World world = World(pool, health, attacks, teams, names)
 
     # Team 1 (Heroes)

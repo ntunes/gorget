@@ -1,22 +1,40 @@
 # gg.ecs — Entity Component System
 
-A reusable ECS library providing entity ID management and generic sparse-set
-component storage.
+A reusable ECS library providing generational entity ID management and generic
+sparse-set component storage.
 
 ## Import
 
 ```gorget
-from gg.ecs import EntityPool, SparseSet
+from gg.ecs import Entity, EntityPool, SparseSet
 ```
+
+## Entity
+
+An opaque handle carrying both an entity ID and a generation counter. Stale
+handles (created before a recycle) are detected by `EntityPool.is_alive()`.
+
+```gorget
+struct Entity:
+    int id
+    int gen
+```
+
+`Entity` implements `Displayable`, formatting as `Entity(id:gen)`.
 
 ## EntityPool
 
-Manages entity IDs with free-list recycling.
+Manages entity handles with free-list recycling and generation tracking.
+Bumping the generation counter on recycle prevents the ABA problem: old handles
+referring to a recycled slot are rejected rather than silently aliasing the new
+occupant.
 
 ```gorget
 struct EntityPool:
     int next_id
     Vector[int] free_ids
+    Vector[int] generations
+    Vector[bool] alive
 ```
 
 ### Methods
@@ -24,34 +42,40 @@ struct EntityPool:
 | Signature | Description |
 |---|---|
 | `EntityPool new()` | Create a new empty pool (static factory) |
-| `int create(&self)` | Allocate a new entity ID (reuses freed IDs first) |
-| `void destroy(&self, int id)` | Return an ID to the free list (ignores out-of-range IDs) |
+| `Entity create(&self)` | Allocate a new entity handle (reuses freed slots first) |
+| `void destroy(&self, Entity e)` | Return a slot to the free list; ignores out-of-range, already-dead, or stale handles |
+| `bool is_alive(self, Entity e)` | `true` iff the handle is current (alive and generation matches) |
 | `int count(self)` | Number of currently live entities |
 | `int max_id(self)` | Upper bound on entity IDs (one past the highest ever allocated) |
 
 ### Usage
 
 ```gorget
-from gg.ecs import EntityPool
+from gg.ecs import Entity, EntityPool
 
 EntityPool pool = EntityPool.new()
-int e1 = pool.create()   # 0
-int e2 = pool.create()   # 1
+Entity e1 = pool.create()   # Entity(0:0)
+Entity e2 = pool.create()   # Entity(1:0)
 pool.destroy(e1)
-int e3 = pool.create()   # 0 (recycled)
-print(pool.max_id())     # 2
+Entity e3 = pool.create()   # Entity(0:1) — id reused, generation bumped
+print(pool.max_id())        # 2
+print(pool.is_alive(e1))    # false — stale handle
+print(pool.is_alive(e3))    # true
+pool.destroy(e2)
+pool.destroy(e2)            # second destroy is a no-op
+print(pool.count())         # 1
 ```
 
 ## SparseSet[T]
 
-O(1) insert, remove, and lookup component storage indexed by entity ID.
+O(1) insert, remove, and lookup component storage indexed by `Entity` handle.
 Internally uses a sparse-to-dense indirection array and contiguous data arrays,
 giving cache-friendly iteration and constant-time random access.
 
 ```gorget
 struct SparseSet[T]:
     Vector[int] sparse
-    Vector[int] entity_ids
+    Vector[Entity] entity_ids
     Vector[T] data
     int count
 ```
@@ -60,49 +84,59 @@ struct SparseSet[T]:
 
 | Signature | Description |
 |---|---|
-| `void insert(&self, int id, T value)` | Add or update a component for entity `id` |
-| `void remove(&self, int id)` | Remove the component (swap-and-pop) |
-| `bool has(self, int id)` | Check if entity `id` has a component |
-| `T get(self, int id)` | Get the component value (panics if missing — use `has()` first) |
-| `void set(&self, int id, T value)` | Update in place (silently no-ops if entity missing) |
+| `void insert(&self, Entity e, T value)` | Add or update a component for entity `e` |
+| `void remove(&self, Entity e)` | Remove the component (swap-and-pop) |
+| `bool has(self, Entity e)` | Check if entity `e` has a component |
+| `T get(self, Entity e)` | Get the component value (panics if missing — use `has()` first) |
+| `void set(&self, Entity e, T value)` | Update in place (silently no-ops if entity missing) |
 | `int len(self)` | Number of stored components |
-| `int entity_at(self, int idx)` | Entity ID at dense index `idx` |
+| `Entity entity_at(self, int idx)` | Entity handle at dense index `idx` |
 | `T data_at(self, int idx)` | Component value at dense index `idx` |
 
 ### Iteration
 
-`SparseSet[T]` implements `Iterable[int]`, so you can iterate entity IDs directly:
+`SparseSet[T]` implements `Iterable[Entity]`, so you can iterate entity handles
+directly:
 
 ```gorget
-for eid in health:
-    Health h = health.get(eid)
-    print("{eid}: {h.hp} HP")
+for e in health:
+    Health h = health.get(e)
+    print("{e.id}: {h.hp} HP")
+```
+
+### Construction
+
+```gorget
+from std.collections import Vector
+from gg.ecs import Entity, EntityPool, SparseSet
+
+SparseSet[Health] health = SparseSet[Health](Vector[int](), Vector[Entity](), Vector[Health](), 0)
 ```
 
 ### Usage
 
 ```gorget
 from std.collections import Vector
-from gg.ecs import EntityPool, SparseSet
+from gg.ecs import Entity, EntityPool, SparseSet
 
 struct Health:
     int hp
     int max_hp
 
 EntityPool pool = EntityPool.new()
-SparseSet[Health] health = SparseSet[Health](Vector[int](), Vector[int](), Vector[Health](), 0)
+SparseSet[Health] health = SparseSet[Health](Vector[int](), Vector[Entity](), Vector[Health](), 0)
 
-int id = pool.create()
-health.insert(id, Health(100, 100))
+Entity e = pool.create()
+health.insert(e, Health(100, 100))
 
-Health h = health.get(id)
+Health h = health.get(e)
 print("{h.hp}")           # 100
 
-health.set(id, Health(80, 100))
+health.set(e, Health(80, 100))
 
-for eid in health:
-    Health val = health.get(eid)
-    print("Entity {eid}: {val.hp} HP")
+for e in health:
+    Health val = health.get(e)
+    print("Entity {e.id}: {val.hp} HP")
 ```
 
 ## Building a World
@@ -110,7 +144,7 @@ for eid in health:
 Compose an EntityPool with multiple SparseSet stores to form a game world:
 
 ```gorget
-from gg.ecs import EntityPool, SparseSet
+from gg.ecs import Entity, EntityPool, SparseSet
 
 struct World:
     EntityPool entities
@@ -118,11 +152,11 @@ struct World:
     SparseSet[Health] health
 
 equip World:
-    int spawn(&self, int x, int y, int hp):
-        int id = self.entities.create()
-        self.positions.insert(id, Position(x, y))
-        self.health.insert(id, Health(hp, hp))
-        return id
+    Entity spawn(&self, int x, int y, int hp):
+        Entity e = self.entities.create()
+        self.positions.insert(e, Position(x, y))
+        self.health.insert(e, Health(hp, hp))
+        return e
 ```
 
 See `examples/ecs/` for a full battle simulation and `examples/breakout/` for

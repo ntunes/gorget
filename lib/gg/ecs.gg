@@ -1,29 +1,60 @@
 # gg.ecs — Entity Component System primitives
 #
-# Provides EntityPool for entity ID management with recycling,
-# and SparseSet[T] for O(1) component storage and lookup.
+# Provides EntityPool for entity ID management with generational recycling
+# (fixes ABA problem and double-destroy), and SparseSet[T] for O(1)
+# component storage and lookup.
 
 from std.collections import Vector
+
+struct Entity:
+    int id
+    int gen
+
+equip Entity with Displayable:
+    str display(self):
+        return "Entity({self.id}:{self.gen})"
 
 struct EntityPool:
     int next_id
     Vector[int] free_ids
+    Vector[int] generations
+    Vector[bool] alive
 
 equip EntityPool:
     EntityPool new():
-        return EntityPool(0, Vector[int]())
+        return EntityPool(0, Vector[int](), Vector[int](), Vector[bool]())
 
-    int create(&self):
+    Entity create(&self):
+        int id = -1
         if self.free_ids.len() > 0:
-            return self.free_ids.pop().unwrap()
-        int id = self.next_id
-        self.next_id = self.next_id + 1
-        return id
+            id = self.free_ids.pop().unwrap()
+        else:
+            id = self.next_id
+            self.next_id = self.next_id + 1
+        while self.generations.len() <= id:
+            self.generations.push(0)
+            self.alive.push(false)
+        self.alive.set(id, true)
+        int gen = self.generations.get(id).unwrap()
+        return Entity(id, gen)
 
-    void destroy(&self, int id):
-        if id < 0 or id >= self.next_id:
+    void destroy(&self, Entity e):
+        if e.id < 0 or e.id >= self.next_id:
             return
-        self.free_ids.push(id)
+        if self.alive.get(e.id).unwrap() == false:
+            return
+        if self.generations.get(e.id).unwrap() != e.gen:
+            return
+        self.alive.set(e.id, false)
+        self.generations.set(e.id, e.gen + 1)
+        self.free_ids.push(e.id)
+
+    bool is_alive(self, Entity e):
+        if e.id < 0 or e.id >= self.next_id:
+            return false
+        if self.alive.get(e.id).unwrap() == false:
+            return false
+        return self.generations.get(e.id).unwrap() == e.gen
 
     int count(self):
         return self.next_id - self.free_ids.len()
@@ -33,13 +64,13 @@ equip EntityPool:
 
 struct SparseSet[T]:
     Vector[int] sparse
-    Vector[int] entity_ids
+    Vector[Entity] entity_ids
     Vector[T] data
     int count
 
 equip SparseSet[T]:
-    void insert(&self, int id, T value):
-        # Grow sparse array if needed
+    void insert(&self, Entity e, T value):
+        int id = e.id
         while self.sparse.len() <= id:
             self.sparse.push(-1)
         int idx = self.sparse.get(id).unwrap()
@@ -50,12 +81,13 @@ equip SparseSet[T]:
         # Add new entry
         int new_idx = self.count
         self.sparse.set(id, new_idx)
-        self.entity_ids.push(id)
+        self.entity_ids.push(e)
         self.data.push(value)
         self.count = self.count + 1
 
-    void remove(&self, int id):
-        if id >= self.sparse.len():
+    void remove(&self, Entity e):
+        int id = e.id
+        if id < 0 or id >= self.sparse.len():
             return
         int idx = self.sparse.get(id).unwrap()
         if idx == -1:
@@ -63,27 +95,28 @@ equip SparseSet[T]:
         int last = self.count - 1
         if idx != last:
             # Swap with last element
-            int last_entity = self.entity_ids.get(last).unwrap()
+            Entity last_entity = self.entity_ids.get(last).unwrap()
             T last_data = self.data.get(last).unwrap()
             self.entity_ids.set(idx, last_entity)
             self.data.set(idx, last_data)
-            self.sparse.set(last_entity, idx)
+            self.sparse.set(last_entity.id, idx)
         # Pop last element
         self.entity_ids.pop()
         self.data.pop()
         self.sparse.set(id, -1)
         self.count = self.count - 1
 
-    bool has(self, int id):
-        if id < 0 or id >= self.sparse.len():
+    bool has(self, Entity e):
+        if e.id < 0 or e.id >= self.sparse.len():
             return false
-        return self.sparse.get(id).unwrap() != -1
+        return self.sparse.get(e.id).unwrap() != -1
 
-    T get(self, int id):
-        int idx = self.sparse.get(id).unwrap()
+    T get(self, Entity e):
+        int idx = self.sparse.get(e.id).unwrap()
         return self.data.get(idx).unwrap()
 
-    void set(&self, int id, T value):
+    void set(&self, Entity e, T value):
+        int id = e.id
         if id < 0 or id >= self.sparse.len():
             return
         int idx = self.sparse.get(id).unwrap()
@@ -94,28 +127,28 @@ equip SparseSet[T]:
     int len(self):
         return self.count
 
-    int entity_at(self, int idx):
+    Entity entity_at(self, int idx):
         return self.entity_ids.get(idx).unwrap()
 
     T data_at(self, int idx):
         return self.data.get(idx).unwrap()
 
 struct SparseSetIter:
-    Vector[int] entity_ids
+    Vector[Entity] entity_ids
     int idx
     int count
 
-equip SparseSetIter with Iterator[int]:
-    Option[int] next(&self):
+equip SparseSetIter with Iterator[Entity]:
+    Option[Entity] next(&self):
         if self.idx >= self.count:
             return None
-        int eid = self.entity_ids.get(self.idx).unwrap()
+        Entity e = self.entity_ids.get(self.idx).unwrap()
         self.idx = self.idx + 1
-        return Some(eid)
+        return Some(e)
 
-equip SparseSet[T] with Iterable[int]:
+equip SparseSet[T] with Iterable[Entity]:
     SparseSetIter iter(&self):
-        Vector[int] ecs_eids = Vector[int]()
+        Vector[Entity] ecs_eids = Vector[Entity]()
         int ecs_i = 0
         while ecs_i < self.count:
             ecs_eids.push(self.entity_ids.get(ecs_i).unwrap())

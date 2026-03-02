@@ -1790,10 +1790,11 @@ mod tests {
             }
         }
 
+        assert!(struct_names.contains(&"Entity".to_string()));
         assert!(struct_names.contains(&"EntityPool".to_string()));
         assert!(struct_names.contains(&"SparseSet".to_string()));
         assert!(struct_names.contains(&"SparseSetIter".to_string()));
-        assert_eq!(equip_count, 4);
+        assert_eq!(equip_count, 5);
     }
 
     #[test]
