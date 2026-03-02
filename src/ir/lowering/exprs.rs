@@ -385,7 +385,22 @@ fn lower_expr_inner(
         }
 
         Expr::Path { segments } => {
-            // Qualified path — try to resolve as enum variant
+            // Qualified enum variant path: Color.Red (2+ segments)
+            if segments.len() >= 2 {
+                let enum_name = &segments[0].node;
+                let variant_name = &segments.last().unwrap().node;
+                if let Some(type_id) = ctx.type_mapper.lookup_named(enum_name) {
+                    if let Some(type_def) = ctx.type_registry.get_type_def(enum_name) {
+                        if let TypeDefKind::Enum(ref e) = type_def.kind {
+                            if e.variants.iter().any(|v| &v.name == variant_name) {
+                                let dst = builder.enum_init(enum_name, variant_name, type_id, vec![]);
+                                return FunctionBuilder::copy(dst);
+                            }
+                        }
+                    }
+                }
+            }
+            // Single-segment path — try as enum variant (prelude: None, Some, Ok, Error)
             if let Some(last) = segments.last() {
                 if let Some((enum_name, variant_name)) = ctx.resolve_enum_variant(&last.node) {
                     let type_id = ctx.type_mapper.lookup_named(&enum_name).unwrap_or(UNIT_TYPE);
@@ -1039,6 +1054,17 @@ fn lower_method_call(
                     "int32" => "int32_t",
                     _ => name.as_str(),
                 };
+                // Check if this is a qualified enum variant constructor: Color.Red()
+                if let Some(type_def) = ctx.type_registry.get_type_def(c_type_name) {
+                    if let TypeDefKind::Enum(ref e) = type_def.kind {
+                        if e.variants.iter().any(|v| v.name == method_name) {
+                            let type_id = ctx.type_mapper.lookup_named(name).unwrap_or(UNIT_TYPE);
+                            let dst = builder.enum_init(name, method_name, type_id, lowered_args);
+                            return FunctionBuilder::copy(dst);
+                        }
+                    }
+                }
+
                 let mangled = format!("{c_type_name}__{method_name}");
                 // Check fn_sigs for direct name or trait-mangled name (Trait_for_Type__method)
                 let effective_name = if ctx.fn_sigs.contains_key(mangled.as_str()) {

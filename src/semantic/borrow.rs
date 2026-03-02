@@ -1136,6 +1136,15 @@ impl<'a> BorrowChecker<'a> {
             } => {
                 self.check_expr(receiver);
                 self.check_call_aliasing(args);
+                // Detect qualified enum variant constructors: EnumName.VariantName(args)
+                // When the receiver resolves to an Enum def, treat args as implicitly consumed.
+                let is_enum_constructor = if let Expr::Identifier(_) = &receiver.node {
+                    self.resolution_map.get(&receiver.span.start)
+                        .map(|&def_id| self.scopes.get_def(def_id).kind == DefKind::Enum)
+                        .unwrap_or(false)
+                } else {
+                    false
+                };
                 for arg in args {
                     match arg.node.ownership {
                         Ownership::Move => {
@@ -1152,7 +1161,30 @@ impl<'a> BorrowChecker<'a> {
                                 self.check_expr(&arg.node.value);
                             }
                         }
-                        _ => {
+                        Ownership::MutableBorrow | Ownership::Borrow => {
+                            // For qualified enum variant constructors, bare non-Copy
+                            // identifier args are implicitly consumed (moved into fields).
+                            if is_enum_constructor {
+                                if let Expr::Identifier(_) = &arg.node.value.node {
+                                    if let Some(&var_def_id) = self.resolution_map.get(&arg.node.value.span.start) {
+                                        let def = self.scopes.get_def(var_def_id);
+                                        if def.kind == DefKind::Variable && !def.is_param {
+                                            if let Some(type_id) = def.type_id {
+                                                if !is_copy_type(type_id, self.types, self.scopes) {
+                                                    let skip_implicit_move = self.loop_depth > 0
+                                                        && !self.loop_local_defs.last()
+                                                            .map_or(false, |s| s.contains(&var_def_id))
+                                                        && self.in_return_expr;
+                                                    if !skip_implicit_move {
+                                                        self.check_move(var_def_id, arg.span);
+                                                        continue;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                             self.check_expr(&arg.node.value);
                         }
                     }
@@ -4702,7 +4734,7 @@ enum Container:
 
 void main():
     String s = \"hello\"
-    Container c = Holding(s)
+    Container c = Container.Holding(s)
     print(s)
 ";
         let errors = check(source);
@@ -4737,7 +4769,7 @@ void wrap(String s):
 
     #[test]
     fn constructor_move_in_loop_not_return() {
-        // `auto w = Value(s)` in a loop should error — s is consumed every iteration
+        // `auto w = Wrapper.Value(s)` in a loop should error — s is consumed every iteration
         let source = "\
 enum Wrapper:
     Value(String)
@@ -4745,7 +4777,7 @@ enum Wrapper:
 void main():
     String s = \"hello\"
     for i in 0..3:
-        auto w = Value(s)
+        auto w = Wrapper.Value(s)
 ";
         let errors = check(source);
         assert!(
@@ -4756,7 +4788,7 @@ void main():
 
     #[test]
     fn constructor_move_in_loop_return() {
-        // `return Value(label)` in a loop should be fine — return exits the function
+        // `return Wrapper.Value(label)` in a loop should be fine — return exits the function
         let source = "\
 enum Wrapper:
     Value(String)
@@ -4764,8 +4796,8 @@ enum Wrapper:
 Wrapper find(Vector[String] items):
     for item in items:
         String label = item
-        return Value(label)
-    return Value(\"default\")
+        return Wrapper.Value(label)
+    return Wrapper.Value(\"default\")
 ";
         let errors = check(source);
         assert!(
@@ -4796,7 +4828,7 @@ void main():
 
     #[test]
     fn nested_constructor_in_return() {
-        // `return Wrap(Val(s))` — nested constructors in return should be fine
+        // `return Outer.Wrap(Inner.Val(s))` — nested constructors in return should be fine
         let source = "\
 enum Inner:
     Val(String)
@@ -4807,8 +4839,8 @@ enum Outer:
 Outer find(Vector[String] items):
     for item in items:
         String s = item
-        return Wrap(Val(s))
-    return Wrap(Val(\"default\"))
+        return Outer.Wrap(Inner.Val(s))
+    return Outer.Wrap(Inner.Val(\"default\"))
 ";
         let errors = check(source);
         assert!(

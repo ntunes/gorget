@@ -1585,7 +1585,7 @@ void main():
     Blue()
 
 void main():
-    Color c = Red()
+    Color c = Color.Red()
     pass
 "#;
         let (module, result) = parse_and_analyze(source);

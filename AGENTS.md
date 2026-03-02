@@ -15,8 +15,8 @@ Gorget is a Python-like language that compiles to C via transpilation.
 
 ```bash
 cargo build              # build the compiler
-cargo test --lib         # 177 unit tests
-cargo test --test integration -- --test-threads=1  # 30 integration tests (run serially to avoid cargo lock contention)
+cargo test --lib         # unit tests (currently ~624)
+cargo test --test integration -- --test-threads=1  # integration tests (currently ~335, run serially to avoid cargo lock contention)
 cargo test               # all tests (use --test-threads=1 if integration tests hang)
 ```
 
@@ -40,7 +40,9 @@ cargo test               # all tests (use --test-threads=1 if integration tests 
 - Type-first declarations: `int x = 5`, `str name = "hello"`, `Vector[int] items = Vector[int]()`
 - Functions: `int add(int a, int b): return a + b`
 - Expression-body functions: `int double(int x) = x * 2`
-- Enum variants constructed as bare calls: `Red()` not `Color.Red()`
+- User-defined enum variants require qualified access: `Color.Red()` not `Red()`. Prelude variants (`Ok`, `Error`, `Some`, `None`) stay bare.
+- Glob import brings variants into bare scope: `from gg.log import LogLevel.*` → `Info()`, `Debug()` etc.
+- Generic enum variants remain bare (e.g. `Some(42)`, `Just(x)`) since qualified generic syntax is not supported.
 - Closures: `(params): body` syntax
 - Function types: `int(int, int)` (return type first)
 - Generic structs need explicit type args: `Pair[int, int](10, 20)`

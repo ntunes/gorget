@@ -4960,6 +4960,18 @@ done",
 }
 
 #[test]
+fn namespace_basic() {
+    run_gg(
+        "namespace_basic.gg",
+        "\
+info
+42
+[ERROR] boom
+done",
+    );
+}
+
+#[test]
 fn term_basic() {
     run_gg(
         "term_basic.gg",

@@ -130,6 +130,26 @@ pub fn collect_top_level(
     }
     collect_top_level_inner(module, scopes, types, errors, &mut ctx);
 
+    // Second pass: handle glob imports (`from X import EnumName.*`).
+    // All enums are now defined in scope, so we can look them up and register
+    // their variants as bare names (shadowing any prelude variant with the same name).
+    for item in &module.items {
+        if let Item::Import(ImportStmt::From { glob_types, .. }) = &item.node {
+            for glob_name in glob_types {
+                // Register the type itself as Import (in case it wasn't in `names`)
+                let _ = scopes.define(glob_name.node.clone(), DefKind::Import, glob_name.span);
+                // Find the enum's variant info and bring each variant into scope
+                if let Some(enum_def_id) = scopes.lookup(&glob_name.node) {
+                    if let Some(variant_info) = ctx.enum_variants.get(&enum_def_id).cloned() {
+                        for (vname, _vdef_id) in &variant_info.variants {
+                            let _ = scopes.define(vname.clone(), DefKind::Variant, glob_name.span);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Fixup: re-resolve function return types that failed during collection.
     // In cross-module scenarios, entry file items come before imported module items
     // in the merged AST, so a function whose return type is an imported type gets
@@ -307,30 +327,43 @@ fn collect_item(
                 Ok(enum_def_id) => {
                     let mut variant_infos = Vec::new();
                     let mut variant_field_types = Vec::new();
+                    // Non-generic user enum variants are NOT inserted into global scope.
+                    // They are only accessible via qualified paths: Color.Red().
+                    // Generic enum variants remain in scope since there is no feasible
+                    // qualified syntax for them (e.g., Maybe[int].Just(42) doesn't parse).
+                    let is_generic = e.generic_params.is_some();
                     for variant in &e.variants {
-                        // Define each variant at module scope so `Some(x)` works
-                        match scopes.define(
-                            variant.node.name.node.clone(),
-                            DefKind::Variant,
-                            variant.node.name.span,
-                        ) {
-                            Ok(variant_def_id) => {
-                                variant_infos.push((
-                                    variant.node.name.node.clone(),
-                                    variant_def_id,
-                                ));
-                                // Collect AST field types for pattern type inference
-                                let field_types = match &variant.node.fields {
-                                    VariantFields::Tuple(types) => types.clone(),
-                                    VariantFields::Unit => Vec::new(),
-                                };
-                                variant_field_types.push((
-                                    variant.node.name.node.clone(),
-                                    field_types,
-                                ));
+                        let variant_def_id = if is_generic {
+                            // Generic enum: keep variant in scope (bare name still works)
+                            match scopes.define(
+                                variant.node.name.node.clone(),
+                                DefKind::Variant,
+                                variant.node.name.span,
+                            ) {
+                                Ok(id) => id,
+                                Err(err) => { errors.push(err); continue; }
                             }
-                            Err(e) => errors.push(e),
-                        }
+                        } else {
+                            // Non-generic user enum: allocate without inserting into scope
+                            scopes.alloc_def(
+                                variant.node.name.node.clone(),
+                                DefKind::Variant,
+                                variant.node.name.span,
+                            )
+                        };
+                        variant_infos.push((
+                            variant.node.name.node.clone(),
+                            variant_def_id,
+                        ));
+                        // Collect AST field types for pattern type inference
+                        let field_types = match &variant.node.fields {
+                            VariantFields::Tuple(types) => types.clone(),
+                            VariantFields::Unit => Vec::new(),
+                        };
+                        variant_field_types.push((
+                            variant.node.name.node.clone(),
+                            field_types,
+                        ));
                     }
                     let generic_param_names = extract_generic_param_names(&e.generic_params);
                     ctx.enum_variants.insert(
@@ -502,11 +535,24 @@ fn collect_import(import: &ImportStmt, scopes: &mut ScopeTable, errors: &mut Vec
                 }
             }
         }
-        ImportStmt::Grouped { names, .. } | ImportStmt::From { names, .. } => {
+        ImportStmt::Grouped { names, .. } => {
             for name in names {
                 if let Err(e) = scopes.define(name.node.clone(), DefKind::Import, name.span) {
                     errors.push(e);
                 }
+            }
+        }
+        ImportStmt::From { names, glob_types, .. } => {
+            for name in names {
+                if let Err(e) = scopes.define(name.node.clone(), DefKind::Import, name.span) {
+                    errors.push(e);
+                }
+            }
+            // Glob type names (`EnumName.*`) register the type itself as Import (if not already).
+            // Their variant registration happens in the second pass of collect_top_level.
+            for name in glob_types {
+                // Silently ignore duplicate: the type may already be imported by a regular name.
+                let _ = scopes.define(name.node.clone(), DefKind::Import, name.span);
             }
         }
     }
@@ -1441,10 +1487,12 @@ mod tests {
         let (scopes, _, errors) =
             parse_and_collect("enum Color:\n    Red\n    Green\n    Blue\n");
         assert!(errors.is_empty(), "errors: {:?}", errors);
+        // Enum type is in scope; non-generic variants are NOT
+        // (they are accessible only via qualified syntax: Color.Red())
         assert!(scopes.lookup("Color").is_some());
-        assert!(scopes.lookup("Red").is_some());
-        assert!(scopes.lookup("Green").is_some());
-        assert!(scopes.lookup("Blue").is_some());
+        assert!(scopes.lookup("Red").is_none(), "non-generic variant Red should not be in global scope");
+        assert!(scopes.lookup("Green").is_none(), "non-generic variant Green should not be in global scope");
+        assert!(scopes.lookup("Blue").is_none(), "non-generic variant Blue should not be in global scope");
     }
 
     #[test]

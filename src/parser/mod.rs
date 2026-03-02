@@ -1061,9 +1061,24 @@ impl Parser {
 
         self.expect_keyword(Keyword::Import)?;
 
-        let mut names = vec![self.expect_name()?];
+        // Parse import names, detecting `EnumName.*` glob syntax
+        let mut names = Vec::new();
+        let mut glob_types = Vec::new();
+
+        let first_name = self.expect_name()?;
+        if self.match_token(&Token::Dot) && self.match_token(&Token::Star) {
+            glob_types.push(first_name);
+        } else {
+            names.push(first_name);
+        }
+
         while self.match_token(&Token::Comma) {
-            names.push(self.expect_name()?);
+            let name = self.expect_name()?;
+            if self.match_token(&Token::Dot) && self.match_token(&Token::Star) {
+                glob_types.push(name);
+            } else {
+                names.push(name);
+            }
         }
 
         let end = self.previous_span();
@@ -1072,6 +1087,7 @@ impl Parser {
         Ok(ImportStmt::From {
             path,
             names,
+            glob_types,
             span: start.merge(end),
         })
     }

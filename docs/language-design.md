@@ -299,6 +299,33 @@ enum Result[T, E]:
     Error(E)
 ```
 
+**Variant namespacing:** User-defined enum variants are namespaced under their type and require qualified access: `Color.Red()`, `Color.Custom(255, 128, 0)`. This eliminates name collisions when two enums define variants with the same name (e.g., `Color.Red` and `Status.Red`) and aligns with Gorget's "explicit by default" philosophy.
+
+Built-in `Option` and `Result` variants (`Ok`, `Error`, `Some`, `None`) are part of the prelude and always available bare — they are foundational types used pervasively.
+
+```gorget
+Color c = Color.Red()              # user enum — qualified required
+Option[int] x = Some(42)           # prelude — bare OK
+Result[int, str] r = Ok(42)        # prelude — bare OK
+
+match c:
+    case Color.Red():
+        print("red")
+    case Color.Custom(r, g, b):
+        print("{r},{g},{b}")
+```
+
+**Glob import:** When working extensively with one enum, use `EnumName.*` to bring all its variants into bare scope:
+
+```gorget
+from gg.log import LogLevel.*
+
+LogLevel lvl = Info()    # bare — from glob import
+match lvl:
+    case Info():  print("info")
+    case Err():   print("err")
+```
+
 ### 4.2.1 Option Sugar
 
 `Option[T]` is Gorget's null replacement. Rich sugar makes it ergonomic:
@@ -1098,7 +1125,12 @@ import std.collections.HashMap                # import specific type
 from std.fmt import Displayable, format       # from...import
 from math.geometry import Point, Circle       # project-local module
 import std.sync.{Arc, Mutex, RwLock}          # multiple items with {}
+from gg.log import LogLevel, Logger           # import type only (qualified variants)
+from gg.log import LogLevel.*                 # glob: import type + all variants bare
+from gg.log import LogLevel.*, Logger         # glob + other names in same statement
 ```
+
+**Glob import** (`EnumName.*`) brings a type's enum variants into bare scope, useful when code makes heavy use of one enum. Without the glob, variants require qualified access (`LogLevel.Info()`). With the glob, bare names work (`Info()`). The type itself is always in scope regardless.
 
 ### 8.4 Visibility
 

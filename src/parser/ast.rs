@@ -252,9 +252,13 @@ pub enum ImportStmt {
         span: Span,
     },
     /// `from std.fmt import Displayable, format`
+    /// Also supports glob: `from gg.log import LogLevel.*`
+    /// Glob names are in `glob_types`; they import the type + all its variants bare.
     From {
         path: Vec<Spanned<String>>,
         names: Vec<Spanned<String>>,
+        /// Type names imported with `.*` — bring type + all variants into scope.
+        glob_types: Vec<Spanned<String>>,
         span: Span,
     },
 }

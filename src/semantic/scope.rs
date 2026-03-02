@@ -104,6 +104,22 @@ impl ScopeTable {
         self.define_with_mutability(name, kind, span, false)
     }
 
+    /// Allocate a DefId and DefInfo for a name without inserting it into scope's name map.
+    /// Used for user-defined enum variants that should only be accessible via qualified paths.
+    pub fn alloc_def(&mut self, name: String, kind: DefKind, span: Span) -> DefId {
+        let def_id = DefId(self.definitions.len() as u32);
+        self.definitions.push(DefInfo {
+            name,
+            kind,
+            span,
+            scope: self.current,
+            type_id: None,
+            is_mutable: false,
+            is_param: false,
+        });
+        def_id
+    }
+
     /// Add a definition with an explicit mutability flag.
     pub fn define_with_mutability(
         &mut self,
@@ -117,10 +133,12 @@ impl ScopeTable {
             let existing = &self.definitions[existing_id.0 as usize];
             // Allow a real definition to replace an import placeholder,
             // a real import to replace a built-in placeholder (dummy span),
-            // or a user definition to shadow a built-in trait (dummy span).
+            // a user definition to shadow a built-in trait (dummy span),
+            // or a user-defined variant to shadow a built-in prelude variant (dummy span).
             if (existing.kind == DefKind::Import && kind != DefKind::Import)
                 || (existing.kind == DefKind::Import && existing.span == Span::dummy())
                 || (existing.kind == DefKind::Trait && existing.span == Span::dummy() && kind != DefKind::Trait)
+                || (existing.kind == DefKind::Variant && existing.span == Span::dummy() && kind == DefKind::Variant)
             {
                 let def_id = DefId(self.definitions.len() as u32);
                 self.definitions.push(DefInfo {

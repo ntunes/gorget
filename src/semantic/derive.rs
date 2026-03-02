@@ -616,6 +616,7 @@ fn field_read_decl(name: &str, type_name: &str) -> String {
 }
 
 fn generate_enum_deserializable(type_name: &str, gs: &str, e: &EnumDef) -> String {
+    let pfx = variant_prefix(type_name, e);
     // Separate unit variants from data variants
     let mut unit_variants = Vec::new();
     let mut data_variants = Vec::new();
@@ -649,7 +650,7 @@ fn generate_enum_deserializable(type_name: &str, gs: &str, e: &EnumDef) -> Strin
             } else {
                 body.push_str(&format!("        elif de_tag == \"{vname}\":\n"));
             }
-            body.push_str(&format!("            return Ok({vname}())\n"));
+            body.push_str(&format!("            return Ok({pfx}{vname}())\n"));
         }
         body.push_str("        return Error(\"unknown variant\")\n");
     }
@@ -674,7 +675,7 @@ fn generate_enum_deserializable(type_name: &str, gs: &str, e: &EnumDef) -> Strin
             let args: Vec<String> =
                 (0..field_types.len()).map(|i| format!("a{i}")).collect();
             body.push_str(&format!(
-                "        return Ok({vname}({}))\n",
+                "        return Ok({pfx}{vname}({}))\n",
                 args.join(", ")
             ));
         }
@@ -690,6 +691,17 @@ fn generate_enum_deserializable(type_name: &str, gs: &str, e: &EnumDef) -> Strin
 
 // ── Enum derive generation ────────────────────────────────────
 
+/// Returns the prefix to use before a variant name in patterns/constructors.
+/// Non-generic enums: `"Color."` (qualified access required).
+/// Generic enums: `""` (variants stay in scope as bare names).
+fn variant_prefix<'a>(type_name: &'a str, e: &EnumDef) -> std::borrow::Cow<'a, str> {
+    if e.generic_params.is_some() {
+        std::borrow::Cow::Borrowed("")
+    } else {
+        std::borrow::Cow::Owned(format!("{type_name}."))
+    }
+}
+
 fn generate_enum_derive(type_name: &str, gs: &str, trait_name: &str, e: &EnumDef) -> String {
     match trait_name {
         "Equatable" => generate_enum_equatable(type_name, gs, e),
@@ -704,6 +716,7 @@ fn generate_enum_derive(type_name: &str, gs: &str, trait_name: &str, e: &EnumDef
 
 fn generate_enum_equatable(type_name: &str, gs: &str, e: &EnumDef) -> String {
     let gp = equip_generic_prefix(gs);
+    let pfx = variant_prefix(type_name, e);
     let mut arms = String::new();
 
     for variant in &e.variants {
@@ -719,15 +732,15 @@ fn generate_enum_equatable(type_name: &str, gs: &str, e: &EnumDef) -> String {
         let other_bindings: Vec<String> = (0..field_count).map(|i| format!("b{i}")).collect();
 
         let self_pattern = if field_count == 0 {
-            format!("{vname}()")
+            format!("{pfx}{vname}()")
         } else {
-            format!("{vname}({})", self_bindings.join(", "))
+            format!("{pfx}{vname}({})", self_bindings.join(", "))
         };
 
         let other_pattern = if field_count == 0 {
-            format!("{vname}()")
+            format!("{pfx}{vname}()")
         } else {
-            format!("{vname}({})", other_bindings.join(", "))
+            format!("{pfx}{vname}({})", other_bindings.join(", "))
         };
 
         // Build the comparison expression
@@ -762,6 +775,7 @@ fn generate_enum_equatable(type_name: &str, gs: &str, e: &EnumDef) -> String {
 
 fn generate_enum_displayable(type_name: &str, gs: &str, e: &EnumDef) -> String {
     let gp = equip_generic_prefix(gs);
+    let pfx = variant_prefix(type_name, e);
     let mut arms = String::new();
 
     for variant in &e.variants {
@@ -774,9 +788,9 @@ fn generate_enum_displayable(type_name: &str, gs: &str, e: &EnumDef) -> String {
         let bindings: Vec<String> = (0..field_count).map(|i| format!("a{i}")).collect();
 
         let pattern = if field_count == 0 {
-            format!("{vname}()")
+            format!("{pfx}{vname}()")
         } else {
-            format!("{vname}({})", bindings.join(", "))
+            format!("{pfx}{vname}({})", bindings.join(", "))
         };
 
         let display_str = if field_count == 0 {
@@ -802,6 +816,7 @@ fn generate_enum_displayable(type_name: &str, gs: &str, e: &EnumDef) -> String {
 
 fn generate_enum_cloneable(type_name: &str, gs: &str, e: &EnumDef) -> String {
     let gp = equip_generic_prefix(gs);
+    let pfx = variant_prefix(type_name, e);
     let mut arms = String::new();
 
     for variant in &e.variants {
@@ -814,15 +829,15 @@ fn generate_enum_cloneable(type_name: &str, gs: &str, e: &EnumDef) -> String {
         let bindings: Vec<String> = (0..field_count).map(|i| format!("a{i}")).collect();
 
         let pattern = if field_count == 0 {
-            format!("{vname}()")
+            format!("{pfx}{vname}()")
         } else {
-            format!("{vname}({})", bindings.join(", "))
+            format!("{pfx}{vname}({})", bindings.join(", "))
         };
 
         let reconstruction = if field_count == 0 {
-            format!("return {vname}()")
+            format!("return {pfx}{vname}()")
         } else {
-            format!("return {vname}({})", bindings.join(", "))
+            format!("return {pfx}{vname}({})", bindings.join(", "))
         };
 
         arms.push_str(&format!(
@@ -841,6 +856,7 @@ fn generate_enum_cloneable(type_name: &str, gs: &str, e: &EnumDef) -> String {
 
 fn generate_enum_hashable(type_name: &str, gs: &str, e: &EnumDef) -> String {
     let gp = equip_generic_prefix(gs);
+    let pfx = variant_prefix(type_name, e);
     let mut arms = String::new();
 
     for (idx, variant) in e.variants.iter().enumerate() {
@@ -853,9 +869,9 @@ fn generate_enum_hashable(type_name: &str, gs: &str, e: &EnumDef) -> String {
         let bindings: Vec<String> = (0..field_count).map(|i| format!("a{i}")).collect();
 
         let pattern = if field_count == 0 {
-            format!("{vname}()")
+            format!("{pfx}{vname}()")
         } else {
-            format!("{vname}({})", bindings.join(", "))
+            format!("{pfx}{vname}({})", bindings.join(", "))
         };
 
         let hash_body = if field_count == 0 {
@@ -885,6 +901,7 @@ fn generate_enum_hashable(type_name: &str, gs: &str, e: &EnumDef) -> String {
 
 fn generate_enum_serializable(type_name: &str, gs: &str, e: &EnumDef) -> String {
     let gp = equip_generic_prefix(gs);
+    let pfx = variant_prefix(type_name, e);
     let mut arms = String::new();
 
     for variant in &e.variants {
@@ -897,9 +914,9 @@ fn generate_enum_serializable(type_name: &str, gs: &str, e: &EnumDef) -> String 
         let bindings: Vec<String> = (0..field_count).map(|i| format!("a{i}")).collect();
 
         let pattern = if field_count == 0 {
-            format!("{vname}()")
+            format!("{pfx}{vname}()")
         } else {
-            format!("{vname}({})", bindings.join(", "))
+            format!("{pfx}{vname}({})", bindings.join(", "))
         };
 
         if field_count == 0 {

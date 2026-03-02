@@ -1,0 +1,33 @@
+from gg.log import Logger, LogLevel
+
+void main():
+    # Qualified variant construction: user-defined enums require qualified access
+    LogLevel lvl = LogLevel.Info()
+    LogLevel dbg = LogLevel.Debug()
+    LogLevel err = LogLevel.Err()
+
+    # Pattern matching with qualified variants
+    match lvl:
+        case LogLevel.Debug():
+            print("debug")
+        case LogLevel.Info():
+            print("info")
+        case LogLevel.Warn():
+            print("warn")
+        case LogLevel.Err():
+            print("err")
+
+    # Prelude variants (Ok, Error, Some, None) stay bare — always
+    Result[int, str] ok_val = Ok(42)
+    Result[int, str] err_val = Error("bad")
+    match ok_val:
+        case Ok(n):
+            print("{n}")
+        case Error(msg):
+            print("{msg}")
+
+    # LogLevel.Err() and Result.Error("msg") coexist without collision
+    Logger lg = Logger.new(err)
+    lg.error("boom")
+
+    print("done")

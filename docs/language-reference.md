@@ -686,11 +686,39 @@ enum Option[T]:
     None
 ```
 
-**Construction:** Variants are constructed as bare function calls at module scope:
+**Construction:** User-defined enum variants are accessed via qualified syntax `EnumName.Variant()`. Built-in prelude variants (`Ok`, `Error`, `Some`, `None`) are always available bare.
 
 ```gorget
-Color c = Red()
-Option[int] x = Some(42)
+Color c = Color.Red()          # user enum — qualified required
+Option[int] x = Some(42)       # prelude — bare OK
+Result[int, str] r = Ok(42)    # prelude — bare OK
+```
+
+**Variant namespacing:** Variants are namespaced under their enum type to prevent name collisions when two enums share variant names. Generic enum variants (e.g., `Maybe[T].Just`) remain bare since they stay in scope.
+
+```gorget
+from gg.log import LogLevel, Logger
+
+LogLevel lvl = LogLevel.Info()
+Result[int, str] err = Error("bad")    # prelude Error — unambiguous
+match lvl:
+    case LogLevel.Info():
+        print("info")
+    case LogLevel.Err():
+        print("error")
+```
+
+**Glob import:** Use `EnumName.*` to bring a type's variants into bare scope:
+
+```gorget
+from gg.log import LogLevel.*    # imports LogLevel type + all variants bare
+
+LogLevel lvl = Info()            # bare variant via glob import
+match lvl:
+    case Info():
+        print("info")
+    case Err():
+        print("err")
 ```
 
 ### 5.4 Traits
@@ -776,7 +804,8 @@ equip Wrapper with Describable via inner:
 import_stmt = simple_import | grouped_import | from_import ;
 simple_import  = "import" dotted_name NEWLINE ;
 grouped_import = "import" dotted_name ".{" IDENTIFIER { "," IDENTIFIER } "}" NEWLINE ;
-from_import    = "from" dotted_name "import" IDENTIFIER { "," IDENTIFIER } NEWLINE ;
+from_import    = "from" dotted_name "import" import_name { "," import_name } NEWLINE ;
+import_name    = IDENTIFIER | IDENTIFIER ".*" ;
 dotted_name    = IDENTIFIER { "." IDENTIFIER } ;
 ```
 
@@ -784,6 +813,16 @@ dotted_name    = IDENTIFIER { "." IDENTIFIER } ;
 import std.io
 import gg.json
 from std.conv import int_to_str, parse_int
+from gg.log import LogLevel, Logger           # import type only (qualified variant access)
+from gg.log import LogLevel.*, Logger         # import type + all variants bare (glob)
+```
+
+**Glob import (`EnumName.*`):** Imports the named type AND brings all its enum variants into bare scope. Useful when working extensively with a single enum. Glob-imported variants shadow prelude variants with the same name.
+
+```gorget
+from gg.log import LogLevel.*
+LogLevel lvl = Info()        # bare — from glob import
+LogLevel err = Err()         # bare — from glob import
 ```
 
 ### 5.7 Type Aliases

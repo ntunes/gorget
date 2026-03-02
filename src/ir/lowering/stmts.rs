@@ -1780,23 +1780,30 @@ pub fn lower_pattern_condition(
         }
 
         Pattern::Constructor { path, .. } => {
-            // Extract variant name from path
             let variant_name = if let Some(last) = path.last() {
-                &last.node
+                last.node.clone()
             } else {
                 return FunctionBuilder::const_bool(true);
             };
-            if let Some((enum_name, variant_name)) = ctx.resolve_enum_variant(variant_name) {
-                let tag = builder.tag_of(FunctionBuilder::copy(scrut_local));
-                if let Some(variant_tag) = ctx.resolve_variant_tag(&enum_name, &variant_name) {
-                    let cmp = builder.cmp(
-                        CmpOp::Eq,
-                        I32_TYPE,
-                        FunctionBuilder::copy(tag),
-                        Operand::Constant(Constant::I32(variant_tag as i32)),
-                    );
-                    return FunctionBuilder::copy(cmp);
+            // Qualified path (Color.Red): use first segment as enum name
+            let (enum_name, variant_name) = if path.len() >= 2 {
+                (path[0].node.clone(), variant_name)
+            } else {
+                // Bare variant: look up via enum_variants (prelude: Ok, Error, Some, None)
+                match ctx.resolve_enum_variant(&variant_name) {
+                    Some((en, vn)) => (en, vn),
+                    None => return FunctionBuilder::const_bool(true),
                 }
+            };
+            let tag = builder.tag_of(FunctionBuilder::copy(scrut_local));
+            if let Some(variant_tag) = ctx.resolve_variant_tag(&enum_name, &variant_name) {
+                let cmp = builder.cmp(
+                    CmpOp::Eq,
+                    I32_TYPE,
+                    FunctionBuilder::copy(tag),
+                    Operand::Constant(Constant::I32(variant_tag as i32)),
+                );
+                return FunctionBuilder::copy(cmp);
             }
             FunctionBuilder::const_bool(true)
         }
@@ -1863,19 +1870,24 @@ pub fn emit_pattern_bindings(
 
             // Use scrutinee type to find the enum name (avoids ambiguous variant lookups
             // when multiple monomorphized enums share variant names like "Some"/"None"/"Ok"/"Err")
-            let enum_name = ctx.type_registry.type_name(scrut_type)
-                .or_else(|| {
-                    // Fallback: pointer type → dereference to find pointee name
-                    if let Some(GirType::Ptr(inner) | GirType::MutPtr(inner)) = ctx.type_registry.get(scrut_type).cloned() {
-                        ctx.type_registry.type_name(inner)
-                    } else {
-                        None
-                    }
-                })
-                .or_else(|| {
-                    // Last resort: use variant name lookup (may be ambiguous for generics)
-                    ctx.resolve_enum_variant(&variant_name).map(|(en, _)| en)
-                });
+            // For qualified paths (Color.Red), path[0] gives us the explicit enum name.
+            let enum_name = if path.len() >= 2 {
+                Some(path[0].node.clone())
+            } else {
+                ctx.type_registry.type_name(scrut_type)
+                    .or_else(|| {
+                        // Fallback: pointer type → dereference to find pointee name
+                        if let Some(GirType::Ptr(inner) | GirType::MutPtr(inner)) = ctx.type_registry.get(scrut_type).cloned() {
+                            ctx.type_registry.type_name(inner)
+                        } else {
+                            None
+                        }
+                    })
+                    .or_else(|| {
+                        // Last resort: use variant name lookup (may be ambiguous for generics)
+                        ctx.resolve_enum_variant(&variant_name).map(|(en, _)| en)
+                    })
+            };
             let enum_name = if let Some(en) = enum_name {
                 en
             } else {

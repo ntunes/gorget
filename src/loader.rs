@@ -4,7 +4,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::errors::ParseError;
-use crate::parser::ast::{ImportStmt, Item, Module};
+use crate::parser::ast::{
+    Block, CallArg, Expr, FunctionBody, FunctionDef, ImportStmt, Item, Module,
+    Pattern, Stmt,
+};
 use crate::parser::Parser;
 use crate::span::{Span, Spanned};
 
@@ -294,25 +297,404 @@ impl ModuleLoader {
     }
 }
 
+// ══════════════════════════════════════════════════════════════
+// Variant Qualification Rewrite
+// ══════════════════════════════════════════════════════════════
+
+/// Rewrite bare enum variant references in an imported module to qualified form.
+///
+/// For a module that defines `enum LogLevel: Debug, Info, Warn, Error`, this
+/// rewrites:
+///   - `Expr::Call { callee: Identifier("Debug"), args }` → `MethodCall { receiver: Identifier("LogLevel"), method: "Debug", args }`
+///   - `Pattern::Constructor { path: ["Debug"], fields }` → `path: ["LogLevel", "Debug"]`
+///   - `Pattern::Binding("Debug")` (unit variant) → `Pattern::Constructor { path: ["LogLevel", "Debug"], fields: [] }`
+///
+/// This runs BEFORE merge so that imported modules' internal variant references
+/// are already qualified when semantic analysis sees them.
+/// Prelude variant names that must never be overridden by user enum auto-qualification.
+const PRELUDE_VARIANTS: &[&str] = &["Ok", "Error", "Some", "None"];
+
+/// Build a variant_name → enum_name map from a single module's non-generic enum definitions,
+/// excluding prelude names.
+fn build_variant_map_from_module(module: &Module) -> HashMap<String, String> {
+    let mut vm = HashMap::new();
+    for item in &module.items {
+        if let Item::Enum(e) = &item.node {
+            if e.generic_params.is_some() {
+                continue;
+            }
+            let enum_name = e.name.node.clone();
+            for variant in &e.variants {
+                let vname = variant.node.name.node.clone();
+                if !PRELUDE_VARIANTS.contains(&vname.as_str()) {
+                    vm.insert(vname, enum_name.clone());
+                }
+            }
+        }
+    }
+    vm
+}
+
+/// Build a global variant_name → enum_name map from ALL modules (for cross-module qualification).
+fn build_variant_map_from_all(modules: &[(PathBuf, String, Module)]) -> HashMap<String, String> {
+    let mut vm = HashMap::new();
+    for (_, _, module) in modules {
+        for item in &module.items {
+            if let Item::Enum(e) = &item.node {
+                if e.generic_params.is_some() {
+                    continue;
+                }
+                let enum_name = e.name.node.clone();
+                for variant in &e.variants {
+                    let vname = variant.node.name.node.clone();
+                    if !PRELUDE_VARIANTS.contains(&vname.as_str()) {
+                        // First-writer-wins: the defining module takes priority
+                        vm.entry(vname).or_insert_with(|| enum_name.clone());
+                    }
+                }
+            }
+        }
+    }
+    vm
+}
+
+/// Rewrite bare variant references in a module using the provided variant map.
+fn qualify_module_with_map(module: &mut Module, vm: &HashMap<String, String>) {
+    if vm.is_empty() {
+        return;
+    }
+    for item in &mut module.items {
+        qualify_item(&mut item.node, vm);
+    }
+}
+
+/// Rewrite bare variant references in a module using its own enum definitions.
+/// Used for backward compatibility in non-merge contexts.
+pub fn qualify_variant_refs(module: &mut Module) {
+    let vm = build_variant_map_from_module(module);
+    qualify_module_with_map(module, &vm);
+}
+
+fn qualify_item(item: &mut Item, vm: &HashMap<String, String>) {
+    match item {
+        Item::Function(f) => qualify_function(f, vm),
+        Item::Equip(eq) => {
+            for method in &mut eq.items {
+                qualify_function(&mut method.node, vm);
+            }
+        }
+        Item::ConstDecl(c) => qualify_expr(&mut c.value, vm),
+        Item::StaticDecl(s) => qualify_expr(&mut s.value, vm),
+        Item::Test(t) => {
+            for binding in &mut t.with_bindings {
+                qualify_expr(&mut binding.expr, vm);
+            }
+            qualify_block(&mut t.body, vm);
+        }
+        Item::SuiteSetup(s) => qualify_block(&mut s.body, vm),
+        Item::SuiteTeardown(s) => qualify_block(&mut s.body, vm),
+        _ => {}
+    }
+}
+
+fn qualify_function(f: &mut FunctionDef, vm: &HashMap<String, String>) {
+    for param in &mut f.params {
+        if let Some(default) = &mut param.node.default {
+            qualify_expr(default, vm);
+        }
+    }
+    match &mut f.body {
+        FunctionBody::Block(block) => qualify_block(block, vm),
+        FunctionBody::Expression(expr) => qualify_expr(expr, vm),
+        FunctionBody::Declaration | FunctionBody::Extern(_) => {}
+    }
+}
+
+fn qualify_block(block: &mut Block, vm: &HashMap<String, String>) {
+    for stmt in &mut block.stmts {
+        qualify_stmt(&mut stmt.node, vm);
+    }
+}
+
+fn qualify_stmt(stmt: &mut Stmt, vm: &HashMap<String, String>) {
+    match stmt {
+        Stmt::VarDecl { value, .. } => qualify_expr(value, vm),
+        Stmt::Assign { target, value } => {
+            qualify_expr(target, vm);
+            qualify_expr(value, vm);
+        }
+        Stmt::CompoundAssign { target, value, .. } => {
+            qualify_expr(target, vm);
+            qualify_expr(value, vm);
+        }
+        Stmt::Expr(e) => qualify_expr(e, vm),
+        Stmt::Return(Some(e)) => qualify_expr(e, vm),
+        Stmt::Return(None) => {}
+        Stmt::If { condition, then_body, elif_branches, else_body } => {
+            qualify_expr(condition, vm);
+            qualify_block(then_body, vm);
+            for (cond, body) in elif_branches {
+                qualify_expr(cond, vm);
+                qualify_block(body, vm);
+            }
+            if let Some(e) = else_body {
+                qualify_block(e, vm);
+            }
+        }
+        Stmt::While { condition, body, else_body } => {
+            qualify_expr(condition, vm);
+            qualify_block(body, vm);
+            if let Some(e) = else_body {
+                qualify_block(e, vm);
+            }
+        }
+        Stmt::Loop { body } => qualify_block(body, vm),
+        Stmt::For { iterable, body, else_body, .. } => {
+            qualify_expr(iterable, vm);
+            qualify_block(body, vm);
+            if let Some(e) = else_body {
+                qualify_block(e, vm);
+            }
+        }
+        Stmt::Match { scrutinee, arms, else_arm } => {
+            qualify_expr(scrutinee, vm);
+            for arm in arms {
+                qualify_pattern(&mut arm.pattern, vm);
+                if let Some(guard) = &mut arm.guard {
+                    qualify_expr(guard, vm);
+                }
+                qualify_expr(&mut arm.body, vm);
+            }
+            if let Some(b) = else_arm {
+                qualify_block(b, vm);
+            }
+        }
+        Stmt::Throw(e) => qualify_expr(e, vm),
+        Stmt::Break(_) | Stmt::Continue | Stmt::Pass => {}
+        Stmt::With { bindings, body } => {
+            for b in bindings { qualify_expr(&mut b.expr, vm); }
+            qualify_block(body, vm);
+        }
+        Stmt::Assert { condition, message } => {
+            qualify_expr(condition, vm);
+            if let Some(m) = message { qualify_expr(m, vm); }
+        }
+        Stmt::Unsafe { body } => qualify_block(body, vm),
+        Stmt::Item(_) | Stmt::Select { .. } => {}
+    }
+}
+
+fn qualify_expr(expr: &mut Spanned<Expr>, vm: &HashMap<String, String>) {
+    match &mut expr.node {
+        // Leaves
+        Expr::IntLiteral(_)
+        | Expr::FloatLiteral(_)
+        | Expr::BoolLiteral(_)
+        | Expr::CharLiteral(_)
+        | Expr::NoneLiteral
+        | Expr::SelfExpr
+        | Expr::It
+        | Expr::StringLiteral(_) => {}
+
+        Expr::Path { .. } => {}
+
+        Expr::Identifier(_) => {
+            // Standalone identifier that is a user enum variant → rewrite to Path
+            // (e.g., unit variants used as expressions in non-call position)
+            // We detect the pattern in the Call handler below; nothing to do here.
+        }
+
+        // The key rewrite: bare variant call → qualified method call
+        Expr::Call { callee, args, .. } => {
+            // Rewrite args first
+            for arg in args.iter_mut() {
+                qualify_expr(&mut arg.node.value, vm);
+            }
+            // Then check if callee is a bare variant identifier
+            if let Expr::Identifier(name) = &callee.node {
+                if let Some(enum_name) = vm.get(name.as_str()) {
+                    let variant_name = name.clone();
+                    let callee_span = callee.span;
+                    let enum_name = enum_name.clone();
+                    // Rewrite: Call { Identifier(v), args } → MethodCall { Identifier(E), v, args }
+                    let new_args: Vec<Spanned<CallArg>> = std::mem::take(args);
+                    expr.node = Expr::MethodCall {
+                        receiver: Box::new(Spanned::new(
+                            Expr::Identifier(enum_name),
+                            callee_span,
+                        )),
+                        method: Spanned::new(variant_name, callee_span),
+                        args: new_args,
+                        generic_args: None,
+                    };
+                    return;
+                }
+            }
+            // Also recurse into callee in the non-rewrite case
+            qualify_expr(callee, vm);
+        }
+
+        Expr::MethodCall { receiver, args, .. } => {
+            qualify_expr(receiver, vm);
+            for arg in args.iter_mut() {
+                qualify_expr(&mut arg.node.value, vm);
+            }
+        }
+
+        Expr::BinaryOp { left, right, .. } => {
+            qualify_expr(left, vm);
+            qualify_expr(right, vm);
+        }
+
+        Expr::UnaryOp { operand, .. } => qualify_expr(operand, vm),
+
+        Expr::FieldAccess { object, .. } => qualify_expr(object, vm),
+        Expr::TupleFieldAccess { object, .. } => qualify_expr(object, vm),
+        Expr::Index { object, index } => {
+            qualify_expr(object, vm);
+            qualify_expr(index, vm);
+        }
+        Expr::Range { start, end, .. } => {
+            if let Some(s) = start { qualify_expr(s, vm); }
+            if let Some(e) = end { qualify_expr(e, vm); }
+        }
+        Expr::If { condition, then_branch, elif_branches, else_branch } => {
+            qualify_expr(condition, vm);
+            qualify_expr(then_branch, vm);
+            for (cond, body) in elif_branches {
+                qualify_expr(cond, vm);
+                qualify_expr(body, vm);
+            }
+            if let Some(e) = else_branch { qualify_expr(e, vm); }
+        }
+        Expr::Match { scrutinee, arms, else_arm } => {
+            qualify_expr(scrutinee, vm);
+            for arm in arms {
+                qualify_pattern(&mut arm.pattern, vm);
+                if let Some(g) = &mut arm.guard { qualify_expr(g, vm); }
+                qualify_expr(&mut arm.body, vm);
+            }
+            if let Some(e) = else_arm { qualify_expr(e, vm); }
+        }
+        Expr::Block(block) => qualify_block(block, vm),
+        Expr::Do { body } => qualify_block(body, vm),
+        Expr::Try { expr: inner }
+        | Expr::Move { expr: inner }
+        | Expr::MutableBorrow { expr: inner }
+        | Expr::Deref { expr: inner }
+        | Expr::Await { expr: inner }
+        | Expr::Spawn { expr: inner }
+        | Expr::TryCapture { expr: inner } => qualify_expr(inner, vm),
+        Expr::NilCoalescing { lhs, rhs } => {
+            qualify_expr(lhs, vm);
+            qualify_expr(rhs, vm);
+        }
+        Expr::OptionalChain { object, .. } => qualify_expr(object, vm),
+        Expr::Is { expr: inner, pattern, .. } => {
+            qualify_expr(inner, vm);
+            qualify_pattern(pattern, vm);
+        }
+        Expr::As { expr: inner, .. } => qualify_expr(inner, vm),
+        Expr::Closure { body, .. } => qualify_expr(body, vm),
+        Expr::ImplicitClosure { body } => qualify_expr(body, vm),
+        Expr::ArrayLiteral(elems) | Expr::TupleLiteral(elems) => {
+            for e in elems { qualify_expr(e, vm); }
+        }
+        Expr::DictLiteral(pairs) => {
+            for (k, v) in pairs {
+                qualify_expr(k, vm);
+                qualify_expr(v, vm);
+            }
+        }
+        Expr::StructLiteral { args, .. } => {
+            for v in args { qualify_expr(v, vm); }
+        }
+        Expr::ListComprehension { expr: inner, iterable, condition, .. } => {
+            qualify_expr(inner, vm);
+            qualify_expr(iterable, vm);
+            if let Some(c) = condition { qualify_expr(c, vm); }
+        }
+        Expr::DictComprehension { key, value, iterable, condition, .. } => {
+            qualify_expr(key, vm);
+            qualify_expr(value, vm);
+            qualify_expr(iterable, vm);
+            if let Some(c) = condition { qualify_expr(c, vm); }
+        }
+        Expr::SetComprehension { expr: inner, iterable, condition, .. } => {
+            qualify_expr(inner, vm);
+            qualify_expr(iterable, vm);
+            if let Some(c) = condition { qualify_expr(c, vm); }
+        }
+    }
+}
+
+fn qualify_pattern(pattern: &mut Spanned<Pattern>, vm: &HashMap<String, String>) {
+    match &mut pattern.node {
+        Pattern::Binding(name) => {
+            // Bare uppercase identifier that is an enum variant → unit variant Constructor
+            if let Some(enum_name) = vm.get(name.as_str()) {
+                let span = pattern.span;
+                let vname = name.clone();
+                let ename = enum_name.clone();
+                pattern.node = Pattern::Constructor {
+                    path: vec![
+                        Spanned::new(ename, span),
+                        Spanned::new(vname, span),
+                    ],
+                    fields: vec![],
+                };
+            }
+        }
+        Pattern::Constructor { path, fields } => {
+            // If already qualified, leave as-is
+            if path.len() == 1 {
+                let vname = path[0].node.clone();
+                if let Some(enum_name) = vm.get(vname.as_str()) {
+                    let span = path[0].span;
+                    let ename = enum_name.clone();
+                    path.insert(0, Spanned::new(ename, span));
+                }
+            }
+            for f in fields { qualify_pattern(f, vm); }
+        }
+        Pattern::Or(alts) => {
+            for alt in alts { qualify_pattern(alt, vm); }
+        }
+        Pattern::Tuple(elems) => {
+            for e in elems { qualify_pattern(e, vm); }
+        }
+        Pattern::Wildcard | Pattern::Literal(_) | Pattern::Rest => {}
+    }
+}
+
 /// Merge all loaded modules into a single `Module`.
 ///
 /// The entry file's items come first, then imported modules' items
 /// (excluding their `Item::Import` nodes to avoid re-processing).
 pub fn merge_modules(modules: Vec<(PathBuf, String, Module)>) -> Module {
     if modules.len() == 1 {
-        // Single-file fast path — no merging needed
-        return modules.into_iter().next().unwrap().2;
+        // Single-file: build variant map from this module and qualify in-place.
+        let (path, source, mut module) = modules.into_iter().next().unwrap();
+        let vm = build_variant_map_from_module(&module);
+        qualify_module_with_map(&mut module, &vm);
+        let _ = (path, source);
+        return module;
     }
+
+    // Multi-file: build a global variant map from ALL modules for cross-module qualification.
+    let global_vm = build_variant_map_from_all(&modules);
 
     let mut all_items: Vec<Spanned<Item>> = Vec::new();
 
-    for (i, (_path, _source, module)) in modules.into_iter().enumerate() {
+    for (i, (_path, _source, mut module)) in modules.into_iter().enumerate() {
+        // Apply global qualification to every module (including entry).
+        qualify_module_with_map(&mut module, &global_vm);
         if i == 0 {
             // Entry file: keep all items (including its imports, so the resolver
             // can register the imported names)
             all_items.extend(module.items);
         } else {
-            // Imported modules: include everything except their own imports
+            // Imported modules: exclude their own import statements after qualification.
             all_items.extend(
                 module
                     .items
