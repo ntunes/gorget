@@ -6569,6 +6569,36 @@ done",
     );
 }
 
+#[test]
+fn tlsf_basic() {
+    run_gg(
+        "tlsf_basic.gg",
+        "\
+bytes_used > 0: true
+pool_size: 65536
+after reset: 0
+done",
+    );
+}
+
+#[test]
+fn tlsf_composable() {
+    run_gg(
+        "tlsf_composable.gg",
+        "\
+alloc= works: true
+done",
+    );
+}
+
+#[test]
+fn tlsf_escape() {
+    check_gg_fails(
+        "tlsf_escape.gg",
+        "cannot assign arena-scoped value",
+    );
+}
+
 // Meta (Compile-Time) Tests
 // ═══════════════════════════════════════════════════════════════
 

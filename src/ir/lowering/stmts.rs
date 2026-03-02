@@ -2191,11 +2191,11 @@ fn generate_assert_static_msg(condition: &Spanned<Expr>) -> String {
 
 // ---- P3.5: With statement ----
 
-/// Check if an expression is an allocator constructor (Arena, TrackingAllocator, PoolAllocator).
+/// Check if an expression is an allocator constructor (Arena, TrackingAllocator, PoolAllocator, TlsfAllocator).
 fn is_allocator_constructor(expr: &Expr) -> bool {
     if let Expr::Call { callee, .. } = expr {
         if let Expr::Identifier(name) = &callee.node {
-            return matches!(name.as_str(), "Arena" | "TrackingAllocator" | "PoolAllocator");
+            return matches!(name.as_str(), "Arena" | "TrackingAllocator" | "PoolAllocator" | "TlsfAllocator");
         }
     }
     false
@@ -2230,14 +2230,18 @@ fn lower_with(
 
     lower_block(ctx, builder, body);
 
-    // Pop allocators in reverse order and destroy them
+    // Drop all non-allocator locals FIRST (while the allocator is still alive),
+    // then pop + destroy allocators. This avoids use-after-free when collections
+    // allocated within the `with` scope try to dealloc via the active allocator.
+    ctx.drops.pop_scope(builder, &ctx.type_registry);
+
     for &local_id in allocator_locals.iter().rev() {
         builder.pop_allocator();
-        // Emit destroy call for the allocator
         let type_id = builder.locals[local_id.0 as usize].type_id;
         let type_name = ctx.type_name_for_id(type_id);
         let destroy_fn = match type_name.as_deref() {
             Some("PoolAllocator") => Some("gorget_pool_destroy"),
+            Some("TlsfAllocator") => Some("gorget_tlsf_destroy"),
             Some("TrackingAllocator") => Some("gorget_tracking_destroy"),
             Some("Arena") => Some("gorget_arena_destroy"),
             _ => None,
@@ -2246,8 +2250,6 @@ fn lower_with(
             builder.call_void(fn_name, vec![FunctionBuilder::copy(local_id)]);
         }
     }
-
-    ctx.drops.pop_scope(builder, &ctx.type_registry);
 }
 
 /// If the condition is an `Expr::Is { expr, pattern, .. }`, emit pattern bindings

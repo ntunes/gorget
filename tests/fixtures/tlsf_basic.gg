@@ -1,0 +1,16 @@
+from std.alloc import TlsfAllocator
+from std.collections import Vector
+
+void main():
+    with TlsfAllocator(65536) as alloc:
+        Vector[int] v = Vector[int]()
+        v.push(1)
+        v.push(2)
+        v.push(3)
+        assert alloc.bytes_used() > 0, "tlsf should have used bytes"
+        print("bytes_used > 0: true")
+        print("pool_size: {alloc.pool_size()}")
+        alloc.reset()
+        assert alloc.bytes_used() == 0, "after reset bytes should be 0"
+        print("after reset: 0")
+    print("done")

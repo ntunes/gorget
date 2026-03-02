@@ -143,6 +143,11 @@ enum SimAllocState {
         total_blocks: i64,
         used_blocks: i64,
     },
+    Tlsf {
+        bytes_used: i64,
+        peak_bytes: i64,
+        pool_size: i64,
+    },
 }
 
 impl SimAllocState {
@@ -162,6 +167,10 @@ impl SimAllocState {
             }
             SimAllocState::Arena { bytes_used, .. } => { *bytes_used += bytes; }
             SimAllocState::Pool { used_blocks, .. } => { *used_blocks += 1; }
+            SimAllocState::Tlsf { bytes_used, peak_bytes, .. } => {
+                *bytes_used += bytes;
+                if *bytes_used > *peak_bytes { *peak_bytes = *bytes_used; }
+            }
         }
     }
     fn record_realloc(&mut self, old_bytes: i64, new_bytes: i64) {
@@ -174,6 +183,10 @@ impl SimAllocState {
             }
             SimAllocState::Arena { bytes_used, .. } => { *bytes_used += new_bytes - old_bytes; }
             SimAllocState::Pool { used_blocks, .. } => { let _ = (old_bytes, new_bytes); *used_blocks += 1; }
+            SimAllocState::Tlsf { bytes_used, peak_bytes, .. } => {
+                *bytes_used += new_bytes - old_bytes;
+                if *bytes_used > *peak_bytes { *peak_bytes = *bytes_used; }
+            }
         }
     }
     fn record_free(&mut self, bytes: i64) {
@@ -185,6 +198,7 @@ impl SimAllocState {
             }
             SimAllocState::Arena { .. } => {} // Arena doesn't track individual frees
             SimAllocState::Pool { used_blocks, .. } => { if *used_blocks > 0 { *used_blocks -= 1; } let _ = bytes; }
+            SimAllocState::Tlsf { bytes_used, .. } => { *bytes_used -= bytes; let _ = bytes; }
         }
     }
 }
@@ -3967,6 +3981,13 @@ impl<'m> Interpreter<'m> {
                 self.tracking_allocs.insert(id, SimAllocState::Pool { block_size, total_blocks, used_blocks: 0 });
                 return Ok(Some(Value::I64(id as i64)));
             }
+            if name == "gorget_tlsf_new" || name == "TlsfAllocator" {
+                let pool_size = args.first().map(|v| v.as_i64()).unwrap_or(65536).max(1);
+                let id = self.tracking_next_id;
+                self.tracking_next_id += 1;
+                self.tracking_allocs.insert(id, SimAllocState::Tlsf { bytes_used: 0, peak_bytes: 0, pool_size });
+                return Ok(Some(Value::I64(id as i64)));
+            }
 
             // ── Helper: resolve allocator ID from arg0 ──
             let alloc_id: Option<usize> = {
@@ -3994,6 +4015,8 @@ impl<'m> Interpreter<'m> {
                 .or_else(|| name.strip_prefix("Arena__"))
                 .or_else(|| name.strip_prefix("gorget_pool_"))
                 .or_else(|| name.strip_prefix("PoolAllocator__"))
+                .or_else(|| name.strip_prefix("gorget_tlsf_"))
+                .or_else(|| name.strip_prefix("TlsfAllocator__"))
                 .unwrap_or(name);
             if let Some(id) = alloc_id {
                 match method {
@@ -4004,6 +4027,7 @@ impl<'m> Interpreter<'m> {
                                 SimAllocState::Tracking { .. } => *state = SimAllocState::tracking_default(),
                                 SimAllocState::Arena { bytes_used, .. } => *bytes_used = 0,
                                 SimAllocState::Pool { used_blocks, .. } => *used_blocks = 0,
+                                SimAllocState::Tlsf { bytes_used, peak_bytes, .. } => { *bytes_used = 0; *peak_bytes = 0; }
                             }
                         }
                         return Ok(Some(Value::Unit));
@@ -4036,6 +4060,12 @@ impl<'m> Interpreter<'m> {
                             "total_blocks"  => return Ok(Some(Value::I64(*total_blocks))),
                             "used_blocks"   => return Ok(Some(Value::I64(*used_blocks))),
                             "free_blocks"   => return Ok(Some(Value::I64(*total_blocks - *used_blocks))),
+                            _ => {}
+                        },
+                        SimAllocState::Tlsf { bytes_used, peak_bytes, pool_size } => match method {
+                            "bytes_used" => return Ok(Some(Value::I64(*bytes_used))),
+                            "peak_bytes" => return Ok(Some(Value::I64(*peak_bytes))),
+                            "pool_size"  => return Ok(Some(Value::I64(*pool_size))),
                             _ => {}
                         },
                     }

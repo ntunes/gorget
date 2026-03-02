@@ -3511,6 +3511,12 @@ fn lower_call(
             let dst = builder.call_extern("gorget_pool_new", vec![a1, a2], pool_type);
             return FunctionBuilder::copy(dst);
         }
+        if name == "TlsfAllocator" && args.len() == 1 {
+            let a1 = lower_expr(ctx, builder, &args[0].node.value);
+            let tlsf_type = ctx.type_mapper.lookup_named("TlsfAllocator").unwrap_or(I64_TYPE);
+            let dst = builder.call_extern("gorget_tlsf_new", vec![a1], tlsf_type);
+            return FunctionBuilder::copy(dst);
+        }
 
         // Channel[T](capacity) constructor → Channel__T__new(capacity)
         if name == "Channel" {

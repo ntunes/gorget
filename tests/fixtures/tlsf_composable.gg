@@ -1,0 +1,11 @@
+from std.alloc import TlsfAllocator
+from std.collections import Vector
+
+void main():
+    TlsfAllocator alloc = TlsfAllocator(65536)
+    Vector[int] v = Vector[int](alloc=alloc)
+    v.push(10)
+    v.push(20)
+    assert alloc.bytes_used() > 0, "alloc= should use tlsf"
+    print("alloc= works: true")
+    print("done")

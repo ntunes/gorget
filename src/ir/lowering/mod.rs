@@ -138,6 +138,7 @@ pub fn lower_module(
             ("Arena", "GorgetArena"),
             ("TrackingAllocator", "GorgetTrackingAllocator"),
             ("PoolAllocator", "GorgetPoolAllocator"),
+            ("TlsfAllocator", "GorgetTlsfAllocator"),
         ];
         for &(gorget_name, c_name) in alloc_types {
             let inner = module.type_registry.insert(GirType::Named(c_name.to_string()));

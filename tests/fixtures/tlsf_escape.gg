@@ -1,0 +1,12 @@
+from std.alloc import TlsfAllocator
+from std.collections import Vector
+
+void leak_via_assign():
+    Vector[int] outer = Vector[int]()
+    with TlsfAllocator(4096) as alloc:
+        Vector[int] inner = Vector[int]()
+        inner.push(42)
+        outer = !inner
+
+void main():
+    print("done")

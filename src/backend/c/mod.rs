@@ -244,6 +244,11 @@ fn map_stdlib_name(name: &str) -> &str {
         "PoolAllocator__block_size" => "gorget_pool_block_size",
         "PoolAllocator__reset" => "gorget_pool_reset",
         "PoolAllocator__destroy" => "gorget_pool_destroy",
+        "TlsfAllocator__bytes_used" => "gorget_tlsf_bytes_used",
+        "TlsfAllocator__peak_bytes" => "gorget_tlsf_peak_bytes",
+        "TlsfAllocator__pool_size" => "gorget_tlsf_pool_size",
+        "TlsfAllocator__reset" => "gorget_tlsf_reset",
+        "TlsfAllocator__destroy" => "gorget_tlsf_destroy",
         // UdpSocket methods
         "UdpSocket__sendto" => "gorget_udp_sendto",
         "UdpSocket__recvfrom" => "gorget_udp_recvfrom",
@@ -1837,6 +1842,7 @@ fn runtime_type_name(name: &str) -> Option<&'static str> {
         "Arena" => Some("GorgetArena*"),
         "TrackingAllocator" => Some("GorgetTrackingAllocator*"),
         "PoolAllocator" => Some("GorgetPoolAllocator*"),
+        "TlsfAllocator" => Some("GorgetTlsfAllocator*"),
         _ => None,
     }
 }
@@ -4888,6 +4894,7 @@ fn infer_runtime_return_type(name: &str) -> Option<&'static str> {
         "gorget_arena_new" | "Arena" => Some("GorgetArena*"),
         "gorget_tracking_new" | "TrackingAllocator" => Some("GorgetTrackingAllocator*"),
         "gorget_pool_new" | "PoolAllocator" => Some("GorgetPoolAllocator*"),
+        "gorget_tlsf_new" | "TlsfAllocator" => Some("GorgetTlsfAllocator*"),
         "Arena__bytes_used" | "gorget_arena_bytes_used" => Some("int64_t"),
         "TrackingAllocator__alloc_count" | "gorget_tracking_alloc_count"
         | "TrackingAllocator__free_count" | "gorget_tracking_free_count"
@@ -4900,6 +4907,9 @@ fn infer_runtime_return_type(name: &str) -> Option<&'static str> {
         | "PoolAllocator__free_blocks" | "gorget_pool_free_blocks"
         | "PoolAllocator__total_blocks" | "gorget_pool_total_blocks"
         | "PoolAllocator__block_size" | "gorget_pool_block_size" => Some("int64_t"),
+        "TlsfAllocator__bytes_used" | "gorget_tlsf_bytes_used"
+        | "TlsfAllocator__peak_bytes" | "gorget_tlsf_peak_bytes"
+        | "TlsfAllocator__pool_size" | "gorget_tlsf_pool_size" => Some("int64_t"),
         // Bytes
         "bytes_from_str" | "gorget_bytes_from_str"
         | "bytes_from_hex" | "gorget_bytes_from_hex"

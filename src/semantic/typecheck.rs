@@ -779,7 +779,7 @@ impl<'a> TypeChecker<'a> {
                 if let Expr::Identifier(cname) = &callee.node {
                     let is_builtin_ctor = matches!(cname.as_str(),
                         "Vector" | "List" | "Array" | "Dict" | "HashMap"
-                        | "Set" | "HashSet" | "Channel" | "String" | "Arena" | "PoolAllocator"
+                        | "Set" | "HashSet" | "Channel" | "String" | "Arena" | "PoolAllocator" | "TlsfAllocator"
                     );
                     if is_builtin_ctor {
                         for arg in args {
@@ -795,14 +795,14 @@ impl<'a> TypeChecker<'a> {
                                     let alloc_resolved = self.resolve_type(alloc_type);
                                     let is_alloc = match self.types.get(alloc_resolved) {
                                         ResolvedType::Defined(def_id) => {
-                                            matches!(self.scopes.get_def(*def_id).name.as_str(), "Arena" | "TrackingAllocator" | "PoolAllocator")
+                                            matches!(self.scopes.get_def(*def_id).name.as_str(), "Arena" | "TrackingAllocator" | "PoolAllocator" | "TlsfAllocator")
                                         }
                                         _ => false,
                                     };
                                     if !is_alloc {
                                         self.error(
                                             SemanticErrorKind::TypeMismatch {
-                                                expected: "allocator type (Arena, TrackingAllocator, or PoolAllocator)".to_string(),
+                                                expected: "allocator type (Arena, TrackingAllocator, PoolAllocator, or TlsfAllocator)".to_string(),
                                                 found: format!("{:?}", self.types.get(alloc_resolved)),
                                             },
                                             arg.node.value.span,
