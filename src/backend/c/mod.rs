@@ -360,7 +360,9 @@ fn is_cstr_param_fn(name: &str) -> bool {
         | "gorget_format_time" | "gorget_parse_time"
         | "gorget_seed" | "gorget_sleep_ms" | "gorget_reactor_sleep_ms"
         | "gorget_crypto_sha256" | "gorget_crypto_hmac_sha256"
-        | "gorget_socket_connect" | "gorget_tls_connect" | "gorget_udp_bind"
+        | "gorget_socket_connect" | "gorget_socket_write_str"
+        | "gorget_tls_connect" | "gorget_tls_write_str"
+        | "gorget_udp_bind" | "gorget_udp_join_multicast" | "gorget_udp_leave_multicast"
         | "gorget_base64_encode" | "gorget_base64_decode"
         | "gorget_hex_encode" | "gorget_hex_decode"
         | "gorget_url_encode" | "gorget_url_decode"
@@ -377,6 +379,7 @@ fn is_cstr_param_fn(name: &str) -> bool {
         | "gorget_sdl_load_texture" | "gorget_sdl_load_font"
         | "gorget_sdl_render_text" | "gorget_sdl_draw_text"
         | "gorget_sdl_text_width" | "gorget_sdl_text_height"
+        | "gorget_hot_load"
     )
 }
 
