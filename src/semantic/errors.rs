@@ -220,6 +220,9 @@ pub enum SemanticErrorKind {
 
     /// Compile-time meta evaluation error.
     MetaEvalError { message: String },
+
+    /// Orphan rule violation: neither the trait nor the type is defined locally.
+    OrphanImpl { trait_: String, type_: String },
 }
 
 impl std::fmt::Display for SemanticError {
@@ -449,6 +452,12 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::MetaEvalError { message } => {
                 write!(f, "meta evaluation error: {message}")
+            }
+            SemanticErrorKind::OrphanImpl { trait_, type_ } => {
+                write!(
+                    f,
+                    "orphan rule: `equip {type_} with {trait_}` requires that either `{type_}` or `{trait_}` is defined in this module"
+                )
             }
         }
     }

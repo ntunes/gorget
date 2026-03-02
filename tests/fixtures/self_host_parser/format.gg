@@ -479,6 +479,8 @@ str format_item(Item item):
             return "newtype " + name + "(" + format_type(inner) + ")"
         case IConstDecl(ty, name, val):
             return "const " + format_type(ty) + " " + name + " = " + format_expr(val)
+        case IStaticDecl(ty, name, val):
+            return format_type(ty) + " " + name + " = " + format_expr(val)
         case IExternBlock(fns):
             str result = "extern:"
             int i = 0

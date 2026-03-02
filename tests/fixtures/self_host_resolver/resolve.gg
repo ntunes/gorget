@@ -193,6 +193,14 @@ ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable &t
     col_names.push("Set")
     col_names.push("HashSet")
     col_names.push("Box")
+    col_names.push("Future")
+    col_names.push("Task")
+    col_names.push("Channel")
+    col_names.push("Shared")
+    col_names.push("Weak")
+    col_names.push("Mutex")
+    col_names.push("Guard")
+    col_names.push("TaskGroup")
     int ci = 0
     while ci < col_names.len():
         str cname = get_str_at(col_names, ci)
@@ -263,6 +271,9 @@ void collect_item(Item item, ScopeTable &scopes, TypeTable &types):
         case IConstDecl(_, name, _):
             scopes.define(name, DkConst(), Span(0, 0))
 
+        case IStaticDecl(_, name, _):
+            scopes.define(name, DkStatic(), Span(0, 0))
+
         case IExternBlock(fns):
             int fi = 0
             while fi < fns.len():
@@ -281,6 +292,21 @@ void collect_item(Item item, ScopeTable &scopes, TypeTable &types):
 
 
 void collect_import(ImportStmt imp, ScopeTable &scopes):
+    if imp.names.len() == 0:
+        # Simple import (e.g. `import gg.json`) — register last path segment
+        str path = imp.module_path
+        int dot_pos = -1
+        int pi = 0
+        while pi < path.byte_len():
+            if path.byte_slice(pi, pi + 1) == ".":
+                dot_pos = pi
+            pi = pi + 1
+        if dot_pos >= 0:
+            str last = path.byte_slice(dot_pos + 1, path.byte_len())
+            scopes.define(last, DkImport(), Span(0, 0))
+        else:
+            scopes.define(path, DkImport(), Span(0, 0))
+        return
     int i = 0
     while i < imp.names.len():
         str name = get_str_at(imp.names, i)
@@ -308,6 +334,9 @@ void resolve_item_body(Item item, ScopeTable &scopes, TypeTable &types, ResolveC
             resolve_equip_block(eq, &scopes, &types, &ctx)
 
         case IConstDecl(_, _, val):
+            resolve_expr(val, &scopes, &ctx)
+
+        case IStaticDecl(_, _, val):
             resolve_expr(val, &scopes, &ctx)
 
         case ITest(_, body):

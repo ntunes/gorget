@@ -494,6 +494,23 @@ int keyword_tag(Token tok):
         else:
             return 0
 
+# ── Helper: decompose 'expr as name' for with-statement ─────
+# parse_expr() consumes 'expr as name' as EAs(expr, type);
+# extract the inner expression and binding name.
+
+Stmt decompose_with_stmt(SpannedExpr consuming full_expr, Vector[Stmt] consuming body):
+    match full_expr.expr:
+        case EAs(inner_expr, cast_ty):
+            str name = ""
+            match (*cast_ty).ty:
+                case TNamed(type_name, _):
+                    name = type_name
+                else:
+                    pass
+            return SWith(*inner_expr, name, body)
+        else:
+            return SWith(!full_expr, "", body)
+
 # ── Helper: extract identifier name ─────────────────────────
 
 str token_ident(Token tok):
@@ -2074,16 +2091,14 @@ equip Parser:
         if self.check_kw(KW_MATCH):
             return self.parse_match_stmt()
 
-        # with
+        # with — parse_expr() consumes 'expr as name' as EAs(expr, type);
+        # decompose the cast to extract the binding name
         if self.check_kw(KW_WITH):
             self.advance()
-            SpannedExpr resource = self.parse_expr()
-            self.expect_kw(KW_AS, "expected 'as' in with statement")
-            SpannedToken name_tok = self.advance()
-            str name = token_ident(name_tok.lex_token)
+            SpannedExpr full_expr = self.parse_expr()
             self.expect_tok(TOK_COLON, "expected ':' after with binding")
             Vector[Stmt] body = self.parse_block()
-            return SWith(resource, name, body)
+            return decompose_with_stmt(!full_expr, !body)
 
         # Items: struct, enum, trait, equip, import, from, directive, const, type, newtype, extern, test
         if self.check_kw(KW_STRUCT):
@@ -2802,22 +2817,41 @@ equip Parser:
             elif self.check_kw(KW_SUITE):
                 items.push(self.parse_suite_item())
             else:
-                # Must be a function definition or top-level statement
-                int saved_pos = self.pos
-                bool is_func = self.try_detect_function()
-                self.pos = saved_pos
-                if is_func:
-                    items.push(self.parse_function_item())
-                else:
-                    # Wrap top-level statement in a dummy
-                    Stmt s = self.parse_statement()
-                    # Just skip it for now — top-level statements aren't really items
-                    # but we can wrap them
-                    match s:
-                        case SItem(found_item):
-                            items.push(found_item)
+                # Skip `meta` declarations (meta int X = ..., meta type T = ..., etc.)
+                SpannedToken peek_tok = self.peek()
+                str peek_name = token_ident(peek_tok.lex_token)
+                if peek_name == "meta":
+                    # Skip to next line/dedent
+                    self.advance()
+                    while not self.at_end() and not self.check_tok(TOK_NEWLINE) and not self.check_tok(TOK_DEDENT):
+                        # meta if: has an indented body — skip it too
+                        if self.check_tok(TOK_INDENT):
+                            self.advance()
+                            while not self.at_end() and not self.check_tok(TOK_DEDENT):
+                                self.advance()
+                            if self.check_tok(TOK_DEDENT):
+                                self.advance()
                         else:
-                            pass
+                            self.advance()
+                    if self.check_tok(TOK_NEWLINE):
+                        self.advance()
+                else:
+                    # Must be a function definition or top-level statement
+                    int saved_pos = self.pos
+                    bool is_func = self.try_detect_function()
+                    self.pos = saved_pos
+                    if is_func:
+                        items.push(self.parse_function_item())
+                    else:
+                        Stmt s = self.parse_statement()
+                        match s:
+                            case SItem(found_item):
+                                items.push(found_item)
+                            case SVarDecl(ty, name, val, _):
+                                # Module-level VarDecl → static declaration
+                                items.push(IStaticDecl(ty, name, val))
+                            else:
+                                pass
             self.skip_trivia()
         return Module(items)
 

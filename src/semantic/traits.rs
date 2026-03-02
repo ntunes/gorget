@@ -6,7 +6,7 @@ use crate::span::Span;
 use super::errors::{SemanticError, SemanticErrorKind};
 use super::ids::{DefId, TypeId};
 use super::resolve::{ResolutionMap, validate_str_param_modes};
-use super::scope::ScopeTable;
+use super::scope::{DefKind, ScopeTable};
 use super::types::{self, TypeTable};
 
 /// Function signature for trait methods.
@@ -519,6 +519,35 @@ fn process_impl(
         if registry.trait_impls.contains_key(&(trait_id, self_type_id, trait_arg_type_ids.clone())) {
             errors.push(SemanticError {
                 kind: SemanticErrorKind::DuplicateImpl {
+                    trait_: trait_name.clone().unwrap_or_default(),
+                    type_: self_type_name.clone(),
+                },
+                span: impl_block.span,
+            });
+            return;
+        }
+    }
+
+    // Orphan rule: at least one of (trait, type) must be defined in this module.
+    // A definition is "local" if it has a real span (not built-in) and is not an import.
+    if trait_def_id.is_some() {
+        let type_is_local = scopes.lookup(&self_type_name)
+            .map(|def_id| {
+                let info = scopes.get_def(def_id);
+                info.span != Span::dummy() && info.kind != DefKind::Import
+            })
+            .unwrap_or(false);
+
+        let trait_is_local = trait_def_id
+            .map(|def_id| {
+                let info = scopes.get_def(def_id);
+                info.span != Span::dummy() && info.kind != DefKind::Import
+            })
+            .unwrap_or(false);
+
+        if !type_is_local && !trait_is_local {
+            errors.push(SemanticError {
+                kind: SemanticErrorKind::OrphanImpl {
                     trait_: trait_name.clone().unwrap_or_default(),
                     type_: self_type_name.clone(),
                 },
@@ -1137,5 +1166,83 @@ equip Outer with Showable via inner:
             SemanticErrorKind::ViaFieldTypeMissingTrait { field, field_type, trait_, .. }
                 if field == "inner" && field_type == "Inner" && trait_ == "Showable"
         )), "via with field type not implementing trait should error: {:?}", errors);
+    }
+
+    #[test]
+    fn orphan_rule_local_type_builtin_trait() {
+        // Local type + built-in trait → allowed
+        let source = "\
+struct MyPoint:
+    float x
+    float y
+
+equip MyPoint with Equatable:
+    bool eq(self, MyPoint other):
+        return true
+";
+        let (_, errors) = analyze(source);
+        assert!(
+            !errors.iter().any(|e| matches!(&e.kind, SemanticErrorKind::OrphanImpl { .. })),
+            "local type with built-in trait should be allowed: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn orphan_rule_local_trait_local_type() {
+        // Both local → allowed
+        let source = "\
+trait MyTrait:
+    int value(self)
+
+struct MyStruct:
+    int x
+
+equip MyStruct with MyTrait:
+    int value(self):
+        return self.x
+";
+        let (_, errors) = analyze(source);
+        assert!(
+            !errors.iter().any(|e| matches!(&e.kind, SemanticErrorKind::OrphanImpl { .. })),
+            "both local should be allowed: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn orphan_rule_rejects_both_foreign() {
+        // Built-in type (int is a primitive, won't be found in scopes) +
+        // built-in trait (Displayable) → both foreign → orphan error
+        let source = "\
+equip int with Displayable:
+    str display(self):
+        return \"x\"
+";
+        let (_, errors) = analyze(source);
+        assert!(
+            errors.iter().any(|e| matches!(
+                &e.kind,
+                SemanticErrorKind::OrphanImpl { trait_, type_ }
+                    if trait_ == "Displayable" && type_ == "int"
+            )),
+            "both foreign should be rejected: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn orphan_rule_local_trait_foreign_type() {
+        // Local trait + built-in type → allowed
+        let source = "\
+trait MyTrait:
+    int value(self)
+
+equip int with MyTrait:
+    int value(self):
+        return 42
+";
+        let (_, errors) = analyze(source);
+        assert!(
+            !errors.iter().any(|e| matches!(&e.kind, SemanticErrorKind::OrphanImpl { .. })),
+            "local trait with foreign type should be allowed: {:?}", errors
+        );
     }
 }

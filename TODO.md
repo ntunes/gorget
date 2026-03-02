@@ -14,7 +14,7 @@
 
 - **Self-hosting parser: 3 remaining comparison mismatches (234/237)**: (1) `chars.gg` — `'\0'` null character literal truncates the C string at the null byte, so the Gorget parser outputs `''` instead of `'\0'`. Fundamental C string limitation. (2) `math_constants.gg` — C's `%g` float formatting outputs `1e+06` / `3.14159e+06` while Rust's `Display` outputs `1000000.0` / `3141592.0`. Would need custom float-to-string in format.gg. (3) `name_first.gg` — `directive name-first` enables a completely different parsing mode (identifier-first declarations like `x int` instead of `int x`). The self-hosting parser only handles the default type-first mode. [added: 2026-02-21]
 
-- **Self-hosting resolver: 9 remaining comparison mismatches (231/240)**: Categories: (1) `import std.json` whole-module imports not handled — only `from X import Y` is supported (3 fixtures: serializable, serialize_collections, deserializable). (2) `SVarDecl` uses `str` name instead of pattern — tuple destructuring in VarDecl not supported in Gorget parser AST (2 fixtures: pattern_destructure, name_first). (3) `implicit it` variable not registered (1 fixture: implicit_it). (4) Match pattern constructor bindings (`case Some(v)`) — Gorget registers binding differently from Rust (1 fixture: match_option_result). (5) Complex match resolution divergence (1 fixture: match_advanced). (6) Test `with` clause bindings not resolved (1 fixture: test_with_clause). SCOPE lines excluded from comparison — Rust AST's `Expr::Block` creates extra scopes absent in Gorget AST. DEF spans excluded — Gorget AST doesn't store name spans. [added: 2026-02-23]
+- **Self-hosting resolver: 28 remaining comparison mismatches (295/323)**: Remaining categories: (1) Parse failures causing misidentified statics — bare tuple return types, `Mutex[int]` param types, dot-shorthand patterns (5 fixtures). (2) `implicit it` — needs `ImplicitClosure` AST variant in Gorget parser (1 fixture). (3) Test `with` clause bindings not in AST (1 fixture). (4) Tuple destructuring in VarDecl (`auto (a, b) = ...`) — name is string not pattern (1 fixture). (5) `directive name-first` not supported (1 fixture). (6) Various match/pattern/enum resolution divergences — is_bindings, async_match, derive, enums, option_box_enum, recursive_enum, etc. (12 fixtures). (7) Other: shared_weak, mutex_basic, trait_bounds, namespace_basic (7 fixtures). SCOPE lines excluded — Rust `Expr::Block` creates extra scopes absent in Gorget AST. DEF spans excluded — Gorget AST doesn't store name spans. [updated: 2026-03-02]
 
 
 - **`Into[T]` conversion trait**: Counterpart to `From[T]` requiring explicit type args (`value.into[Celsius]()`) or return-type inference. Adds complexity (equipping primitives, potential blanket impl pattern). [added: 2026-02-17]
@@ -40,7 +40,6 @@
 
 
 
-- **Basic orphan rule**: equip block must be in the module that defines the trait or the type. Prevents incoherent trait implementations across modules. [added: 2026-02-10]
 
 
 

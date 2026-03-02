@@ -117,6 +117,7 @@ enum Item:
     ITypeAlias(str, Vector[str], SpannedType)
     INewtype(str, SpannedType)
     IConstDecl(SpannedType, str, SpannedExpr)
+    IStaticDecl(SpannedType, str, SpannedExpr)
     IExternBlock(Vector[FunctionDef])
     ITest(str, Vector[Stmt])
     ISuiteSetup(Vector[Stmt])
