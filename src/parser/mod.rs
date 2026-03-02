@@ -463,10 +463,17 @@ impl Parser {
                 return self.parse_meta_item();
             }
             // Function definition (starts with return type, qualifiers, or `fn` in name-first mode)
+            // Exception: `TypeName varname = expr` is a module-level variable declaration.
             _ => {
-                let func = self.parse_function_def(attributes, visibility, doc_comment)?;
-                let span = start.merge(func.span);
-                Ok(Spanned::new(Item::Function(func), span))
+                if !self.name_first && self.looks_like_module_var_decl() {
+                    let decl = self.parse_module_var_decl(visibility)?;
+                    let span = start.merge(decl.span);
+                    Ok(Spanned::new(Item::StaticDecl(decl), span))
+                } else {
+                    let func = self.parse_function_def(attributes, visibility, doc_comment)?;
+                    let span = start.merge(func.span);
+                    Ok(Spanned::new(Item::Function(func), span))
+                }
             }
         }
     }
@@ -1217,6 +1224,71 @@ impl Parser {
         Ok(ExternBlock {
             abi,
             items,
+            span: start.merge(end),
+        })
+    }
+
+    // ── Module-level variable (type-first, no keyword) ────────
+
+    /// Returns true if the current token sequence looks like `Type Name =` (module-level var decl).
+    /// Scans past the type (including optional `[...]` generic args), then the name, checks for `=`.
+    fn looks_like_module_var_decl(&self) -> bool {
+        let mut i = 0;
+        // First token: identifier (type name) or primitive keyword
+        match self.peek_ahead(i) {
+            Token::Identifier(_) => i += 1,
+            Token::Keyword(kw) => {
+                if matches!(kw, Keyword::Str | Keyword::Int | Keyword::Bool | Keyword::Float
+                               | Keyword::Char | Keyword::Void | Keyword::Auto | Keyword::StringType
+                               | Keyword::Mutex) {
+                    i += 1;
+                } else {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+        // Optional generic args: [...]
+        if matches!(self.peek_ahead(i), Token::LBracket) {
+            i += 1;
+            let mut depth = 1usize;
+            loop {
+                match self.peek_ahead(i) {
+                    Token::LBracket => { depth += 1; i += 1; }
+                    Token::RBracket => {
+                        depth -= 1;
+                        i += 1;
+                        if depth == 0 { break; }
+                    }
+                    Token::Eof => return false,
+                    _ => { i += 1; }
+                }
+            }
+        }
+        // Must be followed by identifier (variable name)
+        if !matches!(self.peek_ahead(i), Token::Identifier(_)) {
+            return false;
+        }
+        i += 1;
+        // `=` → variable decl; `(` → function def
+        matches!(self.peek_ahead(i), Token::Eq)
+    }
+
+    /// Parse a module-level variable declaration without a `static` keyword:
+    /// `TypeName [generic_args] name = expr`
+    fn parse_module_var_decl(&mut self, visibility: Visibility) -> Result<StaticDecl, ParseError> {
+        let start = self.peek_span();
+        let type_ = self.parse_type()?;
+        let name = self.expect_identifier()?;
+        self.expect(&Token::Eq)?;
+        let value = self.parse_expr()?;
+        let end = self.previous_span();
+        self.consume_newline();
+        Ok(StaticDecl {
+            visibility,
+            type_,
+            name,
+            value,
             span: start.merge(end),
         })
     }

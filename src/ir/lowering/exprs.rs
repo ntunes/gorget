@@ -57,6 +57,9 @@ fn lower_expr_inner(
                 }
             } else if let Some(constant) = ctx.module_constants.get(name) {
                 Operand::Constant(constant.clone())
+            } else if ctx.global_names.contains(name.as_str()) {
+                // Module-level static variable — reference by name in C
+                Operand::Constant(Constant::GlobalRef(name.clone()))
             } else if ctx.fn_sigs.contains_key(name.as_str()) {
                 // Named function reference (for passing as Callable argument)
                 Operand::Constant(Constant::FuncRef(name.clone()))
@@ -824,6 +827,13 @@ fn lower_struct_literal(
         return FunctionBuilder::copy(dst);
     }
 
+    // CondVar() → gorget_condvar_new()
+    if effective_name == "CondVar" && args.is_empty() {
+        let cv_type = ctx.type_mapper.lookup_named("CondVar").unwrap_or(I64_TYPE);
+        let dst = builder.call_extern("gorget_condvar_new", vec![], cv_type);
+        return FunctionBuilder::copy(dst);
+    }
+
     // RWLock[T](val) → RWLock__T__new(val) — follows the Mutex pattern
     if effective_name == "RWLock" || effective_name.starts_with("RWLock__") {
         if !args.is_empty() {
@@ -1533,6 +1543,49 @@ fn lower_method_call(
         }
     }
 
+    // CondVar methods — receiver is GorgetCondVar* (pointer), passed by value.
+    // CondVar.wait(g) passes a mutable pointer to the Guard so the C bridge can access
+    // g->mutex->lock for pthread_cond_wait (gorget_condvar_wait_guard in MUTEX_RUNTIME).
+    {
+        let recv_type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
+        if let Some(ref ctn) = recv_type_name {
+            if ctn == "CondVar" {
+                match method_name {
+                    "notify_one" => {
+                        builder.call_void("CondVar__notify_one", vec![recv]);
+                        return Operand::Constant(Constant::Unit);
+                    }
+                    "notify_all" => {
+                        builder.call_void("CondVar__notify_all", vec![recv]);
+                        return Operand::Constant(Constant::Unit);
+                    }
+                    "wait" if !args.is_empty() => {
+                        // Lower the guard argument and pass a mutable pointer to it,
+                        // so the C bridge can reach g->mutex->lock.
+                        let guard_val = lower_expr(ctx, builder, &args[0].node.value);
+                        let guard_type = infer_operand_type_full(ctx, &guard_val, builder);
+                        let guard_ptr = if let Operand::Copy(ref place) | Operand::Move(ref place) = guard_val {
+                            let ptr_type = ctx.register_mut_ptr_type(guard_type);
+                            let ptr_local = builder.add_local(ptr_type, None);
+                            builder.emit_borrow_mut(ptr_local, place.clone());
+                            Operand::Copy(Place::local(ptr_local))
+                        } else {
+                            let temp = builder.add_local(guard_type, None);
+                            builder.assign(Place::local(temp), guard_val);
+                            let ptr_type = ctx.register_mut_ptr_type(guard_type);
+                            let ptr_local = builder.add_local(ptr_type, None);
+                            builder.emit_borrow_mut(ptr_local, Place::local(temp));
+                            Operand::Copy(Place::local(ptr_local))
+                        };
+                        builder.call_void("CondVar__wait", vec![recv, guard_ptr]);
+                        return Operand::Constant(Constant::Unit);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
     // RWLock[T] methods: read, write — pass the GorgetRWLock* receiver directly by value.
     {
         let recv_type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
@@ -1567,7 +1620,7 @@ fn lower_method_call(
             if gtn.starts_with("ReadGuard__") || gtn.starts_with("WriteGuard__") {
                 let elem_suffix = if let Some(s) = gtn.strip_prefix("ReadGuard__") { s }
                     else { gtn.strip_prefix("WriteGuard__").unwrap_or("int64_t") };
-                let elem_type = ctx.type_mapper.lookup_named(elem_suffix).unwrap_or(I64_TYPE);
+                let elem_type = c_suffix_to_type_id(elem_suffix, ctx);
                 let recv_type = infer_operand_type_full(ctx, &recv, builder);
                 let guard_ptr = if let Operand::Copy(ref place) | Operand::Move(ref place) = recv {
                     let pt = ctx.register_mut_ptr_type(recv_type);
@@ -1701,8 +1754,7 @@ fn lower_method_call(
                 };
                 match method_name {
                     "get" => {
-                        let elem_type = ctx.type_mapper.lookup_named(elem_suffix)
-                            .unwrap_or(I64_TYPE);
+                        let elem_type = c_suffix_to_type_id(elem_suffix, ctx);
                         let get_fn = format!("{gtn}__get");
                         let dst = builder.call(&get_fn, vec![guard_ptr], elem_type);
                         return FunctionBuilder::copy(dst);
@@ -2806,6 +2858,7 @@ fn infer_type_name_from_operand_full(
             Constant::Bool(_) => return Some("bool".to_string()),
             Constant::I64(_) => return Some("int64_t".to_string()),
             Constant::F64(_) => return Some("double".to_string()),
+            Constant::GlobalRef(name) => return ctx.global_type_names.get(name).cloned(),
             _ => return None,
         },
     };
@@ -5093,6 +5146,21 @@ pub fn ensure_task_group_type_def(ctx: &mut LoweringContext, tg_type_name: &str)
     ctx.type_registry.add_type_def(type_def);
 }
 
+/// Map a C type suffix (e.g. "bool", "int64_t", "double") to a GIR TypeId.
+/// Used when the elem type of a generic container is stored as a C name rather than a Gorget name.
+fn c_suffix_to_type_id(suffix: &str, ctx: &LoweringContext) -> TypeId {
+    match suffix {
+        "bool"    => BOOL_TYPE,
+        "double" | "float64_t" => F64_TYPE,
+        "float"  => F64_TYPE,
+        "int64_t" | "int" | "long long" => I64_TYPE,
+        "int32_t" => I32_TYPE,
+        "int8_t"  => I8_TYPE,
+        "Str"     => ctx.type_mapper.str_type,
+        other     => ctx.type_mapper.lookup_named(other).unwrap_or(I64_TYPE),
+    }
+}
+
 pub fn infer_operand_type_full(ctx: &LoweringContext, operand: &Operand, builder: &FunctionBuilder) -> TypeId {
     match operand {
         Operand::Copy(place) | Operand::Move(place) => {
@@ -5142,6 +5210,7 @@ pub fn infer_operand_type(ctx: &LoweringContext, operand: &Operand) -> TypeId {
             Constant::Unit => UNIT_TYPE,
             Constant::SizeOf(_) => U64_TYPE,
             Constant::FuncRef(_) => UNIT_TYPE, // treated as void* at call site
+            Constant::GlobalRef(_) => UNIT_TYPE, // type looked up from global table at call site
         },
     }
 }

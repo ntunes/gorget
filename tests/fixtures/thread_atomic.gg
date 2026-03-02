@@ -1,0 +1,14 @@
+from std.thread import Thread, thread_spawn
+from std.sync import AtomicInt
+
+AtomicInt counter = AtomicInt(0)
+
+void increment():
+    counter.add(1)
+
+void main():
+    Thread[void] t1 = thread_spawn(increment)
+    Thread[void] t2 = thread_spawn(increment)
+    t1.join()
+    t2.join()
+    print(counter.load())

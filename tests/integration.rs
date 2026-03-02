@@ -6640,6 +6640,26 @@ fn sync_rwlock() {
 }
 
 #[test]
+fn thread_atomic() {
+    run_gg("thread_atomic.gg", "2");
+}
+
+#[test]
+fn thread_mutex() {
+    run_gg("thread_mutex.gg", "2");
+}
+
+#[test]
+fn thread_barrier() {
+    run_gg("thread_barrier.gg", "2");
+}
+
+#[test]
+fn sync_condvar() {
+    run_gg("sync_condvar.gg", "true");
+}
+
+#[test]
 fn process_spawn() {
     // echo appends \n, print(out) adds another \n → blank line before exit code
     run_gg("process_spawn.gg", "hello world\n\n0\ntrue");

@@ -1,0 +1,16 @@
+from std.thread import Thread, thread_spawn
+from std.sync import Barrier, AtomicInt
+
+Barrier b = Barrier(2)
+AtomicInt arrived = AtomicInt(0)
+
+void worker():
+    b.wait()
+    arrived.add(1)
+
+void main():
+    Thread[void] t1 = thread_spawn(worker)
+    Thread[void] t2 = thread_spawn(worker)
+    t1.join()
+    t2.join()
+    print(arrived.load())

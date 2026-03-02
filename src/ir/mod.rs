@@ -227,6 +227,9 @@ pub enum GlobalInit {
     },
     FnRef(String),
     Bytes(Vec<u8>),
+    /// C expression to call at runtime (via __attribute__((constructor))).
+    /// Used for module-level variables that need heap allocation (e.g. AtomicInt, Barrier).
+    RuntimeCall(String),
 }
 
 /// An extern function declaration.

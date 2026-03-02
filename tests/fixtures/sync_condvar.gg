@@ -1,0 +1,22 @@
+from std.thread import Thread, thread_spawn
+from std.sync import CondVar
+
+Mutex[bool] ready_mtx = Mutex[bool](false)
+CondVar cv = CondVar()
+
+void producer():
+    Guard[bool] g = ready_mtx.lock()
+    g.set(true)
+    cv.notify_one()
+
+void consumer():
+    Guard[bool] g = ready_mtx.lock()
+    while not g.get():
+        cv.wait(g)
+    print(g.get())
+
+void main():
+    Thread[void] t1 = thread_spawn(consumer)
+    Thread[void] t2 = thread_spawn(producer)
+    t1.join()
+    t2.join()

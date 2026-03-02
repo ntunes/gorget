@@ -2849,6 +2849,93 @@ Re-exports the `Displayable` trait and `format` builtin for discoverability. Bot
 | `ExecResult` | struct | Result of a process: `output: str`, `errors: str`, `exit_code: int` |
 | `exec` | `int(str)` | Run a shell command, return exit code |
 | `exec_output` | `ExecResult(str)` | Run a command, capture stdout and exit code |
+| `process_spawn` | `Result[Process, str](str, Vector[str])` | Spawn a child process with full pipe control |
+| `getpid` | `int()` | Return the current process ID |
+| `Process` | struct (opaque) | Handle to a child process |
+| `Process.wait` | `int()` | Wait for the process to exit; returns its exit code |
+| `Process.kill` | `void()` | Send SIGKILL to the process |
+| `Process.pid` | `int()` | Return the child's PID |
+| `Process.write_stdin` | `void(str)` | Write data to the child's stdin pipe |
+| `Process.close_stdin` | `void()` | Close the child's stdin pipe (signals EOF) |
+| `Process.read_stdout` | `str()` | Read all remaining stdout from the child |
+| `Process.read_stderr` | `str()` | Read all remaining stderr from the child |
+
+Use `exec` / `exec_output` for quick shell one-liners. Use `process_spawn` when you need argument safety (no shell interpretation), bidirectional pipe I/O, or fine-grained process lifecycle control.
+
+```gorget
+from std.process import process_spawn, getpid
+
+Result[Process, str] result = process_spawn("echo", Vector[str]("hello world"))
+match result:
+    case Ok(p):
+        str out = p.read_stdout()
+        int code = p.wait()
+        print(out)         # hello world
+        print(code)        # 0
+    case Error(msg):
+        print("spawn failed: {msg}")
+```
+
+**`std.sync`** — Synchronization primitives
+
+```gorget
+from std.sync import AtomicInt, AtomicBool, CondVar, Barrier, RWLock
+```
+
+| Type | Constructor | Key Methods |
+|---|---|---|
+| `AtomicInt` | `AtomicInt(int)` | `load() -> int`, `store(int)`, `add(int) -> int`, `sub(int) -> int`, `compare_exchange(int, int) -> bool` |
+| `AtomicBool` | `AtomicBool(bool)` | `load() -> bool`, `store(bool)`, `swap(bool) -> bool`, `compare_exchange(bool, bool) -> bool` |
+| `CondVar` | `CondVar()` | `wait(Guard[T])`, `notify_one()`, `notify_all()` |
+| `Barrier` | `Barrier(int n)` | `wait()` — blocks until `n` threads call `wait()` |
+| `RWLock[T]` | `RWLock[T](T)` | `read() -> ReadGuard[T]`, `write() -> WriteGuard[T]` |
+| `ReadGuard[T]` | from `lock.read()` | `get() -> T`; dropping releases the read lock |
+| `WriteGuard[T]` | from `lock.write()` | `get() -> T`, `set(T)`; dropping releases the write lock |
+
+All atomics use sequential consistency (`__ATOMIC_SEQ_CST`). Module-level sync primitives can be declared without `static`:
+
+```gorget
+from std.sync import AtomicInt, Barrier
+
+AtomicInt counter = AtomicInt(0)
+Barrier b = Barrier(2)
+```
+
+`CondVar.wait(g)` must be called while `g` (a `Guard[T]`) is held; it atomically releases the lock, sleeps until notified, and re-acquires before returning.
+
+**`std.thread`** — OS threads
+
+```gorget
+from std.thread import Thread, thread_spawn, current_thread_id
+```
+
+| Name | Signature | Description |
+|---|---|---|
+| `thread_spawn` | `Thread[T](T())` | Spawn a zero-argument function as a new OS thread |
+| `Thread[T].join` | `T()` | Block until the thread finishes; returns its result |
+| `Thread[T].id` | `int()` | Return the thread's `pthread_t` as an integer |
+| `current_thread_id` | `int()` | Return the calling thread's ID |
+
+Threads are preemptive OS threads (pthreads), heavier than async tasks. `thread_spawn` currently requires bare function references — closures with captured state are not yet supported; share state via module-level variables instead.
+
+```gorget
+from std.thread import Thread, thread_spawn
+from std.sync import AtomicInt
+
+AtomicInt counter = AtomicInt(0)
+
+void increment():
+    counter.add(1)
+
+void main():
+    Thread[void] t1 = thread_spawn(increment)
+    Thread[void] t2 = thread_spawn(increment)
+    t1.join()
+    t2.join()
+    print(counter.load())   # 2
+```
+
+Contrast with `spawn`: async tasks share a thread pool cooperatively; OS threads are independent and preemptive.
 
 **`gg.json`** — JSON parsing and serialization
 

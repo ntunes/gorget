@@ -401,6 +401,19 @@ fn gen_sync_module() -> Module {
         decl_method("wait", Ownership::Borrow, &[], ty_void()),
     ]);
 
+    // CondVar — non-generic opaque struct
+    let condvar_struct = opaque_struct("CondVar");
+    // CondVar.wait takes a Guard[T] argument; declared as a generic guard placeholder.
+    let ty_guard_bool = Type::Named {
+        name: Spanned::dummy("Guard".to_string()),
+        generic_args: vec![Spanned::dummy(ty_bool())],
+    };
+    let condvar_equip = equip_block("CondVar", vec![
+        decl_method("notify_one", Ownership::Borrow, &[], ty_void()),
+        decl_method("notify_all", Ownership::Borrow, &[], ty_void()),
+        decl_method("wait", Ownership::Borrow, &[("guard", ty_guard_bool)], ty_void()),
+    ]);
+
     // RWLock[T] — generic, follows Mutex[T] pattern
     let rwlock_struct = Spanned::dummy(Item::Struct(StructDef {
         attributes: vec![],
@@ -498,6 +511,7 @@ fn gen_sync_module() -> Module {
             atomic_int_struct, atomic_int_equip,
             atomic_bool_struct, atomic_bool_equip,
             barrier_struct, barrier_equip,
+            condvar_struct, condvar_equip,
             rwlock_struct, rwlock_equip,
             read_guard_struct, read_guard_equip,
             write_guard_struct, write_guard_equip,

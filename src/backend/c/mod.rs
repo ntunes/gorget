@@ -121,6 +121,10 @@ fn map_stdlib_name(name: &str) -> &str {
         "AtomicBool__compare_exchange" => "gorget_atomic_bool_compare_exchange",
         // Barrier methods
         "Barrier__wait" => "gorget_barrier_wait",
+        // CondVar methods
+        "CondVar__notify_one" => "gorget_condvar_notify_one",
+        "CondVar__notify_all" => "gorget_condvar_notify_all",
+        "CondVar__wait"       => "gorget_condvar_wait_guard",
         // std.thread
         "current_thread_id" => "gorget_current_thread_id",
         // Environment
@@ -482,7 +486,7 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
         out.push_str(c_runtime::PROCESS_SPAWN_RUNTIME);
     }
     if module.has_sync
-        || all_call_names.iter().any(|n| n.starts_with("gorget_atomic_") || n.starts_with("gorget_barrier_") || n.starts_with("gorget_rwlock_") || n.starts_with("AtomicInt__") || n.starts_with("AtomicBool__") || n.starts_with("Barrier__") || n.starts_with("RWLock__") || n.starts_with("ReadGuard__") || n.starts_with("WriteGuard__")) {
+        || all_call_names.iter().any(|n| n.starts_with("gorget_atomic_") || n.starts_with("gorget_barrier_") || n.starts_with("gorget_condvar_") || n.starts_with("gorget_rwlock_") || n.starts_with("AtomicInt__") || n.starts_with("AtomicBool__") || n.starts_with("Barrier__") || n.starts_with("CondVar__") || n.starts_with("RWLock__") || n.starts_with("ReadGuard__") || n.starts_with("WriteGuard__")) {
         out.push_str(c_runtime::SYNC_RUNTIME);
     }
     if module.has_thread
@@ -1565,9 +1569,29 @@ fn emit_globals(out: &mut String, module: &Module) {
     for global in &module.globals {
         emit_global(out, global, &module.type_registry);
     }
+    // Emit __attribute__((constructor)) for globals that need runtime initialization.
+    emit_global_constructors(out, module);
     if !module.globals.is_empty() {
         out.push('\n');
     }
+}
+
+/// Emit a single `__attribute__((constructor))` function that initializes all
+/// globals whose `GlobalInit` is `RuntimeCall`.
+fn emit_global_constructors(out: &mut String, module: &Module) {
+    let runtime_globals: Vec<_> = module.globals.iter()
+        .filter(|g| matches!(&g.init, GlobalInit::RuntimeCall(_)))
+        .collect();
+    if runtime_globals.is_empty() {
+        return;
+    }
+    out.push_str("__attribute__((constructor)) static void __gorget_init_globals(void) {\n");
+    for g in &runtime_globals {
+        if let GlobalInit::RuntimeCall(expr) = &g.init {
+            let _ = writeln!(out, "    {} = {};", g.name, expr);
+        }
+    }
+    out.push_str("}\n");
 }
 
 /// Emit a single global variable/constant.
@@ -1602,6 +1626,10 @@ fn emit_global(out: &mut String, global: &Global, registry: &TypeRegistry) {
             }
             out.push_str("};\n");
         }
+        GlobalInit::RuntimeCall(_) => {
+            // Declared without initializer; initialized in __gorget_init_globals().
+            let _ = writeln!(out, "static {c_type} {name};", name = global.name);
+        }
     }
 }
 
@@ -1625,6 +1653,7 @@ fn emit_global_init(out: &mut String, init: &GlobalInit) {
             out.push('}');
         }
         GlobalInit::Bytes(_) => out.push_str("/* bytes */"),
+        GlobalInit::RuntimeCall(expr) => out.push_str(expr),
     }
 }
 
@@ -1783,6 +1812,7 @@ fn runtime_type_name(name: &str) -> Option<&'static str> {
         "AtomicInt" => Some("GorgetAtomicInt*"),
         "AtomicBool" => Some("GorgetAtomicBool*"),
         "Barrier" => Some("GorgetBarrier*"),
+        "CondVar" => Some("GorgetCondVar*"),
         "RWLock" => Some("GorgetRWLock*"),
         // std.process Process type
         "Process" => Some("GorgetProcess*"),
@@ -7875,6 +7905,10 @@ fn format_constant(constant: &Constant, _func: &Function, _registry: &TypeRegist
             // The adapter has the (void* env, params...) ABI matching closure __call functions.
             let c_name = mangle_name(name);
             format!("(void*)(void*[2]){{(void*)__adapt_{c_name}, NULL}}")
+        }
+        Constant::GlobalRef(name) => {
+            // Reference to a module-level static variable — emit the variable name directly.
+            name.clone()
         }
     }
 }

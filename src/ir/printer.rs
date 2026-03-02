@@ -137,6 +137,7 @@ fn print_global_init(out: &mut String, init: &GlobalInit) {
         }
         GlobalInit::FnRef(name) => write!(out, "@{}", name).unwrap(),
         GlobalInit::Bytes(bytes) => write!(out, "bytes[{}]", bytes.len()).unwrap(),
+        GlobalInit::RuntimeCall(expr) => write!(out, "runtime_call({expr})").unwrap(),
     }
 }
 
@@ -610,6 +611,7 @@ fn format_constant(c: &Constant) -> String {
         Constant::Unit => "unit".into(),
         Constant::SizeOf(type_id) => format!("sizeof(Type{})", type_id.0),
         Constant::FuncRef(name) => format!("@{}", name),
+        Constant::GlobalRef(name) => format!("global:{}", name),
     }
 }
 

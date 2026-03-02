@@ -80,6 +80,12 @@ pub struct LoweringContext<'a> {
     /// Accumulated set of thread-spawned fn names: fn_name → return TypeId.
     /// NOT cleared between functions. Used to emit thread spawn/join helpers.
     pub thread_spawned_fns: FxHashMap<String, TypeId>,
+    /// Module-level global variable names (from StaticDecl items).
+    /// Used by Expr::Identifier lowering to emit Constant::GlobalRef instead of I64(0).
+    pub global_names: rustc_hash::FxHashSet<String>,
+    /// Module-level global variable type names: var_name → AST type name (e.g. "AtomicInt").
+    /// Used by infer_type_name_from_operand_full to dispatch methods on globals.
+    pub global_type_names: FxHashMap<String, String>,
 }
 
 impl<'a> LoweringContext<'a> {
@@ -112,6 +118,8 @@ impl<'a> LoweringContext<'a> {
             pending_spawn_fn: None,
             spawned_fn_names: FxHashMap::default(),
             thread_spawned_fns: FxHashMap::default(),
+            global_names: rustc_hash::FxHashSet::default(),
+            global_type_names: FxHashMap::default(),
         }
     }
 

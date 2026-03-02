@@ -1907,6 +1907,14 @@ static inline void gorget_guard_release(gorget_guard_t* g) {
     g->mutex = NULL;
     g->ptr   = NULL;
 }
+
+// CondVar.wait(guard) bridge — defined here because it requires gorget_guard_t.
+// Uses void* for the CondVar so this compiles even when SYNC_RUNTIME is absent.
+// GorgetCondVar is { pthread_cond_t cond; }, so the pointer IS a pthread_cond_t*.
+static inline void gorget_condvar_wait_guard(void* cv_opaque, gorget_guard_t* g) {
+    pthread_cond_t* cond = (pthread_cond_t*)cv_opaque;
+    pthread_cond_wait(cond, &g->mutex->lock);
+}
 "#;
 
 /// TaskGroup — structured concurrency: all spawned children complete before join() returns.
@@ -5663,6 +5671,21 @@ static inline void gorget_write_guard_release(gorget_write_guard_t* g) {
     if (!g->rwlock) return;
     pthread_rwlock_unlock(&g->rwlock->lock);
     g->rwlock = NULL; g->ptr = NULL;
+}
+
+// ── CondVar ──
+typedef struct { pthread_cond_t cond; } GorgetCondVar;
+
+static inline GorgetCondVar* gorget_condvar_new(void) {
+    GorgetCondVar* cv = (GorgetCondVar*)GORGET_CALLOC(1, sizeof(GorgetCondVar));
+    pthread_cond_init(&cv->cond, NULL);
+    return cv;
+}
+static inline void gorget_condvar_notify_one(GorgetCondVar* cv) {
+    pthread_cond_signal(&cv->cond);
+}
+static inline void gorget_condvar_notify_all(GorgetCondVar* cv) {
+    pthread_cond_broadcast(&cv->cond);
 }
 "#;
 

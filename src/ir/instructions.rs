@@ -67,6 +67,9 @@ pub enum Constant {
     SizeOf(TypeId),
     /// Reference to a named function (for passing functions as Callable arguments).
     FuncRef(String),
+    /// Reference to a named global variable (module-level static).
+    /// Emitted as the variable name directly in C.
+    GlobalRef(String),
 }
 
 /// Instructions that don't transfer control flow.

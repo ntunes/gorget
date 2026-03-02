@@ -1,0 +1,15 @@
+from std.thread import Thread, thread_spawn
+
+Mutex[int] counter = Mutex[int](0)
+
+void increment():
+    Guard[int] g = counter.lock()
+    g.set(g.get() + 1)
+
+void main():
+    Thread[void] t1 = thread_spawn(increment)
+    Thread[void] t2 = thread_spawn(increment)
+    t1.join()
+    t2.join()
+    Guard[int] g = counter.lock()
+    print(g.get())

@@ -733,6 +733,39 @@ pub fn lower_module(
         ctx.fn_sigs.insert("bool__default".to_string(), (vec![], BOOL_TYPE));
     }
 
+    // Pre-register module-level static variables so functions can reference them.
+    // Skip stdlib StaticDecl items (identified by dummy spans — start == end == 0);
+    // those are handled by the C backend as well-known names (stderr, stdout, etc.).
+    for item in &ast_module.items {
+        if let Item::StaticDecl(decl) = &item.node {
+            // Stdlib items use Span::dummy() { start: 0, end: 0 } — skip them.
+            if decl.span.start == decl.span.end {
+                continue;
+            }
+            ctx.global_names.insert(decl.name.node.clone());
+            // Store the mangled type name for method dispatch inference.
+            // For generic types like Mutex[int] store "Mutex__int64_t" (not just "Mutex")
+            // so that infer_type_name_from_operand_full can dispatch correctly.
+            if let ast::Type::Named { name: type_name, generic_args } = &decl.type_.node {
+                let mangled = if generic_args.is_empty() {
+                    type_name.node.clone()
+                } else {
+                    crate::ir::lowering::types::mangle_generic_name(&type_name.node, generic_args)
+                };
+                ctx.global_type_names.insert(decl.name.node.clone(), mangled);
+            }
+        }
+    }
+
+    // Lower module-level static declarations → Globals.
+    // Skip stdlib StaticDecl items (dummy spans) — handled by C backend as well-known names.
+    for item in &ast_module.items {
+        if let Item::StaticDecl(decl) = &item.node {
+            if decl.span.start == decl.span.end { continue; }
+            lower_static_decl(&mut ctx, &mut module, decl);
+        }
+    }
+
     // Lower all non-generic functions
     for item in &ast_module.items {
         if let Item::Function(func) = &item.node {
@@ -924,7 +957,7 @@ pub fn lower_module(
             }
         }
         // Any sync type signals has_sync
-        if matches!(name.as_str(), "AtomicInt" | "AtomicBool" | "Barrier")
+        if matches!(name.as_str(), "AtomicInt" | "AtomicBool" | "Barrier" | "CondVar")
             || name.starts_with("RWLock__")
             || name.starts_with("ReadGuard__")
             || name.starts_with("WriteGuard__")
@@ -971,6 +1004,127 @@ pub fn lower_module(
     module.has_spawn = !ctx.spawned_fn_names.is_empty();
 
     module
+}
+
+/// Lower a module-level static declaration into a Global IR node.
+///
+/// The initializer is evaluated as a C expression string for types that require
+/// runtime initialization (heap allocation): AtomicInt, AtomicBool, Barrier,
+/// CondVar, Mutex[T], RWLock[T].  All others use `Zeroed`.
+fn lower_static_decl(
+    ctx: &mut LoweringContext,
+    module: &mut Module,
+    decl: &crate::parser::ast::StaticDecl,
+) {
+    use crate::ir::Global;
+
+    // Use map_ast_type_mut so that generic types like Mutex[int] get registered
+    // (map_ast_type returns UNIT_TYPE for unregistered generic types).
+    let type_id = ctx.type_mapper.map_ast_type_mut(&decl.type_.node, &mut ctx.type_registry);
+    let name = decl.name.node.clone();
+
+    let init = eval_static_init(&decl.type_.node, &decl.value.node);
+    module.globals.push(Global { name, type_id, init });
+}
+
+/// Evaluate a static initializer expression into a GlobalInit value.
+/// Supports constructor calls for sync primitives that require heap allocation.
+fn eval_static_init(ty: &crate::parser::ast::Type, expr: &crate::parser::ast::Expr) -> crate::ir::GlobalInit {
+    use crate::ir::GlobalInit;
+    use crate::parser::ast::Expr;
+
+    // Extract the type name (ignoring generic args) for dispatch
+    let type_name = match ty {
+        crate::parser::ast::Type::Named { name, .. } => name.node.as_str(),
+        _ => return GlobalInit::Zeroed,
+    };
+
+    // Constructor syntax: TypeName(args...) is parsed as StructLiteral.
+    // Fallback: plain function Call (e.g. from explicit call-style expressions).
+    let (callee_name, literal_args): (&str, Vec<String>) = match expr {
+        Expr::StructLiteral { name, args, .. } => {
+            let largs = args.iter().map(|a| eval_literal_arg(&a.node)).collect();
+            (name.node.as_str(), largs)
+        }
+        Expr::Call { callee, args, .. } => {
+            let cname = match &callee.node {
+                Expr::Identifier(n) => n.as_str(),
+                _ => return GlobalInit::Zeroed,
+            };
+            let largs = args.iter().map(|a| eval_literal_arg(&a.node.value.node)).collect();
+            (cname, largs)
+        }
+        _ => return GlobalInit::Zeroed,
+    };
+
+    // Dispatch by type/callee name
+    let c_call = match type_name {
+        "AtomicInt" if callee_name == "AtomicInt" => {
+            let n = literal_args.first().cloned().unwrap_or_else(|| "0".to_string());
+            format!("gorget_atomic_int_new({n})")
+        }
+        "AtomicBool" if callee_name == "AtomicBool" => {
+            let b = literal_args.first().map(|s| if s == "true" { "1" } else { "0" }.to_string())
+                          .unwrap_or_else(|| "0".to_string());
+            format!("gorget_atomic_bool_new({b})")
+        }
+        "Barrier" if callee_name == "Barrier" => {
+            let n = literal_args.first().cloned().unwrap_or_else(|| "1".to_string());
+            format!("gorget_barrier_new({n})")
+        }
+        "CondVar" if callee_name == "CondVar" => {
+            "gorget_condvar_new()".to_string()
+        }
+        "Mutex" if callee_name == "Mutex" => {
+            // Determine element C type from the generic arg
+            let elem_c = generic_elem_c_type(ty);
+            let v = literal_args.first().cloned().unwrap_or_else(|| "0".to_string());
+            format!("Mutex__{elem_c}__new({v})")
+        }
+        "RWLock" if callee_name == "RWLock" => {
+            let elem_c = generic_elem_c_type(ty);
+            let v = literal_args.first().cloned().unwrap_or_else(|| "0".to_string());
+            format!("RWLock__{elem_c}__new({v})")
+        }
+        _ => return GlobalInit::Zeroed,
+    };
+
+    GlobalInit::RuntimeCall(c_call)
+}
+
+/// Evaluate a simple literal expression to a C string for use in static initializers.
+fn eval_literal_arg(expr: &crate::parser::ast::Expr) -> String {
+    use crate::parser::ast::Expr;
+    match expr {
+        Expr::IntLiteral(n) => n.to_string(),
+        Expr::FloatLiteral(f) => f.to_string(),
+        Expr::BoolLiteral(b) => if *b { "1".to_string() } else { "0".to_string() },
+        Expr::StringLiteral(s) => format!("\"{}\"", s.as_plain_text()),
+        _ => "0".to_string(),
+    }
+}
+
+/// Extract the C element type name from a generic type like `Mutex[int]`.
+fn generic_elem_c_type(ty: &crate::parser::ast::Type) -> String {
+    use crate::parser::ast::{PrimitiveType, Type};
+    if let Type::Named { generic_args, .. } = ty {
+        if let Some(arg) = generic_args.first() {
+            return match &arg.node {
+                Type::Primitive(p) => match p {
+                    PrimitiveType::Int | PrimitiveType::Int64 => "int64_t".to_string(),
+                    PrimitiveType::Float | PrimitiveType::Float64 => "double".to_string(),
+                    PrimitiveType::Bool  => "bool".to_string(),
+                    PrimitiveType::Str   => "Str".to_string(),
+                    PrimitiveType::Char  => "int32_t".to_string(),
+                    PrimitiveType::Uint8 => "uint8_t".to_string(),
+                    _ => "int64_t".to_string(),
+                },
+                Type::Named { name, .. } => name.node.clone(),
+                _ => "int64_t".to_string(),
+            };
+        }
+    }
+    "int64_t".to_string()
 }
 
 /// Lower test items into test functions and generate a test runner main().

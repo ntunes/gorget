@@ -420,6 +420,11 @@ impl<'m> Interpreter<'m> {
                     .collect();
                 Value::Struct { type_name: type_name.clone(), fields: field_vals }
             }
+            GlobalInit::RuntimeCall(_) => {
+                // Runtime-initialized globals are not supported in the sim interpreter;
+                // return a zero value as a placeholder.
+                Value::zero_for_type(type_id, &self.module.type_registry)
+            }
         }
     }
 
@@ -451,6 +456,10 @@ impl<'m> Interpreter<'m> {
             Constant::Unit => Value::Unit,
             Constant::SizeOf(_type_id) => Value::I64(8), // Approximate sizeof as 8 bytes
             Constant::FuncRef(name) => Value::FuncRef(name.clone()),
+            Constant::GlobalRef(name) => {
+                // Look up the global variable value in the interpreter's global store.
+                self.globals.get(name).cloned().unwrap_or(Value::Unit)
+            }
         }
     }
 
