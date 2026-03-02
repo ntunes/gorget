@@ -79,6 +79,18 @@ pub fn lower_function(
     // P2.6: Push Function drop scope
     ctx.drops.push_scope(DropScopeKind::Function);
 
+    // Register function parameters with the drop elaborator so that ref-counted
+    // types (Channel, Shared, Weak) passed by value are released at scope exit.
+    for (i, p) in func.params.iter().enumerate() {
+        let local_id = LocalId((i + 1) as u32);
+        let base_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+        let gir_type = match p.node.ownership {
+            Ownership::MutableBorrow => ctx.register_mut_ptr_type(base_type),
+            _ => base_type,
+        };
+        ctx.drops.register_param(local_id, gir_type, &ctx.type_registry);
+    }
+
     // Lower the body
     match &func.body {
         FunctionBody::Block(block) => {
@@ -199,6 +211,20 @@ pub fn lower_equip_method(
     // P2.6: Push Function drop scope
     ctx.drops.push_scope(DropScopeKind::Function);
 
+    // Register function parameters with the drop elaborator so that ref-counted
+    // types (Channel, Shared, Weak) passed by value are released at scope exit.
+    {
+        let mut pidx = if self_ptr_type.is_some() { 2u32 } else { 1u32 };
+        for p in &method.params {
+            if p.node.name.node == "self" {
+                continue;
+            }
+            let gir_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+            ctx.drops.register_param(LocalId(pidx), gir_type, &ctx.type_registry);
+            pidx += 1;
+        }
+    }
+
     // Lower the body
     match &method.body {
         FunctionBody::Block(block) => {
@@ -305,6 +331,18 @@ pub fn lower_generic_function(
 
     // P2.6: Push Function drop scope
     ctx.drops.push_scope(DropScopeKind::Function);
+
+    // Register function parameters with the drop elaborator so that ref-counted
+    // types (Channel, Shared, Weak) passed by value are released at scope exit.
+    for (i, p) in template.params.iter().enumerate() {
+        let local_id = LocalId((i + 1) as u32);
+        let base_type = substitute_and_map_type(ctx, &p.node.type_.node, &subs);
+        let gir_type = match p.node.ownership {
+            Ownership::MutableBorrow => ctx.register_mut_ptr_type(base_type),
+            _ => base_type,
+        };
+        ctx.drops.register_local(local_id, gir_type, &ctx.type_registry);
+    }
 
     // Lower the body
     match &template.body {
@@ -457,6 +495,20 @@ pub fn lower_generic_equip_methods_with_defaults(
 
         // P2.6: Push Function drop scope
         ctx.drops.push_scope(DropScopeKind::Function);
+
+        // Register function parameters with the drop elaborator so that ref-counted
+        // types (Channel, Shared, Weak) passed by value are released at scope exit.
+        {
+            let mut pidx = if has_self { 2u32 } else { 1u32 };
+            for p in &method_def.params {
+                if p.node.name.node == "self" {
+                    continue;
+                }
+                let gir_type = substitute_and_map_type(ctx, &p.node.type_.node, &subs);
+                ctx.drops.register_param(LocalId(pidx), gir_type, &ctx.type_registry);
+                pidx += 1;
+            }
+        }
 
         match &method_def.body {
             FunctionBody::Block(block) => {

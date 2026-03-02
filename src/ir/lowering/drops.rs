@@ -83,6 +83,24 @@ impl DropElaborator {
         }
     }
 
+    /// Register a function parameter for drop at scope exit — **only** for Copy-semantics
+    /// types that have a non-None drop strategy (e.g., Channel, Shared, Weak).
+    ///
+    /// Move-semantics parameters are already tracked via VarDecl/body mechanisms;
+    /// registering them again would cause double-free.
+    pub fn register_param(&mut self, local: LocalId, type_id: TypeId, registry: &TypeRegistry) {
+        if !needs_param_drop(type_id, registry) {
+            return;
+        }
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.entries.push(DropEntry {
+                local,
+                type_id,
+                maybe_moved: false,
+            });
+        }
+    }
+
     /// Mark a local as "maybe moved" — future drops will use DropIfAlive.
     pub fn mark_moved(&mut self, local: LocalId) {
         for scope in self.scopes.iter_mut().rev() {
@@ -142,6 +160,23 @@ impl DropElaborator {
     pub fn has_scopes(&self) -> bool {
         !self.scopes.is_empty()
     }
+}
+
+/// Check whether a Copy-semantics type needs dropping when passed as a function parameter.
+/// Only returns true for Copy types with a non-None drop strategy (ref-counted pointers like
+/// Channel, Shared, Weak). Move types are excluded because their drops are handled by the
+/// body-level drop elaboration — registering them as params too would double-free.
+fn needs_param_drop(type_id: TypeId, registry: &TypeRegistry) -> bool {
+    if type_id.0 < 12 {
+        return false;
+    }
+    if let Some(GirType::Named(name)) = registry.get(type_id) {
+        if let Some(type_def) = registry.get_type_def(name) {
+            return type_def.metadata.copy_semantics == CopySemantics::Copy
+                && type_def.metadata.drop_strategy != DropStrategy::None;
+        }
+    }
+    false
 }
 
 /// Check whether a type needs dropping based on its metadata.

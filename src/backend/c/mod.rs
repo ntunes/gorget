@@ -1403,6 +1403,14 @@ fn emit_channel_and_task_defs(out: &mut String, module: &Module) {
         let _ = writeln!(out,
             "static inline bool {chan_name}__poll_recv({chan_name}* self, {elem_c}* out, GorgetWaker* waker) {{ \
              return gorget_channel_poll_recv(*self, out, waker); }}");
+        // clone: retain (increment refcount)
+        let _ = writeln!(out,
+            "static inline {chan_name} {chan_name}__clone({chan_name} self) {{ \
+             return gorget_channel_retain(self); }}");
+        // drop: release (decrement refcount, auto-close+free when last ref drops)
+        let _ = writeln!(out,
+            "static inline void {chan_name}__drop({chan_name}* self) {{ \
+             gorget_channel_release(*self); }}");
         out.push('\n');
     }
 
@@ -1422,7 +1430,9 @@ fn emit_channel_and_task_defs(out: &mut String, module: &Module) {
     if !task_ret_c_types.is_empty() {
         out.push_str("/* ── Task structs ── */\n");
         for task_name in &task_ret_c_types {
-            let _ = writeln!(out, "typedef struct {{ void* __task; }} {task_name};");
+            // Task carries a void* to the __SpawnCtx and a drop function pointer
+            // for RAII join-on-drop (different spawned fns have different ctx sizes).
+            let _ = writeln!(out, "typedef struct {{ void* __task; void (*__drop)(void*); }} {task_name};");
         }
         out.push('\n');
     }
@@ -1474,6 +1484,14 @@ fn emit_spawn_helpers(out: &mut String, module: &Module) {
         }
         out.push_str("    return NULL;\n}\n");
 
+        // Per-fn drop helper: joins thread + frees the specific __SpawnCtx type.
+        // Called via the __drop function pointer embedded in Task__T.
+        let _ = writeln!(out, "static void __spawn_drop_{fn_name}(void* __ptr) {{");
+        let _ = writeln!(out, "    {ctx_name}* __ctx = ({ctx_name}*)__ptr;");
+        out.push_str("    pthread_join(__ctx->thread, NULL);\n");
+        let _ = writeln!(out, "    GORGET_FREE(__ctx, sizeof({ctx_name}));");
+        out.push_str("}\n");
+
         // Spawn function: allocates ctx, fills args, creates thread, returns Task
         let param_decls = params.iter()
             .map(|(name, type_id)| {
@@ -1484,11 +1502,21 @@ fn emit_spawn_helpers(out: &mut String, module: &Module) {
             .join(", ");
         let _ = writeln!(out, "static inline {task_name} __gorget_spawn_{fn_name}({param_decls}) {{");
         let _ = writeln!(out, "    {ctx_name}* __ctx = ({ctx_name}*)GORGET_CALLOC(1, sizeof({ctx_name}));");
-        for (param_name, _) in params {
-            let _ = writeln!(out, "    __ctx->__{param_name} = {param_name};");
+        for (param_name, param_type) in params {
+            // For ref-counted types, emit a retain/clone call to increment the
+            // refcount — the spawned thread gets its own reference.
+            let gir_name = gir_type_name(*param_type, &module.type_registry);
+            let is_refcounted = gir_name.as_ref().map_or(false, |n|
+                n.starts_with("Channel__") || n.starts_with("Shared__") || n.starts_with("Weak__"));
+            if is_refcounted {
+                let type_name = gir_name.as_ref().unwrap();
+                let _ = writeln!(out, "    __ctx->__{param_name} = {type_name}__clone({param_name});");
+            } else {
+                let _ = writeln!(out, "    __ctx->__{param_name} = {param_name};");
+            }
         }
         let _ = writeln!(out, "    pthread_create(&__ctx->thread, NULL, __spawn_thread_{fn_name}, __ctx);");
-        let _ = writeln!(out, "    return ({task_name}){{.__task = __ctx}};");
+        let _ = writeln!(out, "    return ({task_name}){{.__task = __ctx, .__drop = __spawn_drop_{fn_name}}};");
         out.push_str("}\n");
 
         // Await function: joins thread, extracts result, frees ctx
@@ -1507,6 +1535,30 @@ fn emit_spawn_helpers(out: &mut String, module: &Module) {
             out.push_str("    return result;\n");
         }
         out.push_str("}\n\n");
+    }
+
+    // Emit one Task__T__drop per unique Task type.
+    // Called by the RAII drop elaborator; dispatches to the per-fn drop via __drop pointer.
+    let mut emitted_task_drops: Vec<String> = Vec::new();
+    for (_, _, ret_type) in &module.spawned_fns {
+        let ret_c = format_type(*ret_type, &module.type_registry);
+        let task_name = if ret_c == "void" {
+            "Task__void".to_string()
+        } else {
+            format!("Task__{ret_c}")
+        };
+        if emitted_task_drops.contains(&task_name) {
+            continue;
+        }
+        emitted_task_drops.push(task_name.clone());
+        let _ = writeln!(out, "static inline void {task_name}__drop({task_name}* self) {{");
+        let _ = writeln!(out, "    if (self && self->__task && self->__drop) {{");
+        let _ = writeln!(out, "        self->__drop(self->__task);");
+        let _ = writeln!(out, "        self->__task = NULL;");
+        out.push_str("    }\n}\n\n");
+        // Suppress unused-function warning (drop may not be called if all tasks are awaited).
+        // Use __attribute__((unused)) via a variable reference.
+        let _ = writeln!(out, "static void (*__unused_{task_name}__drop)({task_name}*) __attribute__((unused)) = {task_name}__drop;");
     }
 }
 
@@ -3071,8 +3123,38 @@ fn emit_instruction(
             if dst_is_escaped_closure && src_c_type.starts_with("__Closure_") {
                 let struct_name = &src_c_type;
                 let call_fn_name = format!("{struct_name}__call");
-                let _ = writeln!(out,
-                    "        {dst_str} = ({{ {struct_name}* __heap = ({struct_name}*)GORGET_ALLOC(sizeof({struct_name})); *__heap = {val_str}; (GorgetClosure){{.fn_ptr = (void*){call_fn_name}, .env = (void*)__heap}}; }});");
+                // Check for ByMutRef captures (MutPtr fields) that need boxing.
+                // When the closure env is heap-allocated, pointer fields still point to
+                // the caller's stack. Box them so they survive after the caller returns.
+                let mut boxed_fields: Vec<(String, String)> = Vec::new(); // (field_name, inner_c_type)
+                if let Some(type_def) = registry.get_type_def(struct_name) {
+                    if let TypeDefKind::Struct(ref sd) = type_def.kind {
+                        for field in &sd.fields {
+                            if let Some(GirType::MutPtr(inner)) = registry.get(field.type_id) {
+                                let inner_c = format_type(*inner, registry);
+                                boxed_fields.push((field.name.clone(), inner_c));
+                            }
+                        }
+                    }
+                }
+                if boxed_fields.is_empty() {
+                    // No ByMutRef captures — simple heap copy
+                    let _ = writeln!(out,
+                        "        {dst_str} = ({{ {struct_name}* __heap = ({struct_name}*)GORGET_ALLOC(sizeof({struct_name})); *__heap = {val_str}; (GorgetClosure){{.fn_ptr = (void*){call_fn_name}, .env = (void*)__heap}}; }});");
+                } else {
+                    // ByMutRef captures present — heap-copy env, then box each mutable capture.
+                    let _ = writeln!(out, "        {dst_str} = ({{");
+                    let _ = writeln!(out, "            {struct_name}* __heap = ({struct_name}*)GORGET_ALLOC(sizeof({struct_name}));");
+                    let _ = writeln!(out, "            *__heap = {val_str};");
+                    for (field_name, inner_c) in &boxed_fields {
+                        // Allocate a heap cell and copy the current value from the stack pointer.
+                        let _ = writeln!(out, "            {{ {inner_c}* __box = ({inner_c}*)GORGET_ALLOC(sizeof({inner_c}));");
+                        let _ = writeln!(out, "              *__box = *__heap->{field_name};");
+                        let _ = writeln!(out, "              __heap->{field_name} = __box; }}");
+                    }
+                    let _ = writeln!(out, "            (GorgetClosure){{.fn_ptr = (void*){call_fn_name}, .env = (void*)__heap}};");
+                    let _ = writeln!(out, "        }});");
+                }
                 return;
             }
             // Implicit is_none/is_some: src is Option__T but dst is bool

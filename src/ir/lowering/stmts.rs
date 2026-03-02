@@ -142,7 +142,7 @@ fn lower_var_decl(
                     name.node.as_str() == "TaskGroup"
                         || (!generic_args.is_empty()
                             && matches!(name.node.as_str(),
-                                "Shared" | "Weak" | "Mutex" | "Guard" | "Channel"))
+                                "Shared" | "Weak" | "Mutex" | "Guard" | "Channel" | "Task"))
                 } else {
                     false
                 }

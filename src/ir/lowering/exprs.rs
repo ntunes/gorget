@@ -467,27 +467,33 @@ fn lower_expr_inner(
         Expr::Await { expr } => {
             let inner = lower_expr(ctx, builder, expr);
             // Check if the inner expression is a known spawn result (Task local)
-            let fn_name_opt = if let Operand::Copy(ref place) | Operand::Move(ref place) = inner {
+            let task_local = if let Operand::Copy(ref place) | Operand::Move(ref place) = inner {
                 if place.projections.is_empty() {
                     ctx.spawn_result_locals.get(&place.local).cloned()
+                        .map(|fn_name| (place.local, fn_name))
                 } else {
                     None
                 }
             } else {
                 None
             };
-            if let Some(fn_name) = fn_name_opt {
+            if let Some((local_id, fn_name)) = task_local {
                 let ret_type = ctx.fn_sigs.get(fn_name.as_str())
                     .map(|(_, r)| *r)
                     .unwrap_or(UNIT_TYPE);
                 let await_fn = format!("__gorget_await_{fn_name}");
-                if ret_type == UNIT_TYPE {
+                let result = if ret_type == UNIT_TYPE {
                     builder.call_void(&await_fn, vec![inner]);
-                    return Operand::Constant(Constant::Unit);
+                    Operand::Constant(Constant::Unit)
                 } else {
                     let dst = builder.call(&await_fn, vec![inner], ret_type);
-                    return FunctionBuilder::copy(dst);
-                }
+                    FunctionBuilder::copy(dst)
+                };
+                // Zero out the Task local after await to prevent double-join in drop.
+                // The DropIfAlive handler checks memcmp against zero before calling drop.
+                builder.move_zero(Place::local(local_id));
+                ctx.drops.mark_moved(local_id);
+                return result;
             }
             inner
         }
@@ -515,6 +521,18 @@ fn lower_expr_inner(
                     let task_type = if let Some(tid) = ctx.type_mapper.lookup_named(&task_name) {
                         tid
                     } else {
+                        // Register Task TypeDef with Move semantics + RAII join-on-drop.
+                        // The drop function joins the thread and frees the __SpawnCtx.
+                        ctx.type_registry.add_type_def(TypeDef {
+                            name: task_name.clone(),
+                            kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
+                            metadata: TypeMetadata {
+                                size: None,
+                                align: None,
+                                drop_strategy: DropStrategy::Trivial(format!("{task_name}__drop")),
+                                copy_semantics: CopySemantics::Move,
+                            },
+                        });
                         let tid = ctx.type_registry.insert(GirType::Named(task_name.clone()));
                         ctx.type_mapper.register_named(task_name.clone(), tid);
                         tid
@@ -1295,27 +1313,32 @@ fn lower_method_call(
     // Check spawn_result_locals FIRST, before type check, since the declared type may be I64_TYPE
     // (lower_type returns I64_TYPE for unknown Task[T] types) even when the local is a spawn result.
     if method_name == "await" {
-        let fn_name_opt = if let Operand::Copy(ref place) | Operand::Move(ref place) = recv {
+        let task_local = if let Operand::Copy(ref place) | Operand::Move(ref place) = recv {
             if place.projections.is_empty() {
                 ctx.spawn_result_locals.get(&place.local).cloned()
+                    .map(|fn_name| (place.local, fn_name))
             } else {
                 None
             }
         } else {
             None
         };
-        if let Some(fn_name) = fn_name_opt {
+        if let Some((local_id, fn_name)) = task_local {
             let ret_type = ctx.fn_sigs.get(fn_name.as_str())
                 .map(|(_, r)| *r)
                 .unwrap_or(UNIT_TYPE);
             let await_fn = format!("__gorget_await_{fn_name}");
-            if ret_type == UNIT_TYPE {
+            let result = if ret_type == UNIT_TYPE {
                 builder.call_void(&await_fn, vec![recv]);
-                return Operand::Constant(Constant::Unit);
+                Operand::Constant(Constant::Unit)
             } else {
                 let dst = builder.call(&await_fn, vec![recv], ret_type);
-                return FunctionBuilder::copy(dst);
-            }
+                FunctionBuilder::copy(dst)
+            };
+            // Zero out the Task local after await to prevent double-join in drop.
+            builder.move_zero(Place::local(local_id));
+            ctx.drops.mark_moved(local_id);
+            return result;
         }
         return recv; // fallback pass-through (no known spawn source)
     }

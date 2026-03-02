@@ -1,0 +1,8 @@
+async int compute():
+    return 42
+
+async void main():
+    # Spawn a task and don't await — drop should join without crash or hang
+    Task[int] t = spawn compute()
+    # t is dropped here: RAII joins the thread, frees ctx
+    print("ok")

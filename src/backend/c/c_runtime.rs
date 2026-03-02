@@ -2082,6 +2082,7 @@ typedef struct GorgetChannel {
     size_t          recv_waiter_count;
     size_t          recv_waiter_cap;
     GorgetAllocator* alloc;
+    volatile int64_t refcount;  // Atomic reference count for RAII (auto-close+free)
 } GorgetChannel;
 
 static GorgetChannel* gorget_channel_new(size_t capacity, size_t elem_size) {
@@ -2090,6 +2091,7 @@ static GorgetChannel* gorget_channel_new(size_t capacity, size_t elem_size) {
     ch->elem_size = elem_size;
     ch->capacity = capacity;
     ch->alloc = a;
+    ch->refcount = 1;
     if (capacity == 0) {
         // Rendezvous channel: single-element transfer slot, no ring buffer
         ch->buf = a->alloc(a->ctx, elem_size);
@@ -2389,6 +2391,22 @@ static void gorget_channel_free(GorgetChannel* ch) {
     a->dealloc(a->ctx, ch->send_waiters, ch->send_waiter_cap * sizeof(GorgetWaker));
     a->dealloc(a->ctx, ch->recv_waiters, ch->recv_waiter_cap * sizeof(GorgetWaker));
     a->dealloc(a->ctx, ch, sizeof(GorgetChannel));
+}
+
+// Retain: atomically increment the channel's reference count.
+static GorgetChannel* gorget_channel_retain(GorgetChannel* ch) {
+    __atomic_add_fetch(&ch->refcount, 1, __ATOMIC_RELAXED);
+    return ch;
+}
+
+// Release: atomically decrement the channel's reference count.
+// When the last reference is dropped, auto-close (if not already) and free.
+static void gorget_channel_release(GorgetChannel* ch) {
+    if (!ch) return;
+    if (__atomic_sub_fetch(&ch->refcount, 1, __ATOMIC_ACQ_REL) == 0) {
+        if (!ch->closed) gorget_channel_close(ch);
+        gorget_channel_free(ch);
+    }
 }
 "#;
 

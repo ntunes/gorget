@@ -6403,6 +6403,21 @@ fn async_spawn() {
 }
 
 #[test]
+fn spawn_join_on_drop() {
+    run_gg("spawn_join_on_drop.gg", "50\ndone");
+}
+
+#[test]
+fn spawn_drop_void() {
+    run_gg("spawn_drop_void.gg", "ok");
+}
+
+#[test]
+fn channel_raii() {
+    run_gg("channel_raii.gg", "60");
+}
+
+#[test]
 fn async_channel() {
     run_gg("async_channel.gg", "21");
 }

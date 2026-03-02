@@ -1,0 +1,17 @@
+from std.async import Channel
+
+async void producer(Channel[int] ch):
+    ch.send(10)
+    ch.send(20)
+    ch.send(30)
+    # ch dropped here → refcount decremented (but not last ref, so channel stays alive)
+
+async void main():
+    Channel[int] ch = Channel[int](10)
+    Task[void] t = spawn producer(ch)
+    int a = ch.recv()
+    int b = ch.recv()
+    int c = ch.recv()
+    t.await()
+    print(a + b + c)
+    # ch dropped here → refcount decremented to 0 → auto-close + free

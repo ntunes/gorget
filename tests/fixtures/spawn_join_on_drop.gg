@@ -1,0 +1,14 @@
+async int work(int x):
+    return x * 10
+
+async void main():
+    # Task is awaited normally — should work as before
+    Task[int] t1 = spawn work(5)
+    int r1 = t1.await()
+    print(r1)
+
+    # Task goes out of scope without await — join-on-drop cleans up
+    Task[int] t2 = spawn work(7)
+    # t2 is dropped here: RAII calls Task__int64_t__drop → joins thread, frees ctx
+
+    print("done")

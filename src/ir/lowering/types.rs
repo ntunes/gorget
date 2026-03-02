@@ -44,10 +44,6 @@ impl TypeMapper {
             Type::Inferred => panic!("BUG: Inferred type should be resolved before GIR lowering"),
             Type::Named { name, generic_args } => {
                 if !generic_args.is_empty() {
-                    // Task[T] → T in synchronous GIR mode (spawn is a no-op)
-                    if name.node == "Task" && generic_args.len() == 1 {
-                        return self.map_ast_type(&generic_args[0].node);
-                    }
                     // Generic type — look up monomorphized name
                     let mangled = mangle_generic_name(&name.node, generic_args);
                     if let Some(&id) = self.named_types.get(&mangled) {
@@ -174,12 +170,12 @@ impl TypeMapper {
                                 // Guard[T] is Move + RAII drop that unlocks the mutex.
                                 (CopySemantics::Move, DropStrategy::Trivial(format!("{mangled}__drop")))
                             }
-                            "Shared" | "Weak" => {
-                                // Shared[T] / Weak[T]: Copy pointer + Trivial RAII drop (refcount decrement).
+                            "Shared" | "Weak" | "Channel" => {
+                                // Shared[T] / Weak[T] / Channel[T]: Copy pointer + Trivial RAII drop (refcount).
                                 (CopySemantics::Copy, DropStrategy::Trivial(format!("{mangled}__drop")))
                             }
                             _ => {
-                                // Channel, Mutex: opaque pointer — Copy, no drop.
+                                // Mutex: opaque pointer — Copy, no drop.
                                 (CopySemantics::Copy, DropStrategy::None)
                             }
                         };
