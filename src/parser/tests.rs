@@ -1220,6 +1220,7 @@ fn test_meta_type_alias() {
     assert!(matches!(&module.items[0].node, Item::MetaType(_)));
     if let Item::MetaType(mt) = &module.items[0].node {
         assert_eq!(mt.name.node, "Vec");
+        assert!(matches!(&mt.rhs, MetaTypeRhs::Plain(_)));
     }
 }
 
@@ -1232,6 +1233,40 @@ fn test_meta_type_func() {
     if let Item::MetaTypeFunc(mtf) = &module.items[0].node {
         assert_eq!(mtf.name.node, "sized_int");
         assert_eq!(mtf.params.len(), 1);
+    }
+}
+
+#[test]
+fn test_meta_type_conditional() {
+    let source = "meta type Map = Dict if true else HashMap\n";
+    let module = parse(source);
+    assert_eq!(module.items.len(), 1);
+    if let Item::MetaType(mt) = &module.items[0].node {
+        assert_eq!(mt.name.node, "Map");
+        assert!(matches!(&mt.rhs, MetaTypeRhs::Conditional { .. }));
+        if let MetaTypeRhs::Conditional { then_type, else_type, .. } = &mt.rhs {
+            assert!(matches!(&then_type.node, Type::Named { name, .. } if name.node == "Dict"));
+            assert!(matches!(&else_type.node, Type::Named { name, .. } if name.node == "HashMap"));
+        }
+    } else {
+        panic!("expected MetaType");
+    }
+}
+
+#[test]
+fn test_meta_type_call() {
+    let source = "meta type Word = sized_int(8)\n";
+    let module = parse(source);
+    assert_eq!(module.items.len(), 1);
+    if let Item::MetaType(mt) = &module.items[0].node {
+        assert_eq!(mt.name.node, "Word");
+        assert!(matches!(&mt.rhs, MetaTypeRhs::Call { .. }));
+        if let MetaTypeRhs::Call { callee, args } = &mt.rhs {
+            assert_eq!(callee.node, "sized_int");
+            assert_eq!(args.len(), 1);
+        }
+    } else {
+        panic!("expected MetaType");
     }
 }
 

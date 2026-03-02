@@ -563,21 +563,68 @@ impl Parser {
                 span,
             ))
         } else {
-            // MetaType: meta type name = type
+            // MetaType: meta type name = <rhs>
             self.expect(&Token::Eq)?;
-            let type_ = self.parse_type()?;
+            let rhs = self.parse_meta_type_rhs()?;
             let end = self.previous_span();
             self.consume_newline();
             let span = start.merge(end);
             Ok(Spanned::new(
                 Item::MetaType(MetaType {
                     name,
-                    type_,
+                    rhs,
                     span,
                 }),
                 span,
             ))
         }
+    }
+
+    /// Parse the RHS of a `meta type Name = <rhs>` declaration.
+    ///
+    /// Handles three forms:
+    /// - Plain:       `meta type Num = int`
+    /// - Conditional: `meta type Map = Dict if feature("ordered") else HashMap`
+    /// - Call:        `meta type Word = sized_int(arch_word_bits())`
+    fn parse_meta_type_rhs(&mut self) -> Result<MetaTypeRhs, ParseError> {
+        let start = self.peek_span();
+        let base = self.parse_base_type()?;
+
+        // Type function call: bare named type followed by (
+        // Must intercept before parse_type_postfix, which treats Named(...) + ( as a function type.
+        if let Type::Named { ref name, ref generic_args } = base.node {
+            if generic_args.is_empty() && self.check(&Token::LParen) {
+                let callee = name.clone();
+                self.advance(); // consume (
+                let mut args = Vec::new();
+                while !self.check(&Token::RParen) && !self.at_end() {
+                    args.push(self.parse_expr()?);
+                    if !self.check(&Token::RParen) {
+                        self.expect(&Token::Comma)?;
+                    }
+                }
+                self.expect(&Token::RParen)?;
+                return Ok(MetaTypeRhs::Call { callee, args });
+            }
+        }
+
+        // Complete the type with postfix modifiers (array/function type suffixes)
+        let full_type = self.parse_type_postfix(base, start)?;
+
+        // Conditional type: <type> if <cond> else <type>
+        if self.check_keyword(Keyword::If) {
+            self.advance();
+            let condition = self.parse_expr()?;
+            self.expect_keyword(Keyword::Else)?;
+            let else_type = self.parse_type()?;
+            return Ok(MetaTypeRhs::Conditional {
+                then_type: full_type,
+                condition,
+                else_type,
+            });
+        }
+
+        Ok(MetaTypeRhs::Plain(full_type))
     }
 
     /// `meta assert <expr> [, <msg>]`

@@ -6360,7 +6360,7 @@ fn format_item_canonical(item: &Item) -> String {
             format!("suite_teardown:{body}")
         }
         Item::MetaConst(mc) => format!("meta {} {} = {}", format_type_canonical(&mc.type_.node), mc.name.node, format_expr_canonical(&mc.value.node)),
-        Item::MetaType(mt) => format!("meta type {} = {}", mt.name.node, format_type_canonical(&mt.type_.node)),
+        Item::MetaType(mt) => format!("meta type {} = <rhs>", mt.name.node),
         Item::MetaTypeFunc(mtf) => format!("meta type {}(...)", mtf.name.node),
         Item::MetaAssert(_) => "meta assert ...".to_string(),
         Item::MetaIf(_) => "meta if ...".to_string(),
@@ -6578,6 +6578,16 @@ fn meta_basic() {
 fn meta_builtins() {
     // arch_word_bits() returns 64 on all 64-bit targets; feature() and debug() return false when no --feature flags are passed
     run_gg("meta_builtins.gg", "64\ntrue\nfalse\nfalse\nfeature disabled");
+}
+
+#[test]
+fn meta_conditional_types() {
+    run_gg("meta_conditional_types.gg", "1");
+}
+
+#[test]
+fn meta_type_func() {
+    run_gg("meta_type_func.gg", "7\n1000\n42");
 }
 
 // Concurrency Primitives Tests

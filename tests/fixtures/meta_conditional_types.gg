@@ -1,0 +1,7 @@
+meta bool ORDERED = true
+meta type Map = Dict if ORDERED else HashMap
+
+void main():
+    Map[str, int] counts = Map[str, int]()
+    counts["a"] = 1
+    print(counts["a"])

@@ -14,7 +14,7 @@ impl Parser {
         self.parse_type_postfix(base, start)
     }
 
-    fn parse_base_type(&mut self) -> Result<Spanned<Type>, ParseError> {
+    pub(crate) fn parse_base_type(&mut self) -> Result<Spanned<Type>, ParseError> {
         let start = self.peek_span();
 
         match self.peek().clone() {
@@ -130,7 +130,7 @@ impl Parser {
         Ok(Spanned::new(Type::Tuple(types), start.merge(end)))
     }
 
-    fn parse_type_postfix(
+    pub(crate) fn parse_type_postfix(
         &mut self,
         base: Spanned<Type>,
         start: Span,

@@ -60,15 +60,16 @@ pub fn evaluate_meta_consts(module: &mut Module, features: &[String]) -> Vec<Sem
     let mut errors = Vec::new();
     let mut env: FxHashMap<String, MetaValue> = FxHashMap::default();
     let mut type_env: FxHashMap<String, Type> = FxHashMap::default();
+    let mut type_func_env: FxHashMap<String, MetaTypeFunc> = FxHashMap::default();
     let ctx = MetaContext::new(features);
 
-    // Phase 1: Evaluate meta consts, meta asserts, and meta type aliases
+    // Phase 1: Evaluate meta consts, meta asserts, meta type aliases, and meta type functions
     for item in &module.items {
-        process_meta_item(&item.node, &mut env, &mut type_env, &ctx, &mut errors);
+        process_meta_item(&item.node, &mut env, &mut type_env, &mut type_func_env, &ctx, &mut errors);
     }
 
     // Phase 1.5: Flatten MetaIf (conditional compilation)
-    module.items = flatten_meta_ifs(module.items.clone(), &mut env, &mut type_env, &ctx, &mut errors);
+    module.items = flatten_meta_ifs(module.items.clone(), &mut env, &mut type_env, &mut type_func_env, &ctx, &mut errors);
 
     // Phase 2: Substitute meta const references and type aliases throughout the AST
     for item in &mut module.items {
@@ -79,18 +80,20 @@ pub fn evaluate_meta_consts(module: &mut Module, features: &[String]) -> Vec<Sem
     module.items.retain(|item| {
         !matches!(
             &item.node,
-            Item::MetaConst(_) | Item::MetaAssert(_) | Item::MetaType(_) | Item::MetaIf(_)
+            Item::MetaConst(_) | Item::MetaAssert(_) | Item::MetaType(_)
+            | Item::MetaTypeFunc(_) | Item::MetaIf(_)
         )
     });
 
     errors
 }
 
-/// Process a single meta item: MetaConst, MetaAssert, or MetaType.
+/// Process a single meta item: MetaConst, MetaAssert, MetaType, or MetaTypeFunc.
 fn process_meta_item(
     item: &Item,
     env: &mut FxHashMap<String, MetaValue>,
     type_env: &mut FxHashMap<String, Type>,
+    type_func_env: &mut FxHashMap<String, MetaTypeFunc>,
     ctx: &MetaContext<'_>,
     errors: &mut Vec<SemanticError>,
 ) {
@@ -136,10 +139,210 @@ fn process_meta_item(
             }
         }
         Item::MetaType(mt) => {
-            type_env.insert(mt.name.node.clone(), mt.type_.node.clone());
+            match resolve_meta_type_rhs(&mt.rhs, env, type_env, type_func_env, ctx, mt.span) {
+                Ok(resolved) => { type_env.insert(mt.name.node.clone(), resolved); }
+                Err(e) => errors.push(e),
+            }
+        }
+        Item::MetaTypeFunc(mtf) => {
+            type_func_env.insert(mtf.name.node.clone(), mtf.clone());
         }
         _ => {}
     }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// M5/M6: MetaTypeRhs resolution
+// ═══════════════════════════════════════════════════════════════
+
+/// Resolve a `MetaTypeRhs` to a concrete `Type`.
+fn resolve_meta_type_rhs(
+    rhs: &MetaTypeRhs,
+    env: &FxHashMap<String, MetaValue>,
+    type_env: &FxHashMap<String, Type>,
+    type_func_env: &FxHashMap<String, MetaTypeFunc>,
+    ctx: &MetaContext<'_>,
+    span: Span,
+) -> Result<Type, SemanticError> {
+    match rhs {
+        MetaTypeRhs::Plain(ty) => Ok(resolve_type_via_env(&ty.node, type_env)),
+        MetaTypeRhs::Conditional { then_type, condition, else_type } => {
+            match eval_expr(&condition.node, env, ctx, condition.span)? {
+                MetaValue::Bool(true)  => Ok(resolve_type_via_env(&then_type.node, type_env)),
+                MetaValue::Bool(false) => Ok(resolve_type_via_env(&else_type.node, type_env)),
+                _ => Err(meta_err("conditional type condition must be bool", condition.span)),
+            }
+        }
+        MetaTypeRhs::Call { callee, args } => {
+            let func = type_func_env.get(&callee.node).ok_or_else(|| {
+                meta_err(
+                    &format!("unknown meta type function `{}`", callee.node),
+                    callee.span,
+                )
+            })?;
+            let func = func.clone();
+            call_meta_type_func(&func, args, env, type_env, type_func_env, ctx, span)
+        }
+    }
+}
+
+/// Resolve a type through the type alias environment.
+/// For bare named types, substitutes them if they exist as aliases.
+fn resolve_type_via_env(ty: &Type, type_env: &FxHashMap<String, Type>) -> Type {
+    match ty {
+        Type::Named { name, generic_args } if generic_args.is_empty() => {
+            if let Some(resolved) = type_env.get(&name.node) {
+                resolved.clone()
+            } else {
+                ty.clone()
+            }
+        }
+        _ => ty.clone(),
+    }
+}
+
+/// Call a meta type function, binding args to params and interpreting the body.
+fn call_meta_type_func(
+    func: &MetaTypeFunc,
+    args: &[Spanned<Expr>],
+    env: &FxHashMap<String, MetaValue>,
+    type_env: &FxHashMap<String, Type>,
+    type_func_env: &FxHashMap<String, MetaTypeFunc>,
+    ctx: &MetaContext<'_>,
+    call_span: Span,
+) -> Result<Type, SemanticError> {
+    if args.len() != func.params.len() {
+        return Err(meta_err(
+            &format!(
+                "meta type function `{}` expects {} argument(s), got {}",
+                func.name.node,
+                func.params.len(),
+                args.len()
+            ),
+            call_span,
+        ));
+    }
+
+    // Evaluate args and bind to params in a local env
+    let mut local_env = env.clone();
+    for (param, arg) in func.params.iter().zip(args.iter()) {
+        let val = eval_expr(&arg.node, env, ctx, arg.span)?;
+        if let Err(e) = validate_type(&param.node.type_.node, &val, arg.span) {
+            return Err(e);
+        }
+        local_env.insert(param.node.name.node.clone(), val);
+    }
+
+    eval_meta_type_body(&func.body, &local_env, type_env, type_func_env, ctx, call_span)
+}
+
+/// Interpret a meta type function body, returning the resolved `Type`.
+fn eval_meta_type_body(
+    body: &Block,
+    env: &FxHashMap<String, MetaValue>,
+    type_env: &FxHashMap<String, Type>,
+    type_func_env: &FxHashMap<String, MetaTypeFunc>,
+    ctx: &MetaContext<'_>,
+    span: Span,
+) -> Result<Type, SemanticError> {
+    for stmt in &body.stmts {
+        match &stmt.node {
+            Stmt::Return(Some(expr)) => {
+                return resolve_expr_as_type(&expr.node, type_env, expr.span);
+            }
+            Stmt::Return(None) => {
+                return Err(meta_err("meta type function must return a type", stmt.span));
+            }
+            Stmt::If { condition, then_body, elif_branches, else_body } => {
+                match eval_expr(&condition.node, env, ctx, condition.span)? {
+                    MetaValue::Bool(true) => {
+                        return eval_meta_type_body(then_body, env, type_env, type_func_env, ctx, span);
+                    }
+                    MetaValue::Bool(false) => {
+                        // Try elif branches
+                        let mut taken = false;
+                        for (elif_cond, elif_body) in elif_branches {
+                            match eval_expr(&elif_cond.node, env, ctx, elif_cond.span)? {
+                                MetaValue::Bool(true) => {
+                                    return eval_meta_type_body(elif_body, env, type_env, type_func_env, ctx, span);
+                                }
+                                MetaValue::Bool(false) => {}
+                                _ => {
+                                    return Err(meta_err(
+                                        "meta type function elif condition must be bool",
+                                        elif_cond.span,
+                                    ));
+                                }
+                            }
+                            taken = true;
+                            let _ = taken;
+                        }
+                        // Try else
+                        if let Some(else_blk) = else_body {
+                            return eval_meta_type_body(else_blk, env, type_env, type_func_env, ctx, span);
+                        }
+                        // No branch taken — continue to next statement (none should follow in valid code)
+                    }
+                    _ => {
+                        return Err(meta_err(
+                            "meta type function if condition must be bool",
+                            condition.span,
+                        ));
+                    }
+                }
+            }
+            Stmt::Pass => {} // skip
+            _ => {}          // skip other statements
+        }
+    }
+    Err(meta_err("meta type function did not return a type", span))
+}
+
+/// Map an expression (as it appears in a `return` statement in a type function body)
+/// back to a `Type`. Only simple identifiers and primitive type names are supported.
+fn resolve_expr_as_type(
+    expr: &Expr,
+    type_env: &FxHashMap<String, Type>,
+    span: Span,
+) -> Result<Type, SemanticError> {
+    if let Expr::Identifier(name) = expr {
+        // Check meta type aliases first
+        if let Some(resolved) = type_env.get(name.as_str()) {
+            return Ok(resolved.clone());
+        }
+        // Primitive type names
+        let prim = match name.as_str() {
+            "int"    => Some(PrimitiveType::Int),
+            "int8"   => Some(PrimitiveType::Int8),
+            "int16"  => Some(PrimitiveType::Int16),
+            "int32"  => Some(PrimitiveType::Int32),
+            "int64"  => Some(PrimitiveType::Int64),
+            "uint"   => Some(PrimitiveType::Uint),
+            "uint8"  => Some(PrimitiveType::Uint8),
+            "uint16" => Some(PrimitiveType::Uint16),
+            "uint32" => Some(PrimitiveType::Uint32),
+            "uint64" => Some(PrimitiveType::Uint64),
+            "float"  => Some(PrimitiveType::Float),
+            "float32"=> Some(PrimitiveType::Float32),
+            "float64"=> Some(PrimitiveType::Float64),
+            "bool"   => Some(PrimitiveType::Bool),
+            "str"    => Some(PrimitiveType::Str),
+            "void"   => Some(PrimitiveType::Void),
+            _ => None,
+        };
+        if let Some(p) = prim {
+            return Ok(Type::Primitive(p));
+        }
+        // Bare user-defined type name
+        return Ok(Type::Named {
+            name: Spanned::new(name.clone(), span),
+            generic_args: vec![],
+        });
+    }
+    Err(meta_err(
+        "meta type function return value must be a type name",
+        span,
+    ))
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -152,6 +355,7 @@ fn flatten_meta_ifs(
     items: Vec<Spanned<Item>>,
     env: &mut FxHashMap<String, MetaValue>,
     type_env: &mut FxHashMap<String, Type>,
+    type_func_env: &mut FxHashMap<String, MetaTypeFunc>,
     ctx: &MetaContext<'_>,
     errors: &mut Vec<SemanticError>,
 ) -> Vec<Spanned<Item>> {
@@ -165,7 +369,7 @@ fn flatten_meta_ifs(
                 let winning = pick_meta_if_branch(meta_if, env, ctx, errors);
                 // Process any meta declarations in the winning branch
                 for won_item in &winning {
-                    process_meta_item(&won_item.node, env, type_env, ctx, errors);
+                    process_meta_item(&won_item.node, env, type_env, type_func_env, ctx, errors);
                 }
                 new_items.extend(winning);
             } else {
@@ -476,10 +680,14 @@ fn substitute_type(ty: &mut Spanned<Type>, type_env: &FxHashMap<String, Type>) {
             for arg in generic_args.iter_mut() {
                 substitute_type(arg, type_env);
             }
-            // Replace bare alias references (no generic args)
-            if generic_args.is_empty() {
-                if let Some(replacement) = type_env.get(&name.node) {
+            if let Some(replacement) = type_env.get(&name.node) {
+                if generic_args.is_empty() {
+                    // Bare alias: replace the whole type
                     ty.node = replacement.clone();
+                } else if let Type::Named { name: repl_name, .. } = replacement {
+                    // Generic alias: substitute only the base name (keep existing generic args)
+                    // e.g. `Map[str, int]` where `Map = Dict` → `Dict[str, int]`
+                    *name = repl_name.clone();
                 }
             }
         }
@@ -809,6 +1017,15 @@ fn substitute_expr(expr: &mut Spanned<Expr>, env: &FxHashMap<String, MetaValue>,
     if let Expr::Identifier(name) = &expr.node {
         if let Some(value) = env.get(name.as_str()) {
             expr.node = meta_value_to_expr(value);
+        }
+    }
+
+    // Also substitute meta type alias names used as constructors in expressions.
+    // e.g.  Map[str, int]()  where  meta type Map = Dict  →  Dict[str, int]()
+    // Only Named aliases can appear as expression-level identifiers (primitives can't).
+    if let Expr::Identifier(name) = &mut expr.node {
+        if let Some(Type::Named { name: repl_name, .. }) = type_env.get(name.as_str()) {
+            *name = repl_name.node.clone();
         }
     }
 
@@ -1374,7 +1591,7 @@ mod tests {
                 Spanned::new(
                     Item::MetaType(MetaType {
                         name: Spanned::new("Num".to_string(), dummy_span()),
-                        type_: Spanned::new(Type::Primitive(PrimitiveType::Int), dummy_span()),
+                        rhs: MetaTypeRhs::Plain(Spanned::new(Type::Primitive(PrimitiveType::Int), dummy_span())),
                         span: dummy_span(),
                     }),
                     dummy_span(),
@@ -1766,5 +1983,316 @@ mod tests {
             }
         }
         panic!("test structure unexpected");
+    }
+
+    // ── M5: Conditional types ──
+
+    #[test]
+    fn meta_conditional_type_true() {
+        // meta type Map = Dict if true else HashMap  →  Dict
+        let mut module = Module {
+            items: vec![Spanned::new(
+                Item::MetaType(MetaType {
+                    name: Spanned::new("Map".to_string(), dummy_span()),
+                    rhs: MetaTypeRhs::Conditional {
+                        then_type: Spanned::new(
+                            Type::Named { name: Spanned::new("Dict".to_string(), dummy_span()), generic_args: vec![] },
+                            dummy_span(),
+                        ),
+                        condition: Spanned::new(Expr::BoolLiteral(true), dummy_span()),
+                        else_type: Spanned::new(
+                            Type::Named { name: Spanned::new("HashMap".to_string(), dummy_span()), generic_args: vec![] },
+                            dummy_span(),
+                        ),
+                    },
+                    span: dummy_span(),
+                }),
+                dummy_span(),
+            )],
+            span: dummy_span(),
+        };
+        let errors = evaluate_meta_consts(&mut module, &[]);
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        // MetaType removed
+        assert_eq!(module.items.len(), 0);
+    }
+
+    #[test]
+    fn meta_conditional_type_false() {
+        // meta type Map = Dict if false else HashMap  →  HashMap
+        // Verify via substitution: declare a var of type Map, check it becomes HashMap
+        let mut module = Module {
+            items: vec![
+                Spanned::new(
+                    Item::MetaType(MetaType {
+                        name: Spanned::new("Map".to_string(), dummy_span()),
+                        rhs: MetaTypeRhs::Conditional {
+                            then_type: Spanned::new(
+                                Type::Named { name: Spanned::new("Dict".to_string(), dummy_span()), generic_args: vec![] },
+                                dummy_span(),
+                            ),
+                            condition: Spanned::new(Expr::BoolLiteral(false), dummy_span()),
+                            else_type: Spanned::new(
+                                Type::Named { name: Spanned::new("HashMap".to_string(), dummy_span()), generic_args: vec![] },
+                                dummy_span(),
+                            ),
+                        },
+                        span: dummy_span(),
+                    }),
+                    dummy_span(),
+                ),
+                Spanned::new(
+                    Item::Function(FunctionDef {
+                        attributes: vec![],
+                        visibility: Visibility::Private,
+                        qualifiers: FunctionQualifiers::default(),
+                        return_type: Spanned::new(Type::Primitive(PrimitiveType::Void), dummy_span()),
+                        name: Spanned::new("main".to_string(), dummy_span()),
+                        generic_params: None,
+                        params: vec![],
+                        throws: None,
+                        where_clause: None,
+                        body: FunctionBody::Block(Block {
+                            stmts: vec![Spanned::new(
+                                Stmt::VarDecl {
+                                    is_const: false,
+                                    is_mutable: false,
+                                    type_: Spanned::new(
+                                        Type::Named { name: Spanned::new("Map".to_string(), dummy_span()), generic_args: vec![] },
+                                        dummy_span(),
+                                    ),
+                                    pattern: Spanned::new(Pattern::Binding("x".to_string()), dummy_span()),
+                                    value: Spanned::new(Expr::IntLiteral(0), dummy_span()),
+                                },
+                                dummy_span(),
+                            )],
+                            span: dummy_span(),
+                        }),
+                        doc_comment: None,
+                        span: dummy_span(),
+                    }),
+                    dummy_span(),
+                ),
+            ],
+            span: dummy_span(),
+        };
+        let errors = evaluate_meta_consts(&mut module, &[]);
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        assert_eq!(module.items.len(), 1);
+        if let Item::Function(f) = &module.items[0].node {
+            if let FunctionBody::Block(block) = &f.body {
+                if let Stmt::VarDecl { type_, .. } = &block.stmts[0].node {
+                    assert!(
+                        matches!(&type_.node, Type::Named { name, .. } if name.node == "HashMap"),
+                        "expected HashMap, got: {:?}", type_.node,
+                    );
+                    return;
+                }
+            }
+        }
+        panic!("test structure unexpected");
+    }
+
+    #[test]
+    fn meta_conditional_type_with_meta_const() {
+        // meta bool ORDERED = true
+        // meta type Map = Dict if ORDERED else HashMap  →  Dict
+        let mut module = Module {
+            items: vec![
+                Spanned::new(
+                    Item::MetaConst(MetaConst {
+                        type_: Spanned::new(Type::Primitive(PrimitiveType::Bool), dummy_span()),
+                        name: Spanned::new("ORDERED".to_string(), dummy_span()),
+                        value: Spanned::new(Expr::BoolLiteral(true), dummy_span()),
+                        span: dummy_span(),
+                    }),
+                    dummy_span(),
+                ),
+                Spanned::new(
+                    Item::MetaType(MetaType {
+                        name: Spanned::new("Map".to_string(), dummy_span()),
+                        rhs: MetaTypeRhs::Conditional {
+                            then_type: Spanned::new(
+                                Type::Named { name: Spanned::new("Dict".to_string(), dummy_span()), generic_args: vec![] },
+                                dummy_span(),
+                            ),
+                            condition: Spanned::new(Expr::Identifier("ORDERED".to_string()), dummy_span()),
+                            else_type: Spanned::new(
+                                Type::Named { name: Spanned::new("HashMap".to_string(), dummy_span()), generic_args: vec![] },
+                                dummy_span(),
+                            ),
+                        },
+                        span: dummy_span(),
+                    }),
+                    dummy_span(),
+                ),
+            ],
+            span: dummy_span(),
+        };
+        let errors = evaluate_meta_consts(&mut module, &[]);
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        assert_eq!(module.items.len(), 0);
+    }
+
+    #[test]
+    fn meta_conditional_type_non_bool_error() {
+        let mut module = Module {
+            items: vec![Spanned::new(
+                Item::MetaType(MetaType {
+                    name: Spanned::new("X".to_string(), dummy_span()),
+                    rhs: MetaTypeRhs::Conditional {
+                        then_type: Spanned::new(Type::Primitive(PrimitiveType::Int), dummy_span()),
+                        condition: Spanned::new(Expr::IntLiteral(1), dummy_span()),
+                        else_type: Spanned::new(Type::Primitive(PrimitiveType::Float), dummy_span()),
+                    },
+                    span: dummy_span(),
+                }),
+                dummy_span(),
+            )],
+            span: dummy_span(),
+        };
+        let errors = evaluate_meta_consts(&mut module, &[]);
+        assert_eq!(errors.len(), 1);
+        assert!(format!("{}", errors[0]).contains("bool"));
+    }
+
+    // ── M6: Type functions ──
+
+    #[test]
+    fn meta_type_func_basic() {
+        // meta type sized_int(int bits): if bits <= 8: return int8 else: return int64
+        // meta type Small = sized_int(8)  →  int8
+        let func_item = Item::MetaTypeFunc(MetaTypeFunc {
+            name: Spanned::new("sized_int".to_string(), dummy_span()),
+            params: vec![Spanned::new(
+                Param {
+                    type_: Spanned::new(Type::Primitive(PrimitiveType::Int), dummy_span()),
+                    name: Spanned::new("bits".to_string(), dummy_span()),
+                    default: None,
+                    ownership: Ownership::Borrow,
+                    is_live: false,
+                    live_group: None,
+                },
+                dummy_span(),
+            )],
+            body: Block {
+                stmts: vec![Spanned::new(
+                    Stmt::If {
+                        condition: Spanned::new(
+                            Expr::BinaryOp {
+                                left: Box::new(Spanned::new(Expr::Identifier("bits".to_string()), dummy_span())),
+                                op: BinaryOp::LtEq,
+                                right: Box::new(Spanned::new(Expr::IntLiteral(8), dummy_span())),
+                            },
+                            dummy_span(),
+                        ),
+                        then_body: Block {
+                            stmts: vec![Spanned::new(
+                                Stmt::Return(Some(Spanned::new(Expr::Identifier("int8".to_string()), dummy_span()))),
+                                dummy_span(),
+                            )],
+                            span: dummy_span(),
+                        },
+                        elif_branches: vec![],
+                        else_body: Some(Block {
+                            stmts: vec![Spanned::new(
+                                Stmt::Return(Some(Spanned::new(Expr::Identifier("int64".to_string()), dummy_span()))),
+                                dummy_span(),
+                            )],
+                            span: dummy_span(),
+                        }),
+                    },
+                    dummy_span(),
+                )],
+                span: dummy_span(),
+            },
+            span: dummy_span(),
+        });
+
+        let call_item = Item::MetaType(MetaType {
+            name: Spanned::new("Small".to_string(), dummy_span()),
+            rhs: MetaTypeRhs::Call {
+                callee: Spanned::new("sized_int".to_string(), dummy_span()),
+                args: vec![Spanned::new(Expr::IntLiteral(8), dummy_span())],
+            },
+            span: dummy_span(),
+        });
+
+        let mut module = Module {
+            items: vec![
+                Spanned::new(func_item, dummy_span()),
+                Spanned::new(call_item, dummy_span()),
+                Spanned::new(
+                    Item::Function(FunctionDef {
+                        attributes: vec![],
+                        visibility: Visibility::Private,
+                        qualifiers: FunctionQualifiers::default(),
+                        return_type: Spanned::new(Type::Primitive(PrimitiveType::Void), dummy_span()),
+                        name: Spanned::new("main".to_string(), dummy_span()),
+                        generic_params: None,
+                        params: vec![],
+                        throws: None,
+                        where_clause: None,
+                        body: FunctionBody::Block(Block {
+                            stmts: vec![Spanned::new(
+                                Stmt::VarDecl {
+                                    is_const: false,
+                                    is_mutable: false,
+                                    type_: Spanned::new(
+                                        Type::Named { name: Spanned::new("Small".to_string(), dummy_span()), generic_args: vec![] },
+                                        dummy_span(),
+                                    ),
+                                    pattern: Spanned::new(Pattern::Binding("x".to_string()), dummy_span()),
+                                    value: Spanned::new(Expr::IntLiteral(7), dummy_span()),
+                                },
+                                dummy_span(),
+                            )],
+                            span: dummy_span(),
+                        }),
+                        doc_comment: None,
+                        span: dummy_span(),
+                    }),
+                    dummy_span(),
+                ),
+            ],
+            span: dummy_span(),
+        };
+
+        let errors = evaluate_meta_consts(&mut module, &[]);
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        assert_eq!(module.items.len(), 1);
+        if let Item::Function(f) = &module.items[0].node {
+            if let FunctionBody::Block(block) = &f.body {
+                if let Stmt::VarDecl { type_, .. } = &block.stmts[0].node {
+                    assert!(
+                        matches!(&type_.node, Type::Primitive(PrimitiveType::Int8)),
+                        "expected Primitive(Int8), got: {:?}", type_.node,
+                    );
+                    return;
+                }
+            }
+        }
+        panic!("test structure unexpected");
+    }
+
+    #[test]
+    fn meta_type_func_unknown_error() {
+        let mut module = Module {
+            items: vec![Spanned::new(
+                Item::MetaType(MetaType {
+                    name: Spanned::new("X".to_string(), dummy_span()),
+                    rhs: MetaTypeRhs::Call {
+                        callee: Spanned::new("no_such_fn".to_string(), dummy_span()),
+                        args: vec![],
+                    },
+                    span: dummy_span(),
+                }),
+                dummy_span(),
+            )],
+            span: dummy_span(),
+        };
+        let errors = evaluate_meta_consts(&mut module, &[]);
+        assert_eq!(errors.len(), 1);
+        assert!(format!("{}", errors[0]).contains("no_such_fn"), "error: {}", errors[0]);
     }
 }
