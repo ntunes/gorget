@@ -34,20 +34,42 @@ pub enum MetaValue {
     Str(String),
 }
 
+const MAX_META_RECURSION: usize = 256;
+const MAX_META_ITERATIONS: u64 = 100_000;
+
 /// Context threaded through meta evaluation for built-in function access.
 struct MetaContext<'a> {
     /// Build-time feature flags (from `--feature` CLI args).
     features: &'a [String],
+    /// Module items — used by M7 to look up user-defined functions for compile-time evaluation.
+    items: &'a [Spanned<Item>],
+    /// Current call depth for recursion limit enforcement.
+    call_depth: std::cell::Cell<usize>,
 }
 
 impl<'a> MetaContext<'a> {
-    fn new(features: &'a [String]) -> Self {
-        Self { features }
+    fn new(features: &'a [String], items: &'a [Spanned<Item>]) -> Self {
+        Self { features, items, call_depth: std::cell::Cell::new(0) }
     }
 
     fn empty() -> MetaContext<'static> {
-        MetaContext { features: &[] }
+        MetaContext { features: &[], items: &[], call_depth: std::cell::Cell::new(0) }
     }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// M7: MetaControlFlow — propagates return/break/continue
+// ═══════════════════════════════════════════════════════════════
+
+enum MetaControlFlow {
+    /// Statement completed normally; continue to next statement.
+    Continue,
+    /// A `return` statement was hit; the function should return this value.
+    Return(MetaValue),
+    /// A `break` statement was hit; exit the current loop.
+    Break,
+    /// A `continue` statement was hit; go to the next loop iteration.
+    LoopContinue,
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -61,15 +83,23 @@ pub fn evaluate_meta_consts(module: &mut Module, features: &[String]) -> Vec<Sem
     let mut env: FxHashMap<String, MetaValue> = FxHashMap::default();
     let mut type_env: FxHashMap<String, Type> = FxHashMap::default();
     let mut type_func_env: FxHashMap<String, MetaTypeFunc> = FxHashMap::default();
-    let ctx = MetaContext::new(features);
 
-    // Phase 1: Evaluate meta consts, meta asserts, meta type aliases, and meta type functions
-    for item in &module.items {
-        process_meta_item(&item.node, &mut env, &mut type_env, &mut type_func_env, &ctx, &mut errors);
+    // Phase 1: Evaluate meta consts, meta asserts, meta type aliases, and meta type functions.
+    // Scope the ctx borrow so it ends before we mutate module.items in Phase 1.5.
+    {
+        let ctx = MetaContext::new(features, &module.items);
+        for item in &module.items {
+            process_meta_item(&item.node, &mut env, &mut type_env, &mut type_func_env, &ctx, &mut errors);
+        }
     }
 
-    // Phase 1.5: Flatten MetaIf (conditional compilation)
-    module.items = flatten_meta_ifs(module.items.clone(), &mut env, &mut type_env, &mut type_func_env, &ctx, &mut errors);
+    // Phase 1.5: Flatten MetaIf (conditional compilation).
+    // Snapshot the current items for the context so user-defined functions are still accessible.
+    let items_snapshot = module.items.clone();
+    {
+        let ctx = MetaContext::new(features, &items_snapshot);
+        module.items = flatten_meta_ifs(module.items.clone(), &mut env, &mut type_env, &mut type_func_env, &ctx, &mut errors);
+    }
 
     // Phase 2: Substitute meta const references and type aliases throughout the AST
     for item in &mut module.items {
@@ -563,15 +593,46 @@ fn eval_expr(
                         let type_name = meta_expr_to_type_name(&args[0].node.value.node);
                         Ok(MetaValue::Str(type_name))
                     }
-                    other => Err(meta_err(
-                        &format!("unknown built-in meta function `{other}` — available: \
-                            platform(), arch(), arch_word_bits(), feature(str), debug(), \
-                            sizeof(Type), alignof(Type), typename(Type)"),
-                        span,
-                    )),
+                    other => {
+                        // M7: fall back to user-defined function lookup
+                        match lookup_meta_function(other, ctx.items, span)? {
+                            Some(func_def) => eval_meta_fn_call(&func_def, args, env, ctx, span),
+                            None => Err(meta_err(
+                                &format!("unknown meta function `{other}` — built-ins: \
+                                    platform(), arch(), arch_word_bits(), feature(str), debug(), \
+                                    sizeof(Type), alignof(Type), typename(Type); \
+                                    or define a pure function in the same file"),
+                                span,
+                            )),
+                        }
+                    }
                 }
             } else {
                 Err(meta_err("meta function calls must use a simple function name", span))
+            }
+        }
+
+        // M7: expression-position if (ternary-style)
+        Expr::If { condition, then_branch, elif_branches, else_branch } => {
+            match eval_expr(&condition.node, env, ctx, condition.span)? {
+                MetaValue::Bool(true) => eval_expr(&then_branch.node, env, ctx, then_branch.span),
+                MetaValue::Bool(false) => {
+                    for (elif_cond, elif_val) in elif_branches {
+                        match eval_expr(&elif_cond.node, env, ctx, elif_cond.span)? {
+                            MetaValue::Bool(true) => {
+                                return eval_expr(&elif_val.node, env, ctx, elif_val.span);
+                            }
+                            MetaValue::Bool(false) => {}
+                            _ => return Err(meta_err("elif condition must evaluate to bool", elif_cond.span)),
+                        }
+                    }
+                    if let Some(else_br) = else_branch {
+                        eval_expr(&else_br.node, env, ctx, else_br.span)
+                    } else {
+                        Err(meta_err("if expression without else cannot be used in a meta context", span))
+                    }
+                }
+                _ => Err(meta_err("if condition must evaluate to bool", condition.span)),
             }
         }
 
@@ -721,6 +782,428 @@ fn eval_binary_op(
                 value_type_name(rhs),
             ),
             span,
+        )),
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// M7: Compile-time user-defined function evaluation
+// ═══════════════════════════════════════════════════════════════
+
+/// Returns true if a type is supported as a meta function parameter or return type.
+fn is_meta_compatible_type(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::Primitive(
+            PrimitiveType::Int
+            | PrimitiveType::Int8
+            | PrimitiveType::Int16
+            | PrimitiveType::Int32
+            | PrimitiveType::Int64
+            | PrimitiveType::Uint
+            | PrimitiveType::Uint8
+            | PrimitiveType::Uint16
+            | PrimitiveType::Uint32
+            | PrimitiveType::Uint64
+            | PrimitiveType::Float
+            | PrimitiveType::Float32
+            | PrimitiveType::Float64
+            | PrimitiveType::Bool
+            | PrimitiveType::Str
+        )
+    )
+}
+
+/// Scan `items` for a user-defined function named `name`.
+/// Returns `Ok(Some(def))` if found and valid for compile-time evaluation,
+/// `Ok(None)` if not found, or `Err` if found but invalid (generic, async, etc.).
+fn lookup_meta_function(
+    name: &str,
+    items: &[Spanned<Item>],
+    span: Span,
+) -> Result<Option<FunctionDef>, SemanticError> {
+    for item in items {
+        if let Item::Function(f) = &item.node {
+            if f.name.node == name {
+                if f.generic_params.is_some() {
+                    return Err(meta_err(
+                        &format!("generic function `{name}` cannot be evaluated at compile time"),
+                        span,
+                    ));
+                }
+                if f.qualifiers.is_async {
+                    return Err(meta_err(
+                        &format!("async function `{name}` cannot be evaluated at compile time"),
+                        span,
+                    ));
+                }
+                if f.qualifiers.is_unsafe {
+                    return Err(meta_err(
+                        &format!("unsafe function `{name}` cannot be evaluated at compile time"),
+                        span,
+                    ));
+                }
+                for param in &f.params {
+                    if !is_meta_compatible_type(&param.node.type_.node) {
+                        return Err(meta_err(
+                            &format!(
+                                "parameter `{}` of function `{name}` has a type not supported \
+                                 for compile-time evaluation (only int, float, bool, str allowed)",
+                                param.node.name.node
+                            ),
+                            span,
+                        ));
+                    }
+                }
+                if !is_meta_compatible_type(&f.return_type.node)
+                    && !matches!(f.return_type.node, Type::Primitive(PrimitiveType::Void))
+                {
+                    return Err(meta_err(
+                        &format!(
+                            "return type of function `{name}` is not supported for \
+                             compile-time evaluation (only int, float, bool, str allowed)"
+                        ),
+                        span,
+                    ));
+                }
+                return Ok(Some(f.clone()));
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// Call a user-defined function at compile time.
+fn eval_meta_fn_call(
+    func: &FunctionDef,
+    args: &[Spanned<CallArg>],
+    env: &FxHashMap<String, MetaValue>,
+    ctx: &MetaContext<'_>,
+    call_span: Span,
+) -> Result<MetaValue, SemanticError> {
+    let depth = ctx.call_depth.get();
+    if depth >= MAX_META_RECURSION {
+        return Err(meta_err(
+            &format!(
+                "compile-time recursion limit ({MAX_META_RECURSION}) exceeded \
+                 in function `{}`",
+                func.name.node
+            ),
+            call_span,
+        ));
+    }
+
+    if args.len() != func.params.len() {
+        return Err(meta_err(
+            &format!(
+                "function `{}` expects {} argument(s), got {}",
+                func.name.node,
+                func.params.len(),
+                args.len()
+            ),
+            call_span,
+        ));
+    }
+
+    // Bind arguments to parameters in a fresh local environment.
+    let mut local_env = env.clone();
+    for (param, arg) in func.params.iter().zip(args.iter()) {
+        let val = eval_expr(&arg.node.value.node, env, ctx, arg.node.value.span)?;
+        validate_type(&param.node.type_.node, &val, arg.node.value.span)?;
+        local_env.insert(param.node.name.node.clone(), val);
+    }
+
+    ctx.call_depth.set(depth + 1);
+    let result = eval_meta_fn_body(&func.body, &mut local_env, ctx, func.span);
+    ctx.call_depth.set(depth);
+    result
+}
+
+/// Dispatch on a function body and evaluate it.
+fn eval_meta_fn_body(
+    body: &FunctionBody,
+    env: &mut FxHashMap<String, MetaValue>,
+    ctx: &MetaContext<'_>,
+    fn_span: Span,
+) -> Result<MetaValue, SemanticError> {
+    match body {
+        FunctionBody::Block(block) => {
+            match eval_meta_block(block, env, ctx)? {
+                MetaControlFlow::Return(v) => Ok(v),
+                MetaControlFlow::Continue => {
+                    Err(meta_err("compile-time function did not return a value", fn_span))
+                }
+                MetaControlFlow::Break | MetaControlFlow::LoopContinue => {
+                    Err(meta_err("unexpected break/continue outside a loop", fn_span))
+                }
+            }
+        }
+        FunctionBody::Expression(expr) => eval_expr(&expr.node, env, ctx, expr.span),
+        FunctionBody::Declaration | FunctionBody::Extern(_) => Err(meta_err(
+            "extern/declaration functions cannot be called at compile time",
+            fn_span,
+        )),
+    }
+}
+
+/// Execute a block, returning the first non-Continue control-flow signal.
+fn eval_meta_block(
+    block: &Block,
+    env: &mut FxHashMap<String, MetaValue>,
+    ctx: &MetaContext<'_>,
+) -> Result<MetaControlFlow, SemanticError> {
+    for stmt in &block.stmts {
+        match eval_meta_stmt(&stmt.node, env, ctx, stmt.span)? {
+            MetaControlFlow::Continue => {}
+            flow => return Ok(flow),
+        }
+    }
+    Ok(MetaControlFlow::Continue)
+}
+
+/// Execute a single statement. Returns a `MetaControlFlow` signal.
+fn eval_meta_stmt(
+    stmt: &Stmt,
+    env: &mut FxHashMap<String, MetaValue>,
+    ctx: &MetaContext<'_>,
+    stmt_span: Span,
+) -> Result<MetaControlFlow, SemanticError> {
+    match stmt {
+        Stmt::Pass => Ok(MetaControlFlow::Continue),
+
+        Stmt::Return(None) => {
+            Err(meta_err("compile-time function must return a value (bare `return` not allowed)", stmt_span))
+        }
+        Stmt::Return(Some(expr)) => {
+            let val = eval_expr(&expr.node, env, ctx, expr.span)?;
+            Ok(MetaControlFlow::Return(val))
+        }
+
+        Stmt::Break(_) => Ok(MetaControlFlow::Break),
+        Stmt::Continue => Ok(MetaControlFlow::LoopContinue),
+
+        Stmt::Expr(expr) => {
+            // Evaluate for potential side-effect-free function call; discard result.
+            eval_expr(&expr.node, env, ctx, expr.span)?;
+            Ok(MetaControlFlow::Continue)
+        }
+
+        Stmt::VarDecl { pattern, value, .. } => {
+            let val = eval_expr(&value.node, env, ctx, value.span)?;
+            match &pattern.node {
+                Pattern::Binding(name) => {
+                    env.insert(name.clone(), val);
+                }
+                _ => {
+                    return Err(meta_err(
+                        "only simple variable bindings are supported in compile-time functions",
+                        pattern.span,
+                    ));
+                }
+            }
+            Ok(MetaControlFlow::Continue)
+        }
+
+        Stmt::Assign { target, value } => {
+            let val = eval_expr(&value.node, env, ctx, value.span)?;
+            match &target.node {
+                Expr::Identifier(name) => {
+                    if env.contains_key(name.as_str()) {
+                        env.insert(name.clone(), val);
+                        Ok(MetaControlFlow::Continue)
+                    } else {
+                        Err(meta_err(
+                            &format!("assignment to undeclared variable `{name}`"),
+                            target.span,
+                        ))
+                    }
+                }
+                _ => Err(meta_err(
+                    "only simple variable assignments are supported in compile-time functions",
+                    target.span,
+                )),
+            }
+        }
+
+        Stmt::CompoundAssign { target, op, value } => {
+            let rhs = eval_expr(&value.node, env, ctx, value.span)?;
+            match &target.node {
+                Expr::Identifier(name) => {
+                    let lhs = env.get(name.as_str()).cloned().ok_or_else(|| {
+                        meta_err(&format!("undeclared variable `{name}`"), target.span)
+                    })?;
+                    let result = eval_binary_op(&lhs, *op, &rhs, stmt_span)?;
+                    env.insert(name.clone(), result);
+                    Ok(MetaControlFlow::Continue)
+                }
+                _ => Err(meta_err(
+                    "only simple compound assignments are supported in compile-time functions",
+                    target.span,
+                )),
+            }
+        }
+
+        Stmt::If { condition, then_body, elif_branches, else_body } => {
+            match eval_expr(&condition.node, env, ctx, condition.span)? {
+                MetaValue::Bool(true) => eval_meta_block(then_body, env, ctx),
+                MetaValue::Bool(false) => {
+                    for (elif_cond, elif_body) in elif_branches {
+                        match eval_expr(&elif_cond.node, env, ctx, elif_cond.span)? {
+                            MetaValue::Bool(true) => return eval_meta_block(elif_body, env, ctx),
+                            MetaValue::Bool(false) => {}
+                            _ => {
+                                return Err(meta_err("elif condition must be bool", elif_cond.span))
+                            }
+                        }
+                    }
+                    if let Some(else_blk) = else_body {
+                        eval_meta_block(else_blk, env, ctx)
+                    } else {
+                        Ok(MetaControlFlow::Continue)
+                    }
+                }
+                _ => Err(meta_err("if condition must be bool", condition.span)),
+            }
+        }
+
+        Stmt::While { condition, body, .. } => {
+            let mut iterations: u64 = 0;
+            loop {
+                match eval_expr(&condition.node, env, ctx, condition.span)? {
+                    MetaValue::Bool(false) => break,
+                    MetaValue::Bool(true) => {}
+                    _ => {
+                        return Err(meta_err("while condition must be bool", condition.span))
+                    }
+                }
+                iterations += 1;
+                if iterations > MAX_META_ITERATIONS {
+                    return Err(meta_err(
+                        &format!(
+                            "compile-time iteration limit ({MAX_META_ITERATIONS}) exceeded"
+                        ),
+                        condition.span,
+                    ));
+                }
+                match eval_meta_block(body, env, ctx)? {
+                    MetaControlFlow::Continue | MetaControlFlow::LoopContinue => {}
+                    MetaControlFlow::Break => break,
+                    r @ MetaControlFlow::Return(_) => return Ok(r),
+                }
+            }
+            Ok(MetaControlFlow::Continue)
+        }
+
+        Stmt::Loop { body } => {
+            let mut iterations: u64 = 0;
+            loop {
+                iterations += 1;
+                if iterations > MAX_META_ITERATIONS {
+                    return Err(meta_err(
+                        &format!(
+                            "compile-time iteration limit ({MAX_META_ITERATIONS}) exceeded"
+                        ),
+                        stmt_span,
+                    ));
+                }
+                match eval_meta_block(body, env, ctx)? {
+                    MetaControlFlow::Continue | MetaControlFlow::LoopContinue => {}
+                    MetaControlFlow::Break => break,
+                    r @ MetaControlFlow::Return(_) => return Ok(r),
+                }
+            }
+            Ok(MetaControlFlow::Continue)
+        }
+
+        Stmt::For { pattern, iterable, body, .. } => {
+            // Only integer range iteration is supported at compile time.
+            match &iterable.node {
+                Expr::Range { start, end, inclusive } => {
+                    let start_val = match start {
+                        Some(s) => match eval_expr(&s.node, env, ctx, s.span)? {
+                            MetaValue::Int(n) => n,
+                            _ => return Err(meta_err("range start must be int", s.span)),
+                        },
+                        None => 0,
+                    };
+                    let end_val = match end {
+                        Some(e) => match eval_expr(&e.node, env, ctx, e.span)? {
+                            MetaValue::Int(n) => n,
+                            _ => return Err(meta_err("range end must be int", e.span)),
+                        },
+                        None => {
+                            return Err(meta_err(
+                                "open-ended range not supported in compile-time for-loop",
+                                iterable.span,
+                            ))
+                        }
+                    };
+                    let loop_var = match &pattern.node {
+                        Pattern::Binding(name) => name.clone(),
+                        _ => {
+                            return Err(meta_err(
+                                "only simple variable bindings are supported in \
+                                 compile-time for-loop patterns",
+                                pattern.span,
+                            ))
+                        }
+                    };
+                    let upper = if *inclusive { end_val + 1 } else { end_val };
+                    let mut iterations: u64 = 0;
+                    let mut i = start_val;
+                    while i < upper {
+                        iterations += 1;
+                        if iterations > MAX_META_ITERATIONS {
+                            return Err(meta_err(
+                                &format!(
+                                    "compile-time iteration limit ({MAX_META_ITERATIONS}) exceeded"
+                                ),
+                                iterable.span,
+                            ));
+                        }
+                        env.insert(loop_var.clone(), MetaValue::Int(i));
+                        match eval_meta_block(body, env, ctx)? {
+                            MetaControlFlow::Continue | MetaControlFlow::LoopContinue => {}
+                            MetaControlFlow::Break => break,
+                            r @ MetaControlFlow::Return(_) => return Ok(r),
+                        }
+                        i += 1;
+                    }
+                    Ok(MetaControlFlow::Continue)
+                }
+                _ => Err(meta_err(
+                    "only range-based for-loops are supported in compile-time functions",
+                    iterable.span,
+                )),
+            }
+        }
+
+        Stmt::Assert { condition, message } => {
+            match eval_expr(&condition.node, env, ctx, condition.span)? {
+                MetaValue::Bool(true) => Ok(MetaControlFlow::Continue),
+                MetaValue::Bool(false) => {
+                    let msg = if let Some(msg_expr) = message {
+                        match eval_expr(&msg_expr.node, env, ctx, msg_expr.span) {
+                            Ok(v) => meta_value_to_string(&v),
+                            Err(_) => "assertion failed".to_string(),
+                        }
+                    } else {
+                        "assertion failed".to_string()
+                    };
+                    Err(meta_err(&msg, condition.span))
+                }
+                _ => Err(meta_err("assert condition must be bool", condition.span)),
+            }
+        }
+
+        Stmt::Throw(_)
+        | Stmt::Match { .. }
+        | Stmt::Select { .. }
+        | Stmt::With { .. }
+        | Stmt::Unsafe { .. }
+        | Stmt::Item(_) => Err(meta_err(
+            "this statement type is not supported in compile-time function evaluation",
+            stmt_span,
         )),
     }
 }
@@ -1399,7 +1882,7 @@ mod tests {
         };
         let result = eval_expr(&expr, &empty_env(), &no_ctx(), dummy_span());
         assert!(result.is_err());
-        assert!(format!("{}", result.unwrap_err()).contains("unknown built-in meta function"));
+        assert!(format!("{}", result.unwrap_err()).contains("unknown meta function"));
     }
 
     #[test]

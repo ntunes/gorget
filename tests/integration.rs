@@ -6637,6 +6637,25 @@ fn meta_sizeof() {
     run_gg("meta_sizeof.gg", "8\n1\n16\n8\n1\n2\n4\n4\n8\n1\n8\nint\nbool\nVector[int]\nstr");
 }
 
+#[test]
+fn meta_fn_basic() {
+    // M7: user-defined pure functions called in meta initializers
+    // square(2)=4, add(3,7)=10, add(square(2), square(3))=4+9=13
+    run_gg("meta_fn_basic.gg", "4\n10\n13");
+}
+
+#[test]
+fn meta_fn_recursive() {
+    // M7: recursive meta functions — factorial(10) and fib(10)
+    run_gg("meta_fn_recursive.gg", "3628800\n55");
+}
+
+#[test]
+fn meta_fn_loops() {
+    // M7: meta functions with while loops — sum_to(100)=5050, count_digits(123456)=6
+    run_gg("meta_fn_loops.gg", "5050\n6");
+}
+
 // Concurrency Primitives Tests
 // ═══════════════════════════════════════════════════════════════
 

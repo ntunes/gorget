@@ -1,0 +1,13 @@
+int square(int x) = x * x
+
+int add(int a, int b):
+    return a + b
+
+meta int FOUR = square(2)
+meta int TEN = add(3, 7)
+meta int NESTED = add(square(2), square(3))
+
+void main():
+    print(FOUR)
+    print(TEN)
+    print(NESTED)
