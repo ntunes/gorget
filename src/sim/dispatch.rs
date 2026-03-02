@@ -2263,15 +2263,31 @@ impl<'m> Interpreter<'m> {
                 }
                 return Ok(true);
             }
-            // MutPtr: drop the inner value if it has a custom drop (e.g., Box[Tracked]).
-            // We do NOT free the heap slot, because we cannot distinguish Box[T] (which
-            // should free) from Guard[T] or Mutex[T] (which should NOT free — they just
-            // point into another allocation). Leaking heap slots is fine in the sim.
+            // MutPtr / Ptr: drop the inner value and mark the heap slot dead (P6b).
+            // Box[T] uses this path. Guard[T]/Mutex[T] also pass through here, but since
+            // they don't own the pointed-to allocation, double-drop won't naturally occur.
             Value::MutPtr(addr) | Value::Ptr(addr) => {
                 let addr = *addr;
                 if addr != 0 {
-                    let inner = self.heap_read(addr).cloned().unwrap_or(Value::Unit);
+                    // P6b: detect double-free — if the slot is already dead, this is a
+                    // second drop of the same Box (double-free UB).
+                    if self.ub_checks {
+                        if let Some(meta) = self.heap_meta.get(&addr) {
+                            if !meta.alive {
+                                return Err(SimError::DoubleFree {
+                                    addr,
+                                    alloc_fn: meta.alloc_fn.clone(),
+                                });
+                            }
+                        }
+                    }
+                    // Read inner value (UseAfterFree if dead and ub_checks enabled).
+                    let inner = self.heap_read(addr).cloned()?;
                     self.run_drop_value(&inner, depth)?;
+                    // Mark heap slot dead after dropping Box contents.
+                    if let Some(meta) = self.heap_meta.get_mut(&addr) {
+                        meta.alive = false;
+                    }
                 }
                 return Ok(false); // Don't zero the place for ptr drops
             }
@@ -2284,7 +2300,9 @@ impl<'m> Interpreter<'m> {
                     .unwrap_or(DropStrategy::None);
                 match strategy {
                     DropStrategy::Custom(fn_name) => {
-                        let addr = self.heap_alloc(val.clone());
+                        // Use ref-promoted so the temp heap copy is excluded from leak
+                        // detection — it's an implementation artifact, not a user alloc.
+                        let addr = self.heap_alloc_ref_promoted(val.clone());
                         let ptr = Value::MutPtr(addr);
                         self.call_function(&fn_name, vec![ptr], depth + 1)?;
                         // Drop droppable fields after custom drop.
@@ -2310,7 +2328,7 @@ impl<'m> Interpreter<'m> {
                     .unwrap_or(DropStrategy::None);
                 match strategy {
                     DropStrategy::Custom(fn_name) => {
-                        let addr = self.heap_alloc(val.clone());
+                        let addr = self.heap_alloc_ref_promoted(val.clone());
                         let ptr = Value::MutPtr(addr);
                         self.call_function(&fn_name, vec![ptr], depth + 1)?;
                         for field_val in fields.iter().rev() {

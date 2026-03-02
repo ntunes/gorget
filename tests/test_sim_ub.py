@@ -2,16 +2,20 @@
 """
 UB-detection test harness for `gg sim --ub-checks`.
 
-For each .gg file in tests/sim_ub/, runs:
-  cargo run -- sim --ub-checks --ignore-leaks <fixture>
+Two modes for each .gg fixture in tests/sim_ub/:
 
-and checks:
-  1. Exit code is 0
-  2. Stdout matches <fixture>.expected (if present)
-  3. No UB error keywords appear in stderr
+CLEAN tests (no .ub_expected file):
+  Runs:  cargo run -- sim --ub-checks --ignore-leaks <fixture>
+  Checks:
+    1. Exit code is 0
+    2. Stdout matches <fixture>.expected (if present)
+    3. No UB error keywords appear in stderr
 
-Future: when Instruction::Dealloc is emitted by the GIR lowerer,
-add "positive UB" tests (expected UB substrings in .ub_expected files).
+POSITIVE UB tests (.ub_expected file present):
+  Runs:  cargo run -- sim --ub-checks <fixture>   (no --ignore-leaks)
+  Checks:
+    1. Exit code is non-zero (UB was detected)
+    2. The content of .ub_expected is a substring of stderr
 
 Usage:
   python3 tests/test_sim_ub.py [fixture_name_substring]
@@ -37,8 +41,8 @@ UB_ERROR_KEYWORDS = [
 
 
 def run_sim(fixture_path, extra_flags=None):
-    """Run gg sim --ub-checks --ignore-leaks on a fixture."""
-    cmd = [CARGO, "run", "--quiet", "--", "sim", "--ub-checks", "--ignore-leaks"]
+    """Run gg sim --ub-checks on a fixture."""
+    cmd = [CARGO, "run", "--quiet", "--", "sim", "--ub-checks"]
     if extra_flags:
         cmd.extend(extra_flags)
     cmd.append(fixture_path)
@@ -54,6 +58,15 @@ def load_expected(fixture_path):
     if os.path.exists(expected_path):
         with open(expected_path) as f:
             return f.read()
+    return None
+
+
+def load_ub_expected(fixture_path):
+    """Load .ub_expected file alongside the fixture, or None if not present."""
+    ub_path = fixture_path.replace(".gg", ".ub_expected")
+    if os.path.exists(ub_path):
+        with open(ub_path) as f:
+            return f.read().strip()
     return None
 
 
@@ -85,21 +98,43 @@ def main():
 
     for fname in fixtures:
         fixture_path = os.path.join(FIXTURES_DIR, fname)
-        result, elapsed = run_sim(fixture_path)
-        expected = load_expected(fixture_path)
+        ub_expected = load_ub_expected(fixture_path)
 
-        status = "PASS"
-        reason = ""
+        if ub_expected is not None:
+            # ── Positive UB test: expect non-zero exit + error substring in stderr ──
+            result, elapsed = run_sim(fixture_path)  # no --ignore-leaks
+            status = "PASS"
+            reason = ""
 
-        if result.returncode != 0:
-            status = "FAIL"
-            reason = f"exit code {result.returncode}"
-        elif expected is not None and result.stdout != expected:
-            status = "FAIL"
-            reason = f"stdout mismatch\n  expected: {repr(expected[:80])}\n  got:      {repr(result.stdout[:80])}"
-        elif (ub_kw := has_ub_error(result.stderr)) is not None:
-            status = "FAIL"
-            reason = f"unexpected UB error: {repr(ub_kw)}"
+            if result.returncode == 0:
+                status = "FAIL"
+                reason = f"expected UB error but got exit 0 (stderr: {result.stderr[:200]!r})"
+            elif ub_expected not in result.stderr:
+                status = "FAIL"
+                reason = (
+                    f"expected {ub_expected!r} in stderr\n"
+                    f"         got: {result.stderr[:300]!r}"
+                )
+        else:
+            # ── Clean test: expect exit 0, no UB errors ──
+            result, elapsed = run_sim(fixture_path, extra_flags=["--ignore-leaks"])
+            expected = load_expected(fixture_path)
+            status = "PASS"
+            reason = ""
+
+            if result.returncode != 0:
+                status = "FAIL"
+                reason = f"exit code {result.returncode}"
+            elif expected is not None and result.stdout != expected:
+                status = "FAIL"
+                reason = (
+                    f"stdout mismatch\n"
+                    f"  expected: {expected[:80]!r}\n"
+                    f"  got:      {result.stdout[:80]!r}"
+                )
+            elif (ub_kw := has_ub_error(result.stderr)) is not None:
+                status = "FAIL"
+                reason = f"unexpected UB error: {ub_kw!r}"
 
         results.append((fname, status, reason, elapsed))
 

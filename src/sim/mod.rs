@@ -67,8 +67,11 @@ pub fn interpret(module: &Module, source_path: &str, config: &SimConfig) -> i32 
 
     // P4e: leak detection — report heap slots that were never freed.
     // Skips is_ref_promoted slots (implementation-internal heap refs).
+    // Returns 1 if leaks are found so the process exits non-zero.
     if !config.ignore_leaks && config.ub_checks {
-        report_leaks(&interp);
+        if report_leaks(&interp) > 0 {
+            return 1;
+        }
     }
 
     exit_code
@@ -370,7 +373,8 @@ fn flush_output(stdout: &[u8], stderr: &[u8]) {
 
 /// P4e: report live heap allocations that were not freed.
 /// Skips ref-promoted slots (implementation artifacts, not user allocations).
-fn report_leaks(interp: &Interpreter) {
+/// Returns the number of leaked allocations.
+fn report_leaks(interp: &Interpreter) -> usize {
     let leaks: Vec<_> = interp.heap_meta.iter()
         .filter(|(_, meta)| meta.alive && !meta.is_ref_promoted)
         .collect();
@@ -380,4 +384,5 @@ fn report_leaks(interp: &Interpreter) {
             eprintln!("  heap[{addr}]: allocated in {}", meta.alloc_fn);
         }
     }
+    leaks.len()
 }
