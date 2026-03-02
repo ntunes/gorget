@@ -315,6 +315,19 @@ match c:
         print("{r},{g},{b}")
 ```
 
+**Dot-shorthand:** When the expected type is unambiguous from context (variable declaration, assignment, return, or function parameter), `.Variant()` desugars to `EnumType.Variant()`. This is Swift-style type inference for enum construction and matching:
+
+```gorget
+Color c = .Red()           # → Color.Red()
+c = .Blue(42)              # → Color.Blue(42)
+return .Green()            # → Color.Green(), return type known
+match c:
+    case .Red():           # → Color.Red, scrutinee type is Color
+    case .Blue(n):         # → Color.Blue, scrutinee type is Color
+```
+
+Dot-shorthand eliminates the redundancy of repeating the type name when the compiler can infer it, while retaining the explicit-type discipline of Phase 1 qualified access. Both forms are always valid; dot-shorthand is purely syntactic sugar.
+
 **Glob import:** When working extensively with one enum, use `EnumName.*` to bring all its variants into bare scope:
 
 ```gorget

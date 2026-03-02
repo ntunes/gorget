@@ -250,6 +250,13 @@ pub fn walk_expr<V: ExprVisitor + ?Sized>(v: &mut V, expr: &Spanned<Expr>) {
         Expr::Is { expr, .. } => {
             v.visit_expr(expr);
         }
+
+        // ── Dot-shorthand variant ──
+        Expr::DotShorthand { args, .. } => {
+            for arg in args {
+                v.visit_expr(&arg.node.value);
+            }
+        }
     }
 }
 

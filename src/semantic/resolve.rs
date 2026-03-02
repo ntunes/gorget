@@ -1281,6 +1281,13 @@ fn resolve_expr(
         Expr::Is { expr: inner, .. } => {
             resolve_expr(inner, scopes, errors, resolution_map);
         }
+
+        // Dot-shorthand: resolve arg expressions; enum name resolved at type-check time
+        Expr::DotShorthand { args, .. } => {
+            for arg in args {
+                resolve_expr(&arg.node.value, scopes, errors, resolution_map);
+            }
+        }
     }
 }
 
@@ -1364,6 +1371,13 @@ fn define_pattern_bindings_with_kind(
             }
         }
         Pattern::Wildcard | Pattern::Literal(_) | Pattern::Rest => {}
+
+        // Dot-shorthand: define bindings in sub-patterns
+        Pattern::DotShorthand { fields, .. } => {
+            for field in fields {
+                define_pattern_bindings_with_kind(&field.node, field.span, scopes, errors, kind, is_mutable);
+            }
+        }
     }
 }
 

@@ -94,6 +94,9 @@ fn collect_pattern_bindings(pattern: &Pattern, locals: &mut HashSet<String>) {
             for p in pats { collect_pattern_bindings(&p.node, locals); }
         }
         Pattern::Wildcard | Pattern::Literal(_) | Pattern::Rest => {}
+        Pattern::DotShorthand { fields, .. } => {
+            for f in fields { collect_pattern_bindings(&f.node, locals); }
+        }
     }
 }
 
@@ -1508,6 +1511,43 @@ impl<'a> TypeChecker<'a> {
                 self.infer_expr(inner);
                 self.types.bool_id
             }
+
+            Expr::DotShorthand { variant, args } => {
+                if let Some(hint_id) = self.decl_type_hint {
+                    let resolved = self.resolve_type(hint_id);
+                    let is_enum = match self.types.get(resolved).clone() {
+                        ResolvedType::Defined(def_id) => {
+                            self.scopes.get_def(def_id).kind == DefKind::Enum
+                        }
+                        ResolvedType::Generic(def_id, _) => {
+                            self.scopes.get_def(def_id).kind == DefKind::Enum
+                        }
+                        _ => false,
+                    };
+                    if is_enum {
+                        let field_types = self.resolve_variant_field_types(hint_id, &variant.node);
+                        let prev = self.decl_type_hint;
+                        for (i, arg) in args.iter().enumerate() {
+                            self.decl_type_hint = field_types.get(i).copied();
+                            self.infer_expr(&arg.node.value);
+                            self.decl_type_hint = prev;
+                        }
+                        return hint_id;
+                    }
+                }
+                // No type context — error
+                self.error(
+                    SemanticErrorKind::TypeMismatch {
+                        expected: "enum type context for dot-shorthand".into(),
+                        found: format!(".{}", variant.node),
+                    },
+                    variant.span,
+                );
+                for arg in args {
+                    self.infer_expr(&arg.node.value);
+                }
+                self.types.error_id
+            }
         }
     }
 
@@ -1907,6 +1947,9 @@ impl<'a> TypeChecker<'a> {
             Pattern::Tuple(_) => {
                 // Tuples don't cover enum variants.
             }
+            Pattern::DotShorthand { variant, .. } => {
+                covered.insert(variant.node.clone());
+            }
         }
     }
 
@@ -1949,6 +1992,14 @@ impl<'a> TypeChecker<'a> {
             Pattern::Or(alts) => {
                 for alt in alts {
                     self.assign_pattern_types(alt, scrutinee_type);
+                }
+            }
+            Pattern::DotShorthand { variant, fields } => {
+                let field_types = self.resolve_variant_field_types(scrutinee_type, &variant.node);
+                for (i, field_pat) in fields.iter().enumerate() {
+                    if let Some(&field_tid) = field_types.get(i) {
+                        self.assign_pattern_types(field_pat, field_tid);
+                    }
                 }
             }
             _ => {} // Wildcard, Literal, Rest — no bindings

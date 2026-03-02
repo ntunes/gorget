@@ -1125,6 +1125,20 @@ impl Formatter {
                 }
             }
             Pattern::Rest => self.emitter.write(".."),
+            Pattern::DotShorthand { variant, fields } => {
+                self.emitter.write(".");
+                self.emitter.write(&variant.node);
+                if !fields.is_empty() {
+                    self.emitter.write("(");
+                    for (i, field) in fields.iter().enumerate() {
+                        if i > 0 {
+                            self.emitter.write(", ");
+                        }
+                        self.format_pattern(field);
+                    }
+                    self.emitter.write(")");
+                }
+            }
         }
     }
 
@@ -1523,6 +1537,15 @@ impl Formatter {
             }
             Expr::It => {
                 self.emitter.write("it");
+            }
+            Expr::DotShorthand { variant, args } => {
+                self.emitter.write(".");
+                self.emitter.write(&variant.node);
+                if !args.is_empty() {
+                    self.emitter.write("(");
+                    self.format_call_args(args);
+                    self.emitter.write(")");
+                }
             }
         }
     }

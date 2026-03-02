@@ -708,6 +708,20 @@ match lvl:
         print("error")
 ```
 
+**Dot-shorthand:** When the expected type is known from context (variable declaration, assignment, return, or function parameter), `.Variant()` desugars to `EnumType.Variant()`:
+
+```gorget
+Color c = .Red()               # VarDecl: .Red() → Color.Red()
+c = .Blue(42)                  # Assignment: expected type from c
+return .Green()                # Return: uses declared return type
+print_color(.Green())          # Arg: uses parameter's declared type
+match c:
+    case .Red():               # Pattern: scrutinee type is Color
+        print("red")
+    case .Blue(n):
+        print("blue {n}")
+```
+
 **Glob import:** Use `EnumName.*` to bring a type's variants into bare scope:
 
 ```gorget

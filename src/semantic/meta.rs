@@ -791,6 +791,12 @@ fn substitute_expr(expr: &mut Spanned<Expr>, env: &FxHashMap<String, MetaValue>,
             if let Some(s) = start { substitute_expr(s, env, type_env); }
             if let Some(e) = end { substitute_expr(e, env, type_env); }
         }
+        // Dot-shorthand: recurse into args
+        Expr::DotShorthand { args, .. } => {
+            for arg in args.iter_mut() {
+                substitute_expr(&mut arg.node.value, env, type_env);
+            }
+        }
         // Leaf nodes — no recursion needed
         Expr::IntLiteral(_) | Expr::FloatLiteral(_) | Expr::BoolLiteral(_)
         | Expr::CharLiteral(_) | Expr::NoneLiteral

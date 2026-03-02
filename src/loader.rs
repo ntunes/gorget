@@ -625,6 +625,13 @@ fn qualify_expr(expr: &mut Spanned<Expr>, vm: &HashMap<String, String>) {
             qualify_expr(iterable, vm);
             if let Some(c) = condition { qualify_expr(c, vm); }
         }
+
+        // Dot-shorthand: recurse into args but don't rewrite — enum name resolved at type-check time
+        Expr::DotShorthand { args, .. } => {
+            for arg in args.iter_mut() {
+                qualify_expr(&mut arg.node.value, vm);
+            }
+        }
     }
 }
 
@@ -664,6 +671,11 @@ fn qualify_pattern(pattern: &mut Spanned<Pattern>, vm: &HashMap<String, String>)
             for e in elems { qualify_pattern(e, vm); }
         }
         Pattern::Wildcard | Pattern::Literal(_) | Pattern::Rest => {}
+
+        // Dot-shorthand: recurse into fields but don't rewrite — enum name resolved at type-check time
+        Pattern::DotShorthand { fields, .. } => {
+            for f in fields { qualify_pattern(f, vm); }
+        }
     }
 }
 

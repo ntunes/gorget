@@ -127,6 +127,19 @@ fn enums() {
 }
 
 #[test]
+fn dot_shorthand() {
+    run_gg(
+        "dot_shorthand.gg",
+        "\
+red
+blue 42
+fn green
+made 7
+done",
+    );
+}
+
+#[test]
 fn match_patterns() {
     run_gg(
         "match_patterns.gg",
@@ -5523,6 +5536,17 @@ fn format_pattern_canonical(pat: &Pattern) -> String {
             parts.join(" | ")
         }
         Pattern::Rest => "..".to_string(),
+        Pattern::DotShorthand { variant, fields } => {
+            if fields.is_empty() {
+                format!(".{}", variant.node)
+            } else {
+                let args: Vec<String> = fields
+                    .iter()
+                    .map(|f| format_pattern_canonical(&f.node))
+                    .collect();
+                format!(".{}({})", variant.node, args.join(", "))
+            }
+        }
     }
 }
 
@@ -5889,6 +5913,17 @@ fn format_expr_canonical(expr: &Expr) -> String {
             }
             result.push('}');
             result
+        }
+        Expr::DotShorthand { variant, args } => {
+            if args.is_empty() {
+                format!(".{}", variant.node)
+            } else {
+                let arg_strs: Vec<String> = args
+                    .iter()
+                    .map(format_callarg_canonical)
+                    .collect();
+                format!(".{}({})", variant.node, arg_strs.join(", "))
+            }
         }
     }
 }

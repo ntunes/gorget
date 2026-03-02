@@ -145,6 +145,33 @@ impl Parser {
                 Ok(Spanned::new(Pattern::Tuple(patterns), start.merge(end)))
             }
 
+            // Dot-shorthand pattern: .Red() or .Blue(n)
+            Token::Dot => {
+                self.advance();
+                let variant = self.expect_identifier()?;
+                if self.match_token(&Token::LParen) {
+                    let mut fields = Vec::new();
+                    while !self.check(&Token::RParen) && !self.at_end() {
+                        fields.push(self.parse_pattern()?);
+                        if !self.check(&Token::RParen) {
+                            self.expect(&Token::Comma)?;
+                        }
+                    }
+                    self.expect(&Token::RParen)?;
+                    let end = self.previous_span();
+                    Ok(Spanned::new(
+                        Pattern::DotShorthand { variant, fields },
+                        start.merge(end),
+                    ))
+                } else {
+                    let end = variant.span;
+                    Ok(Spanned::new(
+                        Pattern::DotShorthand { variant, fields: Vec::new() },
+                        start.merge(end),
+                    ))
+                }
+            }
+
             _ => Err(self.error_unexpected("pattern")),
         }
     }

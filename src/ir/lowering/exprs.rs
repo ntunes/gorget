@@ -528,6 +528,38 @@ fn lower_expr_inner(
             lower_expr(ctx, builder, expr)
         }
 
+        // Dot-shorthand variant: .Red() or .Blue(42)
+        // Resolves to the enum variant using the expected type from context.
+        Expr::DotShorthand { variant, args } => {
+            let variant_name = variant.node.clone();
+            let lowered_args: Vec<Operand> = args.iter()
+                .map(|a| lower_expr(ctx, builder, &a.node.value))
+                .collect();
+
+            // 1. Try expected_type (set by VarDecl, Assign, Return, or function arg)
+            if let Some(et) = ctx.expected_type {
+                if let Some(type_name) = ctx.type_registry.type_name(et) {
+                    if let Some(type_def) = ctx.type_registry.get_type_def(&type_name) {
+                        if let TypeDefKind::Enum(ref e) = type_def.kind {
+                            if e.variants.iter().any(|v| v.name == variant_name) {
+                                let dst = builder.enum_init(&type_name, &variant_name, et, lowered_args);
+                                return FunctionBuilder::copy(dst);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 2. Fallback: variant map (for user-defined non-generic enums)
+            if let Some((enum_name, vn)) = ctx.resolve_enum_variant(&variant_name) {
+                let type_id = ctx.type_mapper.lookup_named(&enum_name).unwrap_or(UNIT_TYPE);
+                let dst = builder.enum_init(&enum_name, &vn, type_id, lowered_args);
+                return FunctionBuilder::copy(dst);
+            }
+
+            Operand::Constant(Constant::Unit)
+        }
+
         // Deferred: Select
         _ => Operand::Constant(Constant::Unit),
     }
@@ -3406,9 +3438,22 @@ fn lower_call(
         // Regular function call (use effective name for generic functions)
         // Resolve named args + default params before lowering
         let resolved_args = resolve_call_args(ctx, &effective_name, args);
+        // Extract parameter types to thread expected_type for dot-shorthand args
+        let param_types: Vec<TypeId> = ctx.fn_sigs.get(effective_name.as_str())
+            .map(|(params, _)| params.clone())
+            .unwrap_or_default();
         let lowered_args: Vec<Operand> = resolved_args
             .iter()
-            .map(|arg| lower_call_arg(ctx, builder, arg))
+            .enumerate()
+            .map(|(i, arg)| {
+                let prev_expected = ctx.expected_type;
+                if let Some(&pt) = param_types.get(i) {
+                    ctx.expected_type = Some(pt);
+                }
+                let op = lower_call_arg(ctx, builder, arg);
+                ctx.expected_type = prev_expected;
+                op
+            })
             .collect();
 
         let ret_type = if let Some((_, ret)) = ctx.fn_sigs.get(effective_name.as_str()) {

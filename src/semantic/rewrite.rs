@@ -243,6 +243,12 @@ fn rewrite_expr(expr: &mut Spanned<Expr>, res: &ResolutionMap, scopes: &ScopeTab
             if let Some(s) = start { rewrite_expr(s, res, scopes); }
             if let Some(e) = end { rewrite_expr(e, res, scopes); }
         }
+        // Dot-shorthand: recurse into args
+        Expr::DotShorthand { args, .. } => {
+            for arg in args.iter_mut() {
+                rewrite_expr(&mut arg.node.value, res, scopes);
+            }
+        }
         // Leaf nodes
         Expr::IntLiteral(_) | Expr::FloatLiteral(_) | Expr::BoolLiteral(_)
         | Expr::CharLiteral(_) | Expr::StringLiteral(_) | Expr::NoneLiteral

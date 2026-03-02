@@ -1462,6 +1462,12 @@ impl<'a> BorrowChecker<'a> {
             Expr::As { expr: inner, .. } | Expr::Is { expr: inner, .. } => {
                 self.check_expr(inner);
             }
+
+            Expr::DotShorthand { args, .. } => {
+                for arg in args {
+                    self.check_expr(&arg.node.value);
+                }
+            }
         }
     }
 
@@ -2038,6 +2044,12 @@ impl<'a> BorrowChecker<'a> {
     /// Uses span-based DefId lookup to avoid name collisions between arms.
     fn mark_pattern_origins(&mut self, pattern: &Spanned<Pattern>, scrutinee_origin: &BorrowOrigin) {
         match &pattern.node {
+            Pattern::DotShorthand { fields, .. } => {
+                for field in fields {
+                    self.mark_pattern_origins(field, scrutinee_origin);
+                }
+                return;
+            }
             Pattern::Binding(name) => {
                 // Use span-based lookup to find the correct DefId for this exact binding.
                 // Name-based lookup (find_def_by_name) can return the wrong DefId when
@@ -2078,6 +2090,12 @@ impl<'a> BorrowChecker<'a> {
     /// Mark all bindings in a pattern as Live.
     fn mark_pattern_live_spanned(&mut self, pattern: &Spanned<Pattern>) {
         match &pattern.node {
+            Pattern::DotShorthand { fields, .. } => {
+                for field in fields {
+                    self.mark_pattern_live_spanned(field);
+                }
+                return;
+            }
             Pattern::Binding(name) => {
                 // Use span-based lookup to find the exact DefId for this binding,
                 // avoiding confusion when multiple variables share the same name

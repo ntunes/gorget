@@ -622,6 +622,13 @@ pub enum Expr {
 
     // ── It (implicit closure parameter) ──
     It,
+
+    // ── Dot-shorthand variant: .Red(), .Blue(42) ──
+    /// Resolved to `EnumType.Variant(args)` using the expected type from context.
+    DotShorthand {
+        variant: Spanned<String>,
+        args: Vec<Spanned<CallArg>>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -733,6 +740,13 @@ pub enum Pattern {
 
     /// Rest pattern: ..
     Rest,
+
+    /// Dot-shorthand pattern: .Red(), .Blue(n)
+    /// Resolved to `EnumType.Variant(fields)` using the scrutinee type from context.
+    DotShorthand {
+        variant: Spanned<String>,
+        fields: Vec<Spanned<Pattern>>,
+    },
 }
 
 // ══════════════════════════════════════════════════════════════

@@ -101,6 +101,9 @@ fn contains_it(expr: &Spanned<Expr>) -> bool {
         // Block / Do — walk statements for expressions
         Expr::Block(block) | Expr::Do { body: block } => block_contains_it(block),
 
+        // Dot-shorthand: .Variant(args)
+        Expr::DotShorthand { args, .. } => args.iter().any(|a| contains_it(&a.node.value)),
+
         // Leaves — no sub-expressions
         Expr::IntLiteral(_) | Expr::FloatLiteral(_) | Expr::BoolLiteral(_)
         | Expr::CharLiteral(_) | Expr::StringLiteral(_) | Expr::NoneLiteral
@@ -430,6 +433,27 @@ impl Parser {
                     Expr::Identifier(name),
                     start.merge(end),
                 ))
+            }
+
+            // Dot-shorthand variant: .Red() or .Blue(42)
+            Token::Dot => {
+                self.advance();
+                let variant = self.expect_identifier()?;
+                if self.match_token(&Token::LParen) {
+                    let args = self.parse_call_args()?;
+                    self.expect(&Token::RParen)?;
+                    let end = self.previous_span();
+                    Ok(Spanned::new(
+                        Expr::DotShorthand { variant, args },
+                        start.merge(end),
+                    ))
+                } else {
+                    let end = variant.span;
+                    Ok(Spanned::new(
+                        Expr::DotShorthand { variant, args: Vec::new() },
+                        start.merge(end),
+                    ))
+                }
             }
 
             _ => Err(self.error_unexpected("expression")),
@@ -1480,6 +1504,7 @@ impl Parser {
                 | Token::Keyword(Keyword::Char)
                 | Token::Keyword(Keyword::Str)
                 | Token::Keyword(Keyword::CStr)
+                | Token::Dot
         )
     }
 

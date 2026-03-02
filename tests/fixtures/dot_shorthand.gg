@@ -1,0 +1,42 @@
+enum Color:
+    Red
+    Green
+    Blue(int)
+
+void main():
+    # VarDecl
+    Color c = .Red()
+    match c:
+        case .Red():
+            print("red")
+        case .Green():
+            print("green")
+        case .Blue(n):
+            print("blue {n}")
+    # Assignment
+    c = .Blue(42)
+    match c:
+        case .Blue(n):
+            print("blue {n}")
+        else:
+            print("other")
+    # Function arg
+    print_color(.Green())
+    # Return
+    Color r = make_color()
+    match r:
+        case .Blue(n):
+            print("made {n}")
+        else:
+            print("other")
+    print("done")
+
+Color make_color():
+    return .Blue(7)
+
+void print_color(Color c):
+    match c:
+        case .Green():
+            print("fn green")
+        else:
+            print("fn other")

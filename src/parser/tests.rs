@@ -1318,3 +1318,73 @@ fn test_where_mixed_bounds() {
         panic!("expected function");
     }
 }
+
+// ── Dot-shorthand ─────────────────────────────────────────────
+
+#[test]
+fn test_dot_shorthand_expr_unit() {
+    // .Red() as an expression
+    let source = "void f():\n    auto x = .Red()\n";
+    let module = parse(source);
+    if let Item::Function(f) = &module.items[0].node {
+        if let FunctionBody::Block(block) = &f.body {
+            if let Stmt::VarDecl { value, .. } = &block.stmts[0].node {
+                assert!(matches!(&value.node, Expr::DotShorthand { variant, args }
+                    if variant.node == "Red" && args.is_empty()));
+                return;
+            }
+        }
+    }
+    panic!("unexpected AST shape");
+}
+
+#[test]
+fn test_dot_shorthand_expr_with_args() {
+    // .Blue(42) as an expression
+    let source = "void f():\n    auto x = .Blue(42)\n";
+    let module = parse(source);
+    if let Item::Function(f) = &module.items[0].node {
+        if let FunctionBody::Block(block) = &f.body {
+            if let Stmt::VarDecl { value, .. } = &block.stmts[0].node {
+                assert!(matches!(&value.node, Expr::DotShorthand { variant, args }
+                    if variant.node == "Blue" && args.len() == 1));
+                return;
+            }
+        }
+    }
+    panic!("unexpected AST shape");
+}
+
+#[test]
+fn test_dot_shorthand_pattern_unit() {
+    // case .Red(): in a match
+    let source = "void f():\n    match x:\n        case .Red():\n            pass\n";
+    let module = parse(source);
+    if let Item::Function(f) = &module.items[0].node {
+        if let FunctionBody::Block(block) = &f.body {
+            if let Stmt::Match { arms, .. } = &block.stmts[0].node {
+                assert!(matches!(&arms[0].pattern.node, Pattern::DotShorthand { variant, fields }
+                    if variant.node == "Red" && fields.is_empty()));
+                return;
+            }
+        }
+    }
+    panic!("unexpected AST shape");
+}
+
+#[test]
+fn test_dot_shorthand_pattern_with_binding() {
+    // case .Blue(n): in a match
+    let source = "void f():\n    match x:\n        case .Blue(n):\n            pass\n";
+    let module = parse(source);
+    if let Item::Function(f) = &module.items[0].node {
+        if let FunctionBody::Block(block) = &f.body {
+            if let Stmt::Match { arms, .. } = &block.stmts[0].node {
+                assert!(matches!(&arms[0].pattern.node, Pattern::DotShorthand { variant, fields }
+                    if variant.node == "Blue" && fields.len() == 1));
+                return;
+            }
+        }
+    }
+    panic!("unexpected AST shape");
+}

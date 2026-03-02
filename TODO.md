@@ -4,8 +4,6 @@
 
 ## Medium
 
-- **Phase 2 — Dot shorthand for enum variants (`.Variant()`)**: Swift-style type-directed shorthand where the expected type infers the enum name. `Color c = .Red()` desugars to `Color.Red()`. Requires: (1) Parser: `Expr::DotShorthand { variant, args }` — `.` at expression start followed by Identifier. (2) Type propagation: thread expected type through `lower_expr_inner` (LHS type in VarDecl, param type in Call, scrutinee type in match arm patterns). (3) Resolution: when expected type is an enum, resolve `.Variant` within that enum. Orthogonal to Phase 1 — Phase 1 (qualified access) must land first. [added: 2026-03-02]
-
 - **Inline bounds follow-up — rename `FunctionInfo.where_bounds` → `trait_bounds`**: The field name `where_bounds` is now a misnomer since bounds live inline in generic params, not in where clauses. Rename throughout `semantic/resolve.rs` and all consumers (`typecheck.rs`, `borrow.rs`, codegen). Low risk mechanical rename. [added: 2026-03-02]
 
 - **Inline bounds follow-up — remove dead `WhereBound::Trait` AST variant**: The `WhereBound::Trait` variant in `src/parser/ast.rs` is now dead code (the parser emits an error when it sees `where T is Trait` and `format_where_clause` has it as `unreachable!()`). Remove the variant, the `type_name`/`bounds` fields, and all remaining match arms that reference it. [added: 2026-03-02]

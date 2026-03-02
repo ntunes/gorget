@@ -1842,6 +1842,32 @@ pub fn lower_pattern_condition(
             // Structural match — always matches if types match
             FunctionBuilder::const_bool(true)
         }
+
+        Pattern::DotShorthand { variant, .. } => {
+            // Use scrutinee type to look up the enum name, then compare tag
+            let enum_name = ctx.type_registry.type_name(scrut_type)
+                .or_else(|| {
+                    if let Some(GirType::Ptr(inner) | GirType::MutPtr(inner)) = ctx.type_registry.get(scrut_type).cloned() {
+                        ctx.type_registry.type_name(inner)
+                    } else {
+                        None
+                    }
+                })
+                .or_else(|| ctx.resolve_enum_variant(&variant.node).map(|(en, _)| en));
+            if let Some(ref en) = enum_name {
+                let tag = builder.tag_of(FunctionBuilder::copy(scrut_local));
+                if let Some(variant_tag) = ctx.resolve_variant_tag(en, &variant.node) {
+                    let cmp = builder.cmp(
+                        CmpOp::Eq,
+                        I32_TYPE,
+                        FunctionBuilder::copy(tag),
+                        Operand::Constant(Constant::I32(variant_tag as i32)),
+                    );
+                    return FunctionBuilder::copy(cmp);
+                }
+            }
+            FunctionBuilder::const_bool(true)
+        }
     }
 }
 
@@ -1932,6 +1958,39 @@ pub fn emit_pattern_bindings(
                 let elem_type = I64_TYPE; // placeholder — real type needs registry
                 let dst = builder.field_load(Place::local(scrut_local), i as u32, elem_type);
                 emit_pattern_bindings(ctx, builder, elem_pat, dst, elem_type);
+            }
+        }
+
+        Pattern::DotShorthand { variant, fields } => {
+            // Look up enum name from scrutinee type (same as Constructor)
+            let enum_name = ctx.type_registry.type_name(scrut_type)
+                .or_else(|| {
+                    if let Some(GirType::Ptr(inner) | GirType::MutPtr(inner)) = ctx.type_registry.get(scrut_type).cloned() {
+                        ctx.type_registry.type_name(inner)
+                    } else {
+                        None
+                    }
+                })
+                .or_else(|| ctx.resolve_enum_variant(&variant.node).map(|(en, _)| en));
+            let enum_name = if let Some(en) = enum_name { en } else { return; };
+            let variant_name = variant.node.clone();
+
+            for (i, field_pat) in fields.iter().enumerate() {
+                let field_type = if let Some(type_def) = ctx.type_registry.get_type_def(&enum_name) {
+                    if let TypeDefKind::Enum(ref e) = type_def.kind {
+                        if let Some(v) = e.variants.iter().find(|v| v.name == variant_name) {
+                            v.fields.get(i).map(|f| f.type_id).unwrap_or(I64_TYPE)
+                        } else { I64_TYPE }
+                    } else { I64_TYPE }
+                } else { I64_TYPE };
+
+                let dst = builder.enum_field_load(
+                    Place::local(scrut_local),
+                    variant_name.clone(),
+                    i as u32,
+                    field_type,
+                );
+                emit_pattern_bindings(ctx, builder, field_pat, dst, field_type);
             }
         }
 
