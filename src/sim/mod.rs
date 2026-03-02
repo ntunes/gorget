@@ -245,6 +245,25 @@ fn run_test_suite(interp: &mut Interpreter) -> i32 {
                     failed += 1;
                     let line = format!("FAIL: {msg} ({elapsed_ms}ms)\n");
                     interp.stdout.extend_from_slice(line.as_bytes());
+
+                    if !matches!(interp.backtrace_level, config::BacktraceLevel::Off) {
+                        flush_output(&interp.stdout, &interp.stderr);
+                        interp.stdout.clear();
+                        interp.stderr.clear();
+                        let bt = interp.last_error_backtrace.take();
+                        let err_span = interp.last_error_span.take();
+                        let fname = interp.module.source_filename.as_deref().unwrap_or("<unknown>");
+                        let li = interp.module.source_code.as_ref()
+                            .map(|s| source_loc::LineIndex::new(s));
+                        source_loc::format_sim_location(
+                            err_span,
+                            bt.as_deref(),
+                            fname,
+                            interp.module.source_code.as_deref(),
+                            li.as_ref(),
+                            &interp.backtrace_level,
+                        );
+                    }
                 }
                 Err(SimError::Unimplemented(name)) => {
                     flush_output(&interp.stdout, &interp.stderr);
@@ -256,6 +275,25 @@ fn run_test_suite(interp: &mut Interpreter) -> i32 {
                     failed += 1;
                     let line = format!("FAIL: {e} ({elapsed_ms}ms)\n");
                     interp.stdout.extend_from_slice(line.as_bytes());
+
+                    if !matches!(interp.backtrace_level, config::BacktraceLevel::Off) {
+                        flush_output(&interp.stdout, &interp.stderr);
+                        interp.stdout.clear();
+                        interp.stderr.clear();
+                        let bt = interp.last_error_backtrace.take();
+                        let err_span = interp.last_error_span.take();
+                        let fname = interp.module.source_filename.as_deref().unwrap_or("<unknown>");
+                        let li = interp.module.source_code.as_ref()
+                            .map(|s| source_loc::LineIndex::new(s));
+                        source_loc::format_sim_location(
+                            err_span,
+                            bt.as_deref(),
+                            fname,
+                            interp.module.source_code.as_deref(),
+                            li.as_ref(),
+                            &interp.backtrace_level,
+                        );
+                    }
                 }
             }
         }

@@ -48,11 +48,11 @@ impl LineIndex {
     }
 }
 
-/// Format a runtime error with source location and backtrace to stderr.
+/// Print just source location and backtrace (no leading message line).
 ///
+/// Used by the test runner to append context after the FAIL line.
 /// Output style matches Rust/Gorget compiler error format:
 /// ```text
-/// gorget: index 5 out of bounds (len=3)
 ///   --> example.gg:42:15
 ///    |
 /// 42 |     items.get(5)
@@ -60,8 +60,7 @@ impl LineIndex {
 ///    = in 'process_items' (example.gg:28)
 ///    = called from 'main' (example.gg:12)
 /// ```
-pub fn format_sim_error(
-    error_msg: &str,
+pub fn format_sim_location(
     error_span: Option<Span>,
     backtrace: Option<&[StackFrame]>,
     filename: &str,
@@ -69,8 +68,6 @@ pub fn format_sim_error(
     line_index: Option<&LineIndex>,
     level: &BacktraceLevel,
 ) {
-    eprintln!("{error_msg}");
-
     if matches!(level, BacktraceLevel::Off) {
         return;
     }
@@ -146,4 +143,29 @@ pub fn format_sim_error(
             frames.len() - max_frames
         );
     }
+}
+
+/// Format a runtime error with message, source location, and backtrace to stderr.
+///
+/// Output style matches Rust/Gorget compiler error format:
+/// ```text
+/// gorget: index 5 out of bounds (len=3)
+///   --> example.gg:42:15
+///    |
+/// 42 |     items.get(5)
+///    |               ^
+///    = in 'process_items' (example.gg:28)
+///    = called from 'main' (example.gg:12)
+/// ```
+pub fn format_sim_error(
+    error_msg: &str,
+    error_span: Option<Span>,
+    backtrace: Option<&[StackFrame]>,
+    filename: &str,
+    source: Option<&str>,
+    line_index: Option<&LineIndex>,
+    level: &BacktraceLevel,
+) {
+    eprintln!("{error_msg}");
+    format_sim_location(error_span, backtrace, filename, source, line_index, level);
 }
