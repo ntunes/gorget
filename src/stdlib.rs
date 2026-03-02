@@ -62,13 +62,14 @@ pub fn is_builtin_module(segments: &[String]) -> bool {
             2 => matches!(segments[1].as_str(),
                 "fs" | "path" | "os" | "conv" | "io" | "random" | "time"
                 | "collections" | "math" | "fmt" | "process" | "bytes"
-                | "encoding" | "channel" | "alloc"),
+                | "encoding" | "channel" | "alloc" | "term" | "heap" | "datetime"),
             3 => segments[1] == "net" && matches!(segments[2].as_str(), "socket" | "tls" | "udp"),
             _ => false,
         },
         Some("gg") => segments.len() == 2 && matches!(segments[1].as_str(),
             "json" | "toml" | "xml" | "yaml" | "csv" | "crypto" | "regex"
-            | "sdl" | "gfx" | "ecs" | "ssh" | "http" | "p2p"),
+            | "sdl" | "gfx" | "ecs" | "ssh" | "http" | "p2p"
+            | "uuid" | "log" | "cli"),
         _ => false,
     }
 }
@@ -93,6 +94,9 @@ pub fn generate_builtin_module(segments: &[String]) -> Option<Module> {
                 "encoding" => None, // file-based module — loaded via builtin_module_source()
                 "channel" => Some(gen_channel_module()),
                 "alloc" => Some(gen_alloc_module()),
+                "term" => None,     // file-based module — loaded via builtin_module_source()
+                "heap" => None,     // file-based module — loaded via builtin_module_source()
+                "datetime" => None, // file-based module — loaded via builtin_module_source()
                 _ => None,
             },
             3 if segments[1] == "net" && segments[2] == "socket" => Some(gen_socket_module()),
@@ -114,6 +118,9 @@ pub fn generate_builtin_module(segments: &[String]) -> Option<Module> {
             "ssh" => None,  // file-based module — loaded via builtin_module_source()
             "http" => None, // file-based module — loaded via builtin_module_source()
             "p2p" => None,  // file-based module — loaded via builtin_module_source()
+            "uuid" => None, // file-based module — loaded via builtin_module_source()
+            "log" => None,  // file-based module — loaded via builtin_module_source()
+            "cli" => None,  // file-based module — loaded via builtin_module_source()
             _ => None,
         },
         _ => None,
@@ -598,6 +605,9 @@ pub fn builtin_module_source(segments: &[String]) -> Option<&'static str> {
         Some("std") => match segments.get(1).map(|s| s.as_str()) {
             Some("bytes") => Some(include_str!("../lib/std/bytes.gg")),
             Some("encoding") => Some(include_str!("../lib/std/encoding.gg")),
+            Some("term") => Some(include_str!("../lib/std/term.gg")),
+            Some("heap") => Some(include_str!("../lib/std/heap.gg")),
+            Some("datetime") => Some(include_str!("../lib/std/datetime.gg")),
             _ => None,
         },
         Some("gg") => match segments.get(1).map(|s| s.as_str()) {
@@ -611,6 +621,9 @@ pub fn builtin_module_source(segments: &[String]) -> Option<&'static str> {
             Some("yaml") => Some(include_str!("../lib/gg/yaml.gg")),
             Some("csv") => Some(include_str!("../lib/gg/csv.gg")),
             Some("p2p") => Some(include_str!("../lib/gg/p2p.gg")),
+            Some("uuid") => Some(include_str!("../lib/gg/uuid.gg")),
+            Some("log") => Some(include_str!("../lib/gg/log.gg")),
+            Some("cli") => Some(include_str!("../lib/gg/cli.gg")),
             _ => None,
         },
         _ => None,
@@ -2269,6 +2282,250 @@ mod tests {
         assert!(fn_names.contains(&"csv_parse_table".to_string()));
         assert!(fn_names.contains(&"csv_stringify_table".to_string()));
         assert!(equip_count >= 2, "expected at least 2 equip blocks, got {equip_count}");
+    }
+
+    // ─── gg.uuid ──────────────────────────────────────────────
+
+    #[test]
+    fn is_builtin_uuid() {
+        assert!(is_builtin_module(&["gg".into(), "uuid".into()]));
+    }
+
+    #[test]
+    fn generate_uuid_returns_none() {
+        assert!(generate_builtin_module(&["gg".into(), "uuid".into()]).is_none());
+    }
+
+    #[test]
+    fn uuid_module_source_exists() {
+        let source = builtin_module_source(&["gg".into(), "uuid".into()]);
+        assert!(source.is_some());
+        let src = source.unwrap();
+        assert!(src.contains("struct UUID"));
+        assert!(src.contains("v4()"));
+        assert!(src.contains("to_string"));
+    }
+
+    #[test]
+    fn uuid_source_parses() {
+        let source = builtin_module_source(&["gg".into(), "uuid".into()]).unwrap();
+        let mut parser = crate::parser::Parser::new(source);
+        let module = parser.parse_module();
+        assert!(parser.errors.is_empty(), "uuid.gg parse errors: {:?}", parser.errors);
+        let struct_names: Vec<_> = module.items.iter().filter_map(|i| match &i.node {
+            Item::Struct(s) => Some(s.name.node.clone()),
+            _ => None,
+        }).collect();
+        assert!(struct_names.contains(&"UUID".to_string()));
+        let fn_names: Vec<_> = module.items.iter().filter_map(|i| match &i.node {
+            Item::Function(f) => Some(f.name.node.clone()),
+            _ => None,
+        }).collect();
+        assert!(fn_names.contains(&"uuid_hex_val".to_string()));
+    }
+
+    // ─── gg.log ───────────────────────────────────────────────
+
+    #[test]
+    fn is_builtin_log() {
+        assert!(is_builtin_module(&["gg".into(), "log".into()]));
+    }
+
+    #[test]
+    fn generate_log_returns_none() {
+        assert!(generate_builtin_module(&["gg".into(), "log".into()]).is_none());
+    }
+
+    #[test]
+    fn log_module_source_exists() {
+        let source = builtin_module_source(&["gg".into(), "log".into()]);
+        assert!(source.is_some());
+        let src = source.unwrap();
+        assert!(src.contains("struct Logger"));
+        assert!(src.contains("enum LogLevel"));
+        assert!(src.contains("log_info"));
+    }
+
+    #[test]
+    fn log_source_parses() {
+        let source = builtin_module_source(&["gg".into(), "log".into()]).unwrap();
+        let mut parser = crate::parser::Parser::new(source);
+        let module = parser.parse_module();
+        assert!(parser.errors.is_empty(), "log.gg parse errors: {:?}", parser.errors);
+        let mut struct_names = vec![];
+        let mut fn_names = vec![];
+        let mut enum_names = vec![];
+        for item in &module.items {
+            match &item.node {
+                Item::Struct(s) => struct_names.push(s.name.node.clone()),
+                Item::Function(f) => fn_names.push(f.name.node.clone()),
+                Item::Enum(e) => enum_names.push(e.name.node.clone()),
+                _ => {}
+            }
+        }
+        assert!(struct_names.contains(&"Logger".to_string()));
+        assert!(enum_names.contains(&"LogLevel".to_string()));
+        assert!(fn_names.contains(&"log_info".to_string()));
+        assert!(fn_names.contains(&"log_debug".to_string()));
+        assert!(fn_names.contains(&"log_warn".to_string()));
+        assert!(fn_names.contains(&"log_error".to_string()));
+    }
+
+    // ─── std.term ─────────────────────────────────────────────
+
+    #[test]
+    fn is_builtin_term() {
+        assert!(is_builtin_module(&["std".into(), "term".into()]));
+    }
+
+    #[test]
+    fn generate_term_returns_none() {
+        assert!(generate_builtin_module(&["std".into(), "term".into()]).is_none());
+    }
+
+    #[test]
+    fn term_module_source_exists() {
+        let source = builtin_module_source(&["std".into(), "term".into()]);
+        assert!(source.is_some());
+        let src = source.unwrap();
+        assert!(src.contains("is_tty"));
+        assert!(src.contains("gorget_is_tty"));
+        assert!(src.contains("red"));
+        assert!(src.contains("green"));
+        assert!(src.contains("strip_ansi"));
+    }
+
+    #[test]
+    fn term_source_parses() {
+        let source = builtin_module_source(&["std".into(), "term".into()]).unwrap();
+        let mut parser = crate::parser::Parser::new(source);
+        let module = parser.parse_module();
+        assert!(parser.errors.is_empty(), "term.gg parse errors: {:?}", parser.errors);
+        let fn_names: Vec<_> = module.items.iter().filter_map(|i| match &i.node {
+            Item::Function(f) => Some(f.name.node.clone()),
+            _ => None,
+        }).collect();
+        assert!(fn_names.contains(&"is_tty".to_string()));
+        assert!(fn_names.contains(&"red".to_string()));
+        assert!(fn_names.contains(&"green".to_string()));
+        assert!(fn_names.contains(&"bold".to_string()));
+        assert!(fn_names.contains(&"strip_ansi".to_string()));
+    }
+
+    // ─── gg.cli ───────────────────────────────────────────────
+
+    #[test]
+    fn is_builtin_cli() {
+        assert!(is_builtin_module(&["gg".into(), "cli".into()]));
+    }
+
+    #[test]
+    fn generate_cli_returns_none() {
+        assert!(generate_builtin_module(&["gg".into(), "cli".into()]).is_none());
+    }
+
+    #[test]
+    fn cli_module_source_exists() {
+        let source = builtin_module_source(&["gg".into(), "cli".into()]);
+        assert!(source.is_some());
+        let src = source.unwrap();
+        assert!(src.contains("struct CliParser"));
+        assert!(src.contains("struct CliArg"));
+        assert!(src.contains("add_flag"));
+        assert!(src.contains("add_option"));
+        assert!(src.contains("print_help"));
+    }
+
+    #[test]
+    fn cli_source_parses() {
+        let source = builtin_module_source(&["gg".into(), "cli".into()]).unwrap();
+        let mut parser = crate::parser::Parser::new(source);
+        let module = parser.parse_module();
+        assert!(parser.errors.is_empty(), "cli.gg parse errors: {:?}", parser.errors);
+        let struct_names: Vec<_> = module.items.iter().filter_map(|i| match &i.node {
+            Item::Struct(s) => Some(s.name.node.clone()),
+            _ => None,
+        }).collect();
+        assert!(struct_names.contains(&"CliParser".to_string()));
+        assert!(struct_names.contains(&"CliArg".to_string()));
+    }
+
+    // ─── std.heap ─────────────────────────────────────────────
+
+    #[test]
+    fn is_builtin_heap() {
+        assert!(is_builtin_module(&["std".into(), "heap".into()]));
+    }
+
+    #[test]
+    fn generate_heap_returns_none() {
+        assert!(generate_builtin_module(&["std".into(), "heap".into()]).is_none());
+    }
+
+    #[test]
+    fn heap_module_source_exists() {
+        let source = builtin_module_source(&["std".into(), "heap".into()]);
+        assert!(source.is_some());
+        let src = source.unwrap();
+        assert!(src.contains("struct Heap"));
+        assert!(src.contains("push"));
+        assert!(src.contains("pop"));
+        assert!(src.contains("peek"));
+    }
+
+    #[test]
+    fn heap_source_parses() {
+        let source = builtin_module_source(&["std".into(), "heap".into()]).unwrap();
+        let mut parser = crate::parser::Parser::new(source);
+        let module = parser.parse_module();
+        assert!(parser.errors.is_empty(), "heap.gg parse errors: {:?}", parser.errors);
+        let struct_names: Vec<_> = module.items.iter().filter_map(|i| match &i.node {
+            Item::Struct(s) => Some(s.name.node.clone()),
+            _ => None,
+        }).collect();
+        assert!(struct_names.contains(&"Heap".to_string()));
+    }
+
+    // ─── std.datetime ─────────────────────────────────────────
+
+    #[test]
+    fn is_builtin_datetime() {
+        assert!(is_builtin_module(&["std".into(), "datetime".into()]));
+    }
+
+    #[test]
+    fn generate_datetime_returns_none() {
+        assert!(generate_builtin_module(&["std".into(), "datetime".into()]).is_none());
+    }
+
+    #[test]
+    fn datetime_module_source_exists() {
+        let source = builtin_module_source(&["std".into(), "datetime".into()]);
+        assert!(source.is_some());
+        let src = source.unwrap();
+        assert!(src.contains("struct DateTime"));
+        assert!(src.contains("to_epoch"));
+        assert!(src.contains("weekday"));
+        assert!(src.contains("gorget_dt_decompose"));
+    }
+
+    #[test]
+    fn datetime_source_parses() {
+        let source = builtin_module_source(&["std".into(), "datetime".into()]).unwrap();
+        let mut parser = crate::parser::Parser::new(source);
+        let module = parser.parse_module();
+        assert!(parser.errors.is_empty(), "datetime.gg parse errors: {:?}", parser.errors);
+        let struct_names: Vec<_> = module.items.iter().filter_map(|i| match &i.node {
+            Item::Struct(s) => Some(s.name.node.clone()),
+            _ => None,
+        }).collect();
+        assert!(struct_names.contains(&"DateTime".to_string()));
+        let fn_names: Vec<_> = module.items.iter().filter_map(|i| match &i.node {
+            Item::Function(f) => Some(f.name.node.clone()),
+            _ => None,
+        }).collect();
+        assert!(fn_names.contains(&"dt_is_leap".to_string()));
+        assert!(fn_names.contains(&"dt_days_from_epoch".to_string()));
     }
 
 }

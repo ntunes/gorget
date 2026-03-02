@@ -45,6 +45,10 @@
 
 - **Codegen panics instead of semantic errors**: Several codegen paths panic on invalid input that should be caught earlier — string interpolation of non-primitive types (`c_expr_print.rs:394`), `in` operator fallthrough (`c_expr_call.rs:1225`). Move these checks to semantic analysis or use `unreachable!()`. [added: 2026-02-16]
 
+- **GorgetString→Str coercion in Result/Option compound literals**: `return Error("prefix" + var + "suffix")` fails to compile because `gorget_str_cat()` returns `GorgetString` (owned: `{char* data; size_t len; size_t cap; Allocator a}`) but `Result[T, str].Error._0` is `Str` (borrowed: `{const char* data; size_t len}`). The C backend generates an incompatible compound literal. Assignment coercion already works (line ~2736 in `c_expr.rs`: `(Str){.data = gs.data, .len = gs.len}`) but struct field initialization in Result/Option constructors doesn't apply this conversion. Workaround: use plain string literals (no concatenation) for error messages. Fix: detect `GorgetString` value being stored into a `Str` field during compound literal construction and emit the `(Str){...}` coercion. [added: 2026-03-02]
+
+- **`looks_like_closure()` false positive on `if`-condition parentheses**: The heuristic in `src/parser/expr.rs` scans forward for a matching `)` then checks if `:` follows. In `if cond and (A == B or C == D):`, the `)` is immediately followed by `:` (the `if`-statement colon, not a closure colon), so the parser mis-identifies the expression as a closure and then fails with a confusing parse error. Workaround: extract the parenthesized subexpression to a local bool variable so `(...)` is never the last token before `:` in an `if` condition. Proper fix: make `looks_like_closure()` distinguish closure `:` from statement `:` by checking whether the `:` is at the same indentation level as the `if`. [added: 2026-03-02]
+
 - **Basic orphan rule**: equip block must be in the module that defines the trait or the type. Prevents incoherent trait implementations across modules. [added: 2026-02-10]
 
 

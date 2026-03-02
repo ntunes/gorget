@@ -3058,6 +3058,40 @@ static inline int64_t gorget_parse_time(const char* s, const char* fmt) {
 }
 static inline int64_t gorget_term_cols(void) { struct winsize ws; if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1) return 80; return (int64_t)ws.ws_col; }
 static inline int64_t gorget_term_rows(void) { struct winsize ws; if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1) return 24; return (int64_t)ws.ws_row; }
+static inline bool gorget_is_tty(void) { return isatty(STDOUT_FILENO) != 0; }
+
+// ── DateTime decomposition ────────────────────────────────────
+// Returns a GorgetArray of 7 int64_t elements:
+// [year, month(1-12), day(1-31), hour, minute, second, offset_sec]
+static inline GorgetArray gorget_dt_decompose(int64_t epoch, bool utc) {
+    GorgetArray arr = gorget_array_new(sizeof(int64_t));
+    time_t t = (time_t)epoch;
+    struct tm tm_buf;
+    memset(&tm_buf, 0, sizeof(tm_buf));
+    if (utc) {
+        gmtime_r(&t, &tm_buf);
+    } else {
+        localtime_r(&t, &tm_buf);
+    }
+    int64_t fields[7];
+    fields[0] = (int64_t)(tm_buf.tm_year + 1900);
+    fields[1] = (int64_t)(tm_buf.tm_mon + 1);
+    fields[2] = (int64_t)tm_buf.tm_mday;
+    fields[3] = (int64_t)tm_buf.tm_hour;
+    fields[4] = (int64_t)tm_buf.tm_min;
+    fields[5] = (int64_t)tm_buf.tm_sec;
+#ifdef __linux__
+    fields[6] = utc ? INT64_C(0) : (int64_t)tm_buf.tm_gmtoff;
+#elif defined(__APPLE__)
+    fields[6] = utc ? INT64_C(0) : (int64_t)tm_buf.tm_gmtoff;
+#else
+    fields[6] = INT64_C(0);
+#endif
+    for (int _i = 0; _i < 7; _i++) {
+        gorget_array_push(&arr, &fields[_i]);
+    }
+    return arr;
+}
 
 // ── Line input ───────────────────────────────────────────────
 static inline const char* gorget_readline(void) {

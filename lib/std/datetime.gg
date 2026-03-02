@@ -1,0 +1,151 @@
+# std.datetime — Calendar-aware dates and times
+#
+# Extends std.time (epoch integers) with calendar decomposition.
+# Supports date arithmetic, weekday computation, and formatting.
+# DateTime fields are calendar values: year (e.g. 2026), month (1-12),
+# day (1-31), hour (0-23), minute (0-59), second (0-59), offset_sec.
+
+from std.time import time, format_time
+from std.conv import int_to_str
+
+# ── C-backed decomposition ───────────────────────────────────
+# Returns a Vector[int] with 7 elements:
+# [year, month, day, hour, minute, second, offset_sec]
+# utc=true uses gmtime_r, utc=false uses localtime_r.
+
+extern Vector[int] __dt_decompose(int dt_epoch, bool dt_utc) = "gorget_dt_decompose"
+
+# ── Pure Gorget date helpers ─────────────────────────────────
+
+int dt_is_leap(int dt_year):
+    if dt_year % 4 != 0:
+        return 0
+    if dt_year % 100 != 0:
+        return 1
+    if dt_year % 400 == 0:
+        return 1
+    return 0
+
+int dt_days_in_month(int dt_year, int dt_month):
+    if dt_month == 2:
+        if dt_is_leap(dt_year) == 1:
+            return 29
+        return 28
+    if dt_month == 4 or dt_month == 6 or dt_month == 9 or dt_month == 11:
+        return 30
+    return 31
+
+int dt_day_of_year_impl(int dt_year, int dt_month, int dt_day):
+    int dt_doy = dt_day
+    int dt_m = 1
+    while dt_m < dt_month:
+        dt_doy = dt_doy + dt_days_in_month(dt_year, dt_m)
+        dt_m = dt_m + 1
+    return dt_doy
+
+# Number of days from 1970-01-01 to given date (exclusive of the date itself).
+int dt_days_from_epoch(int dt_year, int dt_month, int dt_day):
+    int dt_days = 0
+    int dt_y = 1970
+    while dt_y < dt_year:
+        if dt_is_leap(dt_y) == 1:
+            dt_days = dt_days + 366
+        else:
+            dt_days = dt_days + 365
+        dt_y = dt_y + 1
+    dt_days = dt_days + dt_day_of_year_impl(dt_year, dt_month, dt_day) - 1
+    return dt_days
+
+DateTime dt_from_parts(Vector[int] dt_parts):
+    int dt_year = dt_parts.get(0).unwrap()
+    int dt_month = dt_parts.get(1).unwrap()
+    int dt_day = dt_parts.get(2).unwrap()
+    int dt_hour = dt_parts.get(3).unwrap()
+    int dt_minute = dt_parts.get(4).unwrap()
+    int dt_second = dt_parts.get(5).unwrap()
+    int dt_offset = dt_parts.get(6).unwrap()
+    return DateTime(dt_year, dt_month, dt_day, dt_hour, dt_minute, dt_second, dt_offset)
+
+# ── DateTime struct ──────────────────────────────────────────
+
+struct DateTime:
+    int dt_year
+    int dt_month
+    int dt_day
+    int dt_hour
+    int dt_minute
+    int dt_second
+    int dt_offset_sec   # UTC offset in seconds (e.g. 3600 for UTC+1)
+
+equip DateTime:
+    DateTime now():
+        int dt_ep = time()
+        Vector[int] dt_parts = __dt_decompose(dt_ep, false)
+        return dt_from_parts(dt_parts)
+
+    DateTime utc_now():
+        int dt_ep = time()
+        Vector[int] dt_parts = __dt_decompose(dt_ep, true)
+        return dt_from_parts(dt_parts)
+
+    DateTime from_epoch(int dt_epoch):
+        Vector[int] dt_parts = __dt_decompose(dt_epoch, false)
+        return dt_from_parts(dt_parts)
+
+    DateTime from_epoch_utc(int dt_epoch):
+        Vector[int] dt_parts = __dt_decompose(dt_epoch, true)
+        return dt_from_parts(dt_parts)
+
+    int to_epoch(self):
+        int dt_days = dt_days_from_epoch(self.dt_year, self.dt_month, self.dt_day)
+        int dt_secs = dt_days * 86400
+        dt_secs = dt_secs + self.dt_hour * 3600
+        dt_secs = dt_secs + self.dt_minute * 60
+        dt_secs = dt_secs + self.dt_second
+        dt_secs = dt_secs - self.dt_offset_sec
+        return dt_secs
+
+    int weekday(self):
+        # Returns 0=Monday, 1=Tuesday, ..., 6=Sunday
+        # 1970-01-01 was a Thursday (index 3 in 0=Monday system)
+        int dt_days = dt_days_from_epoch(self.dt_year, self.dt_month, self.dt_day)
+        return (dt_days + 3) % 7
+
+    int day_of_year(self):
+        return dt_day_of_year_impl(self.dt_year, self.dt_month, self.dt_day)
+
+    DateTime add_seconds(self, int dt_n):
+        int dt_new_ep = self.to_epoch() + dt_n
+        Vector[int] dt_parts = __dt_decompose(dt_new_ep, false)
+        return dt_from_parts(dt_parts)
+
+    DateTime add_days(self, int dt_n):
+        return self.add_seconds(dt_n * 86400)
+
+    DateTime add_hours(self, int dt_n):
+        return self.add_seconds(dt_n * 3600)
+
+    int diff_seconds(self, DateTime dt_other):
+        return self.to_epoch() - dt_other.to_epoch()
+
+    str format(self, str dt_fmt):
+        return format_time(self.to_epoch(), dt_fmt)
+
+    str to_string(self):
+        str dt_s = int_to_str(self.dt_year) + "-"
+        if self.dt_month < 10:
+            dt_s = dt_s + "0"
+        dt_s = dt_s + int_to_str(self.dt_month) + "-"
+        if self.dt_day < 10:
+            dt_s = dt_s + "0"
+        dt_s = dt_s + int_to_str(self.dt_day) + "T"
+        if self.dt_hour < 10:
+            dt_s = dt_s + "0"
+        dt_s = dt_s + int_to_str(self.dt_hour) + ":"
+        if self.dt_minute < 10:
+            dt_s = dt_s + "0"
+        dt_s = dt_s + int_to_str(self.dt_minute) + ":"
+        if self.dt_second < 10:
+            dt_s = dt_s + "0"
+        dt_s = dt_s + int_to_str(self.dt_second) + "Z"
+        return dt_s

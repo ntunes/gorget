@@ -620,7 +620,7 @@ pub fn lower_module(
 
     // Register monomorphized equip method signatures (including default trait methods)
     generic_collector.register_equip_sigs_with_defaults(
-        &ctx.type_mapper, &mut ctx.type_registry, &mut ctx.fn_sigs, Some(ast_module));
+        &mut ctx.type_mapper, &mut ctx.type_registry, &mut ctx.fn_sigs, Some(ast_module));
 
     // Register built-in method signatures for Option/Result instantiations.
     // These methods are inlined by the C backend (not real functions), but

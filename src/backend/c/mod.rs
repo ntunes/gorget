@@ -861,10 +861,29 @@ fn emit_test_runner_main(out: &mut String, module: &Module) {
 }
 
 /// Collect the names of TypeDefs that are unmonomorphized generic templates.
-/// A template TypeDef has at least one field whose type resolves to `void` (Unit).
+///
+/// Two detection strategies:
+/// 1. Naming convention: type name ends with `__X` where X is a single uppercase
+///    ASCII letter (e.g., `Heap__T`, `Option__T`, `SparseSet__V`). These are
+///    uninstantiated generic types whose type parameter was never resolved to a
+///    concrete type.
+/// 2. Structural: the type has at least one field whose type resolves to `void`
+///    (UNIT_TYPE), indicating an unresolved type parameter that the IR erased.
 fn template_type_names(module: &Module) -> Vec<String> {
     let mut names = Vec::new();
     for def in module.type_registry.type_defs() {
+        // Detect by naming convention: Foo__T (single uppercase letter suffix)
+        let b = def.name.as_bytes();
+        let n = b.len();
+        let is_unbound_by_name = n >= 3
+            && b[n - 1].is_ascii_uppercase()
+            && b[n - 2] == b'_'
+            && b[n - 3] == b'_';
+        if is_unbound_by_name {
+            names.push(def.name.clone());
+            continue;
+        }
+        // Detect by structure: field or variant field with UNIT_TYPE
         match &def.kind {
             TypeDefKind::Struct(s) => {
                 if s.fields.iter().any(|f| f.type_id == UNIT_TYPE) {

@@ -1,0 +1,29 @@
+from gg.log import Logger, LogLevel, log_info, log_warn, log_error, log_debug
+
+void main():
+    # Module-level convenience functions
+    log_info("server started")
+    log_warn("disk space low")
+    log_error("connection refused")
+    log_debug("trace point")
+    # Logger struct with Info level
+    Logger lg = Logger.new(Info())
+    lg.info("hello")
+    lg.warn("caution")
+    # Debug message should be suppressed (below Info level)
+    lg.debug("hidden")
+    # Error should appear
+    lg.error("boom")
+    # Logger with Debug level — shows everything
+    Logger verbose = Logger.new(Debug())
+    verbose.debug("debug visible")
+    verbose.info("info visible")
+    # Logger with Error level — only errors
+    Logger quiet = Logger.new(Err())
+    quiet.info("suppressed info")
+    quiet.warn("suppressed warn")
+    quiet.error("only error shows")
+    # with_prefix constructor
+    Logger prefixed = Logger.with_prefix(Info(), "app")
+    prefixed.info("started")
+    print("done")

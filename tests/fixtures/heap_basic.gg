@@ -1,0 +1,60 @@
+from std.heap import Heap
+from std.collections import Vector
+
+void main():
+    # Basic min-heap with integers
+    Heap[int] pq = Heap[int](Vector[int]())
+    pq.push(30)
+    pq.push(10)
+    pq.push(20)
+    pq.push(5)
+    pq.push(15)
+
+    # peek returns minimum without removing
+    int top = pq.peek().unwrap()
+    print("{top}")
+
+    # len
+    int n = pq.len()
+    print("{n}")
+
+    # is_empty
+    bool empty = pq.is_empty()
+    print("{empty}")
+
+    # pop returns minimum elements in sorted order
+    int p1 = pq.pop().unwrap()
+    int p2 = pq.pop().unwrap()
+    int p3 = pq.pop().unwrap()
+    int p4 = pq.pop().unwrap()
+    int p5 = pq.pop().unwrap()
+    print("{p1}")
+    print("{p2}")
+    print("{p3}")
+    print("{p4}")
+    print("{p5}")
+
+    # Now empty
+    bool now_empty = pq.is_empty()
+    print("{now_empty}")
+
+    # pop on empty returns None
+    Option[int] none_val = pq.pop()
+    bool is_none = none_val.is_none()
+    print("{is_none}")
+
+    # Single element heap
+    Heap[int] single = Heap[int](Vector[int]())
+    single.push(42)
+    int sv = single.pop().unwrap()
+    print("{sv}")
+
+    # float heap
+    Heap[float] fpq = Heap[float](Vector[float]())
+    fpq.push(3.14)
+    fpq.push(1.0)
+    fpq.push(2.72)
+    float fmin = fpq.pop().unwrap()
+    print("{fmin}")
+
+    print("done")

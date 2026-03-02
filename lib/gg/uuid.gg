@@ -1,0 +1,85 @@
+# gg.uuid — UUID v4 generation and parsing
+#
+# Provides UUID v4 (random) generation and round-trip parsing.
+# UUID v4: 16 random bytes with version (4) and variant bits set.
+# Format: "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx" (8-4-4-4-12 hex groups)
+
+from std.collections import Vector
+from std.bytes import random_bytes
+from std.conv import char_to_str, ord
+
+# ── Hex helpers ──────────────────────────────────────────────
+
+int uuid_hex_val(char uuid_c):
+    int uuid_code = ord(uuid_c)
+    if uuid_code >= 48 and uuid_code <= 57:
+        return uuid_code - 48
+    if uuid_code >= 97 and uuid_code <= 102:
+        return uuid_code - 87
+    if uuid_code >= 65 and uuid_code <= 70:
+        return uuid_code - 55
+    return -1
+
+# ── UUID type ────────────────────────────────────────────────
+
+struct UUID:
+    Vector[uint8] uuid_bytes
+
+equip UUID:
+    UUID v4():
+        Vector[uint8] uuid_b = random_bytes(16)
+        # Version 4: set bits 4-7 of byte 6 to 0100
+        int uuid_b6 = uuid_b.get(6).unwrap() as int
+        uuid_b.set(6, ((uuid_b6 & 15) | 64) as uint8)
+        # Variant 1: set bits 6-7 of byte 8 to 10
+        int uuid_b8 = uuid_b.get(8).unwrap() as int
+        uuid_b.set(8, ((uuid_b8 & 63) | 128) as uint8)
+        return UUID(uuid_b)
+
+    Result[UUID, str] parse(str uuid_s):
+        if uuid_s.byte_len() != 36:
+            return Error("invalid UUID length")
+        Vector[uint8] uuid_out = Vector[uint8]()
+        int uuid_i = 0
+        while uuid_i < 36:
+            if uuid_i == 8 or uuid_i == 13 or uuid_i == 18 or uuid_i == 23:
+                if uuid_s.char_at(uuid_i) != '-':
+                    return Error("expected '-' at position in UUID")
+                uuid_i = uuid_i + 1
+            else:
+                int uuid_hi = uuid_hex_val(uuid_s.char_at(uuid_i))
+                int uuid_lo = uuid_hex_val(uuid_s.char_at(uuid_i + 1))
+                if uuid_hi < 0 or uuid_lo < 0:
+                    return Error("invalid hex character in UUID")
+                uuid_out.push((uuid_hi * 16 + uuid_lo) as uint8)
+                uuid_i = uuid_i + 2
+        if uuid_out.len() != 16:
+            return Error("UUID byte count mismatch")
+        return Ok(UUID(uuid_out))
+
+    str to_string(self):
+        str uuid_hex = "0123456789abcdef"
+        str uuid_s = ""
+        int uuid_i = 0
+        while uuid_i < 16:
+            int uuid_bv = self.uuid_bytes.get(uuid_i).unwrap() as int
+            uuid_s = uuid_s + char_to_str(uuid_hex.char_at(uuid_bv >> 4))
+            uuid_s = uuid_s + char_to_str(uuid_hex.char_at(uuid_bv & 15))
+            if uuid_i == 3 or uuid_i == 5 or uuid_i == 7 or uuid_i == 9:
+                uuid_s = uuid_s + "-"
+            uuid_i = uuid_i + 1
+        return uuid_s
+
+    bool equals(self, UUID other):
+        if self.uuid_bytes.len() != other.uuid_bytes.len():
+            return false
+        int uuid_i = 0
+        while uuid_i < self.uuid_bytes.len():
+            if self.uuid_bytes.get(uuid_i).unwrap() != other.uuid_bytes.get(uuid_i).unwrap():
+                return false
+            uuid_i = uuid_i + 1
+        return true
+
+    int version(self):
+        int uuid_b6 = self.uuid_bytes.get(6).unwrap() as int
+        return (uuid_b6 >> 4) & 15

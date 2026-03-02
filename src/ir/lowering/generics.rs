@@ -399,7 +399,7 @@ impl GenericCollector {
     /// Register monomorphized equip method signatures.
     pub fn register_equip_sigs(
         &self,
-        mapper: &TypeMapper,
+        mapper: &mut TypeMapper,
         registry: &mut TypeRegistry,
         fn_sigs: &mut FxHashMap<String, (Vec<TypeId>, TypeId)>,
     ) {
@@ -407,9 +407,14 @@ impl GenericCollector {
     }
 
     /// Register monomorphized equip method signatures, including default trait methods.
+    ///
+    /// Uses the mutable mapper (`substitute_and_map_mut`) so that return types like
+    /// `Option[double]` are auto-registered in the type registry if not already present.
+    /// Without this, return types that haven't been discovered yet resolve to UNIT_TYPE,
+    /// causing the IR to emit void calls and silently discard the result.
     pub fn register_equip_sigs_with_defaults(
         &self,
-        mapper: &TypeMapper,
+        mapper: &mut TypeMapper,
         registry: &mut TypeRegistry,
         fn_sigs: &mut FxHashMap<String, (Vec<TypeId>, TypeId)>,
         ast_module: Option<&crate::parser::ast::Module>,
@@ -420,12 +425,13 @@ impl GenericCollector {
                 continue;
             }
             if let Some(equip_blocks) = self.equip_templates.get(base_name) {
-                for equip in equip_blocks {
+                let equip_blocks = equip_blocks.clone();
+                for equip in &equip_blocks {
                     let subs = build_equip_type_substitutions(equip, type_args);
                     let mut implemented = Vec::new();
                     for method in &equip.items {
                         let method_mangled = format!("{mangled_type_name}__{}", method.node.name.node);
-                        let ret_type = substitute_and_map(mapper, &method.node.return_type.node, &subs);
+                        let ret_type = substitute_and_map_mut(mapper, registry, &method.node.return_type.node, &subs);
                         let self_type_id = mapper.lookup_named(mangled_type_name).unwrap_or(UNIT_TYPE);
                         let self_ptr_type = registry.insert(GirType::Ptr(self_type_id));
                         let mut param_types = vec![self_ptr_type];
@@ -433,7 +439,7 @@ impl GenericCollector {
                             if p.node.name.node == "self" {
                                 continue;
                             }
-                            param_types.push(substitute_and_map(mapper, &p.node.type_.node, &subs));
+                            param_types.push(substitute_and_map_mut(mapper, registry, &p.node.type_.node, &subs));
                         }
                         fn_sigs.insert(method_mangled, (param_types, ret_type));
                         implemented.push(method.node.name.node.clone());
@@ -453,13 +459,13 @@ impl GenericCollector {
                                                     _ => {}
                                                 }
                                                 let m_mangled = format!("{mangled_type_name}__{}", dm.name.node);
-                                                let ret_type = substitute_and_map(mapper, &dm.return_type.node, &subs);
+                                                let ret_type = substitute_and_map_mut(mapper, registry, &dm.return_type.node, &subs);
                                                 let self_type_id = mapper.lookup_named(mangled_type_name).unwrap_or(UNIT_TYPE);
                                                 let self_ptr_type = registry.insert(GirType::Ptr(self_type_id));
                                                 let mut param_types = vec![self_ptr_type];
                                                 for p in &dm.params {
                                                     if p.node.name.node == "self" { continue; }
-                                                    param_types.push(substitute_and_map(mapper, &p.node.type_.node, &subs));
+                                                    param_types.push(substitute_and_map_mut(mapper, registry, &p.node.type_.node, &subs));
                                                 }
                                                 fn_sigs.insert(m_mangled, (param_types, ret_type));
                                             }

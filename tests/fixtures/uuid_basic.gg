@@ -1,0 +1,41 @@
+from gg.uuid import UUID, uuid_hex_val
+
+void main():
+    # Parse a known UUID and round-trip through to_string
+    auto parsed = UUID.parse("550e8400-e29b-41d4-a716-446655440000").unwrap()
+    str s = parsed.to_string()
+    print(s)
+    # Verify the string length is 36 (standard UUID format)
+    int slen = s.byte_len()
+    print("{slen}")
+    # Verify version field: char at position 14 should be '4'
+    char ver_char = s.char_at(14)
+    print("{ver_char}")
+    # Verify dash positions
+    char d1 = s.char_at(8)
+    char d2 = s.char_at(13)
+    char d3 = s.char_at(18)
+    char d4 = s.char_at(23)
+    print("{d1}")
+    print("{d2}")
+    print("{d3}")
+    print("{d4}")
+    # Test equals
+    auto same = UUID.parse("550e8400-e29b-41d4-a716-446655440000").unwrap()
+    auto diff = UUID.parse("00000000-0000-4000-8000-000000000001").unwrap()
+    bool eq1 = parsed.equals(same)
+    bool eq2 = parsed.equals(diff)
+    print("{eq1}")
+    print("{eq2}")
+    # Test version detection
+    int ver = parsed.version()
+    print("{ver}")
+    # Test that v4() generates a UUID with the correct version bit
+    auto gen = UUID.v4()
+    int gen_ver = gen.version()
+    print("{gen_ver}")
+    # Test invalid parse
+    Result[UUID, str] bad = UUID.parse("not-a-uuid")
+    bool is_err = bad.is_err()
+    print("{is_err}")
+    print("done")

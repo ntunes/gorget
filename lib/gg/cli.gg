@@ -1,0 +1,131 @@
+# gg.cli — Command-line argument parsing
+#
+# Provides CliParser for declarative CLI argument definition and parsing.
+# Supports flags (--verbose), options (--output file), and positional args.
+
+from std.collections import Vector, Dict
+from std.conv import int_to_str
+
+# ── Helpers ──────────────────────────────────────────────────
+
+str cli_strip_dashes(str cli_s):
+    int cli_i = 0
+    int cli_slen = cli_s.byte_len()
+    while cli_i < cli_slen and cli_s.char_at(cli_i) == '-':
+        cli_i = cli_i + 1
+    return cli_s.byte_slice(cli_i, cli_slen)
+
+# ── Arg descriptor ───────────────────────────────────────────
+
+struct CliArg:
+    str cli_a_long       # e.g., "--verbose" or "" for positionals
+    str cli_a_short      # e.g., "-v" or ""
+    str cli_a_help
+    str cli_a_default    # default value for options; "" for flags
+    bool cli_a_is_flag   # true = flag (no value), false = option or positional
+    bool cli_a_positional
+    str cli_a_pos_name   # display name for positional args
+
+# ── Parser ───────────────────────────────────────────────────
+
+struct CliParser:
+    str cli_app_name
+    str cli_app_desc
+    Vector[CliArg] cli_args
+    Dict[str, str] cli_parsed
+    Vector[str] cli_positionals
+    Vector[str] cli_pos_spec_names
+
+equip CliParser:
+    CliParser new(str cli_name, str cli_desc):
+        return CliParser(cli_name, cli_desc, Vector[CliArg](), Dict[str, str](), Vector[str](), Vector[str]())
+
+    void add_flag(&self, str cli_long, str cli_short, str cli_help):
+        self.cli_args.push(CliArg(cli_long, cli_short, cli_help, "", true, false, ""))
+
+    void add_option(&self, str cli_long, str cli_short, str cli_help, str cli_default):
+        str cli_key = cli_strip_dashes(cli_long)
+        self.cli_args.push(CliArg(cli_long, cli_short, cli_help, cli_default, false, false, ""))
+        self.cli_parsed.put(cli_key, cli_default)
+
+    void add_positional(&self, str cli_pos_name, str cli_help):
+        self.cli_pos_spec_names.push(cli_pos_name)
+        self.cli_args.push(CliArg("", "", cli_help, "", false, true, cli_pos_name))
+
+    Result[bool, str] parse(&self, Vector[str] cli_argv):
+        int cli_i = 0
+        while cli_i < cli_argv.len():
+            str cli_tok = cli_argv.get(cli_i).unwrap()
+            if cli_tok.byte_len() >= 2 and cli_tok.char_at(0) == '-':
+                # Named argument: find matching CliArg
+                bool cli_found = false
+                int cli_ai = 0
+                while cli_ai < self.cli_args.len():
+                    CliArg cli_a = self.cli_args.get(cli_ai).unwrap()
+                    bool cli_matches_tok = cli_tok == cli_a.cli_a_long or cli_tok == cli_a.cli_a_short
+                    if not cli_a.cli_a_positional and cli_matches_tok:
+                        str cli_key = cli_strip_dashes(cli_a.cli_a_long)
+                        if cli_a.cli_a_is_flag:
+                            self.cli_parsed.put(cli_key, "true")
+                        else:
+                            cli_i = cli_i + 1
+                            if cli_i >= cli_argv.len():
+                                return Error("option requires a value")
+                            self.cli_parsed.put(cli_key, cli_argv.get(cli_i).unwrap())
+                        cli_found = true
+                        break
+                    cli_ai = cli_ai + 1
+                if not cli_found:
+                    return Error("unknown option")
+            else:
+                # Positional argument
+                self.cli_positionals.push(cli_tok)
+            cli_i = cli_i + 1
+        return Ok(true)
+
+    bool has(self, str cli_name):
+        if not self.cli_parsed.contains(cli_name):
+            return false
+        str cli_val = self.cli_parsed[cli_name]
+        return cli_val != ""
+
+    str get(self, str cli_name):
+        if self.cli_parsed.contains(cli_name):
+            return self.cli_parsed[cli_name]
+        return ""
+
+    Vector[str] positionals(self):
+        return self.cli_positionals
+
+    void print_help(self):
+        print("Usage: " + self.cli_app_name)
+        if self.cli_app_desc != "":
+            print(self.cli_app_desc)
+        int cli_pos_count = 0
+        int cli_ai = 0
+        while cli_ai < self.cli_args.len():
+            CliArg cli_a = self.cli_args.get(cli_ai).unwrap()
+            if cli_a.cli_a_positional:
+                cli_pos_count = cli_pos_count + 1
+            cli_ai = cli_ai + 1
+        if cli_pos_count > 0:
+            print("Arguments:")
+            cli_ai = 0
+            while cli_ai < self.cli_args.len():
+                CliArg cli_a = self.cli_args.get(cli_ai).unwrap()
+                if cli_a.cli_a_positional:
+                    print("  " + cli_a.cli_a_pos_name + "  " + cli_a.cli_a_help)
+                cli_ai = cli_ai + 1
+        print("Options:")
+        cli_ai = 0
+        while cli_ai < self.cli_args.len():
+            CliArg cli_a = self.cli_args.get(cli_ai).unwrap()
+            if not cli_a.cli_a_positional:
+                str cli_line = "  " + cli_a.cli_a_long
+                if cli_a.cli_a_short != "":
+                    cli_line = cli_line + ", " + cli_a.cli_a_short
+                cli_line = cli_line + "  " + cli_a.cli_a_help
+                if not cli_a.cli_a_is_flag and cli_a.cli_a_default != "":
+                    cli_line = cli_line + " (default: " + cli_a.cli_a_default + ")"
+                print(cli_line)
+            cli_ai = cli_ai + 1

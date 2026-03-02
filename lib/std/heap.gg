@@ -1,0 +1,78 @@
+# std.heap — Generic binary min-heap / priority queue
+#
+# Heap[T] maintains the minimum element at the top (min-heap).
+# T must be comparable via < and > operators (Comparable trait).
+# Uses array-based binary heap for O(log n) push/pop, O(1) peek.
+
+from std.collections import Vector
+
+# ── Heap type ────────────────────────────────────────────────
+
+struct Heap[T]:
+    Vector[T] heap_data
+
+equip Heap[T]:
+    Heap[T] new():
+        return Heap[T](Vector[T]())
+
+    void push(&self, T heap_val):
+        self.heap_data.push(heap_val)
+        # Sift up: restore heap property
+        int heap_i = self.heap_data.len() - 1
+        while heap_i > 0:
+            int heap_parent = (heap_i - 1) / 2
+            T heap_child_v = self.heap_data.get(heap_i).unwrap()
+            T heap_parent_v = self.heap_data.get(heap_parent).unwrap()
+            if heap_child_v < heap_parent_v:
+                self.heap_data.set(heap_i, heap_parent_v)
+                self.heap_data.set(heap_parent, heap_child_v)
+                heap_i = heap_parent
+            else:
+                break
+
+    Option[T] peek(self):
+        if self.heap_data.len() == 0:
+            return None
+        return self.heap_data.get(0)
+
+    Option[T] pop(&self):
+        int heap_n = self.heap_data.len()
+        if heap_n == 0:
+            return None
+        T heap_min = self.heap_data.get(0).unwrap()
+        if heap_n == 1:
+            self.heap_data.pop()
+            return Some(heap_min)
+        # Move last element to root and sift down
+        T heap_last = self.heap_data.pop().unwrap()
+        self.heap_data.set(0, heap_last)
+        int heap_i = 0
+        heap_n = self.heap_data.len()
+        while true:
+            int heap_left = heap_i * 2 + 1
+            int heap_right = heap_i * 2 + 2
+            int heap_smallest = heap_i
+            if heap_left < heap_n:
+                T heap_lv = self.heap_data.get(heap_left).unwrap()
+                T heap_sv = self.heap_data.get(heap_smallest).unwrap()
+                if heap_lv < heap_sv:
+                    heap_smallest = heap_left
+            if heap_right < heap_n:
+                T heap_rv = self.heap_data.get(heap_right).unwrap()
+                T heap_sv2 = self.heap_data.get(heap_smallest).unwrap()
+                if heap_rv < heap_sv2:
+                    heap_smallest = heap_right
+            if heap_smallest == heap_i:
+                break
+            T heap_cur = self.heap_data.get(heap_i).unwrap()
+            T heap_swp = self.heap_data.get(heap_smallest).unwrap()
+            self.heap_data.set(heap_i, heap_swp)
+            self.heap_data.set(heap_smallest, heap_cur)
+            heap_i = heap_smallest
+        return Some(heap_min)
+
+    int len(self):
+        return self.heap_data.len()
+
+    bool is_empty(self):
+        return self.heap_data.len() == 0

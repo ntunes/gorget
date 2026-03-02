@@ -1,0 +1,54 @@
+from gg.cli import CliParser
+from std.collections import Vector
+
+void main():
+    CliParser cli = CliParser.new("myapp", "A test CLI application")
+    cli.add_flag("--verbose", "-v", "Enable verbose output")
+    cli.add_option("--output", "-o", "Output file path", "out.txt")
+    cli.add_positional("input", "Input file to process")
+
+    # Parse a simple set of arguments
+    Vector[str] argv1 = Vector[str]()
+    argv1.push("--verbose")
+    argv1.push("--output")
+    argv1.push("result.txt")
+    argv1.push("input.txt")
+    auto r1 = cli.parse(argv1)
+    bool ok1 = r1.is_ok()
+    print("{ok1}")
+
+    bool has_verbose = cli.has("verbose")
+    str output = cli.get("output")
+    Vector[str] pos = cli.positionals()
+    print("{has_verbose}")
+    print(output)
+    int pos_count = pos.len()
+    print("{pos_count}")
+    str first_pos = pos.get(0).unwrap()
+    print(first_pos)
+
+    # Default value: --output not provided
+    CliParser cli2 = CliParser.new("app2", "Another app")
+    cli2.add_option("--out", "-o", "Output path", "default.txt")
+    Vector[str] argv2 = Vector[str]()
+    auto r2 = cli2.parse(argv2)
+    str def_out = cli2.get("out")
+    print(def_out)
+
+    # Flag not set → has returns false
+    CliParser cli3 = CliParser.new("app3", "Third app")
+    cli3.add_flag("--debug", "-d", "Debug mode")
+    Vector[str] argv3 = Vector[str]()
+    auto r3 = cli3.parse(argv3)
+    bool no_debug = cli3.has("debug")
+    print("{no_debug}")
+
+    # Unknown option → Error result
+    CliParser cli4 = CliParser.new("app4", "App4")
+    Vector[str] argv4 = Vector[str]()
+    argv4.push("--unknown")
+    auto r4 = cli4.parse(argv4)
+    bool is_err = r4.is_err()
+    print("{is_err}")
+
+    print("done")

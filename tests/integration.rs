@@ -4915,6 +4915,131 @@ false
 }
 
 // ══════════════════════════════════════════════════════════════
+// New stdlib modules — Batch 2
+// ══════════════════════════════════════════════════════════════
+
+#[test]
+fn uuid_basic() {
+    run_gg(
+        "uuid_basic.gg",
+        "\
+550e8400-e29b-41d4-a716-446655440000
+36
+4
+-
+-
+-
+-
+true
+false
+4
+4
+true
+done",
+    );
+}
+
+#[test]
+fn log_basic() {
+    run_gg(
+        "log_basic.gg",
+        "\
+[INFO] server started
+[WARN] disk space low
+[ERROR] connection refused
+[DEBUG] trace point
+[INFO] hello
+[WARN] caution
+[ERROR] boom
+[DEBUG] debug visible
+[INFO] info visible
+[ERROR] only error shows
+[INFO] app: started
+done",
+    );
+}
+
+#[test]
+fn term_basic() {
+    run_gg(
+        "term_basic.gg",
+        "\
+hello
+world
+important
+abc
+plain text
+faint
+link
+warn
+info
+false
+done",
+    );
+}
+
+#[test]
+fn cli_basic() {
+    run_gg(
+        "cli_basic.gg",
+        "\
+true
+true
+result.txt
+1
+input.txt
+default.txt
+false
+true
+done",
+    );
+}
+
+#[test]
+fn heap_basic() {
+    run_gg(
+        "heap_basic.gg",
+        "\
+5
+5
+false
+5
+10
+15
+20
+30
+true
+true
+42
+1.000000
+done",
+    );
+}
+
+#[test]
+fn datetime_basic() {
+    run_gg(
+        "datetime_basic.gg",
+        "\
+946684800
+5
+1
+1
+0
+1
+0
+1
+0
+3
+2000-01-01T00:00:00Z
+86400
+61
+60
+done",
+    );
+}
+
+// ══════════════════════════════════════════════════════════════
 // Lexer comparison: Rust vs self-hosting Gorget lexer
 // ══════════════════════════════════════════════════════════════
 
