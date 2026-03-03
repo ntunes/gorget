@@ -6,21 +6,19 @@
 
 - **`std.datetime`: `dt_days_from_epoch` pre-epoch bug**: The while loop `while dt_y < dt_year` in `lib/std/datetime.gg:50` never executes for years < 1970, so `dt_days_from_epoch(1969, 12, 31)` returns 364 instead of -1. The `add_days(-1)` test in `datetime_basic.gg` works correctly because it goes through `to_epoch` → C's `gmtime_r` (which handles negative offsets correctly), not through `dt_days_from_epoch` directly. Fix: use signed arithmetic for the loop counter. [added: 2026-03-03]
 
+- **Module-scoped names (proper namespaces)**: File-based modules currently merge all top-level names into a flat namespace, requiring manual prefixing (`md_`, `csv_`, `enc_`, `xml_`, `yaml_`) to avoid collisions. Every stdlib module does this — it's the C convention. The fix: each file-based module should keep its own scope. `from X import Y` pulls specific names into the caller's scope; `import X` enables qualified access (`X.name`); private helpers (no `public`) stay hidden. The compiler already has `from X import Y` syntax — the missing piece is that the merged AST flattens everything rather than preserving module boundaries. Scope resolution, name resolution, and possibly codegen for qualified access would need changes. Once implemented, all stdlib module prefixes (`md_`, `csv_`, `enc_`, etc.) can be mechanically removed in one pass. [added: 2026-02-26]
+
 - **`std.alloc`: arena checkpoint / restore**: `Arena.checkpoint() -> ArenaCheckpoint` that captures `bytes_used` and `Arena.restore(checkpoint)` that bumps `used` back to the saved value. Useful for transient scratch work without a full `reset()`. Implement as a thin value type wrapping `(Arena*, size_t)`. [added: 2026-03-03]
 
 - **`std.alloc`: per-thread scratch arenas**: `thread_scratch()` returns a thread-local `Arena` reset automatically between calls (double-buffered to allow two scratch frames per thread concurrently). Pattern from stb/handmade: zero-overhead scratch without explicit `with` blocks. [added: 2026-03-03]
-
 
 - **Inline bounds follow-up — find new syntax for `outlives` to fully remove `where`**: The `where` keyword is now only used for `where a outlives b`. Options: (1) inline on the lifetime param `live(a outlives b)`, (2) a dedicated `outlives` section, (3) lifetime annotations on the param itself. Survey and decide before removing `where` entirely. [added: 2026-03-02]
 
 - **Async/await — remaining items**: Core async system (Phases 1–13) is complete. Remaining: (1) await inside Iterable/Iterator-based for-loops (busy-poll fallback), (2) async closures, (3) sub-future state cleanup, (4) work-stealing executor, (5) I/O reactor Phase 2 — socket/file readability events (epoll EPOLLIN on socket fd). **V1 limitations**: thread-pool deadlock if all workers block on `await Task`; `await Task` only in async functions. [added: 2026-02-21, updated: 2026-03-03]
 
-
-
 - **Self-hosting parser: 2 remaining comparison mismatches (235/237)**: (1) `math_constants.gg` — C's `%g` float formatting outputs `1e+06` / `3.14159e+06` while Rust's `Display` outputs `1000000.0` / `3141592.0`. Would need custom float-to-string in format.gg. (2) `name_first.gg` — `directive name-first` enables a completely different parsing mode (identifier-first declarations like `x int` instead of `int x`). The self-hosting parser only handles the default type-first mode. [added: 2026-02-21, updated: 2026-03-03]
 
 - **Self-hosting resolver: 28 remaining comparison mismatches (295/323)**: Remaining categories: (1) Parse failures causing misidentified statics — bare tuple return types, `Mutex[int]` param types, dot-shorthand patterns (5 fixtures). (2) `implicit it` — needs `ImplicitClosure` AST variant in Gorget parser (1 fixture). (3) Test `with` clause bindings not in AST (1 fixture). (4) Tuple destructuring in VarDecl (`auto (a, b) = ...`) — name is string not pattern (1 fixture). (5) `directive name-first` not supported (1 fixture). (6) Various match/pattern/enum resolution divergences — is_bindings, async_match, derive, enums, option_box_enum, recursive_enum, etc. (12 fixtures). (7) Other: shared_weak, mutex_basic, trait_bounds, namespace_basic (7 fixtures). SCOPE lines excluded — Rust `Expr::Block` creates extra scopes absent in Gorget AST. DEF spans excluded — Gorget AST doesn't store name spans. [updated: 2026-03-02]
-
 
 - **`Into[T]` conversion trait**: Counterpart to `From[T]` requiring explicit type args (`value.into[Celsius]()`) or return-type inference. Adds complexity (equipping primitives, potential blanket impl pattern). [added: 2026-02-17]
 
