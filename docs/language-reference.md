@@ -2991,7 +2991,7 @@ void main():
 
 | Name | Kind | Description |
 |---|---|---|
-| `TomlValue` | enum | TOML value: string, integer, float, bool, datetime, array, table variants |
+| `TomlValue` | enum | TOML value: `Str(str)`, `Int(int)`, `Float(float)`, `Bool(bool)`, `DateTime(str)`, `Array(Vector[TomlValue])`, `Table(Dict[str, TomlValue])` — **`DateTime` stores raw text only; year/month/day fields are not decomposed** |
 | `toml_parse` | `TomlValue(str)` | Parse a TOML string into a `TomlValue` |
 | `toml_stringify` | `str(TomlValue)` | Serialize a `TomlValue` to a TOML string |
 

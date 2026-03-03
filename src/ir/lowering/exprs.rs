@@ -580,9 +580,6 @@ fn lower_expr_inner(
 
             Operand::Constant(Constant::Unit)
         }
-
-        // Deferred: Select
-        _ => Operand::Constant(Constant::Unit),
     }
 }
 
@@ -1588,7 +1585,7 @@ fn lower_method_call(
                     "upgrade" => {
                         // Returns Option[Shared[T]] — need to build the Option type
                         let shared_name = format!("Shared__{elem_suffix}");
-                        let shared_type = if let Some(tid) = ctx.type_mapper.lookup_named(&shared_name) {
+                        let _shared_type = if let Some(tid) = ctx.type_mapper.lookup_named(&shared_name) {
                             tid
                         } else {
                             let inner_type = ctx.type_mapper.lookup_named(elem_suffix).unwrap_or(I64_TYPE);

@@ -10,7 +10,7 @@ pub mod types;
 
 use crate::ir::instructions::Operand;
 use crate::ir::types::*;
-use crate::ir::{ExternDecl, Module, TestFnInfo};
+use crate::ir::{ExternDecl, Module};
 use crate::parser::ast::{self, FunctionBody, Item};
 use crate::semantic::AnalysisResult;
 

@@ -1872,7 +1872,7 @@ fn emit_collection_typedefs(out: &mut String, module: &Module) {
     let mut emitted: FxHashSet<String> = FxHashSet::default();
 
     // Scan all types in functions (locals, params, return types)
-    let mut check_type = |type_id: TypeId, emitted: &mut FxHashSet<String>, out: &mut String| {
+    let check_type = |type_id: TypeId, emitted: &mut FxHashSet<String>, out: &mut String| {
         if let Some(GirType::Named(name)) = module.type_registry.get(type_id) {
             if !emitted.contains(name.as_str()) {
                 if let Some(c_type) = collection_type_alias(name) {
@@ -2461,7 +2461,7 @@ fn emit_function(out: &mut String, func: &Function, module: &Module) {
                         let src_idx = src_place.local.0 as usize;
                         let dst_idx = dst.local.0 as usize;
                         // If source place has a Deref projection, strip pointer from type
-                        let has_deref = src_place.projections.iter().any(|p| matches!(p, Projection::Deref));
+                        let _has_deref = src_place.projections.iter().any(|p| matches!(p, Projection::Deref));
                         // Resolve Field projections: walk projections to find the actual type
                         // e.g., _x[Field(1)] on GorgetArray → resolve .len → int64_t
                         let resolve_field_projections = |base_type: &str| -> String {
@@ -4056,10 +4056,10 @@ fn emit_instruction(
                         if c_type.starts_with("Result__") && !func_name.starts_with("__result_") && !is_user_fn_call {
                             // Extract Ok/Error type names from Result__Ok__Err
                             let rest = &c_type["Result__".len()..];
-                            let ok_type = if let Some(pos) = rest.find("__") {
+                            let _ok_type = if let Some(pos) = rest.find("__") {
                                 &rest[..pos]
                             } else { rest };
-                            let err_type = if let Some(pos) = rest.find("__") {
+                            let _err_type = if let Some(pos) = rest.find("__") {
                                 &rest[pos + 2..]
                             } else { "Str" };
                             // Determine how to capture the raw return value
@@ -4258,7 +4258,7 @@ fn emit_instruction(
 
         Instruction::EnumFieldLoad { dst, base, variant, field } => {
             let base_str = format_place(base, registry);
-            let c_type = format_local_type(func, dst.0 as usize, registry);
+            let _c_type = format_local_type(func, dst.0 as usize, registry);
             let accessor = if is_place_ptr_type(func, base, registry) {
                 "->"
             } else {
@@ -4275,7 +4275,7 @@ fn emit_instruction(
             let base_str = format_place(base, registry);
             // Look up field name from type def
             let field_name = resolve_field_name(func, base, *field, registry);
-            let c_type = format_local_type(func, dst.0 as usize, registry);
+            let _c_type = format_local_type(func, dst.0 as usize, registry);
             // Use -> for pointer types (e.g., closure __call env param)
             let accessor = if is_place_ptr_type(func, base, registry) {
                 "->"
@@ -4366,7 +4366,7 @@ fn emit_instruction(
                 };
                 let _ = writeln!(out, "        _{id} = *({c_type}*)gorget_map_get(&{base_str}, {key_arg});", id = dst.0);
             } else {
-                let c_type = format_local_type(func, dst.0 as usize, registry);
+                let _c_type = format_local_type(func, dst.0 as usize, registry);
                 let _ = writeln!(out, "        _{id} = {base_str}[{idx_str}];", id = dst.0);
             }
         }
@@ -4549,7 +4549,7 @@ fn emit_instruction(
                 if local_type == UNIT_TYPE {
                     let _ = writeln!(out, "        {callee_str}({args_str});");
                 } else {
-                    let c_type = format_local_type(func, dst_id.0 as usize, registry);
+                    let _c_type = format_local_type(func, dst_id.0 as usize, registry);
                     let _ = writeln!(out, "        _{id} = {callee_str}({args_str});", id = dst_id.0);
                 }
             } else {
@@ -4576,7 +4576,7 @@ fn emit_instruction(
 
         // -- Allocator --
         Instruction::LoadThreadLocal { dst, name } => {
-            let c_type = format_local_type(func, dst.0 as usize, registry);
+            let _c_type = format_local_type(func, dst.0 as usize, registry);
             let _ = writeln!(out, "        _{id} = {name};", id = dst.0);
         }
 
@@ -5978,13 +5978,6 @@ impl Default for CollectionMethodCall {
     }
 }
 
-/// Helper to build a CollectionMethodCall with only the differing fields set.
-macro_rules! cmc {
-    ($($field:ident: $val:expr),* $(,)?) => {
-        CollectionMethodCall { $($field: $val,)* ..Default::default() }
-    };
-}
-
 /// Try to rewrite a collection method call (Vector__T__method, Dict__K__V__method, etc.)
 /// to the corresponding runtime function.
 fn try_rewrite_collection_method(func_name: &str) -> Option<CollectionMethodCall> {
@@ -6915,7 +6908,7 @@ fn emit_inline_method(
             // sorted: clone + sort (returns new array)
             if let Some(dst_id) = dst {
                 let self_addr = addr_self(&self_raw, self_ptr);
-                let c_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
+                let _c_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
                 let _ = writeln!(out,
                     "        _{id} = gorget_array_clone({self_addr}); \
                     qsort(_{id}.data, _{id}.len, _{id}.elem_size, gorget_generic_compare);",
@@ -6925,7 +6918,7 @@ fn emit_inline_method(
         InlineMethod::OptionUnwrap => {
             let type_name = extract_type_from_method_call(func_name);
             if let Some(dst_id) = dst {
-                let c_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
+                let _c_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
                 let _ = writeln!(out,
                     "        _{id} = ({{ {type_name} __opt = {self_str}; \
                     if (__opt.tag != 0) {{ fprintf(stderr, \"unwrap called on None\\n\"); exit(1); }} \
@@ -6942,7 +6935,7 @@ fn emit_inline_method(
                 "\"expect failed\"".to_string()
             };
             if let Some(dst_id) = dst {
-                let c_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
+                let _c_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
                 if is_const_str || msg.starts_with('"') {
                     // Plain C string — use %s
                     let _ = writeln!(out,
@@ -6977,7 +6970,7 @@ fn emit_inline_method(
                 let default = if args.len() > 1 {
                     format_operand(&args[1], func, registry)
                 } else { "0".to_string() };
-                let c_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
+                let _c_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
                 let _ = writeln!(out,
                     "        _{id} = ({self_str}.tag == 0) ? {self_str}.data.Some._0 : {default};",
                     id = dst_id.0);
@@ -6986,7 +6979,7 @@ fn emit_inline_method(
         InlineMethod::ResultUnwrap => {
             let type_name = extract_type_from_method_call(func_name);
             if let Some(dst_id) = dst {
-                let c_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
+                let _c_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
                 let _ = writeln!(out,
                     "        _{id} = ({{ {type_name} __res = {self_str}; \
                     if (__res.tag != 0) {{ fprintf(stderr, \"unwrap called on Err\\n\"); exit(1); }} \
@@ -7003,7 +6996,7 @@ fn emit_inline_method(
                 "\"expect failed\"".to_string()
             };
             if let Some(dst_id) = dst {
-                let c_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
+                let _c_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
                 if is_const_str || msg.starts_with('"') {
                     let _ = writeln!(out,
                         "        _{id} = ({{ {type_name} __res = {self_str}; \
@@ -7036,7 +7029,7 @@ fn emit_inline_method(
                 let default = if args.len() > 1 {
                     format_operand(&args[1], func, registry)
                 } else { "0".to_string() };
-                let c_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
+                let _c_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
                 let _ = writeln!(out,
                     "        _{id} = ({self_str}.tag == 0) ? {self_str}.data.Ok._0 : {default};",
                     id = dst_id.0);
@@ -7126,7 +7119,7 @@ fn emit_inline_method(
                 let other = if args.len() > 1 {
                     format_operand(&args[1], func, registry)
                 } else { "/*no other*/".to_string() };
-                let c_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
+                let _c_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
                 let _ = writeln!(out,
                     "        _{id} = gorget_set_clone(&{self_str}); \
                     for (size_t __i = 0; __i < {other}.cap; __i++) {{ \
@@ -7141,7 +7134,7 @@ fn emit_inline_method(
                 let other = if args.len() > 1 {
                     format_operand(&args[1], func, registry)
                 } else { "/*no other*/".to_string() };
-                let c_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
+                let _c_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
                 let _ = writeln!(out,
                     "        _{id} = gorget_set_new({self_str}.key_size); \
                     for (size_t __i = 0; __i < {self_str}.cap; __i++) {{ \
@@ -7157,7 +7150,7 @@ fn emit_inline_method(
                 let other = if args.len() > 1 {
                     format_operand(&args[1], func, registry)
                 } else { "/*no other*/".to_string() };
-                let c_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
+                let _c_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
                 let _ = writeln!(out,
                     "        _{id} = gorget_set_new({self_str}.key_size); \
                     for (size_t __i = 0; __i < {self_str}.cap; __i++) {{ \
@@ -7400,7 +7393,7 @@ fn emit_inline_method(
         InlineMethod::ResultUnwrapErr => {
             // unwrap_err: assert is_err, return error value
             if let Some(dst_id) = dst {
-                let result_type = extract_type_from_method_call(func_name);
+                let _result_type = extract_type_from_method_call(func_name);
                 let _ = writeln!(out,
                     "        if ({self_str}.tag == 0) {{ fprintf(stderr, \"gorget: panic: unwrap_err on Ok\\n\"); exit(1); }}");
                 let _ = writeln!(out,
@@ -7476,11 +7469,6 @@ fn is_self_pointer(args: &[Operand], func: &Function, registry: &TypeRegistry) -
     false
 }
 
-/// Check whether any argument is a float type (for dispatching min/max/abs to fmin/fmax/fabs).
-fn has_float_arg(args: &[Operand], func: &Function) -> bool {
-    has_float_arg_with_overrides(args, func, &std::collections::HashMap::new())
-}
-
 fn has_float_arg_with_overrides(args: &[Operand], func: &Function, type_overrides: &std::collections::HashMap<usize, String>) -> bool {
     args.iter().any(|arg| match arg {
         Operand::Copy(place) | Operand::Move(place) => {
@@ -7529,7 +7517,7 @@ fn emit_collection_method_call(
     } else {
         "/*no self*/".to_string()
     };
-    let self_deref = deref_self(&self_str, self_ptr);
+    let _self_deref = deref_self(&self_str, self_ptr);
 
     // Inline special methods
     if rewrite.runtime_fn == "__INLINE_STRING_TO_STR__" {
@@ -7696,7 +7684,7 @@ fn emit_collection_method_call(
     // Field access (len, is_empty) — no function call needed
     if let Some(field) = rewrite.field_access {
         if let Some(dst_id) = dst {
-            let c_type = format_local_type(func, dst_id.0 as usize, registry);
+            let _c_type = format_local_type(func, dst_id.0 as usize, registry);
             let access = if self_ptr { "->" } else { "." };
             let _ = writeln!(out, "        _{id} = {self_str}{access}{field};", id = dst_id.0);
         }
@@ -8383,7 +8371,7 @@ fn format_args_inner(args: &[Operand], func: &Function, registry: &TypeRegistry,
     if needs_patching && !parts.is_empty() {
         let fmt = &parts[0];
         // The format string is a C string literal like "%lld\n" or "\"%lld\\n\""
-        let mut new_fmt = fmt.clone();
+        let new_fmt = fmt.clone();
         // Each %lld in the format string corresponds to a printf argument position
         // Replace the Nth %lld where N matches float_override_positions
         let mut spec_idx = 0usize; // 1-based arg position counter

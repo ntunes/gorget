@@ -13,7 +13,7 @@ use crate::ir::Module;
 use crate::span::Span;
 use super::config::{BacktraceLevel, SimConfig};
 use super::error::{SimError, SimResult};
-use super::value::{SimStr, SimString, SimArray, SimDict, Value};
+use super::value::{SimStr, SimString, Value};
 use super::runtime;
 
 /// Per-allocation metadata for UB detection (Phase 4).
@@ -189,6 +189,7 @@ impl SimAllocState {
             }
         }
     }
+    #[allow(dead_code)]
     fn record_free(&mut self, bytes: i64) {
         match self {
             SimAllocState::Tracking { current_bytes, bytes_freed, free_count, .. } => {
@@ -204,6 +205,7 @@ impl SimAllocState {
 }
 
 // Alias for backwards compatibility within this file
+#[allow(dead_code)]
 type TrackingState = SimAllocState;
 
 /// The GIR interpreter.
@@ -308,6 +310,7 @@ impl<'m> Interpreter<'m> {
     }
 
     /// Record an allocation event to the top-of-stack active allocator (if any).
+    #[allow(dead_code)]
     fn tracking_record_alloc(&mut self, bytes: i64) {
         if let Some(&id) = self.active_tracking.last() {
             if let Some(state) = self.tracking_allocs.get_mut(&id) {
@@ -317,6 +320,7 @@ impl<'m> Interpreter<'m> {
     }
 
     /// Record a realloc event to the top-of-stack active allocator (if any).
+    #[allow(dead_code)]
     fn tracking_record_realloc(&mut self, old_bytes: i64, new_bytes: i64) {
         if let Some(&id) = self.active_tracking.last() {
             if let Some(state) = self.tracking_allocs.get_mut(&id) {
@@ -326,6 +330,7 @@ impl<'m> Interpreter<'m> {
     }
 
     /// Record a free event to the top-of-stack active allocator (if any).
+    #[allow(dead_code)]
     fn tracking_record_free(&mut self, bytes: i64) {
         if let Some(&id) = self.active_tracking.last() {
             if let Some(state) = self.tracking_allocs.get_mut(&id) {
@@ -1469,7 +1474,7 @@ impl<'m> Interpreter<'m> {
             runtime::check_isolation("socket_connect")?;
             let host = args.get(0).map(|v| v.as_str_lossy()).unwrap_or_default();
             let port = args.get(1).map(|v| v.as_i64() as u16).unwrap_or(0);
-            use std::io::BufRead;
+            
             let addr_str = format!("{host}:{port}");
             let sock_addr: std::net::SocketAddr = match addr_str.parse() {
                 Ok(a) => a,
@@ -4666,7 +4671,7 @@ impl<'m> Interpreter<'m> {
 
             if let Some(addr) = arr_addr {
                 let arr = self.heap.get(&addr).cloned().unwrap_or(Value::Unit);
-                if let Value::Array(mut arr_val) = arr {
+                if let Value::Array(arr_val) = arr {
                     let offset = args.get(1).map(|v| v.as_i64()).unwrap_or(0) as usize;
                     let val = args.get(2).map(|v| v.as_i64()).unwrap_or(0);
 
@@ -4797,7 +4802,7 @@ impl<'m> Interpreter<'m> {
                         return Ok(Some(Value::Unit));
                     }
                     "gorget_file_read_all" | "File__read_all" => {
-                        use super::value::SimStr;
+                        
                         let content = std::fs::read_to_string(&path).unwrap_or_default();
                         return Ok(Some(Value::Enum {
                             type_name: "Result__GorgetString__Str".to_string(),
@@ -4851,7 +4856,7 @@ impl<'m> Interpreter<'m> {
                 let rest_raw = after_prefix[fmt_end..].trim_start_matches('"').trim_start_matches(',').trim();
                 // Strip trailing `);` sequences (outer gorget_panic + gorget_format closers)
                 // Use strip_suffix to remove exactly one `)` from each wrapper
-                let rest = rest_raw
+                let _rest = rest_raw
                     .strip_suffix(';').unwrap_or(rest_raw)  // remove trailing `;`
                     .strip_suffix(')').unwrap_or(rest_raw.strip_suffix(';').unwrap_or(rest_raw)) // outer gorget_panic )
                     .strip_suffix(')').unwrap_or(rest_raw.strip_suffix(';').unwrap_or(rest_raw).strip_suffix(')').unwrap_or(rest_raw.strip_suffix(';').unwrap_or(rest_raw))); // gorget_format )
@@ -5484,7 +5489,7 @@ impl<'m> Interpreter<'m> {
         named_keys: &[String], named_vals: &[Option<String>],
     ) -> Value {
         use super::value::SimArray;
-        let mut groups_arr = SimArray::new("Option__Str");
+        let groups_arr = SimArray::new("Option__Str");
         for g in groups {
             let gval = if let Some(s) = g {
                 Value::Enum { type_name: "Option".to_string(), tag: 0, variant: "Some".to_string(),
@@ -5494,8 +5499,8 @@ impl<'m> Interpreter<'m> {
             };
             groups_arr.push(gval);
         }
-        let mut name_keys_arr = SimArray::new("Str");
-        let mut name_vals_arr = SimArray::new("Option__Str");
+        let name_keys_arr = SimArray::new("Str");
+        let name_vals_arr = SimArray::new("Option__Str");
         for (k, v) in named_keys.iter().zip(named_vals.iter()) {
             name_keys_arr.push(Value::Str(SimStr::from_str(k)));
             let gval = if let Some(s) = v {
@@ -5670,7 +5675,7 @@ impl<'m> Interpreter<'m> {
         // ── gorget_regex_group_names (extern method) ─────────────────────────
         if name == "gorget_regex_group_names" {
             let rx_id = self.regex_id_from_arg(args.get(0).unwrap_or(&Value::Null));
-            let mut arr = SimArray::new("Str");
+            let arr = SimArray::new("Str");
             if let Some(id) = rx_id {
                 if let Some(rx) = self.regex_map.get(&id) {
                     for name_opt in rx.capture_names() {
@@ -5728,7 +5733,7 @@ impl<'m> Interpreter<'m> {
                 if let Value::Struct { fields, .. } = m {
                     if let Some(Value::Array(arr)) = fields.get(3) {
                         // Return as Vector[str]: unwrap Some values, use "" for None
-                        let mut out = SimArray::new("Str");
+                        let out = SimArray::new("Str");
                         for item in arr.data.borrow().iter() {
                             match item {
                                 Value::Enum { tag: 0, fields: gf, .. } => {
@@ -5787,7 +5792,7 @@ impl<'m> Interpreter<'m> {
             let all_data: Vec<_> = rx_id.and_then(|id| self.regex_map.get(&id))
                 .map(|rx| rx.captures_iter(&text).map(|caps| Self::extract_caps(rx, &caps)).collect())
                 .unwrap_or_default();
-            let mut arr = SimArray::new("Match");
+            let arr = SimArray::new("Match");
             for (t, s, e, groups, nk, nv) in all_data {
                 let m = Self::build_match_value(&t, s, e, &groups, &nk, &nv);
                 let addr = self.heap_alloc(m);
@@ -5814,7 +5819,7 @@ impl<'m> Interpreter<'m> {
         if name == "Regex__split" {
             let rx_id = self.regex_id_from_arg(args.get(0).unwrap_or(&Value::Null));
             let text = args.get(1).map(|v| v.as_str_lossy()).unwrap_or_default();
-            let mut arr = SimArray::new("Str");
+            let arr = SimArray::new("Str");
             if let Some(id) = rx_id {
                 if let Some(rx) = self.regex_map.get(&id) {
                     for part in rx.split(&text) {
@@ -5830,7 +5835,7 @@ impl<'m> Interpreter<'m> {
             let rx_id = self.regex_id_from_arg(args.get(0).unwrap_or(&Value::Null));
             let text = args.get(1).map(|v| v.as_str_lossy()).unwrap_or_default();
             let n = args.get(2).map(|v| v.as_i64()).unwrap_or(0) as usize;
-            let mut arr = SimArray::new("Str");
+            let arr = SimArray::new("Str");
             if let Some(id) = rx_id {
                 if let Some(rx) = self.regex_map.get(&id) {
                     for part in rx.splitn(&text, n) {
@@ -5972,20 +5977,3 @@ fn consuming_collection_arg_idx(func_name: &str) -> Option<usize> {
     None
 }
 
-/// Extract the value type suffix from a Dict/HashMap method name.
-/// e.g. "Dict__str__int64_t__get" → "int64_t"
-fn extract_dict_value_suffix(name: &str) -> &str {
-    // Remove common prefixes
-    let rest = name.strip_prefix("Dict__")
-        .or_else(|| name.strip_prefix("HashMap__"))
-        .unwrap_or(name);
-    // The pattern is KEY__VALUE__method. Split by __ and take second-to-last part.
-    let parts: Vec<&str> = rest.split("__").collect();
-    if parts.len() >= 3 {
-        parts[parts.len() - 2] // value type is second-to-last
-    } else if parts.len() >= 2 {
-        parts[0] // just use first part as fallback
-    } else {
-        "int64_t"
-    }
-}

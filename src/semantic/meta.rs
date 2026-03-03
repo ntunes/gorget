@@ -52,6 +52,7 @@ impl<'a> MetaContext<'a> {
         Self { features, items, call_depth: std::cell::Cell::new(0) }
     }
 
+    #[allow(dead_code)]
     fn empty() -> MetaContext<'static> {
         MetaContext { features: &[], items: &[], call_depth: std::cell::Cell::new(0) }
     }
@@ -290,7 +291,6 @@ fn eval_meta_type_body(
                     }
                     MetaValue::Bool(false) => {
                         // Try elif branches
-                        let mut taken = false;
                         for (elif_cond, elif_body) in elif_branches {
                             match eval_expr(&elif_cond.node, env, ctx, elif_cond.span)? {
                                 MetaValue::Bool(true) => {
@@ -304,8 +304,6 @@ fn eval_meta_type_body(
                                     ));
                                 }
                             }
-                            taken = true;
-                            let _ = taken;
                         }
                         // Try else
                         if let Some(else_blk) = else_body {

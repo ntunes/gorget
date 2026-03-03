@@ -1,10 +1,8 @@
 /// Runtime function implementations for the GIR interpreter.
 /// This module handles all `CallExtern` dispatch.
 
-use std::io::Write;
 use std::cell::Cell;
 
-use crate::ir::instructions::Operand;
 use crate::ir::Module;
 use super::error::{SimError, SimResult};
 use super::value::{SimStr, SimString, SimArray, Value};
@@ -579,7 +577,7 @@ pub fn call_extern(
                 Value::Dict(d) => d.len() as i64,
                 Value::Str(s) => s.codepoint_count() as i64,
                 Value::String(s) => {
-                    let bytes = s.as_str().len();
+                    let _bytes = s.as_str().len();
                     // codepoint count
                     s.as_str().chars().count() as i64
                 }
@@ -710,7 +708,7 @@ pub fn call_extern(
             Ok(Value::I64(s.codepoint_count() as i64))
         }
 
-        "gorget_str_byte_len" => {
+        "gorget_str_byte_len" | "gorget_string_byte_len" => {
             let s = args.get(0).map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
             Ok(Value::I64(s.byte_len() as i64))
         }
@@ -763,12 +761,6 @@ pub fn call_extern(
                 Some(Value::Str(s)) => Ok(Value::I64(s.byte_len() as i64)),
                 _ => Ok(Value::I64(0)),
             }
-        }
-
-        // GorgetString.byte_len() → byte length
-        "gorget_str_byte_len" | "gorget_string_byte_len" => {
-            let s = args.get(0).map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
-            Ok(Value::I64(s.byte_len() as i64))
         }
 
         "gorget_str_str" | "gorget_string_str" | "gorget_string_as_str" => {
@@ -1039,13 +1031,6 @@ pub fn call_extern(
             let e_idx = end.min(count) as usize;
             let sliced: std::string::String = s_str.chars().skip(s_idx).take(e_idx.saturating_sub(s_idx)).collect();
             Ok(Value::Str(SimStr::from_string(sliced)))
-        }
-
-        "gorget_str_byte_at" => {
-            let s = args.get(0).map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
-            let idx = args.get(1).map(|v| v.as_i64()).unwrap_or(0) as usize;
-            let byte = s.as_bytes().get(idx).copied().unwrap_or(0);
-            Ok(Value::U8(byte))
         }
 
         // Used by the string for-in lowering: gorget_utf8_codepoint_len_at(Str, byte_pos) → I64
@@ -1449,7 +1434,7 @@ pub fn call_extern(
             let fmt_str = args.get(1).map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str("%Y-%m-%d %H:%M:%S"));
             // Use chrono-free implementation via POSIX strftime equivalent in Rust
             // We use std::time + hand-rolled formatting for common patterns
-            let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(epoch.max(0) as u64);
+            let _t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(epoch.max(0) as u64);
             // Convert to local time using std (no chrono needed)
             // Fallback: use a basic manual formatting approach
             let secs = epoch;
@@ -1890,7 +1875,7 @@ pub fn call_extern(
         "gorget_bytes_from_str" => {
             // Convert str/String to Vector[uint8]
             let s = args.first().map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
-            let mut arr = SimArray::new("uint8_t");
+            let arr = SimArray::new("uint8_t");
             for b in s.as_bytes() {
                 arr.push(Value::U8(*b));
             }
@@ -1923,7 +1908,7 @@ pub fn call_extern(
             // Convert hex string to Vector[uint8]
             let hex = args.first().map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
             let hex_str = hex.as_str();
-            let mut arr = SimArray::new("uint8_t");
+            let arr = SimArray::new("uint8_t");
             let mut chars = hex_str.chars().peekable();
             while chars.peek().is_some() {
                 let hi = chars.next().unwrap_or('0');
@@ -1956,7 +1941,7 @@ pub fn call_extern(
                 Value::Array(b) => Some(b.clone()),
                 _ => None,
             }).unwrap_or_else(|| SimArray::new("uint8_t"));
-            let mut out = SimArray::new("uint8_t");
+            let out = SimArray::new("uint8_t");
             for v in a.to_vec().into_iter().chain(b.to_vec().into_iter()) {
                 out.push(v);
             }
@@ -1973,7 +1958,7 @@ pub fn call_extern(
             let end = args.get(2).map(|v| v.as_i64()).unwrap_or(0);
             let len = arr.len();
             let end = (end as usize).min(len);
-            let mut out = SimArray::new("uint8_t");
+            let out = SimArray::new("uint8_t");
             let elems = arr.to_vec();
             for v in elems.into_iter().skip(start).take(end.saturating_sub(start)) {
                 out.push(v);
@@ -1984,7 +1969,7 @@ pub fn call_extern(
         "gorget_random_bytes" => {
             // Generate N random bytes (deterministic in sim: use FNV counter)
             let n = args.first().map(|v| v.as_i64()).unwrap_or(0).max(0) as usize;
-            let mut arr = SimArray::new("uint8_t");
+            let arr = SimArray::new("uint8_t");
             // Deterministic pseudo-random using counter
             let mut state = 12345u64;
             for _ in 0..n {

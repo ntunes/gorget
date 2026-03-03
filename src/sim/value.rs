@@ -313,8 +313,8 @@ impl Value {
             // Arrays/Dicts: truthy when non-empty
             Value::Array(a) => !a.is_empty(),
             Value::Dict(d) => !d.is_empty(),
-            // Unit/Null/Ref/other: treat as false rather than panicking
-            Value::Unit | Value::Null => false,
+            // Unit/other: treat as false rather than panicking
+            Value::Unit => false,
             Value::Ref(a) => *a != 0,
             Value::String(s) => !s.as_str().is_empty(),
             Value::Str(s) => !s.is_empty(),

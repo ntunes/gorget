@@ -303,12 +303,6 @@ fn gen_math_module() -> Module {
     }
 }
 
-fn gen_fmt_module() -> Module {
-    // Displayable trait and format() are already in the prelude/builtins.
-    // This module exists so `from std.fmt import Displayable` doesn't error.
-    make_module(vec![])
-}
-
 fn gen_process_module() -> Module {
     let exec_result_type = Type::Named {
         name: Spanned::dummy("ExecResult".to_string()),
@@ -944,10 +938,6 @@ fn decl_async_fn(name: &str, params: &[(&str, Type)], ret: Type) -> FunctionDef 
 
 fn ty_str() -> Type {
     Type::Primitive(PrimitiveType::Str)
-}
-
-fn ty_cstr() -> Type {
-    Type::Primitive(PrimitiveType::CStr)
 }
 
 fn ty_string() -> Type {

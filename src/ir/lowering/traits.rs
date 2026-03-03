@@ -3,7 +3,7 @@
 //! Generates VTable struct types, TraitObj fat-pointer types, static vtable
 //! instances, and trait implementation methods.
 
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 
 use crate::ir::builder::FunctionBuilder;
 use crate::ir::instructions::*;
@@ -491,7 +491,7 @@ fn emit_via_forwarding_function(
     field_type_name: &str,
     field_name: &str,
     vtable_method: &VTableMethod,
-    vtable_info: &TraitVTableInfo,
+    _vtable_info: &TraitVTableInfo,
     concrete_ptr_type: TypeId,
     concrete_mut_ptr_type: TypeId,
 ) {
@@ -888,102 +888,6 @@ pub fn lower_unregistered_trait_equip_methods(
             }
         }
     }
-}
-
-/// Lower an instance trait method (with `self`) using a concrete type pointer.
-///
-/// Like `lower_equip_method` but uses the trait-mangled name.
-fn lower_instance_trait_method(
-    ctx: &mut LoweringContext,
-    module: &mut crate::ir::Module,
-    method: &ast::FunctionDef,
-    type_name: &str,
-    equipped_type: &Type,
-    mangled_name: &str,
-) {
-    let return_type = ctx.type_mapper.map_ast_type(&method.return_type.node);
-
-    let self_type_id = ctx.type_mapper.map_ast_type(equipped_type);
-    let self_is_mutable = method
-        .params
-        .first()
-        .map(|p| {
-            p.node.name.node == "self"
-                && matches!(p.node.ownership, Ownership::MutableBorrow)
-        })
-        .unwrap_or(false);
-
-    let self_ptr_type = if self_is_mutable {
-        ctx.register_mut_ptr_type(self_type_id)
-    } else {
-        ctx.register_ptr_type(self_type_id)
-    };
-
-    let mut params: Vec<(TypeId, Option<&str>)> =
-        vec![(self_ptr_type, Some("self"))];
-    for p in &method.params {
-        if p.node.name.node == "self" {
-            continue;
-        }
-        let gir_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
-        params.push((gir_type, Some(p.node.name.node.as_str())));
-    }
-
-    let mut builder =
-        FunctionBuilder::new(mangled_name, return_type, &params);
-    ctx.clear_locals();
-
-    ctx.register_local("self", LocalId(1), self_ptr_type);
-
-    let mut param_idx = 2u32;
-    for p in &method.params {
-        if p.node.name.node == "self" {
-            continue;
-        }
-        let gir_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
-        ctx.register_local(
-            &p.node.name.node,
-            LocalId(param_idx),
-            gir_type,
-        );
-        param_idx += 1;
-    }
-
-    ctx.drops.push_scope(DropScopeKind::Function);
-
-    match &method.body {
-        FunctionBody::Block(block) => {
-            lower_block(ctx, &mut builder, block);
-
-            let last_block_idx = builder.current_block.0 as usize;
-            if builder.blocks[last_block_idx].terminator.is_none() {
-                ctx.drops
-                    .pop_scope(&mut builder, &ctx.type_registry);
-                if return_type == UNIT_TYPE {
-                    builder.ret(FunctionBuilder::const_unit());
-                } else {
-                    builder.ret(FunctionBuilder::copy(LocalId(0)));
-                }
-            } else {
-                ctx.drops
-                    .pop_scope(&mut builder, &ctx.type_registry);
-            }
-        }
-        FunctionBody::Expression(expr) => {
-            let operand = lower_expr(ctx, &mut builder, expr);
-            builder.assign(Place::local(LocalId(0)), operand);
-            ctx.drops
-                .pop_scope(&mut builder, &ctx.type_registry);
-            builder.ret(FunctionBuilder::copy(LocalId(0)));
-        }
-        FunctionBody::Declaration | FunctionBody::Extern(_) => {
-            ctx.drops
-                .pop_scope(&mut builder, &ctx.type_registry);
-            return;
-        }
-    }
-
-    module.functions.push(builder.build());
 }
 
 /// Lower a static trait method (no `self` parameter) into a GIR function.

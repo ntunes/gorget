@@ -95,8 +95,6 @@ pub fn lower_stmt(
         Stmt::Item(_) => { /* Nested items are hoisted — no-op in GIR */ }
 
         Stmt::Select { arms, else_arm: _ } => lower_select(ctx, builder, arms),
-
-        _ => {}
     }
 }
 
@@ -284,7 +282,7 @@ fn lower_field_assign(
     field_name: &str,
     value: &Spanned<Expr>,
 ) {
-    use crate::ir::types::{GirType, TypeDefKind};
+    use crate::ir::types::TypeDefKind;
 
     // For mut_capture_locals (mutable borrow params), use the pointer local directly
     // instead of lower_expr which would copy the deref'd value to a temp
@@ -1005,7 +1003,7 @@ fn lower_for_enumerate(
     body: &Block,
     else_arm: Option<&Block>,
 ) {
-    use crate::ir::*;
+    
 
     // Lower the receiver collection
     let iter_op = lower_expr(ctx, builder, receiver);
