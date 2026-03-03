@@ -1,0 +1,9 @@
+from std.path import path_normalize
+
+void main():
+    print(path_normalize("/a/b/../c/./d"))
+    print(path_normalize("a/./b/../../c"))
+    print(path_normalize("/a//b/"))
+    print(path_normalize("."))
+    print(path_normalize(""))
+    print(path_normalize("/a/b/c/../../.."))

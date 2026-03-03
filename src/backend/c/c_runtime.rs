@@ -3702,6 +3702,78 @@ static inline const char* gorget_path_join(const char* a, const char* b) {
     return result;
 }
 
+static inline const char* gorget_path_normalize(const char* path) {
+    if (path == NULL || path[0] == '\0') { char* r = (char*)GORGET_ALLOC(2); r[0]='.'; r[1]='\0'; return r; }
+    int absolute = (path[0] == '/');
+    size_t len = strlen(path);
+    // Copy path and replace '/' with '\0' so components become null-terminated strings in place
+    char* tmp = (char*)GORGET_ALLOC(len + 1);
+    memcpy(tmp, path, len + 1);
+    for (size_t i = 0; i < len; i++) {
+        if (tmp[i] == '/') tmp[i] = '\0';
+    }
+    // Walk null-terminated component tokens, build a stack of kept components
+    // Max components bounded by len
+    const char** stack = (const char**)GORGET_ALLOC((len + 2) * sizeof(const char*));
+    size_t depth = 0;
+    char* p = tmp;
+    char* end_p = tmp + len;
+    while (p < end_p) {
+        if (*p == '\0') { p++; continue; }
+        size_t clen = strlen(p);
+        if (clen == 1 && p[0] == '.') {
+            // skip
+        } else if (clen == 2 && p[0] == '.' && p[1] == '.') {
+            if (depth > 0) depth--;
+        } else {
+            stack[depth++] = p;
+        }
+        p += clen + 1;
+    }
+    // Reconstruct
+    if (depth == 0) {
+        GORGET_FREE(stack, (len + 2) * sizeof(const char*));
+        GORGET_FREE(tmp, len + 1);
+        if (absolute) { char* r = (char*)GORGET_ALLOC(2); r[0]='/'; r[1]='\0'; return r; }
+        char* r = (char*)GORGET_ALLOC(2); r[0]='.'; r[1]='\0'; return r;
+    }
+    // Compute output length: optional leading '/', components joined by '/'
+    size_t outlen = (absolute ? 1 : 0) + (depth - 1);  // leading slash + separating slashes
+    for (size_t i = 0; i < depth; i++) outlen += strlen(stack[i]);
+    char* result = (char*)GORGET_ALLOC(outlen + 1);
+    size_t pos = 0;
+    if (absolute) result[pos++] = '/';
+    for (size_t i = 0; i < depth; i++) {
+        if (i > 0) result[pos++] = '/';
+        size_t clen = strlen(stack[i]);
+        memcpy(result + pos, stack[i], clen);
+        pos += clen;
+    }
+    result[pos] = '\0';
+    GORGET_FREE(stack, (len + 2) * sizeof(const char*));
+    GORGET_FREE(tmp, len + 1);
+    return result;
+}
+
+static inline const char* gorget_path_absolute(const char* path) {
+    if (path == NULL || path[0] == '\0') {
+        char cwd[4096]; if (!getcwd(cwd, sizeof(cwd))) cwd[0]='\0';
+        size_t l = strlen(cwd); char* r = (char*)GORGET_ALLOC(l+1); memcpy(r,cwd,l+1); return r;
+    }
+    if (path[0] == '/') return gorget_path_normalize(path);
+    char cwd[4096]; if (!getcwd(cwd, sizeof(cwd))) cwd[0]='\0';
+    size_t cwdlen = strlen(cwd);
+    size_t pathlen = strlen(path);
+    // cwd + '/' + path
+    char* combined = (char*)GORGET_ALLOC(cwdlen + 1 + pathlen + 1);
+    memcpy(combined, cwd, cwdlen);
+    combined[cwdlen] = '/';
+    memcpy(combined + cwdlen + 1, path, pathlen + 1);
+    const char* result = gorget_path_normalize(combined);
+    GORGET_FREE(combined, cwdlen + 1 + pathlen + 1);
+    return result;
+}
+
 // ── readdir ─────────────────────────────────────────────────
 static inline GorgetArray gorget_readdir(const char* path) {
     GorgetArray arr = gorget_array_new(sizeof(Str));

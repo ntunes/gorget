@@ -135,6 +135,37 @@ fn path_stem_of_base(base: &str) -> std::string::String {
     }
 }
 
+/// Mirror of C gorget_path_normalize.
+fn path_normalize(path: &str) -> std::string::String {
+    if path.is_empty() { return ".".to_string(); }
+    let absolute = path.starts_with('/');
+    let mut stack: Vec<&str> = Vec::new();
+    for component in path.split('/') {
+        match component {
+            "" | "." => {}
+            ".." => { stack.pop(); }
+            c => stack.push(c),
+        }
+    }
+    if stack.is_empty() {
+        if absolute { return "/".to_string(); }
+        return ".".to_string();
+    }
+    let joined = stack.join("/");
+    if absolute { format!("/{}", joined) } else { joined }
+}
+
+/// Mirror of C gorget_path_absolute.
+fn path_absolute(path: &str) -> std::string::String {
+    if path.starts_with('/') {
+        return path_normalize(path);
+    }
+    let cwd = std::env::current_dir()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    path_normalize(&format!("{}/{}", cwd, path))
+}
+
 /// Mirror of C gorget_path_join.
 fn path_join(a: &str, b: &str) -> std::string::String {
     if a.is_empty() { return b.to_string(); }
@@ -1694,6 +1725,14 @@ pub fn call_extern(
             let b = args.get(1).map(|v| v.to_sim_str().as_str().to_string()).unwrap_or_default();
             let result = path_join(&a, &b);
             Ok(Value::Str(SimStr::from_string(result)))
+        }
+        "gorget_path_normalize" | "path_normalize" => {
+            let s = args.first().map(|v| v.to_sim_str().as_str().to_string()).unwrap_or_default();
+            Ok(Value::Str(SimStr::from_string(path_normalize(&s))))
+        }
+        "gorget_path_absolute" | "path_absolute" => {
+            let s = args.first().map(|v| v.to_sim_str().as_str().to_string()).unwrap_or_default();
+            Ok(Value::Str(SimStr::from_string(path_absolute(&s))))
         }
 
         "gorget_path_exists" | "path_exists" => {

@@ -158,6 +158,8 @@ fn gen_path_module() -> Module {
         decl_fn("path_basename", &[("path", ty_str())], ty_string()),
         decl_fn("path_extension", &[("path", ty_str())], ty_string()),
         decl_fn("path_stem", &[("path", ty_str())], ty_string()),
+        decl_fn("path_normalize", &[("path", ty_str())], ty_string()),
+        decl_fn("path_absolute", &[("path", ty_str())], ty_string()),
     ])
 }
 

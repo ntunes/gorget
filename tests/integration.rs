@@ -2987,6 +2987,20 @@ a/b",
 }
 
 #[test]
+fn path_normalize() {
+    run_gg(
+        "path_normalize.gg",
+        "\
+/a/c/d
+c
+/a/b
+.
+.
+/",
+    );
+}
+
+#[test]
 fn readdir() {
     run_gg("readdir.gg", "2");
 }

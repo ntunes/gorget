@@ -170,6 +170,8 @@ str format_expr(SpannedExpr se):
         case EStringLiteral(s):
             return "\"" + s + "\""
         case ECharLiteral(c):
+            if c.len() == 0:
+                return "'\\0'"
             return "'" + c + "'"
         case ENoneLiteral:
             return "None"

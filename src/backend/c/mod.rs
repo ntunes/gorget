@@ -87,6 +87,8 @@ fn map_stdlib_name(name: &str) -> &str {
         "path_extension" => "gorget_path_extension",
         "path_stem" => "gorget_path_stem",
         "path_join" => "gorget_path_join",
+        "path_normalize" => "gorget_path_normalize",
+        "path_absolute" => "gorget_path_absolute",
         "rename" => "gorget_rename",
         // I/O
         "readline" => "gorget_readline",
@@ -353,6 +355,7 @@ fn is_cstr_param_fn(name: &str) -> bool {
         | "gorget_readdir" | "gorget_getcwd"
         | "gorget_path_parent" | "gorget_path_basename" | "gorget_path_extension"
         | "gorget_path_stem" | "gorget_path_join"
+        | "gorget_path_normalize" | "gorget_path_absolute"
         | "gorget_readline" | "gorget_input"
         | "gorget_exec" | "gorget_exec_output"
         | "gorget_getenv" | "gorget_setenv"
@@ -407,6 +410,7 @@ fn returns_cstr(name: &str) -> bool {
         | "gorget_bool_to_str" | "gorget_codepoint_to_utf8"
         | "gorget_path_parent" | "gorget_path_basename" | "gorget_path_extension"
         | "gorget_path_stem" | "gorget_path_join"
+        | "gorget_path_normalize" | "gorget_path_absolute"
         | "gorget_readline" | "gorget_input"
         | "gorget_getcwd" | "gorget_platform"
         | "gorget_format_time"
@@ -5068,7 +5072,9 @@ fn infer_runtime_return_type(name: &str) -> Option<&'static str> {
         | "path_basename" | "gorget_path_basename"
         | "path_extension" | "gorget_path_extension"
         | "path_stem" | "gorget_path_stem"
-        | "path_join" | "gorget_path_join" => Some("Str"),
+        | "path_join" | "gorget_path_join"
+        | "path_normalize" | "gorget_path_normalize"
+        | "path_absolute" | "gorget_path_absolute" => Some("Str"),
         "readdir" | "gorget_readdir" => Some("GorgetArray"),
         // Stdlib: I/O
         "readline" | "gorget_readline" | "input" | "gorget_input" => Some("GorgetString"),
