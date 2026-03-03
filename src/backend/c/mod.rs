@@ -1089,9 +1089,11 @@ fn topo_sorted_body_order(
             }
         }
     }
-    // If any remain (shouldn't happen without cycles), emit them in original order
-    for i in 0..n {
-        if !emitted[i] {
+    // If any remain, there is a dependency cycle — emit them in original order with a warning.
+    let remaining: Vec<usize> = (0..n).filter(|i| !emitted[*i]).collect();
+    if !remaining.is_empty() {
+        debug_assert!(false, "BUG: topological sort found cycle among {} type definitions", remaining.len());
+        for i in remaining {
             order.push(i);
         }
     }

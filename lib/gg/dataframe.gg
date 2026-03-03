@@ -39,7 +39,7 @@ from std.math import sqrt
 
 # Convert int to float (Gorget has no implicit promotion)
 float int_to_float(int n):
-    return parse_float(int_to_str(n))
+    return parse_float(int_to_str(n)).unwrap()
 
 # Returns true if s represents a valid integer (optional leading -, then digits)
 bool str_is_int(str s):
@@ -560,8 +560,8 @@ equip DataFrame:
             else:
                 # numeric comparison: try int first, then float
                 if str_is_int(sv) and str_is_int(val):
-                    int li = parse_int(sv)
-                    int ri = parse_int(val)
+                    int li = parse_int(sv).unwrap()
+                    int ri = parse_int(val).unwrap()
                     if op == "<":
                         keep = li < ri
                     elif op == ">":
@@ -571,8 +571,8 @@ equip DataFrame:
                     elif op == ">=":
                         keep = li >= ri
                 elif str_is_float(sv) and str_is_float(val):
-                    float lv = parse_float(sv)
-                    float rv = parse_float(val)
+                    float lv = parse_float(sv).unwrap()
+                    float rv = parse_float(val).unwrap()
                     if op == "<":
                         keep = lv < rv
                     elif op == ">":
@@ -857,8 +857,8 @@ equip DataFrame:
                 bool should_swap = false
                 # Try numeric comparison first
                 if str_is_int(va) and str_is_int(vb):
-                    int va_int = parse_int(va)
-                    int vb_int = parse_int(vb)
+                    int va_int = parse_int(va).unwrap()
+                    int vb_int = parse_int(vb).unwrap()
                     if ascending:
                         should_swap = va_int > vb_int
                     else:
@@ -901,7 +901,7 @@ equip DataFrame:
                 while kj < new_vals.len():
                     str sv = new_vals.get(kj).unwrap()
                     if str_is_int(sv):
-                        int_data.push(parse_int(sv))
+                        int_data.push(parse_int(sv).unwrap())
                     else:
                         int_data.push(0)
                     kj = kj + 1
@@ -912,7 +912,7 @@ equip DataFrame:
                 while kj < new_vals.len():
                     str sv = new_vals.get(kj).unwrap()
                     if str_is_float(sv):
-                        float_data.push(parse_float(sv))
+                        float_data.push(parse_float(sv).unwrap())
                     else:
                         float_data.push(0.0)
                     kj = kj + 1
@@ -1090,7 +1090,7 @@ equip GroupBy:
                     int row = row_idxs.get(j).unwrap()
                     str sv = col.value_as_str(row)
                     if str_is_float(sv):
-                        float v = parse_float(sv)
+                        float v = parse_float(sv).unwrap()
                         acc = acc + v
                         if first or v < mn:
                             mn = v
@@ -1196,7 +1196,7 @@ DataFrame df_concat(DataFrame a, DataFrame b):
             while j < a.num_rows:
                 str sv = ca.value_as_str(j)
                 if str_is_int(sv):
-                    data.push(parse_int(sv))
+                    data.push(parse_int(sv).unwrap())
                 else:
                     data.push(0)
                 j = j + 1
@@ -1204,7 +1204,7 @@ DataFrame df_concat(DataFrame a, DataFrame b):
             while j < b.num_rows:
                 str sv = cb.value_as_str(j)
                 if str_is_int(sv):
-                    data.push(parse_int(sv))
+                    data.push(parse_int(sv).unwrap())
                 else:
                     data.push(0)
                 j = j + 1
@@ -1215,7 +1215,7 @@ DataFrame df_concat(DataFrame a, DataFrame b):
             while j < a.num_rows:
                 str sv = ca.value_as_str(j)
                 if str_is_float(sv):
-                    data.push(parse_float(sv))
+                    data.push(parse_float(sv).unwrap())
                 else:
                     data.push(0.0)
                 j = j + 1
@@ -1223,7 +1223,7 @@ DataFrame df_concat(DataFrame a, DataFrame b):
             while j < b.num_rows:
                 str sv = cb.value_as_str(j)
                 if str_is_float(sv):
-                    data.push(parse_float(sv))
+                    data.push(parse_float(sv).unwrap())
                 else:
                     data.push(0.0)
                 j = j + 1
@@ -1340,7 +1340,7 @@ Result[DataFrame, str] df_from_csv(str csv_text):
                     data.push(0)
                     mask.push(false)
                 else:
-                    data.push(parse_int(val))
+                    data.push(parse_int(val).unwrap())
                     mask.push(true)
                 ri = ri + 1
             cols.push(IntCol(IntColumn(data, mask)))
@@ -1357,7 +1357,7 @@ Result[DataFrame, str] df_from_csv(str csv_text):
                     data.push(0.0)
                     mask.push(false)
                 else:
-                    data.push(parse_float(val))
+                    data.push(parse_float(val).unwrap())
                     mask.push(true)
                 ri = ri + 1
             cols.push(FloatCol(FloatColumn(data, mask)))

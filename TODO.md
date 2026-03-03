@@ -8,7 +8,7 @@
 
 - **Inline bounds follow-up — find new syntax for `outlives` to fully remove `where`**: The `where` keyword is now only used for `where a outlives b`. Options: (1) inline on the lifetime param `live(a outlives b)`, (2) a dedicated `outlives` section, (3) lifetime annotations on the param itself. Survey and decide before removing `where` entirely. [added: 2026-03-02]
 
-- **Async/await — architectural roadmap**: **Settled design decisions**: (a) Colored async: `async fn` returns `Future[T]`, caller must `await`. Matches Gorget's explicit type philosophy. (b) Ban borrows across await for V1: no `&T` or `&mut T` live across await points. Owned + Copy types only. Eliminates self-referential state structs. Revisit later. (c) ~~Thread-pool executor~~ DONE. (d) ~~Channels for inter-task communication~~ DONE. (e) Deferred: work-stealing. **Prerequisites**: ~~(1) fix closure body scope leakage~~ DONE, ~~(2) extract ExprVisitor trait~~ DONE. ~~**Phase 1 — Type system**~~ DONE. ~~**Phase 2 — Borrow checker suspension-point tracking**~~ DONE. ~~**Phase 3 — Codegen: state machine transformation**~~ DONE. ~~**Phase 4 — Runtime: thread-pool executor**~~ DONE. ~~**Phase 5 — Thread-local error handling + std.channel**~~ DONE. ~~**Phase 6 — Await inside control flow (while/loop/if/elif/else)**~~ DONE. ~~**Phase 7 — RAII for async state structs**~~ DONE. ~~**Phase 8 — Await inside for-loops (range)**~~ DONE. ~~**Phase 9 — Await inside match statements**~~ DONE. ~~**Phase 10 — Await inside non-range for-loops**~~ DONE. ~~**Phase 11 — Expression-position await**~~ DONE. ~~**Phase 12 — Postfix `.await()` syntax**~~ DONE. ~~**Phase 13 — Waker protocol + event-driven executor + non-blocking task-await**~~ DONE. **Remaining items**: ~~expression-position task-await~~ DONE, ~~async channels (waker-driven send/recv instead of condvar blocking)~~ DONE, ~~timer/sleep primitive (first I/O-like waker consumer)~~ DONE (`std.async.async_sleep`), ~~I/O reactor (epoll/kqueue integration)~~ DONE (`REACTOR_RUNTIME`, timerfd+epoll on Linux, kqueue on macOS), ~~worker thread wakers~~ DONE, await inside Iterable/Iterator-based for-loops (busy-poll fallback), async closures, sub-future state cleanup, ~~ConsumeCallable single-call enforcement~~ DONE, ~~`select` for multiplexing multiple channels~~ DONE, ~~unbuffered channels (`Channel[T](0)`)~~ DONE, ~~for/else with break-flag in async for-loops~~ DONE, ~~await in `if`/`while` conditions~~ DONE, ~~await in for-loop iterable/range bounds~~ DONE. **V1 limitations**: thread-pool deadlock if all workers block on `await Task`; ~~spawned-but-never-awaited tasks leak memory~~ DONE (join-on-drop); `await Task` only in async functions; ~~no `Channel.free()` called automatically (manual close only)~~ DONE (refcount RAII). **I/O reactor Phase 2**: socket/file readability events (epoll EPOLLIN on socket fd), completing the async I/O story. [added: 2026-02-21, updated: 2026-03-02]
+- **Async/await — remaining items**: Core async system (Phases 1–13) is complete. Remaining: (1) await inside Iterable/Iterator-based for-loops (busy-poll fallback), (2) async closures, (3) sub-future state cleanup, (4) work-stealing executor, (5) I/O reactor Phase 2 — socket/file readability events (epoll EPOLLIN on socket fd). **V1 limitations**: thread-pool deadlock if all workers block on `await Task`; `await Task` only in async functions. [added: 2026-02-21, updated: 2026-03-03]
 
 
 
@@ -90,8 +90,6 @@
 
 - **Associated type validation**: Associated types are parsed but not validated or resolved in semantic analysis. [from roadmap, added: 2026-02-16]
 
-- **Const evaluation**: No compile-time expression evaluation. Needed for const declarations, array sizes, and const generics. [from roadmap, added: 2026-02-16]
-
 
 - **`gg fmt` (code formatter)**: Auto-formatter for `.gg` source files. [from roadmap, added: 2026-02-16]
 
@@ -103,8 +101,6 @@
 
 
 - **Incremental compilation**: Only recompile changed modules. [from roadmap, added: 2026-02-16]
-
-- **Async/await**: Moved to Medium with structured roadmap. See Medium section. [from roadmap, added: 2026-02-16, promoted: 2026-02-21]
 
 
 - **TOML DateTime is just a raw string**: `DateTime` variants store unparsed text. Users can't extract year/month/day components. Document limitation or add a structured `TomlDateTime` type. (`toml.gg:21, 378-427`) [added: 2026-02-16]
@@ -135,8 +131,6 @@
 - **`build_tree` silently absorbs malformed events**: depth jumps and unmatched Return/StmtEnd are silently dropped. Should log a diagnostic. [added: 2026-02-14]
 
 - **`directive implicit-auto`**: Python-style implicit variable declarations (`x = 1` instead of `auto x = 1`). Trade-off: more Pythonic but typos silently create new variables. [added: 2026-02-11]
-
-- **Topological sort silent fallback for cycles**: `src/backend/c/mod.rs:1092-1097` comment says "shouldn't happen without cycles" but code silently appends remaining types in original order. Should `debug_assert!` or warn. [added: 2026-02-16, updated: 2026-03-03]
 
 
 - **`c_runtime.rs` monolithic string constant**: ~5,200-line single string constant is hard to navigate and edit. Split into separate const blocks or `.c` files. [added: 2026-02-16, updated: 2026-02-25]
