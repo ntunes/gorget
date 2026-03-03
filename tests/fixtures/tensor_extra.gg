@@ -1,4 +1,4 @@
-from gg.tensor import Tensor, tensor_arange, tensor_zeros_int, tensor_zeros_float, tensor_ones_int, tensor_ones_float, tensor_linspace, tensor_sum_int, tensor_sum_float, tensor_sub_float, tensor_div_float, tensor_neg_float, tensor_neg_int, tensor_div_int, scalar_sub_int, scalar_div_int, scalar_mul_int, scalar_sub_float, scalar_mul_float, tensor_clone_int, tensor_mean_axis, tensor_std_all, tensor_matmul_float, tensor_le_int, tensor_ge_int, tensor_ne_int, tensor_eq_float, vec_int_copy
+from gg.tensor import Tensor, tensor_arange, tensor_zeros_int, tensor_zeros_float, tensor_ones_int, tensor_ones_float, tensor_linspace, tensor_sum_int, tensor_sum_float, tensor_sub_float, tensor_div_float, tensor_neg_float, tensor_neg_int, tensor_div_int, scalar_sub_int, scalar_div_int, scalar_mul_int, scalar_sub_float, scalar_mul_float, tensor_clone_int, tensor_mean_axis, tensor_std_all, tensor_matmul_float, tensor_le_int, tensor_ge_int, tensor_ne_int, tensor_eq_float, vec_int_copy, tensor_gt_int, tensor_lt_float, tensor_gt_float, tensor_le_float, tensor_ge_float, tensor_ne_float
 
 void main():
     # -- scalar_div_int: arange(0,6)=[0,1,2,3,4,5] / 2 = [0,0,1,1,2,2], sum=6
@@ -106,3 +106,34 @@ void main():
     Tensor[float] eq_b = tensor_ones_float(sh1)
     Tensor[bool] eq_r = tensor_eq_float(eq_a, eq_b)
     print("{eq_r.flat_get(0)}")
+
+    # -- tensor_gt_int: [5] > [3] → true
+    Tensor[int] gt_a = tensor_arange(5, 6)
+    Tensor[int] gt_b = tensor_arange(3, 4)
+    Tensor[bool] gt_r = tensor_gt_int(gt_a, gt_b)
+    print("{gt_r.flat_get(0)}")
+
+    # -- tensor_lt_float + tensor_gt_float: ltf_a=[1.0], ltf_b=[2.0]
+    Vector[int] sh1f = Vector[int]()
+    sh1f.push(1)
+    Tensor[float] ltf_a = tensor_ones_float(sh1f)
+    Tensor[float] ltf_b = tensor_linspace(2.0, 2.0, 1)
+    Tensor[bool] ltf_r = tensor_lt_float(ltf_a, ltf_b)
+    print("{ltf_r.flat_get(0)}")
+
+    Tensor[bool] gtf_r = tensor_gt_float(ltf_b, ltf_a)
+    print("{gtf_r.flat_get(0)}")
+
+    # -- tensor_le_float: [1.0] <= [1.0] → true
+    Tensor[float] lef_a = tensor_ones_float(sh1f)
+    Tensor[float] lef_b = tensor_ones_float(sh1f)
+    Tensor[bool] lef_r = tensor_le_float(lef_a, lef_b)
+    print("{lef_r.flat_get(0)}")
+
+    # -- tensor_ge_float: [2.0] >= [1.0] → true
+    Tensor[bool] gef_r = tensor_ge_float(ltf_b, ltf_a)
+    print("{gef_r.flat_get(0)}")
+
+    # -- tensor_ne_float: [1.0] != [2.0] → true
+    Tensor[bool] nef_r = tensor_ne_float(ltf_a, ltf_b)
+    print("{nef_r.flat_get(0)}")

@@ -67,3 +67,13 @@ void main():
     DataFrame agg_m = df_group_by(df, name_col).agg(val_col, "mean")
     Column mc = agg_m.get_column("val_mean")
     print("{mc.value_as_str(0)}")
+
+    # agg "min": Alice min = 10
+    DataFrame agg_min = df_group_by(df, name_col).agg(val_col, "min")
+    Column min_col = agg_min.get_column("val_min")
+    print("{min_col.value_as_str(0)}")
+
+    # agg "max": Alice max = 50
+    DataFrame agg_max = df_group_by(df, name_col).agg(val_col, "max")
+    Column max_col = agg_max.get_column("val_max")
+    print("{max_col.value_as_str(0)}")

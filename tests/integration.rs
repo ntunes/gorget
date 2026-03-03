@@ -6957,6 +6957,12 @@ fn tensor_extra() {
 true
 true
 true
+true
+true
+true
+true
+true
+true
 true",
     );
 }
@@ -6980,7 +6986,9 @@ int
 Bob
 2
 1
-Charlie",
+Charlie
+1
+2",
     );
 }
 
@@ -7049,7 +7057,9 @@ fn dataframe_groupby() {
 5
 3
 3
-30",
+30
+10
+50",
     );
 }
 
@@ -7088,7 +7098,11 @@ x
 3
 1
 hello
-true",
+true
+1.5
+9.9
+hello
+default",
     );
 }
 

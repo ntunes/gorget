@@ -294,6 +294,9 @@ Column col_ints_null(Vector[int] data, Vector[bool] mask):
 Column col_strs_null(Vector[str] data, Vector[bool] mask):
     return StrCol(StrColumn(data, mask))
 
+Column col_floats_null(Vector[float] data, Vector[bool] mask):
+    return FloatCol(FloatColumn(data, mask))
+
 # Deep-copy a Column (for head/tail/slice)
 Column col_slice(Column col, int start, int end):
     match col:
@@ -1255,27 +1258,21 @@ DataFrame df_concat(DataFrame a, DataFrame b):
 
 DataFrame df_from_records(Vector[str] headers, Vector[Vector[str]] rows):
     int ncols = headers.len()
-    Vector[Vector[str]] col_data = Vector[Vector[str]]()
-    int c = 0
-    while c < ncols:
-        col_data.push(Vector[str]())
-        c = c + 1
-    int r = 0
-    while r < rows.len():
-        Vector[str] row = rows.get(r).unwrap()
-        int ci = 0
-        while ci < ncols:
+    int nrows = rows.len()
+    Vector[Column] cols = Vector[Column]()
+    int ci = 0
+    while ci < ncols:
+        Vector[str] col_vals = Vector[str]()
+        int ri = 0
+        while ri < nrows:
+            Vector[str] row = rows.get(ri).unwrap()
             str val = ""
             if ci < row.len():
                 val = row.get(ci).unwrap()
-            col_data.get(ci).unwrap().push(val)
-            ci = ci + 1
-        r = r + 1
-    Vector[Column] cols = Vector[Column]()
-    int i = 0
-    while i < ncols:
-        cols.push(col_from_strs(col_data.get(i).unwrap()))
-        i = i + 1
+            col_vals.push(val)
+            ri = ri + 1
+        cols.push(col_from_strs(col_vals))
+        ci = ci + 1
     return df_from_columns(headers, cols)
 
 Result[DataFrame, str] df_from_csv(str csv_text):

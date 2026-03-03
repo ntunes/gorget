@@ -1,4 +1,4 @@
-from gg.dataframe import DataFrame, Column, df_from_columns, col_from_ints, col_from_strs, col_from_floats
+from gg.dataframe import DataFrame, Column, df_from_columns, col_from_ints, col_from_strs, col_from_floats, df_from_records
 
 void main():
     # Build a 3-row DataFrame: name (str), age (int), score (float)
@@ -51,3 +51,16 @@ void main():
     print("{t.nrows()}")
     Column tc = t.get_column("name")
     print("{tc.value_as_str(0)}")
+
+    # df_from_records
+    Vector[str] hdrs = Vector[str]()
+    hdrs.push("x")
+    hdrs.push("y")
+    Vector[Vector[str]] rows = Vector[Vector[str]]()
+    Vector[str] r1 = Vector[str]()
+    r1.push("1")
+    r1.push("2")
+    rows.push(r1)
+    DataFrame dr = df_from_records(hdrs, rows)
+    print("{dr.nrows()}")
+    print("{dr.ncols()}")

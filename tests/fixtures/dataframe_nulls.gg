@@ -1,4 +1,4 @@
-from gg.dataframe import DataFrame, Column, df_from_columns, col_from_ints, col_from_strs, col_from_floats, col_from_bools, col_ints_null, col_strs_null
+from gg.dataframe import DataFrame, Column, df_from_columns, col_from_ints, col_from_strs, col_from_floats, col_from_bools, col_ints_null, col_strs_null, col_floats_null
 
 void main():
     # ── BoolColumn ─────────────────────────────────────────────
@@ -102,3 +102,39 @@ void main():
     # ── display() smoke test ─────────────────────────────────────
     str disp = df2.display()
     print("{disp.byte_len() > 0}")
+
+    # ── fillna_float ─────────────────────────────────────────────
+    Vector[float] fv = Vector[float]()
+    fv.push(1.5)
+    fv.push(0.0)
+    Vector[bool] fm = Vector[bool]()
+    fm.push(true)
+    fm.push(false)
+    Column float_col = col_floats_null(fv, fm)
+    Vector[str] fn_names = Vector[str]()
+    fn_names.push("flt")
+    Vector[Column] fn_cols = Vector[Column]()
+    fn_cols.push(float_col)
+    DataFrame df_flt = df_from_columns(fn_names, fn_cols)
+    DataFrame df_flt2 = df_flt.fillna_float("flt", 9.9)
+    Column flt_col = df_flt2.get_column("flt")
+    print("{flt_col.value_as_str(0)}")
+    print("{flt_col.value_as_str(1)}")
+
+    # ── fillna_str ────────────────────────────────────────────────
+    Vector[str] sv2 = Vector[str]()
+    sv2.push("hello")
+    sv2.push("")
+    Vector[bool] sm2 = Vector[bool]()
+    sm2.push(true)
+    sm2.push(false)
+    Column str_col2 = col_strs_null(sv2, sm2)
+    Vector[str] sn_names = Vector[str]()
+    sn_names.push("msg")
+    Vector[Column] sn_cols = Vector[Column]()
+    sn_cols.push(str_col2)
+    DataFrame df_msg = df_from_columns(sn_names, sn_cols)
+    DataFrame df_msg2 = df_msg.fillna_str("msg", "default")
+    Column msg_col = df_msg2.get_column("msg")
+    print("{msg_col.value_as_str(0)}")
+    print("{msg_col.value_as_str(1)}")
