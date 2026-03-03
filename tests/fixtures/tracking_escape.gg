@@ -1,0 +1,11 @@
+from std.alloc import TrackingAllocator
+from std.collections import Vector
+
+Vector[int] leak_via_return():
+    with TrackingAllocator() as tracker:
+        Vector[int] v = Vector[int]()
+        v.push(1)
+        return v
+
+void main():
+    print("done")

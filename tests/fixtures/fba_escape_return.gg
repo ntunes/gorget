@@ -1,0 +1,11 @@
+from std.alloc import FixedBufferAllocator
+from std.collections import Vector
+
+Vector[int] leak_via_return():
+    with FixedBufferAllocator(4096) as fba:
+        Vector[int] v = Vector[int]()
+        v.push(1)
+        return v
+
+void main():
+    print("done")

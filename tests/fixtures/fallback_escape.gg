@@ -1,0 +1,14 @@
+from std.alloc import FixedBufferAllocator, FallbackAllocator, Arena
+from std.collections import Vector
+
+void leak_via_assign():
+    Vector[int] outer = Vector[int]()
+    FixedBufferAllocator fba = FixedBufferAllocator(128)
+    Arena overflow = Arena(4096)
+    with FallbackAllocator(fba, overflow) as fb:
+        Vector[int] inner = Vector[int]()
+        inner.push(42)
+        outer = !inner
+
+void main():
+    print("done")

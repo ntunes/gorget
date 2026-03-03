@@ -245,6 +245,21 @@ impl GenericCollector {
                     self.scan_block(else_body);
                 }
             }
+            Stmt::With { bindings, body } => {
+                for binding in bindings {
+                    self.scan_expr(&binding.expr);
+                }
+                self.scan_block(body);
+            }
+            Stmt::Loop { body } | Stmt::Unsafe { body } => {
+                self.scan_block(body);
+            }
+            Stmt::Assert { condition, message } => {
+                self.scan_expr(condition);
+                if let Some(msg) = message {
+                    self.scan_expr(msg);
+                }
+            }
             _ => {}
         }
     }

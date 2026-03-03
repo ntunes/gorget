@@ -1,0 +1,16 @@
+from std.alloc import TlsfAllocator, Arena
+from std.collections import Vector
+
+void main():
+    with TlsfAllocator(65536) as outer:
+        Vector[int] v1 = Vector[int]()
+        v1.push(10)
+        v1.push(20)
+        with Arena(4096) as inner:
+            Vector[int] v2 = Vector[int]()
+            v2.push(30)
+            v2.push(40)
+            print("inner len: {v2.len()}")
+        print("outer len: {v1.len()}")
+        print("outer[0]: {v1.get(0).unwrap()}")
+    print("done")

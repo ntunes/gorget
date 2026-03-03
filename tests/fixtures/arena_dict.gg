@@ -1,0 +1,13 @@
+from std.alloc import Arena
+from std.collections import Dict
+
+void main():
+    with Arena(8192) as pool:
+        Dict[str, int] ages = Dict[str, int]()
+        ages.put("alice", 30)
+        ages.put("bob", 25)
+        ages.put("carol", 35)
+        print("len: {ages.len()}")
+        print("alice: {ages.get("alice").unwrap()}")
+        print("bytes_used > 0: {pool.bytes_used() > 0}")
+    print("done")

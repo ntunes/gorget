@@ -1,0 +1,12 @@
+from std.alloc import PoolAllocator
+from std.collections import Vector
+
+void leak_via_assign():
+    Vector[int] outer = Vector[int]()
+    with PoolAllocator(64, 256) as pool:
+        Vector[int] inner = Vector[int]()
+        inner.push(42)
+        outer = !inner
+
+void main():
+    print("done")
