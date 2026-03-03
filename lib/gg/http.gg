@@ -1,13 +1,14 @@
-# gg.http -- Pure Gorget HTTP/1.1 client over TLS
+# gg.http -- Pure Gorget HTTP/1.1 client over TLS and plain TCP
 #
 # Provides http_get, http_post, http_put, http_delete and the underlying
-# http_request function.  Uses std.net.tls for the transport layer.
-# No C dependencies beyond OpenSSL (inherited from std.net.tls).
+# http_request function.  Uses std.net.tls for https:// and std.net.socket
+# for plain http:// URLs.
 #
 # Response headers are stored with lowercase names for easy lookup:
 #   response.headers["content-type"]
 
 from std.net.tls import TlsSocket, tls_connect
+from std.net.socket import Socket, socket_connect
 from std.collections import Vector, Dict
 from std.conv import int_to_str, char_to_str
 from std.bytes import bytes_to_str, bytes_concat
@@ -21,15 +22,18 @@ struct HttpResponse:
 
 # ── URL parsing ──────────────────────────────────────────────
 
-(str, int, str) http_parse_url(str url):
+# Returns (host, port, path, use_tls) where use_tls is false for http:// URLs.
+(str, int, str, bool) http_parse_url(str url):
     str http_rest = url
     int http_port = 443
+    bool http_use_tls = true
 
     if url.starts_with("https://"):
         http_rest = url.byte_slice(8, url.byte_len())
     elif url.starts_with("http://"):
         http_rest = url.byte_slice(7, url.byte_len())
         http_port = 80
+        http_use_tls = false
 
     # Split host from path at the first "/"
     Option[int] http_sl = http_rest.index_of("/")
@@ -51,7 +55,7 @@ struct HttpResponse:
         if http_port_parsed is Some(http_pv):
             http_port = http_pv
 
-    return (http_host, http_port, http_path)
+    return (http_host, http_port, http_path, http_use_tls)
 
 # ── Hex parsing (for chunked transfer encoding) ─────────────
 
@@ -116,6 +120,46 @@ str http_read_body_close(TlsSocket &http_conn):
             http_buf = bytes_concat(http_buf, http_chunk)
     return bytes_to_str(http_buf).unwrap()
 
+# ── Plain-TCP body readers (mirrors TLS versions above) ──────
+
+str http_read_body_fixed_plain(Socket &http_conn, int http_clen):
+    if http_clen <= 0:
+        return ""
+    Vector[uint8] http_raw = http_conn.read_exact(http_clen)
+    return bytes_to_str(http_raw).unwrap()
+
+str http_read_body_chunked_plain(Socket &http_conn):
+    Vector[uint8] http_buf = Vector[uint8]()
+    bool http_reading = true
+    while http_reading:
+        str http_size_line = http_conn.read_line().unwrap()
+        Option[int] http_semi = http_size_line.index_of(";")
+        if http_semi.is_some():
+            http_size_line = http_size_line.byte_slice(0, http_semi.unwrap())
+        http_size_line = http_size_line.trim()
+        int http_chunk_sz = http_parse_hex(http_size_line)
+        if http_chunk_sz == 0:
+            http_reading = false
+        else:
+            Vector[uint8] http_chunk = http_conn.read_exact(http_chunk_sz)
+            http_buf = bytes_concat(http_buf, http_chunk)
+            http_conn.read_line().unwrap()
+    str http_trailer = http_conn.read_line().unwrap()
+    while http_trailer != "":
+        http_trailer = http_conn.read_line().unwrap()
+    return bytes_to_str(http_buf).unwrap()
+
+str http_read_body_close_plain(Socket &http_conn):
+    Vector[uint8] http_buf = Vector[uint8]()
+    bool http_reading = true
+    while http_reading:
+        Vector[uint8] http_chunk = http_conn.read(4096)
+        if http_chunk.len() == 0:
+            http_reading = false
+        else:
+            http_buf = bytes_concat(http_buf, http_chunk)
+    return bytes_to_str(http_buf).unwrap()
+
 # ── Single-shot request (no redirect following) ───────────
 
 Result[HttpResponse, str] http_single(str http_method, str http_url, str http_body, Dict[str, str] http_hdrs):
@@ -123,17 +167,12 @@ Result[HttpResponse, str] http_single(str http_method, str http_url, str http_bo
     str http_host = http_parsed._0
     int http_port = http_parsed._1
     str http_path = http_parsed._2
+    bool http_use_tls = http_parsed._3
 
-    Result[TlsSocket, str] http_cr = tls_connect(http_host, http_port)
-    if http_cr.is_err():
-        return Error(http_cr.unwrap_err())
-    TlsSocket http_conn = http_cr.unwrap()
-
-    # Build request line
+    # Build request (same for TLS and plain)
     str http_req = http_method + " " + http_path + " HTTP/1.1\r\n"
     http_req = http_req + "Host: " + http_host + "\r\n"
 
-    # Content-Length if body is non-empty
     if http_body.byte_len() > 0:
         http_req = http_req + "Content-Length: " + int_to_str(http_body.byte_len()) + "\r\n"
 
@@ -147,75 +186,127 @@ Result[HttpResponse, str] http_single(str http_method, str http_url, str http_bo
         http_req = http_req + http_key + ": " + http_hval + "\r\n"
         http_hi = http_hi + 1
 
-    http_req = http_req + "Connection: close\r\n"
-    http_req = http_req + "\r\n"
+    http_req = http_req + "Connection: close\r\n\r\n"
 
-    # Append body
     if http_body.byte_len() > 0:
         http_req = http_req + http_body
 
-    http_conn.write_str(http_req)
+    if http_use_tls:
+        # ── HTTPS path ───────────────────────────────────────
+        Result[TlsSocket, str] http_tls_cr = tls_connect(http_host, http_port)
+        if http_tls_cr.is_err():
+            return Error(http_tls_cr.unwrap_err())
+        TlsSocket http_tls_conn = http_tls_cr.unwrap()
 
-    # ── Read response ────────────────────────────────────────
+        http_tls_conn.write_str(http_req)
 
-    # Status line: "HTTP/1.1 200 OK"
-    str http_status_line = http_conn.read_line()?
-    Option[int] http_sp1 = http_status_line.index_of(" ")
-    int http_code = 0
-    if http_sp1.is_some():
-        str http_after = http_status_line.byte_slice(http_sp1.unwrap() + 1, http_status_line.byte_len())
-        Option[int] http_sp2 = http_after.index_of(" ")
-        if http_sp2.is_some():
-            str http_code_str = http_after.byte_slice(0, http_sp2.unwrap())
-            Option[int] http_code_opt = int.parse(http_code_str)
-            if http_code_opt is Some(http_cv):
-                http_code = http_cv
-        else:
-            Option[int] http_code_opt2 = int.parse(http_after)
-            if http_code_opt2 is Some(http_cv2):
-                http_code = http_cv2
-
-    # Headers (stored with lowercase names for easy lookup)
-    Dict[str, str] http_resp_hdrs = Dict[str, str]()
-    bool http_in_hdrs = true
-    while http_in_hdrs:
-        str http_hdr_line = http_conn.read_line()?
-        if http_hdr_line == "":
-            http_in_hdrs = false
-        else:
-            Option[int] http_colon = http_hdr_line.index_of(":")
-            if http_colon.is_some():
-                int http_colon_v = http_colon.unwrap()
-                str http_hname = http_hdr_line.byte_slice(0, http_colon_v).trim().to_lower()
-                str http_hval = http_hdr_line.byte_slice(http_colon_v + 1, http_hdr_line.byte_len()).trim()
-                http_resp_hdrs.put(http_hname, http_hval)
-
-    # Body
-    str http_resp_body = ""
-
-    # Check Transfer-Encoding
-    if http_resp_hdrs.contains("transfer-encoding"):
-        str http_te = http_resp_hdrs["transfer-encoding"]
-        if http_te.to_lower().contains("chunked"):
-            http_resp_body = http_read_body_chunked(&http_conn)
-
-    if http_resp_body == "":
-        # Check Content-Length
-        if http_resp_hdrs.contains("content-length"):
-            str http_cl_str = http_resp_hdrs["content-length"]
-            Option[int] http_cl_opt = int.parse(http_cl_str)
-            if http_cl_opt is Some(http_cl):
-                http_resp_body = http_read_body_fixed(&http_conn, http_cl)
+        str http_tls_sl = http_tls_conn.read_line()?
+        Option[int] http_tls_sp1 = http_tls_sl.index_of(" ")
+        int http_tls_code = 0
+        if http_tls_sp1.is_some():
+            str http_tls_after = http_tls_sl.byte_slice(http_tls_sp1.unwrap() + 1, http_tls_sl.byte_len())
+            Option[int] http_tls_sp2 = http_tls_after.index_of(" ")
+            if http_tls_sp2.is_some():
+                str http_tls_cs = http_tls_after.byte_slice(0, http_tls_sp2.unwrap())
+                Option[int] http_tls_co = int.parse(http_tls_cs)
+                if http_tls_co is Some(http_tls_cv):
+                    http_tls_code = http_tls_cv
             else:
-                http_resp_body = http_read_body_close(&http_conn)
-        else:
-            # No length info -- read until connection close
-            http_resp_body = http_read_body_close(&http_conn)
+                Option[int] http_tls_co2 = int.parse(http_tls_after)
+                if http_tls_co2 is Some(http_tls_cv2):
+                    http_tls_code = http_tls_cv2
 
-    http_conn.close()
+        Dict[str, str] http_tls_hdrs = Dict[str, str]()
+        bool http_tls_ih = true
+        while http_tls_ih:
+            str http_tls_hl = http_tls_conn.read_line()?
+            if http_tls_hl == "":
+                http_tls_ih = false
+            else:
+                Option[int] http_tls_colon = http_tls_hl.index_of(":")
+                if http_tls_colon.is_some():
+                    int http_tls_cv3 = http_tls_colon.unwrap()
+                    str http_tls_hn = http_tls_hl.byte_slice(0, http_tls_cv3).trim().to_lower()
+                    str http_tls_hv = http_tls_hl.byte_slice(http_tls_cv3 + 1, http_tls_hl.byte_len()).trim()
+                    http_tls_hdrs.put(http_tls_hn, http_tls_hv)
 
-    HttpResponse http_resp = HttpResponse(http_code, http_resp_body, http_resp_hdrs)
-    return Ok(http_resp)
+        str http_tls_body = ""
+        if http_tls_hdrs.contains("transfer-encoding"):
+            str http_tls_te = http_tls_hdrs["transfer-encoding"]
+            if http_tls_te.to_lower().contains("chunked"):
+                http_tls_body = http_read_body_chunked(&http_tls_conn)
+        if http_tls_body == "":
+            if http_tls_hdrs.contains("content-length"):
+                str http_tls_cls = http_tls_hdrs["content-length"]
+                Option[int] http_tls_clo = int.parse(http_tls_cls)
+                if http_tls_clo is Some(http_tls_cl):
+                    http_tls_body = http_read_body_fixed(&http_tls_conn, http_tls_cl)
+                else:
+                    http_tls_body = http_read_body_close(&http_tls_conn)
+            else:
+                http_tls_body = http_read_body_close(&http_tls_conn)
+
+        http_tls_conn.close()
+        HttpResponse http_tls_resp = HttpResponse(http_tls_code, http_tls_body, http_tls_hdrs)
+        return Ok(http_tls_resp)
+    else:
+        # ── Plain HTTP path ───────────────────────────────────
+        Result[Socket, str] http_plain_cr = socket_connect(http_host, http_port)
+        if http_plain_cr.is_err():
+            return Error(http_plain_cr.unwrap_err())
+        Socket http_plain_conn = http_plain_cr.unwrap()
+
+        http_plain_conn.write_str(http_req)
+
+        str http_plain_sl = http_plain_conn.read_line()?
+        Option[int] http_plain_sp1 = http_plain_sl.index_of(" ")
+        int http_plain_code = 0
+        if http_plain_sp1.is_some():
+            str http_plain_after = http_plain_sl.byte_slice(http_plain_sp1.unwrap() + 1, http_plain_sl.byte_len())
+            Option[int] http_plain_sp2 = http_plain_after.index_of(" ")
+            if http_plain_sp2.is_some():
+                str http_plain_cs = http_plain_after.byte_slice(0, http_plain_sp2.unwrap())
+                Option[int] http_plain_co = int.parse(http_plain_cs)
+                if http_plain_co is Some(http_plain_cv):
+                    http_plain_code = http_plain_cv
+            else:
+                Option[int] http_plain_co2 = int.parse(http_plain_after)
+                if http_plain_co2 is Some(http_plain_cv2):
+                    http_plain_code = http_plain_cv2
+
+        Dict[str, str] http_plain_hdrs = Dict[str, str]()
+        bool http_plain_ih = true
+        while http_plain_ih:
+            str http_plain_hl = http_plain_conn.read_line()?
+            if http_plain_hl == "":
+                http_plain_ih = false
+            else:
+                Option[int] http_plain_colon = http_plain_hl.index_of(":")
+                if http_plain_colon.is_some():
+                    int http_plain_cv3 = http_plain_colon.unwrap()
+                    str http_plain_hn = http_plain_hl.byte_slice(0, http_plain_cv3).trim().to_lower()
+                    str http_plain_hv = http_plain_hl.byte_slice(http_plain_cv3 + 1, http_plain_hl.byte_len()).trim()
+                    http_plain_hdrs.put(http_plain_hn, http_plain_hv)
+
+        str http_plain_body = ""
+        if http_plain_hdrs.contains("transfer-encoding"):
+            str http_plain_te = http_plain_hdrs["transfer-encoding"]
+            if http_plain_te.to_lower().contains("chunked"):
+                http_plain_body = http_read_body_chunked_plain(&http_plain_conn)
+        if http_plain_body == "":
+            if http_plain_hdrs.contains("content-length"):
+                str http_plain_cls = http_plain_hdrs["content-length"]
+                Option[int] http_plain_clo = int.parse(http_plain_cls)
+                if http_plain_clo is Some(http_plain_cl):
+                    http_plain_body = http_read_body_fixed_plain(&http_plain_conn, http_plain_cl)
+                else:
+                    http_plain_body = http_read_body_close_plain(&http_plain_conn)
+            else:
+                http_plain_body = http_read_body_close_plain(&http_plain_conn)
+
+        http_plain_conn.close()
+        HttpResponse http_plain_resp = HttpResponse(http_plain_code, http_plain_body, http_plain_hdrs)
+        return Ok(http_plain_resp)
 
 # ── Core request function (follows redirects) ─────────────
 #
@@ -259,7 +350,7 @@ Result[HttpResponse, str] http_request(str http_method, str http_url, str http_b
         if http_location.starts_with("/"):
             auto http_orig = http_parse_url(http_cur_url)
             str http_scheme = "https://"
-            if http_orig._1 == 80:
+            if not http_orig._3:
                 http_scheme = "http://"
             http_location = http_scheme + http_orig._0 + http_location
 

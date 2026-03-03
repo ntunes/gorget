@@ -268,6 +268,10 @@ fn map_stdlib_name(name: &str) -> &str {
         "UdpSocket__set_multicast_loopback" => "gorget_udp_set_multicast_loopback",
         "UdpSocket__local_addr" => "gorget_udp_local_addr",
         "UdpSocket__close" => "gorget_udp_close",
+        // ServerSocket
+        "server_socket_bind" => "gorget_server_socket_bind",
+        "ServerSocket__accept" => "gorget_server_socket_accept",
+        "ServerSocket__close" => "gorget_server_socket_close",
         // Socket methods
         "Socket__read" => "gorget_socket_read",
         "Socket__read_exact" => "gorget_socket_read_exact",
@@ -368,6 +372,7 @@ fn is_cstr_param_fn(name: &str) -> bool {
         | "gorget_getenv" | "gorget_setenv"
         | "gorget_format_time" | "gorget_parse_time"
         | "gorget_seed" | "gorget_sleep_ms" | "gorget_reactor_sleep_ms"
+        | "gorget_server_socket_bind"
         | "gorget_socket_connect" | "gorget_socket_write_str"
         | "gorget_tls_connect" | "gorget_tls_write_str"
         | "gorget_udp_bind" | "gorget_udp_join_multicast" | "gorget_udp_leave_multicast"
@@ -487,8 +492,15 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
     if all_call_names.iter().any(|n| n.starts_with("gorget_crypto_") || n.starts_with("crypto_")) {
         out.push_str(c_runtime::CRYPTO_RUNTIME);
     }
-    if all_call_names.iter().any(|n| n.starts_with("gorget_socket_") || n == "socket_connect" || n == "socket_listen") {
+    let needs_server_socket = all_call_names.iter().any(|n| {
+        n.starts_with("gorget_server_socket_") || n == "server_socket_bind" || n.starts_with("ServerSocket__")
+    });
+    if all_call_names.iter().any(|n| n.starts_with("gorget_socket_") || n == "socket_connect" || n == "socket_listen")
+        || needs_server_socket {
         out.push_str(c_runtime::SOCKET_RUNTIME);
+    }
+    if needs_server_socket {
+        out.push_str(c_runtime::SERVER_SOCKET_RUNTIME);
     }
     if all_call_names.iter().any(|n| n.starts_with("gorget_udp_") || n == "udp_bind") {
         out.push_str(c_runtime::UDP_SOCKET_RUNTIME);
@@ -2001,6 +2013,7 @@ fn runtime_type_name(name: &str) -> Option<&'static str> {
         "Set" | "HashSet" | "GorgetSet" => Some("GorgetSet"),
         // Network types
         "Socket" => Some("GorgetSocket"),
+        "ServerSocket" => Some("GorgetServerSocket"),
         "UdpSocket" => Some("GorgetUdpSocket"),
         "UdpAddr" => Some("GorgetUdpAddr"),
         "UdpPacket" => Some("GorgetUdpPacket"),
@@ -2061,6 +2074,7 @@ fn collection_type_alias(name: &str) -> Option<&'static str> {
     // Runtime types with different C names
     match name {
         "Socket" => Some("GorgetSocket"),
+        "ServerSocket" => Some("GorgetServerSocket"),
         "TlsSocket" => Some("GorgetTlsSocket"),
         "UdpSocket" => Some("GorgetUdpSocket"),
         "Channel" => Some("GorgetChannel"),
@@ -6728,6 +6742,11 @@ fn last_error_fn(func_name: &str) -> Option<&'static str> {
     if func_name.starts_with("gorget_udp_") || func_name == "udp_bind"
         || func_name.starts_with("UdpSocket__") {
         return Some("gorget_udp_last_error");
+    }
+    // ServerSocket (check before Socket to avoid prefix collision with "Socket__")
+    if func_name.starts_with("gorget_server_socket_") || func_name == "server_socket_bind"
+        || func_name.starts_with("ServerSocket__") {
+        return Some("gorget_server_socket_last_error");
     }
     // Socket
     if func_name.starts_with("gorget_socket_") || func_name == "socket_connect"

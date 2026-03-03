@@ -1,0 +1,178 @@
+# gg.httpserver — HTTP/1.1 server (V1: sequential, one connection at a time)
+#
+# Quick start:
+#
+#   from gg.httpserver import HttpServer, HttpRequest, HttpServerResponse
+#
+#   HttpServerResponse handle(HttpRequest req):
+#       if req.method == "GET" and req.path == "/hello":
+#           return HttpServerResponse.ok("Hello, World!")
+#       return HttpServerResponse.not_found()
+#
+#   async void main():
+#       HttpServer server = HttpServer.new("0.0.0.0", 8080)
+#       server.serve(handle).await()
+#
+# V1 handles connections sequentially.  See V2 notes in the plan for async/concurrent path.
+
+from std.net.socket import ServerSocket, Socket, server_socket_bind
+from std.collections import Vector, Dict
+from std.conv import int_to_str
+from std.bytes import bytes_to_str
+
+# ── Request and response types ────────────────────────────────
+
+struct HttpRequest:
+    str method          # "GET", "POST", ...
+    str path            # "/api/users"
+    str query_string    # raw query string without leading "?"
+    str http_version    # "HTTP/1.1"
+    Dict[str, str] headers   # lowercase header names
+    str body
+
+struct HttpServerResponse:
+    int status_code
+    str body
+    str content_type
+
+equip HttpServerResponse:
+    HttpServerResponse ok(str body) = HttpServerResponse(200, body, "text/plain")
+    HttpServerResponse html(str body) = HttpServerResponse(200, body, "text/html")
+    HttpServerResponse json(str body) = HttpServerResponse(200, body, "application/json")
+    HttpServerResponse not_found() = HttpServerResponse(404, "Not Found", "text/plain")
+    HttpServerResponse bad_request(str msg) = HttpServerResponse(400, msg, "text/plain")
+    HttpServerResponse internal_error(str msg) = HttpServerResponse(500, msg, "text/plain")
+
+    str status_text(self):
+        int sc = self.status_code
+        if sc == 200:
+            return "OK"
+        elif sc == 201:
+            return "Created"
+        elif sc == 204:
+            return "No Content"
+        elif sc == 301:
+            return "Moved Permanently"
+        elif sc == 302:
+            return "Found"
+        elif sc == 400:
+            return "Bad Request"
+        elif sc == 401:
+            return "Unauthorized"
+        elif sc == 403:
+            return "Forbidden"
+        elif sc == 404:
+            return "Not Found"
+        elif sc == 405:
+            return "Method Not Allowed"
+        elif sc == 500:
+            return "Internal Server Error"
+        elif sc == 502:
+            return "Bad Gateway"
+        elif sc == 503:
+            return "Service Unavailable"
+        return "Unknown"
+
+# ── Request parser ────────────────────────────────────────────
+
+Result[HttpRequest, str] http_server_parse_request(Socket &conn):
+    # Request line: "METHOD /path?query HTTP/1.1"
+    str req_line = conn.read_line()?
+
+    Option[int] sp1_opt = req_line.index_of(" ")
+    if sp1_opt.is_none():
+        return Error("malformed request line")
+    int sp1 = sp1_opt.unwrap()
+    str req_method = req_line.byte_slice(0, sp1)
+    str req_rest = req_line.byte_slice(sp1 + 1, req_line.byte_len())
+
+    Option[int] sp2_opt = req_rest.index_of(" ")
+    if sp2_opt.is_none():
+        return Error("malformed request line")
+    int sp2 = sp2_opt.unwrap()
+    str raw_path = req_rest.byte_slice(0, sp2)
+    str req_version = req_rest.byte_slice(sp2 + 1, req_rest.byte_len())
+
+    # Split path at "?"
+    str req_path = raw_path
+    str req_query = ""
+    Option[int] qm_opt = raw_path.index_of("?")
+    if qm_opt.is_some():
+        int qm = qm_opt.unwrap()
+        req_path = raw_path.byte_slice(0, qm)
+        req_query = raw_path.byte_slice(qm + 1, raw_path.byte_len())
+
+    # Headers (read until blank line)
+    Dict[str, str] req_headers = Dict[str, str]()
+    bool reading_headers = true
+    while reading_headers:
+        str hdr_line = conn.read_line()?
+        if hdr_line == "":
+            reading_headers = false
+        else:
+            Option[int] colon_opt = hdr_line.index_of(":")
+            if colon_opt.is_some():
+                int colon = colon_opt.unwrap()
+                str hdr_name = hdr_line.byte_slice(0, colon).trim().to_lower()
+                str hdr_val = hdr_line.byte_slice(colon + 1, hdr_line.byte_len()).trim()
+                req_headers.put(hdr_name, hdr_val)
+
+    # Body (only if Content-Length present)
+    str req_body = ""
+    if req_headers.contains("content-length"):
+        str cl_str = req_headers["content-length"]
+        Option[int] cl_opt = int.parse(cl_str)
+        if cl_opt is Some(cl_v):
+            if cl_v > 0:
+                Vector[uint8] body_bytes = conn.read_exact(cl_v)
+                Result[str, str] body_r = bytes_to_str(body_bytes)
+                if body_r.is_ok():
+                    req_body = body_r.unwrap()
+
+    return Ok(HttpRequest(req_method, req_path, req_query, req_version, req_headers, req_body))
+
+# ── Response writer ───────────────────────────────────────────
+
+void http_server_write_response(Socket &conn, HttpServerResponse resp):
+    str status_line = "HTTP/1.1 " + int_to_str(resp.status_code) + " " + resp.status_text() + "\r\n"
+    str body_len = int_to_str(resp.body.byte_len())
+    conn.write_str(status_line)
+    conn.write_str("Content-Type: " + resp.content_type + "\r\n")
+    conn.write_str("Content-Length: " + body_len + "\r\n")
+    conn.write_str("Connection: close\r\n\r\n")
+    conn.write_str(resp.body)
+
+# ── Connection handler ────────────────────────────────────────
+
+void http_server_handle_conn(Socket conn, Callable[HttpServerResponse(HttpRequest)] handler):
+    Result[HttpRequest, str] r = http_server_parse_request(&conn)
+    match r:
+        case Ok(req):
+            HttpServerResponse resp = handler(req)
+            http_server_write_response(&conn, resp)
+        case Error(e):
+            http_server_write_response(&conn, HttpServerResponse.bad_request(e))
+    conn.close()
+
+# ── HttpServer ────────────────────────────────────────────────
+
+struct HttpServer:
+    str host
+    int port
+
+equip HttpServer:
+    HttpServer new(str host, int port) = HttpServer(host, port)
+
+    # Bind and accept connections in a loop, calling handler for each.
+    # V1: sequential (one connection at a time).
+    # Returns only on bind error.
+    async void serve(self, Callable[HttpServerResponse(HttpRequest)] handler):
+        Result[ServerSocket, str] bind_r = server_socket_bind(self.host, self.port)
+        if bind_r.is_err():
+            return
+        ServerSocket srv = bind_r.unwrap()
+        loop:
+            Result[Socket, str] ar = srv.accept()
+            if ar.is_ok():
+                Socket client = ar.unwrap()
+                http_server_handle_conn(client, handler)

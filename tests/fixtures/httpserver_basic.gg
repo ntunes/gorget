@@ -1,0 +1,36 @@
+from gg.httpserver import HttpServerResponse, HttpRequest
+from gg.httpserver import http_server_parse_request, http_server_write_response
+from std.net.socket import ServerSocket, Socket, server_socket_bind, socket_connect
+from std.time import sleep
+
+HttpServerResponse handle(HttpRequest req):
+    if req.path == "/hello":
+        return HttpServerResponse.ok("world")
+    return HttpServerResponse.not_found()
+
+async void serve_once(int port):
+    ServerSocket srv = server_socket_bind("127.0.0.1", port).unwrap()
+    Socket client = srv.accept().unwrap()
+    srv.close()
+    Result[HttpRequest, str] r = http_server_parse_request(&client)
+    match r:
+        case Ok(req):
+            http_server_write_response(&client, handle(req))
+        case Error(e):
+            http_server_write_response(&client, HttpServerResponse.bad_request(e))
+    client.close()
+
+async void main():
+    int port = 18081
+    Task[void] t = spawn serve_once(port)
+    sleep(0.05).await()
+
+    Socket c = socket_connect("127.0.0.1", port).unwrap()
+    c.write_str("GET /hello HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+    str status_line = c.read_line().unwrap()
+    c.close()
+
+    t.await()
+
+    print(status_line.starts_with("HTTP/1.1 200"))
+    print("done")

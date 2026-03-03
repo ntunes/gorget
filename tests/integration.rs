@@ -4126,6 +4126,16 @@ done",
 }
 
 #[test]
+fn httpserver_basic() {
+    run_gg(
+        "httpserver_basic.gg",
+        "\
+true
+done",
+    );
+}
+
+#[test]
 fn udp_echo() {
     run_gg(
         "udp_echo.gg",

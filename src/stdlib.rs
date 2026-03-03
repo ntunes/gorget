@@ -69,7 +69,7 @@ pub fn is_builtin_module(segments: &[String]) -> bool {
         },
         Some("gg") => segments.len() == 2 && matches!(segments[1].as_str(),
             "json" | "toml" | "xml" | "yaml" | "csv" | "crypto" | "regex"
-            | "sdl" | "gfx" | "ecs" | "ssh" | "http" | "p2p"
+            | "sdl" | "gfx" | "ecs" | "ssh" | "http" | "httpserver" | "p2p"
             | "uuid" | "log" | "cli" | "tensor" | "dataframe"),
         _ => false,
     }
@@ -120,8 +120,9 @@ pub fn generate_builtin_module(segments: &[String]) -> Option<Module> {
             "gfx" => None,  // file-based module — loaded via builtin_module_source()
             "ecs" => None,  // file-based module — loaded via builtin_module_source()
             "ssh" => None,  // file-based module — loaded via builtin_module_source()
-            "http" => None, // file-based module — loaded via builtin_module_source()
-            "p2p" => None,  // file-based module — loaded via builtin_module_source()
+            "http" => None,       // file-based module — loaded via builtin_module_source()
+            "httpserver" => None, // file-based module — loaded via builtin_module_source()
+            "p2p" => None,        // file-based module — loaded via builtin_module_source()
             "uuid" => None, // file-based module — loaded via builtin_module_source()
             "log" => None,  // file-based module — loaded via builtin_module_source()
             "cli" => None,  // file-based module — loaded via builtin_module_source()
@@ -868,6 +869,7 @@ pub fn builtin_module_source(segments: &[String]) -> Option<&'static str> {
             Some("ecs") => Some(include_str!("../lib/gg/ecs.gg")),
             Some("ssh") => Some(include_str!("../lib/gg/ssh.gg")),
             Some("http") => Some(include_str!("../lib/gg/http.gg")),
+            Some("httpserver") => Some(include_str!("../lib/gg/httpserver.gg")),
             Some("json") => Some(include_str!("../lib/gg/json.gg")),
             Some("toml") => Some(include_str!("../lib/gg/toml.gg")),
             Some("xml") => Some(include_str!("../lib/gg/xml.gg")),
@@ -1110,6 +1112,10 @@ fn gen_socket_module() -> Module {
         name: Spanned::dummy("Socket".to_string()),
         generic_args: vec![],
     };
+    let ty_server_socket = || Type::Named {
+        name: Spanned::dummy("ServerSocket".to_string()),
+        generic_args: vec![],
+    };
 
     let mut items: Vec<Spanned<Item>> = Vec::new();
 
@@ -1130,6 +1136,21 @@ fn gen_socket_module() -> Module {
         extern_method("read_line", Ownership::MutableBorrow, &[], ty_result(ty_string(), ty_str()), "gorget_socket_read_line"),
         extern_method("set_timeout", Ownership::MutableBorrow, &[("ms", ty_int())], ty_void(), "gorget_socket_set_timeout"),
         extern_method("close", Ownership::MutableBorrow, &[], ty_void(), "gorget_socket_close"),
+    ]));
+
+    // Opaque struct: ServerSocket
+    items.push(opaque_struct("ServerSocket"));
+
+    // Free function: server_socket_bind(host, port) -> Result[ServerSocket, str]
+    items.push(Spanned::dummy(Item::Function(
+        decl_fn("server_socket_bind", &[("host", ty_str()), ("port", ty_int())], ty_result(ty_server_socket(), ty_str())),
+    )));
+
+    // ServerSocket methods — extern bindings
+    // accept() returns a Result[Socket, str]: the accepted client reuses all Socket methods.
+    items.push(equip_block("ServerSocket", vec![
+        extern_method("accept", Ownership::MutableBorrow, &[], ty_result(ty_socket(), ty_str()), "gorget_server_socket_accept"),
+        extern_method("close", Ownership::MutableBorrow, &[], ty_void(), "gorget_server_socket_close"),
     ]));
 
     Module {
@@ -2066,11 +2087,14 @@ mod tests {
             }
         }
         assert!(struct_names.contains(&"Socket".to_string()));
+        assert!(struct_names.contains(&"ServerSocket".to_string()));
         assert!(fn_names.contains(&"socket_connect".to_string()));
-        assert_eq!(equip_count, 1);
+        assert!(fn_names.contains(&"server_socket_bind".to_string()));
+        assert_eq!(equip_count, 2); // Socket + ServerSocket
         assert!(equip_method_names.contains(&"read".to_string()));
         assert!(equip_method_names.contains(&"write".to_string()));
         assert!(equip_method_names.contains(&"close".to_string()));
+        assert!(equip_method_names.contains(&"accept".to_string()));
     }
 
     #[test]

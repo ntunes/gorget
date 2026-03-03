@@ -4,6 +4,14 @@
 
 ## Medium
 
+- **`gg.httpserver` V2 — non-blocking sockets + async handlers**: Blocked on `GorgetSocket` having no `poll`/`epoll`/`kqueue` integration — reads and writes block the calling thread. Needs `gorget_socket_set_nonblocking()` + fd registration with the existing reactor (epoll fd on Linux, kqueue on macOS), and a `GorgetWaker` protocol extension for readable/writable events. API impact: handler type becomes `async Callable[HttpServerResponse(HttpRequest)]` — one-word change for users. [added: 2026-03-03]
+
+- **`gg.httpserver` V2 — keep-alive / connection reuse**: Current V1 sends `Connection: close` after every response. Future: parse `Connection: keep-alive` + `Keep-Alive: timeout=N`, loop parse→handle→write on the same socket, close on timeout or `Connection: close`. Blocked on async handler signatures (above). [added: 2026-03-03]
+
+- **`gg.httpserver` V2 — TLS server (HTTPS)**: Blocked on no `SSL_accept()` path — `gorget_tls_connect` is client-only (calls `SSL_connect`). Needs `gorget_tls_server_accept(GorgetServerSocket*, SSL_CTX*)` in the TLS runtime + `tls_server_bind(host, port, cert_path, key_path)` exposed in `std.net.tls`. API: `HttpServer.new_tls(host, port, cert, key)` constructor variant. [added: 2026-03-03]
+
+- **`gg.httpserver` V2 — request routing DSL**: Build on top of V1. `server.get("/hello", handle_hello)` / `server.post("/api/data", handle_post)` API. Needs `Dict[str, Dict[str, Box[Callable[...]]]]` (method → path → handler). No language blockers. [added: 2026-03-03]
+
 - **`std.datetime`: `dt_days_from_epoch` pre-epoch bug**: The while loop `while dt_y < dt_year` in `lib/std/datetime.gg:50` never executes for years < 1970, so `dt_days_from_epoch(1969, 12, 31)` returns 364 instead of -1. The `add_days(-1)` test in `datetime_basic.gg` works correctly because it goes through `to_epoch` → C's `gmtime_r` (which handles negative offsets correctly), not through `dt_days_from_epoch` directly. Fix: use signed arithmetic for the loop counter. [added: 2026-03-03]
 
 - **Module-scoped names (proper namespaces)**: File-based modules currently merge all top-level names into a flat namespace, requiring manual prefixing (`md_`, `csv_`, `enc_`, `xml_`, `yaml_`) to avoid collisions. Every stdlib module does this — it's the C convention. The fix: each file-based module should keep its own scope. `from X import Y` pulls specific names into the caller's scope; `import X` enables qualified access (`X.name`); private helpers (no `public`) stay hidden. The compiler already has `from X import Y` syntax — the missing piece is that the merged AST flattens everything rather than preserving module boundaries. Scope resolution, name resolution, and possibly codegen for qualified access would need changes. Once implemented, all stdlib module prefixes (`md_`, `csv_`, `enc_`, etc.) can be mechanically removed in one pass. [added: 2026-02-26]
