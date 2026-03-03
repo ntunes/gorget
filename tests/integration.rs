@@ -6708,6 +6708,16 @@ fn shared_struct() {
 }
 
 #[test]
+fn shared_vector_elem() {
+    run_gg("shared_vector_elem.gg", "3\n10\n30\n99\n42\n2");
+}
+
+#[test]
+fn generic_op_smoke() {
+    run_gg("generic_op_smoke.gg", "13\n7\n30\n15");
+}
+
+#[test]
 fn async_reactor_sleep() {
     run_gg("async_reactor_sleep.gg", "sleep works\ndone");
 }
@@ -6790,6 +6800,214 @@ fn process_spawn() {
 fn process_pipe() {
     // cat echoes stdin back; write_stdin adds \n, print(out) adds another \n
     run_gg("process_pipe.gg", "hello from gorget\n\n0");
+}
+
+// ═══════════════════════════════════════════════════════════════
+// gg.tensor integration tests
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn tensor_basic() {
+    run_gg(
+        "tensor_basic.gg",
+        "\
+Tensor(shape=[6], [0, 1, 2, 3, 4, 5])
+Tensor(shape=[2,3], [0, 1, 2, 3, 4, 5])
+2
+Tensor(shape=[3], [0, 0, 0])
+Tensor(shape=[3], [1, 1, 1])
+6
+2
+5
+1
+99",
+    );
+}
+
+#[test]
+fn tensor_arithmetic() {
+    run_gg(
+        "tensor_arithmetic.gg",
+        "\
+Tensor(shape=[4], [1, 3, 5, 7])
+Tensor(shape=[4], [1, 1, 1, 1])
+Tensor(shape=[4], [0, 2, 6, 12])
+Tensor(shape=[4], [0, -1, -2, -3])
+Tensor(shape=[4], [10, 11, 12, 13])
+Tensor(shape=[4], [3, 6, 9, 12])
+Tensor(shape=[4], [3, 5, 7, 9])
+Tensor(shape=[4], [2, 6, 12, 20])
+Tensor(shape=[4], [11, 12, 13, 14])
+Tensor(shape=[4], [2, 4, 6, 8])",
+    );
+}
+
+#[test]
+fn tensor_broadcast() {
+    run_gg(
+        "tensor_broadcast.gg",
+        "\
+Tensor(shape=[4], [1, 2, 3, 4])
+Tensor(shape=[4], [10, 12, 14, 16])
+3
+4
+Tensor(shape=[4], [10, 10, 10, 10])
+Tensor(shape=[4], [0, 11, 24, 39])
+Tensor(shape=[4], [2, 3, 4, 5])",
+    );
+}
+
+#[test]
+fn tensor_reshape() {
+    run_gg(
+        "tensor_reshape.gg",
+        "\
+Tensor(shape=[2,3], [0, 1, 2, 3, 4, 5])
+5
+2
+3
+2
+3
+2
+1
+3
+42
+Tensor(shape=[2,3], [0, 1, 2, 3, 4, 5])",
+    );
+}
+
+#[test]
+fn tensor_reduce() {
+    run_gg(
+        "tensor_reduce.gg",
+        "\
+10
+0
+4
+15.000000
+1.000000
+5.000000
+3.000000
+Tensor(shape=[3], [3, 5, 7])
+Tensor(shape=[2], [3, 12])
+Tensor(shape=[2], [3, 12])",
+    );
+}
+
+#[test]
+fn tensor_linalg() {
+    run_gg(
+        "tensor_linalg.gg",
+        "\
+8
+Tensor(shape=[2,2], [10, 13, 28, 40])
+14.000000
+true
+true
+true
+true",
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════
+// gg.dataframe integration tests
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn dataframe_basic() {
+    run_gg(
+        "dataframe_basic.gg",
+        "\
+3
+3
+true
+false
+25
+35
+int
+Bob
+2
+1
+Charlie",
+    );
+}
+
+#[test]
+fn dataframe_filter() {
+    run_gg(
+        "dataframe_filter.gg",
+        "\
+2
+4
+2
+2
+Bob
+Charlie
+3
+Bob
+1
+25",
+    );
+}
+
+#[test]
+fn dataframe_agg() {
+    run_gg(
+        "dataframe_agg.gg",
+        "\
+100
+25
+10
+40
+4
+10
+2.5
+2",
+    );
+}
+
+#[test]
+fn dataframe_transform() {
+    run_gg(
+        "dataframe_transform.gg",
+        "\
+20
+25
+30
+30
+3
+60
+3",
+    );
+}
+
+#[test]
+fn dataframe_groupby() {
+    run_gg(
+        "dataframe_groupby.gg",
+        "\
+2
+10
+5
+3",
+    );
+}
+
+#[test]
+fn dataframe_csv() {
+    run_gg(
+        "dataframe_csv.gg",
+        "\
+3
+3
+int
+25
+float
+9
+Charlie
+3
+3",
+    );
 }
 
 // Parser Comparison Test

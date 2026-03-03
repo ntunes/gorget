@@ -1,0 +1,59 @@
+from gg.dataframe import DataFrame, Column, col_from_ints, col_from_strs, df_from_columns, df_group_by, df_inner_join, df_concat
+
+void main():
+    Vector[str] names = Vector[str]()
+    names.push("Alice")
+    names.push("Bob")
+    names.push("Alice")
+    names.push("Bob")
+    names.push("Alice")
+
+    Vector[int] vals = Vector[int]()
+    vals.push(10)
+    vals.push(20)
+    vals.push(30)
+    vals.push(40)
+    vals.push(50)
+
+    Vector[str] col_names = Vector[str]()
+    col_names.push("name")
+    col_names.push("val")
+
+    Vector[Column] cols = Vector[Column]()
+    cols.push(col_from_strs(names))
+    cols.push(col_from_ints(vals))
+
+    DataFrame df = df_from_columns(col_names, cols)
+
+    # groupby + sum
+    str name_col = "name"
+    str val_col = "val"
+    DataFrame agg = df_group_by(df, name_col).agg(val_col, "sum")
+    print("{agg.nrows()}")
+
+    # concat
+    DataFrame df2 = df_concat(df, df)
+    print("{df2.nrows()}")
+
+    # inner join
+    Vector[str] right_names = Vector[str]()
+    right_names.push("Alice")
+    right_names.push("Bob")
+
+    Vector[int] ranks = Vector[int]()
+    ranks.push(1)
+    ranks.push(2)
+
+    Vector[str] right_cols_names = Vector[str]()
+    right_cols_names.push("name")
+    right_cols_names.push("rank")
+
+    Vector[Column] right_cols = Vector[Column]()
+    right_cols.push(col_from_strs(right_names))
+    right_cols.push(col_from_ints(ranks))
+
+    DataFrame right = df_from_columns(right_cols_names, right_cols)
+
+    DataFrame joined = df_inner_join(df, right, name_col)
+    print("{joined.nrows()}")
+    print("{joined.ncols()}")

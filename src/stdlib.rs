@@ -70,7 +70,7 @@ pub fn is_builtin_module(segments: &[String]) -> bool {
         Some("gg") => segments.len() == 2 && matches!(segments[1].as_str(),
             "json" | "toml" | "xml" | "yaml" | "csv" | "crypto" | "regex"
             | "sdl" | "gfx" | "ecs" | "ssh" | "http" | "p2p"
-            | "uuid" | "log" | "cli"),
+            | "uuid" | "log" | "cli" | "tensor" | "dataframe"),
         _ => false,
     }
 }
@@ -125,6 +125,8 @@ pub fn generate_builtin_module(segments: &[String]) -> Option<Module> {
             "uuid" => None, // file-based module — loaded via builtin_module_source()
             "log" => None,  // file-based module — loaded via builtin_module_source()
             "cli" => None,  // file-based module — loaded via builtin_module_source()
+            "tensor" => None,    // file-based module — loaded via builtin_module_source()
+            "dataframe" => None, // file-based module — loaded via builtin_module_source()
             _ => None,
         },
         _ => None,
@@ -879,6 +881,8 @@ pub fn builtin_module_source(segments: &[String]) -> Option<&'static str> {
             Some("uuid") => Some(include_str!("../lib/gg/uuid.gg")),
             Some("log") => Some(include_str!("../lib/gg/log.gg")),
             Some("cli") => Some(include_str!("../lib/gg/cli.gg")),
+            Some("tensor") => Some(include_str!("../lib/gg/tensor.gg")),
+            Some("dataframe") => Some(include_str!("../lib/gg/dataframe.gg")),
             _ => None,
         },
         _ => None,
@@ -2565,6 +2569,66 @@ mod tests {
         assert!(fn_names.contains(&"csv_parse_table".to_string()));
         assert!(fn_names.contains(&"csv_stringify_table".to_string()));
         assert!(equip_count >= 2, "expected at least 2 equip blocks, got {equip_count}");
+    }
+
+    // ─── gg.tensor ────────────────────────────────────────────
+
+    #[test]
+    fn is_builtin_tensor() {
+        assert!(is_builtin_module(&["gg".into(), "tensor".into()]));
+    }
+
+    #[test]
+    fn generate_tensor_returns_none() {
+        assert!(generate_builtin_module(&["gg".into(), "tensor".into()]).is_none());
+    }
+
+    #[test]
+    fn tensor_module_source_exists() {
+        let source = builtin_module_source(&["gg".into(), "tensor".into()]);
+        assert!(source.is_some());
+        let src = source.unwrap();
+        assert!(src.contains("struct Tensor"));
+        assert!(src.contains("tensor_arange"));
+        assert!(src.contains("tensor_zeros_int"));
+    }
+
+    #[test]
+    fn tensor_source_parses() {
+        let source = builtin_module_source(&["gg".into(), "tensor".into()]).unwrap();
+        let mut parser = crate::parser::Parser::new(source);
+        let _module = parser.parse_module();
+        assert!(parser.errors.is_empty(), "tensor.gg parse errors: {:?}", parser.errors);
+    }
+
+    // ─── gg.dataframe ─────────────────────────────────────────
+
+    #[test]
+    fn is_builtin_dataframe() {
+        assert!(is_builtin_module(&["gg".into(), "dataframe".into()]));
+    }
+
+    #[test]
+    fn generate_dataframe_returns_none() {
+        assert!(generate_builtin_module(&["gg".into(), "dataframe".into()]).is_none());
+    }
+
+    #[test]
+    fn dataframe_module_source_exists() {
+        let source = builtin_module_source(&["gg".into(), "dataframe".into()]);
+        assert!(source.is_some());
+        let src = source.unwrap();
+        assert!(src.contains("struct DataFrame"));
+        assert!(src.contains("df_from_columns"));
+        assert!(src.contains("df_from_csv"));
+    }
+
+    #[test]
+    fn dataframe_source_parses() {
+        let source = builtin_module_source(&["gg".into(), "dataframe".into()]).unwrap();
+        let mut parser = crate::parser::Parser::new(source);
+        let _module = parser.parse_module();
+        assert!(parser.errors.is_empty(), "dataframe.gg parse errors: {:?}", parser.errors);
     }
 
     // ─── gg.uuid ──────────────────────────────────────────────

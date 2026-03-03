@@ -794,7 +794,20 @@ fn lower_struct_literal(
             tid
         };
         let new_fn = format!("{shared_mangled}__new");
-        let dst = builder.call(&new_fn, vec![val_op], shared_type);
+        let dst = builder.call(&new_fn, vec![val_op.clone()], shared_type);
+        // Shared[T](v) takes ownership of v's data via a shallow memcpy into the shared
+        // block. If v is a Move-semantics local (e.g. Vector/GorgetArray), mark it as
+        // moved so the drop elaborator emits a null-guarded DropIfAlive instead of an
+        // unconditional gorget_array_free — otherwise the shared block would hold a
+        // dangling data pointer.
+        if let Operand::Copy(place) = &val_op {
+            if place.projections.is_empty() {
+                if is_gorget_array_local(place.local, builder, &ctx.type_registry) {
+                    builder.move_zero(place.clone());
+                    ctx.drops.mark_moved(place.local);
+                }
+            }
+        }
         return FunctionBuilder::copy(dst);
     }
 
@@ -924,7 +937,23 @@ fn lower_struct_literal(
         .collect();
 
     let type_id = ctx.type_mapper.lookup_named(&effective_name).unwrap_or(UNIT_TYPE);
-    let dst = builder.struct_init(&effective_name, type_id, field_operands);
+    let dst = builder.struct_init(&effective_name, type_id, field_operands.clone());
+
+    // After struct init, the struct owns a shallow copy of every GorgetArray field.
+    // Without marking the originals as moved, the drop elaborator would emit
+    // gorget_array_free on those locals at scope exit, leaving the struct's fields
+    // with dangling data pointers. Emit MoveZero + mark_moved for each such local.
+    for op in &field_operands {
+        if let Operand::Copy(place) = op {
+            if place.projections.is_empty()
+                && is_gorget_array_local(place.local, builder, &ctx.type_registry)
+            {
+                builder.move_zero(place.clone());
+                ctx.drops.mark_moved(place.local);
+            }
+        }
+    }
+
     FunctionBuilder::copy(dst)
 }
 
@@ -1520,6 +1549,27 @@ fn lower_method_call(
                         };
                         let downgrade_fn = format!("{stn}__downgrade");
                         let dst = builder.call(&downgrade_fn, vec![recv], weak_type);
+                        return FunctionBuilder::copy(dst);
+                    }
+                    // Shared[Vector[T]] element access — at/set_at/slen
+                    "at" if elem_suffix.starts_with("Vector__") => {
+                        let inner_elem = elem_suffix.strip_prefix("Vector__").unwrap_or("int64_t");
+                        let elem_type = ctx.type_mapper.lookup_named(inner_elem).unwrap_or(I64_TYPE);
+                        let idx = lower_expr(ctx, builder, &args[0].node.value);
+                        let at_fn = format!("{stn}__at");
+                        let dst = builder.call(&at_fn, vec![recv, idx], elem_type);
+                        return FunctionBuilder::copy(dst);
+                    }
+                    "set_at" if elem_suffix.starts_with("Vector__") => {
+                        let idx = lower_expr(ctx, builder, &args[0].node.value);
+                        let val = lower_expr(ctx, builder, &args[1].node.value);
+                        let set_fn = format!("{stn}__set_at");
+                        builder.call_void(&set_fn, vec![recv, idx, val]);
+                        return Operand::Constant(Constant::Unit);
+                    }
+                    "slen" if elem_suffix.starts_with("Vector__") => {
+                        let slen_fn = format!("{stn}__slen");
+                        let dst = builder.call(&slen_fn, vec![recv], I64_TYPE);
                         return FunctionBuilder::copy(dst);
                     }
                     _ => {}
@@ -3697,7 +3747,17 @@ fn lower_call(
                         tid
                     };
                     let new_fn = format!("{mangled}__new");
-                    let dst = builder.call(&new_fn, vec![val_op], shared_type);
+                    let dst = builder.call(&new_fn, vec![val_op.clone()], shared_type);
+                    // Shared[T](v) takes ownership of v's data. Mark GorgetArray locals
+                    // as moved so the drop elaborator skips them (avoids dangling ptr).
+                    if let Operand::Copy(place) = &val_op {
+                        if place.projections.is_empty()
+                            && is_gorget_array_local(place.local, builder, &ctx.type_registry)
+                        {
+                            builder.move_zero(place.clone());
+                            ctx.drops.mark_moved(place.local);
+                        }
+                    }
                     return FunctionBuilder::copy(dst);
                 }
             }
@@ -5381,6 +5441,22 @@ pub fn infer_operand_type(ctx: &LoweringContext, operand: &Operand) -> TypeId {
             Constant::GlobalRef(_) => UNIT_TYPE, // type looked up from global table at call site
         },
     }
+}
+
+/// Returns true if `local` has a GorgetArray-backed type (i.e. Vector[T] or the raw
+/// GorgetArray alias). These are the only Move-semantics types that get a shallow
+/// struct copy when placed into another struct's field — marking them as moved after
+/// the copy prevents the drop elaborator from emitting a double-free.
+fn is_gorget_array_local(
+    local: LocalId,
+    builder: &FunctionBuilder,
+    registry: &TypeRegistry,
+) -> bool {
+    let type_id = builder.locals[local.0 as usize].type_id;
+    if let Some(GirType::Named(name)) = registry.get(type_id) {
+        return name.starts_with("GorgetArray") || name.starts_with("Vector__");
+    }
+    false
 }
 
 #[cfg(test)]

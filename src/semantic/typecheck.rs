@@ -2623,7 +2623,7 @@ impl<'a> TypeChecker<'a> {
                 _ => None,
             },
             "Dict" | "HashMap" => match method {
-                "put" | "update" => Some(self.types.void_id),
+                "put" | "update" | "set" => Some(self.types.void_id),
                 "get" => {
                     if let Some(option_def_id) = self.scopes.lookup("Option") {
                         Some(self.types.insert(ResolvedType::Generic(option_def_id, vec![val_type()])))
@@ -2632,7 +2632,7 @@ impl<'a> TypeChecker<'a> {
                     }
                 }
                 "get_or" | "get_or_put" => Some(val_type()),
-                "contains" => Some(self.types.bool_id),
+                "contains" | "has" => Some(self.types.bool_id),
                 "len" => Some(self.types.int_id),
                 "remove" => Some(self.types.bool_id),
                 "clear" => Some(self.types.void_id),
@@ -2772,6 +2772,18 @@ impl<'a> TypeChecker<'a> {
                         Some(receiver_type)
                     }
                 }
+                // Shared[Vector[T]] element access: at(i) → T, set_at(i, val) → void, slen() → int
+                "at" => {
+                    // elem_type() is Vector[T]; we need T (the inner element type of the Vector)
+                    let inner_vec = elem_type();
+                    if let ResolvedType::Generic(_, inner_args) = self.types.get(inner_vec).clone() {
+                        inner_args.first().copied()
+                    } else {
+                        Some(self.types.int_id)
+                    }
+                }
+                "set_at" => Some(self.types.void_id),
+                "slen" => Some(self.types.int_id),
                 _ => None,
             },
             "Weak" => match method {

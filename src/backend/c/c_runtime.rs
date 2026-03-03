@@ -2496,6 +2496,30 @@ static inline int gorget_weak_upgrade(GorgetShared* w) {
     }
     return 0;  // dead — strong already 0, data freed
 }
+
+// ── Shared[Vector[T]] element access (no-copy read/write via shared backing buffer) ──
+// These operate directly on the GorgetArray inside the shared control block,
+// avoiding the UAF that occurs when get() copies the GorgetArray struct.
+static inline void* gorget_shared_array_get(GorgetShared* s, size_t index) {
+    GorgetArray* arr = (GorgetArray*)s->data;
+    if (index >= (size_t)arr->len) {
+        fprintf(stderr, "gorget: panic: shared array index out of bounds: %zu >= %lld\n", index, (long long)arr->len);
+        exit(1);
+    }
+    return (char*)arr->data + index * arr->elem_size;
+}
+static inline void gorget_shared_array_set(GorgetShared* s, size_t index, const void* elem, size_t elem_size) {
+    GorgetArray* arr = (GorgetArray*)s->data;
+    if (index >= (size_t)arr->len) {
+        fprintf(stderr, "gorget: panic: shared array index out of bounds: %zu >= %lld\n", index, (long long)arr->len);
+        exit(1);
+    }
+    memcpy((char*)arr->data + index * elem_size, elem, elem_size);
+}
+static inline int64_t gorget_shared_array_len(GorgetShared* s) {
+    GorgetArray* arr = (GorgetArray*)s->data;
+    return arr->len;
+}
 "#;
 
 /// Mutex[T] — async-compatible mutex returning a Guard[T] RAII handle.

@@ -3175,6 +3175,150 @@ The SSH module implements the SSH-2 protocol including key exchange, encryption,
 
 Flags for `regex_compile_with`: `i` (case-insensitive), `m` (multiline), `s` (dotall), `x` (extended), `u` (Unicode), `U` (ungreedy). Requires PCRE2 (`libpcre2-8`).
 
+**`gg.tensor`** — N-dimensional numeric tensors (NumPy-equivalent)
+
+Gorget's tensor library provides strided N-dimensional arrays with O(1) view operations (reshape, transpose, slice). Tensors use `Shared[Vector[T]]` internally so views share the same backing buffer — mutations through one view are visible through all views sharing the same storage. Call `.contiguous()` for an independent deep copy.
+
+```gorget
+from gg.tensor import Tensor, tensor_arange, tensor_zeros_int, tensor_linspace,
+    tensor_display_int, tensor_matmul_int, tensor_dot_int, tensor_eq_int
+```
+
+**Construction:**
+
+| Name | Signature | Description |
+|---|---|---|
+| `tensor_arange` | `Tensor[int](int start, int stop)` | `[start, start+1, ..., stop-1]` |
+| `tensor_linspace` | `Tensor[float](float start, float stop, int num)` | Evenly spaced floats |
+| `tensor_zeros_int` | `Tensor[int](Vector[int] shape)` | All-zero int tensor |
+| `tensor_zeros_float` | `Tensor[float](Vector[int] shape)` | All-zero float tensor |
+| `tensor_ones_int` | `Tensor[int](Vector[int] shape)` | All-one int tensor |
+| `tensor_ones_float` | `Tensor[float](Vector[int] shape)` | All-one float tensor |
+| `tensor_full_int` | `Tensor[int](Vector[int] shape, int val)` | Fill with constant |
+| `tensor_full_float` | `Tensor[float](Vector[int] shape, float val)` | Fill with constant |
+
+**Introspection & Element Access (equip Tensor[T]):**
+
+| Method | Signature | Description |
+|---|---|---|
+| `tensor_shape` | `Vector[int](self)` | Shape dimensions |
+| `ndim` | `int(self)` | Number of dimensions |
+| `size` | `int(self)` | Total element count |
+| `flat_get` | `T(self, int i)` | Get element at flat index |
+| `flat_set` | `void(&self, int i, T val)` | Set element at flat index |
+| `at` | `T(self, Vector[int] indices)` | Multi-index element access |
+| `set_at` | `void(&self, Vector[int] indices, T val)` | Multi-index element write |
+
+**Arithmetic (equip Tensor[T] with Add/Sub/Mul/Div):** `a + b`, `a - b`, `a * b`, `a / b`, `-a`
+
+**Scalar ops:** `.scalar_add(v)`, `.scalar_sub(v)`, `.scalar_mul(v)`, `.scalar_div(v)`
+
+**Broadcasting:** `.broadcast_add(other)`, `.broadcast_sub(other)`, `.broadcast_mul(other)`, `.broadcast_div(other)` — NumPy-style shape broadcasting
+
+**Reductions:** `.sum_all()`, `.min_all()`, `.max_all()`, `.sum_axis(axis)`, `.min_axis(axis)`, `.max_axis(axis)`. Float-specific: `tensor_mean_all(t)`, `tensor_std_all(t)`, `tensor_mean_axis(t, axis)`
+
+**O(1) View Operations:**
+
+| Method | Signature | Description |
+|---|---|---|
+| `reshape` | `Tensor[T](self, Vector[int] new_shape)` | New shape, shared storage |
+| `transpose` | `Tensor[T](self)` | Swap first two dims (2D) |
+| `permute` | `Tensor[T](self, Vector[int] axes)` | Reorder all dimensions |
+| `tensor_slice` | `Tensor[T](self, int axis, int start, int end)` | Slice along one axis |
+| `contiguous` | `Tensor[T](self)` | Force independent copy |
+
+**Linear Algebra:**
+
+| Name | Signature | Description |
+|---|---|---|
+| `tensor_matmul_int` | `Tensor[int](Tensor[int] a, Tensor[int] b)` | Matrix multiply `[m,k] @ [k,n]` |
+| `tensor_matmul_float` | `Tensor[float](Tensor[float] a, Tensor[float] b)` | Float matmul |
+| `tensor_dot_int` | `int(Tensor[int] a, Tensor[int] b)` | 1D dot product |
+| `tensor_dot_float` | `float(Tensor[float] a, Tensor[float] b)` | 1D dot product |
+
+**Comparisons:** `tensor_eq_int`, `tensor_lt_int`, `tensor_gt_int`, `tensor_eq_float`, etc. — return `Tensor[bool]`
+
+**Display:** `tensor_display_int(t)`, `tensor_display_float(t)` — format as `Tensor(shape=[2,3], [0, 1, 2, ...])`
+
+---
+
+**`gg.dataframe`** — Tabular data manipulation (pandas-equivalent)
+
+DataFrames store heterogeneous typed columns with optional null masking. Columns can be `int`, `float`, `str`, or `bool` type.
+
+```gorget
+from gg.dataframe import DataFrame, Column, df_from_columns, df_from_csv,
+    col_from_ints, col_from_strs, col_from_floats, col_from_bools,
+    df_group_by, df_inner_join, df_concat
+```
+
+**Construction:**
+
+| Name | Signature | Description |
+|---|---|---|
+| `df_from_columns` | `DataFrame(Vector[str] names, Vector[Column] cols)` | Build from typed columns |
+| `df_from_csv` | `Result[DataFrame, str](str csv_text)` | Parse CSV with type inference |
+| `df_from_records` | `DataFrame(Vector[str] headers, Vector[Vector[str]] rows)` | Build from string rows |
+| `col_from_ints` | `Column(Vector[int] data)` | Create int column |
+| `col_from_floats` | `Column(Vector[float] data)` | Create float column |
+| `col_from_strs` | `Column(Vector[str] data)` | Create str column |
+| `col_from_bools` | `Column(Vector[bool] data)` | Create bool column |
+
+**DataFrame methods (equip DataFrame):**
+
+| Method | Signature | Description |
+|---|---|---|
+| `nrows` | `int(self)` | Row count |
+| `ncols` | `int(self)` | Column count |
+| `has_column` | `bool(self, str name)` | Column existence check |
+| `get_column` | `Column(self, str name)` | Get a column by name |
+| `column_names` | `Vector[str](self)` | All column names |
+| `head` | `DataFrame(self, int n)` | First n rows |
+| `tail` | `DataFrame(self, int n)` | Last n rows |
+| `df_slice` | `DataFrame(self, int start, int end)` | Row slice `[start, end)` |
+| `select` | `DataFrame(self, Vector[str] cols)` | Keep listed columns |
+| `drop` | `DataFrame(self, str col)` | Drop one column |
+| `rename` | `DataFrame(self, str old, str new)` | Rename column |
+| `filter_by` | `DataFrame(self, str col, str op, str val)` | Filter rows (`"=="`, `"!="`, `"<"`, `">"`, `"<="`, `">="`) |
+| `sort_by` | `DataFrame(self, str col, bool ascending)` | Sort rows |
+| `add_column` | `DataFrame(self, str name, Column col)` | Append a column |
+| `drop_column` | `DataFrame(self, str name)` | Remove a column |
+| `apply_int` | `DataFrame(self, str col, int(int) f)` | Map function over int column |
+| `apply_float` | `DataFrame(self, str col, float(float) f)` | Map function over float column |
+| `apply_str` | `DataFrame(self, str col, str(str) f)` | Map function over str column |
+| `fillna_int` | `DataFrame(self, str col, int val)` | Fill nulls in int column |
+| `fillna_float` | `DataFrame(self, str col, float val)` | Fill nulls in float column |
+| `fillna_str` | `DataFrame(self, str col, str val)` | Fill nulls in str column |
+| `dropna` | `DataFrame(self)` | Remove rows with any null |
+| `df_sum` | `str(self, str col)` | Column sum (as string) |
+| `df_mean` | `str(self, str col)` | Column mean |
+| `df_min` | `str(self, str col)` | Column minimum |
+| `df_max` | `str(self, str col)` | Column maximum |
+| `df_count` | `int(self, str col)` | Non-null count |
+| `df_std` | `str(self, str col)` | Standard deviation |
+| `describe` | `DataFrame(self)` | Summary statistics per column |
+| `value_counts` | `DataFrame(self, str col)` | Count unique values |
+
+**Column methods (equip Column):**
+
+| Method | Signature | Description |
+|---|---|---|
+| `col_len` | `int(self)` | Number of rows |
+| `dtype_name` | `str(self)` | `"int"`, `"float"`, `"str"`, or `"bool"` |
+| `value_as_str` | `str(self, int idx)` | Get value as string (`"null"` if masked) |
+| `is_null_at` | `bool(self, int idx)` | True if row is null |
+| `null_count` | `int(self)` | Number of null rows |
+
+**GroupBy & Joins:**
+
+| Name | Signature | Description |
+|---|---|---|
+| `df_group_by` | `GroupBy(DataFrame df, str col)` | Group by column |
+| `.agg` | `DataFrame(self, str target, str op)` | Aggregate groups (`"sum"`, `"mean"`, `"min"`, `"max"`, `"count"`) |
+| `df_inner_join` | `DataFrame(DataFrame left, DataFrame right, str on)` | Inner join on key column |
+| `df_concat` | `DataFrame(DataFrame a, DataFrame b)` | Vertical concat (same schema) |
+| `df_to_csv` | `str(DataFrame df)` | Serialize to CSV string |
+
 **`std.alloc`** — Memory Allocators
 
 Four allocators provide explicit control over memory allocation strategy. All share a common vtable interface and can be composed with collections via scoped binding (`with`) or per-object direction (`alloc=`). The compiler's escape analysis prevents dangling references to allocator-scoped memory at compile time.

@@ -930,8 +930,13 @@ pub fn lower_module(
 
     // Collect channel/shared/mutex element types for C backend wrapper emission
     for name in module.type_registry.all_type_def_names() {
-        // Skip template placeholders (single uppercase letter = generic param e.g. "T", "K")
-        let is_template = |elem: &str| elem.chars().all(|c| c.is_uppercase());
+        // Skip template placeholders. A type is considered abstract/generic if any
+        // `__`-separated component is entirely uppercase letters (e.g. "T", "K").
+        // This catches "T" directly as well as nested cases like "Vector__T" where
+        // the inner element `T` has not been monomorphized.
+        let is_template = |elem: &str| {
+            elem.split("__").any(|part| !part.is_empty() && part.chars().all(|c| c.is_uppercase()))
+        };
         if let Some(elem) = name.strip_prefix("Channel__") {
             if !is_template(elem) && !module.channel_types.contains(&elem.to_string()) {
                 module.channel_types.push(elem.to_string());

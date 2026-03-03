@@ -1,0 +1,17 @@
+from std.collections import Vector
+
+void main():
+    Vector[int] v = Vector[int]()
+    v.push(10)
+    v.push(20)
+    v.push(30)
+    Shared[Vector[int]] s = Shared[Vector[int]](v)
+    print("{s.slen()}")
+    print("{s.at(0)}")
+    print("{s.at(2)}")
+    s.set_at(1, 99)
+    print("{s.at(1)}")
+    Shared[Vector[int]] s2 = s.clone()
+    s2.set_at(0, 42)
+    print("{s.at(0)}")
+    print("{s.strong_count()}")

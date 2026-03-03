@@ -1,0 +1,50 @@
+from gg.dataframe import DataFrame, Column, df_from_columns, col_from_ints, col_from_strs, col_from_floats
+
+void main():
+    Vector[int] ages = Vector[int]()
+    ages.push(20)
+    ages.push(30)
+    ages.push(40)
+    ages.push(10)
+
+    Vector[float] scores = Vector[float]()
+    scores.push(1.0)
+    scores.push(2.0)
+    scores.push(3.0)
+    scores.push(4.0)
+
+    Vector[str] names = Vector[str]()
+    names.push("Alice")
+    names.push("Bob")
+    names.push("Alice")
+    names.push("Bob")
+
+    Vector[str] col_names = Vector[str]()
+    col_names.push("name")
+    col_names.push("age")
+    col_names.push("score")
+
+    Vector[Column] cols = Vector[Column]()
+    cols.push(col_from_strs(names))
+    cols.push(col_from_ints(ages))
+    cols.push(col_from_floats(scores))
+
+    DataFrame df = df_from_columns(col_names, cols)
+
+    # sum / mean / min / max / count
+    str age_col = "age"
+    str score_col = "score"
+    str name_col = "name"
+    print("{df.df_sum(age_col)}")
+    print("{df.df_mean(age_col)}")
+    print("{df.df_min(age_col)}")
+    print("{df.df_max(age_col)}")
+    print("{df.df_count(age_col)}")
+
+    # float aggregations
+    print("{df.df_sum(score_col)}")
+    print("{df.df_mean(score_col)}")
+
+    # value_counts
+    DataFrame vc = df.value_counts(name_col)
+    print("{vc.nrows()}")

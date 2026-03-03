@@ -2998,6 +2998,43 @@ impl<'m> Interpreter<'m> {
             }
             return Ok(Some(Value::Null));
         }
+        // Shared__Vector__T__at(shared_ptr, i) → element at index i of inner Vector
+        if name.starts_with("Shared__Vector__") && name.ends_with("__at") {
+            let ptr = args.get(0).cloned().unwrap_or(Value::Null);
+            let idx = args.get(1).cloned().unwrap_or(Value::I64(0)).as_i64();
+            if let Some(arr) = self.get_array_from_value(&ptr) {
+                if idx >= 0 && (idx as usize) < arr.len() {
+                    return Ok(Some(arr.get(idx as usize).unwrap_or(Value::Unit)));
+                } else {
+                    return Err(super::SimError::Panic(format!(
+                        "gorget: panic: shared array index out of bounds: {} >= {}", idx, arr.len()
+                    )));
+                }
+            }
+            return Ok(Some(Value::Unit));
+        }
+        // Shared__Vector__T__set_at(shared_ptr, i, val) → write element at index i
+        if name.starts_with("Shared__Vector__") && name.ends_with("__set_at") {
+            let ptr = args.get(0).cloned().unwrap_or(Value::Null);
+            let idx = args.get(1).cloned().unwrap_or(Value::I64(0)).as_i64();
+            let val = args.get(2).cloned().unwrap_or(Value::Unit);
+            if let Some(arr) = self.get_array_from_value(&ptr) {
+                if idx >= 0 && (idx as usize) < arr.len() {
+                    arr.set(idx as usize, val);
+                } else {
+                    return Err(super::SimError::Panic(format!(
+                        "gorget: panic: shared array index out of bounds: {} >= {}", idx, arr.len()
+                    )));
+                }
+            }
+            return Ok(Some(Value::Unit));
+        }
+        // Shared__Vector__T__slen(shared_ptr) → length of inner Vector
+        if name.starts_with("Shared__Vector__") && name.ends_with("__slen") {
+            let ptr = args.get(0).cloned().unwrap_or(Value::Null);
+            let len = self.get_array_from_value(&ptr).map(|a| a.len()).unwrap_or(0);
+            return Ok(Some(Value::I64(len as i64)));
+        }
         // Shared__T__set(shared_ptr, val) → write to heap
         if name.starts_with("Shared__") && name.ends_with("__set") {
             let ptr = args.get(0).cloned().unwrap_or(Value::Null);

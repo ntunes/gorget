@@ -1,0 +1,39 @@
+from gg.tensor import Tensor, tensor_arange, tensor_zeros_int, tensor_ones_int, tensor_display_int, tensor_display_float, tensor_badd_int, tensor_bsub_int, tensor_bmul_int, tensor_badd_float, tensor_bmul_float, tensor_linspace, tensor_broadcast_shape, vec_int_copy
+
+void main():
+    # 1D broadcast: [4] + [1]
+    Tensor[int] a = tensor_arange(0, 4)
+    Vector[int] sh1 = Vector[int]()
+    sh1.push(1)
+    Tensor[int] one = tensor_ones_int(sh1)
+    Tensor[int] r1 = tensor_badd_int(a, one)
+    print(tensor_display_int(r1))
+
+    # 1D + 1D same shape
+    Tensor[int] b = tensor_arange(10, 14)
+    Tensor[int] r2 = tensor_badd_int(a, b)
+    print(tensor_display_int(r2))
+
+    # broadcast shape inference
+    Vector[int] sa = Vector[int]()
+    sa.push(3)
+    sa.push(1)
+    Vector[int] sb = Vector[int]()
+    sb.push(1)
+    sb.push(4)
+    Result[Vector[int], str] bc = tensor_broadcast_shape(sa, sb)
+    Vector[int] shape = bc.unwrap()
+    print("{shape.get(0).unwrap()}")
+    print("{shape.get(1).unwrap()}")
+
+    # bsub and bmul
+    Tensor[int] r3 = tensor_bsub_int(b, a)
+    print(tensor_display_int(r3))
+    Tensor[int] r4 = tensor_bmul_int(a, b)
+    print(tensor_display_int(r4))
+
+    # float broadcast
+    Tensor[float] fa = tensor_linspace(1.0, 4.0, 4)
+    Tensor[float] fb = tensor_linspace(1.0, 1.0, 1)
+    Tensor[float] rf = tensor_badd_float(fa, fb)
+    print(tensor_display_float(rf))

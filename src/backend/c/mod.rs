@@ -1161,6 +1161,21 @@ fn emit_shared_defs(out: &mut String, module: &Module) {
         let _ = writeln!(out,
             "static inline {weak_name} {shared_name}__downgrade({shared_name} self) {{ \
              return gorget_shared_downgrade(self); }}");
+        // For Shared[Vector[T]]: emit element-access helpers that avoid the copy-UAF.
+        // at(i) reads element i directly from the inner GorgetArray.
+        // set_at(i, val) writes element i directly into the inner GorgetArray.
+        // slen() returns the length of the inner GorgetArray without copying.
+        if let Some(inner_elem) = elem_c.strip_prefix("Vector__") {
+            let _ = writeln!(out,
+                "static inline {inner_elem} {shared_name}__at({shared_name} self, int64_t i) {{ \
+                 return *({inner_elem}*)gorget_shared_array_get(self, (size_t)i); }}");
+            let _ = writeln!(out,
+                "static inline void {shared_name}__set_at({shared_name} self, int64_t i, {inner_elem} val) {{ \
+                 gorget_shared_array_set(self, (size_t)i, &val, sizeof({inner_elem})); }}");
+            let _ = writeln!(out,
+                "static inline int64_t {shared_name}__slen({shared_name} self) {{ \
+                 return gorget_shared_array_len(self); }}");
+        }
         out.push('\n');
     }
 }
@@ -6100,7 +6115,7 @@ fn try_rewrite_collection_method(func_name: &str) -> Option<CollectionMethodCall
     if func_name.starts_with("Dict__") {
         let method = extract_trailing_method(func_name, "Dict__");
         return match method {
-            "put" => Some(CollectionMethodCall {
+            "put" | "set" => Some(CollectionMethodCall {
                 runtime_fn: "gorget_map_put", pass_by_ptr: true,
                 has_return: false, needs_deref_cast: false, field_access: None,
                 ..Default::default()
@@ -6110,7 +6125,7 @@ fn try_rewrite_collection_method(func_name: &str) -> Option<CollectionMethodCall
                 has_return: true, needs_deref_cast: true, field_access: None,
                 ..Default::default()
             }),
-            "contains" => Some(CollectionMethodCall {
+            "contains" | "has" => Some(CollectionMethodCall {
                 runtime_fn: "gorget_map_contains", pass_by_ptr: true,
                 has_return: true, needs_deref_cast: false, field_access: None,
                 ..Default::default()
@@ -6302,7 +6317,7 @@ fn try_rewrite_collection_method(func_name: &str) -> Option<CollectionMethodCall
                 has_return: true, needs_deref_cast: true, field_access: None,
                 ..Default::default()
             }),
-            "contains" => Some(CollectionMethodCall {
+            "contains" | "has" => Some(CollectionMethodCall {
                 runtime_fn: "gorget_map_contains", pass_by_ptr: true,
                 has_return: true, needs_deref_cast: false, field_access: None,
                 ..Default::default()

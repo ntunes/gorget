@@ -1,0 +1,53 @@
+from gg.dataframe import DataFrame, Column, df_from_columns, col_from_ints, col_from_strs, col_from_floats
+
+void main():
+    # Build a 3-row DataFrame: name (str), age (int), score (float)
+    Vector[int] ages = Vector[int]()
+    ages.push(25)
+    ages.push(30)
+    ages.push(35)
+
+    Vector[str] names = Vector[str]()
+    names.push("Alice")
+    names.push("Bob")
+    names.push("Charlie")
+
+    Vector[float] scores = Vector[float]()
+    scores.push(8.5)
+    scores.push(9.0)
+    scores.push(7.5)
+
+    Vector[str] col_names = Vector[str]()
+    col_names.push("name")
+    col_names.push("age")
+    col_names.push("score")
+
+    Vector[Column] cols = Vector[Column]()
+    cols.push(col_from_strs(names))
+    cols.push(col_from_ints(ages))
+    cols.push(col_from_floats(scores))
+
+    DataFrame df = df_from_columns(col_names, cols)
+
+    # Basic properties
+    print("{df.nrows()}")
+    print("{df.ncols()}")
+    print("{df.has_column("age")}")
+    print("{df.has_column("missing")}")
+
+    # Column value access
+    Column age_col = df.get_column("age")
+    print("{age_col.value_as_str(0)}")
+    print("{age_col.value_as_str(2)}")
+    print("{age_col.dtype_name()}")
+
+    Column name_col = df.get_column("name")
+    print("{name_col.value_as_str(1)}")
+
+    # head / tail
+    DataFrame h = df.head(2)
+    print("{h.nrows()}")
+    DataFrame t = df.tail(1)
+    print("{t.nrows()}")
+    Column tc = t.get_column("name")
+    print("{tc.value_as_str(0)}")

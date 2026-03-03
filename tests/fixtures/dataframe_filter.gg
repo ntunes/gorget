@@ -1,0 +1,63 @@
+from gg.dataframe import DataFrame, Column, df_from_columns, col_from_ints, col_from_strs, col_from_floats
+
+void main():
+    Vector[int] ages = Vector[int]()
+    ages.push(25)
+    ages.push(30)
+    ages.push(35)
+    ages.push(40)
+
+    Vector[str] names = Vector[str]()
+    names.push("Alice")
+    names.push("Bob")
+    names.push("Charlie")
+    names.push("Diana")
+
+    Vector[float] scores = Vector[float]()
+    scores.push(8.5)
+    scores.push(9.0)
+    scores.push(7.5)
+    scores.push(9.5)
+
+    Vector[str] col_names = Vector[str]()
+    col_names.push("name")
+    col_names.push("age")
+    col_names.push("score")
+
+    Vector[Column] cols = Vector[Column]()
+    cols.push(col_from_strs(names))
+    cols.push(col_from_ints(ages))
+    cols.push(col_from_floats(scores))
+
+    DataFrame df = df_from_columns(col_names, cols)
+
+    # select subset of columns
+    Vector[str] sel = Vector[str]()
+    sel.push("name")
+    sel.push("age")
+    DataFrame df2 = df.select(sel)
+    print("{df2.ncols()}")
+    print("{df2.nrows()}")
+
+    # drop a column
+    DataFrame df3 = df.drop("score")
+    print("{df3.ncols()}")
+
+    # slice rows
+    DataFrame sliced = df.df_slice(1, 3)
+    print("{sliced.nrows()}")
+    Column sc = sliced.get_column("name")
+    print("{sc.value_as_str(0)}")
+    print("{sc.value_as_str(1)}")
+
+    # filter_by int column
+    DataFrame filt = df.filter_by("age", ">", "28")
+    print("{filt.nrows()}")
+    Column fc = filt.get_column("name")
+    print("{fc.value_as_str(0)}")
+
+    # filter_by str column
+    DataFrame filt2 = df.filter_by("name", "==", "Alice")
+    print("{filt2.nrows()}")
+    Column fc2 = filt2.get_column("age")
+    print("{fc2.value_as_str(0)}")
