@@ -1,0 +1,29 @@
+str type_label[T](T val):
+    meta if typename(T) == "int":
+        return "integer"
+    elif typename(T) == "float":
+        return "float"
+    elif typename(T) == "str":
+        return "string"
+    else:
+        return "other"
+
+T double_if_int[T](T val):
+    meta if typename(T) == "int":
+        return val + val
+    else:
+        return val
+
+void main():
+    str r1 = type_label[int](42)
+    str r2 = type_label[float](3.14)
+    str r3 = type_label[str]("hello")
+    str r4 = type_label[bool](true)
+    print("{r1}")
+    print("{r2}")
+    print("{r3}")
+    print("{r4}")
+    int r5 = double_if_int[int](7)
+    float r6 = double_if_int[float](2.5)
+    print("{r5}")
+    print("{r6}")

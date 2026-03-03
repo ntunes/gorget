@@ -1033,6 +1033,48 @@ impl Formatter {
                 let spanned = Spanned::new(*item.clone(), stmt.span);
                 self.format_item(&spanned);
             }
+            Stmt::MetaIf {
+                condition,
+                then_body,
+                elif_branches,
+                else_body,
+                ..
+            } => {
+                self.emitter.write("meta if ");
+                self.format_expr(condition);
+                self.emitter.write(":");
+                self.emitter.newline();
+                self.emitter.indent();
+                self.format_block_stmts(then_body);
+                self.emitter.dedent();
+                for (cond, body) in elif_branches {
+                    self.emitter.write("elif ");
+                    self.format_expr(cond);
+                    self.emitter.write(":");
+                    self.emitter.newline();
+                    self.emitter.indent();
+                    self.format_block_stmts(body);
+                    self.emitter.dedent();
+                }
+                if let Some(else_body) = else_body {
+                    self.emitter.write("else:");
+                    self.emitter.newline();
+                    self.emitter.indent();
+                    self.format_block_stmts(else_body);
+                    self.emitter.dedent();
+                }
+            }
+            Stmt::MetaFor { var_name, range, body, .. } => {
+                self.emitter.write("meta for ");
+                self.emitter.write(&var_name.node);
+                self.emitter.write(" in ");
+                self.format_expr(range);
+                self.emitter.write(":");
+                self.emitter.newline();
+                self.emitter.indent();
+                self.format_block_stmts(body);
+                self.emitter.dedent();
+            }
         }
     }
 

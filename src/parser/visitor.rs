@@ -375,6 +375,27 @@ pub fn walk_stmt<V: ExprVisitor + ?Sized>(v: &mut V, stmt: &Spanned<Stmt>) {
         Stmt::Item(_) => {
             // Nested items are not walked — they are separate compilation units.
         }
+        Stmt::MetaIf {
+            condition,
+            then_body,
+            elif_branches,
+            else_body,
+            ..
+        } => {
+            v.visit_expr(condition);
+            v.visit_block(then_body);
+            for (cond, body) in elif_branches {
+                v.visit_expr(cond);
+                v.visit_block(body);
+            }
+            if let Some(eb) = else_body {
+                v.visit_block(eb);
+            }
+        }
+        Stmt::MetaFor { range, body, .. } => {
+            v.visit_expr(range);
+            v.visit_block(body);
+        }
     }
 }
 

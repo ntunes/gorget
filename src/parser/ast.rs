@@ -852,6 +852,27 @@ pub enum Stmt {
 
     /// Nested item definition
     Item(Box<Item>),
+
+    /// meta if <expr>: <stmts> [elif <expr>: <stmts>]* [else: <stmts>]
+    /// Delayed compile-time conditional inside generic function/method bodies.
+    /// Evaluated at monomorphization time when type parameters are concrete.
+    MetaIf {
+        condition: Spanned<Expr>,
+        then_body: Block,
+        elif_branches: Vec<(Spanned<Expr>, Block)>,
+        else_body: Option<Block>,
+        span: Span,
+    },
+
+    /// meta for <name> in <range_expr>: <stmts>
+    /// Compile-time loop unrolling inside generic function/method bodies.
+    /// Evaluated at monomorphization time when type parameters are concrete.
+    MetaFor {
+        var_name: Spanned<String>,
+        range: Spanned<Expr>,
+        body: Block,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone)]

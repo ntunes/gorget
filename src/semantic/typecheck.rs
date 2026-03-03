@@ -1856,6 +1856,23 @@ impl<'a> TypeChecker<'a> {
             Stmt::Item(_) => {
                 // Nested items are checked at the top level
             }
+
+            Stmt::MetaIf { then_body, elif_branches, else_body, .. } => {
+                // Conditions are meta expressions (typename(T) etc.) resolved only at
+                // monomorphization time — skip infer_expr on them.
+                self.check_block(then_body);
+                for (_, body) in elif_branches {
+                    self.check_block(body);
+                }
+                if let Some(eb) = else_body {
+                    self.check_block(eb);
+                }
+            }
+
+            Stmt::MetaFor { body, .. } => {
+                // Range is a meta expression: skip infer_expr; just check the body.
+                self.check_block(body);
+            }
         }
     }
 

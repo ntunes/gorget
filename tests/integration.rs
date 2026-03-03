@@ -6680,6 +6680,7 @@ fn format_stmt_canonical(stmt: &Stmt) -> String {
             s
         }
         Stmt::Item(item) => format_item_canonical(item),
+        Stmt::MetaIf { .. } | Stmt::MetaFor { .. } => "meta".to_string(),
     }
 }
 
@@ -8273,6 +8274,92 @@ done",
     );
 }
 
+#[test]
+fn dataframe_tier2_basic() {
+    run_gg(
+        "dataframe_tier2_basic.gg",
+        "\
+true
+false
+3
+3
+str
+int
+float
+false
+true
+false
+false
+3
+3
+false
+true
+27.5
+8.75
+17.1875
+done",
+    );
+}
+
+#[test]
+fn dataframe_tier2_sort_arith() {
+    run_gg(
+        "dataframe_tier2_sort_arith.gg",
+        "\
+4
+Alice
+Charlie
+2
+35
+2
+25
+105
+115
+35
+65
+2450
+2
+4
+done",
+    );
+}
+
+#[test]
+fn dataframe_tier2_joins() {
+    run_gg(
+        "dataframe_tier2_joins.gg",
+        "\
+2
+int
+3
+100
+true
+100
+2
+4
+6
+4
+done",
+    );
+}
+
+#[test]
+fn dataframe_tier2_groupby() {
+    run_gg(
+        "dataframe_tier2_groupby.gg",
+        "\
+4
+3
+1
+2
+int
+float
+str
+bool
+done",
+    );
+}
+
 // Parser Comparison Test
 // ═══════════════════════════════════════════════════════════════
 
@@ -8780,5 +8867,52 @@ fn mod_rem() {
 1
 0
 0",
+    );
+}
+
+#[test]
+fn meta_delayed_basic() {
+    run_gg(
+        "meta_delayed_basic.gg",
+        "\
+integer
+float
+string
+other
+14
+2.500000",
+    );
+}
+
+#[test]
+fn meta_delayed_for() {
+    run_gg(
+        "meta_delayed_for.gg",
+        "\
+first
+second
+third
+first
+second
+third
+int
+float
+unknown",
+    );
+}
+
+#[test]
+fn meta_delayed_nested() {
+    run_gg(
+        "meta_delayed_nested.gg",
+        "\
+int64
+float64
+other
+is int
+8 bytes
+is str
+16 bytes
+other type",
     );
 }

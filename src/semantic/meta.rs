@@ -1211,6 +1211,12 @@ fn eval_meta_stmt(
             "this statement type is not supported in compile-time function evaluation",
             stmt_span,
         )),
+
+        Stmt::MetaIf { .. } | Stmt::MetaFor { .. } => Err(meta_err(
+            "`meta if`/`meta for` in function body requires generic type parameters \
+             and is evaluated at monomorphization time, not in compile-time functions",
+            stmt_span,
+        )),
     }
 }
 
@@ -1464,6 +1470,19 @@ fn substitute_stmt(stmt: &mut Stmt, env: &FxHashMap<String, MetaValue>, type_env
             if let Some(msg) = message { substitute_expr(msg, env, type_env); }
         }
         Stmt::Item(item) => substitute_item(item, env, type_env),
+        Stmt::MetaIf { condition, then_body, elif_branches, else_body, .. } => {
+            substitute_expr(condition, env, type_env);
+            substitute_block(then_body, env, type_env);
+            for (cond, body) in elif_branches {
+                substitute_expr(cond, env, type_env);
+                substitute_block(body, env, type_env);
+            }
+            if let Some(eb) = else_body { substitute_block(eb, env, type_env); }
+        }
+        Stmt::MetaFor { range, body, .. } => {
+            substitute_expr(range, env, type_env);
+            substitute_block(body, env, type_env);
+        }
     }
 }
 
@@ -1695,6 +1714,369 @@ fn type_name(ty: &Type) -> &'static str {
         Type::Primitive(PrimitiveType::Void) => "void",
         Type::Primitive(PrimitiveType::Char) => "char",
         _ => "<unknown>",
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Delayed meta evaluation (Phase 1.4 — monomorphization time)
+// ═══════════════════════════════════════════════════════════════
+
+/// Context for evaluating `meta if`/`meta for` inside generic bodies.
+/// Created once per monomorphized instantiation with the concrete type bindings.
+pub struct DelayedMetaContext<'a> {
+    /// Generic type parameter bindings, e.g. `[("T", Type::Primitive(Int))]`.
+    pub type_subs: &'a [(String, Type)],
+    /// Feature flags from CLI (`--feature`).
+    pub features: &'a [String],
+    /// Phase 0 meta constant values (already-evaluated at module level).
+    pub meta_env: &'a FxHashMap<String, MetaValue>,
+    /// Module AST items (for Phase 2 reflection builtins; empty slice for Phase 1).
+    pub items: &'a [Spanned<Item>],
+}
+
+/// Convert an AST `Type` to a canonical string representation used by `typename()`.
+pub fn type_to_canonical_name(ty: &Type) -> String {
+    match ty {
+        Type::Primitive(p) => match p {
+            PrimitiveType::Int => "int",
+            PrimitiveType::Int8 => "int8",
+            PrimitiveType::Int16 => "int16",
+            PrimitiveType::Int32 => "int32",
+            PrimitiveType::Int64 => "int64",
+            PrimitiveType::Uint => "uint",
+            PrimitiveType::Uint8 => "uint8",
+            PrimitiveType::Uint16 => "uint16",
+            PrimitiveType::Uint32 => "uint32",
+            PrimitiveType::Uint64 => "uint64",
+            PrimitiveType::Float => "float",
+            PrimitiveType::Float32 => "float32",
+            PrimitiveType::Float64 => "float64",
+            PrimitiveType::Bool => "bool",
+            PrimitiveType::Str => "str",
+            PrimitiveType::CStr => "cstr",
+            PrimitiveType::StringType => "String",
+            PrimitiveType::Void => "void",
+            PrimitiveType::Char => "char",
+        }.to_string(),
+        Type::Named { name, generic_args } => {
+            if generic_args.is_empty() {
+                name.node.clone()
+            } else {
+                let args: Vec<String> = generic_args.iter()
+                    .map(|a| type_to_canonical_name(&a.node))
+                    .collect();
+                format!("{}[{}]", name.node, args.join(", "))
+            }
+        }
+        Type::Tuple(elems) => {
+            let parts: Vec<String> = elems.iter()
+                .map(|e| type_to_canonical_name(&e.node))
+                .collect();
+            format!("({})", parts.join(", "))
+        }
+        _ => "<unknown>".to_string(),
+    }
+}
+
+/// Evaluate a meta expression in delayed context (monomorphization time).
+/// Like `eval_expr` but additionally resolves `typename(T)` via type parameter bindings.
+///
+/// Handles compound expressions (BinaryOp, UnaryOp) by recursing so that
+/// `typename(T) == "int"` correctly resolves `T` even when nested inside a larger
+/// expression tree.
+fn eval_delayed_expr(
+    expr: &Expr,
+    ctx: &DelayedMetaContext<'_>,
+    span: Span,
+) -> Result<MetaValue, SemanticError> {
+    match expr {
+        // Recurse through compound expressions so inner typename(T)/sizeof(T) are resolved.
+        Expr::BinaryOp { left, op, right } => {
+            let lhs = eval_delayed_expr(&left.node, ctx, left.span)?;
+            let rhs = eval_delayed_expr(&right.node, ctx, right.span)?;
+            eval_binary_op(&lhs, *op, &rhs, span)
+        }
+        Expr::UnaryOp { op, operand } => {
+            let val = eval_delayed_expr(&operand.node, ctx, operand.span)?;
+            match (op, &val) {
+                (UnaryOp::Neg, MetaValue::Int(n)) => Ok(MetaValue::Int(-n)),
+                (UnaryOp::Neg, MetaValue::Float(f)) => Ok(MetaValue::Float(-f)),
+                (UnaryOp::Not, MetaValue::Bool(b)) => Ok(MetaValue::Bool(!b)),
+                (UnaryOp::BitNot, MetaValue::Int(n)) => Ok(MetaValue::Int(!n)),
+                _ => Err(meta_err(
+                    &format!("unsupported unary operator in delayed meta expression"),
+                    span,
+                )),
+            }
+        }
+
+        // Built-in calls that need type param resolution
+        Expr::Call { callee, args, .. } => {
+            if let Expr::Identifier(name) = &callee.node {
+                match name.as_str() {
+                    "typename" => {
+                        if args.len() != 1 {
+                            return Err(meta_err("typename() takes exactly 1 argument", span));
+                        }
+                        let type_name_str = meta_expr_to_type_name(&args[0].node.value.node);
+                        // Check if it's a generic type param — resolve to concrete type name
+                        for (param, concrete_ty) in ctx.type_subs {
+                            if *param == type_name_str {
+                                return Ok(MetaValue::Str(type_to_canonical_name(concrete_ty)));
+                            }
+                        }
+                        // Not a type param: return as-is (e.g. typename(int) → "int")
+                        return Ok(MetaValue::Str(type_name_str));
+                    }
+                    "sizeof" => {
+                        if args.len() != 1 {
+                            return Err(meta_err("sizeof() takes exactly 1 argument", span));
+                        }
+                        let type_name_str = meta_expr_to_type_name(&args[0].node.value.node);
+                        // Resolve generic param to concrete type first
+                        let resolved_name = ctx.type_subs.iter()
+                            .find(|(p, _)| *p == type_name_str)
+                            .map(|(_, ty)| type_to_canonical_name(ty))
+                            .unwrap_or(type_name_str);
+                        // Use existing primitive size table
+                        match meta_type_byte_size(&resolved_name) {
+                            Some(size) => return Ok(MetaValue::Int(size)),
+                            None => return Err(meta_err(
+                                &format!(
+                                    "sizeof({resolved_name}): size unknown — \
+                                     only primitive types are supported in Phase 1"
+                                ),
+                                span,
+                            )),
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            // Non-typename/sizeof calls: delegate to Phase 0 evaluator
+            let meta_ctx = MetaContext::new(ctx.features, ctx.items);
+            eval_expr(expr, ctx.meta_env, &meta_ctx, span)
+        }
+
+        // All other leaf/terminal expressions: delegate to Phase 0 evaluator.
+        // This handles literals, identifiers (meta constants), etc.
+        _ => {
+            let meta_ctx = MetaContext::new(ctx.features, ctx.items);
+            eval_expr(expr, ctx.meta_env, &meta_ctx, span)
+        }
+    }
+}
+
+/// Evaluate and splice out all `Stmt::MetaIf`/`Stmt::MetaFor` nodes in a block.
+/// Called at monomorphization time, after type substitution, before GIR lowering.
+///
+/// Modifies `block.stmts` in place: each `MetaIf`/`MetaFor` is replaced by the
+/// statements from the winning branch (or the unrolled loop body).  Recurses into
+/// nested blocks (inside regular `if`, `while`, `for`, etc.) so that nested delayed
+/// meta constructs are also eliminated.
+pub fn evaluate_delayed_meta_block(
+    block: &mut Block,
+    ctx: &DelayedMetaContext<'_>,
+    errors: &mut Vec<SemanticError>,
+) {
+    let mut i = 0;
+    while i < block.stmts.len() {
+        let replacement = match &block.stmts[i].node {
+            Stmt::MetaIf { condition, then_body, elif_branches, else_body, .. } => {
+                let cond_span = condition.span;
+                match eval_delayed_expr(&condition.node, ctx, cond_span) {
+                    Ok(MetaValue::Bool(true)) => {
+                        let mut body = then_body.clone();
+                        evaluate_delayed_meta_block(&mut body, ctx, errors);
+                        Some(body.stmts)
+                    }
+                    Ok(MetaValue::Bool(false)) => {
+                        // Try elif branches
+                        let mut taken: Option<Vec<Spanned<Stmt>>> = None;
+                        for (elif_cond, elif_body) in elif_branches.iter() {
+                            match eval_delayed_expr(&elif_cond.node, ctx, elif_cond.span) {
+                                Ok(MetaValue::Bool(true)) => {
+                                    let mut body = elif_body.clone();
+                                    evaluate_delayed_meta_block(&mut body, ctx, errors);
+                                    taken = Some(body.stmts);
+                                    break;
+                                }
+                                Ok(MetaValue::Bool(false)) => {}
+                                Ok(_) => {
+                                    errors.push(meta_err(
+                                        "meta elif condition must evaluate to bool",
+                                        elif_cond.span,
+                                    ));
+                                    break;
+                                }
+                                Err(e) => {
+                                    errors.push(e);
+                                    break;
+                                }
+                            }
+                        }
+                        if let Some(stmts) = taken {
+                            Some(stmts)
+                        } else if let Some(else_body) = else_body {
+                            let mut body = else_body.clone();
+                            evaluate_delayed_meta_block(&mut body, ctx, errors);
+                            Some(body.stmts)
+                        } else {
+                            Some(vec![]) // No branch taken — emit nothing
+                        }
+                    }
+                    Ok(_) => {
+                        errors.push(meta_err(
+                            "meta if condition must evaluate to bool",
+                            cond_span,
+                        ));
+                        Some(vec![])
+                    }
+                    Err(e) => {
+                        errors.push(e);
+                        Some(vec![])
+                    }
+                }
+            }
+
+            Stmt::MetaFor { var_name, range, body, .. } => {
+                let range_span = range.span;
+                // Evaluate range bounds
+                match eval_delayed_meta_range(&range.node, ctx, range_span) {
+                    Ok((start_val, end_val, inclusive)) => {
+                        let upper = if inclusive { end_val + 1 } else { end_val };
+                        let loop_var = var_name.node.clone();
+                        let mut result_stmts: Vec<Spanned<Stmt>> = Vec::new();
+                        for val in start_val..upper {
+                            // Build a child context with loop var added to meta_env
+                            let mut child_env = ctx.meta_env.clone();
+                            child_env.insert(loop_var.clone(), MetaValue::Int(val));
+                            let child_ctx = DelayedMetaContext {
+                                type_subs: ctx.type_subs,
+                                features: ctx.features,
+                                meta_env: &child_env,
+                                items: ctx.items,
+                            };
+                            let mut loop_body = body.clone();
+                            evaluate_delayed_meta_block(&mut loop_body, &child_ctx, errors);
+                            result_stmts.extend(loop_body.stmts);
+                        }
+                        Some(result_stmts)
+                    }
+                    Err(e) => {
+                        errors.push(e);
+                        Some(vec![])
+                    }
+                }
+            }
+
+            _ => None, // Not a meta stmt — recurse into sub-blocks below
+        };
+
+        if let Some(replacement_stmts) = replacement {
+            // Replace the MetaIf/MetaFor with its expanded stmts
+            let n = replacement_stmts.len();
+            block.stmts.splice(i..i + 1, replacement_stmts);
+            // Process newly inserted stmts (they may contain nested MetaIf/For)
+            // by NOT advancing i — the loop will encounter them next
+            let _ = n; // already processed recursively
+        } else {
+            // Recurse into nested blocks for non-meta stmts
+            recurse_delayed_meta_in_stmt(&mut block.stmts[i].node, ctx, errors);
+            i += 1;
+        }
+    }
+}
+
+/// Evaluate an integer range expression in delayed meta context.
+/// Returns (start, end, inclusive).
+fn eval_delayed_meta_range(
+    range_expr: &Expr,
+    ctx: &DelayedMetaContext<'_>,
+    span: Span,
+) -> Result<(i64, i64, bool), SemanticError> {
+    match range_expr {
+        Expr::Range { start, end, inclusive } => {
+            let start_val = match start {
+                Some(s) => match eval_delayed_expr(&s.node, ctx, s.span)? {
+                    MetaValue::Int(n) => n,
+                    _ => return Err(meta_err("meta for range start must be an integer", s.span)),
+                },
+                None => 0,
+            };
+            let end_val = match end {
+                Some(e) => match eval_delayed_expr(&e.node, ctx, e.span)? {
+                    MetaValue::Int(n) => n,
+                    _ => return Err(meta_err("meta for range end must be an integer", e.span)),
+                },
+                None => return Err(meta_err(
+                    "open-ended range not supported in meta for",
+                    span,
+                )),
+            };
+            Ok((start_val, end_val, *inclusive))
+        }
+        _ => Err(meta_err(
+            "meta for requires a range expression (e.g. `0..n`)",
+            span,
+        )),
+    }
+}
+
+/// Recurse the delayed meta evaluator into sub-blocks of a non-meta statement.
+fn recurse_delayed_meta_in_stmt(
+    stmt: &mut Stmt,
+    ctx: &DelayedMetaContext<'_>,
+    errors: &mut Vec<SemanticError>,
+) {
+    match stmt {
+        Stmt::If { then_body, elif_branches, else_body, .. } => {
+            evaluate_delayed_meta_block(then_body, ctx, errors);
+            for (_, body) in elif_branches {
+                evaluate_delayed_meta_block(body, ctx, errors);
+            }
+            if let Some(eb) = else_body {
+                evaluate_delayed_meta_block(eb, ctx, errors);
+            }
+        }
+        Stmt::While { body, else_body, .. } => {
+            evaluate_delayed_meta_block(body, ctx, errors);
+            if let Some(eb) = else_body {
+                evaluate_delayed_meta_block(eb, ctx, errors);
+            }
+        }
+        Stmt::For { body, else_body, .. } => {
+            evaluate_delayed_meta_block(body, ctx, errors);
+            if let Some(eb) = else_body {
+                evaluate_delayed_meta_block(eb, ctx, errors);
+            }
+        }
+        Stmt::Loop { body } | Stmt::Unsafe { body } => {
+            evaluate_delayed_meta_block(body, ctx, errors);
+        }
+        Stmt::Match { arms, else_arm, .. } => {
+            for arm in arms {
+                if let Expr::Block(block) = &mut arm.body.node {
+                    evaluate_delayed_meta_block(block, ctx, errors);
+                }
+            }
+            if let Some(eb) = else_arm {
+                evaluate_delayed_meta_block(eb, ctx, errors);
+            }
+        }
+        Stmt::With { body, .. } => {
+            evaluate_delayed_meta_block(body, ctx, errors);
+        }
+        Stmt::Select { arms, else_arm } => {
+            for arm in arms {
+                evaluate_delayed_meta_block(&mut arm.body, ctx, errors);
+            }
+            if let Some(eb) = else_arm {
+                evaluate_delayed_meta_block(eb, ctx, errors);
+            }
+        }
+        // Leaf stmts — no sub-blocks
+        _ => {}
     }
 }
 

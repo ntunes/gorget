@@ -144,6 +144,18 @@ fn rewrite_stmt(stmt: &mut Stmt, res: &ResolutionMap, scopes: &ScopeTable) {
             if let Some(msg) = message { rewrite_expr(msg, res, scopes); }
         }
         Stmt::Item(item) => rewrite_item(item, res, scopes),
+        Stmt::MetaIf { then_body, elif_branches, else_body, .. } => {
+            // Conditions are meta expressions — skip rewriting them; rewrite the bodies.
+            rewrite_block(then_body, res, scopes);
+            for (_, body) in elif_branches {
+                rewrite_block(body, res, scopes);
+            }
+            if let Some(eb) = else_body { rewrite_block(eb, res, scopes); }
+        }
+        Stmt::MetaFor { body, .. } => {
+            // Range is a meta expression — skip; rewrite the body.
+            rewrite_block(body, res, scopes);
+        }
     }
 }
 

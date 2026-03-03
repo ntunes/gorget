@@ -165,6 +165,15 @@ fn stmt_contains_it(stmt: &Stmt) -> bool {
             contains_it(condition) || message.as_ref().is_some_and(contains_it)
         }
         Stmt::Item(_) => false,
+        Stmt::MetaIf { condition, then_body, elif_branches, else_body, .. } => {
+            contains_it(condition)
+                || block_contains_it(then_body)
+                || elif_branches.iter().any(|(c, b)| contains_it(c) || block_contains_it(b))
+                || else_body.as_ref().is_some_and(block_contains_it)
+        }
+        Stmt::MetaFor { range, body, .. } => {
+            contains_it(range) || block_contains_it(body)
+        }
     }
 }
 

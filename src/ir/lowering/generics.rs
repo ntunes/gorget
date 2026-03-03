@@ -304,6 +304,23 @@ impl GenericCollector {
                     self.scan_expr(msg);
                 }
             }
+            // Delayed meta stmts: scan all branches (conservative — we can't
+            // evaluate typename(T) yet; all branches may reference generic calls).
+            Stmt::MetaIf { condition, then_body, elif_branches, else_body, .. } => {
+                self.scan_expr(condition);
+                self.scan_block(then_body);
+                for (cond, body) in elif_branches {
+                    self.scan_expr(cond);
+                    self.scan_block(body);
+                }
+                if let Some(eb) = else_body {
+                    self.scan_block(eb);
+                }
+            }
+            Stmt::MetaFor { range, body, .. } => {
+                self.scan_expr(range);
+                self.scan_block(body);
+            }
             _ => {}
         }
     }
@@ -970,6 +987,22 @@ fn substitute_stmt_types(stmt: &mut Spanned<Stmt>, subs: &[(String, Type)]) {
             }
         }
         Stmt::Loop { body } | Stmt::Unsafe { body } => {
+            substitute_block_types(body, subs);
+        }
+        // Delayed meta stmts: substitute types in condition + all branch blocks
+        Stmt::MetaIf { condition, then_body, elif_branches, else_body, .. } => {
+            substitute_expr_types(condition, subs);
+            substitute_block_types(then_body, subs);
+            for (cond, body) in elif_branches {
+                substitute_expr_types(cond, subs);
+                substitute_block_types(body, subs);
+            }
+            if let Some(eb) = else_body {
+                substitute_block_types(eb, subs);
+            }
+        }
+        Stmt::MetaFor { range, body, .. } => {
+            substitute_expr_types(range, subs);
             substitute_block_types(body, subs);
         }
         _ => {}

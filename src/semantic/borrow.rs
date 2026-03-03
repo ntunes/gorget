@@ -2024,6 +2024,23 @@ impl<'a> BorrowChecker<'a> {
             }
 
             Stmt::Item(_) => {}
+
+            Stmt::MetaIf { then_body, elif_branches, else_body, .. } => {
+                // Conditions are meta expressions not evaluated by borrow checker.
+                // Walk bodies conservatively (all branches are potentially live).
+                self.check_block(then_body);
+                for (_, body) in elif_branches {
+                    self.check_block(body);
+                }
+                if let Some(eb) = else_body {
+                    self.check_block(eb);
+                }
+            }
+
+            Stmt::MetaFor { body, .. } => {
+                // Range is a meta expression: skip; just check the body.
+                self.check_block(body);
+            }
         }
     }
 

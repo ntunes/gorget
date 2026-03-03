@@ -32,6 +32,9 @@ impl Parser {
         let start = self.peek_span();
 
         match self.peek().clone() {
+            // Compile-time meta statements (delayed evaluation in generic bodies)
+            Token::Keyword(Keyword::Meta) => self.parse_meta_stmt(),
+
             // Explicit control flow keywords
             Token::Keyword(Keyword::Return) => self.parse_return_stmt(),
             Token::Keyword(Keyword::Throw) => self.parse_throw_stmt(),
@@ -620,6 +623,77 @@ impl Parser {
         } else {
             self.parse_expr_or_assign_stmt()
         }
+    }
+
+    /// Parse a `meta if` or `meta for` statement (delayed compile-time evaluation).
+    fn parse_meta_stmt(&mut self) -> Result<Spanned<Stmt>, ParseError> {
+        let start = self.peek_span();
+        self.expect_keyword(Keyword::Meta)?;
+
+        match self.peek().clone() {
+            Token::Keyword(Keyword::If) => self.parse_meta_if_stmt(start),
+            Token::Keyword(Keyword::For) => self.parse_meta_for_stmt(start),
+            _ => Err(ParseError {
+                kind: crate::errors::ParseErrorKind::UnexpectedToken {
+                    expected: "`if` or `for` after `meta` in function body".to_string(),
+                    got: format!("{:?}", self.peek()),
+                },
+                span: self.peek_span(),
+            }),
+        }
+    }
+
+    fn parse_meta_if_stmt(&mut self, start: Span) -> Result<Spanned<Stmt>, ParseError> {
+        self.expect_keyword(Keyword::If)?;
+        let condition = self.parse_expr()?;
+        let then_body = self.parse_block()?;
+
+        let mut elif_branches = Vec::new();
+        let mut else_body = None;
+
+        while self.match_keyword(Keyword::Elif) {
+            let elif_cond = self.parse_expr()?;
+            let elif_body = self.parse_block()?;
+            elif_branches.push((elif_cond, elif_body));
+        }
+
+        if self.match_keyword(Keyword::Else) {
+            else_body = Some(self.parse_block()?);
+        }
+
+        let end = self.previous_span();
+        let span = start.merge(end);
+        Ok(Spanned::new(
+            Stmt::MetaIf {
+                condition,
+                then_body,
+                elif_branches,
+                else_body,
+                span,
+            },
+            span,
+        ))
+    }
+
+    fn parse_meta_for_stmt(&mut self, start: Span) -> Result<Spanned<Stmt>, ParseError> {
+        self.expect_keyword(Keyword::For)?;
+        let var_span = self.peek_span();
+        let var_name = self.expect_identifier()?;
+        let var_name = Spanned::new(var_name.node, var_span);
+        self.expect_keyword(Keyword::In)?;
+        let range = self.parse_expr()?;
+        let body = self.parse_block()?;
+        let end = self.previous_span();
+        let span = start.merge(end);
+        Ok(Spanned::new(
+            Stmt::MetaFor {
+                var_name,
+                range,
+                body,
+                span,
+            },
+            span,
+        ))
     }
 
     /// Parse a simple binding pattern for variable declarations.

@@ -2,6 +2,7 @@ use crate::ir::builder::FunctionBuilder;
 use crate::ir::instructions::*;
 use crate::ir::types::*;
 use crate::parser::ast::{self, FunctionBody, FunctionDef, GenericParam, Ownership, Type};
+use crate::semantic::meta::{self as meta, DelayedMetaContext};
 use crate::span::Spanned;
 
 use super::context::LoweringContext;
@@ -281,6 +282,35 @@ pub fn lower_generic_function(
     mangled_name: &str,
 ) {
     let subs = build_subs(template.generic_params.as_ref(), type_args);
+
+    // Evaluate delayed meta blocks (meta if/for inside generic bodies) with
+    // the concrete type substitutions.  Modifies a local clone of the template
+    // so the original template is left intact for subsequent instantiations.
+    let template_with_meta_evaluated;
+    let template = if subs.is_empty() {
+        template
+    } else {
+        let mut cloned = template.clone();
+        let empty_env = rustc_hash::FxHashMap::default();
+        let delayed_ctx = DelayedMetaContext {
+            type_subs: &subs,
+            features: &[],
+            meta_env: &empty_env,
+            items: &[],
+        };
+        if let FunctionBody::Block(ref mut block) = cloned.body {
+            let mut errors = Vec::new();
+            meta::evaluate_delayed_meta_block(block, &delayed_ctx, &mut errors);
+            // Errors are non-fatal here (will surface as missing symbols); log if any.
+            if !errors.is_empty() {
+                for e in &errors {
+                    eprintln!("[delayed-meta] {e:?}");
+                }
+            }
+        }
+        template_with_meta_evaluated = cloned;
+        &template_with_meta_evaluated
+    };
 
     // Build type name substitutions for struct init/method calls in the body
     build_type_name_subs(ctx, &subs);

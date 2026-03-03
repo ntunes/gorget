@@ -4236,7 +4236,7 @@ These are always available in meta contexts:
 | `alignof(Type)` | `int` | Alignment in bytes (primitive types) |
 | `typename(Type)` | `str` | String representation, e.g. `"int"`, `"Vector[int]"` |
 
-`sizeof` and `alignof` support primitive types and the built-in string types. User-defined struct sizes are not available during meta evaluation (which runs before layout computation).
+`sizeof` and `alignof` support primitive types and the built-in string types. User-defined struct sizes are not available during Phase 0 meta evaluation (which runs before layout computation). Inside generic function bodies, `sizeof(T)` resolves the generic parameter to its concrete type at monomorphization time (see §19.12).
 
 ```gorget
 meta int  INT_SIZE  = sizeof(int)          # 8
@@ -4313,6 +4313,135 @@ meta assert QUEUE_SIZE > MAX_WORKERS, "queue too small"
 ```gorget
 meta str CONFIG_DIR = "/etc/myapp" if platform() == "linux" else "/Library/Application Support/myapp"
 ```
+
+---
+
+### 19.11 Delayed Meta in Generic Bodies
+
+`meta if` and `meta for` can appear as **statements inside generic function and method bodies**. Unlike module-level `meta if` (which is evaluated before semantic analysis), these *delayed* forms are evaluated at **monomorphization time** — when the type parameters are concrete.
+
+#### Syntax
+
+```gorget
+# meta if inside a generic function body
+T clamp[Numeric T](T val, T lo, T hi):
+    meta if typename(T) == "int":
+        if val < lo: return lo
+        if val > hi: return hi
+        return val
+    elif typename(T) == "float":
+        if val != val: return lo   # NaN → lo
+        if val < lo: return lo
+        if val > hi: return hi
+        return val
+    else:
+        return val
+
+# meta for inside a generic function body
+void emit_info[Numeric T]():
+    meta for i in 0..3:
+        meta if i == 0:
+            print("iteration zero")
+        elif i == 1:
+            print("iteration one")
+        else:
+            print("iteration two")
+```
+
+#### Evaluation Rules
+
+- The condition of `meta if` and the range of `meta for` are **compile-time expressions** — they follow the same rules as module-level meta expressions (see §19.7).
+- `typename(T)` inside a delayed meta condition resolves `T` to its concrete type name at the monomorphization call site.
+- `sizeof(T)` inside a delayed meta condition resolves `T` to its concrete type's byte size.
+- The **winning branch** is spliced inline, replacing the `meta if`/`meta for` node in the AST before GIR lowering. Losing branches are discarded entirely.
+- Nested `meta if` inside `meta for` bodies is supported; the loop variable is available as a meta constant for inner conditions.
+
+#### Restrictions
+
+- Conditions must be evaluable at compile time: they can reference `typename(T)`, `sizeof(T)`, meta constants, literals, and arithmetic — but **not** runtime variables or function calls.
+- Bodies may contain any valid runtime statements (if, while, return, etc.) since the winning body is lowered as ordinary code.
+
+```gorget
+str type_label[T](T val):
+    meta if typename(T) == "int":
+        return "integer"
+    elif typename(T) == "float":
+        return "float"
+    else:
+        return "other"
+
+void main():
+    print(type_label[int](42))      # integer
+    print(type_label[float](3.14))  # float
+    print(type_label[bool](true))   # other
+```
+
+---
+
+### 19.12 Compile-Time `typename` and `sizeof` in Generic Bodies
+
+The existing `typename(T)` and `sizeof(T)` builtins (see §19.7) gain an additional capability when used inside delayed meta conditions: they **resolve generic type parameters** to their concrete values.
+
+| Builtin | In Phase 0 (module level) | In delayed meta (generic body) |
+|---------|--------------------------|-------------------------------|
+| `typename(int)` | `"int"` | `"int"` |
+| `typename(T)` where T is generic | `"T"` (literal param name) | `"int"` / `"float"` / etc. at each call site |
+| `sizeof(int)` | `8` | `8` |
+| `sizeof(T)` where T is generic | error: unknown size | concrete size at each call site |
+
+**Example — dispatching on `sizeof`:**
+
+```gorget
+str size_class[Numeric T]():
+    meta if sizeof(T) == 1:
+        return "byte"
+    elif sizeof(T) == 4:
+        return "word"
+    elif sizeof(T) == 8:
+        return "dword"
+    else:
+        return "large"
+
+void main():
+    print(size_class[int8]())   # byte
+    print(size_class[int32]())  # word
+    print(size_class[int]())    # dword
+    print(size_class[float]())  # dword
+```
+
+---
+
+### 19.13 Compile-Time Loop Unrolling (`meta for`)
+
+`meta for` inside a generic body unrolls its loop at monomorphization time:
+
+```gorget
+meta for <var> in <start>..<end>:
+    <body>
+```
+
+- `<start>` and `<end>` must be compile-time integer expressions.
+- `<var>` is available as a meta constant inside nested `meta if` conditions within `<body>`.
+- `<body>` is duplicated once per iteration, with `<var>` substituted in any nested meta expression.
+
+```gorget
+void emit_labels[Numeric T]():
+    meta for i in 0..3:
+        meta if i == 0:
+            print("first")
+        elif i == 1:
+            print("second")
+        else:
+            print("third")
+
+void main():
+    emit_labels[int]()
+    # → first
+    # → second
+    # → third
+```
+
+The unrolled code is lowered identically to if the programmer had written the three `print` statements directly.
 
 ---
 

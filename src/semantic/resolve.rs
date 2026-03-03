@@ -969,6 +969,32 @@ fn resolve_stmt(
             collect_item(item, Span::dummy(), scopes, types, errors, &mut ctx);
             resolve_item_body(item, scopes, types, errors, resolution_map, &mut ctx.function_info, &mut ctx.function_body_scopes);
         }
+
+        Stmt::MetaIf { then_body, elif_branches, else_body, .. } => {
+            // Conditions are meta expressions (not runtime): skip resolve_expr on them.
+            // Bodies contain regular code that must be fully resolved.
+            scopes.push_scope(super::scope::ScopeKind::Block);
+            resolve_block(then_body, scopes, types, errors, resolution_map);
+            scopes.pop_scope();
+            for (_, body) in elif_branches {
+                scopes.push_scope(super::scope::ScopeKind::Block);
+                resolve_block(body, scopes, types, errors, resolution_map);
+                scopes.pop_scope();
+            }
+            if let Some(eb) = else_body {
+                scopes.push_scope(super::scope::ScopeKind::Block);
+                resolve_block(eb, scopes, types, errors, resolution_map);
+                scopes.pop_scope();
+            }
+        }
+
+        Stmt::MetaFor { body, .. } => {
+            // Range is a meta expression: skip resolve_expr on it.
+            // Body contains regular code that must be resolved.
+            scopes.push_scope(super::scope::ScopeKind::Block);
+            resolve_block(body, scopes, types, errors, resolution_map);
+            scopes.pop_scope();
+        }
     }
 }
 

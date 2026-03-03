@@ -1,0 +1,28 @@
+void emit_labels[Numeric T]():
+    meta for i in 0..3:
+        meta if i == 0:
+            print("first")
+        elif i == 1:
+            print("second")
+        else:
+            print("third")
+
+str type_or_unknown[T]():
+    meta if typename(T) == "int":
+        return "int"
+    elif typename(T) == "float":
+        return "float"
+    elif typename(T) == "str":
+        return "str"
+    else:
+        return "unknown"
+
+void main():
+    emit_labels[int]()
+    emit_labels[float]()
+    str s1 = type_or_unknown[int]()
+    str s2 = type_or_unknown[float]()
+    str s3 = type_or_unknown[bool]()
+    print("{s1}")
+    print("{s2}")
+    print("{s3}")

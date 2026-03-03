@@ -481,6 +481,21 @@ fn qualify_stmt(stmt: &mut Stmt, vm: &HashMap<String, String>) {
         }
         Stmt::Unsafe { body } => qualify_block(body, vm),
         Stmt::Item(_) | Stmt::Select { .. } => {}
+        Stmt::MetaIf { condition, then_body, elif_branches, else_body, .. } => {
+            qualify_expr(condition, vm);
+            qualify_block(then_body, vm);
+            for (cond, body) in elif_branches {
+                qualify_expr(cond, vm);
+                qualify_block(body, vm);
+            }
+            if let Some(eb) = else_body {
+                qualify_block(eb, vm);
+            }
+        }
+        Stmt::MetaFor { range, body, .. } => {
+            qualify_expr(range, vm);
+            qualify_block(body, vm);
+        }
     }
 }
 
