@@ -102,4 +102,21 @@ void main():
     int cnc = dfc.nrows()
     print("{cnc}")
 
+    # ── Test 9: sort_by float column ascending ───────────────
+    Vector[str] float_vals = Vector[str]()
+    float_vals.push("9.0")
+    float_vals.push("10.5")
+    float_vals.push("2.3")
+    Vector[str] float_col_names = Vector[str]()
+    float_col_names.push("score")
+    Vector[Column] float_cols = Vector[Column]()
+    float_cols.push(col_from_strs(float_vals))
+    DataFrame df_float = df_from_columns(float_col_names, float_cols)
+    DataFrame sorted_float = df_float.sort_by("score", true)
+    Column score_col = sorted_float.get_column("score")
+    # Expected order: 2.3, 9.0, 10.5
+    print(score_col.value_as_str(0))
+    print(score_col.value_as_str(1))
+    print(score_col.value_as_str(2))
+
     print("done")

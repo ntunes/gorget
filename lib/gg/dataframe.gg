@@ -873,6 +873,13 @@ equip DataFrame:
                         should_swap = va_int > vb_int
                     else:
                         should_swap = va_int < vb_int
+                elif str_is_float(va) and str_is_float(vb):
+                    float va_flt = parse_float(va).unwrap()
+                    float vb_flt = parse_float(vb).unwrap()
+                    if ascending:
+                        should_swap = va_flt > vb_flt
+                    else:
+                        should_swap = va_flt < vb_flt
                 else:
                     if ascending:
                         should_swap = va > vb
