@@ -189,6 +189,7 @@ pub fn lower_equip_method(
 
     // Clear and register locals
     ctx.clear_locals();
+    ctx.callable_return_types.clear();
 
     // Register self as local _1 (only if method has self)
     let mut param_idx = if let Some(spt) = self_ptr_type {
@@ -205,6 +206,10 @@ pub fn lower_equip_method(
         }
         let gir_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
         ctx.register_local(&p.node.name.node, LocalId(param_idx), gir_type);
+        // Track callable parameter return types for indirect call lowering
+        if let Some(ret_type) = extract_callable_return_type(&p.node.type_.node, &[], ctx) {
+            ctx.callable_return_types.insert(LocalId(param_idx), ret_type);
+        }
         param_idx += 1;
     }
 

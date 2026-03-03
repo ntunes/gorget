@@ -1,0 +1,12 @@
+from gg.tensor import Tensor, tensor_linspace, tensor_sum_float, scalar_div_float
+
+void main():
+    # linspace(1.0, 4.0, 4) = [1, 2, 3, 4]
+    # / 2.0 = [0.5, 1.0, 1.5, 2.0], sum = 5.0
+    Tensor[float] a = tensor_linspace(1.0, 4.0, 4)
+    Tensor[float] b = scalar_div_float(a, 2.0)
+    print("{tensor_sum_float(b)}")
+
+    # flat_get directly — must preserve fractional value (not truncate to int)
+    print("{b.flat_get(0)}")
+    print("{b.flat_get(2)}")

@@ -5244,7 +5244,7 @@ fn infer_method_return_type(name: &str) -> Option<&'static str> {
                 return None;
             }
             // Methods that return the element type — extract from collection name
-            "pop" | "first" | "last" | "remove" | "get" => {
+            "pop" | "first" | "last" | "remove" | "get" | "at" => {
                 if let Some(elem) = extract_element_type_from_collection(type_prefix) {
                     return Some(Box::leak(elem.into_boxed_str()));
                 }
@@ -6490,11 +6490,21 @@ fn emit_indirect_callable(
         arg_c_types.push(arg_type);
         arg_strs.push(arg_str);
     }
-    let ret_type = if let Some(dst_id) = dst {
-        effective_c_type(dst_id.0 as usize, func, registry, type_overrides)
-    } else {
-        "void".to_string()
-    };
+    // Prefer the FnPtr return type recorded on the callable local (more precise).
+    // Fall back to the destination local's type if FnPtr info is absent.
+    let ret_type = func.locals.get(param_idx)
+        .and_then(|local| match registry.get(local.type_id) {
+            Some(GirType::FnPtr { return_type, .. }) => {
+                let t = format_type(*return_type, registry);
+                if t != "void" { Some(t) } else { None }
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| if let Some(dst_id) = dst {
+            effective_c_type(dst_id.0 as usize, func, registry, type_overrides)
+        } else {
+            "void".to_string()
+        });
     // _N is a void* pointing to [fn_ptr, env_ptr] pair.
     // Extract: fn = ((void**)_N)[0], env = ((void**)_N)[1]
     // Then call: ((ret_t(*)(void*, args...))fn)(env, args...)
@@ -8522,6 +8532,10 @@ fn format_local_type(func: &Function, local_idx: usize, registry: &TypeRegistry)
 /// E.g., "Vector__Str__get" → "Str", "Dict__Str__int64_t__keys" → "Str"
 /// Extract element type from a collection type name (e.g., "Vector__Str" → "Str", "Dict__Str__int64_t" → "int64_t")
 fn extract_element_type_from_collection(type_name: &str) -> Option<String> {
+    // Shared__T: strip prefix and recurse to get element type of the inner collection
+    if let Some(rest) = type_name.strip_prefix("Shared__") {
+        return extract_element_type_from_collection(rest);
+    }
     // Vector__T or GorgetArray (with embedded type hint)
     if let Some(rest) = type_name.strip_prefix("Vector__") {
         return Some(rest.to_string());

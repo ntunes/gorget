@@ -14,9 +14,9 @@ void main():
     Tensor[float] r1 = tensor_sub_float(a1, b1)
     print("{tensor_sum_float(r1)}")
 
-    # -- tensor_div_float: linspace(2,10,5)=[2,4,6,8,10] / linspace(1,5,5)=[1,2,3,4,5] = [2,2,2,2,2], sum=10
-    Tensor[float] a2 = tensor_linspace(2.0, 10.0, 5)
-    Tensor[float] b2 = tensor_linspace(1.0, 5.0, 5)
+    # -- tensor_div_float: linspace(1,4,4)=[1,2,3,4] / linspace(2,8,4)=[2,4,6,8] = [0.5,0.5,0.5,0.5], sum=2.0
+    Tensor[float] a2 = tensor_linspace(1.0, 4.0, 4)
+    Tensor[float] b2 = tensor_linspace(2.0, 8.0, 4)
     Tensor[float] r2 = tensor_div_float(a2, b2)
     print("{tensor_sum_float(r2)}")
 

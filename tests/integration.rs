@@ -6945,7 +6945,7 @@ fn tensor_extra() {
         "\
 6
 15.000000
-10.000000
+2.000000
 -15.000000
 28
 9.000000
@@ -6967,6 +6967,17 @@ true
 true
 4.000000
 1.000000",
+    );
+}
+
+#[test]
+fn tensor_float_frac() {
+    run_gg(
+        "tensor_float_frac.gg",
+        "\
+5.000000
+0.500000
+1.500000",
     );
 }
 
@@ -7047,6 +7058,17 @@ fn dataframe_transform() {
 3
 60
 3",
+    );
+}
+
+#[test]
+fn closure_float_ret() {
+    run_gg(
+        "closure_float_ret.gg",
+        "\
+2.5
+5
+10",
     );
 }
 
