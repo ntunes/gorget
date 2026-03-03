@@ -6263,7 +6263,7 @@ fn try_rewrite_collection_method(func_name: &str) -> Option<CollectionMethodCall
             "to_upper" => simple("gorget_str_to_upper"),
             "to_lower" => simple("gorget_str_to_lower"),
             // Read-only methods that delegate to gorget_str_* (GorgetString→Str coercion
-            // is handled at line 7591 when runtime_fn starts with "gorget_str_")
+            // is handled in emit_collection_method_call when runtime_fn starts with "gorget_str_")
             "contains" => simple("gorget_str_contains"),
             "starts_with" => simple("gorget_str_starts_with"),
             "ends_with" => simple("gorget_str_ends_with"),
@@ -7782,6 +7782,22 @@ fn emit_collection_method_call(
             if let Operand::Constant(Constant::Str(s)) = arg {
                 call_args.push(format!("gorget_str_from_literal(\"{}\", {})",
                     escape_c_string(s), s.len()));
+            } else if is_str_method {
+                // gorget_str_* functions expect Str args — coerce GorgetString if needed
+                let arg_c_type = match arg {
+                    Operand::Copy(p) | Operand::Move(p) => {
+                        let idx = p.local.0 as usize;
+                        if idx < func.locals.len() {
+                            format_type(func.locals[idx].type_id, registry)
+                        } else { String::new() }
+                    }
+                    _ => String::new(),
+                };
+                if arg_c_type == "GorgetString" || arg_c_type.contains("GorgetString") {
+                    call_args.push(format!("(Str){{ .data = {val}.data, .len = {val}.len }}"));
+                } else {
+                    call_args.push(val);
+                }
             } else {
                 call_args.push(val);
             }

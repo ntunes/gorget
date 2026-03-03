@@ -1,0 +1,40 @@
+void main():
+    # Test GorgetString→Str coercion in method arguments
+    # str + str yields String (GorgetString), which must be coerced to Str
+    # when passed as an argument to gorget_str_* functions
+
+    str base = "hello world"
+    str a = "wo"
+    str b = "rld"
+    # a + b → String (GorgetString) — must be coerced to Str for contains/starts_with/ends_with
+    String needle = a + b
+
+    if base.contains(needle):
+        print("contains: yes")
+    else:
+        print("contains: no")
+
+    if base.starts_with(needle):
+        print("starts_with: yes")
+    else:
+        print("starts_with: no")
+
+    if base.ends_with(needle):
+        print("ends_with: yes")
+    else:
+        print("ends_with: no")
+
+    # Also test the `in` operator with String needle
+    if needle in base:
+        print("in: yes")
+    else:
+        print("in: no")
+
+    # Test find with String arg
+    int idx = base.find(needle)
+    print(idx)
+
+    # Test replace with String args
+    String replacement = a + "w"
+    String result = base.replace(needle, replacement)
+    print(result)

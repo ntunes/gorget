@@ -54,8 +54,6 @@
 
 - **Smart pointers — remaining**: `Shared[T]` (Arc-pattern), `Weak[T]`, and `Mutex[T]` are DONE. Remaining: (1) `Box[Trait]` trait object generalization — add `SmartPtrKind` (Box/Rc/Arc/Weak) to `ResolvedType::TraitObject`, extend the `name.node == "Box"` check in `types.rs:367` to a set of known smart pointer names. Vtable dispatch is identical across wrappers; only construction/clone/drop differs. (2) Future: `Arc` vs `Rc` naming alignment if single-threaded variant ever needed. [from roadmap, added: 2026-02-16, updated: 2026-03-02]
 
-- **Pattern-bound variable type inference in print**: Bindings from `case Error(e):` use `__typeof__()` for declaration but their TypeId isn't in the resolution map. `print("{e}")` defaults to `%lld` format outside monomorphized contexts (inside monomorphized contexts, single-param `type_id_subs` fallback now works). Workaround: use `print(e)` for non-int pattern-bound vars. [from codegen-notes, added: 2026-02-16, updated: 2026-02-17]
-
 - **SSH library enhancements**: Public key authentication (IdentityFile), host key verification against known_hosts, ProxyJump/ProxyCommand support from ssh_config. [added: 2026-02-15]
 
 
@@ -81,22 +79,10 @@
 
 - **Simulator dispatch for basic File I/O**: `File__create`, `File__open`, `File__read_all`, `File__write_str` have no simulator dispatch — programs that use file I/O can't be run under `gg check`. Add in-memory file table to `src/sim/runtime.rs`. [added: 2026-03-02]
 
-- **`str.contains()` type dispatch audit**: After the GorgetString read-only method fix (Task A), audit all `contains/starts_with/ends_with` call sites in generated C to confirm GorgetString→Str coercion is applied in every code path (closures, match arms, nested expressions). Run the `http_get.gg` example as the primary smoke test. [added: 2026-03-02]
 
 - **Package management phase 2 (`gg update`, registry)**: Semver-aware resolution, central registry, `gg publish`, workspaces. [added: 2026-02-15]
 
-- **Consolidate type inference functions**: 6+ scattered inference functions (`infer_c_type_from_expr`, `infer_receiver_type`, `infer_receiver_c_type`, `infer_receiver_mangled_type`, `infer_vector_elem_type`, `infer_closure_body_c_type`) with no caching and redundant re-computation. Consolidate into a single type resolver module. [added: 2026-02-16]
-
-- **Extract `CodegenContext` sub-contexts**: 40+ fields mixing tracing, closures, generics, ownership, and test mode. Extract `ClosureContext`, `TraceContext`, `TestContext` for single-responsibility. [added: 2026-02-16]
-
-- **Data-driven stdlib call dispatch**: ~400-line match block in `c_expr_call.rs` (`gen_call`) where each arm follows the same pattern (extract args, format C call). Replace with a table of (name, arity, C template). [added: 2026-02-16]
-
-
-- **Deduplicate `trait_defs` collection**: Same `HashMap<String, &TraitDef>` built identically in `emit_function_definitions` and `emit_vtable_instances` (`c_item.rs:402-407, 926-930`). Factor into module-level helper. [added: 2026-02-16]
-
-- **Deduplicate Result constructor pattern**: Same `mangle_generic("Result", ...) + mangle_variant("Ok"/"Error")` pattern repeated 3+ times for HTTP, Socket, RSA (`c_expr_call.rs:575, 607, 717`, `c_expr_methods.rs:1050`). Extract `gen_result_binding()`. [added: 2026-02-16]
-
-- **Inconsistent string type checking**: `is_string_expr()` exists but isn't used everywhere. Some places check `resolve_expr_type_id`, others check `Expr::StringLiteral` (`c_expr.rs:136-137`, `c_expr_generic.rs:454-475`). Unify. [added: 2026-02-16]
+- **Data-driven stdlib call dispatch**: Large match blocks in the GIR C backend (`src/backend/c/mod.rs:3397, 3534, 6543`) where each arm follows the same pattern (check name, emit C call). Replace with a table of (name, arity, C template). [added: 2026-02-16, updated: 2026-03-03]
 
 - **`gg info` command**: show fields, methods, traits, memory layout for a type. [added: 2026-02-10]
 
@@ -150,7 +136,7 @@
 
 - **`directive implicit-auto`**: Python-style implicit variable declarations (`x = 1` instead of `auto x = 1`). Trade-off: more Pythonic but typos silently create new variables. [added: 2026-02-11]
 
-- **Topological sort silent fallback for cycles**: `c_item.rs:166-172` comment says "cycles — shouldn't happen" but code silently handles them. Should `debug_assert!` or warn. [added: 2026-02-16]
+- **Topological sort silent fallback for cycles**: `src/backend/c/mod.rs:1092-1097` comment says "shouldn't happen without cycles" but code silently appends remaining types in original order. Should `debug_assert!` or warn. [added: 2026-02-16, updated: 2026-03-03]
 
 
 - **`c_runtime.rs` monolithic string constant**: ~5,200-line single string constant is hard to navigate and edit. Split into separate const blocks or `.c` files. [added: 2026-02-16, updated: 2026-02-25]
@@ -169,9 +155,6 @@
 
 - **Default trait: replace TryCapture memset with Default call**: TryCapture codegen uses `memset(&var, 0, sizeof(var))` for zero-default on error. Could call `Default_for_Type__default()` instead for proper initialization (e.g., empty strings vs null pointers). Needs type info at the TryCapture site. [added: 2026-02-17]
 
-- **Consistent C code emission style**: `c_item.rs` uses `emitter.emit_line()` with proper indentation, `c_expr.rs` uses long `format!()` strings with embedded `\n`. Statement expression formatting varies across `c_expr.rs:42, 125, 184, 275`. Standardize on emitter usage. [added: 2026-02-16]
-
-- **VTable method slot duplication**: `emit_vtable_method_slot()` and the vtable instance assignment loop (`c_item.rs:852-877, 962-993`) reconstruct the same logic independently. Reuse slot generation. [added: 2026-02-16]
 
 
 - **Native backend**: LLVM, QBE, or cranelift — after language stabilizes. [added: 2026-02-10]

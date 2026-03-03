@@ -1818,6 +1818,20 @@ A
 }
 
 #[test]
+fn string_coerce_args() {
+    run_gg(
+        "string_coerce_args.gg",
+        "\
+contains: yes
+starts_with: no
+ends_with: yes
+in: yes
+6
+hello wow",
+    );
+}
+
+#[test]
 fn struct_string_coerce() {
     run_gg(
         "struct_string_coerce.gg",
