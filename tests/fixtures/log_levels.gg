@@ -1,0 +1,40 @@
+from gg.log import Logger, LogLevel, log_level_int, log_level_name
+
+void main():
+    # Verify log_level_int helper
+    int di = log_level_int(Debug())
+    int ii = log_level_int(Info())
+    int wi = log_level_int(Warn())
+    int ei = log_level_int(Err())
+    print("{di}")
+    print("{ii}")
+    print("{wi}")
+    print("{ei}")
+
+    # Verify log_level_name helper
+    print(log_level_name(Debug()))
+    print(log_level_name(Info()))
+    print(log_level_name(Warn()))
+    print(log_level_name(Err()))
+
+    # Start at Err level — only errors print
+    Logger lg = Logger.new(Err())
+    lg.debug("hidden debug")
+    lg.info("hidden info")
+    lg.warn("hidden warn")
+    lg.error("visible error")
+
+    # Call set_level to Debug — now everything prints
+    lg.set_level(Debug())
+    lg.debug("debug now visible")
+    lg.info("info now visible")
+    lg.warn("warn now visible")
+    lg.error("error still visible")
+
+    # Call set_level back to Info — debug suppressed
+    lg.set_level(Info())
+    lg.debug("debug suppressed again")
+    lg.info("info still visible")
+    lg.error("error still visible 2")
+
+    print("done")

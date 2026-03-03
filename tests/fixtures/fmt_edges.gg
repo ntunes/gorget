@@ -1,0 +1,36 @@
+from std.fmt import pad_left, pad_right, center, repeat, str_truncate, join
+from std.collections import Vector
+
+void main():
+    # pad_left with empty string
+    print(pad_left("", 3, "."))
+
+    # pad_right with zero width (already fits)
+    print(pad_right("", 0, "."))
+
+    # center where string already fills width
+    print(center("x", 1, "-"))
+
+    # repeat with count 1
+    print(repeat("ab", 1))
+
+    # str_truncate: suffix longer than max — suffix itself is truncated
+    print(str_truncate("hello world", 2, "..."))
+
+    # str_truncate: max = 0 — returns ""
+    str z = str_truncate("hello world", 0, "...")
+    int zlen = z.len()
+    print("{zlen}")
+
+    # join with empty vector
+    Vector[str] empty = Vector[str]()
+    str joined_empty = join(empty, ", ")
+    int elen = joined_empty.len()
+    print("{elen}")
+
+    # join with single element (no separator)
+    Vector[str] single = Vector[str]()
+    single.push("only")
+    print(join(single, "-"))
+
+    print("done")

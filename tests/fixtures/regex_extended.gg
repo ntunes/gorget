@@ -1,0 +1,40 @@
+from gg.regex import regex_compile, Regex, Match
+from std.collections import Vector
+
+void main():
+    # find_at: search for \d+ starting at an offset
+    Result[Regex, str] rx_result = regex_compile(r"\d+")
+    match rx_result:
+        case Ok(rx):
+            # "abc 42 def 99" — start at offset 7 → should find "99"
+            Option[Match] m_opt = rx.find_at("abc 42 def 99", 7)
+            match m_opt:
+                case Some(m):
+                    print(m.text())
+                    int s = m.start()
+                    print("{s}")
+                case None:
+                    print("no match")
+        case Error(e):
+            print("error")
+
+    # groups(): returns all capture groups as a vector
+    Result[Regex, str] grp_result = regex_compile(r"(\w+)-(\d+)")
+    match grp_result:
+        case Ok(rx):
+            Option[Match] m_opt = rx.find("item-42")
+            match m_opt:
+                case Some(m):
+                    Vector[str] gs = m.groups()
+                    int gcount = gs.len()
+                    print("{gcount}")
+                    int idx = 0
+                    while idx < gs.len():
+                        print(gs[idx])
+                        idx = idx + 1
+                case None:
+                    print("no match")
+        case Error(e):
+            print("error")
+
+    print("done")

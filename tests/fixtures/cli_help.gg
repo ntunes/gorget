@@ -1,0 +1,17 @@
+from gg.cli import CliParser
+
+void main():
+    CliParser cli = CliParser.new("myapp", "A test CLI application")
+    cli.add_flag("--verbose", "-v", "Enable verbose output")
+    cli.add_option("--output", "-o", "Output file path", "out.txt")
+    cli.add_positional("input", "Input file to process")
+    cli.print_help()
+
+    print("---")
+
+    # Parser with no positionals, multiple options
+    CliParser cli2 = CliParser.new("tool", "A utility tool")
+    cli2.add_flag("--dry-run", "-n", "Simulate without changes")
+    cli2.add_option("--config", "-c", "Config file", "config.toml")
+    cli2.add_option("--timeout", "-t", "Timeout in seconds", "30")
+    cli2.print_help()

@@ -6334,6 +6334,9 @@ static GorgetRegexMatch gorget_regex_find(GorgetRegex* rx, const char* subject, 
     return m;
 }
 
+// ── find_at (alias for find with explicit offset) ────────────────
+#define gorget_regex_find_at gorget_regex_find
+
 // ── is_match ────────────────────────────────────────────────────
 
 static bool gorget_regex_is_match(GorgetRegex* rx, const char* subject) {
