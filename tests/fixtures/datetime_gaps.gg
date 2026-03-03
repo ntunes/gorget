@@ -1,0 +1,43 @@
+from std.datetime import DateTime
+from std.os import setenv
+
+void main():
+    setenv("TZ", "UTC")
+
+    # from_epoch_utc: epoch 0 → 1970-01-01T00:00:00Z
+    DateTime dt1970 = DateTime.from_epoch_utc(0)
+    print(dt1970.to_string())
+
+    # from_epoch_utc: epoch 946684800 → 2000-01-01T00:00:00Z
+    DateTime dt2000 = DateTime.from_epoch_utc(946684800)
+    print(dt2000.to_string())
+
+    # from_epoch (local, but TZ=UTC so same result)
+    DateTime dt2000b = DateTime.from_epoch(946684800)
+    print(dt2000b.to_string())
+
+    # day_of_year: Jan 1 = 1
+    DateTime dt_jan1 = DateTime(2000, 1, 1, 0, 0, 0, 0)
+    int doy1 = dt_jan1.day_of_year()
+    print("{doy1}")
+
+    # day_of_year: Mar 1 in leap year 2000 = 61
+    DateTime dt_mar1 = DateTime(2000, 3, 1, 0, 0, 0, 0)
+    int doy2 = dt_mar1.day_of_year()
+    print("{doy2}")
+
+    # day_of_year: Dec 31 in leap year 2000 = 366
+    DateTime dt_dec31 = DateTime(2000, 12, 31, 0, 0, 0, 0)
+    int doy3 = dt_dec31.day_of_year()
+    print("{doy3}")
+
+    # add_minutes: add 90 minutes to midnight → 01:30:00
+    DateTime dt_base = DateTime(2000, 1, 1, 0, 0, 0, 0)
+    DateTime dt_90m = dt_base.add_minutes(90)
+    print(dt_90m.to_string())
+
+    # add_minutes: negative (subtract 30 min) → 1999-12-31T23:30:00Z
+    DateTime dt_neg = dt_base.add_minutes(-30)
+    print(dt_neg.to_string())
+
+    print("done")

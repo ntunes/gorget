@@ -4858,6 +4858,20 @@ done",
 }
 
 #[test]
+fn regex_extended() {
+    run_gg(
+        "regex_extended.gg",
+        "\
+99
+11
+2
+item
+42
+done",
+    );
+}
+
+#[test]
 fn encoding_basic() {
     run_gg(
         "encoding_basic.gg",
@@ -5044,6 +5058,30 @@ done",
 }
 
 #[test]
+fn log_levels() {
+    run_gg(
+        "log_levels.gg",
+        "\
+0
+1
+2
+3
+DEBUG
+INFO
+WARN
+ERROR
+[ERROR] visible error
+[DEBUG] debug now visible
+[INFO] info now visible
+[WARN] warn now visible
+[ERROR] error still visible
+[INFO] info still visible
+[ERROR] error still visible 2
+done",
+    );
+}
+
+#[test]
 fn log_basic() {
     run_gg(
         "log_basic.gg",
@@ -5095,6 +5133,28 @@ done",
 }
 
 #[test]
+fn cli_help() {
+    run_gg(
+        "cli_help.gg",
+        "\
+Usage: myapp
+A test CLI application
+Arguments:
+  input  Input file to process
+Options:
+  --verbose, -v  Enable verbose output
+  --output, -o  Output file path (default: out.txt)
+---
+Usage: tool
+A utility tool
+Options:
+  --dry-run, -n  Simulate without changes
+  --config, -c  Config file (default: config.toml)
+  --timeout, -t  Timeout in seconds (default: 30)",
+    );
+}
+
+#[test]
 fn cli_basic() {
     run_gg(
         "cli_basic.gg",
@@ -5105,6 +5165,27 @@ result.txt
 1
 input.txt
 default.txt
+false
+true
+done",
+    );
+}
+
+#[test]
+fn heap_edges() {
+    run_gg(
+        "heap_edges.gg",
+        "\
+true
+true
+1
+3
+3
+5
+10
+5
+20
+true
 false
 true
 done",
@@ -5128,6 +5209,19 @@ true
 true
 42
 1.000000
+done",
+    );
+}
+
+#[test]
+fn datetime_format() {
+    run_gg(
+        "datetime_format.gg",
+        "\
+2000-01-01
+00:00:00
+2024/07/15 14:30
+Thursday
 done",
     );
 }
@@ -7215,6 +7309,23 @@ fn fmt_basic() {
 }
 
 #[test]
+fn fmt_edges() {
+    run_gg(
+        "fmt_edges.gg",
+        "\
+...
+
+x
+ab
+..
+0
+0
+only
+done",
+    );
+}
+
+#[test]
 fn process_spawn() {
     // echo appends \n, print(out) adds another \n → blank line before exit code
     run_gg("process_spawn.gg", "hello world\n\n0\ntrue");
@@ -7658,6 +7769,150 @@ Eve
 2.3
 9.0
 10.5
+done",
+    );
+}
+
+#[test]
+fn csv_stringify() {
+    run_gg(
+        "csv_stringify.gg",
+        "\
+3
+name
+age
+Alice
+30
+2
+x
+y
+2
+2
+Paris
+Tokyo
+1
+2
+done",
+    );
+}
+
+#[test]
+fn json_pretty() {
+    run_gg(
+        "json_pretty.gg",
+        "\
+{
+  \"name\": \"Alice\"
+}
+[
+  1,
+  2,
+  3
+]
+done",
+    );
+}
+
+#[test]
+fn xml_query() {
+    run_gg(
+        "xml_query.gg",
+        "\
+item
+1
+a
+0
+2
+1
+2
+0
+<item id=\"1\">a</item>
+done",
+    );
+}
+
+#[test]
+fn yaml_multi() {
+    run_gg(
+        "yaml_multi.gg",
+        "\
+2
+Alice
+Bob
+true
+true
+done",
+    );
+}
+
+#[test]
+fn uuid_props() {
+    run_gg(
+        "uuid_props.gg",
+        "\
+4
+true
+false
+done",
+    );
+}
+
+#[test]
+fn toml_datetime() {
+    run_gg(
+        "toml_datetime.gg",
+        "\
+true
+false
+true
+false
+done",
+    );
+}
+
+#[test]
+fn datetime_gaps() {
+    run_gg(
+        "datetime_gaps.gg",
+        "\
+1970-01-01T00:00:00Z
+2000-01-01T00:00:00Z
+2000-01-01T00:00:00Z
+1
+61
+366
+2000-01-01T01:30:00Z
+1999-12-31T23:30:00Z
+done",
+    );
+}
+
+#[test]
+fn ecs_advanced() {
+    run_gg(
+        "ecs_advanced.gg",
+        "\
+3
+100
+none
+100
+50
+done",
+    );
+}
+
+#[test]
+fn dataframe_extra() {
+    run_gg(
+        "dataframe_extra.gg",
+        "\
+2
+2
+Alice
+90
+2
+true
+true
 done",
     );
 }

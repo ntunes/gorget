@@ -1,0 +1,36 @@
+from gg.ecs import EntityPool, SparseSet, Entity
+
+void main():
+    EntityPool pool = EntityPool.new()
+    Entity e1 = pool.create()
+    Entity e2 = pool.create()
+    Entity e3 = pool.create()
+
+    # max_id: after 3 creates, max_id reflects next assigned id
+    int mid = pool.max_id()
+    print("{mid}")
+
+    # try_get: Some when component exists
+    SparseSet[int] health = SparseSet[int].new()
+    health.insert(e1, 100)
+    health.insert(e2, 50)
+
+    Option[int] h1 = health.try_get(e1)
+    match h1:
+        case Some(v):
+            print("{v}")
+        case None:
+            print("none")
+
+    # try_get: None when component missing
+    Option[int] h3 = health.try_get(e3)
+    match h3:
+        case Some(v):
+            print("{v}")
+        case None:
+            print("none")
+
+    # each: iterate all (entity, value) pairs in insertion order
+    health.each((Entity e, int hp): print("{hp}"))
+
+    print("done")

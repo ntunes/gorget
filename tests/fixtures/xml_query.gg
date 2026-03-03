@@ -1,0 +1,41 @@
+from gg.xml import XmlNode, xml_parse, xml_stringify
+from std.collections import Vector
+
+void main():
+    Result[XmlNode, str] r = xml_parse(
+        "<root><item id=\"1\">a</item><item id=\"2\">b</item><other>c</other></root>"
+    )
+    match r:
+        case Ok(root):
+            # find: first <item>
+            XmlNode first = root.find("item")
+            print(first.tag())
+            print(first.attr("id"))
+            print(first.text())
+
+            # find: non-existent tag returns Text("")
+            XmlNode missing = root.find("nope")
+            str missing_tag = missing.tag()
+            int mlen = missing_tag.len()
+            print("{mlen}")
+
+            # find_all: both <item> elements
+            Vector[XmlNode] items = root.find_all("item")
+            int n = items.len()
+            print("{n}")
+            XmlNode it0 = items.get(0).unwrap()
+            XmlNode it1 = items.get(1).unwrap()
+            print(it0.attr("id"))
+            print(it1.attr("id"))
+
+            # find_all: no match returns empty vector
+            Vector[XmlNode] empty = root.find_all("nope")
+            int en = empty.len()
+            print("{en}")
+
+            # xml_stringify
+            String s = xml_stringify(first)
+            print(s)
+        case Error(e):
+            print("error")
+    print("done")

@@ -1,0 +1,50 @@
+from gg.csv import csv_parse, csv_parse_delim, csv_parse_table, csv_parse_table_delim, csv_stringify, csv_stringify_delim, csv_stringify_table, csv_stringify_table_delim, CsvTable
+from std.collections import Vector
+
+void main():
+    # csv_stringify roundtrip (parse → stringify → re-parse → check cells)
+    str src = "name,age\r\nAlice,30\r\nBob,25\r\n"
+    Vector[Vector[str]] rows = csv_parse(src).unwrap()
+    str out = csv_stringify(rows)
+    Vector[Vector[str]] rows2 = csv_parse(out).unwrap()
+    int nrows = rows2.len()
+    print("{nrows}")
+    Vector[str] r0 = rows2.get(0).unwrap()
+    print(r0.get(0).unwrap())
+    print(r0.get(1).unwrap())
+    Vector[str] r1 = rows2.get(1).unwrap()
+    print(r1.get(0).unwrap())
+    print(r1.get(1).unwrap())
+
+    # csv_stringify_delim roundtrip with "|"
+    str pipe_src = "x|y\r\n1|2\r\n"
+    Vector[Vector[str]] pipe_rows = csv_parse_delim(pipe_src, "|").unwrap()
+    str pipe_out = csv_stringify_delim(pipe_rows, "|")
+    Vector[Vector[str]] pipe_rows2 = csv_parse_delim(pipe_out, "|").unwrap()
+    int pnrows = pipe_rows2.len()
+    print("{pnrows}")
+    Vector[str] pr0 = pipe_rows2.get(0).unwrap()
+    print(pr0.get(0).unwrap())
+    print(pr0.get(1).unwrap())
+
+    # csv_stringify_table roundtrip
+    str tbl_src = "city,pop\r\nParis,2161\r\nTokyo,9273\r\n"
+    CsvTable tbl = csv_parse_table(tbl_src).unwrap()
+    str tbl_out = csv_stringify_table(tbl)
+    CsvTable tbl2 = csv_parse_table(tbl_out).unwrap()
+    int tr = tbl2.row_count()
+    int tc = tbl2.col_count()
+    print("{tr}")
+    print("{tc}")
+    print(tbl2.get_named(0, "city"))
+    print(tbl2.get_named(1, "city"))
+
+    # csv_stringify_table_delim roundtrip with ";"
+    str semi_src = "a;b\r\n1;2\r\n"
+    CsvTable semi_tbl = csv_parse_table_delim(semi_src, ";").unwrap()
+    str semi_out = csv_stringify_table_delim(semi_tbl, ";")
+    CsvTable semi_tbl2 = csv_parse_table_delim(semi_out, ";").unwrap()
+    print(semi_tbl2.get_named(0, "a"))
+    print(semi_tbl2.get_named(0, "b"))
+
+    print("done")

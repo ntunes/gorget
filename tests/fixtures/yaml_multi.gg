@@ -1,0 +1,26 @@
+from gg.yaml import Yaml, yaml_parse, yaml_parse_all, yaml_stringify_all, yaml_pretty
+from std.collections import Vector
+
+void main():
+    # yaml_parse_all: two documents separated by ---
+    str multi = "name: Alice\nage: 30\n---\nname: Bob\nage: 25\n"
+    Vector[Yaml] docs = yaml_parse_all(multi).unwrap()
+    int n = docs.len()
+    print("{n}")
+    Yaml doc0 = docs.get(0).unwrap()
+    print(doc0.get("name").as_str())
+    Yaml doc1 = docs.get(1).unwrap()
+    print(doc1.get("name").as_str())
+
+    # yaml_stringify_all: verify output is non-empty
+    str sa = yaml_stringify_all(docs)
+    bool has_content = sa.len() > 0
+    print("{has_content}")
+
+    # yaml_pretty: block-style output of a mapping
+    Yaml y = yaml_parse("x: 1\ny: 2\n").unwrap()
+    str pretty = yaml_pretty(y)
+    bool pretty_ok = pretty.len() > 0
+    print("{pretty_ok}")
+
+    print("done")
