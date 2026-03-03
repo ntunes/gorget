@@ -76,7 +76,6 @@
 
 ## Low
 
-- **`Rem` trait naming**: Currently `Rem` (C remainder semantics). Consider renaming to `Mod` if Gorget adopts Python-style modulo semantics. [added: 2026-03-03]
 
 - **Delayed meta (Zig-style comptime in generic bodies)**: Meta currently evaluates before semantic analysis, so it cannot branch on generic type params. Future exploration: a second meta evaluation pass at monomorphization time that would allow `meta if typename(T) == "int":` inside generic function bodies. Would enable Zig/Odin-style duck typing without traits. [added: 2026-03-03]
 

@@ -3352,6 +3352,7 @@ fn lower_binary_op(
                 AstOp::Sub => Some("sub"),
                 AstOp::Mul => Some("mul"),
                 AstOp::Div => Some("div"),
+                AstOp::Rem => Some("rem"),
                 AstOp::Mod => Some("mod"),
                 _ => None,
             };
@@ -3389,7 +3390,8 @@ fn lower_binary_op(
                 AstOp::Sub => BinOp::Sub,
                 AstOp::Mul => BinOp::Mul,
                 AstOp::Div => BinOp::Div,
-                AstOp::Mod => BinOp::Rem,
+                AstOp::Rem => BinOp::Rem,
+                AstOp::Mod => BinOp::Mod,
                 AstOp::BitAnd => BinOp::BitAnd,
                 AstOp::BitOr => BinOp::BitOr,
                 AstOp::BitXor => BinOp::BitXor,

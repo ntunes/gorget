@@ -764,8 +764,8 @@ impl<'a> TypeChecker<'a> {
                     // `in` returns bool
                     BinaryOp::In => self.types.bool_id,
                     // Arithmetic operators — result is same type
-                    BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod
-                    | BinaryOp::AddWrap | BinaryOp::SubWrap | BinaryOp::MulWrap => {
+                    BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem
+                    | BinaryOp::Mod | BinaryOp::AddWrap | BinaryOp::SubWrap | BinaryOp::MulWrap => {
                         self.unify(left_type, right_type, expr.span)
                     }
                     // Bitwise operators — result is same type

@@ -165,6 +165,7 @@ ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable &t
     trait_names.push("Mul")
     trait_names.push("Div")
     trait_names.push("Rem")
+    trait_names.push("Mod")
     trait_names.push("Neg")
     trait_names.push("Comparable")
     trait_names.push("Index")

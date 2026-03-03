@@ -329,6 +329,9 @@ pub enum Keyword {
     // Compile-time
     Meta,
 
+    // Arithmetic keyword operators
+    Mod,
+
     // Special identifiers
     It,
     Panic,
@@ -426,6 +429,7 @@ impl Keyword {
             Keyword::Test => "test",
             Keyword::Suite => "suite",
             Keyword::Meta => "meta",
+            Keyword::Mod => "mod",
             Keyword::It => "it",
             Keyword::Panic => "panic",
             Keyword::Assert => "assert",
@@ -522,6 +526,7 @@ impl Keyword {
             "test" => Some(Keyword::Test),
             "suite" => Some(Keyword::Suite),
             "meta" => Some(Keyword::Meta),
+            "mod" => Some(Keyword::Mod),
             "it" => Some(Keyword::It),
             "panic" => Some(Keyword::Panic),
             "assert" => Some(Keyword::Assert),

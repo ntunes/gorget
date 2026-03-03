@@ -627,6 +627,11 @@ impl Parser {
             Token::Percent => InfixBP {
                 left: 29,
                 right: 30,
+                op: InfixOp::Binary(BinaryOp::Rem),
+            },
+            Token::Keyword(Keyword::Mod) => InfixBP {
+                left: 29,
+                right: 30,
                 op: InfixOp::Binary(BinaryOp::Mod),
             },
 

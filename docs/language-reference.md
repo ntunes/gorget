@@ -256,7 +256,8 @@ Type: `Option[T]` for some inferred `T`.
 | `-`    | Subtraction / Negation |
 | `*`    | Multiplication / Dereference |
 | `/`    | Division        |
-| `%`    | Modulo          |
+| `%`    | Remainder (sign follows dividend) |
+| `mod`  | Modulo (sign follows divisor) |
 
 **Bitwise:**
 
@@ -322,7 +323,7 @@ Both operator and keyword forms are equivalent and may be used interchangeably.
 | `-=`   | Subtract-assign    |
 | `*=`   | Multiply-assign    |
 | `/=`   | Divide-assign      |
-| `%=`   | Modulo-assign      |
+| `%=`   | Remainder-assign   |
 | `&=`   | Bitwise AND-assign |
 | `\|=`  | Bitwise OR-assign  |
 | `^=`   | Bitwise XOR-assign |
@@ -1228,7 +1229,7 @@ From lowest to highest precedence:
 | 9          | `..` `..=`                   | Non-associative |
 | 10         | `<<` `>>`                    | Left          |
 | 11         | `+` `-`                      | Left          |
-| 12         | `*` `/` `%`                  | Left          |
+| 12         | `*` `/` `%` `mod`            | Left          |
 | 13         | Unary `-` `~` `!` `&` `*`   | Unary (prefix)|
 | 14         | `?.` `.` `()` `[]`           | Left          |
 | 15         | Atoms (literals, identifiers, grouped expressions) | — |
@@ -2198,6 +2199,7 @@ The compiler automatically registers the following core traits. They cannot be r
 | `Mul[Out]` | `Out mul(self, Self rhs)` | `Out` | `*` and `*=` operators |
 | `Div[Out]` | `Out div(self, Self rhs)` | `Out` | `/` and `/=` operators |
 | `Rem[Out]` | `Out rem(self, Self rhs)` | `Out` | `%` and `%=` operators |
+| `Mod[Out]` | `Out mod(self, Self rhs)` | `Out` | `mod` operator |
 | `Neg[Out]` | `Out neg(self)` | `Out` | Unary `-` operator |
 | `Comparable` | `int compare(self, Self other)` | `int` | `<`, `>`, `<=`, `>=` operators |
 | `Index[K, V]` | `V get(self, K key)` | `V` | `a[k]` read access |
@@ -2415,7 +2417,7 @@ print("{buf.len()}")   # 42
 
 Operator traits enable user-defined types to use built-in operators. The `Out` type parameter controls the return type.
 
-**Arithmetic (`Add`, `Sub`, `Mul`, `Div`, `Rem`).** Each trait enables its corresponding binary operator and compound assignment (`+=`, `-=`, etc.).
+**Arithmetic (`Add`, `Sub`, `Mul`, `Div`, `Rem`, `Mod`).** Each trait enables its corresponding binary operator. `Rem` maps to `%`/`%=` (remainder — sign follows dividend). `Mod` maps to the `mod` keyword operator (modulo — sign follows divisor).
 
 ```gorget
 struct Vec2:

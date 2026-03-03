@@ -160,7 +160,7 @@ fn is_numeric_primitive(name: &str) -> bool {
 /// Check if a trait name is one that numeric primitives intrinsically satisfy.
 fn is_numeric_trait(name: &str) -> bool {
     matches!(name,
-        "Numeric" | "Add" | "Sub" | "Mul" | "Div" | "Rem" | "Neg"
+        "Numeric" | "Add" | "Sub" | "Mul" | "Div" | "Rem" | "Mod" | "Neg"
         | "Comparable" | "Equatable" | "Default" | "One"
     )
 }
@@ -337,6 +337,17 @@ fn register_builtin_traits(
             });
             m
         }),
+        // Mod[Out]: Out mod(self, Self rhs)
+        ("Mod", {
+            let mut m = FxHashMap::default();
+            m.insert("mod".into(), FunctionSig {
+                params: vec![types.error_id],
+                return_type: types.error_id,
+                has_self: true,
+                self_ownership: None,
+            });
+            m
+        }),
         // Neg[Out]: Out neg(self)
         ("Neg", {
             let mut m = FxHashMap::default();
@@ -472,7 +483,7 @@ fn register_builtin_traits(
 
     // Wire Numeric's extends: Add + Sub + Mul + Div + Rem + Neg + Comparable + Default + One
     if let Some(numeric_def_id) = scopes.lookup("Numeric") {
-        let parent_names = ["Add", "Sub", "Mul", "Div", "Rem", "Neg", "Comparable", "Default", "One"];
+        let parent_names = ["Add", "Sub", "Mul", "Div", "Rem", "Mod", "Neg", "Comparable", "Default", "One"];
         let parent_ids: Vec<DefId> = parent_names.iter()
             .filter_map(|name| scopes.lookup(name))
             .collect();
@@ -907,8 +918,8 @@ equip Circle with Drawable:
 ";
         let (registry, errors) = analyze(source);
         assert!(errors.is_empty(), "errors: {:?}", errors);
-        // 23 built-in traits + 1 user-defined trait
-        assert_eq!(registry.traits.len(), 24);
+        // 24 built-in traits + 1 user-defined trait
+        assert_eq!(registry.traits.len(), 25);
         assert_eq!(registry.impls.len(), 1);
         assert!(registry.impls[0].trait_.is_some());
     }
@@ -1342,7 +1353,7 @@ equip int with MyTrait:
         let numeric_info = registry.traits.values()
             .find(|t| t.name == "Numeric")
             .expect("Numeric trait not found");
-        assert_eq!(numeric_info.extends.len(), 9,
-            "Numeric should extend 9 traits (Add, Sub, Mul, Div, Rem, Neg, Comparable, Default, One)");
+        assert_eq!(numeric_info.extends.len(), 10,
+            "Numeric should extend 10 traits (Add, Sub, Mul, Div, Rem, Mod, Neg, Comparable, Default, One)");
     }
 }

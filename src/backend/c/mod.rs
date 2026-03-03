@@ -3261,6 +3261,7 @@ fn emit_instruction(
                     BinOp::Mul => "mul",
                     BinOp::Div => "div",
                     BinOp::Rem => "rem",
+                    BinOp::Mod => "mod",
                     _ => "",
                 };
                 if !trait_method.is_empty() {
@@ -3280,11 +3281,18 @@ fn emit_instruction(
                 let _ = writeln!(out,
                     "        _{id} = ({c_type})((uint64_t){lhs_str} {op_str} (uint64_t){rhs_str});",
                     id = dst.0);
+            } else if *op == BinOp::Mod && (c_type == "double" || c_type == "float") {
+                // Float true modulo (destination is float): fmod + sign correction
+                let _ = writeln!(out, "        {{ double _rem_{id} = fmod((double){lhs_str}, (double){rhs_str}); _{id} = (_rem_{id} != 0.0 && ((_rem_{id} < 0.0) != ((double){rhs_str} < 0.0))) ? _rem_{id} + (double){rhs_str} : _rem_{id}; }}", id = dst.0);
+            } else if *op == BinOp::Mod && (lhs_effective == "double" || lhs_effective == "float") && (c_type == "int64_t" || c_type == "int32_t") {
+                // Float operand with integer destination: true modulo
+                let _ = writeln!(out, "        if ({rhs_str} == 0) {{ fprintf(stderr, \"gorget: division by zero\\n\"); exit(1); }}");
+                let _ = writeln!(out, "        {{ int64_t _a_{id} = (int64_t){lhs_str}; int64_t _b_{id} = (int64_t){rhs_str}; int64_t _rem_{id} = _a_{id} % _b_{id}; _{id} = (_rem_{id} != 0 && ((_rem_{id} ^ _b_{id}) < 0)) ? _rem_{id} + _b_{id} : _rem_{id}; }}", id = dst.0);
             } else if *op == BinOp::Rem && (c_type == "double" || c_type == "float") {
-                // Float modulo (destination is float): use fmod() instead of %
+                // Float remainder (destination is float): use fmod() instead of %
                 let _ = writeln!(out, "        _{id} = fmod((double){lhs_str}, (double){rhs_str});", id = dst.0);
             } else if *op == BinOp::Rem && (lhs_effective == "double" || lhs_effective == "float") && (c_type == "int64_t" || c_type == "int32_t") {
-                // Float operand with integer destination: cast to int first, then integer modulo
+                // Float operand with integer destination: cast to int first, then integer remainder
                 let _ = writeln!(out, "        if ({rhs_str} == 0) {{ fprintf(stderr, \"gorget: division by zero\\n\"); exit(1); }}");
                 let _ = writeln!(out, "        _{id} = (int64_t){lhs_str} % (int64_t){rhs_str};", id = dst.0);
             } else if matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul) && c_type == "int64_t" && !module.overflow_wrap {
@@ -3308,6 +3316,10 @@ fn emit_instruction(
                     };
                     let _ = writeln!(out, "        if ({builtin}({lhs_str}, {rhs_str}, &_{id})) {{ fprintf(stderr, \"gorget: integer overflow\\n\"); exit(1); }}", id = dst.0);
                 }
+            } else if *op == BinOp::Mod && (c_type == "int64_t" || c_type == "int32_t") {
+                // Integer true modulo with division by zero check
+                let _ = writeln!(out, "        if ({rhs_str} == 0) {{ fprintf(stderr, \"gorget: division by zero\\n\"); exit(1); }}");
+                let _ = writeln!(out, "        {{ int64_t _rem_{id} = {lhs_str} % {rhs_str}; _{id} = (_rem_{id} != 0 && ((_rem_{id} ^ {rhs_str}) < 0)) ? _rem_{id} + {rhs_str} : _rem_{id}; }}", id = dst.0);
             } else if matches!(op, BinOp::Div | BinOp::Rem) && (c_type == "int64_t" || c_type == "int32_t") {
                 // Division by zero check
                 let _ = writeln!(out, "        if ({rhs_str} == 0) {{ fprintf(stderr, \"gorget: division by zero\\n\"); exit(1); }}");
@@ -8820,6 +8832,7 @@ fn format_binop(op: BinOp) -> &'static str {
         BinOp::Mul => "*",
         BinOp::Div => "/",
         BinOp::Rem => "%",
+        BinOp::Mod => "%", // fallback only — actual modulo uses inline code
         BinOp::Pow => "pow_placeholder",
         BinOp::BitAnd => "&",
         BinOp::BitOr => "|",

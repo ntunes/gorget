@@ -5043,6 +5043,10 @@ impl<'m> Interpreter<'m> {
                     lf / rf
                 }
                 BinOp::Rem => lf % rf,
+                BinOp::Mod => {
+                    let r = lf % rf;
+                    if r != 0.0 && ((r < 0.0) != (rf < 0.0)) { r + rf } else { r }
+                }
                 BinOp::Pow => lf.powf(rf),
                 _ => return Err(SimError::TypeMismatch {
                     expected: "integer for bitwise op".into(),
@@ -5081,6 +5085,10 @@ impl<'m> Interpreter<'m> {
                 BinOp::Rem => {
                     if ru == 0 { return Err(SimError::DivisionByZero); }
                     lu % ru
+                }
+                BinOp::Mod => {
+                    if ru == 0 { return Err(SimError::DivisionByZero); }
+                    lu % ru // unsigned: modulo == remainder
                 }
                 BinOp::Pow => lu.pow(ru as u32),
                 BinOp::BitAnd => lu & ru,
@@ -5126,6 +5134,11 @@ impl<'m> Interpreter<'m> {
             BinOp::Rem => {
                 if ri == 0 { return Err(SimError::DivisionByZero); }
                 li % ri
+            }
+            BinOp::Mod => {
+                if ri == 0 { return Err(SimError::DivisionByZero); }
+                let r = li % ri;
+                if r != 0 && ((r ^ ri) < 0) { r + ri } else { r }
             }
             BinOp::Pow => {
                 if ri >= 0 { li.pow(ri as u32) } else { 0 }

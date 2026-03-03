@@ -713,11 +713,19 @@ fn eval_binary_op(
                 Ok(MetaValue::Int(a / b))
             }
         }
+        (MetaValue::Int(a), BinaryOp::Rem, MetaValue::Int(b)) => {
+            if *b == 0 {
+                Err(meta_err("remainder by zero", span))
+            } else {
+                Ok(MetaValue::Int(a % b))
+            }
+        }
         (MetaValue::Int(a), BinaryOp::Mod, MetaValue::Int(b)) => {
             if *b == 0 {
                 Err(meta_err("modulo by zero", span))
             } else {
-                Ok(MetaValue::Int(a % b))
+                let r = a % b;
+                Ok(MetaValue::Int(if r != 0 && ((r ^ b) < 0) { r + b } else { r }))
             }
         }
 

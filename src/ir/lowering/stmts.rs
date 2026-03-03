@@ -471,6 +471,7 @@ fn lower_compound_assign(
                 ast::BinaryOp::Sub => Some("sub"),
                 ast::BinaryOp::Mul => Some("mul"),
                 ast::BinaryOp::Div => Some("div"),
+                ast::BinaryOp::Rem => Some("rem"),
                 ast::BinaryOp::Mod => Some("mod"),
                 _ => None,
             }.and_then(|method| {
@@ -509,7 +510,8 @@ fn lower_compound_assign(
                     ast::BinaryOp::Sub => BinOp::Sub,
                     ast::BinaryOp::Mul => BinOp::Mul,
                     ast::BinaryOp::Div => BinOp::Div,
-                    ast::BinaryOp::Mod => BinOp::Rem,
+                    ast::BinaryOp::Rem => BinOp::Rem,
+                    ast::BinaryOp::Mod => BinOp::Mod,
                     ast::BinaryOp::AddWrap => BinOp::AddWrap,
                     ast::BinaryOp::SubWrap => BinOp::SubWrap,
                     ast::BinaryOp::MulWrap => BinOp::MulWrap,

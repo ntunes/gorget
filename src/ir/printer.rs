@@ -622,6 +622,7 @@ fn format_binop(op: BinOp) -> &'static str {
         BinOp::Mul => "mul",
         BinOp::Div => "div",
         BinOp::Rem => "rem",
+        BinOp::Mod => "mod",
         BinOp::Pow => "pow",
         BinOp::BitAnd => "bit_and",
         BinOp::BitOr => "bit_or",

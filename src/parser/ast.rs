@@ -654,6 +654,7 @@ pub enum BinaryOp {
     Sub,
     Mul,
     Div,
+    Rem,
     Mod,
     AddWrap,
     SubWrap,

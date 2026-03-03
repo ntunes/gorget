@@ -1583,7 +1583,11 @@ fn eval_const_expr(
                     BinaryOp::Sub => Some(Constant::I64(a.wrapping_sub(b))),
                     BinaryOp::Mul => Some(Constant::I64(a.wrapping_mul(b))),
                     BinaryOp::Div if b != 0 => Some(Constant::I64(a / b)),
-                    BinaryOp::Mod if b != 0 => Some(Constant::I64(a % b)),
+                    BinaryOp::Rem if b != 0 => Some(Constant::I64(a % b)),
+                    BinaryOp::Mod if b != 0 => {
+                        let r = a % b;
+                        Some(Constant::I64(if r != 0 && ((r ^ b) < 0) { r + b } else { r }))
+                    }
                     BinaryOp::Gt => Some(Constant::Bool(a > b)),
                     BinaryOp::Lt => Some(Constant::Bool(a < b)),
                     BinaryOp::GtEq => Some(Constant::Bool(a >= b)),

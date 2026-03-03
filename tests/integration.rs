@@ -5913,7 +5913,8 @@ fn format_binop_canonical(op: &BinaryOp) -> &'static str {
         BinaryOp::Sub => "-",
         BinaryOp::Mul => "*",
         BinaryOp::Div => "/",
-        BinaryOp::Mod => "%",
+        BinaryOp::Rem => "%",
+        BinaryOp::Mod => "mod",
         BinaryOp::AddWrap => "+%",
         BinaryOp::SubWrap => "-%",
         BinaryOp::MulWrap => "*%",
@@ -5940,7 +5941,7 @@ fn format_compound_assign_canonical(op: &BinaryOp) -> &'static str {
         BinaryOp::Sub => "-=",
         BinaryOp::Mul => "*=",
         BinaryOp::Div => "/=",
-        BinaryOp::Mod => "%=",
+        BinaryOp::Rem => "%=",
         BinaryOp::AddWrap => "+%=",
         BinaryOp::SubWrap => "-%=",
         BinaryOp::MulWrap => "*%=",
@@ -8516,5 +8517,26 @@ fn numeric_trait_ops() {
 -1.500000
 true
 false",
+    );
+}
+
+#[test]
+fn mod_rem() {
+    run_gg(
+        "mod_rem.gg",
+        "\
+1
+-1
+1
+-1
+2
+-2
+-1
+1
+2
+2.000000
+1
+0
+0",
     );
 }
