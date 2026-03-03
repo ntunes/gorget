@@ -4170,6 +4170,14 @@ fn httpserver_static() {
 }
 
 #[test]
+fn httpserver_tls() {
+    run_gg(
+        "httpserver_tls.gg",
+        "0.0.0.0\n8443\n/tmp/cert.pem\n/tmp/key.pem\n127.0.0.1\n8080",
+    );
+}
+
+#[test]
 fn udp_echo() {
     run_gg(
         "udp_echo.gg",

@@ -14,6 +14,9 @@ pub struct GirCodegenOutput {
     pub host_code: Option<String>,
     /// Guest shared library C code (only `Some` when `module.hot_reload == true`).
     pub guest_code: Option<String>,
+    /// True when the generated C code uses TLS (requires -lssl -lcrypto at link time).
+    /// Set when TLS_SOCKET_RUNTIME or TLS_SERVER_RUNTIME is emitted.
+    pub needs_tls: bool,
 }
 
 /// Options for hot-reload code generation.
@@ -199,6 +202,10 @@ fn map_stdlib_name(name: &str) -> &str {
         "socket_connect" => "gorget_socket_connect",
         "socket_listen" => "gorget_socket_listen",
         "tls_connect" => "gorget_tls_connect",
+        "tls_server_bind" => "gorget_tls_server_bind",
+        "TlsServerSocket__accept" => "gorget_tls_server_accept",
+        "TlsServerSocket__close" => "gorget_tls_server_close",
+        "TlsSocket__set_timeout" => "gorget_tls_set_timeout",
         "udp_bind" => "gorget_udp_bind",
         // Bytes
         "bytes_from_str" => "gorget_bytes_from_str",
@@ -374,7 +381,7 @@ fn is_cstr_param_fn(name: &str) -> bool {
         | "gorget_seed" | "gorget_sleep_ms" | "gorget_reactor_sleep_ms"
         | "gorget_server_socket_bind"
         | "gorget_socket_connect" | "gorget_socket_write_str"
-        | "gorget_tls_connect" | "gorget_tls_write_str"
+        | "gorget_tls_connect" | "gorget_tls_write_str" | "gorget_tls_server_bind"
         | "gorget_udp_bind" | "gorget_udp_join_multicast" | "gorget_udp_leave_multicast"
         | "gorget_base64_encode" | "gorget_base64_decode"
         | "gorget_hex_encode" | "gorget_hex_decode"
@@ -505,8 +512,16 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
     if all_call_names.iter().any(|n| n.starts_with("gorget_udp_") || n == "udp_bind") {
         out.push_str(c_runtime::UDP_SOCKET_RUNTIME);
     }
-    if all_call_names.iter().any(|n| n.starts_with("gorget_tls_") || n == "tls_connect") {
+    let needs_tls_server = all_call_names.iter().any(|n| {
+        n.starts_with("gorget_tls_server_") || n == "tls_server_bind" || n.starts_with("TlsServerSocket__")
+    });
+    let needs_tls = all_call_names.iter().any(|n| n.starts_with("gorget_tls_") || n == "tls_connect")
+        || needs_tls_server;
+    if needs_tls {
         out.push_str(c_runtime::TLS_SOCKET_RUNTIME);
+    }
+    if needs_tls_server {
+        out.push_str(c_runtime::TLS_SERVER_RUNTIME);
     }
     if all_call_names.iter().any(|n| n == "gorget_exec" || n == "gorget_exec_output" || n == "exec" || n == "exec_output") {
         out.push_str(c_runtime::PROCESS_RUNTIME);
@@ -705,10 +720,10 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
     // Hot-reload: generate split host/guest sources.
     if module.hot_reload {
         let (host, guest) = generate_hot_reload_split(module, &out, hr_opts);
-        return GirCodegenOutput { c_code: out, host_code: Some(host), guest_code: Some(guest) };
+        return GirCodegenOutput { c_code: out, host_code: Some(host), guest_code: Some(guest), needs_tls };
     }
 
-    GirCodegenOutput { c_code: out, host_code: None, guest_code: None }
+    GirCodegenOutput { c_code: out, host_code: None, guest_code: None, needs_tls }
 }
 
 /// Split a full compiled C string into host + guest for hot-reload mode.
@@ -2024,6 +2039,7 @@ fn runtime_type_name(name: &str) -> Option<&'static str> {
         "UdpAddr" => Some("GorgetUdpAddr"),
         "UdpPacket" => Some("GorgetUdpPacket"),
         "TlsSocket" => Some("GorgetTlsSocket"),
+        "TlsServerSocket" => Some("GorgetTlsServerSocket"),
         // IO types
         "File" => Some("GorgetFile"),
         "Channel" => Some("GorgetChannel*"),
@@ -2082,6 +2098,7 @@ fn collection_type_alias(name: &str) -> Option<&'static str> {
         "Socket" => Some("GorgetSocket"),
         "ServerSocket" => Some("GorgetServerSocket"),
         "TlsSocket" => Some("GorgetTlsSocket"),
+        "TlsServerSocket" => Some("GorgetTlsServerSocket"),
         "UdpSocket" => Some("GorgetUdpSocket"),
         "Channel" => Some("GorgetChannel"),
         "Shared" => Some("GorgetShared*"),
@@ -6836,6 +6853,11 @@ fn last_error_fn(func_name: &str) -> Option<&'static str> {
     if func_name.starts_with("gorget_socket_") || func_name == "socket_connect"
         || func_name.starts_with("Socket__") {
         return Some("gorget_socket_last_error");
+    }
+    // TlsServerSocket (check before TlsSocket — "gorget_tls_server_" starts with "gorget_tls_")
+    if func_name.starts_with("gorget_tls_server_") || func_name == "tls_server_bind"
+        || func_name.starts_with("TlsServerSocket__") {
+        return Some("gorget_tls_server_last_error");
     }
     // TLS
     if func_name.starts_with("gorget_tls_") || func_name == "tls_connect"

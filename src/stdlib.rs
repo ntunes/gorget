@@ -1264,15 +1264,30 @@ fn gen_tls_socket_module() -> Module {
         name: Spanned::dummy("TlsSocket".to_string()),
         generic_args: vec![],
     };
+    let ty_tls_server_socket = || Type::Named {
+        name: Spanned::dummy("TlsServerSocket".to_string()),
+        generic_args: vec![],
+    };
 
     let mut items: Vec<Spanned<Item>> = Vec::new();
 
-    // Opaque struct: TlsSocket
+    // Opaque structs
     items.push(opaque_struct("TlsSocket"));
+    items.push(opaque_struct("TlsServerSocket"));
 
     // Free function: tls_connect(host, port) -> Result[TlsSocket, str]
     items.push(Spanned::dummy(Item::Function(
         decl_fn("tls_connect", &[("host", ty_str()), ("port", ty_int())], ty_result(ty_tls_socket(), ty_str())),
+    )));
+
+    // Free function: tls_server_bind(host, port, cert_path, key_path) -> Result[TlsServerSocket, str]
+    items.push(Spanned::dummy(Item::Function(
+        decl_fn("tls_server_bind", &[
+            ("host", ty_str()),
+            ("port", ty_int()),
+            ("cert_path", ty_str()),
+            ("key_path", ty_str()),
+        ], ty_result(ty_tls_server_socket(), ty_str())),
     )));
 
     // TlsSocket methods — extern bindings
@@ -1283,6 +1298,13 @@ fn gen_tls_socket_module() -> Module {
         extern_method("write_str", Ownership::MutableBorrow, &[("s", ty_str())], ty_int(), "gorget_tls_write_str"),
         extern_method("read_line", Ownership::MutableBorrow, &[], ty_result(ty_string(), ty_str()), "gorget_tls_read_line"),
         extern_method("close", Ownership::MutableBorrow, &[], ty_void(), "gorget_tls_close"),
+        extern_method("set_timeout", Ownership::MutableBorrow, &[("ms", ty_int())], ty_void(), "gorget_tls_set_timeout"),
+    ]));
+
+    // TlsServerSocket methods — extern bindings
+    items.push(equip_block("TlsServerSocket", vec![
+        extern_method("accept", Ownership::MutableBorrow, &[], ty_result(ty_tls_socket(), ty_str()), "gorget_tls_server_accept"),
+        extern_method("close", Ownership::MutableBorrow, &[], ty_void(), "gorget_tls_server_close"),
     ]));
 
     Module {

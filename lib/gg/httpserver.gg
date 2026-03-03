@@ -15,6 +15,7 @@
 #
 
 from std.net.socket import ServerSocket, Socket, server_socket_bind
+from std.net.tls import TlsSocket, TlsServerSocket, tls_server_bind
 from std.collections import Vector, Dict
 from std.conv import int_to_str
 from std.bytes import bytes_to_str
@@ -220,21 +221,128 @@ async void http_server_handle_conn_ka(Socket conn, Callable[HttpServerResponse(H
                 alive = false
     conn.close()
 
+# ── TLS connection handlers ───────────────────────────────────
+
+# Parse an HTTP/1.1 request from a TLS socket (identical logic to plain-TCP version).
+Result[HttpRequest, str] http_server_parse_request_tls(TlsSocket &conn):
+    str req_line = conn.read_line()?
+
+    Option[int] sp1_opt = req_line.index_of(" ")
+    if sp1_opt.is_none():
+        return Error("malformed request line")
+    int sp1 = sp1_opt.unwrap()
+    str req_method = req_line.byte_slice(0, sp1)
+    str req_rest = req_line.byte_slice(sp1 + 1, req_line.byte_len())
+
+    Option[int] sp2_opt = req_rest.index_of(" ")
+    if sp2_opt.is_none():
+        return Error("malformed request line")
+    int sp2 = sp2_opt.unwrap()
+    str raw_path = req_rest.byte_slice(0, sp2)
+    str req_version = req_rest.byte_slice(sp2 + 1, req_rest.byte_len())
+
+    str req_path = raw_path
+    str req_query = ""
+    Option[int] qm_opt = raw_path.index_of("?")
+    if qm_opt.is_some():
+        int qm = qm_opt.unwrap()
+        req_path = raw_path.byte_slice(0, qm)
+        req_query = raw_path.byte_slice(qm + 1, raw_path.byte_len())
+
+    Dict[str, str] req_headers = Dict[str, str]()
+    bool reading_headers = true
+    while reading_headers:
+        str hdr_line = conn.read_line()?
+        if hdr_line == "":
+            reading_headers = false
+        else:
+            Option[int] colon_opt = hdr_line.index_of(":")
+            if colon_opt.is_some():
+                int colon = colon_opt.unwrap()
+                str hdr_name = hdr_line.byte_slice(0, colon).trim().to_lower()
+                str hdr_val = hdr_line.byte_slice(colon + 1, hdr_line.byte_len()).trim()
+                req_headers.put(hdr_name, hdr_val)
+
+    str req_body = ""
+    if req_headers.contains("content-length"):
+        str cl_str = req_headers["content-length"]
+        Option[int] cl_opt = int.parse(cl_str)
+        if cl_opt is Some(cl_v):
+            if cl_v > 0:
+                Vector[uint8] body_bytes = conn.read_exact(cl_v)
+                Result[str, str] body_r = bytes_to_str(body_bytes)
+                if body_r.is_ok():
+                    req_body = body_r.unwrap()
+
+    return Ok(HttpRequest(req_method, req_path, req_query, req_version, req_headers, req_body, Dict[str, str]()))
+
+# Write a keep-alive HTTP response over a TLS socket.
+void http_server_write_response_tls_ka(TlsSocket &conn, HttpServerResponse resp, bool keep_alive):
+    str status_line = "HTTP/1.1 " + int_to_str(resp.status_code) + " " + resp.status_text() + "\r\n"
+    str body_len = int_to_str(resp.body.byte_len())
+    conn.write_str(status_line)
+    conn.write_str("Content-Type: " + resp.content_type + "\r\n")
+    conn.write_str("Content-Length: " + body_len + "\r\n")
+    Vector[str] hdr_keys = resp.headers.keys()
+    int hi = 0
+    while hi < hdr_keys.len():
+        str hk = hdr_keys[hi]
+        conn.write_str(hk + ": " + resp.headers[hk] + "\r\n")
+        hi = hi + 1
+    if keep_alive:
+        conn.write_str("Connection: keep-alive\r\n\r\n")
+    else:
+        conn.write_str("Connection: close\r\n\r\n")
+    conn.write_str(resp.body)
+
+# Keep-alive connection handler for TLS sockets.
+async void http_server_handle_conn_tls_ka(TlsSocket conn, Callable[HttpServerResponse(HttpRequest)] handler, int timeout_ms):
+    conn.set_timeout(timeout_ms)
+    bool alive = true
+    while alive:
+        Result[HttpRequest, str] r = http_server_parse_request_tls(&conn)
+        match r:
+            case Ok(req):
+                bool client_wants_close = false
+                if req.headers.contains("connection"):
+                    if req.headers["connection"].to_lower() == "close":
+                        client_wants_close = true
+                HttpServerResponse resp = handler(req)
+                http_server_write_response_tls_ka(&conn, resp, not client_wants_close)
+                if client_wants_close:
+                    alive = false
+            case Error(e):
+                alive = false
+    conn.close()
+
 # ── HttpServer ────────────────────────────────────────────────
 
 struct HttpServer:
     str host
     int port
     int keep_alive_timeout_ms
+    bool use_tls
+    str cert_path
+    str key_path
 
 equip HttpServer:
-    HttpServer new(str host, int port) = HttpServer(host, port, 5000)
-    HttpServer with_timeout(str host, int port, int timeout_ms) = HttpServer(host, port, timeout_ms)
+    HttpServer new(str host, int port) = HttpServer(host, port, 5000, false, "", "")
+    HttpServer with_timeout(str host, int port, int timeout_ms) = HttpServer(host, port, timeout_ms, false, "", "")
+
+    # Construct a TLS-enabled server that will use the given PEM cert and key files.
+    HttpServer new_tls(str host, int port, str cert_path, str key_path):
+        return HttpServer(host, port, 5000, true, cert_path, key_path)
 
     # Bind and accept connections in a loop, calling handler for each.
-    # Each connection runs in a TaskGroup thread with keep-alive support.
-    # Returns only on bind error.
+    # Dispatches to serve_plain or serve_tls based on the use_tls flag.
     async void serve(self, Callable[HttpServerResponse(HttpRequest)] handler):
+        if self.use_tls:
+            self.serve_tls(handler).await()
+        else:
+            self.serve_plain(handler).await()
+
+    # Plain TCP accept loop with per-connection keep-alive.
+    async void serve_plain(self, Callable[HttpServerResponse(HttpRequest)] handler):
         Result[ServerSocket, str] bind_r = server_socket_bind(self.host, self.port)
         if bind_r.is_err():
             return
@@ -245,6 +353,19 @@ equip HttpServer:
             if ar.is_ok():
                 Socket client = ar.unwrap()
                 group.spawn(spawn http_server_handle_conn_ka(client, handler, self.keep_alive_timeout_ms))
+
+    # TLS accept loop with per-connection keep-alive.
+    async void serve_tls(self, Callable[HttpServerResponse(HttpRequest)] handler):
+        Result[TlsServerSocket, str] bind_r = tls_server_bind(self.host, self.port, self.cert_path, self.key_path)
+        if bind_r.is_err():
+            return
+        TlsServerSocket srv = bind_r.unwrap()
+        TaskGroup group = TaskGroup()
+        loop:
+            Result[TlsSocket, str] ar = srv.accept()
+            if ar.is_ok():
+                TlsSocket client = ar.unwrap()
+                group.spawn(spawn http_server_handle_conn_tls_ka(client, handler, self.keep_alive_timeout_ms))
 
 # ── Query string parser ───────────────────────────────────────
 

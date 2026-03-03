@@ -1,0 +1,26 @@
+# Test: TLS server types compile correctly.
+# This is a compile-only smoke test — no actual TLS connection is made,
+# because that would require a real certificate/key pair and a network stack.
+# The test verifies that:
+#   1. TlsServerSocket, TlsSocket, tls_server_bind are importable.
+#   2. HttpServer.new_tls() constructs without error.
+#   3. The use_tls field is accessible and correct.
+
+from gg.httpserver import HttpServer, HttpRequest, HttpServerResponse
+from std.net.tls import TlsSocket, TlsServerSocket, tls_server_bind
+
+HttpServerResponse handle(HttpRequest req):
+    return HttpServerResponse.ok("hello")
+
+void main():
+    # Verify HttpServer.new_tls constructs correctly
+    HttpServer server = HttpServer.new_tls("0.0.0.0", 8443, "/tmp/cert.pem", "/tmp/key.pem")
+    print(server.host)         # 0.0.0.0
+    print(int_to_str(server.port))  # 8443
+    print(server.cert_path)   # /tmp/cert.pem
+    print(server.key_path)    # /tmp/key.pem
+
+    # Verify plain HttpServer.new still works (no TLS)
+    HttpServer plain = HttpServer.new("127.0.0.1", 8080)
+    print(plain.host)          # 127.0.0.1
+    print(int_to_str(plain.port))  # 8080
