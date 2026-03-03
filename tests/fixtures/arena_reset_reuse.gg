@@ -1,0 +1,18 @@
+from std.alloc import Arena
+from std.collections import Vector
+
+void main():
+    with Arena(4096) as pool:
+        int cycle = 0
+        while cycle < 3:
+            Vector[int] v = Vector[int]()
+            int i = 0
+            while i < 10:
+                v.push(i * (cycle + 1))
+                i = i + 1
+            print("cycle {cycle} len: {v.len()}")
+            print("cycle {cycle} first: {v.get(0).unwrap()}")
+            print("cycle {cycle} last: {v.get(9).unwrap()}")
+            pool.reset()
+            cycle = cycle + 1
+    print("done")

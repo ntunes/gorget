@@ -6703,6 +6703,195 @@ done",
     );
 }
 
+// Allocator escape tests (error fixtures)
+
+#[test]
+fn fba_escape() {
+    check_gg_fails(
+        "fba_escape.gg",
+        "cannot assign arena-scoped value",
+    );
+}
+
+#[test]
+fn fba_escape_return() {
+    check_gg_fails(
+        "fba_escape_return.gg",
+        "cannot return arena-scoped value",
+    );
+}
+
+#[test]
+fn fallback_escape() {
+    check_gg_fails(
+        "fallback_escape.gg",
+        "cannot assign arena-scoped value",
+    );
+}
+
+#[test]
+fn pool_escape() {
+    check_gg_fails(
+        "pool_escape.gg",
+        "cannot assign arena-scoped value",
+    );
+}
+
+#[test]
+fn tracking_escape() {
+    check_gg_fails(
+        "tracking_escape.gg",
+        "cannot return arena-scoped value",
+    );
+}
+
+// Mixed nested allocator tests
+
+#[test]
+fn alloc_nested_mixed() {
+    run_gg(
+        "alloc_nested_mixed.gg",
+        "\
+inner len: 2
+outer len: 2
+outer[0]: 10
+done",
+    );
+}
+
+#[test]
+fn tracking_wraps_arena() {
+    run_gg(
+        "tracking_wraps_arena.gg",
+        "\
+len: 3
+alloc_count > 0: true
+bytes > 0: true
+done",
+    );
+}
+
+// Dict and multi-collection allocator tests
+
+#[test]
+fn arena_dict() {
+    run_gg(
+        "arena_dict.gg",
+        "\
+len: 3
+alice: 30
+bytes_used > 0: true
+done",
+    );
+}
+
+#[test]
+fn arena_multi_collection() {
+    run_gg(
+        "arena_multi_collection.gg",
+        "\
+nums: 3
+names: 2
+scores: 2
+alice: 100
+bytes_used > 0: true
+done",
+    );
+}
+
+// Additional allocator coverage tests
+
+#[test]
+fn tracking_full_stats() {
+    run_gg(
+        "tracking_full_stats.gg",
+        "\
+peak >= current: true
+bytes_freed > 0: true
+free_count > 0: true
+done",
+    );
+}
+
+#[test]
+fn pool_free_blocks() {
+    run_gg(
+        "pool_free_blocks.gg",
+        "\
+initial free: 16
+free decreased: true
+invariant: true
+done",
+    );
+}
+
+#[test]
+fn tlsf_peak_bytes() {
+    run_gg(
+        "tlsf_peak_bytes.gg",
+        "\
+peak >= used: true
+peak > 0: true
+peak after reset: 0
+done",
+    );
+}
+
+#[test]
+fn set_arena() {
+    run_gg(
+        "set_arena.gg",
+        "\
+len: 3
+has 20: true
+bytes_used > 0: true
+done",
+    );
+}
+
+#[test]
+fn tracking_wraps_pool() {
+    run_gg(
+        "tracking_wraps_pool.gg",
+        "\
+allocs > 0: true
+bytes > 0: true
+pool used > 0: true
+done",
+    );
+}
+
+#[test]
+fn arena_reset_reuse() {
+    run_gg(
+        "arena_reset_reuse.gg",
+        "\
+cycle 0 len: 10
+cycle 0 first: 0
+cycle 0 last: 9
+cycle 1 len: 10
+cycle 1 first: 0
+cycle 1 last: 18
+cycle 2 len: 10
+cycle 2 first: 0
+cycle 2 last: 27
+done",
+    );
+}
+
+#[test]
+fn pool_overflow() {
+    run_gg(
+        "pool_overflow.gg",
+        "\
+len: 50
+first: 0
+last: 49
+tracker allocs > 0: true
+done",
+    );
+}
+
 // Meta (Compile-Time) Tests
 // ═══════════════════════════════════════════════════════════════
 

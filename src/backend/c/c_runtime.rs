@@ -208,10 +208,18 @@ static void* __gorget_tracking_realloc(void* ctx, void* ptr, size_t old_size, si
     void* new_ptr = t->inner->realloc(t->inner->ctx, ptr, old_size, new_size);
     if (new_ptr) {
         t->realloc_count++;
-        int64_t delta = (int64_t)new_size - (int64_t)old_size;
-        if (delta > 0) t->bytes_allocated += delta;
-        else t->bytes_freed += (-delta);
-        t->current_bytes += delta;
+        /* Treat realloc as free(old) + alloc(new) so all counters
+           accurately reflect logical memory activity.
+           When ptr == NULL it is an initial alloc routed via realloc
+           (e.g. first Vector push); count it as an alloc_count hit. */
+        if (ptr != NULL && old_size > 0) {
+            t->free_count++;
+            t->bytes_freed += (int64_t)old_size;
+        } else {
+            t->alloc_count++;
+        }
+        t->bytes_allocated += (int64_t)new_size;
+        t->current_bytes += ((int64_t)new_size - (int64_t)old_size);
         if (t->current_bytes > t->peak_bytes) t->peak_bytes = t->current_bytes;
     }
     return new_ptr;

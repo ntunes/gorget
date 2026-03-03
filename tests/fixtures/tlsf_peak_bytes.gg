@@ -1,0 +1,15 @@
+from std.alloc import TlsfAllocator
+from std.collections import Vector
+
+void main():
+    with TlsfAllocator(65536) as alloc:
+        Vector[int] v = Vector[int]()
+        int i = 0
+        while i < 100:
+            v.push(i)
+            i = i + 1
+        print("peak >= used: {alloc.peak_bytes() >= alloc.bytes_used()}")
+        print("peak > 0: {alloc.peak_bytes() > 0}")
+        alloc.reset()
+        print("peak after reset: {alloc.peak_bytes()}")
+    print("done")

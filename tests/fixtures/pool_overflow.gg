@@ -1,0 +1,16 @@
+from std.alloc import TrackingAllocator, PoolAllocator
+from std.collections import Vector
+
+void main():
+    with TrackingAllocator() as tracker:
+        with PoolAllocator(32, 8) as pool:
+            Vector[int] v = Vector[int]()
+            int i = 0
+            while i < 50:
+                v.push(i)
+                i = i + 1
+            print("len: {v.len()}")
+            print("first: {v.get(0).unwrap()}")
+            print("last: {v.get(49).unwrap()}")
+        print("tracker allocs > 0: {tracker.alloc_count() > 0}")
+    print("done")

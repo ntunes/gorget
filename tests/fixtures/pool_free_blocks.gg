@@ -1,0 +1,14 @@
+from std.alloc import PoolAllocator
+from std.collections import Vector
+
+void main():
+    with PoolAllocator(64, 16) as pool:
+        int initial_free = pool.free_blocks()
+        print("initial free: {initial_free}")
+        Vector[int] v = Vector[int]()
+        v.push(1)
+        v.push(2)
+        v.push(3)
+        print("free decreased: {pool.free_blocks() < initial_free}")
+        print("invariant: {pool.free_blocks() + pool.used_blocks() == pool.total_blocks()}")
+    print("done")
