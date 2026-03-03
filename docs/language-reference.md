@@ -3271,7 +3271,9 @@ from gg.tensor import Tensor, tensor_arange, tensor_zeros_int, tensor_linspace,
 | `tensor_dot_int` | `int(Tensor[int] a, Tensor[int] b)` | 1D dot product |
 | `tensor_dot_float` | `float(Tensor[float] a, Tensor[float] b)` | 1D dot product |
 
-**Comparisons:** `tensor_eq_int`, `tensor_lt_int`, `tensor_gt_int`, `tensor_eq_float`, etc. — return `Tensor[bool]`
+**Comparisons (int):** `tensor_eq_int`, `tensor_lt_int`, `tensor_gt_int`, `tensor_le_int`, `tensor_ge_int`, `tensor_ne_int` — return `Tensor[bool]`
+
+**Comparisons (float):** `tensor_eq_float`, `tensor_lt_float`, `tensor_gt_float`, `tensor_le_float`, `tensor_ge_float`, `tensor_ne_float` — return `Tensor[bool]`
 
 **Display:** `tensor_display_int(t)`, `tensor_display_float(t)` — format as `Tensor(shape=[2,3], [0, 1, 2, ...])`
 
@@ -3294,10 +3296,12 @@ from gg.dataframe import DataFrame, Column, df_from_columns, df_from_csv,
 | `df_from_columns` | `DataFrame(Vector[str] names, Vector[Column] cols)` | Build from typed columns |
 | `df_from_csv` | `Result[DataFrame, str](str csv_text)` | Parse CSV with type inference |
 | `df_from_records` | `DataFrame(Vector[str] headers, Vector[Vector[str]] rows)` | Build from string rows |
-| `col_from_ints` | `Column(Vector[int] data)` | Create int column |
-| `col_from_floats` | `Column(Vector[float] data)` | Create float column |
-| `col_from_strs` | `Column(Vector[str] data)` | Create str column |
-| `col_from_bools` | `Column(Vector[bool] data)` | Create bool column |
+| `col_from_ints` | `Column(Vector[int] data)` | Create int column (all present) |
+| `col_from_floats` | `Column(Vector[float] data)` | Create float column (all present) |
+| `col_from_strs` | `Column(Vector[str] data)` | Create str column (all present) |
+| `col_from_bools` | `Column(Vector[bool] data)` | Create bool column (all present) |
+| `col_ints_null` | `Column(Vector[int] data, Vector[bool] mask)` | Create nullable int column; mask[i]=false means null |
+| `col_strs_null` | `Column(Vector[str] data, Vector[bool] mask)` | Create nullable str column; mask[i]=false means null |
 
 **DataFrame methods (equip DataFrame):**
 

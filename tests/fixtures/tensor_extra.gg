@@ -1,0 +1,108 @@
+from gg.tensor import Tensor, tensor_arange, tensor_zeros_int, tensor_zeros_float, tensor_ones_int, tensor_ones_float, tensor_linspace, tensor_sum_int, tensor_sum_float, tensor_sub_float, tensor_div_float, tensor_neg_float, tensor_neg_int, tensor_div_int, scalar_sub_int, scalar_div_int, scalar_mul_int, scalar_sub_float, scalar_mul_float, tensor_clone_int, tensor_mean_axis, tensor_std_all, tensor_matmul_float, tensor_le_int, tensor_ge_int, tensor_ne_int, tensor_eq_float, vec_int_copy
+
+void main():
+    # -- scalar_div_int: arange(0,6)=[0,1,2,3,4,5] / 2 = [0,0,1,1,2,2], sum=6
+    Tensor[int] t0 = tensor_arange(0, 6)
+    Tensor[int] r0 = scalar_div_int(t0, 2)
+    print("{tensor_sum_int(r0)}")
+
+    # -- tensor_sub_float: linspace(2,6,5)=[2,3,4,5,6] - ones=[1,1,1,1,1] = [1,2,3,4,5], sum=15
+    Vector[int] sh5 = Vector[int]()
+    sh5.push(5)
+    Tensor[float] a1 = tensor_linspace(2.0, 6.0, 5)
+    Tensor[float] b1 = tensor_ones_float(sh5)
+    Tensor[float] r1 = tensor_sub_float(a1, b1)
+    print("{tensor_sum_float(r1)}")
+
+    # -- tensor_div_float: linspace(2,10,5)=[2,4,6,8,10] / linspace(1,5,5)=[1,2,3,4,5] = [2,2,2,2,2], sum=10
+    Tensor[float] a2 = tensor_linspace(2.0, 10.0, 5)
+    Tensor[float] b2 = tensor_linspace(1.0, 5.0, 5)
+    Tensor[float] r2 = tensor_div_float(a2, b2)
+    print("{tensor_sum_float(r2)}")
+
+    # -- tensor_neg_float: [5,5,5] negated = [-5,-5,-5], sum=-15
+    Vector[int] sh3 = Vector[int]()
+    sh3.push(3)
+    Tensor[float] t3 = tensor_ones_float(sh3)
+    Tensor[float] t3s = scalar_mul_float(t3, 5.0)
+    Tensor[float] r3 = tensor_neg_float(t3s)
+    print("{tensor_sum_float(r3)}")
+
+    # -- scalar_sub_int: ones([4])*10 - 3 = [7,7,7,7], sum=28
+    Vector[int] sh4 = Vector[int]()
+    sh4.push(4)
+    Tensor[int] t4 = tensor_ones_int(sh4)
+    Tensor[int] t4s = scalar_mul_int(t4, 10)
+    Tensor[int] r4 = scalar_sub_int(t4s, 3)
+    print("{tensor_sum_int(r4)}")
+
+    # -- scalar_sub_float: ones([3])*5.0 - 2.0 = [3,3,3], sum=9
+    Tensor[float] t5 = tensor_ones_float(sh3)
+    Tensor[float] t5s = scalar_mul_float(t5, 5.0)
+    Tensor[float] r5 = scalar_sub_float(t5s, 2.0)
+    print("{tensor_sum_float(r5)}")
+
+    # -- tensor_clone_int: mutate original, clone unaffected
+    Tensor[int] orig = tensor_ones_int(sh4)
+    Tensor[int] cloned = tensor_clone_int(orig)
+    orig.flat_set(0, 99)
+    print("{cloned.flat_get(0)}")
+
+    # -- permute: [2,3] tensor, axes [1,0] → shape [3,2]
+    Vector[int] sh23 = Vector[int]()
+    sh23.push(2)
+    sh23.push(3)
+    Tensor[int] tp = tensor_zeros_int(sh23)
+    Vector[int] paxes = Vector[int]()
+    paxes.push(1)
+    paxes.push(0)
+    Tensor[int] tpp = tp.permute(paxes)
+    print("{tpp.shape.get(0).unwrap()}")
+    print("{tpp.shape.get(1).unwrap()}")
+
+    # -- tensor_std_all: linspace(1,5,5)=[1,2,3,4,5], mean=3, std=sqrt(2)≈1.414214
+    Tensor[float] ts = tensor_linspace(1.0, 5.0, 5)
+    print("{tensor_std_all(ts)}")
+
+    # -- tensor_mean_axis: zeros([2,3]) along axis 0 → shape [3]
+    Vector[int] shm = Vector[int]()
+    shm.push(2)
+    shm.push(3)
+    Tensor[float] tm = tensor_zeros_float(shm)
+    Tensor[float] ma = tensor_mean_axis(tm, 0)
+    print("{ma.shape.get(0).unwrap()}")
+
+    # -- tensor_matmul_float: ones([2,2]) @ ones([2,2]) = [[2,2],[2,2]], size=4
+    Vector[int] sh22 = Vector[int]()
+    sh22.push(2)
+    sh22.push(2)
+    Tensor[float] mm1 = tensor_ones_float(sh22)
+    Tensor[float] mm2 = tensor_ones_float(sh22)
+    Tensor[float] mmr = tensor_matmul_float(mm1, mm2)
+    print("{mmr.size()}")
+
+    # -- tensor_le_int spot check: [3] <= [3] → true at index 0
+    Tensor[int] le_a = tensor_arange(3, 4)
+    Tensor[int] le_b = tensor_arange(3, 4)
+    Tensor[bool] le_r = tensor_le_int(le_a, le_b)
+    print("{le_r.flat_get(0)}")
+
+    # -- tensor_ge_int spot check: [5] >= [3] → true
+    Tensor[int] ge_a = tensor_arange(5, 6)
+    Tensor[int] ge_b = tensor_arange(3, 4)
+    Tensor[bool] ge_r = tensor_ge_int(ge_a, ge_b)
+    print("{ge_r.flat_get(0)}")
+
+    # -- tensor_ne_int spot check: [1] != [2] → true
+    Tensor[int] ne_a = tensor_arange(1, 2)
+    Tensor[int] ne_b = tensor_arange(2, 3)
+    Tensor[bool] ne_r = tensor_ne_int(ne_a, ne_b)
+    print("{ne_r.flat_get(0)}")
+
+    # -- tensor_eq_float spot check: [1.0] == [1.0] → true
+    Vector[int] sh1 = Vector[int]()
+    sh1.push(1)
+    Tensor[float] eq_a = tensor_ones_float(sh1)
+    Tensor[float] eq_b = tensor_ones_float(sh1)
+    Tensor[bool] eq_r = tensor_eq_float(eq_a, eq_b)
+    print("{eq_r.flat_get(0)}")

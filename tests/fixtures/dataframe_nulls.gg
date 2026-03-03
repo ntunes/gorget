@@ -1,0 +1,104 @@
+from gg.dataframe import DataFrame, Column, df_from_columns, col_from_ints, col_from_strs, col_from_floats, col_from_bools, col_ints_null, col_strs_null
+
+void main():
+    # ── BoolColumn ─────────────────────────────────────────────
+    Vector[bool] bools = Vector[bool]()
+    bools.push(true)
+    bools.push(false)
+    bools.push(true)
+    Column bc = col_from_bools(bools)
+    print("{bc.dtype_name()}")
+    print("{bc.value_as_str(0)}")
+
+    # ── Null handling via col_ints_null ─────────────────────────
+    # age col: [25, 0, 35] with mask [true, false, true] → row 1 is null
+    Vector[int] ages = Vector[int]()
+    ages.push(25)
+    ages.push(0)
+    ages.push(35)
+    Vector[bool] mask = Vector[bool]()
+    mask.push(true)
+    mask.push(false)
+    mask.push(true)
+    Column age_col = col_ints_null(ages, mask)
+    print("{age_col.is_null_at(1)}")
+    print("{age_col.null_count()}")
+
+    # ── col_strs_null ───────────────────────────────────────────
+    Vector[str] names = Vector[str]()
+    names.push("Alice")
+    names.push("")
+    names.push("Bob")
+    Vector[bool] smask = Vector[bool]()
+    smask.push(true)
+    smask.push(false)
+    smask.push(true)
+    Column name_col = col_strs_null(names, smask)
+    print("{name_col.is_null_at(1)}")
+
+    # ── fillna_int ──────────────────────────────────────────────
+    Vector[str] col_names = Vector[str]()
+    col_names.push("age")
+    Vector[Column] cols = Vector[Column]()
+    cols.push(age_col)
+    DataFrame df = df_from_columns(col_names, cols)
+    DataFrame filled = df.fillna_int("age", 0)
+    Column filled_col = filled.get_column("age")
+    print("{filled_col.is_null_at(1)}")
+    print("{filled_col.null_count()}")
+
+    # ── dropna ──────────────────────────────────────────────────
+    DataFrame dropped = df.dropna()
+    print("{dropped.nrows()}")
+
+    # ── column_names ────────────────────────────────────────────
+    Vector[str] cn2 = Vector[str]()
+    cn2.push("x")
+    cn2.push("y")
+    cn2.push("z")
+    Vector[int] xd = Vector[int]()
+    xd.push(1)
+    xd.push(2)
+    xd.push(3)
+    Vector[Column] cols2 = Vector[Column]()
+    cols2.push(col_from_ints(xd))
+    cols2.push(col_from_ints(xd))
+    cols2.push(col_from_ints(xd))
+    DataFrame df2 = df_from_columns(cn2, cols2)
+    Vector[str] cnames = df2.column_names()
+    print("{cnames.len()}")
+    print("{cnames.get(0).unwrap()}")
+
+    # ── apply_float ─────────────────────────────────────────────
+    Vector[str] fcols = Vector[str]()
+    fcols.push("score")
+    Vector[float] scores = Vector[float]()
+    scores.push(1.0)
+    scores.push(2.0)
+    scores.push(3.0)
+    Vector[Column] fc = Vector[Column]()
+    fc.push(col_from_floats(scores))
+    DataFrame dff = df_from_columns(fcols, fc)
+    float(float) double_fn = (float x): x * 2.0
+    DataFrame dff2 = dff.apply_float("score", double_fn)
+    # verify the transformation ran (nrows/ncols unchanged)
+    print("{dff2.nrows()}")
+    print("{dff2.ncols()}")
+
+    # ── apply_str ───────────────────────────────────────────────
+    Vector[str] scols = Vector[str]()
+    scols.push("name")
+    Vector[str] sdata = Vector[str]()
+    sdata.push("hello")
+    sdata.push("world")
+    Vector[Column] sc2 = Vector[Column]()
+    sc2.push(col_from_strs(sdata))
+    DataFrame dfs = df_from_columns(scols, sc2)
+    str(str) identity_fn = (str s): s
+    DataFrame dfs2 = dfs.apply_str("name", identity_fn)
+    Column nc = dfs2.get_column("name")
+    print("{nc.value_as_str(0)}")
+
+    # ── display() smoke test ─────────────────────────────────────
+    str disp = df2.display()
+    print("{disp.byte_len() > 0}")

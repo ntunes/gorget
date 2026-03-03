@@ -6937,6 +6937,30 @@ true",
     );
 }
 
+#[test]
+fn tensor_extra() {
+    run_gg(
+        "tensor_extra.gg",
+        "\
+6
+15.000000
+10.000000
+-15.000000
+28
+9.000000
+1
+3
+2
+1.414214
+3
+4
+true
+true
+true
+true",
+    );
+}
+
 // ═══════════════════════════════════════════════════════════════
 // gg.dataframe integration tests
 // ═══════════════════════════════════════════════════════════════
@@ -6974,7 +6998,9 @@ Charlie
 3
 Bob
 1
-25",
+25
+3
+2",
     );
 }
 
@@ -6990,6 +7016,10 @@ fn dataframe_agg() {
 4
 10
 2.5
+2
+11.1803
+6
+3
 2",
     );
 }
@@ -7017,7 +7047,9 @@ fn dataframe_groupby() {
 2
 10
 5
-3",
+3
+3
+30",
     );
 }
 
@@ -7035,6 +7067,28 @@ float
 Charlie
 3
 3",
+    );
+}
+
+#[test]
+fn dataframe_nulls() {
+    run_gg(
+        "dataframe_nulls.gg",
+        "\
+bool
+true
+true
+1
+true
+false
+0
+2
+3
+x
+3
+1
+hello
+true",
     );
 }
 

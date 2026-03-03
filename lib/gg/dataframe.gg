@@ -287,6 +287,13 @@ Column col_from_bools(Vector[bool] data):
         i = i + 1
     return BoolCol(BoolColumn(data, mask))
 
+# Nullable column constructors — mask[i]=true means present, false means null
+Column col_ints_null(Vector[int] data, Vector[bool] mask):
+    return IntCol(IntColumn(data, mask))
+
+Column col_strs_null(Vector[str] data, Vector[bool] mask):
+    return StrCol(StrColumn(data, mask))
+
 # Deep-copy a Column (for head/tail/slice)
 Column col_slice(Column col, int start, int end):
     match col:
@@ -944,7 +951,7 @@ equip DataFrame:
                     new_data.push(f(c.data.get(i).unwrap()))
                     i = i + 1
                 Column new_col = col_from_ints(new_data)
-                return self.add_column(col_name, new_col).drop(col_name).add_column(col_name, new_col)
+                return self.drop(col_name).add_column(col_name, new_col)
             else:
                 return self.df_slice(0, self.num_rows)
 
@@ -1056,7 +1063,9 @@ GroupBy df_group_by(DataFrame df, str col):
     while i < df.num_rows:
         str key = col_data.value_as_str(i)
         if groups.has(key):
-            groups.get(key).unwrap().push(i)
+            Vector[int] existing = groups.get(key).unwrap()
+            existing.push(i)
+            groups.set(key, existing)
         else:
             Vector[int] new_group = Vector[int]()
             new_group.push(i)

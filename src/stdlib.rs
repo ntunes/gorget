@@ -2583,6 +2583,9 @@ mod tests {
         assert!(src.contains("struct Tensor"));
         assert!(src.contains("tensor_arange"));
         assert!(src.contains("tensor_zeros_int"));
+        assert!(src.contains("tensor_bsub_float"));
+        assert!(src.contains("tensor_le_int"));
+        assert!(src.contains("tensor_ne_float"));
     }
 
     #[test]

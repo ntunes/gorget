@@ -57,3 +57,13 @@ void main():
     DataFrame joined = df_inner_join(df, right, name_col)
     print("{joined.nrows()}")
     print("{joined.ncols()}")
+
+    # agg "count" (untested op): Alice has 3 rows, Bob has 2
+    DataFrame agg_c = df_group_by(df, name_col).agg(val_col, "count")
+    Column cc = agg_c.get_column("val_count")
+    print("{cc.value_as_str(0)}")
+
+    # agg "mean": Alice mean = (10+30+50)/3 = 30
+    DataFrame agg_m = df_group_by(df, name_col).agg(val_col, "mean")
+    Column mc = agg_m.get_column("val_mean")
+    print("{mc.value_as_str(0)}")

@@ -2,6 +2,10 @@
 
 ## High
 
+- **`Tensor[float]::flat_get` truncates fractional values via `int64_t`**: In generated C, `Tensor__double__flat_get` stores the `double` result of `Shared__Vector__double__at` into an `int64_t` local variable before returning as `double`, truncating fractions (e.g. 2.5 → 2.0). Affects `tensor_div_float`, `tensor_sub_float`, etc. when results have non-integer values. Root cause: codegen assigns `double` return from collection `at()` into wrong inferred type. All existing tensor tests happen to produce integer float values so this was undetected. Fix: ensure GIR type inference for `Shared[Vector[float]].at()` returns `double` in C, not `int64_t`. [discovered: 2026-03-03]
+
+- **`apply_float` closure return type mismatch**: In `DataFrame__apply_float` generated C, the closure pointer is cast as `int64_t(*)(void*, double)` instead of `double(*)(void*, double)`, causing the `double` return to be reinterpreted as `int64_t`. The pushed value is garbage. Affects `df.apply_float(col, fn)`. Root cause: codegen infers closure return type as `int64_t` for `float(float)` function type. `apply_int` (with `int` closure) is correct. `apply_str` (with `str` closure) is correct. Fix: ensure function pointer cast in closure call uses the correct return type from the Gorget function type signature. [discovered: 2026-03-03]
+
 ## Medium
 
 

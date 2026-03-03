@@ -61,3 +61,11 @@ void main():
     print("{filt2.nrows()}")
     Column fc2 = filt2.get_column("age")
     print("{fc2.value_as_str(0)}")
+
+    # filter_by "!=" (untested operator)
+    DataFrame filt3 = df.filter_by("age", "!=", "25")
+    print("{filt3.nrows()}")
+
+    # filter_by "<" (untested operator)
+    DataFrame filt4 = df.filter_by("age", "<", "35")
+    print("{filt4.nrows()}")
