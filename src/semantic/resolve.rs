@@ -101,7 +101,7 @@ pub fn collect_top_level(
     for trait_name in &[
         "Displayable", "Equatable", "Cloneable", "Hashable", "Drop", "Iterator", "Iterable",
         "Add", "Sub", "Mul", "Div", "Rem", "Neg", "Comparable", "Index", "IndexMut",
-        "Default", "From", "TryFrom", "Measurable", "Parseable",
+        "Default", "From", "TryFrom", "Measurable", "Parseable", "One", "Numeric",
     ] {
         let _ = scopes.define(trait_name.to_string(), DefKind::Trait, Span::dummy());
     }

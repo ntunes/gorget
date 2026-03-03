@@ -43,6 +43,10 @@ pub struct LoweringContext<'a> {
     /// Maps template type names (e.g., "Container__T") to monomorphized names
     /// (e.g., "Container__int64_t") during generic function body lowering.
     pub type_name_subs: FxHashMap<String, String>,
+    /// Raw generic param → concrete mangled fragment subs (e.g., "T" → "int64_t").
+    /// Used by resolve_type_name for on-the-fly substitution of names not in the
+    /// pre-computed type_name_subs map.
+    pub generic_fragment_subs: Vec<(String, String)>,
     /// Generic type parameter → concrete TypeId substitutions.
     /// Maps bare type parameters (e.g., "T") to their concrete TypeIds (e.g., I64_TYPE)
     /// during generic function body lowering.
@@ -103,6 +107,7 @@ impl<'a> LoweringContext<'a> {
             closure_info: FxHashMap::default(),
             loop_stack: Vec::new(),
             type_name_subs: FxHashMap::default(),
+            generic_fragment_subs: Vec::new(),
             generic_type_params: FxHashMap::default(),
             module_constants: FxHashMap::default(),
             strip_asserts: false,
@@ -125,7 +130,31 @@ impl<'a> LoweringContext<'a> {
 
     /// Resolve a type name, applying any active substitutions.
     pub fn resolve_type_name(&self, name: &str) -> String {
-        self.type_name_subs.get(name).cloned().unwrap_or_else(|| name.to_string())
+        if let Some(resolved) = self.type_name_subs.get(name) {
+            return resolved.clone();
+        }
+        // On-the-fly fragment substitution for names like "Vector__T" → "Vector__int64_t"
+        // that weren't in the pre-computed map (because the template type was never registered).
+        if !self.generic_fragment_subs.is_empty() {
+            let mut result = name.to_string();
+            let mut changed = false;
+            for (param, concrete) in &self.generic_fragment_subs {
+                let pattern_end = format!("__{param}");
+                let pattern_mid = format!("__{param}__");
+                if result.ends_with(&pattern_end) {
+                    let prefix = &result[..result.len() - pattern_end.len()];
+                    result = format!("{prefix}__{concrete}");
+                    changed = true;
+                } else if result.contains(&pattern_mid) {
+                    result = result.replace(&pattern_mid, &format!("__{concrete}__"));
+                    changed = true;
+                }
+            }
+            if changed {
+                return result;
+            }
+        }
+        name.to_string()
     }
 
     /// Map an AST type to a GIR TypeId, applying any active type name substitutions.

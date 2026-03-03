@@ -1,17 +1,17 @@
-from gg.tensor import Tensor, tensor_arange, tensor_zeros_int, tensor_zeros_float, tensor_display_int, tensor_display_float, tensor_linspace, tensor_sum_int, tensor_min_int, tensor_max_int, tensor_sum_float, tensor_min_float, tensor_max_float, tensor_mean_all, tensor_std_all, tensor_sum_axis_int, tensor_sum_axis_float, tensor_mean_axis, int_to_float
+from gg.tensor import Tensor, tensor_arange, tensor_zeros, tensor_display_int, tensor_display_float, tensor_linspace, tensor_sum, tensor_min, tensor_max, tensor_mean_all, tensor_std_all, tensor_sum_axis, tensor_mean_axis, int_to_float
 
 void main():
     # 1D int reductions
     Tensor[int] a = tensor_arange(0, 5)
-    print("{tensor_sum_int(a)}")
-    print("{tensor_min_int(a)}")
-    print("{tensor_max_int(a)}")
+    print("{tensor_sum[int](a)}")
+    print("{tensor_min[int](a)}")
+    print("{tensor_max[int](a)}")
 
     # float reductions
     Tensor[float] f = tensor_linspace(1.0, 5.0, 5)
-    print("{tensor_sum_float(f)}")
-    print("{tensor_min_float(f)}")
-    print("{tensor_max_float(f)}")
+    print("{tensor_sum[float](f)}")
+    print("{tensor_min[float](f)}")
+    print("{tensor_max[float](f)}")
     print("{tensor_mean_all(f)}")
 
     # 2D: shape [2,3] sum along axis 0 → [1,3]
@@ -20,11 +20,11 @@ void main():
     sh.push(2)
     sh.push(3)
     Tensor[int] c = b.reshape(sh)
-    Tensor[int] sa0 = tensor_sum_axis_int(c, 0)
+    Tensor[int] sa0 = tensor_sum_axis[int](c, 0)
     print(tensor_display_int(sa0))
 
     # sum along axis 1 → [2,1] → displayed as [1,3]
-    Tensor[int] sa1 = tensor_sum_axis_int(c, 1)
+    Tensor[int] sa1 = tensor_sum_axis[int](c, 1)
     print(tensor_display_int(sa1))
 
     # float axis sum
@@ -33,5 +33,5 @@ void main():
     fsh.push(3)
     Tensor[float] ff = tensor_linspace(0.0, 5.0, 6)
     Tensor[float] fc = ff.reshape(fsh)
-    Tensor[float] fsa = tensor_sum_axis_float(fc, 1)
+    Tensor[float] fsa = tensor_sum_axis[float](fc, 1)
     print(tensor_display_float(fsa))

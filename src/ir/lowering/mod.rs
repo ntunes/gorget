@@ -319,6 +319,7 @@ pub fn lower_module(
     let mut generic_collector = GenericCollector::new();
     generic_collector.collect_templates(ast_module);
     generic_collector.discover_usages(ast_module);
+    generic_collector.discover_transitive();
 
     // Pre-register collection type names BEFORE monomorphization so that
     // monomorphize_enum can resolve inner types like Vector[int] in Option[Vector[int]].
@@ -725,12 +726,14 @@ pub fn lower_module(
             .unwrap_or_else(|| {
                 module.type_registry.insert(GirType::Named("Option__bool".to_string()))
             });
-        // int.parse(str) → Option[int], int.default() → int
+        // int.parse(str) → Option[int], int.default() → int, int.one() → int
         ctx.fn_sigs.insert("int64_t__parse".to_string(), (vec![str_type], opt_int_type));
         ctx.fn_sigs.insert("int64_t__default".to_string(), (vec![], I64_TYPE));
-        // float.parse(str) → Option[float], float.default() → float
+        ctx.fn_sigs.insert("int64_t__one".to_string(), (vec![], I64_TYPE));
+        // float.parse(str) → Option[float], float.default() → float, float.one() → float
         ctx.fn_sigs.insert("double__parse".to_string(), (vec![str_type], opt_float_type));
         ctx.fn_sigs.insert("double__default".to_string(), (vec![], F64_TYPE));
+        ctx.fn_sigs.insert("double__one".to_string(), (vec![], F64_TYPE));
         // bool.parse(str) → Option[bool], bool.default() → bool
         ctx.fn_sigs.insert("bool__parse".to_string(), (vec![str_type], opt_bool_type));
         ctx.fn_sigs.insert("bool__default".to_string(), (vec![], BOOL_TYPE));

@@ -1,10 +1,10 @@
-from gg.tensor import Tensor, tensor_arange, tensor_zeros_int, tensor_zeros_float, tensor_display_int, tensor_display_float, tensor_linspace, tensor_matmul_int, tensor_matmul_float, tensor_dot_int, tensor_dot_float, tensor_eq_int, tensor_lt_int, vec_int_copy
+from gg.tensor import Tensor, tensor_arange, tensor_zeros, tensor_display_int, tensor_display_float, tensor_linspace, tensor_matmul, tensor_dot, tensor_eq, tensor_lt, vec_int_copy
 
 void main():
     # dot product: [0,1,2] · [1,2,3] = 0+2+6 = 8
     Tensor[int] a = tensor_arange(0, 3)
     Tensor[int] b = tensor_arange(1, 4)
-    print("{tensor_dot_int(a, b)}")
+    print("{tensor_dot[int](a, b)}")
 
     # matmul [2,3] @ [3,2] = [2,2]
     # A = [[0,1,2],[3,4,5]], B = [[0,1],[2,3],[4,5]]
@@ -18,22 +18,22 @@ void main():
     shb.push(3)
     shb.push(2)
     mb = mb.reshape(shb)
-    Tensor[int] mc = tensor_matmul_int(ma, mb)
+    Tensor[int] mc = tensor_matmul[int](ma, mb)
     print(tensor_display_int(mc))
 
     # float dot
     Tensor[float] fa = tensor_linspace(1.0, 3.0, 3)
     Tensor[float] fb = tensor_linspace(1.0, 3.0, 3)
-    print("{tensor_dot_float(fa, fb)}")
+    print("{tensor_dot[float](fa, fb)}")
 
     # comparisons
     Tensor[int] x = tensor_arange(0, 4)
     Tensor[int] y = tensor_arange(0, 4)
-    Tensor[bool] eq = tensor_eq_int(x, y)
+    Tensor[bool] eq = tensor_eq[int](x, y)
     print("{eq.flat_get(0)}")
     print("{eq.flat_get(1)}")
 
     Tensor[int] z = tensor_arange(1, 5)
-    Tensor[bool] lt = tensor_lt_int(x, z)
+    Tensor[bool] lt = tensor_lt[int](x, z)
     print("{lt.flat_get(0)}")
     print("{lt.flat_get(3)}")

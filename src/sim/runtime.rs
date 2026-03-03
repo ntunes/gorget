@@ -1591,6 +1591,7 @@ pub fn call_extern(
             }
         }
         "int64_t__default" | "int__default" => Ok(Value::I64(0)),
+        "int64_t__one" | "int__one" => Ok(Value::I64(1)),
         "int8_t__parse" | "int8__parse" => {
             let s = args.first().map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
             match s.as_str().trim().parse::<i8>() {
@@ -1648,6 +1649,7 @@ pub fn call_extern(
             }
         }
         "double__default" | "float__default" => Ok(Value::F64(0.0)),
+        "double__one" | "float__one" => Ok(Value::F64(1.0)),
         "bool__parse" => {
             let s = args.first().map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
             match s.as_str().trim() {

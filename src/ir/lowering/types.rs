@@ -335,6 +335,14 @@ impl TypeMapper {
         self.named_types.get(name).copied()
     }
 
+    /// Reverse-lookup: find the registered name for a GIR TypeId.
+    /// Returns None for primitive types (caller should handle those separately).
+    pub fn name_for_type_id(&self, type_id: TypeId) -> Option<String> {
+        self.named_types.iter()
+            .find(|(_, tid)| **tid == type_id)
+            .map(|(name, _)| name.clone())
+    }
+
     /// Map a primitive type to its GIR TypeId.
     pub fn map_primitive(&self, prim: &PrimitiveType) -> TypeId {
         match prim {

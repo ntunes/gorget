@@ -94,10 +94,14 @@ impl TraitRegistry {
 
     /// Check if a type (by name) has an implementation for a trait (by name).
     pub fn has_trait_impl_by_name(&self, type_name: &str, trait_name: &str) -> bool {
-        self.impls.iter().any(|impl_info| {
+        if self.impls.iter().any(|impl_info| {
             impl_info.self_type_name == type_name
                 && impl_info.trait_name.as_deref() == Some(trait_name)
-        })
+        }) {
+            return true;
+        }
+        // Intrinsic satisfaction: numeric primitives satisfy numeric traits.
+        is_numeric_primitive(type_name) && is_numeric_trait(trait_name)
     }
 
     /// Get the trait's generic AST type args for a specific trait impl on a type (by name).
@@ -113,6 +117,28 @@ impl TraitRegistry {
         &[]
     }
 
+    /// Check if `held_trait` (by name) satisfies `required_trait` (by name),
+    /// either by being the same trait or by extending it (supertrait relationship).
+    pub fn trait_satisfies(&self, held_trait: &str, required_trait: &str) -> bool {
+        if held_trait == required_trait {
+            return true;
+        }
+        // Find the held trait's DefId and check its extends list
+        for info in self.traits.values() {
+            if info.name == held_trait {
+                for &parent_def_id in &info.extends {
+                    if let Some(parent_info) = self.traits.get(&parent_def_id) {
+                        if parent_info.name == required_trait {
+                            return true;
+                        }
+                    }
+                }
+                break;
+            }
+        }
+        false
+    }
+
     /// Check if a type (by name) has a specific method in any equip block.
     pub fn has_method_for_type(&self, type_name: &str, method_name: &str) -> bool {
         self.impls.iter().any(|impl_info| {
@@ -120,6 +146,23 @@ impl TraitRegistry {
                 && impl_info.methods.contains_key(method_name)
         })
     }
+}
+
+/// Check if a type name is a numeric primitive (int, float, and their sized variants).
+fn is_numeric_primitive(name: &str) -> bool {
+    matches!(name,
+        "int" | "int8" | "int16" | "int32" | "int64"
+        | "uint" | "uint8" | "uint16" | "uint32" | "uint64"
+        | "float" | "float32" | "float64"
+    )
+}
+
+/// Check if a trait name is one that numeric primitives intrinsically satisfy.
+fn is_numeric_trait(name: &str) -> bool {
+    matches!(name,
+        "Numeric" | "Add" | "Sub" | "Mul" | "Div" | "Rem" | "Neg"
+        | "Comparable" | "Equatable" | "Default" | "One"
+    )
 }
 
 /// Build the trait and impl registry from the module.
@@ -393,6 +436,22 @@ fn register_builtin_traits(
             });
             m
         }),
+        // One: Self one() — static factory returning multiplicative identity, no self
+        ("One", {
+            let mut m = FxHashMap::default();
+            m.insert("one".into(), FunctionSig {
+                params: vec![],
+                return_type: types.error_id, // Self placeholder
+                has_self: false,
+                self_ownership: None,
+            });
+            m
+        }),
+        // Numeric: composite trait — Add + Sub + Mul + Div + Rem + Neg + Comparable + Default + One
+        // Empty method map; all methods come from parent traits via `extends`.
+        ("Numeric", {
+            FxHashMap::default()
+        }),
     ];
 
     for (name, methods) in builtin_traits {
@@ -408,6 +467,17 @@ fn register_builtin_traits(
                 has_default_body,
                 extends: Vec::new(),
             });
+        }
+    }
+
+    // Wire Numeric's extends: Add + Sub + Mul + Div + Rem + Neg + Comparable + Default + One
+    if let Some(numeric_def_id) = scopes.lookup("Numeric") {
+        let parent_names = ["Add", "Sub", "Mul", "Div", "Rem", "Neg", "Comparable", "Default", "One"];
+        let parent_ids: Vec<DefId> = parent_names.iter()
+            .filter_map(|name| scopes.lookup(name))
+            .collect();
+        if let Some(info) = registry.traits.get_mut(&numeric_def_id) {
+            info.extends = parent_ids;
         }
     }
 }
@@ -837,8 +907,8 @@ equip Circle with Drawable:
 ";
         let (registry, errors) = analyze(source);
         assert!(errors.is_empty(), "errors: {:?}", errors);
-        // 21 built-in traits + 1 user-defined trait
-        assert_eq!(registry.traits.len(), 22);
+        // 23 built-in traits + 1 user-defined trait
+        assert_eq!(registry.traits.len(), 24);
         assert_eq!(registry.impls.len(), 1);
         assert!(registry.impls[0].trait_.is_some());
     }
@@ -1244,5 +1314,35 @@ equip int with MyTrait:
             !errors.iter().any(|e| matches!(&e.kind, SemanticErrorKind::OrphanImpl { .. })),
             "local trait with foreign type should be allowed: {:?}", errors
         );
+    }
+
+    #[test]
+    fn numeric_intrinsic_satisfaction() {
+        let (registry, _) = analyze("");
+        // Numeric primitives satisfy Numeric and its components
+        assert!(registry.has_trait_impl_by_name("int", "Numeric"));
+        assert!(registry.has_trait_impl_by_name("float", "Numeric"));
+        assert!(registry.has_trait_impl_by_name("int", "Add"));
+        assert!(registry.has_trait_impl_by_name("float", "Sub"));
+        assert!(registry.has_trait_impl_by_name("int", "Comparable"));
+        assert!(registry.has_trait_impl_by_name("float", "Default"));
+        assert!(registry.has_trait_impl_by_name("int", "One"));
+        assert!(registry.has_trait_impl_by_name("int8", "Numeric"));
+        assert!(registry.has_trait_impl_by_name("uint64", "Numeric"));
+        assert!(registry.has_trait_impl_by_name("float32", "Numeric"));
+        // Non-numeric types do NOT satisfy Numeric
+        assert!(!registry.has_trait_impl_by_name("str", "Numeric"));
+        assert!(!registry.has_trait_impl_by_name("bool", "Numeric"));
+        assert!(!registry.has_trait_impl_by_name("char", "Numeric"));
+    }
+
+    #[test]
+    fn numeric_extends_has_9_parents() {
+        let (registry, _) = analyze("");
+        let numeric_info = registry.traits.values()
+            .find(|t| t.name == "Numeric")
+            .expect("Numeric trait not found");
+        assert_eq!(numeric_info.extends.len(), 9,
+            "Numeric should extend 9 traits (Add, Sub, Mul, Div, Rem, Neg, Comparable, Default, One)");
     }
 }

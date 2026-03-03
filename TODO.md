@@ -76,6 +76,10 @@
 
 ## Low
 
+- **`Rem` trait naming**: Currently `Rem` (C remainder semantics). Consider renaming to `Mod` if Gorget adopts Python-style modulo semantics. [added: 2026-03-03]
+
+- **Delayed meta (Zig-style comptime in generic bodies)**: Meta currently evaluates before semantic analysis, so it cannot branch on generic type params. Future exploration: a second meta evaluation pass at monomorphization time that would allow `meta if typename(T) == "int":` inside generic function bodies. Would enable Zig/Odin-style duck typing without traits. [added: 2026-03-03]
+
 - **`uuid_parse(str) -> Result[UUID, str]`**: Parse UUID strings in the standard `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx` format. `UUID` would be a struct `{ uint64_t hi; uint64_t lo; }` with `to_string()` and `eq()` equip. C backend via sscanf or manual hex parsing. [added: 2026-03-02]
 
 - **`Heap[T]` max-heap variant**: Current `Heap[T]` is a min-heap. Add a max-heap variant (either a `MaxHeap[T]` type or a `Heap[T](reverse=true)` constructor parameter). [added: 2026-03-02]

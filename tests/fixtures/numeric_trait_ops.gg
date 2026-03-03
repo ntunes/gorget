@@ -1,0 +1,29 @@
+T sub_values[Numeric T](T a, T b):
+    return a - b
+
+T mul_values[Numeric T](T a, T b):
+    return a * b
+
+T negate[Numeric T](T x):
+    return -x
+
+bool is_positive[Numeric T](T x):
+    return x > T.default()
+
+void main():
+    int r1 = sub_values[int](10, 3)
+    float r2 = sub_values[float](5.5, 2.0)
+    int r3 = mul_values[int](4, 5)
+    float r4 = mul_values[float](2.0, 3.5)
+    int r5 = negate[int](42)
+    float r6 = negate[float](1.5)
+    bool r7 = is_positive[int](5)
+    bool r8 = is_positive[int](-3)
+    print("{r1}")
+    print("{r2}")
+    print("{r3}")
+    print("{r4}")
+    print("{r5}")
+    print("{r6}")
+    print("{r7}")
+    print("{r8}")

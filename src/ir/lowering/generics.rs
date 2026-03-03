@@ -6,6 +6,7 @@
 use rustc_hash::FxHashMap;
 
 use crate::ir::types::*;
+use crate::lexer::token::StringSegment;
 use crate::parser::ast::{self, Expr, GenericParam, Item, Stmt, Type};
 use crate::span::Spanned;
 
@@ -34,6 +35,10 @@ pub struct GenericCollector {
     instances: Vec<(String, Vec<Spanned<Type>>, String, TemplateKind)>,
     /// Already-registered mangled names (for dedup).
     registered: FxHashMap<String, ()>,
+    /// When scanning inside a generic function/equip body, the set of type parameter
+    /// names (e.g., {"T", "U"}). Calls using these as type args are deferred until
+    /// transitive discovery resolves them to concrete types.
+    current_generic_params: Option<Vec<String>>,
 }
 
 impl GenericCollector {
@@ -45,6 +50,7 @@ impl GenericCollector {
             equip_templates: FxHashMap::default(),
             instances: Vec::new(),
             registered: FxHashMap::default(),
+            current_generic_params: None,
         }
     }
 
@@ -114,6 +120,28 @@ impl GenericCollector {
         }
     }
 
+    /// Check if a type references any of the current generic params.
+    fn type_has_generic_param(&self, ty: &Type) -> bool {
+        if let Some(ref params) = self.current_generic_params {
+            match ty {
+                Type::Named { name, generic_args } if generic_args.is_empty() => {
+                    params.iter().any(|p| p == &name.node)
+                }
+                Type::Named { generic_args, .. } => {
+                    generic_args.iter().any(|a| self.type_has_generic_param(&a.node))
+                }
+                _ => false,
+            }
+        } else {
+            false
+        }
+    }
+
+    /// Check if any type in a list of type args contains an unresolved generic param.
+    fn has_unresolved_type_args(&self, type_args: &[Spanned<Type>]) -> bool {
+        type_args.iter().any(|a| self.type_has_generic_param(&a.node))
+    }
+
     /// Register a concrete generic instantiation.
     fn register_instance(
         &mut self,
@@ -133,6 +161,16 @@ impl GenericCollector {
 
     /// Scan a function definition for generic usages.
     fn scan_function(&mut self, func: &ast::FunctionDef) {
+        // Track generic params so we can skip unresolved type-arg usages
+        let prev = self.current_generic_params.take();
+        if let Some(ref gp) = func.generic_params {
+            let names: Vec<String> = gp.node.params.iter().map(|p| match &p.node {
+                GenericParam::Type { name, .. } => name.node.clone(),
+                GenericParam::Lifetime(s) | GenericParam::Const { name: s, .. } => s.node.clone(),
+            }).collect();
+            self.current_generic_params = Some(names);
+        }
+
         // Return type
         self.scan_type(&func.return_type);
         // Params
@@ -145,12 +183,18 @@ impl GenericCollector {
             ast::FunctionBody::Expression(expr) => self.scan_expr(expr),
             _ => {}
         }
+
+        self.current_generic_params = prev;
     }
 
     /// Scan an AST type for generic instantiations.
     fn scan_type(&mut self, ty: &Spanned<Type>) {
         match &ty.node {
             Type::Named { name, generic_args } if !generic_args.is_empty() => {
+                // Skip if any type arg contains an unresolved generic param
+                if self.has_unresolved_type_args(generic_args) {
+                    return;
+                }
                 // Recursively scan the type args themselves
                 for arg in generic_args {
                     self.scan_type(arg);
@@ -271,12 +315,16 @@ impl GenericCollector {
                 self.scan_expr(callee);
                 // Generic function call: identity[int](42)
                 if let Some(type_args) = generic_args {
-                    for arg in type_args {
-                        self.scan_type(arg);
-                    }
-                    if let Expr::Identifier(name) = &callee.node {
-                        if self.fn_templates.contains_key(name.as_str()) {
-                            self.register_instance(name, type_args, TemplateKind::Function);
+                    // Skip registering if any type arg is an unresolved generic param
+                    // (will be discovered transitively when the outer function is instantiated)
+                    if !self.has_unresolved_type_args(type_args) {
+                        for arg in type_args {
+                            self.scan_type(arg);
+                        }
+                        if let Expr::Identifier(name) = &callee.node {
+                            if self.fn_templates.contains_key(name.as_str()) {
+                                self.register_instance(name, type_args, TemplateKind::Function);
+                            }
                         }
                     }
                 }
@@ -297,13 +345,15 @@ impl GenericCollector {
             }
             Expr::StructLiteral { generic_args, args, name, .. } => {
                 if let Some(type_args) = generic_args {
-                    for arg in type_args {
-                        self.scan_type(arg);
-                    }
-                    if self.struct_templates.contains_key(name.node.as_str()) {
-                        self.register_instance(&name.node, type_args, TemplateKind::Struct);
-                    } else if self.enum_templates.contains_key(name.node.as_str()) {
-                        self.register_instance(&name.node, type_args, TemplateKind::Enum);
+                    if !self.has_unresolved_type_args(type_args) {
+                        for arg in type_args {
+                            self.scan_type(arg);
+                        }
+                        if self.struct_templates.contains_key(name.node.as_str()) {
+                            self.register_instance(&name.node, type_args, TemplateKind::Struct);
+                        } else if self.enum_templates.contains_key(name.node.as_str()) {
+                            self.register_instance(&name.node, type_args, TemplateKind::Enum);
+                        }
                     }
                 }
                 for arg in args {
@@ -346,7 +396,45 @@ impl GenericCollector {
                     self.scan_expr(e);
                 }
             }
+            Expr::StringLiteral(lit) => {
+                // Scan interpolation segments for generic usages (e.g., "{add_values[int](3, 4)}")
+                for seg in &lit.segments {
+                    if let StringSegment::Interpolation(text) = seg {
+                        if let Ok(parsed) = crate::parser::Parser::new(text).parse_expr() {
+                            self.scan_expr(&parsed);
+                        }
+                    }
+                }
+            }
             _ => {}
+        }
+    }
+
+    /// Phase 2b: Transitively discover generic usages inside monomorphized function bodies.
+    /// When `tensor_neg[int]` calls `tensor_zeros[T]`, the initial scan skips it (T is abstract).
+    /// This phase substitutes T→int in the template body and re-scans to discover `tensor_zeros[int]`.
+    pub fn discover_transitive(&mut self) {
+        let mut i = 0;
+        while i < self.instances.len() {
+            let (base_name, type_args, _, kind) = self.instances[i].clone();
+            i += 1;
+            if !matches!(kind, TemplateKind::Function) {
+                continue;
+            }
+            let template = match self.fn_templates.get(&base_name) {
+                Some(t) => t.clone(),
+                None => continue,
+            };
+            let subs = build_type_substitutions(template.generic_params.as_ref(), &type_args);
+            if subs.is_empty() {
+                continue;
+            }
+            // Substitute types in the template body and re-scan (with no generic params context,
+            // so all discovered usages are concrete).
+            let prev = self.current_generic_params.take();
+            let substituted = substitute_function_body(&template, &subs);
+            self.scan_function(&substituted);
+            self.current_generic_params = prev;
         }
     }
 
@@ -793,6 +881,172 @@ fn substitute_type(ty: &Type, subs: &[(String, Type)]) -> Type {
         }
         // Primitives and other types pass through unchanged
         _ => ty.clone(),
+    }
+}
+
+/// Create a copy of a function definition with all type parameters substituted.
+/// Used for transitive discovery: we substitute concrete types and re-scan the body.
+fn substitute_function_body(
+    template: &ast::FunctionDef,
+    subs: &[(String, Type)],
+) -> ast::FunctionDef {
+    let mut func = template.clone();
+    // Substitute return type
+    func.return_type = Spanned::dummy(substitute_type(&func.return_type.node, subs));
+    // Substitute param types
+    for p in &mut func.params {
+        p.node.type_ = Spanned::dummy(substitute_type(&p.node.type_.node, subs));
+    }
+    // Substitute types in the body by walking and replacing generic type args in calls/types.
+    // The body is substituted in-place via the AST substitution in scan_type/scan_expr,
+    // which reads the types as-is. We need to substitute the call-site generic args.
+    substitute_body_types(&mut func.body, subs);
+    // Clear generic params so scan_function treats this as non-generic
+    func.generic_params = None;
+    func
+}
+
+/// Recursively substitute type parameters in function body expressions.
+fn substitute_body_types(body: &mut ast::FunctionBody, subs: &[(String, Type)]) {
+    match body {
+        ast::FunctionBody::Block(block) => substitute_block_types(block, subs),
+        ast::FunctionBody::Expression(expr) => substitute_expr_types(expr, subs),
+        _ => {}
+    }
+}
+
+fn substitute_block_types(block: &mut ast::Block, subs: &[(String, Type)]) {
+    for stmt in &mut block.stmts {
+        substitute_stmt_types(stmt, subs);
+    }
+}
+
+fn substitute_stmt_types(stmt: &mut Spanned<Stmt>, subs: &[(String, Type)]) {
+    match &mut stmt.node {
+        Stmt::VarDecl { type_, value, .. } => {
+            type_.node = substitute_type(&type_.node, subs);
+            substitute_expr_types(value, subs);
+        }
+        Stmt::Assign { target, value } => {
+            substitute_expr_types(target, subs);
+            substitute_expr_types(value, subs);
+        }
+        Stmt::CompoundAssign { target, value, .. } => {
+            substitute_expr_types(target, subs);
+            substitute_expr_types(value, subs);
+        }
+        Stmt::Return(Some(expr)) | Stmt::Expr(expr) | Stmt::Throw(expr) => {
+            substitute_expr_types(expr, subs);
+        }
+        Stmt::If { condition, then_body, elif_branches, else_body } => {
+            substitute_expr_types(condition, subs);
+            substitute_block_types(then_body, subs);
+            for (cond, body) in elif_branches {
+                substitute_expr_types(cond, subs);
+                substitute_block_types(body, subs);
+            }
+            if let Some(eb) = else_body {
+                substitute_block_types(eb, subs);
+            }
+        }
+        Stmt::While { condition, body, .. } => {
+            substitute_expr_types(condition, subs);
+            substitute_block_types(body, subs);
+        }
+        Stmt::For { iterable, body, .. } => {
+            substitute_expr_types(iterable, subs);
+            substitute_block_types(body, subs);
+        }
+        Stmt::Match { scrutinee, arms, else_arm } => {
+            substitute_expr_types(scrutinee, subs);
+            for arm in arms {
+                substitute_expr_types(&mut arm.body, subs);
+                if let Some(guard) = &mut arm.guard {
+                    substitute_expr_types(guard, subs);
+                }
+            }
+            if let Some(eb) = else_arm {
+                substitute_block_types(eb, subs);
+            }
+        }
+        Stmt::Loop { body } | Stmt::Unsafe { body } => {
+            substitute_block_types(body, subs);
+        }
+        _ => {}
+    }
+}
+
+fn substitute_expr_types(expr: &mut Spanned<Expr>, subs: &[(String, Type)]) {
+    match &mut expr.node {
+        Expr::Call { callee, generic_args, args } => {
+            substitute_expr_types(callee, subs);
+            if let Some(type_args) = generic_args {
+                for arg in type_args.iter_mut() {
+                    arg.node = substitute_type(&arg.node, subs);
+                }
+            }
+            for arg in args {
+                substitute_expr_types(&mut arg.node.value, subs);
+            }
+        }
+        Expr::MethodCall { receiver, generic_args, args, .. } => {
+            substitute_expr_types(receiver, subs);
+            if let Some(type_args) = generic_args {
+                for arg in type_args.iter_mut() {
+                    arg.node = substitute_type(&arg.node, subs);
+                }
+            }
+            for arg in args {
+                substitute_expr_types(&mut arg.node.value, subs);
+            }
+        }
+        Expr::StructLiteral { generic_args, args, .. } => {
+            if let Some(type_args) = generic_args {
+                for arg in type_args.iter_mut() {
+                    arg.node = substitute_type(&arg.node, subs);
+                }
+            }
+            for arg in args {
+                substitute_expr_types(arg, subs);
+            }
+        }
+        Expr::BinaryOp { left, right, .. } => {
+            substitute_expr_types(left, subs);
+            substitute_expr_types(right, subs);
+        }
+        Expr::UnaryOp { operand, .. } => {
+            substitute_expr_types(operand, subs);
+        }
+        Expr::FieldAccess { object, .. } => {
+            substitute_expr_types(object, subs);
+        }
+        Expr::Index { object, index } => {
+            substitute_expr_types(object, subs);
+            substitute_expr_types(index, subs);
+        }
+        Expr::If { condition, then_branch, else_branch, .. } => {
+            substitute_expr_types(condition, subs);
+            substitute_expr_types(then_branch, subs);
+            if let Some(eb) = else_branch {
+                substitute_expr_types(eb, subs);
+            }
+        }
+        Expr::Move { expr: inner } | Expr::MutableBorrow { expr: inner } => {
+            substitute_expr_types(inner, subs);
+        }
+        Expr::Range { start, end, .. } => {
+            if let Some(s) = start { substitute_expr_types(s, subs); }
+            if let Some(e) = end { substitute_expr_types(e, subs); }
+        }
+        Expr::Closure { body, .. } | Expr::ImplicitClosure { body } => {
+            substitute_expr_types(body, subs);
+        }
+        Expr::TupleLiteral(elems) | Expr::ArrayLiteral(elems) => {
+            for e in elems {
+                substitute_expr_types(e, subs);
+            }
+        }
+        _ => {}
     }
 }
 

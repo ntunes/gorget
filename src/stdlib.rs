@@ -2640,10 +2640,10 @@ mod tests {
         let src = source.unwrap();
         assert!(src.contains("struct Tensor"));
         assert!(src.contains("tensor_arange"));
-        assert!(src.contains("tensor_zeros_int"));
-        assert!(src.contains("tensor_bsub_float"));
-        assert!(src.contains("tensor_le_int"));
-        assert!(src.contains("tensor_ne_float"));
+        assert!(src.contains("tensor_zeros"));
+        assert!(src.contains("tensor_bsub"));
+        assert!(src.contains("tensor_le"));
+        assert!(src.contains("tensor_ne"));
     }
 
     #[test]

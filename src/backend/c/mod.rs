@@ -5210,8 +5210,8 @@ fn infer_method_return_type(name: &str) -> Option<&'static str> {
         "uint64_t__parse" | "uint64__parse" => return Some("Option__uint64_t"),
         "double__parse" | "float__parse" => return Some("Option__double"),
         "bool__parse" => return Some("Option__bool"),
-        "int64_t__default" | "int__default" => return Some("int64_t"),
-        "double__default" | "float__default" => return Some("double"),
+        "int64_t__default" | "int__default" | "int64_t__one" | "int__one" => return Some("int64_t"),
+        "double__default" | "float__default" | "double__one" | "float__one" => return Some("double"),
         "bool__default" => return Some("bool"),
         "Str__default" | "str__default" => return Some("Str"),
         _ => {}
@@ -6675,9 +6675,21 @@ fn try_emit_primitive_static_method(
             }
             Some(out)
         }
+        "int64_t__one" | "int__one" => {
+            if let Some(dst_id) = dst {
+                let _ = writeln!(out, "        _{id} = 1;", id = dst_id.0);
+            }
+            Some(out)
+        }
         "double__default" | "float__default" => {
             if let Some(dst_id) = dst {
                 let _ = writeln!(out, "        _{id} = 0.0;", id = dst_id.0);
+            }
+            Some(out)
+        }
+        "double__one" | "float__one" => {
+            if let Some(dst_id) = dst {
+                let _ = writeln!(out, "        _{id} = 1.0;", id = dst_id.0);
             }
             Some(out)
         }

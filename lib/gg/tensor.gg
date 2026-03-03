@@ -6,31 +6,31 @@
 # Key types:
 #   Tensor[T]   — N-dimensional array with shape, strides, and shared storage
 #
+# Generic constructors (Numeric T):
+#   tensor_zeros[T] / tensor_ones[T] / tensor_from[T] / tensor_clone[T]
+#
 # Type-specific constructors:
-#   tensor_zeros_int / tensor_ones_int / tensor_arange / tensor_from_int
-#   tensor_zeros_float / tensor_ones_float / tensor_linspace / tensor_from_float
+#   tensor_arange (int-only), tensor_linspace (float-only)
 #
 # Views (O(1), share backing storage, mutations alias):
 #   Methods: reshape, transpose, permute, tensor_slice
-#   Deep copy: tensor_clone_int / tensor_clone_float
+#   Deep copy: tensor_clone[T]
 #
-# Arithmetic (element-wise free functions, concrete types):
-#   tensor_add_int, tensor_sub_int, tensor_mul_int, tensor_div_int, tensor_neg_int
-#   tensor_add_float, tensor_sub_float, tensor_mul_float, tensor_div_float, tensor_neg_float
-#   scalar_add_int, scalar_sub_int, scalar_mul_int, scalar_div_int
-#   scalar_add_float, scalar_sub_float, scalar_mul_float, scalar_div_float
+# Arithmetic (element-wise generic free functions, Numeric T):
+#   tensor_add[T], tensor_sub[T], tensor_mul[T], tensor_div[T], tensor_neg[T]
+#   scalar_add[T], scalar_sub[T], scalar_mul[T], scalar_div[T]
 #
-# Broadcasting: tensor_broadcast_shape, tensor_badd_int, tensor_badd_float, tensor_bmul_float,
-#   tensor_bsub_float, tensor_bsub_int, tensor_bmul_int, tensor_badd_int
+# Broadcasting: tensor_broadcast_shape, tensor_bc_elem[T],
+#   tensor_badd[T], tensor_bsub[T], tensor_bmul[T]
 #
-# Reductions: tensor_sum_int, tensor_min_int, tensor_max_int
-#   tensor_sum_float, tensor_min_float, tensor_max_float
-#   tensor_mean_all, tensor_std_all (float)
-#   tensor_sum_axis_int, tensor_sum_axis_float, tensor_mean_axis
+# Reductions: tensor_sum[T], tensor_min[T], tensor_max[T]
+#   tensor_mean_all, tensor_std_all (float-only)
+#   tensor_sum_axis[T], tensor_mean_axis (float-only)
 #
-# Linear algebra: tensor_matmul_int, tensor_matmul_float, tensor_dot_int, tensor_dot_float
-# Comparisons (int): tensor_eq_int, tensor_lt_int, tensor_gt_int, tensor_le_int, tensor_ge_int, tensor_ne_int
-# Comparisons (float): tensor_eq_float, tensor_lt_float, tensor_gt_float, tensor_le_float, tensor_ge_float, tensor_ne_float
+# Linear algebra: tensor_matmul[T], tensor_dot[T]
+# Comparisons: tensor_eq[T], tensor_lt[T], tensor_gt[T], tensor_le[T], tensor_ge[T], tensor_ne[T]
+#
+# Display (type-specific): tensor_display_int, tensor_display_float
 
 from std.collections import Vector
 from std.conv import int_to_str, float_to_str, parse_float
@@ -205,29 +205,29 @@ equip Tensor[T]:
         else:
             self.storage.set_at(tensor_flat_to_addr(self.strides, self.offset, self.shape, i), val)
 
-# ── Type-Specific Constructors ────────────────────────────────
+# ── Generic Constructors ─────────────────────────────────────
 
-Tensor[int] tensor_zeros_int(Vector[int] shape):
+Tensor[T] tensor_zeros[Numeric T](Vector[int] shape):
     int sz = tensor_product(shape)
-    Vector[int] data = Vector[int]()
+    Vector[T] data = Vector[T]()
     int i = 0
     while i < sz:
-        data.push(0)
+        data.push(T.default())
         i = i + 1
     Vector[int] s = vec_int_copy(shape)
     Vector[int] strides = tensor_compute_strides(s)
-    return Tensor[int](Shared[Vector[int]](data), s, strides, 0)
+    return Tensor[T](Shared[Vector[T]](data), s, strides, 0)
 
-Tensor[int] tensor_ones_int(Vector[int] shape):
+Tensor[T] tensor_ones[Numeric T](Vector[int] shape):
     int sz = tensor_product(shape)
-    Vector[int] data = Vector[int]()
+    Vector[T] data = Vector[T]()
     int i = 0
     while i < sz:
-        data.push(1)
+        data.push(T.one())
         i = i + 1
     Vector[int] s = vec_int_copy(shape)
     Vector[int] strides = tensor_compute_strides(s)
-    return Tensor[int](Shared[Vector[int]](data), s, strides, 0)
+    return Tensor[T](Shared[Vector[T]](data), s, strides, 0)
 
 Tensor[int] tensor_arange(int start, int stop):
     Vector[int] shape = Vector[int]()
@@ -240,32 +240,10 @@ Tensor[int] tensor_arange(int start, int stop):
     Vector[int] strides = tensor_compute_strides(shape)
     return Tensor[int](Shared[Vector[int]](data), shape, strides, 0)
 
-Tensor[int] tensor_from_int(Vector[int] data, Vector[int] shape):
+Tensor[T] tensor_from[Numeric T](Vector[T] data, Vector[int] shape):
     Vector[int] s = vec_int_copy(shape)
     Vector[int] strides = tensor_compute_strides(s)
-    return Tensor[int](Shared[Vector[int]](data), s, strides, 0)
-
-Tensor[float] tensor_zeros_float(Vector[int] shape):
-    int sz = tensor_product(shape)
-    Vector[float] data = Vector[float]()
-    int i = 0
-    while i < sz:
-        data.push(0.0)
-        i = i + 1
-    Vector[int] s = vec_int_copy(shape)
-    Vector[int] strides = tensor_compute_strides(s)
-    return Tensor[float](Shared[Vector[float]](data), s, strides, 0)
-
-Tensor[float] tensor_ones_float(Vector[int] shape):
-    int sz = tensor_product(shape)
-    Vector[float] data = Vector[float]()
-    int i = 0
-    while i < sz:
-        data.push(1.0)
-        i = i + 1
-    Vector[int] s = vec_int_copy(shape)
-    Vector[int] strides = tensor_compute_strides(s)
-    return Tensor[float](Shared[Vector[float]](data), s, strides, 0)
+    return Tensor[T](Shared[Vector[T]](data), s, strides, 0)
 
 Tensor[float] tensor_linspace(float start, float stop, int num):
     Vector[int] shape = Vector[int]()
@@ -284,15 +262,10 @@ Tensor[float] tensor_linspace(float start, float stop, int num):
     Vector[int] strides = tensor_compute_strides(shape)
     return Tensor[float](Shared[Vector[float]](data), shape, strides, 0)
 
-Tensor[float] tensor_from_float(Vector[float] data, Vector[int] shape):
-    Vector[int] s = vec_int_copy(shape)
-    Vector[int] strides = tensor_compute_strides(s)
-    return Tensor[float](Shared[Vector[float]](data), s, strides, 0)
-
-# Deep copy (type-specific because Vector[T]() requires knowing T)
-Tensor[int] tensor_clone_int(Tensor[int] t):
+# Deep copy (generic)
+Tensor[T] tensor_clone[Numeric T](Tensor[T] t):
     int sz = t.size()
-    Vector[int] new_data = Vector[int]()
+    Vector[T] new_data = Vector[T]()
     Vector[int] indices = Vector[int]()
     int d = 0
     while d < t.shape.len():
@@ -306,25 +279,7 @@ Tensor[int] tensor_clone_int(Tensor[int] t):
         k = k + 1
     Vector[int] new_shape = vec_int_copy(t.shape)
     Vector[int] new_strides = tensor_compute_strides(new_shape)
-    return Tensor[int](Shared[Vector[int]](new_data), new_shape, new_strides, 0)
-
-Tensor[float] tensor_clone_float(Tensor[float] t):
-    int sz = t.size()
-    Vector[float] new_data = Vector[float]()
-    Vector[int] indices = Vector[int]()
-    int d = 0
-    while d < t.shape.len():
-        indices.push(0)
-        d = d + 1
-    int k = 0
-    while k < sz:
-        new_data.push(t.at(indices))
-        if k < sz - 1:
-            tensor_increment_index(indices, t.shape)
-        k = k + 1
-    Vector[int] new_shape = vec_int_copy(t.shape)
-    Vector[int] new_strides = tensor_compute_strides(new_shape)
-    return Tensor[float](Shared[Vector[float]](new_data), new_shape, new_strides, 0)
+    return Tensor[T](Shared[Vector[T]](new_data), new_shape, new_strides, 0)
 
 # ── Display ───────────────────────────────────────────────────
 
@@ -366,166 +321,85 @@ str tensor_display_float(Tensor[float] t):
     out = out + "])"
     return out
 
-# ── Element-wise Arithmetic (free functions) ──────────────────
+# ── Element-wise Arithmetic (generic free functions) ──────────
 
-Tensor[int] tensor_add_int(Tensor[int] a, Tensor[int] b):
+Tensor[T] tensor_add[Numeric T](Tensor[T] a, Tensor[T] b):
     int sz = a.size()
-    Tensor[int] out = tensor_zeros_int(vec_int_copy(a.shape))
+    Tensor[T] out = tensor_zeros[T](vec_int_copy(a.shape))
     int i = 0
     while i < sz:
         out.storage.set_at(i, a.flat_get(i) + b.flat_get(i))
         i = i + 1
     return out
 
-Tensor[int] tensor_sub_int(Tensor[int] a, Tensor[int] b):
+Tensor[T] tensor_sub[Numeric T](Tensor[T] a, Tensor[T] b):
     int sz = a.size()
-    Tensor[int] out = tensor_zeros_int(vec_int_copy(a.shape))
+    Tensor[T] out = tensor_zeros[T](vec_int_copy(a.shape))
     int i = 0
     while i < sz:
         out.storage.set_at(i, a.flat_get(i) - b.flat_get(i))
         i = i + 1
     return out
 
-Tensor[int] tensor_mul_int(Tensor[int] a, Tensor[int] b):
+Tensor[T] tensor_mul[Numeric T](Tensor[T] a, Tensor[T] b):
     int sz = a.size()
-    Tensor[int] out = tensor_zeros_int(vec_int_copy(a.shape))
+    Tensor[T] out = tensor_zeros[T](vec_int_copy(a.shape))
     int i = 0
     while i < sz:
         out.storage.set_at(i, a.flat_get(i) * b.flat_get(i))
         i = i + 1
     return out
 
-Tensor[int] tensor_div_int(Tensor[int] a, Tensor[int] b):
+Tensor[T] tensor_div[Numeric T](Tensor[T] a, Tensor[T] b):
     int sz = a.size()
-    Tensor[int] out = tensor_zeros_int(vec_int_copy(a.shape))
+    Tensor[T] out = tensor_zeros[T](vec_int_copy(a.shape))
     int i = 0
     while i < sz:
         out.storage.set_at(i, a.flat_get(i) / b.flat_get(i))
         i = i + 1
     return out
 
-Tensor[int] tensor_neg_int(Tensor[int] a):
+Tensor[T] tensor_neg[Numeric T](Tensor[T] a):
     int sz = a.size()
-    Tensor[int] out = tensor_zeros_int(vec_int_copy(a.shape))
+    Tensor[T] out = tensor_zeros[T](vec_int_copy(a.shape))
     int i = 0
     while i < sz:
         out.storage.set_at(i, -a.flat_get(i))
         i = i + 1
     return out
 
-Tensor[float] tensor_add_float(Tensor[float] a, Tensor[float] b):
-    int sz = a.size()
-    Tensor[float] out = tensor_zeros_float(vec_int_copy(a.shape))
-    int i = 0
-    while i < sz:
-        out.storage.set_at(i, a.flat_get(i) + b.flat_get(i))
-        i = i + 1
-    return out
+# ── Scalar Operations (generic free functions) ────────────────
 
-Tensor[float] tensor_sub_float(Tensor[float] a, Tensor[float] b):
-    int sz = a.size()
-    Tensor[float] out = tensor_zeros_float(vec_int_copy(a.shape))
-    int i = 0
-    while i < sz:
-        out.storage.set_at(i, a.flat_get(i) - b.flat_get(i))
-        i = i + 1
-    return out
-
-Tensor[float] tensor_mul_float(Tensor[float] a, Tensor[float] b):
-    int sz = a.size()
-    Tensor[float] out = tensor_zeros_float(vec_int_copy(a.shape))
-    int i = 0
-    while i < sz:
-        out.storage.set_at(i, a.flat_get(i) * b.flat_get(i))
-        i = i + 1
-    return out
-
-Tensor[float] tensor_div_float(Tensor[float] a, Tensor[float] b):
-    int sz = a.size()
-    Tensor[float] out = tensor_zeros_float(vec_int_copy(a.shape))
-    int i = 0
-    while i < sz:
-        out.storage.set_at(i, a.flat_get(i) / b.flat_get(i))
-        i = i + 1
-    return out
-
-Tensor[float] tensor_neg_float(Tensor[float] a):
-    int sz = a.size()
-    Tensor[float] out = tensor_zeros_float(vec_int_copy(a.shape))
-    int i = 0
-    while i < sz:
-        out.storage.set_at(i, -a.flat_get(i))
-        i = i + 1
-    return out
-
-# ── Scalar Operations (free functions) ────────────────────────
-
-Tensor[int] scalar_add_int(Tensor[int] t, int val):
+Tensor[T] scalar_add[Numeric T](Tensor[T] t, T val):
     int sz = t.size()
-    Tensor[int] out = tensor_zeros_int(vec_int_copy(t.shape))
+    Tensor[T] out = tensor_zeros[T](vec_int_copy(t.shape))
     int i = 0
     while i < sz:
         out.storage.set_at(i, t.flat_get(i) + val)
         i = i + 1
     return out
 
-Tensor[int] scalar_sub_int(Tensor[int] t, int val):
+Tensor[T] scalar_sub[Numeric T](Tensor[T] t, T val):
     int sz = t.size()
-    Tensor[int] out = tensor_zeros_int(vec_int_copy(t.shape))
+    Tensor[T] out = tensor_zeros[T](vec_int_copy(t.shape))
     int i = 0
     while i < sz:
         out.storage.set_at(i, t.flat_get(i) - val)
         i = i + 1
     return out
 
-Tensor[int] scalar_mul_int(Tensor[int] t, int val):
+Tensor[T] scalar_mul[Numeric T](Tensor[T] t, T val):
     int sz = t.size()
-    Tensor[int] out = tensor_zeros_int(vec_int_copy(t.shape))
+    Tensor[T] out = tensor_zeros[T](vec_int_copy(t.shape))
     int i = 0
     while i < sz:
         out.storage.set_at(i, t.flat_get(i) * val)
         i = i + 1
     return out
 
-Tensor[int] scalar_div_int(Tensor[int] t, int val):
+Tensor[T] scalar_div[Numeric T](Tensor[T] t, T val):
     int sz = t.size()
-    Tensor[int] out = tensor_zeros_int(vec_int_copy(t.shape))
-    int i = 0
-    while i < sz:
-        out.storage.set_at(i, t.flat_get(i) / val)
-        i = i + 1
-    return out
-
-Tensor[float] scalar_add_float(Tensor[float] t, float val):
-    int sz = t.size()
-    Tensor[float] out = tensor_zeros_float(vec_int_copy(t.shape))
-    int i = 0
-    while i < sz:
-        out.storage.set_at(i, t.flat_get(i) + val)
-        i = i + 1
-    return out
-
-Tensor[float] scalar_sub_float(Tensor[float] t, float val):
-    int sz = t.size()
-    Tensor[float] out = tensor_zeros_float(vec_int_copy(t.shape))
-    int i = 0
-    while i < sz:
-        out.storage.set_at(i, t.flat_get(i) - val)
-        i = i + 1
-    return out
-
-Tensor[float] scalar_mul_float(Tensor[float] t, float val):
-    int sz = t.size()
-    Tensor[float] out = tensor_zeros_float(vec_int_copy(t.shape))
-    int i = 0
-    while i < sz:
-        out.storage.set_at(i, t.flat_get(i) * val)
-        i = i + 1
-    return out
-
-Tensor[float] scalar_div_float(Tensor[float] t, float val):
-    int sz = t.size()
-    Tensor[float] out = tensor_zeros_float(vec_int_copy(t.shape))
+    Tensor[T] out = tensor_zeros[T](vec_int_copy(t.shape))
     int i = 0
     while i < sz:
         out.storage.set_at(i, t.flat_get(i) / val)
@@ -563,25 +437,8 @@ Result[Vector[int], str] tensor_broadcast_shape(Vector[int] a, Vector[int] b):
         i = i + 1
     return Ok(out)
 
-# Flat address for broadcast element (int tensor).
-int tensor_bc_addr_int(Tensor[int] t, Vector[int] bc_shape, Vector[int] idx):
-    int n_bc = bc_shape.len()
-    int n_t = t.shape.len()
-    int flat = t.offset
-    int i = 0
-    while i < n_t:
-        int bc_i = n_bc - n_t + i
-        int stride = t.strides.get(i).unwrap()
-        int dim = t.shape.get(i).unwrap()
-        int oi = idx.get(bc_i).unwrap()
-        if dim == 1:
-            oi = 0
-        flat = flat + oi * stride
-        i = i + 1
-    return flat
-
-# Broadcast element read for float tensor.
-float tensor_bc_elem_float(Tensor[float] t, Vector[int] bc_shape, Vector[int] idx):
+# Generic broadcast element read.
+T tensor_bc_elem[Numeric T](Tensor[T] t, Vector[int] bc_shape, Vector[int] idx):
     int n_bc = bc_shape.len()
     int n_t = t.shape.len()
     int flat = t.offset
@@ -597,10 +454,10 @@ float tensor_bc_elem_float(Tensor[float] t, Vector[int] bc_shape, Vector[int] id
         i = i + 1
     return t.storage.at(flat)
 
-Tensor[int] tensor_badd_int(Tensor[int] a, Tensor[int] b):
+Tensor[T] tensor_badd[Numeric T](Tensor[T] a, Tensor[T] b):
     Vector[int] bc_shape = tensor_broadcast_shape(a.shape, b.shape).unwrap()
     int sz = tensor_product(bc_shape)
-    Tensor[int] out = tensor_zeros_int(vec_int_copy(bc_shape))
+    Tensor[T] out = tensor_zeros[T](vec_int_copy(bc_shape))
     Vector[int] idx = Vector[int]()
     int di = 0
     while di < bc_shape.len():
@@ -608,18 +465,18 @@ Tensor[int] tensor_badd_int(Tensor[int] a, Tensor[int] b):
         di = di + 1
     int k = 0
     while k < sz:
-        int av = a.storage.at(tensor_bc_addr_int(a, bc_shape, idx))
-        int bv = b.storage.at(tensor_bc_addr_int(b, bc_shape, idx))
+        T av = tensor_bc_elem[T](a, bc_shape, idx)
+        T bv = tensor_bc_elem[T](b, bc_shape, idx)
         out.storage.set_at(k, av + bv)
         if k < sz - 1:
             tensor_increment_index(idx, bc_shape)
         k = k + 1
     return out
 
-Tensor[int] tensor_bsub_int(Tensor[int] a, Tensor[int] b):
+Tensor[T] tensor_bsub[Numeric T](Tensor[T] a, Tensor[T] b):
     Vector[int] bc_shape = tensor_broadcast_shape(a.shape, b.shape).unwrap()
     int sz = tensor_product(bc_shape)
-    Tensor[int] out = tensor_zeros_int(vec_int_copy(bc_shape))
+    Tensor[T] out = tensor_zeros[T](vec_int_copy(bc_shape))
     Vector[int] idx = Vector[int]()
     int di = 0
     while di < bc_shape.len():
@@ -627,18 +484,18 @@ Tensor[int] tensor_bsub_int(Tensor[int] a, Tensor[int] b):
         di = di + 1
     int k = 0
     while k < sz:
-        int av = a.storage.at(tensor_bc_addr_int(a, bc_shape, idx))
-        int bv = b.storage.at(tensor_bc_addr_int(b, bc_shape, idx))
+        T av = tensor_bc_elem[T](a, bc_shape, idx)
+        T bv = tensor_bc_elem[T](b, bc_shape, idx)
         out.storage.set_at(k, av - bv)
         if k < sz - 1:
             tensor_increment_index(idx, bc_shape)
         k = k + 1
     return out
 
-Tensor[int] tensor_bmul_int(Tensor[int] a, Tensor[int] b):
+Tensor[T] tensor_bmul[Numeric T](Tensor[T] a, Tensor[T] b):
     Vector[int] bc_shape = tensor_broadcast_shape(a.shape, b.shape).unwrap()
     int sz = tensor_product(bc_shape)
-    Tensor[int] out = tensor_zeros_int(vec_int_copy(bc_shape))
+    Tensor[T] out = tensor_zeros[T](vec_int_copy(bc_shape))
     Vector[int] idx = Vector[int]()
     int di = 0
     while di < bc_shape.len():
@@ -646,66 +503,9 @@ Tensor[int] tensor_bmul_int(Tensor[int] a, Tensor[int] b):
         di = di + 1
     int k = 0
     while k < sz:
-        int av = a.storage.at(tensor_bc_addr_int(a, bc_shape, idx))
-        int bv = b.storage.at(tensor_bc_addr_int(b, bc_shape, idx))
+        T av = tensor_bc_elem[T](a, bc_shape, idx)
+        T bv = tensor_bc_elem[T](b, bc_shape, idx)
         out.storage.set_at(k, av * bv)
-        if k < sz - 1:
-            tensor_increment_index(idx, bc_shape)
-        k = k + 1
-    return out
-
-Tensor[float] tensor_badd_float(Tensor[float] a, Tensor[float] b):
-    Vector[int] bc_shape = tensor_broadcast_shape(a.shape, b.shape).unwrap()
-    int sz = tensor_product(bc_shape)
-    Tensor[float] out = tensor_zeros_float(vec_int_copy(bc_shape))
-    Vector[int] idx = Vector[int]()
-    int di = 0
-    while di < bc_shape.len():
-        idx.push(0)
-        di = di + 1
-    int k = 0
-    while k < sz:
-        float av = tensor_bc_elem_float(a, bc_shape, idx)
-        float bv = tensor_bc_elem_float(b, bc_shape, idx)
-        out.storage.set_at(k, av + bv)
-        if k < sz - 1:
-            tensor_increment_index(idx, bc_shape)
-        k = k + 1
-    return out
-
-Tensor[float] tensor_bmul_float(Tensor[float] a, Tensor[float] b):
-    Vector[int] bc_shape = tensor_broadcast_shape(a.shape, b.shape).unwrap()
-    int sz = tensor_product(bc_shape)
-    Tensor[float] out = tensor_zeros_float(vec_int_copy(bc_shape))
-    Vector[int] idx = Vector[int]()
-    int di = 0
-    while di < bc_shape.len():
-        idx.push(0)
-        di = di + 1
-    int k = 0
-    while k < sz:
-        float av = tensor_bc_elem_float(a, bc_shape, idx)
-        float bv = tensor_bc_elem_float(b, bc_shape, idx)
-        out.storage.set_at(k, av * bv)
-        if k < sz - 1:
-            tensor_increment_index(idx, bc_shape)
-        k = k + 1
-    return out
-
-Tensor[float] tensor_bsub_float(Tensor[float] a, Tensor[float] b):
-    Vector[int] bc_shape = tensor_broadcast_shape(a.shape, b.shape).unwrap()
-    int sz = tensor_product(bc_shape)
-    Tensor[float] out = tensor_zeros_float(vec_int_copy(bc_shape))
-    Vector[int] idx = Vector[int]()
-    int di = 0
-    while di < bc_shape.len():
-        idx.push(0)
-        di = di + 1
-    int k = 0
-    while k < sz:
-        float av = tensor_bc_elem_float(a, bc_shape, idx)
-        float bv = tensor_bc_elem_float(b, bc_shape, idx)
-        out.storage.set_at(k, av - bv)
         if k < sz - 1:
             tensor_increment_index(idx, bc_shape)
         k = k + 1
@@ -713,8 +513,8 @@ Tensor[float] tensor_bsub_float(Tensor[float] a, Tensor[float] b):
 
 # ── Reductions ────────────────────────────────────────────────
 
-int tensor_sum_int(Tensor[int] t):
-    int acc = 0
+T tensor_sum[Numeric T](Tensor[T] t):
+    T acc = T.default()
     int sz = t.size()
     int i = 0
     while i < sz:
@@ -722,54 +522,23 @@ int tensor_sum_int(Tensor[int] t):
         i = i + 1
     return acc
 
-int tensor_min_int(Tensor[int] t):
+T tensor_min[Numeric T](Tensor[T] t):
     int sz = t.size()
-    int m = t.flat_get(0)
+    T m = t.flat_get(0)
     int i = 1
     while i < sz:
-        int v = t.flat_get(i)
+        T v = t.flat_get(i)
         if v < m:
             m = v
         i = i + 1
     return m
 
-int tensor_max_int(Tensor[int] t):
+T tensor_max[Numeric T](Tensor[T] t):
     int sz = t.size()
-    int m = t.flat_get(0)
+    T m = t.flat_get(0)
     int i = 1
     while i < sz:
-        int v = t.flat_get(i)
-        if v > m:
-            m = v
-        i = i + 1
-    return m
-
-float tensor_sum_float(Tensor[float] t):
-    float acc = 0.0
-    int sz = t.size()
-    int i = 0
-    while i < sz:
-        acc = acc + t.flat_get(i)
-        i = i + 1
-    return acc
-
-float tensor_min_float(Tensor[float] t):
-    int sz = t.size()
-    float m = t.flat_get(0)
-    int i = 1
-    while i < sz:
-        float v = t.flat_get(i)
-        if v < m:
-            m = v
-        i = i + 1
-    return m
-
-float tensor_max_float(Tensor[float] t):
-    int sz = t.size()
-    float m = t.flat_get(0)
-    int i = 1
-    while i < sz:
-        float v = t.flat_get(i)
+        T v = t.flat_get(i)
         if v > m:
             m = v
         i = i + 1
@@ -784,7 +553,7 @@ float tensor_mean_all(Tensor[float] t):
     while i < sz:
         fcnt = fcnt + 1.0
         i = i + 1
-    return tensor_sum_float(t) / fcnt
+    return tensor_sum[float](t) / fcnt
 
 float tensor_std_all(Tensor[float] t):
     int sz = t.size()
@@ -802,7 +571,7 @@ float tensor_std_all(Tensor[float] t):
     return sqrt(var / fcnt)
 
 # Axis reduction: sum along one axis, returns tensor with ndim-1 dimensions
-Tensor[int] tensor_sum_axis_int(Tensor[int] t, int axis):
+Tensor[T] tensor_sum_axis[Numeric T](Tensor[T] t, int axis):
     int n = t.shape.len()
     int axis_size = t.shape.get(axis).unwrap()
     Vector[int] out_shape = Vector[int]()
@@ -811,7 +580,7 @@ Tensor[int] tensor_sum_axis_int(Tensor[int] t, int axis):
         if i != axis:
             out_shape.push(t.shape.get(i).unwrap())
         i = i + 1
-    Tensor[int] out = tensor_zeros_int(out_shape)
+    Tensor[T] out = tensor_zeros[T](out_shape)
     int out_sz = out.size()
     Vector[int] out_idx = Vector[int]()
     i = 0
@@ -820,46 +589,7 @@ Tensor[int] tensor_sum_axis_int(Tensor[int] t, int axis):
         i = i + 1
     int k = 0
     while k < out_sz:
-        int acc = 0
-        int aj = 0
-        while aj < axis_size:
-            Vector[int] in_idx = Vector[int]()
-            int oi = 0
-            int ni = 0
-            while ni < n:
-                if ni == axis:
-                    in_idx.push(aj)
-                else:
-                    in_idx.push(out_idx.get(oi).unwrap())
-                    oi = oi + 1
-                ni = ni + 1
-            acc = acc + t.at(in_idx)
-            aj = aj + 1
-        out.set_at(out_idx, acc)
-        if k < out_sz - 1:
-            tensor_increment_index(out_idx, out_shape)
-        k = k + 1
-    return out
-
-Tensor[float] tensor_sum_axis_float(Tensor[float] t, int axis):
-    int n = t.shape.len()
-    int axis_size = t.shape.get(axis).unwrap()
-    Vector[int] out_shape = Vector[int]()
-    int i = 0
-    while i < n:
-        if i != axis:
-            out_shape.push(t.shape.get(i).unwrap())
-        i = i + 1
-    Tensor[float] out = tensor_zeros_float(out_shape)
-    int out_sz = out.size()
-    Vector[int] out_idx = Vector[int]()
-    i = 0
-    while i < out_shape.len():
-        out_idx.push(0)
-        i = i + 1
-    int k = 0
-    while k < out_sz:
-        float acc = 0.0
+        T acc = T.default()
         int aj = 0
         while aj < axis_size:
             Vector[int] in_idx = Vector[int]()
@@ -882,61 +612,30 @@ Tensor[float] tensor_sum_axis_float(Tensor[float] t, int axis):
 
 Tensor[float] tensor_mean_axis(Tensor[float] t, int axis):
     int axis_size = t.shape.get(axis).unwrap()
-    Tensor[float] sums = tensor_sum_axis_float(t, axis)
+    Tensor[float] sums = tensor_sum_axis[float](t, axis)
     float fdiv = 0.0
     int i = 0
     while i < axis_size:
         fdiv = fdiv + 1.0
         i = i + 1
-    return scalar_div_float(sums, fdiv)
+    return scalar_div[float](sums, fdiv)
 
 # ── Linear Algebra ────────────────────────────────────────────
 
 # matmul: [m,k] @ [k,n] → [m,n]
-Tensor[int] tensor_matmul_int(Tensor[int] a, Tensor[int] b):
+Tensor[T] tensor_matmul[Numeric T](Tensor[T] a, Tensor[T] b):
     int m = a.shape.get(0).unwrap()
     int k = a.shape.get(1).unwrap()
     int n = b.shape.get(1).unwrap()
     Vector[int] out_shape = Vector[int]()
     out_shape.push(m)
     out_shape.push(n)
-    Tensor[int] out = tensor_zeros_int(out_shape)
+    Tensor[T] out = tensor_zeros[T](out_shape)
     int i = 0
     while i < m:
         int j = 0
         while j < n:
-            int acc = 0
-            int p = 0
-            while p < k:
-                Vector[int] ai = Vector[int]()
-                ai.push(i)
-                ai.push(p)
-                Vector[int] bi = Vector[int]()
-                bi.push(p)
-                bi.push(j)
-                acc = acc + a.at(ai) * b.at(bi)
-                p = p + 1
-            Vector[int] oi = Vector[int]()
-            oi.push(i)
-            oi.push(j)
-            out.set_at(oi, acc)
-            j = j + 1
-        i = i + 1
-    return out
-
-Tensor[float] tensor_matmul_float(Tensor[float] a, Tensor[float] b):
-    int m = a.shape.get(0).unwrap()
-    int k = a.shape.get(1).unwrap()
-    int n = b.shape.get(1).unwrap()
-    Vector[int] out_shape = Vector[int]()
-    out_shape.push(m)
-    out_shape.push(n)
-    Tensor[float] out = tensor_zeros_float(out_shape)
-    int i = 0
-    while i < m:
-        int j = 0
-        while j < n:
-            float acc = 0.0
+            T acc = T.default()
             int p = 0
             while p < k:
                 Vector[int] ai = Vector[int]()
@@ -956,18 +655,9 @@ Tensor[float] tensor_matmul_float(Tensor[float] a, Tensor[float] b):
     return out
 
 # dot product: 1D tensors
-int tensor_dot_int(Tensor[int] a, Tensor[int] b):
+T tensor_dot[Numeric T](Tensor[T] a, Tensor[T] b):
     int sz = a.size()
-    int acc = 0
-    int i = 0
-    while i < sz:
-        acc = acc + a.flat_get(i) * b.flat_get(i)
-        i = i + 1
-    return acc
-
-float tensor_dot_float(Tensor[float] a, Tensor[float] b):
-    int sz = a.size()
-    float acc = 0.0
+    T acc = T.default()
     int i = 0
     while i < sz:
         acc = acc + a.flat_get(i) * b.flat_get(i)
@@ -976,7 +666,7 @@ float tensor_dot_float(Tensor[float] a, Tensor[float] b):
 
 # ── Comparisons ───────────────────────────────────────────────
 
-Tensor[bool] tensor_eq_int(Tensor[int] a, Tensor[int] b):
+Tensor[bool] tensor_eq[Numeric T](Tensor[T] a, Tensor[T] b):
     int sz = a.size()
     Vector[int] sh = vec_int_copy(a.shape)
     Vector[bool] data = Vector[bool]()
@@ -987,7 +677,7 @@ Tensor[bool] tensor_eq_int(Tensor[int] a, Tensor[int] b):
     Vector[int] strides = tensor_compute_strides(sh)
     return Tensor[bool](Shared[Vector[bool]](data), sh, strides, 0)
 
-Tensor[bool] tensor_lt_int(Tensor[int] a, Tensor[int] b):
+Tensor[bool] tensor_lt[Numeric T](Tensor[T] a, Tensor[T] b):
     int sz = a.size()
     Vector[int] sh = vec_int_copy(a.shape)
     Vector[bool] data = Vector[bool]()
@@ -998,7 +688,7 @@ Tensor[bool] tensor_lt_int(Tensor[int] a, Tensor[int] b):
     Vector[int] strides = tensor_compute_strides(sh)
     return Tensor[bool](Shared[Vector[bool]](data), sh, strides, 0)
 
-Tensor[bool] tensor_gt_int(Tensor[int] a, Tensor[int] b):
+Tensor[bool] tensor_gt[Numeric T](Tensor[T] a, Tensor[T] b):
     int sz = a.size()
     Vector[int] sh = vec_int_copy(a.shape)
     Vector[bool] data = Vector[bool]()
@@ -1009,40 +699,7 @@ Tensor[bool] tensor_gt_int(Tensor[int] a, Tensor[int] b):
     Vector[int] strides = tensor_compute_strides(sh)
     return Tensor[bool](Shared[Vector[bool]](data), sh, strides, 0)
 
-Tensor[bool] tensor_eq_float(Tensor[float] a, Tensor[float] b):
-    int sz = a.size()
-    Vector[int] sh = vec_int_copy(a.shape)
-    Vector[bool] data = Vector[bool]()
-    int i = 0
-    while i < sz:
-        data.push(a.flat_get(i) == b.flat_get(i))
-        i = i + 1
-    Vector[int] strides = tensor_compute_strides(sh)
-    return Tensor[bool](Shared[Vector[bool]](data), sh, strides, 0)
-
-Tensor[bool] tensor_lt_float(Tensor[float] a, Tensor[float] b):
-    int sz = a.size()
-    Vector[int] sh = vec_int_copy(a.shape)
-    Vector[bool] data = Vector[bool]()
-    int i = 0
-    while i < sz:
-        data.push(a.flat_get(i) < b.flat_get(i))
-        i = i + 1
-    Vector[int] strides = tensor_compute_strides(sh)
-    return Tensor[bool](Shared[Vector[bool]](data), sh, strides, 0)
-
-Tensor[bool] tensor_gt_float(Tensor[float] a, Tensor[float] b):
-    int sz = a.size()
-    Vector[int] sh = vec_int_copy(a.shape)
-    Vector[bool] data = Vector[bool]()
-    int i = 0
-    while i < sz:
-        data.push(a.flat_get(i) > b.flat_get(i))
-        i = i + 1
-    Vector[int] strides = tensor_compute_strides(sh)
-    return Tensor[bool](Shared[Vector[bool]](data), sh, strides, 0)
-
-Tensor[bool] tensor_le_int(Tensor[int] a, Tensor[int] b):
+Tensor[bool] tensor_le[Numeric T](Tensor[T] a, Tensor[T] b):
     int sz = a.size()
     Vector[int] sh = vec_int_copy(a.shape)
     Vector[bool] data = Vector[bool]()
@@ -1053,18 +710,7 @@ Tensor[bool] tensor_le_int(Tensor[int] a, Tensor[int] b):
     Vector[int] strides = tensor_compute_strides(sh)
     return Tensor[bool](Shared[Vector[bool]](data), sh, strides, 0)
 
-Tensor[bool] tensor_le_float(Tensor[float] a, Tensor[float] b):
-    int sz = a.size()
-    Vector[int] sh = vec_int_copy(a.shape)
-    Vector[bool] data = Vector[bool]()
-    int i = 0
-    while i < sz:
-        data.push(a.flat_get(i) <= b.flat_get(i))
-        i = i + 1
-    Vector[int] strides = tensor_compute_strides(sh)
-    return Tensor[bool](Shared[Vector[bool]](data), sh, strides, 0)
-
-Tensor[bool] tensor_ge_int(Tensor[int] a, Tensor[int] b):
+Tensor[bool] tensor_ge[Numeric T](Tensor[T] a, Tensor[T] b):
     int sz = a.size()
     Vector[int] sh = vec_int_copy(a.shape)
     Vector[bool] data = Vector[bool]()
@@ -1075,29 +721,7 @@ Tensor[bool] tensor_ge_int(Tensor[int] a, Tensor[int] b):
     Vector[int] strides = tensor_compute_strides(sh)
     return Tensor[bool](Shared[Vector[bool]](data), sh, strides, 0)
 
-Tensor[bool] tensor_ge_float(Tensor[float] a, Tensor[float] b):
-    int sz = a.size()
-    Vector[int] sh = vec_int_copy(a.shape)
-    Vector[bool] data = Vector[bool]()
-    int i = 0
-    while i < sz:
-        data.push(a.flat_get(i) >= b.flat_get(i))
-        i = i + 1
-    Vector[int] strides = tensor_compute_strides(sh)
-    return Tensor[bool](Shared[Vector[bool]](data), sh, strides, 0)
-
-Tensor[bool] tensor_ne_int(Tensor[int] a, Tensor[int] b):
-    int sz = a.size()
-    Vector[int] sh = vec_int_copy(a.shape)
-    Vector[bool] data = Vector[bool]()
-    int i = 0
-    while i < sz:
-        data.push(a.flat_get(i) != b.flat_get(i))
-        i = i + 1
-    Vector[int] strides = tensor_compute_strides(sh)
-    return Tensor[bool](Shared[Vector[bool]](data), sh, strides, 0)
-
-Tensor[bool] tensor_ne_float(Tensor[float] a, Tensor[float] b):
+Tensor[bool] tensor_ne[Numeric T](Tensor[T] a, Tensor[T] b):
     int sz = a.size()
     Vector[int] sh = vec_int_copy(a.shape)
     Vector[bool] data = Vector[bool]()

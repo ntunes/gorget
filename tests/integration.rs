@@ -8487,3 +8487,34 @@ fn resolver_comparison() {
     // Diagnostic test — always passes. Mismatches guide development.
     eprintln!("\n================================\n");
 }
+
+// Numeric trait integration tests
+
+#[test]
+fn numeric_trait() {
+    run_gg(
+        "numeric_trait.gg",
+        "\
+7
+4.000000
+0
+1
+1.000000",
+    );
+}
+
+#[test]
+fn numeric_trait_ops() {
+    run_gg(
+        "numeric_trait_ops.gg",
+        "\
+7
+3.500000
+20
+7.000000
+-42
+-1.500000
+true
+false",
+    );
+}

@@ -8,6 +8,33 @@ use crate::span::Spanned;
 
 use super::context::LoweringContext;
 
+/// Reverse-map a GIR TypeId to its Gorget-level primitive name.
+/// Used to resolve generic type params (e.g., T → "int") for static method dispatch.
+fn gorget_name_for_type_id(ctx: &LoweringContext, type_id: TypeId) -> String {
+    if type_id == ctx.type_mapper.str_type {
+        return "str".to_string();
+    }
+    match type_id {
+        I64_TYPE => "int".to_string(),
+        F64_TYPE => "float".to_string(),
+        BOOL_TYPE => "bool".to_string(),
+        I8_TYPE => "int8".to_string(),
+        I16_TYPE => "int16".to_string(),
+        I32_TYPE => "int32".to_string(),
+        U8_TYPE => "uint8".to_string(),
+        U16_TYPE => "uint16".to_string(),
+        U32_TYPE => "uint32".to_string(),
+        U64_TYPE => "uint64".to_string(),
+        F32_TYPE => "float32".to_string(),
+        CHAR_TYPE => "char".to_string(),
+        _ => {
+            // For named types, look up in type_mapper
+            ctx.type_mapper.name_for_type_id(type_id)
+                .unwrap_or_else(|| "int".to_string())
+        }
+    }
+}
+
 /// Lower an expression to GIR instructions, returning the result `Operand`.
 pub fn lower_expr(
     ctx: &mut LoweringContext,
@@ -1160,6 +1187,14 @@ fn lower_method_call(
 ) -> Operand {
     // Static method call: Type.method(args) where receiver is a type name, not a value
     if let Expr::Identifier(name) = &receiver.node {
+        // Resolve generic type params to concrete type names (e.g., T → "int" when T=int).
+        // This enables T.default(), T.one(), T.parse() etc. inside monomorphized generic bodies.
+        let resolved_name: String = if let Some(&type_id) = ctx.generic_type_params.get(name.as_str()) {
+            gorget_name_for_type_id(ctx, type_id)
+        } else {
+            name.clone()
+        };
+        let name = &resolved_name;
         if ctx.lookup_local(name).is_none() && !ctx.module_constants.contains_key(name) {
             // Box.new(value) → heap allocation
             if name == "Box" && method_name == "new" && !args.is_empty() {

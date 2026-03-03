@@ -237,6 +237,10 @@ struct TypeChecker<'a> {
     function_body_scopes: &'a FxHashMap<(String, usize), ScopeId>,
     /// Current function's body scope (for scope-aware variable lookup).
     current_fn_scope: Option<ScopeId>,
+    /// Current function's trait bounds: (param_name, [trait_name, ...]).
+    /// Used for trait bound propagation: when a generic param `T` with bound `Numeric`
+    /// is passed to a callee requiring `Numeric`, the bound is satisfied transitively.
+    current_trait_bounds: Vec<(String, Vec<String>)>,
 }
 
 impl<'a> TypeChecker<'a> {
@@ -269,6 +273,7 @@ impl<'a> TypeChecker<'a> {
             decl_type_hint: None,
             function_body_scopes,
             current_fn_scope: None,
+            current_trait_bounds: Vec::new(),
         }
     }
 
@@ -2555,7 +2560,18 @@ impl<'a> TypeChecker<'a> {
                     Some(prim_tid)
                 }
             }
-            "default" => {
+            "default" | "one" => {
+                // default() supported on all primitives; one() only on numeric types
+                if method == "one" {
+                    match prim {
+                        PrimitiveType::Int | PrimitiveType::Int8 | PrimitiveType::Int16
+                        | PrimitiveType::Int32 | PrimitiveType::Int64
+                        | PrimitiveType::Uint | PrimitiveType::Uint8 | PrimitiveType::Uint16
+                        | PrimitiveType::Uint32 | PrimitiveType::Uint64
+                        | PrimitiveType::Float | PrimitiveType::Float32 | PrimitiveType::Float64 => {}
+                        _ => return None,
+                    }
+                }
                 for arg in args {
                     self.infer_expr(&arg.node.value);
                 }
@@ -2903,7 +2919,16 @@ impl<'a> TypeChecker<'a> {
         for (param_name, required_traits) in &info.trait_bounds {
             if let Some(concrete_type) = param_to_type.get(param_name.as_str()) {
                 for trait_name in required_traits {
-                    if !self.traits.has_trait_impl_by_name(concrete_type, trait_name) {
+                    if self.traits.has_trait_impl_by_name(concrete_type, trait_name) {
+                        continue;
+                    }
+                    // Transitive bound propagation: if the type arg is a generic param
+                    // of the current function with matching (or super-) trait bounds,
+                    // the bound is satisfied transitively.
+                    let satisfied_by_outer_bound = self.current_trait_bounds.iter().any(|(p, bounds)| {
+                        p == concrete_type && bounds.iter().any(|b| self.traits.trait_satisfies(b, trait_name))
+                    });
+                    if !satisfied_by_outer_bound {
                         self.error(
                             SemanticErrorKind::UnsatisfiedTraitBound {
                                 type_name: concrete_type.clone(),
@@ -2995,6 +3020,13 @@ impl<'a> TypeChecker<'a> {
         self.current_function_throws = func.throws.is_some();
         self.current_function_is_async = func.qualifiers.is_async;
 
+        // Set trait bounds for the current function (enables transitive bound propagation)
+        if let Some(def_id) = self.scopes.lookup(&func.name.node) {
+            if let Some(info) = self.function_info.get(&def_id) {
+                self.current_trait_bounds = info.trait_bounds.clone();
+            }
+        }
+
         // Resolve parameter types and write to DefInfo
         for param in &func.params {
             if let Ok(type_id) = super::types::ast_type_to_resolved(
@@ -3026,6 +3058,7 @@ impl<'a> TypeChecker<'a> {
         self.current_return_type = None;
         self.current_function_throws = false;
         self.current_fn_scope = None;
+        self.current_trait_bounds = Vec::new();
     }
 
     /// If `arg_expr` is a closure and `param_type` is a Callable variant,

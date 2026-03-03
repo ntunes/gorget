@@ -339,6 +339,8 @@ pub fn lower_generic_function(
 
     // Register function parameters with the drop elaborator so that ref-counted
     // types (Channel, Shared, Weak) passed by value are released at scope exit.
+    // Use register_param (not register_local) — params are borrowed from the caller,
+    // so only Copy-with-drop types (refcounted) need dropping, not Move types.
     for (i, p) in template.params.iter().enumerate() {
         let local_id = LocalId((i + 1) as u32);
         let base_type = substitute_and_map_type(ctx, &p.node.type_.node, &subs);
@@ -346,7 +348,7 @@ pub fn lower_generic_function(
             Ownership::MutableBorrow => ctx.register_mut_ptr_type(base_type),
             _ => base_type,
         };
-        ctx.drops.register_local(local_id, gir_type, &ctx.type_registry);
+        ctx.drops.register_param(local_id, gir_type, &ctx.type_registry);
     }
 
     // Lower the body
@@ -700,6 +702,9 @@ fn build_type_name_subs(ctx: &mut LoweringContext, subs: &[(String, Type)]) {
         let concrete_name = super::types::mangle_type_for_name(concrete_ty);
         (param.clone(), concrete_name)
     }).collect();
+
+    // Store fragment subs for on-the-fly resolution of names not in the pre-computed map
+    ctx.generic_fragment_subs = fragment_subs.clone();
 
     // Scan all known type names in the registry for template patterns.
     // For each name like "Container__T", substitute "T" → "int64_t" to get "Container__int64_t".

@@ -1,0 +1,20 @@
+T add_values[Numeric T](T a, T b):
+    return a + b
+
+T get_zero[Numeric T]():
+    return T.default()
+
+T get_one[Numeric T]():
+    return T.one()
+
+void main():
+    int ir = add_values[int](3, 4)
+    float fr = add_values[float](1.5, 2.5)
+    int zr = get_zero[int]()
+    int oi = get_one[int]()
+    float of = get_one[float]()
+    print("{ir}")
+    print("{fr}")
+    print("{zr}")
+    print("{oi}")
+    print("{of}")
