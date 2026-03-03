@@ -5250,8 +5250,8 @@ fn infer_method_return_type(name: &str) -> Option<&'static str> {
         let type_prefix = &name[..pos];
         // Collection method return types
         match method {
-            // Vector.get returns Option[T] (bounds-checked safe access)
-            "get" if type_prefix.starts_with("Vector") => {
+            // Vector.get / .first / .last return Option[T] (bounds-checked safe access)
+            "get" | "first" | "last" if type_prefix.starts_with("Vector") => {
                 if let Some(elem) = extract_element_type_from_collection(type_prefix) {
                     let option_type = format!("Option__{elem}");
                     return Some(Box::leak(option_type.into_boxed_str()));
@@ -5259,7 +5259,7 @@ fn infer_method_return_type(name: &str) -> Option<&'static str> {
                 return None;
             }
             // Methods that return the element type — extract from collection name
-            "pop" | "first" | "last" | "remove" | "get" | "at" => {
+            "pop" | "remove" | "get" | "at" => {
                 if let Some(elem) = extract_element_type_from_collection(type_prefix) {
                     return Some(Box::leak(elem.into_boxed_str()));
                 }
@@ -5267,7 +5267,7 @@ fn infer_method_return_type(name: &str) -> Option<&'static str> {
             }
             // Methods returning collections — return same collection type
             "filter" | "keys" | "values" | "items"
-            | "sorted" | "reversed" | "unique" | "flatten"
+            | "sorted" | "reversed" | "unique"
                 if !type_prefix.starts_with("Option") && !type_prefix.starts_with("Result") =>
             {
                 if type_prefix.starts_with("Set__") || type_prefix.starts_with("HashSet__") {
@@ -5925,6 +5925,10 @@ enum InlineMethod {
     Sort,
     /// Sorted: clone + sort (returns new array)
     Sorted,
+    /// Reversed: clone + reverse (returns new array)
+    Reversed,
+    /// Unique: clone + sort + dedup (returns new array with duplicates removed)
+    Unique,
     /// Option methods
     OptionUnwrap,
     OptionIsSome,
@@ -6083,6 +6087,21 @@ fn try_rewrite_collection_method(func_name: &str) -> Option<CollectionMethodCall
             "is_empty" => Some(CollectionMethodCall {
                 runtime_fn: "", pass_by_ptr: false,
                 has_return: true, needs_deref_cast: false, field_access: Some("len == 0"),
+                ..Default::default()
+            }),
+            "first" => Some(CollectionMethodCall {
+                runtime_fn: "__INLINE_ARRAY_FIRST__", pass_by_ptr: false,
+                has_return: true, needs_deref_cast: false, field_access: None,
+                ..Default::default()
+            }),
+            "last" => Some(CollectionMethodCall {
+                runtime_fn: "__INLINE_ARRAY_LAST__", pass_by_ptr: false,
+                has_return: true, needs_deref_cast: false, field_access: None,
+                ..Default::default()
+            }),
+            "binary_search" => Some(CollectionMethodCall {
+                runtime_fn: "gorget_array_binary_search", pass_by_ptr: true,
+                has_return: true, needs_deref_cast: false, field_access: None,
                 ..Default::default()
             }),
             _ => None,
@@ -6806,6 +6825,8 @@ fn try_inline_method(func_name: &str) -> Option<InlineMethod> {
             "pop" => Some(InlineMethod::Pop),
             "sort" => Some(InlineMethod::Sort),
             "sorted" => Some(InlineMethod::Sorted),
+            "reversed" => Some(InlineMethod::Reversed),
+            "unique" => Some(InlineMethod::Unique),
             _ => None,
         };
     }
@@ -6943,6 +6964,27 @@ fn emit_inline_method(
                 let _ = writeln!(out,
                     "        _{id} = gorget_array_clone({self_addr}); \
                     qsort(_{id}.data, _{id}.len, _{id}.elem_size, gorget_generic_compare);",
+                    id = dst_id.0);
+            }
+        }
+        InlineMethod::Reversed => {
+            // reversed: clone + reverse (returns new array, original unchanged)
+            if let Some(dst_id) = dst {
+                let self_addr = addr_self(&self_raw, self_ptr);
+                let _ = writeln!(out,
+                    "        _{id} = gorget_array_clone({self_addr}); \
+                    gorget_array_reverse(&_{id});",
+                    id = dst_id.0);
+            }
+        }
+        InlineMethod::Unique => {
+            // unique: clone + sort + dedup (returns new array with duplicates removed)
+            if let Some(dst_id) = dst {
+                let self_addr = addr_self(&self_raw, self_ptr);
+                let _ = writeln!(out,
+                    "        _{id} = gorget_array_clone({self_addr}); \
+                    qsort(_{id}.data, _{id}.len, _{id}.elem_size, gorget_generic_compare); \
+                    gorget_array_dedup(&_{id});",
                     id = dst_id.0);
             }
         }
@@ -7616,6 +7658,55 @@ fn emit_collection_method_call(
                         else {{ __gr = ({option_type}){{.tag = 1}}; }} __gr; }});",
                         id = dst_id.0);
                 }
+            }
+        }
+        return;
+    }
+    if rewrite.runtime_fn == "__INLINE_ARRAY_FIRST__" || rewrite.runtime_fn == "__INLINE_ARRAY_LAST__" {
+        // Vector.first() / .last() → Option[T] with bounds check, same pattern as __INLINE_ARRAY_GET__
+        let self_val = deref_self(&self_str, self_ptr);
+        let is_last = rewrite.runtime_fn == "__INLINE_ARRAY_LAST__";
+        if let Some(dst_id) = dst {
+            let option_type = format_type(func.locals[dst_id.0 as usize].type_id, registry);
+            let inner_type_str = option_type.strip_prefix("Option__").unwrap_or("");
+            let elem_c_type: &str =
+                if inner_type_str.starts_with("Vector__") || inner_type_str.starts_with("List__") {
+                    "GorgetArray"
+                } else if inner_type_str.starts_with("Dict__") || inner_type_str.starts_with("HashMap__") {
+                    "GorgetMap"
+                } else if inner_type_str.starts_with("Set__") || inner_type_str.starts_with("HashSet__") {
+                    "GorgetSet"
+                } else if !inner_type_str.is_empty() {
+                    inner_type_str
+                } else {
+                    extract_collection_elem_type(original_name)
+                };
+            // index expression: 0 for first, (len-1) for last
+            let idx_expr = if is_last {
+                format!("(int64_t)({self_val}.len - 1)")
+            } else {
+                "0".to_string()
+            };
+            let mut clone_ops: Vec<String> = Vec::new();
+            collect_clone_ops(elem_c_type, "__elem", &mut clone_ops, registry);
+            if elem_c_type == "GorgetArray" {
+                let _ = writeln!(out, "        _{id} = ({{ GorgetArray __gr_src = {self_val}; {option_type} __gr; \
+                    if (__gr_src.len > 0) {{ GorgetArray __elem = gorget_array_clone((GorgetArray*)gorget_array_get(&__gr_src, (size_t)({idx_expr}))); \
+                    __gr = ({option_type}){{.tag = 0, .data.Some = {{__elem}}}}; }} \
+                    else {{ __gr = ({option_type}){{.tag = 1}}; }} __gr; }});",
+                    id = dst_id.0);
+            } else if clone_ops.is_empty() {
+                let _ = writeln!(out, "        _{id} = ({{ GorgetArray __gr_src = {self_val}; {option_type} __gr; \
+                    if (__gr_src.len > 0) {{ __gr = ({option_type}){{.tag = 0, .data.Some = {{*({elem_c_type}*)gorget_array_get(&__gr_src, (size_t)({idx_expr}))}}}}; }} \
+                    else {{ __gr = ({option_type}){{.tag = 1}}; }} __gr; }});",
+                    id = dst_id.0);
+            } else {
+                let clone_stmts = clone_ops.join(" ");
+                let _ = writeln!(out, "        _{id} = ({{ GorgetArray __gr_src = {self_val}; {option_type} __gr; \
+                    if (__gr_src.len > 0) {{ {elem_c_type} __elem = *({elem_c_type}*)gorget_array_get(&__gr_src, (size_t)({idx_expr})); {clone_stmts} \
+                    __gr = ({option_type}){{.tag = 0, .data.Some = {{__elem}}}}; }} \
+                    else {{ __gr = ({option_type}){{.tag = 1}}; }} __gr; }});",
+                    id = dst_id.0);
             }
         }
         return;

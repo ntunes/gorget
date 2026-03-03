@@ -2620,7 +2620,15 @@ impl<'a> TypeChecker<'a> {
                 }
                 "clear" | "reserve" | "sort" | "reverse" | "insert" | "extend" => Some(self.types.void_id),
                 "is_empty" | "contains" | "any" | "all" => Some(self.types.bool_id),
-                "sorted" | "slice" | "enumerate" => Some(receiver_type),
+                "sorted" | "reversed" | "unique" | "slice" | "enumerate" => Some(receiver_type),
+                "first" | "last" => {
+                    if let Some(option_def_id) = self.scopes.lookup("Option") {
+                        Some(self.types.insert(ResolvedType::Generic(option_def_id, vec![elem_type()])))
+                    } else {
+                        Some(elem_type())
+                    }
+                }
+                "binary_search" => Some(self.types.int_id),
                 _ => None,
             },
             "Dict" | "HashMap" => match method {

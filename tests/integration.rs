@@ -3383,6 +3383,29 @@ fn trace_in_test_mode() {
 }
 
 #[test]
+fn vector_first_last() {
+    run_gg(
+        "vector_first_last.gg",
+        "\
+30
+20
+true
+true
+20
+10
+30
+30
+1
+-1
+3
+1
+2
+3
+done",
+    );
+}
+
+#[test]
 fn vector_sort() {
     run_gg(
         "vector_sort.gg",

@@ -3167,6 +3167,35 @@ static inline int64_t gorget_array_index_of(const GorgetArray* a, const void* ne
     return -1;
 }
 
+static inline int64_t gorget_array_binary_search(const GorgetArray* a, const void* key) {
+    if (a->len == 0) return -1;
+    size_t lo = 0, hi = a->len;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        int cmp = memcmp((char*)a->data + mid * a->elem_size, key, a->elem_size);
+        if (cmp == 0) return (int64_t)mid;
+        if (cmp < 0) lo = mid + 1;
+        else hi = mid;
+    }
+    return -1;
+}
+
+static inline void gorget_array_dedup(GorgetArray* arr) {
+    if (arr->len <= 1) return;
+    size_t write = 1;
+    for (size_t read = 1; read < arr->len; read++) {
+        char* prev = (char*)arr->data + (write - 1) * arr->elem_size;
+        char* curr = (char*)arr->data + read * arr->elem_size;
+        if (memcmp(prev, curr, arr->elem_size) != 0) {
+            if (write != read) {
+                memcpy((char*)arr->data + write * arr->elem_size, curr, arr->elem_size);
+            }
+            write++;
+        }
+    }
+    arr->len = write;
+}
+
 static inline void gorget_array_insert(GorgetArray* arr, size_t index, const void* elem) {
     if (index > arr->len) {
         fprintf(stderr, "gorget: panic: insert index out of bounds: index %zu, length %zu\n", index, arr->len);

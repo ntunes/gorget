@@ -1,0 +1,45 @@
+from std.collections import Vector
+
+void main():
+    Vector[int] v = Vector[int]()
+    v.push(30)
+    v.push(10)
+    v.push(20)
+
+    # first / last
+    print(v.first().unwrap())
+    print(v.last().unwrap())
+
+    # first / last on empty
+    Vector[int] empty = Vector[int]()
+    print(empty.first().is_none())
+    print(empty.last().is_none())
+
+    # reversed
+    Vector[int] rev = v.reversed()
+    print(rev.get(0).unwrap())
+    print(rev.get(1).unwrap())
+    print(rev.get(2).unwrap())
+    # original unchanged
+    print(v.get(0).unwrap())
+
+    # binary_search (on sorted data)
+    Vector[int] sorted = v.sorted()
+    print(sorted.binary_search(20))
+    print(sorted.binary_search(99))
+
+    # unique
+    Vector[int] dupes = Vector[int]()
+    dupes.push(3)
+    dupes.push(1)
+    dupes.push(2)
+    dupes.push(1)
+    dupes.push(3)
+    dupes.push(2)
+    Vector[int] uniq = dupes.unique()
+    print(uniq.len())
+    print(uniq.get(0).unwrap())
+    print(uniq.get(1).unwrap())
+    print(uniq.get(2).unwrap())
+
+    print("done")

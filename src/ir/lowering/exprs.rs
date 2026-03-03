@@ -2242,9 +2242,9 @@ fn lower_method_call(
                 .unwrap_or(mangled.clone())
         };
 
-        // For Vector.get(), auto-register Option[T] and override return type
+        // For Vector.get() / .first() / .last(), auto-register Option[T] and override return type
         let fn_sig_ret = ctx.fn_sigs.get(&effective_name).map(|(_, ret)| *ret);
-        if method_name == "get"
+        if matches!(method_name, "get" | "first" | "last")
             && (type_name.starts_with("Vector__") || type_name == "GorgetArray")
         {
             let elem_type_name = type_name.strip_prefix("Vector__").unwrap_or("int64_t");
@@ -2263,8 +2263,8 @@ fn lower_method_call(
             }
         }
         let ret_type = if let Some(ret) = fn_sig_ret {
-            // Vector.get() returns Option[T], not T — override fn_sigs
-            if method_name == "get"
+            // Vector.get() / .first() / .last() return Option[T], not T — override fn_sigs
+            if matches!(method_name, "get" | "first" | "last")
                 && (type_name.starts_with("Vector__") || type_name == "GorgetArray")
             {
                 let elem_type_name = type_name.strip_prefix("Vector__").unwrap_or("int64_t");
@@ -2324,7 +2324,7 @@ fn infer_collection_method_return_type(
 
     match method_name {
         // Methods returning int
-        "len" | "count" | "capacity" | "hash" => I64_TYPE,
+        "len" | "count" | "capacity" | "hash" | "binary_search" => I64_TYPE,
         // Methods returning Option[int]
         "index_of" | "find" => {
             ctx.lookup_type_by_name("Option__int64_t").unwrap_or(I64_TYPE)
@@ -2335,8 +2335,8 @@ fn infer_collection_method_return_type(
         | "has" | "contains_key" | "has_key" => {
             BOOL_TYPE
         }
-        // Vector.get → Option[T] (bounds-checked safe access)
-        "get" if is_vector => {
+        // Vector.get / .first / .last → Option[T] (bounds-checked safe access)
+        "get" | "first" | "last" if is_vector => {
             let elem_type_name = type_name.strip_prefix("Vector__")
                 .unwrap_or("int64_t");
             let option_name = format!("Option__{elem_type_name}");
@@ -2446,8 +2446,8 @@ fn infer_collection_method_return_type(
         "fold" | "reduce" | "any" | "all" if is_vector || is_set || is_dict => I64_TYPE,
         // forEach → void
         "for_each" | "each" if is_vector || is_set || is_dict => UNIT_TYPE,
-        // reversed/unique/flatten → same collection
-        "reversed" | "unique" | "flatten" if is_vector => {
+        // reversed/unique → same collection
+        "reversed" | "unique" if is_vector => {
             if let Some(type_id) = ctx.lookup_type_by_name(type_name) {
                 type_id
             } else {
