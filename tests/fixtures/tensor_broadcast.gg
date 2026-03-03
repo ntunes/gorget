@@ -1,4 +1,4 @@
-from gg.tensor import Tensor, tensor_arange, tensor_zeros_int, tensor_ones_int, tensor_display_int, tensor_display_float, tensor_badd_int, tensor_bsub_int, tensor_bmul_int, tensor_badd_float, tensor_bmul_float, tensor_linspace, tensor_broadcast_shape, vec_int_copy
+from gg.tensor import Tensor, tensor_arange, tensor_zeros_int, tensor_ones_int, tensor_display_int, tensor_display_float, tensor_badd_int, tensor_bsub_int, tensor_bmul_int, tensor_badd_float, tensor_bmul_float, tensor_bsub_float, tensor_linspace, tensor_broadcast_shape, vec_int_copy
 
 void main():
     # 1D broadcast: [4] + [1]
@@ -37,3 +37,7 @@ void main():
     Tensor[float] fb = tensor_linspace(1.0, 1.0, 1)
     Tensor[float] rf = tensor_badd_float(fa, fb)
     print(tensor_display_float(rf))
+
+    # tensor_bsub_float: [1,2,3,4] - [1] = [0,1,2,3]
+    Tensor[float] rs = tensor_bsub_float(fa, fb)
+    print(tensor_display_float(rs))

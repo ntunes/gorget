@@ -6881,7 +6881,8 @@ Tensor(shape=[4], [10, 12, 14, 16])
 4
 Tensor(shape=[4], [10, 10, 10, 10])
 Tensor(shape=[4], [0, 11, 24, 39])
-Tensor(shape=[4], [2, 3, 4, 5])",
+Tensor(shape=[4], [2, 3, 4, 5])
+Tensor(shape=[4], [0, 1, 2, 3])",
     );
 }
 
@@ -6963,7 +6964,9 @@ true
 true
 true
 true
-true",
+true
+4.000000
+1.000000",
     );
 }
 
