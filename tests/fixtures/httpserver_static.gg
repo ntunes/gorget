@@ -1,0 +1,52 @@
+# Test: http_serve_file and http_mime_type
+# Verifies:
+#   1. Correct 200 + MIME type when file exists.
+#   2. 404 for missing file.
+#   3. 400 for path-traversal attempt ("..").
+#   4. MIME type detection for several common extensions.
+#   5. index.html fallback when request path is a directory.
+
+from gg.httpserver import http_serve_file, http_mime_type, HttpRequest, HttpServerResponse
+from std.collections import Dict
+from std.fs import write_file, delete_file, mkdir, rmdir
+
+HttpRequest fake_req(str path):
+    return HttpRequest("GET", path, "", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
+
+void main():
+    # ── MIME type detection ──────────────────────────────────────
+    print(http_mime_type("/foo/bar.html"))         # text/html
+    print(http_mime_type("/foo/bar.js"))           # application/javascript
+    print(http_mime_type("/foo/bar.css"))          # text/css
+    print(http_mime_type("/foo/bar.json"))         # application/json
+    print(http_mime_type("/foo/bar.png"))          # image/png
+    print(http_mime_type("/foo/bar.xyz"))          # application/octet-stream (unknown)
+
+    # ── File serving ─────────────────────────────────────────────
+    # Write a temp file for testing
+    write_file("/tmp/gg_static_test.html", "<h1>hello</h1>")
+
+    HttpServerResponse r1 = http_serve_file("/tmp", fake_req("/gg_static_test.html"))
+    print(int_to_str(r1.status_code))              # 200
+    print(r1.content_type)                         # text/html
+    print(r1.body)                                 # <h1>hello</h1>
+
+    # Missing file → 404
+    HttpServerResponse r2 = http_serve_file("/tmp", fake_req("/no_such_file.txt"))
+    print(int_to_str(r2.status_code))              # 404
+
+    # Path traversal → 400
+    HttpServerResponse r3 = http_serve_file("/tmp", fake_req("/../etc/passwd"))
+    print(int_to_str(r3.status_code))              # 400
+
+    # ── Directory with index.html ────────────────────────────────
+    mkdir("/tmp/gg_static_dir")
+    write_file("/tmp/gg_static_dir/index.html", "index")
+    HttpServerResponse r4 = http_serve_file("/tmp", fake_req("/gg_static_dir"))
+    print(int_to_str(r4.status_code))              # 200
+    print(r4.body)                                 # index
+
+    # Cleanup
+    delete_file("/tmp/gg_static_test.html")
+    delete_file("/tmp/gg_static_dir/index.html")
+    rmdir("/tmp/gg_static_dir")

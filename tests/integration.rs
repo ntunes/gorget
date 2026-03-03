@@ -4146,6 +4146,30 @@ fn httpserver_keepalive() {
 }
 
 #[test]
+fn httpserver_router() {
+    run_gg(
+        "httpserver_router.gg",
+        "200\nhello\n200\nposted\n404\n404\n200\nuser:42\n200\npost:7:comment:99\nhello\n2\n*\n302\n/new-location",
+    );
+}
+
+#[test]
+fn httpserver_middleware() {
+    run_gg(
+        "httpserver_middleware.gg",
+        "200\nhello!\ngorget\nget\n404\ngorget\n200\npong",
+    );
+}
+
+#[test]
+fn httpserver_static() {
+    run_gg(
+        "httpserver_static.gg",
+        "text/html\napplication/javascript\ntext/css\napplication/json\nimage/png\napplication/octet-stream\n200\ntext/html\n<h1>hello</h1>\n404\n400\n200\nindex",
+    );
+}
+
+#[test]
 fn udp_echo() {
     run_gg(
         "udp_echo.gg",

@@ -18,6 +18,8 @@ from std.net.socket import ServerSocket, Socket, server_socket_bind
 from std.collections import Vector, Dict
 from std.conv import int_to_str
 from std.bytes import bytes_to_str
+from std.fs import read_file, file_exists, is_dir
+from std.path import path_join, path_extension
 
 # ── Request and response types ────────────────────────────────
 
@@ -268,3 +270,193 @@ Dict[str, str] parse_query_string(str qs):
 equip HttpRequest:
     Dict[str, str] query_params(self):
         return parse_query_string(self.query_string)
+
+# ── Router ────────────────────────────────────────────────────
+#
+# Registers handlers by "METHOD /path" key. Supports:
+#  - Exact paths: "/api/users"
+#  - Parameterized paths: "/users/:id" (colon-prefix denotes capture groups)
+#
+# Usage:
+#   Router router = Router.new()
+#   router.get("/hello", handle_hello)
+#   router.get("/users/:id", handle_user)
+#   server.serve((req): router.dispatch(req)).await()
+
+HttpServerResponse http_server_default_not_found(HttpRequest req):
+    return HttpServerResponse.not_found()
+
+# ── Path-parameter matching helper ────────────────────────────
+
+# Match a URL path against a route pattern.
+# Returns Ok(params_dict) on match, Error("") on miss.
+# Pattern segments starting with ":" (e.g. ":id") capture the path segment.
+Result[Dict[str, str], str] http_router_match_pattern(Vector[str] pattern, Vector[str] parts):
+    if pattern.len() != parts.len():
+        return Error("")
+    Dict[str, str] params = Dict[str, str]()
+    int i = 0
+    while i < pattern.len():
+        str seg = pattern[i]
+        str part = parts[i]
+        if seg.starts_with(":"):
+            str param_name = seg.byte_slice(1, seg.byte_len())
+            params.put(param_name, part)
+        elif seg != part:
+            return Error("")
+        i = i + 1
+    return Ok(params)
+
+struct Router:
+    Dict[str, Callable[HttpServerResponse(HttpRequest)]] exact_routes
+    # Parameterized routes: key = "METHOD|/path/:param" (method + "|" + original path).
+    # Segments are re-derived from the key at dispatch time by splitting on "/".
+    # This avoids storing Vector[str] inside a Dict (which causes use-after-free when
+    # the shallow-copied vector is freed while the dict still owns the data).
+    Dict[str, Callable[HttpServerResponse(HttpRequest)]] param_routes
+    # Middleware pipeline: each hook receives the original request and the handler's response,
+    # and returns a (possibly modified) response. Applied in registration order after dispatch.
+    # Signature: Callable[HttpServerResponse(HttpRequest, HttpServerResponse)]
+    # Use cases: add CORS headers, inject X-headers, log status codes, etc.
+    Vector[Callable[HttpServerResponse(HttpRequest, HttpServerResponse)]] middlewares
+
+equip Router:
+    Router new():
+        Dict[str, Callable[HttpServerResponse(HttpRequest)]] ex = Dict[str, Callable[HttpServerResponse(HttpRequest)]]()
+        Dict[str, Callable[HttpServerResponse(HttpRequest)]] pr = Dict[str, Callable[HttpServerResponse(HttpRequest)]]()
+        Vector[Callable[HttpServerResponse(HttpRequest, HttpServerResponse)]] mw = Vector[Callable[HttpServerResponse(HttpRequest, HttpServerResponse)]]()
+        return Router(ex, pr, mw)
+
+    void route(&self, str method, str path, Callable[HttpServerResponse(HttpRequest)] handler):
+        Callable[HttpServerResponse(HttpRequest)] h = handler
+        if path.contains(":"):
+            str pkey = method + "|" + path
+            self.param_routes.put(pkey, h)
+        else:
+            str key = method + " " + path
+            self.exact_routes.put(key, h)
+
+    void get(&self, str path, Callable[HttpServerResponse(HttpRequest)] handler):
+        Callable[HttpServerResponse(HttpRequest)] h = handler
+        if path.contains(":"):
+            str pkey = "GET|" + path
+            self.param_routes.put(pkey, h)
+        else:
+            str key = "GET " + path
+            self.exact_routes.put(key, h)
+
+    void post(&self, str path, Callable[HttpServerResponse(HttpRequest)] handler):
+        Callable[HttpServerResponse(HttpRequest)] h = handler
+        if path.contains(":"):
+            str pkey = "POST|" + path
+            self.param_routes.put(pkey, h)
+        else:
+            str key = "POST " + path
+            self.exact_routes.put(key, h)
+
+    # Register a middleware hook. Each hook is called (in order) after the matched handler
+    # returns, receiving the original request and the handler's response. The hook returns
+    # the (possibly modified) response. Typical uses: CORS headers, security headers, logging.
+    void use(&self, Callable[HttpServerResponse(HttpRequest, HttpServerResponse)] hook):
+        Callable[HttpServerResponse(HttpRequest, HttpServerResponse)] h = hook
+        self.middlewares.push(h)
+
+    # Inner dispatch: exact match → param match → 404. No middleware applied.
+    HttpServerResponse dispatch_inner(&self, HttpRequest req):
+        # 1. Exact-match first (O(1))
+        str key = req.method + " " + req.path
+        if self.exact_routes.contains(key):
+            Callable[HttpServerResponse(HttpRequest)] h = self.exact_routes[key]
+            return h(req)
+        # 2. Parameterized match (linear scan over param_routes)
+        Vector[str] path_parts = req.path.split("/")
+        Vector[str] pkeys = self.param_routes.keys()
+        str method_prefix = req.method + "|"
+        int method_prefix_len = req.method.byte_len() + 1
+        int pi = 0
+        while pi < pkeys.len():
+            str pkey = pkeys[pi]
+            if pkey.starts_with(method_prefix):
+                str route_path = pkey.byte_slice(method_prefix_len, pkey.byte_len())
+                Vector[str] pattern = route_path.split("/")
+                Result[Dict[str, str], str] m = http_router_match_pattern(pattern, path_parts)
+                if m.is_ok():
+                    Dict[str, str] extracted = m.unwrap()
+                    HttpRequest matched_req = HttpRequest(req.method, req.path, req.query_string, req.http_version, req.headers, req.body, extracted)
+                    Callable[HttpServerResponse(HttpRequest)] h = self.param_routes[pkey]
+                    return h(matched_req)
+            pi = pi + 1
+        # 3. Fallback: 404
+        return HttpServerResponse.not_found()
+
+    # Dispatch a request through the router: inner dispatch + middleware pipeline.
+    HttpServerResponse dispatch(&self, HttpRequest req):
+        HttpServerResponse resp = self.dispatch_inner(req)
+        int mi = 0
+        while mi < self.middlewares.len():
+            Callable[HttpServerResponse(HttpRequest, HttpServerResponse)] mw = self.middlewares[mi]
+            resp = mw(req, resp)
+            mi = mi + 1
+        return resp
+
+# ── Static file serving ───────────────────────────────────────
+
+# Return the MIME type string for a file path based on its extension.
+str http_mime_type(str path):
+    str ext = path_extension(path)
+    if ext == "html":
+        return "text/html"
+    elif ext == "htm":
+        return "text/html"
+    elif ext == "css":
+        return "text/css"
+    elif ext == "js":
+        return "application/javascript"
+    elif ext == "json":
+        return "application/json"
+    elif ext == "xml":
+        return "text/xml"
+    elif ext == "png":
+        return "image/png"
+    elif ext == "jpg":
+        return "image/jpeg"
+    elif ext == "jpeg":
+        return "image/jpeg"
+    elif ext == "gif":
+        return "image/gif"
+    elif ext == "svg":
+        return "image/svg+xml"
+    elif ext == "ico":
+        return "image/x-icon"
+    elif ext == "woff":
+        return "font/woff"
+    elif ext == "woff2":
+        return "font/woff2"
+    elif ext == "txt":
+        return "text/plain"
+    elif ext == "pdf":
+        return "application/pdf"
+    elif ext == "webp":
+        return "image/webp"
+    elif ext == "mp4":
+        return "video/mp4"
+    elif ext == "mp3":
+        return "audio/mpeg"
+    return "application/octet-stream"
+
+# Serve a file from base_dir for the request path.
+# - Rejects paths containing ".." (directory traversal protection).
+# - Automatically serves index.html when the resolved path is a directory.
+# - Returns 200 with file content + correct MIME type on success.
+# - Returns 404 for missing files, 400 for invalid paths.
+HttpServerResponse http_serve_file(str base_dir, HttpRequest req):
+    if req.path.contains(".."):
+        return HttpServerResponse.bad_request("invalid path")
+    mutable str file_path = path_join(base_dir, req.path)
+    if is_dir(file_path):
+        file_path = path_join(file_path, "index.html")
+    if not file_exists(file_path):
+        return HttpServerResponse.not_found()
+    str content = read_file(file_path)
+    str mime = http_mime_type(file_path)
+    return HttpServerResponse(200, content, mime, Dict[str, str]())

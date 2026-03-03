@@ -757,6 +757,9 @@ pub fn mangle_type_for_name(ty: &Type) -> String {
             name.node.clone()
         }
         Type::Tuple(elems) => mangle_tuple_name(elems),
+        // Callable[T(Params)] has a Type::Function as its generic arg — all callables
+        // are GorgetClosure at runtime, so use that as the C name fragment.
+        Type::Function { .. } => "GorgetClosure".to_string(),
         _ => "unknown".to_string(),
     }
 }

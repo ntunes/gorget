@@ -1,0 +1,58 @@
+# Test: Router middleware pipeline
+# Verifies that:
+#   1. Middleware hooks are called in registration order after dispatch.
+#   2. Each hook receives the original request and the current response, and
+#      its return value replaces the response for subsequent hooks.
+#   3. Multiple middlewares compose correctly (each sees the previous hook's output).
+#   4. Middleware with no routes registered still calls dispatch_inner (→ 404).
+
+from gg.httpserver import Router, HttpRequest, HttpServerResponse
+from std.collections import Dict
+
+HttpServerResponse handle_hello(HttpRequest req):
+    return HttpServerResponse.ok("hello")
+
+# Middleware that adds a custom header to every response.
+HttpServerResponse add_x_header(HttpRequest req, HttpServerResponse resp):
+    return resp.with_header("x-powered-by", "gorget")
+
+# Middleware that appends a suffix to the body.
+HttpServerResponse append_suffix(HttpRequest req, HttpServerResponse resp):
+    return HttpServerResponse(resp.status_code, resp.body + "!", resp.content_type, resp.headers)
+
+# Middleware that counts requests (side-effects via a mutable upvalue not testable without
+# shared state, so just checks the request method instead).
+HttpServerResponse method_middleware(HttpRequest req, HttpServerResponse resp):
+    if req.method == "GET":
+        return resp.with_header("x-method", "get")
+    return resp
+
+void main():
+    Router router = Router.new()
+    router.get("/hello", handle_hello)
+    router.use(add_x_header)
+    router.use(append_suffix)
+    router.use(method_middleware)
+
+    # Build a minimal HttpRequest
+    HttpRequest req = HttpRequest("GET", "/hello", "", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
+
+    HttpServerResponse resp = router.dispatch(req)
+    print(int_to_str(resp.status_code))     # 200
+    print(resp.body)                         # hello!
+    print(resp.headers["x-powered-by"])      # gorget
+    print(resp.headers["x-method"])          # get
+
+    # Unknown route: 404, still gets middleware headers
+    HttpRequest req2 = HttpRequest("GET", "/unknown", "", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
+    HttpServerResponse resp2 = router.dispatch(req2)
+    print(int_to_str(resp2.status_code))     # 404
+    print(resp2.headers["x-powered-by"])     # gorget
+
+    # Router with no middlewares: plain dispatch
+    Router plain = Router.new()
+    plain.get("/ping", (r): HttpServerResponse.ok("pong"))
+    HttpRequest req3 = HttpRequest("GET", "/ping", "", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
+    HttpServerResponse resp3 = plain.dispatch(req3)
+    print(int_to_str(resp3.status_code))     # 200
+    print(resp3.body)                         # pong

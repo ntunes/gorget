@@ -2675,7 +2675,17 @@ fn emit_function(out: &mut String, func: &Function, module: &Module) {
                     {
                         // Slice returns the same collection type
                         type_overrides.insert(dst_idx, base_deref.to_string());
-                    } else if let Some(elem) = extract_element_type_from_collection(base_deref) {
+                    } else if let Some(elem) = extract_element_type_from_collection(base_deref)
+                        .or_else(|| {
+                            // base_deref may be normalized (e.g. "GorgetArray"); recover element
+                            // type from the raw IR type when it is a named collection.
+                            if base_idx < func.locals.len() {
+                                if let Some(GirType::Named(raw)) = registry.get(func.locals[base_idx].type_id) {
+                                    extract_element_type_from_collection(raw.as_str())
+                                } else { None }
+                            } else { None }
+                        })
+                    {
                         type_overrides.insert(dst_idx, elem);
                     } else if base_deref == "Str" {
                         type_overrides.insert(dst_idx, "Str".to_string());
@@ -4388,8 +4398,15 @@ fn emit_instruction(
                     rt.to_string()
                 } else { eff_type };
                 let c_type = if ir_type == "int64_t" {
-                    // Try to extract element type from collection type name
-                    let elem = extract_collection_elem_type(&base_type);
+                    // Use the raw (pre-normalization) IR type name so element type info
+                    // is not lost when base_type was normalized to "GorgetArray".
+                    let raw_base: String = if (base.local.0 as usize) < func.locals.len() {
+                        match registry.get(func.locals[base.local.0 as usize].type_id) {
+                            Some(GirType::Named(n)) => n.clone(),
+                            _ => base_type.clone(),
+                        }
+                    } else { base_type.clone() };
+                    let elem = extract_collection_elem_type(&raw_base);
                     if elem != "int64_t" || !base_type.contains("__") { elem.to_string() } else { ir_type }
                 } else { ir_type };
                 // Check if index is a range (slice operation)
@@ -5872,6 +5889,10 @@ fn extract_collection_elem_type(name: &str) -> &str {
     for prefix in &["Vector__", "List__", "Array__", "Set__", "HashSet__"] {
         if let Some(rest) = name.strip_prefix(prefix) {
             if rest.is_empty() { return "int64_t"; }
+            // Callable types (any generic variant) are GorgetClosure at runtime
+            if rest.starts_with("Callable__") || rest.starts_with("MutCallable__") || rest.starts_with("ConsumeCallable__") {
+                return "GorgetClosure";
+            }
             // Check if the rest starts with a collection prefix (nested collections)
             if rest.starts_with("Vector__") || rest.starts_with("List__") || rest.starts_with("Array__") {
                 return "GorgetArray";
