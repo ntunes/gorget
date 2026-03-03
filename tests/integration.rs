@@ -7860,6 +7860,14 @@ done",
 }
 
 #[test]
+fn csv_edge() {
+    run_gg(
+        "csv_edge.gg",
+        "true\ntrue\nfalse\n2\n-1\n2\nhello, world\nplain\nsay \"hi\"\nend\n0\ndone",
+    );
+}
+
+#[test]
 fn json_pretty() {
     run_gg(
         "json_pretty.gg",
@@ -7890,6 +7898,48 @@ a
 2
 0
 <item id=\"1\">a</item>
+done",
+    );
+}
+
+#[test]
+fn xml_roundtrip() {
+    run_gg(
+        "xml_roundtrip.gg",
+        "\
+a < b & c
+a & b
+true
+42
+true
+3 > 2
+he said \"hi\"
+done",
+    );
+}
+
+#[test]
+fn http_urls() {
+    run_gg(
+        "http_urls.gg",
+        "\
+example.com
+443
+/api/v1
+localhost
+8080
+/health
+host.example.com
+80
+/
+api.service
+3000
+/
+26
+255
+26
+16
+0
 done",
     );
 }

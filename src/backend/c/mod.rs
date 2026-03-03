@@ -6563,12 +6563,15 @@ fn try_emit_primitive_static_method(
     registry: &TypeRegistry,
 ) -> Option<String> {
     let mut out = String::new();
-    // Helper: extract const char* from arg (handles Str vs literal)
+    // Helper: extract parse call arguments from arg.
+    // Returns (call_expr) where call_expr is the full gorget_try_parse_int/float call.
+    // For Str variables (non-null-terminated slices), uses the length-bounded _n variant.
+    // For string literals (null-terminated), uses the plain variant.
     let extract_cstr_arg = |args: &[Operand], func: &Function, registry: &TypeRegistry| -> String {
         if args.is_empty() { return "\"\"".to_string(); }
         match &args[0] {
             Operand::Constant(Constant::Str(_)) => {
-                // String literal — already a const char* in C
+                // String literal — already a null-terminated const char* in C
                 format_operand(&args[0], func, registry)
             }
             Operand::Copy(p) | Operand::Move(p) => {
@@ -6583,6 +6586,20 @@ fn try_emit_primitive_static_method(
                 }
             }
             _ => format_operand(&args[0], func, registry),
+        }
+    };
+    // Returns Some(len_expr) when arg is a Str variable (slice — not null-terminated),
+    // so callers can use gorget_try_parse_int_n(data, len) instead of gorget_try_parse_int(data).
+    let extract_str_len = |args: &[Operand], func: &Function, registry: &TypeRegistry| -> Option<String> {
+        if args.is_empty() { return None; }
+        match &args[0] {
+            Operand::Copy(p) | Operand::Move(p) => {
+                let s = format_operand(&args[0], func, registry);
+                let idx = p.local.0 as usize;
+                let c_type = format_type(func.locals[idx].type_id, registry);
+                if c_type == "Str" { Some(format!("{s}.len")) } else { None }
+            }
+            _ => None,
         }
     };
     match func_name {
@@ -6608,8 +6625,15 @@ fn try_emit_primitive_static_method(
                     else { "int64_t" };
                 // Always use Option__cast_type since the GIR local type doesn't know about Option
                 let opt_type = format!("Option__{cast_type}");
+                // Use length-bounded parse for Str slices (not null-terminated),
+                // plain parse for null-terminated literals.
+                let parse_call = if let Some(len) = extract_str_len(args, func, registry) {
+                    format!("gorget_try_parse_int_n({arg_str}, {len})")
+                } else {
+                    format!("gorget_try_parse_int({arg_str})")
+                };
                 let _ = writeln!(out,
-                    "        _{id} = ({{ GorgetParseIntResult __pr = gorget_try_parse_int({arg_str}); \
+                    "        _{id} = ({{ GorgetParseIntResult __pr = {parse_call}; \
                     {opt_type} __opt; \
                     if (__pr.ok) {{ __opt.tag = 0; __opt.data.Some._0 = ({cast_type})__pr.value; }} \
                     else {{ __opt.tag = 1; }} \

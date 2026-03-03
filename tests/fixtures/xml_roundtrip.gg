@@ -1,0 +1,43 @@
+from gg.xml import XmlNode, xml_parse, xml_stringify
+
+void main():
+    # ── Roundtrip: entity encoding in text ──
+    XmlNode n1 = xml_parse("<root><item>a &lt; b &amp; c</item></root>").unwrap()
+    auto ser1 = xml_stringify(n1)
+    XmlNode n1b = xml_parse(ser1).unwrap()
+    XmlNode item1 = n1b.find("item")
+    print(item1.text())
+
+    # ── Roundtrip: entity encoding in attribute ──
+    XmlNode n2 = xml_parse("<link href=\"a &amp; b\"/>").unwrap()
+    auto ser2 = xml_stringify(n2)
+    XmlNode n2b = xml_parse(ser2).unwrap()
+    print(n2b.attr("href"))
+
+    # ── Error: mismatched closing tag ──
+    Result[XmlNode, str] r3 = xml_parse("<a></b>")
+    bool r3_err = r3.is_err()
+    print("{r3_err}")
+
+    # ── Processing instruction skipped ──
+    XmlNode n4 = xml_parse("<?foo bar?><data>42</data>").unwrap()
+    print(n4.text())
+
+    # ── Error: unterminated comment ──
+    Result[XmlNode, str] r5 = xml_parse("<!-- unterminated")
+    bool r5_err = r5.is_err()
+    print("{r5_err}")
+
+    # ── Roundtrip: &gt; in text ──
+    XmlNode n6 = xml_parse("<p>3 &gt; 2</p>").unwrap()
+    auto ser6 = xml_stringify(n6)
+    XmlNode n6b = xml_parse(ser6).unwrap()
+    print(n6b.text())
+
+    # ── Roundtrip: &quot; in attribute ──
+    XmlNode n7 = xml_parse("<tag val=\"he said &quot;hi&quot;\"/>").unwrap()
+    auto ser7 = xml_stringify(n7)
+    XmlNode n7b = xml_parse(ser7).unwrap()
+    print(n7b.attr("val"))
+
+    print("done")

@@ -4060,6 +4060,24 @@ static inline GorgetParseIntResult gorget_try_parse_int(const char* s) {
     return (GorgetParseIntResult){(int64_t)result, true};
 }
 
+/* Length-bounded variant: parses exactly `n` characters, no null-terminator required. */
+static inline GorgetParseIntResult gorget_try_parse_int_n(const char* s, size_t n) {
+    if (n == 0) return (GorgetParseIntResult){0, false};
+    long long result = 0;
+    int sign = 1;
+    size_t i = 0;
+    if (s[i] == '-') { sign = -1; i++; }
+    else if (s[i] == '+') { i++; }
+    if (i >= n) return (GorgetParseIntResult){0, false};
+    size_t start = i;
+    for (; i < n; i++) {
+        if (s[i] < '0' || s[i] > '9') return (GorgetParseIntResult){0, false};
+        result = result * 10 + (s[i] - '0');
+    }
+    if (i == start) return (GorgetParseIntResult){0, false};
+    return (GorgetParseIntResult){(int64_t)(sign * result), true};
+}
+
 typedef struct { double value; bool ok; } GorgetParseFloatResult;
 static inline GorgetParseFloatResult gorget_try_parse_float(const char* s) {
     char* endptr;

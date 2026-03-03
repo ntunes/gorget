@@ -376,11 +376,11 @@ fn try_build_ir(
             cc_cmd.arg("-fno-omit-frame-pointer");
             cc_cmd.arg("-g");
         }
-        add_sdl_flags(&mut cc_cmd, source.contains("gg.sdl") || source.contains("gg.gfx"));
-        add_tls_flags(&mut cc_cmd, source.contains("std.net.tls"));
-        add_crypto_flags(&mut cc_cmd, source.contains("gg.crypto") || source.contains("gg.p2p"));
-        add_regex_flags(&mut cc_cmd, source.contains("gg.regex"));
-        add_thread_flags(&mut cc_cmd, source.contains("std.async") || source.contains("gg.p2p"));
+        add_sdl_flags(&mut cc_cmd, concat_source.contains("gg.sdl") || concat_source.contains("gg.gfx"));
+        add_tls_flags(&mut cc_cmd, concat_source.contains("std.net.tls"));
+        add_crypto_flags(&mut cc_cmd, concat_source.contains("gg.crypto") || concat_source.contains("gg.p2p"));
+        add_regex_flags(&mut cc_cmd, concat_source.contains("gg.regex"));
+        add_thread_flags(&mut cc_cmd, concat_source.contains("std.async") || concat_source.contains("gg.p2p"));
         let status = cc_cmd.status();
         return match status {
             Ok(s) if s.success() => Ok(shared_path.to_path_buf()),
@@ -484,11 +484,11 @@ fn try_build_ir(
         cc_cmd.arg("-g");
     }
 
-    add_sdl_flags(&mut cc_cmd, source.contains("gg.sdl") || source.contains("gg.gfx"));
-    add_tls_flags(&mut cc_cmd, source.contains("std.net.tls"));
-    add_crypto_flags(&mut cc_cmd, source.contains("gg.crypto") || source.contains("gg.p2p"));
-    add_regex_flags(&mut cc_cmd, source.contains("gg.regex"));
-    add_thread_flags(&mut cc_cmd, source.contains("std.async") || source.contains("gg.p2p"));
+    add_sdl_flags(&mut cc_cmd, concat_source.contains("gg.sdl") || concat_source.contains("gg.gfx"));
+    add_tls_flags(&mut cc_cmd, concat_source.contains("std.net.tls"));
+    add_crypto_flags(&mut cc_cmd, concat_source.contains("gg.crypto") || concat_source.contains("gg.p2p"));
+    add_regex_flags(&mut cc_cmd, concat_source.contains("gg.regex"));
+    add_thread_flags(&mut cc_cmd, concat_source.contains("std.async") || concat_source.contains("gg.p2p"));
 
     let status = cc_cmd.status();
 
