@@ -251,6 +251,13 @@ fn map_stdlib_name(name: &str) -> &str {
         "TlsfAllocator__pool_size" => "gorget_tlsf_pool_size",
         "TlsfAllocator__reset" => "gorget_tlsf_reset",
         "TlsfAllocator__destroy" => "gorget_tlsf_destroy",
+        "FixedBufferAllocator__bytes_used" => "gorget_fba_bytes_used",
+        "FixedBufferAllocator__capacity" => "gorget_fba_capacity",
+        "FixedBufferAllocator__reset" => "gorget_fba_reset",
+        "FixedBufferAllocator__destroy" => "gorget_fba_destroy",
+        "FallbackAllocator__primary_count" => "gorget_fallback_primary_count",
+        "FallbackAllocator__fallback_count" => "gorget_fallback_fallback_count",
+        "FallbackAllocator__destroy" => "gorget_fallback_destroy",
         // UdpSocket methods
         "UdpSocket__sendto" => "gorget_udp_sendto",
         "UdpSocket__recvfrom" => "gorget_udp_recvfrom",
@@ -2035,6 +2042,8 @@ fn runtime_type_name(name: &str) -> Option<&'static str> {
         "TrackingAllocator" => Some("GorgetTrackingAllocator*"),
         "PoolAllocator" => Some("GorgetPoolAllocator*"),
         "TlsfAllocator" => Some("GorgetTlsfAllocator*"),
+        "FixedBufferAllocator" => Some("GorgetFixedBufferAllocator*"),
+        "FallbackAllocator" => Some("GorgetFallbackAllocator*"),
         _ => None,
     }
 }
@@ -5146,6 +5155,8 @@ fn infer_runtime_return_type(name: &str) -> Option<&'static str> {
         "gorget_tracking_new" | "TrackingAllocator" => Some("GorgetTrackingAllocator*"),
         "gorget_pool_new" | "PoolAllocator" => Some("GorgetPoolAllocator*"),
         "gorget_tlsf_new" | "TlsfAllocator" => Some("GorgetTlsfAllocator*"),
+        "gorget_fba_new" | "FixedBufferAllocator" => Some("GorgetFixedBufferAllocator*"),
+        "gorget_fallback_new" | "FallbackAllocator" => Some("GorgetFallbackAllocator*"),
         "Arena__bytes_used" | "gorget_arena_bytes_used" => Some("int64_t"),
         "TrackingAllocator__alloc_count" | "gorget_tracking_alloc_count"
         | "TrackingAllocator__free_count" | "gorget_tracking_free_count"
@@ -5161,6 +5172,10 @@ fn infer_runtime_return_type(name: &str) -> Option<&'static str> {
         "TlsfAllocator__bytes_used" | "gorget_tlsf_bytes_used"
         | "TlsfAllocator__peak_bytes" | "gorget_tlsf_peak_bytes"
         | "TlsfAllocator__pool_size" | "gorget_tlsf_pool_size" => Some("int64_t"),
+        "FixedBufferAllocator__bytes_used" | "gorget_fba_bytes_used"
+        | "FixedBufferAllocator__capacity" | "gorget_fba_capacity" => Some("int64_t"),
+        "FallbackAllocator__primary_count" | "gorget_fallback_primary_count"
+        | "FallbackAllocator__fallback_count" | "gorget_fallback_fallback_count" => Some("int64_t"),
         // Bytes
         "bytes_from_str" | "gorget_bytes_from_str"
         | "bytes_from_hex" | "gorget_bytes_from_hex"

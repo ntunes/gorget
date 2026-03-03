@@ -167,8 +167,8 @@ fn is_copy_type(type_id: TypeId, types: &TypeTable, scopes: &ScopeTable) -> bool
             matches!(scopes.get_def(*def_id).name.as_str(), "Channel" | "Shared" | "Weak" | "Mutex")
         }
         ResolvedType::Defined(def_id) => {
-            // Arena/TrackingAllocator/PoolAllocator/TlsfAllocator are Copy — they're pointers
-            matches!(scopes.get_def(*def_id).name.as_str(), "Arena" | "TrackingAllocator" | "PoolAllocator" | "TlsfAllocator")
+            // Arena/TrackingAllocator/PoolAllocator/TlsfAllocator/FixedBufferAllocator/FallbackAllocator are Copy — they're pointers
+            matches!(scopes.get_def(*def_id).name.as_str(), "Arena" | "TrackingAllocator" | "PoolAllocator" | "TlsfAllocator" | "FixedBufferAllocator" | "FallbackAllocator")
         }
         // Everything else is non-Copy (String, structs, enums, etc.)
         _ => false,
@@ -2347,11 +2347,11 @@ impl<'a> BorrowChecker<'a> {
         }
     }
 
-    /// Check if a DefId refers to any allocator type (Arena, TrackingAllocator, PoolAllocator, or TlsfAllocator).
+    /// Check if a DefId refers to any allocator type (Arena, TrackingAllocator, PoolAllocator, TlsfAllocator, FixedBufferAllocator, or FallbackAllocator).
     fn is_allocator_type(&self, def_id: DefId) -> bool {
         self.scopes.get_def(def_id).type_id.map_or(false, |tid| {
             matches!(self.types.get(tid), ResolvedType::Defined(d)
-                if matches!(self.scopes.get_def(*d).name.as_str(), "Arena" | "TrackingAllocator" | "PoolAllocator" | "TlsfAllocator"))
+                if matches!(self.scopes.get_def(*d).name.as_str(), "Arena" | "TrackingAllocator" | "PoolAllocator" | "TlsfAllocator" | "FixedBufferAllocator" | "FallbackAllocator"))
         })
     }
 

@@ -3697,6 +3697,19 @@ fn lower_call(
             let dst = builder.call_extern("gorget_tlsf_new", vec![a1], tlsf_type);
             return FunctionBuilder::copy(dst);
         }
+        if name == "FixedBufferAllocator" && args.len() == 1 {
+            let a1 = lower_expr(ctx, builder, &args[0].node.value);
+            let fba_type = ctx.type_mapper.lookup_named("FixedBufferAllocator").unwrap_or(I64_TYPE);
+            let dst = builder.call_extern("gorget_fba_new", vec![a1], fba_type);
+            return FunctionBuilder::copy(dst);
+        }
+        if name == "FallbackAllocator" && args.len() == 2 {
+            let a1 = lower_expr(ctx, builder, &args[0].node.value);
+            let a2 = lower_expr(ctx, builder, &args[1].node.value);
+            let fb_type = ctx.type_mapper.lookup_named("FallbackAllocator").unwrap_or(I64_TYPE);
+            let dst = builder.call_extern("gorget_fallback_new", vec![a1, a2], fb_type);
+            return FunctionBuilder::copy(dst);
+        }
 
         // Channel[T](capacity) constructor → Channel__T__new(capacity)
         if name == "Channel" {

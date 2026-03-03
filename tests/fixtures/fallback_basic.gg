@@ -1,0 +1,21 @@
+from std.alloc import FixedBufferAllocator, FallbackAllocator, Arena
+from std.collections import Vector
+
+void main():
+    # Create primary (small) and secondary (large) allocators with global alloc
+    FixedBufferAllocator fba = FixedBufferAllocator(128)
+    Arena overflow = Arena(65536)
+    with FallbackAllocator(fba, overflow) as fb:
+        # Allocations go through fb: tries fba first, overflows to Arena
+        Vector[int] v = Vector[int]()
+        int i = 0
+        while i < 100:
+            v.push(i)
+            i = i + 1
+        int total = fb.primary_count() + fb.fallback_count()
+        assert total > 0, "fallback allocator should have served allocations"
+        print("total_count > 0: true")
+        int fc = fb.fallback_count()
+        assert fc > 0, "large allocation should overflow to secondary"
+        print("fallback_count > 0: true")
+    print("done")

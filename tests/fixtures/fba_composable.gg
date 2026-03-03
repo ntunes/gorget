@@ -1,0 +1,11 @@
+from std.alloc import FixedBufferAllocator
+from std.collections import Vector
+
+void main():
+    FixedBufferAllocator fba = FixedBufferAllocator(4096)
+    Vector[int] v = Vector[int](alloc=fba)
+    v.push(10)
+    v.push(20)
+    assert fba.bytes_used() > 0, "alloc= should use fba"
+    print("alloc= works: true")
+    print("done")

@@ -2192,11 +2192,11 @@ fn generate_assert_static_msg(condition: &Spanned<Expr>) -> String {
 
 // ---- P3.5: With statement ----
 
-/// Check if an expression is an allocator constructor (Arena, TrackingAllocator, PoolAllocator, TlsfAllocator).
+/// Check if an expression is an allocator constructor (Arena, TrackingAllocator, PoolAllocator, TlsfAllocator, FixedBufferAllocator, FallbackAllocator).
 fn is_allocator_constructor(expr: &Expr) -> bool {
     if let Expr::Call { callee, .. } = expr {
         if let Expr::Identifier(name) = &callee.node {
-            return matches!(name.as_str(), "Arena" | "TrackingAllocator" | "PoolAllocator" | "TlsfAllocator");
+            return matches!(name.as_str(), "Arena" | "TrackingAllocator" | "PoolAllocator" | "TlsfAllocator" | "FixedBufferAllocator" | "FallbackAllocator");
         }
     }
     false
@@ -2245,6 +2245,8 @@ fn lower_with(
             Some("TlsfAllocator") => Some("gorget_tlsf_destroy"),
             Some("TrackingAllocator") => Some("gorget_tracking_destroy"),
             Some("Arena") => Some("gorget_arena_destroy"),
+            Some("FixedBufferAllocator") => Some("gorget_fba_destroy"),
+            Some("FallbackAllocator") => Some("gorget_fallback_destroy"),
             _ => None,
         };
         if let Some(fn_name) = destroy_fn {

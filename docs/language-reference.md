@@ -3360,10 +3360,10 @@ from gg.dataframe import DataFrame, Column, df_from_columns, df_from_csv,
 
 **`std.alloc`** — Memory Allocators
 
-Four allocators provide explicit control over memory allocation strategy. All share a common vtable interface and can be composed with collections via scoped binding (`with`) or per-object direction (`alloc=`). The compiler's escape analysis prevents dangling references to allocator-scoped memory at compile time.
+Six allocators provide explicit control over memory allocation strategy. All share a common vtable interface and can be composed with collections via scoped binding (`with`) or per-object direction (`alloc=`). The compiler's escape analysis prevents dangling references to allocator-scoped memory at compile time.
 
 ```gorget
-from std.alloc import Arena, PoolAllocator, TlsfAllocator, TrackingAllocator
+from std.alloc import Arena, PoolAllocator, TlsfAllocator, TrackingAllocator, FixedBufferAllocator, FallbackAllocator
 ```
 
 **Arena** — Bump allocator. Fast sequential allocation; all memory freed at once on destroy or reset.
@@ -3413,6 +3413,44 @@ from std.alloc import Arena, PoolAllocator, TlsfAllocator, TrackingAllocator
 | `report` | `void(self)` | Print allocation statistics to stderr |
 | `reset` | `void(self)` | Reset all counters to zero |
 | `destroy` | `void(self)` | Release the tracker |
+
+**FixedBufferAllocator** — Stack/static-buffer bump allocator. Allocates from a caller-provided buffer of fixed size; zero heap usage after construction.
+
+| Name | Signature | Description |
+|---|---|---|
+| *constructor* | `FixedBufferAllocator(int capacity)` | Create bump allocator with given byte capacity |
+| `bytes_used` | `int(self)` | Bytes currently allocated from the buffer |
+| `capacity` | `int(self)` | Total buffer size in bytes |
+| `reset` | `void(self)` | Free all allocations (reuse buffer from start) |
+| `destroy` | `void(self)` | Release the allocator |
+
+When the buffer is exhausted, allocations return `NULL`. Pair with `FallbackAllocator` to overflow gracefully to a secondary allocator.
+
+**FallbackAllocator** — Allocator combinator. Tries a primary allocator first; on failure falls back to a secondary allocator. Individual frees are no-ops (designed for bulk-free primaries like `FixedBufferAllocator` or `Arena`).
+
+| Name | Signature | Description |
+|---|---|---|
+| *constructor* | `FallbackAllocator(primary, secondary)` | Create combinator wrapping any two allocators |
+| `primary_count` | `int(self)` | Number of allocations served by the primary |
+| `fallback_count` | `int(self)` | Number of allocations served by the secondary |
+| `destroy` | `void(self)` | Release the combinator (does not destroy primary/secondary) |
+
+```gorget
+from std.alloc import FixedBufferAllocator, FallbackAllocator, Arena
+from std.collections import Vector
+
+void main():
+    FixedBufferAllocator fba = FixedBufferAllocator(128)
+    Arena overflow = Arena(65536)
+    with FallbackAllocator(fba, overflow) as fb:
+        Vector[int] v = Vector[int]()
+        int i = 0
+        while i < 100:
+            v.push(i)
+            i = i + 1
+        print("fallback_count: {fb.fallback_count()}")
+    print("done")
+```
 
 **Scoped binding (`with`)**
 
@@ -3507,6 +3545,8 @@ void main():
 | `PoolAllocator` | Fixed-size free-list | Object pools, ECS components, list nodes |
 | `TlsfAllocator` | General-purpose O(1) | Real-time systems, embedded, latency-sensitive code |
 | `TrackingAllocator` | Instrumentation wrapper | Profiling, leak detection, allocation auditing |
+| `FixedBufferAllocator` | Stack/static-buffer bump | Zero-heap hot paths, embedded targets, scratch buffers |
+| `FallbackAllocator` | Combinator | Primary-fast + secondary-safe overflow; composing any two allocators |
 
 ---
 

@@ -1,0 +1,17 @@
+from std.alloc import FixedBufferAllocator, FallbackAllocator, Arena
+from std.collections import Vector
+
+void main():
+    FixedBufferAllocator fba = FixedBufferAllocator(64)
+    Arena overflow = Arena(65536)
+    FallbackAllocator fb = FallbackAllocator(fba, overflow)
+    # Use alloc= to direct allocations through the fallback allocator
+    Vector[int] v = Vector[int](alloc=fb)
+    int i = 0
+    while i < 50:
+        v.push(i)
+        i = i + 1
+    int total = fb.primary_count() + fb.fallback_count()
+    assert total > 0, "fallback allocator should have served allocations"
+    print("alloc= works: true")
+    print("done")

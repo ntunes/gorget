@@ -5,6 +5,10 @@
 
 ## Medium
 
+- **`std.alloc`: arena checkpoint / restore**: `Arena.checkpoint() -> ArenaCheckpoint` that captures `bytes_used` and `Arena.restore(checkpoint)` that bumps `used` back to the saved value. Useful for transient scratch work without a full `reset()`. Implement as a thin value type wrapping `(Arena*, size_t)`. [added: 2026-03-03]
+
+- **`std.alloc`: per-thread scratch arenas**: `thread_scratch()` returns a thread-local `Arena` reset automatically between calls (double-buffered to allow two scratch frames per thread concurrently). Pattern from stb/handmade: zero-overhead scratch without explicit `with` blocks. [added: 2026-03-03]
+
 
 - **Inline bounds follow-up — find new syntax for `outlives` to fully remove `where`**: The `where` keyword is now only used for `where a outlives b`. Options: (1) inline on the lifetime param `live(a outlives b)`, (2) a dedicated `outlives` section, (3) lifetime annotations on the param itself. Survey and decide before removing `where` entirely. [added: 2026-03-02]
 

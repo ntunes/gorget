@@ -1532,8 +1532,66 @@ fn gen_alloc_module() -> Module {
         ],
         span: Span::dummy(),
     }));
+    let fba_struct = Spanned::dummy(Item::Struct(StructDef {
+        attributes: vec![],
+        visibility: Visibility::Public,
+        name: Spanned::dummy("FixedBufferAllocator".to_string()),
+        generic_params: None,
+        fields: vec![],
+        doc_comment: None,
+        span: Span::dummy(),
+    }));
+    let fba_equip = Spanned::dummy(Item::Equip(EquipBlock {
+        generic_params: None,
+        trait_: None,
+        type_: Spanned::dummy(Type::Named {
+            name: Spanned::dummy("FixedBufferAllocator".to_string()),
+            generic_args: vec![],
+        }),
+        via_field: None,
+        where_clause: None,
+        items: vec![
+            Spanned::dummy(decl_method("bytes_used", Ownership::Borrow, &[], ty_int())),
+            Spanned::dummy(decl_method("capacity", Ownership::Borrow, &[], ty_int())),
+            Spanned::dummy(decl_method("reset", Ownership::Borrow, &[], ty_void())),
+            Spanned::dummy(decl_method("destroy", Ownership::Borrow, &[], ty_void())),
+        ],
+        span: Span::dummy(),
+    }));
+    let fallback_struct = Spanned::dummy(Item::Struct(StructDef {
+        attributes: vec![],
+        visibility: Visibility::Public,
+        name: Spanned::dummy("FallbackAllocator".to_string()),
+        generic_params: None,
+        fields: vec![],
+        doc_comment: None,
+        span: Span::dummy(),
+    }));
+    let fallback_equip = Spanned::dummy(Item::Equip(EquipBlock {
+        generic_params: None,
+        trait_: None,
+        type_: Spanned::dummy(Type::Named {
+            name: Spanned::dummy("FallbackAllocator".to_string()),
+            generic_args: vec![],
+        }),
+        via_field: None,
+        where_clause: None,
+        items: vec![
+            Spanned::dummy(decl_method("primary_count", Ownership::Borrow, &[], ty_int())),
+            Spanned::dummy(decl_method("fallback_count", Ownership::Borrow, &[], ty_int())),
+            Spanned::dummy(decl_method("destroy", Ownership::Borrow, &[], ty_void())),
+        ],
+        span: Span::dummy(),
+    }));
     Module {
-        items: vec![arena_struct, arena_equip, tracking_struct, tracking_equip, pool_struct, pool_equip, tlsf_struct, tlsf_equip],
+        items: vec![
+            arena_struct, arena_equip,
+            tracking_struct, tracking_equip,
+            pool_struct, pool_equip,
+            tlsf_struct, tlsf_equip,
+            fba_struct, fba_equip,
+            fallback_struct, fallback_equip,
+        ],
         span: Span::dummy(),
     }
 }

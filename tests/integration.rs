@@ -6660,6 +6660,49 @@ fn tlsf_escape() {
     );
 }
 
+#[test]
+fn fba_basic() {
+    run_gg(
+        "fba_basic.gg",
+        "\
+bytes_used > 0: true
+capacity: 4096
+after reset: 0
+done",
+    );
+}
+
+#[test]
+fn fba_composable() {
+    run_gg(
+        "fba_composable.gg",
+        "\
+alloc= works: true
+done",
+    );
+}
+
+#[test]
+fn fallback_basic() {
+    run_gg(
+        "fallback_basic.gg",
+        "\
+total_count > 0: true
+fallback_count > 0: true
+done",
+    );
+}
+
+#[test]
+fn fallback_composable() {
+    run_gg(
+        "fallback_composable.gg",
+        "\
+alloc= works: true
+done",
+    );
+}
+
 // Meta (Compile-Time) Tests
 // ═══════════════════════════════════════════════════════════════
 

@@ -260,6 +260,7 @@ fn rewrite_expr(expr: &mut Spanned<Expr>, res: &ResolutionMap, scopes: &ScopeTab
     // GorgetDict__new, etc.) that don't use compound literal syntax.
     const COLLECTION_TYPES: &[&str] = &[
         "Vector", "Dict", "HashMap", "Set", "HashSet", "Box", "Channel", "Arena", "TrackingAllocator", "PoolAllocator", "TlsfAllocator",
+        "FixedBufferAllocator", "FallbackAllocator",
     ];
     if let Expr::Call { callee, .. } = &expr.node {
         if let Expr::Identifier(cname) = &callee.node {
