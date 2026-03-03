@@ -1,0 +1,21 @@
+# Test that TaskGroup.spawn is fire-and-forget (non-blocking).
+# If spawn blocked until the task completed (old bug), the rendezvous via
+# an unbuffered channel would deadlock: task1 blocks on send while waiting
+# for task2 to receive, but task2 never spawns.
+from std.channel import Channel
+
+async void sender(Channel[int] ch):
+    ch.send(42)
+
+async void receiver(Channel[int] ch):
+    int v = ch.recv()
+    print(v)
+
+async void main():
+    Channel[int] ch = Channel[int](0)
+    TaskGroup group = TaskGroup()
+    group.spawn(spawn sender(ch))
+    group.spawn(spawn receiver(ch))
+    group.join()
+    ch.close()
+    print("done")

@@ -819,13 +819,28 @@ fn collect_all_required_methods(
 }
 
 fn build_function_sig(func: &FunctionDef, scopes: &ScopeTable, types: &mut TypeTable) -> FunctionSig {
-    let return_type = types::ast_type_to_resolved(
+    let raw_return_type = types::ast_type_to_resolved(
         &func.return_type.node,
         func.return_type.span,
         scopes,
         types,
     )
     .unwrap_or(types.error_id);
+
+    // Async methods expose Future[T] as their return type at call sites, matching
+    // how top-level async functions are registered in typecheck.rs (line ~2963).
+    let return_type = if func.qualifiers.is_async {
+        if let Some(future_def_id) = scopes.lookup("Future") {
+            types.insert(crate::semantic::types::ResolvedType::Generic(
+                future_def_id,
+                vec![raw_return_type],
+            ))
+        } else {
+            raw_return_type
+        }
+    } else {
+        raw_return_type
+    };
 
     let mut params = Vec::new();
     let mut has_self = false;

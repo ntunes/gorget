@@ -109,6 +109,25 @@ fn lower_var_decl(
     match &pattern.node {
         Pattern::Binding(name) => {
             let gir_type = ctx.resolve_var_type(type_, value);
+            // For explicit Callable[...] declarations, use map_ast_type_mut to register a FnPtr TypeId.
+            // resolve_var_type → map_type_with_subs → map_ast_type (immutable) returns UNIT_TYPE for
+            // Callable generics; map_ast_type_mut (mutable) creates the actual FnPtr TypeId so the
+            // local is declared as GorgetClosure and dispatched via __gorget_closure_call_N.
+            let gir_type = if gir_type == crate::ir::types::UNIT_TYPE {
+                if let ast::Type::Named { ref name, ref generic_args } = type_.node {
+                    if matches!(name.node.as_str(), "Callable" | "MutCallable" | "ConsumeCallable")
+                        && !generic_args.is_empty()
+                    {
+                        ctx.type_mapper.map_ast_type_mut(&type_.node, &mut ctx.type_registry)
+                    } else {
+                        gir_type
+                    }
+                } else {
+                    gir_type
+                }
+            } else {
+                gir_type
+            };
             // Box[Callable[...]] variables pre-register with a "Box__Callable__unknown" type from the
             // generic collector. We need to reinfer from the actual RHS to get the real closure type.
             let gir_type_is_box_callable = ctx.type_name_for_id(gir_type)
@@ -145,10 +164,15 @@ fn lower_var_decl(
                     false
                 }
             };
-            let needs_reinfer = matches!(type_.node, ast::Type::Inferred)
+            // Don't reinfer when gir_type is FnPtr (explicit Callable[T] declaration):
+            // the Assign handler will pack closures/FuncRefs into GorgetClosure form.
+            let gir_type_is_fnptr = matches!(ctx.type_registry.get(gir_type), Some(GirType::FnPtr { .. }));
+            let needs_reinfer = !gir_type_is_fnptr && (
+                matches!(type_.node, ast::Type::Inferred)
                 || matches!(value.node, ast::Expr::Closure { .. } | ast::Expr::ImplicitClosure { .. })
                 || gir_type_is_box_callable
-                || gir_type_is_lazy_generic;
+                || gir_type_is_lazy_generic
+            );
             if needs_reinfer {
                 let inferred = infer_operand_type_with_builder(ctx, &operand, builder);
                 if inferred != gir_type {

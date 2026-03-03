@@ -1,4 +1,4 @@
-# gg.httpserver — HTTP/1.1 server (V1: sequential, one connection at a time)
+# gg.httpserver — HTTP/1.1 server (V2: concurrent connections, keep-alive)
 #
 # Quick start:
 #
@@ -13,7 +13,6 @@
 #       HttpServer server = HttpServer.new("0.0.0.0", 8080)
 #       server.serve(handle).await()
 #
-# V1 handles connections sequentially.  See V2 notes in the plan for async/concurrent path.
 
 from std.net.socket import ServerSocket, Socket, server_socket_bind
 from std.collections import Vector, Dict
@@ -29,19 +28,31 @@ struct HttpRequest:
     str http_version    # "HTTP/1.1"
     Dict[str, str] headers   # lowercase header names
     str body
+    Dict[str, str] params    # URL path parameters (populated by Router)
 
 struct HttpServerResponse:
     int status_code
     str body
     str content_type
+    Dict[str, str] headers   # additional response headers (e.g. Set-Cookie, CORS)
 
 equip HttpServerResponse:
-    HttpServerResponse ok(str body) = HttpServerResponse(200, body, "text/plain")
-    HttpServerResponse html(str body) = HttpServerResponse(200, body, "text/html")
-    HttpServerResponse json(str body) = HttpServerResponse(200, body, "application/json")
-    HttpServerResponse not_found() = HttpServerResponse(404, "Not Found", "text/plain")
-    HttpServerResponse bad_request(str msg) = HttpServerResponse(400, msg, "text/plain")
-    HttpServerResponse internal_error(str msg) = HttpServerResponse(500, msg, "text/plain")
+    HttpServerResponse ok(str body) = HttpServerResponse(200, body, "text/plain", Dict[str, str]())
+    HttpServerResponse html(str body) = HttpServerResponse(200, body, "text/html", Dict[str, str]())
+    HttpServerResponse json(str body) = HttpServerResponse(200, body, "application/json", Dict[str, str]())
+    HttpServerResponse not_found() = HttpServerResponse(404, "Not Found", "text/plain", Dict[str, str]())
+    HttpServerResponse bad_request(str msg) = HttpServerResponse(400, msg, "text/plain", Dict[str, str]())
+    HttpServerResponse internal_error(str msg) = HttpServerResponse(500, msg, "text/plain", Dict[str, str]())
+
+    HttpServerResponse with_header(self, str name, str value):
+        Dict[str, str] new_headers = self.headers
+        new_headers.put(name, value)
+        return HttpServerResponse(self.status_code, self.body, self.content_type, new_headers)
+
+    HttpServerResponse redirect(str location):
+        HttpServerResponse resp = HttpServerResponse(302, "", "text/plain", Dict[str, str]())
+        resp.headers.put("Location", location)
+        return resp
 
     str status_text(self):
         int sc = self.status_code
@@ -129,21 +140,50 @@ Result[HttpRequest, str] http_server_parse_request(Socket &conn):
                 if body_r.is_ok():
                     req_body = body_r.unwrap()
 
-    return Ok(HttpRequest(req_method, req_path, req_query, req_version, req_headers, req_body))
+    return Ok(HttpRequest(req_method, req_path, req_query, req_version, req_headers, req_body, Dict[str, str]()))
 
-# ── Response writer ───────────────────────────────────────────
+# ── Response writers ──────────────────────────────────────────
 
+# Write response with "Connection: close" (legacy/single-request).
 void http_server_write_response(Socket &conn, HttpServerResponse resp):
     str status_line = "HTTP/1.1 " + int_to_str(resp.status_code) + " " + resp.status_text() + "\r\n"
     str body_len = int_to_str(resp.body.byte_len())
     conn.write_str(status_line)
     conn.write_str("Content-Type: " + resp.content_type + "\r\n")
     conn.write_str("Content-Length: " + body_len + "\r\n")
+    # Emit any custom headers
+    Vector[str] hdr_keys = resp.headers.keys()
+    int hi = 0
+    while hi < hdr_keys.len():
+        str hk = hdr_keys[hi]
+        conn.write_str(hk + ": " + resp.headers[hk] + "\r\n")
+        hi = hi + 1
     conn.write_str("Connection: close\r\n\r\n")
     conn.write_str(resp.body)
 
-# ── Connection handler ────────────────────────────────────────
+# Write response with Connection header based on keep_alive flag.
+void http_server_write_response_ka(Socket &conn, HttpServerResponse resp, bool keep_alive):
+    str status_line = "HTTP/1.1 " + int_to_str(resp.status_code) + " " + resp.status_text() + "\r\n"
+    str body_len = int_to_str(resp.body.byte_len())
+    conn.write_str(status_line)
+    conn.write_str("Content-Type: " + resp.content_type + "\r\n")
+    conn.write_str("Content-Length: " + body_len + "\r\n")
+    # Emit any custom headers
+    Vector[str] hdr_keys = resp.headers.keys()
+    int hi = 0
+    while hi < hdr_keys.len():
+        str hk = hdr_keys[hi]
+        conn.write_str(hk + ": " + resp.headers[hk] + "\r\n")
+        hi = hi + 1
+    if keep_alive:
+        conn.write_str("Connection: keep-alive\r\n\r\n")
+    else:
+        conn.write_str("Connection: close\r\n\r\n")
+    conn.write_str(resp.body)
 
+# ── Connection handlers ───────────────────────────────────────
+
+# Legacy single-request handler (kept for backward compat — httpserver_basic uses it directly).
 void http_server_handle_conn(Socket conn, Callable[HttpServerResponse(HttpRequest)] handler):
     Result[HttpRequest, str] r = http_server_parse_request(&conn)
     match r:
@@ -154,25 +194,77 @@ void http_server_handle_conn(Socket conn, Callable[HttpServerResponse(HttpReques
             http_server_write_response(&conn, HttpServerResponse.bad_request(e))
     conn.close()
 
+# Keep-alive connection handler: loop parse→handle→write on the same socket.
+# Exits when:
+#   - client sends "Connection: close"
+#   - read times out (SO_RCVTIMEO set via timeout_ms)
+#   - parse error (malformed request, EOF)
+async void http_server_handle_conn_ka(Socket conn, Callable[HttpServerResponse(HttpRequest)] handler, int timeout_ms):
+    conn.set_timeout(timeout_ms)
+    bool alive = true
+    while alive:
+        Result[HttpRequest, str] r = http_server_parse_request(&conn)
+        match r:
+            case Ok(req):
+                bool client_wants_close = false
+                if req.headers.contains("connection"):
+                    if req.headers["connection"].to_lower() == "close":
+                        client_wants_close = true
+                HttpServerResponse resp = handler(req)
+                http_server_write_response_ka(&conn, resp, not client_wants_close)
+                if client_wants_close:
+                    alive = false
+            case Error(e):
+                alive = false
+    conn.close()
+
 # ── HttpServer ────────────────────────────────────────────────
 
 struct HttpServer:
     str host
     int port
+    int keep_alive_timeout_ms
 
 equip HttpServer:
-    HttpServer new(str host, int port) = HttpServer(host, port)
+    HttpServer new(str host, int port) = HttpServer(host, port, 5000)
+    HttpServer with_timeout(str host, int port, int timeout_ms) = HttpServer(host, port, timeout_ms)
 
     # Bind and accept connections in a loop, calling handler for each.
-    # V1: sequential (one connection at a time).
+    # Each connection runs in a TaskGroup thread with keep-alive support.
     # Returns only on bind error.
     async void serve(self, Callable[HttpServerResponse(HttpRequest)] handler):
         Result[ServerSocket, str] bind_r = server_socket_bind(self.host, self.port)
         if bind_r.is_err():
             return
         ServerSocket srv = bind_r.unwrap()
+        TaskGroup group = TaskGroup()
         loop:
             Result[Socket, str] ar = srv.accept()
             if ar.is_ok():
                 Socket client = ar.unwrap()
-                http_server_handle_conn(client, handler)
+                group.spawn(spawn http_server_handle_conn_ka(client, handler, self.keep_alive_timeout_ms))
+
+# ── Query string parser ───────────────────────────────────────
+
+Dict[str, str] parse_query_string(str qs):
+    Dict[str, str] params = Dict[str, str]()
+    if qs == "":
+        return params
+    Vector[str] pairs = qs.split("&")
+    int i = 0
+    while i < pairs.len():
+        str pair = pairs[i]
+        Option[int] eq_opt = pair.index_of("=")
+        if eq_opt.is_some():
+            int eq = eq_opt.unwrap()
+            str key = pair.byte_slice(0, eq)
+            str val = pair.byte_slice(eq + 1, pair.byte_len())
+            params.put(key, val)
+        else:
+            params.put(pair, "")
+        i = i + 1
+    return params
+
+equip HttpRequest:
+    Dict[str, str] query_params(self):
+        return parse_query_string(self.query_string)

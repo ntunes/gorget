@@ -2959,17 +2959,23 @@ fn lower_index_access(
 
 /// Infer the element type of a collection from its TypeId.
 /// Returns the element TypeId, or I64_TYPE if unknown.
-pub(super) fn infer_collection_element_type(ctx: &LoweringContext, collection_type: TypeId) -> TypeId {
-    if let Some(GirType::Named(name)) = ctx.type_registry.get(collection_type) {
+pub(super) fn infer_collection_element_type(ctx: &mut LoweringContext, collection_type: TypeId) -> TypeId {
+    if let Some(GirType::Named(name)) = ctx.type_registry.get(collection_type).cloned() {
         // Vector__T → look up T as a type
         if let Some(elem_name) = name.strip_prefix("Vector__") {
-            return resolve_type_name_to_id(ctx, elem_name);
+            let elem_name = elem_name.to_string();
+            return resolve_type_name_to_id(ctx, &elem_name);
         }
         // Dict__K__V → V is the value type (for indexing)
         if let Some(rest) = name.strip_prefix("Dict__").or_else(|| name.strip_prefix("Map__")) {
             if let Some(pos) = rest.find("__") {
                 let val_name = &rest[pos + 2..];
-                return resolve_type_name_to_id(ctx, val_name);
+                // Callable value types → FnPtr TypeId so the local is declared as GorgetClosure
+                if val_name.starts_with("Callable__") || val_name.starts_with("MutCallable__") || val_name.starts_with("ConsumeCallable__") {
+                    return ctx.type_registry.insert(GirType::FnPtr { params: vec![], return_type: I64_TYPE });
+                }
+                let val_name = val_name.to_string();
+                return resolve_type_name_to_id(ctx, &val_name);
             }
         }
     }

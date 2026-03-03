@@ -230,6 +230,18 @@ impl TypeMapper {
                         self.named_types.insert(mangled, type_id);
                         return type_id;
                     }
+                    // Callable/MutCallable/ConsumeCallable generics: return a FnPtr TypeId
+                    // so locals declared as Callable[T(P)] get GorgetClosure C type and
+                    // use __gorget_closure_call_N dispatch.
+                    // NOT cached in named_types so map_ast_type (immutable, used for
+                    // function parameters) still returns UNIT_TYPE → void* __callable_N ABI.
+                    if matches!(base, "Callable" | "MutCallable" | "ConsumeCallable") {
+                        return if generic_args.len() == 1 {
+                            self.map_ast_type_mut(&generic_args[0].node, registry)
+                        } else {
+                            registry.insert(GirType::FnPtr { params: vec![], return_type: UNIT_TYPE })
+                        };
+                    }
                     return UNIT_TYPE;
                 }
                 if let Some(&id) = self.named_types.get(name.node.as_str()) {

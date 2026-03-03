@@ -4136,6 +4136,16 @@ done",
 }
 
 #[test]
+fn httpserver_concurrent() {
+    run_gg("httpserver_concurrent.gg", "2");
+}
+
+#[test]
+fn httpserver_keepalive() {
+    run_gg("httpserver_keepalive.gg", "true\ntrue");
+}
+
+#[test]
 fn udp_echo() {
     run_gg(
         "udp_echo.gg",
@@ -7292,6 +7302,11 @@ fn mutex_basic() {
 #[test]
 fn async_task_group() {
     run_gg("async_task_group.gg", "2");
+}
+
+#[test]
+fn async_task_group_fire() {
+    run_gg("async_task_group_fire.gg", "42\ndone");
 }
 
 #[test]

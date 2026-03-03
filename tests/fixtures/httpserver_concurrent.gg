@@ -1,0 +1,65 @@
+# Tests that serve() handles multiple concurrent connections.
+# A server accepts exactly 2 connections concurrently using TaskGroup.
+# Both clients send requests simultaneously; both must get 200 responses.
+from gg.httpserver import HttpServerResponse, HttpRequest, http_server_parse_request, http_server_write_response
+from std.net.socket import ServerSocket, Socket, server_socket_bind, socket_connect
+from std.channel import Channel
+from std.time import sleep
+
+HttpServerResponse handle(HttpRequest req):
+    return HttpServerResponse.ok("hello")
+
+async void handle_conn(Socket conn):
+    Result[HttpRequest, str] r = http_server_parse_request(&conn)
+    match r:
+        case Ok(req):
+            http_server_write_response(&conn, handle(req))
+        case Error(e):
+            http_server_write_response(&conn, HttpServerResponse.bad_request(e))
+    conn.close()
+
+# Server that accepts exactly n connections concurrently, then exits.
+async void serve_n(int port, int n):
+    ServerSocket srv = server_socket_bind("127.0.0.1", port).unwrap()
+    TaskGroup group = TaskGroup()
+    int i = 0
+    while i < n:
+        Socket client = srv.accept().unwrap()
+        group.spawn(spawn handle_conn(client))
+        i = i + 1
+    group.join()
+    srv.close()
+
+async void client_task(int port, Channel[int] results):
+    sleep(0.05).await()
+    Result[Socket, str] cr = socket_connect("127.0.0.1", port)
+    if cr.is_err():
+        results.send(0)
+        return
+    Socket c = cr.unwrap()
+    c.write_str("GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+    Result[str, str] line_r = c.read_line()
+    c.close()
+    if line_r.is_ok():
+        str line = line_r.unwrap()
+        if line.starts_with("HTTP/1.1 200"):
+            results.send(1)
+            return
+    results.send(0)
+
+async void main():
+    int port = 18082
+    Task[void] srv = spawn serve_n(port, 2)
+
+    Channel[int] results = Channel[int](2)
+    TaskGroup clients = TaskGroup()
+    clients.spawn(spawn client_task(port, results))
+    clients.spawn(spawn client_task(port, results))
+    clients.join()
+
+    int a = results.recv()
+    int b = results.recv()
+    results.close()
+
+    srv.await()
+    print(a + b)

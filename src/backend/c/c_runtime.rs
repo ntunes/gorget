@@ -2990,8 +2990,11 @@ static inline void gorget_task_group_submit_raw(gorget_task_group_t* g, void* ta
 }
 
 // Extracts __task void* from any Task__T struct, then records its thread.
-#define gorget_task_group_submit(g, task) \
-    gorget_task_group_submit_raw((g), (task).__task)
+// Nulls out __task so the Task temporary's drop is a no-op (TaskGroup owns the thread).
+#define gorget_task_group_submit(g, task) do { \
+    gorget_task_group_submit_raw((g), (task).__task); \
+    (task).__task = NULL; \
+} while(0)
 
 // Blocking join — waits for all submitted tasks to finish.
 static inline void gorget_task_group_join(gorget_task_group_t* g) {

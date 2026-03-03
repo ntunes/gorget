@@ -1502,7 +1502,9 @@ fn emit_spawn_helpers(out: &mut String, module: &Module) {
         let _ = writeln!(out, "typedef struct {ctx_name} {{");
         out.push_str("    pthread_t thread;\n");
         for (param_name, param_type) in params {
-            let param_c = format_type(*param_type, &module.type_registry);
+            // Callable params have UNIT_TYPE in GIR (void); store as GorgetClosure in the context
+            // struct so the spawned thread can call them indirectly.
+            let param_c = spawn_param_c_type(*param_type, &module.type_registry);
             let _ = writeln!(out, "    {param_c} __{param_name};");
         }
         if !is_void {
@@ -1535,7 +1537,7 @@ fn emit_spawn_helpers(out: &mut String, module: &Module) {
         // Spawn function: allocates ctx, fills args, creates thread, returns Task
         let param_decls = params.iter()
             .map(|(name, type_id)| {
-                let c = format_type(*type_id, &module.type_registry);
+                let c = spawn_param_c_type(*type_id, &module.type_registry);
                 format!("{c} {name}")
             })
             .collect::<Vec<_>>()
@@ -2006,6 +2008,10 @@ fn runtime_type_name(name: &str) -> Option<&'static str> {
     if name.starts_with("Vector__") { return Some("GorgetArray"); }
     if name.starts_with("Set__") || name.starts_with("HashSet__") { return Some("GorgetSet"); }
     if name.starts_with("Dict__") || name.starts_with("HashMap__") { return Some("GorgetMap"); }
+    // Callable generics → GorgetClosure (16-byte {fn_ptr, env} struct)
+    if name.starts_with("Callable__") || name.starts_with("MutCallable__") || name.starts_with("ConsumeCallable__") {
+        return Some("GorgetClosure");
+    }
     match name {
         // Unmonomorphized collection template names
         "Vector" | "GorgetArray" => Some("GorgetArray"),
@@ -2930,7 +2936,18 @@ fn emit_function(out: &mut String, func: &Function, module: &Module) {
         }
 
         let c_type = if let Some(override_type) = type_overrides.get(&local_id) {
-            override_type.clone()
+            // Normalize runtime type names (e.g. Callable__* → GorgetClosure, Vector__T → GorgetArray)
+            // Preserve pointer suffix: "Vector__int64_t*" → "GorgetArray*"
+            let (base, suffix) = if override_type.ends_with('*') {
+                (&override_type[..override_type.len() - 1], "*")
+            } else {
+                (override_type.as_str(), "")
+            };
+            if let Some(rt) = runtime_type_name(base) {
+                format!("{rt}{suffix}")
+            } else {
+                override_type.clone()
+            }
         } else {
             // FnPtr-typed locals represent escaped closures — declare as GorgetClosure.
             // (FnPtr in struct fields remains a real function pointer; locals are different.)
@@ -3069,8 +3086,22 @@ fn effective_c_type(
     type_overrides: &std::collections::HashMap<usize, String>,
 ) -> String {
     if let Some(override_type) = type_overrides.get(&local_idx) {
+        // Normalize runtime type names, preserving pointer suffix.
+        // e.g. "Callable__*" → "GorgetClosure", "Vector__T*" → "GorgetArray*"
+        let (base, suffix) = if override_type.ends_with('*') {
+            (&override_type[..override_type.len() - 1], "*")
+        } else {
+            (override_type.as_str(), "")
+        };
+        if let Some(rt) = runtime_type_name(base) {
+            return format!("{rt}{suffix}");
+        }
         override_type.clone()
     } else if local_idx < func.locals.len() {
+        // FnPtr-typed locals are represented as GorgetClosure in C
+        if matches!(registry.get(func.locals[local_idx].type_id), Some(GirType::FnPtr { .. })) {
+            return "GorgetClosure".to_string();
+        }
         format_type(func.locals[local_idx].type_id, registry)
     } else {
         "int64_t".to_string()
@@ -3164,6 +3195,15 @@ fn emit_instruction(
             let dst_is_escaped_closure = (dst_c_type == "GorgetClosure")
                 || (dst_local_idx < func.locals.len()
                     && matches!(registry.get(func.locals[dst_local_idx].type_id), Some(GirType::FnPtr { .. })));
+            // FuncRef → GorgetClosure: named function assigned to an escaped Callable local.
+            // Pack using the adapter that has the (void* env, params...) ABI.
+            if dst_is_escaped_closure {
+                if let Operand::Constant(Constant::FuncRef(fn_name)) = value {
+                    let c_name = mangle_name(fn_name);
+                    let _ = writeln!(out, "        {dst_str} = (GorgetClosure){{.fn_ptr = (void*)__adapt_{c_name}, .env = NULL}};");
+                    return;
+                }
+            }
             if dst_is_escaped_closure && src_c_type.starts_with("__Closure_") {
                 let struct_name = &src_c_type;
                 let call_fn_name = format!("{struct_name}__call");
@@ -4784,6 +4824,26 @@ fn format_type(type_id: TypeId, registry: &TypeRegistry) -> String {
     }
 }
 
+/// Format a C type for a spawned function parameter.
+///
+/// Callable params have UNIT_TYPE in the GIR (the `map_ast_type` path returns UNIT_TYPE for
+/// `Callable[T(Params)]` since it can't register the type on the fly). In function bodies
+/// Callable params are lowered as `void*` locals, so we use the same ABI here: store as
+/// `void*` in the context struct and pass `void*` to the spawned function.
+fn spawn_param_c_type(type_id: TypeId, registry: &TypeRegistry) -> String {
+    // FnPtr TypeId means a Callable param (fn_sigs uses map_ast_type_mut which returns FnPtr).
+    // Use void* so the spawn context stores it as an opaque pointer (__callable_N ABI).
+    if matches!(registry.get(type_id), Some(GirType::FnPtr { .. })) {
+        return "void*".to_string();
+    }
+    let c = format_type(type_id, registry);
+    if c == "void" {
+        "void*".to_string()
+    } else {
+        c
+    }
+}
+
 /// Format a struct field declaration as valid C.
 ///
 /// Function pointer types need special syntax: `RetType (*name)(Params)` instead of
@@ -5881,6 +5941,9 @@ fn emit_collection_constructor(name: &str, dst_id: u32) -> Option<String> {
         Some("GorgetMap") => {
             // Extract key and value types from Dict__K__V or HashMap__K__V
             let (key_type, val_type) = extract_map_kv_types(type_name);
+            // Normalize runtime type names (e.g. Callable__* → GorgetClosure)
+            let val_type = runtime_type_name(val_type).unwrap_or(val_type);
+            let key_type = runtime_type_name(key_type).unwrap_or(key_type);
             // Use Str-aware constructors for Str keys (content-based hash/compare)
             if key_type == "Str" {
                 let ctor = if type_name.starts_with("Dict__") { "gorget_dict_new_str" } else { "gorget_map_new_str" };

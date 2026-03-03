@@ -1,0 +1,63 @@
+# Tests HTTP keep-alive: send two requests on the same TCP connection.
+# First request has "Connection: keep-alive" → server keeps connection open.
+# Second request has "Connection: close" → server closes after responding.
+from gg.httpserver import HttpServerResponse, HttpRequest
+from gg.httpserver import http_server_parse_request, http_server_write_response_ka
+from std.net.socket import ServerSocket, Socket, server_socket_bind, socket_connect
+from std.time import sleep
+
+HttpServerResponse handle(HttpRequest req):
+    return HttpServerResponse.ok("")
+
+# Server that handles a single connection in keep-alive mode.
+async void serve_ka(int port):
+    ServerSocket srv = server_socket_bind("127.0.0.1", port).unwrap()
+    Socket conn = srv.accept().unwrap()
+    srv.close()
+    conn.set_timeout(2000)
+    bool alive = true
+    while alive:
+        Result[HttpRequest, str] r = http_server_parse_request(&conn)
+        match r:
+            case Ok(req):
+                bool client_wants_close = false
+                if req.headers.contains("connection"):
+                    if req.headers["connection"].to_lower() == "close":
+                        client_wants_close = true
+                http_server_write_response_ka(&conn, handle(req), not client_wants_close)
+                if client_wants_close:
+                    alive = false
+            case Error(e):
+                alive = false
+    conn.close()
+
+async void main():
+    int port = 18083
+    Task[void] srv = spawn serve_ka(port)
+    sleep(0.05).await()
+
+    Socket c = socket_connect("127.0.0.1", port).unwrap()
+
+    # Request 1: keep-alive
+    c.write_str("GET /a HTTP/1.1\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\n")
+    str line1 = c.read_line().unwrap()
+    # Drain headers from response 1
+    bool draining = true
+    while draining:
+        Result[str, str] hdrl = c.read_line()
+        if hdrl.is_ok():
+            str h = hdrl.unwrap()
+            if h == "":
+                draining = false
+        else:
+            draining = false
+
+    # Request 2: close
+    c.write_str("GET /b HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+    str line2 = c.read_line().unwrap()
+    c.close()
+
+    srv.await()
+
+    print(line1.starts_with("HTTP/1.1 200"))
+    print(line2.starts_with("HTTP/1.1 200"))
