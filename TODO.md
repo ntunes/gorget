@@ -73,8 +73,6 @@
 
 - **`uuid_parse(str) -> Result[UUID, str]`**: Parse UUID strings in the standard `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx` format. `UUID` would be a struct `{ uint64_t hi; uint64_t lo; }` with `to_string()` and `eq()` equip. C backend via sscanf or manual hex parsing. [added: 2026-03-02]
 
-- **`gg.log` level filtering (`Logger.set_level`)**: Currently `Logger` emits all messages regardless of level. Add `Logger.set_level(LogLevel)` to suppress messages below the configured threshold. The log level should be stored as a thread-local or global static in the C runtime. [added: 2026-03-02]
-
 - **`Heap[T]` max-heap variant**: Current `Heap[T]` is a min-heap. Add a max-heap variant (either a `MaxHeap[T]` type or a `Heap[T](reverse=true)` constructor parameter). [added: 2026-03-02]
 
 - **Simulator dispatch for basic File I/O**: `File__create`, `File__open`, `File__read_all`, `File__write_str` have no simulator dispatch — programs that use file I/O can't be run under `gg check`. Add in-memory file table to `src/sim/runtime.rs`. [added: 2026-03-02]
@@ -108,8 +106,6 @@
 
 
 
-- **Vector/List/Array declared identically in collections module**: Three collection types declared with identical representations. Either an intentional alias system (document it) or placeholder for future differentiation. (`stdlib.rs:246`) [added: 2026-02-16]
-
 - **Serial port library (`std.io.serial`)**: `Port` struct, `.write()`, `.read_until()`, timeout support. C backend via termios/POSIX. [added: 2026-02-14]
 
 - **File system utilities (`std.io.fs`)**: temp directory management, content assertions. [added: 2026-02-14]
@@ -127,8 +123,6 @@
 - **HTML report: source file/line context**: trace nodes show source text but no file path or line number. [added: 2026-02-14]
 
 - **HTML report: timing breakdown per function**: call/return pairs contain the data but the report doesn't surface it. [added: 2026-02-14]
-
-- **`build_tree` silently absorbs malformed events**: depth jumps and unmatched Return/StmtEnd are silently dropped. Should log a diagnostic. [added: 2026-02-14]
 
 - **`directive implicit-auto`**: Python-style implicit variable declarations (`x = 1` instead of `auto x = 1`). Trade-off: more Pythonic but typos silently create new variables. [added: 2026-02-11]
 

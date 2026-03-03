@@ -778,7 +778,7 @@ impl<'a> TypeChecker<'a> {
                 // Validate `alloc=` named arg on builtin constructors
                 if let Expr::Identifier(cname) = &callee.node {
                     let is_builtin_ctor = matches!(cname.as_str(),
-                        "Vector" | "List" | "Array" | "Dict" | "HashMap"
+                        "Vector" | "Dict" | "HashMap"
                         | "Set" | "HashSet" | "Channel" | "String" | "Arena" | "PoolAllocator" | "TlsfAllocator"
                     );
                     if is_builtin_ctor {
@@ -1092,7 +1092,7 @@ impl<'a> TypeChecker<'a> {
                     // Check for Vector[T] indexing/slicing
                     let vec_info = if let ResolvedType::Generic(def_id, args) = self.types.get(resolved_obj) {
                         let name = self.scopes.get_def(*def_id).name.clone();
-                        if matches!(name.as_str(), "Vector" | "List" | "Array") {
+                        if matches!(name.as_str(), "Vector") {
                             Some(args.first().copied().unwrap_or(self.types.int_id))
                         } else {
                             None
@@ -1693,7 +1693,7 @@ impl<'a> TypeChecker<'a> {
                         ResolvedType::Generic(def_id, args) => {
                             let name = self.scopes.get_def(def_id).name.clone();
                             match name.as_str() {
-                                "Vector" | "List" | "Array" | "Set" | "HashSet" => {
+                                "Vector" | "Set" | "HashSet" => {
                                     args.first().copied()
                                 }
                                 _ => None,
@@ -2147,7 +2147,7 @@ impl<'a> TypeChecker<'a> {
         let value_resolved = self.resolve_type(value);
         if let ResolvedType::Generic(def_id, _) = self.types.get(declared_resolved) {
             let name = &self.scopes.get_def(*def_id).name;
-            if matches!(name.as_str(), "Vector" | "List" | "Array" | "Dict" | "HashMap" | "Set" | "HashSet") {
+            if matches!(name.as_str(), "Vector" | "Dict" | "HashMap" | "Set" | "HashSet") {
                 // Allow any value type (array literal, comprehension, constructor call)
                 return matches!(self.types.get(value_resolved),
                     ResolvedType::Array(_, _) | ResolvedType::Error
@@ -2233,24 +2233,24 @@ impl<'a> TypeChecker<'a> {
             }
 
             // --- Vector higher-order methods ---
-            ("Vector" | "List" | "Array", "filter") => {
+            ("Vector", "filter") => {
                 // (T) -> bool, returns Vector[T]
                 let _ = self.infer_expr(&args.first()?.node.value);
                 Some(receiver_type)
             }
-            ("Vector" | "List" | "Array", "map") => {
+            ("Vector", "map") => {
                 // (T) -> U, returns Vector[U]
                 let closure_type = self.infer_expr(&args.first()?.node.value);
                 let u_type = self.extract_fn_return_type(closure_type)?;
                 Some(self.types.insert(ResolvedType::Generic(def_id, vec![u_type])))
             }
-            ("Vector" | "List" | "Array", "fold") => {
+            ("Vector", "fold") => {
                 // args: initial_value, closure (U, T) -> U — returns U
                 let init_type = self.infer_expr(&args.first()?.node.value);
                 let _ = args.get(1).map(|a| self.infer_expr(&a.node.value));
                 Some(init_type)
             }
-            ("Vector" | "List" | "Array", "reduce") => {
+            ("Vector", "reduce") => {
                 // (T, T) -> T, returns T
                 let _ = self.infer_expr(&args.first()?.node.value);
                 let elem_type = type_args.first().copied()?;
@@ -2599,7 +2599,7 @@ impl<'a> TypeChecker<'a> {
         let val_type = || type_args.get(1).copied().unwrap_or(self.types.int_id);
 
         match type_name.as_str() {
-            "Vector" | "List" | "Array" => match method {
+            "Vector" => match method {
                 "push" => Some(self.types.void_id),
                 "pop" | "remove" | "get" => {
                     if let Some(option_def_id) = self.scopes.lookup("Option") {

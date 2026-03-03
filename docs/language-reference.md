@@ -2952,6 +2952,41 @@ Contrast with `spawn`: async tasks share a thread pool cooperatively; OS threads
 | `Deserializer` | trait | Deserialization backend: `read_bool`, `read_int`, `read_float`, `read_str`, `is_null`, `begin_struct`/`end_struct`, `begin_seq`/`end_seq` |
 | `Deserializable` | trait | `void deserialize(&self, Box[Deserializer] de)` — types implement this to be deserialized (derivable via `@derive`) |
 
+**`gg.log`** — Structured leveled logging
+
+```gorget
+from gg.log import LogLevel, Logger, log_info, log_warn
+```
+
+| Name | Kind | Description |
+|---|---|---|
+| `LogLevel` | enum | `Debug`, `Info`, `Warn`, `Err` |
+| `Logger` | struct | Leveled logger with optional timestamps and prefix |
+| `Logger.new` | `Logger(LogLevel)` | Create logger with minimum level |
+| `Logger.with_prefix` | `Logger(LogLevel, str)` | Logger with prefix string |
+| `Logger.with_timestamps` | `Logger(LogLevel)` | Logger with `[YYYY-MM-DD HH:MM:SS]` timestamps |
+| `Logger.set_level` | `void(&self, LogLevel)` | Change minimum level at runtime |
+| `Logger.debug` | `void(&self, str)` | Log at Debug level |
+| `Logger.info` | `void(&self, str)` | Log at Info level |
+| `Logger.warn` | `void(&self, str)` | Log at Warn level |
+| `Logger.error` | `void(&self, str)` | Log at Error level |
+| `log_debug` | `void(str)` | Module-level Debug (always emits) |
+| `log_info` | `void(str)` | Module-level Info (always emits) |
+| `log_warn` | `void(str)` | Module-level Warn (always emits) |
+| `log_error` | `void(str)` | Module-level Error (always emits) |
+
+Messages below the logger's minimum level are suppressed. Module-level convenience functions always emit (no filtering).
+
+```gorget
+from gg.log import LogLevel, Logger
+
+void main():
+    Logger log = Logger.new(LogLevel.Info())
+    log.debug("skipped")     # suppressed (below Info)
+    log.info("hello")        # [INFO] hello
+    log.warn("caution")      # [WARN] caution
+```
+
 **`gg.toml`** — TOML parsing and serialization
 
 | Name | Kind | Description |

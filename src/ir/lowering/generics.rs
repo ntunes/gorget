@@ -161,7 +161,7 @@ impl GenericCollector {
                     self.register_instance(base, generic_args, TemplateKind::Struct);
                 } else if self.enum_templates.contains_key(base) {
                     self.register_instance(base, generic_args, TemplateKind::Enum);
-                } else if matches!(base.as_str(), "Vector" | "List" | "Array" | "Dict" | "HashMap" | "Set" | "HashSet" | "Box") {
+                } else if matches!(base.as_str(), "Vector" | "Dict" | "HashMap" | "Set" | "HashSet" | "Box") {
                     // Runtime collection types — register as Struct so the type name is
                     // available for method call mangling (no struct template to monomorphize)
                     self.register_instance(base, generic_args, TemplateKind::Struct);
@@ -347,7 +347,7 @@ impl GenericCollector {
                 TemplateKind::Struct => {
                     if let Some(template) = self.struct_templates.get(base_name) {
                         monomorphize_struct(template, type_args, mangled_name, mapper, registry);
-                    } else if matches!(base_name.as_str(), "Vector" | "List" | "Array" | "Dict" | "HashMap" | "Set" | "HashSet" | "Box") {
+                    } else if matches!(base_name.as_str(), "Vector" | "Dict" | "HashMap" | "Set" | "HashSet" | "Box") {
                         // Runtime collection types — no template to monomorphize, register alias
                         if !mapper.named_types.contains_key(mangled_name) {
                             super::types::register_collection_alias(mapper, registry, base_name, type_args, mangled_name);

@@ -325,7 +325,7 @@ pub fn lower_module(
             continue;
         }
         let is_collection = matches!(base_name.as_str(),
-            "Vector" | "List" | "Array" | "Dict" | "HashMap" | "Set" | "HashSet");
+            "Vector" | "Dict" | "HashMap" | "Set" | "HashSet");
         if is_collection && !type_mapper.named_types.contains_key(mangled_name) {
             let drop_fn = match base_name.as_str() {
                 "Dict" | "HashMap" => "gorget_map_free",

@@ -594,7 +594,7 @@ fn gen_thread_module() -> Module {
 
 fn gen_collections_module() -> Module {
     let type_defs: Vec<(&str, usize)> = vec![
-        ("Vector", 1), ("List", 1), ("Array", 1),   // [T]
+        ("Vector", 1),   // [T]
         ("Dict", 2), ("HashMap", 2),                   // [K, V]
         ("Set", 1), ("HashSet", 1),                   // [T]
         ("Box", 1),                                    // [T]
@@ -1738,7 +1738,7 @@ mod tests {
     #[test]
     fn generate_collections() {
         let m = generate_builtin_module(&["std".into(), "collections".into()]).unwrap();
-        assert_eq!(m.items.len(), 10); // 9 structs + 1 File equip block
+        assert_eq!(m.items.len(), 8); // 7 structs + 1 File equip block
         let names: Vec<_> = m.items.iter().filter_map(|i| match &i.node {
             Item::Struct(s) => Some(s.name.node.clone()),
             _ => None,

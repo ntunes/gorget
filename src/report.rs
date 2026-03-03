@@ -274,6 +274,12 @@ fn build_tree(events: Vec<TraceEvent>) -> Vec<TraceNode> {
                 });
             }
         }
+        if stack.len() > 1 {
+            let (_, frame_depth, kind, _) = stack.last().unwrap();
+            if matches!(kind, FrameKind::Normal) && ed < *frame_depth {
+                eprintln!("[trace-tree] warning: depth jump from {frame_depth} to {ed}, unclosed frame");
+            }
+        }
 
         // Process the event itself.
         match &event {
@@ -296,6 +302,8 @@ fn build_tree(events: Vec<TraceEvent>) -> Vec<TraceNode> {
                             result_vars,
                         });
                     }
+                } else {
+                    eprintln!("[trace-tree] warning: unmatched Return/StmtEnd at depth {ed}");
                 }
             }
             TraceEvent::Loop { .. } => {
@@ -318,7 +326,12 @@ fn build_tree(events: Vec<TraceEvent>) -> Vec<TraceNode> {
 
     // Drain remaining unclosed frames.
     while stack.len() > 1 {
-        let (opener, _, _, children) = stack.pop().unwrap();
+        let (opener, _, kind, children) = stack.pop().unwrap();
+        if matches!(kind, FrameKind::Normal) {
+            if let Some(ref ev) = opener {
+                eprintln!("[trace-tree] warning: unclosed frame at end of trace: {ev:?}");
+            }
+        }
         if let Some(ev) = opener {
             stack.last_mut().unwrap().3.push(TraceNode {
                 event: ev,
