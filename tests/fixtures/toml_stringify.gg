@@ -1,0 +1,102 @@
+from gg.toml import TomlValue, toml_parse, toml_stringify, toml_stringify_value
+
+void main():
+    # ── Test 1: Simple key-value roundtrip ─────────────────
+    str toml1 = "name = \"Alice\"\ncount = 42\nflag = true"
+    auto r1 = toml_parse(toml1)
+    match r1:
+        case Ok(doc1):
+            str ser1 = toml_stringify(doc1)
+            auto r1b = toml_parse(ser1)
+            match r1b:
+                case Ok(doc1b):
+                    print(doc1b.get("name").as_str())
+                    int cnt = doc1b.get("count").as_int()
+                    bool flg = doc1b.get("flag").as_bool()
+                    print("{cnt}")
+                    print("{flg}")
+                case Error(e1b):
+                    print("error")
+        case Error(e1):
+            print("error")
+
+    # ── Test 2: Nested table roundtrip ───────────────────────
+    str toml2 = "[server]\nhost = \"localhost\"\nport = 8080"
+    auto r2 = toml_parse(toml2)
+    match r2:
+        case Ok(doc2):
+            str ser2 = toml_stringify(doc2)
+            auto r2b = toml_parse(ser2)
+            match r2b:
+                case Ok(doc2b):
+                    print(doc2b.get("server").get("host").as_str())
+                    int port = doc2b.get("server").get("port").as_int()
+                    print("{port}")
+                case Error(e2b):
+                    print("error")
+        case Error(e2):
+            print("error")
+
+    # ── Test 3: Array-of-tables roundtrip ────────────────────
+    str toml3 = "[[items]]\nname = \"first\"\n\n[[items]]\nname = \"second\""
+    auto r3 = toml_parse(toml3)
+    match r3:
+        case Ok(doc3):
+            str ser3 = toml_stringify(doc3)
+            auto r3b = toml_parse(ser3)
+            match r3b:
+                case Ok(doc3b):
+                    int ilen = doc3b.get("items").len()
+                    print("{ilen}")
+                    print(doc3b.get("items").at(0).get("name").as_str())
+                    print(doc3b.get("items").at(1).get("name").as_str())
+                case Error(e3b):
+                    print("error")
+        case Error(e3):
+            print("error")
+
+    # ── Test 4: toml_stringify_value on each variant ─────────
+    print(toml_stringify_value(Str("hello")))
+    int iv = 99
+    print(toml_stringify_value(Int(iv)))
+    print(toml_stringify_value(Bool(true)))
+    print(toml_stringify_value(Bool(false)))
+    TomlValue fv = Float(3.14)
+    bool is_flt = fv.is_float()
+    print("{is_flt}")
+
+    # ── Test 5: keys() on a table ────────────────────────────
+    str toml5 = "a = 1\nb = 2\nc = 3"
+    auto r5 = toml_parse(toml5)
+    match r5:
+        case Ok(doc5):
+            auto keys5 = doc5.keys()
+            int klen = keys5.len()
+            print("{klen}")
+        case Error(e5):
+            print("error")
+
+    # ── Test 6: is_array() on array value ────────────────────
+    str toml6 = "items = [1, 2, 3]"
+    auto r6 = toml_parse(toml6)
+    match r6:
+        case Ok(doc6):
+            bool is_arr = doc6.get("items").is_array()
+            bool is_tbl = doc6.get("items").is_table()
+            print("{is_arr}")
+            print("{is_tbl}")
+        case Error(e6):
+            print("error")
+
+    # ── Test 7: is_datetime() and as_str() ───────────────────
+    str toml7 = "event = 2024-01-15T09:30:00Z"
+    auto r7 = toml_parse(toml7)
+    match r7:
+        case Ok(doc7):
+            bool is_dt = doc7.get("event").is_datetime()
+            print("{is_dt}")
+            print(doc7.get("event").as_str())
+        case Error(e7):
+            print("error")
+
+    print("done")

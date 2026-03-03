@@ -1,0 +1,121 @@
+from gg.json import Json, json_parse, json_stringify, json_pretty
+from std.collections import Vector, Dict
+
+void main():
+    # ── Test 1: as_float on Float and Int ────────────────────
+    auto r_float = json_parse("[3.14]")
+    match r_float:
+        case Ok(jf):
+            float fv = jf.at(0).as_float()
+            print(fv > 3.1)
+            print(fv < 3.2)
+        case Error(_):
+            print("error")
+
+    auto r_int = json_parse("[42]")
+    match r_int:
+        case Ok(ji):
+            float nv = ji.at(0).as_float()
+            bool eq42 = nv == 42.0
+            print("{eq42}")
+        case Error(_):
+            print("error")
+
+    # ── Test 2: Type predicates ──────────────────────────────
+    auto r_str = json_parse("[\"hello\"]")
+    match r_str:
+        case Ok(jarr):
+            Json js = jarr.at(0)
+            print(js.is_string())
+            print(js.is_number())
+            print(js.is_bool())
+        case Error(_):
+            print("error")
+
+    auto r_num = json_parse("[99]")
+    match r_num:
+        case Ok(jarr2):
+            Json jn = jarr2.at(0)
+            print(jn.is_number())
+            print(jn.is_string())
+        case Error(_):
+            print("error")
+
+    auto r_bool = json_parse("[true]")
+    match r_bool:
+        case Ok(jarr3):
+            Json jb = jarr3.at(0)
+            print(jb.is_bool())
+            print(jb.is_number())
+        case Error(_):
+            print("error")
+
+    # ── Test 3: json_pretty on small array ───────────────────
+    auto r_arr = json_parse("[1, 2, 3]")
+    match r_arr:
+        case Ok(jarr4):
+            String pp = json_pretty(jarr4)
+            print(pp)
+        case Error(_):
+            print("error")
+
+    # ── Test 4: Empty array and object ───────────────────────
+    auto r_empty_arr = json_parse("[]")
+    match r_empty_arr:
+        case Ok(jea):
+            int elen = jea.len()
+            print("{elen}")
+        case Error(_):
+            print("error")
+
+    auto r_empty_obj = json_parse("\{\}")
+    match r_empty_obj:
+        case Ok(jeo):
+            int olen = jeo.len()
+            print("{olen}")
+        case Error(_):
+            print("error")
+
+    # ── Test 5: Negative number ──────────────────────────────
+    auto r_neg = json_parse("[-42]")
+    match r_neg:
+        case Ok(jneg):
+            int nval = jneg.at(0).as_int()
+            print("{nval}")
+        case Error(_):
+            print("error")
+
+    # ── Test 6: Escaped string byte count ────────────────────
+    auto r_esc = json_parse("[\"hello\\nworld\"]")
+    match r_esc:
+        case Ok(jesc):
+            int blen = jesc.at(0).as_str().byte_len()
+            print("{blen}")
+        case Error(_):
+            print("error")
+
+    # ── Test 7: Parse errors ─────────────────────────────────
+    auto r_bad1 = json_parse("[1, 2")
+    match r_bad1:
+        case Error(_):
+            print("error caught")
+        case Ok(_):
+            print("unexpected ok")
+
+    auto r_bad2 = json_parse("\"unterminated")
+    match r_bad2:
+        case Error(_):
+            print("error caught")
+        case Ok(_):
+            print("unexpected ok")
+
+    # ── Test 8: Roundtrip ────────────────────────────────────
+    auto r_rt = json_parse("[1, 2, 3]")
+    match r_rt:
+        case Ok(jrt):
+            auto s1 = json_stringify(jrt)
+            print(s1)
+        case Error(_):
+            print("error")
+
+    print("done")

@@ -1,0 +1,91 @@
+from gg.dataframe import DataFrame, Column, df_from_columns, df_from_records, df_to_csv, df_from_csv, col_from_ints, col_from_strs
+from std.collections import Vector, Dict
+
+void main():
+    # ── Test 1: df_from_columns ──────────────────────────────
+    Vector[str] names_data = Vector[str]()
+    names_data.push("Alice")
+    names_data.push("Bob")
+    names_data.push("Carol")
+    Column names_col = col_from_strs(names_data)
+
+    Vector[int] ages_data = Vector[int]()
+    ages_data.push(30)
+    ages_data.push(25)
+    ages_data.push(35)
+    Column ages_col = col_from_ints(ages_data)
+
+    Vector[str] col_names = Vector[str]()
+    col_names.push("name")
+    col_names.push("age")
+    Vector[Column] cols = Vector[Column]()
+    cols.push(names_col)
+    cols.push(ages_col)
+
+    DataFrame df = df_from_columns(col_names, cols)
+    int nr = df.nrows()
+    int nc = df.ncols()
+    print("{nr}")
+    print("{nc}")
+    print(df.has_column("name"))
+    print(df.has_column("score"))
+
+    # column_names
+    Vector[str] cn = df.column_names()
+    int cnlen = cn.len()
+    print("{cnlen}")
+    print(cn.get(0).unwrap())
+    print(cn.get(1).unwrap())
+
+    # row_as_dict
+    Dict[str, str] row0 = df.row_as_dict(0)
+    print(row0.get("name").unwrap())
+    print(row0.get("age").unwrap())
+
+    # display returns non-empty string
+    str disp = df.display()
+    bool disp_ok = disp.byte_len() > 0
+    print("{disp_ok}")
+
+    # ── Test 2: df_from_records ───────────────────────────────
+    Vector[str] headers = Vector[str]()
+    headers.push("x")
+    headers.push("y")
+
+    Vector[str] rec1 = Vector[str]()
+    rec1.push("10")
+    rec1.push("20")
+
+    Vector[str] rec2 = Vector[str]()
+    rec2.push("30")
+    rec2.push("40")
+
+    Vector[Vector[str]] records = Vector[Vector[str]]()
+    records.push(rec1)
+    records.push(rec2)
+
+    DataFrame df2 = df_from_records(headers, records)
+    int r2n = df2.nrows()
+    int r2c = df2.ncols()
+    print("{r2n}")
+    print("{r2c}")
+
+    Dict[str, str] row2_0 = df2.row_as_dict(0)
+    print(row2_0.get("x").unwrap())
+    print(row2_0.get("y").unwrap())
+
+    # ── Test 3: df_to_csv → df_from_csv roundtrip ────────────
+    str csv_out = df_to_csv(df)
+    auto r_csv = df_from_csv(csv_out)
+    match r_csv:
+        case Ok(df3):
+            int df3n = df3.nrows()
+            int df3c = df3.ncols()
+            print("{df3n}")
+            print("{df3c}")
+            print(df3.has_column("name"))
+            print(df3.has_column("age"))
+        case Error(err):
+            print("error")
+
+    print("done")

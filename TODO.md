@@ -2,6 +2,7 @@
 
 ## High
 
+- **`DataFrame.sort_by()` float comparison bug**: `sort_by()` (`dataframe.gg:869`) only checks `str_is_int()` for numeric comparison. Float column values always fall through to string comparison, so e.g. `"10.5"` sorts before `"9.0"` lexicographically. Fix: add an `elif str_is_float(va) and str_is_float(vb)` branch in the bubble sort that calls `parse_float()` for numeric ordering. [added: 2026-03-03]
 
 ## Medium
 

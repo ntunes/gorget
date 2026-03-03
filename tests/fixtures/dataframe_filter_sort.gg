@@ -1,0 +1,105 @@
+from gg.dataframe import DataFrame, Column, df_from_columns, df_concat, col_from_ints, col_from_strs
+from std.collections import Vector
+
+void main():
+    # Build a DataFrame with name (str) and age (int) columns
+    Vector[str] names_data = Vector[str]()
+    names_data.push("Charlie")
+    names_data.push("Alice")
+    names_data.push("Bob")
+    names_data.push("Diana")
+    names_data.push("Eve")
+
+    Vector[int] ages_data = Vector[int]()
+    ages_data.push(35)
+    ages_data.push(25)
+    ages_data.push(30)
+    ages_data.push(28)
+    ages_data.push(40)
+
+    Vector[str] col_names = Vector[str]()
+    col_names.push("name")
+    col_names.push("age")
+
+    Vector[Column] cols = Vector[Column]()
+    cols.push(col_from_strs(names_data))
+    cols.push(col_from_ints(ages_data))
+
+    DataFrame df = df_from_columns(col_names, cols)
+
+    # ── Test 1: sort_by int column ascending ─────────────────
+    DataFrame sorted_age = df.sort_by("age", true)
+    # Expected order: Alice(25), Diana(28), Bob(30), Charlie(35), Eve(40)
+    Column sorted_name_col = sorted_age.get_column("name")
+    print(sorted_name_col.value_as_str(0))
+    print(sorted_name_col.value_as_str(4))
+
+    # ── Test 2: sort_by string column ascending ───────────────
+    DataFrame sorted_name = df.sort_by("name", true)
+    # Expected order: Alice, Bob, Charlie, Diana, Eve
+    Column sorted_name_col2 = sorted_name.get_column("name")
+    print(sorted_name_col2.value_as_str(0))
+    print(sorted_name_col2.value_as_str(4))
+
+    # ── Test 3: filter_by age >= 30 ──────────────────────────
+    DataFrame filtered_ge = df.filter_by("age", ">=", "30")
+    int ge_count = filtered_ge.nrows()
+    print("{ge_count}")
+
+    # ── Test 4: filter_by age <= 30 ──────────────────────────
+    DataFrame filtered_le = df.filter_by("age", "<=", "30")
+    int le_count = filtered_le.nrows()
+    print("{le_count}")
+
+    # ── Test 5: filter_by name == "Alice" ────────────────────
+    DataFrame filtered_eq = df.filter_by("name", "==", "Alice")
+    int eq_count = filtered_eq.nrows()
+    print("{eq_count}")
+    Column eq_name_col = filtered_eq.get_column("name")
+    print(eq_name_col.value_as_str(0))
+
+    # ── Test 6: head and tail ─────────────────────────────────
+    DataFrame sorted2 = df.sort_by("age", true)
+    DataFrame h2 = sorted2.head(2)
+    int h2n = h2.nrows()
+    print("{h2n}")
+    Column h2_name = h2.get_column("name")
+    print(h2_name.value_as_str(0))
+
+    DataFrame t1 = sorted2.tail(1)
+    int t1n = t1.nrows()
+    print("{t1n}")
+    Column t1_name = t1.get_column("name")
+    print(t1_name.value_as_str(0))
+
+    # ── Test 7: df_slice ─────────────────────────────────────
+    DataFrame sliced = sorted2.df_slice(1, 3)
+    int sn = sliced.nrows()
+    print("{sn}")
+
+    # ── Test 8: df_concat ────────────────────────────────────
+    Vector[str] names_a = Vector[str]()
+    names_a.push("X")
+    names_a.push("Y")
+    Vector[int] ages_a = Vector[int]()
+    ages_a.push(10)
+    ages_a.push(20)
+    Vector[Column] cols_a = Vector[Column]()
+    cols_a.push(col_from_strs(names_a))
+    cols_a.push(col_from_ints(ages_a))
+    DataFrame dfa = df_from_columns(col_names, cols_a)
+
+    Vector[str] names_b = Vector[str]()
+    names_b.push("Z")
+    Vector[int] ages_b = Vector[int]()
+    ages_b.push(30)
+    Vector[Column] cols_b = Vector[Column]()
+    cols_b.push(col_from_strs(names_b))
+    cols_b.push(col_from_ints(ages_b))
+    DataFrame dfb = df_from_columns(col_names, cols_b)
+
+    DataFrame dfc = df_concat(dfa, dfb)
+    int cnc = dfc.nrows()
+    print("{cnc}")
+
+    print("done")

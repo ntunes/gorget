@@ -7365,6 +7365,138 @@ default",
     );
 }
 
+#[test]
+fn toml_stringify() {
+    run_gg(
+        "toml_stringify.gg",
+        "\
+Alice
+42
+true
+localhost
+8080
+2
+first
+second
+\"hello\"
+99
+true
+false
+true
+3
+true
+false
+true
+2024-01-15T09:30:00Z
+done",
+    );
+}
+
+#[test]
+fn json_edge_cases() {
+    run_gg(
+        "json_edge_cases.gg",
+        "\
+true
+true
+true
+true
+false
+false
+true
+false
+true
+false
+[
+  1,
+  2,
+  3
+]
+0
+0
+-42
+11
+error caught
+error caught
+[1,2,3]
+done",
+    );
+}
+
+#[test]
+fn dataframe_ops() {
+    run_gg(
+        "dataframe_ops.gg",
+        "\
+3
+2
+true
+false
+2
+name
+age
+Alice
+30
+true
+2
+2
+10
+20
+3
+2
+true
+true
+done",
+    );
+}
+
+#[test]
+fn csv_delimiters() {
+    run_gg(
+        "csv_delimiters.gg",
+        "\
+2
+3
+Alice
+LA
+true
+true
+true
+2
+10
+40
+2
+1
+alpha
+0
+2
+done",
+    );
+}
+
+#[test]
+fn dataframe_filter_sort() {
+    run_gg(
+        "dataframe_filter_sort.gg",
+        "\
+Alice
+Eve
+Alice
+Eve
+3
+3
+1
+Alice
+2
+Alice
+1
+Eve
+2
+3
+done",
+    );
+}
+
 // Parser Comparison Test
 // ═══════════════════════════════════════════════════════════════
 
