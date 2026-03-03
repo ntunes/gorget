@@ -1,0 +1,51 @@
+from std.fmt import pad_left, pad_right, center, repeat, str_truncate, join
+from std.collections import Vector
+
+void main():
+    # ── pad_left: empty fill defaults to space ──
+    print(pad_left("x", 4, ""))
+
+    # ── pad_right: empty fill defaults to space ──
+    str pr = pad_right("y", 4, "")
+    print(pr)
+    int pr_len = pr.len()
+    print("{pr_len}")
+
+    # ── center: odd total padding (extra goes right) ──
+    print(center("a", 4, "-"))
+
+    # ── center: already >= width returns unchanged ──
+    print(center("abcdef", 3, "*"))
+
+    # ── str_truncate: max = 0 returns "" ──
+    print(str_truncate("hello", 0, "...") == "")
+
+    # ── str_truncate: suffix longer than max — suffix itself truncated ──
+    print(str_truncate("hello world", 2, "..."))
+
+    # ── str_truncate: exact fit — no truncation ──
+    print(str_truncate("abc", 3, "..."))
+
+    # ── repeat with negative → "" ──
+    print(repeat("x", -1) == "")
+
+    # ── join: empty vector ──
+    Vector[str] empty = Vector[str]()
+    print(join(empty, ","))
+
+    # ── join: single element (no separator) ──
+    Vector[str] single = Vector[str]()
+    single.push("only")
+    print(join(single, ","))
+
+    # ── join: empty separator ──
+    Vector[str] parts = Vector[str]()
+    parts.push("a")
+    parts.push("b")
+    parts.push("c")
+    print(join(parts, ""))
+
+    # ── pad_left: multi-char fill uses only first char ──
+    print(pad_left("x", 4, "AB"))
+
+    print("done")

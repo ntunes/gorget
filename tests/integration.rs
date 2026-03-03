@@ -4906,6 +4906,34 @@ done",
 }
 
 #[test]
+fn encoding_edge() {
+    run_gg(
+        "encoding_edge.gg",
+        "\
+true
+
+
+%2Fpath%3Fq%3D1%26x%3D2
+a+b%2Bc
+caught
+caught
+8211
+8212
+8230
+8364
+163
+&bogus;
+trail&
+true
+0
+-1
+caught
+4
+done",
+    );
+}
+
+#[test]
 fn option_struct_field() {
     run_gg(
         "option_struct_field.gg",
@@ -7326,6 +7354,15 @@ done",
 }
 
 #[test]
+fn fmt_edge() {
+    // "y   " has 3 trailing spaces from pad_right; using \n escapes to preserve them
+    run_gg(
+        "fmt_edge.gg",
+        "   x\ny   \n4\n-a--\nabcdef\ntrue\n..\nabc\ntrue\n\nonly\nabc\nAAAx\ndone",
+    );
+}
+
+#[test]
 fn process_spawn() {
     // echo appends \n, print(out) adds another \n → blank line before exit code
     run_gg("process_spawn.gg", "hello world\n\n0\ntrue");
@@ -7661,6 +7698,32 @@ true
 false
 true
 2024-01-15T09:30:00Z
+done",
+    );
+}
+
+#[test]
+fn toml_edge() {
+    run_gg(
+        "toml_edge.gg",
+        "\
+hello
+world
+C:\\Users\\me
+line1
+line2
+1
+2
+-42
+-3.500000
+true
+true
+true
+0
+true
+false
+3
+3
 done",
     );
 }

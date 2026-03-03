@@ -4,6 +4,8 @@
 
 ## Medium
 
+- **`std.datetime`: `dt_days_from_epoch` pre-epoch bug**: The while loop `while dt_y < dt_year` in `lib/std/datetime.gg:50` never executes for years < 1970, so `dt_days_from_epoch(1969, 12, 31)` returns 364 instead of -1. The `add_days(-1)` test in `datetime_basic.gg` works correctly because it goes through `to_epoch` → C's `gmtime_r` (which handles negative offsets correctly), not through `dt_days_from_epoch` directly. Fix: use signed arithmetic for the loop counter. [added: 2026-03-03]
+
 - **`std.alloc`: arena checkpoint / restore**: `Arena.checkpoint() -> ArenaCheckpoint` that captures `bytes_used` and `Arena.restore(checkpoint)` that bumps `used` back to the saved value. Useful for transient scratch work without a full `reset()`. Implement as a thin value type wrapping `(Arena*, size_t)`. [added: 2026-03-03]
 
 - **`std.alloc`: per-thread scratch arenas**: `thread_scratch()` returns a thread-local `Arena` reset automatically between calls (double-buffered to allow two scratch frames per thread concurrently). Pattern from stb/handmade: zero-overhead scratch without explicit `with` blocks. [added: 2026-03-03]

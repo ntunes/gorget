@@ -1,0 +1,89 @@
+from std.encoding import url_encode, url_decode, form_encode, form_decode
+from std.encoding import html_escape, html_unescape
+from std.encoding import utf8_len, utf8_codepoints, utf8_is_valid, utf8_char_at
+from std.encoding import latin1_encode, latin1_decode
+from std.collections import Vector
+
+void main():
+    # ── Empty string edge cases ──
+    print(url_encode(""))
+    auto r_empty = url_decode("")
+    match r_empty:
+        case Ok(v):
+            print(v == "")
+        else:
+            print("error")
+    print(html_escape(""))
+    print(html_unescape(""))
+
+    # ── URL: special characters ──
+    print(url_encode("/path?q=1&x=2"))
+    print(form_encode("a b+c"))
+
+    # ── form_decode error: incomplete percent ──
+    auto r_bad1 = form_decode("a%2")
+    match r_bad1:
+        case Error(e1):
+            print("caught")
+        else:
+            print("unexpected")
+
+    # ── form_decode error: invalid hex ──
+    auto r_bad2 = form_decode("a%ZZ")
+    match r_bad2:
+        case Error(e2):
+            print("caught")
+        else:
+            print("unexpected")
+
+    # ── HTML: named entities not tested in basic ──
+    Vector[int] ndash_cps = utf8_codepoints(html_unescape("&ndash;"))
+    int ndash_cp = ndash_cps.get(0).unwrap()
+    print("{ndash_cp}")
+    Vector[int] mdash_cps = utf8_codepoints(html_unescape("&mdash;"))
+    int mdash_cp = mdash_cps.get(0).unwrap()
+    print("{mdash_cp}")
+    Vector[int] hellip_cps = utf8_codepoints(html_unescape("&hellip;"))
+    int hellip_cp = hellip_cps.get(0).unwrap()
+    print("{hellip_cp}")
+    Vector[int] euro_cps = utf8_codepoints(html_unescape("&euro;"))
+    int euro_cp = euro_cps.get(0).unwrap()
+    print("{euro_cp}")
+    Vector[int] pound_cps = utf8_codepoints(html_unescape("&pound;"))
+    int pound_cp = pound_cps.get(0).unwrap()
+    print("{pound_cp}")
+
+    # ── HTML: unknown entity passes through ──
+    print(html_unescape("&bogus;"))
+
+    # ── HTML: bare ampersand at end ──
+    print(html_unescape("trail&"))
+
+    # ── UTF-8 validation: ASCII is valid ──
+    print(utf8_is_valid("hello"))
+
+    # ── UTF-8 length on empty string ──
+    int enc_empty_len = utf8_len("")
+    print("{enc_empty_len}")
+
+    # ── utf8_char_at on empty → -1 ──
+    int oob = utf8_char_at("", 0)
+    print("{oob}")
+
+    # ── Latin-1 encode out-of-range error ──
+    auto r_l1 = latin1_encode(html_unescape("&euro;"))
+    match r_l1:
+        case Error(e3):
+            print("caught")
+        else:
+            print("unexpected")
+
+    # ── Latin-1 roundtrip with high bytes ──
+    Vector[uint8] high_bytes = Vector[uint8]()
+    high_bytes.push(195 as uint8)
+    high_bytes.push(169 as uint8)
+    str decoded = latin1_decode(high_bytes)
+    int blen = decoded.byte_len()
+    print("{blen}")
+
+    print("done")

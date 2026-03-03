@@ -399,6 +399,17 @@ equip TomlParser:
             self.pos = self.pos + 1
         elif self.pos < self.source.byte_len() and self.source.char_at(self.pos) == '+':
             self.pos = self.pos + 1
+        # Handle signed special floats: -inf, +inf, -nan, +nan
+        if self.pos + 3 <= self.source.byte_len():
+            str num_special = self.source.byte_slice(self.pos, self.pos + 3)
+            if num_special == "inf":
+                self.pos = self.pos + 3
+                if is_negative:
+                    return Float(-1.0 / 0.0)
+                return Float(1.0 / 0.0)
+            if num_special == "nan":
+                self.pos = self.pos + 3
+                return Float(0.0 / 0.0)
         # Check for hex/oct/bin prefixes
         if self.pos + 1 < self.source.byte_len() and self.source.char_at(self.pos) == '0':
             char num_prefix = self.source.char_at(self.pos + 1)

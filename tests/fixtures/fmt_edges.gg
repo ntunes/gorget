@@ -1,36 +1,37 @@
-from std.fmt import pad_left, pad_right, center, repeat, str_truncate, join
+from std.fmt import str_truncate, join, repeat
 from std.collections import Vector
 
 void main():
-    # pad_left with empty string
-    print(pad_left("", 3, "."))
+    # str_truncate: max == suffix.len() → return suffix itself
+    print(str_truncate("hello world", 3, "..."))
 
-    # pad_right with zero width (already fits)
-    print(pad_right("", 0, "."))
-
-    # center where string already fills width
-    print(center("x", 1, "-"))
-
-    # repeat with count 1
-    print(repeat("ab", 1))
-
-    # str_truncate: suffix longer than max — suffix itself is truncated
-    print(str_truncate("hello world", 2, "..."))
-
-    # str_truncate: max = 0 — returns ""
-    str z = str_truncate("hello world", 0, "...")
-    int zlen = z.len()
-    print("{zlen}")
-
-    # join with empty vector
+    # join: empty vector → empty string
     Vector[str] empty = Vector[str]()
-    str joined_empty = join(empty, ", ")
-    int elen = joined_empty.len()
-    print("{elen}")
+    print(join(empty, ","))
 
-    # join with single element (no separator)
+    # str_truncate: text fits within max → unchanged
+    print(str_truncate("x", 3, "..."))
+
+    # join: two elements, empty separator
+    Vector[str] pair = Vector[str]()
+    pair.push("a")
+    pair.push("b")
+    print(join(pair, ""))
+
+    # str_truncate: max == suffix.len() (2) → return suffix
+    print(str_truncate("hello world", 2, ".."))
+
+    # str_truncate: max = 0 → ""
+    int t0 = str_truncate("hello", 0, "...").len()
+    print("{t0}")
+
+    # repeat: 0 times → "" → len = 0
+    int r0 = repeat("x", 0).len()
+    print("{r0}")
+
+    # join: single element (no separator applied)
     Vector[str] single = Vector[str]()
     single.push("only")
-    print(join(single, "-"))
+    print(join(single, ","))
 
     print("done")
