@@ -6690,43 +6690,32 @@ fn try_emit_primitive_static_method(
     registry: &TypeRegistry,
 ) -> Option<String> {
     let mut out = String::new();
-    // Helper: extract parse call arguments from arg.
-    // Returns (call_expr) where call_expr is the full gorget_try_parse_int/float call.
-    // For Str variables (non-null-terminated slices), uses the length-bounded _n variant.
-    // For string literals (null-terminated), uses the plain variant.
-    let extract_cstr_arg = |args: &[Operand], func: &Function, registry: &TypeRegistry| -> String {
-        if args.is_empty() { return "\"\"".to_string(); }
+    // Helper: extract (data_expr, len_expr) from a Str arg.
+    // gorget_try_parse_int/float take (const char* s, size_t len) so they work
+    // correctly on non-null-terminated substrings produced by byte_slice().
+    let extract_str_data_len = |args: &[Operand], func: &Function, registry: &TypeRegistry| -> (String, String) {
+        if args.is_empty() { return ("\"\"".to_string(), "0".to_string()); }
         match &args[0] {
-            Operand::Constant(Constant::Str(_)) => {
-                // String literal — already a null-terminated const char* in C
-                format_operand(&args[0], func, registry)
+            Operand::Constant(Constant::Str(lit)) => {
+                let data = format_operand(&args[0], func, registry);
+                let len = lit.len().to_string();
+                (data, len)
             }
             Operand::Copy(p) | Operand::Move(p) => {
                 let s = format_operand(&args[0], func, registry);
-                // Check if it's a Str or a raw string
                 let idx = p.local.0 as usize;
                 let c_type = format_type(func.locals[idx].type_id, registry);
                 if c_type == "Str" || c_type == "GorgetString" {
-                    format!("{s}.data")
+                    (format!("{s}.data"), format!("{s}.len"))
                 } else {
-                    s
+                    // Raw const char* — use strlen
+                    (s.clone(), format!("strlen({s})"))
                 }
             }
-            _ => format_operand(&args[0], func, registry),
-        }
-    };
-    // Returns Some(len_expr) when arg is a Str variable (slice — not null-terminated),
-    // so callers can use gorget_try_parse_int_n(data, len) instead of gorget_try_parse_int(data).
-    let extract_str_len = |args: &[Operand], func: &Function, registry: &TypeRegistry| -> Option<String> {
-        if args.is_empty() { return None; }
-        match &args[0] {
-            Operand::Copy(p) | Operand::Move(p) => {
+            _ => {
                 let s = format_operand(&args[0], func, registry);
-                let idx = p.local.0 as usize;
-                let c_type = format_type(func.locals[idx].type_id, registry);
-                if c_type == "Str" { Some(format!("{s}.len")) } else { None }
+                (s.clone(), format!("strlen({s})"))
             }
-            _ => None,
         }
     };
     match func_name {
@@ -6739,7 +6728,7 @@ fn try_emit_primitive_static_method(
         | "uint32_t__parse" | "uint32__parse"
         | "uint64_t__parse" | "uint64__parse" => {
             if let Some(dst_id) = dst {
-                let arg_str = extract_cstr_arg(args, func, registry);
+                let (data_str, len_str) = extract_str_data_len(args, func, registry);
                 // Determine the C cast type from the function name
                 // Check uint variants BEFORE int variants (uint contains int as substring)
                 let cast_type = if func_name.contains("uint8") { "uint8_t" }
@@ -6752,15 +6741,8 @@ fn try_emit_primitive_static_method(
                     else { "int64_t" };
                 // Always use Option__cast_type since the GIR local type doesn't know about Option
                 let opt_type = format!("Option__{cast_type}");
-                // Use length-bounded parse for Str slices (not null-terminated),
-                // plain parse for null-terminated literals.
-                let parse_call = if let Some(len) = extract_str_len(args, func, registry) {
-                    format!("gorget_try_parse_int_n({arg_str}, {len})")
-                } else {
-                    format!("gorget_try_parse_int({arg_str})")
-                };
                 let _ = writeln!(out,
-                    "        _{id} = ({{ GorgetParseIntResult __pr = {parse_call}; \
+                    "        _{id} = ({{ GorgetParseIntResult __pr = gorget_try_parse_int({data_str}, {len_str}); \
                     {opt_type} __opt; \
                     if (__pr.ok) {{ __opt.tag = 0; __opt.data.Some._0 = ({cast_type})__pr.value; }} \
                     else {{ __opt.tag = 1; }} \
@@ -6771,9 +6753,9 @@ fn try_emit_primitive_static_method(
         }
         "double__parse" | "float__parse" => {
             if let Some(dst_id) = dst {
-                let arg_str = extract_cstr_arg(args, func, registry);
+                let (data_str, len_str) = extract_str_data_len(args, func, registry);
                 let _ = writeln!(out,
-                    "        _{id} = ({{ GorgetParseFloatResult __pr = gorget_try_parse_float({arg_str}); \
+                    "        _{id} = ({{ GorgetParseFloatResult __pr = gorget_try_parse_float({data_str}, {len_str}); \
                     Option__double __opt; \
                     if (__pr.ok) {{ __opt.tag = 0; __opt.data.Some._0 = (double)__pr.value; }} \
                     else {{ __opt.tag = 1; }} \
@@ -6784,12 +6766,13 @@ fn try_emit_primitive_static_method(
         }
         "bool__parse" => {
             if let Some(dst_id) = dst {
-                let arg_str = extract_cstr_arg(args, func, registry);
-                // bool parse: "true"→true, "false"→false, else None
+                let (data_str, len_str) = extract_str_data_len(args, func, registry);
+                // bool parse: "true"→true, "false"→false, else None.
+                // Use strncmp+length check to handle non-null-terminated Str slices.
                 let _ = writeln!(out,
-                    "        _{id} = ({{ Option__bool __opt; \
-                    if (strcmp({arg_str}, \"true\") == 0) {{ __opt.tag = 0; __opt.data.Some._0 = 1; }} \
-                    else if (strcmp({arg_str}, \"false\") == 0) {{ __opt.tag = 0; __opt.data.Some._0 = 0; }} \
+                    "        _{id} = ({{ Option__bool __opt; size_t __plen = (size_t){len_str}; \
+                    if (__plen == 4 && strncmp({data_str}, \"true\", 4) == 0) {{ __opt.tag = 0; __opt.data.Some._0 = 1; }} \
+                    else if (__plen == 5 && strncmp({data_str}, \"false\", 5) == 0) {{ __opt.tag = 0; __opt.data.Some._0 = 0; }} \
                     else {{ __opt.tag = 1; }} \
                     __opt; }});",
                     id = dst_id.0);

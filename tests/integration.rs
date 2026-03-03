@@ -4178,6 +4178,15 @@ fn httpserver_tls() {
 }
 
 #[test]
+fn httpserver_e2e() {
+    // 6 checks × 2 lines each (status + body/header), all printing "ok"
+    run_gg(
+        "httpserver_e2e.gg",
+        "ok\nok\nok\nok\nok\nok\nok\nok\nok\nok\nok",
+    );
+}
+
+#[test]
 fn udp_echo() {
     run_gg(
         "udp_echo.gg",

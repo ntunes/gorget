@@ -4052,12 +4052,15 @@ static inline double gorget_parse_float(const char* s) {
 }
 
 // ── try_parse (fallible) ─────────────────────────────────────
+// len: number of characters to treat as the string.  This matters when the
+// Str pointer points into the interior of a larger allocation (e.g. the
+// result of byte_slice): the bytes after len are not part of the value.
 typedef struct { int64_t value; bool ok; } GorgetParseIntResult;
-static inline GorgetParseIntResult gorget_try_parse_int(const char* s) {
+static inline GorgetParseIntResult gorget_try_parse_int(const char* s, size_t len) {
     char* endptr;
     errno = 0;
     long long result = strtoll(s, &endptr, 10);
-    if (endptr == s || (*endptr != '\0' && !isspace((unsigned char)*endptr)) || errno == ERANGE) {
+    if (endptr == s || (size_t)(endptr - s) != len || errno == ERANGE) {
         return (GorgetParseIntResult){0, false};
     }
     return (GorgetParseIntResult){(int64_t)result, true};
@@ -4082,11 +4085,11 @@ static inline GorgetParseIntResult gorget_try_parse_int_n(const char* s, size_t 
 }
 
 typedef struct { double value; bool ok; } GorgetParseFloatResult;
-static inline GorgetParseFloatResult gorget_try_parse_float(const char* s) {
+static inline GorgetParseFloatResult gorget_try_parse_float(const char* s, size_t len) {
     char* endptr;
     errno = 0;
     double result = strtod(s, &endptr);
-    if (endptr == s || (*endptr != '\0' && !isspace((unsigned char)*endptr)) || errno == ERANGE) {
+    if (endptr == s || (size_t)(endptr - s) != len || errno == ERANGE) {
         return (GorgetParseFloatResult){0.0, false};
     }
     return (GorgetParseFloatResult){result, true};
@@ -6042,16 +6045,21 @@ static void gorget_tls_set_timeout(GorgetTlsSocket* sock, int64_t ms) {
     setsockopt(sock->fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 }
 
+// Forward-declare GorgetTlsServerSocket so that programs importing std.net.tls
+// (e.g. via gg.http) can reference TlsServerSocket in type aliases and Result
+// structs even when TLS_SERVER_RUNTIME is not emitted (no tls_server_bind call).
+typedef struct {
+    int fd;
+    SSL_CTX* ctx;
+} GorgetTlsServerSocket;
+
 "#;
 
 // ── TLS Server Socket runtime ───────────────────────────────
 pub const TLS_SERVER_RUNTIME: &str = r#"
 // ── TLS Server Socket (std.net.tls) ─────────────────────────
-
-typedef struct {
-    int fd;
-    SSL_CTX* ctx;
-} GorgetTlsServerSocket;
+// (GorgetTlsServerSocket is defined in TLS_SOCKET_RUNTIME to ensure the type
+//  is available even when TLS_SERVER_RUNTIME is not emitted.)
 
 static const char* __gorget_tls_server_last_error = NULL;
 

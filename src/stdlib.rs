@@ -2445,8 +2445,10 @@ mod tests {
             }
         }
         assert!(struct_names.contains(&"TlsSocket".to_string()));
+        assert!(struct_names.contains(&"TlsServerSocket".to_string()));
         assert!(fn_names.contains(&"tls_connect".to_string()));
-        assert_eq!(equip_count, 1);
+        assert!(fn_names.contains(&"tls_server_bind".to_string()));
+        assert_eq!(equip_count, 2); // TlsSocket + TlsServerSocket
     }
 
     #[test]
@@ -2466,7 +2468,8 @@ mod tests {
                                 "write",
                                 "write_str",
                                 "read_line",
-                                "close"
+                                "close",
+                                "set_timeout"
                             ]
                         );
                         for method in &eq.items {

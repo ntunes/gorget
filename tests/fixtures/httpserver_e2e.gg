@@ -1,0 +1,137 @@
+# End-to-end test: gg.http client against gg.httpserver server.
+#
+# This is the only test that exercises both stacks over a real TCP socket.
+# It verifies that gg.http's response parser (status code, headers, body,
+# Content-Length reading) is wire-compatible with gg.httpserver's writer.
+#
+# Checks:
+#   1. GET → 200 + body
+#   2. GET → correct Content-Type header
+#   3. POST with body → body echoed back
+#   4. Unknown path → 404
+#   5. Custom response header propagated to client
+#   6. URL path parameter via query_string + parse_query_string
+
+from gg.httpserver import HttpRequest, HttpServerResponse, parse_query_string, http_server_handle_conn_ka
+from gg.http import http_get, http_post, HttpResponse
+from std.net.socket import ServerSocket, Socket, server_socket_bind
+from std.collections import Dict
+from std.conv import int_to_str
+from std.time import sleep
+
+# ── Top-level handler (no closure capture needed) ─────────────
+
+HttpServerResponse handle(HttpRequest req):
+    if req.method == "GET" and req.path == "/hello":
+        return HttpServerResponse.ok("world")
+    elif req.method == "GET" and req.path == "/json":
+        return HttpServerResponse.json("[true]")
+    elif req.method == "POST" and req.path == "/echo":
+        return HttpServerResponse.ok(req.body)
+    elif req.method == "GET" and req.path == "/powered":
+        return HttpServerResponse.ok("ok").with_header("x-powered-by", "gorget")
+    elif req.method == "GET" and req.path == "/search":
+        Dict[str, str] qp = parse_query_string(req.query_string)
+        if qp.contains("q"):
+            return HttpServerResponse.ok("q=" + qp["q"])
+        return HttpServerResponse.ok("no-q")
+    return HttpServerResponse.not_found()
+
+# ── Server: accept exactly n connections then exit ─────────────
+# (Uses a standalone async function so spawn works correctly.
+#  Note: spawn on a method call is a known compiler limitation —
+#  only free-function spawn generates a thread.)
+
+async void serve_n(int port, int n):
+    Result[ServerSocket, str] bind_r = server_socket_bind("127.0.0.1", port)
+    if bind_r.is_err():
+        return
+    ServerSocket srv = bind_r.unwrap()
+    TaskGroup group = TaskGroup()
+    int i = 0
+    while i < n:
+        Result[Socket, str] ar = srv.accept()
+        if ar.is_ok():
+            Socket client = ar.unwrap()
+            group.spawn(spawn http_server_handle_conn_ka(client, handle, 5000))
+            i = i + 1
+    group.join()
+    srv.close()
+
+# ── Test helper ───────────────────────────────────────────────
+
+void check(str label, bool ok):
+    if not ok:
+        print("FAIL: " + label)
+    else:
+        print("ok")
+
+async void main():
+    int port = 18086
+
+    # 6 requests → 6 connections (each http_get/post sends Connection: close)
+    Task[void] srv = spawn serve_n(port, 6)
+    sleep(0.05).await()
+
+    str base = "http://127.0.0.1:" + int_to_str(port)
+
+    # 1. GET /hello → 200 "world"
+    Result[HttpResponse, str] r1 = http_get(base + "/hello")
+    if r1.is_ok():
+        HttpResponse resp1 = r1.unwrap()
+        check("status 200", resp1.status_code == 200)
+        check("body world", resp1.body_text == "world")
+    else:
+        print("FAIL: " + r1.unwrap_err())
+        print("FAIL: body")
+
+    # 2. GET /json → correct Content-Type in response headers
+    Result[HttpResponse, str] r2 = http_get(base + "/json")
+    if r2.is_ok():
+        HttpResponse resp2 = r2.unwrap()
+        check("json status", resp2.status_code == 200)
+        check("json content-type", resp2.headers["content-type"] == "application/json")
+    else:
+        print("FAIL: " + r2.unwrap_err())
+        print("FAIL: content-type")
+
+    # 3. POST /echo with body → body echoed
+    Dict[str, str] empty_hdrs = Dict[str, str]()
+    Result[HttpResponse, str] r3 = http_post(base + "/echo", "hello body", empty_hdrs)
+    if r3.is_ok():
+        HttpResponse resp3 = r3.unwrap()
+        check("echo status", resp3.status_code == 200)
+        check("echo body", resp3.body_text == "hello body")
+    else:
+        print("FAIL: " + r3.unwrap_err())
+        print("FAIL: echo body")
+
+    # 4. Unknown path → 404
+    Result[HttpResponse, str] r4 = http_get(base + "/unknown")
+    if r4.is_ok():
+        HttpResponse resp4 = r4.unwrap()
+        check("404", resp4.status_code == 404)
+    else:
+        print("FAIL: " + r4.unwrap_err())
+
+    # 5. Custom response header propagated to client
+    Result[HttpResponse, str] r5 = http_get(base + "/powered")
+    if r5.is_ok():
+        HttpResponse resp5 = r5.unwrap()
+        check("custom header status", resp5.status_code == 200)
+        check("custom header value", resp5.headers["x-powered-by"] == "gorget")
+    else:
+        print("FAIL: " + r5.unwrap_err())
+        print("FAIL: custom header")
+
+    # 6. Query string parsed by handler (path + ?q=gorget)
+    Result[HttpResponse, str] r6 = http_get(base + "/search?q=gorget")
+    if r6.is_ok():
+        HttpResponse resp6 = r6.unwrap()
+        check("query status", resp6.status_code == 200)
+        check("query body", resp6.body_text == "q=gorget")
+    else:
+        print("FAIL: " + r6.unwrap_err())
+        print("FAIL: query body")
+
+    srv.await()
