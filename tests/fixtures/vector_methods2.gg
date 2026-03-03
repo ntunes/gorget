@@ -43,3 +43,9 @@ void main():
     print("{all_pos}")
     bool all_small = v.all((int x): x < 30)
     print("{all_small}")
+
+    # contains
+    bool has20 = v.contains(20)
+    print("{has20}")
+    bool has99 = v.contains(99)
+    print("{has99}")
