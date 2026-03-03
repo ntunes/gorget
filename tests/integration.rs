@@ -5138,6 +5138,145 @@ done",
 }
 
 // ══════════════════════════════════════════════════════════════
+// New stdlib modules — Batch 3
+// ══════════════════════════════════════════════════════════════
+
+#[test]
+fn math_trig() {
+    run_gg(
+        "math_trig.gg",
+        "\
+true
+true
+true
+true
+true
+true
+true
+true
+false
+false
+done",
+    );
+}
+
+#[test]
+fn log_set_level() {
+    run_gg(
+        "log_set_level.gg",
+        "\
+[ERROR] visible1
+[INFO] visible2
+[DEBUG] visible3
+done",
+    );
+}
+
+#[test]
+fn cli_advanced() {
+    run_gg(
+        "cli_advanced.gg",
+        "\
+true
+true
+true
+2
+file1.txt
+file2.txt
+Usage: mytool
+A sample tool
+Arguments:
+  input  Input file
+Options:
+  --verbose, -v  Be verbose
+  --output, -o  Output path (default: out.txt)
+done",
+    );
+}
+
+#[test]
+fn ecs_query2() {
+    run_gg(
+        "ecs_query2.gg",
+        "\
+1
+0
+0
+2
+done",
+    );
+}
+
+#[test]
+fn heap_advanced() {
+    run_gg(
+        "heap_advanced.gg",
+        "\
+1
+2
+3
+apple
+banana
+cherry
+3
+3
+5
+5
+5
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+done",
+    );
+}
+
+#[test]
+fn datetime_extended() {
+    run_gg(
+        "datetime_extended.gg",
+        "\
+31
+29
+31
+30
+31
+30
+31
+31
+30
+31
+30
+31
+28
+0
+1
+365
+10957
+1970
+1
+1
+0
+1970
+1
+2
+2026
+3
+3
+12
+30
+45
+done",
+    );
+}
+
+// ══════════════════════════════════════════════════════════════
 // Lexer comparison: Rust vs self-hosting Gorget lexer
 // ══════════════════════════════════════════════════════════════
 

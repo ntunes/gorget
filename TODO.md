@@ -83,6 +83,8 @@
 
 - **Data-driven stdlib call dispatch**: Large match blocks in the GIR C backend (`src/backend/c/mod.rs:3397, 3534, 6543`) where each arm follows the same pattern (check name, emit C call). Replace with a table of (name, arity, C template). [added: 2026-02-16, updated: 2026-03-03]
 
+- **Dead C backend code for Vector methods `first`, `last`, `binary_search`, `reversed`, `unique`, `flatten`**: `src/backend/c/mod.rs` has emit paths for these Vector method names, but `src/semantic/typecheck.rs` never registers them as builtin methods, making the backend code permanently unreachable. Either register the methods in the typechecker (preferred) or remove the dead backend branches. [added: 2026-03-03]
+
 - **`gg info` command**: show fields, methods, traits, memory layout for a type. [added: 2026-02-10]
 
 - **Docs: document borrow checker inference pipeline for contributors**: Explain the multi-phase architecture: Pass 5a computes `return_borrows_from` per function (body analysis with local alias tracing → elision fallback → explicit `live`), Pass 5b validates at call sites using `var_origins` + `return_borrows_from`. Document how the two systems interact — 5b depends on 5a's metadata for cross-function analysis. Cover `BorrowOrigin` variants, `compute_expr_origin()`, and the `LocalAliasMap` that traces through local variables and calls. [added: 2026-02-22, updated: 2026-02-22]

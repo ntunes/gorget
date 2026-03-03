@@ -1,0 +1,42 @@
+from gg.cli import CliParser
+from std.collections import Vector
+
+void main():
+    # Short option only
+    CliParser c1 = CliParser.new("app", "desc")
+    c1.add_flag("--verbose", "-v", "Verbose")
+    Vector[str] a1 = Vector[str]()
+    a1.push("-v")
+    auto r1 = c1.parse(a1)
+    print(r1.is_ok())
+    print(c1.has("verbose"))
+
+    # Missing value for option → error
+    CliParser c2 = CliParser.new("app2", "desc2")
+    c2.add_option("--out", "-o", "Output", "")
+    Vector[str] a2 = Vector[str]()
+    a2.push("--out")
+    auto r2 = c2.parse(a2)
+    print(r2.is_err())
+
+    # Multiple positionals
+    CliParser c3 = CliParser.new("app3", "desc3")
+    c3.add_positional("src", "Source")
+    c3.add_positional("dst", "Destination")
+    Vector[str] a3 = Vector[str]()
+    a3.push("file1.txt")
+    a3.push("file2.txt")
+    auto r3 = c3.parse(a3)
+    Vector[str] pos = c3.positionals()
+    print(pos.len())
+    print(pos.get(0).unwrap())
+    print(pos.get(1).unwrap())
+
+    # print_help
+    CliParser c4 = CliParser.new("mytool", "A sample tool")
+    c4.add_flag("--verbose", "-v", "Be verbose")
+    c4.add_option("--output", "-o", "Output path", "out.txt")
+    c4.add_positional("input", "Input file")
+    c4.print_help()
+
+    print("done")

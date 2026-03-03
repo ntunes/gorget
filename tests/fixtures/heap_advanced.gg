@@ -1,0 +1,50 @@
+from std.heap import Heap
+
+void main():
+    # Heap.new() factory
+    Heap[int] h = Heap[int].new()
+    h.push(3)
+    h.push(1)
+    h.push(2)
+    print(h.pop().unwrap())
+    print(h.pop().unwrap())
+    print(h.pop().unwrap())
+
+    # String heap (lexicographic order)
+    Heap[str] sh = Heap[str].new()
+    sh.push("cherry")
+    sh.push("apple")
+    sh.push("banana")
+    print(sh.pop().unwrap())
+    print(sh.pop().unwrap())
+    print(sh.pop().unwrap())
+
+    # Duplicate values
+    Heap[int] dh = Heap[int].new()
+    dh.push(5)
+    dh.push(5)
+    dh.push(3)
+    dh.push(5)
+    dh.push(3)
+    print(dh.pop().unwrap())
+    print(dh.pop().unwrap())
+    print(dh.pop().unwrap())
+    print(dh.pop().unwrap())
+    print(dh.pop().unwrap())
+
+    # Heapsort pattern
+    Heap[int] hs = Heap[int].new()
+    hs.push(9)
+    hs.push(4)
+    hs.push(7)
+    hs.push(1)
+    hs.push(8)
+    hs.push(2)
+    hs.push(6)
+    hs.push(3)
+    hs.push(5)
+    hs.push(10)
+    while not hs.is_empty():
+        print(hs.pop().unwrap())
+
+    print("done")

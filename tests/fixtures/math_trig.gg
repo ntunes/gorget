@@ -1,0 +1,25 @@
+from std.math import tan, asin, acos, atan, atan2, log, NAN, PI, floor, round
+
+void main():
+    # tan(0) = 0
+    print(tan(0.0) == 0.0)
+    # tan(PI/4) ≈ 1.0 (use round to absorb float error)
+    print(round(tan(PI / 4.0) * 1000.0) == 1000.0)
+    # asin(1.0) = PI/2
+    print(floor(asin(1.0) * 1000000.0) == floor(PI / 2.0 * 1000000.0))
+    # acos(1.0) = 0
+    print(acos(1.0) == 0.0)
+    # atan(1.0) = PI/4
+    print(floor(atan(1.0) * 1000000.0) == floor(PI / 4.0 * 1000000.0))
+    # atan2(1.0, 1.0) = PI/4
+    print(floor(atan2(1.0, 1.0) * 1000000.0) == floor(PI / 4.0 * 1000000.0))
+    # log(1.0) == 0.0 (exact)
+    print(log(1.0) == 0.0)
+    # NAN != NAN (NaN is never equal to itself)
+    print(NAN != NAN)
+    # NAN comparisons are always false
+    bool gt = NAN > 0.0
+    bool lt = NAN < 0.0
+    print(gt)
+    print(lt)
+    print("done")

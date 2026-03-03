@@ -1,0 +1,35 @@
+from gg.ecs import Entity, EntityPool, SparseSet, query2
+
+void main():
+    EntityPool pool = EntityPool.new()
+    Entity e1 = pool.create()
+    Entity e2 = pool.create()
+    Entity e3 = pool.create()
+
+    SparseSet[int] health = SparseSet[int].new()
+    SparseSet[int] damage = SparseSet[int].new()
+
+    # e1 has both, e2 has health only, e3 has damage only
+    health.insert(e1, 100)
+    health.insert(e2, 50)
+    damage.insert(e1, 10)
+    damage.insert(e3, 20)
+
+    # Partial overlap — only e1 qualifies
+    auto both = query2[int, int](health, damage)
+    print(both.len())
+    print(both.get(0).unwrap().id)
+
+    # No overlap (health vs empty store)
+    SparseSet[int] empty_set = SparseSet[int].new()
+    auto none = query2[int, int](health, empty_set)
+    print(none.len())
+
+    # Full overlap (all health entities also have armor)
+    SparseSet[int] armor = SparseSet[int].new()
+    armor.insert(e1, 5)
+    armor.insert(e2, 8)
+    auto full = query2[int, int](health, armor)
+    print(full.len())
+
+    print("done")

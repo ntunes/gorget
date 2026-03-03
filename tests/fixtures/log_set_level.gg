@@ -1,0 +1,12 @@
+from gg.log import Logger, LogLevel
+
+void main():
+    Logger lg = Logger.new(Err())
+    lg.info("hidden1")
+    lg.error("visible1")
+    lg.set_level(Info())
+    lg.info("visible2")
+    lg.debug("hidden2")
+    lg.set_level(Debug())
+    lg.debug("visible3")
+    print("done")

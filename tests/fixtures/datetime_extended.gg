@@ -1,0 +1,50 @@
+from std.datetime import DateTime, dt_is_leap, dt_days_in_month, dt_days_from_epoch
+
+void main():
+    # dt_days_in_month for all months in 2000 (leap year)
+    print(dt_days_in_month(2000, 1))
+    print(dt_days_in_month(2000, 2))
+    print(dt_days_in_month(2000, 3))
+    print(dt_days_in_month(2000, 4))
+    print(dt_days_in_month(2000, 5))
+    print(dt_days_in_month(2000, 6))
+    print(dt_days_in_month(2000, 7))
+    print(dt_days_in_month(2000, 8))
+    print(dt_days_in_month(2000, 9))
+    print(dt_days_in_month(2000, 10))
+    print(dt_days_in_month(2000, 11))
+    print(dt_days_in_month(2000, 12))
+    # February in a non-leap year
+    print(dt_days_in_month(2001, 2))
+
+    # dt_days_from_epoch: known dates
+    print(dt_days_from_epoch(1970, 1, 1))
+    print(dt_days_from_epoch(1970, 1, 2))
+    print(dt_days_from_epoch(1971, 1, 1))
+    print(dt_days_from_epoch(2000, 1, 1))
+
+    # from_epoch_utc: epoch 0 = 1970-01-01T00:00:00Z
+    DateTime d0 = DateTime.from_epoch_utc(0)
+    print(d0.dt_year)
+    print(d0.dt_month)
+    print(d0.dt_day)
+    print(d0.dt_hour)
+
+    # from_epoch_utc: 86400 = 1970-01-02T00:00:00Z
+    DateTime d1 = DateTime.from_epoch_utc(86400)
+    print(d1.dt_year)
+    print(d1.dt_month)
+    print(d1.dt_day)
+
+    # Round-trip: construct → to_epoch → from_epoch_utc → compare fields
+    DateTime orig = DateTime(2026, 3, 3, 12, 30, 45, 0)
+    int ep = orig.to_epoch()
+    DateTime rt = DateTime.from_epoch_utc(ep)
+    print(rt.dt_year)
+    print(rt.dt_month)
+    print(rt.dt_day)
+    print(rt.dt_hour)
+    print(rt.dt_minute)
+    print(rt.dt_second)
+
+    print("done")
