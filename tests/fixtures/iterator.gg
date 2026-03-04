@@ -21,8 +21,8 @@ equip Counter with Iterable[int]:
 void main():
     Counter c = Counter(0, 5)
     for x in c:
-        print("{x}")
+        print(f"{x}")
     CounterIter c2 = Counter(10, 13).iter()
-    print("{c2.next().unwrap()}")
-    print("{c2.next().unwrap()}")
-    print("{c2.next().unwrap()}")
+    print(f"{c2.next().unwrap()}")
+    print(f"{c2.next().unwrap()}")
+    print(f"{c2.next().unwrap()}")

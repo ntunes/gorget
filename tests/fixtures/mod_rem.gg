@@ -6,36 +6,36 @@ void main():
     int r2 = -7 % 3
     int r3 = 7 % -3
     int r4 = -7 % -3
-    print("{r1}")
-    print("{r2}")
-    print("{r3}")
-    print("{r4}")
+    print(f"{r1}")
+    print(f"{r2}")
+    print(f"{r3}")
+    print(f"{r4}")
 
     # Modulo: sign matches divisor (right operand)
     int m1 = -7 mod 3
     int m2 = 7 mod -3
     int m3 = -7 mod -3
-    print("{m1}")
-    print("{m2}")
-    print("{m3}")
+    print(f"{m1}")
+    print(f"{m2}")
+    print(f"{m3}")
 
     # Positive operands: remainder == modulo
     int m4 = 7 mod 3
     int m5 = 10 mod 4
-    print("{m4}")
-    print("{m5}")
+    print(f"{m4}")
+    print(f"{m5}")
 
     # Float modulo
     float fm = -7.0 mod 3.0
-    print("{fm}")
+    print(f"{fm}")
 
     # Compound remainder assignment
     int x = 10
     x %= 3
-    print("{x}")
+    print(f"{x}")
 
     # Zero cases
     int z1 = 0 % 3
     int z2 = 0 mod 3
-    print("{z1}")
-    print("{z2}")
+    print(f"{z1}")
+    print(f"{z2}")

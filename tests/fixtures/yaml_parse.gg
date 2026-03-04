@@ -7,9 +7,9 @@ void main():
     Yaml yaml_bm = yaml_parse(yaml_block_map).unwrap()
     print(yaml_bm.get("name").as_str())
     int yaml_age = yaml_bm.get("age").as_int()
-    print("{yaml_age}")
+    print(f"{yaml_age}")
     bool yaml_active = yaml_bm.get("active").as_bool()
-    print("{yaml_active}")
+    print(f"{yaml_active}")
 
     # ── Block sequence ───────────────────────────────────────
     str yaml_block_seq = "- apple\n- banana\n- cherry\n"
@@ -18,14 +18,14 @@ void main():
     print(yaml_bs.at(1).as_str())
     print(yaml_bs.at(2).as_str())
     int yaml_seq_len = yaml_bs.len()
-    print("{yaml_seq_len}")
+    print(f"{yaml_seq_len}")
 
     # ── Nested mapping/sequence ──────────────────────────────
     str yaml_nested = "server:\n  host: localhost\n  port: 8080\nitems:\n  - one\n  - two\n"
     Yaml yaml_n = yaml_parse(yaml_nested).unwrap()
     print(yaml_n.get("server").get("host").as_str())
     int yaml_port = yaml_n.get("server").get("port").as_int()
-    print("{yaml_port}")
+    print(f"{yaml_port}")
     print(yaml_n.get("items").at(0).as_str())
     print(yaml_n.get("items").at(1).as_str())
 
@@ -34,8 +34,8 @@ void main():
     Yaml yaml_fm = yaml_parse(yaml_flow_map_str).unwrap()
     int yaml_fa = yaml_fm.get("a").as_int()
     int yaml_fb = yaml_fm.get("b").as_int()
-    print("{yaml_fa}")
-    print("{yaml_fb}")
+    print(f"{yaml_fa}")
+    print(f"{yaml_fb}")
 
     # ── Flow sequence ────────────────────────────────────────
     str yaml_flow_seq_str = "[10, 20, 30]"
@@ -43,9 +43,9 @@ void main():
     int yaml_f0 = yaml_fs.at(0).as_int()
     int yaml_f1 = yaml_fs.at(1).as_int()
     int yaml_f2 = yaml_fs.at(2).as_int()
-    print("{yaml_f0}")
-    print("{yaml_f1}")
-    print("{yaml_f2}")
+    print(f"{yaml_f0}")
+    print(f"{yaml_f1}")
+    print(f"{yaml_f2}")
 
     # ── Quoted scalars ───────────────────────────────────────
     str yaml_quoted = "dq: \"hello world\"\nsq: 'it''s fine'\n"
@@ -58,18 +58,18 @@ void main():
     Yaml yaml_sc = yaml_parse(yaml_scalars).unwrap()
     bool yaml_n1_null = yaml_sc.get("n1").is_null()
     bool yaml_n2_null = yaml_sc.get("n2").is_null()
-    print("{yaml_n1_null}")
-    print("{yaml_n2_null}")
+    print(f"{yaml_n1_null}")
+    print(f"{yaml_n2_null}")
     bool yaml_b1 = yaml_sc.get("b1").as_bool()
     bool yaml_b2 = yaml_sc.get("b2").as_bool()
-    print("{yaml_b1}")
-    print("{yaml_b2}")
+    print(f"{yaml_b1}")
+    print(f"{yaml_b2}")
     int yaml_i1 = yaml_sc.get("i1").as_int()
     int yaml_i2 = yaml_sc.get("i2").as_int()
-    print("{yaml_i1}")
-    print("{yaml_i2}")
+    print(f"{yaml_i1}")
+    print(f"{yaml_i2}")
     float yaml_f1v = yaml_sc.get("f1").as_float()
-    print("{yaml_f1v}")
+    print(f"{yaml_f1v}")
     print(yaml_sc.get("s1").as_str())
 
     # ── Comments ─────────────────────────────────────────────
@@ -93,27 +93,27 @@ void main():
     # ── Accessor methods ─────────────────────────────────────
     bool yaml_has_name = yaml_bm.has("name")
     bool yaml_has_missing = yaml_bm.has("missing")
-    print("{yaml_has_name}")
-    print("{yaml_has_missing}")
+    print(f"{yaml_has_name}")
+    print(f"{yaml_has_missing}")
 
     bool yaml_has_idx0 = yaml_bs.has_index(0)
     bool yaml_has_idx5 = yaml_bs.has_index(5)
-    print("{yaml_has_idx0}")
-    print("{yaml_has_idx5}")
+    print(f"{yaml_has_idx0}")
+    print(f"{yaml_has_idx5}")
 
     bool yaml_is_obj = yaml_bm.is_object()
     bool yaml_is_arr = yaml_bs.is_array()
     bool yaml_is_str = yaml_bm.get("name").is_string()
     bool yaml_is_num = yaml_bm.get("age").is_number()
     bool yaml_is_bval = yaml_bm.get("active").is_bool()
-    print("{yaml_is_obj}")
-    print("{yaml_is_arr}")
-    print("{yaml_is_str}")
-    print("{yaml_is_num}")
-    print("{yaml_is_bval}")
+    print(f"{yaml_is_obj}")
+    print(f"{yaml_is_arr}")
+    print(f"{yaml_is_str}")
+    print(f"{yaml_is_num}")
+    print(f"{yaml_is_bval}")
 
     int yaml_map_len = yaml_bm.len()
-    print("{yaml_map_len}")
+    print(f"{yaml_map_len}")
 
     Vector[str] yaml_ks = yaml_bm.keys()
     print(yaml_ks.get(0).unwrap())
@@ -122,7 +122,7 @@ void main():
     str yaml_bad_input = r"{unclosed: true"
     Result[Yaml, str] yaml_bad = yaml_parse(yaml_bad_input)
     bool yaml_is_err = yaml_bad.is_err()
-    print("{yaml_is_err}")
+    print(f"{yaml_is_err}")
 
     # ── Phase 2: Literal block scalar ─────────────────────
     str yaml_lit_src = "text: |\n  line 1\n  line 2\n  line 3\n"
@@ -184,17 +184,17 @@ void main():
     str yaml_multi = "---\nfirst: 1\n---\nsecond: 2\n"
     Vector[Yaml] yaml_all = yaml_parse_all(yaml_multi).unwrap()
     int yaml_ndocs = yaml_all.len()
-    print("{yaml_ndocs}")
+    print(f"{yaml_ndocs}")
     int yaml_d1v = yaml_all.get(0).unwrap().get("first").as_int()
-    print("{yaml_d1v}")
+    print(f"{yaml_d1v}")
     int yaml_d2v = yaml_all.get(1).unwrap().get("second").as_int()
-    print("{yaml_d2v}")
+    print(f"{yaml_d2v}")
 
     # ── Phase 3: Multi-doc with ... separator ─────────────
     str yaml_dots = "---\nalpha: a\n...\n---\nbeta: b\n"
     Vector[Yaml] yaml_dot_docs = yaml_parse_all(yaml_dots).unwrap()
     int yaml_ddocs = yaml_dot_docs.len()
-    print("{yaml_ddocs}")
+    print(f"{yaml_ddocs}")
     print(yaml_dot_docs.get(0).unwrap().get("alpha").as_str())
     print(yaml_dot_docs.get(1).unwrap().get("beta").as_str())
 
@@ -202,7 +202,7 @@ void main():
     str yaml_single = "key: value\n"
     Vector[Yaml] yaml_single_docs = yaml_parse_all(yaml_single).unwrap()
     int yaml_sdocs = yaml_single_docs.len()
-    print("{yaml_sdocs}")
+    print(f"{yaml_sdocs}")
     print(yaml_single_docs.get(0).unwrap().get("key").as_str())
 
     # ── Phase 3: stringify_all ────────────────────────────
@@ -229,7 +229,7 @@ void main():
     Yaml yaml_a3 = yaml_parse(yaml_anchor3).unwrap()
     print(yaml_a3.get("dev").get("host").as_str())
     int yaml_a3_port = yaml_a3.get("dev").get("port").as_int()
-    print("{yaml_a3_port}")
+    print(f"{yaml_a3_port}")
     print(yaml_a3.get("dev").get("db").as_str())
 
     # ── Phase 4: Existing keys take precedence over merge ─
@@ -237,8 +237,8 @@ void main():
     Yaml yaml_a4 = yaml_parse(yaml_anchor4).unwrap()
     int yaml_a4_a = yaml_a4.get("obj").get("a").as_int()
     int yaml_a4_b = yaml_a4.get("obj").get("b").as_int()
-    print("{yaml_a4_a}")
-    print("{yaml_a4_b}")
+    print(f"{yaml_a4_a}")
+    print(f"{yaml_a4_b}")
 
     # ── Phase 4: Merge with sequence of mappings ─────────
     str yaml_anchor5 = "b: &b\n  x: 1\ne: &e\n  y: 2\nr:\n  <<: [*b, *e]\n  z: 3\n"
@@ -246,59 +246,59 @@ void main():
     int yaml_a5_x = yaml_a5.get("r").get("x").as_int()
     int yaml_a5_y = yaml_a5.get("r").get("y").as_int()
     int yaml_a5_z = yaml_a5.get("r").get("z").as_int()
-    print("{yaml_a5_x}")
-    print("{yaml_a5_y}")
-    print("{yaml_a5_z}")
+    print(f"{yaml_a5_x}")
+    print(f"{yaml_a5_y}")
+    print(f"{yaml_a5_z}")
 
     # ── Phase 4: Flow context anchor/alias ───────────────
     str yaml_anchor6 = "a: &val 42\nb: *val\n"
     Yaml yaml_a6 = yaml_parse(yaml_anchor6).unwrap()
     int yaml_a6_a = yaml_a6.get("a").as_int()
     int yaml_a6_b = yaml_a6.get("b").as_int()
-    print("{yaml_a6_a}")
-    print("{yaml_a6_b}")
+    print(f"{yaml_a6_a}")
+    print(f"{yaml_a6_b}")
 
     # ── Phase 5: Hex integer ─────────────────────────────────
     str yaml_p5_hex = "h: 0xFF\n"
     Yaml yaml_p5_hv = yaml_parse(yaml_p5_hex).unwrap()
     int yaml_p5_hex_val = yaml_p5_hv.get("h").as_int()
-    print("{yaml_p5_hex_val}")
+    print(f"{yaml_p5_hex_val}")
 
     # ── Phase 5: Octal integer ────────────────────────────────
     str yaml_p5_oct = "o: 0o17\n"
     Yaml yaml_p5_ov = yaml_parse(yaml_p5_oct).unwrap()
     int yaml_p5_oct_val = yaml_p5_ov.get("o").as_int()
-    print("{yaml_p5_oct_val}")
+    print(f"{yaml_p5_oct_val}")
 
     # ── Phase 5: Binary integer ───────────────────────────────
     str yaml_p5_bin = "b: 0b1010\n"
     Yaml yaml_p5_bv = yaml_parse(yaml_p5_bin).unwrap()
     int yaml_p5_bin_val = yaml_p5_bv.get("b").as_int()
-    print("{yaml_p5_bin_val}")
+    print(f"{yaml_p5_bin_val}")
 
     # ── Phase 5: Underscored integer ──────────────────────────
     str yaml_p5_us = "u: 1_000_000\n"
     Yaml yaml_p5_uv = yaml_parse(yaml_p5_us).unwrap()
     int yaml_p5_us_val = yaml_p5_uv.get("u").as_int()
-    print("{yaml_p5_us_val}")
+    print(f"{yaml_p5_us_val}")
 
     # ── Phase 5: Negative hex ─────────────────────────────────
     str yaml_p5_nhex = "nh: -0xFF\n"
     Yaml yaml_p5_nhv = yaml_parse(yaml_p5_nhex).unwrap()
     int yaml_p5_nhex_val = yaml_p5_nhv.get("nh").as_int()
-    print("{yaml_p5_nhex_val}")
+    print(f"{yaml_p5_nhex_val}")
 
     # ── Phase 5: Scientific float ─────────────────────────────
     str yaml_p5_sci = "s: 1.5e2\n"
     Yaml yaml_p5_sv = yaml_parse(yaml_p5_sci).unwrap()
     float yaml_p5_sci_val = yaml_p5_sv.get("s").as_float()
-    print("{yaml_p5_sci_val}")
+    print(f"{yaml_p5_sci_val}")
 
     # ── Phase 5: Positive integer with sign ───────────────────
     str yaml_p5_pos = "p: +42\n"
     Yaml yaml_p5_pv = yaml_parse(yaml_p5_pos).unwrap()
     int yaml_p5_pos_val = yaml_p5_pv.get("p").as_int()
-    print("{yaml_p5_pos_val}")
+    print(f"{yaml_p5_pos_val}")
 
     # ── Phase 5: Special floats (.inf, -.inf, .nan) ───────────
     str yaml_p5_inf = "a: .inf\nb: -.inf\nc: .nan\n"
@@ -306,22 +306,22 @@ void main():
     bool yaml_p5_inf_num = yaml_p5_infv.get("a").is_number()
     bool yaml_p5_ninf_num = yaml_p5_infv.get("b").is_number()
     bool yaml_p5_nan_num = yaml_p5_infv.get("c").is_number()
-    print("{yaml_p5_inf_num}")
-    print("{yaml_p5_ninf_num}")
-    print("{yaml_p5_nan_num}")
+    print(f"{yaml_p5_inf_num}")
+    print(f"{yaml_p5_ninf_num}")
+    print(f"{yaml_p5_nan_num}")
 
     # ── Phase 5: Leading underscore → string (bug fix) ────────
     str yaml_p5_lu = "v: _100\n"
     Yaml yaml_p5_luv = yaml_parse(yaml_p5_lu).unwrap()
     bool yaml_p5_lu_str = yaml_p5_luv.get("v").is_string()
-    print("{yaml_p5_lu_str}")
+    print(f"{yaml_p5_lu_str}")
     print(yaml_p5_luv.get("v").as_str())
 
     # ── Phase 5: Unknown escape → error (bug fix) ─────────────
     str yaml_p5_be = "v: \"hello\\qworld\"\n"
     Result[Yaml, str] yaml_p5_ber = yaml_parse(yaml_p5_be)
     bool yaml_p5_be_err = yaml_p5_ber.is_err()
-    print("{yaml_p5_be_err}")
+    print(f"{yaml_p5_be_err}")
 
     # ── Phase 5: Known escape sequences ───────────────────────
     str yaml_p5_esc = "v: \"line1\\nline2\"\n"
@@ -336,33 +336,33 @@ void main():
     # ── Phase 5: Error — unterminated double-quoted string ────
     str yaml_p5_e1 = "v: \"unclosed\n"
     bool yaml_p5_e1_f = yaml_parse(yaml_p5_e1).is_err()
-    print("{yaml_p5_e1_f}")
+    print(f"{yaml_p5_e1_f}")
 
     # ── Phase 5: Error — unterminated single-quoted string ────
     str yaml_p5_e2 = "v: 'unclosed\n"
     bool yaml_p5_e2_f = yaml_parse(yaml_p5_e2).is_err()
-    print("{yaml_p5_e2_f}")
+    print(f"{yaml_p5_e2_f}")
 
     # ── Phase 5: Error — unterminated flow sequence ───────────
     str yaml_p5_e3 = "[1, 2, 3\n"
     bool yaml_p5_e3_f = yaml_parse(yaml_p5_e3).is_err()
-    print("{yaml_p5_e3_f}")
+    print(f"{yaml_p5_e3_f}")
 
     # ── Phase 5: Error — unterminated flow mapping ────────────
     str yaml_p5_e4 = r"{a: 1, b: 2"
     bool yaml_p5_e4_f = yaml_parse(yaml_p5_e4).is_err()
-    print("{yaml_p5_e4_f}")
+    print(f"{yaml_p5_e4_f}")
 
     # ── Phase 5: Error — undefined alias ──────────────────────
     str yaml_p5_e5 = "v: *nonexistent\n"
     bool yaml_p5_e5_f = yaml_parse(yaml_p5_e5).is_err()
-    print("{yaml_p5_e5_f}")
+    print(f"{yaml_p5_e5_f}")
 
     # ── Phase 5: Empty value → null ───────────────────────────
     str yaml_p5_ev = "key:\nother: ok\n"
     Yaml yaml_p5_evv = yaml_parse(yaml_p5_ev).unwrap()
     bool yaml_p5_ev_null = yaml_p5_evv.get("key").is_null()
-    print("{yaml_p5_ev_null}")
+    print(f"{yaml_p5_ev_null}")
     print(yaml_p5_evv.get("other").as_str())
 
     # ── Phase 5: Quoted keys ──────────────────────────────────
@@ -376,15 +376,15 @@ void main():
     Yaml yaml_p5_emv = yaml_parse(yaml_p5_em).unwrap()
     bool yaml_p5_em_obj = yaml_p5_emv.is_object()
     int yaml_p5_em_len = yaml_p5_emv.len()
-    print("{yaml_p5_em_obj}")
-    print("{yaml_p5_em_len}")
+    print(f"{yaml_p5_em_obj}")
+    print(f"{yaml_p5_em_len}")
 
     str yaml_p5_es = "[]"
     Yaml yaml_p5_esv = yaml_parse(yaml_p5_es).unwrap()
     bool yaml_p5_es_arr = yaml_p5_esv.is_array()
     int yaml_p5_es_len = yaml_p5_esv.len()
-    print("{yaml_p5_es_arr}")
-    print("{yaml_p5_es_len}")
+    print(f"{yaml_p5_es_arr}")
+    print(f"{yaml_p5_es_len}")
 
     # ── Phase 5: Plain scalar # handling ──────────────────────
     str yaml_p5_hash = "v1: value#not-comment\nv2: value # comment\n"
@@ -404,10 +404,10 @@ void main():
     bool yaml_p5_n2 = yaml_p5_nv.get("n2").is_null()
     bool yaml_p5_n3 = yaml_p5_nv.get("n3").is_null()
     bool yaml_p5_n4 = yaml_p5_nv.get("n4").is_null()
-    print("{yaml_p5_n1}")
-    print("{yaml_p5_n2}")
-    print("{yaml_p5_n3}")
-    print("{yaml_p5_n4}")
+    print(f"{yaml_p5_n1}")
+    print(f"{yaml_p5_n2}")
+    print(f"{yaml_p5_n3}")
+    print(f"{yaml_p5_n4}")
 
     # ── Phase 5: Bool variants ────────────────────────────────
     str yaml_p5_bools = "b1: True\nb2: TRUE\nb3: False\nb4: FALSE\n"
@@ -416,10 +416,10 @@ void main():
     bool yaml_p5_b2 = yaml_p5_bov.get("b2").as_bool()
     bool yaml_p5_b3 = yaml_p5_bov.get("b3").as_bool()
     bool yaml_p5_b4 = yaml_p5_bov.get("b4").as_bool()
-    print("{yaml_p5_b1}")
-    print("{yaml_p5_b2}")
-    print("{yaml_p5_b3}")
-    print("{yaml_p5_b4}")
+    print(f"{yaml_p5_b1}")
+    print(f"{yaml_p5_b2}")
+    print(f"{yaml_p5_b3}")
+    print(f"{yaml_p5_b4}")
 
     # ── Phase 5: Nested flow collections ──────────────────────
     str yaml_p5_nfc = r"{a: [1, 2], b: {x: 3}}"
@@ -427,9 +427,9 @@ void main():
     int yaml_p5_nfc_a0 = yaml_p5_nfcv.get("a").at(0).as_int()
     int yaml_p5_nfc_a1 = yaml_p5_nfcv.get("a").at(1).as_int()
     int yaml_p5_nfc_bx = yaml_p5_nfcv.get("b").get("x").as_int()
-    print("{yaml_p5_nfc_a0}")
-    print("{yaml_p5_nfc_a1}")
-    print("{yaml_p5_nfc_bx}")
+    print(f"{yaml_p5_nfc_a0}")
+    print(f"{yaml_p5_nfc_a1}")
+    print(f"{yaml_p5_nfc_bx}")
 
     # ── Phase 5: Deeply nested block structure ────────────────
     str yaml_p5_deep = "l1:\n  l2:\n    l3: deep\n"
@@ -440,7 +440,7 @@ void main():
     str yaml_p5_multi = "a: 1\nb: 2\nc: 3\nd: 4\ne: 5\n"
     Yaml yaml_p5_mv = yaml_parse(yaml_p5_multi).unwrap()
     int yaml_p5_m_len = yaml_p5_mv.len()
-    print("{yaml_p5_m_len}")
+    print(f"{yaml_p5_m_len}")
 
     # ── Phase 5: Stringify special values ─────────────────────
     str yaml_p5_sn = yaml_stringify(Null())

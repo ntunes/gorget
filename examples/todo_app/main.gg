@@ -27,16 +27,16 @@ void main():
     store.show_all()
 
     # Statistics
-    print("total: {store.count()}")
-    print("done: {store.count_done()}")
+    print(f"total: {store.count()}")
+    print(f"done: {store.count_done()}")
 
     # Filter: pending tasks
     Vector[Task] todo = store.pending()
-    print("pending: {todo.len()}")
+    print(f"pending: {todo.len()}")
 
     # Filter: high priority
     Vector[Task] urgent = store.high_priority()
-    print("high priority: {urgent.len()}")
+    print(f"high priority: {urgent.len()}")
 
     # Complete a task and show it
     Task t = store.tasks.get(1).unwrap()

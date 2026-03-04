@@ -8,7 +8,7 @@ State init():
 
 bool tick(State &state):
     state.counter = state.counter + 1
-    print("{state.counter}")
+    print(f"{state.counter}")
     if state.counter >= 3:
         return false
     return true

@@ -16,7 +16,7 @@ void main():
     Vector[int] idx = Vector[int]()
     idx.push(0)
     idx.push(2)
-    print("{c.at(idx)}")
+    print(f"{c.at(idx)}")
 
     # zeros and ones
     Vector[int] sh = Vector[int]()
@@ -27,17 +27,17 @@ void main():
     print(tensor_display_int(o))
 
     # size and ndim
-    print("{c.size()}")
-    print("{c.ndim()}")
+    print(f"{c.size()}")
+    print(f"{c.ndim()}")
 
     # linspace float
     Tensor[float] ls = tensor_linspace(0.0, 1.0, 5)
-    print("{ls.size()}")
-    print("{ls.ndim()}")
+    print(f"{ls.size()}")
+    print(f"{ls.ndim()}")
 
     # set_at
     Vector[int] idx2 = Vector[int]()
     idx2.push(1)
     idx2.push(1)
     c.set_at(idx2, 99)
-    print("{c.at(idx2)}")
+    print(f"{c.at(idx2)}")

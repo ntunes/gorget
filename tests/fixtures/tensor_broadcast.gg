@@ -23,8 +23,8 @@ void main():
     sb.push(4)
     Result[Vector[int], str] bc = tensor_broadcast_shape(sa, sb)
     Vector[int] shape = bc.unwrap()
-    print("{shape.get(0).unwrap()}")
-    print("{shape.get(1).unwrap()}")
+    print(f"{shape.get(0).unwrap()}")
+    print(f"{shape.get(1).unwrap()}")
 
     # bsub and bmul
     Tensor[int] r3 = tensor_bsub[int](b, a)

@@ -19,6 +19,6 @@ void main():
     str val_col = "val"
     DataFrame df2 = df.apply_float(val_col, scale_fn)
     Column c = df2.get_column(val_col)
-    print("{c.value_as_str(0)}")
-    print("{c.value_as_str(1)}")
-    print("{c.value_as_str(2)}")
+    print(f"{c.value_as_str(0)}")
+    print(f"{c.value_as_str(1)}")
+    print(f"{c.value_as_str(2)}")

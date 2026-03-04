@@ -27,7 +27,7 @@ equip TaskStore:
     void show_all(self):
         for i in 0..self.tasks.len():
             Task t = self.tasks.get(i).unwrap()
-            print("{t}")
+            print(f"{t}")
 
     Vector[Task] pending(self):
         return self.tasks.filter((Task t): t.done == false)

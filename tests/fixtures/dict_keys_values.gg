@@ -16,11 +16,11 @@ void main():
 
     # values — insertion order preserved
     Vector[int] vs = ages.values()
-    print("{vs.get(0).unwrap()}")
-    print("{vs.get(1).unwrap()}")
-    print("{vs.get(2).unwrap()}")
+    print(f"{vs.get(0).unwrap()}")
+    print(f"{vs.get(1).unwrap()}")
+    print(f"{vs.get(2).unwrap()}")
 
     # fold
     int total = ages.fold(0, (int acc, str k, int v): acc + v)
-    print("{total}")
-    print("{ks.len()}")
+    print(f"{total}")
+    print(f"{ks.len()}")

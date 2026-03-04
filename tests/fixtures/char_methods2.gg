@@ -4,22 +4,22 @@ void main():
     char c3 = '5'
 
     # to_upper / to_lower
-    print("{c1.to_upper()}")
-    print("{c2.to_lower()}")
+    print(f"{c1.to_upper()}")
+    print(f"{c2.to_lower()}")
 
     # is_upper / is_lower
-    print("{c1.is_upper()}")
-    print("{c1.is_lower()}")
-    print("{c2.is_upper()}")
-    print("{c2.is_lower()}")
+    print(f"{c1.is_upper()}")
+    print(f"{c1.is_lower()}")
+    print(f"{c2.is_upper()}")
+    print(f"{c2.is_lower()}")
 
     # digits are neither upper nor lower
-    print("{c3.is_upper()}")
-    print("{c3.is_lower()}")
+    print(f"{c3.is_upper()}")
+    print(f"{c3.is_lower()}")
 
     # is_hex_digit
-    print("{c1.is_hex_digit()}")
-    print("{c2.is_hex_digit()}")
-    print("{c3.is_hex_digit()}")
+    print(f"{c1.is_hex_digit()}")
+    print(f"{c2.is_hex_digit()}")
+    print(f"{c3.is_hex_digit()}")
     char c4 = 'G'
-    print("{c4.is_hex_digit()}")
+    print(f"{c4.is_hex_digit()}")

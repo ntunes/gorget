@@ -57,19 +57,19 @@ void main():
 
     # Add
     Vec2 c = a + b
-    print("{c.x} {c.y}")
+    print(f"{c.x} {c.y}")
 
     # Sub
     Vec2 d = a - b
-    print("{d.x} {d.y}")
+    print(f"{d.x} {d.y}")
 
     # Neg
     Vec2 e = -a
-    print("{e.x} {e.y}")
+    print(f"{e.x} {e.y}")
 
     # Compound assignment via Add
     a += Vec2(10, 20)
-    print("{a.x} {a.y}")
+    print(f"{a.x} {a.y}")
 
     # Comparable: derived from compare()
     Vec2 small = Vec2(1, 0)
@@ -85,8 +85,8 @@ void main():
 
     # Index read
     Grid g = Grid(10, 20, 30, 40)
-    print("{g[0]} {g[1]} {g[2]} {g[3]}")
+    print(f"{g[0]} {g[1]} {g[2]} {g[3]}")
 
     # IndexMut write
     g[1] = 99
-    print("{g[1]}")
+    print(f"{g[1]}")

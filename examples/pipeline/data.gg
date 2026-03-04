@@ -13,9 +13,9 @@ struct Student:
 equip Student with Displayable:
     str display(self):
         if self.honors:
-            return format("{self.name} ({self.grade}*)")
+            return format(f"{self.name} ({self.grade}*)")
         else:
-            return format("{self.name} ({self.grade})")
+            return format(f"{self.name} ({self.grade})")
 
 Vector[Student] class_roster():
     Vector[Student] r = Vector[Student]()

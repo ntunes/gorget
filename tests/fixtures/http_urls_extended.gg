@@ -16,45 +16,45 @@ void main():
     # URL with query string — query stays in path
     auto (h1, p1, path1, tls1) = http_parse_url("http://host.com/search?q=test&page=2")
     print(h1)
-    print("{p1}")
+    print(f"{p1}")
     print(path1)
 
     # URL with no scheme — treated as https, default port 443
     auto (h2, p2, path2, tls2) = http_parse_url("example.com/path")
     print(h2)
-    print("{p2}")
+    print(f"{p2}")
     print(path2)
 
     # Port parse failure — falls back to http default (80)
     auto (h3, p3, path3, tls3) = http_parse_url("http://host:abc/")
     print(h3)
-    print("{p3}")
+    print(f"{p3}")
     print(path3)
 
     # Empty path — defaults to "/"
     auto (h4, p4, path4, tls4) = http_parse_url("http://host.com")
     print(h4)
-    print("{p4}")
+    print(f"{p4}")
     print(path4)
 
     # Hex: empty string → 0
     int hx1 = http_parse_hex("")
-    print("{hx1}")
+    print(f"{hx1}")
 
     # Mixed case: "aF" → 10*16 + 15 = 175
     int hx2 = http_parse_hex("aF")
-    print("{hx2}")
+    print(f"{hx2}")
 
     # Leading zeros: "001" → 1
     int hx3 = http_parse_hex("001")
-    print("{hx3}")
+    print(f"{hx3}")
 
     # Non-hex mid-string stops early: "1z2" → 1
     int hx4 = http_parse_hex("1z2")
-    print("{hx4}")
+    print(f"{hx4}")
 
     # Single char: "f" → 15
     int hx5 = http_parse_hex("f")
-    print("{hx5}")
+    print(f"{hx5}")
 
     print("done")

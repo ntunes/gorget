@@ -23,15 +23,15 @@ void main():
 
     # First iteration
     for x in nums:
-        print("{x}")
+        print(f"{x}")
 
     # Second iteration over the same collection (proves fresh iterator)
     for y in nums:
-        print("{y}")
+        print(f"{y}")
 
     # Empty iterable with for...else
     NumberRange empty = NumberRange(5, 5)
     for z in empty:
-        print("{z}")
+        print(f"{z}")
     else:
         print("empty")

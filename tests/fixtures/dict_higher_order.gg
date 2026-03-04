@@ -8,12 +8,12 @@ void main():
 
     # fold: sum all values
     int total = ages.fold(0, (int acc, str k, int v): acc + v)
-    print("{total}")
+    print(f"{total}")
 
     # filter: keep entries where value > 28
     Dict[str, int] older = ages.filter((str k, int v): v > 28)
-    print("{older.len()}")
+    print(f"{older.len()}")
 
     # fold on filtered: sum the older ages
     int older_total = older.fold(0, (int acc, str k, int v): acc + v)
-    print("{older_total}")
+    print(f"{older_total}")

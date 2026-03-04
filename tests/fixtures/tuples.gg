@@ -4,32 +4,32 @@
 void main():
     # basic tuple with auto
     auto pair = (10, 20)
-    print("{pair._0}")
-    print("{pair._1}")
+    print(f"{pair._0}")
+    print(f"{pair._1}")
 
     # mixed-type tuple (int + int)
     auto t = (42, 99)
-    print("{t._0}")
-    print("{t._1}")
+    print(f"{t._0}")
+    print(f"{t._1}")
 
     # 3-element tuple
     auto triple = (1, 2, 3)
-    print("{triple._0}")
-    print("{triple._1}")
-    print("{triple._2}")
+    print(f"{triple._0}")
+    print(f"{triple._1}")
+    print(f"{triple._2}")
 
     # function returning tuple
     auto p = get_pair()
-    print("{p._0}")
-    print("{p._1}")
+    print(f"{p._0}")
+    print(f"{p._1}")
 
     # nested tuple
     auto nested = (1, (2, 3))
-    print("{nested._0}")
-    print("{nested._1._0}")
-    print("{nested._1._1}")
+    print(f"{nested._0}")
+    print(f"{nested._1._0}")
+    print(f"{nested._1._1}")
 
     # mixed-type tuple (bool + int)
     auto mixed = (true, 7)
-    print("{mixed._0}")
-    print("{mixed._1}")
+    print(f"{mixed._0}")
+    print(f"{mixed._1}")

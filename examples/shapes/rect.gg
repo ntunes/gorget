@@ -16,4 +16,4 @@ equip Rect with Shape:
     int area(self):
         return self.width * self.height
     str name(self):
-        return format("rect({self.width}x{self.height})")
+        return format(f"rect({self.width}x{self.height})")

@@ -6,7 +6,7 @@ void main():
         Vector[int] v = Vector[int](alloc=pool)
         v.push(1)
         v.push(2)
-        print("len: {v.len()}")
+        print(f"len: {v.len()}")
         int used = pool.bytes_used()
         assert used > 0, "alloc= should use arena"
         print("used > 0: true")

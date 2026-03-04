@@ -9,7 +9,7 @@ void main():
     str pr = pad_right("y", 4, "")
     print(pr)
     int pr_len = pr.len()
-    print("{pr_len}")
+    print(f"{pr_len}")
 
     # ── center: odd total padding (extra goes right) ──
     print(center("a", 4, "-"))

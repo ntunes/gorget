@@ -9,4 +9,4 @@ test "double negative":
     assert double(-5) == -10
 
 void main():
-    print("{double(21)}")
+    print(f"{double(21)}")

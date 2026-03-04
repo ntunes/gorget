@@ -4283,6 +4283,19 @@ fn httpserver_json() {
 }
 
 #[test]
+fn fstring_basic() {
+    run_gg(
+        "fstring_basic.gg",
+        "{name}\nHello, Alice!\n\\n stays\nhello world\nHi, Bob!",
+    );
+}
+
+#[test]
+fn char_str_coerce() {
+    run_gg("char_str_coerce.gg", "A\ntrue\nA");
+}
+
+#[test]
 fn httpserver_response() {
     run_gg(
         "httpserver_response.gg",
@@ -5722,6 +5735,7 @@ fn escape_canonical_rust(s: &str) -> String {
 fn describe_string_canonical_rust(slit: &StringLiteral) -> String {
     let prefix = match slit.kind {
         StringKind::Normal => "str:",
+        StringKind::Format => "fstr:",
         StringKind::Raw => "rstr:",
         StringKind::MultiLine => "mstr:",
         StringKind::Byte => "bstr:",

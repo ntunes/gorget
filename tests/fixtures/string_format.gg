@@ -1,7 +1,7 @@
 void main():
     # Basic string interpolation — format() now returns String
     str name = "world"
-    String greeting = format("hello {name}")
+    String greeting = format(f"hello {name}")
     print(greeting)
 
     # Plain string (no interpolation) — format() still returns String
@@ -10,13 +10,13 @@ void main():
 
     # Numeric formatting
     int x = 42
-    String num_str = format("{x}")
+    String num_str = format(f"{x}")
     print(num_str)
 
     # Multiple interpolations
     int a = 10
     int b = 20
-    String expr_str = format("{a} + {b} = 30")
+    String expr_str = format(f"{a} + {b} = 30")
     print(expr_str)
 
     # Using format result in further string ops
@@ -26,15 +26,15 @@ void main():
 
     # Interpolation in assignment — auto resolves to String
     int v = 99
-    auto assigned = "value is {v}"
+    auto assigned = f"value is {v}"
     print(assigned)
 
     # Interpolation in function argument (coerced to str for concat)
     str who = "gorget"
-    print("hello " + "from {who}")
+    print("hello " + f"from {who}")
 
     # Direct String assignment from interpolated literal
-    String direct = "hi {name}"
+    String direct = f"hi {name}"
     print(direct)
 
     # Plain string literal stays str
@@ -42,5 +42,5 @@ void main():
     print(plain_str)
 
     # str variable from format — coercion String → str
-    str coerced = format("coerced {x}")
+    str coerced = format(f"coerced {x}")
     print(coerced)

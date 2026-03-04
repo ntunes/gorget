@@ -70,7 +70,7 @@ void main():
     store.insert(se3, Health(300, 300))
     for e in store:
         Health s = store.get(e)
-        print("{e.id}:{s.hp}")
+        print(f"{e.id}:{s.hp}")
 
     # entity_at / data_at
     print(store.entity_at(0).id)
@@ -109,4 +109,4 @@ void main():
 
     # each()
     ns.insert(Entity(5, 0), Health(99, 100))
-    ns.each((Entity e, Health h): print("{e.id}:{h.hp}"))
+    ns.each((Entity e, Health h): print(f"{e.id}:{h.hp}"))

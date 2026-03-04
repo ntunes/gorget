@@ -14,10 +14,10 @@ void main():
     DataFrame df1 = df_from_columns(n1, c1)
     DataFrame df1c = df_clip(df1, "v", 0.0, 100.0)
     Column vc = df1c.get_column("v")
-    print("{vc.value_as_str(0)}")
-    print("{vc.value_as_str(1)}")
-    print("{vc.value_as_str(2)}")
-    print("{vc.value_as_str(3)}")
+    print(f"{vc.value_as_str(0)}")
+    print(f"{vc.value_as_str(1)}")
+    print(f"{vc.value_as_str(2)}")
+    print(f"{vc.value_as_str(3)}")
 
     # ── clip float column ──
     Vector[float] fv = Vector[float]()
@@ -31,9 +31,9 @@ void main():
     DataFrame df2 = df_from_columns(n2, c2)
     DataFrame df2c = df_clip(df2, "f", 0.0, 10.0)
     Column fc = df2c.get_column("f")
-    print("{fc.value_as_str(0)}")
-    print("{fc.value_as_str(1)}")
-    print("{fc.value_as_str(2)}")
+    print(f"{fc.value_as_str(0)}")
+    print(f"{fc.value_as_str(1)}")
+    print(f"{fc.value_as_str(2)}")
 
     # ── non-numeric column: unchanged ──
     Vector[str] sv = Vector[str]()
@@ -46,12 +46,12 @@ void main():
     DataFrame df3 = df_from_columns(n3, c3)
     DataFrame df3c = df_clip(df3, "s", 0.0, 10.0)
     Column sc = df3c.get_column("s")
-    print("{sc.value_as_str(0)}")
-    print("{sc.value_as_str(1)}")
+    print(f"{sc.value_as_str(0)}")
+    print(f"{sc.value_as_str(1)}")
 
     # ── missing column: df unchanged ──
     DataFrame df4c = df_clip(df1, "missing", 0.0, 100.0)
-    print("{df4c.nrows()}")
+    print(f"{df4c.nrows()}")
 
     # ── nulls preserved in int column ──
     Vector[int] ndata = Vector[int]()
@@ -69,9 +69,9 @@ void main():
     DataFrame df5 = df_from_columns(n5, c5)
     DataFrame df5c = df_clip(df5, "w", 0.0, 100.0)
     Column wc = df5c.get_column("w")
-    print("{wc.value_as_str(0)}")
-    print("{wc.value_as_str(1)}")
-    print("{wc.value_as_str(2)}")
+    print(f"{wc.value_as_str(0)}")
+    print(f"{wc.value_as_str(1)}")
+    print(f"{wc.value_as_str(2)}")
 
     # ── clip at exact boundary (values equal to lo/hi unchanged) ──
     Vector[int] bv = Vector[int]()
@@ -85,8 +85,8 @@ void main():
     DataFrame df6 = df_from_columns(n6, c6)
     DataFrame df6c = df_clip(df6, "b", 0.0, 100.0)
     Column bc = df6c.get_column("b")
-    print("{bc.value_as_str(0)}")
-    print("{bc.value_as_str(1)}")
-    print("{bc.value_as_str(2)}")
+    print(f"{bc.value_as_str(0)}")
+    print(f"{bc.value_as_str(1)}")
+    print(f"{bc.value_as_str(2)}")
 
     print("done")

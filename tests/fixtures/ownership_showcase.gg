@@ -6,10 +6,10 @@ struct Message:
     int priority
 
 void preview(Message msg):
-    print("{msg.sender} {msg.subject} {msg.priority}")
+    print(f"{msg.sender} {msg.subject} {msg.priority}")
 
 void send(Message !msg):
-    print("sent {msg.subject} by {msg.sender}")
+    print(f"sent {msg.subject} by {msg.sender}")
 
 equip Message:
     void set_priority(&self, int new_priority):
@@ -19,8 +19,8 @@ void main():
     # Copy types flow freely
     int priority = 3
     int backup = priority
-    print("{priority}")
-    print("{backup}")
+    print(f"{priority}")
+    print(f"{backup}")
 
     # Create and borrow
     Message msg = Message("Alice", "Hello", 1)

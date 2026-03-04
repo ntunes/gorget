@@ -13,14 +13,14 @@ Result[int, str] add_ten(str s):
 
 void main():
     Result[int, str] r1 = double_parsed("42")
-    print("{r1.unwrap()}")
+    print(f"{r1.unwrap()}")
 
     Result[int, str] r2 = double_parsed("abc")
-    print("{r2.unwrap_or(-1)}")
+    print(f"{r2.unwrap_or(-1)}")
     if r2.is_err():
         print("is error")
 
     Result[int, str] r3 = add_ten("42")
-    print("{r3.unwrap()}")
+    print(f"{r3.unwrap()}")
 
     print("done")

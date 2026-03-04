@@ -29,11 +29,11 @@ void main():
     str name_col = "name"
     str val_col = "val"
     DataFrame agg = df_group_by(df, name_col).agg(val_col, "sum")
-    print("{agg.nrows()}")
+    print(f"{agg.nrows()}")
 
     # concat
     DataFrame df2 = df_concat(df, df)
-    print("{df2.nrows()}")
+    print(f"{df2.nrows()}")
 
     # inner join
     Vector[str] right_names = Vector[str]()
@@ -55,25 +55,25 @@ void main():
     DataFrame right = df_from_columns(right_cols_names, right_cols)
 
     DataFrame joined = df_inner_join(df, right, name_col)
-    print("{joined.nrows()}")
-    print("{joined.ncols()}")
+    print(f"{joined.nrows()}")
+    print(f"{joined.ncols()}")
 
     # agg "count" (untested op): Alice has 3 rows, Bob has 2
     DataFrame agg_c = df_group_by(df, name_col).agg(val_col, "count")
     Column cc = agg_c.get_column("val_count")
-    print("{cc.value_as_str(0)}")
+    print(f"{cc.value_as_str(0)}")
 
     # agg "mean": Alice mean = (10+30+50)/3 = 30
     DataFrame agg_m = df_group_by(df, name_col).agg(val_col, "mean")
     Column mc = agg_m.get_column("val_mean")
-    print("{mc.value_as_str(0)}")
+    print(f"{mc.value_as_str(0)}")
 
     # agg "min": Alice min = 10
     DataFrame agg_min = df_group_by(df, name_col).agg(val_col, "min")
     Column min_col = agg_min.get_column("val_min")
-    print("{min_col.value_as_str(0)}")
+    print(f"{min_col.value_as_str(0)}")
 
     # agg "max": Alice max = 50
     DataFrame agg_max = df_group_by(df, name_col).agg(val_col, "max")
     Column max_col = agg_max.get_column("val_max")
-    print("{max_col.value_as_str(0)}")
+    print(f"{max_col.value_as_str(0)}")

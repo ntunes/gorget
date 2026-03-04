@@ -22,9 +22,9 @@ void main():
     Result[int, str] err_val = Error("bad")
     match ok_val:
         case Ok(n):
-            print("{n}")
+            print(f"{n}")
         case Error(msg):
-            print("{msg}")
+            print(f"{msg}")
 
     # LogLevel.Err() and Result.Error("msg") coexist without collision
     Logger lg = Logger.new(err)

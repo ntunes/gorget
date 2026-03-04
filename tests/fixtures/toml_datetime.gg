@@ -7,18 +7,18 @@ void main():
         case Ok(root):
             TomlValue ts = root.get("ts")
             bool is_dt = ts.is_datetime()
-            print("{is_dt}")
+            print(f"{is_dt}")
 
             bool is_str_type = ts.is_string()
-            print("{is_str_type}")
+            print(f"{is_str_type}")
 
             str raw = ts.as_str()
             bool has_val = raw.len() > 0
-            print("{has_val}")
+            print(f"{has_val}")
 
             TomlValue name_val = root.get("name")
             bool name_is_dt = name_val.is_datetime()
-            print("{name_is_dt}")
+            print(f"{name_is_dt}")
         case Error(e):
             print("error")
     print("done")

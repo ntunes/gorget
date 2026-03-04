@@ -4,7 +4,7 @@ void main():
     # -- scalar_div_int: arange(0,6)=[0,1,2,3,4,5] / 2 = [0,0,1,1,2,2], sum=6
     Tensor[int] t0 = tensor_arange(0, 6)
     Tensor[int] r0 = scalar_div[int](t0, 2)
-    print("{tensor_sum[int](r0)}")
+    print(f"{tensor_sum[int](r0)}")
 
     # -- tensor_sub_float: linspace(2,6,5)=[2,3,4,5,6] - ones=[1,1,1,1,1] = [1,2,3,4,5], sum=15
     Vector[int] sh5 = Vector[int]()
@@ -12,13 +12,13 @@ void main():
     Tensor[float] a1 = tensor_linspace(2.0, 6.0, 5)
     Tensor[float] b1 = tensor_ones[float](sh5)
     Tensor[float] r1 = tensor_sub[float](a1, b1)
-    print("{tensor_sum[float](r1)}")
+    print(f"{tensor_sum[float](r1)}")
 
     # -- tensor_div_float: linspace(1,4,4)=[1,2,3,4] / linspace(2,8,4)=[2,4,6,8] = [0.5,0.5,0.5,0.5], sum=2.0
     Tensor[float] a2 = tensor_linspace(1.0, 4.0, 4)
     Tensor[float] b2 = tensor_linspace(2.0, 8.0, 4)
     Tensor[float] r2 = tensor_div[float](a2, b2)
-    print("{tensor_sum[float](r2)}")
+    print(f"{tensor_sum[float](r2)}")
 
     # -- tensor_neg_float: [5,5,5] negated = [-5,-5,-5], sum=-15
     Vector[int] sh3 = Vector[int]()
@@ -26,7 +26,7 @@ void main():
     Tensor[float] t3 = tensor_ones[float](sh3)
     Tensor[float] t3s = scalar_mul[float](t3, 5.0)
     Tensor[float] r3 = tensor_neg[float](t3s)
-    print("{tensor_sum[float](r3)}")
+    print(f"{tensor_sum[float](r3)}")
 
     # -- scalar_sub_int: ones([4])*10 - 3 = [7,7,7,7], sum=28
     Vector[int] sh4 = Vector[int]()
@@ -34,19 +34,19 @@ void main():
     Tensor[int] t4 = tensor_ones[int](sh4)
     Tensor[int] t4s = scalar_mul[int](t4, 10)
     Tensor[int] r4 = scalar_sub[int](t4s, 3)
-    print("{tensor_sum[int](r4)}")
+    print(f"{tensor_sum[int](r4)}")
 
     # -- scalar_sub_float: ones([3])*5.0 - 2.0 = [3,3,3], sum=9
     Tensor[float] t5 = tensor_ones[float](sh3)
     Tensor[float] t5s = scalar_mul[float](t5, 5.0)
     Tensor[float] r5 = scalar_sub[float](t5s, 2.0)
-    print("{tensor_sum[float](r5)}")
+    print(f"{tensor_sum[float](r5)}")
 
     # -- tensor_clone_int: mutate original, clone unaffected
     Tensor[int] orig = tensor_ones[int](sh4)
     Tensor[int] cloned = tensor_clone[int](orig)
     orig.flat_set(0, 99)
-    print("{cloned.flat_get(0)}")
+    print(f"{cloned.flat_get(0)}")
 
     # -- permute: [2,3] tensor, axes [1,0] → shape [3,2]
     Vector[int] sh23 = Vector[int]()
@@ -57,12 +57,12 @@ void main():
     paxes.push(1)
     paxes.push(0)
     Tensor[int] tpp = tp.permute(paxes)
-    print("{tpp.shape.get(0).unwrap()}")
-    print("{tpp.shape.get(1).unwrap()}")
+    print(f"{tpp.shape.get(0).unwrap()}")
+    print(f"{tpp.shape.get(1).unwrap()}")
 
     # -- tensor_std_all: linspace(1,5,5)=[1,2,3,4,5], mean=3, std=sqrt(2)≈1.414214
     Tensor[float] ts = tensor_linspace(1.0, 5.0, 5)
-    print("{tensor_std_all(ts)}")
+    print(f"{tensor_std_all(ts)}")
 
     # -- tensor_mean_axis: zeros([2,3]) along axis 0 → shape [3]
     Vector[int] shm = Vector[int]()
@@ -70,7 +70,7 @@ void main():
     shm.push(3)
     Tensor[float] tm = tensor_zeros[float](shm)
     Tensor[float] ma = tensor_mean_axis(tm, 0)
-    print("{ma.shape.get(0).unwrap()}")
+    print(f"{ma.shape.get(0).unwrap()}")
 
     # -- tensor_matmul_float: ones([2,2]) @ ones([2,2]) = [[2,2],[2,2]], size=4
     Vector[int] sh22 = Vector[int]()
@@ -79,25 +79,25 @@ void main():
     Tensor[float] mm1 = tensor_ones[float](sh22)
     Tensor[float] mm2 = tensor_ones[float](sh22)
     Tensor[float] mmr = tensor_matmul[float](mm1, mm2)
-    print("{mmr.size()}")
+    print(f"{mmr.size()}")
 
     # -- tensor_le_int spot check: [3] <= [3] → true at index 0
     Tensor[int] le_a = tensor_arange(3, 4)
     Tensor[int] le_b = tensor_arange(3, 4)
     Tensor[bool] le_r = tensor_le[int](le_a, le_b)
-    print("{le_r.flat_get(0)}")
+    print(f"{le_r.flat_get(0)}")
 
     # -- tensor_ge_int spot check: [5] >= [3] → true
     Tensor[int] ge_a = tensor_arange(5, 6)
     Tensor[int] ge_b = tensor_arange(3, 4)
     Tensor[bool] ge_r = tensor_ge[int](ge_a, ge_b)
-    print("{ge_r.flat_get(0)}")
+    print(f"{ge_r.flat_get(0)}")
 
     # -- tensor_ne_int spot check: [1] != [2] → true
     Tensor[int] ne_a = tensor_arange(1, 2)
     Tensor[int] ne_b = tensor_arange(2, 3)
     Tensor[bool] ne_r = tensor_ne[int](ne_a, ne_b)
-    print("{ne_r.flat_get(0)}")
+    print(f"{ne_r.flat_get(0)}")
 
     # -- tensor_eq_float spot check: [1.0] == [1.0] → true
     Vector[int] sh1 = Vector[int]()
@@ -105,13 +105,13 @@ void main():
     Tensor[float] eq_a = tensor_ones[float](sh1)
     Tensor[float] eq_b = tensor_ones[float](sh1)
     Tensor[bool] eq_r = tensor_eq[float](eq_a, eq_b)
-    print("{eq_r.flat_get(0)}")
+    print(f"{eq_r.flat_get(0)}")
 
     # -- tensor_gt_int: [5] > [3] → true
     Tensor[int] gt_a = tensor_arange(5, 6)
     Tensor[int] gt_b = tensor_arange(3, 4)
     Tensor[bool] gt_r = tensor_gt[int](gt_a, gt_b)
-    print("{gt_r.flat_get(0)}")
+    print(f"{gt_r.flat_get(0)}")
 
     # -- tensor_lt_float + tensor_gt_float: ltf_a=[1.0], ltf_b=[2.0]
     Vector[int] sh1f = Vector[int]()
@@ -119,24 +119,24 @@ void main():
     Tensor[float] ltf_a = tensor_ones[float](sh1f)
     Tensor[float] ltf_b = tensor_linspace(2.0, 2.0, 1)
     Tensor[bool] ltf_r = tensor_lt[float](ltf_a, ltf_b)
-    print("{ltf_r.flat_get(0)}")
+    print(f"{ltf_r.flat_get(0)}")
 
     Tensor[bool] gtf_r = tensor_gt[float](ltf_b, ltf_a)
-    print("{gtf_r.flat_get(0)}")
+    print(f"{gtf_r.flat_get(0)}")
 
     # -- tensor_le_float: [1.0] <= [1.0] → true
     Tensor[float] lef_a = tensor_ones[float](sh1f)
     Tensor[float] lef_b = tensor_ones[float](sh1f)
     Tensor[bool] lef_r = tensor_le[float](lef_a, lef_b)
-    print("{lef_r.flat_get(0)}")
+    print(f"{lef_r.flat_get(0)}")
 
     # -- tensor_ge_float: [2.0] >= [1.0] → true
     Tensor[bool] gef_r = tensor_ge[float](ltf_b, ltf_a)
-    print("{gef_r.flat_get(0)}")
+    print(f"{gef_r.flat_get(0)}")
 
     # -- tensor_ne_float: [1.0] != [2.0] → true
     Tensor[bool] nef_r = tensor_ne[float](ltf_a, ltf_b)
-    print("{nef_r.flat_get(0)}")
+    print(f"{nef_r.flat_get(0)}")
 
     # -- tensor_from_float: [1.5, 2.5] shape [2], sum=4
     Vector[float] ff_data = Vector[float]()
@@ -145,10 +145,10 @@ void main():
     Vector[int] ff_sh = Vector[int]()
     ff_sh.push(2)
     Tensor[float] ff = tensor_from[float](ff_data, ff_sh)
-    print("{tensor_sum[float](ff)}")
+    print(f"{tensor_sum[float](ff)}")
 
     # -- tensor_clone_float: mutate original, clone unaffected
     Tensor[float] forig = tensor_ones[float](ff_sh)
     Tensor[float] fcloned = tensor_clone[float](forig)
     forig.flat_set(0, 9.9)
-    print("{fcloned.flat_get(0)}")
+    print(f"{fcloned.flat_get(0)}")

@@ -20,8 +20,8 @@ void main():
     DataFrame df = df_from_records(headers, rows)
     int nr = df.nrows()
     int nc = df.ncols()
-    print("{nr}")
-    print("{nc}")
+    print(f"{nr}")
+    print(f"{nc}")
 
     # row_as_dict: returns Dict[str, str] for a row
     Dict[str, str] r0d = df.row_as_dict(0)
@@ -47,10 +47,10 @@ void main():
     DataFrame cat_df = df_from_records(cat_headers, cat_rows)
     DataFrame vc = cat_df.value_counts("color")
     int vc_rows = vc.nrows()
-    print("{vc_rows}")
+    print(f"{vc_rows}")
     bool has_color = vc.has_column("color")
     bool has_count = vc.has_column("count")
-    print("{has_color}")
-    print("{has_count}")
+    print(f"{has_color}")
+    print(f"{has_count}")
 
     print("done")

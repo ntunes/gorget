@@ -1,4 +1,4 @@
 import base
 
 void run():
-    print("{value()}")
+    print(f"{value()}")

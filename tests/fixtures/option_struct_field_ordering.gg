@@ -16,7 +16,7 @@ str main():
     Pixel p1 = Pixel(10, 20, Some(red))
     match p1.color:
         case Some(c):
-            print("{c.r}")
+            print(f"{c.r}")
     Pixel p2 = Pixel(0, 0, None)
     match p2.color:
         case Some(c):

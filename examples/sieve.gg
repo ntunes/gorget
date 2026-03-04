@@ -30,6 +30,6 @@ Vector[int] sieve(int limit):
 
 void main():
     Vector[int] primes = sieve(100)
-    print("Primes up to 100 ({primes.len()} found):")
+    print(f"Primes up to 100 ({primes.len()} found):")
     for p in primes:
-        print("  {p}")
+        print(f"  {p}")

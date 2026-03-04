@@ -4,12 +4,12 @@ void main():
     # Heap[int].new() static constructor
     Heap[int] h = Heap[int].new()
     bool initially_empty = h.is_empty()
-    print("{initially_empty}")
+    print(f"{initially_empty}")
 
     # peek on empty heap → None
     Option[int] empty_peek = h.peek()
     bool peek_none = empty_peek.is_none()
-    print("{peek_none}")
+    print(f"{peek_none}")
 
     # push duplicates and pop in sorted order
     Heap[int] dups = Heap[int].new()
@@ -21,32 +21,32 @@ void main():
     int d2 = dups.pop().unwrap()
     int d3 = dups.pop().unwrap()
     int d4 = dups.pop().unwrap()
-    print("{d1}")
-    print("{d2}")
-    print("{d3}")
-    print("{d4}")
+    print(f"{d1}")
+    print(f"{d2}")
+    print(f"{d3}")
+    print(f"{d4}")
 
     # Interleaved push/pop
     Heap[int] mix = Heap[int].new()
     mix.push(10)
     mix.push(20)
     int m1 = mix.pop().unwrap()
-    print("{m1}")
+    print(f"{m1}")
     mix.push(5)
     int m2 = mix.pop().unwrap()
-    print("{m2}")
+    print(f"{m2}")
     int m3 = mix.pop().unwrap()
-    print("{m3}")
+    print(f"{m3}")
 
     # is_empty transitions
     Heap[int] trans = Heap[int].new()
     bool e1 = trans.is_empty()
-    print("{e1}")
+    print(f"{e1}")
     trans.push(42)
     bool e2 = trans.is_empty()
-    print("{e2}")
+    print(f"{e2}")
     trans.pop()
     bool e3 = trans.is_empty()
-    print("{e3}")
+    print(f"{e3}")
 
     print("done")

@@ -8,4 +8,4 @@ void main():
     int total = 0
     for x in nums:
         total = total + x
-    print("{total}")
+    print(f"{total}")

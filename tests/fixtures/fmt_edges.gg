@@ -23,11 +23,11 @@ void main():
 
     # str_truncate: max = 0 → ""
     int t0 = str_truncate("hello", 0, "...").len()
-    print("{t0}")
+    print(f"{t0}")
 
     # repeat: 0 times → "" → len = 0
     int r0 = repeat("x", 0).len()
-    print("{r0}")
+    print(f"{r0}")
 
     # join: single element (no separator applied)
     Vector[str] single = Vector[str]()

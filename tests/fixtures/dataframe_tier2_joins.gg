@@ -39,33 +39,33 @@ void main():
 
     # ── inner join: only matching rows ──
     DataFrame inner = df_inner_join(left, right, "dept")
-    print("{inner.nrows()}")
+    print(f"{inner.nrows()}")
     # Alice(eng)+eng, Charlie(eng)+eng = 2 rows
     Column inner_budget = inner.get_column("budget")
-    print("{inner_budget.dtype_name()}")
+    print(f"{inner_budget.dtype_name()}")
 
     # ── left join: all left rows, nulls for unmatched right ──
     DataFrame lj = df_left_join(left, right, "dept")
-    print("{lj.nrows()}")
+    print(f"{lj.nrows()}")
     # Alice=eng(100), Bob=sales(null), Charlie=eng(100)
     Column lj_budget = lj.get_column("budget")
-    print("{lj_budget.value_as_str(0)}")
-    print("{lj_budget.is_null_at(1)}")
-    print("{lj_budget.value_as_str(2)}")
+    print(f"{lj_budget.value_as_str(0)}")
+    print(f"{lj_budget.is_null_at(1)}")
+    print(f"{lj_budget.value_as_str(2)}")
 
     # ── right join = left join with swapped tables ──
     DataFrame rj = df_right_join(left, right, "dept")
-    print("{rj.nrows()}")
+    print(f"{rj.nrows()}")
 
     # ── outer join: all rows from both sides ──
     DataFrame oj = df_outer_join(left, right, "dept")
     # eng matched (Alice, Charlie), sales unmatched left, hr unmatched right = 4 rows
-    print("{oj.nrows()}")
+    print(f"{oj.nrows()}")
 
     # ── cross join ──
     DataFrame cj = df_cross_join(left, right)
     # 3 * 2 = 6 rows
-    print("{cj.nrows()}")
-    print("{cj.ncols()}")
+    print(f"{cj.nrows()}")
+    print(f"{cj.ncols()}")
 
     print("done")

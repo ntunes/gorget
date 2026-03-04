@@ -8,13 +8,13 @@ void main():
 
     # In-bounds get returns Some
     Option[int] r = v.get(1)
-    print("{r.is_some()}")
-    print("{r.unwrap()}")
+    print(f"{r.is_some()}")
+    print(f"{r.unwrap()}")
 
     # Out-of-bounds get returns None
     Option[int] oob = v.get(5)
-    print("{oob.is_none()}")
+    print(f"{oob.is_none()}")
 
     # Negative index returns None
     Option[int] neg = v.get(-1)
-    print("{neg.is_none()}")
+    print(f"{neg.is_none()}")

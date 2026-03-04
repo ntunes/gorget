@@ -6,7 +6,7 @@ struct Container:
 
 equip Container with Drop:
     void drop(!self):
-        print("drop {self.label} len={self.data.len()}")
+        print(f"drop {self.label} len={self.data.len()}")
 
 struct Wrapper:
     Container inner
@@ -32,11 +32,11 @@ void main():
     # Push from function return (non-Identifier argument)
     items.push(make_container("third", 42))
 
-    print("len {items.len()}")
+    print(f"len {items.len()}")
 
     # .get().unwrap() gives independent copy
     auto got = items.get(0).unwrap()
-    print("got {got.label} len={got.data.len()}")
+    print(f"got {got.label} len={got.data.len()}")
 
     # set() pre-drops old element before overwriting
     Container old_c = Container("old", Vector[int]())
@@ -50,7 +50,7 @@ void main():
     v2.set(0, new_c)
 
     auto after = v2.get(0).unwrap()
-    print("after set: {after.label}")
+    print(f"after set: {after.label}")
 
     # deep-clone drops: Wrapper has no Drop, but Container field does
     Vector[Wrapper] wrappers = Vector[Wrapper]()
@@ -59,7 +59,7 @@ void main():
     wrappers.push(w1)
 
     auto w = wrappers.get(0).unwrap()
-    print("wrapper id={w.id}")
+    print(f"wrapper id={w.id}")
 
     # deep-clone of direct collection type from nested .get()
     # Before fix: deep-cloned Vector[int] got no drops → buffer leaked.
@@ -70,7 +70,7 @@ void main():
     inner.push(99)
     nested.push(inner)
     auto v = nested.get(0).unwrap()
-    print("nested len={v.len()}")
+    print(f"nested len={v.len()}")
 
     # Nested pre-drop: set() on Vector[Vector[Container]] drops inner elements
     Vector[Vector[Container]] nested_v = Vector[Vector[Container]]()

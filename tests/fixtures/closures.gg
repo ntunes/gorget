@@ -2,21 +2,21 @@ void main():
     int x = 10
     GorgetClosure add_x = (int y): x + y
     int result = add_x(5)
-    print("{result}")
+    print(f"{result}")
 
     int result2 = add_x(20)
-    print("{result2}")
+    print(f"{result2}")
 
     auto sum_with = (int a, int b): a + b + x
     int result3 = sum_with(3, 7)
-    print("{result3}")
+    print(f"{result3}")
 
     auto get_x = (): x
     int result4 = get_x()
-    print("{result4}")
+    print(f"{result4}")
 
     int result5 = add_x(1) + 100
-    print("{result5}")
+    print(f"{result5}")
 
     add_x(0)
 
@@ -25,11 +25,11 @@ void main():
     # Untyped closure parameters (type inference)
     auto add = (a, b): a + b
     int inferred_sum = add(3, 4)
-    print("{inferred_sum}")
+    print(f"{inferred_sum}")
 
     auto negate = (n): 0 - n
     int neg_result = negate(42)
-    print("{neg_result}")
+    print(f"{neg_result}")
 
     # Mutable capture: mutation propagates to outer scope
     int count = 0
@@ -38,7 +38,7 @@ void main():
     increment()
     increment()
     increment()
-    print("{count}")
+    print(f"{count}")
 
     # Compound assignment mutable capture
     int total = 0
@@ -47,7 +47,7 @@ void main():
     accumulate(10)
     accumulate(20)
     accumulate(30)
-    print("{total}")
+    print(f"{total}")
 
     # Mixed captures: some mutable, some immutable
     int base = 100
@@ -56,6 +56,6 @@ void main():
         accum += base + n
     add_to_accum(1)
     add_to_accum(2)
-    print("{accum}")
+    print(f"{accum}")
 
     print("closures")

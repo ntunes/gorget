@@ -10,14 +10,14 @@ void main():
     # Basic if-is with binding
     Outcome r = Success(42)
     if r is Success(value):
-        print("{value}")
+        print(f"{value}")
 
     # elif-is with binding
     Outcome r2 = Failure("oops")
     if r2 is Success(v):
         print("should not print")
     elif r2 is Failure(msg):
-        print("{msg}")
+        print(f"{msg}")
 
     # is not — no binding, just boolean
     if r is not Failure:
@@ -27,7 +27,7 @@ void main():
     Outcome r3 = Success(99)
     if r3 is Success(x):
         int y = x + 1
-        print("{y}")
+        print(f"{y}")
     else:
         print("should not print")
 
@@ -35,7 +35,7 @@ void main():
     int count = 0
     Maybe opt = Just(10)
     while opt is Just(n):
-        print("{n}")
+        print(f"{n}")
         count = count + 1
         if count >= 3:
             opt = Nothing()
@@ -47,7 +47,7 @@ void main():
     # Compound is + guard
     Option[int] cval = Some(42)
     if cval is Some(cv) and cv > 10:
-        print("compound_guard:{cv}")
+        print(f"compound_guard:{cv}")
 
     if cval is Some(cv2) and cv2 > 100:
         print("should_not_print")
@@ -64,14 +64,14 @@ void main():
     Option[int] mx = Some(5)
     Option[int] my = Some(10)
     if mx is Some(mvx) and my is Some(mvy) and mvx + mvy == 15:
-        print("multi_is:{mvx}:{mvy}")
+        print(f"multi_is:{mvx}:{mvy}")
 
     # elif-is + else (the bug: generated invalid C before the fix)
     Outcome r4 = Failure("bad")
     if r4 is Success(v4):
         print("should_not_print")
     elif r4 is Failure(msg4):
-        print("elif_else:{msg4}")
+        print(f"elif_else:{msg4}")
     else:
         print("should_not_print")
 
@@ -80,7 +80,7 @@ void main():
     if r5 is Success(v5):
         print("should_not_print")
     elif r5 is Failure(m5):
-        print("multi_elif:{m5}")
+        print(f"multi_elif:{m5}")
     elif r5 is Success(v5b):
         print("should_not_print")
     else:
@@ -94,7 +94,7 @@ void main():
     elif r6 is Success(v6):
         print("should_not_print")
     elif r6 is Failure(m6):
-        print("mixed_chain:{m6}")
+        print(f"mixed_chain:{m6}")
     else:
         print("should_not_print")
 

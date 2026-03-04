@@ -5,10 +5,10 @@ void main():
     Vector[int] b = [4, 5]
 
     auto c = a + b
-    print("{c.len()}")
+    print(f"{c.len()}")
     for x in c:
-        print("{x}")
+        print(f"{x}")
 
     # Originals unchanged
-    print("{a.len()}")
-    print("{b.len()}")
+    print(f"{a.len()}")
+    print(f"{b.len()}")

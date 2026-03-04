@@ -41,7 +41,7 @@ void main():
     # Test generic function calling method on generic struct (single type param)
     Box2[int] b1 = Box2[int](42)
     int v1 = unwrap_box[int](b1)
-    print("{v1}")
+    print(f"{v1}")
 
     Box2[str] b2 = Box2[str]("hello")
     str v2 = unwrap_box[str](b2)
@@ -49,7 +49,7 @@ void main():
 
     # Test generic function with method chaining
     int v3 = unwrap_rewrapped[int](b1)
-    print("{v3}")
+    print(f"{v3}")
 
     # Test same_value with ints
     Box2[int] b3 = Box2[int](42)
@@ -65,4 +65,4 @@ void main():
     # Test multi-param generic struct in generic function
     Pair2[int, str] p = Pair2[int, str](10, "world")
     int first = extract_first[int, str](p)
-    print("{first}")
+    print(f"{first}")

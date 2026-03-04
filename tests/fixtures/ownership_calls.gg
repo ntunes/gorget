@@ -1,11 +1,11 @@
 void consume(String !s):
-    print("{s}")
+    print(f"{s}")
 
 void borrow_it(String &s):
-    print("{s}")
+    print(f"{s}")
 
 void look(int x):
-    print("{x}")
+    print(f"{x}")
 
 void main():
     # Bare borrow of copy type

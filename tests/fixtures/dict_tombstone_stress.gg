@@ -24,8 +24,8 @@ void main():
         i = i + 1
 
     # 21 live entries total (key 11 + keys 100..119)
-    print("{d.len()}")
+    print(f"{d.len()}")
 
     # Verify key 11 survived and a new key works
-    print("{d.get(11).unwrap()}")
-    print("{d.get(105).unwrap()}")
+    print(f"{d.get(11).unwrap()}")
+    print(f"{d.get(105).unwrap()}")

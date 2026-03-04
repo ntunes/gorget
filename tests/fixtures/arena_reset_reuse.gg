@@ -10,9 +10,9 @@ void main():
             while i < 10:
                 v.push(i * (cycle + 1))
                 i = i + 1
-            print("cycle {cycle} len: {v.len()}")
-            print("cycle {cycle} first: {v.get(0).unwrap()}")
-            print("cycle {cycle} last: {v.get(9).unwrap()}")
+            print(f"cycle {cycle} len: {v.len()}")
+            print(f"cycle {cycle} first: {v.get(0).unwrap()}")
+            print(f"cycle {cycle} last: {v.get(9).unwrap()}")
             pool.reset()
             cycle = cycle + 1
     print("done")

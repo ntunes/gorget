@@ -12,38 +12,38 @@ int apply_once(ConsumeCallable[int(int)] f, int x):
 void main():
     # Basic Callable — non-capturing closure
     int r1 = apply((n): n * 2, 5)
-    print("{r1}")
+    print(f"{r1}")
 
     # Callable — capturing closure (immutable capture)
     int factor = 3
     int r2 = apply((n): n * factor, 7)
-    print("{r2}")
+    print(f"{r2}")
 
     # Callable-typed local variable
     Callable[int(int)] triple = (n): n * 3
     int r3 = triple(4)
-    print("{r3}")
+    print(f"{r3}")
 
     # MutCallable — accepts Callable closures (hierarchy coercion)
     int r4 = apply_mut((n): n + 10, 5)
-    print("{r4}")
+    print(f"{r4}")
 
     # MutCallable — capturing closure
     int offset = 100
     int r5 = apply_mut((n): n + offset, 7)
-    print("{r5}")
+    print(f"{r5}")
 
     # ConsumeCallable — accepts any closure (top of hierarchy)
     int r6 = apply_once((n): n * n, 6)
-    print("{r6}")
+    print(f"{r6}")
 
     # Named function passed to Callable param
     int r7 = apply(double, 8)
-    print("{r7}")
+    print(f"{r7}")
 
     # Named function passed to MutCallable (coercion)
     int r8 = apply_mut(double, 9)
-    print("{r8}")
+    print(f"{r8}")
 
     print("done")
 

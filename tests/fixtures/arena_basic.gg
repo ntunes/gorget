@@ -11,7 +11,7 @@ void main():
         int used = pool.bytes_used()
         assert used > 0, "arena should have bytes used"
         print("bytes used > 0: true")
-        print("len: {v.len()}")
+        print(f"len: {v.len()}")
 
     # Arena with reset
     with Arena(1024) as pool:
@@ -20,7 +20,7 @@ void main():
         pool.reset()
         Vector[int] b = Vector[int]()
         b.push(99)
-        print("after reset: {b.get(0).unwrap()}")
+        print(f"after reset: {b.get(0).unwrap()}")
 
     # Nested arenas
     with Arena(4096) as outer:
@@ -29,7 +29,7 @@ void main():
         with Arena(1024) as inner:
             Vector[int] v2 = Vector[int]()
             v2.push(20)
-            print("inner: {v2.get(0).unwrap()}")
-        print("outer: {v1.get(0).unwrap()}")
+            print(f"inner: {v2.get(0).unwrap()}")
+        print(f"outer: {v1.get(0).unwrap()}")
 
     print("done")

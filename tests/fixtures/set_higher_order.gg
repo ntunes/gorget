@@ -9,12 +9,12 @@ void main():
 
     # fold: sum all elements
     int total = s.fold(0, (int acc, int x): acc + x)
-    print("{total}")
+    print(f"{total}")
 
     # filter: keep elements > 15
     Set[int] big = s.filter((int x): x > 15)
-    print("{big.len()}")
+    print(f"{big.len()}")
 
     # fold on filtered: sum the big elements
     int big_total = big.fold(0, (int acc, int x): acc + x)
-    print("{big_total}")
+    print(f"{big_total}")

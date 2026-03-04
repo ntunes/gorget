@@ -8,5 +8,5 @@ void main():
     int total = 0
     for x in v:
         total = total + x
-    print("len: {v.len()}")
-    print("sum: {total}")
+    print(f"len: {v.len()}")
+    print(f"sum: {total}")

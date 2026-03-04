@@ -6,9 +6,9 @@ void main():
     int8 d = 127
     uint16 e = 65535
     int16 f = -32768
-    print("{a}")
-    print("{b}")
-    print("{c}")
-    print("{d}")
-    print("{e}")
-    print("{f}")
+    print(f"{a}")
+    print(f"{b}")
+    print(f"{c}")
+    print(f"{d}")
+    print(f"{e}")
+    print(f"{f}")

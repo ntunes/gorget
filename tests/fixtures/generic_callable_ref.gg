@@ -33,7 +33,7 @@ void main():
     match r1:
         case Some(v):
             int val = v
-            print("{val}")
+            print(f"{val}")
         else:
             print("none")
 
@@ -47,5 +47,5 @@ void main():
             print("restored")
 
     int final_pos = s.get_pos()
-    print("{final_pos}")
+    print(f"{final_pos}")
     print("done")

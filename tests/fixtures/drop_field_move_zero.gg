@@ -31,7 +31,7 @@ void main():
     items.push(h1.data)
 
     auto inner = items.get(0).unwrap()
-    print("pushed {inner.len()}")
+    print(f"pushed {inner.len()}")
 
     # Test 2: assign field to new variable (enables ownership transfer)
     Holder h2 = Holder("h2", Vector[int]())
@@ -39,7 +39,7 @@ void main():
     h2.data.push(40)
     h2.data.push(50)
     Vector[int] extracted = h2.data
-    print("extracted {extracted.len()}")
+    print(f"extracted {extracted.len()}")
 
     # Test 3: self.field
     DataHolder dh = DataHolder("test", Vector[int]())
@@ -47,12 +47,12 @@ void main():
     dh.payload.push(200)
     dh.payload.push(300)
     Vector[int] taken = dh.take_payload()
-    print("taken {taken.len()}")
+    print(f"taken {taken.len()}")
 
     # Test 4: chained access
     Outer o = Outer(Inner(Vector[int]()))
     o.nested.items.push(42)
     Vector[int] chained = o.nested.items
-    print("chained {chained.len()}")
+    print(f"chained {chained.len()}")
 
     print("done")

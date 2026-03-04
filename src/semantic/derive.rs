@@ -248,7 +248,7 @@ fn generate_struct_displayable(type_name: &str, gs: &str, fields: &[(&str, &str)
             .map(|(name, _)| format!("{name}={{self.{name}}}"))
             .collect();
         format!(
-            "        return format(\"{type_name}({})\")",
+            "        return f\"{type_name}({})\"",
             parts.join(", ")
         )
     };
@@ -797,7 +797,7 @@ fn generate_enum_displayable(type_name: &str, gs: &str, e: &EnumDef) -> String {
             format!("return \"{vname}()\"")
         } else {
             let parts: Vec<String> = bindings.iter().map(|b| format!("{{{b}}}")).collect();
-            format!("return format(\"{vname}({})\")", parts.join(", "))
+            format!("return f\"{vname}({})\"", parts.join(", "))
         };
 
         arms.push_str(&format!(
@@ -1018,7 +1018,7 @@ mod tests {
     #[test]
     fn test_struct_displayable() {
         let src = generate_struct_displayable("Point", "", &[("x", "float"), ("y", "float")]);
-        assert!(src.contains("Point(x={self.x}, y={self.y})"));
+        assert!(src.contains("f\"Point(x={self.x}, y={self.y})\""));
     }
 
     #[test]

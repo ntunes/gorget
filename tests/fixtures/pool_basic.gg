@@ -9,7 +9,7 @@ void main():
         v.push(3)
         assert pool.used_blocks() > 0, "pool should have used blocks"
         print("used > 0: true")
-        print("block_size: {pool.block_size()}")
+        print(f"block_size: {pool.block_size()}")
         assert pool.total_blocks() >= 256, "total should be >= initial"
         print("total >= 256: true")
     print("done")

@@ -44,17 +44,17 @@ void main():
     # ── Test 3: filter_by age >= 30 ──────────────────────────
     DataFrame filtered_ge = df.filter_by("age", ">=", "30")
     int ge_count = filtered_ge.nrows()
-    print("{ge_count}")
+    print(f"{ge_count}")
 
     # ── Test 4: filter_by age <= 30 ──────────────────────────
     DataFrame filtered_le = df.filter_by("age", "<=", "30")
     int le_count = filtered_le.nrows()
-    print("{le_count}")
+    print(f"{le_count}")
 
     # ── Test 5: filter_by name == "Alice" ────────────────────
     DataFrame filtered_eq = df.filter_by("name", "==", "Alice")
     int eq_count = filtered_eq.nrows()
-    print("{eq_count}")
+    print(f"{eq_count}")
     Column eq_name_col = filtered_eq.get_column("name")
     print(eq_name_col.value_as_str(0))
 
@@ -62,20 +62,20 @@ void main():
     DataFrame sorted2 = df.sort_by("age", true)
     DataFrame h2 = sorted2.head(2)
     int h2n = h2.nrows()
-    print("{h2n}")
+    print(f"{h2n}")
     Column h2_name = h2.get_column("name")
     print(h2_name.value_as_str(0))
 
     DataFrame t1 = sorted2.tail(1)
     int t1n = t1.nrows()
-    print("{t1n}")
+    print(f"{t1n}")
     Column t1_name = t1.get_column("name")
     print(t1_name.value_as_str(0))
 
     # ── Test 7: df_slice ─────────────────────────────────────
     DataFrame sliced = sorted2.df_slice(1, 3)
     int sn = sliced.nrows()
-    print("{sn}")
+    print(f"{sn}")
 
     # ── Test 8: df_concat ────────────────────────────────────
     Vector[str] names_a = Vector[str]()
@@ -100,7 +100,7 @@ void main():
 
     DataFrame dfc = df_concat(dfa, dfb)
     int cnc = dfc.nrows()
-    print("{cnc}")
+    print(f"{cnc}")
 
     # ── Test 9: sort_by float column ascending ───────────────
     Vector[str] float_vals = Vector[str]()

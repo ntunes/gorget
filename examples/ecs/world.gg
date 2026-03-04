@@ -83,9 +83,9 @@ equip World:
             self.health.set(target, Health(new_hp, target_health.max_hp))
             str target_name = self.names.get(target)
             if new_hp <= 0:
-                print("{attacker_name} attacks {target_name} for {atk.damage} damage (defeated)")
+                print(f"{attacker_name} attacks {target_name} for {atk.damage} damage (defeated)")
             else:
-                print("{attacker_name} attacks {target_name} for {atk.damage} damage ({new_hp} HP left)")
+                print(f"{attacker_name} attacks {target_name} for {atk.damage} damage ({new_hp} HP left)")
 
     void remove_dead(&self):
         Vector[Entity] dead = Vector[Entity]()
@@ -101,4 +101,4 @@ equip World:
         for e in self.health:
             str name = self.names.get(e)
             Health h = self.health.get(e)
-            print("{name}: {h.hp}/{h.max_hp} HP")
+            print(f"{name}: {h.hp}/{h.max_hp} HP")

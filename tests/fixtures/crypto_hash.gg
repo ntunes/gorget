@@ -18,7 +18,7 @@ void main():
     Vector[uint8] msg = bytes_from_str("hello")
     Result[Vector[uint8], str] hmac_res = crypto_hmac("sha256", key, msg)
     Vector[uint8] mac = hmac_res.unwrap()
-    print("{mac.len()}")
+    print(f"{mac.len()}")
 
     # AES-128-CTR encrypt/decrypt roundtrip
     Vector[uint8] aes_key = bytes_from_hex("000102030405060708090a0b0c0d0e0f")
@@ -43,7 +43,7 @@ void main():
     # crypto_random_bytes produces correct length
     Result[Vector[uint8], str] rand_res = crypto_random_bytes(32)
     Vector[uint8] r = rand_res.unwrap()
-    print("{r.len()}")
+    print(f"{r.len()}")
 
     # Error path: invalid AES key size
     Vector[uint8] bad_key = bytes_from_str("short")

@@ -11,16 +11,16 @@ void main():
     nums.push(10)
     nums.push(20)
     nums.push(30)
-    print("{len(nums)}")
+    print(f"{len(nums)}")
 
     str greeting = "hello"
-    print("{len(greeting)}")
+    print(f"{len(greeting)}")
 
     # len() on user type equipped with Measurable
     Buffer buf = Buffer(42)
-    print("{len(buf)}")
+    print(f"{len(buf)}")
 
     # .len() method still works directly
-    print("{nums.len()}")
-    print("{greeting.len()}")
-    print("{buf.len()}")
+    print(f"{nums.len()}")
+    print(f"{greeting.len()}")
+    print(f"{buf.len()}")

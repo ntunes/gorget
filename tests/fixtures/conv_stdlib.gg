@@ -4,7 +4,7 @@ void main():
     # parse_int — Result[int, str]
     Result[int, str] pi_res = parse_int("42")
     if pi_res is Ok(pi_val):
-        print("{pi_val}")
+        print(f"{pi_val}")
 
     Result[int, str] pi_bad = parse_int("hello")
     if pi_bad is Error(pi_err):
@@ -13,11 +13,11 @@ void main():
     # parse_float — Result[float, str]
     Result[float, str] pf_res = parse_float("3.14")
     if pf_res is Ok(pi):
-        print("{pi}")
+        print(f"{pi}")
 
     Result[float, str] neg_res = parse_float("-0.5")
     if neg_res is Ok(neg):
-        print("{neg}")
+        print(f"{neg}")
 
     Result[float, str] pf_bad = parse_float("xyz")
     if pf_bad is Error(pf_err):
@@ -46,7 +46,7 @@ void main():
     # Parseable trait — int.parse()
     Option[int] n = int.parse("42")
     if n is Some(val):
-        print("{val}")
+        print(f"{val}")
 
     Option[int] bad = int.parse("hello")
     if bad is None:
@@ -55,7 +55,7 @@ void main():
     # Parseable trait — float.parse()
     Option[float] f = float.parse("3.14")
     if f is Some(fval):
-        print("{fval}")
+        print(f"{fval}")
 
     Option[float] fbad = float.parse("xyz")
     if fbad is None:
@@ -63,7 +63,7 @@ void main():
 
     # int.default() now works (parser fix)
     int d = int.default()
-    print("{d}")
+    print(f"{d}")
 
     # ── Edge cases ──────────────────────────────────────────
     Option[int] empty = int.parse("")
@@ -77,11 +77,11 @@ void main():
     # ── Integer type variants ───────────────────────────────
     Option[int8] i8v = int8.parse("127")
     if i8v is Some(v8):
-        print("{v8}")
+        print(f"{v8}")
 
     Option[uint16] u16v = uint16.parse("65535")
     if u16v is Some(v16):
-        print("{v16}")
+        print(f"{v16}")
 
     # ── Float edge cases ────────────────────────────────────
     Option[float] fneg0 = float.parse("-0.0")
@@ -90,23 +90,23 @@ void main():
 
     Option[float] fsci = float.parse("1.5e2")
     if fsci is Some(fsc):
-        print("{fsc}")
+        print(f"{fsc}")
 
     # ── Auto inference ──────────────────────────────────────
     auto auto_n = int.parse("99")
     if auto_n is Some(av):
-        print("{av}")
+        print(f"{av}")
 
     # ── Method chaining ─────────────────────────────────────
     int chained = int.parse("77").unwrap_or(0)
-    print("{chained}")
+    print(f"{chained}")
 
     # ── More .default() coverage ────────────────────────────
     float fd = float.default()
-    print("{fd}")
+    print(f"{fd}")
 
     bool bd = bool.default()
-    print("{bd}")
+    print(f"{bd}")
 
     str sd = str.default()
-    print("str_default:{sd}:")
+    print(f"str_default:{sd}:")

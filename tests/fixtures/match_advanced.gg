@@ -8,9 +8,9 @@ void main():
     Shape s1 = Circle(5)
     match s1:
         case Circle(r):
-            print("{r}")
+            print(f"{r}")
         case Rect(w, h):
-            print("{w} {h}")
+            print(f"{w} {h}")
         case Point:
             print("point")
 
@@ -18,9 +18,9 @@ void main():
     Shape s2 = Rect(3, 4)
     match s2:
         case Circle(r):
-            print("{r}")
+            print(f"{r}")
         case Rect(w, h):
-            print("{w} {h}")
+            print(f"{w} {h}")
         case Point:
             print("point")
 
@@ -40,8 +40,8 @@ void main():
     Shape s3 = Point()
     match s3:
         case Circle(r):
-            print("{r}")
+            print(f"{r}")
         case Rect(w, h):
-            print("{w} {h}")
+            print(f"{w} {h}")
         case Point:
             print("point")

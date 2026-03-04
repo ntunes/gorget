@@ -223,7 +223,7 @@ str describe_string(StringLiteral slit):
             case SegLiteral(text):
                 result = result + text
             case SegInterpolation(expr):
-                result = result + "{{" + expr + "}}"
+                result = result + "{" + expr + "}"
         i = i + 1
     return result
 
@@ -260,7 +260,7 @@ void main():
     print(tokens_to_str(toks4))
 
     # Test 5: String with interpolation
-    str src5 = "print(\"hello \{name\}\")\n"
+    str src5 = f"print(\"hello \{name\}\")\n"
     auto toks5 = lex_tokenize(src5)
     print(tokens_to_str(toks5))
 

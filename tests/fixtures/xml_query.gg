@@ -17,12 +17,12 @@ void main():
             XmlNode missing = root.find("nope")
             str missing_tag = missing.tag()
             int mlen = missing_tag.len()
-            print("{mlen}")
+            print(f"{mlen}")
 
             # find_all: both <item> elements
             Vector[XmlNode] items = root.find_all("item")
             int n = items.len()
-            print("{n}")
+            print(f"{n}")
             XmlNode it0 = items.get(0).unwrap()
             XmlNode it1 = items.get(1).unwrap()
             print(it0.attr("id"))
@@ -31,7 +31,7 @@ void main():
             # find_all: no match returns empty vector
             Vector[XmlNode] empty = root.find_all("nope")
             int en = empty.len()
-            print("{en}")
+            print(f"{en}")
 
             # xml_stringify
             String s = xml_stringify(first)

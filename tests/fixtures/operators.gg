@@ -1,57 +1,57 @@
 void main():
     # integer division
     int d = 10 / 3
-    print("{d}")
+    print(f"{d}")
 
     # modulo
     int m = 10 % 3
-    print("{m}")
+    print(f"{m}")
 
     # unary negation
     int neg = -5
-    print("{neg}")
+    print(f"{neg}")
 
     int neg2 = -(3 + 2)
-    print("{neg2}")
+    print(f"{neg2}")
 
     # logical not
     bool a = not true
-    print("{a}")
+    print(f"{a}")
 
     bool b = not (5 > 10)
-    print("{b}")
+    print(f"{b}")
 
     # combined precedence
     int x = 7
     int y = 3
     int result = -x + y
-    print("{result}")
+    print(f"{result}")
 
     # -x * y should be (-x) * y, not -(x * y)
     int p1 = -x * y
-    print("{p1}")
+    print(f"{p1}")
 
     # -x - y should be (-x) - y
     int p2 = -x - y
-    print("{p2}")
+    print(f"{p2}")
 
     # double negation
     int p3 = - -x
-    print("{p3}")
+    print(f"{p3}")
 
     # negation with parenthesized addition (unchanged)
     int p4 = -(x + y)
-    print("{p4}")
+    print(f"{p4}")
 
     # not binds tighter than and: not false and false = (not false) and false = false
     bool c1 = not false and false
-    print("{c1}")
+    print(f"{c1}")
 
     # not binds tighter than or: not true or true = (not true) or true = true
     bool c2 = not true or true
-    print("{c2}")
+    print(f"{c2}")
 
     int q = 17 / 5
     int r = 17 % 5
-    print("{q}")
-    print("{r}")
+    print(f"{q}")
+    print(f"{r}")

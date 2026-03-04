@@ -4,7 +4,7 @@ void main():
     Vector[int] v = Vector[int]()
     v.push(10)
     v.push(20)
-    print("{v.len()}")
-    print("{v.get(0).unwrap()}")
+    print(f"{v.len()}")
+    print(f"{v.get(0).unwrap()}")
     str s = "hello"
-    print("{s.len()}")
+    print(f"{s.len()}")

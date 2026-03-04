@@ -29,14 +29,14 @@ void main():
             print(e3)
 
     # ── Inline table ──
-    str inl = "point = {{x = 1, y = 2}}"
+    str inl = f"point = {{x = 1, y = 2}}"
     auto r4 = toml_parse(inl)
     match r4:
         case Ok(doc4):
             int px = doc4.get("point").get("x").as_int()
             int py = doc4.get("point").get("y").as_int()
-            print("{px}")
-            print("{py}")
+            print(f"{px}")
+            print(f"{py}")
         case Error(e4):
             print(e4)
 
@@ -46,7 +46,7 @@ void main():
     match r5:
         case Ok(doc5):
             int nv = doc5.get("val").as_int()
-            print("{nv}")
+            print(f"{nv}")
         case Error(e5):
             print(e5)
 
@@ -56,7 +56,7 @@ void main():
     match r6:
         case Ok(doc6):
             float fv = doc6.get("temp").as_float()
-            print("{fv}")
+            print(f"{fv}")
         case Error(e6):
             print(e6)
 
@@ -70,7 +70,7 @@ void main():
             print(pinf > 999999.0)
             print(ninf < -999999.0)
             bool is_flt = doc7.get("nan_val").is_float()
-            print("{is_flt}")
+            print(f"{is_flt}")
         case Error(e7):
             print(e7)
 
@@ -80,7 +80,7 @@ void main():
     match r8:
         case Ok(doc8):
             int alen = doc8.get("list").len()
-            print("{alen}")
+            print(f"{alen}")
         case Error(e8):
             print(e8)
 
@@ -101,10 +101,10 @@ void main():
         case Ok(doc10):
             str tab_s = doc10.get("tab").as_str()
             int tab_len = tab_s.byte_len()
-            print("{tab_len}")
+            print(f"{tab_len}")
             str nl_s = doc10.get("nl").as_str()
             int nl_len = nl_s.byte_len()
-            print("{nl_len}")
+            print(f"{nl_len}")
         case Error(e10):
             print(e10)
 

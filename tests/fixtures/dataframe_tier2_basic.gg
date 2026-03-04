@@ -34,17 +34,17 @@ void main():
 
     # ── rename_column ──
     DataFrame renamed = df.rename_column("name", "person")
-    print("{renamed.has_column("person")}")
-    print("{renamed.has_column("name")}")
-    print("{renamed.ncols()}")
+    print(f"{renamed.has_column("person")}")
+    print(f"{renamed.has_column("name")}")
+    print(f"{renamed.ncols()}")
 
     # ── dtypes ──
     DataFrame dt = df.dtypes()
-    print("{dt.nrows()}")
+    print(f"{dt.nrows()}")
     Column dtype_col = dt.get_column("dtype")
-    print("{dtype_col.value_as_str(0)}")
-    print("{dtype_col.value_as_str(1)}")
-    print("{dtype_col.value_as_str(2)}")
+    print(f"{dtype_col.value_as_str(0)}")
+    print(f"{dtype_col.value_as_str(1)}")
+    print(f"{dtype_col.value_as_str(2)}")
 
     # ── isna / notna ──
     Vector[int] null_ages = Vector[int]()
@@ -64,18 +64,18 @@ void main():
 
     DataFrame isna_df = na_df.isna("age")
     Column isna_col = isna_df.get_column("age_isna")
-    print("{isna_col.value_as_str(0)}")
-    print("{isna_col.value_as_str(1)}")
-    print("{isna_col.value_as_str(2)}")
+    print(f"{isna_col.value_as_str(0)}")
+    print(f"{isna_col.value_as_str(1)}")
+    print(f"{isna_col.value_as_str(2)}")
 
     DataFrame notna_df = na_df.notna("age")
     Column notna_col = notna_df.get_column("age_notna")
-    print("{notna_col.value_as_str(1)}")
+    print(f"{notna_col.value_as_str(1)}")
 
     # ── unique / nunique ──
-    print("{df.df_nunique("name")}")
+    print(f"{df.df_nunique("name")}")
     DataFrame uniq = df.df_unique("name")
-    print("{uniq.nrows()}")
+    print(f"{uniq.nrows()}")
 
     # ── col_bools_null ──
     Vector[bool] bdata = Vector[bool]()
@@ -85,17 +85,17 @@ void main():
     bmask.push(true)
     bmask.push(false)
     Column bcol = col_bools_null(bdata, bmask)
-    print("{bcol.is_null_at(0)}")
-    print("{bcol.is_null_at(1)}")
+    print(f"{bcol.is_null_at(0)}")
+    print(f"{bcol.is_null_at(1)}")
 
     # ── median ──
-    print("{df.df_median("age")}")
-    print("{df.df_median("score")}")
+    print(f"{df.df_median("age")}")
+    print(f"{df.df_median("score")}")
 
     # ── variance ──
     str var_result = df.df_var("age")
     # ages: 25, 30, 35, 25 → mean=28.75, var=((25-28.75)^2+(30-28.75)^2+(35-28.75)^2+(25-28.75)^2)/4
     # = (14.0625 + 1.5625 + 39.0625 + 14.0625)/4 = 68.75/4 = 17.1875
-    print("{var_result}")
+    print(f"{var_result}")
 
     print("done")

@@ -5,7 +5,7 @@ void main():
     bool flag = true
     int sum = x + y
     int product = x * 2
-    print("{sum}")
-    print("{product}")
+    print(f"{sum}")
+    print(f"{product}")
     auto name = "gorget"
-    print("{name}")
+    print(f"{name}")

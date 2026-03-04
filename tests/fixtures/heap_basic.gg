@@ -12,15 +12,15 @@ void main():
 
     # peek returns minimum without removing
     int top = pq.peek().unwrap()
-    print("{top}")
+    print(f"{top}")
 
     # len
     int n = pq.len()
-    print("{n}")
+    print(f"{n}")
 
     # is_empty
     bool empty = pq.is_empty()
-    print("{empty}")
+    print(f"{empty}")
 
     # pop returns minimum elements in sorted order
     int p1 = pq.pop().unwrap()
@@ -28,26 +28,26 @@ void main():
     int p3 = pq.pop().unwrap()
     int p4 = pq.pop().unwrap()
     int p5 = pq.pop().unwrap()
-    print("{p1}")
-    print("{p2}")
-    print("{p3}")
-    print("{p4}")
-    print("{p5}")
+    print(f"{p1}")
+    print(f"{p2}")
+    print(f"{p3}")
+    print(f"{p4}")
+    print(f"{p5}")
 
     # Now empty
     bool now_empty = pq.is_empty()
-    print("{now_empty}")
+    print(f"{now_empty}")
 
     # pop on empty returns None
     Option[int] none_val = pq.pop()
     bool is_none = none_val.is_none()
-    print("{is_none}")
+    print(f"{is_none}")
 
     # Single element heap
     Heap[int] single = Heap[int](Vector[int]())
     single.push(42)
     int sv = single.pop().unwrap()
-    print("{sv}")
+    print(f"{sv}")
 
     # float heap
     Heap[float] fpq = Heap[float](Vector[float]())
@@ -55,6 +55,6 @@ void main():
     fpq.push(1.0)
     fpq.push(2.72)
     float fmin = fpq.pop().unwrap()
-    print("{fmin}")
+    print(f"{fmin}")
 
     print("done")

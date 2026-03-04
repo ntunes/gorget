@@ -49,8 +49,8 @@ void main():
 
     int score = world.get_score()
     if world.won():
-        print("You win! Score: {score}")
+        print(f"You win! Score: {score}")
     else:
-        print("Game over! Score: {score}")
+        print(f"Game over! Score: {score}")
 
     gfx_close(canvas)

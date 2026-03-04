@@ -7,7 +7,7 @@ void main():
     m.put(3, 30)
 
     auto items = m.items()
-    print("{items.len()}")
+    print(f"{items.len()}")
 
     int total = 0
     int i = 0
@@ -15,4 +15,4 @@ void main():
         auto item = items.get(i).unwrap()
         total = total + item._1
         i = i + 1
-    print("{total}")
+    print(f"{total}")

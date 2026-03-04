@@ -2,5 +2,5 @@ from shapes import Point, origin
 
 void main():
     Point p = origin()
-    print("{p.x}")
-    print("{p.y}")
+    print(f"{p.x}")
+    print(f"{p.y}")

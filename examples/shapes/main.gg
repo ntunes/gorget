@@ -17,9 +17,9 @@ void main():
     # Direct dispatch — compiler knows the concrete types
     Circle c = Circle(5)
     Rect r = Rect(3, 4)
-    print("{c.name()} area={c.area()}")
-    print("{r.name()} area={r.area()}")
-    print("circumference={c.circumference()}")
+    print(f"{c.name()} area={c.area()}")
+    print(f"{r.name()} area={r.area()}")
+    print(f"circumference={c.circumference()}")
 
     # Inherent method
     Rect sq = Rect(5, 5)
@@ -31,8 +31,8 @@ void main():
     Box[Shape] s2 = Box.new(Rect(6, 7))
     int a1 = s1.area()
     int a2 = s2.area()
-    print("s1 area={a1}")
-    print("s2 area={a2}")
+    print(f"s1 area={a1}")
+    print(f"s2 area={a2}")
 
     # Compare areas
     if a1 > a2:

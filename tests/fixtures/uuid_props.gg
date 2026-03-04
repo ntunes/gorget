@@ -4,17 +4,17 @@ void main():
     # version(): v4 UUID always returns 4
     UUID u = UUID.v4()
     int v = u.version()
-    print("{v}")
+    print(f"{v}")
 
     # equals(): same UUID via parse(to_string()) roundtrip → true
     str s = u.to_string()
     UUID u2 = UUID.parse(s).unwrap()
     bool same = u.equals(u2)
-    print("{same}")
+    print(f"{same}")
 
     # equals(): different UUID → false
     UUID u3 = UUID.v4()
     bool diff = u.equals(u3)
-    print("{diff}")
+    print(f"{diff}")
 
     print("done")

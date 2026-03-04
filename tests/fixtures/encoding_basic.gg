@@ -60,7 +60,7 @@ void main():
     str enc_copy = html_unescape("&copy;")
     Vector[int] enc_copy_cps = utf8_codepoints(enc_copy)
     int enc_copy_val = enc_copy_cps.get(0).unwrap()
-    print("{enc_copy_val}")
+    print(f"{enc_copy_val}")
 
     # HTML roundtrip
     str enc_html_rt = html_unescape(html_escape("<div>"))
@@ -68,31 +68,31 @@ void main():
 
     # ── UTF-8 ──
     int enc_u8len = utf8_len("Hello")
-    print("{enc_u8len}")
+    print(f"{enc_u8len}")
     print(utf8_is_valid("Hello"))
     int enc_char0 = utf8_char_at("Hello", 0)
-    print("{enc_char0}")
+    print(f"{enc_char0}")
     int enc_oob = utf8_char_at("Hello", 10)
-    print("{enc_oob}")
+    print(f"{enc_oob}")
 
     Vector[int] enc_cps = utf8_codepoints("Hi")
     int enc_cplen = enc_cps.len()
-    print("{enc_cplen}")
+    print(f"{enc_cplen}")
     int enc_cp0 = enc_cps.get(0).unwrap()
     int enc_cp1 = enc_cps.get(1).unwrap()
-    print("{enc_cp0}")
-    print("{enc_cp1}")
+    print(f"{enc_cp0}")
+    print(f"{enc_cp1}")
 
     # ── Latin-1 ──
     auto enc_l1 = latin1_encode("AB")
     match enc_l1:
         case Ok(enc_bytes):
             int enc_blen = enc_bytes.len()
-            print("{enc_blen}")
+            print(f"{enc_blen}")
             int enc_b0 = enc_bytes.get(0).unwrap() as int
             int enc_b1 = enc_bytes.get(1).unwrap() as int
-            print("{enc_b0}")
-            print("{enc_b1}")
+            print(f"{enc_b0}")
+            print(f"{enc_b1}")
         else:
             print("error")
 

@@ -78,7 +78,7 @@ void update(Game mutable game):
 
 void render(Game game):
     # Clear screen and move cursor to top-left
-    print("\u{1b}[2J\u{1b}[H")
+    print(f"\u{1b}[2J\u{1b}[H")
     for y in 0..game.height:
         String row = ""
         for x in 0..game.width:
@@ -101,7 +101,7 @@ void render(Game game):
                     row = row + " "
         print(row)
     print("")
-    print("  Score: {game.score}  |  WASD: move  Q: quit")
+    print(f"  Score: {game.score}  |  WASD: move  Q: quit")
 
 void main():
     seed(time())
@@ -154,5 +154,5 @@ void main():
 
     # Restore terminal
     exec("stty icanon echo")
-    print("\u{1b}[2J\u{1b}[H")
-    print("Game Over! Final score: {game.score}")
+    print(f"\u{1b}[2J\u{1b}[H")
+    print(f"Game Over! Final score: {game.score}")

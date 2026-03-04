@@ -19,10 +19,10 @@ void main():
     Wrapper[int] a = Wrapper[int](10)
     Wrapper[int] b = Wrapper[int](3)
     Wrapper[int] c = a + b
-    print("{c.val}")
+    print(f"{c.val}")
     Wrapper[int] d = a - b
-    print("{d.val}")
+    print(f"{d.val}")
     Wrapper[int] e = a * b
-    print("{e.val}")
+    print(f"{e.val}")
     a += Wrapper[int](5)
-    print("{a.val}")
+    print(f"{a.val}")

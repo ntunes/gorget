@@ -39,19 +39,19 @@ void main():
     # ── HTML: named entities not tested in basic ──
     Vector[int] ndash_cps = utf8_codepoints(html_unescape("&ndash;"))
     int ndash_cp = ndash_cps.get(0).unwrap()
-    print("{ndash_cp}")
+    print(f"{ndash_cp}")
     Vector[int] mdash_cps = utf8_codepoints(html_unescape("&mdash;"))
     int mdash_cp = mdash_cps.get(0).unwrap()
-    print("{mdash_cp}")
+    print(f"{mdash_cp}")
     Vector[int] hellip_cps = utf8_codepoints(html_unescape("&hellip;"))
     int hellip_cp = hellip_cps.get(0).unwrap()
-    print("{hellip_cp}")
+    print(f"{hellip_cp}")
     Vector[int] euro_cps = utf8_codepoints(html_unescape("&euro;"))
     int euro_cp = euro_cps.get(0).unwrap()
-    print("{euro_cp}")
+    print(f"{euro_cp}")
     Vector[int] pound_cps = utf8_codepoints(html_unescape("&pound;"))
     int pound_cp = pound_cps.get(0).unwrap()
-    print("{pound_cp}")
+    print(f"{pound_cp}")
 
     # ── HTML: unknown entity passes through ──
     print(html_unescape("&bogus;"))
@@ -64,11 +64,11 @@ void main():
 
     # ── UTF-8 length on empty string ──
     int enc_empty_len = utf8_len("")
-    print("{enc_empty_len}")
+    print(f"{enc_empty_len}")
 
     # ── utf8_char_at on empty → -1 ──
     int oob = utf8_char_at("", 0)
-    print("{oob}")
+    print(f"{oob}")
 
     # ── Latin-1 encode out-of-range error ──
     auto r_l1 = latin1_encode(html_unescape("&euro;"))
@@ -84,6 +84,6 @@ void main():
     high_bytes.push(169 as uint8)
     str decoded = latin1_decode(high_bytes)
     int blen = decoded.byte_len()
-    print("{blen}")
+    print(f"{blen}")
 
     print("done")

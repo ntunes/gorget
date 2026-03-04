@@ -3,7 +3,7 @@ from gg.uuid import UUID
 void main():
     UUID id1 = UUID.v4()
     UUID id2 = UUID.v4()
-    print("ID 1: {id1.to_string()}")
-    print("ID 2: {id2.to_string()}")
-    print("Equal: {id1.equals(id2)}")
-    print("Version: {id1.version()}")
+    print(f"ID 1: {id1.to_string()}")
+    print(f"ID 2: {id2.to_string()}")
+    print(f"Equal: {id1.equals(id2)}")
+    print(f"Version: {id1.version()}")

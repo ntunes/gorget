@@ -7,8 +7,8 @@ void main():
     bools.push(false)
     bools.push(true)
     Column bc = col_from_bools(bools)
-    print("{bc.dtype_name()}")
-    print("{bc.value_as_str(0)}")
+    print(f"{bc.dtype_name()}")
+    print(f"{bc.value_as_str(0)}")
 
     # ── Null handling via col_ints_null ─────────────────────────
     # age col: [25, 0, 35] with mask [true, false, true] → row 1 is null
@@ -21,8 +21,8 @@ void main():
     mask.push(false)
     mask.push(true)
     Column age_col = col_ints_null(ages, mask)
-    print("{age_col.is_null_at(1)}")
-    print("{age_col.null_count()}")
+    print(f"{age_col.is_null_at(1)}")
+    print(f"{age_col.null_count()}")
 
     # ── col_strs_null ───────────────────────────────────────────
     Vector[str] names = Vector[str]()
@@ -34,7 +34,7 @@ void main():
     smask.push(false)
     smask.push(true)
     Column name_col = col_strs_null(names, smask)
-    print("{name_col.is_null_at(1)}")
+    print(f"{name_col.is_null_at(1)}")
 
     # ── fillna_int ──────────────────────────────────────────────
     Vector[str] col_names = Vector[str]()
@@ -44,12 +44,12 @@ void main():
     DataFrame df = df_from_columns(col_names, cols)
     DataFrame filled = df.fillna_int("age", 0)
     Column filled_col = filled.get_column("age")
-    print("{filled_col.is_null_at(1)}")
-    print("{filled_col.null_count()}")
+    print(f"{filled_col.is_null_at(1)}")
+    print(f"{filled_col.null_count()}")
 
     # ── dropna ──────────────────────────────────────────────────
     DataFrame dropped = df.dropna()
-    print("{dropped.nrows()}")
+    print(f"{dropped.nrows()}")
 
     # ── column_names ────────────────────────────────────────────
     Vector[str] cn2 = Vector[str]()
@@ -66,8 +66,8 @@ void main():
     cols2.push(col_from_ints(xd))
     DataFrame df2 = df_from_columns(cn2, cols2)
     Vector[str] cnames = df2.column_names()
-    print("{cnames.len()}")
-    print("{cnames.get(0).unwrap()}")
+    print(f"{cnames.len()}")
+    print(f"{cnames.get(0).unwrap()}")
 
     # ── apply_float ─────────────────────────────────────────────
     Vector[str] fcols = Vector[str]()
@@ -82,8 +82,8 @@ void main():
     float(float) double_fn = (float x): x * 2.0
     DataFrame dff2 = dff.apply_float("score", double_fn)
     # verify the transformation ran (nrows/ncols unchanged)
-    print("{dff2.nrows()}")
-    print("{dff2.ncols()}")
+    print(f"{dff2.nrows()}")
+    print(f"{dff2.ncols()}")
 
     # ── apply_str ───────────────────────────────────────────────
     Vector[str] scols = Vector[str]()
@@ -97,11 +97,11 @@ void main():
     str(str) identity_fn = (str s): s
     DataFrame dfs2 = dfs.apply_str("name", identity_fn)
     Column nc = dfs2.get_column("name")
-    print("{nc.value_as_str(0)}")
+    print(f"{nc.value_as_str(0)}")
 
     # ── display() smoke test ─────────────────────────────────────
     str disp = df2.display()
-    print("{disp.byte_len() > 0}")
+    print(f"{disp.byte_len() > 0}")
 
     # ── fillna_float ─────────────────────────────────────────────
     Vector[float] fv = Vector[float]()
@@ -118,8 +118,8 @@ void main():
     DataFrame df_flt = df_from_columns(fn_names, fn_cols)
     DataFrame df_flt2 = df_flt.fillna_float("flt", 9.9)
     Column flt_col = df_flt2.get_column("flt")
-    print("{flt_col.value_as_str(0)}")
-    print("{flt_col.value_as_str(1)}")
+    print(f"{flt_col.value_as_str(0)}")
+    print(f"{flt_col.value_as_str(1)}")
 
     # ── fillna_str ────────────────────────────────────────────────
     Vector[str] sv2 = Vector[str]()
@@ -136,5 +136,5 @@ void main():
     DataFrame df_msg = df_from_columns(sn_names, sn_cols)
     DataFrame df_msg2 = df_msg.fillna_str("msg", "default")
     Column msg_col = df_msg2.get_column("msg")
-    print("{msg_col.value_as_str(0)}")
-    print("{msg_col.value_as_str(1)}")
+    print(f"{msg_col.value_as_str(0)}")
+    print(f"{msg_col.value_as_str(1)}")

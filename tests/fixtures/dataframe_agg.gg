@@ -35,28 +35,28 @@ void main():
     str age_col = "age"
     str score_col = "score"
     str name_col = "name"
-    print("{df.df_sum(age_col)}")
-    print("{df.df_mean(age_col)}")
-    print("{df.df_min(age_col)}")
-    print("{df.df_max(age_col)}")
-    print("{df.df_count(age_col)}")
+    print(f"{df.df_sum(age_col)}")
+    print(f"{df.df_mean(age_col)}")
+    print(f"{df.df_min(age_col)}")
+    print(f"{df.df_max(age_col)}")
+    print(f"{df.df_count(age_col)}")
 
     # float aggregations
-    print("{df.df_sum(score_col)}")
-    print("{df.df_mean(score_col)}")
+    print(f"{df.df_sum(score_col)}")
+    print(f"{df.df_mean(score_col)}")
 
     # value_counts
     DataFrame vc = df.value_counts(name_col)
-    print("{vc.nrows()}")
+    print(f"{vc.nrows()}")
 
     # df_std
-    print("{df.df_std(age_col)}")
+    print(f"{df.df_std(age_col)}")
 
     # describe shape: 6 stat rows × 3 cols (stat + age + score)
     DataFrame desc = df.describe()
-    print("{desc.nrows()}")
-    print("{desc.ncols()}")
+    print(f"{desc.nrows()}")
+    print(f"{desc.ncols()}")
 
     # value_counts: verify actual count value
     Column vc_col = vc.get_column("count")
-    print("{vc_col.value_as_str(0)}")
+    print(f"{vc_col.value_as_str(0)}")

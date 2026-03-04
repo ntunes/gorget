@@ -10,8 +10,8 @@ void main():
             String out = proc.read_stdout()
             int code = proc.wait()
             print(out)
-            print("{code}")
+            print(f"{code}")
         case Error(msg):
-            print("spawn failed: {msg}")
+            print(f"spawn failed: {msg}")
     int mypid = getpid()
-    print("{mypid > 0}")
+    print(f"{mypid > 0}")

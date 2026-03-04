@@ -17,9 +17,9 @@ void main():
         print("equal")
     if a != c:
         print("not equal")
-    print("{a}")
+    print(f"{a}")
     Point d = a.clone()
-    print("{d}")
+    print(f"{d}")
 
     Color r = Red()
     Color r2 = Red()
@@ -28,7 +28,7 @@ void main():
         print("colors equal")
     if r != bl:
         print("colors differ")
-    print("{r}")
-    print("{bl}")
+    print(f"{r}")
+    print(f"{bl}")
     Color r_clone = r.clone()
-    print("{r_clone}")
+    print(f"{r_clone}")

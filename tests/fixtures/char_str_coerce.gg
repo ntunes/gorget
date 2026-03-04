@@ -1,0 +1,19 @@
+# Tests for char → str implicit coercion.
+#
+# Expected output:
+#   A
+#   true
+#   A
+
+void main():
+    # char assigned to str variable
+    str s = 'A'
+    print(s)
+
+    # char compared via str context
+    str t = 'A'
+    print(t == "A")
+
+    # char passed as str argument
+    str result = 'A'
+    print(result)

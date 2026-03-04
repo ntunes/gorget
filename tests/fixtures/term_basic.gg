@@ -29,5 +29,5 @@ void main():
     print(strip_ansi(blued))
     # is_tty returns false when output is piped (which it is during tests)
     bool tty = is_tty()
-    print("{tty}")
+    print(f"{tty}")
     print("done")

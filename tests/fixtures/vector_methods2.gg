@@ -9,43 +9,43 @@ void main():
 
     # index_of
     int found_idx = v.index_of(20).unwrap()
-    print("{found_idx}")
+    print(f"{found_idx}")
     bool not_found = v.index_of(99).is_none()
-    print("{not_found}")
+    print(f"{not_found}")
 
     # insert
     v.insert(1, 15)
-    print("{v.get(1).unwrap()}")
-    print("{v.len()}")
+    print(f"{v.get(1).unwrap()}")
+    print(f"{v.len()}")
 
     # extend
     Vector[int] other = Vector[int]()
     other.push(50)
     other.push(60)
     v.extend(other)
-    print("{v.len()}")
-    print("{v.get(6).unwrap()}")
+    print(f"{v.len()}")
+    print(f"{v.get(6).unwrap()}")
 
     # slice
     Vector[int] s = v.slice(0, 3)
-    print("{s.len()}")
-    print("{s.get(0).unwrap()}")
-    print("{s.get(2).unwrap()}")
+    print(f"{s.len()}")
+    print(f"{s.get(0).unwrap()}")
+    print(f"{s.get(2).unwrap()}")
 
     # any
     bool has_big = v.any((int x): x > 50)
-    print("{has_big}")
+    print(f"{has_big}")
     bool has_neg = v.any((int x): x < 0)
-    print("{has_neg}")
+    print(f"{has_neg}")
 
     # all
     bool all_pos = v.all((int x): x > 0)
-    print("{all_pos}")
+    print(f"{all_pos}")
     bool all_small = v.all((int x): x < 30)
-    print("{all_small}")
+    print(f"{all_small}")
 
     # contains
     bool has20 = v.contains(20)
-    print("{has20}")
+    print(f"{has20}")
     bool has99 = v.contains(99)
-    print("{has99}")
+    print(f"{has99}")

@@ -16,9 +16,9 @@ struct Task:
 equip Task with Displayable:
     str display(self):
         if self.done:
-            return format("[x] {self.title}")
+            return format(f"[x] {self.title}")
         else:
-            return format("[ ] {self.title}")
+            return format(f"[ ] {self.title}")
 
 equip Task:
     bool is_high(self):

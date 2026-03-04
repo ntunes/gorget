@@ -3,7 +3,7 @@ void main():
     Option[int] some = Some(42)
     match some:
         case Some(x):
-            print("{x}")
+            print(f"{x}")
         case None:
             print("none")
 
@@ -11,7 +11,7 @@ void main():
     Option[int] none = None()
     match none:
         case Some(x):
-            print("{x}")
+            print(f"{x}")
         case None:
             print("none")
 
@@ -19,17 +19,17 @@ void main():
     Result[int, str] ok = Ok(100)
     match ok:
         case Ok(v):
-            print("{v}")
+            print(f"{v}")
         case Error(e):
-            print("{e}")
+            print(f"{e}")
 
     # Match on Result[int, str] — Error (tests string type inference)
     Result[int, str] err = Error("fail")
     match err:
         case Ok(v):
-            print("{v}")
+            print(f"{v}")
         case Error(e):
-            print("{e}")
+            print(f"{e}")
 
     # is expression on Option[int]
     if some is Some:

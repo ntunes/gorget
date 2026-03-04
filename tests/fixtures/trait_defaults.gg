@@ -26,5 +26,5 @@ void main():
     str n1 = e.name()
     str g2 = f.greeting()
     str n2 = f.name()
-    print("{g1} {n1}")
-    print("{g2} {n2}")
+    print(f"{g1} {n1}")
+    print(f"{g2} {n2}")

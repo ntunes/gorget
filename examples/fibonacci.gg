@@ -18,7 +18,7 @@ void main():
     # First 20 Fibonacci numbers (iterative)
     print("Fibonacci sequence:")
     for i in 0..20:
-        print("  fib({i}) = {fib_iterative(i)}")
+        print(f"  fib({i}) = {fib_iterative(i)}")
 
     # Verify recursive matches iterative
     print("Recursive check:")
@@ -26,5 +26,5 @@ void main():
         int r = fib_recursive(i)
         int iter = fib_iterative(i)
         assert r == iter, "mismatch!"
-        print("  fib({i}) = {r}")
+        print(f"  fib({i}) = {r}")
     print("All checks passed.")

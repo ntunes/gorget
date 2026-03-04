@@ -6,7 +6,7 @@ from std.os import exec
 
 void main():
     # Test 1: ANSI clear screen
-    print("\u{1b}[2J\u{1b}[H")
+    print(f"\u{1b}[2J\u{1b}[H")
     print("=== Input Test ===")
     print("Press keys to see codes. Press Q to quit.")
     print("")
@@ -20,12 +20,12 @@ void main():
         if ch != -1:
             count = count + 1
             # Move cursor to line 5, clear it, print there
-            print("\u{1b}[5;1H\u{1b}[2K")
-            print("Key #{count}: code={ch}", newline=false)
+            print(f"\u{1b}[5;1H\u{1b}[2K")
+            print(f"Key #{count}: code={ch}", newline=false)
             if ch == 113:
                 print("")
                 break
 
     exec("stty icanon echo")
     print("")
-    print("\u{1b}[7;1HDone. Got {count} keypresses.")
+    print(f"\u{1b}[7;1HDone. Got {count} keypresses.")

@@ -12,7 +12,7 @@ void main():
                 case Some(m):
                     print(m.text())
                     int s = m.start()
-                    print("{s}")
+                    print(f"{s}")
                 case None:
                     print("no match")
         case Error(e):
@@ -27,7 +27,7 @@ void main():
                 case Some(m):
                     Vector[str] gs = m.groups()
                     int gcount = gs.len()
-                    print("{gcount}")
+                    print(f"{gcount}")
                     int idx = 0
                     while idx < gs.len():
                         print(gs[idx])

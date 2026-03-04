@@ -4,17 +4,17 @@ void main():
     str s = "Hello, World!"
 
     # starts_with / ends_with via interpolation
-    print("{s.starts_with("Hello")}")
-    print("{s.ends_with("World!")}")
-    print("{s.starts_with("World")}")
+    print(f"{s.starts_with("Hello")}")
+    print(f"{s.ends_with("World!")}")
+    print(f"{s.starts_with("World")}")
 
     # is_empty
     str empty = ""
-    print("{empty.is_empty()}")
-    print("{s.is_empty()}")
+    print(f"{empty.is_empty()}")
+    print(f"{s.is_empty()}")
 
     # contains
-    print("{s.contains("World")}")
+    print(f"{s.contains("World")}")
 
     # trim — print method call result directly
     str padded = "  hi  "
@@ -31,4 +31,4 @@ void main():
     # split
     str csv = "a,b,c"
     Vector[str] parts = csv.split(",")
-    print("{parts.len()}")
+    print(f"{parts.len()}")

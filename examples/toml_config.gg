@@ -12,4 +12,4 @@ void main():
             print(db.get("url").as_str())
             print(db.get("pool_size").as_int())
         case Error(e):
-            print("Parse error: {e}")
+            print(f"Parse error: {e}")

@@ -12,4 +12,4 @@ void main():
         print("b_ok")
     # Edge case: lo == hi returns lo
     int c = rand_range(5, 5)
-    print("{c}")
+    print(f"{c}")

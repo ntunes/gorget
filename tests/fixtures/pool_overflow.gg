@@ -9,8 +9,8 @@ void main():
             while i < 50:
                 v.push(i)
                 i = i + 1
-            print("len: {v.len()}")
-            print("first: {v.get(0).unwrap()}")
-            print("last: {v.get(49).unwrap()}")
-        print("tracker allocs > 0: {tracker.alloc_count() > 0}")
+            print(f"len: {v.len()}")
+            print(f"first: {v.get(0).unwrap()}")
+            print(f"last: {v.get(49).unwrap()}")
+        print(f"tracker allocs > 0: {tracker.alloc_count() > 0}")
     print("done")

@@ -6,7 +6,7 @@ struct Tracked:
 equip Tracked with Drop:
     void drop(!self):
         str l = self.label
-        print("drop {l}")
+        print(f"drop {l}")
 
 void main():
     # Vector buffer cleanup (no crash = success)

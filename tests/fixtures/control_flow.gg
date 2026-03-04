@@ -10,8 +10,8 @@ void main():
 
     int i = 0
     while i < 3:
-        print("{i}")
+        print(f"{i}")
         i += 1
 
     for j in 0..5:
-        print("{j}")
+        print(f"{j}")

@@ -18,4 +18,4 @@ void main():
         print("equal")
     if a != c:
         print("not equal")
-    print("{a}")
+    print(f"{a}")

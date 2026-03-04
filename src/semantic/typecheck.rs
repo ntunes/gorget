@@ -554,6 +554,10 @@ impl<'a> TypeChecker<'a> {
             | (ResolvedType::Primitive(PrimitiveType::StringType), ResolvedType::Primitive(PrimitiveType::CStr)) => {
                 a
             }
+            // char → str coercion: a single char can be used where a str is expected
+            (ResolvedType::Primitive(PrimitiveType::Str), ResolvedType::Primitive(PrimitiveType::Char)) => {
+                a // accept the expected str type
+            }
             _ => {
                 if a_ty != b_ty {
                     self.error(
@@ -3347,7 +3351,7 @@ mod tests {
     #[test]
     fn interpolation_struct_rejected() {
         let errors = check(
-            "struct Foo:\n    int x\nvoid main():\n    Foo f = Foo(1)\n    print(\"{f}\")\n",
+            "struct Foo:\n    int x\nvoid main():\n    Foo f = Foo(1)\n    print(f\"{f}\")\n",
         );
         assert!(
             errors.iter().any(|e| matches!(
@@ -3362,7 +3366,7 @@ mod tests {
     #[test]
     fn interpolation_enum_rejected() {
         let errors = check(
-            "enum Color:\n    Red()\n    Blue()\nvoid main():\n    Color c = Red()\n    print(\"{c}\")\n",
+            "enum Color:\n    Red()\n    Blue()\nvoid main():\n    Color c = Red()\n    print(f\"{c}\")\n",
         );
         assert!(
             errors.iter().any(|e| matches!(
@@ -3376,7 +3380,7 @@ mod tests {
 
     #[test]
     fn interpolation_primitives_ok() {
-        let errors = check("void main():\n    int x = 42\n    print(\"{x}\")\n");
+        let errors = check("void main():\n    int x = 42\n    print(f\"{x}\")\n");
         assert!(
             !errors.iter().any(|e| matches!(
                 &e.kind,

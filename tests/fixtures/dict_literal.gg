@@ -2,16 +2,16 @@ from std.collections import Dict
 
 void main():
     auto d = {"alice": 30, "bob": 25, "carol": 35}
-    print("{d.len()}")
-    print("{d.get("alice").unwrap()}")
-    print("{d.get("bob").unwrap()}")
-    print("{d.get("carol").unwrap()}")
+    print(f"{d.len()}")
+    print(f"{d.get("alice").unwrap()}")
+    print(f"{d.get("bob").unwrap()}")
+    print(f"{d.get("carol").unwrap()}")
 
     # Empty dict with type hint
     Dict[str, int] empty = {}
-    print("{empty.len()}")
+    print(f"{empty.len()}")
 
     # Integer keys
     auto nums = {1: 100, 2: 200, 3: 300}
-    print("{nums.get(2).unwrap()}")
-    print("{nums.len()}")
+    print(f"{nums.get(2).unwrap()}")
+    print(f"{nums.len()}")

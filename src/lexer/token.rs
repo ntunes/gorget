@@ -740,6 +740,7 @@ impl StringLiteral {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StringKind {
     Normal,
+    Format, // f"..." or f'...' — formatted/interpolating string (opt-in)
     Raw,
     MultiLine,
     Byte,

@@ -13,9 +13,9 @@ void main():
     Pair[int] p2 = Pair[int](10, 20)
     if p1 == p2:
         print("pair equal")
-    print("{p1}")
+    print(f"{p1}")
     Pair[int] p3 = p1.clone()
-    print("{p3}")
+    print(f"{p3}")
     Wrapper[int] w = Value(42)
     Wrapper[int] w2 = w.clone()
     Wrapper[int] e = Empty()
@@ -23,7 +23,7 @@ void main():
         print("wrapper equal")
     if w != e:
         print("wrapper not equal")
-    print("{w}")
-    print("{e}")
+    print(f"{w}")
+    print(f"{e}")
     int h = w.hash()
     print("hash ok")

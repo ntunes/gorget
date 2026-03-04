@@ -7,17 +7,17 @@ void main():
     m.put(30, 300)
 
     # Basic operations
-    print("{m.len()}")
-    print("{m.get(10).unwrap()}")
-    print("{m.get(20).unwrap()}")
-    print("{m.get(30).unwrap()}")
-    print("{m.contains(10)}")
-    print("{m.contains(99)}")
+    print(f"{m.len()}")
+    print(f"{m.get(10).unwrap()}")
+    print(f"{m.get(20).unwrap()}")
+    print(f"{m.get(30).unwrap()}")
+    print(f"{m.contains(10)}")
+    print(f"{m.contains(99)}")
 
     # Remove
     m.remove(20)
-    print("{m.len()}")
+    print(f"{m.len()}")
 
     # Fold (order-independent sum)
     int total = m.fold(0, (int acc, int k, int v): acc + v)
-    print("{total}")
+    print(f"{total}")

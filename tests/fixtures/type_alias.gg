@@ -2,5 +2,5 @@ type Count = int
 
 void main():
     int c = 42
-    print("{c}")
+    print(f"{c}")
     print("type alias works")

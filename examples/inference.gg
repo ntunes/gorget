@@ -37,7 +37,7 @@ void main():
 
     # For loop
     for i in 0..5:
-        print("{i}")
+        print(f"{i}")
 
     # Match statement
     match x:

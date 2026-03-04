@@ -8,6 +8,6 @@ void main():
         v.push(2)
         v.push(3)
         int rc = tracker.realloc_count()
-        print("realloc_count > 0: {rc > 0}")
+        print(f"realloc_count > 0: {rc > 0}")
         tracker.report()
     print("done")

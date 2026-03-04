@@ -4,7 +4,7 @@ struct Inner:
 equip Inner with Drop:
     void drop(!self):
         str l = self.label
-        print("drop inner {l}")
+        print(f"drop inner {l}")
 
 # Struct with non-Copy field, NO explicit Drop → auto field drop
 struct Wrapper:
@@ -18,7 +18,7 @@ struct Container:
 equip Container with Drop:
     void drop(!self):
         str t = self.tag
-        print("drop container {t}")
+        print(f"drop container {t}")
 
 # Struct with String field → auto string free (no crash = success)
 struct Config:

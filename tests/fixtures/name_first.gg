@@ -12,14 +12,14 @@ fn double(x: int) -> int = x * 2
 
 fn main():
     result: int = add(3, 4)
-    print("{result}")
+    print(f"{result}")
     d: int = double(5)
-    print("{d}")
+    print(f"{d}")
     const PI: float = 3.14
     print("3")
     v: auto = "gorget"
-    print("{v}")
+    print(f"{v}")
     mutable count: int = 0
     count = count + 1
-    print("{count}")
+    print(f"{count}")
     print("done")

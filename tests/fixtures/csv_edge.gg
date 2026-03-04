@@ -5,18 +5,18 @@ void main():
     # ── Error: unterminated quoted field ──
     Result[Vector[Vector[str]], str] r_err = csv_parse("\"unclosed")
     bool csv_is_err = r_err.is_err()
-    print("{csv_is_err}")
+    print(f"{csv_is_err}")
 
     # ── has_column / column_index ──
     CsvTable tbl = csv_parse_table("name,age,city\nAlice,30,NYC\nBob,25,LA").unwrap()
     print(tbl.has_column("age"))
     print(tbl.has_column("zip"))
     int city_idx = tbl.column_index("city")
-    print("{city_idx}")
+    print(f"{city_idx}")
     int missing_idx = tbl.column_index("missing")
-    print("{missing_idx}")
+    print(f"{missing_idx}")
     int nrows = tbl.row_count()
-    print("{nrows}")
+    print(f"{nrows}")
 
     # ── Roundtrip: field with embedded delimiter and escaped double-quote ──
     str tricky = "\"hello, world\",plain\n\"say \"\"hi\"\"\",end"
@@ -33,6 +33,6 @@ void main():
     # ── Empty input → Ok with 0 rows ──
     Vector[Vector[str]] empty_rows = csv_parse("").unwrap()
     int empty_len = empty_rows.len()
-    print("{empty_len}")
+    print(f"{empty_len}")
 
     print("done")

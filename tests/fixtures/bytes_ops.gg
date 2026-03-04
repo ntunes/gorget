@@ -10,7 +10,7 @@ from std.collections import Vector
 void main():
     # str → bytes → str roundtrip
     Vector[uint8] b = bytes_from_str("Hello")
-    print("{b.len()}")
+    print(f"{b.len()}")
     str s = bytes_to_str(b).unwrap()
     print(s)
 
@@ -27,23 +27,23 @@ void main():
     Vector[uint8] buf = bytes_from_hex("00000000aabbccdd")
     bytes_write_u32_be(buf, 0, 305419896)
     int val = bytes_read_u32_be(buf, 0)
-    print("{val}")
+    print(f"{val}")
 
     # read the second u32
     int val2 = bytes_read_u32_be(buf, 4)
-    print("{val2}")
+    print(f"{val2}")
 
     # big-endian u16 read/write
     Vector[uint8] buf16 = bytes_from_hex("00001234")
     bytes_write_u16_be(buf16, 0, 4660)
     int v16 = bytes_read_u16_be(buf16, 0)
-    print("{v16}")
+    print(f"{v16}")
 
     # little-endian u32 read/write
     Vector[uint8] le_buf = bytes_from_hex("0000000000000000")
     bytes_write_u32_le(le_buf, 0, 305419896)
     int le_val = bytes_read_u32_le(le_buf, 0)
-    print("{le_val}")
+    print(f"{le_val}")
     # verify byte order: 305419896 = 0x12345678
     # LE stores as 78 56 34 12
     str le_hex = bytes_to_hex(le_buf)
@@ -53,7 +53,7 @@ void main():
     Vector[uint8] le_buf16 = bytes_from_hex("00000000")
     bytes_write_u16_le(le_buf16, 0, 4660)
     int le_v16 = bytes_read_u16_le(le_buf16, 0)
-    print("{le_v16}")
+    print(f"{le_v16}")
     # verify byte order: 4660 = 0x1234, LE stores as 34 12
     str le_hex16 = bytes_to_hex(le_buf16)
     print(le_hex16)
@@ -70,7 +70,7 @@ void main():
 
     # random_bytes produces correct length
     Vector[uint8] r = random_bytes(16)
-    print("{r.len()}")
+    print(f"{r.len()}")
 
     # base64 encode
     str b64_enc = base64_encode(bytes_from_str("Hello"))

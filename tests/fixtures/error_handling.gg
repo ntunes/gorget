@@ -14,21 +14,21 @@ int propagate(int x) throws str:
 void main():
     # try capture — success case
     int a = try risky(5)
-    print("{a}")
+    print(f"{a}")
 
     # try capture — error case (returns zero-default)
     int b = try risky(-1)
-    print("{b}")
+    print(f"{b}")
 
     # throw with a str variable (not a literal)
     int c = try throw_var("variable error")
-    print("{c}")
+    print(f"{c}")
 
     # ? operator propagates errors through wrapper
     int d = try propagate(5)
-    print("{d}")
+    print(f"{d}")
 
     int e = try propagate(-1)
-    print("{e}")
+    print(f"{e}")
 
     print("done")

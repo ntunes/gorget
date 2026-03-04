@@ -17,7 +17,7 @@ from std.collections import Dict
 void main():
     # ok("") → 200, text/plain, empty body
     HttpServerResponse r1 = HttpServerResponse.ok("")
-    print("{r1.status_code}")
+    print(f"{r1.status_code}")
     print(r1.content_type)
 
     # ok("body") → body present
@@ -29,20 +29,20 @@ void main():
     print(r3.content_type)
 
     # json → application/json
-    HttpServerResponse r4 = HttpServerResponse.json("{}")
+    HttpServerResponse r4 = HttpServerResponse.json(f"{}")
     print(r4.content_type)
 
     # not_found → 404
     HttpServerResponse r5 = HttpServerResponse.not_found()
-    print("{r5.status_code}")
+    print(f"{r5.status_code}")
 
     # bad_request → 400
     HttpServerResponse r6 = HttpServerResponse.bad_request("msg")
-    print("{r6.status_code}")
+    print(f"{r6.status_code}")
 
     # internal_error → 500
     HttpServerResponse r7 = HttpServerResponse.internal_error("boom")
-    print("{r7.status_code}")
+    print(f"{r7.status_code}")
 
     # with_header chaining — multiple headers accumulate
     HttpServerResponse r8a = HttpServerResponse.ok("hello").with_header("x-a", "gorget")
@@ -52,7 +52,7 @@ void main():
 
     # redirect → 302, Location header present (validates fix 1A)
     HttpServerResponse r9 = HttpServerResponse.redirect("/target")
-    print("{r9.status_code}")
+    print(f"{r9.status_code}")
     print(r9.headers["Location"])
 
     # status_text for known codes

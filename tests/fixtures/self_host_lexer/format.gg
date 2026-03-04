@@ -224,7 +224,7 @@ str describe_string_canonical(StringLiteral slit):
             case SegLiteral(text):
                 result = result + escape_canonical(text)
             case SegInterpolation(expr):
-                result = result + "\{" + expr + "\}"
+                result = result + f"\{" + expr + "\}"
         i = i + 1
     return result
 

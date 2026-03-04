@@ -17,11 +17,11 @@ struct Message:
 
 # Borrow: read-only access. The caller still owns the message.
 void preview(Message msg):
-    print("[Preview] sender={msg.sender} subject={msg.subject} priority={msg.priority}")
+    print(f"[Preview] sender={msg.sender} subject={msg.subject} priority={msg.priority}")
 
 # Move: takes ownership. The caller's variable is dead after this call.
 void send(Message !msg):
-    print("[Sent] {msg.subject} by {msg.sender}")
+    print(f"[Sent] {msg.subject} by {msg.sender}")
 
 # Mutable borrow via method: can modify fields, caller keeps ownership.
 equip Message:
@@ -34,7 +34,7 @@ void main():
     # when passed to functions. No ! needed.
     int priority = 3
     int backup = priority
-    print("Priority: {priority}, backup: {backup}")
+    print(f"Priority: {priority}, backup: {backup}")
 
     # --- Create a message ---
     Message msg = Message("Alice", "Meeting tomorrow", 1)

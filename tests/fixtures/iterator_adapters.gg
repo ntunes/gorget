@@ -23,28 +23,28 @@ equip Counter with Iterable[int]:
 void main():
     # collect: drain iterator into a Vector
     Vector[int] collected = Counter(0, 5).iter().collect()
-    print("{collected.len()}")
+    print(f"{collected.len()}")
 
     # filter: keep only even numbers
     Vector[int] evens = Counter(0, 5).iter().filter((int x): x % 2 == 0)
-    print("{evens.len()}")
+    print(f"{evens.len()}")
 
     # filter: verify values
-    print("{evens.get(0).unwrap()}")
+    print(f"{evens.get(0).unwrap()}")
 
     # collect length
-    print("{collected.get(0).unwrap()}")
-    print("{collected.get(4).unwrap()}")
+    print(f"{collected.get(0).unwrap()}")
+    print(f"{collected.get(4).unwrap()}")
 
     # map: double each element
     Vector[int] doubled = Counter(0, 5).iter().map((int x): x * 2)
-    print("{doubled.get(0).unwrap()}")
-    print("{doubled.get(2).unwrap()}")
+    print(f"{doubled.get(0).unwrap()}")
+    print(f"{doubled.get(2).unwrap()}")
 
     # fold: sum all elements
     int total = Counter(0, 5).iter().fold(0, (int acc, int x): acc + x)
-    print("{total}")
+    print(f"{total}")
 
     # fold with non-zero init
     int total2 = Counter(1, 4).iter().fold(100, (int acc, int x): acc + x)
-    print("{total2}")
+    print(f"{total2}")

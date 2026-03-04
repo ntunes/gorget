@@ -9,9 +9,9 @@ str describe(int n):
 
 void main():
     int r1 = apply[int]((int n): n * 2, 5)
-    print("{r1}")
+    print(f"{r1}")
     str r2 = apply[str]((int n): "val", 3)
     print(r2)
     int r3 = apply[int](double, 7)
-    print("{r3}")
+    print(f"{r3}")
     print("done")

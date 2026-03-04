@@ -8,7 +8,7 @@ void main():
     print(bs[2])
 
     # .bytes() on multi-byte (café: c=0x63, a=0x61, f=0x66, é=0xC3 0xA9)
-    str cafe = "caf\u{E9}"
+    str cafe = f"caf\u{E9}"
     Vector[uint8] cafe_bytes = cafe.bytes()
     print(cafe_bytes.len())
     print(cafe_bytes[4])

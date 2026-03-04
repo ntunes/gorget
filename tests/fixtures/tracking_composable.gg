@@ -6,5 +6,5 @@ void main():
     Vector[int] v = Vector[int](alloc=tracker)
     v.push(10)
     v.push(20)
-    print("bytes > 0: {tracker.bytes_allocated() > 0}")
+    print(f"bytes > 0: {tracker.bytes_allocated() > 0}")
     print("done")

@@ -13,32 +13,32 @@ void main():
     Vector[int] idx = Vector[int]()
     idx.push(1)
     idx.push(2)
-    print("{c.at(idx)}")
+    print(f"{c.at(idx)}")
 
     # transpose: [2,3] → [3,2]
     Tensor[int] t = c.transpose()
-    print("{t.ndim()}")
-    print("{t.shape.get(0).unwrap()}")
-    print("{t.shape.get(1).unwrap()}")
+    print(f"{t.ndim()}")
+    print(f"{t.shape.get(0).unwrap()}")
+    print(f"{t.shape.get(1).unwrap()}")
 
     # element access on transposed: t[0,1] = c[1,0] = 3
     Vector[int] ti = Vector[int]()
     ti.push(0)
     ti.push(1)
-    print("{t.at(ti)}")
+    print(f"{t.at(ti)}")
 
     # tensor_slice: slice axis=0, rows 0..1 of c → [1,3]
     Tensor[int] s = c.tensor_slice(0, 0, 1)
-    print("{s.ndim()}")
-    print("{s.shape.get(0).unwrap()}")
-    print("{s.shape.get(1).unwrap()}")
+    print(f"{s.ndim()}")
+    print(f"{s.shape.get(0).unwrap()}")
+    print(f"{s.shape.get(1).unwrap()}")
 
     # view aliasing: mutate c, verify a sees it (shared storage)
     Vector[int] mi = Vector[int]()
     mi.push(0)
     mi.push(0)
     c.set_at(mi, 42)
-    print("{a.flat_get(0)}")
+    print(f"{a.flat_get(0)}")
 
     # float reshape
     Tensor[float] fl = tensor_linspace(0.0, 5.0, 6)

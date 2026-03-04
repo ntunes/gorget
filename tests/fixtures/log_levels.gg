@@ -6,10 +6,10 @@ void main():
     int ii = log_level_int(Info())
     int wi = log_level_int(Warn())
     int ei = log_level_int(Err())
-    print("{di}")
-    print("{ii}")
-    print("{wi}")
-    print("{ei}")
+    print(f"{di}")
+    print(f"{ii}")
+    print(f"{wi}")
+    print(f"{ei}")
 
     # Verify log_level_name helper
     print(log_level_name(Debug()))

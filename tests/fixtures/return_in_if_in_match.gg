@@ -64,11 +64,11 @@ void main():
 
     # double_positive: return inside if in else arm
     Result[int, str] r1 = double_positive(5)
-    print("{r1.unwrap()}")      # 10
+    print(f"{r1.unwrap()}")      # 10
     Result[int, str] r2 = double_positive(0)
-    print("{r2.is_ok()}")      # false
+    print(f"{r2.is_ok()}")      # false
     Result[int, str] r3 = double_positive(-3)
-    print("{r3.unwrap()}")     # 0
+    print(f"{r3.unwrap()}")     # 0
 
     # grade: elif chain inside match else arm
     print(grade(95))   # A

@@ -10,13 +10,13 @@ void main():
     d2.put("c", 30)
 
     d1.update(d2)
-    print("{d1.len()}")
-    print("{d1.get("a").unwrap()}")
-    print("{d1.get("b").unwrap()}")
-    print("{d1.get("c").unwrap()}")
+    print(f"{d1.len()}")
+    print(f"{d1.get("a").unwrap()}")
+    print(f"{d1.get("b").unwrap()}")
+    print(f"{d1.get("c").unwrap()}")
 
     # get_or
     int val = d1.get_or("a", 0)
-    print("{val}")
+    print(f"{val}")
     int missing = d1.get_or("z", 99)
-    print("{missing}")
+    print(f"{missing}")

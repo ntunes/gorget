@@ -9,8 +9,8 @@ void main():
         case Ok(tbl1):
             int row_cnt = tbl1.row_count()
             int col_cnt = tbl1.col_count()
-            print("{row_cnt}")
-            print("{col_cnt}")
+            print(f"{row_cnt}")
+            print(f"{col_cnt}")
             print(tbl1.get_named(0, "name"))
             print(tbl1.get_named(1, "city"))
             print(tbl1.has_column("age"))
@@ -76,8 +76,8 @@ void main():
         case Ok(tbl5):
             int sc_rows = tbl5.row_count()
             int sc_cols = tbl5.col_count()
-            print("{sc_rows}")
-            print("{sc_cols}")
+            print(f"{sc_rows}")
+            print(f"{sc_cols}")
             print(tbl5.get_named(0, "val"))
         case Error(e5):
             print("error")
@@ -89,8 +89,8 @@ void main():
         case Ok(tbl6):
             int ho_rows = tbl6.row_count()
             int ho_cols = tbl6.col_count()
-            print("{ho_rows}")
-            print("{ho_cols}")
+            print(f"{ho_rows}")
+            print(f"{ho_cols}")
         case Error(e6):
             print("error")
 

@@ -6,16 +6,16 @@ void main():
     s.add(20)
     s.add(10)
     int len = s.len()
-    print("{len}")
+    print(f"{len}")
     if s.contains(10):
         print("has 10")
     if s.contains(99) == false:
         print("no 99")
     s.remove(10)
-    print("{s.len()}")
+    print(f"{s.len()}")
     if s.contains(10) == false:
         print("removed 10")
     s.clear()
-    print("{s.len()}")
+    print(f"{s.len()}")
     if s.is_empty():
         print("empty")

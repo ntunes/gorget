@@ -5,8 +5,8 @@ void main():
     seed(42)
     int a = rand() % 100
     int b = rand() % 100
-    print("{a}")
-    print("{b}")
+    print(f"{a}")
+    print(f"{b}")
     int t = time()
     if t > 0:
         print("time ok")

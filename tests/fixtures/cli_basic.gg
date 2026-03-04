@@ -15,15 +15,15 @@ void main():
     argv1.push("input.txt")
     auto r1 = cli.parse(argv1)
     bool ok1 = r1.is_ok()
-    print("{ok1}")
+    print(f"{ok1}")
 
     bool has_verbose = cli.has("verbose")
     str output = cli.get("output")
     Vector[str] pos = cli.positionals()
-    print("{has_verbose}")
+    print(f"{has_verbose}")
     print(output)
     int pos_count = pos.len()
-    print("{pos_count}")
+    print(f"{pos_count}")
     str first_pos = pos.get(0).unwrap()
     print(first_pos)
 
@@ -41,7 +41,7 @@ void main():
     Vector[str] argv3 = Vector[str]()
     auto r3 = cli3.parse(argv3)
     bool no_debug = cli3.has("debug")
-    print("{no_debug}")
+    print(f"{no_debug}")
 
     # Unknown option → Error result
     CliParser cli4 = CliParser.new("app4", "App4")
@@ -49,6 +49,6 @@ void main():
     argv4.push("--unknown")
     auto r4 = cli4.parse(argv4)
     bool is_err = r4.is_err()
-    print("{is_err}")
+    print(f"{is_err}")
 
     print("done")

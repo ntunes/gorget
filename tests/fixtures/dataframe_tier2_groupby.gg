@@ -41,14 +41,14 @@ void main():
     group_cols.push("level")
 
     DataFrame agg_sum = df_group_by_multi(df, group_cols).agg("salary", "sum")
-    print("{agg_sum.nrows()}")
+    print(f"{agg_sum.nrows()}")
     # eng+jr: 50+55=105, eng+sr: 100, sales+jr: 40, sales+sr: 80
-    print("{agg_sum.ncols()}")
+    print(f"{agg_sum.ncols()}")
 
     DataFrame agg_count = df_group_by_multi(df, group_cols).agg("salary", "count")
     Column cnt_col = agg_count.get_column("salary_count")
     # eng+jr has 2 rows
-    print("{cnt_col.value_as_str(0)}")
+    print(f"{cnt_col.value_as_str(0)}")
 
     # ── df_from_records_typed (type inference) ──
     Vector[str] headers = Vector[str]()
@@ -72,14 +72,14 @@ void main():
     rows.push(r2)
 
     DataFrame typed = df_from_records_typed(headers, rows)
-    print("{typed.nrows()}")
+    print(f"{typed.nrows()}")
     Column id_col = typed.get_column("id")
-    print("{id_col.dtype_name()}")
+    print(f"{id_col.dtype_name()}")
     Column score_col = typed.get_column("score")
-    print("{score_col.dtype_name()}")
+    print(f"{score_col.dtype_name()}")
     Column name_col = typed.get_column("name")
-    print("{name_col.dtype_name()}")
+    print(f"{name_col.dtype_name()}")
     Column active_col = typed.get_column("active")
-    print("{active_col.dtype_name()}")
+    print(f"{active_col.dtype_name()}")
 
     print("done")

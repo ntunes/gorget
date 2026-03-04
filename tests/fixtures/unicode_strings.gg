@@ -1,16 +1,16 @@
 void main():
     # Latin Extended: café → CAFÉ
-    str cafe = "caf\u{E9}"
+    str cafe = f"caf\u{E9}"
     String upper_cafe = cafe.to_upper()
     print(upper_cafe)
 
     # Greek: Ελληνικά to_lower
-    str greek_upper = "\u{395}\u{3BB}\u{3BB}\u{3B7}\u{3BD}\u{3B9}\u{3BA}\u{3AC}"
+    str greek_upper = f"\u{395}\u{3BB}\u{3BB}\u{3B7}\u{3BD}\u{3B9}\u{3BA}\u{3AC}"
     String greek_lower = greek_upper.to_lower()
     print(greek_lower)
 
     # Cyrillic: МОСКВА to_lower
-    str moscow = "\u{41C}\u{41E}\u{421}\u{41A}\u{412}\u{410}"
+    str moscow = f"\u{41C}\u{41E}\u{421}\u{41A}\u{412}\u{410}"
     String moscow_lower = moscow.to_lower()
     print(moscow_lower)
 
@@ -20,12 +20,12 @@ void main():
     print(trimmed)
 
     # Unicode whitespace trim (NBSP = U+00A0)
-    str nbsp_padded = "\u{A0}hello\u{A0}"
+    str nbsp_padded = f"\u{A0}hello\u{A0}"
     str nbsp_trimmed = nbsp_padded.trim()
     print(nbsp_trimmed)
 
     # index_of returns codepoint index
-    Option[int] idx = cafe.index_of("\u{E9}")
+    Option[int] idx = cafe.index_of(f"\u{E9}")
     print(idx.unwrap())
 
     # contains on non-null-terminated view (byte_slice produces non-null-terminated)
@@ -46,19 +46,19 @@ void main():
     print(owned)
 
     # replace with unicode
-    String replaced = cafe.replace("\u{E9}", "e")
+    String replaced = cafe.replace(f"\u{E9}", "e")
     print(replaced)
 
     # starts_with / ends_with on multibyte
     print(cafe.starts_with("caf"))
-    print(cafe.ends_with("\u{E9}"))
+    print(cafe.ends_with(f"\u{E9}"))
 
     # count with unicode needle
-    str repeated = "\u{E9}\u{E9}\u{E9}"
-    print(repeated.count("\u{E9}"))
+    str repeated = f"\u{E9}\u{E9}\u{E9}"
+    print(repeated.count(f"\u{E9}"))
 
     # split preserves unicode views
-    str csv = "a,\u{E9},c"
+    str csv = f"a,\u{E9},c"
     auto parts = csv.split(",")
     print(parts.len())
     print(parts[1])

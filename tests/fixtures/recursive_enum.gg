@@ -24,25 +24,25 @@ void main():
 
     match root:
         case Obj(d):
-            print("object with {d.len()} keys")
+            print(f"object with {d.len()} keys")
             match d["name"]:
                 case Str(s):
-                    print("name = {s}")
+                    print(f"name = {s}")
                 else:
                     print("unexpected")
             match d["tags"]:
                 case Arr(arr):
-                    print("tags has {arr.len()} items")
+                    print(f"tags has {arr.len()} items")
                     match arr.get(0).unwrap():
                         case Str(s):
-                            print("first = {s}")
+                            print(f"first = {s}")
                         else:
                             print("unexpected")
                 else:
                     print("unexpected")
             match d["active"]:
                 case Bool(b):
-                    print("active = {b}")
+                    print(f"active = {b}")
                 else:
                     print("unexpected")
             match d["nothing"]:

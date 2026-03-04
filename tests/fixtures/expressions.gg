@@ -6,6 +6,6 @@ void main():
     int prod = x * y
     bool gt = x > y
     bool eq = x == 5
-    print("{sum}")
-    print("{diff}")
-    print("{prod}")
+    print(f"{sum}")
+    print(f"{diff}")
+    print(f"{prod}")

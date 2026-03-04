@@ -3195,6 +3195,14 @@ fn emit_instruction(
                     return;
                 }
             }
+            // When assigning a char constant to a Str destination: coerce via codepoint_to_str
+            if let Operand::Constant(Constant::Char(n)) = value {
+                let final_type = resolve_place_c_type(dst, func, registry, type_overrides);
+                if final_type == "Str" {
+                    let _ = writeln!(out, "        {dst_str} = codepoint_to_str((int64_t){n}u);");
+                    return;
+                }
+            }
             let val_str = format_operand(value, func, registry);
             // Coerce GorgetString → Str when destination is Str-typed
             // Use resolve_place_c_type for field projections (e.g., (*_3).ser_out = gorget_str_cat_result)
@@ -3282,6 +3290,9 @@ fn emit_instruction(
                 let _ = writeln!(out, "        {dst_str} = (Str){{ .data = {val_str}.data, .len = {val_str}.len }};");
             } else if dst_c_type == "GorgetString" && src_c_type == "Str" {
                 let _ = writeln!(out, "        {dst_str} = gorget_string_from_str({val_str});");
+            } else if dst_c_type == "Str" && src_c_type == "uint32_t" {
+                // char → str coercion: encode Unicode codepoint to UTF-8 and wrap as Str
+                let _ = writeln!(out, "        {dst_str} = codepoint_to_str((int64_t){val_str});");
             } else {
                 let dst_type = func.locals[dst.local.0 as usize].type_id;
                 let src_type = operand_type(value, func);

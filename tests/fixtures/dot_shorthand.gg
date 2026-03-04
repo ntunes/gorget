@@ -12,12 +12,12 @@ void main():
         case .Green():
             print("green")
         case .Blue(n):
-            print("blue {n}")
+            print(f"blue {n}")
     # Assignment
     c = .Blue(42)
     match c:
         case .Blue(n):
-            print("blue {n}")
+            print(f"blue {n}")
         else:
             print("other")
     # Function arg
@@ -26,7 +26,7 @@ void main():
     Color r = make_color()
     match r:
         case .Blue(n):
-            print("made {n}")
+            print(f"made {n}")
         else:
             print("other")
     print("done")

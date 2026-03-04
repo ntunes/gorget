@@ -18,8 +18,8 @@ int bump_and_read(Counter &c):
 void main():
     Counter c = Counter(0)
     int r1 = with_counter(bump_and_read, &c)
-    print("{r1}")
+    print(f"{r1}")
     int r2 = with_counter(bump_and_read, &c)
-    print("{r2}")
-    print("{c.get()}")
+    print(f"{r2}")
+    print(f"{c.get()}")
     print("done")

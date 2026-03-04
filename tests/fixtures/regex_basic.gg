@@ -6,9 +6,9 @@ void main():
     match rx_result:
         case Ok(rx):
             bool m1 = rx.is_match("abc 123 def")
-            print("{m1}")
+            print(f"{m1}")
             bool m2 = rx.is_match("no digits here")
-            print("{m2}")
+            print(f"{m2}")
         case Error(e):
             print("error")
 
@@ -21,11 +21,11 @@ void main():
                 case Some(m):
                     print(m.text())
                     int s = m.start()
-                    print("{s}")
+                    print(f"{s}")
                     int ep = m.end_pos()
-                    print("{ep}")
+                    print(f"{ep}")
                     int gc = m.group_count()
-                    print("{gc}")
+                    print(f"{gc}")
                     Option[str] g1 = m.group(0)
                     match g1:
                         case Some(g):
@@ -55,7 +55,7 @@ void main():
         case Ok(rx):
             Vector[Match] matches = rx.find_all("hello world foo")
             int mlen = matches.len()
-            print("{mlen}")
+            print(f"{mlen}")
             int idx = 0
             while idx < matches.len():
                 Match cur = matches[idx]
@@ -82,7 +82,7 @@ void main():
         case Ok(rx):
             Vector[str] parts = rx.split("a, b,  c,d")
             int plen = parts.len()
-            print("{plen}")
+            print(f"{plen}")
             int idx = 0
             while idx < parts.len():
                 print(parts[idx])
@@ -121,10 +121,10 @@ void main():
             # group_names
             Vector[str] names = rx.group_names()
             int nlen = names.len()
-            print("{nlen}")
+            print(f"{nlen}")
             # capture_count
             int cc = rx.capture_count()
-            print("{cc}")
+            print(f"{cc}")
         case Error(e):
             print("error")
 
@@ -134,7 +134,7 @@ void main():
 
     # Test 8: convenience functions
     bool cim = regex_is_match(r"\d+", "abc 42 def")
-    print("{cim}")
+    print(f"{cim}")
 
     Option[Match] conv_m = regex_find(r"\d+", "abc 42 def")
     match conv_m:
@@ -178,7 +178,7 @@ void main():
     match ci_result:
         case Ok(rx):
             bool ci_match = rx.is_match("HELLO WORLD")
-            print("{ci_match}")
+            print(f"{ci_match}")
             print(rx.pattern_str())
         case Error(e):
             print("error")
@@ -189,7 +189,7 @@ void main():
         case Ok(rx):
             Vector[str] parts = rx.splitn("a,b,c,d,e", 3)
             int plen = parts.len()
-            print("{plen}")
+            print(f"{plen}")
             int idx = 0
             while idx < parts.len():
                 print(parts[idx])

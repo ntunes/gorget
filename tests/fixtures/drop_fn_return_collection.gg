@@ -22,18 +22,18 @@ int sum_vec(Vector[int] v):
 void main():
     # Function-returned Vector — buffer freed at scope exit
     Vector[int] nums = make_nums()
-    print("{nums.len()}")
+    print(f"{nums.len()}")
 
     # Function-returned Dict — buffer freed at scope exit
     Dict[str, int] scores = make_scores()
-    print("{scores.len()}")
+    print(f"{scores.len()}")
 
     # Method-returned Vector — .keys() returns fresh buffer
     Vector[str] ks = scores.keys()
-    print("{ks.len()}")
+    print(f"{ks.len()}")
 
     # Chained: function return used then freed
     int s = sum_vec(make_nums())
-    print("{s}")
+    print(f"{s}")
 
     print("done")

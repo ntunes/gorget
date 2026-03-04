@@ -37,31 +37,31 @@ void main():
     # 1. PUT /resource → 200 + "put"
     HttpRequest req1 = HttpRequest("PUT", "/resource", "", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
     HttpServerResponse resp1 = router.dispatch(req1)
-    print("{resp1.status_code}")
+    print(f"{resp1.status_code}")
     print(resp1.body)
 
     # 2. DELETE /resource → 200 + "deleted"
     HttpRequest req2 = HttpRequest("DELETE", "/resource", "", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
     HttpServerResponse resp2 = router.dispatch(req2)
-    print("{resp2.status_code}")
+    print(f"{resp2.status_code}")
     print(resp2.body)
 
     # 3. PATCH /resource → 200 + "patched"
     HttpRequest req3 = HttpRequest("PATCH", "/resource", "", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
     HttpServerResponse resp3 = router.dispatch(req3)
-    print("{resp3.status_code}")
+    print(f"{resp3.status_code}")
     print(resp3.body)
 
     # 4. HEAD /hello → 200 + empty body (runs GET handler, strips body)
     HttpRequest req4 = HttpRequest("HEAD", "/hello", "", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
     HttpServerResponse resp4 = router.dispatch(req4)
-    print("{resp4.status_code}")
+    print(f"{resp4.status_code}")
     print(resp4.body)
 
     # 5. OPTIONS /hello → 200 + Allow header contains "GET"
     HttpRequest req5 = HttpRequest("OPTIONS", "/hello", "", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
     HttpServerResponse resp5 = router.dispatch(req5)
-    print("{resp5.status_code}")
+    print(f"{resp5.status_code}")
     str allow = resp5.headers["Allow"]
     if allow.contains("GET"):
         print("GET")
@@ -71,9 +71,9 @@ void main():
     # 6. OPTIONS /unknown → 404 (no routes registered for /unknown)
     HttpRequest req6 = HttpRequest("OPTIONS", "/unknown", "", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
     HttpServerResponse resp6 = router.dispatch(req6)
-    print("{resp6.status_code}")
+    print(f"{resp6.status_code}")
 
     # 7. HEAD /unknown → 404
     HttpRequest req7 = HttpRequest("HEAD", "/unknown", "", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
     HttpServerResponse resp7 = router.dispatch(req7)
-    print("{resp7.status_code}")
+    print(f"{resp7.status_code}")

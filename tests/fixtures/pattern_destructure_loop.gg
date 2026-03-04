@@ -10,9 +10,9 @@ void main():
     int total = 0
     for (k, v) in scores:
         total = total + v
-    print("{total}")
+    print(f"{total}")
 
     # For-loop with enumerate still works
     Vector[str] words = ["hello", "world"]
     for (i, w) in words.enumerate():
-        print("{i} {w}")
+        print(f"{i} {w}")

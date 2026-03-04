@@ -5,14 +5,14 @@ void main():
         int b = 10
         a + b
 
-    print("{x}")
+    print(f"{x}")
 
     # simple do block
     int y = do:
         int n = 3
         n * n
 
-    print("{y}")
+    print(f"{y}")
 
     # do block with multiple steps
     int z = do:
@@ -20,7 +20,7 @@ void main():
         int second = first + 5
         second * 2
 
-    print("{z}")
+    print(f"{z}")
 
     # do block with if as tail
     int w = do:
@@ -30,7 +30,7 @@ void main():
         else:
             n - 1
 
-    print("{w}")
+    print(f"{w}")
 
     # do block with match as tail
     int m = do:
@@ -43,4 +43,4 @@ void main():
             else:
                 0
 
-    print("{m}")
+    print(f"{m}")

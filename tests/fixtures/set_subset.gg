@@ -17,15 +17,15 @@ void main():
     c.add(4)
 
     # b is subset of a
-    print("{b.is_subset(a)}")
+    print(f"{b.is_subset(a)}")
     # a is not subset of b
-    print("{a.is_subset(b)}")
+    print(f"{a.is_subset(b)}")
     # a is subset of itself
-    print("{a.is_subset(c)}")
+    print(f"{a.is_subset(c)}")
 
     # a is superset of b
-    print("{a.is_superset(b)}")
+    print(f"{a.is_superset(b)}")
     # b is not superset of a
-    print("{b.is_superset(a)}")
+    print(f"{b.is_superset(a)}")
     # c is superset of a
-    print("{c.is_superset(a)}")
+    print(f"{c.is_superset(a)}")

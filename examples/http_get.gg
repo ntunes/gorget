@@ -4,7 +4,7 @@ void main():
     Result[HttpResponse, str] result = http_get("https://httpbin.org/get")
     match result:
         case Ok(resp):
-            print("Status: {resp.status_code}")
-            print("Body length: {resp.body_text.len()}")
+            print(f"Status: {resp.status_code}")
+            print(f"Body length: {resp.body_text.len()}")
         case Error(e):
-            print("Error: {e}")
+            print(f"Error: {e}")

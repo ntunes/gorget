@@ -1,2 +1,2 @@
 void hello(str name):
-    print("hello {name}")
+    print(f"hello {name}")

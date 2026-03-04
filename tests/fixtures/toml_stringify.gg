@@ -13,8 +13,8 @@ void main():
                     print(doc1b.get("name").as_str())
                     int cnt = doc1b.get("count").as_int()
                     bool flg = doc1b.get("flag").as_bool()
-                    print("{cnt}")
-                    print("{flg}")
+                    print(f"{cnt}")
+                    print(f"{flg}")
                 case Error(e1b):
                     print("error")
         case Error(e1):
@@ -31,7 +31,7 @@ void main():
                 case Ok(doc2b):
                     print(doc2b.get("server").get("host").as_str())
                     int port = doc2b.get("server").get("port").as_int()
-                    print("{port}")
+                    print(f"{port}")
                 case Error(e2b):
                     print("error")
         case Error(e2):
@@ -47,7 +47,7 @@ void main():
             match r3b:
                 case Ok(doc3b):
                     int ilen = doc3b.get("items").len()
-                    print("{ilen}")
+                    print(f"{ilen}")
                     print(doc3b.get("items").at(0).get("name").as_str())
                     print(doc3b.get("items").at(1).get("name").as_str())
                 case Error(e3b):
@@ -63,7 +63,7 @@ void main():
     print(toml_stringify_value(Bool(false)))
     TomlValue fv = Float(3.14)
     bool is_flt = fv.is_float()
-    print("{is_flt}")
+    print(f"{is_flt}")
 
     # ── Test 5: keys() on a table ────────────────────────────
     str toml5 = "a = 1\nb = 2\nc = 3"
@@ -72,7 +72,7 @@ void main():
         case Ok(doc5):
             auto keys5 = doc5.keys()
             int klen = keys5.len()
-            print("{klen}")
+            print(f"{klen}")
         case Error(e5):
             print("error")
 
@@ -83,8 +83,8 @@ void main():
         case Ok(doc6):
             bool is_arr = doc6.get("items").is_array()
             bool is_tbl = doc6.get("items").is_table()
-            print("{is_arr}")
-            print("{is_tbl}")
+            print(f"{is_arr}")
+            print(f"{is_tbl}")
         case Error(e6):
             print("error")
 
@@ -94,7 +94,7 @@ void main():
     match r7:
         case Ok(doc7):
             bool is_dt = doc7.get("event").is_datetime()
-            print("{is_dt}")
+            print(f"{is_dt}")
             print(doc7.get("event").as_str())
         case Error(e7):
             print("error")

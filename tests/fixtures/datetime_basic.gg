@@ -8,39 +8,39 @@ void main():
 
     # to_epoch: 2000-01-01 00:00:00 UTC should be epoch 946684800
     int ep = dt2000.to_epoch()
-    print("{ep}")
+    print(f"{ep}")
 
     # weekday: 2000-01-01 was Saturday (5, with 0=Monday)
     int wd = dt2000.weekday()
-    print("{wd}")
+    print(f"{wd}")
 
     # day_of_year: 2000-01-01 is day 1
     int doy = dt2000.day_of_year()
-    print("{doy}")
+    print(f"{doy}")
 
     # Leap year tests
     int leap2000 = dt_is_leap(2000)
     int leap1900 = dt_is_leap(1900)
     int leap2024 = dt_is_leap(2024)
     int leap2023 = dt_is_leap(2023)
-    print("{leap2000}")
-    print("{leap1900}")
-    print("{leap2024}")
-    print("{leap2023}")
+    print(f"{leap2000}")
+    print(f"{leap1900}")
+    print(f"{leap2024}")
+    print(f"{leap2023}")
 
     # diff_seconds between two datetimes
     DateTime dt2000b = DateTime(2000, 1, 1, 0, 0, 1, 0)
     int diff = dt2000b.diff_seconds(dt2000)
-    print("{diff}")
+    print(f"{diff}")
 
     # Another known date: 1970-01-01 (epoch 0)
     DateTime dt1970 = DateTime(1970, 1, 1, 0, 0, 0, 0)
     int ep1970 = dt1970.to_epoch()
-    print("{ep1970}")
+    print(f"{ep1970}")
 
     # 1970-01-01 was a Thursday (3 in 0=Monday system)
     int wd1970 = dt1970.weekday()
-    print("{wd1970}")
+    print(f"{wd1970}")
 
     # to_string (ISO 8601 format)
     str s2000 = dt2000.to_string()
@@ -49,15 +49,15 @@ void main():
     # diff: 2000-01-02 - 2000-01-01 = 86400 seconds
     DateTime dt2000_next = DateTime(2000, 1, 2, 0, 0, 0, 0)
     int day_diff = dt2000_next.diff_seconds(dt2000)
-    print("{day_diff}")
+    print(f"{day_diff}")
 
     # day_of_year for March 1 in leap year 2000: Jan(31)+Feb(29)+1 = 61
     int doy_mar1 = dt_day_of_year_impl(2000, 3, 1)
-    print("{doy_mar1}")
+    print(f"{doy_mar1}")
 
     # day_of_year for March 1 in non-leap year 2001: Jan(31)+Feb(28)+1 = 60
     int doy_mar1_2001 = dt_day_of_year_impl(2001, 3, 1)
-    print("{doy_mar1_2001}")
+    print(f"{doy_mar1_2001}")
 
     # Arithmetic: add_days(1) on 2000-01-01 → 2000-01-02
     DateTime dt_add1d = dt2000.add_days(1)

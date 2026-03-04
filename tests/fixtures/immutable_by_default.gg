@@ -3,9 +3,9 @@ directive immutable-by-default
 void main():
     mutable int x = 10
     x = 20
-    print("{x}")
+    print(f"{x}")
     mutable auto y = 30
     y = 40
-    print("{y}")
+    print(f"{y}")
     int z = 50
-    print("{z}")
+    print(f"{z}")

@@ -22,8 +22,8 @@ int eval(Expr e):
 
 void main():
     Expr with_else = If(Box(Num(1)), Box(Num(42)), Some(Box(Num(99))))
-    print("{eval(with_else)}")
+    print(f"{eval(with_else)}")
     Expr without_else = If(Box(Num(0)), Box(Num(42)), None())
-    print("{eval(without_else)}")
+    print(f"{eval(without_else)}")
     Expr nested = If(Box(Num(1)), Box(Add(Box(Num(3)), Box(Num(4)))), Some(Box(Neg(Box(Num(5))))))
-    print("{eval(nested)}")
+    print(f"{eval(nested)}")

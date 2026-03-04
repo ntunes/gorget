@@ -3,14 +3,14 @@ void main():
     Result[int, str] err = Error("fail")
     Result[int, str] doubled = ok.map((int x): x * 2)
     Result[int, str] err_mapped = err.map((int x): x * 2)
-    print("{doubled.unwrap()}")
-    print("{err_mapped.unwrap_or(0)}")
+    print(f"{doubled.unwrap()}")
+    print(f"{err_mapped.unwrap_or(0)}")
     Result[int, str] chained = ok.and_then((int x): Ok(x + 1))
-    print("{chained.unwrap()}")
+    print(f"{chained.unwrap()}")
     # Cross-type map: int -> str
     Result[str, str] str_ok = ok.map((int x): "yes")
     print(str_ok.unwrap())
     # Cross-type map_err: str -> int
     Result[int, int] coded = err.map_err((str e): e.len())
     if coded is Error(code):
-        print("{code}")
+        print(f"{code}")

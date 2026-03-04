@@ -25,7 +25,7 @@ void main():
 
     # edge case: all whitespace
     auto s4 = "   "
-    print("[{s4.strip()}]")
+    print(f"[{s4.strip()}]")
 
     # edge case: no matching chars
     auto s5 = "hello"

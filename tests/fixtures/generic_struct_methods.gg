@@ -22,24 +22,24 @@ equip Pair[A, B]:
 void main():
     # Basic generic struct method calls
     Container[int] c1 = Container[int](42)
-    print("{c1.get()}")
+    print(f"{c1.get()}")
 
     Container[str] c2 = Container[str]("hello")
     str s1 = c2.get()
-    print("{s1}")
+    print(f"{s1}")
 
     # Wrap returns a new Container of the same type
     Container[int] c3 = c1.wrap()
-    print("{c3.get()}")
+    print(f"{c3.get()}")
 
     # Pair with two different type args
     Pair[int, str] p = Pair[int, str](10, "world")
-    print("{p.get_first()}")
+    print(f"{p.get_first()}")
     str s2 = p.get_second()
-    print("{s2}")
+    print(f"{s2}")
 
     # Nested: Container[Container[int]]
     Container[int] inner = Container[int](99)
     Container[Container[int]] outer = Container[Container[int]](inner)
     Container[int] got_inner = outer.get()
-    print("{got_inner.get()}")
+    print(f"{got_inner.get()}")

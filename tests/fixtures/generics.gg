@@ -9,6 +9,6 @@ void main():
     int a = p.first
     int b = p.second
     int sum = a + b
-    print("{sum}")
+    print(f"{sum}")
     int v = identity(99)
-    print("{v}")
+    print(f"{v}")

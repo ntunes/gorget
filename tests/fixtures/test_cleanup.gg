@@ -6,7 +6,7 @@ struct Resource:
 equip Resource with Drop:
     void drop(self):
         str n = self.name
-        print("dropping {n}")
+        print(f"dropping {n}")
 
 test "cleanup on failure":
     Resource r = Resource("alpha")

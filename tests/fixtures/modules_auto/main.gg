@@ -2,4 +2,4 @@ from math import square
 
 void main():
     auto result = square(7)
-    print("{result}")
+    print(f"{result}")

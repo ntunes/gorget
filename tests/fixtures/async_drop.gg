@@ -4,7 +4,7 @@ struct Tracked:
 equip Tracked with Drop:
     void drop(!self):
         str l = self.label
-        print("drop {l}")
+        print(f"drop {l}")
 
 async int compute(int x):
     Tracked t = Tracked("compute-local")

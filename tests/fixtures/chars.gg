@@ -1,6 +1,6 @@
 void main():
     char c = 'A'
-    print("{c}")
+    print(f"{c}")
 
     # char comparison
     if 'A' < 'B':
@@ -11,11 +11,11 @@ void main():
 
     # escape sequences
     char backslash = '\\'
-    print("{backslash}")
+    print(f"{backslash}")
 
     char tab = '\t'
     char zero = '\0'
 
     # char in expressions
     bool is_upper = c >= 'A' and c <= 'Z'
-    print("{is_upper}")
+    print(f"{is_upper}")

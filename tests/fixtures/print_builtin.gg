@@ -4,4 +4,4 @@ void main():
     print("hello ", newline=false)
     print("world")
     int x = 42
-    print("to stderr: {x}", file=stderr)
+    print(f"to stderr: {x}", file=stderr)

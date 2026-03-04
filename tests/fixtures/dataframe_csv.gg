@@ -5,26 +5,26 @@ void main():
     Result[DataFrame, str] res = df_from_csv(csv_text)
     DataFrame df = res.unwrap()
 
-    print("{df.nrows()}")
-    print("{df.ncols()}")
+    print(f"{df.nrows()}")
+    print(f"{df.ncols()}")
 
     str age_col = "age"
     str name_col = "name"
     str score_col = "score"
     Column ac = df.get_column(age_col)
-    print("{ac.dtype_name()}")
-    print("{ac.value_as_str(0)}")
+    print(f"{ac.dtype_name()}")
+    print(f"{ac.value_as_str(0)}")
 
     Column sc = df.get_column(score_col)
-    print("{sc.dtype_name()}")
-    print("{sc.value_as_str(1)}")
+    print(f"{sc.dtype_name()}")
+    print(f"{sc.value_as_str(1)}")
 
     Column nc = df.get_column(name_col)
-    print("{nc.value_as_str(2)}")
+    print(f"{nc.value_as_str(2)}")
 
     # round-trip: to_csv preserves shape
     str csv_out = df_to_csv(df)
     Result[DataFrame, str] res2 = df_from_csv(csv_out)
     DataFrame df2 = res2.unwrap()
-    print("{df2.nrows()}")
-    print("{df2.ncols()}")
+    print(f"{df2.nrows()}")
+    print(f"{df2.ncols()}")

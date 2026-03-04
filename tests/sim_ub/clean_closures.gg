@@ -7,5 +7,5 @@ void main():
     int factor = 3
     int(int) double = (n): n * 2
     int(int) triple = (n): n * factor
-    print("{apply(double, 5)}")
-    print("{apply(triple, 7)}")
+    print(f"{apply(double, 5)}")
+    print(f"{apply(triple, 7)}")

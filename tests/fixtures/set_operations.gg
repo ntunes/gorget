@@ -15,11 +15,11 @@ void main():
 
     # union: {1,2,3,4,5,6}
     Set[int] u = a.union(b)
-    print("{u.len()}")
+    print(f"{u.len()}")
 
     # intersection: {3,4}
     Set[int] inter = a.intersection(b)
-    print("{inter.len()}")
+    print(f"{inter.len()}")
     if inter.contains(3):
         print("has 3")
     if inter.contains(4):
@@ -27,7 +27,7 @@ void main():
 
     # difference: {1,2}
     Set[int] d = a.difference(b)
-    print("{d.len()}")
+    print(f"{d.len()}")
     if d.contains(1):
         print("has 1")
     if d.contains(2):

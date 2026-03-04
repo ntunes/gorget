@@ -431,7 +431,7 @@ void main():
         if cli.len() >= 3:
             str out_path = cli.get(2).unwrap()
             write_file(out_path, html)
-            print("Wrote {out_path}")
+            print(f"Wrote {out_path}")
         else:
             print(html)
 

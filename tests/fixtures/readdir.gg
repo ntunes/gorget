@@ -15,7 +15,7 @@ void main():
         if e == "__test_b.txt":
             count = count + 1
 
-    print("{count}")
+    print(f"{count}")
 
     # Clean up
     delete_file("__test_a.txt")

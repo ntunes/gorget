@@ -10,9 +10,9 @@ void main():
             int count_val = doc1.get("count").as_int()
             float pi_val = doc1.get("pi").as_float()
             bool enabled_val = doc1.get("enabled").as_bool()
-            print("{count_val}")
-            print("{pi_val}")
-            print("{enabled_val}")
+            print(f"{count_val}")
+            print(f"{pi_val}")
+            print(f"{enabled_val}")
         case Error(err1):
             print(err1)
 
@@ -23,7 +23,7 @@ void main():
         case Ok(doc2):
             print(doc2.get("server").get("host").as_str())
             int port_val = doc2.get("server").get("port").as_int()
-            print("{port_val}")
+            print(f"{port_val}")
             print(doc2.get("server").get("tls").get("cert").as_str())
         case Error(err2):
             print(err2)
@@ -36,9 +36,9 @@ void main():
             int ports_len = doc3.get("ports").len()
             int port_first = doc3.get("ports").at(0).as_int()
             int port_last = doc3.get("ports").at(2).as_int()
-            print("{ports_len}")
-            print("{port_first}")
-            print("{port_last}")
+            print(f"{ports_len}")
+            print(f"{port_first}")
+            print(f"{port_last}")
             print(doc3.get("tags").at(1).as_str())
         case Error(err3):
             print(err3)
@@ -49,7 +49,7 @@ void main():
     match parsed_aot:
         case Ok(doc4):
             int fruits_len = doc4.get("fruits").len()
-            print("{fruits_len}")
+            print(f"{fruits_len}")
             print(doc4.get("fruits").at(0).get("name").as_str())
             print(doc4.get("fruits").at(1).get("name").as_str())
         case Error(err4):
@@ -64,10 +64,10 @@ void main():
             int oct_val = doc5.get("oct").as_int()
             int bin_val = doc5.get("bin").as_int()
             int sep_val = doc5.get("sep").as_int()
-            print("{hex_val}")
-            print("{oct_val}")
-            print("{bin_val}")
-            print("{sep_val}")
+            print(f"{hex_val}")
+            print(f"{oct_val}")
+            print(f"{bin_val}")
+            print(f"{sep_val}")
         case Error(err5):
             print(err5)
 
@@ -91,11 +91,11 @@ void main():
             bool is_flt = doc7.get("f").is_float()
             bool is_bln = doc7.get("b").is_bool()
             bool is_tbl = doc7.is_table()
-            print("{is_str}")
-            print("{is_int}")
-            print("{is_flt}")
-            print("{is_bln}")
-            print("{is_tbl}")
+            print(f"{is_str}")
+            print(f"{is_int}")
+            print(f"{is_flt}")
+            print(f"{is_bln}")
+            print(f"{is_tbl}")
         case Error(err7):
             print(err7)
 
@@ -107,17 +107,17 @@ void main():
             bool has_name = doc_has.has("name")
             bool has_missing = doc_has.has("nope")
             bool has_data = doc_has.has("data")
-            print("{has_name}")
-            print("{has_missing}")
-            print("{has_data}")
+            print(f"{has_name}")
+            print(f"{has_missing}")
+            print(f"{has_data}")
             # has_index on array
             bool has_i0 = doc_has.get("data").get("items").has_index(0)
             bool has_i5 = doc_has.get("data").get("items").has_index(5)
-            print("{has_i0}")
-            print("{has_i5}")
+            print(f"{has_i0}")
+            print(f"{has_i5}")
             # has on non-table returns false
             bool has_on_str = doc_has.get("name").has("x")
-            print("{has_on_str}")
+            print(f"{has_on_str}")
         case Error(err_has):
             print(err_has)
 
@@ -136,7 +136,7 @@ void main():
     match parsed_comments:
         case Ok(doc9):
             int comment_val = doc9.get("val").as_int()
-            print("{comment_val}")
+            print(f"{comment_val}")
         case Error(err9):
             print(err9)
 

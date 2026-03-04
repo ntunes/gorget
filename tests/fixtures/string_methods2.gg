@@ -9,18 +9,18 @@ void main():
 
     # char_at
     char c = s.char_at(0)
-    print("{c}")
+    print(f"{c}")
 
     # index_of
     int idx = s.index_of("world").unwrap()
-    print("{idx}")
+    print(f"{idx}")
     bool not_found = s.index_of("xyz").is_none()
-    print("{not_found}")
+    print(f"{not_found}")
 
     # count
     str s2 = "abcabcabc"
-    print("{s2.count("abc")}")
-    print("{s2.count("x")}")
+    print(f"{s2.count("abc")}")
+    print(f"{s2.count("x")}")
 
     # repeat
     print("ha".repeat(3))

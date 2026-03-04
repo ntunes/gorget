@@ -10,20 +10,20 @@ void main():
 
     # filter: keep even numbers
     Vector[int] evens = v.filter((int x): x % 2 == 0)
-    print("{evens.len()}")
-    print("{evens.get(0).unwrap()}")
-    print("{evens.get(1).unwrap()}")
+    print(f"{evens.len()}")
+    print(f"{evens.get(0).unwrap()}")
+    print(f"{evens.get(1).unwrap()}")
 
     # map: double each element
     Vector[int] doubled = v.map((int x): x * 2)
-    print("{doubled.len()}")
-    print("{doubled.get(0).unwrap()}")
-    print("{doubled.get(4).unwrap()}")
+    print(f"{doubled.len()}")
+    print(f"{doubled.get(0).unwrap()}")
+    print(f"{doubled.get(4).unwrap()}")
 
     # fold: sum all elements
     int total = v.fold(0, (int acc, int x): acc + x)
-    print("{total}")
+    print(f"{total}")
 
     # reduce: sum via reduce
     int reduced = v.reduce((int a, int b): a + b)
-    print("{reduced}")
+    print(f"{reduced}")

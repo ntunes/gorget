@@ -42,46 +42,46 @@ void main():
     Column sc = sorted.get_column("score")
     # Alice(25,90), Alice(25,85), Bob(30,80), Charlie(35,70)
     # Both Alices have age=25, so order between them is stable or arbitrary
-    print("{sorted.nrows()}")
+    print(f"{sorted.nrows()}")
     Column sn = sorted.get_column("name")
-    print("{sn.value_as_str(0)}")
-    print("{sn.value_as_str(3)}")
+    print(f"{sn.value_as_str(0)}")
+    print(f"{sn.value_as_str(3)}")
 
     # ── nlargest / nsmallest ──
     DataFrame top2 = df.nlargest(2, "age")
-    print("{top2.nrows()}")
+    print(f"{top2.nrows()}")
     Column top_age = top2.get_column("age")
-    print("{top_age.value_as_str(0)}")
+    print(f"{top_age.value_as_str(0)}")
 
     DataFrame bot2 = df.nsmallest(2, "age")
-    print("{bot2.nrows()}")
+    print(f"{bot2.nrows()}")
     Column bot_age = bot2.get_column("age")
-    print("{bot_age.value_as_str(0)}")
+    print(f"{bot_age.value_as_str(0)}")
 
     # ── column arithmetic ──
     DataFrame with_sum = df.col_add("age", "score", "total")
     Column total = with_sum.get_column("total")
     # Charlie: 35+70=105, Alice: 25+90=115, Bob: 30+80=110, Alice: 25+85=110
-    print("{total.value_as_str(0)}")
-    print("{total.value_as_str(1)}")
+    print(f"{total.value_as_str(0)}")
+    print(f"{total.value_as_str(1)}")
 
     DataFrame with_diff = df.col_sub("score", "age", "diff")
     Column diff_col = with_diff.get_column("diff")
     # Charlie: 70-35=35, Alice: 90-25=65
-    print("{diff_col.value_as_str(0)}")
-    print("{diff_col.value_as_str(1)}")
+    print(f"{diff_col.value_as_str(0)}")
+    print(f"{diff_col.value_as_str(1)}")
 
     DataFrame with_prod = df.col_mul("age", "score", "product")
     Column prod_col = with_prod.get_column("product")
     # Charlie: 35*70=2450
-    print("{prod_col.value_as_str(0)}")
+    print(f"{prod_col.value_as_str(0)}")
 
     # ── sample ──
     DataFrame sampled = df.sample(2, 42)
-    print("{sampled.nrows()}")
+    print(f"{sampled.nrows()}")
 
     # ── shuffle ──
     DataFrame shuffled = df.shuffle(42)
-    print("{shuffled.nrows()}")
+    print(f"{shuffled.nrows()}")
 
     print("done")

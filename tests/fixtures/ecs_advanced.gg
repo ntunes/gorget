@@ -8,7 +8,7 @@ void main():
 
     # max_id: after 3 creates, max_id reflects next assigned id
     int mid = pool.max_id()
-    print("{mid}")
+    print(f"{mid}")
 
     # try_get: Some when component exists
     SparseSet[int] health = SparseSet[int].new()
@@ -18,7 +18,7 @@ void main():
     Option[int] h1 = health.try_get(e1)
     match h1:
         case Some(v):
-            print("{v}")
+            print(f"{v}")
         case None:
             print("none")
 
@@ -26,11 +26,11 @@ void main():
     Option[int] h3 = health.try_get(e3)
     match h3:
         case Some(v):
-            print("{v}")
+            print(f"{v}")
         case None:
             print("none")
 
     # each: iterate all (entity, value) pairs in insertion order
-    health.each((Entity e, int hp): print("{hp}"))
+    health.each((Entity e, int hp): print(f"{hp}"))
 
     print("done")

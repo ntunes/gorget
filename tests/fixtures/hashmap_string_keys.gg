@@ -6,7 +6,7 @@ void main():
     str key2 = "hello"
     m.put(key1, 42)
     int val = m.get(key2).unwrap()
-    print("{val}")
+    print(f"{val}")
     if m.contains(key2):
         print("found")
     m.remove(key2)

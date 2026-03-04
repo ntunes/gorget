@@ -19,17 +19,17 @@ void main():
     # day_of_year: Jan 1 = 1
     DateTime dt_jan1 = DateTime(2000, 1, 1, 0, 0, 0, 0)
     int doy1 = dt_jan1.day_of_year()
-    print("{doy1}")
+    print(f"{doy1}")
 
     # day_of_year: Mar 1 in leap year 2000 = 61
     DateTime dt_mar1 = DateTime(2000, 3, 1, 0, 0, 0, 0)
     int doy2 = dt_mar1.day_of_year()
-    print("{doy2}")
+    print(f"{doy2}")
 
     # day_of_year: Dec 31 in leap year 2000 = 366
     DateTime dt_dec31 = DateTime(2000, 12, 31, 0, 0, 0, 0)
     int doy3 = dt_dec31.day_of_year()
-    print("{doy3}")
+    print(f"{doy3}")
 
     # add_minutes: add 90 minutes to midnight → 01:30:00
     DateTime dt_base = DateTime(2000, 1, 1, 0, 0, 0, 0)

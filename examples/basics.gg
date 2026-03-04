@@ -43,11 +43,11 @@ void main():
         print("zero")
 
     for i in 0..10:
-        print("{i}")
+        print(f"{i}")
 
-    print("add(3, 4) = {add(3, 4)}")
-    print("double(5) = {double(5)}")
-    print("name = {name}")
+    print(f"add(3, 4) = {add(3, 4)}")
+    print(f"double(5) = {double(5)}")
+    print(f"name = {name}")
 
     # NOT YET: list comprehensions
     # Vector[int] squares = [x * x for x in 0..10]

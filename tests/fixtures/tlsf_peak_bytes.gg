@@ -8,8 +8,8 @@ void main():
         while i < 100:
             v.push(i)
             i = i + 1
-        print("peak >= used: {alloc.peak_bytes() >= alloc.bytes_used()}")
-        print("peak > 0: {alloc.peak_bytes() > 0}")
+        print(f"peak >= used: {alloc.peak_bytes() >= alloc.bytes_used()}")
+        print(f"peak > 0: {alloc.peak_bytes() > 0}")
         alloc.reset()
-        print("peak after reset: {alloc.peak_bytes()}")
+        print(f"peak after reset: {alloc.peak_bytes()}")
     print("done")

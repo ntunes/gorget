@@ -30,27 +30,27 @@ void main():
     DataFrame df = df_from_columns(col_names, cols)
 
     # Basic properties
-    print("{df.nrows()}")
-    print("{df.ncols()}")
-    print("{df.has_column("age")}")
-    print("{df.has_column("missing")}")
+    print(f"{df.nrows()}")
+    print(f"{df.ncols()}")
+    print(f"{df.has_column("age")}")
+    print(f"{df.has_column("missing")}")
 
     # Column value access
     Column age_col = df.get_column("age")
-    print("{age_col.value_as_str(0)}")
-    print("{age_col.value_as_str(2)}")
-    print("{age_col.dtype_name()}")
+    print(f"{age_col.value_as_str(0)}")
+    print(f"{age_col.value_as_str(2)}")
+    print(f"{age_col.dtype_name()}")
 
     Column name_col = df.get_column("name")
-    print("{name_col.value_as_str(1)}")
+    print(f"{name_col.value_as_str(1)}")
 
     # head / tail
     DataFrame h = df.head(2)
-    print("{h.nrows()}")
+    print(f"{h.nrows()}")
     DataFrame t = df.tail(1)
-    print("{t.nrows()}")
+    print(f"{t.nrows()}")
     Column tc = t.get_column("name")
-    print("{tc.value_as_str(0)}")
+    print(f"{tc.value_as_str(0)}")
 
     # df_from_records
     Vector[str] hdrs = Vector[str]()
@@ -62,5 +62,5 @@ void main():
     r1.push("2")
     rows.push(r1)
     DataFrame dr = df_from_records(hdrs, rows)
-    print("{dr.nrows()}")
-    print("{dr.ncols()}")
+    print(f"{dr.nrows()}")
+    print(f"{dr.ncols()}")

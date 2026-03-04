@@ -29,7 +29,7 @@ void main():
     int turn = 0
     while world.team_alive_count(1) > 0 and world.team_alive_count(2) > 0:
         turn = turn + 1
-        print("=== Turn {turn} ===")
+        print(f"=== Turn {turn} ===")
         world.combat_round()
         world.remove_dead()
 

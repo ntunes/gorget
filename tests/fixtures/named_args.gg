@@ -2,7 +2,7 @@ int add(int a, int b):
     return a + b
 
 int greet(str name, int age = 25):
-    print("{name} is {age}")
+    print(f"{name} is {age}")
     return age
 
 int power(int base, int exp = 2):
@@ -16,15 +16,15 @@ int power(int base, int exp = 2):
 void main():
     # Named args in normal order
     int r1 = add(a = 1, b = 2)
-    print("{r1}")
+    print(f"{r1}")
 
     # Named args in reverse order
     int r2 = add(b = 10, a = 3)
-    print("{r2}")
+    print(f"{r2}")
 
     # Mix positional + named
     int r3 = add(5, b = 7)
-    print("{r3}")
+    print(f"{r3}")
 
     # Default param: use default
     greet("alice")
@@ -37,8 +37,8 @@ void main():
 
     # Default param in power: use default (exp=2)
     int p1 = power(3)
-    print("{p1}")
+    print(f"{p1}")
 
     # Default param in power: override
     int p2 = power(2, exp = 10)
-    print("{p2}")
+    print(f"{p2}")

@@ -16,7 +16,7 @@ void main():
     XmlNode n3 = xml_parse("<root><a>one</a><b>two</b></root>").unwrap()
     Vector[XmlNode] n3_kids = n3.children()
     int kid_count = n3_kids.len()
-    print("{kid_count}")
+    print(f"{kid_count}")
     XmlNode n3_b = n3.find("b")
     print(n3_b.text())
 
@@ -25,7 +25,7 @@ void main():
     print(n4.tag())
     Vector[XmlNode] n4_kids = n4.children()
     int br_kids = n4_kids.len()
-    print("{br_kids}")
+    print(f"{br_kids}")
 
     # Entity refs in text
     XmlNode n5 = xml_parse("<msg>a &amp; b &lt; c</msg>").unwrap()
@@ -43,7 +43,7 @@ void main():
     XmlNode n8 = xml_parse("<list><item>a</item><item>b</item><other>c</other></list>").unwrap()
     Vector[XmlNode] found_items = n8.find_all("item")
     int found_count = found_items.len()
-    print("{found_count}")
+    print(f"{found_count}")
     XmlNode item0 = found_items.get(0).unwrap()
     print(item0.text())
     XmlNode item1 = found_items.get(1).unwrap()
@@ -77,6 +77,6 @@ void main():
     # Parse error
     Result[XmlNode, str] bad_result = xml_parse("<unclosed>")
     bool is_err = bad_result.is_err()
-    print("{is_err}")
+    print(f"{is_err}")
 
     print("done")

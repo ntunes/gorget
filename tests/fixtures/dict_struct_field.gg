@@ -31,23 +31,23 @@ void main():
     reg.add("alice", 30)
     reg.add("bob", 25)
     reg.add("carol", 35)
-    print("{reg.size()}")
-    print("{reg.lookup("alice")}")
+    print(f"{reg.size()}")
+    print(f"{reg.lookup("alice")}")
     if reg.has("bob"):
         print("has bob")
     if reg.has("nobody") == false:
         print("no nobody")
 
     int sub = reg.items["carol"]
-    print("{sub}")
+    print(f"{sub}")
 
     Vector[str] ks = reg.items.keys()
-    print("{ks.len()}")
+    print(f"{ks.len()}")
 
     Cache cache = Cache(HashMap[str, int]())
     cache.set("x", 100)
     cache.set("y", 200)
-    print("{cache.count()}")
-    print("{cache.fetch("x")}")
+    print(f"{cache.count()}")
+    print(f"{cache.fetch("x")}")
     if cache.has("y"):
         print("has y")

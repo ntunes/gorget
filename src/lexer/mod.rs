@@ -294,8 +294,15 @@ impl<'src> Lexer<'src> {
                     i = new_end;
                 }
 
-                // Raw string r"...", byte string b"...", or cstr string c"..."
+                // Raw string r"...", byte string b"...", cstr string c"...", or format string f"..."/f'...'
                 b'r' | b'b' | b'c' if i + 1 < bytes.len() && bytes[i + 1] == b'"' => {
+                    let (tok, new_end) = self.scan_string_literal(i);
+                    let span = self.span(i, new_end);
+                    self.pending.push_back(Spanned::new(tok, span));
+                    i = new_end;
+                }
+
+                b'f' if i + 1 < bytes.len() && (bytes[i + 1] == b'"' || bytes[i + 1] == b'\'') => {
                     let (tok, new_end) = self.scan_string_literal(i);
                     let span = self.span(i, new_end);
                     self.pending.push_back(Spanned::new(tok, span));
@@ -328,6 +335,9 @@ impl<'src> Lexer<'src> {
                         && !(bytes[i] == b'c'
                             && i + 1 < bytes.len()
                             && bytes[i + 1] == b'"')
+                        && !(bytes[i] == b'f'
+                            && i + 1 < bytes.len()
+                            && (bytes[i + 1] == b'"' || bytes[i + 1] == b'\''))
                     {
                         i += 1;
                     }
@@ -559,17 +569,24 @@ impl<'src> Lexer<'src> {
         } else if i < bytes.len() && bytes[i] == b'c' {
             i += 1; // skip 'c'
             StringKind::CStr
+        } else if i < bytes.len() && bytes[i] == b'f' {
+            i += 1; // skip 'f'
+            StringKind::Format
         } else {
             StringKind::Normal
         };
 
-        // Expect opening quote
-        if i >= bytes.len() || bytes[i] != b'"' {
+        // Expect opening quote (either " or ')
+        if i >= bytes.len() || (bytes[i] != b'"' && bytes[i] != b'\'') {
             return (Token::Error("expected string".to_string()), i);
         }
+        let quote_char = bytes[i];
 
-        // Check for triple-quote
-        let triple = i + 2 < bytes.len() && bytes[i + 1] == b'"' && bytes[i + 2] == b'"';
+        // Check for triple-quote (only for double-quoted Normal strings)
+        let triple = quote_char == b'"'
+            && i + 2 < bytes.len()
+            && bytes[i + 1] == b'"'
+            && bytes[i + 2] == b'"';
         let actual_kind = if triple && kind == StringKind::Normal {
             StringKind::MultiLine
         } else {
@@ -579,7 +596,7 @@ impl<'src> Lexer<'src> {
         if triple {
             i += 3; // skip """
         } else {
-            i += 1; // skip "
+            i += 1; // skip opening quote
         }
 
         let mut segments: Vec<StringSegment> = Vec::new();
@@ -603,7 +620,7 @@ impl<'src> Lexer<'src> {
                     i += 3;
                     break;
                 }
-            } else if bytes[i] == b'"' {
+            } else if bytes[i] == quote_char {
                 i += 1;
                 break;
             }
@@ -616,7 +633,7 @@ impl<'src> Lexer<'src> {
                 break;
             }
 
-            // Escape sequences
+            // Escape sequences (all non-Raw kinds)
             if bytes[i] == b'\\' && actual_kind != StringKind::Raw {
                 i += 1; // skip backslash
                 match self.parse_escape(bytes, &mut i, EscapeContext::String) {
@@ -632,8 +649,8 @@ impl<'src> Lexer<'src> {
                 continue;
             }
 
-            // String interpolation: {expr}
-            if bytes[i] == b'{' && actual_kind != StringKind::Raw && actual_kind != StringKind::CStr {
+            // String interpolation: {expr} — only for Format strings
+            if bytes[i] == b'{' && actual_kind == StringKind::Format {
                 // Check for escaped brace: {{
                 if i + 1 < bytes.len() && bytes[i + 1] == b'{' {
                     current_literal.push('{');
@@ -656,10 +673,11 @@ impl<'src> Lexer<'src> {
                     match bytes[i] {
                         b'{' => brace_depth += 1,
                         b'}' => brace_depth -= 1,
-                        b'"' => {
-                            // Skip nested string
+                        b'"' | b'\'' => {
+                            // Skip nested string (same quote style)
+                            let nested_quote = bytes[i];
                             i += 1;
-                            while i < bytes.len() && bytes[i] != b'"' {
+                            while i < bytes.len() && bytes[i] != nested_quote {
                                 if bytes[i] == b'\\' {
                                     i += 1;
                                 }
@@ -686,10 +704,8 @@ impl<'src> Lexer<'src> {
                 continue;
             }
 
-            // Escaped brace: }}
-            if bytes[i] == b'}'
-                && actual_kind != StringKind::Raw
-                && actual_kind != StringKind::CStr
+            // Escaped brace: }} — only for Format strings
+            if bytes[i] == b'}' && actual_kind == StringKind::Format
                 && i + 1 < bytes.len()
                 && bytes[i + 1] == b'}'
             {
@@ -715,7 +731,13 @@ impl<'src> Lexer<'src> {
         (token, i)
     }
 
-    /// Scan a char literal starting at `pos`. Returns (Token, end_position).
+    /// Scan a single-quoted literal starting at `pos`. Returns (Token, end_position).
+    ///
+    /// - `'x'` or `'\n'` (exactly one char/escape) → `Token::CharLiteral`
+    /// - `'hello'` or `''` (multi-char or empty) → `Token::StringLiteral(Normal)` (raw str, no interpolation)
+    ///
+    /// Note: `f'...'` is routed to `scan_string_literal` instead, so this function never
+    /// sees f-prefixed single-quoted strings.
     fn scan_char_literal(&mut self, pos: usize) -> (Token, usize) {
         let bytes = self.source.as_bytes();
         let mut i = pos + 1; // skip opening '
@@ -728,35 +750,81 @@ impl<'src> Lexer<'src> {
             return (Token::Error("unterminated char".to_string()), i);
         }
 
-        let ch = if bytes[i] == b'\\' {
-            i += 1; // skip backslash
-            match self.parse_escape(bytes, &mut i, EscapeContext::Char) {
-                EscapeResult::Char(c) => c,
+        // Scan one char or escape, track whether we're still a potential single-char literal.
+        // We use a small scan-ahead: try to read exactly one char/escape, then check for `'`.
+        // If the closing `'` is right there → CharLiteral.
+        // Otherwise fall through to multi-char string scanning.
+
+        // Scan the first character or escape sequence.
+        let (first_char, after_first) = if bytes[i] == b'\\' {
+            let mut j = i + 1;
+            match self.parse_escape(bytes, &mut j, EscapeContext::Char) {
+                EscapeResult::Char(c) => (Some(c), j),
                 EscapeResult::Eof => {
                     self.errors.push(LexError {
                         kind: LexErrorKind::UnterminatedCharLiteral,
                         span: self.span(pos, i),
                     });
-                    return (Token::Error("unterminated char".to_string()), i);
+                    return (Token::Error("unterminated char".to_string()), i + 1);
                 }
             }
         } else {
             let c = self.source[i..].chars().next().unwrap();
-            i += c.len_utf8();
-            c
+            (Some(c), i + c.len_utf8())
         };
 
-        // Expect closing quote
-        if i < bytes.len() && bytes[i] == b'\'' {
-            i += 1;
-            (Token::CharLiteral(ch), i)
-        } else {
-            self.errors.push(LexError {
-                kind: LexErrorKind::UnterminatedCharLiteral,
-                span: self.span(pos, i),
-            });
-            (Token::CharLiteral(ch), i)
+        // If the next byte after the first char is `'`, it's a single-char literal.
+        if let Some(ch) = first_char {
+            if after_first < bytes.len() && bytes[after_first] == b'\'' {
+                return (Token::CharLiteral(ch), after_first + 1);
+            }
         }
+
+        // Multi-char (or empty `''`) single-quoted string → StringLiteral::Normal (raw str).
+        // Restart from just after the opening `'` and collect until matching `'`.
+        let mut literal = String::new();
+        i = pos + 1; // back to just after opening '
+
+        loop {
+            if i >= bytes.len() || bytes[i] == b'\n' {
+                self.errors.push(LexError {
+                    kind: LexErrorKind::UnterminatedString,
+                    span: self.span(pos, i),
+                });
+                break;
+            }
+
+            if bytes[i] == b'\'' {
+                i += 1; // consume closing '
+                break;
+            }
+
+            // Escape sequences (single-quoted raw strings still process escapes like "..." do)
+            if bytes[i] == b'\\' {
+                i += 1;
+                match self.parse_escape(bytes, &mut i, EscapeContext::String) {
+                    EscapeResult::Char(c) => literal.push(c),
+                    EscapeResult::Eof => {
+                        self.errors.push(LexError {
+                            kind: LexErrorKind::UnterminatedString,
+                            span: self.span(pos, i),
+                        });
+                        break;
+                    }
+                }
+                continue;
+            }
+
+            let ch = self.source[i..].chars().next().unwrap();
+            literal.push(ch);
+            i += ch.len_utf8();
+        }
+
+        let token = Token::StringLiteral(StringLiteral {
+            kind: StringKind::Normal,
+            segments: vec![StringSegment::Literal(literal)],
+        });
+        (token, i)
     }
 
     /// Skip to end of line (or EOF) without collecting content.
@@ -907,13 +975,30 @@ mod tests {
     }
 
     #[test]
-    fn test_string_interpolation() {
+    fn test_string_no_interpolation() {
+        // Plain "..." strings do NOT interpolate — {name} is a literal brace group.
         let tokens = lex("\"Hello, {name}!\"\n");
         assert_eq!(
             tokens,
             vec![
                 Token::StringLiteral(StringLiteral {
                     kind: StringKind::Normal,
+                    segments: vec![StringSegment::Literal("Hello, {name}!".to_string())],
+                }),
+                Token::Newline,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_fstring_interpolation() {
+        // f"..." strings DO interpolate.
+        let tokens = lex("f\"Hello, {name}!\"\n");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::StringLiteral(StringLiteral {
+                    kind: StringKind::Format,
                     segments: vec![
                         StringSegment::Literal("Hello, ".to_string()),
                         StringSegment::Interpolation("name".to_string()),
@@ -1132,13 +1217,30 @@ mod tests {
     }
 
     #[test]
-    fn test_escaped_braces_in_string() {
+    fn test_normal_string_literal_braces() {
+        // In Normal strings, { and } are literal characters — no escape needed.
         let tokens = lex("\"{{literal}}\"\n");
         assert_eq!(
             tokens,
             vec![
                 Token::StringLiteral(StringLiteral {
                     kind: StringKind::Normal,
+                    segments: vec![StringSegment::Literal("{{literal}}".to_string())],
+                }),
+                Token::Newline,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_fstring_escaped_braces() {
+        // In Format strings, {{ → { and }} → } (escape sequences).
+        let tokens = lex("f\"{{literal}}\"\n");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::StringLiteral(StringLiteral {
+                    kind: StringKind::Format,
                     segments: vec![StringSegment::Literal("{literal}".to_string())],
                 }),
                 Token::Newline,

@@ -19,7 +19,7 @@ void main():
     # Empty string → empty dict (size 0)
     Dict[str, str] d1 = parse_query_string("")
     int size1 = d1.keys().len()
-    print("{size1}")
+    print(f"{size1}")
 
     # "key" → {"key": ""}
     Dict[str, str] d2 = parse_query_string("key")

@@ -3,6 +3,6 @@ void main():
     int y = x * 2 + 5
     bool flag = y > 20
     if flag:
-        print("big: {y}")
+        print(f"big: {y}")
     else:
-        print("small: {y}")
+        print(f"small: {y}")

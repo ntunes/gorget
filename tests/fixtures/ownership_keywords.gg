@@ -3,26 +3,26 @@ struct Point:
     int y
 
 void consume(String consuming s):
-    print("{s}")
+    print(f"{s}")
 
 void borrow_it(String mutable s):
-    print("{s}")
+    print(f"{s}")
 
 void look(int x):
-    print("{x}")
+    print(f"{x}")
 
 void main():
     # Primitives are Copy — no move needed
     int a = 42
     int b = a
-    print("{a}")
-    print("{b}")
+    print(f"{a}")
+    print(f"{b}")
 
     # Structs use move semantics with `consuming` keyword
     Point p = Point(1, 2)
     Point q = consuming p
-    print("{q.x}")
-    print("{q.y}")
+    print(f"{q.x}")
+    print(f"{q.y}")
 
     # Move ownership with keyword
     String s1 = "moved"

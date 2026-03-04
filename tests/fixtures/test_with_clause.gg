@@ -4,7 +4,7 @@ struct Resource:
 equip Resource with Drop:
     void drop(self):
         str n = self.name
-        print("dropping {n}")
+        print(f"dropping {n}")
 
 test "single with" with Resource("alpha") as r:
     assert r.name == "alpha"

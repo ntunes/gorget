@@ -9,7 +9,7 @@ void main():
         v.push(3)
         assert fba.bytes_used() > 0, "fba should have used bytes"
         print("bytes_used > 0: true")
-        print("capacity: {fba.capacity()}")
+        print(f"capacity: {fba.capacity()}")
         fba.reset()
         assert fba.bytes_used() == 0, "after reset bytes should be 0"
         print("after reset: 0")

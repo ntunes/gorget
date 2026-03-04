@@ -26,14 +26,14 @@ void main():
     str name_col = "name"
     DataFrame sorted = df.sort_by(age_col, true)
     Column sc = sorted.get_column(age_col)
-    print("{sc.value_as_str(0)}")
-    print("{sc.value_as_str(1)}")
-    print("{sc.value_as_str(2)}")
+    print(f"{sc.value_as_str(0)}")
+    print(f"{sc.value_as_str(1)}")
+    print(f"{sc.value_as_str(2)}")
 
     # sort_by descending
     DataFrame sorted_desc = df.sort_by(age_col, false)
     Column sc2 = sorted_desc.get_column(age_col)
-    print("{sc2.value_as_str(0)}")
+    print(f"{sc2.value_as_str(0)}")
 
     # add_column
     Vector[float] scores = Vector[float]()
@@ -42,14 +42,14 @@ void main():
     scores.push(7.5)
     str score_col = "score"
     DataFrame df2 = df.add_column(score_col, col_from_floats(scores))
-    print("{df2.ncols()}")
+    print(f"{df2.ncols()}")
 
     # apply_int: double the ages
     int(int) double_fn = (int x): x * 2
     DataFrame df3 = df.apply_int(age_col, double_fn)
     Column ac = df3.get_column(age_col)
-    print("{ac.value_as_str(0)}")
+    print(f"{ac.value_as_str(0)}")
 
     # dropna (no nulls, same size)
     DataFrame df4 = df.dropna()
-    print("{df4.nrows()}")
+    print(f"{df4.nrows()}")

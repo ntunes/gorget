@@ -12,8 +12,8 @@ str describe(Greeting g):
     str pri = "no priority"
     match g.priority:
         case Some(p):
-            pri = "{p}"
-    return "{msg} ({pri})"
+            pri = f"{p}"
+    return f"{msg} ({pri})"
 
 str main():
     Greeting a = Greeting(Some("hello"), Some(1))

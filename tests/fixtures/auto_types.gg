@@ -13,20 +13,20 @@ void main():
     auto flag = true
     auto ch = 'A'
 
-    print("{n}")
-    print("{greeting}")
-    print("{pi}")
-    print("{flag}")
-    print("{ch}")
+    print(f"{n}")
+    print(f"{greeting}")
+    print(f"{pi}")
+    print(f"{flag}")
+    print(f"{ch}")
 
     auto sum = n + 8
-    print("{sum}")
+    print(f"{sum}")
 
     auto msg = "world"
-    print("{greeting} {msg}")
+    print(f"{greeting} {msg}")
 
     const auto limit = 100
-    print("{limit}")
+    print(f"{limit}")
 
     auto v = Vec2(1.0, 2.0)
     float vsum = v.sum()
@@ -35,5 +35,5 @@ void main():
     int base = 10
     auto add_base = (int y): base + y
     int result = add_base(5)
-    print("{result}")
+    print(f"{result}")
     print("auto closure")

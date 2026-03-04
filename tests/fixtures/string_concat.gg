@@ -9,4 +9,4 @@ void main():
     print("foo" + "bar")
     auto x = "a" + "b" + "c"
     print(x)
-    print("{a + b}")
+    print(f"{a + b}")

@@ -1727,6 +1727,7 @@ impl Formatter {
             StringKind::Raw => self.emitter.write("r\""),
             StringKind::Byte => self.emitter.write("b\""),
             StringKind::CStr => self.emitter.write("c\""),
+            StringKind::Format => self.emitter.write("f\""),
             StringKind::MultiLine => self.emitter.write("\"\"\""),
             StringKind::Normal => self.emitter.write("\""),
         }

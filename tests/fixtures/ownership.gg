@@ -6,10 +6,10 @@ void main():
     # Primitives are Copy — no ! needed
     int a = 42
     int b = a
-    print("{a}")
-    print("{b}")
+    print(f"{a}")
+    print(f"{b}")
     # Structs use move semantics
     Point p = Point(1, 2)
     Point q = !p
-    print("{q.x}")
-    print("{q.y}")
+    print(f"{q.x}")
+    print(f"{q.y}")

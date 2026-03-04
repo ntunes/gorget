@@ -42,4 +42,4 @@ void main():
     str d = w.describe()
     print(d)
     int c = w.count()
-    print("{c}")
+    print(f"{c}")

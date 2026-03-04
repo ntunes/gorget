@@ -10,10 +10,10 @@ void main():
     int total = 0
     for (k, v) in ages:
         total = total + v
-    print("{total}")
+    print(f"{total}")
 
     # Iterate keys only — insertion order preserved
     int count = 0
     for k in ages:
         count = count + 1
-    print("{count}")
+    print(f"{count}")

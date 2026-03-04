@@ -15,19 +15,19 @@ int identity(int x):
 void main():
     # Bare auto destructuring
     auto a, b = get_pair()
-    print("{a}")
-    print("{b}")
+    print(f"{a}")
+    print(f"{b}")
 
     # Three-element bare auto destructuring
     auto name, value, flag = parse_info()
-    print("{name}")
-    print("{value}")
-    print("{flag}")
+    print(f"{name}")
+    print(f"{value}")
+    print(f"{flag}")
 
     # Parenthesized forms still work (regression)
     auto (x, y) = get_pair()
-    print("{x}")
-    print("{y}")
+    print(f"{x}")
+    print(f"{y}")
 
     # Bare for-loop pattern
     Vector[(int, int)] pairs = Vector[(int, int)]()
@@ -35,9 +35,9 @@ void main():
     pairs.push((2, 20))
     pairs.push((3, 30))
     for first, second in pairs:
-        print("{first}")
-        print("{second}")
+        print(f"{first}")
+        print(f"{second}")
 
     # Single return regression
     int r = identity(99)
-    print("{r}")
+    print(f"{r}")

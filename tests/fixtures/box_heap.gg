@@ -2,10 +2,10 @@ from std.collections import Box
 
 void main():
     Box[int] b = Box(42)
-    print("{*b}")
+    print(f"{*b}")
     int val = b.get()
-    print("{val}")
+    print(f"{val}")
     b.set(100)
-    print("{b.get()}")
+    print(f"{b.get()}")
     Box[str] s = Box.new("hello")
-    print("{*s}")
+    print(f"{*s}")
