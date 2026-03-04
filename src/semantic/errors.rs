@@ -56,6 +56,9 @@ pub enum SemanticErrorKind {
     /// Duplicate trait implementation.
     DuplicateImpl { trait_: String, type_: String },
 
+    /// Cyclic trait inheritance (e.g. `trait A extends B` + `trait B extends A`).
+    TraitCycle { trait_: String, cycle: String },
+
     /// Method signature doesn't match trait definition.
     MethodSignatureMismatch {
         trait_: String,
@@ -272,10 +275,17 @@ impl std::fmt::Display for SemanticError {
                 write!(f, "no field `{field}` found on type `{type_}`")
             }
             SemanticErrorKind::DuplicateImpl { trait_, type_ } => {
-                write!(
-                    f,
-                    "duplicate implementation of trait `{trait_}` for type `{type_}`"
-                )
+                if trait_ == "(inherent)" {
+                    write!(f, "duplicate inherent impl block for type `{type_}`")
+                } else {
+                    write!(
+                        f,
+                        "duplicate implementation of trait `{trait_}` for type `{type_}`"
+                    )
+                }
+            }
+            SemanticErrorKind::TraitCycle { trait_, cycle } => {
+                write!(f, "trait `{trait_}` has a cyclic inheritance: {cycle}")
             }
             SemanticErrorKind::MethodSignatureMismatch {
                 trait_,

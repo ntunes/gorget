@@ -1,4 +1,4 @@
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::parser::ast::*;
 use crate::span::Span;
@@ -192,7 +192,10 @@ pub fn build_registry(
         }
     }
 
-    // Third pass: validate trait impls (check all required methods are present)
+    // Third pass: detect trait inheritance cycles (before validate_trait_impls to avoid stack overflow)
+    validate_trait_cycles(&registry, errors);
+
+    // Fourth pass: validate trait impls (check all required methods are present)
     validate_trait_impls(&registry, module, types, errors);
 
     registry
@@ -673,6 +676,17 @@ fn process_impl(
     if let Some(trait_id) = trait_def_id {
         registry.trait_impls.insert((trait_id, self_type_id, trait_arg_type_ids), impl_idx);
     } else {
+        // Duplicate inherent equip check
+        if registry.inherent_impls.contains_key(&self_type_id) {
+            errors.push(SemanticError {
+                kind: SemanticErrorKind::DuplicateImpl {
+                    trait_: "(inherent)".to_string(),
+                    type_: self_type_name.clone(),
+                },
+                span: impl_block.span,
+            });
+            return;
+        }
         registry
             .inherent_impls
             .entry(self_type_id)
@@ -892,18 +906,84 @@ fn type_name_from_ast(ty: &Type) -> Option<String> {
     }
 }
 
+/// Detect cycles in trait inheritance via DFS. Emits `TraitCycle` errors.
+fn validate_trait_cycles(registry: &TraitRegistry, errors: &mut Vec<SemanticError>) {
+    let mut visited = FxHashSet::default();
+    let mut in_stack: Vec<(DefId, String)> = Vec::new();
+
+    let ids: Vec<DefId> = registry.traits.keys().copied().collect();
+    for id in ids {
+        if !visited.contains(&id) {
+            dfs_detect_cycle(id, registry, &mut visited, &mut in_stack, errors);
+        }
+    }
+}
+
+fn dfs_detect_cycle(
+    id: DefId,
+    registry: &TraitRegistry,
+    visited: &mut FxHashSet<DefId>,
+    in_stack: &mut Vec<(DefId, String)>,
+    errors: &mut Vec<SemanticError>,
+) {
+    let Some(trait_info) = registry.traits.get(&id) else { return };
+
+    // Cycle found — id is already in the current DFS path
+    if let Some(cycle_start) = in_stack.iter().position(|(sid, _)| *sid == id) {
+        let mut path: Vec<String> = in_stack[cycle_start..]
+            .iter()
+            .map(|(_, name)| name.clone())
+            .collect();
+        path.push(trait_info.name.clone());
+        let cycle_str = path.join(" → ");
+        errors.push(SemanticError {
+            kind: SemanticErrorKind::TraitCycle {
+                trait_: trait_info.name.clone(),
+                cycle: cycle_str,
+            },
+            span: Span::dummy(),
+        });
+        return;
+    }
+
+    if visited.contains(&id) {
+        return;
+    }
+
+    in_stack.push((id, trait_info.name.clone()));
+    let extends = trait_info.extends.clone();
+    for parent_id in extends {
+        dfs_detect_cycle(parent_id, registry, visited, in_stack, errors);
+    }
+    in_stack.pop();
+    visited.insert(id);
+}
+
 /// Collect all methods required by a trait, including inherited parent methods.
 /// Returns (method_name, has_default, source_trait_name) tuples.
+/// Uses a visited set to guard against cycles (which are reported separately).
 fn collect_all_required_methods(
     trait_info: &TraitInfo,
     registry: &TraitRegistry,
 ) -> Vec<(String, bool, String)> {
+    let mut visited = FxHashSet::default();
+    collect_all_required_methods_inner(trait_info, registry, &mut visited)
+}
+
+fn collect_all_required_methods_inner(
+    trait_info: &TraitInfo,
+    registry: &TraitRegistry,
+    visited: &mut FxHashSet<DefId>,
+) -> Vec<(String, bool, String)> {
+    if !visited.insert(trait_info.def_id) {
+        return vec![]; // cycle guard — already visited
+    }
     let mut methods = Vec::new();
 
     // Recursively collect parent trait methods
     for &parent_id in &trait_info.extends {
         if let Some(parent_info) = registry.traits.get(&parent_id) {
-            methods.extend(collect_all_required_methods(parent_info, registry));
+            methods.extend(collect_all_required_methods_inner(parent_info, registry, visited));
         }
     }
 
@@ -1532,5 +1612,96 @@ equip Circle with Drawable:
             &e.kind,
             SemanticErrorKind::MethodSignatureMismatch { .. }
         )), "correct signature should produce no mismatch errors: {:?}", errors);
+    }
+
+    #[test]
+    fn duplicate_inherent_equip_errors() {
+        let source = "\
+struct Point:
+    float x
+
+equip Point:
+    float x(self):
+        return self.x
+
+equip Point:
+    float y(self):
+        return 0.0
+";
+        let (_, errors) = analyze(source);
+        assert!(errors.iter().any(|e| matches!(
+            &e.kind,
+            SemanticErrorKind::DuplicateImpl { type_, .. } if type_ == "Point"
+        )), "expected DuplicateImpl for inherent equip, got: {:?}", errors);
+    }
+
+    #[test]
+    fn duplicate_trait_equip_errors() {
+        let source = "\
+trait Drawable:
+    void draw(self)
+
+struct Circle:
+    float radius
+
+equip Circle with Drawable:
+    void draw(self):
+        pass
+
+equip Circle with Drawable:
+    void draw(self):
+        pass
+";
+        let (_, errors) = analyze(source);
+        assert!(errors.iter().any(|e| matches!(
+            &e.kind,
+            SemanticErrorKind::DuplicateImpl { trait_, type_ }
+                if trait_ == "Drawable" && type_ == "Circle"
+        )), "expected DuplicateImpl for duplicate trait equip, got: {:?}", errors);
+    }
+
+    #[test]
+    fn trait_cycle_detected() {
+        let source = "\
+trait A extends B:
+    void a(self)
+
+trait B extends A:
+    void b(self)
+";
+        let (_, errors) = analyze(source);
+        assert!(errors.iter().any(|e| matches!(
+            &e.kind,
+            SemanticErrorKind::TraitCycle { .. }
+        )), "expected TraitCycle, got: {:?}", errors);
+    }
+
+    #[test]
+    fn trait_self_cycle_detected() {
+        let source = "\
+trait A extends A:
+    void a(self)
+";
+        let (_, errors) = analyze(source);
+        assert!(errors.iter().any(|e| matches!(
+            &e.kind,
+            SemanticErrorKind::TraitCycle { .. }
+        )), "expected TraitCycle for self-extension, got: {:?}", errors);
+    }
+
+    #[test]
+    fn trait_no_cycle_no_error() {
+        let source = "\
+trait Base:
+    void base(self)
+
+trait Child extends Base:
+    void child(self)
+";
+        let (_, errors) = analyze(source);
+        assert!(!errors.iter().any(|e| matches!(
+            &e.kind,
+            SemanticErrorKind::TraitCycle { .. }
+        )), "correct inheritance should produce no cycle errors: {:?}", errors);
     }
 }
