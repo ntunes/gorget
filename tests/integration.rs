@@ -6937,6 +6937,11 @@ fn format_item_canonical(item: &Item) -> String {
         Item::MetaTypeFunc(mtf) => format!("meta type {}(...)", mtf.name.node),
         Item::MetaAssert(_) => "meta assert ...".to_string(),
         Item::MetaIf(_) => "meta if ...".to_string(),
+        Item::Module { path, items } => {
+            let path_str = path.join(".");
+            let inner = items.iter().map(|si| format_item_canonical(&si.node)).collect::<Vec<_>>().join("|");
+            format!("module({path_str})[{inner}]")
+        }
     }
 }
 
@@ -8646,6 +8651,7 @@ fn format_scope_kind_canonical(kind: &gorget::semantic::scope::ScopeKind) -> &'s
     use gorget::semantic::scope::ScopeKind::*;
     match kind {
         Module => "Module",
+        FileModule { .. } => "FileModule",
         Function => "Function",
         Block => "Block",
         EquipBlock { .. } => "EquipBlock",

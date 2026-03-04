@@ -130,13 +130,15 @@ impl ModuleLoader {
     /// `entry` is the path to the main `.gg` file. `entry_source` and `entry_module`
     /// are the already-read source and parsed AST for the entry file (to avoid re-parsing).
     ///
-    /// Returns `(path, source, module)` triples for all loaded files, with the entry first.
+    /// Returns `(path, logical_path, source, module)` quads for all loaded files, with the
+    /// entry first. `logical_path` is the import path segments (e.g. `["gg", "csv"]`); empty
+    /// for the entry module.
     pub fn load_all(
         &mut self,
         entry: &Path,
         entry_source: String,
         entry_module: Module,
-    ) -> Result<Vec<(PathBuf, String, Module)>, LoadError> {
+    ) -> Result<Vec<(PathBuf, Vec<String>, String, Module)>, LoadError> {
         let canonical = entry
             .canonicalize()
             .map_err(|e| LoadError::Io {
@@ -155,7 +157,8 @@ impl ModuleLoader {
         let imports = extract_imports(&entry_module);
         let base_dir = canonical.parent().unwrap().to_path_buf();
 
-        results.push((canonical.clone(), entry_source, entry_module));
+        // Entry module has an empty logical path.
+        results.push((canonical.clone(), Vec::new(), entry_source, entry_module));
 
         // Recursively load each import
         for (segments, _span) in imports {
@@ -170,7 +173,7 @@ impl ModuleLoader {
         &mut self,
         base_dir: &Path,
         segments: &[String],
-        results: &mut Vec<(PathBuf, String, Module)>,
+        results: &mut Vec<(PathBuf, Vec<String>, String, Module)>,
     ) -> Result<(), LoadError> {
         // Intercept virtual built-in modules (std.* and gg.*) before filesystem resolution
         if crate::stdlib::is_builtin_module(segments) {
@@ -182,7 +185,7 @@ impl ModuleLoader {
             // Try synthetic (compiler-generated) module first
             if let Some(module) = crate::stdlib::generate_builtin_module(segments) {
                 self.loaded.insert(virtual_path.clone());
-                results.push((virtual_path, String::new(), module));
+                results.push((virtual_path, segments.to_vec(), String::new(), module));
                 return Ok(());
             }
 
@@ -208,7 +211,7 @@ impl ModuleLoader {
                 for (segs, _span) in imports {
                     self.load_recursive(base_dir, &segs, results)?;
                 }
-                results.push((virtual_path.clone(), source.to_string(), module));
+                results.push((virtual_path.clone(), segments.to_vec(), source.to_string(), module));
 
                 self.load_stack.pop();
                 return Ok(());
@@ -290,7 +293,7 @@ impl ModuleLoader {
         for (segs, _span) in imports {
             self.load_recursive(&this_dir, &segs, results)?;
         }
-        results.push((canonical.clone(), source, module));
+        results.push((canonical.clone(), segments.to_vec(), source, module));
 
         self.load_stack.pop();
         Ok(())
@@ -710,38 +713,58 @@ fn qualify_pattern(pattern: &mut Spanned<Pattern>, vm: &HashMap<String, String>)
 
 /// Merge all loaded modules into a single `Module`.
 ///
-/// The entry file's items come first, then imported modules' items
-/// (excluding their `Item::Import` nodes to avoid re-processing).
-pub fn merge_modules(modules: Vec<(PathBuf, String, Module)>) -> Module {
+/// The entry file's items come first at the top level. Each imported module's items
+/// are wrapped in an `Item::Module { path, items }` node that preserves module
+/// identity through the semantic pipeline. This allows the resolver to enforce
+/// per-module scoping and `private` visibility.
+pub fn merge_modules(modules: Vec<(PathBuf, Vec<String>, String, Module)>) -> Module {
     if modules.len() == 1 {
         // Single-file: build variant map from this module and qualify in-place.
-        let (path, source, mut module) = modules.into_iter().next().unwrap();
+        let (_path, _logical, _source, mut module) = modules.into_iter().next().unwrap();
         let vm = build_variant_map_from_module(&module);
         qualify_module_with_map(&mut module, &vm);
-        let _ = (path, source);
         return module;
     }
 
     // Multi-file: build a global variant map from ALL modules for cross-module qualification.
-    let global_vm = build_variant_map_from_all(&modules);
+    // The variant map needs the raw (PathBuf, String, Module) triples, so extract them.
+    let raw_for_vm: Vec<(PathBuf, String, Module)> = modules.iter()
+        .map(|(p, _, s, m)| (p.clone(), s.clone(), m.clone()))
+        .collect();
+    let global_vm = build_variant_map_from_all(&raw_for_vm);
 
     let mut all_items: Vec<Spanned<Item>> = Vec::new();
 
-    for (i, (_path, _source, mut module)) in modules.into_iter().enumerate() {
+    for (i, (_path, logical_path, _source, mut module)) in modules.into_iter().enumerate() {
         // Apply global qualification to every module (including entry).
         qualify_module_with_map(&mut module, &global_vm);
         if i == 0 {
-            // Entry file: keep all items (including its imports, so the resolver
-            // can register the imported names)
+            // Entry file: keep all items at the top level (including its import statements,
+            // so the resolver can register imported names into the global scope).
             all_items.extend(module.items);
         } else {
-            // Imported modules: exclude their own import statements after qualification.
-            all_items.extend(
-                module
-                    .items
-                    .into_iter()
-                    .filter(|item| !matches!(item.node, Item::Import(_))),
-            );
+            // Non-entry modules: wrap in Item::Module to preserve module identity.
+            // Exclude the module's own import statements — they were used during
+            // loading but must not pollute the entry module's import-resolution pass.
+            let mod_items: Vec<Spanned<Item>> = module
+                .items
+                .into_iter()
+                .filter(|item| !matches!(item.node, Item::Import(_)))
+                .collect();
+
+            let span = if let (Some(first), Some(last)) = (mod_items.first(), mod_items.last()) {
+                first.span.merge(last.span)
+            } else {
+                Span::dummy()
+            };
+
+            all_items.push(Spanned {
+                node: Item::Module {
+                    path: logical_path,
+                    items: mod_items,
+                },
+                span,
+            });
         }
     }
 

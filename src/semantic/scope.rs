@@ -46,6 +46,10 @@ pub struct Scope {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScopeKind {
     Module,
+    /// A file-based module scope (created for each non-entry `Item::Module` wrapper).
+    /// Its names are exported to the parent `Module` scope after collection,
+    /// except for items explicitly marked `private`.
+    FileModule { path: Vec<String> },
     Function,
     Block,
     EquipBlock { self_type: Option<TypeId> },
@@ -334,6 +338,53 @@ impl ScopeTable {
             }
         }
         false
+    }
+
+    /// Return all `(name, DefId)` pairs defined directly in the current scope.
+    pub fn names_in_current_scope(&self) -> Vec<(String, DefId)> {
+        self.scopes[self.current.0 as usize]
+            .names
+            .iter()
+            .map(|(n, d)| (n.clone(), *d))
+            .collect()
+    }
+
+    /// Copy all non-private names from the current scope into the parent scope.
+    ///
+    /// Called after collecting a `FileModule` scope's items to make public items
+    /// accessible from the enclosing (global Module) scope.
+    pub fn export_non_private(&mut self, private_names: &rustc_hash::FxHashSet<String>) {
+        let current_idx = self.current.0 as usize;
+        let parent_idx = match self.scopes[current_idx].parent {
+            Some(p) => p.0 as usize,
+            None => return, // root scope — nothing to export to
+        };
+
+        let names: Vec<(String, DefId)> = self.scopes[current_idx]
+            .names
+            .iter()
+            .filter(|(name, _)| !private_names.contains(name.as_str()))
+            .map(|(n, d)| (n.clone(), *d))
+            .collect();
+
+        for (name, def_id) in names {
+            // Allow real definitions to replace Import placeholders or dummy entries.
+            // Import placeholders are created in the parent scope by `from X import Y`
+            // in the entry module — the actual definition from the FileModule scope must
+            // take over. Don't overwrite a real (non-Import) definition.
+            let existing = self.scopes[parent_idx].names.get(&name).copied();
+            let should_insert = match existing {
+                None => true,
+                Some(existing_id) => {
+                    let existing_def = &self.definitions[existing_id.0 as usize];
+                    existing_def.kind == DefKind::Import
+                        || existing_def.span == crate::span::Span::dummy()
+                }
+            };
+            if should_insert {
+                self.scopes[parent_idx].names.insert(name, def_id);
+            }
+        }
     }
 }
 

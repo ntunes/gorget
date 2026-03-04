@@ -52,6 +52,11 @@ fn rewrite_item(item: &mut Item, res: &ResolutionMap, scopes: &ScopeTable) {
         | Item::TypeAlias(_) | Item::Newtype(_) | Item::ExternBlock(_)
         | Item::Directive(_) | Item::MetaConst(_) | Item::MetaType(_)
         | Item::MetaTypeFunc(_) | Item::MetaAssert(_) | Item::MetaIf(_) => {}
+        Item::Module { items, .. } => {
+            for si in items {
+                rewrite_item(&mut si.node, res, scopes);
+            }
+        }
     }
 }
 

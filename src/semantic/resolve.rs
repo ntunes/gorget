@@ -1,11 +1,11 @@
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::parser::ast::*;
 use crate::span::{Span, Spanned};
 
 use super::errors::{SemanticError, SemanticErrorKind};
 use super::ids::{DefId, TypeId};
-use super::scope::{DefKind, ScopeTable};
+use super::scope::{DefKind, ScopeKind, ScopeTable};
 use super::types::{self, TypeTable};
 
 pub use crate::parser::ast::Ownership;
@@ -520,6 +520,48 @@ fn collect_item(
         | Item::MetaAssert(_) | Item::MetaIf(_) => {
             // Meta items resolved during meta evaluation pass (not yet implemented).
         }
+
+        Item::Module { path, items } => {
+            // Compute the set of explicitly-private names in this module.
+            let private_names: FxHashSet<String> = items.iter()
+                .filter_map(|si| {
+                    let vis = match &si.node {
+                        Item::Function(f) => f.visibility,
+                        Item::Struct(s) => s.visibility,
+                        Item::Enum(e) => e.visibility,
+                        Item::Trait(t) => t.visibility,
+                        Item::ConstDecl(c) => c.visibility,
+                        Item::StaticDecl(s) => s.visibility,
+                        _ => return None,
+                    };
+                    if vis == Visibility::Private {
+                        Some(match &si.node {
+                            Item::Function(f) => f.name.node.clone(),
+                            Item::Struct(s) => s.name.node.clone(),
+                            Item::Enum(e) => e.name.node.clone(),
+                            Item::Trait(t) => t.name.node.clone(),
+                            Item::ConstDecl(c) => c.name.node.clone(),
+                            Item::StaticDecl(s) => s.name.node.clone(),
+                            _ => unreachable!(),
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            // Push a file-module scope and collect all items (public + private) into it.
+            scopes.push_scope(ScopeKind::FileModule { path: path.clone() });
+
+            for si in items {
+                collect_item(&si.node, si.span, scopes, types, errors, ctx);
+            }
+
+            // Promote non-private names to the enclosing global scope.
+            scopes.export_non_private(&private_names);
+
+            scopes.pop_scope();
+        }
     }
 }
 
@@ -625,6 +667,13 @@ fn resolve_item_body(
             scopes.push_scope(super::scope::ScopeKind::Function);
             resolve_block(&s.body, scopes, types, errors, resolution_map);
             scopes.pop_scope();
+        }
+        // Nested module: recurse into its items so function bodies are resolved
+        // with the global scope (which already has all exported names from collect_top_level).
+        Item::Module { items, .. } => {
+            for si in items {
+                resolve_item_body(&si.node, scopes, types, errors, resolution_map, function_info, function_body_scopes);
+            }
         }
         // Other items don't have bodies to resolve
         _ => {}

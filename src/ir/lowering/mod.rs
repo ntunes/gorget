@@ -54,6 +54,30 @@ pub fn lower_module(
 ) -> Module {
     let mut module = Module::new();
 
+    // Flatten `Item::Module` wrappers produced by `merge_modules()` so all subsequent
+    // lowering passes see a unified item list (matching the pre-module-scope behavior
+    // where all items from all imported modules were at the top level). Semantic analysis
+    // has already resolved all name references using the module-scoped information; GIR
+    // lowering only needs the items themselves.
+    let flat_module_items: Vec<crate::span::Spanned<ast::Item>> = {
+        fn flatten(items: &[crate::span::Spanned<ast::Item>]) -> Vec<crate::span::Spanned<ast::Item>> {
+            let mut result = Vec::new();
+            for item in items {
+                if let ast::Item::Module { items: inner, .. } = &item.node {
+                    result.extend(flatten(inner));
+                } else {
+                    result.push(item.clone());
+                }
+            }
+            result
+        }
+        flatten(&ast_module.items)
+    };
+    // Shadow `ast_module` with the flat view for all subsequent passes in this function
+    // and in any helper functions that receive `ast_module` as a parameter.
+    let flat_module = ast::Module { items: flat_module_items, span: ast_module.span };
+    let ast_module = &flat_module;
+
     // Create type mapper
     let mut type_mapper = TypeMapper::new(&mut module.type_registry);
 

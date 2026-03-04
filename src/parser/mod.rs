@@ -370,11 +370,13 @@ impl Parser {
             attributes.push(self.parse_attribute()?);
         }
 
-        // Parse visibility
-        let visibility = if self.match_keyword(Keyword::Public) {
-            Visibility::Public
-        } else {
+        // Parse visibility — public by default; `private` makes the item module-private.
+        // The `public` keyword is accepted for backward compatibility but is a no-op.
+        let visibility = if self.match_keyword(Keyword::Private) {
             Visibility::Private
+        } else {
+            let _ = self.match_keyword(Keyword::Public); // consume optional `public`
+            Visibility::Public
         };
 
         // Determine item kind
@@ -787,10 +789,11 @@ impl Parser {
         let mut fields = Vec::new();
         while !self.check(&Token::Dedent) && !self.at_end() {
             let field_start = self.peek_span();
-            let field_vis = if self.match_keyword(Keyword::Public) {
-                Visibility::Public
-            } else {
+            let field_vis = if self.match_keyword(Keyword::Private) {
                 Visibility::Private
+            } else {
+                let _ = self.match_keyword(Keyword::Public);
+                Visibility::Public
             };
             let (type_, field_name) = if self.name_first {
                 let field_name = self.expect_identifier()?;
@@ -932,7 +935,7 @@ impl Parser {
                 items.push(Spanned::new(TraitItem::AssociatedType(assoc.node), assoc.span));
             } else {
                 // Method
-                let func = self.parse_function_def(Vec::new(), Visibility::Private, method_doc)?;
+                let func = self.parse_function_def(Vec::new(), Visibility::Public, method_doc)?;
                 let span = func.span;
                 items.push(Spanned::new(TraitItem::Method(func), span));
             }
@@ -1040,10 +1043,11 @@ impl Parser {
                 attrs.push(self.parse_attribute()?);
             }
 
-            let vis = if self.match_keyword(Keyword::Public) {
-                Visibility::Public
-            } else {
+            let vis = if self.match_keyword(Keyword::Private) {
                 Visibility::Private
+            } else {
+                let _ = self.match_keyword(Keyword::Public); // consume optional `public`
+                Visibility::Public
             };
 
             let func = self.parse_function_def(attrs, vis, method_doc)?;
@@ -1213,7 +1217,7 @@ impl Parser {
                 self.advance();
                 continue;
             }
-            let func = self.parse_function_def(Vec::new(), Visibility::Private, None)?;
+            let func = self.parse_function_def(Vec::new(), Visibility::Public, None)?;
             let span = func.span;
             items.push(Spanned::new(func, span));
         }

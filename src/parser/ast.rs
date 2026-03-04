@@ -11,6 +11,29 @@ pub struct Module {
     pub span: Span,
 }
 
+impl Module {
+    /// Return a flat list of all items, recursively unwrapping `Item::Module` wrappers.
+    ///
+    /// After `merge_modules()`, non-entry imported modules are wrapped in `Item::Module`.
+    /// Most compiler passes want a flat view of all items across all modules — this method
+    /// provides that without allocating a new AST.
+    pub fn all_items(&self) -> Vec<&Item> {
+        let mut result = Vec::new();
+        Self::collect_flat(&self.items, &mut result);
+        result
+    }
+
+    fn collect_flat<'a>(items: &'a [Spanned<Item>], out: &mut Vec<&'a Item>) {
+        for item in items {
+            if let Item::Module { items: inner, .. } = &item.node {
+                Self::collect_flat(inner, out);
+            } else {
+                out.push(&item.node);
+            }
+        }
+    }
+}
+
 /// A top-level item in a module.
 #[derive(Debug, Clone)]
 pub enum Item {
@@ -34,6 +57,13 @@ pub enum Item {
     MetaTypeFunc(MetaTypeFunc),
     MetaAssert(MetaAssert),
     MetaIf(MetaIf),
+    /// A file-based module's items, wrapped during merge to preserve module identity.
+    /// Created by the loader when merging multi-file programs.
+    Module {
+        /// Logical import path, e.g. `["gg", "csv"]`.
+        path: Vec<String>,
+        items: Vec<Spanned<Item>>,
+    },
 }
 
 // ══════════════════════════════════════════════════════════════

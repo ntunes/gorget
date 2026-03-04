@@ -1369,6 +1369,11 @@ fn substitute_item(item: &mut Item, env: &FxHashMap<String, MetaValue>, type_env
         Item::SuiteTeardown(s) => substitute_block(&mut s.body, env, type_env),
         Item::Import(_) | Item::Directive(_) | Item::MetaConst(_) | Item::MetaType(_)
         | Item::MetaTypeFunc(_) | Item::MetaAssert(_) | Item::MetaIf(_) => {}
+        Item::Module { items, .. } => {
+            for si in items {
+                substitute_item(&mut si.node, env, type_env);
+            }
+        }
     }
 }
 

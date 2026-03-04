@@ -969,11 +969,14 @@ fn lower_struct_literal(
     // with dangling data pointers. Emit MoveZero + mark_moved for each such local.
     for op in &field_operands {
         if let Operand::Copy(place) = op {
-            if place.projections.is_empty()
-                && is_gorget_array_local(place.local, builder, &ctx.type_registry)
-            {
-                builder.move_zero(place.clone());
-                ctx.drops.mark_moved(place.local);
+            if place.projections.is_empty() {
+                let type_id = builder.locals[place.local.0 as usize].type_id;
+                let gir_name = ctx.type_registry.get(type_id);
+                let is_array = is_gorget_array_local(place.local, builder, &ctx.type_registry);
+                if is_array {
+                    builder.move_zero(place.clone());
+                    ctx.drops.mark_moved(place.local);
+                }
             }
         }
     }

@@ -57,7 +57,7 @@ fn load_imports(filename: &str, source: &str, module: gorget::parser::ast::Modul
     // Build concatenated source text matching the span offsets assigned during loading.
     // Each module's source is separated by "\n" (matching the +1 offset gaps in the loader).
     let concat_source = modules.iter()
-        .map(|(_, src, _)| src.as_str())
+        .map(|(_, _, src, _)| src.as_str())
         .collect::<Vec<_>>()
         .join("\n");
 

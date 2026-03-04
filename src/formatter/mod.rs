@@ -170,6 +170,11 @@ impl Formatter {
             | Item::MetaAssert(_) | Item::MetaIf(_) => {
                 // TODO: meta formatting not yet implemented
             }
+            Item::Module { items, .. } => {
+                for inner in items {
+                    self.format_item(inner);
+                }
+            }
         }
     }
 
@@ -243,8 +248,10 @@ impl Formatter {
     }
 
     fn format_visibility(&mut self, vis: &Visibility) {
-        if *vis == Visibility::Public {
-            self.emitter.write("public ");
+        // Public is the default — no keyword needed.
+        // Private is the opt-in keyword.
+        if *vis == Visibility::Private {
+            self.emitter.write("private ");
         }
     }
 
@@ -348,8 +355,8 @@ impl Formatter {
         self.emitter.indent();
         for field in &s.fields {
             self.emit_comments_before(field.span.start);
-            if field.node.visibility == Visibility::Public {
-                self.emitter.write("public ");
+            if field.node.visibility == Visibility::Private {
+                self.emitter.write("private ");
             }
             if self.name_first {
                 // name-first: `name: type`
