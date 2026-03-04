@@ -2,6 +2,10 @@ struct Vec2:
     float x
     float y
 
+struct Typed:
+    int x
+    float y
+
 struct Vec3:
     float x
     float y
@@ -56,6 +60,16 @@ void list_variant_names[T]():
         else:
             print("?")
 
+void check_field_types[T]():
+    meta if field_type(T, "x") == "int":
+        print("x:int")
+    else:
+        print("x:other")
+    meta if field_type(T, "y") == "float":
+        print("y:float")
+    else:
+        print("y:other")
+
 void main():
     count_fields[Vec2]()
     count_fields[Vec3]()
@@ -65,4 +79,5 @@ void main():
     list_field_names[Vec2]()
     list_field_names[Vec3]()
     list_variant_names[Color]()
+    check_field_types[Typed]()
     print("done")

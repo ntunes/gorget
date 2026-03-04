@@ -9112,6 +9112,8 @@ z
 Red
 Green
 Blue
+x:int
+y:float
 done",
     );
 }

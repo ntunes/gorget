@@ -235,6 +235,33 @@ impl TypeRegistry {
         }
     }
 
+    /// Return the canonical Gorget-language name for a TypeId.
+    /// Works for both pre-allocated primitive types and Named types.
+    /// Returns "unknown" only for internal/unresolvable types.
+    pub fn type_id_to_canonical_name(&self, id: TypeId) -> String {
+        match id {
+            BOOL_TYPE  => "bool".to_string(),
+            I8_TYPE    => "int8".to_string(),
+            I16_TYPE   => "int16".to_string(),
+            I32_TYPE   => "int32".to_string(),
+            I64_TYPE   => "int".to_string(),
+            U8_TYPE    => "uint8".to_string(),
+            U16_TYPE   => "uint16".to_string(),
+            U32_TYPE   => "uint32".to_string(),
+            U64_TYPE   => "uint".to_string(),
+            F32_TYPE   => "float32".to_string(),
+            F64_TYPE   => "float".to_string(),
+            UNIT_TYPE  => "void".to_string(),
+            CHAR_TYPE  => "char".to_string(),
+            _ => {
+                if let Some(GirType::Named(name)) = self.get(id) {
+                    return name.clone();
+                }
+                "unknown".to_string()
+            }
+        }
+    }
+
     /// Total number of types (including primitives).
     pub fn len(&self) -> usize {
         self.types.len()

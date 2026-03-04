@@ -2066,8 +2066,7 @@ fn eval_delayed_expr(
                             Some(type_def) => {
                                 if let crate::ir::types::TypeDefKind::Struct(s) = &type_def.kind {
                                     if let Some(field) = s.fields.iter().find(|f| f.name == field_name) {
-                                        let ft = ctx.type_registry.type_name(field.type_id)
-                                            .unwrap_or_else(|| "unknown".to_string());
+                                        let ft = ctx.type_registry.type_id_to_canonical_name(field.type_id);
                                         return Ok(MetaValue::Str(ft));
                                     }
                                     return Err(meta_err(
