@@ -1,0 +1,101 @@
+# End-to-end test: additional wire-level tests for gg.http + gg.httpserver.
+#
+# Validates:
+#   1. PUT request with body → 200 + body echoed
+#   2. DELETE request → 200
+#   3. Empty body POST → 200 + empty body
+#   4. Multiple custom response headers all propagated to client
+#
+# Expected output:
+#   ok\nok\nok\nok\nok\nok
+
+from gg.httpserver import HttpRequest, HttpServerResponse, http_server_handle_conn_ka
+from gg.http import http_get, http_put, http_delete, http_post, HttpResponse
+from std.net.socket import ServerSocket, Socket, server_socket_bind
+from std.collections import Dict
+from std.conv import int_to_str
+from std.time import sleep
+
+HttpServerResponse handle(HttpRequest req):
+    if req.method == "PUT" and req.path == "/resource":
+        return HttpServerResponse.ok(req.body)
+    elif req.method == "DELETE" and req.path == "/resource":
+        return HttpServerResponse.ok("deleted")
+    elif req.method == "POST" and req.path == "/empty":
+        if req.body == "":
+            return HttpServerResponse.ok("empty-ok")
+        return HttpServerResponse.ok("non-empty")
+    elif req.method == "GET" and req.path == "/multi-header":
+        HttpServerResponse resp = HttpServerResponse.ok("multi")
+        resp = resp.with_header("x-header-a", "alpha")
+        resp = resp.with_header("x-header-b", "beta")
+        return resp
+    return HttpServerResponse.not_found()
+
+async void serve_n(int port, int n):
+    Result[ServerSocket, str] bind_r = server_socket_bind("127.0.0.1", port)
+    if bind_r.is_err():
+        return
+    ServerSocket srv = bind_r.unwrap()
+    TaskGroup group = TaskGroup()
+    int i = 0
+    while i < n:
+        Result[Socket, str] ar = srv.accept()
+        if ar.is_ok():
+            Socket client = ar.unwrap()
+            group.spawn(spawn http_server_handle_conn_ka(client, handle, 5000))
+            i = i + 1
+    group.join()
+    srv.close()
+
+void check(str label, bool ok):
+    if not ok:
+        print("FAIL: " + label)
+    else:
+        print("ok")
+
+async void main():
+    int port = 18088
+    Task[void] srv = spawn serve_n(port, 4)
+    sleep(0.05).await()
+
+    str base = "http://127.0.0.1:" + int_to_str(port)
+
+    # 1. PUT request with body → 200 + body echoed
+    Dict[str, str] empty_hdrs = Dict[str, str]()
+    Result[HttpResponse, str] r1 = http_put(base + "/resource", "put-body", empty_hdrs)
+    if r1.is_ok():
+        HttpResponse resp1 = r1.unwrap()
+        check("put status", resp1.status_code == 200)
+        check("put body", resp1.body_text == "put-body")
+    else:
+        print("FAIL: " + r1.unwrap_err())
+        print("FAIL: put body")
+
+    # 2. DELETE request → 200
+    Result[HttpResponse, str] r2 = http_delete(base + "/resource", empty_hdrs)
+    if r2.is_ok():
+        HttpResponse resp2 = r2.unwrap()
+        check("delete status", resp2.status_code == 200)
+    else:
+        print("FAIL: " + r2.unwrap_err())
+
+    # 3. Empty body POST → 200 + empty-ok
+    Result[HttpResponse, str] r3 = http_post(base + "/empty", "", empty_hdrs)
+    if r3.is_ok():
+        HttpResponse resp3 = r3.unwrap()
+        check("empty post", resp3.body_text == "empty-ok")
+    else:
+        print("FAIL: " + r3.unwrap_err())
+
+    # 4. Multiple custom response headers propagated to client
+    Result[HttpResponse, str] r4 = http_get(base + "/multi-header", empty_hdrs)
+    if r4.is_ok():
+        HttpResponse resp4 = r4.unwrap()
+        check("multi-header-a", resp4.headers["x-header-a"] == "alpha")
+        check("multi-header-b", resp4.headers["x-header-b"] == "beta")
+    else:
+        print("FAIL: " + r4.unwrap_err())
+        print("FAIL: multi-header-b")
+
+    srv.await()

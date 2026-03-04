@@ -53,9 +53,9 @@ equip HttpServerResponse:
         return HttpServerResponse(self.status_code, self.body, self.content_type, new_headers)
 
     HttpServerResponse redirect(str location):
-        HttpServerResponse resp = HttpServerResponse(302, "", "text/plain", Dict[str, str]())
-        resp.headers.put("Location", location)
-        return resp
+        Dict[str, str] hdrs = Dict[str, str]()
+        hdrs.put("Location", location)
+        return HttpServerResponse(302, "", "text/plain", hdrs)
 
     str status_text(self):
         int sc = self.status_code
@@ -404,9 +404,6 @@ equip HttpRequest:
 #   router.get("/users/:id", handle_user)
 #   server.serve((req): router.dispatch(req)).await()
 
-HttpServerResponse http_server_default_not_found(HttpRequest req):
-    return HttpServerResponse.not_found()
-
 # ── Path-parameter matching helper ────────────────────────────
 
 # Match a URL path against a route pattern.
@@ -458,22 +455,10 @@ equip Router:
             self.exact_routes.put(key, h)
 
     void get(&self, str path, Callable[HttpServerResponse(HttpRequest)] handler):
-        Callable[HttpServerResponse(HttpRequest)] h = handler
-        if path.contains(":"):
-            str pkey = "GET|" + path
-            self.param_routes.put(pkey, h)
-        else:
-            str key = "GET " + path
-            self.exact_routes.put(key, h)
+        self.route("GET", path, handler)
 
     void post(&self, str path, Callable[HttpServerResponse(HttpRequest)] handler):
-        Callable[HttpServerResponse(HttpRequest)] h = handler
-        if path.contains(":"):
-            str pkey = "POST|" + path
-            self.param_routes.put(pkey, h)
-        else:
-            str key = "POST " + path
-            self.exact_routes.put(key, h)
+        self.route("POST", path, handler)
 
     # Register a middleware hook. Each hook is called (in order) after the matched handler
     # returns, receiving the original request and the handler's response. The hook returns

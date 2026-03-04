@@ -2,28 +2,32 @@ from gg.http import http_parse_url, http_parse_hex
 
 void main():
     # ── https with default port (443) ──
-    auto (h1, p1, path1) = http_parse_url("https://example.com/api/v1")
+    auto (h1, p1, path1, tls1) = http_parse_url("https://example.com/api/v1")
     print(h1)
     print("{p1}")
     print(path1)
+    print(tls1)
 
     # ── http with explicit port override ──
-    auto (h2, p2, path2) = http_parse_url("http://localhost:8080/health")
+    auto (h2, p2, path2, tls2) = http_parse_url("http://localhost:8080/health")
     print(h2)
     print("{p2}")
     print(path2)
+    print(tls2)
 
     # ── http with no path → default "/" ──
-    auto (h3, p3, path3) = http_parse_url("http://host.example.com")
+    auto (h3, p3, path3, tls3) = http_parse_url("http://host.example.com")
     print(h3)
     print("{p3}")
     print(path3)
+    print(tls3)
 
     # ── http with port and root path "/" ──
-    auto (h4, p4, path4) = http_parse_url("http://api.service:3000/")
+    auto (h4, p4, path4, tls4) = http_parse_url("http://api.service:3000/")
     print(h4)
     print("{p4}")
     print(path4)
+    print(tls4)
 
     # ── http_parse_hex: lowercase ──
     int hex1 = http_parse_hex("1a")

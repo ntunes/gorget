@@ -1,0 +1,106 @@
+# Test: http_server_parse_request edge cases over real TCP connections.
+#
+# Validates:
+#   - GET method parsed correctly
+#   - Query string in path → split into path and query_string
+#   - POST with Content-Length body parsed
+#   - Custom header accessible via req.headers
+#   - Header names are lowercased by the parser
+#
+# Expected output:
+#   ok\nok\nok\nok\nok
+
+from gg.httpserver import HttpRequest, HttpServerResponse, http_server_handle_conn_ka
+from gg.http import http_get, http_post, HttpResponse
+from std.net.socket import ServerSocket, Socket, server_socket_bind
+from std.collections import Dict
+from std.conv import int_to_str
+from std.time import sleep
+
+HttpServerResponse handle(HttpRequest req):
+    if req.method == "GET" and req.path == "/method":
+        return HttpServerResponse.ok(req.method)
+    elif req.method == "GET" and req.path == "/query":
+        return HttpServerResponse.ok(req.query_string)
+    elif req.method == "POST" and req.path == "/body":
+        return HttpServerResponse.ok(req.body)
+    elif req.method == "GET" and req.path == "/header":
+        if req.headers.contains("x-test"):
+            return HttpServerResponse.ok(req.headers["x-test"])
+        return HttpServerResponse.ok("no-header")
+    elif req.method == "GET" and req.path == "/lower":
+        if req.headers.contains("x-case"):
+            return HttpServerResponse.ok("lower")
+        return HttpServerResponse.ok("not-lower")
+    return HttpServerResponse.not_found()
+
+async void serve_n(int port, int n):
+    Result[ServerSocket, str] bind_r = server_socket_bind("127.0.0.1", port)
+    if bind_r.is_err():
+        return
+    ServerSocket srv = bind_r.unwrap()
+    TaskGroup group = TaskGroup()
+    int i = 0
+    while i < n:
+        Result[Socket, str] ar = srv.accept()
+        if ar.is_ok():
+            Socket client = ar.unwrap()
+            group.spawn(spawn http_server_handle_conn_ka(client, handle, 5000))
+            i = i + 1
+    group.join()
+    srv.close()
+
+void check(str label, bool ok):
+    if not ok:
+        print("FAIL: " + label)
+    else:
+        print("ok")
+
+async void main():
+    int port = 18087
+    Task[void] srv = spawn serve_n(port, 5)
+    sleep(0.05).await()
+
+    str base = "http://127.0.0.1:" + int_to_str(port)
+
+    # 1. GET method parsed correctly
+    Result[HttpResponse, str] r1 = http_get(base + "/method")
+    if r1.is_ok():
+        check("method", r1.unwrap().body_text == "GET")
+    else:
+        print("FAIL: " + r1.unwrap_err())
+
+    # 2. Query string in path → split correctly
+    Result[HttpResponse, str] r2 = http_get(base + "/query?key=value&a=1")
+    if r2.is_ok():
+        check("query", r2.unwrap().body_text == "key=value&a=1")
+    else:
+        print("FAIL: " + r2.unwrap_err())
+
+    # 3. POST with Content-Length body parsed
+    Dict[str, str] post_hdrs = Dict[str, str]()
+    Result[HttpResponse, str] r3 = http_post(base + "/body", "hello", post_hdrs)
+    if r3.is_ok():
+        check("body", r3.unwrap().body_text == "hello")
+    else:
+        print("FAIL: " + r3.unwrap_err())
+
+    # 4. Custom header accessible in handler
+    Dict[str, str] custom_hdrs = Dict[str, str]()
+    custom_hdrs.put("x-test", "myvalue")
+    Result[HttpResponse, str] r4 = http_get(base + "/header", custom_hdrs)
+    if r4.is_ok():
+        check("header", r4.unwrap().body_text == "myvalue")
+    else:
+        print("FAIL: " + r4.unwrap_err())
+
+    # 5. Header names lowercased by parser (send X-Case, server checks x-case)
+    Dict[str, str] upper_hdrs = Dict[str, str]()
+    upper_hdrs.put("X-Case", "test")
+    Result[HttpResponse, str] r5 = http_get(base + "/lower", upper_hdrs)
+    if r5.is_ok():
+        check("lowercase", r5.unwrap().body_text == "lower")
+    else:
+        print("FAIL: " + r5.unwrap_err())
+
+    srv.await()

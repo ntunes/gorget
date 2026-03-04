@@ -352,7 +352,11 @@ Result[HttpResponse, str] http_request(str http_method, str http_url, str http_b
             str http_scheme = "https://"
             if not http_orig._3:
                 http_scheme = "http://"
-            http_location = http_scheme + http_orig._0 + http_location
+            str http_redir_host = http_orig._0
+            int http_redir_port = http_orig._1
+            if (http_orig._3 and http_redir_port != 443) or (not http_orig._3 and http_redir_port != 80):
+                http_redir_host = http_redir_host + ":" + int_to_str(http_redir_port)
+            http_location = http_scheme + http_redir_host + http_location
 
         http_cur_url = http_location
 

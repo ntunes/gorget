@@ -1,0 +1,68 @@
+# Test: HttpServerResponse factory methods and builders (no TCP).
+#
+# Validates:
+#   - ok(""), ok("body") — 200, text/plain
+#   - html(...), json(...) — correct content-types
+#   - not_found() → 404, bad_request("msg") → 400, internal_error("boom") → 500
+#   - with_header chaining — multiple headers accumulate
+#   - redirect("/target") → 302, Location header present (validates fix 1A)
+#   - status_text() for all known codes + unknown code
+#
+# Expected output:
+#   200\ntext/plain\nbody\ntext/html\napplication/json\n404\n400\n500\ngorget\n42\n302\n/target\nOK\nNot Found\nBad Request\nInternal Server Error\nFound\nUnknown
+
+from gg.httpserver import HttpServerResponse
+from std.collections import Dict
+
+void main():
+    # ok("") → 200, text/plain, empty body
+    HttpServerResponse r1 = HttpServerResponse.ok("")
+    print("{r1.status_code}")
+    print(r1.content_type)
+
+    # ok("body") → body present
+    HttpServerResponse r2 = HttpServerResponse.ok("body")
+    print(r2.body)
+
+    # html → text/html
+    HttpServerResponse r3 = HttpServerResponse.html("<h1>hi</h1>")
+    print(r3.content_type)
+
+    # json → application/json
+    HttpServerResponse r4 = HttpServerResponse.json("{}")
+    print(r4.content_type)
+
+    # not_found → 404
+    HttpServerResponse r5 = HttpServerResponse.not_found()
+    print("{r5.status_code}")
+
+    # bad_request → 400
+    HttpServerResponse r6 = HttpServerResponse.bad_request("msg")
+    print("{r6.status_code}")
+
+    # internal_error → 500
+    HttpServerResponse r7 = HttpServerResponse.internal_error("boom")
+    print("{r7.status_code}")
+
+    # with_header chaining — multiple headers accumulate
+    HttpServerResponse r8a = HttpServerResponse.ok("hello").with_header("x-a", "gorget")
+    HttpServerResponse r8b = r8a.with_header("x-b", "42")
+    print(r8b.headers["x-a"])
+    print(r8b.headers["x-b"])
+
+    # redirect → 302, Location header present (validates fix 1A)
+    HttpServerResponse r9 = HttpServerResponse.redirect("/target")
+    print("{r9.status_code}")
+    print(r9.headers["Location"])
+
+    # status_text for known codes
+    print(HttpServerResponse.ok("").status_text())
+    print(HttpServerResponse.not_found().status_text())
+    print(HttpServerResponse.bad_request("").status_text())
+    print(HttpServerResponse.internal_error("").status_text())
+    HttpServerResponse r302 = HttpServerResponse.redirect("/x")
+    print(r302.status_text())
+
+    # Unknown code → "Unknown"
+    HttpServerResponse r_unk = HttpServerResponse(999, "", "text/plain", Dict[str, str]())
+    print(r_unk.status_text())

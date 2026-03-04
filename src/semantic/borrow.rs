@@ -702,14 +702,36 @@ impl<'a> BorrowChecker<'a> {
                     }
                 }
             }
+
+            // Callable variable calls: `h(req)` where `h: Callable[T(...)]`.
+            // We can't inspect h's body, so propagate conservatively from h's own
+            // captured origin (analogous to method receiver) plus all arg origins.
+            let def = self.scopes.get_def(def_id);
+            if def.kind == DefKind::Variable {
+                let callable_origin = self.compute_expr_origin(callee);
+                let mut origins = vec![callable_origin];
+                origins.extend(args.iter().map(|a| self.compute_expr_origin(&a.node.value)));
+                return Self::merge_origins(origins);
+            }
+
+            // Enum variant constructors: `Ok(x)`, `Error("msg")`, `Some(y)`, etc.
+            // The variant transparently wraps its arguments; propagate their origins.
+            if def.kind == DefKind::Variant {
+                let origins: Vec<BorrowOrigin> = args.iter()
+                    .map(|a| self.compute_expr_origin(&a.node.value))
+                    .collect();
+                return Self::merge_origins(origins);
+            }
         }
         BorrowOrigin::Unknown
     }
 
     /// Compute the origin of a method call result using `return_borrows_from` data.
     fn compute_method_call_origin(&self, receiver: &Spanned<Expr>, method: &Spanned<String>, args: &[Spanned<CallArg>]) -> BorrowOrigin {
-        if let Some(&def_id) = self.method_resolutions.get(&method.span.start) {
-            if let Some(info) = self.function_info.get(&def_id) {
+        let method_def_id_opt = self.method_resolutions.get(&method.span.start);
+        if let Some(&def_id) = method_def_id_opt {
+            let info_opt = self.function_info.get(&def_id);
+            if let Some(info) = info_opt {
                 if !info.return_borrows_from.is_empty() {
                     // Methods have self as param 0: index 0 = receiver, N>0 = args[N-1]
                     let origins: Vec<BorrowOrigin> = info.return_borrows_from.iter()
@@ -734,6 +756,18 @@ impl<'a> BorrowChecker<'a> {
                     {
                         return BorrowOrigin::Static;
                     }
+                }
+            }
+        }
+        // If the receiver is a struct/enum/newtype TYPE NAME (not a value instance),
+        // any unresolved static factory method constructs a fresh value — always Static.
+        // This covers patterns like `HttpServerResponse.not_found()` where the struct
+        // definition's type_id is None so method_resolutions was never populated.
+        if let Expr::Identifier(_) = &receiver.node {
+            if let Some(def_id) = self.resolve_callee_def_id(receiver) {
+                let def = self.scopes.get_def(def_id);
+                if matches!(def.kind, DefKind::Struct | DefKind::Enum | DefKind::Newtype) {
+                    return BorrowOrigin::Static;
                 }
             }
         }

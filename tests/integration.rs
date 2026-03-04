@@ -4187,6 +4187,90 @@ fn httpserver_e2e() {
 }
 
 #[test]
+fn httpserver_router_extended() {
+    run_gg(
+        "httpserver_router_extended.gg",
+        "404\n404\n404\n404\npost:7\nbase-mw1-mw2-mw3",
+    );
+}
+
+#[test]
+fn httpserver_response() {
+    run_gg(
+        "httpserver_response.gg",
+        "\
+200
+text/plain
+body
+text/html
+application/json
+404
+400
+500
+gorget
+42
+302
+/target
+OK
+Not Found
+Bad Request
+Internal Server Error
+Found
+Unknown",
+    );
+}
+
+#[test]
+fn httpserver_query_string() {
+    run_gg(
+        "httpserver_query_string.gg",
+        "0\nempty\nvalue\n1\n2\n3\na=b\nempty\nhello\n2",
+    );
+}
+
+#[test]
+fn httpserver_parse_request() {
+    run_gg(
+        "httpserver_parse_request.gg",
+        "ok\nok\nok\nok\nok",
+    );
+}
+
+#[test]
+fn http_urls_extended() {
+    run_gg(
+        "http_urls_extended.gg",
+        "\
+host.com
+80
+/search?q=test&page=2
+example.com
+443
+/path
+host
+80
+/
+host.com
+80
+/
+0
+175
+1
+1
+15
+done",
+    );
+}
+
+#[test]
+fn httpserver_e2e_extended() {
+    run_gg(
+        "httpserver_e2e_extended.gg",
+        "ok\nok\nok\nok\nok\nok",
+    );
+}
+
+#[test]
 fn udp_echo() {
     run_gg(
         "udp_echo.gg",
@@ -7993,15 +8077,19 @@ fn http_urls() {
 example.com
 443
 /api/v1
+true
 localhost
 8080
 /health
+false
 host.example.com
 80
 /
+false
 api.service
 3000
 /
+false
 26
 255
 26

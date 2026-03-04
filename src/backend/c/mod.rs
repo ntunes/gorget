@@ -3231,6 +3231,14 @@ fn emit_instruction(
                     return;
                 }
             }
+            // Callable parameter → GorgetClosure local:
+            // Callable function parameters are lowered as void* in the C ABI (the caller packs
+            // the closure as `(void*)(void*[2]){fn_ptr, env}`). When assigning such a parameter
+            // to a GorgetClosure local, dereference the void* to extract the struct value.
+            if dst_is_escaped_closure && src_c_type == "void" {
+                let _ = writeln!(out, "        {dst_str} = *(GorgetClosure*){val_str};");
+                return;
+            }
             if dst_is_escaped_closure && src_c_type.starts_with("__Closure_") {
                 let struct_name = &src_c_type;
                 let call_fn_name = format!("{struct_name}__call");

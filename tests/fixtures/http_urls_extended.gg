@@ -1,0 +1,60 @@
+# Test: http_parse_url + http_parse_hex edge cases.
+#
+# Validates:
+#   - URL with query string — query stays in path
+#   - URL with no scheme — treated as https, port 443
+#   - Port parse failure (http://host:abc/) — falls back to default (80)
+#   - Empty path (http://host.com) — defaults to "/"
+#   - Hex: empty string → 0, mixed case, leading zeros, non-hex stops early, single char
+#
+# Expected output:
+#   host.com\n80\n/search?q=test&page=2\nexample.com\n443\n/path\nhost\n80\n/\nhost.com\n80\n/\n0\n175\n1\n1\n15\ndone
+
+from gg.http import http_parse_url, http_parse_hex
+
+void main():
+    # URL with query string — query stays in path
+    auto (h1, p1, path1, tls1) = http_parse_url("http://host.com/search?q=test&page=2")
+    print(h1)
+    print("{p1}")
+    print(path1)
+
+    # URL with no scheme — treated as https, default port 443
+    auto (h2, p2, path2, tls2) = http_parse_url("example.com/path")
+    print(h2)
+    print("{p2}")
+    print(path2)
+
+    # Port parse failure — falls back to http default (80)
+    auto (h3, p3, path3, tls3) = http_parse_url("http://host:abc/")
+    print(h3)
+    print("{p3}")
+    print(path3)
+
+    # Empty path — defaults to "/"
+    auto (h4, p4, path4, tls4) = http_parse_url("http://host.com")
+    print(h4)
+    print("{p4}")
+    print(path4)
+
+    # Hex: empty string → 0
+    int hx1 = http_parse_hex("")
+    print("{hx1}")
+
+    # Mixed case: "aF" → 10*16 + 15 = 175
+    int hx2 = http_parse_hex("aF")
+    print("{hx2}")
+
+    # Leading zeros: "001" → 1
+    int hx3 = http_parse_hex("001")
+    print("{hx3}")
+
+    # Non-hex mid-string stops early: "1z2" → 1
+    int hx4 = http_parse_hex("1z2")
+    print("{hx4}")
+
+    # Single char: "f" → 15
+    int hx5 = http_parse_hex("f")
+    print("{hx5}")
+
+    print("done")
