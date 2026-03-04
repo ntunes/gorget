@@ -1030,46 +1030,54 @@ impl Parser {
             None
         };
 
-        self.expect(&Token::Colon)?;
-        self.expect(&Token::Newline)?;
-        self.expect(&Token::Indent)?;
+        let items = if self.check(&Token::Colon) {
+            self.advance();
+            self.expect(&Token::Newline)?;
+            self.expect(&Token::Indent)?;
 
-        let mut items = Vec::new();
-        while !self.check(&Token::Dedent) && !self.at_end() {
-            let method_doc = self.collect_doc_comment();
+            let mut items = Vec::new();
+            while !self.check(&Token::Dedent) && !self.at_end() {
+                let method_doc = self.collect_doc_comment();
 
-            if self.check(&Token::Newline) {
-                self.advance();
-                continue;
-            }
-
-            // `pass` means no methods in this equip block
-            if self.match_keyword(Keyword::Pass) {
                 if self.check(&Token::Newline) {
                     self.advance();
+                    continue;
                 }
-                continue;
+
+                // `pass` means no methods in this equip block
+                if self.match_keyword(Keyword::Pass) {
+                    if self.check(&Token::Newline) {
+                        self.advance();
+                    }
+                    continue;
+                }
+
+                // Collect attributes for methods
+                let mut attrs = Vec::new();
+                while self.check(&Token::At) {
+                    attrs.push(self.parse_attribute()?);
+                }
+
+                let vis = if self.match_keyword(Keyword::Private) {
+                    Visibility::Private
+                } else {
+                    let _ = self.match_keyword(Keyword::Public); // consume optional `public`
+                    Visibility::Public
+                };
+
+                let func = self.parse_function_def(attrs, vis, method_doc)?;
+                let span = func.span;
+                items.push(Spanned::new(func, span));
             }
 
-            // Collect attributes for methods
-            let mut attrs = Vec::new();
-            while self.check(&Token::At) {
-                attrs.push(self.parse_attribute()?);
-            }
+            self.expect(&Token::Dedent)?;
+            items
+        } else {
+            // No colon — blank equip block; default implementations come from the trait.
+            self.consume_newline();
+            Vec::new()
+        };
 
-            let vis = if self.match_keyword(Keyword::Private) {
-                Visibility::Private
-            } else {
-                let _ = self.match_keyword(Keyword::Public); // consume optional `public`
-                Visibility::Public
-            };
-
-            let func = self.parse_function_def(attrs, vis, method_doc)?;
-            let span = func.span;
-            items.push(Spanned::new(func, span));
-        }
-
-        self.expect(&Token::Dedent)?;
         let end = self.previous_span();
 
         Ok(EquipBlock {

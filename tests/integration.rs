@@ -9227,3 +9227,16 @@ boolean
 done",
     );
 }
+
+#[test]
+fn trait_default_meta() {
+    run_gg(
+        "trait_default_meta.gg",
+        "\
+found Red
+found Blue
+not found
+found South
+done",
+    );
+}

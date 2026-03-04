@@ -885,6 +885,15 @@ pub fn substitute_type_pub(ty: &Type, subs: &[(String, Type)]) -> Type {
 /// Recursively substitute type parameters in an AST type.
 fn substitute_type(ty: &Type, subs: &[(String, Type)]) -> Type {
     match ty {
+        // Self is a keyword type — look for a "Self" entry in subs.
+        Type::SelfType => {
+            for (param_name, concrete) in subs {
+                if param_name == "Self" {
+                    return concrete.clone();
+                }
+            }
+            ty.clone()
+        }
         Type::Named { name, generic_args } if generic_args.is_empty() => {
             // Check if this is a type parameter that should be substituted
             for (param_name, concrete) in subs {

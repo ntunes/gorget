@@ -4770,6 +4770,74 @@ The unrolled code is lowered identically to if the programmer had written the th
 
 ---
 
+### 19.18 Default Trait Method Bodies with Meta
+
+Default method bodies in trait definitions can use `meta if`, `meta for`, and reflection builtins
+that reference `Self`. When the trait is equipped onto a concrete type, the compiler evaluates the
+meta expressions at that monomorphization point — substituting `Self` with the equipped type before
+lowering the method body.
+
+#### `make_variant(T, "VariantName")` — Construct an Enum Variant
+
+`make_variant(T, "Red")` is a compile-time rewrite that produces `T.Red()`. It is only valid
+inside `meta for` loops or other delayed meta contexts where the variant name is resolved to a
+string literal before the body is lowered.
+
+```gorget
+trait FromStr:
+    Option[Self] from_str(str s):
+        meta if Self is Enum:
+            meta for vname in variant_names(Self):
+                if s == vname:
+                    return Some(make_variant(Self, vname))
+        return None()
+
+enum Color:
+    Red()
+    Green()
+    Blue()
+
+equip Color with FromStr   # no body needed — uses the trait default
+
+void main():
+    auto r = Color.from_str("Red")
+    match r:
+        case Some(_): print("found")
+        case None: print("not found")
+    # → found
+```
+
+The `meta if Self is Enum` guard (§19.13) prevents the loop from expanding for non-enum types. For
+each variant name produced by `variant_names(Self)`, the compiler generates an `if s == "<name>":`
+branch that returns `Some(T.VariantName())`.
+
+#### Blank `equip` Syntax
+
+When a trait has a complete default implementation, the equip block can be written without a body:
+
+```gorget
+equip Color with FromStr      # uses all trait defaults — no colon or indented block
+equip Direction with FromStr  # same
+```
+
+This is equivalent to `equip Color with FromStr: pass`.
+
+#### `Enum` and `Struct` Type Categories
+
+`Self is Enum` and `Self is Struct` are supported in `meta if` conditions inside default method
+bodies (and generic function bodies). They check the concrete equipped type against the GIR type
+registry:
+
+| Category | Matches |
+|----------|---------|
+| `Enum` | User-defined enums |
+| `Struct` | User-defined structs |
+| `int` | All integer primitives |
+| `float` | All floating-point primitives |
+| `numeric` | All numeric primitives |
+
+---
+
 ## Appendix A: Grammar Summary
 
 This appendix collects the grammar rules from throughout the document.

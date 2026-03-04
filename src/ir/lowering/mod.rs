@@ -722,6 +722,22 @@ pub fn lower_module(
     // (built-in traits like From, Default, Equatable, Displayable, etc.)
     traits::register_unregistered_trait_equip_sigs(&mut ctx, &trait_info, ast_module);
 
+    // Re-scan monomorphized enum variants: trait sig registration (above) may create new
+    // generic enum instantiations (e.g., Option__Color via map_ast_type_mut) whose variants
+    // weren't in the type_registry during the initial enum_variants scan. Re-running here
+    // ensures `case Some(_)` and `case None:` pattern matching resolves correctly.
+    for type_def in ctx.type_registry.type_defs() {
+        if let TypeDefKind::Enum(ref e) = type_def.kind {
+            if type_def.name.contains("__") {
+                for variant in &e.variants {
+                    ctx.enum_variants
+                        .entry(variant.name.clone())
+                        .or_insert_with(|| (type_def.name.clone(), variant.name.clone()));
+                }
+            }
+        }
+    }
+
     // Register runtime built-in method signatures (Str methods, etc.)
     {
         let str_type = ctx.type_mapper.str_type;

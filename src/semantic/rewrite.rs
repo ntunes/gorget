@@ -316,6 +316,34 @@ fn rewrite_expr(expr: &mut Spanned<Expr>, res: &ResolutionMap, scopes: &ScopeTab
         }
     }
 
+    // Rewrite make_variant(T, "Variant") → Expr::Path ["T", "Variant"]
+    if let Expr::Call { ref callee, ref args, .. } = expr.node {
+        if let Expr::Identifier(ref cname) = callee.node {
+            if cname == "make_variant" && args.len() == 2 {
+                if let Expr::StringLiteral(ref s) = args[1].node.value.node {
+                    if !s.has_interpolation() {
+                        let variant_name: String = s.segments.iter()
+                            .filter_map(|seg| if let StringSegment::Literal(l) = seg { Some(l.as_str()) } else { None })
+                            .collect();
+                        if !variant_name.is_empty() {
+                            if let Expr::Identifier(type_name) = args[0].node.value.node.clone() {
+                                let type_span = args[0].node.value.span;
+                                let var_span  = args[1].node.value.span;
+                                expr.node = Expr::Path {
+                                    segments: vec![
+                                        Spanned::new(type_name, type_span),
+                                        Spanned::new(variant_name, var_span),
+                                    ],
+                                };
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Now check if this expression is a Call that should become a StructLiteral.
     // Skip collection types — they have special C constructors (gorget_array_new,
     // GorgetDict__new, etc.) that don't use compound literal syntax.

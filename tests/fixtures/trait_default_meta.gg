@@ -1,0 +1,40 @@
+trait FromStr:
+    Option[Self] from_str(str s):
+        meta if Self is Enum:
+            meta for vname in variant_names(Self):
+                if s == vname:
+                    return Some(make_variant(Self, vname))
+        return None()
+
+enum Color:
+    Red()
+    Green()
+    Blue()
+
+enum Direction:
+    North()
+    South()
+    East()
+    West()
+
+equip Color with FromStr
+equip Direction with FromStr
+
+void main():
+    auto r1 = Color.from_str("Red")
+    auto r2 = Color.from_str("Blue")
+    auto r3 = Color.from_str("Purple")
+    match r1:
+        case Some(_): print("found Red")
+        case None: print("not found")
+    match r2:
+        case Some(_): print("found Blue")
+        case None: print("not found")
+    match r3:
+        case Some(_): print("found Purple")
+        case None: print("not found")
+    auto d = Direction.from_str("South")
+    match d:
+        case Some(_): print("found South")
+        case None: print("not found")
+    print("done")

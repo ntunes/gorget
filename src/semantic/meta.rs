@@ -732,10 +732,10 @@ fn pattern_to_name(pattern: &Pattern) -> String {
 /// Evaluate `T is Category` in a delayed meta context (monomorphization time).
 ///
 /// Returns `true` if the resolved type name matches the given category or exact
-/// type name. Category keywords (`int`, `float`, `signed`, `unsigned`, `numeric`)
-/// match entire families of types; everything else is an exact string match
-/// against the canonical type name produced by `type_to_canonical_name`.
-fn eval_type_is_check(resolved: &str, category: &str) -> bool {
+/// type name. Category keywords (`int`, `float`, `signed`, `unsigned`, `numeric`,
+/// `Enum`, `Struct`) match entire families of types; everything else is an exact
+/// string match against the canonical type name produced by `type_to_canonical_name`.
+fn eval_type_is_check(resolved: &str, category: &str, type_registry: &crate::ir::types::TypeRegistry) -> bool {
     match category {
         // Broad category: any integer type (signed or unsigned)
         "int" | "integer" => matches!(resolved,
@@ -754,6 +754,17 @@ fn eval_type_is_check(resolved: &str, category: &str) -> bool {
             "float32" | "float" | "float64"),
         // Single-member categories (also exact matches)
         "bool" | "str" | "char" | "void" => resolved == category,
+        // Registry-backed categories: check if the resolved type is an enum or struct.
+        "Enum" | "enum" => {
+            type_registry.get_type_def(resolved)
+                .map(|def| matches!(def.kind, crate::ir::types::TypeDefKind::Enum(_)))
+                .unwrap_or(false)
+        }
+        "Struct" | "struct" => {
+            type_registry.get_type_def(resolved)
+                .map(|def| matches!(def.kind, crate::ir::types::TypeDefKind::Struct(_)))
+                .unwrap_or(false)
+        }
         // Exact match for everything else: float32, int8, uint64, MyStruct, etc.
         other => resolved == other,
     }
@@ -1808,6 +1819,34 @@ fn substitute_expr(expr: &mut Spanned<Expr>, env: &FxHashMap<String, MetaValue>,
             }
         }
     }
+
+    // Post-recursion: rewrite make_variant(T, "Variant") → Expr::Path ["T", "Variant"]
+    // After meta substitution the second arg is a plain string literal.
+    if let Expr::Call { ref callee, ref args, .. } = expr.node {
+        if let Expr::Identifier(ref cname) = callee.node {
+            if cname == "make_variant" && args.len() == 2 {
+                if let Expr::StringLiteral(ref s) = args[1].node.value.node {
+                    if !s.has_interpolation() {
+                        let variant_name: String = s.segments.iter()
+                            .filter_map(|seg| if let StringSegment::Literal(l) = seg { Some(l.as_str()) } else { None })
+                            .collect();
+                        if !variant_name.is_empty() {
+                            if let Expr::Identifier(type_name) = args[0].node.value.node.clone() {
+                                let type_span = args[0].node.value.span;
+                                let var_span  = args[1].node.value.span;
+                                expr.node = Expr::Path {
+                                    segments: vec![
+                                        Spanned::new(type_name, type_span),
+                                        Spanned::new(variant_name, var_span),
+                                    ],
+                                };
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -2011,7 +2050,7 @@ fn eval_delayed_expr(
                 .unwrap_or_else(|| raw.clone());
 
             let category = pattern_to_name(&pattern.node);
-            let result = eval_type_is_check(&resolved, &category);
+            let result = eval_type_is_check(&resolved, &category, ctx.type_registry);
             Ok(MetaValue::Bool(if *negated { !result } else { result }))
         }
 
@@ -2372,6 +2411,13 @@ fn eval_delayed_expr(
                             "field_value() accesses a runtime struct field and cannot be used as a \
                              compile-time meta const; use it directly in a runtime statement: \
                              `auto v = field_value(val, fname)` or inline: `print(\"{field_value(val, fname)}\")`",
+                            span,
+                        ));
+                    }
+                    "make_variant" => {
+                        return Err(meta_err(
+                            "make_variant() constructs an enum variant at runtime and cannot be used as a \
+                             compile-time meta const; use it directly in a runtime statement inside `meta for`",
                             span,
                         ));
                     }

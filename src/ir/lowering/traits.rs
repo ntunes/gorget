@@ -10,10 +10,12 @@ use crate::ir::instructions::*;
 use crate::ir::types::*;
 use crate::ir::{Global, GlobalInit};
 use crate::parser::ast::{self, FunctionBody, Item, Ownership, TraitItem, Type};
+use crate::semantic::meta::{self as meta, DelayedMetaContext};
 
 use super::context::LoweringContext;
 use super::drops::DropScopeKind;
 use super::exprs::lower_expr;
+use super::generics;
 use super::stmts::lower_block;
 
 /// Information about a trait's vtable layout.
@@ -66,10 +68,20 @@ pub fn register_trait_types(
 
             let trait_name = &trait_def.name.node;
 
-            // Collect method slots from the trait definition
+            // Collect method slots from the trait definition.
+            // Only instance methods (with a `self` parameter) can be dispatched via vtable.
+            // Static methods are handled outside the vtable machinery.
             let mut methods = Vec::new();
             for trait_item in &trait_def.items {
                 if let TraitItem::Method(method_def) = &trait_item.node {
+                    // Skip static methods (no `self` parameter) — they cannot be in a vtable.
+                    let has_self = method_def.params.first()
+                        .map(|p| p.node.name.node == "self")
+                        .unwrap_or(false);
+                    if !has_self {
+                        continue;
+                    }
+
                     let method_name = &method_def.name.node;
                     let return_type =
                         ctx.type_mapper.map_ast_type(&method_def.return_type.node);
@@ -760,7 +772,11 @@ pub fn register_unregistered_trait_equip_sigs(
 
             let trait_type = &equip.trait_.as_ref().unwrap().trait_name.node;
 
+            let mut registered_methods: Vec<String> = Vec::new();
+
             for method in &equip.items {
+                registered_methods.push(method.node.name.node.clone());
+
                 let method_def = &method.node;
                 let ret_type =
                     ctx.type_mapper.map_ast_type(&method_def.return_type.node);
@@ -822,6 +838,59 @@ pub fn register_unregistered_trait_equip_sigs(
                         .insert(mangled, (param_types, ret_type));
                 }
             }
+
+            // Also register signatures for default methods from the trait definition.
+            // Substitute Self → equipped type so return types like Option[Self] resolve correctly.
+            let self_subs_sig = vec![("Self".to_string(), equip.type_.node.clone())];
+            if let Some(trait_def) = find_trait_def(ast_module, &trait_name) {
+                for trait_item in &trait_def.items {
+                    if let TraitItem::Method(default_method) = &trait_item.node {
+                        let method_name = &default_method.name.node;
+                        if registered_methods.contains(method_name) {
+                            continue;
+                        }
+                        match &default_method.body {
+                            FunctionBody::Declaration | FunctionBody::Extern(_) => continue,
+                            FunctionBody::Block(_) | FunctionBody::Expression(_) => {}
+                        }
+                        let substituted_ret = generics::substitute_type_pub(
+                            &default_method.return_type.node, &self_subs_sig,
+                        );
+                        let ret_type = ctx.type_mapper.map_ast_type_mut(&substituted_ret, &mut ctx.type_registry);
+                        let has_self = default_method.params.first()
+                            .map(|p| p.node.name.node == "self")
+                            .unwrap_or(false);
+                        let mut param_types = Vec::new();
+                        if has_self {
+                            let self_type_id = ctx.type_mapper.map_ast_type(&equip.type_.node);
+                            let self_is_mutable = default_method.params.first()
+                                .map(|p| {
+                                    p.node.name.node == "self"
+                                        && matches!(p.node.ownership, Ownership::MutableBorrow)
+                                })
+                                .unwrap_or(false);
+                            let self_ptr_type = if self_is_mutable {
+                                ctx.register_mut_ptr_type(self_type_id)
+                            } else {
+                                ctx.register_ptr_type(self_type_id)
+                            };
+                            param_types.push(self_ptr_type);
+                        }
+                        for p in &default_method.params {
+                            if p.node.name.node == "self" { continue; }
+                            let subst_p = generics::substitute_type_pub(&p.node.type_.node, &self_subs_sig);
+                            param_types.push(ctx.type_mapper.map_ast_type_mut(&subst_p, &mut ctx.type_registry));
+                        }
+                        if has_self {
+                            let mangled = format!("{type_name}__{method_name}");
+                            ctx.fn_sigs.insert(mangled, (param_types, ret_type));
+                        } else {
+                            let mangled = mangle_trait_equip_name(trait_type, &type_name, method_name, ctx);
+                            ctx.fn_sigs.insert(mangled, (param_types, ret_type));
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -856,7 +925,11 @@ pub fn lower_unregistered_trait_equip_methods(
             let trait_type =
                 &equip.trait_.as_ref().unwrap().trait_name.node;
 
+            let mut implemented_methods: Vec<String> = Vec::new();
+
             for method in &equip.items {
+                implemented_methods.push(method.node.name.node.clone());
+
                 let has_self = method
                     .node
                     .params
@@ -886,6 +959,38 @@ pub fn lower_unregistered_trait_equip_methods(
                     );
                 }
             }
+
+            // Emit default methods from the trait definition that are not overridden.
+            if let Some(trait_def) = find_trait_def(ast_module, &trait_name) {
+                let self_subs = vec![("Self".to_string(), equip.type_.node.clone())];
+                for trait_item in &trait_def.items {
+                    if let TraitItem::Method(default_method) = &trait_item.node {
+                        let method_name = &default_method.name.node;
+                        if implemented_methods.contains(method_name) {
+                            continue;
+                        }
+                        match &default_method.body {
+                            FunctionBody::Declaration | FunctionBody::Extern(_) => continue,
+                            FunctionBody::Block(_) | FunctionBody::Expression(_) => {}
+                        }
+                        let has_self = default_method.params.first()
+                            .map(|p| p.node.name.node == "self")
+                            .unwrap_or(false);
+                        if has_self {
+                            super::functions::lower_equip_method(
+                                ctx, module, default_method, &type_name, &equip.type_.node,
+                            );
+                        } else {
+                            // Substitute Self in return type, param types, and body before lowering.
+                            let substituted = substitute_method_self(default_method, &self_subs, ctx);
+                            let mangled = mangle_trait_equip_name(
+                                trait_type, &type_name, method_name, ctx,
+                            );
+                            lower_static_trait_method(ctx, module, &substituted, &mangled);
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -899,34 +1004,32 @@ fn lower_static_trait_method(
     method: &ast::FunctionDef,
     mangled: &str,
 ) {
-    let return_type = ctx.type_mapper.map_ast_type(&method.return_type.node);
+    // Use map_ast_type_mut to auto-register generic instantiations like Option[Color].
+    let return_type = ctx.type_mapper.map_ast_type_mut(&method.return_type.node, &mut ctx.type_registry);
 
     // Build parameters (skip self if somehow present)
-    let params: Vec<(TypeId, Option<&str>)> = method
+    let params: Vec<(TypeId, Option<String>)> = method
         .params
         .iter()
         .filter(|p| p.node.name.node != "self")
         .map(|p| {
-            let gir_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
-            (gir_type, Some(p.node.name.node.as_str()))
+            let gir_type = ctx.type_mapper.map_ast_type_mut(&p.node.type_.node, &mut ctx.type_registry);
+            (gir_type, Some(p.node.name.node.clone()))
         })
         .collect();
+    let param_refs: Vec<(TypeId, Option<&str>)> = params.iter()
+        .map(|(id, name)| (*id, name.as_deref()))
+        .collect();
 
-    let mut builder = FunctionBuilder::new(mangled, return_type, &params);
+    let mut builder = FunctionBuilder::new(mangled, return_type, &param_refs);
     ctx.clear_locals();
 
-    // Register params starting at _1
+    // Register params starting at _1 (use already-mapped types from `params`)
     let mut param_idx = 1u32;
-    for p in &method.params {
-        if p.node.name.node == "self" {
-            continue;
+    for (gir_type, name) in &params {
+        if let Some(name) = name {
+            ctx.register_local(name, LocalId(param_idx), *gir_type);
         }
-        let gir_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
-        ctx.register_local(
-            &p.node.name.node,
-            LocalId(param_idx),
-            gir_type,
-        );
         param_idx += 1;
     }
 
@@ -993,6 +1096,48 @@ fn extract_type_name(ty: &Type) -> Option<String> {
 /// - `From[float]` on `Celsius`, method `from` → `From__double_for_Celsius__from`
 /// - `Default` on `Point`, method `default` → `Default_for_Point__default`
 /// - `Equatable` on `Circle`, method `eq` → `Equatable_for_Circle__eq`
+/// Clone a `FunctionDef` and substitute `Self` (and other subs) in:
+/// - return type
+/// - parameter types
+/// - body block (via delayed meta evaluation)
+///
+/// Used to instantiate default trait methods with a concrete equipped type.
+fn substitute_method_self(
+    method: &ast::FunctionDef,
+    self_subs: &[(String, Type)],
+    ctx: &LoweringContext,
+) -> ast::FunctionDef {
+    let mut cloned = method.clone();
+
+    // Substitute Self in return type.
+    cloned.return_type.node = generics::substitute_type_pub(&method.return_type.node, self_subs);
+
+    // Substitute Self in parameter types.
+    for param in &mut cloned.params {
+        param.node.type_.node = generics::substitute_type_pub(&param.node.type_.node, self_subs);
+    }
+
+    // Evaluate delayed meta in the body block.
+    if let ast::FunctionBody::Block(ref mut block) = cloned.body {
+        let empty_env = rustc_hash::FxHashMap::default();
+        let delayed_ctx = DelayedMetaContext {
+            type_subs:      self_subs,
+            features:       &[],
+            meta_env:       &empty_env,
+            items:          &[],
+            trait_registry: &ctx.analysis.traits,
+            type_registry:  &ctx.type_registry,
+        };
+        let mut meta_errors = Vec::new();
+        meta::evaluate_delayed_meta_block(block, &delayed_ctx, &mut meta_errors);
+        for e in &meta_errors {
+            eprintln!("[delayed-meta static-trait] {e:?}");
+        }
+    }
+
+    cloned
+}
+
 fn mangle_trait_equip_name(
     trait_type: &Type,
     type_name: &str,

@@ -1165,6 +1165,13 @@ fn resolve_expr(
                     resolve_expr(&args[0].node.value, scopes, errors, resolution_map);
                     return;
                 }
+                // make_variant(T, "Variant") is a compile-time rewrite builtin.
+                // arg0 is a type name (no runtime resolution needed), arg1 is a string literal.
+                // Skip callee and arg1 resolution to avoid spurious errors.
+                if cname == "make_variant" && args.len() == 2 {
+                    // arg0 is a type name — no resolution needed (types aren't in the value scope).
+                    return;
+                }
             }
             resolve_expr(callee, scopes, errors, resolution_map);
             for arg in args {

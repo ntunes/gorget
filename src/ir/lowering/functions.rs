@@ -240,7 +240,24 @@ pub fn lower_equip_method(
     // Lower the body
     match &method.body {
         FunctionBody::Block(block) => {
-            lower_block(ctx, &mut builder, block);
+            // Evaluate delayed meta blocks (meta if/for) with Self bound to the equipped type.
+            let mut block = block.clone();
+            let self_subs = vec![("Self".to_string(), equipped_type.clone())];
+            let empty_env = rustc_hash::FxHashMap::default();
+            let delayed_ctx = DelayedMetaContext {
+                type_subs:      &self_subs,
+                features:       &[],
+                meta_env:       &empty_env,
+                items:          &[],
+                trait_registry: &ctx.analysis.traits,
+                type_registry:  &ctx.type_registry,
+            };
+            let mut meta_errors = Vec::new();
+            meta::evaluate_delayed_meta_block(&mut block, &delayed_ctx, &mut meta_errors);
+            for e in &meta_errors {
+                eprintln!("[delayed-meta equip] {e:?}");
+            }
+            lower_block(ctx, &mut builder, &block);
 
             let last_block_idx = builder.current_block.0 as usize;
             if builder.blocks[last_block_idx].terminator.is_none() {
@@ -453,6 +470,9 @@ pub fn lower_generic_equip_methods_with_defaults(
 ) {
     let subs = build_equip_subs(equip, type_args);
 
+    // Substituted equipped type — used for Self binding in delayed meta evaluation.
+    let substituted_equipped_type = generics::substitute_type_pub(&equip.type_.node, &subs);
+
     // Build type name substitutions for struct init/method calls in the body
     build_type_name_subs(ctx, &subs);
 
@@ -557,7 +577,24 @@ pub fn lower_generic_equip_methods_with_defaults(
 
         match &method_def.body {
             FunctionBody::Block(block) => {
-                lower_block(ctx, &mut builder, block);
+                // Evaluate delayed meta blocks (meta if/for) with Self bound to the equipped type.
+                let mut block = block.clone();
+                let self_subs = vec![("Self".to_string(), substituted_equipped_type.clone())];
+                let empty_env = rustc_hash::FxHashMap::default();
+                let delayed_ctx = DelayedMetaContext {
+                    type_subs:      &self_subs,
+                    features:       &[],
+                    meta_env:       &empty_env,
+                    items:          &[],
+                    trait_registry: &ctx.analysis.traits,
+                    type_registry:  &ctx.type_registry,
+                };
+                let mut meta_errors = Vec::new();
+                meta::evaluate_delayed_meta_block(&mut block, &delayed_ctx, &mut meta_errors);
+                for e in &meta_errors {
+                    eprintln!("[delayed-meta generic-equip] {e:?}");
+                }
+                lower_block(ctx, &mut builder, &block);
 
                 let last_block_idx = builder.current_block.0 as usize;
                 if builder.blocks[last_block_idx].terminator.is_none() {
@@ -594,8 +631,8 @@ pub fn lower_generic_equip_methods_with_defaults(
             let implemented: Vec<String> = equip.items.iter()
                 .map(|m| m.node.name.node.clone())
                 .collect();
-            // Reconstruct the substituted equipped type for lower_equip_method
-            let substituted_type = generics::substitute_type_pub(&equip.type_.node, &subs);
+            // Substituted equipped type already computed above; re-borrow for this scope.
+            let substituted_type = substituted_equipped_type.clone();
             // Find trait def and emit defaults
             for item in &ast_mod.items {
                 if let Item::Trait(trait_def) = &item.node {
