@@ -460,6 +460,15 @@ equip Router:
     void post(&self, str path, Callable[HttpServerResponse(HttpRequest)] handler):
         self.route("POST", path, handler)
 
+    void put(&self, str path, Callable[HttpServerResponse(HttpRequest)] handler):
+        self.route("PUT", path, handler)
+
+    void delete(&self, str path, Callable[HttpServerResponse(HttpRequest)] handler):
+        self.route("DELETE", path, handler)
+
+    void patch(&self, str path, Callable[HttpServerResponse(HttpRequest)] handler):
+        self.route("PATCH", path, handler)
+
     # Register a middleware hook. Each hook is called (in order) after the matched handler
     # returns, receiving the original request and the handler's response. The hook returns
     # the (possibly modified) response. Typical uses: CORS headers, security headers, logging.
@@ -467,7 +476,45 @@ equip Router:
         Callable[HttpServerResponse(HttpRequest, HttpServerResponse)] h = hook
         self.middlewares.push(h)
 
-    # Inner dispatch: exact match → param match → 404. No middleware applied.
+    # Collect all HTTP methods registered for a given path (exact or matching param pattern).
+    # Used by HEAD and OPTIONS auto-handling.
+    Vector[str] allowed_methods(&self, str path):
+        Vector[str] all_methods = Vector[str]()
+        all_methods.push("GET")
+        all_methods.push("POST")
+        all_methods.push("PUT")
+        all_methods.push("DELETE")
+        all_methods.push("PATCH")
+        Vector[str] found = Vector[str]()
+        Vector[str] path_parts = path.split("/")
+        int ai = 0
+        while ai < all_methods.len():
+            str m = all_methods[ai]
+            str exact_key = m + " " + path
+            if self.exact_routes.contains(exact_key):
+                found.push(m)
+                ai = ai + 1
+                continue
+            str mpfx = m + "|"
+            int mpfx_len = m.byte_len() + 1
+            Vector[str] pkeys = self.param_routes.keys()
+            int pi = 0
+            bool matched = false
+            while pi < pkeys.len():
+                str pkey = pkeys[pi]
+                if pkey.starts_with(mpfx):
+                    str route_path = pkey.byte_slice(mpfx_len, pkey.byte_len())
+                    Vector[str] pattern = route_path.split("/")
+                    Result[Dict[str, str], str] mr = http_router_match_pattern(pattern, path_parts)
+                    if mr.is_ok():
+                        matched = true
+                pi = pi + 1
+            if matched:
+                found.push(m)
+            ai = ai + 1
+        return found
+
+    # Inner dispatch: exact match → param match → HEAD/OPTIONS auto → 404. No middleware applied.
     HttpServerResponse dispatch_inner(&self, HttpRequest req):
         # 1. Exact-match first (O(1))
         str key = req.method + " " + req.path
@@ -492,7 +539,27 @@ equip Router:
                     Callable[HttpServerResponse(HttpRequest)] h = self.param_routes[pkey]
                     return h(matched_req)
             pi = pi + 1
-        # 3. Fallback: 404
+        # 3. HEAD auto-handling: run the GET handler and strip the body.
+        if req.method == "HEAD":
+            HttpRequest get_req = HttpRequest("GET", req.path, req.query_string, req.http_version, req.headers, req.body, req.params)
+            HttpServerResponse get_resp = self.dispatch_inner(get_req)
+            return HttpServerResponse(get_resp.status_code, "", get_resp.content_type, get_resp.headers)
+        # 4. OPTIONS auto-handling: respond with allowed methods for this path.
+        if req.method == "OPTIONS":
+            Vector[str] allowed = self.allowed_methods(req.path)
+            if allowed.len() == 0:
+                return HttpServerResponse.not_found()
+            # Always include HEAD and OPTIONS in Allow header
+            str allow_str = "OPTIONS, HEAD"
+            int oi = 0
+            while oi < allowed.len():
+                allow_str = allow_str + ", " + allowed[oi]
+                oi = oi + 1
+            Dict[str, str] opts_hdrs = Dict[str, str]()
+            opts_hdrs.put("Allow", allow_str)
+            opts_hdrs.put("Content-Length", "0")
+            return HttpServerResponse(200, "", "text/plain", opts_hdrs)
+        # 5. Fallback: 404
         return HttpServerResponse.not_found()
 
     # Dispatch a request through the router: inner dispatch + middleware pipeline.

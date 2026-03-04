@@ -4195,6 +4195,30 @@ fn httpserver_router_extended() {
 }
 
 #[test]
+fn httpserver_methods() {
+    run_gg(
+        "httpserver_methods.gg",
+        "200\nput\n200\ndeleted\n200\npatched\n200\n\n200\nGET\n404\n404",
+    );
+}
+
+#[test]
+fn httpserver_large_body() {
+    run_gg(
+        "httpserver_large_body.gg",
+        "ok\nok",
+    );
+}
+
+#[test]
+fn http_patch() {
+    run_gg(
+        "http_patch.gg",
+        "ok\nok",
+    );
+}
+
+#[test]
 fn httpserver_response() {
     run_gg(
         "httpserver_response.gg",

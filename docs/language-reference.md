@@ -3111,16 +3111,169 @@ match result:
 
 **`gg.http`** — HTTP client
 
-| Name | Kind | Description |
+Supports HTTP and HTTPS (TLS). Follows redirects automatically (up to 5 hops).
+
+```gorget
+from gg.http import http_get, http_post, http_put, http_delete, http_patch, HttpResponse
+
+Result[HttpResponse, str] r = http_get("https://api.example.com/data")
+if r.is_ok():
+    HttpResponse resp = r.unwrap()
+    print("{resp.status_code}")   # e.g. 200
+    print(resp.body_text)         # response body as string
+    print(resp.headers["content-type"])
+```
+
+`HttpResponse` fields:
+
+| Field | Type | Description |
 |---|---|---|
-| `Response` | struct | HTTP response with `status() → int`, `body() → str`, `header(str) → str` methods |
-| `Client` | struct | Configurable HTTP client with `base_url`, `header`, `timeout` builder methods |
-| `get` | `Result[Response, str](str)` | HTTP GET request |
-| `post` | `Result[Response, str](str, str)` | HTTP POST request (url, body) |
-| `put` | `Result[Response, str](str, str)` | HTTP PUT request |
-| `delete` | `Result[Response, str](str)` | HTTP DELETE request |
-| `patch` | `Result[Response, str](str, str)` | HTTP PATCH request |
-| `head` | `Result[Response, str](str)` | HTTP HEAD request |
+| `status_code` | `int` | HTTP status code (200, 404, …) |
+| `body_text` | `str` | Response body decoded as UTF-8 |
+| `headers` | `Dict[str, str]` | Response headers (lowercase names) |
+
+Client functions (all return `Result[HttpResponse, str]`):
+
+| Function | Signature | Description |
+|---|---|---|
+| `http_get` | `(str url, Dict[str,str] headers={})` | GET request |
+| `http_post` | `(str url, str body="", Dict[str,str] headers={})` | POST request |
+| `http_put` | `(str url, str body="", Dict[str,str] headers={})` | PUT request |
+| `http_delete` | `(str url, Dict[str,str] headers={})` | DELETE request |
+| `http_patch` | `(str url, str body="", Dict[str,str] headers={})` | PATCH request |
+
+Helper:
+
+| Function | Signature | Description |
+|---|---|---|
+| `http_parse_url` | `(str url) → (str host, int port, str path, bool use_tls)` | Parse a URL into components |
+
+---
+
+**`gg.httpserver`** — HTTP/1.1 server
+
+Provides a `Router`-based request dispatcher, keep-alive connection handling, TLS support, middleware pipeline, and static file serving.
+
+```gorget
+from gg.httpserver import Router, HttpRequest, HttpServerResponse
+from std.net.socket import ServerSocket, Socket, server_socket_bind
+from std.time import sleep
+
+HttpServerResponse handle_hello(HttpRequest req):
+    return HttpServerResponse.ok("hello, " + req.params["name"])
+
+async void main():
+    Router router = Router.new()
+    router.get("/hello/:name", handle_hello)
+    router.use((req, resp): resp.with_header("x-powered-by", "gorget"))
+
+    int port = 8080
+    ServerSocket srv = server_socket_bind("0.0.0.0", port).unwrap()
+    while true:
+        Socket conn = srv.accept().unwrap()
+        spawn http_server_handle_conn_ka(conn, (req): router.dispatch(req), 30000)
+```
+
+**`HttpRequest`** fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `method` | `str` | `"GET"`, `"POST"`, `"PUT"`, `"DELETE"`, `"PATCH"`, … |
+| `path` | `str` | URL path (e.g. `"/api/users"`) |
+| `query_string` | `str` | Raw query string without leading `?` |
+| `http_version` | `str` | `"HTTP/1.1"` |
+| `headers` | `Dict[str, str]` | Request headers (lowercase names) |
+| `body` | `str` | Request body |
+| `params` | `Dict[str, str]` | URL path parameters captured by the Router |
+
+`HttpRequest` methods:
+
+| Method | Returns | Description |
+|---|---|---|
+| `query_params()` | `Dict[str, str]` | Parse `query_string` into key/value pairs |
+
+**`HttpServerResponse`** fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `status_code` | `int` | HTTP status code |
+| `body` | `str` | Response body |
+| `content_type` | `str` | `Content-Type` header value |
+| `headers` | `Dict[str, str]` | Additional response headers |
+
+`HttpServerResponse` factory methods (static):
+
+| Method | Description |
+|---|---|
+| `HttpServerResponse.ok(str body)` | 200 text/plain |
+| `HttpServerResponse.html(str body)` | 200 text/html |
+| `HttpServerResponse.json(str body)` | 200 application/json |
+| `HttpServerResponse.not_found()` | 404 |
+| `HttpServerResponse.bad_request(str msg)` | 400 |
+| `HttpServerResponse.internal_error(str msg)` | 500 |
+| `HttpServerResponse.redirect(str location)` | 302 with `Location` header |
+
+Instance methods:
+
+| Method | Returns | Description |
+|---|---|---|
+| `with_header(str name, str value)` | `HttpServerResponse` | Return copy with additional header |
+| `status_text()` | `str` | Human-readable status (e.g. `"OK"`, `"Not Found"`) |
+
+**`Router`** — URL-pattern dispatcher:
+
+```gorget
+Router router = Router.new()
+router.get("/users/:id", handle_user)    # GET
+router.post("/users", handle_create)     # POST
+router.put("/users/:id", handle_update)  # PUT
+router.delete("/users/:id", handle_del)  # DELETE
+router.patch("/users/:id", handle_patch) # PATCH
+router.use(cors_middleware)              # middleware hook
+
+HttpServerResponse resp = router.dispatch(req)
+```
+
+`Router` registers routes for exact paths (e.g. `/hello`) and parameterized paths (e.g. `/users/:id`). Path parameters are populated into `req.params`. The router automatically handles:
+
+- **`HEAD`** — runs the matching `GET` handler and strips the response body
+- **`OPTIONS`** — returns 200 with an `Allow` header listing registered methods for the path; returns 404 if no routes match
+
+**Middleware** hooks run in registration order after the matched handler:
+
+```gorget
+# Hook receives (request, response) and returns the (modified) response
+router.use((req, resp): resp.with_header("access-control-allow-origin", "*"))
+```
+
+**Connection handlers** (low-level):
+
+| Function | Description |
+|---|---|
+| `http_server_handle_conn_ka(Socket, handler, timeout_ms)` | Keep-alive HTTP connection handler (async) |
+| `http_server_handle_conn_tls_ka(TlsSocket, handler, timeout_ms)` | Keep-alive HTTPS connection handler (async) |
+
+**TLS server**:
+
+```gorget
+from gg.httpserver import HttpServer
+
+HttpServer srv = HttpServer.new_tls("0.0.0.0", 8443, "/path/cert.pem", "/path/key.pem")
+srv.serve((req): router.dispatch(req)).await()
+```
+
+**Static file serving**:
+
+```gorget
+from gg.httpserver import http_serve_file, http_mime_type
+
+router.get("/static/:file", (req): http_serve_file("./public", req))
+```
+
+`parse_query_string(str) → Dict[str, str]` — parse a raw query string.
+`http_mime_type(str path) → str` — return MIME type for a file path by extension.
+
+---
 
 **`std.net.socket`** — TCP sockets
 

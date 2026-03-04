@@ -379,3 +379,6 @@ Result[HttpResponse, str] http_put(str http_url, str http_body = "", Dict[str, s
 
 Result[HttpResponse, str] http_delete(str http_url, Dict[str, str] http_hdrs = Dict[str, str]()):
     return http_request("DELETE", http_url, "", http_hdrs)
+
+Result[HttpResponse, str] http_patch(str http_url, str http_body = "", Dict[str, str] http_hdrs = Dict[str, str]()):
+    return http_request("PATCH", http_url, http_body, http_hdrs)

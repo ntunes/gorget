@@ -1,0 +1,69 @@
+# Test: Large request body (>4096 bytes) correctly received by httpserver.
+#
+# Sends a POST with a body of 8192 'x' characters via a real TCP connection,
+# verifying that http_server_handle_conn_ka reads the full body via read_exact.
+#
+# Expected output:
+#   ok\nok
+
+from gg.httpserver import HttpRequest, HttpServerResponse, http_server_handle_conn_ka
+from gg.http import http_post, HttpResponse
+from std.net.socket import ServerSocket, Socket, server_socket_bind
+from std.collections import Dict
+from std.conv import int_to_str
+from std.time import sleep
+
+HttpServerResponse handle(HttpRequest req):
+    int body_len = req.body.byte_len()
+    if body_len == 8192:
+        return HttpServerResponse.ok("full")
+    return HttpServerResponse.ok("partial:" + int_to_str(body_len))
+
+async void serve_n(int port, int n):
+    Result[ServerSocket, str] bind_r = server_socket_bind("127.0.0.1", port)
+    if bind_r.is_err():
+        return
+    ServerSocket srv = bind_r.unwrap()
+    TaskGroup group = TaskGroup()
+    int i = 0
+    while i < n:
+        Result[Socket, str] ar = srv.accept()
+        if ar.is_ok():
+            Socket client = ar.unwrap()
+            group.spawn(spawn http_server_handle_conn_ka(client, handle, 5000))
+            i = i + 1
+    group.join()
+    srv.close()
+
+void check(str label, bool ok):
+    if not ok:
+        print("FAIL: " + label)
+    else:
+        print("ok")
+
+async void main():
+    int port = 18091
+    Task[void] srv = spawn serve_n(port, 1)
+    sleep(0.05).await()
+
+    str base = "http://127.0.0.1:" + int_to_str(port)
+
+    # Build 8192-byte body: 64 repetitions of a 128-char string
+    str chunk = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    str big_body = ""
+    int ri = 0
+    while ri < 64:
+        big_body = big_body + chunk
+        ri = ri + 1
+
+    Dict[str, str] hdrs = Dict[str, str]()
+    Result[HttpResponse, str] r = http_post(base + "/upload", big_body, hdrs)
+    if r.is_ok():
+        HttpResponse resp = r.unwrap()
+        check("status", resp.status_code == 200)
+        check("body_received", resp.body_text == "full")
+    else:
+        print("FAIL: " + r.unwrap_err())
+        print("FAIL: body_received")
+
+    srv.await()

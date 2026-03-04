@@ -1,0 +1,79 @@
+# Test: Router dispatch for PUT, DELETE, PATCH + HEAD and OPTIONS auto-handling.
+#
+# Validates (all via direct Router.dispatch, no TCP):
+#   - PUT /resource  → 200 + "put"
+#   - DELETE /resource → 200 + "deleted"
+#   - PATCH /resource → 200 + "patched"
+#   - HEAD /hello (GET registered) → 200 + empty body
+#   - OPTIONS /hello (GET registered) → 200 + Allow header contains "GET"
+#   - OPTIONS /unknown → 404 (no routes for that path)
+#   - HEAD /unknown → 404
+#
+# Expected output:
+#   200\nput\n200\ndeleted\n200\npatched\n200\n\n200\nGET\n404\n404
+
+from gg.httpserver import Router, HttpRequest, HttpServerResponse
+from std.collections import Dict
+
+HttpServerResponse handle_hello(HttpRequest req):
+    return HttpServerResponse.ok("hello")
+
+HttpServerResponse handle_put(HttpRequest req):
+    return HttpServerResponse.ok("put")
+
+HttpServerResponse handle_delete(HttpRequest req):
+    return HttpServerResponse.ok("deleted")
+
+HttpServerResponse handle_patch(HttpRequest req):
+    return HttpServerResponse.ok("patched")
+
+void main():
+    Router router = Router.new()
+    router.get("/hello", handle_hello)
+    router.put("/resource", handle_put)
+    router.delete("/resource", handle_delete)
+    router.patch("/resource", handle_patch)
+
+    # 1. PUT /resource → 200 + "put"
+    HttpRequest req1 = HttpRequest("PUT", "/resource", "", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
+    HttpServerResponse resp1 = router.dispatch(req1)
+    print("{resp1.status_code}")
+    print(resp1.body)
+
+    # 2. DELETE /resource → 200 + "deleted"
+    HttpRequest req2 = HttpRequest("DELETE", "/resource", "", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
+    HttpServerResponse resp2 = router.dispatch(req2)
+    print("{resp2.status_code}")
+    print(resp2.body)
+
+    # 3. PATCH /resource → 200 + "patched"
+    HttpRequest req3 = HttpRequest("PATCH", "/resource", "", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
+    HttpServerResponse resp3 = router.dispatch(req3)
+    print("{resp3.status_code}")
+    print(resp3.body)
+
+    # 4. HEAD /hello → 200 + empty body (runs GET handler, strips body)
+    HttpRequest req4 = HttpRequest("HEAD", "/hello", "", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
+    HttpServerResponse resp4 = router.dispatch(req4)
+    print("{resp4.status_code}")
+    print(resp4.body)
+
+    # 5. OPTIONS /hello → 200 + Allow header contains "GET"
+    HttpRequest req5 = HttpRequest("OPTIONS", "/hello", "", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
+    HttpServerResponse resp5 = router.dispatch(req5)
+    print("{resp5.status_code}")
+    str allow = resp5.headers["Allow"]
+    if allow.contains("GET"):
+        print("GET")
+    else:
+        print("FAIL")
+
+    # 6. OPTIONS /unknown → 404 (no routes registered for /unknown)
+    HttpRequest req6 = HttpRequest("OPTIONS", "/unknown", "", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
+    HttpServerResponse resp6 = router.dispatch(req6)
+    print("{resp6.status_code}")
+
+    # 7. HEAD /unknown → 404
+    HttpRequest req7 = HttpRequest("HEAD", "/unknown", "", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
+    HttpServerResponse resp7 = router.dispatch(req7)
+    print("{resp7.status_code}")
