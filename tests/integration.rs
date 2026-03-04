@@ -4243,6 +4243,14 @@ fn httpserver_before() {
 }
 
 #[test]
+fn httpserver_routing() {
+    run_gg(
+        "httpserver_routing.gg",
+        "ok\nok\nok\nok\nok",
+    );
+}
+
+#[test]
 fn httpserver_response() {
     run_gg(
         "httpserver_response.gg",

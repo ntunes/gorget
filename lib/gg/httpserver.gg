@@ -543,6 +543,51 @@ Result[Dict[str, str], str] http_router_match_pattern(Vector[str] pattern, Vecto
         i = i + 1
     return Ok(params)
 
+# Match a URL path against a wildcard route pattern.
+# A segment starting with "*" captures all remaining path segments (joined by "/").
+# Example: pattern "/files/*rest" matches "/files/img/logo.png" → params["rest"] = "img/logo.png"
+# Returns Ok(params_dict) on match, Error("") on miss.
+Result[Dict[str, str], str] http_router_match_wildcard(Vector[str] pattern, Vector[str] parts):
+    # Find the wildcard segment index
+    int wc_idx = -1
+    str wc_name = ""
+    int pi = 0
+    while pi < pattern.len():
+        str seg = pattern[pi]
+        if seg.starts_with("*"):
+            wc_idx = pi
+            wc_name = seg.byte_slice(1, seg.byte_len())
+        pi = pi + 1
+    if wc_idx < 0:
+        return Error("")
+    # Path must have at least wc_idx segments before the wildcard
+    if parts.len() < wc_idx:
+        return Error("")
+    # Match all segments before the wildcard exactly
+    Dict[str, str] params = Dict[str, str]()
+    int si = 0
+    while si < wc_idx:
+        if si >= pattern.len() or si >= parts.len():
+            return Error("")
+        str pseg = pattern[si]
+        str ppart = parts[si]
+        if pseg.starts_with(":"):
+            str pname = pseg.byte_slice(1, pseg.byte_len())
+            params.put(pname, ppart)
+        elif pseg != ppart:
+            return Error("")
+        si = si + 1
+    # Capture remaining parts into the wildcard param
+    str captured = ""
+    int ri = wc_idx
+    while ri < parts.len():
+        if ri > wc_idx:
+            captured = captured + "/"
+        captured = captured + parts[ri]
+        ri = ri + 1
+    params.put(wc_name, captured)
+    return Ok(params)
+
 struct Router:
     Dict[str, Callable[HttpServerResponse(HttpRequest)]] exact_routes
     # Parameterized routes: key = "METHOD|/path/:param" (method + "|" + original path).
@@ -550,6 +595,9 @@ struct Router:
     # This avoids storing Vector[str] inside a Dict (which causes use-after-free when
     # the shallow-copied vector is freed while the dict still owns the data).
     Dict[str, Callable[HttpServerResponse(HttpRequest)]] param_routes
+    # Wildcard routes: key = "METHOD|/prefix/*name". The *name segment captures all
+    # remaining path segments (including slashes) into params["name"].
+    Dict[str, Callable[HttpServerResponse(HttpRequest)]] wildcard_routes
     # Post-dispatch middleware: called after handler, receives (req, resp) → resp.
     # Use cases: add CORS headers, inject X-headers, log status codes, etc.
     Vector[Callable[HttpServerResponse(HttpRequest, HttpServerResponse)]] middlewares
@@ -563,13 +611,17 @@ equip Router:
     Router new():
         Dict[str, Callable[HttpServerResponse(HttpRequest)]] ex = Dict[str, Callable[HttpServerResponse(HttpRequest)]]()
         Dict[str, Callable[HttpServerResponse(HttpRequest)]] pr = Dict[str, Callable[HttpServerResponse(HttpRequest)]]()
+        Dict[str, Callable[HttpServerResponse(HttpRequest)]] wr = Dict[str, Callable[HttpServerResponse(HttpRequest)]]()
         Vector[Callable[HttpServerResponse(HttpRequest, HttpServerResponse)]] mw = Vector[Callable[HttpServerResponse(HttpRequest, HttpServerResponse)]]()
         Vector[Callable[Option[HttpServerResponse](HttpRequest)]] pre = Vector[Callable[Option[HttpServerResponse](HttpRequest)]]()
-        return Router(ex, pr, mw, pre)
+        return Router(ex, pr, wr, mw, pre)
 
     void route(&self, str method, str path, Callable[HttpServerResponse(HttpRequest)] handler):
         Callable[HttpServerResponse(HttpRequest)] h = handler
-        if path.contains(":"):
+        if path.contains("*"):
+            str wkey = method + "|" + path
+            self.wildcard_routes.put(wkey, h)
+        elif path.contains(":"):
             str pkey = method + "|" + path
             self.param_routes.put(pkey, h)
         else:
@@ -605,6 +657,44 @@ equip Router:
         Callable[Option[HttpServerResponse](HttpRequest)] h = hook
         self.pre_middlewares.push(h)
 
+    # Mount all routes from a sub-router under a path prefix.
+    # Routes from sub are copied into self with `prefix` prepended.
+    # Middlewares from sub are NOT copied (parent controls the pipeline).
+    void prefix_mount(&self, str prefix, Router sub):
+        Vector[str] ex_keys = sub.exact_routes.keys()
+        int ei = 0
+        while ei < ex_keys.len():
+            str k = ex_keys[ei]
+            Option[int] sp = k.index_of(" ")
+            if sp.is_some():
+                str mth = k.byte_slice(0, sp.unwrap())
+                str pth = k.byte_slice(sp.unwrap() + 1, k.byte_len())
+                Callable[HttpServerResponse(HttpRequest)] h = sub.exact_routes[k]
+                self.exact_routes.put(mth + " " + prefix + pth, h)
+            ei = ei + 1
+        Vector[str] pr_keys = sub.param_routes.keys()
+        int pri = 0
+        while pri < pr_keys.len():
+            str k = pr_keys[pri]
+            Option[int] sp2 = k.index_of("|")
+            if sp2.is_some():
+                str mth = k.byte_slice(0, sp2.unwrap())
+                str pth = k.byte_slice(sp2.unwrap() + 1, k.byte_len())
+                Callable[HttpServerResponse(HttpRequest)] h = sub.param_routes[k]
+                self.param_routes.put(mth + "|" + prefix + pth, h)
+            pri = pri + 1
+        Vector[str] wr_keys = sub.wildcard_routes.keys()
+        int wri = 0
+        while wri < wr_keys.len():
+            str k = wr_keys[wri]
+            Option[int] sp3 = k.index_of("|")
+            if sp3.is_some():
+                str mth = k.byte_slice(0, sp3.unwrap())
+                str pth = k.byte_slice(sp3.unwrap() + 1, k.byte_len())
+                Callable[HttpServerResponse(HttpRequest)] h = sub.wildcard_routes[k]
+                self.wildcard_routes.put(mth + "|" + prefix + pth, h)
+            wri = wri + 1
+
     # Collect all HTTP methods registered for a given path (exact or matching param pattern).
     # Used by HEAD and OPTIONS auto-handling.
     Vector[str] allowed_methods(&self, str path):
@@ -638,6 +728,18 @@ equip Router:
                     if mr.is_ok():
                         matched = true
                 pi = pi + 1
+            if not matched:
+                Vector[str] wkeys = self.wildcard_routes.keys()
+                int wi = 0
+                while wi < wkeys.len():
+                    str wkey = wkeys[wi]
+                    if wkey.starts_with(mpfx):
+                        str wpath = wkey.byte_slice(mpfx_len, wkey.byte_len())
+                        Vector[str] wpat = wpath.split("/")
+                        Result[Dict[str, str], str] wmr = http_router_match_wildcard(wpat, path_parts)
+                        if wmr.is_ok():
+                            matched = true
+                    wi = wi + 1
             if matched:
                 found.push(m)
             ai = ai + 1
@@ -668,6 +770,23 @@ equip Router:
                     Callable[HttpServerResponse(HttpRequest)] h = self.param_routes[pkey]
                     return h(matched_req)
             pi = pi + 1
+        # 2b. Wildcard match (linear scan over wildcard_routes)
+        Vector[str] wkeys = self.wildcard_routes.keys()
+        str wpfx = req.method + "|"
+        int wpfx_len = req.method.byte_len() + 1
+        int wi = 0
+        while wi < wkeys.len():
+            str wkey = wkeys[wi]
+            if wkey.starts_with(wpfx):
+                str wpath = wkey.byte_slice(wpfx_len, wkey.byte_len())
+                Vector[str] wpat = wpath.split("/")
+                Result[Dict[str, str], str] wm = http_router_match_wildcard(wpat, path_parts)
+                if wm.is_ok():
+                    Dict[str, str] wextracted = wm.unwrap()
+                    HttpRequest wmatched_req = HttpRequest(req.method, req.path, req.query_string, req.http_version, req.headers, req.body, wextracted)
+                    Callable[HttpServerResponse(HttpRequest)] wh = self.wildcard_routes[wkey]
+                    return wh(wmatched_req)
+            wi = wi + 1
         # 3. HEAD auto-handling: run the GET handler and strip the body.
         if req.method == "HEAD":
             HttpRequest get_req = HttpRequest("GET", req.path, req.query_string, req.http_version, req.headers, req.body, req.params)
