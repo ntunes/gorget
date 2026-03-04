@@ -5,9 +5,9 @@
 
 ## Overview
 
-Gorget is a Python-like language that compiles to C via transpilation.
+Gorget is a statically typed, Python-like language with Rust-inspired ownership and safety.
 
-**Pipeline:** `.gg` source → lexer → parser → semantic analysis → C codegen → cc → binary
+**Pipeline:** `.gg` source → lexer → parser → semantic analysis → IR lowering → backend → binary
 
 **Binary:** `gg` with commands: `lex`, `parse`, `check`, `build`, `run`
 
@@ -15,8 +15,8 @@ Gorget is a Python-like language that compiles to C via transpilation.
 
 ```bash
 cargo build              # build the compiler
-cargo test --lib         # unit tests (currently ~628)
-cargo test --test integration -- --test-threads=1  # integration tests (currently ~336, run serially to avoid cargo lock contention)
+cargo test --lib         # unit tests (currently ~670)
+cargo test --test integration -- --test-threads=1  # integration tests (currently ~493, run serially to avoid cargo lock contention)
 cargo test               # all tests (use --test-threads=1 if integration tests hang)
 ```
 
@@ -30,7 +30,12 @@ cargo test               # all tests (use --test-threads=1 if integration tests 
 - `src/lexer/` — Logos-based tokenizer with indentation tracking
 - `src/parser/` — Recursive descent parser producing AST
 - `src/semantic/` — Name resolution, type checking, trait registry, borrow checking
-- `src/codegen/` — C code generation (uses GCC extensions: statement expressions, `__typeof__`)
+- `src/ir/` — Intermediate representation and lowering from AST (monomorphization, drop insertion, closures)
+- `src/backend/` — Code generation backends (`c/` is the current backend)
+- `src/formatter/` — Source formatter (`gg fmt`)
+- `src/sim/` — Interpreter / simulation runtime
+- `src/loader.rs`, `src/lockfile.rs`, `src/manifest.rs` — Package management
+- `src/report.rs` — Test report generation
 - `tests/fixtures/*.gg` — Integration test programs with deterministic stdout
 - `tests/integration.rs` — Integration test harness: builds fixtures via `cargo run -- build`, executes, asserts stdout
 
@@ -49,6 +54,16 @@ cargo test               # all tests (use --test-threads=1 if integration tests 
 - Generic structs need explicit type args: `Pair[int, int](10, 20)`
 - String interpolation: `print("{variable}")`
 - Match uses `case` keyword: `match x: case 1: ... else: ...`
+
+- Meta / compile-time evaluation uses the `meta` keyword:
+  - `meta const name = expr` — compile-time constant binding (valid inside generic function bodies)
+  - `meta T is Category` — type predicate: `meta T is Numeric`, `meta T is Struct`, etc.
+  - `meta log(expr)` — compile-time debug output (printed during compilation, not at runtime)
+  - `fields(T)` — compile-time list of field names for struct type `T`
+  - `field_value(val, fname)` — compile-time field access by name string
+  - `embed_file(path)` — embed file contents as a `str` at compile time
+  - `enum_ordinal(variant)` — ordinal index of an enum variant
+  - `enum_from_ordinal(EnumType, n)` — construct enum variant from ordinal
 
 **Always use type-first native Gorget syntax** when generating code, writing plans, or providing examples. Write `int x = 5` not `x: int = 5` or `let x = 5`. Write `str greet(str name)` not `fn greet(name: str) -> str`.
 
