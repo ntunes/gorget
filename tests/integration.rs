@@ -4251,6 +4251,14 @@ fn httpserver_routing() {
 }
 
 #[test]
+fn httpserver_body_parsers() {
+    run_gg(
+        "httpserver_body_parsers.gg",
+        "ok\nok\nok\nok\nok",
+    );
+}
+
+#[test]
 fn httpserver_response() {
     run_gg(
         "httpserver_response.gg",

@@ -1,0 +1,52 @@
+# Test: Form body parsing and cookie parsing — direct HttpRequest construction (no TCP).
+#
+# Validates:
+#   1. POST form body "name=John+Doe&age=30" → form_params() gives name="John Doe", age="30"
+#   2. POST form body "q=hello%20world" → form_params() gives q="hello world" (percent-decoded)
+#   3. GET with Cookie header "session=abc123; theme=dark" → cookies() returns both values
+#   4. No Cookie header → cookies() returns empty dict
+#   5. Empty form body → form_params() returns empty dict
+#
+# Expected output:
+#   ok\nok\nok\nok\nok
+
+from gg.httpserver import HttpRequest, HttpServerResponse, parse_form_body, parse_cookies
+from std.collections import Dict
+
+void check(str label, bool ok):
+    if not ok:
+        print("FAIL: " + label)
+    else:
+        print("ok")
+
+void main():
+    # 1. form_params() decodes + as space and parses multiple fields
+    Dict[str, str] hdrs1 = Dict[str, str]()
+    HttpRequest req1 = HttpRequest("POST", "/submit", "", "HTTP/1.1", hdrs1, "name=John+Doe&age=30", Dict[str, str]())
+    Dict[str, str] fp1 = req1.form_params()
+    check("form_plus_space", fp1["name"] == "John Doe" and fp1["age"] == "30")
+
+    # 2. form_params() decodes %20 as space
+    Dict[str, str] hdrs2 = Dict[str, str]()
+    HttpRequest req2 = HttpRequest("POST", "/search", "", "HTTP/1.1", hdrs2, "q=hello%20world", Dict[str, str]())
+    Dict[str, str] fp2 = req2.form_params()
+    check("form_percent_decode", fp2["q"] == "hello world")
+
+    # 3. cookies() parses semi-colon separated cookie pairs
+    Dict[str, str] hdrs3 = Dict[str, str]()
+    hdrs3.put("cookie", "session=abc123; theme=dark")
+    HttpRequest req3 = HttpRequest("GET", "/", "", "HTTP/1.1", hdrs3, "", Dict[str, str]())
+    Dict[str, str] ck3 = req3.cookies()
+    check("cookies_multi", ck3["session"] == "abc123" and ck3["theme"] == "dark")
+
+    # 4. No Cookie header → cookies() returns empty dict
+    Dict[str, str] hdrs4 = Dict[str, str]()
+    HttpRequest req4 = HttpRequest("GET", "/", "", "HTTP/1.1", hdrs4, "", Dict[str, str]())
+    Dict[str, str] ck4 = req4.cookies()
+    check("cookies_empty", ck4.len() == 0)
+
+    # 5. Empty form body → form_params() returns empty dict
+    Dict[str, str] hdrs5 = Dict[str, str]()
+    HttpRequest req5 = HttpRequest("POST", "/submit", "", "HTTP/1.1", hdrs5, "", Dict[str, str]())
+    Dict[str, str] fp5 = req5.form_params()
+    check("form_empty_body", fp5.len() == 0)

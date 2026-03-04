@@ -506,9 +506,66 @@ Dict[str, str] parse_query_string(str qs):
         i = i + 1
     return params
 
+# Parse an application/x-www-form-urlencoded body into a key→value dict.
+# Keys and values are decoded using form_decode (+ → space, %XX → byte).
+Dict[str, str] parse_form_body(str body):
+    Dict[str, str] params = Dict[str, str]()
+    if body == "":
+        return params
+    Vector[str] pairs = body.split("&")
+    int i = 0
+    while i < pairs.len():
+        str pair = pairs[i]
+        Option[int] eq_opt = pair.index_of("=")
+        if eq_opt.is_some():
+            int eq = eq_opt.unwrap()
+            str raw_key = pair.byte_slice(0, eq)
+            str raw_val = pair.byte_slice(eq + 1, pair.byte_len())
+            Result[str, str] dk = form_decode(raw_key)
+            Result[str, str] dv = form_decode(raw_val)
+            params.put(dk.unwrap_or(raw_key), dv.unwrap_or(raw_val))
+        else:
+            Result[str, str] dk2 = form_decode(pair)
+            params.put(dk2.unwrap_or(pair), "")
+        i = i + 1
+    return params
+
+# Parse a Cookie header value into a name→value dict.
+# Cookies are split by ";", trimmed, and split at the first "=".
+# No decoding is applied (cookie values are raw).
+Dict[str, str] parse_cookies(str header):
+    Dict[str, str] cookies = Dict[str, str]()
+    if header == "":
+        return cookies
+    Vector[str] parts = header.split(";")
+    int i = 0
+    while i < parts.len():
+        str part = parts[i].trim()
+        Option[int] eq_opt = part.index_of("=")
+        if eq_opt.is_some():
+            int eq = eq_opt.unwrap()
+            str name = part.byte_slice(0, eq).trim()
+            str value = part.byte_slice(eq + 1, part.byte_len()).trim()
+            if name != "":
+                cookies.put(name, value)
+        i = i + 1
+    return cookies
+
 equip HttpRequest:
     Dict[str, str] query_params(self):
         return parse_query_string(self.query_string)
+
+    # Parse the request body as application/x-www-form-urlencoded.
+    # Returns empty dict if body is empty or has no = pairs.
+    Dict[str, str] form_params(self):
+        return parse_form_body(self.body)
+
+    # Parse the Cookie header into a name→value dict.
+    # Returns empty dict if no Cookie header is present.
+    Dict[str, str] cookies(self):
+        if self.headers.contains("cookie"):
+            return parse_cookies(self.headers["cookie"])
+        return Dict[str, str]()
 
 # ── Router ────────────────────────────────────────────────────
 #
