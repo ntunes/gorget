@@ -13,13 +13,13 @@ enum Color:
 void print_ordinals[T]():
     meta for vname in variant_names(T):
         meta const idx = enum_ordinal(T, vname)
-        print("{vname}={idx}")
+        print(f"{vname}={idx}")
 
 # Compile-time name lookup via meta const inside integer-range meta for
 void print_names[T]():
     meta for i in 0..variant_count(T):
         meta const vname = enum_from_ordinal(T, i)
-        print("{vname}")
+        print(f"{vname}")
 
 void main():
     print_ordinals[Direction]()

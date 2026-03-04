@@ -15,13 +15,13 @@ str to_debug[T](T val):
             out = out + ","
         meta if ftype == "int":
             int v = field_value(val, fname)
-            out = out + "{fname}={v}"
+            out = out + f"{fname}={v}"
         elif ftype == "str":
             str v = field_value(val, fname)
-            out = out + "{fname}={v}"
+            out = out + f"{fname}={v}"
         elif ftype == "bool":
             bool v = field_value(val, fname)
-            out = out + "{fname}={v}"
+            out = out + f"{fname}={v}"
     return out
 
 # Generic int-field sum
