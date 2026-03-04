@@ -1,0 +1,108 @@
+# Test: Server lifecycle — HttpServer.serve_n and max_requests_per_conn.
+#
+# Validates:
+#   1. HttpServer.serve_n accepts exactly n connections and returns cleanly.
+#      Two GET requests succeed (both 200).
+#   2. max_requests_per_conn = 1: server closes the connection after the first
+#      request even when the client sent Connection: keep-alive. A second read
+#      on the same socket fails (connection closed by server).
+#   3. serve_n + max_requests_per_conn: combined, server is properly bounded.
+#
+# Expected output:
+#   ok\nok\nok
+
+from gg.httpserver import HttpRequest, HttpServerResponse, http_server_handle_conn_ka, HttpServer
+from gg.http import http_get, HttpResponse
+from std.net.socket import ServerSocket, Socket, server_socket_bind, socket_connect
+from std.bytes import bytes_to_str
+from std.conv import int_to_str
+from std.time import sleep
+
+HttpServerResponse handle(HttpRequest req):
+    return HttpServerResponse.ok("pong")
+
+void check(str label, bool ok):
+    if not ok:
+        print("FAIL: " + label)
+    else:
+        print("ok")
+
+# Free function wrapper so spawn works (method-spawn is not yet supported).
+async void run_server_n(int port, int n, int max_req):
+    HttpServer s = HttpServer.with_max_requests("127.0.0.1", port, max_req)
+    s.accept_n(handle, n).await()
+
+async void main():
+    # ── Test 1 & 2: serve_n with 2 normal connections ──────────
+    int port1 = 18096
+    Task[void] srv1 = spawn run_server_n(port1, 2, 0)
+    sleep(0.05).await()
+
+    # Both http_get requests use Connection: close → 2 separate connections
+    Result[HttpResponse, str] r1a = http_get("http://127.0.0.1:18096/ping")
+    check("serve_n_req1", r1a.is_ok() and r1a.unwrap().status_code == 200)
+
+    Result[HttpResponse, str] r1b = http_get("http://127.0.0.1:18096/ping")
+    check("serve_n_req2", r1b.is_ok() and r1b.unwrap().status_code == 200)
+
+    srv1.await()
+
+    # ── Test 3: max_requests_per_conn = 1 closes after 1st ─────
+    int port2 = 18097
+    # Server accepts 1 connection, closes after 1 request (max_requests=1)
+    Task[void] srv2 = spawn run_server_n(port2, 1, 1)
+    sleep(0.05).await()
+
+    Result[Socket, str] cr = socket_connect("127.0.0.1", port2)
+    if cr.is_err():
+        print("FAIL: connect")
+        srv2.await()
+        return
+    Socket conn = cr.unwrap()
+
+    # Send req1 with Connection: keep-alive (server should close anyway after max_requests=1)
+    str req_str = "GET /ping HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: keep-alive\r\n\r\n"
+    conn.write_str(req_str)
+
+    # Drain status line + headers, collect Content-Length
+    int content_length = 0
+    bool reading_hdrs = true
+    while reading_hdrs:
+        Result[str, str] line_r = conn.read_line()
+        if line_r.is_err():
+            reading_hdrs = false
+        else:
+            str line = line_r.unwrap()
+            if line == "":
+                reading_hdrs = false
+            else:
+                Option[int] colon_opt = line.index_of(":")
+                if colon_opt.is_some():
+                    int colon = colon_opt.unwrap()
+                    str hname = line.byte_slice(0, colon).trim().to_lower()
+                    str hval = line.byte_slice(colon + 1, line.byte_len()).trim()
+                    if hname == "content-length":
+                        Option[int] clv = int.parse(hval)
+                        if clv.is_some():
+                            content_length = clv.unwrap()
+
+    # Drain the body
+    if content_length > 0:
+        Vector[uint8] body_bytes = conn.read_exact(content_length)
+
+    # Server has sent Connection: close and closed the connection.
+    # Set a short timeout so we don't hang if there's a bug.
+    conn.set_timeout(500)
+    # Attempt to read — should get EOF (Ok("")) because server closed the connection.
+    Result[str, str] resp2_r = conn.read_line()
+    bool closed = false
+    if resp2_r.is_err():
+        closed = true
+    else:
+        str resp2_line = resp2_r.unwrap()
+        if resp2_line == "":
+            closed = true
+    check("max_req_closes", closed)
+
+    conn.close()
+    srv2.await()

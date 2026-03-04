@@ -4267,6 +4267,14 @@ fn httpserver_static_enhanced() {
 }
 
 #[test]
+fn httpserver_lifecycle() {
+    run_gg(
+        "httpserver_lifecycle.gg",
+        "ok\nok\nok",
+    );
+}
+
+#[test]
 fn httpserver_response() {
     run_gg(
         "httpserver_response.gg",
