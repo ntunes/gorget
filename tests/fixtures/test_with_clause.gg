@@ -2,7 +2,7 @@ struct Resource:
     str name
 
 equip Resource with Drop:
-    void drop(self):
+    void drop(!self):
         str n = self.name
         print(f"dropping {n}")
 

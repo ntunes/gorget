@@ -193,7 +193,7 @@ pub fn build_registry(
     }
 
     // Third pass: validate trait impls (check all required methods are present)
-    validate_trait_impls(&registry, module, errors);
+    validate_trait_impls(&registry, module, types, errors);
 
     registry
 }
@@ -260,14 +260,14 @@ fn register_builtin_traits(
             });
             m
         }),
-        // Iterator[T]: Option[T] next(&self)
+        // Iterator[T]: Option[T] next(&self)  — &self parses as MutableBorrow
         ("Iterator", {
             let mut m = FxHashMap::default();
             m.insert("next".into(), FunctionSig {
                 params: vec![],
                 return_type: types.error_id, // placeholder — Option[T] depends on concrete T
                 has_self: true,
-                self_ownership: Some(Ownership::Borrow),
+                self_ownership: Some(Ownership::MutableBorrow),
             });
             m
         }),
@@ -278,7 +278,7 @@ fn register_builtin_traits(
                 params: vec![],
                 return_type: types.error_id, // placeholder — concrete iterator type from equip block
                 has_self: true,
-                self_ownership: Some(Ownership::Borrow),
+                self_ownership: Some(Ownership::MutableBorrow),
             });
             m
         }),
@@ -681,7 +681,7 @@ fn process_impl(
     }
 }
 
-fn validate_trait_impls(registry: &TraitRegistry, module: &Module, errors: &mut Vec<SemanticError>) {
+fn validate_trait_impls(registry: &TraitRegistry, module: &Module, types: &TypeTable, errors: &mut Vec<SemanticError>) {
     for impl_info in &registry.impls {
         let Some(trait_def_id) = impl_info.trait_ else {
             continue;
@@ -721,6 +721,108 @@ fn validate_trait_impls(registry: &TraitRegistry, module: &Module, errors: &mut 
                     },
                     span: impl_info.span,
                 });
+            }
+
+            // Validate signature of methods present in the equip block
+            let owner_trait_info = if *source_trait_name == trait_info.name {
+                trait_info
+            } else {
+                registry.traits.values()
+                    .find(|t| t.name == *source_trait_name)
+                    .unwrap_or(trait_info)
+            };
+            let Some(trait_sig) = owner_trait_info.methods.get(method_name) else { continue };
+            let Some((_def_id, impl_sig)) = impl_info.methods.get(method_name) else { continue };
+
+            // Return type — skip if trait uses error_id as a placeholder (e.g. Self or Option[T])
+            if trait_sig.return_type != types.error_id
+                && trait_sig.return_type != impl_sig.return_type
+            {
+                errors.push(SemanticError {
+                    kind: SemanticErrorKind::MethodSignatureMismatch {
+                        trait_: source_trait_name.clone(),
+                        method: method_name.clone(),
+                        detail: format!(
+                            "return type is `{}`, expected `{}`",
+                            types.display(impl_sig.return_type),
+                            types.display(trait_sig.return_type),
+                        ),
+                    },
+                    span: impl_info.span,
+                });
+            }
+
+            if trait_sig.params.len() != impl_sig.params.len() {
+                errors.push(SemanticError {
+                    kind: SemanticErrorKind::MethodSignatureMismatch {
+                        trait_: source_trait_name.clone(),
+                        method: method_name.clone(),
+                        detail: format!(
+                            "has {} parameter(s), expected {}",
+                            impl_sig.params.len(),
+                            trait_sig.params.len(),
+                        ),
+                    },
+                    span: impl_info.span,
+                });
+            } else {
+                for (i, (trait_param, impl_param)) in
+                    trait_sig.params.iter().zip(&impl_sig.params).enumerate()
+                {
+                    // Skip if trait uses error_id as a placeholder (e.g. Self, generic T)
+                    if *trait_param == types.error_id {
+                        continue;
+                    }
+                    if trait_param != impl_param {
+                        errors.push(SemanticError {
+                            kind: SemanticErrorKind::MethodSignatureMismatch {
+                                trait_: source_trait_name.clone(),
+                                method: method_name.clone(),
+                                detail: format!(
+                                    "parameter {} type is `{}`, expected `{}`",
+                                    i + 1,
+                                    types.display(*impl_param),
+                                    types.display(*trait_param),
+                                ),
+                            },
+                            span: impl_info.span,
+                        });
+                    }
+                }
+            }
+
+            if trait_sig.has_self != impl_sig.has_self {
+                let detail = if trait_sig.has_self {
+                    "missing `self` parameter"
+                } else {
+                    "unexpected `self` parameter"
+                };
+                errors.push(SemanticError {
+                    kind: SemanticErrorKind::MethodSignatureMismatch {
+                        trait_: source_trait_name.clone(),
+                        method: method_name.clone(),
+                        detail: detail.to_string(),
+                    },
+                    span: impl_info.span,
+                });
+            }
+
+            // Skip self ownership check when trait uses None as a wildcard (builtin traits
+            // that don't enforce a specific ownership mode).
+            if let Some(expected_ownership) = trait_sig.self_ownership {
+                if impl_sig.self_ownership != Some(expected_ownership) {
+                    errors.push(SemanticError {
+                        kind: SemanticErrorKind::MethodSignatureMismatch {
+                            trait_: source_trait_name.clone(),
+                            method: method_name.clone(),
+                            detail: format!(
+                                "self ownership is `{:?}`, expected `{:?}`",
+                                impl_sig.self_ownership, expected_ownership,
+                            ),
+                        },
+                        span: impl_info.span,
+                    });
+                }
             }
         }
     }
@@ -1370,5 +1472,65 @@ equip int with MyTrait:
             .expect("Numeric trait not found");
         assert_eq!(numeric_info.extends.len(), 10,
             "Numeric should extend 10 traits (Add, Sub, Mul, Div, Rem, Mod, Neg, Comparable, Default, One)");
+    }
+
+    #[test]
+    fn method_return_type_mismatch() {
+        let source = "\
+trait Drawable:
+    void draw(self)
+
+struct Circle:
+    float radius
+
+equip Circle with Drawable:
+    int draw(self):
+        return 42
+";
+        let (_, errors) = analyze(source);
+        assert!(errors.iter().any(|e| matches!(
+            &e.kind,
+            SemanticErrorKind::MethodSignatureMismatch { method, .. } if method == "draw"
+        )), "expected MethodSignatureMismatch for draw, got: {:?}", errors);
+    }
+
+    #[test]
+    fn method_param_count_mismatch() {
+        let source = "\
+trait Transformer:
+    int transform(self, int x)
+
+struct Wrapper:
+    int val
+
+equip Wrapper with Transformer:
+    int transform(self):
+        return 0
+";
+        let (_, errors) = analyze(source);
+        assert!(errors.iter().any(|e| matches!(
+            &e.kind,
+            SemanticErrorKind::MethodSignatureMismatch { method, .. } if method == "transform"
+        )), "expected MethodSignatureMismatch for transform, got: {:?}", errors);
+    }
+
+    #[test]
+    fn method_signature_correct_no_error() {
+        let source = "\
+trait Drawable:
+    void draw(self)
+
+struct Circle:
+    float radius
+
+equip Circle with Drawable:
+    void draw(self):
+        pass
+";
+        let (_, errors) = analyze(source);
+        assert!(!errors.iter().any(|e| matches!(
+            &e.kind,
+            SemanticErrorKind::MethodSignatureMismatch { .. }
+        )), "correct signature should produce no mismatch errors: {:?}", errors);
     }
 }
