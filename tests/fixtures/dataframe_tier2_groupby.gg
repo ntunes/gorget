@@ -1,0 +1,85 @@
+from gg.dataframe import DataFrame, Column, df_from_columns, df_group_by_multi, df_from_records_typed, col_from_ints, col_from_strs
+
+void main():
+    # Setup
+    Vector[str] depts = Vector[str]()
+    depts.push("eng")
+    depts.push("eng")
+    depts.push("sales")
+    depts.push("sales")
+    depts.push("eng")
+
+    Vector[str] levels = Vector[str]()
+    levels.push("jr")
+    levels.push("sr")
+    levels.push("jr")
+    levels.push("sr")
+    levels.push("jr")
+
+    Vector[int] salaries = Vector[int]()
+    salaries.push(50)
+    salaries.push(100)
+    salaries.push(40)
+    salaries.push(80)
+    salaries.push(55)
+
+    Vector[str] col_names = Vector[str]()
+    col_names.push("dept")
+    col_names.push("level")
+    col_names.push("salary")
+
+    Vector[Column] cols = Vector[Column]()
+    cols.push(col_from_strs(depts))
+    cols.push(col_from_strs(levels))
+    cols.push(col_from_ints(salaries))
+
+    DataFrame df = df_from_columns(col_names, cols)
+
+    # ── multi-column groupby ──
+    Vector[str] group_cols = Vector[str]()
+    group_cols.push("dept")
+    group_cols.push("level")
+
+    DataFrame agg_sum = df_group_by_multi(df, group_cols).agg("salary", "sum")
+    print("{agg_sum.nrows()}")
+    # eng+jr: 50+55=105, eng+sr: 100, sales+jr: 40, sales+sr: 80
+    print("{agg_sum.ncols()}")
+
+    DataFrame agg_count = df_group_by_multi(df, group_cols).agg("salary", "count")
+    Column cnt_col = agg_count.get_column("salary_count")
+    # eng+jr has 2 rows
+    print("{cnt_col.value_as_str(0)}")
+
+    # ── df_from_records_typed (type inference) ──
+    Vector[str] headers = Vector[str]()
+    headers.push("id")
+    headers.push("score")
+    headers.push("name")
+    headers.push("active")
+
+    Vector[str] r1 = Vector[str]()
+    r1.push("1")
+    r1.push("9.5")
+    r1.push("Alice")
+    r1.push("true")
+    Vector[str] r2 = Vector[str]()
+    r2.push("2")
+    r2.push("8.0")
+    r2.push("Bob")
+    r2.push("false")
+    Vector[Vector[str]] rows = Vector[Vector[str]]()
+    rows.push(r1)
+    rows.push(r2)
+
+    DataFrame typed = df_from_records_typed(headers, rows)
+    print("{typed.nrows()}")
+    Column id_col = typed.get_column("id")
+    print("{id_col.dtype_name()}")
+    Column score_col = typed.get_column("score")
+    print("{score_col.dtype_name()}")
+    Column name_col = typed.get_column("name")
+    print("{name_col.dtype_name()}")
+    Column active_col = typed.get_column("active")
+    print("{active_col.dtype_name()}")
+
+    print("done")

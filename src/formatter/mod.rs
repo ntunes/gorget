@@ -1075,6 +1075,30 @@ impl Formatter {
                 self.format_block_stmts(body);
                 self.emitter.dedent();
             }
+            Stmt::MetaMatch { scrutinee, arms, else_arm, .. } => {
+                self.emitter.write("meta match ");
+                self.format_expr(scrutinee);
+                self.emitter.write(":");
+                self.emitter.newline();
+                self.emitter.indent();
+                for (case_expr, body) in arms {
+                    self.emitter.write("case ");
+                    self.format_expr(case_expr);
+                    self.emitter.write(":");
+                    self.emitter.newline();
+                    self.emitter.indent();
+                    self.format_block_stmts(body);
+                    self.emitter.dedent();
+                }
+                if let Some(else_body) = else_arm {
+                    self.emitter.write("else:");
+                    self.emitter.newline();
+                    self.emitter.indent();
+                    self.format_block_stmts(else_body);
+                    self.emitter.dedent();
+                }
+                self.emitter.dedent();
+            }
         }
     }
 

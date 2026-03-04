@@ -1,0 +1,116 @@
+from gg.dataframe import DataFrame, Column, df_from_columns, col_from_ints, col_from_floats, col_from_strs, col_from_bools, col_ints_null, df_cast
+
+void main():
+    # ── int → float ──
+    Vector[int] iv = Vector[int]()
+    iv.push(1)
+    iv.push(2)
+    iv.push(3)
+    Vector[str] n1 = Vector[str]()
+    n1.push("x")
+    Vector[Column] c1 = Vector[Column]()
+    c1.push(col_from_ints(iv))
+    DataFrame df1 = df_from_columns(n1, c1)
+    Result[DataFrame, str] r1 = df_cast(df1, "x", "float")
+    print("{r1.is_ok()}")
+    Column fc = r1.unwrap().get_column("x")
+    print("{fc.dtype_name()}")
+    print("{fc.value_as_str(0)}")
+    print("{fc.value_as_str(2)}")
+
+    # ── float → int (truncation toward zero) ──
+    Vector[float] fv = Vector[float]()
+    fv.push(3.9)
+    fv.push(-2.8)
+    fv.push(0.0)
+    Vector[str] n2 = Vector[str]()
+    n2.push("y")
+    Vector[Column] c2 = Vector[Column]()
+    c2.push(col_from_floats(fv))
+    DataFrame df2 = df_from_columns(n2, c2)
+    Result[DataFrame, str] r2 = df_cast(df2, "y", "int")
+    print("{r2.is_ok()}")
+    Column ic = r2.unwrap().get_column("y")
+    print("{ic.value_as_str(0)}")
+    print("{ic.value_as_str(1)}")
+    print("{ic.value_as_str(2)}")
+
+    # ── int → str ──
+    Result[DataFrame, str] r3 = df_cast(df1, "x", "str")
+    print("{r3.is_ok()}")
+    Column sc = r3.unwrap().get_column("x")
+    print("{sc.dtype_name()}")
+    print("{sc.value_as_str(0)}")
+
+    # ── str → int (non-parseable becomes null) ──
+    Vector[str] sv = Vector[str]()
+    sv.push("42")
+    sv.push("hello")
+    sv.push("7")
+    Vector[str] n4 = Vector[str]()
+    n4.push("z")
+    Vector[Column] c4 = Vector[Column]()
+    c4.push(col_from_strs(sv))
+    DataFrame df4 = df_from_columns(n4, c4)
+    Result[DataFrame, str] r4 = df_cast(df4, "z", "int")
+    print("{r4.is_ok()}")
+    Column zc = r4.unwrap().get_column("z")
+    print("{zc.value_as_str(0)}")
+    print("{zc.value_as_str(1)}")
+    print("{zc.value_as_str(2)}")
+
+    # ── bool → int ──
+    Vector[bool] bv = Vector[bool]()
+    bv.push(true)
+    bv.push(false)
+    Vector[str] n5 = Vector[str]()
+    n5.push("b")
+    Vector[Column] c5 = Vector[Column]()
+    c5.push(col_from_bools(bv))
+    DataFrame df5 = df_from_columns(n5, c5)
+    Result[DataFrame, str] r5 = df_cast(df5, "b", "int")
+    print("{r5.is_ok()}")
+    Column bc = r5.unwrap().get_column("b")
+    print("{bc.value_as_str(0)}")
+    print("{bc.value_as_str(1)}")
+
+    # ── int → bool (0 = false, nonzero = true) ──
+    Result[DataFrame, str] r6 = df_cast(df1, "x", "bool")
+    print("{r6.is_ok()}")
+    Column boolc = r6.unwrap().get_column("x")
+    print("{boolc.value_as_str(0)}")
+
+    # ── same type → no-op ──
+    Result[DataFrame, str] r7 = df_cast(df1, "x", "int")
+    print("{r7.is_ok()}")
+
+    # ── Error: column not found ──
+    Result[DataFrame, str] r8 = df_cast(df1, "missing", "float")
+    print("{r8.is_ok()}")
+
+    # ── Error: unsupported target type ──
+    Result[DataFrame, str] r9 = df_cast(df1, "x", "unknown")
+    print("{r9.is_ok()}")
+
+    # ── null propagation: int column with nulls cast to float ──
+    Vector[int] ndata = Vector[int]()
+    ndata.push(10)
+    ndata.push(0)
+    ndata.push(20)
+    Vector[bool] nmask = Vector[bool]()
+    nmask.push(true)
+    nmask.push(false)
+    nmask.push(true)
+    Vector[str] n10 = Vector[str]()
+    n10.push("v")
+    Vector[Column] c10 = Vector[Column]()
+    c10.push(col_ints_null(ndata, nmask))
+    DataFrame df10 = df_from_columns(n10, c10)
+    Result[DataFrame, str] r10 = df_cast(df10, "v", "float")
+    print("{r10.is_ok()}")
+    Column vc = r10.unwrap().get_column("v")
+    print("{vc.value_as_str(0)}")
+    print("{vc.value_as_str(1)}")
+    print("{vc.value_as_str(2)}")
+
+    print("done")

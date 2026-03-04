@@ -167,8 +167,10 @@ impl<'a> LoweringContext<'a> {
                 if let Some(&id) = self.generic_type_params.get(name.node.as_str()) {
                     return id;
                 }
-            } else if !self.type_name_subs.is_empty() {
-                // For generic named types, check if the mangled name needs substitution
+            } else if !self.type_name_subs.is_empty() || !self.generic_fragment_subs.is_empty() {
+                // For generic named types, check if the mangled name needs substitution.
+                // resolve_type_name handles both type_name_subs (pre-computed) and
+                // generic_fragment_subs (on-the-fly), e.g. "Vector__T" → "Vector__int64_t".
                 let mangled = super::types::mangle_generic_name(&name.node, generic_args);
                 let resolved = self.resolve_type_name(&mangled);
                 if let Some(&id) = self.type_mapper.named_types.get(&resolved) {

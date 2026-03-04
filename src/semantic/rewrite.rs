@@ -156,6 +156,13 @@ fn rewrite_stmt(stmt: &mut Stmt, res: &ResolutionMap, scopes: &ScopeTable) {
             // Range is a meta expression — skip; rewrite the body.
             rewrite_block(body, res, scopes);
         }
+        Stmt::MetaMatch { arms, else_arm, .. } => {
+            // Scrutinee and case exprs are meta expressions — skip; rewrite bodies only.
+            for (_, body) in arms {
+                rewrite_block(body, res, scopes);
+            }
+            if let Some(eb) = else_arm { rewrite_block(eb, res, scopes); }
+        }
     }
 }
 

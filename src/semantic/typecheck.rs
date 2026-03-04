@@ -1873,6 +1873,17 @@ impl<'a> TypeChecker<'a> {
                 // Range is a meta expression: skip infer_expr; just check the body.
                 self.check_block(body);
             }
+
+            Stmt::MetaMatch { arms, else_arm, .. } => {
+                // Scrutinee and case exprs are meta expressions resolved only at
+                // monomorphization time — skip infer_expr on them; check bodies only.
+                for (_, body) in arms {
+                    self.check_block(body);
+                }
+                if let Some(eb) = else_arm {
+                    self.check_block(eb);
+                }
+            }
         }
     }
 

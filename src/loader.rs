@@ -496,6 +496,16 @@ fn qualify_stmt(stmt: &mut Stmt, vm: &HashMap<String, String>) {
             qualify_expr(range, vm);
             qualify_block(body, vm);
         }
+        Stmt::MetaMatch { scrutinee, arms, else_arm, .. } => {
+            qualify_expr(scrutinee, vm);
+            // Case exprs are meta literals — no qualification needed; qualify bodies only.
+            for (_, body) in arms {
+                qualify_block(body, vm);
+            }
+            if let Some(eb) = else_arm {
+                qualify_block(eb, vm);
+            }
+        }
     }
 }
 

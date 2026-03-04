@@ -321,6 +321,16 @@ impl GenericCollector {
                 self.scan_expr(range);
                 self.scan_block(body);
             }
+            Stmt::MetaMatch { scrutinee, arms, else_arm, .. } => {
+                self.scan_expr(scrutinee);
+                for (case_expr, body) in arms {
+                    self.scan_expr(case_expr);
+                    self.scan_block(body);
+                }
+                if let Some(eb) = else_arm {
+                    self.scan_block(eb);
+                }
+            }
             _ => {}
         }
     }
@@ -330,7 +340,7 @@ impl GenericCollector {
         match &expr.node {
             Expr::Call { callee, generic_args, args } => {
                 self.scan_expr(callee);
-                // Generic function call: identity[int](42)
+                // Generic function/struct call: identity[int](42), TypedColumn[int](d, m)
                 if let Some(type_args) = generic_args {
                     // Skip registering if any type arg is an unresolved generic param
                     // (will be discovered transitively when the outer function is instantiated)
@@ -341,6 +351,9 @@ impl GenericCollector {
                         if let Expr::Identifier(name) = &callee.node {
                             if self.fn_templates.contains_key(name.as_str()) {
                                 self.register_instance(name, type_args, TemplateKind::Function);
+                            } else if self.struct_templates.contains_key(name.as_str()) {
+                                // Struct constructor call with generic args: TypedColumn[int](...)
+                                self.register_instance(name, type_args, TemplateKind::Struct);
                             }
                         }
                     }
@@ -421,6 +434,20 @@ impl GenericCollector {
                             self.scan_expr(&parsed);
                         }
                     }
+                }
+            }
+            // Block expressions: multi-statement match arm bodies, do-blocks, etc.
+            Expr::Block(block) | Expr::Do { body: block } => {
+                self.scan_block(block);
+            }
+            // Expression-level match (arm bodies may contain VarDecls with generic types)
+            Expr::Match { scrutinee, arms, else_arm } => {
+                self.scan_expr(scrutinee);
+                for arm in arms {
+                    self.scan_expr(&arm.body);
+                }
+                if let Some(eb) = else_arm {
+                    self.scan_expr(eb);
                 }
             }
             _ => {}
@@ -1004,6 +1031,16 @@ fn substitute_stmt_types(stmt: &mut Spanned<Stmt>, subs: &[(String, Type)]) {
         Stmt::MetaFor { range, body, .. } => {
             substitute_expr_types(range, subs);
             substitute_block_types(body, subs);
+        }
+        Stmt::MetaMatch { scrutinee, arms, else_arm, .. } => {
+            substitute_expr_types(scrutinee, subs);
+            for (case_expr, body) in arms {
+                substitute_expr_types(case_expr, subs);
+                substitute_block_types(body, subs);
+            }
+            if let Some(eb) = else_arm {
+                substitute_block_types(eb, subs);
+            }
         }
         _ => {}
     }

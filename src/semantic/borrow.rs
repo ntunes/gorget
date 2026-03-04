@@ -2041,6 +2041,17 @@ impl<'a> BorrowChecker<'a> {
                 // Range is a meta expression: skip; just check the body.
                 self.check_block(body);
             }
+
+            Stmt::MetaMatch { arms, else_arm, .. } => {
+                // Scrutinee and case exprs are meta expressions not evaluated by borrow checker.
+                // Walk bodies conservatively (all branches are potentially live).
+                for (_, body) in arms {
+                    self.check_block(body);
+                }
+                if let Some(eb) = else_arm {
+                    self.check_block(eb);
+                }
+            }
         }
     }
 

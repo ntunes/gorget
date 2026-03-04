@@ -1,0 +1,71 @@
+from gg.dataframe import DataFrame, Column, df_from_columns, df_left_join, df_right_join, df_outer_join, df_cross_join, df_inner_join, col_from_ints, col_from_strs
+
+void main():
+    # Left table: employees
+    Vector[str] emp_names = Vector[str]()
+    emp_names.push("Alice")
+    emp_names.push("Bob")
+    emp_names.push("Charlie")
+
+    Vector[str] emp_depts = Vector[str]()
+    emp_depts.push("eng")
+    emp_depts.push("sales")
+    emp_depts.push("eng")
+
+    Vector[str] left_cols = Vector[str]()
+    left_cols.push("name")
+    left_cols.push("dept")
+    Vector[Column] left_data = Vector[Column]()
+    left_data.push(col_from_strs(emp_names))
+    left_data.push(col_from_strs(emp_depts))
+    DataFrame left = df_from_columns(left_cols, left_data)
+
+    # Right table: dept info
+    Vector[str] dept_ids = Vector[str]()
+    dept_ids.push("eng")
+    dept_ids.push("hr")
+
+    Vector[int] budgets = Vector[int]()
+    budgets.push(100)
+    budgets.push(50)
+
+    Vector[str] right_cols = Vector[str]()
+    right_cols.push("dept")
+    right_cols.push("budget")
+    Vector[Column] right_data = Vector[Column]()
+    right_data.push(col_from_strs(dept_ids))
+    right_data.push(col_from_ints(budgets))
+    DataFrame right = df_from_columns(right_cols, right_data)
+
+    # ── inner join: only matching rows ──
+    DataFrame inner = df_inner_join(left, right, "dept")
+    print("{inner.nrows()}")
+    # Alice(eng)+eng, Charlie(eng)+eng = 2 rows
+    Column inner_budget = inner.get_column("budget")
+    print("{inner_budget.dtype_name()}")
+
+    # ── left join: all left rows, nulls for unmatched right ──
+    DataFrame lj = df_left_join(left, right, "dept")
+    print("{lj.nrows()}")
+    # Alice=eng(100), Bob=sales(null), Charlie=eng(100)
+    Column lj_budget = lj.get_column("budget")
+    print("{lj_budget.value_as_str(0)}")
+    print("{lj_budget.is_null_at(1)}")
+    print("{lj_budget.value_as_str(2)}")
+
+    # ── right join = left join with swapped tables ──
+    DataFrame rj = df_right_join(left, right, "dept")
+    print("{rj.nrows()}")
+
+    # ── outer join: all rows from both sides ──
+    DataFrame oj = df_outer_join(left, right, "dept")
+    # eng matched (Alice, Charlie), sales unmatched left, hr unmatched right = 4 rows
+    print("{oj.nrows()}")
+
+    # ── cross join ──
+    DataFrame cj = df_cross_join(left, right)
+    # 3 * 2 = 6 rows
+    print("{cj.nrows()}")
+    print("{cj.ncols()}")
+
+    print("done")

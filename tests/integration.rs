@@ -6680,7 +6680,7 @@ fn format_stmt_canonical(stmt: &Stmt) -> String {
             s
         }
         Stmt::Item(item) => format_item_canonical(item),
-        Stmt::MetaIf { .. } | Stmt::MetaFor { .. } => "meta".to_string(),
+        Stmt::MetaIf { .. } | Stmt::MetaFor { .. } | Stmt::MetaMatch { .. } => "meta".to_string(),
     }
 }
 
@@ -8360,6 +8360,67 @@ done",
     );
 }
 
+#[test]
+fn dataframe_cast() {
+    run_gg(
+        "dataframe_cast.gg",
+        "\
+true
+float
+1
+3
+true
+3
+-2
+0
+true
+str
+1
+true
+42
+null
+7
+true
+1
+0
+true
+true
+true
+false
+false
+true
+10
+null
+20
+done",
+    );
+}
+
+#[test]
+fn dataframe_clip() {
+    run_gg(
+        "dataframe_clip.gg",
+        "\
+0
+0
+50
+100
+0
+5.5
+10
+hello
+world
+4
+0
+null
+100
+0
+100
+50
+done",
+    );
+}
+
 // Parser Comparison Test
 // ═══════════════════════════════════════════════════════════════
 
@@ -8914,5 +8975,20 @@ is int
 is str
 16 bytes
 other type",
+    );
+}
+
+#[test]
+fn meta_delayed_match() {
+    run_gg(
+        "meta_delayed_match.gg",
+        "\
+integer
+float
+string
+other
+0
+0
+-1",
     );
 }

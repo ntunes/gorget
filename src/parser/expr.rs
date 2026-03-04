@@ -174,6 +174,11 @@ fn stmt_contains_it(stmt: &Stmt) -> bool {
         Stmt::MetaFor { range, body, .. } => {
             contains_it(range) || block_contains_it(body)
         }
+        Stmt::MetaMatch { scrutinee, arms, else_arm, .. } => {
+            contains_it(scrutinee)
+                || arms.iter().any(|(c, b)| contains_it(c) || block_contains_it(b))
+                || else_arm.as_ref().is_some_and(block_contains_it)
+        }
     }
 }
 

@@ -995,6 +995,21 @@ fn resolve_stmt(
             resolve_block(body, scopes, types, errors, resolution_map);
             scopes.pop_scope();
         }
+
+        Stmt::MetaMatch { arms, else_arm, .. } => {
+            // Scrutinee and case exprs are meta expressions: skip resolve_expr on them.
+            // Bodies contain regular code that must be fully resolved.
+            for (_, body) in arms {
+                scopes.push_scope(super::scope::ScopeKind::Block);
+                resolve_block(body, scopes, types, errors, resolution_map);
+                scopes.pop_scope();
+            }
+            if let Some(eb) = else_arm {
+                scopes.push_scope(super::scope::ScopeKind::Block);
+                resolve_block(eb, scopes, types, errors, resolution_map);
+                scopes.pop_scope();
+            }
+        }
     }
 }
 

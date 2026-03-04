@@ -96,10 +96,10 @@ pub fn lower_stmt(
 
         Stmt::Select { arms, else_arm: _ } => lower_select(ctx, builder, arms),
 
-        // meta if/for should have been evaluated and removed before GIR lowering.
+        // meta if/for/match should have been evaluated and removed before GIR lowering.
         // If they appear here it means they were in a non-generic context (a semantic
         // error should have been emitted) — emit nothing.
-        Stmt::MetaIf { .. } | Stmt::MetaFor { .. } => {}
+        Stmt::MetaIf { .. } | Stmt::MetaFor { .. } | Stmt::MetaMatch { .. } => {}
     }
 }
 

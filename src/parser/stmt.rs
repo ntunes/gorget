@@ -625,7 +625,7 @@ impl Parser {
         }
     }
 
-    /// Parse a `meta if` or `meta for` statement (delayed compile-time evaluation).
+    /// Parse a `meta if`, `meta for`, or `meta match` statement (delayed compile-time evaluation).
     fn parse_meta_stmt(&mut self) -> Result<Spanned<Stmt>, ParseError> {
         let start = self.peek_span();
         self.expect_keyword(Keyword::Meta)?;
@@ -633,9 +633,10 @@ impl Parser {
         match self.peek().clone() {
             Token::Keyword(Keyword::If) => self.parse_meta_if_stmt(start),
             Token::Keyword(Keyword::For) => self.parse_meta_for_stmt(start),
+            Token::Keyword(Keyword::Match) => self.parse_meta_match_stmt(start),
             _ => Err(ParseError {
                 kind: crate::errors::ParseErrorKind::UnexpectedToken {
-                    expected: "`if` or `for` after `meta` in function body".to_string(),
+                    expected: "`if`, `for`, or `match` after `meta` in function body".to_string(),
                     got: format!("{:?}", self.peek()),
                 },
                 span: self.peek_span(),
@@ -694,6 +695,64 @@ impl Parser {
             },
             span,
         ))
+    }
+
+    fn parse_meta_match_stmt(&mut self, start: Span) -> Result<Spanned<Stmt>, ParseError> {
+        self.expect_keyword(Keyword::Match)?;
+        let scrutinee = self.parse_expr()?;
+        self.expect(&Token::Colon)?;
+        self.expect(&Token::Newline)?;
+        self.expect(&Token::Indent)?;
+
+        let mut arms: Vec<(Spanned<Expr>, Block)> = Vec::new();
+        let mut else_arm: Option<Block> = None;
+
+        while !self.check(&Token::Dedent) && !self.at_end() {
+            if self.check(&Token::Newline) {
+                self.advance();
+                continue;
+            }
+
+            if self.match_keyword(Keyword::Else) {
+                self.expect(&Token::Colon)?;
+                let body = self.parse_meta_match_arm_body()?;
+                else_arm = Some(body);
+                continue;
+            }
+
+            self.expect_keyword(Keyword::Case)?;
+            let case_expr = self.parse_expr()?;
+            self.expect(&Token::Colon)?;
+            let body = self.parse_meta_match_arm_body()?;
+            arms.push((case_expr, body));
+        }
+
+        self.expect(&Token::Dedent)?;
+        let end = self.previous_span();
+        let span = start.merge(end);
+        Ok(Spanned::new(
+            Stmt::MetaMatch {
+                scrutinee,
+                arms,
+                else_arm,
+                span,
+            },
+            span,
+        ))
+    }
+
+    /// Parse a `meta match` arm body: either a single inline statement or a newline-indented block.
+    fn parse_meta_match_arm_body(&mut self) -> Result<Block, ParseError> {
+        if self.check(&Token::Newline) {
+            let block_start = self.peek_span();
+            self.parse_block_body(block_start)
+        } else {
+            // Single inline statement
+            let stmt_start = self.peek_span();
+            let stmt = self.parse_stmt()?;
+            let span = stmt.span;
+            Ok(Block { stmts: vec![stmt], span: stmt_start.merge(span) })
+        }
     }
 
     /// Parse a simple binding pattern for variable declarations.

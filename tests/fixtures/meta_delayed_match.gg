@@ -1,0 +1,21 @@
+str type_name[T]():
+    meta match typename(T):
+        case "int":   return "integer"
+        case "float": return "float"
+        case "str":   return "string"
+        else:         return "other"
+
+int null_sentinel[T]():
+    meta match typename(T):
+        case "int":   return 0
+        case "float": return 0
+        else:         return -1
+
+void main():
+    print(type_name[int]())
+    print(type_name[float]())
+    print(type_name[str]())
+    print(type_name[bool]())
+    print(null_sentinel[int]())
+    print(null_sentinel[float]())
+    print(null_sentinel[bool]())

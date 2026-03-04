@@ -1212,8 +1212,8 @@ fn eval_meta_stmt(
             stmt_span,
         )),
 
-        Stmt::MetaIf { .. } | Stmt::MetaFor { .. } => Err(meta_err(
-            "`meta if`/`meta for` in function body requires generic type parameters \
+        Stmt::MetaIf { .. } | Stmt::MetaFor { .. } | Stmt::MetaMatch { .. } => Err(meta_err(
+            "`meta if`/`meta for`/`meta match` in function body requires generic type parameters \
              and is evaluated at monomorphization time, not in compile-time functions",
             stmt_span,
         )),
@@ -1482,6 +1482,15 @@ fn substitute_stmt(stmt: &mut Stmt, env: &FxHashMap<String, MetaValue>, type_env
         Stmt::MetaFor { range, body, .. } => {
             substitute_expr(range, env, type_env);
             substitute_block(body, env, type_env);
+        }
+        Stmt::MetaMatch { scrutinee, arms, else_arm, .. } => {
+            substitute_expr(scrutinee, env, type_env);
+            // Case exprs are meta literals — substitute in them too (for consistency).
+            for (case_expr, body) in arms {
+                substitute_expr(case_expr, env, type_env);
+                substitute_block(body, env, type_env);
+            }
+            if let Some(eb) = else_arm { substitute_block(eb, env, type_env); }
         }
     }
 }
@@ -1778,6 +1787,17 @@ pub fn type_to_canonical_name(ty: &Type) -> String {
     }
 }
 
+/// Compare two `MetaValue`s for equality (used by `meta match`).
+fn meta_values_eq(a: &MetaValue, b: &MetaValue) -> bool {
+    match (a, b) {
+        (MetaValue::Int(x),   MetaValue::Int(y))   => x == y,
+        (MetaValue::Bool(x),  MetaValue::Bool(y))  => x == y,
+        (MetaValue::Str(x),   MetaValue::Str(y))   => x == y,
+        (MetaValue::Float(x), MetaValue::Float(y)) => x == y,
+        _ => false,
+    }
+}
+
 /// Evaluate a meta expression in delayed context (monomorphization time).
 /// Like `eval_expr` but additionally resolves `typename(T)` via type parameter bindings.
 ///
@@ -1970,6 +1990,43 @@ pub fn evaluate_delayed_meta_block(
                 }
             }
 
+            Stmt::MetaMatch { scrutinee, arms, else_arm, .. } => {
+                let subject = eval_delayed_expr(&scrutinee.node, ctx, scrutinee.span);
+                match subject {
+                    Ok(subject_val) => {
+                        let mut taken = None;
+                        for (case_expr, case_body) in arms.iter() {
+                            match eval_delayed_expr(&case_expr.node, ctx, case_expr.span) {
+                                Ok(case_val) if meta_values_eq(&subject_val, &case_val) => {
+                                    let mut body = case_body.clone();
+                                    evaluate_delayed_meta_block(&mut body, ctx, errors);
+                                    taken = Some(body.stmts);
+                                    break;
+                                }
+                                Ok(_) => {}
+                                Err(e) => {
+                                    errors.push(e);
+                                    break;
+                                }
+                            }
+                        }
+                        if let Some(stmts) = taken {
+                            Some(stmts)
+                        } else if let Some(else_body) = else_arm {
+                            let mut body = else_body.clone();
+                            evaluate_delayed_meta_block(&mut body, ctx, errors);
+                            Some(body.stmts)
+                        } else {
+                            Some(vec![])
+                        }
+                    }
+                    Err(e) => {
+                        errors.push(e);
+                        Some(vec![])
+                    }
+                }
+            }
+
             _ => None, // Not a meta stmt — recurse into sub-blocks below
         };
 
@@ -2070,6 +2127,16 @@ fn recurse_delayed_meta_in_stmt(
         Stmt::Select { arms, else_arm } => {
             for arm in arms {
                 evaluate_delayed_meta_block(&mut arm.body, ctx, errors);
+            }
+            if let Some(eb) = else_arm {
+                evaluate_delayed_meta_block(eb, ctx, errors);
+            }
+        }
+        // MetaMatch: recurse into all case bodies + else arm
+        // (needed when a meta match is nested inside a regular if/while/etc.)
+        Stmt::MetaMatch { arms, else_arm, .. } => {
+            for (_, body) in arms {
+                evaluate_delayed_meta_block(body, ctx, errors);
             }
             if let Some(eb) = else_arm {
                 evaluate_delayed_meta_block(eb, ctx, errors);

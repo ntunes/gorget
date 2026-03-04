@@ -1,0 +1,101 @@
+from gg.dataframe import DataFrame, Column, df_from_columns, col_from_ints, col_from_strs, col_from_floats, col_from_bools, col_ints_null, col_bools_null
+
+void main():
+    # Setup: 4-row DataFrame
+    Vector[str] names = Vector[str]()
+    names.push("Alice")
+    names.push("Bob")
+    names.push("Charlie")
+    names.push("Alice")
+
+    Vector[int] ages = Vector[int]()
+    ages.push(25)
+    ages.push(30)
+    ages.push(35)
+    ages.push(25)
+
+    Vector[float] scores = Vector[float]()
+    scores.push(8.5)
+    scores.push(9.0)
+    scores.push(7.5)
+    scores.push(9.5)
+
+    Vector[str] col_names = Vector[str]()
+    col_names.push("name")
+    col_names.push("age")
+    col_names.push("score")
+
+    Vector[Column] cols = Vector[Column]()
+    cols.push(col_from_strs(names))
+    cols.push(col_from_ints(ages))
+    cols.push(col_from_floats(scores))
+
+    DataFrame df = df_from_columns(col_names, cols)
+
+    # ── rename_column ──
+    DataFrame renamed = df.rename_column("name", "person")
+    print("{renamed.has_column("person")}")
+    print("{renamed.has_column("name")}")
+    print("{renamed.ncols()}")
+
+    # ── dtypes ──
+    DataFrame dt = df.dtypes()
+    print("{dt.nrows()}")
+    Column dtype_col = dt.get_column("dtype")
+    print("{dtype_col.value_as_str(0)}")
+    print("{dtype_col.value_as_str(1)}")
+    print("{dtype_col.value_as_str(2)}")
+
+    # ── isna / notna ──
+    Vector[int] null_ages = Vector[int]()
+    null_ages.push(25)
+    null_ages.push(0)
+    null_ages.push(35)
+    Vector[bool] null_mask = Vector[bool]()
+    null_mask.push(true)
+    null_mask.push(false)
+    null_mask.push(true)
+    Column null_age_col = col_ints_null(null_ages, null_mask)
+    Vector[str] na_names = Vector[str]()
+    na_names.push("age")
+    Vector[Column] na_cols = Vector[Column]()
+    na_cols.push(null_age_col)
+    DataFrame na_df = df_from_columns(na_names, na_cols)
+
+    DataFrame isna_df = na_df.isna("age")
+    Column isna_col = isna_df.get_column("age_isna")
+    print("{isna_col.value_as_str(0)}")
+    print("{isna_col.value_as_str(1)}")
+    print("{isna_col.value_as_str(2)}")
+
+    DataFrame notna_df = na_df.notna("age")
+    Column notna_col = notna_df.get_column("age_notna")
+    print("{notna_col.value_as_str(1)}")
+
+    # ── unique / nunique ──
+    print("{df.df_nunique("name")}")
+    DataFrame uniq = df.df_unique("name")
+    print("{uniq.nrows()}")
+
+    # ── col_bools_null ──
+    Vector[bool] bdata = Vector[bool]()
+    bdata.push(true)
+    bdata.push(false)
+    Vector[bool] bmask = Vector[bool]()
+    bmask.push(true)
+    bmask.push(false)
+    Column bcol = col_bools_null(bdata, bmask)
+    print("{bcol.is_null_at(0)}")
+    print("{bcol.is_null_at(1)}")
+
+    # ── median ──
+    print("{df.df_median("age")}")
+    print("{df.df_median("score")}")
+
+    # ── variance ──
+    str var_result = df.df_var("age")
+    # ages: 25, 30, 35, 25 → mean=28.75, var=((25-28.75)^2+(30-28.75)^2+(35-28.75)^2+(25-28.75)^2)/4
+    # = (14.0625 + 1.5625 + 39.0625 + 14.0625)/4 = 68.75/4 = 17.1875
+    print("{var_result}")
+
+    print("done")

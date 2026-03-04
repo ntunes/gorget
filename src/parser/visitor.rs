@@ -396,6 +396,16 @@ pub fn walk_stmt<V: ExprVisitor + ?Sized>(v: &mut V, stmt: &Spanned<Stmt>) {
             v.visit_expr(range);
             v.visit_block(body);
         }
+        Stmt::MetaMatch { scrutinee, arms, else_arm, .. } => {
+            v.visit_expr(scrutinee);
+            for (case_expr, body) in arms {
+                v.visit_expr(case_expr);
+                v.visit_block(body);
+            }
+            if let Some(eb) = else_arm {
+                v.visit_block(eb);
+            }
+        }
     }
 }
 

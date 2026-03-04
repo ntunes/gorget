@@ -873,6 +873,16 @@ pub enum Stmt {
         body: Block,
         span: Span,
     },
+
+    /// meta match <expr>: case <val>: <block> ... [else: <block>]
+    /// Compile-time match on a meta value inside a generic function body.
+    /// Evaluated at monomorphization time when type parameters are concrete.
+    MetaMatch {
+        scrutinee: Spanned<Expr>,
+        arms: Vec<(Spanned<Expr>, Block)>,  // (case value expr, body)
+        else_arm: Option<Block>,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone)]
