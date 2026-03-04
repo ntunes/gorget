@@ -4275,6 +4275,14 @@ fn httpserver_lifecycle() {
 }
 
 #[test]
+fn httpserver_json() {
+    run_gg(
+        "httpserver_json.gg",
+        "ok\nok\nok\nok\nok",
+    );
+}
+
+#[test]
 fn httpserver_response() {
     run_gg(
         "httpserver_response.gg",

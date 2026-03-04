@@ -23,6 +23,7 @@ from std.fs import read_file, file_exists, is_dir
 from std.path import path_join, path_extension
 from std.encoding import url_decode, form_decode
 from gg.crypto import crypto_sha1
+from gg.json import Json, json_parse, json_stringify
 
 # ── Request and response types ────────────────────────────────
 
@@ -45,6 +46,10 @@ equip HttpServerResponse:
     HttpServerResponse ok(str body) = HttpServerResponse(200, body, "text/plain", Dict[str, str]())
     HttpServerResponse html(str body) = HttpServerResponse(200, body, "text/html", Dict[str, str]())
     HttpServerResponse json(str body) = HttpServerResponse(200, body, "application/json", Dict[str, str]())
+    # Build a 200 application/json response by serializing a Json value.
+    HttpServerResponse of_json(Json val):
+        str body = json_stringify(val).str()
+        return HttpServerResponse(200, body, "application/json", Dict[str, str]())
     HttpServerResponse not_found() = HttpServerResponse(404, "Not Found", "text/plain", Dict[str, str]())
     HttpServerResponse bad_request(str msg) = HttpServerResponse(400, msg, "text/plain", Dict[str, str]())
     HttpServerResponse internal_error(str msg) = HttpServerResponse(500, msg, "text/plain", Dict[str, str]())
@@ -637,6 +642,11 @@ equip HttpRequest:
         if self.headers.contains("cookie"):
             return parse_cookies(self.headers["cookie"])
         return Dict[str, str]()
+
+    # Parse the request body as JSON.
+    # Returns Ok(Json) on success or Err(message) on parse failure.
+    Result[Json, str] json(self):
+        return json_parse(self.body)
 
 # ── Router ────────────────────────────────────────────────────
 #
