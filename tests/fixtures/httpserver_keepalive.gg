@@ -40,7 +40,7 @@ async void main():
 
     # Request 1: keep-alive
     c.write_str("GET /a HTTP/1.1\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\n")
-    str line1 = c.read_line().unwrap()
+    String line1 = c.read_line().unwrap()
     # Drain headers from response 1
     bool draining = true
     while draining:
@@ -54,7 +54,7 @@ async void main():
 
     # Request 2: close
     c.write_str("GET /b HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-    str line2 = c.read_line().unwrap()
+    String line2 = c.read_line().unwrap()
     c.close()
 
     srv.await()

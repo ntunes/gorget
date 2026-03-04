@@ -27,7 +27,7 @@ async void main():
 
     Socket c = socket_connect("127.0.0.1", port).unwrap()
     c.write_str("GET /hello HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-    str status_line = c.read_line().unwrap()
+    String status_line = c.read_line().unwrap()
     c.close()
 
     t.await()
