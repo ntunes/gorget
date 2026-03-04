@@ -554,10 +554,6 @@ impl<'a> TypeChecker<'a> {
             | (ResolvedType::Primitive(PrimitiveType::StringType), ResolvedType::Primitive(PrimitiveType::CStr)) => {
                 a
             }
-            // char → str coercion: a single char can be used where a str is expected
-            (ResolvedType::Primitive(PrimitiveType::Str), ResolvedType::Primitive(PrimitiveType::Char)) => {
-                a // accept the expected str type
-            }
             _ => {
                 if a_ty != b_ty {
                     self.error(
@@ -601,7 +597,6 @@ impl<'a> TypeChecker<'a> {
             }
             Expr::FloatLiteral(_) => self.types.float_id,
             Expr::BoolLiteral(_) => self.types.bool_id,
-            Expr::CharLiteral(_) => self.types.char_id,
             Expr::StringLiteral(s) => {
                 use crate::lexer::token::StringSegment;
                 for seg in &s.segments {
@@ -2566,7 +2561,6 @@ impl<'a> TypeChecker<'a> {
             "float32" => Some(PrimitiveType::Float32),
             "float64" => Some(PrimitiveType::Float64),
             "bool" => Some(PrimitiveType::Bool),
-            "char" => Some(PrimitiveType::Char),
             "str" => Some(PrimitiveType::Str),
             _ => None,
         };
@@ -2633,13 +2627,16 @@ impl<'a> TypeChecker<'a> {
             ResolvedType::Primitive(PrimitiveType::Str | PrimitiveType::StringType | PrimitiveType::CStr) => {
                 ("str".to_string(), vec![])
             }
+            ResolvedType::Primitive(PrimitiveType::Uint8) => {
+                ("uint8".to_string(), vec![])
+            }
             ResolvedType::Primitive(
                 PrimitiveType::Int | PrimitiveType::Int8 | PrimitiveType::Int16 |
                 PrimitiveType::Int32 | PrimitiveType::Int64 |
-                PrimitiveType::Uint | PrimitiveType::Uint8 | PrimitiveType::Uint16 |
+                PrimitiveType::Uint | PrimitiveType::Uint16 |
                 PrimitiveType::Uint32 | PrimitiveType::Uint64 |
                 PrimitiveType::Float | PrimitiveType::Float32 | PrimitiveType::Float64 |
-                PrimitiveType::Bool | PrimitiveType::Char
+                PrimitiveType::Bool
             ) => {
                 if method == "hash" { return Some(self.types.int_id); }
                 return None;
@@ -2736,6 +2733,13 @@ impl<'a> TypeChecker<'a> {
                 "union" | "intersection" | "difference" => Some(receiver_type),
                 _ => None,
             },
+            "uint8" => match method {
+                "is_alpha" | "is_digit" | "is_alphanumeric" | "is_whitespace"
+                | "is_upper" | "is_lower" | "is_hex_digit" | "is_ascii"
+                    => Some(self.types.bool_id),
+                "to_upper" | "to_lower" => Some(self.types.primitive_id(PrimitiveType::Uint8)),
+                _ => None,
+            },
             "str" | "String" => match method {
                 "len" | "hash" | "count" | "byte_len" => Some(self.types.int_id),
                 "index_of" => {
@@ -2754,7 +2758,12 @@ impl<'a> TypeChecker<'a> {
                 "to_upper" | "to_lower" | "replace" | "repeat" | "join" | "pad_left" | "pad_right"
                     => Some(self.types.owned_string_id),
                 "enumerate" => Some(receiver_type),
-                "char_at" => Some(self.types.char_id),
+                "byte_at" => Some(self.types.primitive_id(PrimitiveType::Uint8)),
+                // char_at: deprecated compat alias — returns str (1-byte view, byte-indexed)
+                "char_at" => Some(self.types.string_id),
+                "is_alpha" | "is_digit" | "is_alphanumeric" | "is_whitespace"
+                | "is_upper" | "is_lower" | "is_hex_digit" | "is_ascii"
+                    => Some(self.types.bool_id),
                 "split" => {
                     // Return Vector[str]
                     if let Some(vec_def_id) = self.scopes.lookup("Vector") {
@@ -3134,7 +3143,6 @@ fn ast_type_to_gorget_name(ty: &Type) -> Option<String> {
                 PrimitiveType::Float => "float",
                 PrimitiveType::Bool => "bool",
                 PrimitiveType::Str | PrimitiveType::StringType => "str",
-                PrimitiveType::Char => "char",
                 PrimitiveType::Void => "void",
                 _ => return None,
             };

@@ -9,7 +9,7 @@
 # This avoids Gorget's value-type Dict aliasing (copying metadata on extract).
 
 from std.collections import Vector, Dict
-from std.conv import parse_int, parse_float, int_to_str, float_to_str, bool_to_str, char_to_str, codepoint_to_str
+from std.conv import parse_int, parse_float, int_to_str, float_to_str, bool_to_str, codepoint_to_str
 
 # ── TOML value type ─────────────────────────────────────────
 
@@ -47,7 +47,7 @@ equip TomlParser:
         if self.err == "":
             self.err = consuming msg
 
-    char peek(self):
+    str peek(self):
         if self.pos < self.source.byte_len():
             return self.source.char_at(self.pos)
         return '\0'
@@ -56,7 +56,7 @@ equip TomlParser:
 
     void skip_ws(&self):
         while self.pos < self.source.byte_len():
-            char ch = self.source.char_at(self.pos)
+            str ch = self.source.char_at(self.pos)
             if ch == ' ' or ch == '\t':
                 self.pos = self.pos + 1
             else:
@@ -64,7 +64,7 @@ equip TomlParser:
 
     void skip_ws_and_newlines(&self):
         while self.pos < self.source.byte_len():
-            char ch = self.source.char_at(self.pos)
+            str ch = self.source.char_at(self.pos)
             if ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r':
                 self.pos = self.pos + 1
             elif ch == '#':
@@ -79,7 +79,7 @@ equip TomlParser:
     void skip_to_newline(&self):
         self.skip_ws()
         if self.pos < self.source.byte_len():
-            char ch = self.source.char_at(self.pos)
+            str ch = self.source.char_at(self.pos)
             if ch == '#':
                 self.skip_comment()
             if self.pos < self.source.byte_len() and self.source.char_at(self.pos) == '\n':
@@ -94,7 +94,7 @@ equip TomlParser:
     str parse_bare_key(&self):
         int start = self.pos
         while self.pos < self.source.byte_len():
-            char ch = self.source.char_at(self.pos)
+            str ch = self.source.char_at(self.pos)
             if ch >= 'a' and ch <= 'z':
                 self.pos = self.pos + 1
             elif ch >= 'A' and ch <= 'Z':
@@ -114,7 +114,7 @@ equip TomlParser:
         if self.pos >= self.source.byte_len():
             self.fail("expected key")
             return ""
-        char ch = self.source.char_at(self.pos)
+        str ch = self.source.char_at(self.pos)
         if ch == '"':
             return self.parse_basic_string()
         elif ch == '\'':
@@ -146,14 +146,14 @@ equip TomlParser:
             return self.parse_ml_basic_string()
         str toml_result = ""
         while self.pos < self.source.byte_len():
-            char ch = self.source.char_at(self.pos)
+            str ch = self.source.char_at(self.pos)
             if ch == '"':
                 self.pos = self.pos + 1
                 return toml_result
             elif ch == '\\':
                 toml_result = toml_result + self.parse_escape()
             else:
-                toml_result = toml_result + char_to_str(ch)
+                toml_result = toml_result + ch
                 self.pos = self.pos + 1
         self.fail("unterminated basic string")
         return ""
@@ -169,11 +169,11 @@ equip TomlParser:
             if self.pos + 2 < self.source.byte_len() and self.source.char_at(self.pos) == '"' and self.source.char_at(self.pos + 1) == '"' and self.source.char_at(self.pos + 2) == '"':
                 self.pos = self.pos + 3
                 return toml_result
-            char ch = self.source.char_at(self.pos)
+            str ch = self.source.char_at(self.pos)
             if ch == '\\':
                 self.pos = self.pos + 1
                 if self.pos < self.source.byte_len():
-                    char next_ch = self.source.char_at(self.pos)
+                    str next_ch = self.source.char_at(self.pos)
                     if next_ch == '\n' or next_ch == '\r':
                         self.skip_ws_and_newlines()
                     else:
@@ -183,7 +183,7 @@ equip TomlParser:
                     self.fail("unterminated escape in multi-line string")
                     return ""
             else:
-                toml_result = toml_result + char_to_str(ch)
+                toml_result = toml_result + ch
                 self.pos = self.pos + 1
         self.fail("unterminated multi-line basic string")
         return ""
@@ -193,7 +193,7 @@ equip TomlParser:
         if self.pos >= self.source.byte_len():
             self.fail("unterminated escape sequence")
             return ""
-        char esc = self.source.char_at(self.pos)
+        str esc = self.source.char_at(self.pos)
         self.pos = self.pos + 1
         if esc == '"':
             return "\""
@@ -216,14 +216,14 @@ equip TomlParser:
             int toml_uni_cp = 0
             int toml_uni_cnt = 0
             while toml_uni_cnt < toml_hex_len and self.pos < self.source.byte_len():
-                char toml_uhc = self.source.char_at(self.pos)
+                byte toml_uhc = self.source.byte_at(self.pos)
                 int toml_uhv = -1
-                if toml_uhc >= '0' and toml_uhc <= '9':
-                    toml_uhv = toml_uhc as int - '0' as int
-                elif toml_uhc >= 'a' and toml_uhc <= 'f':
-                    toml_uhv = toml_uhc as int - 'a' as int + 10
-                elif toml_uhc >= 'A' and toml_uhc <= 'F':
-                    toml_uhv = toml_uhc as int - 'A' as int + 10
+                if toml_uhc >= b'0' and toml_uhc <= b'9':
+                    toml_uhv = toml_uhc as int - b'0'
+                elif toml_uhc >= b'a' and toml_uhc <= b'f':
+                    toml_uhv = toml_uhc as int - b'a' + 10
+                elif toml_uhc >= b'A' and toml_uhc <= b'F':
+                    toml_uhv = toml_uhc as int - b'A' + 10
                 if toml_uhv < 0:
                     self.fail("invalid hex digit in unicode escape")
                     return ""
@@ -244,11 +244,11 @@ equip TomlParser:
             return self.parse_ml_literal_string()
         str toml_result = ""
         while self.pos < self.source.byte_len():
-            char ch = self.source.char_at(self.pos)
+            str ch = self.source.char_at(self.pos)
             if ch == '\'':
                 self.pos = self.pos + 1
                 return toml_result
-            toml_result = toml_result + char_to_str(ch)
+            toml_result = toml_result + ch
             self.pos = self.pos + 1
         self.fail("unterminated literal string")
         return ""
@@ -263,7 +263,7 @@ equip TomlParser:
             if self.pos + 2 < self.source.byte_len() and self.source.char_at(self.pos) == '\'' and self.source.char_at(self.pos + 1) == '\'' and self.source.char_at(self.pos + 2) == '\'':
                 self.pos = self.pos + 3
                 return toml_result
-            toml_result = toml_result + char_to_str(self.source.char_at(self.pos))
+            toml_result = toml_result + self.source.char_at(self.pos)
             self.pos = self.pos + 1
         self.fail("unterminated multi-line literal string")
         return ""
@@ -277,7 +277,7 @@ equip TomlParser:
         if self.at_end():
             self.fail("unexpected end of input")
             return Str("")
-        char ch = self.peek()
+        str ch = self.peek()
         if ch == '"':
             str sv = self.parse_basic_string()
             return Str(sv)
@@ -412,7 +412,7 @@ equip TomlParser:
                 return Float(0.0 / 0.0)
         # Check for hex/oct/bin prefixes
         if self.pos + 1 < self.source.byte_len() and self.source.char_at(self.pos) == '0':
-            char num_prefix = self.source.char_at(self.pos + 1)
+            str num_prefix = self.source.char_at(self.pos + 1)
             if num_prefix == 'x' or num_prefix == 'o' or num_prefix == 'b':
                 return self.parse_prefixed_int(start, is_negative, num_prefix)
         # Scan digits
@@ -420,7 +420,7 @@ equip TomlParser:
         bool has_exp = false
         bool could_be_date = false
         while self.pos < self.source.byte_len():
-            char ch = self.source.char_at(self.pos)
+            str ch = self.source.char_at(self.pos)
             if ch >= '0' and ch <= '9':
                 self.pos = self.pos + 1
             elif ch == '_':
@@ -432,7 +432,7 @@ equip TomlParser:
                 has_exp = true
                 self.pos = self.pos + 1
                 if self.pos < self.source.byte_len():
-                    char sign_ch = self.source.char_at(self.pos)
+                    str sign_ch = self.source.char_at(self.pos)
                     if sign_ch == '+' or sign_ch == '-':
                         self.pos = self.pos + 1
             elif ch == '-' or ch == ':' or ch == 'T' or ch == 'Z':
@@ -453,7 +453,7 @@ equip TomlParser:
         int iv = parse_int(cleaned).unwrap_or(0)
         return Int(iv)
 
-    TomlValue parse_prefixed_int(&self, int start, bool is_negative, char num_prefix):
+    TomlValue parse_prefixed_int(&self, int start, bool is_negative, str num_prefix):
         self.pos = self.pos + 2
         int val = 0
         int base = 16
@@ -463,22 +463,22 @@ equip TomlParser:
             base = 2
         bool has_digits = false
         while self.pos < self.source.byte_len():
-            char ch = self.source.char_at(self.pos)
-            if ch == '_':
+            byte ch = self.source.byte_at(self.pos)
+            if ch == b'_':
                 self.pos = self.pos + 1
-            elif ch >= '0' and ch <= '9':
-                int digit = ch as int - '0' as int
+            elif ch >= b'0' and ch <= b'9':
+                int digit = ch as int - b'0'
                 if digit >= base:
                     break
                 val = val * base + digit
                 self.pos = self.pos + 1
                 has_digits = true
-            elif ch >= 'a' and ch <= 'f' and base == 16:
-                val = val * 16 + (ch as int - 'a' as int + 10)
+            elif ch >= b'a' and ch <= b'f' and base == 16:
+                val = val * 16 + (ch as int - b'a' + 10)
                 self.pos = self.pos + 1
                 has_digits = true
-            elif ch >= 'A' and ch <= 'F' and base == 16:
-                val = val * 16 + (ch as int - 'A' as int + 10)
+            elif ch >= b'A' and ch <= b'F' and base == 16:
+                val = val * 16 + (ch as int - b'A' + 10)
                 self.pos = self.pos + 1
                 has_digits = true
             else:
@@ -524,7 +524,7 @@ equip TomlParser:
     void parse_document(&self):
         self.skip_ws_and_newlines()
         while self.pos < self.source.byte_len() and not self.failed():
-            char ch = self.source.char_at(self.pos)
+            str ch = self.source.char_at(self.pos)
             if ch == '#':
                 self.skip_comment()
                 self.skip_ws_and_newlines()
@@ -592,9 +592,9 @@ str toml_strip_underscores(str txt):
     str cleaned = ""
     int ti = 0
     while ti < txt.byte_len():
-        char tc = txt.char_at(ti)
+        str tc = txt.char_at(ti)
         if tc != '_':
-            cleaned = cleaned + char_to_str(tc)
+            cleaned = cleaned + tc
         ti = ti + 1
     return cleaned
 
@@ -732,7 +732,7 @@ str toml_escape_string(str sv):
     str toml_out = "\""
     int si = 0
     while si < sv.byte_len():
-        char sc = sv.char_at(si)
+        str sc = sv.char_at(si)
         if sc == '"':
             toml_out = toml_out + "\\\""
         elif sc == '\\':
@@ -744,7 +744,7 @@ str toml_escape_string(str sv):
         elif sc == '\r':
             toml_out = toml_out + "\\r"
         else:
-            toml_out = toml_out + char_to_str(sc)
+            toml_out = toml_out + sc
         si = si + 1
     return toml_out + "\""
 

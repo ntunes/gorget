@@ -279,7 +279,7 @@ fn rewrite_expr(expr: &mut Spanned<Expr>, res: &ResolutionMap, scopes: &ScopeTab
         }
         // Leaf nodes
         Expr::IntLiteral(_) | Expr::FloatLiteral(_) | Expr::BoolLiteral(_)
-        | Expr::CharLiteral(_) | Expr::StringLiteral(_) | Expr::NoneLiteral
+        | Expr::StringLiteral(_) | Expr::NoneLiteral
         | Expr::Identifier(_) | Expr::SelfExpr | Expr::Path { .. } | Expr::It => {}
     }
 

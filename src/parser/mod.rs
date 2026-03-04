@@ -1243,7 +1243,7 @@ impl Parser {
             Token::Identifier(_) => i += 1,
             Token::Keyword(kw) => {
                 if matches!(kw, Keyword::Str | Keyword::Int | Keyword::Bool | Keyword::Float
-                               | Keyword::Char | Keyword::Void | Keyword::Auto | Keyword::StringType
+                               | Keyword::Void | Keyword::Auto | Keyword::StringType
                                | Keyword::Mutex) {
                     i += 1;
                 } else {

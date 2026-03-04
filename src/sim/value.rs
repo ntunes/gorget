@@ -524,7 +524,6 @@ impl Value {
         if type_id == F32_TYPE { return Value::F32(0.0); }
         if type_id == F64_TYPE { return Value::F64(0.0); }
         if type_id == UNIT_TYPE { return Value::Unit; }
-        if type_id == CHAR_TYPE { return Value::Char(0); }
         match registry.get(type_id) {
             Some(GirType::Named(name)) => {
                 // Try to create a zero value from the type def

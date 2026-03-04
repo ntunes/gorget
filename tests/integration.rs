@@ -957,7 +957,7 @@ kw:int ident:add ( kw:int ident:a , kw:int ident:b ) : NL INDENT kw:return ident
 ident:x == ident:y != ident:z <= ident:w >= ident:v NL EOF
 int:255 int:63 int:10 float:3.14 NL EOF
 ident:print ( str:hello {name} ) NL EOF
-kw:char ident:c = char:a NL EOF
+kw:char ident:c = str:a NL EOF
 comment:this is a comment ident:x = int:1 NL EOF
 ident:f ( ident:a , ident:b ) NL EOF
 ident:a += int:1 NL ident:b -= int:2 NL ident:c ..= ident:d NL EOF
@@ -1932,7 +1932,7 @@ fn bounds_check() {
 
 #[test]
 fn string_index_oob() {
-    run_gg_panics("string_index_oob.gg", "string byte index out of bounds");
+    run_gg_panics("string_index_oob.gg", "str index out of bounds");
 }
 
 #[test]
@@ -5763,9 +5763,6 @@ fn describe_token_canonical_rust(token: &Token) -> String {
         Token::IntLiteral(n) => format!("int:{n}"),
         Token::FloatLiteral(n) => format!("float:{n}"),
         Token::StringLiteral(slit) => describe_string_canonical_rust(slit),
-        Token::CharLiteral(c) => {
-            format!("char:{}", escape_canonical_rust(&c.to_string()))
-        }
         Token::BoolLiteral(b) => format!("bool:{b}"),
         Token::Plus => "+".into(),
         Token::Minus => "-".into(),
@@ -6063,7 +6060,6 @@ fn format_primitive_canonical(p: &PrimitiveType) -> &'static str {
         PrimitiveType::Float32 => "float32",
         PrimitiveType::Float64 => "float64",
         PrimitiveType::Bool => "bool",
-        PrimitiveType::Char => "char",
         PrimitiveType::Str => "str",
         PrimitiveType::CStr => "cstr",
         PrimitiveType::StringType => "String",
@@ -6248,7 +6244,6 @@ fn format_expr_canonical(expr: &Expr) -> String {
             }
         }
         Expr::BoolLiteral(b) => if *b { "true" } else { "false" }.to_string(),
-        Expr::CharLiteral(c) => format!("'{c}'"),
         Expr::StringLiteral(slit) => {
             let text = flatten_string_literal(slit);
             format!("\"{text}\"")

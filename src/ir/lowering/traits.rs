@@ -1032,7 +1032,6 @@ fn mangle_c_type_name(ty: &Type, _ctx: &LoweringContext) -> String {
             PrimitiveType::Float | PrimitiveType::Float64 => "double".into(),
             PrimitiveType::Float32 => "float".into(),
             PrimitiveType::Bool => "bool".into(),
-            PrimitiveType::Char => "int32_t".into(),
             PrimitiveType::Str => "Str".into(),
             PrimitiveType::CStr => "const_char_ptr".into(),
             PrimitiveType::StringType => "GorgetString".into(),

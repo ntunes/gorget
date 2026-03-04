@@ -1285,11 +1285,6 @@ impl Formatter {
             Expr::BoolLiteral(b) => {
                 self.emitter.write(if *b { "true" } else { "false" });
             }
-            Expr::CharLiteral(c) => {
-                self.emitter.write("'");
-                self.format_char_escape(*c);
-                self.emitter.write("'");
-            }
             Expr::StringLiteral(s) => {
                 self.format_string_lit(s);
             }
@@ -1770,20 +1765,6 @@ impl Formatter {
         }
     }
 
-    fn format_char_escape(&mut self, c: char) {
-        match c {
-            '\n' => self.emitter.write("\\n"),
-            '\t' => self.emitter.write("\\t"),
-            '\r' => self.emitter.write("\\r"),
-            '\\' => self.emitter.write("\\\\"),
-            '\'' => self.emitter.write("\\'"),
-            '\0' => self.emitter.write("\\0"),
-            c => {
-                let mut buf = [0u8; 4];
-                self.emitter.write(c.encode_utf8(&mut buf));
-            }
-        }
-    }
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -1862,7 +1843,6 @@ fn primitive_type_str(p: PrimitiveType) -> &'static str {
         PrimitiveType::Float32 => "float32",
         PrimitiveType::Float64 => "float64",
         PrimitiveType::Bool => "bool",
-        PrimitiveType::Char => "char",
         PrimitiveType::Str => "str",
         PrimitiveType::CStr => "cstr",
         PrimitiveType::StringType => "String",

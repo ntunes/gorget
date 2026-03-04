@@ -7,7 +7,7 @@
 # comment skipping. No namespaces, DTD, CDATA, or processing instructions.
 
 from std.collections import Vector, Dict
-from std.conv import int_to_str, char_to_str, parse_int, chr
+from std.conv import int_to_str, parse_int, chr
 
 # ── XML node types ─────────────────────────────────────────
 # Element(tag_name, attributes, child_nodes) | Text(content)
@@ -24,14 +24,14 @@ int xml_hex_to_int(str hex_str):
     int result = 0
     int hi = 0
     while hi < hex_str.byte_len():
-        char hc = hex_str.char_at(hi)
+        byte hc = hex_str.byte_at(hi)
         int digit = -1
-        if hc >= '0' and hc <= '9':
-            digit = hc as int - '0' as int
-        elif hc >= 'a' and hc <= 'f':
-            digit = hc as int - 'a' as int + 10
-        elif hc >= 'A' and hc <= 'F':
-            digit = hc as int - 'A' as int + 10
+        if hc >= b'0' and hc <= b'9':
+            digit = hc as int - b'0'
+        elif hc >= b'a' and hc <= b'f':
+            digit = hc as int - b'a' + 10
+        elif hc >= b'A' and hc <= b'F':
+            digit = hc as int - b'A' + 10
         if digit < 0:
             return -1
         result = result * 16 + digit
@@ -44,7 +44,7 @@ str xml_decode_entities(str raw):
     str decoded = ""
     int ei = 0
     while ei < raw.byte_len():
-        char ec = raw.char_at(ei)
+        str ec = raw.char_at(ei)
         if ec == '&':
             int semi_pos = ei + 1
             while semi_pos < raw.byte_len() and raw.char_at(semi_pos) != ';':
@@ -69,25 +69,25 @@ str xml_decode_entities(str raw):
                 else:
                     int nc_code = -1
                     if entity_name.byte_len() > 1:
-                        char en_first = entity_name.char_at(0)
+                        str en_first = entity_name.char_at(0)
                         if en_first == '#':
                             str ref_body = entity_name.byte_slice(1, entity_name.byte_len())
                             if ref_body.byte_len() > 1:
-                                char rb_first = ref_body.char_at(0)
+                                str rb_first = ref_body.char_at(0)
                                 if rb_first == 'x' or rb_first == 'X':
                                     nc_code = xml_hex_to_int(ref_body.byte_slice(1, ref_body.byte_len()))
                             if nc_code < 0 and ref_body.byte_len() > 0:
                                 bool all_digits = true
                                 int di = 0
                                 while di < ref_body.byte_len():
-                                    char dc = ref_body.char_at(di)
+                                    str dc = ref_body.char_at(di)
                                     if dc < '0' or dc > '9':
                                         all_digits = false
                                     di = di + 1
                                 if all_digits:
                                     nc_code = parse_int(ref_body).unwrap_or(0)
                     if nc_code > 0:
-                        decoded = decoded + char_to_str(chr(nc_code))
+                        decoded = decoded + chr(nc_code)
                         ei = semi_pos + 1
                     else:
                         decoded = decoded + "&"
@@ -96,7 +96,7 @@ str xml_decode_entities(str raw):
                 decoded = decoded + "&"
                 ei = ei + 1
         else:
-            decoded = decoded + char_to_str(ec)
+            decoded = decoded + ec
             ei = ei + 1
     return decoded
 
@@ -104,7 +104,7 @@ str xml_encode_text(str raw_text):
     str encoded = ""
     int ti = 0
     while ti < raw_text.byte_len():
-        char tc = raw_text.char_at(ti)
+        str tc = raw_text.char_at(ti)
         if tc == '&':
             encoded = encoded + "&amp;"
         elif tc == '<':
@@ -112,7 +112,7 @@ str xml_encode_text(str raw_text):
         elif tc == '>':
             encoded = encoded + "&gt;"
         else:
-            encoded = encoded + char_to_str(tc)
+            encoded = encoded + tc
         ti = ti + 1
     return encoded
 
@@ -120,7 +120,7 @@ str xml_encode_attr(str raw_attr):
     str encoded = ""
     int ai = 0
     while ai < raw_attr.byte_len():
-        char ac = raw_attr.char_at(ai)
+        str ac = raw_attr.char_at(ai)
         if ac == '&':
             encoded = encoded + "&amp;"
         elif ac == '<':
@@ -132,7 +132,7 @@ str xml_encode_attr(str raw_attr):
         elif ac == '\'':
             encoded = encoded + "&apos;"
         else:
-            encoded = encoded + char_to_str(ac)
+            encoded = encoded + ac
         ai = ai + 1
     return encoded
 
@@ -150,7 +150,7 @@ equip XmlParser:
         if self.err == "":
             self.err = consuming msg
 
-    char peek(self):
+    str peek(self):
         if self.pos < self.xml_input.byte_len():
             return self.xml_input.char_at(self.pos)
         return '\0'
@@ -161,7 +161,7 @@ equip XmlParser:
 
     void skip_ws(&self):
         while self.pos < self.xml_input.byte_len():
-            char wc = self.xml_input.char_at(self.pos)
+            str wc = self.xml_input.char_at(self.pos)
             if wc == ' ' or wc == '\t' or wc == '\n' or wc == '\r':
                 self.pos = self.pos + 1
             else:
@@ -190,7 +190,7 @@ equip XmlParser:
     str parse_tag_name(&self):
         int start = self.pos
         while self.pos < self.xml_input.byte_len():
-            char tc = self.xml_input.char_at(self.pos)
+            str tc = self.xml_input.char_at(self.pos)
             if tc >= 'a' and tc <= 'z':
                 self.pos = self.pos + 1
             elif tc >= 'A' and tc <= 'Z':
@@ -212,18 +212,18 @@ equip XmlParser:
         if self.pos >= self.xml_input.byte_len():
             self.fail("expected attribute value")
             return ""
-        char quote_ch = self.xml_input.char_at(self.pos)
+        str quote_ch = self.xml_input.char_at(self.pos)
         if quote_ch != '"' and quote_ch != '\'':
             self.fail("expected quote in attribute value")
             return ""
         self.pos = self.pos + 1
         str attr_val = ""
         while self.pos < self.xml_input.byte_len():
-            char vc = self.xml_input.char_at(self.pos)
+            str vc = self.xml_input.char_at(self.pos)
             if vc == quote_ch:
                 self.pos = self.pos + 1
                 return xml_decode_entities(attr_val)
-            attr_val = attr_val + char_to_str(vc)
+            attr_val = attr_val + vc
             self.pos = self.pos + 1
         self.fail("unterminated attribute value")
         return ""
@@ -234,7 +234,7 @@ equip XmlParser:
             self.skip_ws()
             if self.pos >= self.xml_input.byte_len():
                 break
-            char ac = self.xml_input.char_at(self.pos)
+            str ac = self.xml_input.char_at(self.pos)
             if ac == '>' or ac == '/' or ac == '?':
                 break
             str attr_key = self.parse_tag_name()
@@ -266,10 +266,10 @@ equip XmlParser:
     XmlNode parse_text(&self):
         str text_val = ""
         while self.pos < self.xml_input.byte_len():
-            char xc = self.xml_input.char_at(self.pos)
+            str xc = self.xml_input.char_at(self.pos)
             if xc == '<':
                 break
-            text_val = text_val + char_to_str(xc)
+            text_val = text_val + xc
             self.pos = self.pos + 1
         return Text(xml_decode_entities(text_val))
 

@@ -1,4 +1,4 @@
-from std.conv import int_to_str, float_to_str, char_to_str
+from std.conv import int_to_str, float_to_str
 
 void main():
     # String constructor
@@ -55,7 +55,7 @@ void main():
     String flt = float_to_str(3.14)
     print(flt)
 
-    String ch = char_to_str('A')
+    String ch = String('A')
     print(ch)
 
     # String passed to function expecting str

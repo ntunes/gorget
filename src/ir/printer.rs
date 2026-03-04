@@ -603,7 +603,6 @@ fn format_constant(c: &Constant) -> String {
         Constant::U16(n) => format!("{}u16", n),
         Constant::U32(n) => format!("{}u32", n),
         Constant::U64(n) => format!("{}u64", n),
-        Constant::Char(n) => format!("'{}'", char::from_u32(*n).unwrap_or('?')),
         Constant::F32(n) => format!("{}f32", n),
         Constant::F64(n) => format!("{}f64", n),
         Constant::Str(s) => format!("\"{}\"", s),

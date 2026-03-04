@@ -10,7 +10,7 @@
 from std.net.tls import TlsSocket, tls_connect
 from std.net.socket import Socket, socket_connect
 from std.collections import Vector, Dict
-from std.conv import int_to_str, char_to_str
+from std.conv import int_to_str
 from std.bytes import bytes_to_str, bytes_concat
 
 # ── Response type ────────────────────────────────────────────
@@ -63,14 +63,14 @@ int http_parse_hex(str http_hex):
     int http_val = 0
     int http_hi = 0
     while http_hi < http_hex.byte_len():
-        char http_hc = http_hex.char_at(http_hi)
+        byte http_hc = http_hex.byte_at(http_hi)
         int http_hv = 0
-        if http_hc >= '0' and http_hc <= '9':
-            http_hv = http_hc as int - '0' as int
-        elif http_hc >= 'a' and http_hc <= 'f':
-            http_hv = http_hc as int - 'a' as int + 10
-        elif http_hc >= 'A' and http_hc <= 'F':
-            http_hv = http_hc as int - 'A' as int + 10
+        if http_hc >= b'0' and http_hc <= b'9':
+            http_hv = http_hc as int - b'0'
+        elif http_hc >= b'a' and http_hc <= b'f':
+            http_hv = http_hc as int - b'a' + 10
+        elif http_hc >= b'A' and http_hc <= b'F':
+            http_hv = http_hc as int - b'A' + 10
         else:
             return http_val
         http_val = http_val * 16 + http_hv

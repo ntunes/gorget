@@ -9,13 +9,13 @@ void main():
     int slen = s.byte_len()
     print(f"{slen}")
     # Verify version field: char at position 14 should be '4'
-    char ver_char = s.char_at(14)
+    str ver_char = s[14]
     print(f"{ver_char}")
     # Verify dash positions
-    char d1 = s.char_at(8)
-    char d2 = s.char_at(13)
-    char d3 = s.char_at(18)
-    char d4 = s.char_at(23)
+    str d1 = s[8]
+    str d2 = s[13]
+    str d3 = s[18]
+    str d4 = s[23]
     print(f"{d1}")
     print(f"{d2}")
     print(f"{d3}")

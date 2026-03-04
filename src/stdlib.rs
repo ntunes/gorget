@@ -178,14 +178,13 @@ fn gen_os_module() -> Module {
 
 fn gen_conv_module() -> Module {
     make_module(vec![
-        decl_fn("ord", &[("c", ty_char())], ty_int()),
-        decl_fn("chr", &[("n", ty_int())], ty_char()),
+        decl_fn("ord", &[("s", ty_str())], ty_int()),
+        decl_fn("chr", &[("n", ty_int())], ty_str()),
         decl_fn("parse_int", &[("s", ty_str())], ty_result(ty_int(), ty_str())),
         decl_fn("parse_float", &[("s", ty_str())], ty_result(ty_float(), ty_str())),
         decl_fn("int_to_str", &[("n", ty_int())], ty_string()),
         decl_fn("float_to_str", &[("x", ty_float())], ty_string()),
         decl_fn("bool_to_str", &[("b", ty_bool())], ty_str()),
-        decl_fn("char_to_str", &[("c", ty_char())], ty_string()),
         decl_fn("codepoint_to_str", &[("cp", ty_int())], ty_string()),
     ])
 }
@@ -954,10 +953,6 @@ fn ty_int() -> Type {
 
 fn ty_bool() -> Type {
     Type::Primitive(PrimitiveType::Bool)
-}
-
-fn ty_char() -> Type {
-    Type::Primitive(PrimitiveType::Char)
 }
 
 fn ty_float() -> Type {
@@ -1765,7 +1760,7 @@ mod tests {
     #[test]
     fn generate_conv() {
         let m = generate_builtin_module(&["std".into(), "conv".into()]).unwrap();
-        assert_eq!(m.items.len(), 9);
+        assert_eq!(m.items.len(), 8);
     }
 
     #[test]

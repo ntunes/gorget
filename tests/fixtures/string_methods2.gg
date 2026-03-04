@@ -7,8 +7,8 @@ void main():
     print(s.substring(0, 5))
     print(s.substring(6, 11))
 
-    # char_at
-    char c = s.char_at(0)
+    # subscript
+    str c = s[0]
     print(f"{c}")
 
     # index_of

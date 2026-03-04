@@ -35,8 +35,8 @@ pub struct Lexer<'src> {
 enum EscapeContext {
     /// String literal: allows `\"`, `\{`, `\}`.
     String,
-    /// Char literal: allows `\'`.
-    Char,
+    /// Single-quoted literal: allows `\'`.
+    SingleQuoted,
 }
 
 /// Result of parsing a single escape sequence.
@@ -309,7 +309,15 @@ impl<'src> Lexer<'src> {
                     i = new_end;
                 }
 
-                // Char literal
+                // Byte literal b'A', b'\n', etc.
+                b'b' if i + 1 < bytes.len() && bytes[i + 1] == b'\'' => {
+                    let (tok, new_end) = self.scan_byte_literal(i);
+                    let span = self.span(i, new_end);
+                    self.pending.push_back(Spanned::new(tok, span));
+                    i = new_end;
+                }
+
+                // Single-quoted string/char literal
                 b'\'' => {
                     let (tok, new_end) = self.scan_char_literal(i);
                     let span = self.span(i, new_end);
@@ -332,6 +340,9 @@ impl<'src> Lexer<'src> {
                         && !(bytes[i] == b'b'
                             && i + 1 < bytes.len()
                             && bytes[i + 1] == b'"')
+                        && !(bytes[i] == b'b'
+                            && i + 1 < bytes.len()
+                            && bytes[i + 1] == b'\'')
                         && !(bytes[i] == b'c'
                             && i + 1 < bytes.len()
                             && bytes[i + 1] == b'"')
@@ -506,7 +517,7 @@ impl<'src> Lexer<'src> {
             b'\\' => { *i += 1; '\\' }
             b'0' => { *i += 1; '\0' }
             b'"' if matches!(context, EscapeContext::String) => { *i += 1; '"' }
-            b'\'' if matches!(context, EscapeContext::Char) => { *i += 1; '\'' }
+            b'\'' if matches!(context, EscapeContext::SingleQuoted) => { *i += 1; '\'' }
             b'{' if matches!(context, EscapeContext::String) => { *i += 1; '{' }
             b'}' if matches!(context, EscapeContext::String) => { *i += 1; '}' }
             b'u' if *i + 1 < bytes.len() && bytes[*i + 1] == b'{' => {
@@ -733,11 +744,11 @@ impl<'src> Lexer<'src> {
 
     /// Scan a single-quoted literal starting at `pos`. Returns (Token, end_position).
     ///
-    /// - `'x'` or `'\n'` (exactly one char/escape) → `Token::CharLiteral`
-    /// - `'hello'` or `''` (multi-char or empty) → `Token::StringLiteral(Normal)` (raw str, no interpolation)
+    /// All single-quoted literals → `Token::StringLiteral(Normal)` (raw str, no interpolation).
+    /// `'x'`, `'\n'`, `'hello'`, `''` all produce StringLiteral.
     ///
-    /// Note: `f'...'` is routed to `scan_string_literal` instead, so this function never
-    /// sees f-prefixed single-quoted strings.
+    /// Note: `f'...'` is routed to `scan_string_literal` instead, and `b'...'` is routed
+    /// to `scan_byte_literal`, so this function only sees plain single-quoted strings.
     fn scan_char_literal(&mut self, pos: usize) -> (Token, usize) {
         let bytes = self.source.as_bytes();
         let mut i = pos + 1; // skip opening '
@@ -748,36 +759,6 @@ impl<'src> Lexer<'src> {
                 span: self.span(pos, i),
             });
             return (Token::Error("unterminated char".to_string()), i);
-        }
-
-        // Scan one char or escape, track whether we're still a potential single-char literal.
-        // We use a small scan-ahead: try to read exactly one char/escape, then check for `'`.
-        // If the closing `'` is right there → CharLiteral.
-        // Otherwise fall through to multi-char string scanning.
-
-        // Scan the first character or escape sequence.
-        let (first_char, after_first) = if bytes[i] == b'\\' {
-            let mut j = i + 1;
-            match self.parse_escape(bytes, &mut j, EscapeContext::Char) {
-                EscapeResult::Char(c) => (Some(c), j),
-                EscapeResult::Eof => {
-                    self.errors.push(LexError {
-                        kind: LexErrorKind::UnterminatedCharLiteral,
-                        span: self.span(pos, i),
-                    });
-                    return (Token::Error("unterminated char".to_string()), i + 1);
-                }
-            }
-        } else {
-            let c = self.source[i..].chars().next().unwrap();
-            (Some(c), i + c.len_utf8())
-        };
-
-        // If the next byte after the first char is `'`, it's a single-char literal.
-        if let Some(ch) = first_char {
-            if after_first < bytes.len() && bytes[after_first] == b'\'' {
-                return (Token::CharLiteral(ch), after_first + 1);
-            }
         }
 
         // Multi-char (or empty `''`) single-quoted string → StringLiteral::Normal (raw str).
@@ -799,10 +780,10 @@ impl<'src> Lexer<'src> {
                 break;
             }
 
-            // Escape sequences (single-quoted raw strings still process escapes like "..." do)
+            // Escape sequences (single-quoted strings allow \', \\, \n, etc.)
             if bytes[i] == b'\\' {
                 i += 1;
-                match self.parse_escape(bytes, &mut i, EscapeContext::String) {
+                match self.parse_escape(bytes, &mut i, EscapeContext::SingleQuoted) {
                     EscapeResult::Char(c) => literal.push(c),
                     EscapeResult::Eof => {
                         self.errors.push(LexError {
@@ -825,6 +806,61 @@ impl<'src> Lexer<'src> {
             segments: vec![StringSegment::Literal(literal)],
         });
         (token, i)
+    }
+
+    /// Scan a byte literal `b'A'`, `b'\n'` etc. starting at `pos` (the `b`).
+    /// Emits `Token::IntLiteral(byte_value)`.
+    fn scan_byte_literal(&mut self, pos: usize) -> (Token, usize) {
+        let bytes = self.source.as_bytes();
+        // pos points at 'b', pos+1 is '\''
+        let i = pos + 2; // skip b and opening '
+
+        if i >= bytes.len() || bytes[i] == b'\n' {
+            self.errors.push(LexError {
+                kind: LexErrorKind::UnterminatedCharLiteral,
+                span: self.span(pos, i),
+            });
+            return (Token::Error("unterminated byte literal".to_string()), i);
+        }
+
+        // Parse one char or escape sequence.
+        let (byte_val, after) = if bytes[i] == b'\\' {
+            let mut j = i + 1;
+            match self.parse_escape(bytes, &mut j, EscapeContext::SingleQuoted) {
+                EscapeResult::Char(c) => {
+                    if c as u32 > 255 {
+                        self.errors.push(LexError {
+                            kind: LexErrorKind::InvalidEscapeSequence("byte literal: escape value > 255".to_string()),
+                            span: self.span(pos, j),
+                        });
+                        (0u8, j)
+                    } else {
+                        (c as u8, j)
+                    }
+                }
+                EscapeResult::Eof => {
+                    self.errors.push(LexError {
+                        kind: LexErrorKind::UnterminatedCharLiteral,
+                        span: self.span(pos, i),
+                    });
+                    return (Token::Error("unterminated byte literal".to_string()), i + 1);
+                }
+            }
+        } else {
+            let b = bytes[i];
+            (b, i + 1)
+        };
+
+        // Expect closing '
+        if after < bytes.len() && bytes[after] == b'\'' {
+            (Token::IntLiteral(byte_val as i64), after + 1)
+        } else {
+            self.errors.push(LexError {
+                kind: LexErrorKind::UnterminatedCharLiteral,
+                span: self.span(pos, after),
+            });
+            (Token::Error("byte literal: expected closing quote".to_string()), after)
+        }
     }
 
     /// Skip to end of line (or EOF) without collecting content.
@@ -1120,11 +1156,16 @@ mod tests {
 
     #[test]
     fn test_char_literal() {
+        // Single-quoted 'A' is now a StringLiteral (1-codepoint str)
         let tokens = lex("'A'\n");
-        assert_eq!(
-            tokens,
-            vec![Token::CharLiteral('A'), Token::Newline,]
-        );
+        assert!(matches!(&tokens[0], Token::StringLiteral(s) if s.segments.len() == 1));
+    }
+
+    #[test]
+    fn test_byte_literal() {
+        // b'A' == 65
+        let tokens = lex("b'A'\n");
+        assert_eq!(tokens, vec![Token::IntLiteral(65), Token::Newline,]);
     }
 
     #[test]

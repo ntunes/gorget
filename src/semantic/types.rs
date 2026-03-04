@@ -105,7 +105,6 @@ pub struct TypeTable {
     pub bool_id: TypeId,
     pub int_id: TypeId,
     pub float_id: TypeId,
-    pub char_id: TypeId,
     pub string_id: TypeId,
     pub owned_string_id: TypeId,
     pub cstr_id: TypeId,
@@ -129,9 +128,6 @@ impl TypeTable {
         let float_id = TypeId(types.len() as u32);
         types.push(ResolvedType::Primitive(PrimitiveType::Float));
 
-        let char_id = TypeId(types.len() as u32);
-        types.push(ResolvedType::Primitive(PrimitiveType::Char));
-
         let string_id = TypeId(types.len() as u32);
         types.push(ResolvedType::Primitive(PrimitiveType::Str));
 
@@ -154,7 +150,6 @@ impl TypeTable {
             bool_id,
             int_id,
             float_id,
-            char_id,
             string_id,
             owned_string_id,
             cstr_id,
@@ -209,7 +204,6 @@ impl TypeTable {
             PrimitiveType::Bool => self.bool_id,
             PrimitiveType::Int => self.int_id,
             PrimitiveType::Float => self.float_id,
-            PrimitiveType::Char => self.char_id,
             PrimitiveType::Str => self.string_id,
             PrimitiveType::CStr => self.cstr_id,
             PrimitiveType::StringType => self.owned_string_id,

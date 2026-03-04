@@ -1,4 +1,4 @@
-from std.conv import parse_int, parse_float, int_to_str, float_to_str, bool_to_str, char_to_str
+from std.conv import parse_int, parse_float, int_to_str, float_to_str, bool_to_str
 
 void main():
     # parse_int — Result[int, str]
@@ -39,8 +39,8 @@ void main():
     print(bool_to_str(true))
     print(bool_to_str(false))
 
-    # char_to_str
-    str s5 = char_to_str('A')
+    # single-char str literal
+    str s5 = 'A'
     print(s5)
 
     # Parseable trait — int.parse()

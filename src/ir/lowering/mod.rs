@@ -749,9 +749,8 @@ pub fn lower_module(
             ctx.fn_sigs.insert(format!("Str__{m}"), (str_self.clone(), str_type));
         }
         ctx.fn_sigs.insert("Str__byte_slice".to_string(), (vec![str_type, I64_TYPE, I64_TYPE], str_type));
-        // char_at returns char (uint32_t) at the semantic level.
-        // The C backend handles the Str→uint32_t conversion via inline helper.
-        ctx.fn_sigs.insert("Str__char_at".to_string(), (vec![str_type, I64_TYPE], CHAR_TYPE));
+        ctx.fn_sigs.insert("Str__byte_at".to_string(), (vec![str_type, I64_TYPE], U8_TYPE));
+        ctx.fn_sigs.insert("Str__char_at".to_string(), (vec![str_type, I64_TYPE], str_type));
         // Methods returning GorgetString
         for m in &["to_upper", "to_lower"] {
             ctx.fn_sigs.insert(format!("Str__{m}"), (str_self.clone(), owned_str_type));
@@ -770,23 +769,25 @@ pub fn lower_module(
             ctx.fn_sigs.insert(format!("Str__{m}"), (params, I64_TYPE));
         }
         // Methods returning bool
-        for m in &["contains", "starts_with", "ends_with", "is_empty"] {
+        for m in &["contains", "starts_with", "ends_with", "is_empty",
+                   "is_alpha", "is_digit", "is_alphanumeric", "is_whitespace",
+                   "is_upper", "is_lower", "is_ascii", "is_hex_digit"] {
             let params = if *m == "is_empty" { str_self.clone() } else { str_str.clone() };
+            let params = if m.starts_with("is_") && *m != "is_empty" { str_self.clone() } else { params };
             ctx.fn_sigs.insert(format!("Str__{m}"), (params, BOOL_TYPE));
         }
         ctx.fn_sigs.insert("Str__eq".to_string(), (str_str.clone(), BOOL_TYPE));
         ctx.fn_sigs.insert("Str__join".to_string(), (vec![str_type, array_type], owned_str_type));
     }
 
-    // Register char builtin method signatures
+    // Register uint8_t (byte) method signatures
     {
-        let char_self = vec![CHAR_TYPE];
         for m in &["is_alpha", "is_digit", "is_alphanumeric", "is_whitespace",
-                    "is_upper", "is_lower", "is_ascii", "is_hex_digit"] {
-            ctx.fn_sigs.insert(format!("char__{m}"), (char_self.clone(), BOOL_TYPE));
+                   "is_upper", "is_lower", "is_ascii", "is_hex_digit"] {
+            ctx.fn_sigs.insert(format!("uint8_t__{m}"), (vec![U8_TYPE], BOOL_TYPE));
         }
-        ctx.fn_sigs.insert("char__to_upper".to_string(), (char_self.clone(), CHAR_TYPE));
-        ctx.fn_sigs.insert("char__to_lower".to_string(), (char_self.clone(), CHAR_TYPE));
+        ctx.fn_sigs.insert("uint8_t__to_upper".to_string(), (vec![U8_TYPE], U8_TYPE));
+        ctx.fn_sigs.insert("uint8_t__to_lower".to_string(), (vec![U8_TYPE], U8_TYPE));
     }
 
     // Register primitive static method signatures (int.parse, int.default, etc.)
@@ -1218,7 +1219,6 @@ fn generic_elem_c_type(ty: &crate::parser::ast::Type) -> String {
                     PrimitiveType::Float | PrimitiveType::Float64 => "double".to_string(),
                     PrimitiveType::Bool  => "bool".to_string(),
                     PrimitiveType::Str   => "Str".to_string(),
-                    PrimitiveType::Char  => "int32_t".to_string(),
                     PrimitiveType::Uint8 => "uint8_t".to_string(),
                     _ => "int64_t".to_string(),
                 },

@@ -62,9 +62,8 @@ fn map_stdlib_name(name: &str) -> &str {
         // Conversion
         "int_to_str" => "gorget_int_to_str",
         "float_to_str" => "gorget_float_to_str",
-        "char_to_str" => "gorget_char_to_str",
         "bool_to_str" => "gorget_bool_to_str",
-        "ord" => "gorget_char_ord",
+        "ord" => "gorget_str_ord",
         "chr" => "gorget_char_chr",
         "parse_int" => "gorget_parse_int",
         "parse_float" => "gorget_parse_float",
@@ -314,7 +313,6 @@ fn map_stdlib_name(name: &str) -> &str {
         "File__read_all" => "gorget_file_read_all",
         "File__close" => "gorget_file_close",
         // Str methods (Type__method → gorget_str_method)
-        "Str__char_at" => "gorget_str_char_at",
         "Str__hash" => "gorget_str_hash",
         // SDL: sdl_foo → gorget_sdl_foo
         "sdl_init" => "gorget_sdl_init",
@@ -425,8 +423,8 @@ fn takes_array_ptr_args(name: &str) -> bool {
 /// Functions that return `const char*` or `char*` (need wrapping to Str/GorgetString).
 fn returns_cstr(name: &str) -> bool {
     matches!(name,
-        "gorget_int_to_str" | "gorget_float_to_str" | "gorget_char_to_str"
-        | "gorget_bool_to_str" | "gorget_codepoint_to_utf8"
+        "gorget_int_to_str" | "gorget_float_to_str" | "gorget_bool_to_str"
+        | "gorget_codepoint_to_utf8"
         | "gorget_path_parent" | "gorget_path_basename" | "gorget_path_extension"
         | "gorget_path_stem" | "gorget_path_join"
         | "gorget_path_normalize" | "gorget_path_absolute"
@@ -625,9 +623,9 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
 
     // GIR-specific helpers
     out.push_str("\nstatic int gorget_generic_compare(const void* a, const void* b) {\n    return memcmp(a, b, sizeof(int64_t));\n}\n");
-    // Inline helpers for char operations (ord/chr)
-    out.push_str("static inline int64_t gorget_char_ord(uint32_t c) { return (int64_t)c; }\n");
+    // Inline helpers for ord/chr operations
     out.push_str("static inline Str gorget_char_chr(int64_t code) { return gorget_str_from_cstr(gorget_codepoint_to_utf8(code)); }\n");
+    out.push_str("static inline int64_t gorget_str_ord(Str s) { size_t pos = 0; return (int64_t)gorget_utf8_decode(s.data, s.len, &pos); }\n");
     out.push_str("static inline uint32_t gorget_str_decode_codepoint(const char* data, size_t len) {\n");
     out.push_str("    if (len == 0) return 0;\n");
     out.push_str("    uint8_t b = (uint8_t)data[0];\n");
@@ -637,7 +635,6 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
     out.push_str("    if ((b & 0xF8) == 0xF0 && len >= 4) return ((b & 0x07) << 18) | ((data[1] & 0x3F) << 12) | ((data[2] & 0x3F) << 6) | (data[3] & 0x3F);\n");
     out.push_str("    return b;\n");
     out.push_str("}\n");
-    out.push_str("static inline uint32_t gorget_str_char_at(Str* s, int64_t idx) { return (uint32_t)gorget_str_byte_at(*s, idx); }\n");
     out.push_str("static inline Str codepoint_to_str(int64_t code) { return gorget_str_from_cstr(gorget_codepoint_to_utf8(code)); }\n");
     out.push_str("static inline int64_t gorget_str_hash(Str* s) { return (int64_t)__gorget_hash_str_len(s->data, s->len); }\n");
     out.push_str("static inline int64_t __gorget_hash_int(int64_t v) { return (int64_t)__gorget_fnv1a(&v, sizeof(v)); }\n");
@@ -3092,7 +3089,7 @@ fn trace_formatter_for_type(type_id: crate::ir::types::TypeId, registry: &TypeRe
         F32_TYPE | F64_TYPE => "__gorget_trace_val_float",
         _ if type_id == I8_TYPE || type_id == I16_TYPE || type_id == I32_TYPE
             || type_id == I64_TYPE || type_id == U8_TYPE || type_id == U16_TYPE
-            || type_id == U32_TYPE || type_id == U64_TYPE || type_id == CHAR_TYPE => "__gorget_trace_val_int",
+            || type_id == U32_TYPE || type_id == U64_TYPE => "__gorget_trace_val_int",
         _ => {
             if let Some(crate::ir::types::GirType::Named(name)) = registry.get(type_id) {
                 if name == "Str" || name == "GorgetString" {
@@ -3192,14 +3189,6 @@ fn emit_instruction(
                 if final_type == "GorgetString" {
                     let escaped = escape_c_string(s);
                     let _ = writeln!(out, "        {dst_str} = gorget_string_new(\"{escaped}\");");
-                    return;
-                }
-            }
-            // When assigning a char constant to a Str destination: coerce via codepoint_to_str
-            if let Operand::Constant(Constant::Char(n)) = value {
-                let final_type = resolve_place_c_type(dst, func, registry, type_overrides);
-                if final_type == "Str" {
-                    let _ = writeln!(out, "        {dst_str} = codepoint_to_str((int64_t){n}u);");
                     return;
                 }
             }
@@ -3455,23 +3444,40 @@ fn emit_instruction(
         Instruction::Cmp { dst, op, lhs, rhs, .. } => {
             let lhs_str = format_operand(lhs, func, registry);
             let rhs_str = format_operand(rhs, func, registry);
-            let lhs_effective = match lhs {
-                Operand::Copy(p) | Operand::Move(p) =>
-                    effective_c_type(p.local.0 as usize, func, registry, type_overrides),
-                _ => "int64_t".to_string(),
+            let operand_effective = |operand: &Operand| -> String {
+                match operand {
+                    Operand::Copy(p) | Operand::Move(p) =>
+                        effective_c_type(p.local.0 as usize, func, registry, type_overrides),
+                    Operand::Constant(Constant::Str(_)) => "Str".to_string(),
+                    _ => "int64_t".to_string(),
+                }
             };
-            if lhs_effective == "Str" {
-                // String comparison using gorget_str_eq
+            let lhs_effective = operand_effective(lhs);
+            let rhs_effective = operand_effective(rhs);
+            // Wrap a string-constant operand so it becomes a Str struct, not char*
+            let wrap_str_const = |operand: &Operand, formatted: &str| -> String {
+                match operand {
+                    Operand::Constant(Constant::Str(s)) => {
+                        let escaped = escape_c_string(s);
+                        format!("gorget_str_from_literal(\"{escaped}\", {})", s.len())
+                    }
+                    _ => formatted.to_string(),
+                }
+            };
+            if lhs_effective == "Str" || rhs_effective == "Str" {
+                // String comparison using gorget_str_eq / gorget_str_cmp
+                let lhs_cmp = wrap_str_const(lhs, &lhs_str);
+                let rhs_cmp = wrap_str_const(rhs, &rhs_str);
                 match op {
                     CmpOp::Eq => {
-                        let _ = writeln!(out, "        _{id} = gorget_str_eq({lhs_str}, {rhs_str});", id = dst.0);
+                        let _ = writeln!(out, "        _{id} = gorget_str_eq({lhs_cmp}, {rhs_cmp});", id = dst.0);
                     }
                     CmpOp::Ne => {
-                        let _ = writeln!(out, "        _{id} = !gorget_str_eq({lhs_str}, {rhs_str});", id = dst.0);
+                        let _ = writeln!(out, "        _{id} = !gorget_str_eq({lhs_cmp}, {rhs_cmp});", id = dst.0);
                     }
                     _ => {
                         let op_str = format_cmpop(*op);
-                        let _ = writeln!(out, "        _{id} = gorget_str_cmp({lhs_str}, {rhs_str}) {op_str} 0;", id = dst.0);
+                        let _ = writeln!(out, "        _{id} = gorget_str_cmp({lhs_cmp}, {rhs_cmp}) {op_str} 0;", id = dst.0);
                     }
                 }
             } else if registry.get_type_def(&lhs_effective).is_some() {
@@ -4838,9 +4844,6 @@ fn format_type(type_id: TypeId, registry: &TypeRegistry) -> String {
     if type_id == UNIT_TYPE {
         return "void".to_string();
     }
-    if type_id == CHAR_TYPE {
-        return "uint32_t".to_string();
-    }
 
     // Non-primitive: look up in registry
     if let Some(gir_type) = registry.get(type_id) {
@@ -5255,9 +5258,8 @@ fn infer_runtime_return_type(name: &str) -> Option<&'static str> {
         | "atan2" | "gorget_atan2" => Some("double"),
         // Stdlib: conversion
         // parse_int/parse_float now return Result[T, str] — type comes from GIR, not here
-        "ord" | "gorget_char_ord" => Some("int64_t"),
+        "ord" | "gorget_str_ord" | "gorget_char_ord" => Some("int64_t"),
         "int_to_str" | "gorget_int_to_str" | "float_to_str" | "gorget_float_to_str"
-        | "char_to_str" | "gorget_char_to_str"
         | "bool_to_str" | "gorget_bool_to_str" => Some("Str"),
         "chr" | "gorget_char_chr" | "codepoint_to_utf8" | "gorget_codepoint_to_utf8" => Some("Str"),
         // Crypto hash functions (return GorgetArray of bytes)
@@ -5370,10 +5372,13 @@ fn infer_method_return_type(name: &str) -> Option<&'static str> {
             "trim" | "strip" | "lstrip" | "rstrip"
             | "removeprefix" | "removesuffix" | "byte_slice"
             | "slice" | "substring" => Some("Str"),
-            "char_at" => Some("uint32_t"),
+            "byte_at" => Some("uint8_t"),
+            "char_at" => Some("Str"),
             "len" | "byte_len" | "count" | "find" | "hash" => Some("int64_t"),
             "index_of" => Some("Option__int64_t"),
-            "contains" | "starts_with" | "ends_with" | "eq" => Some("bool"),
+            "is_alpha" | "is_digit" | "is_alphanumeric" | "is_whitespace"
+            | "is_upper" | "is_lower" | "is_hex_digit" | "is_ascii"
+            | "contains" | "starts_with" | "ends_with" | "eq" | "is_empty" => Some("bool"),
             "enumerate" => Some("GorgetArray"),
             _ => None,
         };
@@ -6122,10 +6127,6 @@ enum InlineMethod {
     ResultUnwrapErr,
     ResultUnwrapOrElse,
     ResultOr,
-    /// Char methods
-    CharClassify(&'static str), // C function name (isalpha, isdigit, etc.)
-    CharToUpper,
-    CharToLower,
 }
 
 /// Represents a rewritten collection method call.
@@ -6378,6 +6379,16 @@ fn try_rewrite_collection_method(func_name: &str) -> Option<CollectionMethodCall
             "_removeprefix" => simple("gorget_str_removeprefix"),
             "_removesuffix" => simple("gorget_str_removesuffix"),
             "_byte_slice" => simple("gorget_str_byte_slice"),
+            "_byte_at" => simple("gorget_str_byte_at"),
+            "_char_at" => simple("gorget_str_char_at"),
+            "_is_alpha" => simple("gorget_str_is_alpha"),
+            "_is_digit" => simple("gorget_str_is_digit"),
+            "_is_alphanumeric" => simple("gorget_str_is_alphanumeric"),
+            "_is_whitespace" => simple("gorget_str_is_whitespace"),
+            "_is_upper" => simple("gorget_str_is_upper"),
+            "_is_lower" => simple("gorget_str_is_lower"),
+            "_is_hex_digit" => simple("gorget_str_is_hex_digit"),
+            "_is_ascii" => simple("gorget_str_is_ascii"),
             "_to_upper" => simple("gorget_str_to_upper"),
             "_to_lower" => simple("gorget_str_to_lower"),
             "_replace" => simple("gorget_str_replace"),
@@ -6467,6 +6478,16 @@ fn try_rewrite_collection_method(func_name: &str) -> Option<CollectionMethodCall
             "removeprefix" => simple("gorget_str_removeprefix"),
             "removesuffix" => simple("gorget_str_removesuffix"),
             "byte_slice" => simple("gorget_str_byte_slice"),
+            "byte_at" => simple("gorget_str_byte_at"),
+            "char_at" => simple("gorget_str_char_at"),
+            "is_alpha" => simple("gorget_str_is_alpha"),
+            "is_digit" => simple("gorget_str_is_digit"),
+            "is_alphanumeric" => simple("gorget_str_is_alphanumeric"),
+            "is_whitespace" => simple("gorget_str_is_whitespace"),
+            "is_upper" => simple("gorget_str_is_upper"),
+            "is_lower" => simple("gorget_str_is_lower"),
+            "is_hex_digit" => simple("gorget_str_is_hex_digit"),
+            "is_ascii" => simple("gorget_str_is_ascii"),
             "bytes" => simple("gorget_str_bytes"),
             "codepoints" => simple("gorget_str_codepoints"),
             "chars" => simple("gorget_str_chars"),
@@ -6486,6 +6507,29 @@ fn try_rewrite_collection_method(func_name: &str) -> Option<CollectionMethodCall
                 needs_deref_cast: false, field_access: None,
                 ws_variant: Some("gorget_str_rstrip_ws"), ..Default::default()
             }),
+            _ => None,
+        };
+    }
+
+    // uint8_t (byte) methods
+    if func_name.starts_with("uint8_t__") {
+        let method = &func_name["uint8_t__".len()..];
+        let simple_bool = |runtime_fn| Some(CollectionMethodCall {
+            runtime_fn, pass_by_ptr: false, has_return: true,
+            needs_deref_cast: false, field_access: None,
+            ..Default::default()
+        });
+        return match method {
+            "is_alpha" => simple_bool("gorget_uint8_is_alpha"),
+            "is_digit" => simple_bool("gorget_uint8_is_digit"),
+            "is_alphanumeric" => simple_bool("gorget_uint8_is_alphanumeric"),
+            "is_whitespace" => simple_bool("gorget_uint8_is_whitespace"),
+            "is_upper" => simple_bool("gorget_uint8_is_upper"),
+            "is_lower" => simple_bool("gorget_uint8_is_lower"),
+            "is_hex_digit" => simple_bool("gorget_uint8_is_hex_digit"),
+            "is_ascii" => simple_bool("gorget_uint8_is_ascii"),
+            "to_upper" => simple_bool("gorget_uint8_to_upper"),
+            "to_lower" => simple_bool("gorget_uint8_to_lower"),
             _ => None,
         };
     }
@@ -7035,23 +7079,6 @@ fn try_inline_method(func_name: &str) -> Option<InlineMethod> {
             _ => None,
         };
     }
-    // Char methods
-    if func_name.starts_with("char__") {
-        let method = &func_name[6..]; // strip "char__"
-        return match method {
-            "is_alpha" => Some(InlineMethod::CharClassify("isalpha")),
-            "is_digit" => Some(InlineMethod::CharClassify("isdigit")),
-            "is_alphanumeric" => Some(InlineMethod::CharClassify("isalnum")),
-            "is_whitespace" => Some(InlineMethod::CharClassify("isspace")),
-            "is_hex_digit" => Some(InlineMethod::CharClassify("isxdigit")),
-            "is_upper" => Some(InlineMethod::CharClassify("isupper")),
-            "is_lower" => Some(InlineMethod::CharClassify("islower")),
-            "is_ascii" => Some(InlineMethod::CharClassify("isascii")),
-            "to_upper" => Some(InlineMethod::CharToUpper),
-            "to_lower" => Some(InlineMethod::CharToLower),
-            _ => None,
-        };
-    }
     // Option methods
     if func_name.starts_with("Option__") {
         let method = extract_trailing_method(func_name, "Option__");
@@ -7415,29 +7442,6 @@ fn emit_inline_method(
                     id = dst_id.0);
             }
         }
-        InlineMethod::CharClassify(c_func) => {
-            // char method (is_alpha, is_digit, etc.) → C ctype function
-            if let Some(dst_id) = dst {
-                let _ = writeln!(out,
-                    "        _{id} = {c_func}((int){self_str});",
-                    id = dst_id.0);
-            }
-        }
-        InlineMethod::CharToUpper => {
-            if let Some(dst_id) = dst {
-                let _ = writeln!(out,
-                    "        _{id} = (uint32_t)toupper((int){self_str});",
-                    id = dst_id.0);
-            }
-        }
-        InlineMethod::CharToLower => {
-            if let Some(dst_id) = dst {
-                let _ = writeln!(out,
-                    "        _{id} = (uint32_t)tolower((int){self_str});",
-                    id = dst_id.0);
-            }
-        }
-
         // -- Dict update/get_or --
         InlineMethod::DictUpdate => {
             // update(other): merge other dict into self
@@ -7935,7 +7939,6 @@ fn emit_collection_method_call(
                 Constant::I64(_) | Constant::I32(_) => "int64_t".to_string(),
                 Constant::F64(_) => "double".to_string(),
                 Constant::Bool(_) => "bool".to_string(),
-                Constant::Char(_) => "uint32_t".to_string(),
                 Constant::Str(_) => "Str".to_string(),
                 _ => String::new(),
             },
@@ -7961,7 +7964,7 @@ fn emit_collection_method_call(
                 // String argument — coerce to Str view
                 if is_push_line {
                     let _ = writeln!(out, "        gorget_string_append_str({self_ref}, (Str){{ .data = {arg_val}.data, .len = {arg_val}.len }});");
-                    let _ = writeln!(out, "        gorget_string_push_char({self_ref}, '\\n');");
+                    let _ = writeln!(out, "        gorget_string_push_byte({self_ref}, '\\n');");
                 } else {
                     let _ = writeln!(out, "        gorget_string_append_str({self_ref}, (Str){{ .data = {arg_val}.data, .len = {arg_val}.len }});");
                 }
@@ -7975,7 +7978,7 @@ fn emit_collection_method_call(
                 };
                 if is_push_line {
                     let _ = writeln!(out, "        gorget_string_append_str({self_ref}, {coerced});");
-                    let _ = writeln!(out, "        gorget_string_push_char({self_ref}, '\\n');");
+                    let _ = writeln!(out, "        gorget_string_push_byte({self_ref}, '\\n');");
                 } else {
                     let _ = writeln!(out, "        gorget_string_append_str({self_ref}, {coerced});");
                 }
@@ -7996,9 +7999,13 @@ fn emit_collection_method_call(
 
     // Build argument list for the runtime function
     let mut call_args = Vec::new();
-    // Str methods take self by value; dereference if self is a pointer
+    // Str and uint8 methods take self by value; dereference if self is a pointer
     let is_str_method = rewrite.runtime_fn.starts_with("gorget_str_");
-    if is_str_method {
+    let is_uint8_method = rewrite.runtime_fn.starts_with("gorget_uint8_");
+    if is_uint8_method {
+        let dereffed = deref_self(&self_str, self_ptr);
+        call_args.push(dereffed);
+    } else if is_str_method {
         // Check if self is a GorgetString — if so, coerce to Str
         let self_c_type = if !args.is_empty() {
             match &args[0] {
@@ -8057,7 +8064,6 @@ fn emit_collection_method_call(
                             Constant::F64(_) => "double".to_string(),
                             Constant::Bool(_) => "bool".to_string(),
                             Constant::Str(_) => "Str".to_string(),
-                            Constant::Char(_) => "uint32_t".to_string(),
                             _ => "int64_t".to_string(),
                         },
                     };
@@ -8488,7 +8494,6 @@ fn format_constant(constant: &Constant, _func: &Function, _registry: &TypeRegist
         Constant::U8(n) => format!("(uint8_t){n}"),
         Constant::U16(n) => format!("(uint16_t){n}"),
         Constant::U32(n) => format!("{n}u"),
-        Constant::Char(n) => format!("{n}u"),
         Constant::U64(n) => format!("{n}ULL"),
         Constant::F32(n) => format_float(*n as f64),
         Constant::F64(n) => format_float(*n),

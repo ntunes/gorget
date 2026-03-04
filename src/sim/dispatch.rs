@@ -7,7 +7,7 @@ use crate::ir::instructions::{BinOp, CmpOp, Constant, Instruction, Operand, Plac
 use crate::ir::types::{
     TypeId, GirType, TypeDefKind,
     BOOL_TYPE, I8_TYPE, I16_TYPE, I32_TYPE, I64_TYPE,
-    U8_TYPE, U16_TYPE, U32_TYPE, U64_TYPE, F32_TYPE, F64_TYPE, UNIT_TYPE, CHAR_TYPE,
+    U8_TYPE, U16_TYPE, U32_TYPE, U64_TYPE, F32_TYPE, F64_TYPE, UNIT_TYPE,
 };
 use crate::ir::Module;
 use crate::span::Span;
@@ -474,7 +474,6 @@ impl<'m> Interpreter<'m> {
             Constant::U16(n) => Value::U16(*n),
             Constant::U32(n) => Value::U32(*n),
             Constant::U64(n) => Value::U64(*n),
-            Constant::Char(c) => Value::Char(*c),
             Constant::F32(f) => Value::F32(*f),
             Constant::F64(f) => Value::F64(*f),
             Constant::Str(s) => Value::Str(SimStr::from_str(s)),
@@ -2706,7 +2705,6 @@ impl<'m> Interpreter<'m> {
             || name.starts_with("gorget_str_to_upper_to_str")
             || name.starts_with("gorget_str_to_lower_to_str")
             || name.starts_with("gorget_str_char_at")
-            || name.starts_with("char__")
             || name.starts_with("__option_")
             || name.starts_with("__result_")
     }
@@ -5269,9 +5267,6 @@ impl<'m> Interpreter<'m> {
         if target_type == F32_TYPE { return Ok(Value::F32(val.as_f64() as f32)); }
         if target_type == F64_TYPE { return Ok(Value::F64(val.as_f64())); }
         if target_type == UNIT_TYPE { return Ok(Value::Unit); }
-        if target_type == CHAR_TYPE {
-            return Ok(Value::Char(val.as_i64() as u32));
-        }
 
         // Named type cast — for aliases and newtypes, just pass through
         if let Some(gir_type) = self.module.type_registry.get(target_type) {

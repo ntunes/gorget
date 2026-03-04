@@ -4,7 +4,6 @@
 # pure Gorget Base64 encoding/decoding (RFC 4648).
 
 from std.collections import Vector
-from std.conv import char_to_str, ord
 
 # ── C-backed extern functions ────────────────────────────────
 
@@ -36,8 +35,8 @@ extern Vector[uint8] random_bytes(int b64_n) = "gorget_random_bytes"
 
 # ── Base64 helpers ───────────────────────────────────────────
 
-int b64_char_value(char b64_ch):
-    int b64_code = ord(b64_ch)
+int b64_char_value(byte b64_ch):
+    int b64_code = b64_ch as int
     # A-Z → 0-25
     if b64_code >= 65 and b64_code <= 90:
         return b64_code - 65
@@ -69,17 +68,17 @@ str base64_encode(Vector[uint8] b64_data):
         int b64_c1 = b64_data.get(b64_i + 1).unwrap() as int
         int b64_c2 = b64_data.get(b64_i + 2).unwrap() as int
 
-        b64_out = b64_out + char_to_str(b64_alpha.char_at(b64_c0 >> 2))
+        b64_out = b64_out + b64_alpha[b64_c0 >> 2]
 
         int b64_lo1 = b64_c0 & 3
         int b64_hi1 = b64_c1 >> 4
-        b64_out = b64_out + char_to_str(b64_alpha.char_at(b64_lo1 << 4 | b64_hi1))
+        b64_out = b64_out + b64_alpha[b64_lo1 << 4 | b64_hi1]
 
         int b64_lo2 = b64_c1 & 15
         int b64_hi2 = b64_c2 >> 6
-        b64_out = b64_out + char_to_str(b64_alpha.char_at(b64_lo2 << 2 | b64_hi2))
+        b64_out = b64_out + b64_alpha[b64_lo2 << 2 | b64_hi2]
 
-        b64_out = b64_out + char_to_str(b64_alpha.char_at(b64_c2 & 63))
+        b64_out = b64_out + b64_alpha[b64_c2 & 63]
 
         b64_i = b64_i + 3
 
@@ -87,19 +86,19 @@ str base64_encode(Vector[uint8] b64_data):
     int b64_rem = b64_len - b64_i
     if b64_rem == 1:
         int b64_c0 = b64_data.get(b64_i).unwrap() as int
-        b64_out = b64_out + char_to_str(b64_alpha.char_at(b64_c0 >> 2))
+        b64_out = b64_out + b64_alpha[b64_c0 >> 2]
         int b64_lo = b64_c0 & 3
-        b64_out = b64_out + char_to_str(b64_alpha.char_at(b64_lo << 4))
+        b64_out = b64_out + b64_alpha[b64_lo << 4]
         b64_out = b64_out + "=="
     elif b64_rem == 2:
         int b64_c0 = b64_data.get(b64_i).unwrap() as int
         int b64_c1 = b64_data.get(b64_i + 1).unwrap() as int
-        b64_out = b64_out + char_to_str(b64_alpha.char_at(b64_c0 >> 2))
+        b64_out = b64_out + b64_alpha[b64_c0 >> 2]
         int b64_lo1 = b64_c0 & 3
         int b64_hi1 = b64_c1 >> 4
-        b64_out = b64_out + char_to_str(b64_alpha.char_at(b64_lo1 << 4 | b64_hi1))
+        b64_out = b64_out + b64_alpha[b64_lo1 << 4 | b64_hi1]
         int b64_lo2 = b64_c1 & 15
-        b64_out = b64_out + char_to_str(b64_alpha.char_at(b64_lo2 << 2))
+        b64_out = b64_out + b64_alpha[b64_lo2 << 2]
         b64_out = b64_out + "="
 
     return b64_out
@@ -116,18 +115,18 @@ Result[Vector[uint8], str] base64_decode(str b64_encoded):
 
     int b64_i = 0
     while b64_i < b64_len:
-        int b64_v0 = b64_char_value(b64_encoded.char_at(b64_i))
-        int b64_v1 = b64_char_value(b64_encoded.char_at(b64_i + 1))
+        int b64_v0 = b64_char_value(b64_encoded.byte_at(b64_i))
+        int b64_v1 = b64_char_value(b64_encoded.byte_at(b64_i + 1))
         if b64_v0 < 0 or b64_v1 < 0:
             return Error("invalid base64 character")
 
-        if b64_encoded.char_at(b64_i + 2) == '=' and b64_encoded.char_at(b64_i + 3) == '=':
+        if b64_encoded[b64_i + 2] == "=" and b64_encoded[b64_i + 3] == "=":
             # 2 significant chars → 1 byte
             int b64_byte0 = b64_v0 << 2 | b64_v1 >> 4
             b64_out.push(b64_byte0 as uint8)
-        elif b64_encoded.char_at(b64_i + 3) == '=':
+        elif b64_encoded[b64_i + 3] == "=":
             # 3 significant chars → 2 bytes
-            int b64_v2 = b64_char_value(b64_encoded.char_at(b64_i + 2))
+            int b64_v2 = b64_char_value(b64_encoded.byte_at(b64_i + 2))
             if b64_v2 < 0:
                 return Error("invalid base64 character")
             int b64_byte0 = b64_v0 << 2 | b64_v1 >> 4
@@ -137,8 +136,8 @@ Result[Vector[uint8], str] base64_decode(str b64_encoded):
             b64_out.push(b64_byte1 as uint8)
         else:
             # 4 significant chars → 3 bytes
-            int b64_v2 = b64_char_value(b64_encoded.char_at(b64_i + 2))
-            int b64_v3 = b64_char_value(b64_encoded.char_at(b64_i + 3))
+            int b64_v2 = b64_char_value(b64_encoded.byte_at(b64_i + 2))
+            int b64_v3 = b64_char_value(b64_encoded.byte_at(b64_i + 3))
             if b64_v2 < 0 or b64_v3 < 0:
                 return Error("invalid base64 character")
             int b64_byte0 = b64_v0 << 2 | b64_v1 >> 4

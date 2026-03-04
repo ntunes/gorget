@@ -171,7 +171,6 @@ fn format_type(ty: &crate::parser::ast::Type) -> String {
             PrimitiveType::Float32 => "float32".to_string(),
             PrimitiveType::Float64 => "float64".to_string(),
             PrimitiveType::Bool => "bool".to_string(),
-            PrimitiveType::Char => "char".to_string(),
             PrimitiveType::Str => "str".to_string(),
             PrimitiveType::CStr => "cstr".to_string(),
             PrimitiveType::StringType => "String".to_string(),
@@ -520,7 +519,6 @@ fn field_write_call(expr: &str, type_name: &str) -> String {
         "float32" | "float64" => format!("ser.write_float({expr} as float)"),
         "bool" => format!("ser.write_bool({expr})"),
         "str" | "String" => format!("ser.write_str({expr})"),
-        "char" => format!("ser.write_str(char_to_str({expr}))"),
         _ => format!("{expr}.serialize(ser)"),
     }
 }
@@ -608,9 +606,6 @@ fn field_read_decl(name: &str, type_name: &str) -> String {
         }
         "bool" => format!("bool {name} = de.read_bool()"),
         "str" | "String" => format!("str {name} = de.read_str()"),
-        "char" => {
-            format!("str {name}_raw = de.read_str()\n    char {name} = {name}_raw[0]")
-        }
         _ => format!("{type_name} {name} = deserialize_{type_name}(de)?"),
     }
 }
@@ -1320,7 +1315,6 @@ void main():
         assert_eq!(field_write_call("self.x", "bool"), "ser.write_bool(self.x)");
         assert_eq!(field_write_call("self.x", "str"), "ser.write_str(self.x)");
         assert_eq!(field_write_call("self.x", "String"), "ser.write_str(self.x)");
-        assert_eq!(field_write_call("self.x", "char"), "ser.write_str(char_to_str(self.x))");
         assert_eq!(field_write_call("self.x", "int8"), "ser.write_int(self.x as int)");
         assert_eq!(field_write_call("self.x", "uint64"), "ser.write_int(self.x as int)");
         assert_eq!(field_write_call("self.x", "float32"), "ser.write_float(self.x as float)");
@@ -1449,10 +1443,6 @@ void main():
         assert_eq!(field_read_decl("x", "bool"), "bool x = de.read_bool()");
         assert_eq!(field_read_decl("x", "str"), "str x = de.read_str()");
         assert_eq!(field_read_decl("x", "String"), "str x = de.read_str()");
-        assert_eq!(
-            field_read_decl("x", "char"),
-            "str x_raw = de.read_str()\n    char x = x_raw[0]"
-        );
         assert_eq!(
             field_read_decl("x", "int8"),
             "int x_raw = de.read_int()\n    int8 x = x_raw as int8"

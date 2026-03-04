@@ -106,7 +106,7 @@ fn contains_it(expr: &Spanned<Expr>) -> bool {
 
         // Leaves — no sub-expressions
         Expr::IntLiteral(_) | Expr::FloatLiteral(_) | Expr::BoolLiteral(_)
-        | Expr::CharLiteral(_) | Expr::StringLiteral(_) | Expr::NoneLiteral
+        | Expr::StringLiteral(_) | Expr::NoneLiteral
         | Expr::Identifier(_) | Expr::SelfExpr | Expr::Path { .. } => false,
     }
 }
@@ -257,10 +257,6 @@ impl Parser {
             Token::BoolLiteral(b) => {
                 self.advance();
                 Ok(Spanned::new(Expr::BoolLiteral(b), start))
-            }
-            Token::CharLiteral(c) => {
-                self.advance();
-                Ok(Spanned::new(Expr::CharLiteral(c), start))
             }
             Token::StringLiteral(s) => {
                 self.advance();
@@ -441,7 +437,7 @@ impl Parser {
                 | Keyword::Int | Keyword::Int8 | Keyword::Int16 | Keyword::Int32 | Keyword::Int64
                 | Keyword::Uint | Keyword::Uint8 | Keyword::Uint16 | Keyword::Uint32 | Keyword::Uint64
                 | Keyword::Float | Keyword::Float32 | Keyword::Float64
-                | Keyword::Bool | Keyword::Char | Keyword::Str | Keyword::CStr),
+                | Keyword::Bool | Keyword::Str | Keyword::CStr),
             ) => {
                 let name = kw.as_name().to_string();
                 self.advance();
@@ -1492,7 +1488,6 @@ impl Parser {
             Token::IntLiteral(_)
                 | Token::FloatLiteral(_)
                 | Token::StringLiteral(_)
-                | Token::CharLiteral(_)
                 | Token::BoolLiteral(_)
                 | Token::Identifier(_)
                 | Token::LParen
@@ -1534,7 +1529,6 @@ impl Parser {
                 | Token::Keyword(Keyword::Float32)
                 | Token::Keyword(Keyword::Float64)
                 | Token::Keyword(Keyword::Bool)
-                | Token::Keyword(Keyword::Char)
                 | Token::Keyword(Keyword::Str)
                 | Token::Keyword(Keyword::CStr)
                 | Token::Dot
@@ -1560,7 +1554,6 @@ impl Parser {
                     | Keyword::Float32
                     | Keyword::Float64
                     | Keyword::Bool
-                    | Keyword::Char
                     | Keyword::Str
                     | Keyword::CStr
                     | Keyword::StringType

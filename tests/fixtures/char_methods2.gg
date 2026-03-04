@@ -1,7 +1,7 @@
 void main():
-    char c1 = 'a'
-    char c2 = 'Z'
-    char c3 = '5'
+    str c1 = "a"
+    str c2 = "Z"
+    str c3 = "5"
 
     # to_upper / to_lower
     print(f"{c1.to_upper()}")
@@ -21,5 +21,5 @@ void main():
     print(f"{c1.is_hex_digit()}")
     print(f"{c2.is_hex_digit()}")
     print(f"{c3.is_hex_digit()}")
-    char c4 = 'G'
+    str c4 = "G"
     print(f"{c4.is_hex_digit()}")

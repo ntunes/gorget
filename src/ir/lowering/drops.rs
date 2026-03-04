@@ -275,14 +275,14 @@ mod tests {
     #[test]
     fn needs_drop_move_type() {
         let reg = make_move_registry();
-        let owned_string_id = TypeId(13); // first inserted after primitives
+        let owned_string_id = TypeId(12); // first inserted after primitives
         assert!(needs_drop(owned_string_id, &reg));
     }
 
     #[test]
     fn drop_elaborator_scope_lifecycle() {
         let reg = make_move_registry();
-        let owned_string_id = TypeId(13);
+        let owned_string_id = TypeId(12);
 
         let mut elab = DropElaborator::new();
         let mut builder = FunctionBuilder::new("test", UNIT_TYPE, &[]);
@@ -306,7 +306,7 @@ mod tests {
     #[test]
     fn drop_elaborator_maybe_moved() {
         let reg = make_move_registry();
-        let owned_string_id = TypeId(13);
+        let owned_string_id = TypeId(12);
 
         let mut elab = DropElaborator::new();
         let mut builder = FunctionBuilder::new("test", UNIT_TYPE, &[]);
@@ -335,7 +335,7 @@ mod tests {
     #[test]
     fn drop_elaborator_nested_scopes() {
         let reg = make_move_registry();
-        let owned_string_id = TypeId(13);
+        let owned_string_id = TypeId(12);
 
         let mut elab = DropElaborator::new();
         let mut builder = FunctionBuilder::new("test", UNIT_TYPE, &[]);
@@ -370,7 +370,7 @@ mod tests {
     #[test]
     fn drop_elaborator_early_return() {
         let reg = make_move_registry();
-        let owned_string_id = TypeId(13);
+        let owned_string_id = TypeId(12);
 
         let mut elab = DropElaborator::new();
         let mut builder = FunctionBuilder::new("test", UNIT_TYPE, &[]);

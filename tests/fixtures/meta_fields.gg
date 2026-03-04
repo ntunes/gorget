@@ -9,7 +9,7 @@ struct Player:
 
 void describe_fields[T]():
     meta for fname, ftype in fields(T):
-        print("{fname}:{ftype}")
+        print(f"{fname}:{ftype}")
 
 void count_numeric_fields[T]():
     auto count = 0

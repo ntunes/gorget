@@ -151,7 +151,6 @@ fn is_copy_type(type_id: TypeId, types: &TypeTable, scopes: &ScopeTable) -> bool
                     | Float32
                     | Float64
                     | Bool
-                    | Char
                     | Str
                     | CStr
             )
@@ -624,8 +623,7 @@ impl<'a> BorrowChecker<'a> {
             // Value-type literals: always produce new owned values, never references
             Expr::IntLiteral(_)
             | Expr::FloatLiteral(_)
-            | Expr::BoolLiteral(_)
-            | Expr::CharLiteral(_) => BorrowOrigin::Static,
+            | Expr::BoolLiteral(_) => BorrowOrigin::Static,
 
             // Binary/unary ops produce new values (arithmetic, comparison, logical)
             Expr::BinaryOp { .. } | Expr::UnaryOp { .. } => BorrowOrigin::Static,
@@ -1018,7 +1016,6 @@ impl<'a> BorrowChecker<'a> {
             Expr::IntLiteral(_)
             | Expr::FloatLiteral(_)
             | Expr::BoolLiteral(_)
-            | Expr::CharLiteral(_)
             | Expr::StringLiteral(_)
             | Expr::NoneLiteral
             | Expr::SelfExpr

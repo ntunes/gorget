@@ -370,7 +370,6 @@ impl TypeMapper {
             PrimitiveType::Float32 => F32_TYPE,
             PrimitiveType::Bool => BOOL_TYPE,
             PrimitiveType::Str | PrimitiveType::CStr => self.str_type,
-            PrimitiveType::Char => CHAR_TYPE, // char as u32 codepoint, but prints as character
             PrimitiveType::StringType => self.owned_string_type,
             PrimitiveType::Void => UNIT_TYPE,
         }
@@ -378,9 +377,7 @@ impl TypeMapper {
 
     /// Return the printf format specifier for a GIR type.
     pub fn format_specifier(&self, type_id: TypeId) -> &str {
-        if type_id == CHAR_TYPE {
-            "%c"
-        } else if type_id == I64_TYPE || type_id == I32_TYPE || type_id == I16_TYPE || type_id == I8_TYPE {
+        if type_id == I64_TYPE || type_id == I32_TYPE || type_id == I16_TYPE || type_id == I8_TYPE {
             "%lld"
         } else if type_id == U64_TYPE || type_id == U32_TYPE || type_id == U16_TYPE || type_id == U8_TYPE {
             "%llu"
@@ -747,7 +744,6 @@ pub fn mangle_type_for_name(ty: &Type) -> String {
             PrimitiveType::Str => "Str".to_string(),
             PrimitiveType::CStr => "cstr".to_string(),
             PrimitiveType::StringType => "GorgetString".to_string(),
-            PrimitiveType::Char => "uint32_t".to_string(),
             PrimitiveType::Void => "void".to_string(),
         },
         Type::Named { name, generic_args } => {

@@ -430,7 +430,6 @@ pub enum PrimitiveType {
     Float32,
     Float64,
     Bool,
-    Char,
     Str,
     CStr,
     StringType,
@@ -447,7 +446,6 @@ pub enum Expr {
     IntLiteral(i64),
     FloatLiteral(f64),
     BoolLiteral(bool),
-    CharLiteral(char),
     StringLiteral(crate::lexer::token::StringLiteral),
     NoneLiteral,
 

@@ -256,7 +256,7 @@ mod tests {
         assert!(module.functions.is_empty());
         assert!(module.globals.is_empty());
         assert!(module.externs.is_empty());
-        assert_eq!(module.type_registry.len(), 13); // primitives
+        assert_eq!(module.type_registry.len(), 12); // primitives
     }
 
     #[test]

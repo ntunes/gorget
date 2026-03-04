@@ -3,26 +3,26 @@
 # to the Rust-side describe_token_canonical_rust().
 
 from lexer import Token, Keyword, StringLiteral, StringSegment, StringKind
-from std.conv import int_to_str, float_to_str, char_to_str
+from std.conv import int_to_str, float_to_str
 
-str escape_char_canonical(char c):
-    if c == '\n':
+str escape_char_canonical(str c):
+    if c == "\n":
         return "\\n"
-    if c == '\r':
+    if c == "\r":
         return "\\r"
-    if c == '\t':
+    if c == "\t":
         return "\\t"
-    if c == '\0':
+    if c == "\0":
         return "\\0"
-    if c == '\\':
+    if c == "\\":
         return "\\\\"
-    return char_to_str(c)
+    return c
 
 str escape_canonical(str s):
     str result = ""
     int i = 0
     while i < s.byte_len():
-        char c = s.char_at(i)
+        str c = s.byte_slice(i, i + 1)
         result = result + escape_char_canonical(c)
         i = i + 1
     return result
@@ -240,8 +240,6 @@ str describe_token_canonical(Token t):
             return "float:" + float_to_str(f)
         case TkString(slit):
             return describe_string_canonical(slit)
-        case TkChar(c):
-            return "char:" + escape_char_canonical(c)
         case TkBool(b):
             if b:
                 return "bool:true"

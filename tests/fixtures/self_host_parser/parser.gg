@@ -2,7 +2,6 @@
 # Consumes a token stream from the lexer and produces an AST.
 
 from std.collections import Vector
-from std.conv import char_to_str
 from lexer import lex_tokenize, SpannedToken, Token, Keyword, StringLiteral, StringKind, StringSegment
 from ast import Module, Item, Stmt, Expr, Type, Pattern, Span, SpannedExpr, SpannedType, SpannedPattern, FunctionDef, StructDef, EnumDef, EnumVariant, TraitDef, EquipBlock, MatchArm, ElseBranch, Param, ImportStmt
 
@@ -186,8 +185,7 @@ int token_tag(Token tok):
             return TOK_FLOAT
         case TkString(_):
             return TOK_STRING
-        case TkChar(_):
-            return TOK_CHAR
+        # TkChar removed — single-quoted literals are now TkString
         case TkBool(_):
             return TOK_BOOL
         case TkPlus:
@@ -555,8 +553,6 @@ str token_string_val(Token tok):
 
 str token_char_val(Token tok):
     match tok:
-        case TkChar(c):
-            return char_to_str(c)
         else:
             return ""
 
@@ -1637,11 +1633,6 @@ equip Parser:
         if ptag == TOK_STRING:
             SpannedToken t = self.advance()
             return SpannedExpr(EStringLiteral(token_string_val(t.lex_token)), Span(t.lex_start, t.lex_end))
-
-        # Char literal
-        if ptag == TOK_CHAR:
-            SpannedToken t = self.advance()
-            return SpannedExpr(ECharLiteral(token_char_val(t.lex_token)), Span(t.lex_start, t.lex_end))
 
         # Bool literal
         if ptag == TOK_BOOL:

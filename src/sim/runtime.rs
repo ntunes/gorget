@@ -1150,13 +1150,10 @@ pub fn call_extern(
             Ok(Value::Str(SimStr::from_str(if b { "true" } else { "false" })))
         }
 
-        "gorget_char_to_str" | "char_to_str" | "codepoint_to_str" => {
-            let cp = args.first().map(|v| match v {
-                Value::Char(c) => *c,
-                _ => v.as_i64() as u32,
-            }).unwrap_or(0);
+        "codepoint_to_str" | "gorget_codepoint_to_utf8" => {
+            let cp = args.first().map(|v| v.as_i64() as u32).unwrap_or(0);
             let s = char::from_u32(cp).unwrap_or('\0').to_string();
-            Ok(Value::String(SimString::from_string(s)))
+            Ok(Value::Str(SimStr::from_str(&s)))
         }
 
         // gorget_parse_int / parse_int → Result[int, str]
@@ -1221,9 +1218,10 @@ pub fn call_extern(
             Ok(Value::I64(cp as i64))
         }
 
-        "chr" => {
+        "chr" | "gorget_char_chr" => {
             let cp = args.first().map(|v| v.as_i64() as u32).unwrap_or(0);
-            Ok(Value::Char(cp))
+            let s = char::from_u32(cp).map(|c| c.to_string()).unwrap_or_default();
+            Ok(Value::Str(SimStr::from_str(&s)))
         }
 
         // ── Math ───────────────────────────────────────────────────────────────
@@ -1535,50 +1533,6 @@ pub fn call_extern(
             Ok(Value::Unit)
         }
 
-        // ── Char methods ───────────────────────────────────────────────────────
-        "gorget_char_is_alpha" | "char__is_alpha" => {
-            let cp = match args.first() { Some(Value::Char(c)) => *c, _ => 0 };
-            Ok(Value::Bool(char::from_u32(cp).map(|c| c.is_alphabetic()).unwrap_or(false)))
-        }
-        "gorget_char_is_digit" | "char__is_digit" => {
-            let cp = match args.first() { Some(Value::Char(c)) => *c, _ => 0 };
-            Ok(Value::Bool(char::from_u32(cp).map(|c| c.is_ascii_digit()).unwrap_or(false)))
-        }
-        "gorget_char_is_alphanumeric" | "char__is_alphanumeric" => {
-            let cp = match args.first() { Some(Value::Char(c)) => *c, _ => 0 };
-            Ok(Value::Bool(char::from_u32(cp).map(|c| c.is_alphanumeric()).unwrap_or(false)))
-        }
-        "gorget_char_is_whitespace" | "char__is_whitespace" => {
-            let cp = match args.first() { Some(Value::Char(c)) => *c, _ => 0 };
-            Ok(Value::Bool(char::from_u32(cp).map(|c| c.is_whitespace()).unwrap_or(false)))
-        }
-        "gorget_char_is_upper" | "char__is_upper" => {
-            let cp = match args.first() { Some(Value::Char(c)) => *c, _ => 0 };
-            Ok(Value::Bool(char::from_u32(cp).map(|c| c.is_uppercase()).unwrap_or(false)))
-        }
-        "gorget_char_is_lower" | "char__is_lower" => {
-            let cp = match args.first() { Some(Value::Char(c)) => *c, _ => 0 };
-            Ok(Value::Bool(char::from_u32(cp).map(|c| c.is_lowercase()).unwrap_or(false)))
-        }
-        "gorget_char_is_ascii" | "char__is_ascii" => {
-            let cp = match args.first() { Some(Value::Char(c)) => *c, _ => 0 };
-            Ok(Value::Bool(cp < 128))
-        }
-        "gorget_char_is_hex_digit" | "char__is_hex_digit" => {
-            let cp = match args.first() { Some(Value::Char(c)) => *c, _ => 0 };
-            Ok(Value::Bool(char::from_u32(cp).map(|c| c.is_ascii_hexdigit()).unwrap_or(false)))
-        }
-        "gorget_char_to_upper" | "char__to_upper" => {
-            let cp = match args.first() { Some(Value::Char(c)) => *c, _ => 0 };
-            let upper_cp = char::from_u32(cp).map(|c| c.to_uppercase().next().unwrap_or(c) as u32).unwrap_or(cp);
-            Ok(Value::Char(upper_cp))
-        }
-        "gorget_char_to_lower" | "char__to_lower" => {
-            let cp = match args.first() { Some(Value::Char(c)) => *c, _ => 0 };
-            let lower_cp = char::from_u32(cp).map(|c| c.to_lowercase().next().unwrap_or(c) as u32).unwrap_or(cp);
-            Ok(Value::Char(lower_cp))
-        }
-
         // ── Primitive static method dispatch (int.parse, int.default, etc.) ──────
         // These are lowered as Call("int64_t__parse", [str]) etc. from Type.method() syntax.
         // Helper: make Some(val) enum
@@ -1660,7 +1614,6 @@ pub fn call_extern(
         }
         "bool__default" => Ok(Value::Bool(false)),
         "Str__default" | "str__default" => Ok(Value::Str(SimStr::from_str(""))),
-        "char__default" => Ok(Value::Char(0)),
 
         // ── Option / Result operations (first arg is already derefed enum value) ──
         // dispatch.rs auto-derefs __option_* and __result_* first arg from Ptr → Enum.

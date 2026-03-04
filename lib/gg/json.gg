@@ -4,7 +4,7 @@
 # No C dependencies — uses only Gorget standard library.
 
 from std.collections import Vector, Dict, Box
-from std.conv import parse_int, parse_float, int_to_str, float_to_str, bool_to_str, char_to_str, codepoint_to_str
+from std.conv import parse_int, parse_float, int_to_str, float_to_str, bool_to_str, codepoint_to_str
 
 # ── JSON value type ──────────────────────────────────────────
 
@@ -220,7 +220,7 @@ equip JsonParser:
 
     void skip_whitespace(&self):
         while self.pos < self.input.byte_len():
-            char c = self.input.char_at(self.pos)
+            str c = self.input.char_at(self.pos)
             if c == ' ' or c == '\t' or c == '\n' or c == '\r':
                 self.pos = self.pos + 1
             else:
@@ -233,7 +233,7 @@ equip JsonParser:
         if self.pos >= self.input.byte_len():
             self.fail("unexpected end of input")
             return Null()
-        char c = self.input.char_at(self.pos)
+        str c = self.input.char_at(self.pos)
         if c == '"':
             return self.parse_string_value()
         if c == '{':
@@ -258,7 +258,7 @@ equip JsonParser:
         self.pos = self.pos + 1
         str result = ""
         while self.pos < self.input.byte_len():
-            char c = self.input.char_at(self.pos)
+            str c = self.input.char_at(self.pos)
             if c == '"':
                 self.pos = self.pos + 1
                 return result
@@ -267,7 +267,7 @@ equip JsonParser:
                 if self.pos >= self.input.byte_len():
                     self.fail("unterminated string escape")
                     return ""
-                char esc = self.input.char_at(self.pos)
+                str esc = self.input.char_at(self.pos)
                 self.pos = self.pos + 1
                 if esc == '"':
                     result = result + "\""
@@ -285,14 +285,14 @@ equip JsonParser:
                     int uni_cp = 0
                     int uni_cnt = 0
                     while uni_cnt < 4 and self.pos < self.input.byte_len():
-                        char uni_hc = self.input.char_at(self.pos)
+                        byte uni_hc = self.input.byte_at(self.pos)
                         int uni_hv = -1
-                        if uni_hc >= '0' and uni_hc <= '9':
-                            uni_hv = uni_hc as int - '0' as int
-                        elif uni_hc >= 'a' and uni_hc <= 'f':
-                            uni_hv = uni_hc as int - 'a' as int + 10
-                        elif uni_hc >= 'A' and uni_hc <= 'F':
-                            uni_hv = uni_hc as int - 'A' as int + 10
+                        if uni_hc >= b'0' and uni_hc <= b'9':
+                            uni_hv = uni_hc as int - b'0'
+                        elif uni_hc >= b'a' and uni_hc <= b'f':
+                            uni_hv = uni_hc as int - b'a' + 10
+                        elif uni_hc >= b'A' and uni_hc <= b'F':
+                            uni_hv = uni_hc as int - b'A' + 10
                         if uni_hv < 0:
                             self.fail("invalid hex digit in unicode escape")
                             return ""
@@ -309,14 +309,14 @@ equip JsonParser:
                             int uni_low = 0
                             int uni_lcnt = 0
                             while uni_lcnt < 4 and self.pos < self.input.byte_len():
-                                char uni_lhc = self.input.char_at(self.pos)
+                                byte uni_lhc = self.input.byte_at(self.pos)
                                 int uni_lhv = -1
-                                if uni_lhc >= '0' and uni_lhc <= '9':
-                                    uni_lhv = uni_lhc as int - '0' as int
-                                elif uni_lhc >= 'a' and uni_lhc <= 'f':
-                                    uni_lhv = uni_lhc as int - 'a' as int + 10
-                                elif uni_lhc >= 'A' and uni_lhc <= 'F':
-                                    uni_lhv = uni_lhc as int - 'A' as int + 10
+                                if uni_lhc >= b'0' and uni_lhc <= b'9':
+                                    uni_lhv = uni_lhc as int - b'0'
+                                elif uni_lhc >= b'a' and uni_lhc <= b'f':
+                                    uni_lhv = uni_lhc as int - b'a' + 10
+                                elif uni_lhc >= b'A' and uni_lhc <= b'F':
+                                    uni_lhv = uni_lhc as int - b'A' + 10
                                 if uni_lhv < 0:
                                     self.fail("invalid hex digit in surrogate pair")
                                     return ""
@@ -337,9 +337,9 @@ equip JsonParser:
                     result = result + codepoint_to_str(uni_cp)
                 else:
                     result = result + "\\"
-                    result = result + char_to_str(esc)
+                    result = result + esc
             else:
-                result = result + char_to_str(c)
+                result = result + c
                 self.pos = self.pos + 1
         self.fail("unterminated string")
         return ""
@@ -473,7 +473,7 @@ str json_escape_string(str s):
     str result = "\""
     int i = 0
     while i < s.byte_len():
-        char c = s.char_at(i)
+        str c = s.char_at(i)
         if c == '"':
             result = result + "\\\""
         elif c == '\\':
@@ -485,7 +485,7 @@ str json_escape_string(str s):
         elif c == '\r':
             result = result + "\\r"
         else:
-            result = result + char_to_str(c)
+            result = result + c
         i = i + 1
     return result + "\""
 

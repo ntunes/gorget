@@ -6,11 +6,11 @@
 
 from std.collections import Vector
 from std.bytes import random_bytes
-from std.conv import char_to_str, ord
+from std.conv import ord
 
 # ── Hex helpers ──────────────────────────────────────────────
 
-int uuid_hex_val(char uuid_c):
+int uuid_hex_val(str uuid_c):
     int uuid_code = ord(uuid_c)
     if uuid_code >= 48 and uuid_code <= 57:
         return uuid_code - 48
@@ -63,8 +63,8 @@ equip UUID:
         int uuid_i = 0
         while uuid_i < 16:
             int uuid_bv = self.uuid_bytes.get(uuid_i).unwrap() as int
-            uuid_s = uuid_s + char_to_str(uuid_hex.char_at(uuid_bv >> 4))
-            uuid_s = uuid_s + char_to_str(uuid_hex.char_at(uuid_bv & 15))
+            uuid_s = uuid_s + uuid_hex.char_at(uuid_bv >> 4)
+            uuid_s = uuid_s + uuid_hex.char_at(uuid_bv & 15)
             if uuid_i == 3 or uuid_i == 5 or uuid_i == 7 or uuid_i == 9:
                 uuid_s = uuid_s + "-"
             uuid_i = uuid_i + 1

@@ -2162,7 +2162,7 @@ fn is_primitive_type_for_assert(type_id: TypeId) -> bool {
     matches!(type_id,
         I64_TYPE | I32_TYPE | I16_TYPE | I8_TYPE |
         U64_TYPE | U32_TYPE | U16_TYPE | U8_TYPE |
-        F64_TYPE | F32_TYPE | BOOL_TYPE | CHAR_TYPE
+        F64_TYPE | F32_TYPE | BOOL_TYPE
     )
 }
 
@@ -2174,8 +2174,6 @@ fn assert_printf_info(op: &Operand, type_id: TypeId) -> (String, String) {
         ("%g".to_string(), format!("(double){c_expr}"))
     } else if type_id == BOOL_TYPE {
         ("%s".to_string(), format!("({c_expr}) ? \"true\" : \"false\""))
-    } else if type_id == CHAR_TYPE {
-        ("%lld".to_string(), format!("(long long)({c_expr})"))
     } else {
         // All integer types: treat as int64_t
         ("%lld".to_string(), format!("(long long)({c_expr})"))

@@ -1,4 +1,5 @@
-# Tests for char → str implicit coercion.
+# Tests for single-char str literals.
+# Single-quoted literals 'A' are now str (same as "A").
 #
 # Expected output:
 #   A
@@ -6,14 +7,14 @@
 #   A
 
 void main():
-    # char assigned to str variable
+    # single-char literal assigned to str variable
     str s = 'A'
     print(s)
 
-    # char compared via str context
+    # single-char literal compared with double-quoted str
     str t = 'A'
     print(t == "A")
 
-    # char passed as str argument
+    # single-char literal is a str
     str result = 'A'
     print(result)

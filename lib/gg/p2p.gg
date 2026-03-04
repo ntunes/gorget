@@ -381,7 +381,7 @@ Result[bool, str] p2p_bootstrap(Node &node, Vector[str] addrs):
             int port = 0
             int k = 0
             while k < port_str.byte_len():
-                int d = port_str.char_at(k) as int - 48
+                int d = port_str.byte_at(k) as int - 48
                 port = port * 10 + d
                 k = k + 1
             p2p_send_raw(&node, host, port, 1, Vector[uint8]())
@@ -546,7 +546,7 @@ Result[ExternalAddr, str] p2p_discover_external_addr(Node &node, str probe_host,
                 int ext_port = 0
                 int k = 0
                 while k < port_str.byte_len():
-                    int d = port_str.char_at(k) as int - 48
+                    int d = port_str.byte_at(k) as int - 48
                     ext_port = ext_port * 10 + d
                     k = k + 1
                 return Ok(ExternalAddr(ext_host, ext_port))

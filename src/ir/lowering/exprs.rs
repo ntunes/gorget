@@ -26,7 +26,6 @@ fn gorget_name_for_type_id(ctx: &LoweringContext, type_id: TypeId) -> String {
         U32_TYPE => "uint32".to_string(),
         U64_TYPE => "uint64".to_string(),
         F32_TYPE => "float32".to_string(),
-        CHAR_TYPE => "char".to_string(),
         _ => {
             // For named types, look up in type_mapper
             ctx.type_mapper.name_for_type_id(type_id)
@@ -262,9 +261,6 @@ fn lower_expr_inner(
         }
 
         // -- P3.4: Miscellaneous expressions --
-        Expr::CharLiteral(ch) => {
-            Operand::Constant(Constant::Char(*ch as u32))
-        }
 
         Expr::NoneLiteral => {
             Operand::Constant(Constant::Null)
@@ -2407,7 +2403,7 @@ fn infer_collection_method_return_type(
         }
         // String methods returning Str (view operations)
         "trim" | "strip" | "lstrip" | "rstrip" | "removeprefix" | "removesuffix"
-        | "byte_slice" | "substring" | "char_at" if is_string => {
+        | "byte_slice" | "substring" if is_string => {
             ctx.type_mapper.str_type
         }
         // String methods returning GorgetString (allocating)
@@ -2417,6 +2413,11 @@ fn infer_collection_method_return_type(
         }
         // String .str() / .as_str() → Str
         "str" | "as_str" if is_string => ctx.type_mapper.str_type,
+        // String .byte_at(i) → uint8
+        "byte_at" if is_string => U8_TYPE,
+        // String boolean predicates (all-codepoints)
+        "is_alpha" | "is_digit" | "is_alphanumeric" | "is_whitespace"
+        | "is_upper" | "is_lower" | "is_hex_digit" | "is_ascii" if is_string => BOOL_TYPE,
         // String .split() / .chars() → Vector__Str
         "split" | "chars" if is_string => {
             ctx.lookup_type_by_name("Vector__Str")
@@ -3082,7 +3083,6 @@ fn infer_type_name_from_operand_full(
             tid?
         }
         Operand::Constant(c) => match c {
-            Constant::Char(_) => return Some("char".to_string()),
             Constant::Str(_) => return Some("Str".to_string()),
             Constant::Bool(_) => return Some("bool".to_string()),
             Constant::I64(_) => return Some("int64_t".to_string()),
@@ -3102,10 +3102,9 @@ fn infer_type_name_from_operand_full(
     if effective_tid == ctx.type_mapper.owned_string_type {
         return Some("GorgetString".to_string());
     }
-    if effective_tid == CHAR_TYPE {
-        return Some("char".to_string());
+    if effective_tid == U8_TYPE {
+        return Some("uint8_t".to_string());
     }
-
     // Check named types (match both the original type_id and the dereferenced effective_tid,
     // since opaque pointer types like PoolAllocator are registered as Ptr(Named(...)))
     ctx.type_mapper.named_types.iter()
@@ -3642,20 +3641,6 @@ fn lower_call(
         if name == "print" {
             lower_print_call(ctx, builder, args);
             return Operand::Constant(Constant::Unit);
-        }
-
-        // chr(n) → cast int to char (uint32_t)
-        if name == "chr" && args.len() == 1 {
-            let arg = lower_expr(ctx, builder, &args[0].node.value);
-            let dst = builder.cast(CHAR_TYPE, arg);
-            return FunctionBuilder::copy(dst);
-        }
-
-        // ord(c) → cast char to int
-        if name == "ord" && args.len() == 1 {
-            let arg = lower_expr(ctx, builder, &args[0].node.value);
-            let dst = builder.cast(I64_TYPE, arg);
-            return FunctionBuilder::copy(dst);
         }
 
         // Box(value) constructor → heap allocation via __gorget_box_alloc
@@ -5499,7 +5484,6 @@ pub fn infer_operand_type(ctx: &LoweringContext, operand: &Operand) -> TypeId {
             Constant::U16(_) => U16_TYPE,
             Constant::U32(_) => U32_TYPE,
             Constant::U64(_) => U64_TYPE,
-            Constant::Char(_) => CHAR_TYPE,
             Constant::F32(_) => F32_TYPE,
             Constant::F64(_) => F64_TYPE,
             Constant::Str(_) => ctx.type_mapper.str_type,
@@ -5692,15 +5676,6 @@ mod tests {
     }
 
     // ---- P3.4: Miscellaneous expression tests ----
-
-    #[test]
-    fn lower_char_literal() {
-        let (_analysis, mut ctx) = make_test_ctx();
-        let mut builder = FunctionBuilder::new("test", UNIT_TYPE, &[]);
-
-        let result = lower_expr(&mut ctx, &mut builder, &spanned(Expr::CharLiteral('A')));
-        assert!(matches!(result, Operand::Constant(Constant::Char(65))));
-    }
 
     #[test]
     fn lower_self_expr() {

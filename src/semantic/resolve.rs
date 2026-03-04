@@ -1081,7 +1081,6 @@ fn resolve_expr(
         Expr::IntLiteral(_)
         | Expr::FloatLiteral(_)
         | Expr::BoolLiteral(_)
-        | Expr::CharLiteral(_)
         | Expr::NoneLiteral
         | Expr::SelfExpr
         | Expr::It => {}
@@ -1545,7 +1544,7 @@ fn is_builtin(name: &str) -> bool {
         | "int" | "int8" | "int16" | "int32" | "int64"
         | "uint" | "uint8" | "uint16" | "uint32" | "uint64"
         | "float" | "float32" | "float64"
-        | "bool" | "char" | "str"
+        | "bool" | "byte" | "str"
     )
 }
 

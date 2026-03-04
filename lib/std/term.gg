@@ -55,13 +55,13 @@ str strip_ansi(str term_s):
     int term_i = 0
     int term_len = term_s.byte_len()
     while term_i < term_len:
-        char term_c = term_s.char_at(term_i)
-        # ESC char = \u{1b} = codepoint 27
-        if term_c as int == 27 and term_i + 1 < term_len and term_s.char_at(term_i + 1) == '[':
+        byte term_c = term_s.byte_at(term_i)
+        # ESC byte = \u{1b} = codepoint 27
+        if term_c as int == 27 and term_i + 1 < term_len and term_s.byte_at(term_i + 1) == b'[':
             # Skip ESC [ ... until we hit a letter (the final byte of the sequence)
             term_i = term_i + 2
             while term_i < term_len:
-                char term_fc = term_s.char_at(term_i)
+                byte term_fc = term_s.byte_at(term_i)
                 term_i = term_i + 1
                 int term_fcode = term_fc as int
                 # Final byte range: 0x40–0x7E (letters and some punctuation)

@@ -1,6 +1,6 @@
 from lexer import lex_tokenize, SpannedToken, Token, Keyword, StringLiteral, StringSegment, StringKind
 from std.collections import Vector
-from std.conv import int_to_str, float_to_str, char_to_str
+from std.conv import int_to_str, float_to_str
 
 # Helper to describe a token for test output
 str describe_token(Token t):
@@ -15,8 +15,6 @@ str describe_token(Token t):
             return "float:" + float_to_str(f)
         case TkString(slit):
             return describe_string(slit)
-        case TkChar(c):
-            return "char:" + char_to_str(c)
         case TkBool(b):
             if b:
                 return "bool:true"

@@ -1149,7 +1149,7 @@ static inline void gorget_string_append(GorgetString* s, const char* rhs) {
     s->len = new_len;
 }
 
-static inline void gorget_string_push_char(GorgetString* s, char c) {
+static inline void gorget_string_push_byte(GorgetString* s, char c) {
     if (s->len + 2 > s->cap) {
         size_t old_cap = s->cap;
         size_t new_cap = (s->len + 2) * 2;
@@ -1190,27 +1190,27 @@ static inline void gorget_string_push_bool(GorgetString* s, bool b) {
 
 static inline void gorget_string_push_line(GorgetString* s, const char* rhs) {
     gorget_string_append(s, rhs);
-    gorget_string_push_char(s, '\n');
+    gorget_string_push_byte(s, '\n');
 }
 
 static inline void gorget_string_push_line_int(GorgetString* s, int64_t n) {
     gorget_string_push_int(s, n);
-    gorget_string_push_char(s, '\n');
+    gorget_string_push_byte(s, '\n');
 }
 
 static inline void gorget_string_push_line_float(GorgetString* s, double d) {
     gorget_string_push_float(s, d);
-    gorget_string_push_char(s, '\n');
+    gorget_string_push_byte(s, '\n');
 }
 
 static inline void gorget_string_push_line_bool(GorgetString* s, bool b) {
     gorget_string_push_bool(s, b);
-    gorget_string_push_char(s, '\n');
+    gorget_string_push_byte(s, '\n');
 }
 
 static inline void gorget_string_push_line_char(GorgetString* s, char c) {
-    gorget_string_push_char(s, c);
-    gorget_string_push_char(s, '\n');
+    gorget_string_push_byte(s, c);
+    gorget_string_push_byte(s, '\n');
 }
 
 // ── String concatenation ────────────────────────────────────
@@ -1233,6 +1233,19 @@ typedef struct {
 
 static inline Str gorget_str_from_literal(const char* data, size_t len) {
     return (Str){ .data = data, .len = len };
+}
+
+// Push a str (1+ bytes) onto a GorgetString builder — user-facing push_char.
+static inline void gorget_string_push_char(GorgetString* s, Str c) {
+    if (s->len + c.len + 1 > s->cap) {
+        size_t old_cap = s->cap;
+        size_t new_cap = (s->len + c.len + 1) * 2;
+        s->data = (char*)s->alloc->realloc(s->alloc->ctx, s->data, old_cap, new_cap);
+        s->cap = new_cap;
+    }
+    if (c.len > 0) memcpy(s->data + s->len, c.data, c.len);
+    s->len += c.len;
+    s->data[s->len] = '\0';
 }
 
 static inline Str gorget_str_from_cstr(const char* s) {
@@ -1417,13 +1430,21 @@ static inline Str gorget_str_byte_slice(Str s, int64_t start, int64_t end) {
     return (Str){ .data = s.data + start, .len = (size_t)(end - start) };
 }
 
+// Return the byte at index as a 1-byte Str. Deprecated compat: prefer byte_at() for byte access.
+static inline Str gorget_str_char_at(Str s, int64_t index) {
+    if (index < 0 || (size_t)index >= s.len) {
+        return (Str){ .data = "", .len = 0 };
+    }
+    return (Str){ .data = s.data + index, .len = 1 };
+}
+
 // Return the byte at index (byte-level). Bounds-checked against byte length.
-static inline char gorget_str_byte_at(Str s, int64_t index) {
+static inline uint8_t gorget_str_byte_at(Str s, int64_t index) {
     if (index < 0 || (size_t)index >= s.len) {
         fprintf(stderr, "gorget: panic: string byte index out of bounds: index %" PRId64 ", byte length %zu\n", index, s.len);
         exit(1);
     }
-    return s.data[index];
+    return (uint8_t)s.data[index];
 }
 
 // ── UTF-8 encode helper ─────────────────────────────────────
@@ -1638,6 +1659,22 @@ static inline int64_t gorget_unicode_toupper(int64_t cp) {
     return cp;
 }
 
+// ── Unicode alpha predicate ───────────────────────────────────
+// A codepoint is alphabetic if toupper() != tolower() (case-capable), or it's in a
+// known alphabetic range. Simplified: a char is alpha if it has a different upper/lower,
+// or isalpha() in ASCII range.
+static inline bool gorget_unicode_isalpha(int64_t cp) {
+    if (cp >= 0 && cp <= 127) return isalpha((int)cp) != 0;
+    // Non-ASCII: a codepoint is alphabetic if its uppercase differs from its lowercase
+    // (meaning it's case-capable), or if it's in the Zl/Zp/Lo/Ll/Lu/Lt/Lm category.
+    // Approximation: if toupper != tolower, it's alphabetic.
+    // Additionally, many ideographic and other letter codepoints have toupper == tolower == cp.
+    // For those, we rely on the fact that they're > 127 and not punctuation/symbol.
+    // Simple heuristic: treat all non-ASCII codepoints >= U+00C0 as alpha unless they
+    // are known non-alphabetic ranges (digits 0-9 are already excluded above).
+    return cp >= 0xC0;
+}
+
 // ── Unicode whitespace predicate ─────────────────────────────
 // All 25 Unicode whitespace codepoints (Zs category + control chars).
 static inline bool gorget_is_unicode_whitespace(int64_t cp) {
@@ -1845,6 +1882,104 @@ static inline GorgetString gorget_str_to_lower(Str s) {
     return (GorgetString){ out, out_len, cap, al };
 }
 
+// Group C: Boolean predicates — all-codepoints semantics (like Python str.isalpha() etc.)
+
+static inline bool gorget_str_is_alpha(Str s) {
+    if (s.len == 0) return false;
+    size_t pos = 0;
+    while (pos < s.len) {
+        int64_t cp = gorget_utf8_decode(s.data, s.len, &pos);
+        if (!gorget_unicode_isalpha(cp)) return false;
+    }
+    return true;
+}
+
+static inline bool gorget_str_is_digit(Str s) {
+    if (s.len == 0) return false;
+    size_t pos = 0;
+    while (pos < s.len) {
+        int64_t cp = gorget_utf8_decode(s.data, s.len, &pos);
+        if (cp < '0' || cp > '9') return false;
+    }
+    return true;
+}
+
+static inline bool gorget_str_is_alphanumeric(Str s) {
+    if (s.len == 0) return false;
+    size_t pos = 0;
+    while (pos < s.len) {
+        int64_t cp = gorget_utf8_decode(s.data, s.len, &pos);
+        if (!gorget_unicode_isalpha(cp) && (cp < '0' || cp > '9')) return false;
+    }
+    return true;
+}
+
+static inline bool gorget_str_is_whitespace(Str s) {
+    if (s.len == 0) return false;
+    size_t pos = 0;
+    while (pos < s.len) {
+        int64_t cp = gorget_utf8_decode(s.data, s.len, &pos);
+        if (!gorget_is_unicode_whitespace(cp)) return false;
+    }
+    return true;
+}
+
+static inline bool gorget_str_is_upper(Str s) {
+    if (s.len == 0) return false;
+    size_t pos = 0;
+    bool has_cased = false;
+    while (pos < s.len) {
+        int64_t cp = gorget_utf8_decode(s.data, s.len, &pos);
+        int64_t lo = gorget_unicode_tolower(cp);
+        int64_t up = gorget_unicode_toupper(cp);
+        if (lo != up) { has_cased = true; if (cp != up) return false; }
+    }
+    return has_cased;
+}
+
+static inline bool gorget_str_is_lower(Str s) {
+    if (s.len == 0) return false;
+    size_t pos = 0;
+    bool has_cased = false;
+    while (pos < s.len) {
+        int64_t cp = gorget_utf8_decode(s.data, s.len, &pos);
+        int64_t lo = gorget_unicode_tolower(cp);
+        int64_t up = gorget_unicode_toupper(cp);
+        if (lo != up) { has_cased = true; if (cp != lo) return false; }
+    }
+    return has_cased;
+}
+
+static inline bool gorget_str_is_hex_digit(Str s) {
+    if (s.len == 0) return false;
+    size_t pos = 0;
+    while (pos < s.len) {
+        int64_t cp = gorget_utf8_decode(s.data, s.len, &pos);
+        if (!((cp >= '0' && cp <= '9') || (cp >= 'a' && cp <= 'f') || (cp >= 'A' && cp <= 'F'))) return false;
+    }
+    return true;
+}
+
+static inline bool gorget_str_is_ascii(Str s) {
+    for (size_t i = 0; i < s.len; i++) {
+        if ((uint8_t)s.data[i] > 127) return false;
+    }
+    return true;
+}
+
+/* ── uint8_t (byte) classification methods ────────────────────────────────── */
+
+static inline bool gorget_uint8_is_alpha(uint8_t c) { return (bool)isalpha((int)c); }
+static inline bool gorget_uint8_is_digit(uint8_t c) { return (bool)isdigit((int)c); }
+static inline bool gorget_uint8_is_alphanumeric(uint8_t c) { return (bool)isalnum((int)c); }
+static inline bool gorget_uint8_is_whitespace(uint8_t c) { return (bool)isspace((int)c); }
+static inline bool gorget_uint8_is_upper(uint8_t c) { return (bool)isupper((int)c); }
+static inline bool gorget_uint8_is_lower(uint8_t c) { return (bool)islower((int)c); }
+static inline bool gorget_uint8_is_hex_digit(uint8_t c) { return (bool)isxdigit((int)c); }
+static inline bool gorget_uint8_is_ascii(uint8_t c) { return c < 128; }
+static inline uint8_t gorget_uint8_to_upper(uint8_t c) { return (uint8_t)toupper((int)c); }
+static inline uint8_t gorget_uint8_to_lower(uint8_t c) { return (uint8_t)tolower((int)c); }
+
 static inline GorgetString gorget_str_replace(Str s, Str old, Str new_s) {
     GorgetAllocator* al = __gorget_current_alloc;
     if (old.len == 0) {
@@ -1914,7 +2049,7 @@ static inline GorgetString gorget_str_repeat(Str s, int64_t n) {
     return (GorgetString){ out, total, cap, al };
 }
 
-static inline GorgetString gorget_str_pad_left(Str s, int64_t width, char fill) {
+static inline GorgetString gorget_str_pad_left(Str s, int64_t width, Str fill) {
     GorgetAllocator* al = __gorget_current_alloc;
     int64_t cp_count = gorget_str_codepoint_count(s);
     if (cp_count >= width) {
@@ -1926,17 +2061,22 @@ static inline GorgetString gorget_str_pad_left(Str s, int64_t width, char fill) 
         out[s.len] = '\0';
         return (GorgetString){ out, s.len, cap, al };
     }
-    size_t pad = (size_t)(width - cp_count);
-    size_t cap = pad + s.len + 1;
+    int64_t pad_count = width - cp_count;
+    size_t fill_bytes = fill.len > 0 ? fill.len : 1;
+    size_t pad_bytes = (size_t)pad_count * fill_bytes;
+    size_t cap = pad_bytes + s.len + 1;
     char* out = (char*)al->alloc(al->ctx, cap);
     if (!out) { fprintf(stderr, "gorget: panic: out of memory\n"); exit(1); }
-    memset(out, fill, pad);
-    if (s.len > 0) memcpy(out + pad, s.data, s.len);
-    out[pad + s.len] = '\0';
-    return (GorgetString){ out, pad + s.len, cap, al };
+    for (int64_t i = 0; i < pad_count; i++) {
+        if (fill.len > 0) memcpy(out + (size_t)i * fill_bytes, fill.data, fill_bytes);
+        else out[i] = ' ';
+    }
+    if (s.len > 0) memcpy(out + pad_bytes, s.data, s.len);
+    out[pad_bytes + s.len] = '\0';
+    return (GorgetString){ out, pad_bytes + s.len, cap, al };
 }
 
-static inline GorgetString gorget_str_pad_right(Str s, int64_t width, char fill) {
+static inline GorgetString gorget_str_pad_right(Str s, int64_t width, Str fill) {
     GorgetAllocator* al = __gorget_current_alloc;
     int64_t cp_count = gorget_str_codepoint_count(s);
     if (cp_count >= width) {
@@ -1947,14 +2087,19 @@ static inline GorgetString gorget_str_pad_right(Str s, int64_t width, char fill)
         out[s.len] = '\0';
         return (GorgetString){ out, s.len, cap, al };
     }
-    size_t pad = (size_t)(width - cp_count);
-    size_t cap = s.len + pad + 1;
+    int64_t pad_count = width - cp_count;
+    size_t fill_bytes = fill.len > 0 ? fill.len : 1;
+    size_t pad_bytes = (size_t)pad_count * fill_bytes;
+    size_t cap = s.len + pad_bytes + 1;
     char* out = (char*)al->alloc(al->ctx, cap);
     if (!out) { fprintf(stderr, "gorget: panic: out of memory\n"); exit(1); }
     if (s.len > 0) memcpy(out, s.data, s.len);
-    memset(out + s.len, fill, pad);
-    out[s.len + pad] = '\0';
-    return (GorgetString){ out, s.len + pad, cap, al };
+    for (int64_t i = 0; i < pad_count; i++) {
+        if (fill.len > 0) memcpy(out + s.len + (size_t)i * fill_bytes, fill.data, fill_bytes);
+        else out[s.len + (size_t)i] = ' ';
+    }
+    out[s.len + pad_bytes] = '\0';
+    return (GorgetString){ out, s.len + pad_bytes, cap, al };
 }
 
 // Group C: Non-string returns.

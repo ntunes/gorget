@@ -522,7 +522,6 @@ fn qualify_expr(expr: &mut Spanned<Expr>, vm: &HashMap<String, String>) {
         Expr::IntLiteral(_)
         | Expr::FloatLiteral(_)
         | Expr::BoolLiteral(_)
-        | Expr::CharLiteral(_)
         | Expr::NoneLiteral
         | Expr::SelfExpr
         | Expr::It

@@ -91,7 +91,7 @@ bool str_is_float(str s):
     bool has_dot = false
     int i = start
     while i < n:
-        char c = s.char_at(i)
+        str c = s.char_at(i)
         if c == '.':
             if has_dot:
                 return false

@@ -1,21 +1,21 @@
 void main():
-    char c = 'A'
+    str c = "A"
     print(f"{c}")
 
-    # char comparison
-    if 'A' < 'B':
+    # str comparison (single-char strings compare lexicographically)
+    if "A" < "B":
         print("A < B")
 
-    if c == 'A':
+    if c == "A":
         print("equal")
 
-    # escape sequences
-    char backslash = '\\'
+    # escape sequences work in str
+    str backslash = "\\"
     print(f"{backslash}")
 
-    char tab = '\t'
-    char zero = '\0'
+    str tab = "\t"
+    str zero = "\0"
 
-    # char in expressions
-    bool is_upper = c >= 'A' and c <= 'Z'
+    # str ordering for single chars
+    bool is_upper = c >= "A" and c <= "Z"
     print(f"{is_upper}")

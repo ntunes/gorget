@@ -1680,7 +1680,7 @@ fn substitute_expr(expr: &mut Spanned<Expr>, env: &FxHashMap<String, MetaValue>,
         }
         // Leaf nodes — no recursion needed
         Expr::IntLiteral(_) | Expr::FloatLiteral(_) | Expr::BoolLiteral(_)
-        | Expr::CharLiteral(_) | Expr::NoneLiteral
+        | Expr::NoneLiteral
         | Expr::Identifier(_) | Expr::SelfExpr | Expr::Path { .. } | Expr::It => {}
         // StringLiteral handled below
         Expr::StringLiteral(_) => {}
@@ -1791,7 +1791,6 @@ fn type_name(ty: &Type) -> &'static str {
         Type::Primitive(PrimitiveType::CStr) => "cstr",
         Type::Primitive(PrimitiveType::StringType) => "String",
         Type::Primitive(PrimitiveType::Void) => "void",
-        Type::Primitive(PrimitiveType::Char) => "char",
         _ => "<unknown>",
     }
 }
@@ -1839,7 +1838,6 @@ pub fn type_to_canonical_name(ty: &Type) -> String {
             PrimitiveType::CStr => "cstr",
             PrimitiveType::StringType => "String",
             PrimitiveType::Void => "void",
-            PrimitiveType::Char => "char",
         }.to_string(),
         Type::Named { name, generic_args } => {
             if generic_args.is_empty() {

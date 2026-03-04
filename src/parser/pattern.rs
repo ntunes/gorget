@@ -102,15 +102,6 @@ impl Parser {
                 ))
             }
 
-            // Char literal
-            Token::CharLiteral(c) => {
-                self.advance();
-                Ok(Spanned::new(
-                    Pattern::Literal(Box::new(Spanned::new(Expr::CharLiteral(c), start))),
-                    start,
-                ))
-            }
-
             // Boolean literals
             Token::Keyword(Keyword::True) => {
                 self.advance();
@@ -149,7 +140,7 @@ impl Parser {
                 Keyword::Int | Keyword::Int8 | Keyword::Int16 | Keyword::Int32 | Keyword::Int64 |
                 Keyword::Uint | Keyword::Uint8 | Keyword::Uint16 | Keyword::Uint32 | Keyword::Uint64 |
                 Keyword::Float | Keyword::Float32 | Keyword::Float64 |
-                Keyword::Bool | Keyword::Char | Keyword::Str | Keyword::CStr |
+                Keyword::Bool | Keyword::Str | Keyword::CStr |
                 Keyword::StringType | Keyword::Void
             )) => {
                 let name_str = kw.as_name().to_string();

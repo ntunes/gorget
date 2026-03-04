@@ -152,8 +152,6 @@ pub const U64_TYPE: TypeId = TypeId(8);
 pub const F32_TYPE: TypeId = TypeId(9);
 pub const F64_TYPE: TypeId = TypeId(10);
 pub const UNIT_TYPE: TypeId = TypeId(11);
-/// Char type (stored as uint32_t codepoint, but prints with %c)
-pub const CHAR_TYPE: TypeId = TypeId(12);
 
 /// Registry of all GIR types in a module.
 pub struct TypeRegistry {
@@ -206,7 +204,6 @@ impl TypeRegistry {
             GirType::F32,  // 9
             GirType::F64,  // 10
             GirType::Unit, // 11
-            GirType::U32,  // 12 = CHAR (stored as u32, but printed as character)
         ];
         Self {
             types,
@@ -252,7 +249,6 @@ impl TypeRegistry {
             F32_TYPE   => "float32".to_string(),
             F64_TYPE   => "float".to_string(),
             UNIT_TYPE  => "void".to_string(),
-            CHAR_TYPE  => "char".to_string(),
             _ => {
                 if let Some(GirType::Named(name)) = self.get(id) {
                     return name.clone();
@@ -335,7 +331,7 @@ mod tests {
     #[test]
     fn type_registry_primitives() {
         let reg = TypeRegistry::new();
-        assert_eq!(reg.len(), 13);
+        assert_eq!(reg.len(), 12);
         assert_eq!(reg.get(BOOL_TYPE), Some(&GirType::Bool));
         assert_eq!(reg.get(I8_TYPE), Some(&GirType::I8));
         assert_eq!(reg.get(I16_TYPE), Some(&GirType::I16));
@@ -348,16 +344,15 @@ mod tests {
         assert_eq!(reg.get(F32_TYPE), Some(&GirType::F32));
         assert_eq!(reg.get(F64_TYPE), Some(&GirType::F64));
         assert_eq!(reg.get(UNIT_TYPE), Some(&GirType::Unit));
-        assert_eq!(reg.get(CHAR_TYPE), Some(&GirType::U32));
     }
 
     #[test]
     fn type_registry_insert() {
         let mut reg = TypeRegistry::new();
         let ptr_id = reg.insert(GirType::Ptr(I32_TYPE));
-        assert_eq!(ptr_id, TypeId(13));
+        assert_eq!(ptr_id, TypeId(12));
         assert_eq!(reg.get(ptr_id), Some(&GirType::Ptr(I32_TYPE)));
-        assert_eq!(reg.len(), 14);
+        assert_eq!(reg.len(), 13);
     }
 
     #[test]

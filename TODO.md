@@ -5,8 +5,6 @@
 
 ## Medium
 
-- **Remove `char` type (follow-up to f-strings PR)**: Now that f-strings are in, `char` is the last friction point for Python-model strings. Removal plan: (1) `'a'` → `str` (single-char raw string, no coercion needed); (2) `char_at(i)` → returns `str`; (3) `is_alpha()`, `is_digit()`, `to_upper()`, `to_lower()` etc. move to `str` methods (semantically only valid on 1-char strings, but no runtime guard needed); (4) `ord(c)` takes `str`, `chr(n)` returns `str`; (5) update `lib/std/bytes.gg` (Base64), `lib/std/encoding.gg` (URL/HTML encoding) and all char-using fixtures (`chars.gg`, `char_methods.gg`, `char_methods2.gg`, `char_method_on_index.gg`); (6) remove `char_id`, `CharLiteral`, `CHAR_TYPE`, `Constant::Char`, `PrimitiveType::Char` from type system, IR, and codegen. Defer until after a stable release — large change, risk of broken intermediate state. [added: 2026-03-04]
-
 - **`gg.httpserver` V2 — non-blocking sockets + async handlers**: Blocked on `GorgetSocket` having no `poll`/`epoll`/`kqueue` integration — reads and writes block the calling thread. Needs `gorget_socket_set_nonblocking()` + fd registration with the existing reactor (epoll fd on Linux, kqueue on macOS), and a `GorgetWaker` protocol extension for readable/writable events. API impact: handler type becomes `async Callable[HttpServerResponse(HttpRequest)]` — one-word change for users. [added: 2026-03-03]
 
 - **`spawn` on method calls compiles as direct blocking call**: `spawn server.serve(handle)` (or any `spawn expr.method(args)`) generates a direct function call instead of launching a thread. Root cause: `src/ir/lowering/exprs.rs` `Spawn` handler only handles `Expr::Identifier` callees; method calls (dot expressions) fall through to the "Fallback: direct call" path. Workaround: wrap the method in a standalone `async void fn()` free function. Fix: detect `Expr::MethodCall` / `Expr::DotAccess` in the Spawn lowering and route through the thread-spawn path. [added: 2026-03-03]
@@ -143,7 +141,7 @@
 
 ## Best Effort
 
-- **API consistency**: review `trim()` vs `strip()` overlap; string method naming audit (Python `upper`/`lower`/`startswith` vs current `to_upper`/`to_lower`/`starts_with`); evaluate `str.is_alpha()`/`is_digit()` on `str` (currently only on `char`); review `Vector.get(i)` vs `v[i]` overlap. [added: 2026-02-14]
+- **API consistency**: review `trim()` vs `strip()` overlap; string method naming audit (Python `upper`/`lower`/`startswith` vs current `to_upper`/`to_lower`/`starts_with`); review `Vector.get(i)` vs `v[i]` overlap. [added: 2026-02-14]
 
 - **fprintf trace performance**: each trace event produces many small `fprintf` calls. Consider `setvbuf` with a large buffer or batching events in memory. [added: 2026-02-14]
 

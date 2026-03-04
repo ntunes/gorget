@@ -50,7 +50,6 @@ pub fn walk_expr<V: ExprVisitor + ?Sized>(v: &mut V, expr: &Spanned<Expr>) {
         Expr::IntLiteral(_)
         | Expr::FloatLiteral(_)
         | Expr::BoolLiteral(_)
-        | Expr::CharLiteral(_)
         | Expr::NoneLiteral
         | Expr::Identifier(_)
         | Expr::SelfExpr

@@ -4,7 +4,6 @@
 # configurable delimiter, and header-based table access.
 
 from std.collections import Vector
-from std.conv import char_to_str
 
 # ── CsvParser ────────────────────────────────────────────────
 
@@ -23,7 +22,7 @@ equip CsvParser:
 
     bool csv_at_end(self) = self.csv_pos >= self.csv_input.byte_len()
 
-    char csv_peek(self) = self.csv_input.char_at(self.csv_pos)
+    str csv_peek(self) = self.csv_input.char_at(self.csv_pos)
 
     void csv_advance(&self):
         self.csv_pos = self.csv_pos + 1
@@ -38,10 +37,10 @@ equip CsvParser:
         # Unquoted field — consume until delimiter, \r, \n, or EOF
         str csv_val = ""
         while not self.csv_at_end():
-            char csv_ch = self.csv_peek()
-            if char_to_str(csv_ch) == self.csv_delim or csv_ch == '\r' or csv_ch == '\n':
+            str csv_ch = self.csv_peek()
+            if csv_ch == self.csv_delim or csv_ch == '\r' or csv_ch == '\n':
                 return csv_val
-            csv_val = csv_val + char_to_str(csv_ch)
+            csv_val = csv_val + csv_ch
             self.csv_advance()
         return csv_val
 
@@ -50,7 +49,7 @@ equip CsvParser:
         self.csv_advance()
         str csv_val = ""
         while not self.csv_at_end():
-            char csv_ch = self.csv_peek()
+            str csv_ch = self.csv_peek()
             if csv_ch == '"':
                 self.csv_advance()
                 # "" inside quoted field = literal "
@@ -60,7 +59,7 @@ equip CsvParser:
                 else:
                     return csv_val
             else:
-                csv_val = csv_val + char_to_str(csv_ch)
+                csv_val = csv_val + csv_ch
                 self.csv_advance()
         self.csv_fail("unterminated quoted field")
         return ""
@@ -76,8 +75,8 @@ equip CsvParser:
         csv_fields.push(csv_fld)
         # Parse remaining fields separated by delimiter
         while not self.csv_at_end() and not self.csv_failed():
-            char csv_ch = self.csv_peek()
-            if char_to_str(csv_ch) == self.csv_delim:
+            str csv_ch = self.csv_peek()
+            if csv_ch == self.csv_delim:
                 self.csv_advance()
                 str csv_next = self.csv_parse_field()
                 if self.csv_failed():
@@ -162,8 +161,8 @@ str csv_stringify_field(str csv_field, str csv_sep):
     bool csv_need_quote = false
     int csv_fi = 0
     while csv_fi < csv_field.byte_len():
-        char csv_fc = csv_field.char_at(csv_fi)
-        if char_to_str(csv_fc) == csv_sep or csv_fc == '"' or csv_fc == '\n' or csv_fc == '\r':
+        str csv_fc = csv_field.char_at(csv_fi)
+        if csv_fc == csv_sep or csv_fc == '"' or csv_fc == '\n' or csv_fc == '\r':
             csv_need_quote = true
         csv_fi = csv_fi + 1
     if not csv_need_quote:
@@ -172,11 +171,11 @@ str csv_stringify_field(str csv_field, str csv_sep):
     str csv_out = "\""
     int csv_fj = 0
     while csv_fj < csv_field.byte_len():
-        char csv_qc = csv_field.char_at(csv_fj)
+        str csv_qc = csv_field.char_at(csv_fj)
         if csv_qc == '"':
             csv_out = csv_out + "\"\""
         else:
-            csv_out = csv_out + char_to_str(csv_qc)
+            csv_out = csv_out + csv_qc
         csv_fj = csv_fj + 1
     return csv_out + "\""
 
