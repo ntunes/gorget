@@ -182,6 +182,7 @@ fn stmt_contains_it(stmt: &Stmt) -> bool {
         Stmt::MetaWhile { condition, body, .. } => {
             contains_it(condition) || block_contains_it(body)
         }
+        Stmt::MetaConst { value, .. } => contains_it(value),
     }
 }
 

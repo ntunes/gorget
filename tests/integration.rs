@@ -6697,7 +6697,8 @@ fn format_stmt_canonical(stmt: &Stmt) -> String {
             s
         }
         Stmt::Item(item) => format_item_canonical(item),
-        Stmt::MetaIf { .. } | Stmt::MetaFor { .. } | Stmt::MetaMatch { .. } | Stmt::MetaWhile { .. } => "meta".to_string(),
+        Stmt::MetaIf { .. } | Stmt::MetaFor { .. } | Stmt::MetaMatch { .. }
+        | Stmt::MetaWhile { .. } | Stmt::MetaConst { .. } => "meta".to_string(),
     }
 }
 
@@ -9160,6 +9161,7 @@ Green=1
 Blue=2
 Red
 Green
+Blue
 done",
     );
 }

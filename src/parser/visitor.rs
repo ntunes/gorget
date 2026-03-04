@@ -409,6 +409,9 @@ pub fn walk_stmt<V: ExprVisitor + ?Sized>(v: &mut V, stmt: &Spanned<Stmt>) {
             v.visit_expr(condition);
             v.visit_block(body);
         }
+        Stmt::MetaConst { value, .. } => {
+            v.visit_expr(value);
+        }
     }
 }
 

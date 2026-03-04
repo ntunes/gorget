@@ -923,6 +923,16 @@ pub enum Stmt {
         body: Block,
         span: Span,
     },
+
+    /// `meta const <name> = <expr>`
+    /// Compile-time constant binding inside a generic function/method body.
+    /// Evaluated at monomorphization time; value is available to subsequent
+    /// statements in the same block via the delayed meta environment.
+    MetaConst {
+        name:  Spanned<String>,
+        value: Spanned<Expr>,
+        span:  Span,
+    },
 }
 
 #[derive(Debug, Clone)]

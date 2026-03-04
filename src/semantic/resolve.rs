@@ -1067,6 +1067,10 @@ fn resolve_stmt(
             resolve_block(body, scopes, types, errors, resolution_map);
             scopes.pop_scope();
         }
+
+        Stmt::MetaConst { .. } => {
+            // Entirely a meta expression — evaluated at monomorphization time; skip.
+        }
     }
 }
 

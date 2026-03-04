@@ -1263,8 +1263,9 @@ fn eval_meta_stmt(
             stmt_span,
         )),
 
-        Stmt::MetaIf { .. } | Stmt::MetaFor { .. } | Stmt::MetaMatch { .. } | Stmt::MetaWhile { .. } => Err(meta_err(
-            "`meta if`/`meta for`/`meta match`/`meta while` in function body requires generic type parameters \
+        Stmt::MetaIf { .. } | Stmt::MetaFor { .. } | Stmt::MetaMatch { .. }
+        | Stmt::MetaWhile { .. } | Stmt::MetaConst { .. } => Err(meta_err(
+            "`meta if`/`meta for`/`meta match`/`meta while`/`meta const` in function body requires generic type parameters \
              and is evaluated at monomorphization time, not in compile-time functions",
             stmt_span,
         )),
@@ -1551,6 +1552,9 @@ fn substitute_stmt(stmt: &mut Stmt, env: &FxHashMap<String, MetaValue>, type_env
         Stmt::MetaWhile { condition, body, .. } => {
             substitute_expr(condition, env, type_env);
             substitute_block(body, env, type_env);
+        }
+        Stmt::MetaConst { value, .. } => {
+            substitute_expr(value, env, type_env);
         }
     }
 }
@@ -2300,218 +2304,248 @@ pub fn evaluate_delayed_meta_block(
     ctx: &DelayedMetaContext<'_>,
     errors: &mut Vec<SemanticError>,
 ) {
+    let mut local_env = (*ctx.meta_env).clone();
     let mut i = 0;
     while i < block.stmts.len() {
-        let replacement = match &block.stmts[i].node {
-            Stmt::MetaIf { condition, then_body, elif_branches, else_body, .. } => {
-                let cond_span = condition.span;
-                match eval_delayed_expr(&condition.node, ctx, cond_span) {
-                    Ok(MetaValue::Bool(true)) => {
-                        let mut body = then_body.clone();
-                        evaluate_delayed_meta_block(&mut body, ctx, errors);
-                        Some(body.stmts)
-                    }
-                    Ok(MetaValue::Bool(false)) => {
-                        // Try elif branches
-                        let mut taken: Option<Vec<Spanned<Stmt>>> = None;
-                        for (elif_cond, elif_body) in elif_branches.iter() {
-                            match eval_delayed_expr(&elif_cond.node, ctx, elif_cond.span) {
-                                Ok(MetaValue::Bool(true)) => {
-                                    let mut body = elif_body.clone();
-                                    evaluate_delayed_meta_block(&mut body, ctx, errors);
-                                    taken = Some(body.stmts);
-                                    break;
-                                }
-                                Ok(MetaValue::Bool(false)) => {}
-                                Ok(_) => {
-                                    errors.push(meta_err(
-                                        "meta elif condition must evaluate to bool",
-                                        elif_cond.span,
-                                    ));
-                                    break;
-                                }
-                                Err(e) => {
-                                    errors.push(e);
-                                    break;
-                                }
-                            }
-                        }
-                        if let Some(stmts) = taken {
-                            Some(stmts)
-                        } else if let Some(else_body) = else_body {
-                            let mut body = else_body.clone();
-                            evaluate_delayed_meta_block(&mut body, ctx, errors);
-                            Some(body.stmts)
-                        } else {
-                            Some(vec![]) // No branch taken — emit nothing
-                        }
-                    }
-                    Ok(_) => {
-                        errors.push(meta_err(
-                            "meta if condition must evaluate to bool",
-                            cond_span,
-                        ));
-                        Some(vec![])
-                    }
-                    Err(e) => {
-                        errors.push(e);
-                        Some(vec![])
+        // ── MetaConst: evaluate, bind, substitute remaining stmts, remove ──
+        if let Stmt::MetaConst { name, value, .. } = &block.stmts[i].node {
+            let name_str = name.node.clone();
+            let val_expr = value.node.clone();
+            let val_span = value.span;
+            let val_result = {
+                let cur = DelayedMetaContext { meta_env: &local_env, ..*ctx };
+                eval_delayed_expr(&val_expr, &cur, val_span)
+            }; // cur dropped — local_env borrow released
+            match val_result {
+                Ok(val) => {
+                    local_env.insert(name_str, val);
+                    let empty_type_env = FxHashMap::default();
+                    for stmt in &mut block.stmts[i + 1..] {
+                        substitute_stmt(&mut stmt.node, &local_env, &empty_type_env);
                     }
                 }
+                Err(e) => errors.push(e),
             }
+            block.stmts.remove(i);
+            continue;
+        }
 
-            Stmt::MetaFor { vars, range, body, .. } => {
-                let range_span = range.span;
-                // Evaluate range bounds
-                match eval_delayed_meta_range(&range.node, ctx, range_span) {
-                    Ok((start_val, end_val, inclusive)) => {
-                        if vars.len() > 1 {
+        // ── All other statements: build cur from local_env ──
+        let replacement = {
+            let cur = DelayedMetaContext { meta_env: &local_env, ..*ctx };
+            match &block.stmts[i].node {
+                Stmt::MetaIf { condition, then_body, elif_branches, else_body, .. } => {
+                    let cond_span = condition.span;
+                    match eval_delayed_expr(&condition.node, &cur, cond_span) {
+                        Ok(MetaValue::Bool(true)) => {
+                            let mut body = then_body.clone();
+                            evaluate_delayed_meta_block(&mut body, &cur, errors);
+                            Some(body.stmts)
+                        }
+                        Ok(MetaValue::Bool(false)) => {
+                            // Try elif branches
+                            let mut taken: Option<Vec<Spanned<Stmt>>> = None;
+                            for (elif_cond, elif_body) in elif_branches.iter() {
+                                match eval_delayed_expr(&elif_cond.node, &cur, elif_cond.span) {
+                                    Ok(MetaValue::Bool(true)) => {
+                                        let mut body = elif_body.clone();
+                                        evaluate_delayed_meta_block(&mut body, &cur, errors);
+                                        taken = Some(body.stmts);
+                                        break;
+                                    }
+                                    Ok(MetaValue::Bool(false)) => {}
+                                    Ok(_) => {
+                                        errors.push(meta_err(
+                                            "meta elif condition must evaluate to bool",
+                                            elif_cond.span,
+                                        ));
+                                        break;
+                                    }
+                                    Err(e) => {
+                                        errors.push(e);
+                                        break;
+                                    }
+                                }
+                            }
+                            if let Some(stmts) = taken {
+                                Some(stmts)
+                            } else if let Some(else_body) = else_body {
+                                let mut body = else_body.clone();
+                                evaluate_delayed_meta_block(&mut body, &cur, errors);
+                                Some(body.stmts)
+                            } else {
+                                Some(vec![]) // No branch taken — emit nothing
+                            }
+                        }
+                        Ok(_) => {
                             errors.push(meta_err(
-                                "meta for: multi-variable destructuring is not valid for integer ranges",
-                                range.span,
+                                "meta if condition must evaluate to bool",
+                                cond_span,
                             ));
                             Some(vec![])
-                        } else {
-                            let upper = if inclusive { end_val + 1 } else { end_val };
-                            let loop_var = vars[0].node.clone();
-                            let mut result_stmts: Vec<Spanned<Stmt>> = Vec::new();
-                            for val in start_val..upper {
-                                // Build a child context with loop var added to meta_env
-                                let mut child_env = (*ctx.meta_env).clone();
-                                child_env.insert(loop_var.clone(), MetaValue::Int(val));
-                                let child_ctx = DelayedMetaContext { meta_env: &child_env, ..*ctx };
-                                let mut loop_body = body.clone();
-                                evaluate_delayed_meta_block(&mut loop_body, &child_ctx, errors);
-                                result_stmts.extend(loop_body.stmts);
-                            }
-                            Some(result_stmts)
+                        }
+                        Err(e) => {
+                            errors.push(e);
+                            Some(vec![])
                         }
                     }
-                    Err(_range_err) => {
-                        // Not an integer range — try evaluating as a list expression
-                        match eval_delayed_expr(&range.node, ctx, range.span) {
-                            Ok(MetaValue::List(items)) => {
+                }
+
+                Stmt::MetaFor { vars, range, body, .. } => {
+                    let range_span = range.span;
+                    // Evaluate range bounds
+                    match eval_delayed_meta_range(&range.node, &cur, range_span) {
+                        Ok((start_val, end_val, inclusive)) => {
+                            if vars.len() > 1 {
+                                errors.push(meta_err(
+                                    "meta for: multi-variable destructuring is not valid for integer ranges",
+                                    range.span,
+                                ));
+                                Some(vec![])
+                            } else {
+                                let upper = if inclusive { end_val + 1 } else { end_val };
+                                let loop_var = vars[0].node.clone();
                                 let mut result_stmts: Vec<Spanned<Stmt>> = Vec::new();
                                 let empty_type_env = FxHashMap::default();
-                                for item_val in items {
-                                    let mut child_env = (*ctx.meta_env).clone();
-                                    if vars.len() == 1 {
-                                        // Single variable — bind item directly
-                                        child_env.insert(vars[0].node.clone(), item_val);
-                                    } else {
-                                        // Multi-variable — item must be a list; bind positionally
-                                        if let MetaValue::List(parts) = item_val {
-                                            for (var, part) in vars.iter().zip(parts.into_iter()) {
-                                                child_env.insert(var.node.clone(), part);
-                                            }
-                                        } else {
-                                            errors.push(meta_err(
-                                                "meta for: multi-variable destructuring requires a list of lists \
-                                                 (use fields(T) to get (name, type) pairs)",
-                                                range.span,
-                                            ));
-                                            break;
-                                        }
-                                    }
+                                for val in start_val..upper {
+                                    // Build a child context with loop var added to local_env
+                                    let mut child_env = local_env.clone();
+                                    child_env.insert(loop_var.clone(), MetaValue::Int(val));
                                     let child_ctx = DelayedMetaContext { meta_env: &child_env, ..*ctx };
                                     let mut loop_body = body.clone();
-                                    // Substitute loop-variable values into string interpolations and
-                                    // identifier references BEFORE evaluating inner meta constructs.
-                                    // This enables `print("{fname}:{ftype}")` and ensures that
-                                    // `meta if ftype is numeric:` sees the resolved type string.
                                     substitute_block(&mut loop_body, &child_env, &empty_type_env);
                                     evaluate_delayed_meta_block(&mut loop_body, &child_ctx, errors);
                                     result_stmts.extend(loop_body.stmts);
                                 }
                                 Some(result_stmts)
                             }
-                            Ok(_) => {
-                                errors.push(meta_err(
-                                    "meta for: range must be an integer range (x..y) or a list (e.g. field_names(T))",
-                                    range.span,
-                                ));
+                        }
+                        Err(_range_err) => {
+                            // Not an integer range — try evaluating as a list expression
+                            match eval_delayed_expr(&range.node, &cur, range.span) {
+                                Ok(MetaValue::List(items)) => {
+                                    let mut result_stmts: Vec<Spanned<Stmt>> = Vec::new();
+                                    let empty_type_env = FxHashMap::default();
+                                    for item_val in items {
+                                        let mut child_env = local_env.clone();
+                                        if vars.len() == 1 {
+                                            // Single variable — bind item directly
+                                            child_env.insert(vars[0].node.clone(), item_val);
+                                        } else {
+                                            // Multi-variable — item must be a list; bind positionally
+                                            if let MetaValue::List(parts) = item_val {
+                                                for (var, part) in vars.iter().zip(parts.into_iter()) {
+                                                    child_env.insert(var.node.clone(), part);
+                                                }
+                                            } else {
+                                                errors.push(meta_err(
+                                                    "meta for: multi-variable destructuring requires a list of lists \
+                                                     (use fields(T) to get (name, type) pairs)",
+                                                    range.span,
+                                                ));
+                                                break;
+                                            }
+                                        }
+                                        let child_ctx = DelayedMetaContext { meta_env: &child_env, ..*ctx };
+                                        let mut loop_body = body.clone();
+                                        // Substitute loop-variable values into string interpolations and
+                                        // identifier references BEFORE evaluating inner meta constructs.
+                                        // This enables `print("{fname}:{ftype}")` and ensures that
+                                        // `meta if ftype is numeric:` sees the resolved type string.
+                                        substitute_block(&mut loop_body, &child_env, &empty_type_env);
+                                        evaluate_delayed_meta_block(&mut loop_body, &child_ctx, errors);
+                                        result_stmts.extend(loop_body.stmts);
+                                    }
+                                    Some(result_stmts)
+                                }
+                                Ok(_) => {
+                                    errors.push(meta_err(
+                                        "meta for: range must be an integer range (x..y) or a list (e.g. field_names(T))",
+                                        range.span,
+                                    ));
+                                    Some(vec![])
+                                }
+                                Err(e) => { errors.push(e); Some(vec![]) }
+                            }
+                        }
+                    }
+                }
+
+                Stmt::MetaMatch { scrutinee, arms, else_arm, .. } => {
+                    let subject = eval_delayed_expr(&scrutinee.node, &cur, scrutinee.span);
+                    match subject {
+                        Ok(subject_val) => {
+                            let mut taken = None;
+                            for (case_expr, case_body) in arms.iter() {
+                                match eval_delayed_expr(&case_expr.node, &cur, case_expr.span) {
+                                    Ok(case_val) if meta_values_eq(&subject_val, &case_val) => {
+                                        let mut body = case_body.clone();
+                                        evaluate_delayed_meta_block(&mut body, &cur, errors);
+                                        taken = Some(body.stmts);
+                                        break;
+                                    }
+                                    Ok(_) => {}
+                                    Err(e) => {
+                                        errors.push(e);
+                                        break;
+                                    }
+                                }
+                            }
+                            if let Some(stmts) = taken {
+                                Some(stmts)
+                            } else if let Some(else_body) = else_arm {
+                                let mut body = else_body.clone();
+                                evaluate_delayed_meta_block(&mut body, &cur, errors);
+                                Some(body.stmts)
+                            } else {
                                 Some(vec![])
                             }
-                            Err(e) => { errors.push(e); Some(vec![]) }
-                        }
-                    }
-                }
-            }
-
-            Stmt::MetaMatch { scrutinee, arms, else_arm, .. } => {
-                let subject = eval_delayed_expr(&scrutinee.node, ctx, scrutinee.span);
-                match subject {
-                    Ok(subject_val) => {
-                        let mut taken = None;
-                        for (case_expr, case_body) in arms.iter() {
-                            match eval_delayed_expr(&case_expr.node, ctx, case_expr.span) {
-                                Ok(case_val) if meta_values_eq(&subject_val, &case_val) => {
-                                    let mut body = case_body.clone();
-                                    evaluate_delayed_meta_block(&mut body, ctx, errors);
-                                    taken = Some(body.stmts);
-                                    break;
-                                }
-                                Ok(_) => {}
-                                Err(e) => {
-                                    errors.push(e);
-                                    break;
-                                }
-                            }
-                        }
-                        if let Some(stmts) = taken {
-                            Some(stmts)
-                        } else if let Some(else_body) = else_arm {
-                            let mut body = else_body.clone();
-                            evaluate_delayed_meta_block(&mut body, ctx, errors);
-                            Some(body.stmts)
-                        } else {
-                            Some(vec![])
-                        }
-                    }
-                    Err(e) => {
-                        errors.push(e);
-                        Some(vec![])
-                    }
-                }
-            }
-
-            Stmt::MetaWhile { condition, body, span } => {
-                const MAX_META_ITERATIONS: usize = 100_000;
-                let mut result_stmts = Vec::new();
-                let mut iter_count = 0usize;
-                loop {
-                    match eval_delayed_expr(&condition.node, ctx, condition.span) {
-                        Ok(MetaValue::Bool(true)) => {
-                            if iter_count >= MAX_META_ITERATIONS {
-                                errors.push(meta_err(
-                                    "meta while exceeded iteration limit (100000)",
-                                    *span,
-                                ));
-                                break;
-                            }
-                            let mut loop_body = body.clone();
-                            evaluate_delayed_meta_block(&mut loop_body, ctx, errors);
-                            result_stmts.extend(loop_body.stmts);
-                            iter_count += 1;
-                        }
-                        Ok(MetaValue::Bool(false)) => break,
-                        Ok(_) => {
-                            errors.push(meta_err(
-                                "meta while condition must evaluate to bool",
-                                condition.span,
-                            ));
-                            break;
                         }
                         Err(e) => {
                             errors.push(e);
-                            break;
+                            Some(vec![])
                         }
                     }
                 }
-                Some(result_stmts)
-            }
 
-            _ => None, // Not a meta stmt — recurse into sub-blocks below
+                Stmt::MetaWhile { condition, body, span } => {
+                    const MAX_META_ITERATIONS: usize = 100_000;
+                    let mut result_stmts = Vec::new();
+                    let mut iter_count = 0usize;
+                    loop {
+                        match eval_delayed_expr(&condition.node, &cur, condition.span) {
+                            Ok(MetaValue::Bool(true)) => {
+                                if iter_count >= MAX_META_ITERATIONS {
+                                    errors.push(meta_err(
+                                        "meta while exceeded iteration limit (100000)",
+                                        *span,
+                                    ));
+                                    break;
+                                }
+                                let mut loop_body = body.clone();
+                                evaluate_delayed_meta_block(&mut loop_body, &cur, errors);
+                                result_stmts.extend(loop_body.stmts);
+                                iter_count += 1;
+                            }
+                            Ok(MetaValue::Bool(false)) => break,
+                            Ok(_) => {
+                                errors.push(meta_err(
+                                    "meta while condition must evaluate to bool",
+                                    condition.span,
+                                ));
+                                break;
+                            }
+                            Err(e) => {
+                                errors.push(e);
+                                break;
+                            }
+                        }
+                    }
+                    Some(result_stmts)
+                }
+
+                _ => None, // Not a meta stmt — recurse into sub-blocks below
+            }
         };
 
         if let Some(replacement_stmts) = replacement {
@@ -2523,7 +2557,8 @@ pub fn evaluate_delayed_meta_block(
             let _ = n; // already processed recursively
         } else {
             // Recurse into nested blocks for non-meta stmts
-            recurse_delayed_meta_in_stmt(&mut block.stmts[i].node, ctx, errors);
+            let cur = DelayedMetaContext { meta_env: &local_env, ..*ctx };
+            recurse_delayed_meta_in_stmt(&mut block.stmts[i].node, &cur, errors);
             i += 1;
         }
     }

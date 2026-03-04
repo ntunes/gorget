@@ -1116,6 +1116,12 @@ impl Formatter {
                 self.format_block_stmts(body);
                 self.emitter.dedent();
             }
+            Stmt::MetaConst { name, value, .. } => {
+                self.emitter.write("meta const ");
+                self.emitter.write(&name.node);
+                self.emitter.write(" = ");
+                self.format_expr(value);
+            }
         }
     }
 

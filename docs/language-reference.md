@@ -4376,6 +4376,46 @@ void main():
     print(type_label[bool](true))   # other
 ```
 
+#### 19.11.1 `meta const` Inside Generic Bodies
+
+`meta const` binds a compile-time name to a value computed at monomorphization time. It is the inline counterpart to module-level `meta TYPE name = expr`.
+
+**Syntax:**
+```
+meta const name = expr
+```
+
+No type annotation — the type is inferred from the evaluated `MetaValue`.
+
+**Scope:** the binding is visible to all subsequent statements in the **same block**. It does not escape to enclosing or sibling blocks.
+
+**Common use — capturing intermediate meta values:**
+
+```gorget
+# Print "VariantName=ordinal" for each variant of any enum T
+void print_ordinals[T]():
+    meta for vname in variant_names(T):
+        meta const idx = enum_ordinal(T, vname)
+        print("{vname}={idx}")
+
+# Reverse lookup: print variant names in ordinal order
+void print_names[T]():
+    meta for i in 0..variant_count(T):
+        meta const vname = enum_from_ordinal(T, i)
+        print("{vname}")
+```
+
+Without `meta const`, the same result requires nested double-loops with `meta if` conditions to match variant names against their ordinals — substantially more verbose.
+
+**Distinction from module-level `meta`:**
+
+| Form | Location | Type annotation |
+|------|----------|----------------|
+| `meta INT x = expr` | Module level | Required (`INT`, `STR`, `BOOL`, …) |
+| `meta const x = expr` | Generic function/method body | None — inferred |
+
+Module-level `meta` is evaluated during Phase 0 (before semantic analysis). `meta const` inside a generic body is evaluated at monomorphization time, after type parameters are substituted.
+
 ---
 
 ### 19.12 Compile-Time `typename` and `sizeof` in Generic Bodies

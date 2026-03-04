@@ -635,9 +635,10 @@ impl Parser {
             Token::Keyword(Keyword::For) => self.parse_meta_for_stmt(start),
             Token::Keyword(Keyword::Match) => self.parse_meta_match_stmt(start),
             Token::Keyword(Keyword::While) => self.parse_meta_while_stmt(start),
+            Token::Keyword(Keyword::Const) => self.parse_meta_const_stmt(start),
             _ => Err(ParseError {
                 kind: crate::errors::ParseErrorKind::UnexpectedToken {
-                    expected: "`if`, `for`, `match`, or `while` after `meta` in function body".to_string(),
+                    expected: "`if`, `for`, `match`, `while`, or `const` after `meta` in function body".to_string(),
                     got: format!("{:?}", self.peek()),
                 },
                 span: self.peek_span(),
@@ -771,6 +772,17 @@ impl Parser {
             Stmt::MetaWhile { condition, body, span },
             span,
         ))
+    }
+
+    fn parse_meta_const_stmt(&mut self, start: Span) -> Result<Spanned<Stmt>, ParseError> {
+        self.expect_keyword(Keyword::Const)?;
+        let name = self.expect_identifier()?;
+        self.expect(&Token::Eq)?;
+        let value = self.parse_expr()?;
+        let end = self.previous_span();
+        self.consume_newline();
+        let span = start.merge(end);
+        Ok(Spanned::new(Stmt::MetaConst { name, value, span }, span))
     }
 
     /// Parse a simple binding pattern for variable declarations.

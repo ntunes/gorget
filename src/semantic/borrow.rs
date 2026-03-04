@@ -2054,6 +2054,10 @@ impl<'a> BorrowChecker<'a> {
                 // Condition is a meta expression: skip; just check the body.
                 self.check_block(body);
             }
+
+            Stmt::MetaConst { .. } => {
+                // Entirely a meta expression — evaluated at monomorphization time; skip.
+            }
         }
     }
 

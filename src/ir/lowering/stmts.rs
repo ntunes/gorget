@@ -99,7 +99,8 @@ pub fn lower_stmt(
         // meta if/for/match/while should have been evaluated and removed before GIR lowering.
         // If they appear here it means they were in a non-generic context (a semantic
         // error should have been emitted) — emit nothing.
-        Stmt::MetaIf { .. } | Stmt::MetaFor { .. } | Stmt::MetaMatch { .. } | Stmt::MetaWhile { .. } => {}
+        Stmt::MetaIf { .. } | Stmt::MetaFor { .. } | Stmt::MetaMatch { .. }
+        | Stmt::MetaWhile { .. } | Stmt::MetaConst { .. } => {}
     }
 }
 

@@ -1888,6 +1888,10 @@ impl<'a> TypeChecker<'a> {
                 // Condition is a meta expression — skip infer_expr on it; check body only.
                 self.check_block(body);
             }
+
+            Stmt::MetaConst { .. } => {
+                // Entirely a meta expression — evaluated at monomorphization time; skip.
+            }
         }
     }
 

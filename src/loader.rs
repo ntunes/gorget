@@ -513,6 +513,9 @@ fn qualify_stmt(stmt: &mut Stmt, vm: &HashMap<String, String>) {
             qualify_expr(condition, vm);
             qualify_block(body, vm);
         }
+        Stmt::MetaConst { value, .. } => {
+            qualify_expr(value, vm);
+        }
     }
 }
 

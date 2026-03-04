@@ -172,6 +172,10 @@ fn rewrite_stmt(stmt: &mut Stmt, res: &ResolutionMap, scopes: &ScopeTable) {
             // Condition is a meta expression — skip; rewrite the body.
             rewrite_block(body, res, scopes);
         }
+
+        Stmt::MetaConst { .. } => {
+            // Entirely a meta expression — evaluated at monomorphization time; skip.
+        }
     }
 }
 

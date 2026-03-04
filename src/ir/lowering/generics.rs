@@ -334,6 +334,9 @@ impl GenericCollector {
             Stmt::MetaWhile { body, .. } => {
                 self.scan_block(body);
             }
+            Stmt::MetaConst { value, .. } => {
+                self.scan_expr(value);
+            }
             _ => {}
         }
     }
@@ -1048,6 +1051,9 @@ fn substitute_stmt_types(stmt: &mut Spanned<Stmt>, subs: &[(String, Type)]) {
         Stmt::MetaWhile { condition, body, .. } => {
             substitute_expr_types(condition, subs);
             substitute_block_types(body, subs);
+        }
+        Stmt::MetaConst { value, .. } => {
+            substitute_expr_types(value, subs);
         }
         _ => {}
     }
