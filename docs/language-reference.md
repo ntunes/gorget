@@ -4563,7 +4563,77 @@ name. Use `ftype`, `ty`, `field_type`, or any other non-keyword identifier.
 
 ---
 
-### 19.15 `enum_ordinal` and `enum_from_ordinal` — Enum Ordinal Reflection
+### 19.15 `field_value(val, fname)` — Compile-Time Field Access
+
+`field_value(val, fname)` reads a struct field whose name is known at compile time. It is a
+**source-to-source rewrite** — the compiler transforms `field_value(val, "x")` into `val.x`
+(field access) before type-checking and code generation. No new runtime overhead is introduced.
+
+**Two usage forms:**
+
+```gorget
+# Form 1 — meta-loop variable (most common)
+str to_debug[T](T val):
+    str out = ""
+    meta for fname, ftype in fields(T):
+        meta if ftype == "int":
+            int v = field_value(val, fname)   # fname is substituted to "x", "y", ... per iteration
+            out = out + "{fname}={v}"
+    return out
+
+# Form 2 — direct string literal
+auto p = Point(10, 20)
+int xval = field_value(p, "x")   # same as p.x
+int yval = field_value(p, "y")   # same as p.y
+```
+
+**How it works:**
+
+In Form 1, `fname` is a meta-loop variable that gets substituted to a string literal (`"x"`,
+`"y"`, …) for each loop iteration. The compiler then rewrites `field_value(val, "x")` to `val.x`
+before type-checking.
+
+In Form 2, the second argument is already a string literal at compile time. The rewrite pass
+(which runs after name resolution) converts it to the equivalent field access.
+
+**Cannot use in `meta const`:** `field_value` produces a *runtime* value, not a compile-time
+meta constant. Using it in a `meta const` definition emits a compile error:
+
+```gorget
+meta const bad = field_value(p, "x")  # error: field_value() is a runtime expression
+```
+
+**Generic serializer example:**
+
+```gorget
+str to_debug[T](T val):
+    str out = ""
+    meta for fname, ftype in fields(T):
+        if out != "":
+            out = out + ","
+        meta if ftype == "int":
+            int v = field_value(val, fname)
+            out = out + "{fname}={v}"
+        elif ftype == "str":
+            str v = field_value(val, fname)
+            out = out + "{fname}={v}"
+        elif ftype == "bool":
+            bool v = field_value(val, fname)
+            out = out + "{fname}={v}"
+    return out
+
+# Generic int-field sum
+int sum_int_fields[T](T val):
+    int total = 0
+    meta for fname, ftype in fields(T):
+        meta if ftype == "int":
+            total += field_value(val, fname)
+    return total
+```
+
+---
+
+### 19.16 `enum_ordinal` and `enum_from_ordinal` — Enum Ordinal Reflection
 
 Two builtins map between variant names and their zero-based ordinal positions at compile time.
 
@@ -4609,7 +4679,7 @@ the ordinal is out of range.
 
 ---
 
-### 19.16 Compile-Time Loop Unrolling (`meta for`)
+### 19.17 Compile-Time Loop Unrolling (`meta for`)
 
 `meta for` inside a generic body unrolls its loop at monomorphization time:
 

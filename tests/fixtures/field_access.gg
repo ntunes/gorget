@@ -1,0 +1,47 @@
+struct Point:
+    int x
+    int y
+
+struct Player:
+    str name
+    int health
+    bool alive
+
+# Generic debug serializer
+str to_debug[T](T val):
+    str out = ""
+    meta for fname, ftype in fields(T):
+        if out != "":
+            out = out + ","
+        meta if ftype == "int":
+            int v = field_value(val, fname)
+            out = out + "{fname}={v}"
+        elif ftype == "str":
+            str v = field_value(val, fname)
+            out = out + "{fname}={v}"
+        elif ftype == "bool":
+            bool v = field_value(val, fname)
+            out = out + "{fname}={v}"
+    return out
+
+# Generic int-field sum
+int sum_int_fields[T](T val):
+    int total = 0
+    meta for fname, ftype in fields(T):
+        meta if ftype == "int":
+            total += field_value(val, fname)
+    return total
+
+void main():
+    # Direct literal field access
+    auto p = Point(10, 20)
+    int xval = field_value(p, "x")
+    int yval = field_value(p, "y")
+    print(xval)
+    print(yval)
+    # Generic serializer
+    print(to_debug[Point](Point(3, 7)))
+    print(to_debug[Player](Player("alice", 100, true)))
+    # Generic sum
+    print(sum_int_fields[Point](Point(4, 6)))
+    print("done")

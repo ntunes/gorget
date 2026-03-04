@@ -9189,3 +9189,17 @@ y:float
 done",
     );
 }
+
+#[test]
+fn field_access() {
+    run_gg(
+        "field_access.gg",
+        "\
+10
+20
+x=3,y=7
+name=alice,health=100,alive=true
+10
+done",
+    );
+}

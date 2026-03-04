@@ -6,6 +6,7 @@
 //! This activates the dead `StructLiteral` match arms across the compiler
 //! and removes the need for struct-as-Call workarounds in the borrow checker.
 
+use crate::lexer::token::StringSegment;
 use crate::parser::ast::*;
 use crate::span::Spanned;
 
@@ -285,6 +286,30 @@ fn rewrite_expr(expr: &mut Spanned<Expr>, res: &ResolutionMap, scopes: &ScopeTab
         Expr::IntLiteral(_) | Expr::FloatLiteral(_) | Expr::BoolLiteral(_)
         | Expr::StringLiteral(_) | Expr::NoneLiteral
         | Expr::Identifier(_) | Expr::SelfExpr | Expr::Path { .. } | Expr::It => {}
+    }
+
+    // Rewrite field_value(val, "field") → val.field (for literal usage outside meta for)
+    if let Expr::Call { ref callee, ref args, .. } = expr.node {
+        if let Expr::Identifier(ref cname) = callee.node {
+            if cname == "field_value" && args.len() == 2 {
+                if let Expr::StringLiteral(ref s) = args[1].node.value.node {
+                    if !s.has_interpolation() {
+                        let field_name: String = s.segments.iter()
+                            .filter_map(|seg| if let StringSegment::Literal(l) = seg { Some(l.as_str()) } else { None })
+                            .collect();
+                        if !field_name.is_empty() {
+                            let val_expr = args[0].node.value.clone();
+                            let field_span = args[1].node.value.span;
+                            expr.node = Expr::FieldAccess {
+                                object: Box::new(val_expr),
+                                field: Spanned::new(field_name, field_span),
+                            };
+                            return;
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // Now check if this expression is a Call that should become a StructLiteral.
