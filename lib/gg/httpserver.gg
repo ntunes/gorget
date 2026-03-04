@@ -18,10 +18,11 @@ from std.net.socket import ServerSocket, Socket, server_socket_bind
 from std.net.tls import TlsSocket, TlsServerSocket, tls_server_bind
 from std.collections import Vector, Dict
 from std.conv import int_to_str
-from std.bytes import bytes_to_str, bytes_concat
+from std.bytes import bytes_to_str, bytes_concat, bytes_from_str, bytes_to_hex
 from std.fs import read_file, file_exists, is_dir
 from std.path import path_join, path_extension
 from std.encoding import url_decode, form_decode
+from gg.crypto import crypto_sha1
 
 # ── Request and response types ────────────────────────────────
 
@@ -948,10 +949,17 @@ str http_mime_type(str path):
         return "audio/mpeg"
     return "application/octet-stream"
 
+# Compute an ETag value for file content (SHA-1 hex, double-quoted per RFC 7232).
+str http_etag(str content):
+    Vector[uint8] sha = crypto_sha1(bytes_from_str(content))
+    return "\"" + bytes_to_hex(sha) + "\""
+
 # Serve a file from base_dir for the request path.
 # - Rejects paths containing ".." (directory traversal protection).
 # - Automatically serves index.html when the resolved path is a directory.
 # - Returns 200 with file content + correct MIME type on success.
+# - Returns 304 Not Modified when If-None-Match header matches the ETag.
+# - Returns 206 Partial Content for Range requests (bytes=start-end or bytes=start-).
 # - Returns 404 for missing files, 400 for invalid paths.
 HttpServerResponse http_serve_file(str base_dir, HttpRequest req):
     if req.path.contains(".."):
@@ -963,4 +971,40 @@ HttpServerResponse http_serve_file(str base_dir, HttpRequest req):
         return HttpServerResponse.not_found()
     str content = read_file(file_path)
     str mime = http_mime_type(file_path)
-    return HttpServerResponse(200, content, mime, Dict[str, str]())
+    str etag = http_etag(content)
+    # 304 Not Modified: check If-None-Match
+    if req.headers.contains("if-none-match"):
+        str inm = req.headers["if-none-match"]
+        if inm == etag:
+            Dict[str, str] nm_hdrs = Dict[str, str]()
+            nm_hdrs.put("ETag", etag)
+            return HttpServerResponse(304, "", mime, nm_hdrs)
+    # 206 Partial Content: handle Range header
+    if req.headers.contains("range"):
+        str range_hdr = req.headers["range"]
+        if range_hdr.starts_with("bytes="):
+            str spec = range_hdr.byte_slice(6, range_hdr.byte_len())
+            int total = content.byte_len()
+            Option[int] dash_opt = spec.index_of("-")
+            if dash_opt.is_some():
+                int dash = dash_opt.unwrap()
+                str start_s = spec.byte_slice(0, dash).trim()
+                str end_s = spec.byte_slice(dash + 1, spec.byte_len()).trim()
+                Option[int] start_opt = int.parse(start_s)
+                if start_opt.is_some():
+                    int start = start_opt.unwrap()
+                    int end_exclusive = total
+                    if end_s != "":
+                        Option[int] end_opt = int.parse(end_s)
+                        if end_opt.is_some():
+                            end_exclusive = end_opt.unwrap() + 1
+                    if start < total and start < end_exclusive:
+                        str partial = content.byte_slice(start, end_exclusive)
+                        Dict[str, str] rhdrs = Dict[str, str]()
+                        rhdrs.put("Content-Range", "bytes " + int_to_str(start) + "-" + int_to_str(end_exclusive - 1) + "/" + int_to_str(total))
+                        rhdrs.put("ETag", etag)
+                        return HttpServerResponse(206, partial, mime, rhdrs)
+    # 200 OK
+    Dict[str, str] ok_hdrs = Dict[str, str]()
+    ok_hdrs.put("ETag", etag)
+    return HttpServerResponse(200, content, mime, ok_hdrs)

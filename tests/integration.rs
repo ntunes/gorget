@@ -4259,6 +4259,14 @@ fn httpserver_body_parsers() {
 }
 
 #[test]
+fn httpserver_static_enhanced() {
+    run_gg(
+        "httpserver_static_enhanced.gg",
+        "ok\nok\nok\nok\nok",
+    );
+}
+
+#[test]
 fn httpserver_response() {
     run_gg(
         "httpserver_response.gg",
