@@ -4523,7 +4523,53 @@ name. Use `ftype`, `ty`, `field_type`, or any other non-keyword identifier.
 
 ---
 
-### 19.15 Compile-Time Loop Unrolling (`meta for`)
+### 19.15 `enum_ordinal` and `enum_from_ordinal` — Enum Ordinal Reflection
+
+Two builtins map between variant names and their zero-based ordinal positions at compile time.
+
+**`enum_ordinal(T, name)`** — ordinal of a named variant:
+
+```gorget
+meta if enum_ordinal(T, vname) == 0:
+    print("first variant: {vname}")
+```
+
+**`enum_from_ordinal(T, n)`** — variant name at ordinal `n`:
+
+```gorget
+# Validated round-trip: ordinal → name → compare
+meta if enum_from_ordinal(T, i) == vname:
+    print("consistent at ordinal {i}")
+```
+
+**As a `meta for` range bound** — iterate only a prefix of the variants:
+
+```gorget
+# Print all variants before "Blue"
+void print_before_blue[T]():
+    meta for i in 0..enum_ordinal(T, "Blue"):
+        meta for vname in variant_names(T):
+            meta if enum_ordinal(T, vname) == i:
+                print("{vname}")
+```
+
+**Printing ordinals** — combine an integer range with `variant_names` to print each variant's ordinal:
+
+```gorget
+void print_ordinals[T]():
+    meta for i in 0..variant_count(T):
+        meta for vname in variant_names(T):
+            meta if enum_ordinal(T, vname) == i:
+                meta if enum_from_ordinal(T, i) == vname:
+                    print("{vname}={i}")
+```
+
+Both builtins error at compile time if the type is not an enum, the variant name is not found, or
+the ordinal is out of range.
+
+---
+
+### 19.16 Compile-Time Loop Unrolling (`meta for`)
 
 `meta for` inside a generic body unrolls its loop at monomorphization time:
 

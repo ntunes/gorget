@@ -2214,6 +2214,63 @@ fn eval_delayed_expr(
                                 &format!("variant_count: unknown type `{type_name}`"), span)),
                         }
                     }
+                    "enum_ordinal" => {
+                        if args.len() != 2 {
+                            return Err(meta_err("enum_ordinal() takes exactly 2 arguments: (T, \"VariantName\")", span));
+                        }
+                        let raw = meta_expr_to_type_name(&args[0].node.value.node);
+                        let type_name = ctx.type_subs.iter().find(|(p, _)| *p == raw)
+                            .map(|(_, ty)| type_to_canonical_name(ty))
+                            .unwrap_or(raw);
+                        let variant_name = match eval_delayed_expr(&args[1].node.value.node, ctx, span)? {
+                            MetaValue::Str(s) => s,
+                            _ => return Err(meta_err("enum_ordinal(): second argument must be a variant name string", span)),
+                        };
+                        match ctx.type_registry.get_type_def(&type_name) {
+                            Some(type_def) => {
+                                if let crate::ir::types::TypeDefKind::Enum(e) = &type_def.kind {
+                                    match e.variants.iter().position(|v| v.name == variant_name) {
+                                        Some(idx) => return Ok(MetaValue::Int(idx as i64)),
+                                        None => return Err(meta_err(
+                                            &format!("enum_ordinal: `{type_name}` has no variant `{variant_name}`"),
+                                            span)),
+                                    }
+                                }
+                                return Err(meta_err(&format!("enum_ordinal: `{type_name}` is not an enum"), span));
+                            }
+                            None => return Err(meta_err(
+                                &format!("enum_ordinal: unknown type `{type_name}`"), span)),
+                        }
+                    }
+                    "enum_from_ordinal" => {
+                        if args.len() != 2 {
+                            return Err(meta_err("enum_from_ordinal() takes exactly 2 arguments: (T, n)", span));
+                        }
+                        let raw = meta_expr_to_type_name(&args[0].node.value.node);
+                        let type_name = ctx.type_subs.iter().find(|(p, _)| *p == raw)
+                            .map(|(_, ty)| type_to_canonical_name(ty))
+                            .unwrap_or(raw);
+                        let ordinal = match eval_delayed_expr(&args[1].node.value.node, ctx, span)? {
+                            MetaValue::Int(n) => n,
+                            _ => return Err(meta_err("enum_from_ordinal(): second argument must be an integer", span)),
+                        };
+                        match ctx.type_registry.get_type_def(&type_name) {
+                            Some(type_def) => {
+                                if let crate::ir::types::TypeDefKind::Enum(e) = &type_def.kind {
+                                    match e.variants.get(ordinal as usize) {
+                                        Some(v) => return Ok(MetaValue::Str(v.name.clone())),
+                                        None => return Err(meta_err(
+                                            &format!("enum_from_ordinal: ordinal {ordinal} out of range \
+                                                      for `{type_name}` ({} variants)", e.variants.len()),
+                                            span)),
+                                    }
+                                }
+                                return Err(meta_err(&format!("enum_from_ordinal: `{type_name}` is not an enum"), span));
+                            }
+                            None => return Err(meta_err(
+                                &format!("enum_from_ordinal: unknown type `{type_name}`"), span)),
+                        }
+                    }
                     _ => {}
                 }
             }

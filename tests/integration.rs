@@ -9147,6 +9147,24 @@ done",
 }
 
 #[test]
+fn meta_enum_ordinal() {
+    run_gg(
+        "meta_enum_ordinal.gg",
+        "\
+North=0
+East=1
+South=2
+West=3
+Red=0
+Green=1
+Blue=2
+Red
+Green
+done",
+    );
+}
+
+#[test]
 fn meta_reflection() {
     run_gg(
         "meta_reflection.gg",

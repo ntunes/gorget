@@ -1,0 +1,33 @@
+enum Direction:
+    North
+    East
+    South
+    West
+
+enum Color:
+    Red
+    Green
+    Blue
+
+# Print "VarName=ordinal" for each variant.
+# Uses enum_ordinal in a meta if condition and validates enum_from_ordinal round-trip.
+void print_ordinals[T]():
+    meta for i in 0..variant_count(T):
+        meta for vname in variant_names(T):
+            meta if enum_ordinal(T, vname) == i:
+                meta if enum_from_ordinal(T, i) == vname:
+                    print("{vname}={i}")
+
+# Print only variants with ordinal strictly less than the Blue variant's ordinal.
+# Demonstrates enum_ordinal used as a meta for range bound.
+void print_before_blue[T]():
+    meta for i in 0..enum_ordinal(T, "Blue"):
+        meta for vname in variant_names(T):
+            meta if enum_ordinal(T, vname) == i:
+                print("{vname}")
+
+void main():
+    print_ordinals[Direction]()
+    print_ordinals[Color]()
+    print_before_blue[Color]()
+    print("done")
