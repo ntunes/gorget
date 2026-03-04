@@ -1,0 +1,108 @@
+# Test: Chunked Transfer-Encoding body reading on the server side.
+#
+# Sends a raw chunked POST request over TCP using a raw socket.
+# The server must reassemble chunks "hell" + "o" = "hello".
+#
+# Chunked format: <hex-size>\r\n<data>\r\n ... 0\r\n\r\n
+#
+# Expected output:
+#   ok\nok
+
+from gg.httpserver import HttpRequest, HttpServerResponse, http_server_handle_conn_ka
+from std.net.socket import ServerSocket, Socket, server_socket_bind, socket_connect
+from std.bytes import bytes_to_str
+from std.conv import int_to_str
+from std.time import sleep
+
+HttpServerResponse handle(HttpRequest req):
+    if req.method == "POST" and req.path == "/echo":
+        return HttpServerResponse.ok(req.body)
+    return HttpServerResponse.not_found()
+
+async void serve_n(int port, int n):
+    Result[ServerSocket, str] bind_r = server_socket_bind("127.0.0.1", port)
+    if bind_r.is_err():
+        return
+    ServerSocket srv = bind_r.unwrap()
+    int i = 0
+    while i < n:
+        Result[Socket, str] ar = srv.accept()
+        if ar.is_ok():
+            Socket client = ar.unwrap()
+            http_server_handle_conn_ka(client, handle, 2000).await()
+            i = i + 1
+    srv.close()
+
+void check(str label, bool ok):
+    if not ok:
+        print("FAIL: " + label)
+    else:
+        print("ok")
+
+async void main():
+    int port = 18095
+    Task[void] srv = spawn serve_n(port, 1)
+    sleep(0.05).await()
+
+    # Open a raw socket and send a chunked POST manually
+    Result[Socket, str] cr = socket_connect("127.0.0.1", port)
+    if cr.is_err():
+        print("FAIL: connect: " + cr.unwrap_err())
+        print("FAIL: body")
+        srv.await()
+        return
+    Socket conn = cr.unwrap()
+
+    # Body = "hello" split into chunk "hell" (4 bytes) and "o" (1 byte)
+    str raw = "POST /echo HTTP/1.1\r\n"
+    raw = raw + "Host: 127.0.0.1\r\n"
+    raw = raw + "Transfer-Encoding: chunked\r\n"
+    raw = raw + "Connection: close\r\n"
+    raw = raw + "\r\n"
+    raw = raw + "4\r\nhell\r\n"
+    raw = raw + "1\r\no\r\n"
+    raw = raw + "0\r\n\r\n"
+    conn.write_str(raw)
+
+    # Read response status line
+    bool ok_status = false
+    Result[str, str] sl_r = conn.read_line()
+    if sl_r.is_ok():
+        str sl = sl_r.unwrap()
+        ok_status = sl.contains("200")
+
+    # Read headers, collect Content-Length
+    int content_length = 0
+    bool reading_hdrs = true
+    while reading_hdrs:
+        Result[str, str] hl_r = conn.read_line()
+        if hl_r.is_err():
+            reading_hdrs = false
+        else:
+            str hl = hl_r.unwrap()
+            if hl == "":
+                reading_hdrs = false
+            else:
+                Option[int] colon_opt = hl.index_of(":")
+                if colon_opt.is_some():
+                    int colon = colon_opt.unwrap()
+                    str hname = hl.byte_slice(0, colon).trim().to_lower()
+                    str hval = hl.byte_slice(colon + 1, hl.byte_len()).trim()
+                    if hname == "content-length":
+                        Option[int] clv = int.parse(hval)
+                        if clv.is_some():
+                            content_length = clv.unwrap()
+
+    # Read body using Content-Length
+    str resp_body = ""
+    if content_length > 0:
+        Vector[uint8] raw_body = conn.read_exact(content_length)
+        Result[str, str] sr = bytes_to_str(raw_body)
+        if sr.is_ok():
+            resp_body = sr.unwrap()
+    conn.close()
+
+    check("status", ok_status)
+    check("body", resp_body == "hello")
+
+    srv.await()

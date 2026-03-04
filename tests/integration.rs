@@ -4190,7 +4190,7 @@ fn httpserver_e2e() {
 fn httpserver_router_extended() {
     run_gg(
         "httpserver_router_extended.gg",
-        "404\n404\n404\n404\npost:7\nbase-mw1-mw2-mw3",
+        "405\n404\n404\n404\npost:7\nbase-mw1-mw2-mw3",
     );
 }
 
@@ -4214,6 +4214,22 @@ fn httpserver_large_body() {
 fn http_patch() {
     run_gg(
         "http_patch.gg",
+        "ok\nok",
+    );
+}
+
+#[test]
+fn httpserver_protocol() {
+    run_gg(
+        "httpserver_protocol.gg",
+        "ok\nok\nok\nok",
+    );
+}
+
+#[test]
+fn httpserver_chunked() {
+    run_gg(
+        "httpserver_chunked.gg",
         "ok\nok",
     );
 }

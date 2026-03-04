@@ -18,9 +18,10 @@ from std.net.socket import ServerSocket, Socket, server_socket_bind
 from std.net.tls import TlsSocket, TlsServerSocket, tls_server_bind
 from std.collections import Vector, Dict
 from std.conv import int_to_str
-from std.bytes import bytes_to_str
+from std.bytes import bytes_to_str, bytes_concat
 from std.fs import read_file, file_exists, is_dir
 from std.path import path_join, path_extension
+from std.encoding import url_decode, form_decode
 
 # ── Request and response types ────────────────────────────────
 
@@ -87,9 +88,97 @@ equip HttpServerResponse:
             return "Service Unavailable"
         return "Unknown"
 
+# ── Chunked body helpers ──────────────────────────────────────
+
+int http_server_parse_hex(str s):
+    int val = 0
+    int i = 0
+    while i < s.byte_len():
+        char c = s.char_at(i)
+        int v = 0
+        if c >= '0' and c <= '9':
+            v = c as int - '0' as int
+        elif c >= 'a' and c <= 'f':
+            v = c as int - 'a' as int + 10
+        elif c >= 'A' and c <= 'F':
+            v = c as int - 'A' as int + 10
+        else:
+            return val
+        val = val * 16 + v
+        i = i + 1
+    return val
+
+str http_server_read_body_chunked(Socket &conn):
+    Vector[uint8] buf = Vector[uint8]()
+    bool reading = true
+    while reading:
+        Result[str, str] sl_r = conn.read_line()
+        str size_line = ""
+        if sl_r.is_ok():
+            size_line = sl_r.unwrap()
+        else:
+            reading = false
+            continue
+        Option[int] semi = size_line.index_of(";")
+        if semi.is_some():
+            size_line = size_line.byte_slice(0, semi.unwrap())
+        size_line = size_line.trim()
+        int chunk_sz = http_server_parse_hex(size_line)
+        if chunk_sz == 0:
+            reading = false
+        else:
+            Vector[uint8] chunk = conn.read_exact(chunk_sz)
+            buf = bytes_concat(buf, chunk)
+            Result[str, str] crlf_r = conn.read_line()
+    Result[str, str] trl_r = conn.read_line()
+    str trailer = ""
+    if trl_r.is_ok():
+        trailer = trl_r.unwrap()
+    while trailer != "":
+        Result[str, str] next_r = conn.read_line()
+        if next_r.is_ok():
+            trailer = next_r.unwrap()
+        else:
+            trailer = ""
+    return bytes_to_str(buf).unwrap()
+
+str http_server_read_body_chunked_tls(TlsSocket &conn):
+    Vector[uint8] buf = Vector[uint8]()
+    bool reading = true
+    while reading:
+        Result[str, str] sl_r = conn.read_line()
+        str size_line = ""
+        if sl_r.is_ok():
+            size_line = sl_r.unwrap()
+        else:
+            reading = false
+            continue
+        Option[int] semi = size_line.index_of(";")
+        if semi.is_some():
+            size_line = size_line.byte_slice(0, semi.unwrap())
+        size_line = size_line.trim()
+        int chunk_sz = http_server_parse_hex(size_line)
+        if chunk_sz == 0:
+            reading = false
+        else:
+            Vector[uint8] chunk = conn.read_exact(chunk_sz)
+            buf = bytes_concat(buf, chunk)
+            Result[str, str] crlf_r = conn.read_line()
+    Result[str, str] trl_r2 = conn.read_line()
+    str trailer2 = ""
+    if trl_r2.is_ok():
+        trailer2 = trl_r2.unwrap()
+    while trailer2 != "":
+        Result[str, str] next_r2 = conn.read_line()
+        if next_r2.is_ok():
+            trailer2 = next_r2.unwrap()
+        else:
+            trailer2 = ""
+    return bytes_to_str(buf).unwrap()
+
 # ── Request parser ────────────────────────────────────────────
 
-Result[HttpRequest, str] http_server_parse_request(Socket &conn):
+Result[HttpRequest, str] http_server_parse_request(Socket &conn, int max_body_bytes = 16777216):
     # Request line: "METHOD /path?query HTTP/1.1"
     str req_line = conn.read_line()?
 
@@ -107,7 +196,7 @@ Result[HttpRequest, str] http_server_parse_request(Socket &conn):
     str raw_path = req_rest.byte_slice(0, sp2)
     str req_version = req_rest.byte_slice(sp2 + 1, req_rest.byte_len())
 
-    # Split path at "?"
+    # Split path at "?" then percent-decode both parts
     str req_path = raw_path
     str req_query = ""
     Option[int] qm_opt = raw_path.index_of("?")
@@ -115,6 +204,12 @@ Result[HttpRequest, str] http_server_parse_request(Socket &conn):
         int qm = qm_opt.unwrap()
         req_path = raw_path.byte_slice(0, qm)
         req_query = raw_path.byte_slice(qm + 1, raw_path.byte_len())
+    Result[str, str] pd = url_decode(req_path)
+    if pd.is_ok():
+        req_path = pd.unwrap()
+    Result[str, str] qd = url_decode(req_query)
+    if qd.is_ok():
+        req_query = qd.unwrap()
 
     # Headers (read until blank line)
     Dict[str, str] req_headers = Dict[str, str]()
@@ -131,12 +226,18 @@ Result[HttpRequest, str] http_server_parse_request(Socket &conn):
                 str hdr_val = hdr_line.byte_slice(colon + 1, hdr_line.byte_len()).trim()
                 req_headers.put(hdr_name, hdr_val)
 
-    # Body (only if Content-Length present)
+    # Body: chunked transfer-encoding takes priority over content-length
     str req_body = ""
-    if req_headers.contains("content-length"):
+    if req_headers.contains("transfer-encoding"):
+        str te = req_headers["transfer-encoding"]
+        if te.to_lower().contains("chunked"):
+            req_body = http_server_read_body_chunked(&conn)
+    elif req_headers.contains("content-length"):
         str cl_str = req_headers["content-length"]
         Option[int] cl_opt = int.parse(cl_str)
         if cl_opt is Some(cl_v):
+            if cl_v > max_body_bytes:
+                return Error("request body too large")
             if cl_v > 0:
                 Vector[uint8] body_bytes = conn.read_exact(cl_v)
                 Result[str, str] body_r = bytes_to_str(body_bytes)
@@ -224,7 +325,7 @@ async void http_server_handle_conn_ka(Socket conn, Callable[HttpServerResponse(H
 # ── TLS connection handlers ───────────────────────────────────
 
 # Parse an HTTP/1.1 request from a TLS socket (identical logic to plain-TCP version).
-Result[HttpRequest, str] http_server_parse_request_tls(TlsSocket &conn):
+Result[HttpRequest, str] http_server_parse_request_tls(TlsSocket &conn, int max_body_bytes = 16777216):
     str req_line = conn.read_line()?
 
     Option[int] sp1_opt = req_line.index_of(" ")
@@ -248,6 +349,12 @@ Result[HttpRequest, str] http_server_parse_request_tls(TlsSocket &conn):
         int qm = qm_opt.unwrap()
         req_path = raw_path.byte_slice(0, qm)
         req_query = raw_path.byte_slice(qm + 1, raw_path.byte_len())
+    Result[str, str] tls_pd = url_decode(req_path)
+    if tls_pd.is_ok():
+        req_path = tls_pd.unwrap()
+    Result[str, str] tls_qd = url_decode(req_query)
+    if tls_qd.is_ok():
+        req_query = tls_qd.unwrap()
 
     Dict[str, str] req_headers = Dict[str, str]()
     bool reading_headers = true
@@ -264,10 +371,16 @@ Result[HttpRequest, str] http_server_parse_request_tls(TlsSocket &conn):
                 req_headers.put(hdr_name, hdr_val)
 
     str req_body = ""
-    if req_headers.contains("content-length"):
+    if req_headers.contains("transfer-encoding"):
+        str te = req_headers["transfer-encoding"]
+        if te.to_lower().contains("chunked"):
+            req_body = http_server_read_body_chunked_tls(&conn)
+    elif req_headers.contains("content-length"):
         str cl_str = req_headers["content-length"]
         Option[int] cl_opt = int.parse(cl_str)
         if cl_opt is Some(cl_v):
+            if cl_v > max_body_bytes:
+                return Error("request body too large")
             if cl_v > 0:
                 Vector[uint8] body_bytes = conn.read_exact(cl_v)
                 Result[str, str] body_r = bytes_to_str(body_bytes)
@@ -324,14 +437,16 @@ struct HttpServer:
     bool use_tls
     str cert_path
     str key_path
+    int max_body_bytes
 
 equip HttpServer:
-    HttpServer new(str host, int port) = HttpServer(host, port, 5000, false, "", "")
-    HttpServer with_timeout(str host, int port, int timeout_ms) = HttpServer(host, port, timeout_ms, false, "", "")
+    HttpServer new(str host, int port) = HttpServer(host, port, 5000, false, "", "", 16777216)
+    HttpServer with_timeout(str host, int port, int timeout_ms) = HttpServer(host, port, timeout_ms, false, "", "", 16777216)
+    HttpServer with_max_body(str host, int port, int max_bytes) = HttpServer(host, port, 5000, false, "", "", max_bytes)
 
     # Construct a TLS-enabled server that will use the given PEM cert and key files.
     HttpServer new_tls(str host, int port, str cert_path, str key_path):
-        return HttpServer(host, port, 5000, true, cert_path, key_path)
+        return HttpServer(host, port, 5000, true, cert_path, key_path, 16777216)
 
     # Bind and accept connections in a loop, calling handler for each.
     # Dispatches to serve_plain or serve_tls based on the use_tls flag.
@@ -380,11 +495,14 @@ Dict[str, str] parse_query_string(str qs):
         Option[int] eq_opt = pair.index_of("=")
         if eq_opt.is_some():
             int eq = eq_opt.unwrap()
-            str key = pair.byte_slice(0, eq)
-            str val = pair.byte_slice(eq + 1, pair.byte_len())
-            params.put(key, val)
+            str raw_key = pair.byte_slice(0, eq)
+            str raw_val = pair.byte_slice(eq + 1, pair.byte_len())
+            Result[str, str] dk = url_decode(raw_key)
+            Result[str, str] dv = url_decode(raw_val)
+            params.put(dk.unwrap_or(raw_key), dv.unwrap_or(raw_val))
         else:
-            params.put(pair, "")
+            Result[str, str] dk2 = url_decode(pair)
+            params.put(dk2.unwrap_or(pair), "")
         i = i + 1
     return params
 
@@ -559,7 +677,17 @@ equip Router:
             opts_hdrs.put("Allow", allow_str)
             opts_hdrs.put("Content-Length", "0")
             return HttpServerResponse(200, "", "text/plain", opts_hdrs)
-        # 5. Fallback: 404
+        # 5. Fallback: check if path exists under a different method → 405, else 404
+        Vector[str] am = self.allowed_methods(req.path)
+        if am.len() > 0:
+            str allow_str_405 = "OPTIONS, HEAD"
+            int oi405 = 0
+            while oi405 < am.len():
+                allow_str_405 = allow_str_405 + ", " + am[oi405]
+                oi405 = oi405 + 1
+            Dict[str, str] m405_hdrs = Dict[str, str]()
+            m405_hdrs.put("Allow", allow_str_405)
+            return HttpServerResponse(405, "Method Not Allowed", "text/plain", m405_hdrs)
         return HttpServerResponse.not_found()
 
     # Dispatch a request through the router: inner dispatch + middleware pipeline.
