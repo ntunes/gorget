@@ -46,16 +46,23 @@ struct MetaContext<'a> {
     items: &'a [Spanned<Item>],
     /// Current call depth for recursion limit enforcement.
     call_depth: std::cell::Cell<usize>,
+    /// Directory containing the source file — used to resolve relative paths in embed_file().
+    /// `None` when no source path is available; falls back to the process working directory.
+    source_dir: Option<std::path::PathBuf>,
 }
 
 impl<'a> MetaContext<'a> {
     fn new(features: &'a [String], items: &'a [Spanned<Item>]) -> Self {
-        Self { features, items, call_depth: std::cell::Cell::new(0) }
+        Self { features, items, call_depth: std::cell::Cell::new(0), source_dir: None }
+    }
+
+    fn with_source_dir(features: &'a [String], items: &'a [Spanned<Item>], source_dir: Option<std::path::PathBuf>) -> Self {
+        Self { features, items, call_depth: std::cell::Cell::new(0), source_dir }
     }
 
     #[allow(dead_code)]
     fn empty() -> MetaContext<'static> {
-        MetaContext { features: &[], items: &[], call_depth: std::cell::Cell::new(0) }
+        MetaContext { features: &[], items: &[], call_depth: std::cell::Cell::new(0), source_dir: None }
     }
 }
 
@@ -81,6 +88,22 @@ enum MetaControlFlow {
 /// Evaluate, substitute, and remove all meta constructs from a module.
 /// `features` is the list of enabled build-time feature flags (from `--feature` CLI args).
 pub fn evaluate_meta_consts(module: &mut Module, features: &[String]) -> Vec<SemanticError> {
+    evaluate_meta_consts_impl(module, features, None)
+}
+
+pub fn evaluate_meta_consts_with_source_dir(
+    module: &mut Module,
+    features: &[String],
+    source_dir: Option<std::path::PathBuf>,
+) -> Vec<SemanticError> {
+    evaluate_meta_consts_impl(module, features, source_dir)
+}
+
+fn evaluate_meta_consts_impl(
+    module: &mut Module,
+    features: &[String],
+    source_dir: Option<std::path::PathBuf>,
+) -> Vec<SemanticError> {
     let mut errors = Vec::new();
     let mut env: FxHashMap<String, MetaValue> = FxHashMap::default();
     let mut type_env: FxHashMap<String, Type> = FxHashMap::default();
@@ -89,7 +112,7 @@ pub fn evaluate_meta_consts(module: &mut Module, features: &[String]) -> Vec<Sem
     // Phase 1: Evaluate meta consts, meta asserts, meta type aliases, and meta type functions.
     // Scope the ctx borrow so it ends before we mutate module.items in Phase 1.5.
     {
-        let ctx = MetaContext::new(features, &module.items);
+        let ctx = MetaContext::with_source_dir(features, &module.items, source_dir.clone());
         for item in &module.items {
             process_meta_item(&item.node, &mut env, &mut type_env, &mut type_func_env, &ctx, &mut errors);
         }
@@ -99,7 +122,7 @@ pub fn evaluate_meta_consts(module: &mut Module, features: &[String]) -> Vec<Sem
     // Snapshot the current items for the context so user-defined functions are still accessible.
     let items_snapshot = module.items.clone();
     {
-        let ctx = MetaContext::new(features, &items_snapshot);
+        let ctx = MetaContext::with_source_dir(features, &items_snapshot, source_dir);
         module.items = flatten_meta_ifs(module.items.clone(), &mut env, &mut type_env, &mut type_func_env, &ctx, &mut errors);
     }
 
@@ -592,6 +615,27 @@ fn eval_expr(
                         let type_name = meta_expr_to_type_name(&args[0].node.value.node);
                         Ok(MetaValue::Str(type_name))
                     }
+                    "embed_file" => {
+                        if args.len() != 1 {
+                            return Err(meta_err("embed_file() takes exactly 1 argument", span));
+                        }
+                        let path_val = eval_expr(&args[0].node.value.node, env, ctx, args[0].node.value.span)?;
+                        let rel_path = match path_val {
+                            MetaValue::Str(s) => s,
+                            _ => return Err(meta_err("embed_file(): argument must be a string literal path", span)),
+                        };
+                        let full_path = match &ctx.source_dir {
+                            Some(dir) => dir.join(&rel_path),
+                            None => std::path::PathBuf::from(&rel_path),
+                        };
+                        match std::fs::read_to_string(&full_path) {
+                            Ok(contents) => Ok(MetaValue::Str(contents)),
+                            Err(e) => Err(meta_err(
+                                &format!("embed_file(\"{rel_path}\"): {e}"),
+                                span,
+                            )),
+                        }
+                    }
                     other => {
                         // M7: fall back to user-defined function lookup
                         match lookup_meta_function(other, ctx.items, span)? {
@@ -599,7 +643,7 @@ fn eval_expr(
                             None => Err(meta_err(
                                 &format!("unknown meta function `{other}` — built-ins: \
                                     platform(), arch(), arch_word_bits(), feature(str), debug(), \
-                                    sizeof(Type), alignof(Type), typename(Type); \
+                                    sizeof(Type), alignof(Type), typename(Type), embed_file(str); \
                                     or define a pure function in the same file"),
                                 span,
                             )),

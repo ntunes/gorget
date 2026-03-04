@@ -288,7 +288,8 @@ fn try_build_ir(
     // Load imported modules recursively and merge
     let (mut module, concat_source) = load_imports(filename, source, module, dep_paths);
 
-    let result = gorget::semantic::analyze(&mut module, features);
+    let source_dir = std::path::Path::new(filename).parent().map(|p| p.to_path_buf());
+    let result = gorget::semantic::analyze_with_source_dir(&mut module, features, source_dir);
 
     if !result.errors.is_empty() {
         let reporter = ErrorReporter::new(filename.to_string(), concat_source);
@@ -1214,7 +1215,8 @@ fn main() {
             let dep_paths = resolve_deps_for_file(filename);
             let (mut module, concat_source) = load_imports(filename, &source, module, dep_paths);
 
-            let result = gorget::semantic::analyze(&mut module, &features);
+            let source_dir = std::path::Path::new(filename).parent().map(|p| p.to_path_buf());
+            let result = gorget::semantic::analyze_with_source_dir(&mut module, &features, source_dir);
 
             if show_borrows {
                 print_borrow_summary(&result);
@@ -1472,7 +1474,8 @@ fn main() {
             let dep_paths = resolve_deps_for_file(filename);
             let (mut module, concat_source) = load_imports(filename, &source, module, dep_paths);
 
-            let result = gorget::semantic::analyze(&mut module, &features);
+            let source_dir = std::path::Path::new(&filename).parent().map(|p| p.to_path_buf());
+            let result = gorget::semantic::analyze_with_source_dir(&mut module, &features, source_dir);
 
             if !result.errors.is_empty() {
                 let reporter = gorget::errors::ErrorReporter::new(filename.clone(), concat_source);

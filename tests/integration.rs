@@ -9203,3 +9203,14 @@ name=alice,health=100,alive=true
 done",
     );
 }
+
+#[test]
+fn embed_file() {
+    run_gg(
+        "embed_file.gg",
+        "\
+SELECT id, name FROM users WHERE active = 1;
+hello world
+done",
+    );
+}

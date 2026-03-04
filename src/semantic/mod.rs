@@ -45,12 +45,22 @@ pub struct AnalysisResult {
 /// Run all semantic analysis passes on a parsed module.
 /// `features` is the list of enabled build-time feature flags (from `--feature` CLI args).
 pub fn analyze(module: &mut Module, features: &[String]) -> AnalysisResult {
+    analyze_with_source_dir(module, features, None)
+}
+
+/// Like [`analyze`], but also provides the source file's directory so that
+/// `embed_file("relative/path")` is resolved relative to the source file rather than CWD.
+pub fn analyze_with_source_dir(
+    module: &mut Module,
+    features: &[String],
+    source_dir: Option<std::path::PathBuf>,
+) -> AnalysisResult {
     let mut scopes = ScopeTable::new();
     let mut types = TypeTable::new();
     let mut errors = Vec::new();
 
     // Pass 0: Evaluate and substitute meta constants
-    errors.extend(meta::evaluate_meta_consts(module, features));
+    errors.extend(meta::evaluate_meta_consts_with_source_dir(module, features, source_dir));
 
     // Expand @derive(...) attributes into equip blocks
     derive::expand_derives(module, &mut errors);

@@ -4235,6 +4235,7 @@ These are always available in meta contexts:
 | `sizeof(Type)` | `int` | Size in bytes (primitive types and `str`, `cstr`, `String`) |
 | `alignof(Type)` | `int` | Alignment in bytes (primitive types) |
 | `typename(Type)` | `str` | String representation, e.g. `"int"`, `"Vector[int]"` |
+| `embed_file(str)` | `str` | Read a file at compile time, embed its contents as a string |
 
 `sizeof` and `alignof` support primitive types and the built-in string types. User-defined struct sizes are not available during Phase 0 meta evaluation (which runs before layout computation). Inside generic function bodies, `sizeof(T)` resolves the generic parameter to its concrete type at monomorphization time (see §19.12).
 
@@ -4246,6 +4247,23 @@ meta str  INT_NAME  = typename(int)        # "int"
 meta bool IS_64     = arch_word_bits() == 64
 meta bool HAS_TLS   = feature("tls")
 ```
+
+**`embed_file(path)`** reads a file at compile time and inlines its contents as a string constant.
+The path is resolved relative to the source file's directory. It is a compilation error if the
+file does not exist:
+
+```gorget
+meta str SQL      = embed_file("queries/get_users.sql")
+meta str SHADER   = embed_file("shaders/vertex.glsl")
+meta str TEMPLATE = embed_file("templates/email.html")
+
+void main():
+    print(SQL)       # prints the file contents at runtime — no I/O at runtime
+```
+
+The embedded string becomes an ordinary `meta str` constant and is substituted throughout the
+module like any other meta constant. Multiline files work naturally — the string preserves all
+whitespace and newlines.
 
 ### 19.8 Evaluation Order and Scoping
 
