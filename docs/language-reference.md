@@ -4411,7 +4411,64 @@ void main():
 
 ---
 
-### 19.13 Compile-Time Loop Unrolling (`meta for`)
+### 19.13 Type Predicate `T is Category`
+
+`T is X` in a delayed meta condition evaluates to `bool` at monomorphization time. The RHS `X` is interpreted as a **type category** for the common base-type names, allowing concise type-family predicates:
+
+| Expression | Meaning |
+|------------|---------|
+| `T is float` | T is any floating-point (float32 or float) |
+| `T is int` | T is any integer type (int8..uint64) |
+| `T is signed` | T is any signed integer (int8, int16, int32, int) |
+| `T is unsigned` | T is any unsigned integer (uint8..uint64) |
+| `T is numeric` | T is any integer or float |
+| `T is bool` | T is exactly bool |
+| `T is str` | T is exactly str |
+| `T is char` | T is exactly char |
+| `T is float32` | T is exactly float32 (exact match, not a category) |
+| `T is int8`, `T is uint64`, etc. | T is exactly that type (exact match) |
+| `T is MyStruct` | T resolves to exactly MyStruct (exact match) |
+
+**Note:** `float` and `int` denote broad categories (any floating-point / any integer), not the specific `float` (F64) or `int` (I64) types. For an exact F64 match, use `typename(T) == "float"`.
+
+**Negation** (`T is not X`) is supported: `meta if T is not signed:`.
+
+**Composability** — `T is X` is a normal meta boolean and composes with `and`/`or`/`not`:
+
+```gorget
+meta if T is signed or T is float:
+    print("handles signed math")
+```
+
+**Example:**
+
+```gorget
+T clamp[T](T val, T lo, T hi):
+    meta if T is float:
+        return fmax(fmin(val, hi), lo)
+    else:
+        return min(max(val, lo), hi)
+
+str classify[T]():
+    meta if T is float:
+        return "float"
+    elif T is signed:
+        return "signed"
+    elif T is unsigned:
+        return "unsigned"
+    else:
+        return "other"
+
+void main():
+    print(classify[float32]())  # float
+    print(classify[int8]())     # signed
+    print(classify[uint]())     # unsigned
+    print(classify[bool]())     # other
+```
+
+---
+
+### 19.14 Compile-Time Loop Unrolling (`meta for`)
 
 `meta for` inside a generic body unrolls its loop at monomorphization time:
 

@@ -1,0 +1,58 @@
+str classify[T]():
+    meta if T is float:
+        return "float"
+    elif T is signed:
+        return "signed"
+    elif T is unsigned:
+        return "unsigned"
+    elif T is bool:
+        return "bool"
+    else:
+        return "other"
+
+str numeric_check[T]():
+    meta if T is numeric:
+        return "numeric"
+    else:
+        return "not-numeric"
+
+str negation_check[T]():
+    meta if T is not signed:
+        return "not-signed"
+    else:
+        return "signed"
+
+str exact_check[T]():
+    meta if T is float32:
+        return "float32-exact"
+    elif T is float:
+        return "float-category"
+    else:
+        return "other"
+
+str or_check[T]():
+    meta if T is signed or T is float:
+        return "handles-signed-math"
+    else:
+        return "other"
+
+void main():
+    print(classify[float32]())
+    print(classify[float]())
+    print(classify[int8]())
+    print(classify[int]())
+    print(classify[uint8]())
+    print(classify[uint]())
+    print(classify[bool]())
+    print(classify[str]())
+    print(numeric_check[int]())
+    print(numeric_check[float]())
+    print(numeric_check[bool]())
+    print(negation_check[uint]())
+    print(negation_check[int]())
+    print(exact_check[float32]())
+    print(exact_check[float]())
+    print(or_check[int8]())
+    print(or_check[float32]())
+    print(or_check[uint]())
+    print("done")

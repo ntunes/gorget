@@ -9095,6 +9095,33 @@ done",
 }
 
 #[test]
+fn meta_type_is() {
+    run_gg(
+        "meta_type_is.gg",
+        "\
+float
+float
+signed
+signed
+unsigned
+unsigned
+bool
+other
+numeric
+numeric
+not-numeric
+not-signed
+signed
+float32-exact
+float-category
+handles-signed-math
+handles-signed-math
+other
+done",
+    );
+}
+
+#[test]
 fn meta_reflection() {
     run_gg(
         "meta_reflection.gg",

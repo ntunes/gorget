@@ -656,6 +656,50 @@ fn meta_expr_to_type_name(expr: &Expr) -> String {
     }
 }
 
+/// Extract a plain name string from a pattern used in `T is <pattern>`.
+/// Handles `Pattern::Binding` (identifiers and type-keyword names) and
+/// `Pattern::Constructor` (e.g. `T is Some(...)` — uses the final path segment).
+fn pattern_to_name(pattern: &Pattern) -> String {
+    match pattern {
+        Pattern::Binding(name) => name.clone(),
+        Pattern::Constructor { path, .. } => {
+            // Use the last segment of the path (e.g. `Color.Red` → "Red")
+            path.last().map(|s| s.node.clone()).unwrap_or_else(|| "?".to_string())
+        }
+        _ => "?".to_string(),
+    }
+}
+
+/// Evaluate `T is Category` in a delayed meta context (monomorphization time).
+///
+/// Returns `true` if the resolved type name matches the given category or exact
+/// type name. Category keywords (`int`, `float`, `signed`, `unsigned`, `numeric`)
+/// match entire families of types; everything else is an exact string match
+/// against the canonical type name produced by `type_to_canonical_name`.
+fn eval_type_is_check(resolved: &str, category: &str) -> bool {
+    match category {
+        // Broad category: any integer type (signed or unsigned)
+        "int" | "integer" => matches!(resolved,
+            "int8" | "int16" | "int32" | "int" | "int64" |
+            "uint8" | "uint16" | "uint32" | "uint" | "uint64"),
+        // Broad category: any floating-point type
+        "float" => matches!(resolved, "float32" | "float" | "float64"),
+        // Signed integers only
+        "signed" => matches!(resolved, "int8" | "int16" | "int32" | "int" | "int64"),
+        // Unsigned integers only
+        "unsigned" => matches!(resolved, "uint8" | "uint16" | "uint32" | "uint" | "uint64"),
+        // Any numeric type (integer or float)
+        "numeric" => matches!(resolved,
+            "int8" | "int16" | "int32" | "int" | "int64" |
+            "uint8" | "uint16" | "uint32" | "uint" | "uint64" |
+            "float32" | "float" | "float64"),
+        // Single-member categories (also exact matches)
+        "bool" | "str" | "char" | "void" => resolved == category,
+        // Exact match for everything else: float32, int8, uint64, MyStruct, etc.
+        other => resolved == other,
+    }
+}
+
 /// Byte size of a Gorget type as it is laid out in C on a 64-bit target.
 /// Only primitive and built-in types are supported; user struct sizes are not
 /// known during meta evaluation (which runs before layout computation).
@@ -1855,6 +1899,20 @@ fn eval_delayed_expr(
                     span,
                 )),
             }
+        }
+
+        // `T is Category` / `T is not Category` — type predicate
+        Expr::Is { expr, negated, pattern } => {
+            // Resolve LHS to canonical type name (handles generic type params)
+            let raw = meta_expr_to_type_name(&expr.node);
+            let resolved = ctx.type_subs.iter()
+                .find(|(p, _)| *p == raw)
+                .map(|(_, ty)| type_to_canonical_name(ty))
+                .unwrap_or_else(|| raw.clone());
+
+            let category = pattern_to_name(&pattern.node);
+            let result = eval_type_is_check(&resolved, &category);
+            Ok(MetaValue::Bool(if *negated { !result } else { result }))
         }
 
         // Built-in calls that need type param resolution

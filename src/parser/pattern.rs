@@ -143,6 +143,20 @@ impl Parser {
                 self.parse_constructor_or_binding(Spanned::new(name_str, start), start)
             }
 
+            // Type-name keywords used as patterns in `T is <type>` expressions.
+            // These are lexed as keywords (not identifiers) so need explicit handling.
+            Token::Keyword(kw @ (
+                Keyword::Int | Keyword::Int8 | Keyword::Int16 | Keyword::Int32 | Keyword::Int64 |
+                Keyword::Uint | Keyword::Uint8 | Keyword::Uint16 | Keyword::Uint32 | Keyword::Uint64 |
+                Keyword::Float | Keyword::Float32 | Keyword::Float64 |
+                Keyword::Bool | Keyword::Char | Keyword::Str | Keyword::CStr |
+                Keyword::StringType | Keyword::Void
+            )) => {
+                let name_str = kw.as_name().to_string();
+                self.advance();
+                Ok(Spanned::new(Pattern::Binding(name_str), start))
+            }
+
             Token::Identifier(_) => {
                 let name = self.expect_identifier()?;
                 self.parse_constructor_or_binding(name, start)
