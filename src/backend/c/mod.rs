@@ -5326,6 +5326,12 @@ fn infer_runtime_return_type(name: &str) -> Option<&'static str> {
 
 /// Infer the C return type for a Type__method call.
 fn infer_method_return_type(name: &str) -> Option<&'static str> {
+    // Module-mangled function names use `___` (triple underscore) as the separator between
+    // module path and function name (e.g., `std__fmt___join`).  They are NOT method calls;
+    // their return types come from the GIR, not from heuristic inference.
+    if name.contains("___") {
+        return None;
+    }
     // Primitive type parse methods: int64_t__parse → Option__int64_t, etc.
     match name {
         "int64_t__parse" | "int__parse" => return Some("Option__int64_t"),

@@ -12,13 +12,19 @@ use super::generics;
 use super::stmts::lower_block;
 
 /// Lower a single function definition into the GIR module.
+///
+/// `name_override` — when `Some`, use this as the GIR/C function name instead of
+/// `func.name.node`.  Used by module-scoped name mangling (Phase 5) so that functions
+/// from non-entry modules get their module-path prefix in the emitted C symbol while
+/// the rest of the lowering logic (body, params, drops) remains unchanged.
 pub fn lower_function(
     ctx: &mut LoweringContext,
     module: &mut crate::ir::Module,
     func: &FunctionDef,
+    name_override: Option<&str>,
 ) {
     let func_span = func.span;
-    let name = &func.name.node;
+    let name: &str = name_override.unwrap_or(func.name.node.as_str());
     let is_main = name == "main";
 
     // Map return type — use fn_sigs if available (handles `throws` → Result)
@@ -45,7 +51,7 @@ pub fn lower_function(
         })
         .collect();
 
-    let mut builder = FunctionBuilder::new(name.clone(), return_type, &params);
+    let mut builder = FunctionBuilder::new(name.to_string(), return_type, &params);
 
     // Clear and register locals for this function
     ctx.clear_locals();
@@ -138,7 +144,7 @@ pub fn lower_function(
     }
 
     let mut func = builder.build();
-    func.display_name = Some(name.clone());
+    func.display_name = Some(name.to_string());
     func.def_span = Some(func_span);
     module.functions.push(func);
 }

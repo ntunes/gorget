@@ -15,7 +15,7 @@
 
 - **`gg.httpserver` V2 — keep-alive / connection reuse**: Current V1 sends `Connection: close` after every response. Future: parse `Connection: keep-alive` + `Keep-Alive: timeout=N`, loop parse→handle→write on the same socket, close on timeout or `Connection: close`. Blocked on async handler signatures (above). [added: 2026-03-03]
 
-- **Module namespaces Phase 5 — GIR name mangling**: Compiler phases 1–4 (AST wrapping, scope isolation, name export) are done. Phase 5: mangle all functions in non-entry modules in GIR lowering — `gg.csv` private `parse_field` → `gg__csv___parse_field` in C, avoiding linker collisions when two modules define the same name. `from X import Y` at call sites should resolve to the mangled symbol. Public functions need aliasing or the same mangling applied consistently. Phase 6 (lib prefix cleanup) follows once Phase 5 is stable. [added: 2026-02-26, updated: 2026-03-04]
+- **Module namespaces Phase 6 — lib prefix cleanup**: Compiler phases 1–5 are all done. Phase 6: remove manual C-style prefixes from all 22 library files (e.g., `csv_parse_field` → `parse_field` in `lib/gg/csv.gg`). Add `private` to internal helpers. Update all import statements and test fixtures. Start with smallest modules (gg.uuid, gg.log), validate pattern, then tackle yaml.gg. [added: 2026-02-26, updated: 2026-03-04]
 
 - **`std.alloc`: arena checkpoint / restore**: `Arena.checkpoint() -> ArenaCheckpoint` that captures `bytes_used` and `Arena.restore(checkpoint)` that bumps `used` back to the saved value. Useful for transient scratch work without a full `reset()`. Implement as a thin value type wrapping `(Arena*, size_t)`. [added: 2026-03-03]
 

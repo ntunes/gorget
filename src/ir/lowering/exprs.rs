@@ -530,9 +530,16 @@ fn lower_expr_inner(
         Expr::Spawn { expr } => {
             if let Expr::Call { callee, args: call_args, .. } = &expr.node {
                 if let Expr::Identifier(fn_name) = &callee.node {
-                    ctx.pending_spawn_fn = Some(fn_name.clone());
-                    ctx.spawned_fn_names.insert(fn_name.clone(), true);
-                    // Get return type from fn_sigs to determine Task type
+                    // Resolve the actual C symbol name (Phase 5 mangled for module functions,
+                    // or bare Gorget name for entry-module functions).  The spawn infrastructure
+                    // (context struct, thread wrapper, spawn/await helpers) is keyed by this
+                    // C name so that the internal call uses the right symbol.
+                    let c_name = ctx.extern_bindings.get(fn_name.as_str())
+                        .cloned()
+                        .unwrap_or_else(|| fn_name.clone());
+                    ctx.pending_spawn_fn = Some(c_name.clone());
+                    ctx.spawned_fn_names.insert(c_name.clone(), true);
+                    // fn_sigs is keyed by the Gorget bare name for lookup purposes.
                     let fn_ret_type = ctx.fn_sigs.get(fn_name.as_str())
                         .map(|(_, r)| *r)
                         .unwrap_or(I64_TYPE);
@@ -567,7 +574,7 @@ fn lower_expr_inner(
                     let lowered_args: Vec<Operand> = call_args.iter()
                         .map(|arg| lower_expr(ctx, builder, &arg.node.value))
                         .collect();
-                    let spawn_fn = format!("__gorget_spawn_{fn_name}");
+                    let spawn_fn = format!("__gorget_spawn_{c_name}");
                     let dst = builder.call(&spawn_fn, lowered_args, task_type);
                     return FunctionBuilder::copy(dst);
                 }
@@ -970,8 +977,6 @@ fn lower_struct_literal(
     for op in &field_operands {
         if let Operand::Copy(place) = op {
             if place.projections.is_empty() {
-                let type_id = builder.locals[place.local.0 as usize].type_id;
-                let gir_name = ctx.type_registry.get(type_id);
                 let is_array = is_gorget_array_local(place.local, builder, &ctx.type_registry);
                 if is_array {
                     builder.move_zero(place.clone());

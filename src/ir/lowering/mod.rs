@@ -54,6 +54,47 @@ pub fn lower_module(
 ) -> Module {
     let mut module = Module::new();
 
+    // Phase 5: pre-compute module function name manglings BEFORE flattening so we
+    // retain the module path information.  Maps func_name.span.start → mangled C name
+    // for every non-generic function inside an `Item::Module` wrapper.  The mangled
+    // name has the form  `seg1__seg2___func_name`  (module segments joined by `__`,
+    // then `___` separator, then the Gorget function name).  This prevents C linker
+    // collisions when multiple file-based modules define the same function name.
+    let module_fn_manglings: rustc_hash::FxHashMap<usize, String> = {
+        fn collect(
+            path: &[String],
+            items: &[crate::span::Spanned<ast::Item>],
+            out: &mut rustc_hash::FxHashMap<usize, String>,
+        ) {
+            for item in items {
+                match &item.node {
+                    ast::Item::Function(f)
+                        if f.generic_params.is_none()
+                            && !path.is_empty()
+                            // Exclude synthetic (Declaration) and extern functions — they are
+                            // implemented in the C runtime and must keep their original C names.
+                            && !matches!(
+                                f.body,
+                                ast::FunctionBody::Declaration | ast::FunctionBody::Extern(_)
+                            ) =>
+                    {
+                        out.insert(
+                            f.name.span.start,
+                            format!("{}___{}", path.join("__"), f.name.node),
+                        );
+                    }
+                    ast::Item::Module { path: mod_path, items: inner } => {
+                        collect(mod_path, inner, out);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let mut map = rustc_hash::FxHashMap::default();
+        collect(&[], &ast_module.items, &mut map);
+        map
+    };
+
     // Flatten `Item::Module` wrappers produced by `merge_modules()` so all subsequent
     // lowering passes see a unified item list (matching the pre-module-scope behavior
     // where all items from all imported modules were at the top level). Semantic analysis
@@ -562,13 +603,17 @@ pub fn lower_module(
                 .map(|p| ctx.type_mapper.map_ast_type_mut(&p.node.type_.node, &mut ctx.type_registry))
                 .collect();
 
-            ctx.fn_sigs.insert(name.clone(), (param_types, ret_type));
+            // Check whether this function is from a non-entry module and needs mangling.
+            let mangled_name = module_fn_manglings.get(&func.name.span.start).cloned();
+
+            // Register under the bare name (always — call sites may use the short name).
+            ctx.fn_sigs.insert(name.clone(), (param_types.clone(), ret_type));
 
             // Record parameter names for named-arg reordering
             let param_names: Vec<String> = func.params.iter()
                 .map(|p| p.node.name.node.clone())
                 .collect();
-            ctx.fn_param_names.insert(name.clone(), param_names);
+            ctx.fn_param_names.insert(name.clone(), param_names.clone());
 
             // Record default parameter values
             let defaults: Vec<(usize, ast::Expr)> = func.params.iter()
@@ -578,13 +623,26 @@ pub fn lower_module(
                 })
                 .collect();
             if !defaults.is_empty() {
-                ctx.fn_defaults.insert(name.clone(), defaults);
+                ctx.fn_defaults.insert(name.clone(), defaults.clone());
             }
 
-            // Record extern binding: Gorget name → C symbol
+            // Record extern binding: Gorget name → C symbol (takes priority over mangling).
+            // Declaration functions are C-runtime inline implementations; do not rename them.
             if let FunctionBody::Extern(c_symbol) = &func.body {
                 ctx.extern_bindings.insert(name.clone(), c_symbol.clone());
-            }
+            } else if !matches!(func.body, FunctionBody::Declaration) {
+                if let Some(ref mangled) = mangled_name {
+                // Phase 5: also register the mangled name so fn_sigs lookups using the
+                // mangled name (from lower_function) resolve correctly.
+                ctx.fn_sigs.insert(mangled.clone(), (param_types, ret_type));
+                ctx.fn_param_names.insert(mangled.clone(), param_names);
+                if !defaults.is_empty() {
+                    ctx.fn_defaults.insert(mangled.clone(), defaults);
+                }
+                // Map bare name → mangled C name at every call site that uses the short name.
+                ctx.extern_bindings.insert(name.clone(), mangled.clone());
+                }  // if let Some(ref mangled)
+            }  // else if !Declaration
         }
     }
 
@@ -802,7 +860,12 @@ pub fn lower_module(
             if func.generic_params.is_some() {
                 continue; // Generic functions are lowered as monomorphized instances
             }
-            lower_function(&mut ctx, &mut module, func);
+            // Phase 5: use the module-mangled name if this function came from a
+            // non-entry module (identified by its definition span).
+            let name_override = module_fn_manglings
+                .get(&func.name.span.start)
+                .map(|s| s.as_str());
+            lower_function(&mut ctx, &mut module, func, name_override);
         }
     }
 
