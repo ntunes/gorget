@@ -1884,6 +1884,11 @@ impl<'a> TypeChecker<'a> {
                     self.check_block(eb);
                 }
             }
+
+            Stmt::MetaWhile { body, .. } => {
+                // Condition is a meta expression — skip infer_expr on it; check body only.
+                self.check_block(body);
+            }
         }
     }
 

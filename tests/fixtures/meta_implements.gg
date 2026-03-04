@@ -1,0 +1,40 @@
+trait Printable:
+    void print_val(self)
+
+struct Dog:
+    str name
+
+equip Dog with Printable:
+    void print_val(self):
+        print(self.name)
+
+void check_numeric[T]():
+    meta if implements(T, "Numeric"):
+        print("numeric")
+    else:
+        print("not-numeric")
+
+void check_comparable[T]():
+    meta if implements(T, "Comparable"):
+        print("comparable")
+    else:
+        print("not-comparable")
+
+void check_printable[T]():
+    meta if implements(T, "Printable"):
+        print("printable")
+    else:
+        print("not-printable")
+
+void main():
+    check_numeric[int]()
+    check_numeric[float]()
+    check_numeric[int8]()
+    check_numeric[uint64]()
+    check_numeric[str]()
+    check_numeric[bool]()
+    check_comparable[int]()
+    check_comparable[float32]()
+    check_printable[Dog]()
+    check_printable[int]()
+    print("done")

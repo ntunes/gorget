@@ -1010,6 +1010,14 @@ fn resolve_stmt(
                 scopes.pop_scope();
             }
         }
+
+        Stmt::MetaWhile { body, .. } => {
+            // Condition is a meta expression: skip resolve_expr on it.
+            // Body contains regular code that must be fully resolved.
+            scopes.push_scope(super::scope::ScopeKind::Block);
+            resolve_block(body, scopes, types, errors, resolution_map);
+            scopes.pop_scope();
+        }
     }
 }
 

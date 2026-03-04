@@ -1,0 +1,54 @@
+void check_width[T]():
+    meta if bitwidth(T) == 8:
+        print("8")
+    elif bitwidth(T) == 16:
+        print("16")
+    elif bitwidth(T) == 32:
+        print("32")
+    else:
+        print("64")
+
+void check_sign[T]():
+    meta if min_val(T) == 0:
+        print("unsigned")
+    else:
+        print("signed")
+
+void check_max[T]():
+    meta match max_val(T):
+        case 127:   print("int8-max")
+        case 255:   print("uint8-max")
+        case 32767: print("int16-max")
+        else:       print("other-max")
+
+str get_type[T]():
+    meta if typeof(T) == "int8":
+        return "int8"
+    elif typeof(T) == "uint8":
+        return "uint8"
+    elif typeof(T) == "int16":
+        return "int16"
+    elif typeof(T) == "uint16":
+        return "uint16"
+    else:
+        return "other"
+
+void main():
+    check_width[int8]()
+    check_width[uint8]()
+    check_width[int16]()
+    check_width[uint16]()
+    check_width[int32]()
+    check_width[int]()
+    check_sign[int8]()
+    check_sign[uint8]()
+    check_sign[int16]()
+    check_sign[uint16]()
+    check_max[int8]()
+    check_max[uint8]()
+    check_max[int16]()
+    print(get_type[int8]())
+    print(get_type[uint8]())
+    print(get_type[int16]())
+    print(get_type[float]())
+    print("done")

@@ -179,6 +179,9 @@ fn stmt_contains_it(stmt: &Stmt) -> bool {
                 || arms.iter().any(|(c, b)| contains_it(c) || block_contains_it(b))
                 || else_arm.as_ref().is_some_and(block_contains_it)
         }
+        Stmt::MetaWhile { condition, body, .. } => {
+            contains_it(condition) || block_contains_it(body)
+        }
     }
 }
 

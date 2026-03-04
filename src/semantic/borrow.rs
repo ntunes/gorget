@@ -2052,6 +2052,11 @@ impl<'a> BorrowChecker<'a> {
                     self.check_block(eb);
                 }
             }
+
+            Stmt::MetaWhile { body, .. } => {
+                // Condition is a meta expression: skip; just check the body.
+                self.check_block(body);
+            }
         }
     }
 

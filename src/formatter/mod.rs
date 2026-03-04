@@ -1099,6 +1099,15 @@ impl Formatter {
                 }
                 self.emitter.dedent();
             }
+            Stmt::MetaWhile { condition, body, .. } => {
+                self.emitter.write("meta while ");
+                self.format_expr(condition);
+                self.emitter.write(":");
+                self.emitter.newline();
+                self.emitter.indent();
+                self.format_block_stmts(body);
+                self.emitter.dedent();
+            }
         }
     }
 

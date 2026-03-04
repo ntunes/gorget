@@ -293,10 +293,12 @@ pub fn lower_generic_function(
         let mut cloned = template.clone();
         let empty_env = rustc_hash::FxHashMap::default();
         let delayed_ctx = DelayedMetaContext {
-            type_subs: &subs,
-            features: &[],
-            meta_env: &empty_env,
-            items: &[],
+            type_subs:      &subs,
+            features:       &[],
+            meta_env:       &empty_env,
+            items:          &[],
+            trait_registry: &ctx.analysis.traits,
+            type_registry:  &ctx.type_registry,
         };
         if let FunctionBody::Block(ref mut block) = cloned.body {
             let mut errors = Vec::new();

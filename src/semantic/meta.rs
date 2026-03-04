@@ -32,6 +32,7 @@ pub enum MetaValue {
     Float(f64),
     Bool(bool),
     Str(String),
+    List(Vec<MetaValue>),
 }
 
 const MAX_META_RECURSION: usize = 256;
@@ -1212,8 +1213,8 @@ fn eval_meta_stmt(
             stmt_span,
         )),
 
-        Stmt::MetaIf { .. } | Stmt::MetaFor { .. } | Stmt::MetaMatch { .. } => Err(meta_err(
-            "`meta if`/`meta for`/`meta match` in function body requires generic type parameters \
+        Stmt::MetaIf { .. } | Stmt::MetaFor { .. } | Stmt::MetaMatch { .. } | Stmt::MetaWhile { .. } => Err(meta_err(
+            "`meta if`/`meta for`/`meta match`/`meta while` in function body requires generic type parameters \
              and is evaluated at monomorphization time, not in compile-time functions",
             stmt_span,
         )),
@@ -1492,6 +1493,10 @@ fn substitute_stmt(stmt: &mut Stmt, env: &FxHashMap<String, MetaValue>, type_env
             }
             if let Some(eb) = else_arm { substitute_block(eb, env, type_env); }
         }
+        Stmt::MetaWhile { condition, body, .. } => {
+            substitute_expr(condition, env, type_env);
+            substitute_block(body, env, type_env);
+        }
     }
 }
 
@@ -1667,6 +1672,11 @@ fn meta_value_to_expr(value: &MetaValue) -> Expr {
             kind: StringKind::Normal,
             segments: vec![StringSegment::Literal(s.clone())],
         }),
+        MetaValue::List(_) => {
+            // Lists are not representable as a single AST expression;
+            // they are only used internally by meta for iteration.
+            panic!("meta List value cannot be substituted into AST expression position")
+        }
     }
 }
 
@@ -1676,6 +1686,10 @@ fn meta_value_to_string(value: &MetaValue) -> String {
         MetaValue::Float(f) => format!("{f}"),
         MetaValue::Bool(b) => format!("{b}"),
         MetaValue::Str(s) => s.clone(),
+        MetaValue::List(items) => {
+            let parts: Vec<String> = items.iter().map(meta_value_to_string).collect();
+            format!("[{}]", parts.join(", "))
+        }
     }
 }
 
@@ -1698,6 +1712,7 @@ fn value_type_name(v: &MetaValue) -> &'static str {
         MetaValue::Float(_) => "float",
         MetaValue::Bool(_) => "bool",
         MetaValue::Str(_) => "str",
+        MetaValue::List(_) => "list",
     }
 }
 
@@ -1741,6 +1756,10 @@ pub struct DelayedMetaContext<'a> {
     pub meta_env: &'a FxHashMap<String, MetaValue>,
     /// Module AST items (for Phase 2 reflection builtins; empty slice for Phase 1).
     pub items: &'a [Spanned<Item>],
+    /// Trait registry for `implements()` builtin.
+    pub trait_registry: &'a crate::semantic::traits::TraitRegistry,
+    /// Type registry for struct/enum reflection builtins.
+    pub type_registry: &'a crate::ir::types::TypeRegistry,
 }
 
 /// Convert an AST `Type` to a canonical string representation used by `typename()`.
@@ -1794,6 +1813,9 @@ fn meta_values_eq(a: &MetaValue, b: &MetaValue) -> bool {
         (MetaValue::Bool(x),  MetaValue::Bool(y))  => x == y,
         (MetaValue::Str(x),   MetaValue::Str(y))   => x == y,
         (MetaValue::Float(x), MetaValue::Float(y)) => x == y,
+        (MetaValue::List(a), MetaValue::List(b)) => {
+            a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| meta_values_eq(x, y))
+        }
         _ => false,
     }
 }
@@ -1868,6 +1890,229 @@ fn eval_delayed_expr(
                                 ),
                                 span,
                             )),
+                        }
+                    }
+                    "typeof" => {
+                        if args.len() != 1 {
+                            return Err(meta_err("typeof() takes exactly 1 argument", span));
+                        }
+                        let type_name_str = meta_expr_to_type_name(&args[0].node.value.node);
+                        for (param, concrete_ty) in ctx.type_subs {
+                            if *param == type_name_str {
+                                return Ok(MetaValue::Str(type_to_canonical_name(concrete_ty)));
+                            }
+                        }
+                        return Ok(MetaValue::Str(type_name_str));
+                    }
+                    "bitwidth" => {
+                        if args.len() != 1 {
+                            return Err(meta_err("bitwidth() takes exactly 1 argument", span));
+                        }
+                        let raw = meta_expr_to_type_name(&args[0].node.value.node);
+                        let type_name = ctx.type_subs.iter().find(|(p, _)| *p == raw)
+                            .map(|(_, ty)| type_to_canonical_name(ty))
+                            .unwrap_or(raw);
+                        let bits: i64 = match type_name.as_str() {
+                            "int8" | "uint8" | "bool"               => 8,
+                            "int16" | "uint16"                       => 16,
+                            "int32" | "uint32" | "float32"           => 32,
+                            "int" | "int64" | "uint" | "uint64" |
+                            "float" | "float64"                      => 64,
+                            other => return Err(meta_err(
+                                &format!("bitwidth({other}): unknown or non-primitive type"), span)),
+                        };
+                        return Ok(MetaValue::Int(bits));
+                    }
+                    "min_val" => {
+                        if args.len() != 1 {
+                            return Err(meta_err("min_val() takes exactly 1 argument", span));
+                        }
+                        let raw = meta_expr_to_type_name(&args[0].node.value.node);
+                        let type_name = ctx.type_subs.iter().find(|(p, _)| *p == raw)
+                            .map(|(_, ty)| type_to_canonical_name(ty))
+                            .unwrap_or(raw);
+                        let val: i64 = match type_name.as_str() {
+                            "int8"   => i8::MIN as i64,
+                            "int16"  => i16::MIN as i64,
+                            "int32"  => i32::MIN as i64,
+                            "int" | "int64" => i64::MIN,
+                            "uint8" | "uint16" | "uint32" | "uint64" | "uint" => 0,
+                            other => return Err(meta_err(
+                                &format!("min_val({other}): requires an integer type"), span)),
+                        };
+                        return Ok(MetaValue::Int(val));
+                    }
+                    "max_val" => {
+                        if args.len() != 1 {
+                            return Err(meta_err("max_val() takes exactly 1 argument", span));
+                        }
+                        let raw = meta_expr_to_type_name(&args[0].node.value.node);
+                        let type_name = ctx.type_subs.iter().find(|(p, _)| *p == raw)
+                            .map(|(_, ty)| type_to_canonical_name(ty))
+                            .unwrap_or(raw);
+                        let val: i64 = match type_name.as_str() {
+                            "int8"   => i8::MAX as i64,
+                            "int16"  => i16::MAX as i64,
+                            "int32"  => i32::MAX as i64,
+                            "int" | "int64" => i64::MAX,
+                            "uint8"  => u8::MAX as i64,
+                            "uint16" => u16::MAX as i64,
+                            "uint32" => u32::MAX as i64,
+                            "uint" | "uint64" => i64::MAX,   // saturated at i64::MAX
+                            other => return Err(meta_err(
+                                &format!("max_val({other}): requires an integer type"), span)),
+                        };
+                        return Ok(MetaValue::Int(val));
+                    }
+                    "implements" => {
+                        if args.len() != 2 {
+                            return Err(meta_err("implements() takes exactly 2 arguments", span));
+                        }
+                        let raw = meta_expr_to_type_name(&args[0].node.value.node);
+                        let type_name = ctx.type_subs.iter().find(|(p, _)| *p == raw)
+                            .map(|(_, ty)| type_to_canonical_name(ty))
+                            .unwrap_or(raw);
+                        // arg1 must be a string literal (the trait name)
+                        let trait_name = match eval_delayed_expr(&args[1].node.value.node, ctx, span)? {
+                            MetaValue::Str(s) => s,
+                            _ => return Err(meta_err("implements(): second argument must be a trait name string", span)),
+                        };
+                        let found = ctx.trait_registry.has_trait_impl_by_name(&type_name, &trait_name);
+                        return Ok(MetaValue::Bool(found));
+                    }
+                    "field_names" => {
+                        if args.len() != 1 {
+                            return Err(meta_err("field_names() takes exactly 1 argument", span));
+                        }
+                        let raw = meta_expr_to_type_name(&args[0].node.value.node);
+                        let type_name = ctx.type_subs.iter().find(|(p, _)| *p == raw)
+                            .map(|(_, ty)| type_to_canonical_name(ty))
+                            .unwrap_or(raw);
+                        match ctx.type_registry.get_type_def(&type_name) {
+                            Some(type_def) => {
+                                if let crate::ir::types::TypeDefKind::Struct(s) = &type_def.kind {
+                                    let names = s.fields.iter()
+                                        .map(|f| MetaValue::Str(f.name.clone()))
+                                        .collect();
+                                    return Ok(MetaValue::List(names));
+                                }
+                                return Err(meta_err(&format!("field_names: `{type_name}` is not a struct"), span));
+                            }
+                            None => return Err(meta_err(
+                                &format!("field_names: unknown type `{type_name}` (struct must be used before reflection)"),
+                                span)),
+                        }
+                    }
+                    "field_count" => {
+                        if args.len() != 1 {
+                            return Err(meta_err("field_count() takes exactly 1 argument", span));
+                        }
+                        let raw = meta_expr_to_type_name(&args[0].node.value.node);
+                        let type_name = ctx.type_subs.iter().find(|(p, _)| *p == raw)
+                            .map(|(_, ty)| type_to_canonical_name(ty))
+                            .unwrap_or(raw);
+                        match ctx.type_registry.get_type_def(&type_name) {
+                            Some(type_def) => {
+                                if let crate::ir::types::TypeDefKind::Struct(s) = &type_def.kind {
+                                    return Ok(MetaValue::Int(s.fields.len() as i64));
+                                }
+                                return Err(meta_err(&format!("field_count: `{type_name}` is not a struct"), span));
+                            }
+                            None => return Err(meta_err(
+                                &format!("field_count: unknown type `{type_name}`"), span)),
+                        }
+                    }
+                    "has_field" => {
+                        if args.len() != 2 {
+                            return Err(meta_err("has_field() takes exactly 2 arguments", span));
+                        }
+                        let raw = meta_expr_to_type_name(&args[0].node.value.node);
+                        let type_name = ctx.type_subs.iter().find(|(p, _)| *p == raw)
+                            .map(|(_, ty)| type_to_canonical_name(ty))
+                            .unwrap_or(raw);
+                        let field_name = match eval_delayed_expr(&args[1].node.value.node, ctx, span)? {
+                            MetaValue::Str(s) => s,
+                            _ => return Err(meta_err("has_field(): second argument must be a field name string", span)),
+                        };
+                        match ctx.type_registry.get_type_def(&type_name) {
+                            Some(type_def) => {
+                                if let crate::ir::types::TypeDefKind::Struct(s) = &type_def.kind {
+                                    let found = s.fields.iter().any(|f| f.name == field_name);
+                                    return Ok(MetaValue::Bool(found));
+                                }
+                                return Ok(MetaValue::Bool(false));
+                            }
+                            None => return Ok(MetaValue::Bool(false)),
+                        }
+                    }
+                    "field_type" => {
+                        if args.len() != 2 {
+                            return Err(meta_err("field_type() takes exactly 2 arguments", span));
+                        }
+                        let raw = meta_expr_to_type_name(&args[0].node.value.node);
+                        let type_name = ctx.type_subs.iter().find(|(p, _)| *p == raw)
+                            .map(|(_, ty)| type_to_canonical_name(ty))
+                            .unwrap_or(raw);
+                        let field_name = match eval_delayed_expr(&args[1].node.value.node, ctx, span)? {
+                            MetaValue::Str(s) => s,
+                            _ => return Err(meta_err("field_type(): second argument must be a field name string", span)),
+                        };
+                        match ctx.type_registry.get_type_def(&type_name) {
+                            Some(type_def) => {
+                                if let crate::ir::types::TypeDefKind::Struct(s) = &type_def.kind {
+                                    if let Some(field) = s.fields.iter().find(|f| f.name == field_name) {
+                                        let ft = ctx.type_registry.type_name(field.type_id)
+                                            .unwrap_or_else(|| "unknown".to_string());
+                                        return Ok(MetaValue::Str(ft));
+                                    }
+                                    return Err(meta_err(
+                                        &format!("field_type: `{type_name}` has no field `{field_name}`"), span));
+                                }
+                                return Err(meta_err(&format!("field_type: `{type_name}` is not a struct"), span));
+                            }
+                            None => return Err(meta_err(
+                                &format!("field_type: unknown type `{type_name}`"), span)),
+                        }
+                    }
+                    "variant_names" => {
+                        if args.len() != 1 {
+                            return Err(meta_err("variant_names() takes exactly 1 argument", span));
+                        }
+                        let raw = meta_expr_to_type_name(&args[0].node.value.node);
+                        let type_name = ctx.type_subs.iter().find(|(p, _)| *p == raw)
+                            .map(|(_, ty)| type_to_canonical_name(ty))
+                            .unwrap_or(raw);
+                        match ctx.type_registry.get_type_def(&type_name) {
+                            Some(type_def) => {
+                                if let crate::ir::types::TypeDefKind::Enum(e) = &type_def.kind {
+                                    let names = e.variants.iter()
+                                        .map(|v| MetaValue::Str(v.name.clone()))
+                                        .collect();
+                                    return Ok(MetaValue::List(names));
+                                }
+                                return Err(meta_err(&format!("variant_names: `{type_name}` is not an enum"), span));
+                            }
+                            None => return Err(meta_err(
+                                &format!("variant_names: unknown type `{type_name}`"), span)),
+                        }
+                    }
+                    "variant_count" => {
+                        if args.len() != 1 {
+                            return Err(meta_err("variant_count() takes exactly 1 argument", span));
+                        }
+                        let raw = meta_expr_to_type_name(&args[0].node.value.node);
+                        let type_name = ctx.type_subs.iter().find(|(p, _)| *p == raw)
+                            .map(|(_, ty)| type_to_canonical_name(ty))
+                            .unwrap_or(raw);
+                        match ctx.type_registry.get_type_def(&type_name) {
+                            Some(type_def) => {
+                                if let crate::ir::types::TypeDefKind::Enum(e) = &type_def.kind {
+                                    return Ok(MetaValue::Int(e.variants.len() as i64));
+                                }
+                                return Err(meta_err(&format!("variant_count: `{type_name}` is not an enum"), span));
+                            }
+                            None => return Err(meta_err(
+                                &format!("variant_count: unknown type `{type_name}`"), span)),
                         }
                     }
                     _ => {}
@@ -1969,23 +2214,39 @@ pub fn evaluate_delayed_meta_block(
                         let mut result_stmts: Vec<Spanned<Stmt>> = Vec::new();
                         for val in start_val..upper {
                             // Build a child context with loop var added to meta_env
-                            let mut child_env = ctx.meta_env.clone();
+                            let mut child_env = (*ctx.meta_env).clone();
                             child_env.insert(loop_var.clone(), MetaValue::Int(val));
-                            let child_ctx = DelayedMetaContext {
-                                type_subs: ctx.type_subs,
-                                features: ctx.features,
-                                meta_env: &child_env,
-                                items: ctx.items,
-                            };
+                            let child_ctx = DelayedMetaContext { meta_env: &child_env, ..*ctx };
                             let mut loop_body = body.clone();
                             evaluate_delayed_meta_block(&mut loop_body, &child_ctx, errors);
                             result_stmts.extend(loop_body.stmts);
                         }
                         Some(result_stmts)
                     }
-                    Err(e) => {
-                        errors.push(e);
-                        Some(vec![])
+                    Err(_range_err) => {
+                        // Not an integer range — try evaluating as a list expression
+                        match eval_delayed_expr(&range.node, ctx, range.span) {
+                            Ok(MetaValue::List(items)) => {
+                                let mut result_stmts: Vec<Spanned<Stmt>> = Vec::new();
+                                for item_val in items {
+                                    let mut child_env = (*ctx.meta_env).clone();
+                                    child_env.insert(var_name.node.clone(), item_val);
+                                    let child_ctx = DelayedMetaContext { meta_env: &child_env, ..*ctx };
+                                    let mut loop_body = body.clone();
+                                    evaluate_delayed_meta_block(&mut loop_body, &child_ctx, errors);
+                                    result_stmts.extend(loop_body.stmts);
+                                }
+                                Some(result_stmts)
+                            }
+                            Ok(_) => {
+                                errors.push(meta_err(
+                                    "meta for: range must be an integer range (x..y) or a list (e.g. field_names(T))",
+                                    range.span,
+                                ));
+                                Some(vec![])
+                            }
+                            Err(e) => { errors.push(e); Some(vec![]) }
+                        }
                     }
                 }
             }
@@ -2025,6 +2286,42 @@ pub fn evaluate_delayed_meta_block(
                         Some(vec![])
                     }
                 }
+            }
+
+            Stmt::MetaWhile { condition, body, span } => {
+                const MAX_META_ITERATIONS: usize = 100_000;
+                let mut result_stmts = Vec::new();
+                let mut iter_count = 0usize;
+                loop {
+                    match eval_delayed_expr(&condition.node, ctx, condition.span) {
+                        Ok(MetaValue::Bool(true)) => {
+                            if iter_count >= MAX_META_ITERATIONS {
+                                errors.push(meta_err(
+                                    "meta while exceeded iteration limit (100000)",
+                                    *span,
+                                ));
+                                break;
+                            }
+                            let mut loop_body = body.clone();
+                            evaluate_delayed_meta_block(&mut loop_body, ctx, errors);
+                            result_stmts.extend(loop_body.stmts);
+                            iter_count += 1;
+                        }
+                        Ok(MetaValue::Bool(false)) => break,
+                        Ok(_) => {
+                            errors.push(meta_err(
+                                "meta while condition must evaluate to bool",
+                                condition.span,
+                            ));
+                            break;
+                        }
+                        Err(e) => {
+                            errors.push(e);
+                            break;
+                        }
+                    }
+                }
+                Some(result_stmts)
             }
 
             _ => None, // Not a meta stmt — recurse into sub-blocks below
@@ -2141,6 +2438,11 @@ fn recurse_delayed_meta_in_stmt(
             if let Some(eb) = else_arm {
                 evaluate_delayed_meta_block(eb, ctx, errors);
             }
+        }
+        // MetaWhile: recurse into body
+        // (needed when a meta while is nested inside a regular if/while/etc.)
+        Stmt::MetaWhile { condition: _, body, .. } => {
+            evaluate_delayed_meta_block(body, ctx, errors);
         }
         // Leaf stmts — no sub-blocks
         _ => {}

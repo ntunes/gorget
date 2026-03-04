@@ -4610,8 +4610,11 @@ fn build_if_chain_expr(
     builder.switch_to(then_bb);
     super::stmts::emit_is_bindings(ctx, builder, condition);
     let then_val = lower_block_expr(ctx, builder, then_body);
-    builder.assign(Place::local(result_id), then_val);
-    builder.jump(merge_bb);
+    // Guard: if the branch terminated via return/break/continue, don't overwrite its terminator.
+    if !builder.is_terminated() {
+        builder.assign(Place::local(result_id), then_val);
+        builder.jump(merge_bb);
+    }
 
     // Elif branches
     let mut current_else_bb = else_bb;
@@ -4625,8 +4628,10 @@ fn build_if_chain_expr(
         builder.switch_to(elif_then_bb);
         super::stmts::emit_is_bindings(ctx, builder, elif_cond);
         let elif_val = lower_block_expr(ctx, builder, elif_body);
-        builder.assign(Place::local(result_id), elif_val);
-        builder.jump(merge_bb);
+        if !builder.is_terminated() {
+            builder.assign(Place::local(result_id), elif_val);
+            builder.jump(merge_bb);
+        }
 
         current_else_bb = next_else_bb;
     }
@@ -4635,11 +4640,14 @@ fn build_if_chain_expr(
     builder.switch_to(current_else_bb);
     if let Some(else_block) = else_body {
         let else_val = lower_block_expr(ctx, builder, else_block);
-        builder.assign(Place::local(result_id), else_val);
+        if !builder.is_terminated() {
+            builder.assign(Place::local(result_id), else_val);
+            builder.jump(merge_bb);
+        }
     } else {
         builder.assign(Place::local(result_id), Operand::Constant(Constant::I64(0)));
+        builder.jump(merge_bb);
     }
-    builder.jump(merge_bb);
 
     builder.switch_to(merge_bb);
     FunctionBuilder::copy(result_id)

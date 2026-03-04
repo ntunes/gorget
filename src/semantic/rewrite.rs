@@ -163,6 +163,10 @@ fn rewrite_stmt(stmt: &mut Stmt, res: &ResolutionMap, scopes: &ScopeTable) {
             }
             if let Some(eb) = else_arm { rewrite_block(eb, res, scopes); }
         }
+        Stmt::MetaWhile { body, .. } => {
+            // Condition is a meta expression — skip; rewrite the body.
+            rewrite_block(body, res, scopes);
+        }
     }
 }
 

@@ -406,6 +406,10 @@ pub fn walk_stmt<V: ExprVisitor + ?Sized>(v: &mut V, stmt: &Spanned<Stmt>) {
                 v.visit_block(eb);
             }
         }
+        Stmt::MetaWhile { condition, body, .. } => {
+            v.visit_expr(condition);
+            v.visit_block(body);
+        }
     }
 }
 

@@ -17,11 +17,26 @@ void main():
     # February in a non-leap year
     print(dt_days_in_month(2001, 2))
 
-    # dt_days_from_epoch: known dates
+    # dt_days_from_epoch: post-epoch dates
     print(dt_days_from_epoch(1970, 1, 1))
     print(dt_days_from_epoch(1970, 1, 2))
     print(dt_days_from_epoch(1971, 1, 1))
     print(dt_days_from_epoch(2000, 1, 1))
+
+    # dt_days_from_epoch: pre-epoch dates (previously always returned wrong positive values)
+    print(dt_days_from_epoch(1969, 12, 31))
+    print(dt_days_from_epoch(1969, 1, 1))
+    print(dt_days_from_epoch(1968, 12, 31))
+    print(dt_days_from_epoch(1968, 1, 1))
+
+    # Round-trip: pre-epoch to_epoch should match gmtime_r via from_epoch_utc
+    DateTime dpre = DateTime(1969, 12, 31, 0, 0, 0, 0)
+    int ep_pre = dpre.to_epoch()
+    print(ep_pre)
+    DateTime dpre_rt = DateTime.from_epoch_utc(ep_pre)
+    print(dpre_rt.dt_year)
+    print(dpre_rt.dt_month)
+    print(dpre_rt.dt_day)
 
     # from_epoch_utc: epoch 0 = 1970-01-01T00:00:00Z
     DateTime d0 = DateTime.from_epoch_utc(0)

@@ -1,0 +1,33 @@
+# Guard pattern: body skipped when condition is false for instantiated types
+void only_exotic[T]():
+    # bitwidth > 64 is always false for any real type
+    meta while bitwidth(T) > 64:
+        print("exotic wide type")
+    print("normal")
+
+# Guard: body skipped when T is not int (typeof(T) == "int" is false for float)
+void only_if_int[T]():
+    meta while typeof(T) == "int":
+        print("matched-int")
+    print("done")
+
+# Combination: meta while + meta match
+void width_check[T]():
+    meta while bitwidth(T) > 128:
+        print("impossible")
+    meta match bitwidth(T):
+        case 8:  print("8-bit")
+        case 16: print("16-bit")
+        case 32: print("32-bit")
+        else:    print("64-bit")
+
+void main():
+    only_exotic[int8]()
+    only_exotic[int]()
+    only_if_int[float]()
+    only_if_int[str]()
+    width_check[int8]()
+    width_check[uint16]()
+    width_check[int32]()
+    width_check[int]()
+    print("done")

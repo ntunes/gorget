@@ -1,0 +1,68 @@
+struct Vec2:
+    float x
+    float y
+
+struct Vec3:
+    float x
+    float y
+    float z
+
+enum Color:
+    Red
+    Green
+    Blue
+
+void count_fields[T]():
+    meta if field_count(T) == 2:
+        print("2")
+    elif field_count(T) == 3:
+        print("3")
+    else:
+        print("other")
+
+bool has_z[T]():
+    meta if has_field(T, "z"):
+        return true
+    else:
+        return false
+
+void count_variants[T]():
+    meta if variant_count(T) == 3:
+        print("3-variants")
+    elif variant_count(T) == 2:
+        print("2-variants")
+    else:
+        print("other-variants")
+
+void list_field_names[T]():
+    meta for field in field_names(T):
+        meta if field == "x":
+            print("x")
+        elif field == "y":
+            print("y")
+        elif field == "z":
+            print("z")
+        else:
+            print("?")
+
+void list_variant_names[T]():
+    meta for v in variant_names(T):
+        meta if v == "Red":
+            print("Red")
+        elif v == "Green":
+            print("Green")
+        elif v == "Blue":
+            print("Blue")
+        else:
+            print("?")
+
+void main():
+    count_fields[Vec2]()
+    count_fields[Vec3]()
+    print(has_z[Vec2]())
+    print(has_z[Vec3]())
+    count_variants[Color]()
+    list_field_names[Vec2]()
+    list_field_names[Vec3]()
+    list_variant_names[Color]()
+    print("done")

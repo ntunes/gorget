@@ -506,6 +506,10 @@ fn qualify_stmt(stmt: &mut Stmt, vm: &HashMap<String, String>) {
                 qualify_block(eb, vm);
             }
         }
+        Stmt::MetaWhile { condition, body, .. } => {
+            qualify_expr(condition, vm);
+            qualify_block(body, vm);
+        }
     }
 }
 

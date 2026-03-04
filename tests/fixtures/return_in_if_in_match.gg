@@ -1,0 +1,81 @@
+# ── Enum for dispatch ──
+enum Shape:
+    Circle(float)
+    Rect(float, float)
+    Triangle(float, float)
+
+# Returns a description based on shape + size category.
+# Tests: return inside if inside match arm (previously generated goto arm_end).
+str classify(Shape s, float threshold):
+    match s:
+        case Circle(r):
+            if r > threshold:
+                return "big circle"
+            return "small circle"
+        case Rect(w, h):
+            float area = w * h
+            if area > threshold:
+                return "big rect"
+            elif area > 0.0:
+                return "small rect"
+            return "zero rect"
+        case Triangle(b, h):
+            if b > threshold:
+                return "big triangle"
+            if h > threshold:
+                return "tall triangle"
+            return "small triangle"
+
+# Returns Ok(x*2) for positive, Error for zero, Ok(0) for negative.
+Result[int, str] double_positive(int x):
+    match x:
+        case 0:
+            return Error("zero")
+        else:
+            if x > 0:
+                return Ok(x * 2)
+            return Ok(0)
+
+# Multi-branch with elif chains inside match arms.
+str grade(int score):
+    match score:
+        case 0:
+            return "zero"
+        else:
+            if score >= 90:
+                return "A"
+            elif score >= 80:
+                return "B"
+            elif score >= 70:
+                return "C"
+            elif score >= 60:
+                return "D"
+            return "F"
+
+void main():
+    # classify: return inside if inside match arm
+    print(classify(Circle(5.0), 3.0))    # big circle
+    print(classify(Circle(2.0), 3.0))    # small circle
+    print(classify(Rect(4.0, 6.0), 20.0))  # big rect
+    print(classify(Rect(2.0, 3.0), 20.0))  # small rect
+    print(classify(Triangle(10.0, 2.0), 5.0))  # big triangle
+    print(classify(Triangle(3.0, 8.0), 5.0))   # tall triangle
+    print(classify(Triangle(2.0, 2.0), 5.0))   # small triangle
+
+    # double_positive: return inside if in else arm
+    Result[int, str] r1 = double_positive(5)
+    print("{r1.unwrap()}")      # 10
+    Result[int, str] r2 = double_positive(0)
+    print("{r2.is_ok()}")      # false
+    Result[int, str] r3 = double_positive(-3)
+    print("{r3.unwrap()}")     # 0
+
+    # grade: elif chain inside match else arm
+    print(grade(95))   # A
+    print(grade(83))   # B
+    print(grade(72))   # C
+    print(grade(65))   # D
+    print(grade(50))   # F
+    print(grade(0))    # zero
+
+    print("done")

@@ -331,6 +331,9 @@ impl GenericCollector {
                     self.scan_block(eb);
                 }
             }
+            Stmt::MetaWhile { body, .. } => {
+                self.scan_block(body);
+            }
             _ => {}
         }
     }
@@ -1041,6 +1044,10 @@ fn substitute_stmt_types(stmt: &mut Spanned<Stmt>, subs: &[(String, Type)]) {
             if let Some(eb) = else_arm {
                 substitute_block_types(eb, subs);
             }
+        }
+        Stmt::MetaWhile { condition, body, .. } => {
+            substitute_expr_types(condition, subs);
+            substitute_block_types(body, subs);
         }
         _ => {}
     }

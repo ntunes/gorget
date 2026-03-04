@@ -96,10 +96,10 @@ pub fn lower_stmt(
 
         Stmt::Select { arms, else_arm: _ } => lower_select(ctx, builder, arms),
 
-        // meta if/for/match should have been evaluated and removed before GIR lowering.
+        // meta if/for/match/while should have been evaluated and removed before GIR lowering.
         // If they appear here it means they were in a non-generic context (a semantic
         // error should have been emitted) — emit nothing.
-        Stmt::MetaIf { .. } | Stmt::MetaFor { .. } | Stmt::MetaMatch { .. } => {}
+        Stmt::MetaIf { .. } | Stmt::MetaFor { .. } | Stmt::MetaMatch { .. } | Stmt::MetaWhile { .. } => {}
     }
 }
 
@@ -650,8 +650,12 @@ fn lower_if(
     ctx.drops.push_scope(DropScopeKind::Block);
     emit_is_bindings(ctx, builder, condition);
     lower_block(ctx, builder, then_body);
-    ctx.drops.pop_scope(builder, &ctx.type_registry);
-    if !block_always_returns(then_body) {
+    // Use is_terminated() rather than block_always_returns(): handles any early exit
+    // (return/break/continue, including nested match/while) and prevents double-drops.
+    if builder.is_terminated() {
+        ctx.drops.pop_scope_no_emit();
+    } else {
+        ctx.drops.pop_scope(builder, &ctx.type_registry);
         builder.jump(merge_bb);
     }
 
@@ -674,8 +678,10 @@ fn lower_if(
         ctx.drops.push_scope(DropScopeKind::Block);
         emit_is_bindings(ctx, builder, elif_cond);
         lower_block(ctx, builder, elif_body);
-        ctx.drops.pop_scope(builder, &ctx.type_registry);
-        if !block_always_returns(elif_body) {
+        if builder.is_terminated() {
+            ctx.drops.pop_scope_no_emit();
+        } else {
+            ctx.drops.pop_scope(builder, &ctx.type_registry);
             builder.jump(merge_bb);
         }
 
@@ -687,8 +693,10 @@ fn lower_if(
         builder.switch_to(current_else_bb);
         ctx.drops.push_scope(DropScopeKind::Block);
         lower_block(ctx, builder, else_body);
-        ctx.drops.pop_scope(builder, &ctx.type_registry);
-        if !block_always_returns(else_body) {
+        if builder.is_terminated() {
+            ctx.drops.pop_scope_no_emit();
+        } else {
+            ctx.drops.pop_scope(builder, &ctx.type_registry);
             builder.jump(merge_bb);
         }
     }
@@ -2343,14 +2351,6 @@ pub fn infer_operand_type_with_builder(
 }
 
 /// Check if a block always ends with a return statement.
-fn block_always_returns(block: &Block) -> bool {
-    if let Some(last) = block.stmts.last() {
-        matches!(last.node, Stmt::Return(_))
-    } else {
-        false
-    }
-}
-
 /// Stub for `select` statement lowering in synchronous GIR mode.
 /// The async backend handles select via its own codegen path; in the synchronous
 /// GIR path we emit a no-op (the C backend for async will never see this path).

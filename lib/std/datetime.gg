@@ -44,15 +44,25 @@ int dt_day_of_year_impl(int dt_year, int dt_month, int dt_day):
     return dt_doy
 
 # Number of days from 1970-01-01 to given date (exclusive of the date itself).
+# Positive for dates after the epoch, negative for dates before.
 int dt_days_from_epoch(int dt_year, int dt_month, int dt_day):
     int dt_days = 0
     int dt_y = 1970
-    while dt_y < dt_year:
-        if dt_is_leap(dt_y) == 1:
-            dt_days = dt_days + 366
-        else:
-            dt_days = dt_days + 365
-        dt_y = dt_y + 1
+    if dt_year >= 1970:
+        while dt_y < dt_year:
+            if dt_is_leap(dt_y) == 1:
+                dt_days = dt_days + 366
+            else:
+                dt_days = dt_days + 365
+            dt_y = dt_y + 1
+    else:
+        dt_y = dt_year
+        while dt_y < 1970:
+            if dt_is_leap(dt_y) == 1:
+                dt_days = dt_days - 366
+            else:
+                dt_days = dt_days - 365
+            dt_y = dt_y + 1
     dt_days = dt_days + dt_day_of_year_impl(dt_year, dt_month, dt_day) - 1
     return dt_days
 

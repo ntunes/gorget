@@ -883,6 +883,15 @@ pub enum Stmt {
         else_arm: Option<Block>,
         span: Span,
     },
+
+    /// meta while <condition>: <block>
+    /// Compile-time while loop inside generic function/method bodies.
+    /// Evaluated at monomorphization time when type parameters are concrete.
+    MetaWhile {
+        condition: Spanned<Expr>,
+        body: Block,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone)]

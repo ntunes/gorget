@@ -5637,6 +5637,14 @@ fn datetime_extended() {
 1
 365
 10957
+-1
+-365
+-366
+-731
+-86400
+1969
+12
+31
 1970
 1
 1
@@ -6680,7 +6688,7 @@ fn format_stmt_canonical(stmt: &Stmt) -> String {
             s
         }
         Stmt::Item(item) => format_item_canonical(item),
-        Stmt::MetaIf { .. } | Stmt::MetaFor { .. } | Stmt::MetaMatch { .. } => "meta".to_string(),
+        Stmt::MetaIf { .. } | Stmt::MetaFor { .. } | Stmt::MetaMatch { .. } | Stmt::MetaWhile { .. } => "meta".to_string(),
     }
 }
 
@@ -8361,6 +8369,31 @@ done",
 }
 
 #[test]
+fn return_in_if_in_match() {
+    run_gg(
+        "return_in_if_in_match.gg",
+        "\
+big circle
+small circle
+big rect
+small rect
+big triangle
+tall triangle
+small triangle
+10
+false
+0
+A
+B
+C
+D
+F
+zero
+done",
+    );
+}
+
+#[test]
 fn dataframe_cast() {
     run_gg(
         "dataframe_cast.gg",
@@ -8990,5 +9023,89 @@ other
 0
 0
 -1",
+    );
+}
+
+#[test]
+fn meta_numeric_meta() {
+    run_gg(
+        "meta_numeric_meta.gg",
+        "\
+8
+8
+16
+16
+32
+64
+signed
+unsigned
+signed
+unsigned
+int8-max
+uint8-max
+int16-max
+int8
+uint8
+int16
+other
+done",
+    );
+}
+
+#[test]
+fn meta_implements() {
+    run_gg(
+        "meta_implements.gg",
+        "\
+numeric
+numeric
+numeric
+numeric
+not-numeric
+not-numeric
+comparable
+comparable
+printable
+not-printable
+done",
+    );
+}
+
+#[test]
+fn meta_while() {
+    run_gg(
+        "meta_while.gg",
+        "\
+normal
+normal
+done
+done
+8-bit
+16-bit
+32-bit
+64-bit
+done",
+    );
+}
+
+#[test]
+fn meta_reflection() {
+    run_gg(
+        "meta_reflection.gg",
+        "\
+2
+3
+false
+true
+3-variants
+x
+y
+x
+y
+z
+Red
+Green
+Blue
+done",
     );
 }
