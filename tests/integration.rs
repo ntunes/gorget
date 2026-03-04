@@ -4235,6 +4235,14 @@ fn httpserver_chunked() {
 }
 
 #[test]
+fn httpserver_before() {
+    run_gg(
+        "httpserver_before.gg",
+        "ok\nok\nok\nok\nok",
+    );
+}
+
+#[test]
 fn httpserver_response() {
     run_gg(
         "httpserver_response.gg",

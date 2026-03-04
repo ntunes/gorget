@@ -550,18 +550,22 @@ struct Router:
     # This avoids storing Vector[str] inside a Dict (which causes use-after-free when
     # the shallow-copied vector is freed while the dict still owns the data).
     Dict[str, Callable[HttpServerResponse(HttpRequest)]] param_routes
-    # Middleware pipeline: each hook receives the original request and the handler's response,
-    # and returns a (possibly modified) response. Applied in registration order after dispatch.
-    # Signature: Callable[HttpServerResponse(HttpRequest, HttpServerResponse)]
+    # Post-dispatch middleware: called after handler, receives (req, resp) → resp.
     # Use cases: add CORS headers, inject X-headers, log status codes, etc.
     Vector[Callable[HttpServerResponse(HttpRequest, HttpServerResponse)]] middlewares
+    # Pre-dispatch middleware: called before handler, receives (req) → Option[HttpServerResponse].
+    # Return Some(resp) to short-circuit (handler is not called).
+    # Return None() to pass through to the next hook or the handler.
+    # Post-dispatch middlewares still run on short-circuit responses.
+    Vector[Callable[Option[HttpServerResponse](HttpRequest)]] pre_middlewares
 
 equip Router:
     Router new():
         Dict[str, Callable[HttpServerResponse(HttpRequest)]] ex = Dict[str, Callable[HttpServerResponse(HttpRequest)]]()
         Dict[str, Callable[HttpServerResponse(HttpRequest)]] pr = Dict[str, Callable[HttpServerResponse(HttpRequest)]]()
         Vector[Callable[HttpServerResponse(HttpRequest, HttpServerResponse)]] mw = Vector[Callable[HttpServerResponse(HttpRequest, HttpServerResponse)]]()
-        return Router(ex, pr, mw)
+        Vector[Callable[Option[HttpServerResponse](HttpRequest)]] pre = Vector[Callable[Option[HttpServerResponse](HttpRequest)]]()
+        return Router(ex, pr, mw, pre)
 
     void route(&self, str method, str path, Callable[HttpServerResponse(HttpRequest)] handler):
         Callable[HttpServerResponse(HttpRequest)] h = handler
@@ -587,12 +591,19 @@ equip Router:
     void patch(&self, str path, Callable[HttpServerResponse(HttpRequest)] handler):
         self.route("PATCH", path, handler)
 
-    # Register a middleware hook. Each hook is called (in order) after the matched handler
-    # returns, receiving the original request and the handler's response. The hook returns
-    # the (possibly modified) response. Typical uses: CORS headers, security headers, logging.
+    # Register a post-dispatch middleware hook. Called after the handler, can modify response.
+    # Typical uses: CORS headers, security headers, logging.
     void use(&self, Callable[HttpServerResponse(HttpRequest, HttpServerResponse)] hook):
         Callable[HttpServerResponse(HttpRequest, HttpServerResponse)] h = hook
         self.middlewares.push(h)
+
+    # Register a pre-dispatch middleware hook. Called before the handler.
+    # Return Some(resp) to short-circuit (skip handler). Return None() to continue.
+    # Post-dispatch middlewares still run on short-circuit responses.
+    # Typical uses: authentication, rate limiting, CORS preflight.
+    void before(&self, Callable[Option[HttpServerResponse](HttpRequest)] hook):
+        Callable[Option[HttpServerResponse](HttpRequest)] h = hook
+        self.pre_middlewares.push(h)
 
     # Collect all HTTP methods registered for a given path (exact or matching param pattern).
     # Used by HEAD and OPTIONS auto-handling.
@@ -690,15 +701,31 @@ equip Router:
             return HttpServerResponse(405, "Method Not Allowed", "text/plain", m405_hdrs)
         return HttpServerResponse.not_found()
 
-    # Dispatch a request through the router: inner dispatch + middleware pipeline.
-    HttpServerResponse dispatch(&self, HttpRequest req):
-        HttpServerResponse resp = self.dispatch_inner(req)
+    # Run post-dispatch middlewares on a response.
+    HttpServerResponse run_post_middlewares(&self, HttpRequest req, HttpServerResponse resp):
         int mi = 0
         while mi < self.middlewares.len():
             Callable[HttpServerResponse(HttpRequest, HttpServerResponse)] mw = self.middlewares[mi]
             resp = mw(req, resp)
             mi = mi + 1
         return resp
+
+    # Dispatch a request through the router:
+    #   1. Pre-dispatch hooks (before): first Some() short-circuits.
+    #   2. Handler dispatch (dispatch_inner).
+    #   3. Post-dispatch hooks (use): always run, even on short-circuit.
+    HttpServerResponse dispatch(&self, HttpRequest req):
+        # Pre-dispatch: first hook returning Some() short-circuits
+        int pi = 0
+        while pi < self.pre_middlewares.len():
+            Callable[Option[HttpServerResponse](HttpRequest)] pre = self.pre_middlewares[pi]
+            Option[HttpServerResponse] early = pre(req)
+            if early is Some(short_resp):
+                return self.run_post_middlewares(req, short_resp)
+            pi = pi + 1
+        # Normal handler dispatch
+        HttpServerResponse resp = self.dispatch_inner(req)
+        return self.run_post_middlewares(req, resp)
 
 # ── Static file serving ───────────────────────────────────────
 
