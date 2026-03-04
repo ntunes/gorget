@@ -183,6 +183,7 @@ fn stmt_contains_it(stmt: &Stmt) -> bool {
             contains_it(condition) || block_contains_it(body)
         }
         Stmt::MetaConst { value, .. } => contains_it(value),
+        Stmt::MetaLog { args, .. } => args.iter().any(contains_it),
     }
 }
 

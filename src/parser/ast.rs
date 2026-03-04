@@ -56,6 +56,7 @@ pub enum Item {
     MetaType(MetaType),
     MetaTypeFunc(MetaTypeFunc),
     MetaAssert(MetaAssert),
+    MetaLog(MetaLog),
     MetaIf(MetaIf),
     /// A file-based module's items, wrapped during merge to preserve module identity.
     /// Created by the loader when merging multi-file programs.
@@ -933,6 +934,14 @@ pub enum Stmt {
         value: Spanned<Expr>,
         span:  Span,
     },
+
+    /// `meta log <expr> [, <expr> ...]`
+    /// Compile-time diagnostic: evaluates each expression and prints to stderr.
+    /// Evaluated at monomorphization time in generic bodies; at Phase 0 at file scope.
+    MetaLog {
+        args: Vec<Spanned<Expr>>,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -1043,6 +1052,14 @@ pub struct MetaTypeFunc {
 pub struct MetaAssert {
     pub condition: Spanned<Expr>,
     pub message: Option<Spanned<Expr>>,
+    pub span: Span,
+}
+
+/// `meta log <expr> [, <expr> ...]`
+/// Compile-time diagnostic: evaluates each expression and prints to stderr during compilation.
+#[derive(Debug, Clone)]
+pub struct MetaLog {
+    pub args: Vec<Spanned<Expr>>,
     pub span: Span,
 }
 

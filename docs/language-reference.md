@@ -4094,7 +4094,46 @@ meta assert BUFFER_SIZE <= 1048576, "buffer exceeds 1 MB"
 meta assert TABLE_SIZE == 1024   # no message required
 ```
 
-### 19.3 Meta Type Aliases
+### 19.3 Meta Log
+
+`meta log` emits a compile-time diagnostic message to stderr. It is the soft counterpart to `meta assert`: instead of halting compilation, it prints and continues.
+
+**Syntax:**
+
+```gorget
+meta log expr [, expr ...]
+```
+
+Each expression is evaluated as a meta expression (same rules as `meta const` and `meta if` conditions) and printed space-separated with the prefix `[meta]`.
+
+```gorget
+meta int PAGE_SIZE = 4096
+meta int PAGES     = 16
+
+meta log "page size:", PAGE_SIZE, "pages:", PAGES
+# stderr: [meta] page size: 4096 pages: 16
+```
+
+Inside generic function bodies, `meta log` is evaluated at monomorphization time:
+
+```gorget
+str describe[T]():
+    meta log "describe called for type:", typename(T)
+    meta if typename(T) == "int":
+        return "integer"
+    elif typename(T) == "str":
+        return "string"
+    else:
+        return "other"
+```
+
+When `describe[int]()` is instantiated: `stderr: [meta] describe called for type: int`.
+
+Multiple comma-separated arguments are space-separated in the output. `meta log` accepts any expression valid in a meta context: string literals, integer/bool/float literals, meta const names, `typename(T)`, `sizeof(T)`, arithmetic, and boolean expressions.
+
+`meta log` has no effect on the compiled program; all `meta log` statements are erased before type-checking and code generation.
+
+### 19.4 Meta Type Aliases
 
 **Plain alias** — `meta type <Name> = <Type>`
 

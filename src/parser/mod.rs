@@ -525,6 +525,7 @@ impl Parser {
             Token::Keyword(Keyword::Type) => self.parse_meta_type(start),
             Token::Keyword(Keyword::Assert) => self.parse_meta_assert(start),
             Token::Keyword(Keyword::If) => self.parse_meta_if(start),
+            Token::Identifier(s) if s == "log" => self.parse_meta_log_item(start),
             _ => self.parse_meta_const(start),
         }
     }
@@ -656,6 +657,19 @@ impl Parser {
             }),
             span,
         ))
+    }
+
+    /// `meta log <expr> [, <expr> ...]`
+    fn parse_meta_log_item(&mut self, start: Span) -> Result<Spanned<Item>, ParseError> {
+        self.advance(); // consume `log` identifier
+        let mut args = vec![self.parse_expr()?];
+        while self.match_token(&Token::Comma) {
+            args.push(self.parse_expr()?);
+        }
+        let end = self.previous_span();
+        self.consume_newline();
+        let span = start.merge(end);
+        Ok(Spanned::new(Item::MetaLog(MetaLog { args, span }), span))
     }
 
     /// `meta if <expr>: <items> [elif <expr>: <items>]* [else: <items>]`

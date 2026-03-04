@@ -100,7 +100,7 @@ pub fn lower_stmt(
         // If they appear here it means they were in a non-generic context (a semantic
         // error should have been emitted) — emit nothing.
         Stmt::MetaIf { .. } | Stmt::MetaFor { .. } | Stmt::MetaMatch { .. }
-        | Stmt::MetaWhile { .. } | Stmt::MetaConst { .. } => {}
+        | Stmt::MetaWhile { .. } | Stmt::MetaConst { .. } | Stmt::MetaLog { .. } => {}
     }
 }
 

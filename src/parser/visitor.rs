@@ -412,6 +412,9 @@ pub fn walk_stmt<V: ExprVisitor + ?Sized>(v: &mut V, stmt: &Spanned<Stmt>) {
         Stmt::MetaConst { value, .. } => {
             v.visit_expr(value);
         }
+        Stmt::MetaLog { args, .. } => {
+            for arg in args { v.visit_expr(arg); }
+        }
     }
 }
 

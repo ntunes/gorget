@@ -52,7 +52,7 @@ fn rewrite_item(item: &mut Item, res: &ResolutionMap, scopes: &ScopeTable) {
         Item::Struct(_) | Item::Enum(_) | Item::Import(_)
         | Item::TypeAlias(_) | Item::Newtype(_) | Item::ExternBlock(_)
         | Item::Directive(_) | Item::MetaConst(_) | Item::MetaType(_)
-        | Item::MetaTypeFunc(_) | Item::MetaAssert(_) | Item::MetaIf(_) => {}
+        | Item::MetaTypeFunc(_) | Item::MetaAssert(_) | Item::MetaIf(_) | Item::MetaLog(_) => {}
         Item::Module { items, .. } => {
             for si in items {
                 rewrite_item(&mut si.node, res, scopes);
@@ -176,6 +176,10 @@ fn rewrite_stmt(stmt: &mut Stmt, res: &ResolutionMap, scopes: &ScopeTable) {
 
         Stmt::MetaConst { .. } => {
             // Entirely a meta expression — evaluated at monomorphization time; skip.
+        }
+
+        Stmt::MetaLog { .. } => {
+            // Compile-time diagnostic — removed before GIR lowering; skip.
         }
     }
 }

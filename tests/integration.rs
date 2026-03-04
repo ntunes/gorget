@@ -6698,7 +6698,7 @@ fn format_stmt_canonical(stmt: &Stmt) -> String {
         }
         Stmt::Item(item) => format_item_canonical(item),
         Stmt::MetaIf { .. } | Stmt::MetaFor { .. } | Stmt::MetaMatch { .. }
-        | Stmt::MetaWhile { .. } | Stmt::MetaConst { .. } => "meta".to_string(),
+        | Stmt::MetaWhile { .. } | Stmt::MetaConst { .. } | Stmt::MetaLog { .. } => "meta".to_string(),
     }
 }
 
@@ -6947,6 +6947,7 @@ fn format_item_canonical(item: &Item) -> String {
         Item::MetaTypeFunc(mtf) => format!("meta type {}(...)", mtf.name.node),
         Item::MetaAssert(_) => "meta assert ...".to_string(),
         Item::MetaIf(_) => "meta if ...".to_string(),
+        Item::MetaLog(_) => "meta log ...".to_string(),
         Item::Module { path, items } => {
             let path_str = path.join(".");
             let inner = items.iter().map(|si| format_item_canonical(&si.node)).collect::<Vec<_>>().join("|");
@@ -9211,6 +9212,18 @@ fn embed_file() {
         "\
 SELECT id, name FROM users WHERE active = 1;
 hello world
+done",
+    );
+}
+
+#[test]
+fn meta_log() {
+    run_gg(
+        "meta_log.gg",
+        "\
+integer
+string
+boolean
 done",
     );
 }

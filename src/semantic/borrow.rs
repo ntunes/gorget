@@ -2058,6 +2058,10 @@ impl<'a> BorrowChecker<'a> {
             Stmt::MetaConst { .. } => {
                 // Entirely a meta expression — evaluated at monomorphization time; skip.
             }
+
+            Stmt::MetaLog { .. } => {
+                // Compile-time diagnostic — removed before GIR lowering; skip.
+            }
         }
     }
 

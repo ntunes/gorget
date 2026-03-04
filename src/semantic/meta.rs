@@ -135,8 +135,8 @@ fn evaluate_meta_consts_impl(
     module.items.retain(|item| {
         !matches!(
             &item.node,
-            Item::MetaConst(_) | Item::MetaAssert(_) | Item::MetaType(_)
-            | Item::MetaTypeFunc(_) | Item::MetaIf(_)
+            Item::MetaConst(_) | Item::MetaAssert(_) | Item::MetaLog(_)
+            | Item::MetaType(_) | Item::MetaTypeFunc(_) | Item::MetaIf(_)
         )
     });
 
@@ -192,6 +192,15 @@ fn process_meta_item(
                 }
                 Err(e) => errors.push(e),
             }
+        }
+        Item::MetaLog(ml) => {
+            let parts: Vec<String> = ml.args.iter().filter_map(|arg| {
+                match eval_expr(&arg.node, env, ctx, arg.span) {
+                    Ok(v) => Some(meta_value_to_string(&v)),
+                    Err(e) => { errors.push(e); None }
+                }
+            }).collect();
+            eprintln!("[meta] {}", parts.join(" "));
         }
         Item::MetaType(mt) => {
             match resolve_meta_type_rhs(&mt.rhs, env, type_env, type_func_env, ctx, mt.span) {
@@ -1307,6 +1316,18 @@ fn eval_meta_stmt(
             stmt_span,
         )),
 
+        Stmt::MetaLog { args, .. } => {
+            // meta log is always valid in compile-time functions — evaluate and print.
+            let meta_ctx = MetaContext::new(ctx.features, ctx.items);
+            let parts: Vec<String> = args.iter().filter_map(|arg| {
+                match eval_expr(&arg.node, env, &meta_ctx, arg.span) {
+                    Ok(v) => Some(meta_value_to_string(&v)),
+                    Err(_) => None,
+                }
+            }).collect();
+            eprintln!("[meta] {}", parts.join(" "));
+            Ok(MetaControlFlow::Continue)
+        }
         Stmt::MetaIf { .. } | Stmt::MetaFor { .. } | Stmt::MetaMatch { .. }
         | Stmt::MetaWhile { .. } | Stmt::MetaConst { .. } => Err(meta_err(
             "`meta if`/`meta for`/`meta match`/`meta while`/`meta const` in function body requires generic type parameters \
@@ -1463,7 +1484,7 @@ fn substitute_item(item: &mut Item, env: &FxHashMap<String, MetaValue>, type_env
         Item::SuiteSetup(s) => substitute_block(&mut s.body, env, type_env),
         Item::SuiteTeardown(s) => substitute_block(&mut s.body, env, type_env),
         Item::Import(_) | Item::Directive(_) | Item::MetaConst(_) | Item::MetaType(_)
-        | Item::MetaTypeFunc(_) | Item::MetaAssert(_) | Item::MetaIf(_) => {}
+        | Item::MetaTypeFunc(_) | Item::MetaAssert(_) | Item::MetaIf(_) | Item::MetaLog(_) => {}
         Item::Module { items, .. } => {
             for si in items {
                 substitute_item(&mut si.node, env, type_env);
@@ -1583,6 +1604,9 @@ fn substitute_stmt(stmt: &mut Stmt, env: &FxHashMap<String, MetaValue>, type_env
         Stmt::MetaFor { range, body, .. } => {
             substitute_expr(range, env, type_env);
             substitute_block(body, env, type_env);
+        }
+        Stmt::MetaLog { args, .. } => {
+            for arg in args { substitute_expr(arg, env, type_env); }
         }
         Stmt::MetaMatch { scrutinee, arms, else_arm, .. } => {
             substitute_expr(scrutinee, env, type_env);
@@ -2618,6 +2642,18 @@ pub fn evaluate_delayed_meta_block(
                         }
                     }
                     Some(result_stmts)
+                }
+
+                Stmt::MetaLog { args, .. } => {
+                    // Evaluate and print each arg to stderr, then remove the stmt.
+                    let parts: Vec<String> = args.iter().filter_map(|arg| {
+                        match eval_delayed_expr(&arg.node, &cur, arg.span) {
+                            Ok(v) => Some(meta_value_to_string(&v)),
+                            Err(e) => { errors.push(e); None }
+                        }
+                    }).collect();
+                    eprintln!("[meta] {}", parts.join(" "));
+                    Some(vec![]) // Remove the stmt
                 }
 
                 _ => None, // Not a meta stmt — recurse into sub-blocks below

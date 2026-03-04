@@ -516,6 +516,11 @@ fn qualify_stmt(stmt: &mut Stmt, vm: &HashMap<String, String>) {
         Stmt::MetaConst { value, .. } => {
             qualify_expr(value, vm);
         }
+        Stmt::MetaLog { args, .. } => {
+            for arg in args {
+                qualify_expr(arg, vm);
+            }
+        }
     }
 }
 

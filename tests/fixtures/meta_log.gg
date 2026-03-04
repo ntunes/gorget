@@ -1,0 +1,23 @@
+meta str VERSION = "1.0"
+meta int COUNT = 3
+
+# File-scope meta log
+meta log "starting compilation"
+meta log "version:", VERSION, "count:", COUNT
+
+str describe[T]():
+    meta log "describe called for type:", typename(T)
+    meta if typename(T) == "int":
+        return "integer"
+    elif typename(T) == "str":
+        return "string"
+    elif typename(T) == "bool":
+        return "boolean"
+    else:
+        return "other"
+
+void main():
+    print(describe[int]())
+    print(describe[str]())
+    print(describe[bool]())
+    print("done")

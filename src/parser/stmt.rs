@@ -636,14 +636,27 @@ impl Parser {
             Token::Keyword(Keyword::Match) => self.parse_meta_match_stmt(start),
             Token::Keyword(Keyword::While) => self.parse_meta_while_stmt(start),
             Token::Keyword(Keyword::Const) => self.parse_meta_const_stmt(start),
+            Token::Identifier(ref s) if s == "log" => self.parse_meta_log_stmt(start),
             _ => Err(ParseError {
                 kind: crate::errors::ParseErrorKind::UnexpectedToken {
-                    expected: "`if`, `for`, `match`, `while`, or `const` after `meta` in function body".to_string(),
+                    expected: "`if`, `for`, `match`, `while`, `const`, or `log` after `meta` in function body".to_string(),
                     got: format!("{:?}", self.peek()),
                 },
                 span: self.peek_span(),
             }),
         }
+    }
+
+    fn parse_meta_log_stmt(&mut self, start: Span) -> Result<Spanned<Stmt>, ParseError> {
+        self.advance(); // consume `log` identifier
+        let mut args = vec![self.parse_expr()?];
+        while self.match_token(&Token::Comma) {
+            args.push(self.parse_expr()?);
+        }
+        let end = self.previous_span();
+        self.consume_newline();
+        let span = start.merge(end);
+        Ok(Spanned::new(Stmt::MetaLog { args, span }, span))
     }
 
     fn parse_meta_if_stmt(&mut self, start: Span) -> Result<Spanned<Stmt>, ParseError> {

@@ -170,6 +170,14 @@ impl Formatter {
             | Item::MetaAssert(_) | Item::MetaIf(_) => {
                 // TODO: meta formatting not yet implemented
             }
+            Item::MetaLog(ml) => {
+                self.emitter.write("meta log ");
+                for (i, arg) in ml.args.iter().enumerate() {
+                    if i > 0 { self.emitter.write(", "); }
+                    self.format_expr(arg);
+                }
+                self.emitter.newline();
+            }
             Item::Module { items, .. } => {
                 for inner in items {
                     self.format_item(inner);
@@ -1121,6 +1129,14 @@ impl Formatter {
                 self.emitter.write(&name.node);
                 self.emitter.write(" = ");
                 self.format_expr(value);
+            }
+            Stmt::MetaLog { args, .. } => {
+                self.emitter.write("meta log ");
+                for (i, arg) in args.iter().enumerate() {
+                    if i > 0 { self.emitter.write(", "); }
+                    self.format_expr(arg);
+                }
+                self.emitter.newline();
             }
         }
     }

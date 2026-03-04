@@ -517,7 +517,7 @@ fn collect_item(
         }
 
         Item::MetaConst(_) | Item::MetaType(_) | Item::MetaTypeFunc(_)
-        | Item::MetaAssert(_) | Item::MetaIf(_) => {
+        | Item::MetaAssert(_) | Item::MetaIf(_) | Item::MetaLog(_) => {
             // Meta items resolved during meta evaluation pass (not yet implemented).
         }
 
@@ -1070,6 +1070,10 @@ fn resolve_stmt(
 
         Stmt::MetaConst { .. } => {
             // Entirely a meta expression — evaluated at monomorphization time; skip.
+        }
+
+        Stmt::MetaLog { .. } => {
+            // Args are meta expressions (typename(T), sizeof(T), etc.) — skip resolution.
         }
     }
 }
