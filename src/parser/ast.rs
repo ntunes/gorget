@@ -895,10 +895,13 @@ pub enum Stmt {
     },
 
     /// meta for <name> in <range_expr>: <stmts>
+    /// meta for <name>, <name> in <expr>: <stmts>  (multi-var destructuring)
     /// Compile-time loop unrolling inside generic function/method bodies.
     /// Evaluated at monomorphization time when type parameters are concrete.
+    /// `vars.len() == 1`: single binding (integer ranges, field_names, …).
+    /// `vars.len() >= 2`: positional destructure — each list item must itself be a list.
     MetaFor {
-        var_name: Spanned<String>,
+        vars: Vec<Spanned<String>>,
         range: Spanned<Expr>,
         body: Block,
         span: Span,

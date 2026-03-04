@@ -680,8 +680,11 @@ impl Parser {
     fn parse_meta_for_stmt(&mut self, start: Span) -> Result<Spanned<Stmt>, ParseError> {
         self.expect_keyword(Keyword::For)?;
         let var_span = self.peek_span();
-        let var_name = self.expect_identifier()?;
-        let var_name = Spanned::new(var_name.node, var_span);
+        let first = self.expect_identifier()?;
+        let mut vars = vec![Spanned::new(first.node, var_span)];
+        while self.match_token(&Token::Comma) {
+            vars.push(self.expect_identifier()?);
+        }
         self.expect_keyword(Keyword::In)?;
         let range = self.parse_expr()?;
         let body = self.parse_block()?;
@@ -689,7 +692,7 @@ impl Parser {
         let span = start.merge(end);
         Ok(Spanned::new(
             Stmt::MetaFor {
-                var_name,
+                vars,
                 range,
                 body,
                 span,

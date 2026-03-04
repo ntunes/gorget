@@ -9095,6 +9095,22 @@ done",
 }
 
 #[test]
+fn meta_fields() {
+    run_gg(
+        "meta_fields.gg",
+        "\
+x:float
+y:float
+name:str
+health:int
+alive:bool
+2
+1
+done",
+    );
+}
+
+#[test]
 fn meta_type_is() {
     run_gg(
         "meta_type_is.gg",

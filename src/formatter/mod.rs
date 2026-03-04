@@ -1071,9 +1071,10 @@ impl Formatter {
                     self.emitter.dedent();
                 }
             }
-            Stmt::MetaFor { var_name, range, body, .. } => {
+            Stmt::MetaFor { vars, range, body, .. } => {
                 self.emitter.write("meta for ");
-                self.emitter.write(&var_name.node);
+                let joined = vars.iter().map(|v| v.node.as_str()).collect::<Vec<_>>().join(", ");
+                self.emitter.write(&joined);
                 self.emitter.write(" in ");
                 self.format_expr(range);
                 self.emitter.write(":");

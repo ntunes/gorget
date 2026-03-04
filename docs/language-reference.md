@@ -4468,7 +4468,62 @@ void main():
 
 ---
 
-### 19.14 Compile-Time Loop Unrolling (`meta for`)
+### 19.14 `fields(T)` — Combined Field Iteration
+
+`fields(T)` returns all struct fields as `(name, type)` pairs, enabling combined iteration in a
+single `meta for` loop using multi-variable destructuring:
+
+```gorget
+meta for <name>, <type> in fields(T):
+    <body>
+```
+
+Each iteration binds `<name>` to the field name string and `<type>` to the canonical Gorget
+type name string (e.g. `"int"`, `"float"`, `"str"`, `"MyStruct"`).
+
+**Compared to separate loops:**
+
+```gorget
+# Before fields(T): two separate mechanisms required
+void old_way[T]():
+    meta for fname in field_names(T):
+        auto ftype = field_type(T, fname)   # repeated per-field lookup
+
+# With fields(T): single loop, both variables available together
+void new_way[T]():
+    meta for fname, ftype in fields(T):
+        print("{fname}:{ftype}")
+```
+
+**Composable with `T is X`:** the type string bound by `fields(T)` works as the LHS of `is`
+predicates inside the loop body:
+
+```gorget
+void count_numeric_fields[T]():
+    auto count = 0
+    meta for fname, ftype in fields(T):
+        meta if ftype is numeric:
+            count += 1
+    print(count)
+
+struct Player:
+    str name
+    int health
+    bool alive
+
+void main():
+    count_numeric_fields[Player]()   # 1 (only health is numeric)
+```
+
+**Note on variable naming:** `type` is a Gorget keyword and cannot be used as a loop variable
+name. Use `ftype`, `ty`, `field_type`, or any other non-keyword identifier.
+
+**`fields(T)` requires T to be a struct** (not an enum or primitive). For enum variants, use
+`variant_names(T)` and `variant_count(T)`.
+
+---
+
+### 19.15 Compile-Time Loop Unrolling (`meta for`)
 
 `meta for` inside a generic body unrolls its loop at monomorphization time:
 

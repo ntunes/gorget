@@ -647,6 +647,12 @@ fn eval_expr(
 fn meta_expr_to_type_name(expr: &Expr) -> String {
     match expr {
         Expr::Identifier(name) => name.clone(),
+        // After meta-variable substitution in a `meta for` loop, what was an identifier
+        // (e.g. `ftype`) becomes a StringLiteral holding the resolved type name.
+        // Extract the plain text so `T is numeric` still works post-substitution.
+        Expr::StringLiteral(s) => s.segments.iter().filter_map(|seg| {
+            if let StringSegment::Literal(t) = seg { Some(t.as_str()) } else { None }
+        }).collect(),
         Expr::Index { object, index } => {
             let base = meta_expr_to_type_name(&object.node);
             let idx  = meta_expr_to_type_name(&index.node);
@@ -2136,6 +2142,39 @@ fn eval_delayed_expr(
                                 &format!("field_type: unknown type `{type_name}`"), span)),
                         }
                     }
+                    "fields" => {
+                        if args.len() != 1 {
+                            return Err(meta_err("fields() takes exactly 1 argument", span));
+                        }
+                        let raw = meta_expr_to_type_name(&args[0].node.value.node);
+                        let type_name = ctx.type_subs.iter().find(|(p, _)| *p == raw)
+                            .map(|(_, ty)| type_to_canonical_name(ty))
+                            .unwrap_or(raw);
+                        match ctx.type_registry.get_type_def(&type_name) {
+                            Some(type_def) => {
+                                if let crate::ir::types::TypeDefKind::Struct(s) = &type_def.kind {
+                                    let pairs = s.fields.iter().map(|f| {
+                                        let raw_name = ctx.type_registry.type_id_to_canonical_name(f.type_id);
+                                        // Normalize GIR-internal names to Gorget language names:
+                                        // "Str" → "str", "GorgetString" → "String"
+                                        let ty_name = match raw_name.as_str() {
+                                            "Str" => "str".to_string(),
+                                            "GorgetString" => "String".to_string(),
+                                            other => other.to_string(),
+                                        };
+                                        MetaValue::List(vec![
+                                            MetaValue::Str(f.name.clone()),
+                                            MetaValue::Str(ty_name),
+                                        ])
+                                    }).collect();
+                                    return Ok(MetaValue::List(pairs));
+                                }
+                                return Err(meta_err(&format!("fields: `{type_name}` is not a struct"), span));
+                            }
+                            None => return Err(meta_err(
+                                &format!("fields: unknown type `{type_name}`"), span)),
+                        }
+                    }
                     "variant_names" => {
                         if args.len() != 1 {
                             return Err(meta_err("variant_names() takes exactly 1 argument", span));
@@ -2266,35 +2305,66 @@ pub fn evaluate_delayed_meta_block(
                 }
             }
 
-            Stmt::MetaFor { var_name, range, body, .. } => {
+            Stmt::MetaFor { vars, range, body, .. } => {
                 let range_span = range.span;
                 // Evaluate range bounds
                 match eval_delayed_meta_range(&range.node, ctx, range_span) {
                     Ok((start_val, end_val, inclusive)) => {
-                        let upper = if inclusive { end_val + 1 } else { end_val };
-                        let loop_var = var_name.node.clone();
-                        let mut result_stmts: Vec<Spanned<Stmt>> = Vec::new();
-                        for val in start_val..upper {
-                            // Build a child context with loop var added to meta_env
-                            let mut child_env = (*ctx.meta_env).clone();
-                            child_env.insert(loop_var.clone(), MetaValue::Int(val));
-                            let child_ctx = DelayedMetaContext { meta_env: &child_env, ..*ctx };
-                            let mut loop_body = body.clone();
-                            evaluate_delayed_meta_block(&mut loop_body, &child_ctx, errors);
-                            result_stmts.extend(loop_body.stmts);
+                        if vars.len() > 1 {
+                            errors.push(meta_err(
+                                "meta for: multi-variable destructuring is not valid for integer ranges",
+                                range.span,
+                            ));
+                            Some(vec![])
+                        } else {
+                            let upper = if inclusive { end_val + 1 } else { end_val };
+                            let loop_var = vars[0].node.clone();
+                            let mut result_stmts: Vec<Spanned<Stmt>> = Vec::new();
+                            for val in start_val..upper {
+                                // Build a child context with loop var added to meta_env
+                                let mut child_env = (*ctx.meta_env).clone();
+                                child_env.insert(loop_var.clone(), MetaValue::Int(val));
+                                let child_ctx = DelayedMetaContext { meta_env: &child_env, ..*ctx };
+                                let mut loop_body = body.clone();
+                                evaluate_delayed_meta_block(&mut loop_body, &child_ctx, errors);
+                                result_stmts.extend(loop_body.stmts);
+                            }
+                            Some(result_stmts)
                         }
-                        Some(result_stmts)
                     }
                     Err(_range_err) => {
                         // Not an integer range — try evaluating as a list expression
                         match eval_delayed_expr(&range.node, ctx, range.span) {
                             Ok(MetaValue::List(items)) => {
                                 let mut result_stmts: Vec<Spanned<Stmt>> = Vec::new();
+                                let empty_type_env = FxHashMap::default();
                                 for item_val in items {
                                     let mut child_env = (*ctx.meta_env).clone();
-                                    child_env.insert(var_name.node.clone(), item_val);
+                                    if vars.len() == 1 {
+                                        // Single variable — bind item directly
+                                        child_env.insert(vars[0].node.clone(), item_val);
+                                    } else {
+                                        // Multi-variable — item must be a list; bind positionally
+                                        if let MetaValue::List(parts) = item_val {
+                                            for (var, part) in vars.iter().zip(parts.into_iter()) {
+                                                child_env.insert(var.node.clone(), part);
+                                            }
+                                        } else {
+                                            errors.push(meta_err(
+                                                "meta for: multi-variable destructuring requires a list of lists \
+                                                 (use fields(T) to get (name, type) pairs)",
+                                                range.span,
+                                            ));
+                                            break;
+                                        }
+                                    }
                                     let child_ctx = DelayedMetaContext { meta_env: &child_env, ..*ctx };
                                     let mut loop_body = body.clone();
+                                    // Substitute loop-variable values into string interpolations and
+                                    // identifier references BEFORE evaluating inner meta constructs.
+                                    // This enables `print("{fname}:{ftype}")` and ensures that
+                                    // `meta if ftype is numeric:` sees the resolved type string.
+                                    substitute_block(&mut loop_body, &child_env, &empty_type_env);
                                     evaluate_delayed_meta_block(&mut loop_body, &child_ctx, errors);
                                     result_stmts.extend(loop_body.stmts);
                                 }

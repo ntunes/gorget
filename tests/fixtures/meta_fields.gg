@@ -1,0 +1,26 @@
+struct Point:
+    float x
+    float y
+
+struct Player:
+    str name
+    int health
+    bool alive
+
+void describe_fields[T]():
+    meta for fname, ftype in fields(T):
+        print("{fname}:{ftype}")
+
+void count_numeric_fields[T]():
+    auto count = 0
+    meta for fname, ftype in fields(T):
+        meta if ftype is numeric:
+            count += 1
+    print(count)
+
+void main():
+    describe_fields[Point]()
+    describe_fields[Player]()
+    count_numeric_fields[Point]()
+    count_numeric_fields[Player]()
+    print("done")
