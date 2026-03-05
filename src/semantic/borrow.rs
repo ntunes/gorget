@@ -150,6 +150,10 @@ struct BranchState {
     invalidated: FxHashSet<DefId>,
     reassignment_invalidated: FxHashMap<DefId, (String, Span)>,
     await_invalidated: FxHashSet<DefId>,
+    /// Variables currently captured mutably by live closures.
+    mut_captured_vars: FxHashMap<DefId, Vec<(String, DefId, Span)>>,
+    /// Reverse map: closure DefId → captured variable DefIds.
+    mut_capture_owners: FxHashMap<DefId, Vec<DefId>>,
     /// Whether this branch always diverges (return/break/continue/throw).
     diverges: bool,
 }
@@ -362,6 +366,16 @@ struct BorrowChecker<'a> {
     /// Temporarily holds the capture set computed for the most recent closure
     /// expression, picked up by VarDecl to associate it with the variable's DefId.
     pending_capture_set: Option<CaptureSet>,
+
+    /// Variables currently captured mutably by live closures.
+    /// Maps variable DefId → Vec of (closure variable name, closure DefId, span of closure decl).
+    /// Multiple closures may capture the same variable; the Vec tracks all of them.
+    /// While any entry is present, reading or writing the variable directly is an error.
+    mut_captured_vars: FxHashMap<DefId, Vec<(String, DefId, Span)>>,
+    /// Reverse map: closure DefId → list of captured variable DefIds registered in
+    /// mut_captured_vars.  Used to clean up mut_captured_vars when the closure is moved
+    /// or goes out of scope.
+    mut_capture_owners: FxHashMap<DefId, Vec<DefId>>,
 }
 
 impl<'a> BorrowChecker<'a> {
@@ -407,6 +421,8 @@ impl<'a> BorrowChecker<'a> {
             await_invalidated: FxHashSet::default(),
             closure_capture_sets: FxHashMap::default(),
             pending_capture_set: None,
+            mut_captured_vars: FxHashMap::default(),
+            mut_capture_owners: FxHashMap::default(),
         }
     }
 
@@ -934,6 +950,19 @@ impl<'a> BorrowChecker<'a> {
         // Phase 5: Check outlives constraints — if we're moving a "longer" group's source,
         // check that all "shorter" group sources are already invalidated.
         self.check_outlives_on_move(def_id, span);
+
+        // B6: If the moved variable is a closure that had mutable captures,
+        // release those capture locks — the closure is no longer live.
+        if let Some(captured_def_ids) = self.mut_capture_owners.remove(&def_id) {
+            for captured_id in captured_def_ids {
+                if let Some(entries) = self.mut_captured_vars.get_mut(&captured_id) {
+                    entries.retain(|(_, cid, _)| *cid != def_id);
+                    if entries.is_empty() {
+                        self.mut_captured_vars.remove(&captured_id);
+                    }
+                }
+            }
+        }
     }
 
 
@@ -947,6 +976,8 @@ impl<'a> BorrowChecker<'a> {
             invalidated: self.invalidated_origins.clone(),
             reassignment_invalidated: self.reassignment_invalidated.clone(),
             await_invalidated: self.await_invalidated.clone(),
+            mut_captured_vars: self.mut_captured_vars.clone(),
+            mut_capture_owners: self.mut_capture_owners.clone(),
             diverges: self.diverged,
         }
     }
@@ -958,6 +989,8 @@ impl<'a> BorrowChecker<'a> {
         self.invalidated_origins = state.invalidated.clone();
         self.reassignment_invalidated = state.reassignment_invalidated.clone();
         self.await_invalidated = state.await_invalidated.clone();
+        self.mut_captured_vars = state.mut_captured_vars.clone();
+        self.mut_capture_owners = state.mut_capture_owners.clone();
         self.diverged = state.diverges;
     }
 
@@ -981,6 +1014,8 @@ impl<'a> BorrowChecker<'a> {
             self.invalidated_origins = states[0].invalidated.clone();
             self.reassignment_invalidated = states[0].reassignment_invalidated.clone();
             self.await_invalidated = states[0].await_invalidated.clone();
+            self.mut_captured_vars = states[0].mut_captured_vars.clone();
+            self.mut_capture_owners = states[0].mut_capture_owners.clone();
             self.diverged = true;
             return;
         }
@@ -990,6 +1025,8 @@ impl<'a> BorrowChecker<'a> {
         let mut merged_invalidated = live[0].invalidated.clone();
         let mut merged_reassignment_invalidated = live[0].reassignment_invalidated.clone();
         let mut merged_await_invalidated = live[0].await_invalidated.clone();
+        let mut merged_mut_captured = live[0].mut_captured_vars.clone();
+        let mut merged_mut_owners = live[0].mut_capture_owners.clone();
 
         for state in &live[1..] {
             // Merge var states: moved in either = moved
@@ -1014,6 +1051,25 @@ impl<'a> BorrowChecker<'a> {
             }
             // Merge await_invalidated: union (conservative — if any branch has await, use after merge is suspect)
             merged_await_invalidated.extend(&state.await_invalidated);
+            // Merge mut_captured_vars: union — if a capture lock exists in any branch,
+            // it must be conservatively assumed live after the merge.
+            for (def_id, entries) in &state.mut_captured_vars {
+                let existing = merged_mut_captured.entry(*def_id).or_default();
+                for entry in entries {
+                    if !existing.iter().any(|(_, cid, _)| *cid == entry.1) {
+                        existing.push(entry.clone());
+                    }
+                }
+            }
+            // Merge mut_capture_owners: union.
+            for (closure_id, captured_ids) in &state.mut_capture_owners {
+                let existing = merged_mut_owners.entry(*closure_id).or_default();
+                for id in captured_ids {
+                    if !existing.contains(id) {
+                        existing.push(*id);
+                    }
+                }
+            }
         }
 
         self.var_states = merged_vars;
@@ -1021,6 +1077,8 @@ impl<'a> BorrowChecker<'a> {
         self.invalidated_origins = merged_invalidated;
         self.reassignment_invalidated = merged_reassignment_invalidated;
         self.await_invalidated = merged_await_invalidated;
+        self.mut_captured_vars = merged_mut_captured;
+        self.mut_capture_owners = merged_mut_owners;
         self.diverged = false;
     }
 
@@ -1058,12 +1116,26 @@ impl<'a> BorrowChecker<'a> {
             | Expr::SelfExpr
             | Expr::It => {}
 
-            Expr::Identifier(_) => {
+            Expr::Identifier(var_name) => {
                 // Check that the variable is still live
                 if let Some(&def_id) = self.resolution_map.get(&expr.span.start) {
                     let kind = self.scopes.get_def(def_id).kind;
                     if kind == DefKind::Variable {
                         self.check_use(def_id, expr.span);
+                        // B4: MutCallable aliasing — reading a variable while it is
+                        // mutably captured by a live closure is unsound.
+                        if let Some(entries) = self.mut_captured_vars.get(&def_id) {
+                            if let Some((closure_name, _, _)) = entries.first() {
+                                let closure_name = closure_name.clone();
+                                self.error(
+                                    SemanticErrorKind::ReadWhileMutCaptured {
+                                        var_name: var_name.clone(),
+                                        closure_name,
+                                    },
+                                    expr.span,
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -1353,6 +1425,14 @@ impl<'a> BorrowChecker<'a> {
                                         inner.span,
                                     );
                                 }
+                                if entry.mode == BorrowCaptureMode::Mutable {
+                                    self.error(
+                                        SemanticErrorKind::SpawnClosureCaptureMutable {
+                                            var_name: entry.name.clone(),
+                                        },
+                                        inner.span,
+                                    );
+                                }
                             }
                         } else {
                             // No capture set (closure returned from function, etc.) — conservative reject.
@@ -1366,6 +1446,14 @@ impl<'a> BorrowChecker<'a> {
                             if entry.has_borrowed_origin {
                                 self.error(
                                     SemanticErrorKind::SpawnClosureCaptureBorrowed {
+                                        var_name: entry.name.clone(),
+                                    },
+                                    inner.span,
+                                );
+                            }
+                            if entry.mode == BorrowCaptureMode::Mutable {
+                                self.error(
+                                    SemanticErrorKind::SpawnClosureCaptureMutable {
                                         var_name: entry.name.clone(),
                                     },
                                     inner.span,
@@ -1716,6 +1804,21 @@ impl<'a> BorrowChecker<'a> {
                         // Capture set tracking: associate the pending capture set
                         // (computed during check_expr(Closure)) with this variable.
                         if let Some(cs) = self.pending_capture_set.take() {
+                            // B3: MutCallable aliasing — register mutable captures so that
+                            // direct reads/writes to the captured variable are rejected
+                            // while this closure is live.
+                            for entry in &cs.captures {
+                                if entry.mode == BorrowCaptureMode::Mutable {
+                                    self.mut_captured_vars
+                                        .entry(entry.def_id)
+                                        .or_default()
+                                        .push((name.clone(), def_id, pattern.span));
+                                    self.mut_capture_owners
+                                        .entry(def_id)
+                                        .or_default()
+                                        .push(entry.def_id);
+                                }
+                            }
                             self.closure_capture_sets.insert(def_id, cs);
                         }
                     }
@@ -1727,6 +1830,28 @@ impl<'a> BorrowChecker<'a> {
             }
 
             Stmt::Assign { target, value } => {
+                // B6: When reassigning a closure variable with a new closure,
+                // release the old closure's mutable capture locks BEFORE checking
+                // the RHS. This prevents false positives where the new closure
+                // body reads a variable that the old closure held mutably.
+                if matches!(&value.node, Expr::Closure { .. }) {
+                    if let Expr::Identifier(_) = &target.node {
+                        if let Some(&def_id) = self.resolution_map.get(&target.span.start) {
+                            if self.mut_capture_owners.contains_key(&def_id) {
+                                if let Some(captured_def_ids) = self.mut_capture_owners.remove(&def_id) {
+                                    for captured_id in &captured_def_ids {
+                                        if let Some(entries) = self.mut_captured_vars.get_mut(captured_id) {
+                                            entries.retain(|(_, cid, _)| *cid != def_id);
+                                            if entries.is_empty() {
+                                                self.mut_captured_vars.remove(captured_id);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 self.check_expr(value);
 
                 // Check: if value is a bare identifier of non-Copy type, needs `!`
@@ -1766,7 +1891,7 @@ impl<'a> BorrowChecker<'a> {
 
                 // Check immutability/const constraints on identifier targets
                 match &target.node {
-                    Expr::Identifier(_) => {
+                    Expr::Identifier(target_var_name) => {
                         if let Some(&def_id) = self.resolution_map.get(&target.span.start) {
                             let def = self.scopes.get_def(def_id);
                             if def.kind == DefKind::Const {
@@ -1783,6 +1908,20 @@ impl<'a> BorrowChecker<'a> {
                                     target.span,
                                 );
                             }
+                            // B5: MutCallable aliasing — writing to a variable while it is
+                            // mutably captured by a live closure is unsound.
+                            if let Some(entries) = self.mut_captured_vars.get(&def_id) {
+                                if let Some((closure_name, _, _)) = entries.first() {
+                                    let closure_name = closure_name.clone();
+                                    self.error(
+                                        SemanticErrorKind::WriteWhileMutCaptured {
+                                            var_name: target_var_name.clone(),
+                                            closure_name,
+                                        },
+                                        target.span,
+                                    );
+                                }
+                            }
                             // Reassignment revives a moved variable
                             self.mark_live(def_id);
                             // Also un-invalidate: if this variable was moved and
@@ -1795,6 +1934,27 @@ impl<'a> BorrowChecker<'a> {
 
                             // Async: reassignment after await clears suspension-point invalidation.
                             self.await_invalidated.remove(&def_id);
+
+                            // If the new value is a closure, register its mutable captures.
+                            // Only consume pending_capture_set when the RHS is actually a closure
+                            // (not for arbitrary assignments like `x = 1` inside a closure body).
+                            if matches!(&value.node, Expr::Closure { .. }) {
+                                if let Some(cs) = self.pending_capture_set.take() {
+                                    for entry in &cs.captures {
+                                        if entry.mode == BorrowCaptureMode::Mutable {
+                                            self.mut_captured_vars
+                                                .entry(entry.def_id)
+                                                .or_default()
+                                                .push((target_var_name.clone(), def_id, target.span));
+                                            self.mut_capture_owners
+                                                .entry(def_id)
+                                                .or_default()
+                                                .push(entry.def_id);
+                                        }
+                                    }
+                                    self.closure_capture_sets.insert(def_id, cs);
+                                }
+                            }
 
                             // Phase 11: Reassignment invalidation.
                             // When a non-Copy owning variable is reassigned, all existing
@@ -1836,7 +1996,7 @@ impl<'a> BorrowChecker<'a> {
 
             Stmt::CompoundAssign { target, value, .. } => {
                 // Check immutability/const constraints on identifier targets
-                if let Expr::Identifier(_) = &target.node {
+                if let Expr::Identifier(target_var_name) = &target.node {
                     if let Some(&def_id) = self.resolution_map.get(&target.span.start) {
                         let def = self.scopes.get_def(def_id);
                         if def.kind == DefKind::Const {
@@ -1852,6 +2012,20 @@ impl<'a> BorrowChecker<'a> {
                                 SemanticErrorKind::AssignmentToImmutable { name: def.name.clone() },
                                 target.span,
                             );
+                        }
+                        // B5: MutCallable aliasing — writing to a variable while it is
+                        // mutably captured by a live closure is unsound.
+                        if let Some(entries) = self.mut_captured_vars.get(&def_id) {
+                            if let Some((closure_name, _, _)) = entries.first() {
+                                let closure_name = closure_name.clone();
+                                self.error(
+                                    SemanticErrorKind::WriteWhileMutCaptured {
+                                        var_name: target_var_name.clone(),
+                                        closure_name,
+                                    },
+                                    target.span,
+                                );
+                            }
                         }
                     }
                 }
@@ -2188,8 +2362,39 @@ impl<'a> BorrowChecker<'a> {
     }
 
     fn check_block(&mut self, block: &Block) {
+        // Collect closure variables declared in this block so we can release their
+        // mutable capture locks when the block exits (closures go out of scope).
+        let mut block_closure_defs: Vec<DefId> = Vec::new();
+
         for stmt in &block.stmts {
             self.check_stmt(stmt);
+
+            // Track closure variables that were declared in this block.
+            if let Stmt::VarDecl { pattern, value, .. } = &stmt.node {
+                if matches!(&value.node, Expr::Closure { .. }) {
+                    if let Pattern::Binding(name) = &pattern.node {
+                        if let Some(def_id) = self.scopes.lookup_def_by_span(name, pattern.span)
+                            .or_else(|| self.find_def_by_name(name))
+                        {
+                            block_closure_defs.push(def_id);
+                        }
+                    }
+                }
+            }
+        }
+
+        // B6: Release mutable capture locks for closures that went out of scope.
+        for closure_def_id in block_closure_defs {
+            if let Some(captured_def_ids) = self.mut_capture_owners.remove(&closure_def_id) {
+                for captured_id in captured_def_ids {
+                    if let Some(entries) = self.mut_captured_vars.get_mut(&captured_id) {
+                        entries.retain(|(_, cid, _)| *cid != closure_def_id);
+                        if entries.is_empty() {
+                            self.mut_captured_vars.remove(&captured_id);
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -2638,6 +2843,8 @@ impl<'a> BorrowChecker<'a> {
         self.await_invalidated.clear();
         self.closure_capture_sets.clear();
         self.pending_capture_set = None;
+        self.mut_captured_vars.clear();
+        self.mut_capture_owners.clear();
 
         // Set scope-aware lookup context for this function
         self.current_fn_scope = self.function_body_scopes
@@ -5967,6 +6174,193 @@ void main():
         assert!(
             errors.is_empty(),
             "unexpected errors for basic named scope: {:?}", errors
+        );
+    }
+
+    // ─── MutCallable aliasing enforcement (Feature B) ─────────────────────
+
+    #[test]
+    fn read_while_mut_captured_rejected() {
+        // Reading x while it is mutably captured by live closure c → error.
+        // Block-bodied closure: ():↵    x = 1
+        let source = "void main():\n    int x = 0\n    auto c = ():\n        x = 1\n    print(x)\n";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::ReadWhileMutCaptured { .. })),
+            "expected ReadWhileMutCaptured: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn write_while_mut_captured_rejected() {
+        // Writing x while it is mutably captured by live closure c → error.
+        let source = "void main():\n    int x = 0\n    auto c = ():\n        x = 1\n    x = 2\n";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::WriteWhileMutCaptured { .. })),
+            "expected WriteWhileMutCaptured: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn read_only_capture_ok() {
+        // Closure reads x but doesn't mutate it → no aliasing error.
+        let source = "\
+void main():
+    int x = 0
+    auto c = (): print(x)
+    print(x)
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k,
+                SemanticErrorKind::ReadWhileMutCaptured { .. }
+                | SemanticErrorKind::WriteWhileMutCaptured { .. }
+            )),
+            "expected no aliasing error for read-only capture: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn mut_capture_released_after_move() {
+        // After the closure is moved (!c), the captured variable can be read again.
+        // We define a sink function to accept the moved closure.
+        let source = "void sink(auto f):\n    print(\"done\")\nvoid main():\n    int x = 0\n    auto c = ():\n        x = 1\n    sink(!c)\n    print(x)\n";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k,
+                SemanticErrorKind::ReadWhileMutCaptured { .. }
+                | SemanticErrorKind::WriteWhileMutCaptured { .. }
+            )),
+            "expected no aliasing error after closure moved: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn mut_capture_in_named_scope_released_at_block_exit() {
+        // Closure declared inside a named scope block goes out of scope at block exit;
+        // the captured variable should be readable after the block.
+        let source = "void main():\n    int x = 0\n    inner:\n        auto c = ():\n            x = 1\n        c()\n    print(x)\n";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k,
+                SemanticErrorKind::ReadWhileMutCaptured { .. }
+                | SemanticErrorKind::WriteWhileMutCaptured { .. }
+            )),
+            "expected no aliasing error after block exit: {:?}", errors
+        );
+    }
+
+    // ─── Soundness fixes: spawn mutable capture rejection ─────────────────
+
+    #[test]
+    fn spawn_closure_with_mutable_capture_rejected() {
+        // A closure that mutably captures x cannot be spawned — it stores a
+        // pointer to the parent stack frame.
+        let source = "\
+async void main():
+    int x = 0
+    auto c = ():
+        x = 1
+    Task[void] t = spawn c()
+    t.await()
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::SpawnClosureCaptureMutable { .. })),
+            "expected SpawnClosureCaptureMutable: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn spawn_closure_with_readonly_capture_ok() {
+        // A closure that only reads x can be safely spawned (ByValue copy).
+        let source = "\
+async void main():
+    int x = 42
+    auto c = (): print(x)
+    Task[void] t = spawn c()
+    t.await()
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k,
+                SemanticErrorKind::SpawnClosureCaptureMutable { .. }
+                | SemanticErrorKind::SpawnClosureCaptureBorrowed { .. }
+            )),
+            "expected no spawn capture errors: {:?}", errors
+        );
+    }
+
+    // ─── Soundness fixes: multiple closures on same variable ──────────────
+
+    #[test]
+    fn two_mut_closures_same_var_rejected() {
+        // Two closures both capturing x mutably is a conflict — the second
+        // closure definition (inside its body walk) triggers WriteWhileMutCaptured
+        // because c1 already holds x.
+        let source = "\
+void main():
+    int x = 0
+    auto c1 = ():
+        x = 1
+    auto c2 = ():
+        x = 2
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::WriteWhileMutCaptured { .. })),
+            "expected WriteWhileMutCaptured for second closure: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn sequential_mut_closures_in_scopes_ok() {
+        // After c1 goes out of scope, defining c2 with mutable capture of x is fine.
+        let source = "\
+void main():
+    int x = 0
+    s1:
+        auto c1 = ():
+            x = 1
+        c1()
+    s2:
+        auto c2 = ():
+            x = 2
+        c2()
+    print(x)
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k,
+                SemanticErrorKind::ReadWhileMutCaptured { .. }
+                | SemanticErrorKind::WriteWhileMutCaptured { .. }
+            )),
+            "expected no aliasing error for sequential closures in scopes: {:?}", errors
+        );
+    }
+
+    // ─── Soundness fixes: closure reassignment ───────────────────────────
+
+    #[test]
+    fn closure_reassignment_releases_old_locks() {
+        // Reassigning a closure variable to a non-mutating closure should
+        // release the old mutable capture lock.
+        let source = "\
+void main():
+    int x = 0
+    auto c = ():
+        x = 1
+    c = (): print(x)
+    print(x)
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k,
+                SemanticErrorKind::ReadWhileMutCaptured { .. }
+                | SemanticErrorKind::WriteWhileMutCaptured { .. }
+            )),
+            "expected no aliasing error after closure reassignment: {:?}", errors
         );
     }
 }

@@ -9304,3 +9304,23 @@ fn spawn_closure_shared() {
 15",
     );
 }
+
+#[test]
+fn spawn_closure_inline() {
+    run_gg(
+        "spawn_closure_inline.gg",
+        "\
+7
+done",
+    );
+}
+
+#[test]
+fn spawn_closure_void() {
+    run_gg(
+        "spawn_closure_void.gg",
+        "\
+hello from thread
+main done",
+    );
+}

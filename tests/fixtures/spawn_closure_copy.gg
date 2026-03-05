@@ -1,18 +1,19 @@
-# Tests that closures with Copy captures pass the borrow checker.
-# The actual spawn uses a named function wrapper since the IR only
-# supports spawning named functions currently.
-
-async int compute(int x):
-    return x * 10
+# Tests that closures with Copy captures can be spawned via spawn c().
+# The closure captures an int (Copy type) by value, which is safe to send
+# across thread boundaries.
 
 async void main():
     int val = 42
 
-    # Closure captures a Copy int — borrow checker allows this
+    # Spawn a closure variable capturing a Copy int
     auto printer = (): print(val)
-    printer()
+    Task[void] t = spawn printer()
+    t.await()
 
-    # Spawn via named function works as before
-    Task[int] t = spawn compute(val)
-    int result = t.await()
+    # Also verify direct named-function spawn still works
+    Task[int] t2 = spawn compute(val)
+    int result = t2.await()
     print(result)
+
+async int compute(int x):
+    return x * 10

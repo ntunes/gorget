@@ -104,6 +104,10 @@ pub enum SemanticErrorKind {
     /// Closure passed to `spawn` captures a borrowed variable.
     SpawnClosureCaptureBorrowed { var_name: String },
 
+    /// Closure passed to `spawn` captures a variable mutably — the mutable
+    /// capture stores a pointer to the parent stack frame, unsafe across threads.
+    SpawnClosureCaptureMutable { var_name: String },
+
     // ── Borrow checking errors ──
 
     /// Variable used after ownership was moved.
@@ -237,6 +241,12 @@ pub enum SemanticErrorKind {
 
     /// Orphan rule violation: neither the trait nor the type is defined locally.
     OrphanImpl { trait_: String, type_: String },
+
+    /// Variable read while mutably captured by a live closure.
+    ReadWhileMutCaptured { var_name: String, closure_name: String },
+
+    /// Variable written while mutably captured by a live closure.
+    WriteWhileMutCaptured { var_name: String, closure_name: String },
 }
 
 impl std::fmt::Display for SemanticError {
@@ -343,6 +353,9 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::SpawnClosureCaptureBorrowed { var_name } => {
                 write!(f, "cannot spawn closure that captures borrowed variable `{var_name}` — use owned or Copy types")
+            }
+            SemanticErrorKind::SpawnClosureCaptureMutable { var_name } => {
+                write!(f, "cannot spawn closure that mutably captures `{var_name}` — mutable captures hold pointers to the parent stack")
             }
             SemanticErrorKind::UseAfterMove { name, .. } => {
                 write!(f, "use of moved value `{name}`")
@@ -488,6 +501,12 @@ impl std::fmt::Display for SemanticError {
                     f,
                     "orphan rule: `equip {type_} with {trait_}` requires that either `{type_}` or `{trait_}` is defined in this module"
                 )
+            }
+            SemanticErrorKind::ReadWhileMutCaptured { var_name, closure_name } => {
+                write!(f, "cannot read `{var_name}` while it is mutably captured by closure `{closure_name}`")
+            }
+            SemanticErrorKind::WriteWhileMutCaptured { var_name, closure_name } => {
+                write!(f, "cannot write to `{var_name}` while it is mutably captured by closure `{closure_name}`")
             }
         }
     }

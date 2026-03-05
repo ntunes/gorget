@@ -1,0 +1,10 @@
+# Tests spawning an inline closure literal: spawn ((): body)()
+# The closure captures a Copy int, which is safe across thread boundaries.
+
+async void main():
+    int x = 7
+
+    # Spawn an inline closure with Copy capture
+    Task[void] t = spawn ((): print(x))()
+    t.await()
+    print("done")

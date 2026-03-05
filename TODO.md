@@ -49,9 +49,6 @@
 
 
 
-- **Borrow checker: no MutCallable aliasing enforcement**: A `MutCallable` closure holds `&mut` to captured variables, but the checker doesn't prevent simultaneous reads of those variables while the closure exists. Works in C (raw pointers) but would be unsound with stricter backends. [added: 2026-02-21]
-
-- **IR/backend: closure spawn codegen**: The borrow checker now validates closure spawns (capture set tracking), but the IR lowering only generates threading infrastructure for direct function calls (`spawn fn_name(args)`). Closure variable calls (`spawn c()`) and inline closure calls (`spawn ((): body)()`) fall through to the direct-call fallback (no threading). Needs: spawn context struct generation for closure types, thread wrapper that calls `__Closure_N__call`, clone/retain for captured ref-counted values. [added: 2026-03-05]
 
 
 

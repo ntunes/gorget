@@ -35,8 +35,13 @@ pub struct LoweringContext<'a> {
     pub enum_variants: FxHashMap<String, (String, String)>,
     /// Struct field info: (type_name, field_name) → (field_index, field_type_id).
     pub struct_fields: FxHashMap<(String, String), (u32, TypeId)>,
-    /// Closure info: struct_name → (call_fn_name, struct_type_id).
-    pub closure_info: FxHashMap<String, (String, TypeId)>,
+    /// Closure info: struct_name → (call_fn_name, struct_type_id, by-value captures with field indices).
+    /// Each capture entry is (name, type_id, struct_field_index).
+    pub closure_info: FxHashMap<String, (String, TypeId, Vec<(String, TypeId, u32)>)>,
+    /// Spawn wrapper functions accumulated during lowering; emitted into the module after
+    /// all regular functions. Each wrapper reconstructs the closure struct from flat args
+    /// and calls the corresponding __Closure_N__call function.
+    pub spawn_wrapper_fns: Vec<crate::ir::Function>,
     /// Stack of active loops for break/continue targeting.
     loop_stack: Vec<LoopInfo>,
     /// Type name substitutions for generic monomorphization.
@@ -105,6 +110,7 @@ impl<'a> LoweringContext<'a> {
             enum_variants: FxHashMap::default(),
             struct_fields: FxHashMap::default(),
             closure_info: FxHashMap::default(),
+            spawn_wrapper_fns: Vec::new(),
             loop_stack: Vec::new(),
             type_name_subs: FxHashMap::default(),
             generic_fragment_subs: Vec::new(),
@@ -324,13 +330,19 @@ impl<'a> LoweringContext<'a> {
     }
 
     /// Register closure info for call dispatch.
-    pub fn register_closure_info(&mut self, struct_name: String, call_fn_name: String, struct_type_id: TypeId) {
-        self.closure_info.insert(struct_name, (call_fn_name, struct_type_id));
+    pub fn register_closure_info(
+        &mut self,
+        struct_name: String,
+        call_fn_name: String,
+        struct_type_id: TypeId,
+        captures: Vec<(String, TypeId, u32)>,
+    ) {
+        self.closure_info.insert(struct_name, (call_fn_name, struct_type_id, captures));
     }
 
     /// Look up closure info by struct name.
-    pub fn lookup_closure_info(&self, struct_name: &str) -> Option<(&str, TypeId)> {
-        self.closure_info.get(struct_name).map(|(name, tid)| (name.as_str(), *tid))
+    pub fn lookup_closure_info(&self, struct_name: &str) -> Option<(&str, TypeId, &[(String, TypeId, u32)])> {
+        self.closure_info.get(struct_name).map(|(name, tid, caps)| (name.as_str(), *tid, caps.as_slice()))
     }
 
     // ---- Loop stack for break/continue ----

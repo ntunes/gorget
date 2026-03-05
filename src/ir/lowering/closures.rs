@@ -160,11 +160,19 @@ impl ClosureLowering {
         sig_params.extend_from_slice(&closure_param_types);
         ctx.fn_sigs.insert(call_fn_name.clone(), (sig_params, return_type));
 
-        // Register this closure's info for call dispatch
+        // Register this closure's info for call dispatch.
+        // Only store ByValue captures — ByMutRef captures cannot be copied across
+        // thread boundaries, so they are excluded from the spawn wrapper signature.
+        let spawn_captures: Vec<(String, TypeId, u32)> = captures.iter()
+            .enumerate()
+            .filter(|(_, c)| c.mode == CaptureMode::ByValue)
+            .map(|(i, c)| (c.name.clone(), c.type_id, i as u32))
+            .collect();
         ctx.register_closure_info(
             struct_name.clone(),
             call_fn_name.clone(),
             struct_type_id,
+            spawn_captures,
         );
 
         // Store the lifted closure for later function emission

@@ -1,0 +1,9 @@
+# Tests spawning a void-returning closure.
+# The closure takes no explicit args and returns void.
+
+async void main():
+    # Closure with no captures, void return
+    auto greet = (): print("hello from thread")
+    Task[void] t = spawn greet()
+    t.await()
+    print("main done")

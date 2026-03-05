@@ -525,6 +525,66 @@ fn lower_expr_inner(
         // Task result locals are tracked in spawn_result_locals for await dispatch.
         Expr::Spawn { expr } => {
             if let Expr::Call { callee, args: call_args, .. } = &expr.node {
+                // ── Case A: spawn c(args) where c is a local closure variable ──
+                if let Expr::Identifier(fn_name) = &callee.node {
+                    if let Some((local_id, local_type_id)) = ctx.lookup_local(fn_name) {
+                        if let Some(type_name) = ctx.type_name_for_id(local_type_id).map(|s| s.to_string()) {
+                            if ctx.lookup_closure_info(&type_name).is_some() {
+                                let (call_fn_name, struct_type_id, captures) =
+                                    ctx.lookup_closure_info(&type_name)
+                                        .map(|(cfn, stid, caps)| {
+                                            (cfn.to_string(), stid, caps.to_vec())
+                                        })
+                                        .unwrap();
+                                let call_args_cloned: Vec<_> = call_args.iter().cloned().collect();
+                                return lower_closure_spawn(
+                                    ctx, builder,
+                                    local_id, local_type_id,
+                                    &type_name, &call_fn_name, struct_type_id,
+                                    &captures, &call_args_cloned,
+                                );
+                            }
+                        }
+                    }
+                }
+
+                // ── Case B: spawn ((): body)(args) — inline closure literal ──
+                if let Expr::Closure { params, body, is_move, .. } = &callee.node {
+                    let params_cloned = params.clone();
+                    let body_cloned = body.clone();
+                    let is_move_val = *is_move;
+                    let call_args_cloned: Vec<_> = call_args.iter().cloned().collect();
+
+                    let mut cl = std::mem::take(&mut ctx.closures);
+                    let closure_op = cl.lower_closure(ctx, builder, &params_cloned, &body_cloned, is_move_val);
+                    ctx.closures = cl;
+
+                    if let Operand::Copy(ref place) | Operand::Move(ref place) = closure_op {
+                        if place.projections.is_empty() {
+                            let closure_local = place.local;
+                            let closure_type_id = builder.locals[closure_local.0 as usize].type_id;
+                            if let Some(type_name) = ctx.type_name_for_id(closure_type_id).map(|s| s.to_string()) {
+                                if ctx.lookup_closure_info(&type_name).is_some() {
+                                    let (call_fn_name, struct_type_id, captures) =
+                                        ctx.lookup_closure_info(&type_name)
+                                            .map(|(cfn, stid, caps)| {
+                                                (cfn.to_string(), stid, caps.to_vec())
+                                            })
+                                            .unwrap();
+                                    return lower_closure_spawn(
+                                        ctx, builder,
+                                        closure_local, closure_type_id,
+                                        &type_name, &call_fn_name, struct_type_id,
+                                        &captures, &call_args_cloned,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    // Inline closure lowering succeeded but no closure info found — fall through
+                }
+
+                // ── Direct function call spawn (original path) ──
                 if let Expr::Identifier(fn_name) = &callee.node {
                     // Resolve the actual C symbol name (Phase 5 mangled for module functions,
                     // or bare Gorget name for entry-module functions).  The spawn infrastructure
@@ -2677,7 +2737,7 @@ fn call_closure_in_adapter(
         };
         if let Some(type_name) = ctx.type_name_for_id(local_type_id) {
             let type_name = type_name.to_string();
-            if let Some((call_fn, _)) = ctx.lookup_closure_info(&type_name) {
+            if let Some((call_fn, _, _)) = ctx.lookup_closure_info(&type_name) {
                 let call_fn = call_fn.to_string();
                 // Closure call: __Closure_N__call(&closure, args...)
                 let ptr_type = ctx.type_registry.insert(GirType::Ptr(local_type_id));
@@ -4028,7 +4088,7 @@ fn lower_call(
             let type_name = ctx.type_name_for_id(local_type_id);
             if let Some(type_name) = type_name {
                 let type_name = type_name.to_string();
-                if let Some((call_fn, _)) = ctx.lookup_closure_info(&type_name) {
+                if let Some((call_fn, _, _)) = ctx.lookup_closure_info(&type_name) {
                     let call_fn = call_fn.to_string();
                     // Closure call: __Closure_N__call(&closure_var, args...)
                     // The __call function expects a pointer to the closure struct
@@ -5510,6 +5570,174 @@ fn is_gorget_array_local(
         return name.starts_with("GorgetArray") || name.starts_with("Vector__");
     }
     false
+}
+
+// ─── Closure Spawn Codegen ─────────────────────────────────────────────────
+
+/// Build a thin wrapper function `__spawn_wrap_<struct_name>` that accepts
+/// flat capture arguments + call arguments, reconstructs the closure struct,
+/// and calls `__Closure_N__call(&struct, args...)`.
+///
+/// This wrapper is treated as a regular spawned function by the C backend,
+/// so `emit_spawn_helpers` generates the context struct, thread function,
+/// and spawn/await helpers automatically.
+fn build_spawn_wrapper(
+    ctx: &mut LoweringContext,
+    wrapper_name: &str,
+    call_fn_name: &str,
+    captures: &[(String, TypeId, u32)],
+    call_param_types: &[TypeId],
+    return_type: TypeId,
+    struct_name: &str,
+    struct_type_id: TypeId,
+) -> crate::ir::Function {
+    // Build parameter slice: capture types first, then call arg types.
+    // We use None for names — they're internal implementation details.
+    let all_param_types: Vec<TypeId> = captures.iter()
+        .map(|(_, tid, _)| *tid)
+        .chain(call_param_types.iter().copied())
+        .collect();
+    let params: Vec<(TypeId, Option<&str>)> = all_param_types.iter()
+        .map(|&tid| (tid, None))
+        .collect();
+
+    let mut builder = FunctionBuilder::new(wrapper_name, return_type, &params);
+
+    // _0 = return slot, _1.._n_cap = capture params, _n_cap+1.. = call arg params.
+    let n_cap = captures.len();
+
+    // Build field operands from capture params (_1.._n_cap).
+    let field_operands: Vec<Operand> = (0..n_cap)
+        .map(|i| FunctionBuilder::copy(LocalId((i + 1) as u32)))
+        .collect();
+
+    // Reconstruct the closure struct.
+    let struct_local = builder.struct_init(struct_name, struct_type_id, field_operands);
+
+    // Take an immutable reference to the struct (env pointer for __call).
+    let env_ptr_type = ctx.type_registry.insert(GirType::Ptr(struct_type_id));
+    let env_ptr_local = builder.add_local(env_ptr_type, None);
+    builder.emit_borrow(env_ptr_local, Place::local(struct_local));
+
+    // Build call args: env pointer + explicit call params.
+    let mut call_args = vec![FunctionBuilder::copy(env_ptr_local)];
+    let call_arg_start = (n_cap + 1) as u32; // skip _0 (return) + n_cap capture params
+    for i in 0..call_param_types.len() {
+        call_args.push(FunctionBuilder::copy(LocalId(call_arg_start + i as u32)));
+    }
+
+    // Emit the call to __Closure_N__call and return its result.
+    if return_type == UNIT_TYPE {
+        builder.call_void(call_fn_name, call_args);
+        builder.ret(FunctionBuilder::const_unit());
+    } else {
+        let result = builder.call(call_fn_name, call_args, return_type);
+        builder.assign(Place::local(LocalId(0)), FunctionBuilder::copy(result));
+        builder.ret(FunctionBuilder::copy(LocalId(0)));
+    }
+
+    builder.build()
+}
+
+/// Lower `spawn c(args)` or `spawn ((): body)(args)` where `c` is a closure variable.
+///
+/// Generates (or reuses) a thin wrapper function that reconstructs the closure
+/// struct from flat parameters, then emits a call to `__gorget_spawn_<wrapper>`.
+/// The Task local is registered in `ctx.spawn_result_locals` for await dispatch.
+fn lower_closure_spawn(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    closure_local: LocalId,
+    _closure_type_id: TypeId,
+    struct_name: &str,
+    call_fn_name: &str,
+    struct_type_id: TypeId,
+    captures: &[(String, TypeId, u32)],
+    call_args: &[Spanned<crate::parser::ast::CallArg>],
+) -> Operand {
+    // Get the closure call function's return type and param types.
+    let (call_param_types, fn_ret_type) = ctx.fn_sigs.get(call_fn_name)
+        .map(|(params, ret)| {
+            // Skip the first param (env pointer).
+            let call_params: Vec<TypeId> = params.iter().skip(1).copied().collect();
+            (call_params, *ret)
+        })
+        .unwrap_or_else(|| (vec![], I64_TYPE));
+
+    let wrapper_name = format!("__spawn_wrap_{struct_name}");
+
+    // Emit the wrapper function once (idempotent — skip if already registered).
+    if !ctx.spawned_fn_names.contains_key(&wrapper_name) {
+        let wrapper_fn = build_spawn_wrapper(
+            ctx,
+            &wrapper_name,
+            call_fn_name,
+            captures,
+            &call_param_types,
+            fn_ret_type,
+            struct_name,
+            struct_type_id,
+        );
+        ctx.spawn_wrapper_fns.push(wrapper_fn);
+
+        // Register the wrapper's signature so the module assembly loop can
+        // populate module.spawned_fns for the C backend.
+        let mut sig_params = captures.iter().map(|(_, tid, _)| *tid).collect::<Vec<_>>();
+        sig_params.extend_from_slice(&call_param_types);
+        ctx.fn_sigs.insert(wrapper_name.clone(), (sig_params.clone(), fn_ret_type));
+        let param_names: Vec<String> = captures.iter().map(|(n, _, _)| n.clone())
+            .chain((0..call_param_types.len()).map(|i| format!("__arg{i}")))
+            .collect();
+        ctx.fn_param_names.insert(wrapper_name.clone(), param_names);
+    }
+
+    ctx.pending_spawn_fn = Some(wrapper_name.clone());
+    ctx.spawned_fn_names.insert(wrapper_name.clone(), true);
+
+    // Register the Task type (same logic as direct-fn spawn).
+    let ret_c = ctx.type_name_for_id(fn_ret_type)
+        .unwrap_or("int64_t")
+        .to_string();
+    let task_name = if fn_ret_type == UNIT_TYPE {
+        "Task__void".to_string()
+    } else {
+        format!("Task__{ret_c}")
+    };
+    let task_type = if let Some(tid) = ctx.type_mapper.lookup_named(&task_name) {
+        tid
+    } else {
+        ctx.type_registry.add_type_def(TypeDef {
+            name: task_name.clone(),
+            kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
+            metadata: TypeMetadata {
+                size: None,
+                align: None,
+                drop_strategy: DropStrategy::Trivial(format!("{task_name}__drop")),
+                copy_semantics: CopySemantics::Move,
+            },
+        });
+        let tid = ctx.type_registry.insert(GirType::Named(task_name.clone()));
+        ctx.type_mapper.register_named(task_name.clone(), tid);
+        tid
+    };
+
+    // Extract capture field values from the closure struct using actual field indices.
+    // The field_index is the position in the struct (which may differ from the
+    // position in this captures list when ByMutRef captures are filtered out).
+    let mut spawn_args: Vec<Operand> = Vec::new();
+    for (_, cap_type, field_index) in captures {
+        let field_val = builder.field_load(Place::local(closure_local), *field_index, *cap_type);
+        spawn_args.push(FunctionBuilder::copy(field_val));
+    }
+
+    // Lower and append explicit call arguments.
+    for arg in call_args {
+        spawn_args.push(lower_expr(ctx, builder, &arg.node.value));
+    }
+
+    let spawn_fn = format!("__gorget_spawn_{wrapper_name}");
+    let dst = builder.call(&spawn_fn, spawn_args, task_type);
+    FunctionBuilder::copy(dst)
 }
 
 #[cfg(test)]
