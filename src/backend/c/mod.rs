@@ -620,6 +620,22 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
     if all_call_names.iter().any(|n| n.starts_with("sdl_") || n.starts_with("gorget_sdl_")) {
         out.push_str(c_runtime::SDL_RUNTIME);
     }
+    let needs_sqlite = all_call_names.iter().any(|n| n.starts_with("gorget_sqlite_") || n == "sqlite_open");
+    if needs_sqlite {
+        // Ensure platform APIs (mremap, etc.) and disable mmap to avoid portability issues.
+        out.push_str("\n#define SQLITE_MAX_MMAP_SIZE 0\n");
+        out.push_str("#define HAVE_MREMAP 0\n");
+        // Suppress warnings in the amalgamation so user code stays clean.
+        out.push_str("#pragma GCC diagnostic push\n");
+        out.push_str("#pragma GCC diagnostic ignored \"-Wunused-parameter\"\n");
+        out.push_str("#pragma GCC diagnostic ignored \"-Wunused-variable\"\n");
+        out.push_str("#pragma GCC diagnostic ignored \"-Wunused-function\"\n");
+        out.push_str("#pragma GCC diagnostic ignored \"-Wimplicit-fallthrough\"\n");
+        out.push_str("#pragma GCC diagnostic ignored \"-Wpedantic\"\n");
+        out.push_str(c_runtime::SQLITE_AMALGAMATION);
+        out.push_str("\n#pragma GCC diagnostic pop\n");
+        out.push_str(c_runtime::SQLITE_GORGET_WRAPPERS);
+    }
 
     // GIR-specific helpers
     out.push_str("\nstatic int gorget_generic_compare(const void* a, const void* b) {\n    return memcmp(a, b, sizeof(int64_t));\n}\n");

@@ -70,7 +70,8 @@ pub fn is_builtin_module(segments: &[String]) -> bool {
         Some("gg") => segments.len() == 2 && matches!(segments[1].as_str(),
             "json" | "toml" | "xml" | "yaml" | "csv" | "crypto" | "regex"
             | "sdl" | "gfx" | "ecs" | "ssh" | "http" | "httpserver" | "p2p"
-            | "uuid" | "log" | "cli" | "tensor" | "dataframe"),
+            | "uuid" | "log" | "cli" | "tensor" | "dataframe"
+            | "db" | "sqlite" | "influx"),
         _ => false,
     }
 }
@@ -128,6 +129,9 @@ pub fn generate_builtin_module(segments: &[String]) -> Option<Module> {
             "cli" => None,  // file-based module — loaded via builtin_module_source()
             "tensor" => None,    // file-based module — loaded via builtin_module_source()
             "dataframe" => None, // file-based module — loaded via builtin_module_source()
+            "db" => None,        // file-based module — loaded via builtin_module_source()
+            "sqlite" => None,    // file-based module — loaded via builtin_module_source()
+            "influx" => None,    // file-based module — loaded via builtin_module_source()
             _ => None,
         },
         _ => None,
@@ -880,6 +884,9 @@ pub fn builtin_module_source(segments: &[String]) -> Option<&'static str> {
             Some("cli") => Some(include_str!("../lib/gg/cli.gg")),
             Some("tensor") => Some(include_str!("../lib/gg/tensor.gg")),
             Some("dataframe") => Some(include_str!("../lib/gg/dataframe.gg")),
+            Some("db") => Some(include_str!("../lib/gg/db.gg")),
+            Some("sqlite") => Some(include_str!("../lib/gg/sqlite.gg")),
+            Some("influx") => Some(include_str!("../lib/gg/influx.gg")),
             _ => None,
         },
         _ => None,
@@ -1725,6 +1732,9 @@ mod tests {
         assert!(is_builtin_module(&["gg".into(), "gfx".into()]));
         assert!(is_builtin_module(&["gg".into(), "ssh".into()]));
         assert!(is_builtin_module(&["gg".into(), "p2p".into()]));
+        assert!(is_builtin_module(&["gg".into(), "db".into()]));
+        assert!(is_builtin_module(&["gg".into(), "sqlite".into()]));
+        assert!(is_builtin_module(&["gg".into(), "influx".into()]));
         // old std.* battery paths are NOT valid anymore
         assert!(!is_builtin_module(&["std".into(), "sdl".into()]));
         assert!(!is_builtin_module(&["std".into(), "json".into()]));
@@ -2970,6 +2980,79 @@ mod tests {
         }).collect();
         assert!(fn_names.contains(&"dt_is_leap".to_string()));
         assert!(fn_names.contains(&"dt_days_from_epoch".to_string()));
+    }
+
+    // ─── gg.db / gg.sqlite / gg.influx ──────────────────────
+
+    #[test]
+    fn db_module_source_exists() {
+        let source = builtin_module_source(&["gg".into(), "db".into()]);
+        assert!(source.is_some());
+        let src = source.unwrap();
+        assert!(src.contains("struct Row"));
+        assert!(src.contains("enum Param"));
+        assert!(src.contains("trait FromRow"));
+        assert!(src.contains("trait Queryable"));
+        assert!(src.contains("trait DbConnection"));
+    }
+
+    #[test]
+    fn db_source_parses() {
+        let source = builtin_module_source(&["gg".into(), "db".into()]).unwrap();
+        let mut parser = crate::parser::Parser::new(source);
+        let module = parser.parse_module();
+        assert!(parser.errors.is_empty(), "db.gg parse errors: {:?}", parser.errors);
+        let has_trait = module.items.iter().any(|i| match &i.node {
+            Item::Trait(t) => t.name.node == "FromRow" || t.name.node == "Queryable",
+            _ => false,
+        });
+        assert!(has_trait, "expected FromRow or Queryable trait in db.gg");
+    }
+
+    #[test]
+    fn sqlite_module_source_exists() {
+        let source = builtin_module_source(&["gg".into(), "sqlite".into()]);
+        assert!(source.is_some());
+        let src = source.unwrap();
+        assert!(src.contains("struct SqliteConn"));
+        assert!(src.contains("sqlite_open"));
+        assert!(src.contains("DbConnection"));
+    }
+
+    #[test]
+    fn sqlite_source_parses() {
+        let source = builtin_module_source(&["gg".into(), "sqlite".into()]).unwrap();
+        let mut parser = crate::parser::Parser::new(source);
+        let module = parser.parse_module();
+        assert!(parser.errors.is_empty(), "sqlite.gg parse errors: {:?}", parser.errors);
+        let fn_names: Vec<_> = module.items.iter().filter_map(|i| match &i.node {
+            Item::Function(f) => Some(f.name.node.clone()),
+            _ => None,
+        }).collect();
+        assert!(fn_names.contains(&"sqlite_open".to_string()), "sqlite.gg missing sqlite_open");
+    }
+
+    #[test]
+    fn influx_module_source_exists() {
+        let source = builtin_module_source(&["gg".into(), "influx".into()]);
+        assert!(source.is_some());
+        let src = source.unwrap();
+        assert!(src.contains("struct InfluxClient"));
+        assert!(src.contains("influx_connect"));
+        assert!(src.contains("DbConnection"));
+    }
+
+    #[test]
+    fn influx_source_parses() {
+        let source = builtin_module_source(&["gg".into(), "influx".into()]).unwrap();
+        let mut parser = crate::parser::Parser::new(source);
+        let module = parser.parse_module();
+        assert!(parser.errors.is_empty(), "influx.gg parse errors: {:?}", parser.errors);
+        let fn_names: Vec<_> = module.items.iter().filter_map(|i| match &i.node {
+            Item::Function(f) => Some(f.name.node.clone()),
+            _ => None,
+        }).collect();
+        assert!(fn_names.contains(&"influx_connect".to_string()), "influx.gg missing influx_connect");
     }
 
 }

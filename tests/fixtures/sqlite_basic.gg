@@ -1,0 +1,72 @@
+from gg.sqlite import sqlite_open, SqliteConn
+from gg.db import Row, Param
+from std.collections import Vector
+
+@derive(FromRow)
+struct User:
+    str name
+    int age
+
+void main():
+    # Open in-memory database
+    Result[SqliteConn, str] db_r = sqlite_open(":memory:")
+    SqliteConn db = db_r.unwrap()
+
+    # Create table
+    db.exec_simple("CREATE TABLE users (name TEXT NOT NULL, age INTEGER NOT NULL)").unwrap()
+
+    # Insert rows with parameters
+    Vector[Param] p1 = Vector[Param]()
+    p1.push(Param.StrParam("alice"))
+    p1.push(Param.IntParam(30))
+    db.exec("INSERT INTO users VALUES (?, ?)", p1).unwrap()
+
+    Vector[Param] p2 = Vector[Param]()
+    p2.push(Param.StrParam("bob"))
+    p2.push(Param.IntParam(25))
+    db.exec("INSERT INTO users VALUES (?, ?)", p2).unwrap()
+
+    Vector[Param] p3 = Vector[Param]()
+    p3.push(Param.StrParam("carol"))
+    p3.push(Param.IntParam(35))
+    db.exec("INSERT INTO users VALUES (?, ?)", p3).unwrap()
+
+    # Query raw rows
+    Result[Vector[Row], str] rows_r = db.query_raw("SELECT name, age FROM users ORDER BY name", Vector[Param]())
+    Vector[Row] rows = rows_r.unwrap()
+    print(rows.len())  # 3
+
+    # Access by column name
+    Row r0 = rows.get(0).unwrap()
+    print(r0.get("name"))   # alice
+    print(r0.get_int("age"))  # 30
+
+    # Use @derive(FromRow) to map rows to User structs
+    Vector[User] users = Vector[User]()
+    int i = 0
+    while i < rows.len():
+        Row row = rows.get(i).unwrap()
+        User u = User.from_row(row)
+        users.push(u)
+        i += 1
+
+    User u0 = users.get(0).unwrap()
+    print(u0.name)  # alice
+    print(u0.age)   # 30
+
+    User u1 = users.get(1).unwrap()
+    print(u1.name)  # bob
+    print(u1.age)   # 25
+
+    # exec_simple (no params)
+    int changes = db.exec_simple("DELETE FROM users WHERE age < 30").unwrap()
+    print(changes)  # 1 (bob)
+
+    # Verify deletion
+    Result[Vector[Row], str] after_r = db.query_raw("SELECT COUNT(*) as cnt FROM users", Vector[Param]())
+    Vector[Row] after = after_r.unwrap()
+    Row cnt_row = after.get(0).unwrap()
+    print(cnt_row.get("cnt"))  # 2
+
+    db.close()
+    print("done")

@@ -1,0 +1,92 @@
+# gg.db — Shared database foundation
+#
+# Provides Row, Value, Param, FromRow, Queryable, and DbConnection.
+# Imported by gg.sqlite and gg.influx.
+#
+# @derive(FromRow) is supported on user structs whose field names match
+# column names. Fields of type str, int, float, and bool are handled;
+# everything else is left as str (the raw column text).
+
+from std.collections import Vector, Dict
+from std.conv import parse_int, parse_float
+
+# ── Raw row from a query result ──────────────────────────────
+
+struct Row:
+    Dict[str, str] columns
+
+equip Row:
+    # Get a column value as str (empty string if column not present).
+    str get(&self, str col):
+        if self.columns.contains(col):
+            return self.columns[col]
+        return ""
+
+    # Typed accessors used by @derive(FromRow)-generated code.
+    int get_int(&self, str col):
+        if not self.columns.contains(col):
+            return 0
+        Result[int, str] r = parse_int(self.columns[col])
+        if r.is_ok():
+            return r.unwrap()
+        return 0
+
+    float get_float(&self, str col):
+        if not self.columns.contains(col):
+            return 0.0
+        Result[float, str] r = parse_float(self.columns[col])
+        if r.is_ok():
+            return r.unwrap()
+        return 0.0
+
+    bool get_bool(&self, str col):
+        if not self.columns.contains(col):
+            return false
+        str v = self.columns[col]
+        return v == "1" or v == "true" or v == "True"
+
+    bool has(&self, str col) = self.columns.contains(col)
+
+# ── Typed DB column value ─────────────────────────────────────
+
+enum Value:
+    IntVal(int)
+    FloatVal(float)
+    StrVal(str)
+    BoolVal(bool)
+    NullVal
+
+# ── Query parameter ───────────────────────────────────────────
+
+enum Param:
+    IntParam(int)
+    FloatParam(float)
+    StrParam(str)
+    BoolParam(bool)
+    NullParam
+
+# ── Traits ────────────────────────────────────────────────────
+
+# Any type constructible from a database row.
+# Use @derive(FromRow) on structs whose field names match column names.
+trait FromRow:
+    Self from_row(Row row)
+
+# Row trivially satisfies FromRow (identity).
+equip Row with FromRow:
+    Row from_row(Row row) = row
+
+# The core query interface.
+#
+# Implementations: SqliteConn (gg.sqlite), InfluxClient (gg.influx).
+# query_raw returns raw rows; use from_row to convert to typed structs.
+trait Queryable:
+    Result[Vector[Row], str] query_raw(&self, str sql, Vector[Param] params)
+    Result[int, str] exec(&self, str sql, Vector[Param] params)
+    Result[int, str] exec_simple(&self, str sql):
+        return self.exec(sql, Vector[Param]())
+
+# Database connection lifecycle (extends Queryable).
+trait DbConnection extends Queryable:
+    bool is_connected(&self)
+    void close(&self)

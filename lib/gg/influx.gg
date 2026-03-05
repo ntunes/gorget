@@ -1,0 +1,203 @@
+# gg.influx — InfluxDB 2.x client (pure Gorget, no C dependencies)
+#
+# Uses gg.http for HTTP calls and gg.csv for annotated CSV response parsing.
+# Implements the Queryable + DbConnection traits from gg.db.
+#
+# Usage:
+#   from gg.influx import influx_connect, InfluxClient
+#   from gg.db import Row, Param, Param.StrParam
+#
+#   Result[InfluxClient, str] c_r = influx_connect(
+#       "http://localhost:8086", "mytoken", "myorg", "mybucket")
+#   InfluxClient client = c_r.unwrap()
+#
+#   # Write line protocol
+#   client.exec_simple("cpu,host=server01 usage=0.42").unwrap()
+#
+#   # Flux query
+#   Vector[Row] rows = client.query_raw(
+#       "from(bucket:\"mybucket\") |> range(start: -1h)", Vector[Param]()).unwrap()
+
+from gg.db import Row, Param, Queryable, DbConnection
+from gg.http import http_request, http_get, http_post, HttpResponse
+from gg.csv import csv_parse_table
+from std.collections import Vector, Dict
+from std.conv import int_to_str, float_to_str
+
+# ── InfluxDB client ───────────────────────────────────────────
+
+struct InfluxClient:
+    str base_url
+    str token
+    str org
+    str bucket
+
+# ── Internal helpers ──────────────────────────────────────────
+
+# Build auth header dict.
+Dict[str, str] _influx_auth_headers(str token):
+    Dict[str, str] hdrs = Dict[str, str]()
+    hdrs["Authorization"] = "Token " + token
+    hdrs["Content-Type"] = "application/json"
+    hdrs["Accept"] = "application/csv"
+    return hdrs
+
+# Substitute ? placeholders in a template string with param values.
+# InfluxDB uses Flux (no positional params), so this is a simple concat helper
+# for line-protocol exec where the user may embed literal values.
+str _influx_format_sql(str sql, Vector[Param] params):
+    if params.len() == 0:
+        return sql
+    str result = sql
+    int i = 0
+    while i < params.len():
+        Param p = params.get(i).unwrap()
+        str val = ""
+        match p:
+            case IntParam(v):
+                val = int_to_str(v)
+            case FloatParam(v):
+                val = float_to_str(v)
+            case StrParam(v):
+                val = v
+            case BoolParam(v):
+                if v:
+                    val = "true"
+                else:
+                    val = "false"
+            case NullParam:
+                val = "null"
+        # Replace first ? with the value
+        Option[int] pos = result.index_of("?")
+        if pos.is_some():
+            int p_idx = pos.unwrap()
+            str before = result.byte_slice(0, p_idx)
+            str after = result.byte_slice(p_idx + 1, result.byte_len())
+            result = before + val + after
+        i += 1
+    return result
+
+# Parse InfluxDB 2.x annotated CSV into rows.
+# Annotated CSV has header rows starting with #, then a _field/_value schema.
+# We return each data row as a Row with column names from the CSV header.
+Result[Vector[Row], str] _influx_parse_csv(str body):
+    Vector[Row] rows = Vector[Row]()
+    # Find lines and skip annotation rows (start with #)
+    Vector[str] lines = Vector[str]()
+    int start = 0
+    int i = 0
+    while i < body.byte_len():
+        if body.byte_at(i) == 10:  # newline
+            str line = body.byte_slice(start, i)
+            lines.push(line)
+            start = i + 1
+        i += 1
+    if start < body.byte_len():
+        lines.push(body.byte_slice(start, body.byte_len()))
+
+    # Find header row (first non-comment, non-empty line)
+    Vector[str] headers = Vector[str]()
+    int data_start = 0
+    int li = 0
+    while li < lines.len():
+        str line = lines.get(li).unwrap()
+        if line != "" and not line.starts_with("#"):
+            # Split by comma to get header names
+            int hstart = 0
+            int ci = 0
+            while ci < line.byte_len():
+                if line.byte_at(ci) == 44:  # comma
+                    headers.push(line.byte_slice(hstart, ci))
+                    hstart = ci + 1
+                ci += 1
+            headers.push(line.byte_slice(hstart, line.byte_len()))
+            data_start = li + 1
+            li = lines.len()  # break
+        li += 1
+
+    if headers.len() == 0:
+        return Ok(rows)
+
+    # Parse data rows
+    li = data_start
+    while li < lines.len():
+        str line = lines.get(li).unwrap()
+        if line == "" or line.starts_with("#"):
+            li += 1
+            continue
+        # Split by comma
+        Vector[str] fields = Vector[str]()
+        int fstart = 0
+        int ci = 0
+        while ci < line.byte_len():
+            if line.byte_at(ci) == 44:  # comma
+                fields.push(line.byte_slice(fstart, ci))
+                fstart = ci + 1
+            ci += 1
+        fields.push(line.byte_slice(fstart, line.byte_len()))
+
+        if fields.len() > 0:
+            Dict[str, str] cols = Dict[str, str]()
+            int fi = 0
+            while fi < fields.len() and fi < headers.len():
+                str col_name = headers.get(fi).unwrap()
+                str col_val = fields.get(fi).unwrap()
+                cols[col_name] = col_val
+                fi += 1
+            rows.push(Row(cols))
+        li += 1
+
+    return Ok(rows)
+
+# ── InfluxClient: implements DbConnection ─────────────────────
+
+equip InfluxClient with DbConnection:
+    bool is_connected(&self) = self.base_url != ""
+
+    void close(&self):
+        pass  # HTTP client is stateless; nothing to close
+
+    # Flux query via POST /api/v2/query
+    # Returns rows parsed from InfluxDB annotated CSV response.
+    # The `params` vector is used for ? substitution in the Flux string.
+    Result[Vector[Row], str] query_raw(&self, str flux, Vector[Param] params):
+        str query = _influx_format_sql(flux, params)
+        str url = self.base_url + "/api/v2/query?org=" + self.org
+        Dict[str, str] hdrs = Dict[str, str]()
+        hdrs["Authorization"] = "Token " + self.token
+        hdrs["Content-Type"] = "application/vnd.flux"
+        hdrs["Accept"] = "application/csv"
+        Result[HttpResponse, str] resp = http_request("POST", url, query, hdrs)
+        if resp.is_error():
+            return Error(resp.unwrap_error())
+        HttpResponse r = resp.unwrap()
+        if r.status_code != 200:
+            return Error("influx query HTTP " + int_to_str(r.status_code) + ": " + r.body_text)
+        return _influx_parse_csv(r.body_text)
+
+    # Line Protocol write via POST /api/v2/write
+    # The `sql` parameter is the Line Protocol string.
+    # Returns number of lines written (always 0 from InfluxDB — it returns 204).
+    Result[int, str] exec(&self, str line_protocol, Vector[Param] params):
+        str body = _influx_format_sql(line_protocol, params)
+        str url = self.base_url + "/api/v2/write?org=" + self.org + "&bucket=" + self.bucket + "&precision=ns"
+        Dict[str, str] hdrs = Dict[str, str]()
+        hdrs["Authorization"] = "Token " + self.token
+        hdrs["Content-Type"] = "text/plain; charset=utf-8"
+        Result[HttpResponse, str] resp = http_request("POST", url, body, hdrs)
+        if resp.is_error():
+            return Error(resp.unwrap_error())
+        HttpResponse r = resp.unwrap()
+        if r.status_code != 204 and r.status_code != 200:
+            return Error("influx write HTTP " + int_to_str(r.status_code) + ": " + r.body_text)
+        return Ok(0)
+
+    Result[int, str] exec_simple(&self, str line_protocol):
+        return self.exec(line_protocol, Vector[Param]())
+
+# ── Public entry point ────────────────────────────────────────
+
+Result[InfluxClient, str] influx_connect(str url, str token, str org, str bucket):
+    if url == "":
+        return Error("influx_connect: url is empty")
+    return Ok(InfluxClient(url, token, org, bucket))

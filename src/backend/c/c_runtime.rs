@@ -7428,3 +7428,17 @@ static inline int64_t gorget_getpid(void) {
     return (int64_t)getpid();
 }
 "#;
+
+// ─── SQLite ──────────────────────────────────────────────────
+// The amalgamation is embedded at compile time via include_str! so programs
+// that use gg.sqlite need no external -lsqlite3 flag.  The gorget wrapper
+// functions come after the amalgamation so they can call sqlite3_* symbols.
+
+/// Full SQLite3 amalgamation source (~8.7 MB of C code).
+/// Emitted with GCC diagnostic suppressors to keep -Wall -Wextra clean.
+pub const SQLITE_AMALGAMATION: &str = include_str!("sqlite3/sqlite3.c");
+
+/// Gorget-callable thin wrappers around the SQLite3 C API.
+/// Must be emitted AFTER both RUNTIME_PREAMBLE (for `Str`, `int64_t`, etc.)
+/// and SQLITE_AMALGAMATION (for `sqlite3*`, `SQLITE_ROW`, etc.).
+pub const SQLITE_GORGET_WRAPPERS: &str = include_str!("sqlite3/gorget_sqlite.c");

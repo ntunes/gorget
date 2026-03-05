@@ -9240,3 +9240,21 @@ found South
 done",
     );
 }
+
+#[test]
+fn sqlite_basic() {
+    run_gg(
+        "sqlite_basic.gg",
+        "\
+3
+alice
+30
+alice
+30
+bob
+25
+1
+2
+done",
+    );
+}

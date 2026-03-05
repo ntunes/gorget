@@ -60,7 +60,7 @@ pub fn expand_derives(module: &mut Module, errors: &mut Vec<SemanticError>) {
 }
 
 const DERIVABLE_STRUCT_TRAITS: &[&str] =
-    &["Equatable", "Displayable", "Cloneable", "Hashable", "Serializable", "Default", "Deserializable", "From", "TryFrom"];
+    &["Equatable", "Displayable", "Cloneable", "Hashable", "Serializable", "Default", "Deserializable", "From", "TryFrom", "FromRow"];
 const DERIVABLE_ENUM_TRAITS: &[&str] =
     &["Equatable", "Displayable", "Cloneable", "Hashable", "Serializable", "Deserializable"];
 
@@ -216,6 +216,7 @@ fn generate_struct_derive(
         "Deserializable" => generate_struct_deserializable(type_name, gs, fields),
         "From" => generate_struct_from(type_name, gs, fields),
         "TryFrom" => generate_struct_try_from(type_name, gs, fields),
+        "FromRow" => generate_struct_from_row(type_name, gs, fields),
         _ => String::new(),
     }
 }
@@ -564,6 +565,47 @@ fn generate_struct_try_from(type_name: &str, gs: &str, fields: &[(&str, &str)]) 
         "equip {gp}{type_name}{gs} with TryFrom[{field_type}]:\n    \
          Result[{type_name}{gs}, str] try_from({field_type} value):\n        \
          return Ok({type_name}{gs}(value))\n"
+    )
+}
+
+/// `@derive(FromRow)` — auto-generate `equip T with FromRow` for structs.
+///
+/// Maps column names to field names using `Row.get()`, `Row.get_int()`,
+/// `Row.get_float()`, `Row.get_bool()`. The trait method signature is
+/// `Self from_row(Row row)`. Only str, int, float, bool fields are handled
+/// natively; all other field types receive the raw column text (str).
+fn generate_struct_from_row(type_name: &str, gs: &str, fields: &[(&str, &str)]) -> String {
+    let gp = equip_generic_prefix(gs);
+    let mut body = String::new();
+    for (name, ty) in fields {
+        match *ty {
+            "str" | "String" => {
+                body.push_str(&format!("        str {name} = row.get(\"{name}\")\n"));
+            }
+            "int" | "int8" | "int16" | "int32" | "int64"
+            | "uint" | "uint8" | "uint16" | "uint32" | "uint64" => {
+                body.push_str(&format!("        int {name} = row.get_int(\"{name}\")\n"));
+            }
+            "float" | "float32" | "float64" => {
+                body.push_str(&format!("        float {name} = row.get_float(\"{name}\")\n"));
+            }
+            "bool" => {
+                body.push_str(&format!("        bool {name} = row.get_bool(\"{name}\")\n"));
+            }
+            _ => {
+                // Fall back to raw string for unknown types
+                body.push_str(&format!("        str {name} = row.get(\"{name}\")\n"));
+            }
+        }
+    }
+    let args: Vec<&str> = fields.iter().map(|(name, _)| *name).collect();
+    body.push_str(&format!(
+        "        return {type_name}{gs}({})\n",
+        args.join(", ")
+    ));
+
+    format!(
+        "equip {gp}{type_name}{gs} with FromRow:\n    {type_name}{gs} from_row(Row row):\n{body}"
     )
 }
 

@@ -1,0 +1,146 @@
+# gg.sqlite — SQLite database client
+#
+# Zero external dependencies: the SQLite3 amalgamation is compiled inline.
+# No -lsqlite3 linker flag needed.
+#
+# Usage:
+#   from gg.sqlite import sqlite_open, SqliteConn
+#   from gg.db import Row, Param, Param.IntParam, Param.StrParam
+#
+#   Result[SqliteConn, str] db_r = sqlite_open("app.db")
+#   SqliteConn db = db_r.unwrap()
+#   db.exec_simple("CREATE TABLE IF NOT EXISTS users(name TEXT, age INT)").unwrap()
+#   db.exec("INSERT INTO users VALUES (?, ?)",
+#           Vector[Param](StrParam("alice"), IntParam(30))).unwrap()
+#   Vector[Row] rows = db.query_raw("SELECT * FROM users", Vector[Param]()).unwrap()
+#   db.close()
+
+from gg.db import Row, Param, Queryable, DbConnection, FromRow
+from std.collections import Vector, Dict
+from std.conv import int_to_str, float_to_str
+
+# ── Opaque connection handle ──────────────────────────────────
+# _handle stores sqlite3* cast to int.  Never construct directly — use sqlite_open().
+
+struct SqliteConn:
+    int _handle
+
+# ── Low-level C extern bindings ───────────────────────────────
+
+extern int _gorget_sqlite_open(str path) = "gorget_sqlite_open"
+extern str _gorget_sqlite_errmsg(int db) = "gorget_sqlite_errmsg"
+extern void _gorget_sqlite_close(int db) = "gorget_sqlite_close"
+
+extern int _gorget_sqlite_prepare(int db, str sql) = "gorget_sqlite_prepare"
+extern void _gorget_sqlite_bind_int(int stmt, int idx, int val) = "gorget_sqlite_bind_int"
+extern void _gorget_sqlite_bind_float(int stmt, int idx, float val) = "gorget_sqlite_bind_float"
+extern void _gorget_sqlite_bind_str(int stmt, int idx, str val) = "gorget_sqlite_bind_str"
+extern void _gorget_sqlite_bind_null(int stmt, int idx) = "gorget_sqlite_bind_null"
+extern int _gorget_sqlite_step(int stmt) = "gorget_sqlite_step"
+extern int _gorget_sqlite_column_count(int stmt) = "gorget_sqlite_column_count"
+extern str _gorget_sqlite_column_name(int stmt, int col) = "gorget_sqlite_column_name"
+extern str _gorget_sqlite_column_text(int stmt, int col) = "gorget_sqlite_column_text"
+extern void _gorget_sqlite_finalize(int stmt) = "gorget_sqlite_finalize"
+extern int _gorget_sqlite_exec_simple(int db, str sql) = "gorget_sqlite_exec_simple"
+extern int _gorget_sqlite_changes(int db) = "gorget_sqlite_changes"
+
+# ── Helper: bind a Param at position idx (1-indexed) ──────────
+
+void _sqlite_bind_param(int stmt, int idx, Param p):
+    match p:
+        case IntParam(v): _gorget_sqlite_bind_int(stmt, idx, v)
+        case FloatParam(v): _gorget_sqlite_bind_float(stmt, idx, v)
+        case StrParam(v): _gorget_sqlite_bind_str(stmt, idx, v)
+        case BoolParam(v):
+            int bval = 0
+            if v:
+                bval = 1
+            _gorget_sqlite_bind_int(stmt, idx, bval)
+        case NullParam: _gorget_sqlite_bind_null(stmt, idx)
+
+# ── Helper: execute a prepared+bound stmt, collect rows ────────
+
+Result[Vector[Row], str] _sqlite_step_rows(int stmt, int db):
+    Vector[Row] rows = Vector[Row]()
+    bool step_done = false
+    str step_err = ""
+    while not step_done:
+        int r = _gorget_sqlite_step(stmt)
+        if r == 1:
+            int col_count = _gorget_sqlite_column_count(stmt)
+            Dict[str, str] cols = Dict[str, str]()
+            int c = 0
+            while c < col_count:
+                str col_name = _gorget_sqlite_column_name(stmt, c)
+                str col_val = _gorget_sqlite_column_text(stmt, c)
+                cols[col_name] = col_val
+                c += 1
+            rows.push(Row(cols))
+        elif r == 0:
+            step_done = true
+        else:
+            step_err = _gorget_sqlite_errmsg(db)
+            step_done = true
+    _gorget_sqlite_finalize(stmt)
+    if step_err != "":
+        return Error(step_err)
+    return Ok(rows)
+
+# ── SqliteConn: implements DbConnection ───────────────────────
+
+equip SqliteConn with DbConnection:
+    bool is_connected(&self) = self._handle != 0
+
+    void close(&self):
+        if self._handle != 0:
+            _gorget_sqlite_close(self._handle)
+
+    Result[Vector[Row], str] query_raw(&self, str sql, Vector[Param] params):
+        if self._handle == 0:
+            return Error("sqlite: not connected")
+        int stmt = _gorget_sqlite_prepare(self._handle, sql)
+        if stmt == 0:
+            str err = _gorget_sqlite_errmsg(self._handle)
+            return Error("sqlite prepare: " + err)
+        int i = 0
+        while i < params.len():
+            Param p = params.get(i).unwrap()
+            _sqlite_bind_param(stmt, i + 1, p)
+            i += 1
+        return _sqlite_step_rows(stmt, self._handle)
+
+    Result[int, str] exec(&self, str sql, Vector[Param] params):
+        if self._handle == 0:
+            return Error("sqlite: not connected")
+        if params.len() == 0:
+            int changes = _gorget_sqlite_exec_simple(self._handle, sql)
+            if changes < 0:
+                str err = _gorget_sqlite_errmsg(self._handle)
+                return Error("sqlite exec: " + err)
+            return Ok(changes)
+        int stmt = _gorget_sqlite_prepare(self._handle, sql)
+        if stmt == 0:
+            str err = _gorget_sqlite_errmsg(self._handle)
+            return Error("sqlite prepare: " + err)
+        int i = 0
+        while i < params.len():
+            Param p = params.get(i).unwrap()
+            _sqlite_bind_param(stmt, i + 1, p)
+            i += 1
+        int r = _gorget_sqlite_step(stmt)
+        _gorget_sqlite_finalize(stmt)
+        if r < 0:
+            str err = _gorget_sqlite_errmsg(self._handle)
+            return Error("sqlite exec: " + err)
+        return Ok(_gorget_sqlite_changes(self._handle))
+
+    Result[int, str] exec_simple(&self, str sql):
+        return self.exec(sql, Vector[Param]())
+
+# ── Public entry point ────────────────────────────────────────
+
+Result[SqliteConn, str] sqlite_open(str path):
+    int h = _gorget_sqlite_open(path)
+    if h == 0:
+        return Error("sqlite_open failed for: " + path)
+    return Ok(SqliteConn(h))
