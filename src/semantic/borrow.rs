@@ -1291,16 +1291,22 @@ impl<'a> BorrowChecker<'a> {
                 // Non-identifier sub-expressions fall back to compute_expr_origin.
                 if let Expr::Call { args, .. } = &inner.node {
                     for arg in args {
-                        let is_borrowed = if let Some(&def_id) =
-                            self.resolution_map.get(&arg.node.value.span.start)
-                        {
-                            // identifier path: only reference-typed values are in var_origins
-                            self.var_origins
-                                .get(&def_id)
-                                .map_or(false, |o| !matches!(o, BorrowOrigin::Static))
+                        let is_borrowed = if let Expr::Identifier(_) = &arg.node.value.node {
+                            // Bare identifier: use var_origins for type-sensitive check.
+                            // Only reference-typed values (str, &T, …) are in var_origins;
+                            // copy-type args (int, bool) won't be found → map_or(false) → safe.
+                            if let Some(&def_id) = self.resolution_map.get(&arg.node.value.span.start) {
+                                self.var_origins
+                                    .get(&def_id)
+                                    .map_or(false, |o| !matches!(o, BorrowOrigin::Static))
+                            } else {
+                                false
+                            }
                         } else {
-                            // expression path: use conservative origin check
-                            self.compute_expr_origin(&arg.node.value).contains_local()
+                            // Complex expression (call, field access, etc.): for spawn,
+                            // ANY non-Static origin is dangerous — Param origins point
+                            // into the caller's stack which the spawned task may outlive.
+                            !matches!(self.compute_expr_origin(&arg.node.value), BorrowOrigin::Static)
                         };
                         if is_borrowed {
                             self.error(SemanticErrorKind::SpawnWithBorrowedRef, arg.span);
@@ -5431,6 +5437,27 @@ void launch():
         assert!(
             !has_error(&errors, |k| matches!(k, SemanticErrorKind::SpawnWithBorrowedRef)),
             "unexpected SpawnWithBorrowedRef for static str: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn spawn_with_call_returning_borrowed_str_rejected() {
+        // A function call returning a str derived from a param → still borrowed.
+        // The spawned task may outlive the caller, so this is unsound.
+        let source = "\
+str get_slice(str s):
+    return s
+
+async void worker(str name):
+    print(name)
+
+void launch(str data):
+    auto t = spawn worker(get_slice(data))
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::SpawnWithBorrowedRef)),
+            "expected SpawnWithBorrowedRef for call-derived borrowed str in spawn: {:?}", errors
         );
     }
 
