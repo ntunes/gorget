@@ -1322,6 +1322,7 @@ fn eval_meta_stmt(
         | Stmt::Select { .. }
         | Stmt::With { .. }
         | Stmt::Unsafe { .. }
+        | Stmt::NamedScope { .. }
         | Stmt::Item(_) => Err(meta_err(
             "this statement type is not supported in compile-time function evaluation",
             stmt_span,
@@ -1598,6 +1599,7 @@ fn substitute_stmt(stmt: &mut Stmt, env: &FxHashMap<String, MetaValue>, type_env
             substitute_block(body, env, type_env);
         }
         Stmt::Unsafe { body } => substitute_block(body, env, type_env),
+        Stmt::NamedScope { body, .. } => substitute_block(body, env, type_env),
         Stmt::Assert { condition, message } => {
             substitute_expr(condition, env, type_env);
             if let Some(msg) = message { substitute_expr(msg, env, type_env); }
@@ -2785,7 +2787,7 @@ fn recurse_delayed_meta_in_stmt(
                 evaluate_delayed_meta_block(eb, ctx, errors);
             }
         }
-        Stmt::Loop { body } | Stmt::Unsafe { body } => {
+        Stmt::Loop { body } | Stmt::Unsafe { body } | Stmt::NamedScope { body, .. } => {
             evaluate_delayed_meta_block(body, ctx, errors);
         }
         Stmt::Match { arms, else_arm, .. } => {

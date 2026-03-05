@@ -295,7 +295,7 @@ impl GenericCollector {
                 }
                 self.scan_block(body);
             }
-            Stmt::Loop { body } | Stmt::Unsafe { body } => {
+            Stmt::Loop { body } | Stmt::Unsafe { body } | Stmt::NamedScope { body, .. } => {
                 self.scan_block(body);
             }
             Stmt::Assert { condition, message } => {
@@ -1028,7 +1028,7 @@ fn substitute_stmt_types(stmt: &mut Spanned<Stmt>, subs: &[(String, Type)]) {
                 substitute_block_types(eb, subs);
             }
         }
-        Stmt::Loop { body } | Stmt::Unsafe { body } => {
+        Stmt::Loop { body } | Stmt::Unsafe { body } | Stmt::NamedScope { body, .. } => {
             substitute_block_types(body, subs);
         }
         // Delayed meta stmts: substitute types in condition + all branch blocks

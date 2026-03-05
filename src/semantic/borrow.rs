@@ -1253,7 +1253,16 @@ impl<'a> BorrowChecker<'a> {
                 self.check_expr(inner);
                 if self.current_function_is_async {
                     let to_invalidate: Vec<DefId> = self.var_origins.iter()
-                        .filter(|(_, origin)| !matches!(origin, BorrowOrigin::Static))
+                        .filter(|(_, origin)| {
+                            // Static origins are always safe.
+                            if matches!(origin, BorrowOrigin::Static) { return false; }
+                            // Param-only origins are safe across await: the caller is blocked
+                            // at the direct-await call site, so all params remain alive.
+                            // This is sound because Change 1 (Spawn enforcement) prevents
+                            // borrowed refs from reaching fire-and-forget spawns.
+                            if !origin.contains_local() { return false; }
+                            true
+                        })
                         .filter_map(|(def_id, _)| {
                             // Not in var_states = never moved = implicitly live (e.g. params).
                             if !matches!(self.var_states.get(def_id), Some(VarState::Moved { .. })) {
@@ -1269,10 +1278,35 @@ impl<'a> BorrowChecker<'a> {
                 }
             }
 
-            Expr::Try { expr: inner }
-            | Expr::Spawn { expr: inner }
-            | Expr::TryCapture { expr: inner } => {
+            Expr::Try { expr: inner } | Expr::TryCapture { expr: inner } => {
                 self.check_expr(inner);
+            }
+
+            Expr::Spawn { expr: inner } => {
+                self.check_expr(inner);
+                // Spawn is fire-and-forget: the spawned task may outlive the caller's stack.
+                // Reject any arg whose borrow origin is not Static.
+                // `var_origins` only tracks reference-typed values (str, &T, …), so
+                // identifier args resolve through it for type-sensitive filtering.
+                // Non-identifier sub-expressions fall back to compute_expr_origin.
+                if let Expr::Call { args, .. } = &inner.node {
+                    for arg in args {
+                        let is_borrowed = if let Some(&def_id) =
+                            self.resolution_map.get(&arg.node.value.span.start)
+                        {
+                            // identifier path: only reference-typed values are in var_origins
+                            self.var_origins
+                                .get(&def_id)
+                                .map_or(false, |o| !matches!(o, BorrowOrigin::Static))
+                        } else {
+                            // expression path: use conservative origin check
+                            self.compute_expr_origin(&arg.node.value).contains_local()
+                        };
+                        if is_borrowed {
+                            self.error(SemanticErrorKind::SpawnWithBorrowedRef, arg.span);
+                        }
+                    }
+                }
             }
 
             Expr::If {
@@ -2010,6 +2044,10 @@ impl<'a> BorrowChecker<'a> {
             }
 
             Stmt::Unsafe { body } => {
+                self.check_block(body);
+            }
+
+            Stmt::NamedScope { body, .. } => {
                 self.check_block(body);
             }
 
@@ -2886,7 +2924,7 @@ fn build_aliases_from_stmt(
         Stmt::For { body, .. } | Stmt::While { body, .. } | Stmt::Loop { body } => {
             build_aliases_from_block(body, param_names, aliases, function_info, resolution_map, scopes);
         }
-        Stmt::With { body, .. } | Stmt::Unsafe { body } => {
+        Stmt::With { body, .. } | Stmt::Unsafe { body } | Stmt::NamedScope { body, .. } => {
             build_aliases_from_block(body, param_names, aliases, function_info, resolution_map, scopes);
         }
         _ => {}
@@ -3127,7 +3165,7 @@ fn trace_stmt_returns_to_params(
         Stmt::For { body, .. } | Stmt::While { body, .. } | Stmt::Loop { body } => {
             trace_block_returns_to_params(body, param_names, local_aliases, function_info, resolution_map, scopes, result);
         }
-        Stmt::With { body, .. } | Stmt::Unsafe { body } => {
+        Stmt::With { body, .. } | Stmt::Unsafe { body } | Stmt::NamedScope { body, .. } => {
             trace_block_returns_to_params(body, param_names, local_aliases, function_info, resolution_map, scopes, result);
         }
         _ => {}
@@ -5182,8 +5220,10 @@ str wrapper():
     // ─── Async/Await Borrow-Across-Await Tests ──────────────
 
     #[test]
-    fn borrow_across_await_param_rejected() {
-        // str param used after await → BorrowAcrossAwait
+    fn param_str_across_await_ok() {
+        // str param used after await → now OK: caller is blocked, param stays alive.
+        // Sound because spawn enforcement (SpawnWithBorrowedRef) prevents borrowed refs
+        // from escaping into fire-and-forget spawns.
         let source = "\
 async int do_work():
     return 1
@@ -5194,14 +5234,15 @@ async void process(str name):
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::BorrowAcrossAwait { name } if name == "name")),
-            "expected BorrowAcrossAwait for name, got: {:?}", errors
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::BorrowAcrossAwait { .. })),
+            "unexpected BorrowAcrossAwait for param str: {:?}", errors
         );
     }
 
     #[test]
-    fn borrow_across_await_local_rejected() {
-        // Local str borrowing from param, used after await → error
+    fn local_str_from_param_across_await_ok() {
+        // Local str derived from a str param (via function call) is also safe across await:
+        // its origin traces back to the param, which stays alive while caller is blocked.
         let source = "\
 str get_slice(str input):
     return input
@@ -5216,8 +5257,32 @@ async void process(str data):
 ";
         let errors = check(source);
         assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::BorrowAcrossAwait { .. })),
+            "unexpected BorrowAcrossAwait for local from param: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn local_str_across_await_still_rejected() {
+        // str derived from a local variable (not a param) IS still rejected:
+        // the local may not be live at the suspension point resume.
+        let source = "\
+str get_slice(str input):
+    return input
+
+async int do_work():
+    return 1
+
+async void process():
+    String owned = String.from(\"hello\")
+    str s = owned.as_str()
+    do_work().await()
+    print(s)
+";
+        let errors = check(source);
+        assert!(
             has_error(&errors, |k| matches!(k, SemanticErrorKind::BorrowAcrossAwait { .. })),
-            "expected BorrowAcrossAwait for s or data, got: {:?}", errors
+            "expected BorrowAcrossAwait for local-derived str: {:?}", errors
         );
     }
 
@@ -5298,7 +5363,7 @@ async void process(str name):
 
     #[test]
     fn borrow_across_await_in_branch() {
-        // await in one if branch, use after merge → error (conservative)
+        // await in one if branch, param used after merge → now OK (param-only origin)
         let source = "\
 async int do_work():
     return 1
@@ -5310,8 +5375,8 @@ async void process(str name, bool cond):
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::BorrowAcrossAwait { name } if name == "name")),
-            "expected BorrowAcrossAwait for branch-await, got: {:?}", errors
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::BorrowAcrossAwait { .. })),
+            "unexpected BorrowAcrossAwait for param-origin branch-await, got: {:?}", errors
         );
     }
 
@@ -5330,6 +5395,77 @@ async void process(str name):
         assert!(
             !has_error(&errors, |k| matches!(k, SemanticErrorKind::BorrowAcrossAwait { .. })),
             "unexpected BorrowAcrossAwait for spawn: {:?}", errors
+        );
+    }
+
+    // ─── Spawn-site borrow enforcement ──────────────────────
+
+    #[test]
+    fn spawn_with_borrowed_str_rejected() {
+        // passing a str param to a spawned task → SpawnWithBorrowedRef
+        let source = "\
+async void worker(str name):
+    print(name)
+
+void launch(str name):
+    auto t = spawn worker(name)
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::SpawnWithBorrowedRef)),
+            "expected SpawnWithBorrowedRef for borrowed arg in spawn: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn spawn_with_static_str_ok() {
+        // passing a string literal to a spawned task → OK (Static origin)
+        let source = "\
+async void worker(str name):
+    print(name)
+
+void launch():
+    auto t = spawn worker(\"hello\")
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::SpawnWithBorrowedRef)),
+            "unexpected SpawnWithBorrowedRef for static str: {:?}", errors
+        );
+    }
+
+    // ─── Named scope borrow checker tests ───────────────────
+
+    #[test]
+    fn named_scope_outer_borrow_ok() {
+        // variable declared outside the named scope, borrowed inside → fine
+        let source = "\
+void process(str data):
+    workers:
+        print(data)
+";
+        let errors = check(source);
+        assert!(
+            errors.is_empty(),
+            "unexpected errors for outer borrow in named scope: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn named_scope_basic_parse_ok() {
+        // named scope parses and type-checks without error
+        let source = "\
+void main():
+    int x = 5
+    section:
+        int y = x + 1
+        print(y)
+    print(x)
+";
+        let errors = check(source);
+        assert!(
+            errors.is_empty(),
+            "unexpected errors for basic named scope: {:?}", errors
         );
     }
 }

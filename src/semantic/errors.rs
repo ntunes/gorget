@@ -93,6 +93,10 @@ pub enum SemanticErrorKind {
     /// Reference-typed variable used across an `await` suspension point.
     BorrowAcrossAwait { name: String },
 
+    /// Borrowed reference passed as argument to `spawn` (fire-and-forget).
+    /// Use `String` or `Shared[T]` instead.
+    SpawnWithBorrowedRef,
+
     // ── Borrow checking errors ──
 
     /// Variable used after ownership was moved.
@@ -323,6 +327,9 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::BorrowAcrossAwait { name } => {
                 write!(f, "cannot use reference `{name}` across `await` — move owned data instead")
+            }
+            SemanticErrorKind::SpawnWithBorrowedRef => {
+                write!(f, "cannot pass borrowed reference to spawned task — use String or Shared[T]")
             }
             SemanticErrorKind::UseAfterMove { name, .. } => {
                 write!(f, "use of moved value `{name}`")

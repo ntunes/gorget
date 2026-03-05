@@ -1,0 +1,14 @@
+void main():
+    int x = 10
+
+    outer:
+        int y = x + 5
+        print(y)
+        inner:
+            int z = y * 2
+            print(z)
+        # z dropped here
+        print(y)
+    # y dropped here
+
+    print(x)

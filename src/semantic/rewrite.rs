@@ -145,6 +145,7 @@ fn rewrite_stmt(stmt: &mut Stmt, res: &ResolutionMap, scopes: &ScopeTable) {
             rewrite_block(body, res, scopes);
         }
         Stmt::Unsafe { body } => rewrite_block(body, res, scopes),
+        Stmt::NamedScope { body, .. } => rewrite_block(body, res, scopes),
         Stmt::Assert { condition, message } => {
             rewrite_expr(condition, res, scopes);
             if let Some(msg) = message { rewrite_expr(msg, res, scopes); }

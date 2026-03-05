@@ -92,6 +92,8 @@ pub fn lower_stmt(
 
         Stmt::Unsafe { body } => lower_block(ctx, builder, body),
 
+        Stmt::NamedScope { body, .. } => lower_named_scope(ctx, builder, body),
+
         Stmt::Item(_) => { /* Nested items are hoisted — no-op in GIR */ }
 
         Stmt::Select { arms, else_arm: _ } => lower_select(ctx, builder, arms),
@@ -2238,6 +2240,22 @@ fn is_allocator_constructor(expr: &Expr) -> bool {
         }
     }
     false
+}
+
+/// Lower a named scope block: `identifier:\n    body`.
+/// Opens a new drop scope so variables declared inside are dropped at block exit.
+fn lower_named_scope(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    body: &Block,
+) {
+    ctx.drops.push_scope(DropScopeKind::Block);
+    lower_block(ctx, builder, body);
+    if builder.is_terminated() {
+        ctx.drops.pop_scope_no_emit();
+    } else {
+        ctx.drops.pop_scope(builder, &ctx.type_registry);
+    }
 }
 
 /// Lower a `with bindings: body` statement.

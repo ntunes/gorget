@@ -1852,6 +1852,10 @@ impl<'a> TypeChecker<'a> {
                 self.check_block(body);
             }
 
+            Stmt::NamedScope { body, .. } => {
+                self.check_block(body);
+            }
+
             Stmt::Item(_) => {
                 // Nested items are checked at the top level
             }

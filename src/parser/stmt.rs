@@ -72,6 +72,10 @@ impl Parser {
             // mutable — prefix for mutable variable declaration under immutable-by-default
             Token::Keyword(Keyword::Mutable) if !self.name_first => self.parse_decl_or_expr_stmt(),
 
+            // Named scope: `identifier: \n    body` — mid-function drop zone.
+            // Must come before name-first mode to avoid misclassifying it as a declaration.
+            _ if self.check_identifier_colon_block() => self.parse_named_scope(),
+
             // In name-first mode: try name-first declaration before falling through
             _ if self.name_first => self.parse_name_first_decl_or_expr_stmt(),
 
@@ -796,6 +800,18 @@ impl Parser {
         self.consume_newline();
         let span = start.merge(end);
         Ok(Spanned::new(Stmt::MetaConst { name, value, span }, span))
+    }
+
+    /// Parse a named scope block: `identifier:\n    stmts`.
+    fn parse_named_scope(&mut self) -> Result<Spanned<Stmt>, ParseError> {
+        let start = self.peek_span();
+        let name = self.expect_identifier()?;
+        let body = self.parse_block()?;
+        let end = self.previous_span();
+        Ok(Spanned::new(
+            Stmt::NamedScope { name, body },
+            start.merge(end),
+        ))
     }
 
     /// Parse a simple binding pattern for variable declarations.

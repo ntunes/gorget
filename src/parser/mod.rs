@@ -83,6 +83,17 @@ impl Parser {
         matches!(self.peek(), Token::Identifier(s) if s == "fn")
     }
 
+    /// Returns `true` when the current position starts a named scope block:
+    /// `Identifier Colon Newline Indent`.
+    /// This pattern is unambiguous — name-first var decls (`x: int = …`) have a
+    /// type token at peek+2, never `Newline`.
+    pub fn check_identifier_colon_block(&self) -> bool {
+        matches!(self.peek_ahead(0), Token::Identifier(_))
+            && matches!(self.peek_ahead(1), Token::Colon)
+            && matches!(self.peek_ahead(2), Token::Newline)
+            && matches!(self.peek_ahead(3), Token::Indent)
+    }
+
     // ── Token Management ──────────────────────────────────────
 
     pub fn peek(&self) -> &Token {

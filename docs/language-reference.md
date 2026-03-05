@@ -949,7 +949,7 @@ Statements are executed for their side effects. They appear inside function bodi
 statement = var_decl | expr_stmt | assign_stmt | compound_assign_stmt
           | return_stmt | throw_stmt | break_stmt | continue_stmt | pass_stmt
           | for_stmt | while_stmt | loop_stmt | if_stmt | match_stmt
-          | with_stmt | unsafe_stmt | item ;
+          | with_stmt | unsafe_stmt | named_scope_stmt | item ;
 ```
 
 ### 6.1 Variable Declarations
@@ -1205,6 +1205,47 @@ unsafe_stmt = "unsafe" ":" block ;
 ```
 
 Opts into operations the compiler cannot verify: raw pointer dereferencing, FFI calls, mutable static access.
+
+### 6.16 Named Scope Block
+
+```ebnf
+named_scope_stmt = IDENTIFIER ":" NEWLINE INDENT stmt* DEDENT ;
+```
+
+A **named scope** is a mid-function drop zone. Variables declared inside the block are dropped when the block exits — exactly like variables at function return, but at an earlier point. The name is documentation-only; it is not a bindable identifier.
+
+```gorget
+void main():
+    data = load_data()
+
+    workers:                                  # scope named "workers"
+        Task[void] t1 = spawn process(data)
+        Task[void] t2 = spawn process(data)
+    # Task[void]__drop(t2), Task[void]__drop(t1) — both joined here
+
+    cleanup:                                  # scope named "cleanup"
+        File f = File.open("out.txt").unwrap()
+        write_results(&f)
+    # File__drop(f) — file closed here
+
+    print("done")
+```
+
+**Thread safety via RAII.** `Task[T]`'s drop implementation joins the thread. Tasks created inside a named scope are joined before the block exits, so outer borrows remain valid for the entire scope:
+
+```gorget
+void crunch(str data):
+    workers:
+        # data is borrowed inside — safe because tasks are joined at scope exit
+        Task[void] t1 = spawn analyse(data)
+        Task[void] t2 = spawn summarise(data)
+    # both threads joined here; data still lives
+    print("crunch done")
+```
+
+**Comparison with `with X as y:`** — `with` manages a single resource acquired at block entry. A named scope is a general drop boundary for any number of variables; there is no acquisition step.
+
+Variables declared *outside* the named scope and read or borrowed *inside* are perfectly valid — they outlive the scope by definition.
 
 ---
 
@@ -1684,15 +1725,17 @@ int result = add(f().await(), g().await()).await()
 
 #### Suspension-Point Safety
 
-An `.await()` expression is a **suspension point** — execution may pause and resume later, potentially on a different thread. To prevent dangling references and data races, the compiler enforces that **no references are live across `.await()` points**.
+An `.await()` expression is a **suspension point** — execution may pause and resume later, potentially on a different thread. To prevent dangling references and data races, the compiler enforces that **references to local variables** may not live across `.await()` points. Parameters are exempt: when a caller directly awaits an async function, the caller is blocked and all parameters remain alive throughout.
 
 **What can cross an `.await()`:**
 - **Owned types** (`String`, structs, enums, collections) — they own their data, so the data moves with the suspended state.
 - **Copy types** (`int`, `float`, `bool`, `char`) — trivially duplicated, no pointers involved.
 - **Static string literals** (`str s = "hello"`) — point to program-global storage that is always valid.
+- **`str` parameters** — the caller is blocked at the direct-await call site, so `str` params and any `str` derived from them remain alive across the suspension.
 
 **What cannot cross an `.await()`:**
-- **Borrowed references** — `str` variables that borrow from parameters or local data, `&T` references, or any value whose underlying data is owned elsewhere. The referent may be invalidated during suspension.
+- **`str` derived from a local `String`** — the local variable owns the data; a borrow of it cannot outlive the variable's scope across a suspension point.
+- **`&T` references to local variables** — same reasoning.
 
 ```gorget
 # OK: owned int crosses await
@@ -1707,24 +1750,50 @@ async void greet():
     some_task().await()
     print(msg)             # fine: "hello" is a static literal
 
-# ERROR: borrowed str crosses await
+# OK: str parameter crosses await (caller is blocked, param stays alive)
 async void process(str name):
     some_task().await()
-    print(name)            # error: `name` borrows from caller
+    print(name)            # fine: caller is blocked, name is live
 
-# FIX: copy to owned String before await
-async void process_fixed(str name):
-    String owned = String(name)
+# OK: str derived from a parameter is also safe
+async void process2(str data):
+    str slice = get_prefix(data)
+    some_task().await()
+    print(slice)           # fine: data (and thus slice) is live
+
+# ERROR: str borrowed from a local variable
+async void process_local():
+    String owned = String.from("hello")
+    str s = owned.as_str()
+    some_task().await()
+    print(s)               # error: s borrows from local `owned`
+
+# FIX: use the owned String directly
+async void process_fixed():
+    String owned = String.from("hello")
     some_task().await()
     print(owned)           # fine: String owns its data
 ```
 
-**`spawn` is not a suspension point.** The current function continues immediately after `spawn`, so references remain valid:
+**`spawn` with borrowed references is rejected.** Unlike `.await()`, `spawn` launches a fire-and-forget thread that may outlive the current function. The compiler rejects passing borrowed references (`str` params, `&T`) to spawned tasks:
+
+```gorget
+async void worker(str name):
+    print(name)
+
+void launch(str name):
+    # ERROR: name is a borrowed str — thread may outlive launch()
+    auto t = spawn worker(name)
+    # FIX: pass an owned String instead
+    auto t2 = spawn worker(String(name).as_str())   # or redesign worker to take String
+```
+
+**`spawn` is not a suspension point.** The current function continues immediately after `spawn`, so non-borrowed values remain valid:
 
 ```gorget
 async void example(str s):
     auto task = spawn some_async_fn()
-    print(s)               # fine: spawn doesn't suspend
+    print(s)               # fine: spawn doesn't suspend, s is still live
 ```
 
 See [4.6 Copy vs. Non-Copy Types](#46-copy-vs-non-copy-types) for the full type classification and [4.3 Ownership Rules](#43-ownership-rules) for borrow semantics.

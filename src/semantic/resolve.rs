@@ -1005,6 +1005,12 @@ fn resolve_stmt(
             scopes.pop_scope();
         }
 
+        Stmt::NamedScope { body, .. } => {
+            scopes.push_scope(super::scope::ScopeKind::Block);
+            resolve_block(body, scopes, types, errors, resolution_map);
+            scopes.pop_scope();
+        }
+
         Stmt::Assert { condition, message } => {
             resolve_expr(condition, scopes, errors, resolution_map);
             if let Some(msg) = message {

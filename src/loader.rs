@@ -483,6 +483,7 @@ fn qualify_stmt(stmt: &mut Stmt, vm: &HashMap<String, String>) {
             if let Some(m) = message { qualify_expr(m, vm); }
         }
         Stmt::Unsafe { body } => qualify_block(body, vm),
+        Stmt::NamedScope { body, .. } => qualify_block(body, vm),
         Stmt::Item(_) | Stmt::Select { .. } => {}
         Stmt::MetaIf { condition, then_body, elif_branches, else_body, .. } => {
             qualify_expr(condition, vm);

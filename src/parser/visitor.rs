@@ -362,6 +362,9 @@ pub fn walk_stmt<V: ExprVisitor + ?Sized>(v: &mut V, stmt: &Spanned<Stmt>) {
         Stmt::Unsafe { body } => {
             v.visit_block(body);
         }
+        Stmt::NamedScope { body, .. } => {
+            v.visit_block(body);
+        }
         Stmt::Assert {
             condition,
             message,

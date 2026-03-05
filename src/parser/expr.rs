@@ -184,6 +184,7 @@ fn stmt_contains_it(stmt: &Stmt) -> bool {
         }
         Stmt::MetaConst { value, .. } => contains_it(value),
         Stmt::MetaLog { args, .. } => args.iter().any(contains_it),
+        Stmt::NamedScope { body, .. } => block_contains_it(body),
     }
 }
 

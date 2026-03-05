@@ -1138,6 +1138,14 @@ impl Formatter {
                 }
                 self.emitter.newline();
             }
+            Stmt::NamedScope { name, body } => {
+                self.emitter.write(&name.node);
+                self.emitter.write(":");
+                self.emitter.newline();
+                self.emitter.indent();
+                self.format_block_stmts(body);
+                self.emitter.dedent();
+            }
         }
     }
 

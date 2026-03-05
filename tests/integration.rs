@@ -6699,6 +6699,10 @@ fn format_stmt_canonical(stmt: &Stmt) -> String {
         Stmt::Item(item) => format_item_canonical(item),
         Stmt::MetaIf { .. } | Stmt::MetaFor { .. } | Stmt::MetaMatch { .. }
         | Stmt::MetaWhile { .. } | Stmt::MetaConst { .. } | Stmt::MetaLog { .. } => "meta".to_string(),
+        Stmt::NamedScope { name, body } => {
+            let body = format_block_canonical(&body.stmts);
+            format!("{}:{}", name.node, body)
+        }
     }
 }
 
@@ -9256,5 +9260,27 @@ bob
 1
 2
 done",
+    );
+}
+
+#[test]
+fn named_scope_basic() {
+    run_gg(
+        "named_scope_basic.gg",
+        "\
+15
+30
+15
+10",
+    );
+}
+
+#[test]
+fn async_param_across_await() {
+    run_gg(
+        "async_param_across_await.gg",
+        "\
+world
+84",
     );
 }

@@ -873,6 +873,15 @@ pub enum Stmt {
         body: Block,
     },
 
+    /// Named scope block: `identifier:\n    body`.
+    /// Mid-function drop zone — variables created inside are dropped at block exit.
+    /// Thread safety follows from `Task[T]` RAII: tasks spawned inside are joined
+    /// (dropped) before the scope exits, so outer borrows remain valid.
+    NamedScope {
+        name: Spanned<String>,
+        body: Block,
+    },
+
     /// assert condition [, message]
     Assert {
         condition: Spanned<Expr>,

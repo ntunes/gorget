@@ -1,0 +1,10 @@
+async int compute(int x):
+    return x * 2
+
+async void greet(str name):
+    int result = compute(42).await()
+    print(name)
+    print(result)
+
+async void main():
+    greet("world").await()
