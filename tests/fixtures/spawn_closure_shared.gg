@@ -1,0 +1,20 @@
+# Tests that closures with Shared[T] captures pass the borrow checker.
+# Shared[T] is Copy (ref-counted pointer), so it's safe to capture.
+
+from std.sync import Shared
+
+async int add_ten(Shared[int] s):
+    int v = s.get()
+    return v + 10
+
+async void main():
+    Shared[int] counter = Shared[int](5)
+
+    # Closure captures Shared[int] — borrow checker allows this (Copy type)
+    auto reader = (): print(counter.get())
+    reader()
+
+    # Spawn via named function with Shared param
+    Task[int] t = spawn add_ten(counter)
+    int result = t.await()
+    print(result)

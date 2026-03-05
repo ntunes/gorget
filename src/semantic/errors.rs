@@ -101,6 +101,9 @@ pub enum SemanticErrorKind {
     /// Only `spawn fn_name(args)` is supported.
     SpawnRequiresDirectCall,
 
+    /// Closure passed to `spawn` captures a borrowed variable.
+    SpawnClosureCaptureBorrowed { var_name: String },
+
     // ── Borrow checking errors ──
 
     /// Variable used after ownership was moved.
@@ -337,6 +340,9 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::SpawnRequiresDirectCall => {
                 write!(f, "spawn requires a direct function call — use `spawn fn_name(args)`")
+            }
+            SemanticErrorKind::SpawnClosureCaptureBorrowed { var_name } => {
+                write!(f, "cannot spawn closure that captures borrowed variable `{var_name}` — use owned or Copy types")
             }
             SemanticErrorKind::UseAfterMove { name, .. } => {
                 write!(f, "use of moved value `{name}`")

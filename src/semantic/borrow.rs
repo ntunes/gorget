@@ -23,6 +23,35 @@ enum VarState {
 /// Snapshot of all variable states (for branching).
 type StateSnapshot = FxHashMap<DefId, VarState>;
 
+// ─── Capture Set Tracking ─────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BorrowCaptureMode {
+    Read,
+    Mutable,
+}
+
+#[derive(Debug, Clone)]
+struct CaptureEntry {
+    def_id: DefId,
+    name: String,
+    mode: BorrowCaptureMode,
+    /// True if the captured variable has a non-Static borrow origin
+    /// (str param, &T, reference derived from local, etc.)
+    has_borrowed_origin: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+struct CaptureSet {
+    captures: Vec<CaptureEntry>,
+}
+
+impl CaptureSet {
+    fn has_any_borrowed(&self) -> bool {
+        self.captures.iter().any(|c| c.has_borrowed_origin)
+    }
+}
+
 // ─── Borrow Origin ────────────────────────────────────────
 
 /// Tracks where a reference-typed value originated from.
@@ -327,6 +356,12 @@ struct BorrowChecker<'a> {
     /// Variables with non-static borrow origins that were Live before an `await`.
     /// Using these after the await triggers BorrowAcrossAwait.
     await_invalidated: FxHashSet<DefId>,
+
+    /// Capture sets for closure-typed variables, keyed by the variable's DefId.
+    closure_capture_sets: FxHashMap<DefId, CaptureSet>,
+    /// Temporarily holds the capture set computed for the most recent closure
+    /// expression, picked up by VarDecl to associate it with the variable's DefId.
+    pending_capture_set: Option<CaptureSet>,
 }
 
 impl<'a> BorrowChecker<'a> {
@@ -370,6 +405,8 @@ impl<'a> BorrowChecker<'a> {
             in_return_expr: false,
             current_function_is_async: false,
             await_invalidated: FxHashSet::default(),
+            closure_capture_sets: FxHashMap::default(),
+            pending_capture_set: None,
         }
     }
 
@@ -1284,47 +1321,64 @@ impl<'a> BorrowChecker<'a> {
 
             Expr::Spawn { expr: inner } => {
                 self.check_expr(inner);
-                // spawn only supports direct function calls: `spawn fn_name(args)`.
-                // Method calls, closure calls, and other forms are rejected — they
-                // bypass arg borrow checking and the IR only generates threading
-                // infrastructure for the direct-call form anyway.
-                let is_direct_fn_call = matches!(&inner.node, Expr::Call { callee, .. }
-                    if matches!(&callee.node, Expr::Identifier(_))
-                        && self.resolution_map.get(&callee.span.start)
-                            .and_then(|&id| Some(self.scopes.get_def(id).kind))
-                            .map_or(false, |k| matches!(k, DefKind::Function))
-                );
-                match &inner.node {
-                    Expr::Call { args, .. } if is_direct_fn_call =>
-                    {
-                        // Check args: spawned task may outlive the caller's stack,
-                        // so any borrowed (non-Static) reference arg is unsound.
-                        for arg in args {
-                            let is_borrowed = if let Expr::Identifier(_) = &arg.node.value.node {
-                                // Bare identifier: use var_origins for type-sensitive check.
-                                // Only reference-typed values (str, &T, …) are tracked;
-                                // copy-type args (int, bool) won't be found → safe.
-                                if let Some(&def_id) = self.resolution_map.get(&arg.node.value.span.start) {
-                                    self.var_origins
-                                        .get(&def_id)
-                                        .map_or(false, |o| !matches!(o, BorrowOrigin::Static))
-                                } else {
-                                    false
+                // spawn supports:
+                //   1. Direct function calls: `spawn fn_name(args)`
+                //   2. Closure variable calls: `spawn c(args)` where c is a closure variable
+                //   3. Inline closure calls: `spawn ((): body)(args)`
+                // All other forms (method calls, indirect calls) are rejected.
+                if let Expr::Call { callee, args, .. } = &inner.node {
+                    // Classify the callee
+                    let callee_kind = match &callee.node {
+                        Expr::Identifier(_) => {
+                            self.resolution_map.get(&callee.span.start)
+                                .map(|&id| self.scopes.get_def(id).kind)
+                        }
+                        _ => None,
+                    };
+
+                    if matches!(callee_kind, Some(DefKind::Function)) {
+                        // Case 1: Direct function call — check args for borrowed origins.
+                        self.check_spawn_args(args);
+                    } else if matches!(callee_kind, Some(DefKind::Variable)) {
+                        // Case 2: Closure variable call — check capture set + args.
+                        let callee_def_id = self.resolution_map.get(&callee.span.start).copied();
+                        if let Some(cs) = callee_def_id.and_then(|id| self.closure_capture_sets.get(&id)) {
+                            let cs = cs.clone(); // borrow checker appeasement
+                            for entry in &cs.captures {
+                                if entry.has_borrowed_origin {
+                                    self.error(
+                                        SemanticErrorKind::SpawnClosureCaptureBorrowed {
+                                            var_name: entry.name.clone(),
+                                        },
+                                        inner.span,
+                                    );
                                 }
-                            } else {
-                                // Complex expression: for spawn, ANY non-Static origin is
-                                // dangerous — Param origins point into the caller's stack
-                                // which the spawned task may outlive.
-                                !matches!(self.compute_expr_origin(&arg.node.value), BorrowOrigin::Static)
-                            };
-                            if is_borrowed {
-                                self.error(SemanticErrorKind::SpawnWithBorrowedRef, arg.span);
+                            }
+                        } else {
+                            // No capture set (closure returned from function, etc.) — conservative reject.
+                            self.error(SemanticErrorKind::SpawnRequiresDirectCall, inner.span);
+                        }
+                        self.check_spawn_args(args);
+                    } else if let Expr::Closure { params, body, .. } = &callee.node {
+                        // Case 3: Inline closure call — `spawn ((): body)(args)`
+                        let cs = self.compute_capture_set(params, body);
+                        for entry in &cs.captures {
+                            if entry.has_borrowed_origin {
+                                self.error(
+                                    SemanticErrorKind::SpawnClosureCaptureBorrowed {
+                                        var_name: entry.name.clone(),
+                                    },
+                                    inner.span,
+                                );
                             }
                         }
-                    }
-                    _ => {
+                        self.check_spawn_args(args);
+                    } else {
+                        // Fallback: method calls, arbitrary expressions, etc.
                         self.error(SemanticErrorKind::SpawnRequiresDirectCall, inner.span);
                     }
+                } else {
+                    self.error(SemanticErrorKind::SpawnRequiresDirectCall, inner.span);
                 }
             }
 
@@ -1397,7 +1451,12 @@ impl<'a> BorrowChecker<'a> {
                 self.check_block(body);
             }
 
-            Expr::Closure { body, .. } => {
+            Expr::Closure { params, body, .. } => {
+                // Compute the capture set before checking the body, so it's
+                // available for spawn enforcement via pending_capture_set.
+                let capture_set = self.compute_capture_set(params, body);
+                self.pending_capture_set = Some(capture_set);
+
                 // A closure definition must not leak state into the enclosing
                 // scope.  Moves/borrows inside the body execute when the
                 // closure is *called*, not when it is *defined*.  Snapshot the
@@ -1652,6 +1711,12 @@ impl<'a> BorrowChecker<'a> {
                                 let origin = self.compute_expr_origin(value);
                                 self.var_origins.insert(def_id, origin);
                             }
+                        }
+
+                        // Capture set tracking: associate the pending capture set
+                        // (computed during check_expr(Closure)) with this variable.
+                        if let Some(cs) = self.pending_capture_set.take() {
+                            self.closure_capture_sets.insert(def_id, cs);
                         }
                     }
                 }
@@ -2418,6 +2483,65 @@ impl<'a> BorrowChecker<'a> {
         collector.origins
     }
 
+    /// Compute the full capture set for a closure with the given params and body.
+    /// Identifies all free variables, classifies them as Read/Mutable, and checks
+    /// whether each has a borrowed origin.
+    /// Check spawn call arguments for borrowed origins.
+    /// Spawned tasks may outlive the caller, so any non-Static reference arg is unsound.
+    fn check_spawn_args(&mut self, args: &[Spanned<CallArg>]) {
+        for arg in args {
+            let is_borrowed = if let Expr::Identifier(_) = &arg.node.value.node {
+                if let Some(&def_id) = self.resolution_map.get(&arg.node.value.span.start) {
+                    self.var_origins
+                        .get(&def_id)
+                        .map_or(false, |o| !matches!(o, BorrowOrigin::Static))
+                } else {
+                    false
+                }
+            } else {
+                !matches!(self.compute_expr_origin(&arg.node.value), BorrowOrigin::Static)
+            };
+            if is_borrowed {
+                self.error(SemanticErrorKind::SpawnWithBorrowedRef, arg.span);
+            }
+        }
+    }
+
+    fn compute_capture_set(
+        &self,
+        params: &[Spanned<ClosureParam>],
+        body: &Spanned<Expr>,
+    ) -> CaptureSet {
+        use crate::parser::visitor::ExprVisitor;
+
+        let param_names: FxHashSet<&str> = params.iter()
+            .map(|p| p.node.name.node.as_str()).collect();
+
+        // Phase 1: detect mutations inside the closure body
+        let mut mutation_collector = CapturedMutationCollector {
+            locals: FxHashSet::default(),
+            mutated: FxHashSet::default(),
+        };
+        mutation_collector.visit_expr(body);
+
+        // Phase 2: collect all captured variables
+        let mut collector = CaptureSetCollector {
+            resolution_map: self.resolution_map,
+            scopes: self.scopes,
+            types: self.types,
+            ref_type_structs: &self.ref_type_structs,
+            var_origins: &self.var_origins,
+            param_names: &param_names,
+            local_names: FxHashSet::default(),
+            seen: FxHashSet::default(),
+            captures: Vec::new(),
+            mutated_names: &mutation_collector.mutated,
+        };
+        collector.visit_expr(body);
+
+        CaptureSet { captures: collector.captures }
+    }
+
     /// Check if a function returns a temporary (non-reference owning type) with
     /// no `return_borrows_from`. Used by both Call and MethodCall detection.
     fn is_temporary_from_function(&self, def_id: DefId) -> bool {
@@ -2512,6 +2636,8 @@ impl<'a> BorrowChecker<'a> {
         self.active_outlives.clear();
         self.current_function_is_async = func.qualifiers.is_async;
         self.await_invalidated.clear();
+        self.closure_capture_sets.clear();
+        self.pending_capture_set = None;
 
         // Set scope-aware lookup context for this function
         self.current_fn_scope = self.function_body_scopes
@@ -2812,6 +2938,143 @@ impl crate::parser::visitor::ExprVisitor for CapturedRefOriginCollector<'_> {
     // visit_stmt and visit_block: use default walk_stmt/walk_block.
     // This covers Stmt::With, Assert, and all other statement variants
     // that the previous manual walker missed with its `_ => {}` catch-all.
+}
+
+// ─── Visitor: Captured Mutation Collector ─────────────────────
+
+/// Walks a closure body collecting names of variables that are mutated
+/// (assigned or compound-assigned) inside the body. Excludes locals
+/// declared inside the closure itself.
+struct CapturedMutationCollector {
+    locals: FxHashSet<String>,
+    mutated: FxHashSet<String>,
+}
+
+impl crate::parser::visitor::ExprVisitor for CapturedMutationCollector {
+    fn visit_expr(&mut self, expr: &Spanned<Expr>) {
+        match &expr.node {
+            // Skip nested closures — they have their own mutation scope
+            Expr::Closure { .. } | Expr::ImplicitClosure { .. } => {}
+            _ => crate::parser::visitor::walk_expr(self, expr),
+        }
+    }
+
+    fn visit_stmt(&mut self, stmt: &Spanned<Stmt>) {
+        match &stmt.node {
+            Stmt::VarDecl { pattern, .. } => {
+                if let Pattern::Binding(name) = &pattern.node {
+                    self.locals.insert(name.clone());
+                }
+            }
+            Stmt::Assign { target, .. } | Stmt::CompoundAssign { target, .. } => {
+                // Extract root identifier from assignment target
+                let mut expr = &target.node;
+                loop {
+                    match expr {
+                        Expr::Identifier(name) => {
+                            if !self.locals.contains(name) {
+                                self.mutated.insert(name.clone());
+                            }
+                            break;
+                        }
+                        Expr::FieldAccess { object, .. }
+                        | Expr::Index { object, .. } => {
+                            expr = &object.node;
+                        }
+                        _ => break,
+                    }
+                }
+            }
+            _ => {}
+        }
+        crate::parser::visitor::walk_stmt(self, stmt);
+    }
+}
+
+// ─── Visitor: Capture Set Collector ──────────────────────────
+
+/// Walks a closure body collecting ALL free variables (not just reference-typed
+/// ones like `CapturedRefOriginCollector`). For each captured variable, records
+/// its name, DefId, capture mode (Read/Mutable), and whether it has a borrowed
+/// origin. Used by spawn enforcement to decide if a closure is safe to spawn.
+struct CaptureSetCollector<'a> {
+    resolution_map: &'a ResolutionMap,
+    scopes: &'a ScopeTable,
+    types: &'a TypeTable,
+    ref_type_structs: &'a FxHashSet<DefId>,
+    var_origins: &'a FxHashMap<DefId, BorrowOrigin>,
+    param_names: &'a FxHashSet<&'a str>,
+    local_names: FxHashSet<String>,
+    seen: FxHashSet<DefId>,
+    captures: Vec<CaptureEntry>,
+    mutated_names: &'a FxHashSet<String>,
+}
+
+impl crate::parser::visitor::ExprVisitor for CaptureSetCollector<'_> {
+    fn visit_expr(&mut self, expr: &Spanned<Expr>) {
+        match &expr.node {
+            Expr::Identifier(name) => {
+                // Skip closure params and locals declared inside the closure
+                if self.param_names.contains(name.as_str())
+                    || self.local_names.contains(name.as_str())
+                {
+                    return;
+                }
+                // Resolve DefId
+                let Some(&def_id) = self.resolution_map.get(&expr.span.start) else {
+                    return;
+                };
+                let def = self.scopes.get_def(def_id);
+                if def.kind != DefKind::Variable {
+                    return;
+                }
+                // Dedup
+                if !self.seen.insert(def_id) {
+                    return;
+                }
+
+                let mode = if self.mutated_names.contains(name.as_str()) {
+                    BorrowCaptureMode::Mutable
+                } else {
+                    BorrowCaptureMode::Read
+                };
+
+                // Determine if this variable has a borrowed origin
+                let has_borrowed_origin = if let Some(origin) = self.var_origins.get(&def_id) {
+                    !matches!(origin, BorrowOrigin::Static)
+                } else if let Some(type_id) = def.type_id {
+                    // No explicit origin tracked — check if the type is inherently
+                    // reference-like (str, &T, etc.). If so, treat as borrowed
+                    // conservatively (the origin wasn't tracked, so we can't prove
+                    // it's Static).
+                    types::is_reference_type(type_id, self.types, self.ref_type_structs)
+                } else {
+                    false
+                };
+
+                self.captures.push(CaptureEntry {
+                    def_id,
+                    name: name.clone(),
+                    mode,
+                    has_borrowed_origin,
+                });
+            }
+            // Skip nested closures — they have their own capture scope
+            Expr::Closure { .. } | Expr::ImplicitClosure { .. } => {}
+            _ => crate::parser::visitor::walk_expr(self, expr),
+        }
+    }
+
+    fn visit_stmt(&mut self, stmt: &Spanned<Stmt>) {
+        // Track locals declared inside the closure body so they aren't
+        // counted as captures.
+        if let Stmt::VarDecl { pattern, .. } = &stmt.node {
+            if let Pattern::Binding(name) = &pattern.node {
+                self.local_names.insert(name.clone());
+            }
+        }
+        crate::parser::visitor::walk_stmt(self, stmt);
+    }
 }
 
 // ─── Visitor: Closure Body Param Tracer ──────────────────────
@@ -3239,6 +3502,8 @@ pub fn check_module(
                 checker.var_origins.clear();
                 checker.invalidated_origins.clear();
                 checker.await_invalidated.clear();
+                checker.closure_capture_sets.clear();
+                checker.pending_capture_set = None;
                 for binding in &t.with_bindings {
                     checker.check_expr(&binding.expr);
                 }
@@ -3253,6 +3518,8 @@ pub fn check_module(
                 checker.var_origins.clear();
                 checker.invalidated_origins.clear();
                 checker.await_invalidated.clear();
+                checker.closure_capture_sets.clear();
+                checker.pending_capture_set = None;
                 checker.check_block(&s.body);
             }
             Item::SuiteTeardown(s) => {
@@ -3264,6 +3531,8 @@ pub fn check_module(
                 checker.var_origins.clear();
                 checker.invalidated_origins.clear();
                 checker.await_invalidated.clear();
+                checker.closure_capture_sets.clear();
+                checker.pending_capture_set = None;
                 checker.check_block(&s.body);
             }
             _ => {}
@@ -5497,8 +5766,8 @@ void launch():
     }
 
     #[test]
-    fn spawn_closure_call_rejected() {
-        // spawn closure() is not a direct function call → error
+    fn spawn_closure_call_no_captures_ok() {
+        // spawn closure() with no captures → allowed (no borrowed state)
         let source = "\
 void launch():
     auto c = (): print(42)
@@ -5506,8 +5775,163 @@ void launch():
 ";
         let errors = check(source);
         assert!(
+            !has_error(&errors, |k| matches!(k,
+                SemanticErrorKind::SpawnRequiresDirectCall
+                | SemanticErrorKind::SpawnClosureCaptureBorrowed { .. }
+            )),
+            "expected no spawn error for capture-free closure: {:?}", errors
+        );
+    }
+
+    // ─── Closure capture set + spawn tests ────────────────────
+
+    #[test]
+    fn spawn_closure_inline_no_captures_ok() {
+        // spawn ((): body)() with no captures — allowed
+        let source = "\
+void launch():
+    auto t = spawn ((): print(42))()
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k,
+                SemanticErrorKind::SpawnRequiresDirectCall
+                | SemanticErrorKind::SpawnClosureCaptureBorrowed { .. }
+            )),
+            "expected no spawn error for inline closure with no captures: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn spawn_closure_copy_capture_ok() {
+        // Closure captures an int (Copy type) — allowed
+        let source = "\
+void launch():
+    int x = 5
+    auto t = spawn ((): print(x))()
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k,
+                SemanticErrorKind::SpawnRequiresDirectCall
+                | SemanticErrorKind::SpawnClosureCaptureBorrowed { .. }
+            )),
+            "expected no spawn error for closure capturing Copy int: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn spawn_closure_str_capture_rejected() {
+        // Closure captures a str parameter (borrowed origin) — rejected
+        let source = "\
+void launch(str name):
+    auto t = spawn ((): print(name))()
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k,
+                SemanticErrorKind::SpawnClosureCaptureBorrowed { .. }
+            )),
+            "expected SpawnClosureCaptureBorrowed for str capture: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn spawn_closure_var_copy_ok() {
+        // Closure variable capturing int — allowed
+        let source = "\
+void launch():
+    int x = 5
+    auto c = (): print(x)
+    auto t = spawn c()
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k,
+                SemanticErrorKind::SpawnRequiresDirectCall
+                | SemanticErrorKind::SpawnClosureCaptureBorrowed { .. }
+            )),
+            "expected no spawn error for closure var with Copy capture: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn spawn_closure_var_str_rejected() {
+        // Closure variable capturing str parameter — rejected
+        let source = "\
+void launch(str name):
+    auto c = (): print(name)
+    auto t = spawn c()
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k,
+                SemanticErrorKind::SpawnClosureCaptureBorrowed { .. }
+            )),
+            "expected SpawnClosureCaptureBorrowed for closure var with str capture: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn spawn_direct_fn_still_works() {
+        // Direct function call — the existing path must still work
+        let source = "\
+async void work(int n):
+    print(n)
+void launch():
+    auto t = spawn work(42)
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k,
+                SemanticErrorKind::SpawnRequiresDirectCall
+                | SemanticErrorKind::SpawnClosureCaptureBorrowed { .. }
+                | SemanticErrorKind::SpawnWithBorrowedRef
+            )),
+            "expected no spawn error for direct function call: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn spawn_method_still_rejected() {
+        // Method calls are still rejected
+        let source = "\
+struct Worker:
+    int id
+equip Worker:
+    async void run(self):
+        print(self.id)
+void launch():
+    Worker w = Worker(1)
+    auto t = spawn w.run()
+";
+        let errors = check(source);
+        assert!(
             has_error(&errors, |k| matches!(k, SemanticErrorKind::SpawnRequiresDirectCall)),
-            "expected SpawnRequiresDirectCall for closure spawn: {:?}", errors
+            "expected SpawnRequiresDirectCall for method call: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn capture_set_read_vs_mutable() {
+        // Verify a mutated capture is classified as Mutable, read-only as Read
+        let source = "\
+void launch():
+    int x = 1
+    int y = 2
+    auto c = ():
+        x = x + 1
+        print(y)
+    c()
+";
+        let errors = check(source);
+        // This test just verifies no crash — the classification is internal.
+        // Mutable captures of Copy types should not cause spawn errors.
+        assert!(
+            !has_error(&errors, |k| matches!(k,
+                SemanticErrorKind::SpawnClosureCaptureBorrowed { .. }
+            )),
+            "Copy captures (even mutable) should not be rejected: {:?}", errors
         );
     }
 

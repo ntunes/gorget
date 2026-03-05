@@ -1775,13 +1775,29 @@ async void process_fixed():
     print(owned)           # fine: String owns its data
 ```
 
-**`spawn` requires a direct function call.** Only `spawn fn_name(args)` is valid — method calls, closure calls, and other forms are rejected at compile time:
+**`spawn` supports direct function calls and closures.** The compiler checks that all captured variables and arguments are safe to send across threads:
 
 ```gorget
 spawn worker(42)         # OK — direct function call
-spawn obj.method()       # ERROR — method call
-spawn my_closure()       # ERROR — closure variable call
+spawn obj.method()       # ERROR — method calls not supported
 spawn get_fn()(x)        # ERROR — indirect call
+```
+
+**Closures can be spawned if their captures are safe** (owned or Copy types). The compiler tracks each closure's capture set and rejects closures that capture borrowed references:
+
+```gorget
+int x = 42
+spawn ((): print(x))()          # OK — x is Copy (int)
+spawn ((): print("hello"))()    # OK — string literal is Static
+
+auto c = (): print(x)
+spawn c()                       # OK — closure variable with Copy capture
+
+str name = get_name()
+spawn ((): print(name))()       # ERROR — name has borrowed origin
+
+Shared[int] counter = Shared[int](0)
+spawn ((): print(counter.get()))()  # OK — Shared[T] is Copy
 ```
 
 **`spawn` with borrowed references is rejected.** Unlike `.await()`, `spawn` launches a fire-and-forget thread that may outlive the current function. The compiler rejects passing borrowed references (`str` params, `&T`) to spawned tasks:

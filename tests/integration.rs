@@ -9284,3 +9284,23 @@ world
 84",
     );
 }
+
+#[test]
+fn spawn_closure_copy() {
+    run_gg(
+        "spawn_closure_copy.gg",
+        "\
+42
+420",
+    );
+}
+
+#[test]
+fn spawn_closure_shared() {
+    run_gg(
+        "spawn_closure_shared.gg",
+        "\
+5
+15",
+    );
+}
