@@ -5,6 +5,9 @@
 
 ## Medium
 
+- **GIR Phase 5 — Optimization passes**: Dead code elimination (unreachable blocks, unused locals), constant folding, drop elision (remove drops for provably-moved values), copy propagation. These are GIR-level backend-agnostic transforms that C's optimizer can't do due to lack of ownership information. Build as optional passes before backend emission. [added: 2026-03-05]
+
+- **`gg sim` aliasing model — Tree Borrows tracking**: sim.md identifies this as the "core differentiator from naive interpreters." Implement borrow-level tracking to catch aliasing violations. Add `--tree-borrows` (default) and `--strict-aliasing` flags (stricter stacked-borrows model). Currently sim detects UB (bounds, uninit, etc.) but does not track borrow validity. [added: 2026-03-05]
 
 - **`gg.httpserver` V2 — non-blocking sockets + async handlers**: Blocked on `GorgetSocket` having no `poll`/`epoll`/`kqueue` integration — reads and writes block the calling thread. Needs `gorget_socket_set_nonblocking()` + fd registration with the existing reactor (epoll fd on Linux, kqueue on macOS), and a `GorgetWaker` protocol extension for readable/writable events. API impact: handler type becomes `async Callable[HttpServerResponse(HttpRequest)]` — one-word change for users. [added: 2026-03-03]
 
@@ -78,6 +81,19 @@
 
 ## Low
 
+- **GIR Phase 6 — LLVM backend**: Implement `src/backend/llvm/` to emit LLVM IR (text or bitcode) from GIR. Use `llc` or Rust `inkwell`/`llvm-sys` crate for compilation. Construct SSA via alloca+mem2reg pattern. Emit debug info from GIR source locations. Wire as `gg build --backend=llvm`. Removes C compiler dependency for native compilation. [added: 2026-03-05]
+
+- **GIR Phase 7 — WASM backend**: Add WebAssembly support — either via LLVM backend with `--target=wasm32-wasi` (Option A, minimal code) or direct WASM emission (Option B, more control). Start with Option A, defer Option B if LLVM quality is sufficient. Wire as `gg build --backend=wasm`. [added: 2026-03-05]
+
+- **GIR Phase 8 — GPU/compute backend**: Implement `@kernel` and `@parallel` annotation support in GIR lowering. Add validation pass for GPU constraints (no heap alloc, recursion, virtual dispatch). Implement SPIR-V emission (most portable GPU target). Generate host-side dispatch code (buffer setup, kernel launch, readback). Wire as `gg build --backend=gpu`. [added: 2026-03-05]
+
+- **`gg sim` cross-target interpretation**: `gg sim run --target aarch64-unknown-gorget-elf` to catch byte-layout bugs by interpreting code as a different architecture/endianness. Test struct layout assumptions portably without recompiling. [added: 2026-03-05]
+
+- **`gg sim` `cfg(sim)` gating**: Support `cfg(sim)` or `cfg(gg_sim)` conditional compilation to gate code that behaves differently under simulation or skip problematic tests. Allows tests to adapt to simulated environment constraints. [added: 2026-03-05]
+
+- **`gg sim` data race detection**: Single-threaded deterministic model + weak memory exploration for detecting races in multi-threaded programs. Requires work-stealing executor + weak memory models. [added: 2026-03-05]
+
+- **`gg sim bench`**: Interpret benchmarks under the simulator (with warmup). Phase 2+ extension from sim.md design. Useful for detecting memory/aliasing issues in performance-critical code. [added: 2026-03-05]
 
 - **`uuid_parse(str) -> Result[UUID, str]`**: Parse UUID strings in the standard `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx` format. `UUID` would be a struct `{ uint64_t hi; uint64_t lo; }` with `to_string()` and `eq()` equip. C backend via sscanf or manual hex parsing. [added: 2026-03-02]
 
