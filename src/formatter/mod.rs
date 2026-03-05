@@ -1696,6 +1696,14 @@ impl Formatter {
                     self.emitter.write(")");
                 }
             }
+            Expr::MetaOpInfix { left, op_name, right } => {
+                self.format_expr(left);
+                self.emitter.write(&format!(" meta[{op_name}] "));
+                self.format_expr(right);
+            }
+            Expr::MetaOpToken(op) => {
+                self.emitter.write(&format!("meta {:?}", op).to_lowercase());
+            }
         }
     }
 

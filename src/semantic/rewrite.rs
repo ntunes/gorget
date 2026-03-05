@@ -287,6 +287,11 @@ fn rewrite_expr(expr: &mut Spanned<Expr>, res: &ResolutionMap, scopes: &ScopeTab
                 rewrite_expr(&mut arg.node.value, res, scopes);
             }
         }
+        Expr::MetaOpInfix { left, right, .. } => {
+            rewrite_expr(left, res, scopes);
+            rewrite_expr(right, res, scopes);
+        }
+        Expr::MetaOpToken(_) => {}
         // Leaf nodes
         Expr::IntLiteral(_) | Expr::FloatLiteral(_) | Expr::BoolLiteral(_)
         | Expr::StringLiteral(_) | Expr::NoneLiteral

@@ -2,7 +2,7 @@ use crate::ir::builder::FunctionBuilder;
 use crate::ir::instructions::*;
 use crate::ir::types::*;
 use crate::parser::ast::{self, FunctionBody, FunctionDef, GenericParam, Ownership, Type};
-use crate::semantic::meta::{self as meta, DelayedMetaContext};
+use crate::semantic::meta::{self as meta, DelayedMetaContext, MetaValue};
 use crate::span::Spanned;
 
 use super::context::LoweringContext;
@@ -303,22 +303,31 @@ pub fn lower_generic_function(
     template: &FunctionDef,
     type_args: &[Spanned<Type>],
     mangled_name: &str,
+    meta_op_bindings: &[(String, ast::BinaryOp)],
 ) {
     let subs = build_subs(template.generic_params.as_ref(), type_args);
+
+    // Build a meta env pre-populated with any compile-time operator bindings.
+    // Used by evaluate_delayed_meta_block so MetaOpInfix nodes get substituted
+    // to real BinaryOp expressions during monomorphization.
+    let mut meta_env_map: rustc_hash::FxHashMap<String, MetaValue> =
+        rustc_hash::FxHashMap::default();
+    for (param_name, op) in meta_op_bindings {
+        meta_env_map.insert(param_name.clone(), MetaValue::Op(*op));
+    }
 
     // Evaluate delayed meta blocks (meta if/for inside generic bodies) with
     // the concrete type substitutions.  Modifies a local clone of the template
     // so the original template is left intact for subsequent instantiations.
     let template_with_meta_evaluated;
-    let template = if subs.is_empty() {
+    let template = if subs.is_empty() && meta_env_map.is_empty() {
         template
     } else {
         let mut cloned = template.clone();
-        let empty_env = rustc_hash::FxHashMap::default();
         let delayed_ctx = DelayedMetaContext {
             type_subs:      &subs,
             features:       &[],
-            meta_env:       &empty_env,
+            meta_env:       &meta_env_map,
             items:          &[],
             trait_registry: &ctx.analysis.traits,
             type_registry:  &ctx.type_registry,
@@ -346,10 +355,12 @@ pub fn lower_generic_function(
     // Map return type with substitutions
     let return_type = substitute_and_map_type(ctx, &template.return_type.node, &subs);
 
-    // Map parameters with substitutions — MutableBorrow params become MutPtr
+    // Map parameters with substitutions — skip meta op params (no runtime representation),
+    // MutableBorrow params become MutPtr
     let params: Vec<(TypeId, Option<String>)> = template
         .params
         .iter()
+        .filter(|p| !p.node.is_meta_op)
         .map(|p| {
             let base_type = substitute_and_map_type(ctx, &p.node.type_.node, &subs);
             let gir_type = match p.node.ownership {
@@ -367,12 +378,18 @@ pub fn lower_generic_function(
 
     let mut builder = FunctionBuilder::new(mangled_name, return_type, &param_refs);
 
-    // Clear and register locals
+    // Clear and register locals — assign sequential LocalIds to runtime params only
+    // (meta op params carry no runtime value and are skipped).
     ctx.clear_locals();
-
     ctx.callable_return_types.clear();
-    for (i, p) in template.params.iter().enumerate() {
-        let local_id = LocalId((i + 1) as u32);
+
+    let mut local_idx: u32 = 0;
+    for p in template.params.iter() {
+        if p.node.is_meta_op {
+            continue;
+        }
+        local_idx += 1;
+        let local_id = LocalId(local_idx);
         let base_type = substitute_and_map_type(ctx, &p.node.type_.node, &subs);
         let gir_type = match p.node.ownership {
             Ownership::MutableBorrow => ctx.register_mut_ptr_type(base_type),
@@ -396,8 +413,14 @@ pub fn lower_generic_function(
     // types (Channel, Shared, Weak) passed by value are released at scope exit.
     // Use register_param (not register_local) — params are borrowed from the caller,
     // so only Copy-with-drop types (refcounted) need dropping, not Move types.
-    for (i, p) in template.params.iter().enumerate() {
-        let local_id = LocalId((i + 1) as u32);
+    // Skip meta op params — they have no runtime local slot.
+    let mut drop_idx: u32 = 0;
+    for p in template.params.iter() {
+        if p.node.is_meta_op {
+            continue;
+        }
+        drop_idx += 1;
+        let local_id = LocalId(drop_idx);
         let base_type = substitute_and_map_type(ctx, &p.node.type_.node, &subs);
         let gir_type = match p.node.ownership {
             Ownership::MutableBorrow => ctx.register_mut_ptr_type(base_type),

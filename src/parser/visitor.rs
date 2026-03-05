@@ -256,6 +256,12 @@ pub fn walk_expr<V: ExprVisitor + ?Sized>(v: &mut V, expr: &Spanned<Expr>) {
                 v.visit_expr(&arg.node.value);
             }
         }
+        // ── Meta op ──
+        Expr::MetaOpInfix { left, right, .. } => {
+            v.visit_expr(left);
+            v.visit_expr(right);
+        }
+        Expr::MetaOpToken(_) => {}
     }
 }
 

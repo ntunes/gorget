@@ -190,6 +190,7 @@ fn gen_conv_module() -> Module {
         decl_fn("float_to_str", &[("x", ty_float())], ty_string()),
         decl_fn("bool_to_str", &[("b", ty_bool())], ty_str()),
         decl_fn("codepoint_to_str", &[("cp", ty_int())], ty_string()),
+        decl_fn("int_to_float", &[("n", ty_int())], ty_float()),
     ])
 }
 
@@ -929,6 +930,7 @@ fn decl_fn(name: &str, params: &[(&str, Type)], ret: Type) -> FunctionDef {
                     default: None,
                     is_live: false,
                     live_group: None,
+                    is_meta_op: false,
                 })
             })
             .collect(),
@@ -1437,6 +1439,7 @@ fn decl_method(
         default: None,
         is_live: false,
         live_group: None,
+        is_meta_op: false,
     })];
     for (pname, pty) in extra_params {
         params.push(Spanned::dummy(Param {
@@ -1446,6 +1449,7 @@ fn decl_method(
             default: None,
             is_live: false,
             live_group: None,
+            is_meta_op: false,
         }));
     }
     FunctionDef {
@@ -1770,7 +1774,7 @@ mod tests {
     #[test]
     fn generate_conv() {
         let m = generate_builtin_module(&["std".into(), "conv".into()]).unwrap();
-        assert_eq!(m.items.len(), 8);
+        assert_eq!(m.items.len(), 9); // +1 for int_to_float
     }
 
     #[test]

@@ -63,6 +63,7 @@ fn map_stdlib_name(name: &str) -> &str {
         "int_to_str" => "gorget_int_to_str",
         "float_to_str" => "gorget_float_to_str",
         "bool_to_str" => "gorget_bool_to_str",
+        "int_to_float" => "gorget_int_to_float",
         "ord" => "gorget_str_ord",
         "chr" => "gorget_char_chr",
         "parse_int" => "gorget_parse_int",
@@ -5277,6 +5278,7 @@ fn infer_runtime_return_type(name: &str) -> Option<&'static str> {
         "ord" | "gorget_str_ord" | "gorget_char_ord" => Some("int64_t"),
         "int_to_str" | "gorget_int_to_str" | "float_to_str" | "gorget_float_to_str"
         | "bool_to_str" | "gorget_bool_to_str" => Some("Str"),
+        "int_to_float" | "gorget_int_to_float" => Some("double"),
         "chr" | "gorget_char_chr" | "codepoint_to_utf8" | "gorget_codepoint_to_utf8" => Some("Str"),
         // Crypto hash functions (return GorgetArray of bytes)
         "crypto_sha256" | "gorget_crypto_sha256"

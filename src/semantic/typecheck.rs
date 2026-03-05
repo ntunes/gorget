@@ -1553,6 +1553,17 @@ impl<'a> TypeChecker<'a> {
                 }
                 self.types.error_id
             }
+            Expr::MetaOpInfix { left, right, .. } => {
+                // Type-check both operands; the result type mirrors the left operand.
+                // The operator is unknown at template-checking time; treat as arithmetic.
+                let t = self.infer_expr(left);
+                self.infer_expr(right);
+                t
+            }
+            Expr::MetaOpToken(_) => {
+                // Meta op tokens have no runtime value.
+                self.types.void_id
+            }
         }
     }
 

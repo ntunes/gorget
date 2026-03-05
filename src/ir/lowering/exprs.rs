@@ -670,6 +670,14 @@ fn lower_expr_inner(
 
             Operand::Constant(Constant::Unit)
         }
+        Expr::MetaOpInfix { .. } => {
+            // Should have been substituted by the meta pass before lowering.
+            panic!("MetaOpInfix not substituted before GIR lowering — meta substitution pass incomplete")
+        }
+        Expr::MetaOpToken(_) => {
+            // Should have been filtered out at the call site before reaching here.
+            panic!("MetaOpToken not filtered out before GIR lowering — call lowering incomplete")
+        }
     }
 }
 
@@ -4039,10 +4047,19 @@ fn lower_call(
             }
         }
 
-        // Determine effective function name (mangled if generic call)
+        // Determine effective function name (mangled if generic call).
+        // For meta op calls, also append per-op suffixes so the name matches
+        // the mangled name produced by GenericCollector::register_instance_with_ops.
         let effective_name = if let Some(type_args) = generic_args {
             if !type_args.is_empty() {
-                let mangled = super::types::mangle_generic_name(name, type_args);
+                let mut mangled = super::types::mangle_generic_name(name, type_args);
+                // Append __<op_suffix> for each MetaOpToken arg (same order as params)
+                for arg in args.iter() {
+                    if let Expr::MetaOpToken(op) = &arg.node.value.node {
+                        mangled.push_str("__");
+                        mangled.push_str(super::types::op_mangle_suffix(*op));
+                    }
+                }
                 // Apply type name substitutions for generic monomorphization
                 ctx.resolve_type_name(&mangled)
             } else {
@@ -4162,8 +4179,22 @@ fn lower_call(
         }
 
         // Regular function call (use effective name for generic functions)
+        // Filter out MetaOpToken args — they are compile-time only and have no
+        // runtime representation in the lowered GIR call.
+        let runtime_args_buf: Vec<Spanned<ast::CallArg>>;
+        let runtime_args: &[Spanned<ast::CallArg>] =
+            if args.iter().any(|a| matches!(a.node.value.node, Expr::MetaOpToken(_))) {
+                runtime_args_buf = args
+                    .iter()
+                    .filter(|a| !matches!(a.node.value.node, Expr::MetaOpToken(_)))
+                    .cloned()
+                    .collect();
+                &runtime_args_buf
+            } else {
+                args
+            };
         // Resolve named args + default params before lowering
-        let resolved_args = resolve_call_args(ctx, &effective_name, args);
+        let resolved_args = resolve_call_args(ctx, &effective_name, runtime_args);
         // Extract parameter types to thread expected_type for dot-shorthand args
         let param_types: Vec<TypeId> = ctx.fn_sigs.get(effective_name.as_str())
             .map(|(params, _)| params.clone())

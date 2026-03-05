@@ -150,6 +150,8 @@ pub struct Param {
     pub is_live: bool,
     /// Named borrow group: `live(a)` → `Some("a")`, bare `live` → `None`.
     pub live_group: Option<String>,
+    /// True for params declared `meta name` — carry no runtime value; operator token only.
+    pub is_meta_op: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -653,6 +655,19 @@ pub enum Expr {
         variant: Spanned<String>,
         args: Vec<Spanned<CallArg>>,
     },
+
+    /// `a meta[op_name] b` — compile-time operator placeholder in a generic body.
+    /// Substituted with a real `BinaryOp` during monomorphization when the `meta op`
+    /// param is instantiated with a concrete operator token.
+    MetaOpInfix {
+        left:    Box<Spanned<Expr>>,
+        op_name: String,
+        right:   Box<Spanned<Expr>>,
+    },
+
+    /// `meta +` / `meta -` etc. at a call site — passes an operator token to a
+    /// `meta op` parameter.  Has no runtime value; filtered out before GIR lowering.
+    MetaOpToken(BinaryOp),
 }
 
 #[derive(Debug, Clone)]

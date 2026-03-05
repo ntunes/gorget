@@ -5,10 +5,6 @@
 
 ## Medium
 
-- **`meta op` — compile-time operator parameters**: 17 near-identical functions in `lib/gg/tensor.gg` (element-wise, scalar, broadcast, comparison ops) differ only in the infix operator (`+`, `-`, `*`, `/`, `<`, `==`, etc.). A regular closure would work but incurs a per-element function pointer call. `meta op` would be a compile-time token parameter inlined by the C backend — zero runtime cost. Proposed syntax: `Tensor[T] tensor_elemwise[Numeric T](Tensor[T] a, Tensor[T] b, meta op): ... a.flat_get(i) meta[op] b.flat_get(i) ...` called as `tensor_elemwise[T](a, b, meta +)`. Would collapse 17 functions into ~3. [added: 2026-03-04]
-
-- **`int_to_float` duplicated in `lib/gg/tensor.gg` and `lib/gg/dataframe.gg`**: Both files define an identical `int_to_float(int n) -> float` helper. Should be moved to `std.conv` (alongside `int_to_str`, `float_to_str`, etc.) and imported from there. Both files would then `from std.conv import int_to_float`. [added: 2026-03-04]
-
 
 - **`gg.httpserver` V2 — non-blocking sockets + async handlers**: Blocked on `GorgetSocket` having no `poll`/`epoll`/`kqueue` integration — reads and writes block the calling thread. Needs `gorget_socket_set_nonblocking()` + fd registration with the existing reactor (epoll fd on Linux, kqueue on macOS), and a `GorgetWaker` protocol extension for readable/writable events. API impact: handler type becomes `async Callable[HttpServerResponse(HttpRequest)]` — one-word change for users. [added: 2026-03-03]
 

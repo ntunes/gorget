@@ -26,6 +26,7 @@ fn make_self_param(
             default: None,
             is_live,
             live_group,
+            is_meta_op: false,
         },
         start.merge(name_span),
     )
@@ -1624,6 +1625,26 @@ impl Parser {
     fn parse_param(&mut self) -> Result<Spanned<Param>, ParseError> {
         let start = self.peek_span();
 
+        // meta op parameter: `meta name` — no type, carries only an operator token at call site.
+        if self.check_keyword(Keyword::Meta) {
+            let meta_span = self.peek_span();
+            self.advance(); // consume `meta`
+            let name = self.expect_identifier()?;
+            let end = self.previous_span();
+            return Ok(Spanned::new(
+                Param {
+                    type_: Spanned::new(Type::Primitive(PrimitiveType::Void), meta_span),
+                    ownership: Ownership::Borrow,
+                    name,
+                    default: None,
+                    is_live: false,
+                    live_group: None,
+                    is_meta_op: true,
+                },
+                start.merge(end),
+            ));
+        }
+
         let is_live = self.match_keyword(Keyword::Live);
 
         // Parse optional borrow group name: `live(a)` → Some("a"), bare `live` → None
@@ -1688,6 +1709,7 @@ impl Parser {
                 default,
                 is_live,
                 live_group,
+                is_meta_op: false,
             },
             start.merge(end),
         ))

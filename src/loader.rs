@@ -672,6 +672,11 @@ fn qualify_expr(expr: &mut Spanned<Expr>, vm: &HashMap<String, String>) {
                 qualify_expr(&mut arg.node.value, vm);
             }
         }
+        Expr::MetaOpInfix { left, right, .. } => {
+            qualify_expr(left, vm);
+            qualify_expr(right, vm);
+        }
+        Expr::MetaOpToken(_) => {}
     }
 }
 

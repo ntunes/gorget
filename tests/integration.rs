@@ -6533,6 +6533,15 @@ fn format_expr_canonical(expr: &Expr) -> String {
                 format!(".{}({})", variant.node, arg_strs.join(", "))
             }
         }
+        Expr::MetaOpInfix { left, op_name, right } => {
+            format!(
+                "{} meta[{}] {}",
+                format_expr_canonical(&left.node),
+                op_name,
+                format_expr_canonical(&right.node)
+            )
+        }
+        Expr::MetaOpToken(op) => format!("meta {:?}", op),
     }
 }
 

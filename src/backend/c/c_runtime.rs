@@ -4263,6 +4263,8 @@ static inline const char* gorget_bool_to_str(bool b) {
     return b ? "true" : "false";
 }
 
+static inline double gorget_int_to_float(int64_t n) { return (double)n; }
+
 static inline const char* gorget_char_to_str(char c) {
     char* out = (char*)GORGET_ALLOC(2);
     out[0] = c;

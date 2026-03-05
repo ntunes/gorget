@@ -33,12 +33,8 @@
 # Display: tensor_display[T]
 
 from std.collections import Vector
-from std.conv import int_to_str, float_to_str, parse_float
+from std.conv import int_to_str, float_to_str, int_to_float
 from std.math import sqrt
-
-# Convert int to float (Gorget has no implicit int→float promotion)
-float int_to_float(int n):
-    return parse_float(int_to_str(n)).unwrap()
 
 # ── Core Struct ──────────────────────────────────────────────
 
@@ -307,41 +303,21 @@ str tensor_display[Numeric T](Tensor[T] t):
 
 # ── Element-wise Arithmetic (generic free functions) ──────────
 
-Tensor[T] tensor_add[Numeric T](Tensor[T] a, Tensor[T] b):
+# Generic template: element-wise binary op on two tensors of the same type.
+Tensor[T] tensor_elemwise[Numeric T](Tensor[T] a, Tensor[T] b, meta op):
     int sz = a.size()
     Tensor[T] out = tensor_zeros[T](vec_int_copy(a.shape))
     int i = 0
     while i < sz:
-        out.storage.set_at(i, a.flat_get(i) + b.flat_get(i))
+        out.storage.set_at(i, a.flat_get(i) meta[op] b.flat_get(i))
         i = i + 1
     return out
 
-Tensor[T] tensor_sub[Numeric T](Tensor[T] a, Tensor[T] b):
-    int sz = a.size()
-    Tensor[T] out = tensor_zeros[T](vec_int_copy(a.shape))
-    int i = 0
-    while i < sz:
-        out.storage.set_at(i, a.flat_get(i) - b.flat_get(i))
-        i = i + 1
-    return out
-
-Tensor[T] tensor_mul[Numeric T](Tensor[T] a, Tensor[T] b):
-    int sz = a.size()
-    Tensor[T] out = tensor_zeros[T](vec_int_copy(a.shape))
-    int i = 0
-    while i < sz:
-        out.storage.set_at(i, a.flat_get(i) * b.flat_get(i))
-        i = i + 1
-    return out
-
-Tensor[T] tensor_div[Numeric T](Tensor[T] a, Tensor[T] b):
-    int sz = a.size()
-    Tensor[T] out = tensor_zeros[T](vec_int_copy(a.shape))
-    int i = 0
-    while i < sz:
-        out.storage.set_at(i, a.flat_get(i) / b.flat_get(i))
-        i = i + 1
-    return out
+# Thin named wrappers — preserve the public API exactly.
+Tensor[T] tensor_add[Numeric T](Tensor[T] a, Tensor[T] b) = tensor_elemwise[T](a, b, meta +)
+Tensor[T] tensor_sub[Numeric T](Tensor[T] a, Tensor[T] b) = tensor_elemwise[T](a, b, meta -)
+Tensor[T] tensor_mul[Numeric T](Tensor[T] a, Tensor[T] b) = tensor_elemwise[T](a, b, meta *)
+Tensor[T] tensor_div[Numeric T](Tensor[T] a, Tensor[T] b) = tensor_elemwise[T](a, b, meta /)
 
 Tensor[T] tensor_neg[Numeric T](Tensor[T] a):
     int sz = a.size()
@@ -354,41 +330,21 @@ Tensor[T] tensor_neg[Numeric T](Tensor[T] a):
 
 # ── Scalar Operations (generic free functions) ────────────────
 
-Tensor[T] scalar_add[Numeric T](Tensor[T] t, T val):
+# Generic template: element-wise binary op between a tensor and a scalar.
+Tensor[T] tensor_scalar_op[Numeric T](Tensor[T] t, T val, meta op):
     int sz = t.size()
     Tensor[T] out = tensor_zeros[T](vec_int_copy(t.shape))
     int i = 0
     while i < sz:
-        out.storage.set_at(i, t.flat_get(i) + val)
+        out.storage.set_at(i, t.flat_get(i) meta[op] val)
         i = i + 1
     return out
 
-Tensor[T] scalar_sub[Numeric T](Tensor[T] t, T val):
-    int sz = t.size()
-    Tensor[T] out = tensor_zeros[T](vec_int_copy(t.shape))
-    int i = 0
-    while i < sz:
-        out.storage.set_at(i, t.flat_get(i) - val)
-        i = i + 1
-    return out
-
-Tensor[T] scalar_mul[Numeric T](Tensor[T] t, T val):
-    int sz = t.size()
-    Tensor[T] out = tensor_zeros[T](vec_int_copy(t.shape))
-    int i = 0
-    while i < sz:
-        out.storage.set_at(i, t.flat_get(i) * val)
-        i = i + 1
-    return out
-
-Tensor[T] scalar_div[Numeric T](Tensor[T] t, T val):
-    int sz = t.size()
-    Tensor[T] out = tensor_zeros[T](vec_int_copy(t.shape))
-    int i = 0
-    while i < sz:
-        out.storage.set_at(i, t.flat_get(i) / val)
-        i = i + 1
-    return out
+# Thin named wrappers — preserve the public API exactly.
+Tensor[T] scalar_add[Numeric T](Tensor[T] t, T val) = tensor_scalar_op[T](t, val, meta +)
+Tensor[T] scalar_sub[Numeric T](Tensor[T] t, T val) = tensor_scalar_op[T](t, val, meta -)
+Tensor[T] scalar_mul[Numeric T](Tensor[T] t, T val) = tensor_scalar_op[T](t, val, meta *)
+Tensor[T] scalar_div[Numeric T](Tensor[T] t, T val) = tensor_scalar_op[T](t, val, meta /)
 
 # ── Broadcasting ──────────────────────────────────────────────
 
@@ -650,68 +606,22 @@ T tensor_dot[Numeric T](Tensor[T] a, Tensor[T] b):
 
 # ── Comparisons ───────────────────────────────────────────────
 
-Tensor[bool] tensor_eq[Numeric T](Tensor[T] a, Tensor[T] b):
+# Generic template: element-wise comparison, always returns Tensor[bool].
+Tensor[bool] tensor_cmpwise[Numeric T](Tensor[T] a, Tensor[T] b, meta op):
     int sz = a.size()
     Vector[int] sh = vec_int_copy(a.shape)
     Vector[bool] data = Vector[bool]()
     int i = 0
     while i < sz:
-        data.push(a.flat_get(i) == b.flat_get(i))
+        data.push(a.flat_get(i) meta[op] b.flat_get(i))
         i = i + 1
     Vector[int] strides = tensor_compute_strides(sh)
     return Tensor[bool](Shared[Vector[bool]](data), sh, strides, 0)
 
-Tensor[bool] tensor_lt[Numeric T](Tensor[T] a, Tensor[T] b):
-    int sz = a.size()
-    Vector[int] sh = vec_int_copy(a.shape)
-    Vector[bool] data = Vector[bool]()
-    int i = 0
-    while i < sz:
-        data.push(a.flat_get(i) < b.flat_get(i))
-        i = i + 1
-    Vector[int] strides = tensor_compute_strides(sh)
-    return Tensor[bool](Shared[Vector[bool]](data), sh, strides, 0)
-
-Tensor[bool] tensor_gt[Numeric T](Tensor[T] a, Tensor[T] b):
-    int sz = a.size()
-    Vector[int] sh = vec_int_copy(a.shape)
-    Vector[bool] data = Vector[bool]()
-    int i = 0
-    while i < sz:
-        data.push(a.flat_get(i) > b.flat_get(i))
-        i = i + 1
-    Vector[int] strides = tensor_compute_strides(sh)
-    return Tensor[bool](Shared[Vector[bool]](data), sh, strides, 0)
-
-Tensor[bool] tensor_le[Numeric T](Tensor[T] a, Tensor[T] b):
-    int sz = a.size()
-    Vector[int] sh = vec_int_copy(a.shape)
-    Vector[bool] data = Vector[bool]()
-    int i = 0
-    while i < sz:
-        data.push(a.flat_get(i) <= b.flat_get(i))
-        i = i + 1
-    Vector[int] strides = tensor_compute_strides(sh)
-    return Tensor[bool](Shared[Vector[bool]](data), sh, strides, 0)
-
-Tensor[bool] tensor_ge[Numeric T](Tensor[T] a, Tensor[T] b):
-    int sz = a.size()
-    Vector[int] sh = vec_int_copy(a.shape)
-    Vector[bool] data = Vector[bool]()
-    int i = 0
-    while i < sz:
-        data.push(a.flat_get(i) >= b.flat_get(i))
-        i = i + 1
-    Vector[int] strides = tensor_compute_strides(sh)
-    return Tensor[bool](Shared[Vector[bool]](data), sh, strides, 0)
-
-Tensor[bool] tensor_ne[Numeric T](Tensor[T] a, Tensor[T] b):
-    int sz = a.size()
-    Vector[int] sh = vec_int_copy(a.shape)
-    Vector[bool] data = Vector[bool]()
-    int i = 0
-    while i < sz:
-        data.push(a.flat_get(i) != b.flat_get(i))
-        i = i + 1
-    Vector[int] strides = tensor_compute_strides(sh)
-    return Tensor[bool](Shared[Vector[bool]](data), sh, strides, 0)
+# Thin named wrappers — preserve the public API exactly.
+Tensor[bool] tensor_eq[Numeric T](Tensor[T] a, Tensor[T] b) = tensor_cmpwise[T](a, b, meta ==)
+Tensor[bool] tensor_lt[Numeric T](Tensor[T] a, Tensor[T] b) = tensor_cmpwise[T](a, b, meta <)
+Tensor[bool] tensor_gt[Numeric T](Tensor[T] a, Tensor[T] b) = tensor_cmpwise[T](a, b, meta >)
+Tensor[bool] tensor_le[Numeric T](Tensor[T] a, Tensor[T] b) = tensor_cmpwise[T](a, b, meta <=)
+Tensor[bool] tensor_ge[Numeric T](Tensor[T] a, Tensor[T] b) = tensor_cmpwise[T](a, b, meta >=)
+Tensor[bool] tensor_ne[Numeric T](Tensor[T] a, Tensor[T] b) = tensor_cmpwise[T](a, b, meta !=)

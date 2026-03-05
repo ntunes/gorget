@@ -33,6 +33,8 @@ pub enum MetaValue {
     Bool(bool),
     Str(String),
     List(Vec<MetaValue>),
+    /// Compile-time operator token — carried by `meta op` parameters.
+    Op(crate::parser::ast::BinaryOp),
 }
 
 const MAX_META_RECURSION: usize = 256;
@@ -1763,12 +1765,35 @@ fn substitute_expr(expr: &mut Spanned<Expr>, env: &FxHashMap<String, MetaValue>,
                 substitute_expr(&mut arg.node.value, env, type_env);
             }
         }
+        // Meta op: recurse into operands; operator substitution handled below
+        Expr::MetaOpInfix { left, right, .. } => {
+            substitute_expr(left, env, type_env);
+            substitute_expr(right, env, type_env);
+        }
+        Expr::MetaOpToken(_) => {}
         // Leaf nodes — no recursion needed
         Expr::IntLiteral(_) | Expr::FloatLiteral(_) | Expr::BoolLiteral(_)
         | Expr::NoneLiteral
         | Expr::Identifier(_) | Expr::SelfExpr | Expr::Path { .. } | Expr::It => {}
         // StringLiteral handled below
         Expr::StringLiteral(_) => {}
+    }
+
+    // Substitute MetaOpInfix → BinaryOp when the op_name is bound to a MetaValue::Op
+    {
+        let found_op = if let Expr::MetaOpInfix { ref op_name, .. } = expr.node {
+            env.get(op_name.as_str()).and_then(|v| {
+                if let MetaValue::Op(op) = v { Some(*op) } else { None }
+            })
+        } else {
+            None
+        };
+        if let Some(bin_op) = found_op {
+            let old = std::mem::replace(&mut expr.node, Expr::IntLiteral(0));
+            if let Expr::MetaOpInfix { left, right, .. } = old {
+                expr.node = Expr::BinaryOp { left, op: bin_op, right };
+            }
+        }
     }
 
     // Then: check if this is a meta-const reference to replace
@@ -1869,6 +1894,10 @@ fn meta_value_to_expr(value: &MetaValue) -> Expr {
             // they are only used internally by meta for iteration.
             panic!("meta List value cannot be substituted into AST expression position")
         }
+        MetaValue::Op(_) => {
+            // Op tokens are consumed by MetaOpInfix substitution; they never appear standalone.
+            panic!("meta Op value cannot be substituted into AST expression position")
+        }
     }
 }
 
@@ -1882,6 +1911,7 @@ fn meta_value_to_string(value: &MetaValue) -> String {
             let parts: Vec<String> = items.iter().map(meta_value_to_string).collect();
             format!("[{}]", parts.join(", "))
         }
+        MetaValue::Op(op) => format!("{op:?}"),
     }
 }
 
@@ -1905,6 +1935,7 @@ fn value_type_name(v: &MetaValue) -> &'static str {
         MetaValue::Bool(_) => "bool",
         MetaValue::Str(_) => "str",
         MetaValue::List(_) => "list",
+        MetaValue::Op(_) => "op",
     }
 }
 
@@ -2453,6 +2484,17 @@ pub fn evaluate_delayed_meta_block(
     errors: &mut Vec<SemanticError>,
 ) {
     let mut local_env = (*ctx.meta_env).clone();
+
+    // If the initial env is non-empty (e.g., from meta op bindings pre-loaded in
+    // lower_generic_function), do an upfront sweep so all MetaOpInfix nodes that
+    // reference those bindings are resolved to BinaryOp before further processing.
+    if !local_env.is_empty() {
+        let empty_type_env = FxHashMap::default();
+        for stmt in &mut block.stmts {
+            substitute_stmt(&mut stmt.node, &local_env, &empty_type_env);
+        }
+    }
+
     let mut i = 0;
     while i < block.stmts.len() {
         // ── MetaConst: evaluate, bind, substitute remaining stmts, remove ──
@@ -3890,6 +3932,7 @@ mod tests {
                     ownership: Ownership::Borrow,
                     is_live: false,
                     live_group: None,
+                    is_meta_op: false,
                 },
                 dummy_span(),
             )],

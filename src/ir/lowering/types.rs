@@ -716,6 +716,24 @@ pub fn mangle_generic_name(base: &str, args: &[Spanned<Type>]) -> String {
     result
 }
 
+/// Return the name suffix used when mangling a `meta op` parameter.
+pub fn op_mangle_suffix(op: crate::parser::ast::BinaryOp) -> &'static str {
+    use crate::parser::ast::BinaryOp;
+    match op {
+        BinaryOp::Add   => "add",
+        BinaryOp::Sub   => "sub",
+        BinaryOp::Mul   => "mul",
+        BinaryOp::Div   => "div",
+        BinaryOp::Eq    => "eq",
+        BinaryOp::Neq   => "ne",
+        BinaryOp::Lt    => "lt",
+        BinaryOp::LtEq  => "le",
+        BinaryOp::Gt    => "gt",
+        BinaryOp::GtEq  => "ge",
+        _               => "op",
+    }
+}
+
 /// Mangle a tuple type name: `(int, float)` → `Tuple__int64_t__double`.
 fn mangle_tuple_name(elems: &[Spanned<Type>]) -> String {
     let mut result = "Tuple".to_string();

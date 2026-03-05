@@ -10,7 +10,7 @@ use crate::lexer::token::StringSegment;
 use crate::parser::ast::{self, Expr, GenericParam, Item, Stmt, Type};
 use crate::span::Spanned;
 
-use super::types::{mangle_generic_name, TypeMapper};
+use super::types::{mangle_generic_name, op_mangle_suffix, TypeMapper};
 
 /// The kind of generic template being instantiated.
 #[derive(Debug, Clone, Copy)]
@@ -39,6 +39,9 @@ pub struct GenericCollector {
     /// names (e.g., {"T", "U"}). Calls using these as type args are deferred until
     /// transitive discovery resolves them to concrete types.
     current_generic_params: Option<Vec<String>>,
+    /// Meta op bindings for each mangled function name: mangled → [(param_name, BinaryOp)].
+    /// Populated during scan when MetaOpToken args are detected.
+    meta_op_bindings: FxHashMap<String, Vec<(String, ast::BinaryOp)>>,
 }
 
 impl GenericCollector {
@@ -51,6 +54,7 @@ impl GenericCollector {
             instances: Vec::new(),
             registered: FxHashMap::default(),
             current_generic_params: None,
+            meta_op_bindings: FxHashMap::default(),
         }
     }
 
@@ -157,6 +161,43 @@ impl GenericCollector {
         self.instances
             .push((base_name.to_string(), type_args.to_vec(), mangled.clone(), kind));
         mangled
+    }
+
+    /// Register a concrete generic function instantiation that has `meta op` bindings.
+    /// The mangled name gets an additional `__<op_suffix>` per op binding.
+    fn register_instance_with_ops(
+        &mut self,
+        base_name: &str,
+        type_args: &[Spanned<Type>],
+        op_bindings: Vec<(String, ast::BinaryOp)>,
+    ) -> String {
+        // Base mangled name from type args
+        let mut mangled = mangle_generic_name(base_name, type_args);
+        // Append one suffix per op binding
+        for (_, op) in &op_bindings {
+            mangled.push_str("__");
+            mangled.push_str(op_mangle_suffix(*op));
+        }
+        if !self.registered.contains_key(&mangled) {
+            self.registered.insert(mangled.clone(), ());
+            self.instances.push((
+                base_name.to_string(),
+                type_args.to_vec(),
+                mangled.clone(),
+                TemplateKind::Function,
+            ));
+        }
+        // Always store/update the bindings (idempotent for same mangled name)
+        self.meta_op_bindings.entry(mangled.clone()).or_insert(op_bindings);
+        mangled
+    }
+
+    /// Return the meta op bindings for a mangled function name (empty slice if none).
+    pub fn meta_op_bindings_for(&self, mangled: &str) -> &[(String, ast::BinaryOp)] {
+        self.meta_op_bindings
+            .get(mangled)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
     }
 
     /// Scan a function definition for generic usages.
@@ -356,7 +397,26 @@ impl GenericCollector {
                         }
                         if let Expr::Identifier(name) = &callee.node {
                             if self.fn_templates.contains_key(name.as_str()) {
-                                self.register_instance(name, type_args, TemplateKind::Function);
+                                // Collect meta op bindings from MetaOpToken args
+                                let template = self.fn_templates.get(name.as_str()).unwrap();
+                                let op_bindings: Vec<(String, ast::BinaryOp)> = template
+                                    .params
+                                    .iter()
+                                    .zip(args.iter())
+                                    .filter_map(|(param, arg)| {
+                                        if param.node.is_meta_op {
+                                            if let Expr::MetaOpToken(op) = &arg.node.value.node {
+                                                return Some((param.node.name.node.clone(), *op));
+                                            }
+                                        }
+                                        None
+                                    })
+                                    .collect();
+                                if op_bindings.is_empty() {
+                                    self.register_instance(name, type_args, TemplateKind::Function);
+                                } else {
+                                    self.register_instance_with_ops(name, type_args, op_bindings);
+                                }
                             } else if self.struct_templates.contains_key(name.as_str()) {
                                 // Struct constructor call with generic args: TypedColumn[int](...)
                                 self.register_instance(name, type_args, TemplateKind::Struct);
@@ -456,6 +516,12 @@ impl GenericCollector {
                     self.scan_expr(eb);
                 }
             }
+            Expr::MetaOpInfix { left, right, .. } => {
+                self.scan_expr(left);
+                self.scan_expr(right);
+            }
+            // MetaOpToken is a leaf — no sub-expressions to scan.
+            Expr::MetaOpToken(_) => {}
             _ => {}
         }
     }
@@ -534,6 +600,7 @@ impl GenericCollector {
                 let subs = build_type_substitutions(template.generic_params.as_ref(), type_args);
                 let ret_type = substitute_and_map(mapper, &template.return_type.node, &subs);
                 let param_types: Vec<TypeId> = template.params.iter()
+                    .filter(|p| !p.node.is_meta_op) // meta op params have no runtime slot
                     .map(|p| {
                         let base = substitute_and_map(mapper, &p.node.type_.node, &subs);
                         // MutableBorrow params become MutPtr in the GIR
@@ -1138,6 +1205,12 @@ fn substitute_expr_types(expr: &mut Spanned<Expr>, subs: &[(String, Type)]) {
                 substitute_expr_types(e, subs);
             }
         }
+        Expr::MetaOpInfix { left, right, .. } => {
+            substitute_expr_types(left, subs);
+            substitute_expr_types(right, subs);
+        }
+        // MetaOpToken carries only an operator — no sub-expressions to substitute.
+        Expr::MetaOpToken(_) => {}
         _ => {}
     }
 }

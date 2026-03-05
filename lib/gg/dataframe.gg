@@ -54,12 +54,8 @@
 #   df_from_csv(csv_text), df_to_csv(df)
 
 from std.collections import Vector, Dict
-from std.conv import int_to_str, float_to_str, bool_to_str, parse_int, parse_float
+from std.conv import int_to_str, float_to_str, bool_to_str, parse_int, parse_float, int_to_float
 from std.math import sqrt, floor, ceil
-
-# Convert int to float (Gorget has no implicit promotion)
-float int_to_float(int n):
-    return parse_float(int_to_str(n)).unwrap()
 
 # Returns true if s represents a valid integer (optional leading -, then digits)
 bool str_is_int(str s):

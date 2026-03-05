@@ -889,12 +889,14 @@ pub fn lower_module(
     // Lower monomorphized generic function instances
     for (base_name, type_args, mangled_name) in generic_collector.function_instances() {
         if let Some(template) = generic_collector.get_fn_template(base_name) {
+            let op_bindings = generic_collector.meta_op_bindings_for(mangled_name);
             functions::lower_generic_function(
                 &mut ctx,
                 &mut module,
                 template,
                 type_args,
                 mangled_name,
+                op_bindings,
             );
         }
     }

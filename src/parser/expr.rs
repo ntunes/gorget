@@ -5,6 +5,24 @@ use super::ast::*;
 use super::Parser;
 use crate::errors::ParseError;
 
+/// Map a token to a `BinaryOp` if it is a recognised binary operator token.
+/// Used to parse `meta +`, `meta -`, `meta *`, etc.
+fn binary_op_from_token(tok: &Token) -> Option<BinaryOp> {
+    Some(match tok {
+        Token::Plus     => BinaryOp::Add,
+        Token::Minus    => BinaryOp::Sub,
+        Token::Star     => BinaryOp::Mul,
+        Token::Slash    => BinaryOp::Div,
+        Token::EqEq     => BinaryOp::Eq,
+        Token::BangEq   => BinaryOp::Neq,
+        Token::Lt       => BinaryOp::Lt,
+        Token::Gt       => BinaryOp::Gt,
+        Token::LtEq     => BinaryOp::LtEq,
+        Token::GtEq     => BinaryOp::GtEq,
+        _ => return None,
+    })
+}
+
 /// Recursively check whether an expression contains `Expr::It`.
 /// Returns `false` if `it` only appears inside a nested closure (where it
 /// would be bound by that closure instead).
@@ -103,6 +121,10 @@ fn contains_it(expr: &Spanned<Expr>) -> bool {
 
         // Dot-shorthand: .Variant(args)
         Expr::DotShorthand { args, .. } => args.iter().any(|a| contains_it(&a.node.value)),
+
+        // Meta op: recurse into operands
+        Expr::MetaOpInfix { left, right, .. } => contains_it(left) || contains_it(right),
+        Expr::MetaOpToken(_) => false,
 
         // Leaves — no sub-expressions
         Expr::IntLiteral(_) | Expr::FloatLiteral(_) | Expr::BoolLiteral(_)
@@ -205,6 +227,8 @@ enum InfixOp {
     Is,
     IsNot,
     As,
+    /// `a meta[op_name] b` — placeholder infix op for meta op templates.
+    MetaOp,
 }
 
 impl Parser {
@@ -472,6 +496,20 @@ impl Parser {
                 }
             }
 
+            // `meta +` / `meta -` / `meta *` etc. — operator token for meta op params
+            Token::Keyword(Keyword::Meta) => {
+                if let Some(op) = binary_op_from_token(self.peek_ahead(1)) {
+                    self.advance(); // consume `meta`
+                    self.advance(); // consume operator token
+                    let end = self.previous_span();
+                    Ok(Spanned::new(Expr::MetaOpToken(op), start.merge(end)))
+                } else {
+                    Err(self.error_unexpected(
+                        "operator after `meta` (e.g. `meta +`, `meta <`)",
+                    ))
+                }
+            }
+
             _ => Err(self.error_unexpected("expression")),
         }
     }
@@ -658,6 +696,17 @@ impl Parser {
                 op: InfixOp::As,
             },
 
+            // meta[op_name] — compile-time operator placeholder (same precedence as addition)
+            Token::Keyword(Keyword::Meta)
+                if matches!(self.peek_ahead(1), Token::LBracket) =>
+            {
+                InfixBP {
+                    left: 27,
+                    right: 28,
+                    op: InfixOp::MetaOp,
+                }
+            }
+
             _ => return None,
         })
     }
@@ -730,6 +779,22 @@ impl Parser {
                     Expr::As {
                         expr: Box::new(lhs),
                         type_,
+                    },
+                    start.merge(end),
+                ))
+            }
+            InfixOp::MetaOp => {
+                self.advance(); // consume `meta`
+                self.expect(&Token::LBracket)?;
+                let op_name = self.expect_identifier()?.node;
+                self.expect(&Token::RBracket)?;
+                let rhs = self.parse_expr_bp(ibp.right)?;
+                let end = rhs.span;
+                Ok(Spanned::new(
+                    Expr::MetaOpInfix {
+                        left: Box::new(lhs),
+                        op_name,
+                        right: Box::new(rhs),
                     },
                     start.merge(end),
                 ))

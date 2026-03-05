@@ -1699,6 +1699,11 @@ impl<'a> BorrowChecker<'a> {
                     self.check_expr(&arg.node.value);
                 }
             }
+            Expr::MetaOpInfix { left, right, .. } => {
+                self.check_expr(left);
+                self.check_expr(right);
+            }
+            Expr::MetaOpToken(_) => {}
         }
     }
 

@@ -1418,6 +1418,11 @@ fn resolve_expr(
                 resolve_expr(&arg.node.value, scopes, errors, resolution_map);
             }
         }
+        Expr::MetaOpInfix { left, right, .. } => {
+            resolve_expr(left, scopes, errors, resolution_map);
+            resolve_expr(right, scopes, errors, resolution_map);
+        }
+        Expr::MetaOpToken(_) => {}
     }
 }
 
