@@ -1284,33 +1284,46 @@ impl<'a> BorrowChecker<'a> {
 
             Expr::Spawn { expr: inner } => {
                 self.check_expr(inner);
-                // Spawn is fire-and-forget: the spawned task may outlive the caller's stack.
-                // Reject any arg whose borrow origin is not Static.
-                // `var_origins` only tracks reference-typed values (str, &T, …), so
-                // identifier args resolve through it for type-sensitive filtering.
-                // Non-identifier sub-expressions fall back to compute_expr_origin.
-                if let Expr::Call { args, .. } = &inner.node {
-                    for arg in args {
-                        let is_borrowed = if let Expr::Identifier(_) = &arg.node.value.node {
-                            // Bare identifier: use var_origins for type-sensitive check.
-                            // Only reference-typed values (str, &T, …) are in var_origins;
-                            // copy-type args (int, bool) won't be found → map_or(false) → safe.
-                            if let Some(&def_id) = self.resolution_map.get(&arg.node.value.span.start) {
-                                self.var_origins
-                                    .get(&def_id)
-                                    .map_or(false, |o| !matches!(o, BorrowOrigin::Static))
+                // spawn only supports direct function calls: `spawn fn_name(args)`.
+                // Method calls, closure calls, and other forms are rejected — they
+                // bypass arg borrow checking and the IR only generates threading
+                // infrastructure for the direct-call form anyway.
+                let is_direct_fn_call = matches!(&inner.node, Expr::Call { callee, .. }
+                    if matches!(&callee.node, Expr::Identifier(_))
+                        && self.resolution_map.get(&callee.span.start)
+                            .and_then(|&id| Some(self.scopes.get_def(id).kind))
+                            .map_or(false, |k| matches!(k, DefKind::Function))
+                );
+                match &inner.node {
+                    Expr::Call { args, .. } if is_direct_fn_call =>
+                    {
+                        // Check args: spawned task may outlive the caller's stack,
+                        // so any borrowed (non-Static) reference arg is unsound.
+                        for arg in args {
+                            let is_borrowed = if let Expr::Identifier(_) = &arg.node.value.node {
+                                // Bare identifier: use var_origins for type-sensitive check.
+                                // Only reference-typed values (str, &T, …) are tracked;
+                                // copy-type args (int, bool) won't be found → safe.
+                                if let Some(&def_id) = self.resolution_map.get(&arg.node.value.span.start) {
+                                    self.var_origins
+                                        .get(&def_id)
+                                        .map_or(false, |o| !matches!(o, BorrowOrigin::Static))
+                                } else {
+                                    false
+                                }
                             } else {
-                                false
+                                // Complex expression: for spawn, ANY non-Static origin is
+                                // dangerous — Param origins point into the caller's stack
+                                // which the spawned task may outlive.
+                                !matches!(self.compute_expr_origin(&arg.node.value), BorrowOrigin::Static)
+                            };
+                            if is_borrowed {
+                                self.error(SemanticErrorKind::SpawnWithBorrowedRef, arg.span);
                             }
-                        } else {
-                            // Complex expression (call, field access, etc.): for spawn,
-                            // ANY non-Static origin is dangerous — Param origins point
-                            // into the caller's stack which the spawned task may outlive.
-                            !matches!(self.compute_expr_origin(&arg.node.value), BorrowOrigin::Static)
-                        };
-                        if is_borrowed {
-                            self.error(SemanticErrorKind::SpawnWithBorrowedRef, arg.span);
                         }
+                    }
+                    _ => {
+                        self.error(SemanticErrorKind::SpawnRequiresDirectCall, inner.span);
                     }
                 }
             }
@@ -5458,6 +5471,43 @@ void launch(str data):
         assert!(
             has_error(&errors, |k| matches!(k, SemanticErrorKind::SpawnWithBorrowedRef)),
             "expected SpawnWithBorrowedRef for call-derived borrowed str in spawn: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn spawn_method_call_rejected() {
+        // spawn obj.method() is not a direct function call → error
+        let source = "\
+struct Runner:
+    int id
+
+equip Runner:
+    void run(self):
+        print(self.id)
+
+void launch():
+    Runner r = Runner(1)
+    auto t = spawn r.run()
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::SpawnRequiresDirectCall)),
+            "expected SpawnRequiresDirectCall for method spawn: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn spawn_closure_call_rejected() {
+        // spawn closure() is not a direct function call → error
+        let source = "\
+void launch():
+    auto c = (): print(42)
+    auto t = spawn c()
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::SpawnRequiresDirectCall)),
+            "expected SpawnRequiresDirectCall for closure spawn: {:?}", errors
         );
     }
 

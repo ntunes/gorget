@@ -1775,6 +1775,15 @@ async void process_fixed():
     print(owned)           # fine: String owns its data
 ```
 
+**`spawn` requires a direct function call.** Only `spawn fn_name(args)` is valid — method calls, closure calls, and other forms are rejected at compile time:
+
+```gorget
+spawn worker(42)         # OK — direct function call
+spawn obj.method()       # ERROR — method call
+spawn my_closure()       # ERROR — closure variable call
+spawn get_fn()(x)        # ERROR — indirect call
+```
+
 **`spawn` with borrowed references is rejected.** Unlike `.await()`, `spawn` launches a fire-and-forget thread that may outlive the current function. The compiler rejects passing borrowed references (`str` params, `&T`) to spawned tasks:
 
 ```gorget

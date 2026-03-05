@@ -97,6 +97,10 @@ pub enum SemanticErrorKind {
     /// Use `String` or `Shared[T]` instead.
     SpawnWithBorrowedRef,
 
+    /// `spawn` used with something other than a direct function call.
+    /// Only `spawn fn_name(args)` is supported.
+    SpawnRequiresDirectCall,
+
     // ── Borrow checking errors ──
 
     /// Variable used after ownership was moved.
@@ -330,6 +334,9 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::SpawnWithBorrowedRef => {
                 write!(f, "cannot pass borrowed reference to spawned task — use String or Shared[T]")
+            }
+            SemanticErrorKind::SpawnRequiresDirectCall => {
+                write!(f, "spawn requires a direct function call — use `spawn fn_name(args)`")
             }
             SemanticErrorKind::UseAfterMove { name, .. } => {
                 write!(f, "use of moved value `{name}`")
