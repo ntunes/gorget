@@ -27,15 +27,11 @@ void check(str label, bool ok):
     else:
         print("ok")
 
-# Free function wrapper so spawn works (method-spawn is not yet supported).
-async void run_server_n(int port, int n, int max_req):
-    HttpServer s = HttpServer.with_max_requests("127.0.0.1", port, max_req)
-    s.accept_n(handle, n).await()
-
 async void main():
     # ── Test 1 & 2: serve_n with 2 normal connections ──────────
     int port1 = 18096
-    Task[void] srv1 = spawn run_server_n(port1, 2, 0)
+    HttpServer s1 = HttpServer.with_max_requests("127.0.0.1", port1, 0)
+    Task[void] srv1 = spawn s1.accept_n(handle, 2)
     sleep(0.05).await()
 
     # Both http_get requests use Connection: close → 2 separate connections
@@ -50,7 +46,8 @@ async void main():
     # ── Test 3: max_requests_per_conn = 1 closes after 1st ─────
     int port2 = 18097
     # Server accepts 1 connection, closes after 1 request (max_requests=1)
-    Task[void] srv2 = spawn run_server_n(port2, 1, 1)
+    HttpServer s2 = HttpServer.with_max_requests("127.0.0.1", port2, 1)
+    Task[void] srv2 = spawn s2.accept_n(handle, 1)
     sleep(0.05).await()
 
     Result[Socket, str] cr = socket_connect("127.0.0.1", port2)

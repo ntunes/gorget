@@ -38,9 +38,6 @@ HttpServerResponse handle(HttpRequest req):
     return HttpServerResponse.not_found()
 
 # ── Server: accept exactly n connections then exit ─────────────
-# (Uses a standalone async function so spawn works correctly.
-#  Note: spawn on a method call is a known compiler limitation —
-#  only free-function spawn generates a thread.)
 
 async void serve_n(int port, int n):
     Result[ServerSocket, str] bind_r = server_socket_bind("127.0.0.1", port)

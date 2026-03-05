@@ -9333,3 +9333,22 @@ hello from thread
 main done",
     );
 }
+
+#[test]
+fn spawn_method_basic() {
+    run_gg(
+        "spawn_method_basic.gg",
+        "\
+50",
+    );
+}
+
+#[test]
+fn spawn_method_void() {
+    run_gg(
+        "spawn_method_void.gg",
+        "\
+hello from thread
+done",
+    );
+}

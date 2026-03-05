@@ -1,0 +1,12 @@
+struct Logger:
+    int level
+
+equip Logger:
+    async void log(self, str msg):
+        print(msg)
+
+async void main():
+    Logger l = Logger(1)
+    Task[void] t = spawn l.log("hello from thread")
+    t.await()
+    print("done")

@@ -1,0 +1,12 @@
+struct Worker:
+    int id
+
+equip Worker:
+    async int compute(self):
+        return self.id * 10
+
+async void main():
+    Worker w = Worker(5)
+    Task[int] t = spawn w.compute()
+    int result = t.await()
+    print(result)

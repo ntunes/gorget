@@ -635,6 +635,10 @@ fn lower_expr_inner(
                     return FunctionBuilder::copy(dst);
                 }
             }
+            // ── Case D: spawn receiver.method(args) — method call ──
+            if let Expr::MethodCall { receiver, method, args: call_args, .. } = &expr.node {
+                return lower_method_spawn(ctx, builder, receiver, &method.node, call_args);
+            }
             // Fallback: direct call (no tracking)
             lower_expr(ctx, builder, expr)
         }
@@ -5601,6 +5605,262 @@ fn is_gorget_array_local(
         return name.starts_with("GorgetArray") || name.starts_with("Vector__");
     }
     false
+}
+
+// ─── Method Spawn Codegen ──────────────────────────────────────────────────
+
+/// Build a thin wrapper function that takes the receiver by value plus explicit
+/// args, borrows the receiver to get the self pointer, and calls the method.
+fn build_method_spawn_wrapper(
+    ctx: &mut LoweringContext,
+    wrapper_name: &str,
+    method_c_name: &str,
+    recv_value_type: TypeId,
+    needs_mut_borrow: bool,
+    arg_types: &[TypeId],    // explicit args, excluding self
+    return_type: TypeId,
+) -> crate::ir::Function {
+    // Params: receiver value, then explicit call args
+    let all_param_types: Vec<TypeId> = std::iter::once(recv_value_type)
+        .chain(arg_types.iter().copied())
+        .collect();
+    let params: Vec<(TypeId, Option<&str>)> = all_param_types.iter()
+        .enumerate()
+        .map(|(i, &tid)| (tid, if i == 0 { Some("__self") } else { None }))
+        .collect();
+
+    let mut builder = FunctionBuilder::new(wrapper_name, return_type, &params);
+
+    // _0 = return slot, _1 = receiver value, _2.. = explicit args
+    // Borrow _1 to get the self pointer
+    let ptr_type = if needs_mut_borrow {
+        ctx.type_registry.insert(GirType::MutPtr(recv_value_type))
+    } else {
+        ctx.type_registry.insert(GirType::Ptr(recv_value_type))
+    };
+    let ptr_local = builder.add_local(ptr_type, None);
+    if needs_mut_borrow {
+        builder.emit_borrow_mut(ptr_local, Place::local(LocalId(1)));
+    } else {
+        builder.emit_borrow(ptr_local, Place::local(LocalId(1)));
+    }
+
+    // Build call args: self pointer + explicit params
+    let mut call_args = vec![FunctionBuilder::copy(ptr_local)];
+    for i in 0..arg_types.len() {
+        call_args.push(FunctionBuilder::copy(LocalId((i + 2) as u32)));
+    }
+
+    // Call the method and return the result
+    if return_type == UNIT_TYPE {
+        builder.call_void(method_c_name, call_args);
+        builder.ret(FunctionBuilder::const_unit());
+    } else {
+        let result = builder.call(method_c_name, call_args, return_type);
+        builder.assign(Place::local(LocalId(0)), FunctionBuilder::copy(result));
+        builder.ret(FunctionBuilder::copy(LocalId(0)));
+    }
+
+    builder.build()
+}
+
+/// Lower `spawn receiver.method(args)` by generating a thin wrapper function
+/// and dispatching through the spawn infrastructure.
+fn lower_method_spawn(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    receiver: &Spanned<Expr>,
+    method_name: &str,
+    args: &[Spanned<crate::parser::ast::CallArg>],
+) -> Operand {
+    // 1. Lower the receiver to get the value operand
+    let recv = lower_expr(ctx, builder, receiver);
+    let recv_type = infer_operand_type_full(ctx, &recv, builder);
+
+    // 2. Infer the type name for method resolution
+    let type_name = match infer_type_name_from_operand_full(ctx, &recv, builder) {
+        Some(name) => name,
+        None => {
+            // Can't resolve type — fall back to blocking call
+            return lower_method_call_blocking(ctx, builder, recv, method_name, args);
+        }
+    };
+
+    // 3. Resolve the mangled method name (same logic as lower_method_call)
+    let mangled = format!("{type_name}__{method_name}");
+    let effective_name = if ctx.fn_sigs.contains_key(mangled.as_str()) {
+        mangled.clone()
+    } else {
+        let suffix = format!("_for_{type_name}__{method_name}");
+        let candidates: Vec<&String> = ctx.fn_sigs.keys()
+            .filter(|k| k.ends_with(&suffix))
+            .collect();
+        if candidates.len() == 1 {
+            candidates[0].clone()
+        } else {
+            mangled.clone()
+        }
+    };
+
+    // 4. Get method signature from fn_sigs
+    let (param_types, fn_ret_type) = match ctx.fn_sigs.get(effective_name.as_str()) {
+        Some((params, ret)) => (params.clone(), *ret),
+        None => {
+            // Method not in fn_sigs (synthetic stdlib method) — fall back to blocking call
+            return lower_method_call_blocking(ctx, builder, recv, method_name, args);
+        }
+    };
+
+    // param_types[0] is the self pointer type (Ptr(T) or MutPtr(T))
+    if param_types.is_empty() {
+        return lower_method_call_blocking(ctx, builder, recv, method_name, args);
+    }
+
+    // 5. Determine self borrow mode
+    let needs_mut = matches!(ctx.type_registry.get(param_types[0]), Some(GirType::MutPtr(_)));
+
+    // 6. Get the receiver value type (strip pointer wrapper)
+    let recv_value_type = match ctx.type_registry.get(param_types[0]) {
+        Some(GirType::Ptr(inner)) | Some(GirType::MutPtr(inner)) => *inner,
+        _ => recv_type, // self param is not a pointer — use recv type directly
+    };
+
+    // Explicit arg types (everything after self)
+    let explicit_arg_types: Vec<TypeId> = param_types[1..].to_vec();
+
+    // 7. Build or reuse wrapper (idempotent, keyed by wrapper name)
+    let wrapper_name = format!("__spawn_method_wrap_{effective_name}");
+
+    if !ctx.spawned_fn_names.contains_key(&wrapper_name) {
+        let wrapper_fn = build_method_spawn_wrapper(
+            ctx,
+            &wrapper_name,
+            &effective_name,
+            recv_value_type,
+            needs_mut,
+            &explicit_arg_types,
+            fn_ret_type,
+        );
+        ctx.spawn_wrapper_fns.push(wrapper_fn);
+
+        // Register wrapper signature: [recv_value_type, explicit_arg_types...] → fn_ret_type
+        let mut sig_params = vec![recv_value_type];
+        sig_params.extend_from_slice(&explicit_arg_types);
+        ctx.fn_sigs.insert(wrapper_name.clone(), (sig_params, fn_ret_type));
+
+        // Register param names
+        let mut param_names = vec!["__self".to_string()];
+        param_names.extend((0..explicit_arg_types.len()).map(|i| format!("__arg{i}")));
+        ctx.fn_param_names.insert(wrapper_name.clone(), param_names);
+    }
+
+    // 8. Register for spawn
+    ctx.pending_spawn_fn = Some(wrapper_name.clone());
+    ctx.spawned_fn_names.insert(wrapper_name.clone(), true);
+
+    // 9. Register Task type (same boilerplate as direct-fn spawn)
+    let ret_c = ctx.type_name_for_id(fn_ret_type)
+        .unwrap_or("int64_t")
+        .to_string();
+    let task_name = if fn_ret_type == UNIT_TYPE {
+        "Task__void".to_string()
+    } else {
+        format!("Task__{ret_c}")
+    };
+    let task_type = if let Some(tid) = ctx.type_mapper.lookup_named(&task_name) {
+        tid
+    } else {
+        ctx.type_registry.add_type_def(TypeDef {
+            name: task_name.clone(),
+            kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
+            metadata: TypeMetadata {
+                size: None,
+                align: None,
+                drop_strategy: DropStrategy::Trivial(format!("{task_name}__drop")),
+                copy_semantics: CopySemantics::Move,
+            },
+        });
+        let tid = ctx.type_registry.insert(GirType::Named(task_name.clone()));
+        ctx.type_mapper.register_named(task_name.clone(), tid);
+        tid
+    };
+
+    // 10. Build spawn args: receiver value + explicit args
+    let recv_local = match &recv {
+        Operand::Copy(place) | Operand::Move(place) if place.projections.is_empty() => {
+            Some(place.local)
+        }
+        _ => None,
+    };
+    let mut spawn_args = vec![recv];
+    for arg in args {
+        spawn_args.push(lower_expr(ctx, builder, &arg.node.value));
+    }
+
+    // 11. Emit spawn call
+    let spawn_fn = format!("__gorget_spawn_{wrapper_name}");
+    let dst = builder.call(&spawn_fn, spawn_args, task_type);
+
+    // 12. Zero receiver to transfer ownership (prevents double-free for Move types)
+    if let Some(local_id) = recv_local {
+        builder.move_zero(Place::local(local_id));
+        ctx.drops.mark_moved(local_id);
+    }
+
+    FunctionBuilder::copy(dst)
+}
+
+/// Fallback: lower a method call as a blocking (non-spawned) call.
+/// Used when method resolution fails in the spawn path.
+fn lower_method_call_blocking(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    recv: Operand,
+    method_name: &str,
+    args: &[Spanned<crate::parser::ast::CallArg>],
+) -> Operand {
+    // Re-create the MethodCall expression and lower it normally.
+    // We already have the lowered receiver, so we build the self ptr + call directly.
+    let recv_type = infer_operand_type_full(ctx, &recv, builder);
+    let type_name = infer_type_name_from_operand_full(ctx, &recv, builder)
+        .unwrap_or_else(|| "unknown".to_string());
+    let mangled = format!("{type_name}__{method_name}");
+
+    // Borrow receiver for self
+    let mut call_args = Vec::new();
+    if let Operand::Copy(ref place) | Operand::Move(ref place) = recv {
+        let pt = ctx.register_ptr_type(recv_type);
+        let pl = builder.add_local(pt, None);
+        builder.emit_borrow(pl, place.clone());
+        call_args.push(FunctionBuilder::copy(pl));
+    } else {
+        call_args.push(recv);
+    }
+    for arg in args {
+        call_args.push(lower_expr(ctx, builder, &arg.node.value));
+    }
+
+    let effective_name = if ctx.fn_sigs.contains_key(&mangled) {
+        mangled.clone()
+    } else {
+        let suffix = format!("_for_{type_name}__{method_name}");
+        ctx.fn_sigs.keys()
+            .find(|k| k.ends_with(&suffix))
+            .cloned()
+            .unwrap_or(mangled.clone())
+    };
+
+    let ret_type = ctx.fn_sigs.get(effective_name.as_str())
+        .map(|(_, r)| *r)
+        .unwrap_or(I64_TYPE);
+
+    if ret_type == UNIT_TYPE {
+        builder.call_void(effective_name, call_args);
+        Operand::Constant(Constant::Unit)
+    } else {
+        let dst = builder.call(effective_name, call_args, ret_type);
+        FunctionBuilder::copy(dst)
+    }
 }
 
 // ─── Closure Spawn Codegen ─────────────────────────────────────────────────

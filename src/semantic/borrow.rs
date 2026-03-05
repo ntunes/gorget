@@ -1465,6 +1465,15 @@ impl<'a> BorrowChecker<'a> {
                         // Fallback: method calls, arbitrary expressions, etc.
                         self.error(SemanticErrorKind::SpawnRequiresDirectCall, inner.span);
                     }
+                } else if let Expr::MethodCall { receiver, args, .. } = &inner.node {
+                    // Case 4: Method call — spawn receiver.method(args)
+                    // Validate receiver origin: owned locals and statics are safe to transfer.
+                    // Reject borrowed references (Param, Unknown, etc.) that might dangle.
+                    let recv_origin = self.compute_expr_origin(receiver);
+                    if !matches!(recv_origin, BorrowOrigin::Static | BorrowOrigin::Local(_)) {
+                        self.error(SemanticErrorKind::SpawnWithBorrowedRef, receiver.span);
+                    }
+                    self.check_spawn_args(args);
                 } else {
                     self.error(SemanticErrorKind::SpawnRequiresDirectCall, inner.span);
                 }
@@ -5956,8 +5965,8 @@ void launch(str data):
     }
 
     #[test]
-    fn spawn_method_call_rejected() {
-        // spawn obj.method() is not a direct function call → error
+    fn spawn_method_call_ok() {
+        // spawn obj.method() is now supported
         let source = "\
 struct Runner:
     int id
@@ -5972,8 +5981,8 @@ void launch():
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::SpawnRequiresDirectCall)),
-            "expected SpawnRequiresDirectCall for method spawn: {:?}", errors
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::SpawnRequiresDirectCall)),
+            "expected no SpawnRequiresDirectCall for method spawn: {:?}", errors
         );
     }
 
@@ -6105,8 +6114,8 @@ void launch():
     }
 
     #[test]
-    fn spawn_method_still_rejected() {
-        // Method calls are still rejected
+    fn spawn_method_with_async_ok() {
+        // Method calls (including async) are now supported for spawn
         let source = "\
 struct Worker:
     int id
@@ -6119,8 +6128,8 @@ void launch():
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::SpawnRequiresDirectCall)),
-            "expected SpawnRequiresDirectCall for method call: {:?}", errors
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::SpawnRequiresDirectCall)),
+            "expected no SpawnRequiresDirectCall for method spawn: {:?}", errors
         );
     }
 
