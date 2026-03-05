@@ -569,7 +569,8 @@ qualifiers    = { "async" | "const" | "static" | "unsafe" } ;
 return_type   = type { "," type } | "void" ;  (* bare tuple: str, int or (str, int) *)
 param_list    = param { "," param } ;
 param         = [ "live" [ "(" IDENTIFIER ")" ] ]
-                type [ "&" | "!" | "mutable" | "consuming" ] IDENTIFIER [ "=" expr ] ;
+                type [ "&" | "!" | "mutable" | "consuming" ] IDENTIFIER [ "=" expr ]
+              | "meta" IDENTIFIER ;   (* meta op parameter — see §19.23 *)
 throws_clause = "throws" [ type ] ;
 block         = ":" NEWLINE INDENT { statement } DEDENT ;
 ```
@@ -1102,8 +1103,11 @@ else:
 
 ```ebnf
 match_stmt = "match" expr ":" NEWLINE INDENT
-             { "case" pattern [ "if" expr ] ":" block }
+             { match_item }
              [ "else" ":" block ] DEDENT ;
+match_item = "case" pattern [ "if" expr ] ":" block
+           | "meta" "for" IDENTIFIER { "," IDENTIFIER } "in" expr ":"
+             NEWLINE INDENT "case" pattern ":" block DEDENT ;
 ```
 
 Pattern matching on a value. Arms are tried in order; the first matching pattern executes. The `else` arm catches anything not matched by preceding `case` arms.
@@ -4569,9 +4573,45 @@ Module-level `meta` is evaluated during Phase 0 (before semantic analysis). `met
 
 ---
 
-### 19.12 Compile-Time `typename` and `sizeof` in Generic Bodies
+### 19.12 Delayed-Context Builtins Reference
 
-The existing `typename(T)` and `sizeof(T)` builtins (see §19.7) gain an additional capability when used inside delayed meta conditions: they **resolve generic type parameters** to their concrete values.
+Inside generic function bodies, method bodies, and trait default bodies, all of the following
+builtins are available. They resolve generic type parameters to their concrete values at
+monomorphization time.
+
+**Type inspection:**
+
+| Builtin | Returns | Description |
+|---------|---------|-------------|
+| `typename(T)` | `str` | Canonical type name; resolves `T` at monomorphization |
+| `typeof(T)` | `str` | Alias for `typename(T)` |
+| `sizeof(T)` | `int` | Byte size; resolves `T` at monomorphization |
+| `bitwidth(T)` | `int` | Bit width of numeric types (§19.21) |
+| `min_val(T)` | `int` | Minimum value for integer types (§19.21) |
+| `max_val(T)` | `int` | Maximum value for integer types (§19.21) |
+| `implements(T, str)` | `bool` | True if T implements the named trait (§19.22) |
+
+**Struct reflection:**
+
+| Builtin | Returns | Description |
+|---------|---------|-------------|
+| `fields(T)` | `List[[str,str]]` | `[name, type]` pairs for all fields (§19.14) |
+| `field_names(T)` | `List[str]` | Field names in declaration order (§19.19) |
+| `field_count(T)` | `int` | Number of fields (§19.19) |
+| `has_field(T, str)` | `bool` | True if the named field exists (§19.19) |
+| `field_type(T, str)` | `str` | Canonical type name of a named field (§19.19) |
+
+**Enum reflection:**
+
+| Builtin | Returns | Description |
+|---------|---------|-------------|
+| `variant_names(T)` | `List[str]` | Variant names in declaration order (§19.20) |
+| `variant_count(T)` | `int` | Number of variants (§19.20) |
+| `variant_payloads(T)` | `List[[str,str]]` | `[name, inner_type]` pairs (§19.20) |
+| `enum_ordinal(T, str)` | `int` | Zero-based ordinal of a named variant (§19.16) |
+| `enum_from_ordinal(T, int)` | `str` | Variant name at ordinal n (§19.16) |
+
+**Comparison: Phase 0 vs delayed:**
 
 | Builtin | In Phase 0 (module level) | In delayed meta (generic body) |
 |---------|--------------------------|-------------------------------|
@@ -4832,7 +4872,9 @@ the ordinal is out of range.
 
 ### 19.17 Compile-Time Loop Unrolling (`meta for`)
 
-`meta for` inside a generic body unrolls its loop at monomorphization time:
+`meta for` inside a generic body unrolls its loop at monomorphization time. Two range forms are supported:
+
+**Integer range:**
 
 ```gorget
 meta for <var> in <start>..<end>:
@@ -4860,7 +4902,24 @@ void main():
     # → third
 ```
 
-The unrolled code is lowered identically to if the programmer had written the three `print` statements directly.
+**List range** — iterate over a list produced by a reflection builtin:
+
+```gorget
+meta for <var> in variant_names(T):
+    <body>
+
+meta for <name>, <type> in fields(T):
+    <body>
+
+meta for <name>, <type> in variant_payloads(T):
+    <body>
+```
+
+- The loop variable(s) bind to string values from the list each iteration.
+- Multi-variable destructuring (`name, type`) unpacks list-of-pairs builtins (`fields`, `variant_payloads`).
+- String variables substituted in constructor or pattern positions become identifiers before lowering.
+
+The unrolled code is lowered identically to if the programmer had written each body directly.
 
 ---
 
@@ -4932,6 +4991,380 @@ registry:
 
 ---
 
+### 19.19 Additional Struct Field Builtins
+
+These builtins complement `fields(T)` (§19.14) for targeted struct introspection. All require `T`
+to be a struct and are evaluated at monomorphization time in generic bodies.
+
+| Builtin | Signature | Description |
+|---------|-----------|-------------|
+| `field_names(T)` | `→ List[str]` | All field names in declaration order |
+| `field_count(T)` | `→ int` | Number of fields |
+| `has_field(T, "name")` | `→ bool` | True if the named field exists |
+| `field_type(T, "name")` | `→ str` | Canonical Gorget type name of the named field |
+
+**`field_names(T)`** is the lower-level companion to `fields(T)` — it returns only the name
+strings without the paired type strings. Prefer `fields(T)` when both name and type are needed;
+use `field_names(T)` when only names are required:
+
+```gorget
+void print_field_names[T]():
+    meta for fname in field_names(T):
+        print(fname)
+```
+
+**`field_count(T)`** returns the number of fields as a compile-time integer, useful in `meta if`
+conditions and as a `meta for` range bound:
+
+```gorget
+void assert_two_fields[T]():
+    meta assert field_count(T) == 2, "T must have exactly 2 fields"
+```
+
+**`has_field(T, "name")`** checks for the existence of a field before accessing it — useful for
+adapting generic code to structs with optional fields:
+
+```gorget
+void maybe_print_id[T](T val):
+    meta if has_field(T, "id"):
+        print("{field_value(val, "id")}")
+    else:
+        print("(no id)")
+```
+
+**`field_type(T, "name")`** returns the canonical Gorget type name of a specific field. The second
+argument must be a string literal or a meta-loop variable substituted to one:
+
+```gorget
+void inspect[T]():
+    meta if has_field(T, "score"):
+        meta const st = field_type(T, "score")
+        print("score type: {st}")
+```
+
+---
+
+### 19.20 Variant Inspection
+
+Three builtins introspect enum variants at monomorphization time. All require `T` to be an enum.
+
+| Builtin | Signature | Description |
+|---------|-----------|-------------|
+| `variant_names(T)` | `→ List[str]` | All variant names in declaration order |
+| `variant_count(T)` | `→ int` | Number of variants |
+| `variant_payloads(T)` | `→ List[[str, str]]` | `[variant_name, inner_type]` pairs |
+
+#### `variant_names(T)` and `variant_count(T)`
+
+```gorget
+void print_variants[T]():
+    meta if T is Enum:
+        print("count: {variant_count(T)}")
+        meta for vname in variant_names(T):
+            print(vname)
+
+enum Color:
+    Red()
+    Green()
+    Blue()
+
+void main():
+    print_variants[Color]()
+    # → count: 3
+    # → Red
+    # → Green
+    # → Blue
+```
+
+`meta for vname in variant_names(T)` iterates over a list of strings. When `vname` appears in
+a constructor call or match pattern, the compiler rewrites it as an identifier — `make_variant`
+(§19.18) also achieves this, but `vname` in call/pattern position does so implicitly.
+
+`variant_count(T)` is useful as a `meta for` range bound (see §19.16) or in assertions:
+
+```gorget
+meta assert variant_count(Color) == 3, "unexpected Color variant count"
+```
+
+#### `variant_payloads(T)`
+
+`variant_payloads(T)` is the enum counterpart to `fields(T)`. It returns one `[name, type]` pair
+per variant, where the inner type is the canonical Gorget name of the single payload field:
+
+| Variant | `variant_payloads` entry |
+|---------|--------------------------|
+| `IntCol(TypedColumn[int])` | `["IntCol", "int"]` |
+| `FloatCol(TypedColumn[float])` | `["FloatCol", "float"]` |
+| `StrCol(TypedColumn[str])` | `["StrCol", "str"]` |
+
+For unit variants or multi-field variants, the inner type string is `""`. The primary use case is
+collapsing per-variant dispatch into a single `meta for` block (see §19.24).
+
+```gorget
+void list_payloads[T]():
+    meta if T is Enum:
+        meta for vname, vtype in variant_payloads(T):
+            print("{vname} → {vtype}")
+```
+
+---
+
+### 19.21 Numeric Type Inspection
+
+The following builtins are available in delayed meta contexts (generic function and method bodies).
+They all resolve generic type parameters to their concrete values at monomorphization time.
+
+| Builtin | Signature | Description |
+|---------|-----------|-------------|
+| `typeof(T)` | `→ str` | Canonical Gorget type name — alias for `typename(T)` |
+| `bitwidth(T)` | `→ int` | Bit width of a numeric type |
+| `min_val(T)` | `→ int` | Minimum value for an integer type |
+| `max_val(T)` | `→ int` | Maximum representable value for an integer type |
+
+**`typeof(T)`** is a synonym for `typename(T)` that reads as a question ("what type is T?") rather
+than a conversion. Both return the same string:
+
+```gorget
+meta const name = typeof(T)   # same as typename(T)
+```
+
+**`bitwidth(T)`** returns the bit width of any numeric type:
+
+```gorget
+void show_bits[T]():
+    print("{bitwidth(T)}")
+
+void main():
+    show_bits[int8]()    # → 8
+    show_bits[int32]()   # → 32
+    show_bits[float32]() # → 32
+    show_bits[float]()   # → 64
+```
+
+Supported types and their widths: `int8`/`uint8`/`bool` → 8; `int16`/`uint16` → 16;
+`int32`/`uint32`/`float32` → 32; `int`/`int64`/`uint`/`uint64`/`float`/`float64` → 64.
+Passing any other type is a compile-time error.
+
+**`min_val(T)` and `max_val(T)`** accept integer types only and return the boundary value as an
+`int` meta constant:
+
+| Type | `min_val` | `max_val` |
+|------|-----------|-----------|
+| `int8` | −128 | 127 |
+| `int16` | −32768 | 32767 |
+| `int32` | −2147483648 | 2147483647 |
+| `int` / `int64` | −9223372036854775808 | 9223372036854775807 |
+| `uint8` | 0 | 255 |
+| `uint16` | 0 | 65535 |
+| `uint32` | 0 | 4294967295 |
+| `uint` / `uint64` | 0 | 9223372036854775807 |
+
+```gorget
+void show_range[Signed T]():
+    meta const lo = min_val(T)
+    meta const hi = max_val(T)
+    print("[{lo}, {hi}]")
+
+void main():
+    show_range[int8]()   # → [-128, 127]
+    show_range[int32]()  # → [-2147483648, 2147483647]
+```
+
+Passing a float type to `min_val`/`max_val` is a compile-time error.
+
+---
+
+### 19.22 `implements(T, "Trait")` — Trait Introspection
+
+`implements(T, "TraitName")` evaluates to `true` at monomorphization time if `T` has been
+equipped with the named trait. This allows generic code to adapt its behavior based on what
+interfaces the concrete type provides.
+
+**Signature:** `implements(T, "TraitName") → bool`
+
+- First argument: a type (may be a generic type parameter `T`, `Self`, or a concrete name).
+- Second argument: a string literal — the exact trait name as declared.
+
+```gorget
+str maybe_display[T](T val):
+    meta if implements(T, "Displayable"):
+        return "{val}"
+    else:
+        return "<no display>"
+
+void main():
+    print(maybe_display[int](42))      # → 42
+    print(maybe_display[bool](true))   # → true
+```
+
+`implements` is evaluated after all equip blocks in the module are registered. A type equipped
+in the same file is visible. Cross-module traits are visible after import.
+
+```gorget
+void generic_combine[T](T a, T b):
+    meta if implements(T, "Addable") and implements(T, "Displayable"):
+        T c = a + b
+        print("{c}")
+    elif implements(T, "Displayable"):
+        print("{a} and {b} (no add)")
+    else:
+        print("(opaque type)")
+```
+
+---
+
+### 19.23 `meta op` — Compile-Time Operator Parameters
+
+`meta op` allows a function to accept a **binary operator token as a compile-time parameter**,
+eliminating the need for separate `add`, `sub`, `mul`, `div` variants of the same algorithm.
+
+#### Declaration
+
+A `meta op` parameter is declared using the `meta` keyword in place of a type annotation:
+
+```gorget
+T fold[Numeric T](T a, T b, meta op):
+    return a meta[op] b
+```
+
+- `meta op` replaces the type annotation — operators carry no runtime type.
+- The parameter name (`op` above) is arbitrary.
+
+#### Call Site
+
+Pass the operator token directly — no quotes, no parentheses:
+
+```gorget
+void main():
+    print(fold[int](10, 3, +))   # → 13
+    print(fold[int](10, 3, *))   # → 30
+    print(fold[int](10, 3, -))   # → 7
+    print(fold[int](10, 3, /))   # → 3
+```
+
+Supported operators: `+`, `-`, `*`, `/`, `%`, `&`, `|`, `^`, `<<`, `>>`, `==`, `!=`, `<`, `<=`,
+`>`, `>=`.
+
+#### Usage in the Body
+
+Inside the function body, use the operator with the `meta[op_name]` infix syntax:
+
+```gorget
+T elemwise[Numeric T](T a, T b, meta op):
+    return a meta[op] b
+```
+
+`a meta[op] b` is a placeholder that the compiler expands to `a + b`, `a * b`, etc. when the
+function is monomorphized. The expansion happens before IR lowering.
+
+#### Larger Example
+
+```gorget
+Tensor[T] tensor_elemwise[Numeric T](Tensor[T] a, Tensor[T] b, meta op):
+    Tensor[T] out = Tensor[T](a.shape())
+    for i in 0..a.len():
+        out.set(i, a.get(i) meta[op] b.get(i))
+    return out
+
+void main():
+    auto a = Tensor[int]([1, 2, 3])
+    auto b = Tensor[int]([10, 20, 30])
+    print(tensor_elemwise[int](a, b, +))   # [11, 22, 33]
+    print(tensor_elemwise[int](a, b, *))   # [10, 40, 90]
+```
+
+One `tensor_elemwise` definition replaces separate `tensor_add`, `tensor_sub`, `tensor_mul`,
+`tensor_div` functions.
+
+#### Restrictions
+
+- `meta op` parameters are positional; they cannot have default values.
+- The operator must be a binary infix operator — unary operators are not supported.
+- Multiple `meta op` parameters in the same function are allowed.
+- `meta op` parameters are resolved at compile time; they cannot be stored in variables or
+  passed as runtime values.
+
+---
+
+### 19.24 `meta for` Inside Match Arms
+
+`meta for` can appear inside a `match` arm list. Each loop iteration produces one concrete match
+arm, replacing a block of identical per-variant arms with a single template.
+
+#### Syntax
+
+```gorget
+match expr:
+    meta for var [, var] in range_expr:
+        case pattern: body
+```
+
+- The `meta for` header appears at the same indentation as regular `case` arms.
+- Exactly **one** `case` arm follows the header — the template arm.
+- The template arm is duplicated for each iteration, with meta variables substituted throughout.
+
+#### Example — Dispatch Wrapper
+
+```gorget
+Column col_slice(Column col, int start, int end):
+    match col:
+        meta for vname, T in variant_payloads(Column):
+            case vname(c): return vname(col_slice_inner[T](c, start, end))
+```
+
+The compiler expands this to:
+
+```gorget
+Column col_slice(Column col, int start, int end):
+    match col:
+        case IntCol(c):   return IntCol(col_slice_inner[int](c, start, end))
+        case FloatCol(c): return FloatCol(col_slice_inner[float](c, start, end))
+        case StrCol(c):   return StrCol(col_slice_inner[str](c, start, end))
+        case BoolCol(c):  return BoolCol(col_slice_inner[bool](c, start, end))
+```
+
+#### Substitution in the Template Arm
+
+Meta variables are substituted in three positions:
+
+1. **Pattern** — `case vname(c)` → `case IntCol(c)`, `case FloatCol(c)`, etc.
+2. **Callee identifier** — `return vname(...)` rewrites the callee to the concrete variant name.
+3. **Type argument** — `col_slice_inner[T]` substitutes `T` with the concrete payload type.
+
+#### With `variant_names(T)`
+
+When no payload type is needed, `variant_names(T)` provides just the name:
+
+```gorget
+int col_len(Column col):
+    match col:
+        meta for vname in variant_names(Column):
+            case vname(c): return c.col_len()
+```
+
+#### Nested Match
+
+`vname` is substituted throughout the entire arm body, including nested match patterns:
+
+```gorget
+Column col_concat(Column a, Column b):
+    match a:
+        meta for vname, T in variant_payloads(Column):
+            case vname(ca):
+                match b:
+                    case vname(cb):
+                        return vname(col_concat_inner[T](ca, cb))
+                    else:
+                        return a
+```
+
+#### Exhaustiveness
+
+When any `meta for` items are present in a match, the exhaustiveness checker defers to IR
+lowering. The expanded arms are validated after expansion completes.
+
+---
+
 ## Appendix A: Grammar Summary
 
 This appendix collects the grammar rules from throughout the document.
@@ -4959,7 +5392,8 @@ qualifier     = "async" | "const" | "static" | "unsafe" ;
 return_type   = type { "," type } | "void" ;  (* bare tuple: str, int or (str, int) *)
 param_list    = param { "," param } ;
 param         = [ "live" [ "(" IDENTIFIER ")" ] ]
-                type [ "&" | "!" | "mutable" | "consuming" ] IDENTIFIER [ "=" expr ] ;
+                type [ "&" | "!" | "mutable" | "consuming" ] IDENTIFIER [ "=" expr ]
+              | "meta" IDENTIFIER ;   (* meta op parameter — see §19.23 *)
 throws_clause = "throws" [ type ] ;
 block         = ":" NEWLINE INDENT { statement } DEDENT ;
 
@@ -5074,7 +5508,10 @@ while_stmt = "while" expr ":" block [ "else" ":" block ] ;
 loop_stmt  = "loop" ":" block ;
 if_stmt    = "if" expr ":" block { "elif" expr ":" block } [ "else" ":" block ] ;
 match_stmt = "match" expr ":" NEWLINE INDENT
-             { "case" pattern [ "if" expr ] ":" block } [ "else" ":" block ] DEDENT ;
+             { match_item } [ "else" ":" block ] DEDENT ;
+match_item = "case" pattern [ "if" expr ] ":" block
+           | "meta" "for" IDENTIFIER { "," IDENTIFIER } "in" expr ":"
+             NEWLINE INDENT "case" pattern ":" block DEDENT ;  (* see §19.24 *)
 with_stmt  = "with" with_binding { "," with_binding } ":" block ;
 with_binding = expr "as" IDENTIFIER ;
 unsafe_stmt = "unsafe" ":" block ;

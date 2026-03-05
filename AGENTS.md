@@ -59,11 +59,12 @@ cargo test               # all tests (use --test-threads=1 if integration tests 
   - `meta const name = expr` — compile-time constant binding (valid inside generic function bodies)
   - `meta T is Category` — type predicate: `meta T is Numeric`, `meta T is Struct`, etc.
   - `meta log(expr)` — compile-time debug output (printed during compilation, not at runtime)
-  - `fields(T)` — compile-time list of field names for struct type `T`
-  - `field_value(val, fname)` — compile-time field access by name string
-  - `embed_file(path)` — embed file contents as a `str` at compile time
-  - `enum_ordinal(variant)` — ordinal index of an enum variant
-  - `enum_from_ordinal(EnumType, n)` — construct enum variant from ordinal
+  - `meta op` parameter — accepts a binary operator token at call site; use `a meta[op] b` in body
+  - `meta for vname, T in variant_payloads(E): case vname(c): ...` — expand match arms from enum variants
+  - Phase-0 builtins: `platform()`, `arch()`, `arch_word_bits()`, `feature(str)`, `debug()`, `sizeof(Type)`, `alignof(Type)`, `typename(Type)`, `embed_file(str)`
+  - Delayed (generic body) builtins — type: `typename(T)`, `typeof(T)`, `sizeof(T)`, `bitwidth(T)`, `min_val(T)`, `max_val(T)`, `implements(T, str)`
+  - Delayed — struct: `fields(T)`, `field_names(T)`, `field_count(T)`, `has_field(T, str)`, `field_type(T, str)`, `field_value(val, fname)`
+  - Delayed — enum: `variant_names(T)`, `variant_count(T)`, `variant_payloads(T)`, `enum_ordinal(T, str)`, `enum_from_ordinal(T, n)`, `make_variant(T, str)`
 
 **Always use type-first native Gorget syntax** when generating code, writing plans, or providing examples. Write `int x = 5` not `x: int = 5` or `let x = 5`. Write `str greet(str name)` not `fn greet(name: str) -> str`.
 
