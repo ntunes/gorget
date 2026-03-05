@@ -2244,7 +2244,7 @@ impl<'a> BorrowChecker<'a> {
                 let before = self.save_branch_state();
                 let mut branch_states = Vec::new();
 
-                for arm in arms {
+                for arm in arms.iter().filter_map(|i| i.arm()) {
                     self.restore_branch_state(&before);
                     self.mark_pattern_origins(&arm.pattern, &scrutinee_origin);
                     if let Some(guard) = &arm.guard {
@@ -3407,7 +3407,7 @@ fn build_aliases_from_stmt(
             }
         }
         Stmt::Match { arms, else_arm, .. } => {
-            for arm in arms {
+            for arm in arms.iter().filter_map(|i| i.arm()) {
                 if let Expr::Block(block) = &arm.body.node {
                     build_aliases_from_block(block, param_names, aliases, function_info, resolution_map, scopes);
                 }
@@ -3648,7 +3648,7 @@ fn trace_stmt_returns_to_params(
             }
         }
         Stmt::Match { arms, else_arm, .. } => {
-            for arm in arms {
+            for arm in arms.iter().filter_map(|i| i.arm()) {
                 if let Expr::Block(block) = &arm.body.node {
                     trace_block_returns_to_params(block, param_names, local_aliases, function_info, resolution_map, scopes, result);
                 }

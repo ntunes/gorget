@@ -941,7 +941,7 @@ fn resolve_stmt(
             else_arm,
         } => {
             resolve_expr(scrutinee, scopes, errors, resolution_map);
-            for arm in arms {
+            for arm in arms.iter().filter_map(|i| i.arm()) {
                 scopes.push_scope(super::scope::ScopeKind::Block);
                 define_pattern_bindings(&arm.pattern.node, arm.pattern.span, scopes, errors, false);
                 if let Some(guard) = &arm.guard {

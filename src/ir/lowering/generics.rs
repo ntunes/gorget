@@ -26,6 +26,9 @@ pub struct GenericCollector {
     struct_templates: FxHashMap<String, ast::StructDef>,
     /// Generic enum templates: base_name → AST EnumDef.
     enum_templates: FxHashMap<String, ast::EnumDef>,
+    /// Non-generic enum definitions: enum_name → AST EnumDef.
+    /// Used for AST-level expansion of `variant_payloads(T)` inside `meta for` match arms.
+    non_generic_enum_defs: FxHashMap<String, ast::EnumDef>,
     /// Generic function templates: base_name → AST FunctionDef.
     fn_templates: FxHashMap<String, ast::FunctionDef>,
     /// Generic equip templates: base_type_name → Vec<EquipBlock>.
@@ -49,6 +52,7 @@ impl GenericCollector {
         Self {
             struct_templates: FxHashMap::default(),
             enum_templates: FxHashMap::default(),
+            non_generic_enum_defs: FxHashMap::default(),
             fn_templates: FxHashMap::default(),
             equip_templates: FxHashMap::default(),
             instances: Vec::new(),
@@ -67,6 +71,11 @@ impl GenericCollector {
                 }
                 Item::Enum(e) if e.generic_params.is_some() => {
                     self.enum_templates.insert(e.name.node.clone(), e.clone());
+                }
+                Item::Enum(e) if e.generic_params.is_none() => {
+                    // Store non-generic enums for AST-level variant_payloads expansion
+                    // during MetaFor match arm scanning.
+                    self.non_generic_enum_defs.insert(e.name.node.clone(), e.clone());
                 }
                 Item::Function(f) if f.generic_params.is_some() => {
                     self.fn_templates.insert(f.name.node.clone(), f.clone());
@@ -320,10 +329,19 @@ impl GenericCollector {
             }
             Stmt::Match { scrutinee, arms, else_arm } => {
                 self.scan_expr(scrutinee);
-                for arm in arms {
-                    self.scan_expr(&arm.body);
-                    if let Some(guard) = &arm.guard {
-                        self.scan_expr(guard);
+                for item in arms {
+                    match item {
+                        ast::MatchItem::Arm(arm) => {
+                            self.scan_expr(&arm.body);
+                            if let Some(guard) = &arm.guard {
+                                self.scan_expr(guard);
+                            }
+                        }
+                        ast::MatchItem::MetaFor { vars, range, arm_template, .. } => {
+                            // Expand variant_payloads at scan time so generic calls inside
+                            // arm templates (e.g. col_slice_inner[T]) get monomorphized.
+                            self.scan_meta_for_match_arm(vars, range, arm_template);
+                        }
                     }
                 }
                 if let Some(else_body) = else_arm {
@@ -380,6 +398,91 @@ impl GenericCollector {
             }
             _ => {}
         }
+    }
+
+    /// Scan a `meta for vname, T in variant_payloads(EnumName):` match item.
+    ///
+    /// Expands the range by looking up the enum definition in the AST, then scans
+    /// the arm template body once per variant with concrete variable substitutions.
+    /// This ensures generic calls like `col_slice_inner[T]` are discovered for
+    /// monomorphization even though the outer function is non-generic.
+    fn scan_meta_for_match_arm(
+        &mut self,
+        vars: &[crate::span::Spanned<String>],
+        range: &Spanned<Expr>,
+        arm_template: &ast::MatchArm,
+    ) {
+        use crate::semantic::meta::{MetaValue, meta_str_to_type, substitute_match_arm};
+
+        // Extract enum name from variant_payloads(EnumName) call
+        let enum_name = match Self::extract_variant_payloads_enum_name(range) {
+            Some(n) => n,
+            None => {
+                // Unknown range form — scan template conservatively with no substitution
+                self.scan_expr(&arm_template.body);
+                return;
+            }
+        };
+
+        // Look up enum definition in the AST-level store
+        let enum_def = match self.non_generic_enum_defs.get(&enum_name) {
+            Some(e) => e.clone(),
+            None => {
+                self.scan_expr(&arm_template.body);
+                return;
+            }
+        };
+
+        // For each variant, build substitution env and scan the concrete arm body
+        for variant in &enum_def.variants {
+            let vname = variant.node.name.node.clone();
+
+            // Extract inner type arg from the variant's first tuple field, if any
+            let inner_type_str: String = match &variant.node.fields {
+                ast::VariantFields::Tuple(types) if types.len() == 1 => {
+                    // For a field like TypedColumn[int], take the first generic arg
+                    match &types[0].node {
+                        Type::Named { generic_args, .. } if !generic_args.is_empty() => {
+                            crate::semantic::meta::type_to_canonical_name(&generic_args[0].node)
+                        }
+                        other => crate::semantic::meta::type_to_canonical_name(other),
+                    }
+                }
+                _ => String::new(),
+            };
+
+            let mut env: rustc_hash::FxHashMap<String, MetaValue> =
+                rustc_hash::FxHashMap::default();
+            let mut type_env: rustc_hash::FxHashMap<String, crate::parser::ast::Type> =
+                rustc_hash::FxHashMap::default();
+
+            if !vars.is_empty() {
+                env.insert(vars[0].node.clone(), MetaValue::Str(vname));
+            }
+            if vars.len() >= 2 && !inner_type_str.is_empty() {
+                let key = vars[1].node.clone();
+                env.insert(key.clone(), MetaValue::Str(inner_type_str.clone()));
+                type_env.insert(key, meta_str_to_type(&inner_type_str));
+            }
+
+            let mut concrete_arm = arm_template.clone();
+            substitute_match_arm(&mut concrete_arm, &env, &type_env);
+            self.scan_expr(&concrete_arm.body);
+        }
+    }
+
+    /// Extract the enum type name from a `variant_payloads(EnumName)` call expression.
+    fn extract_variant_payloads_enum_name(range: &Spanned<Expr>) -> Option<String> {
+        if let Expr::Call { callee, args, .. } = &range.node {
+            if let Expr::Identifier(name) = &callee.node {
+                if name == "variant_payloads" && !args.is_empty() {
+                    if let Expr::Identifier(enum_name) = &args[0].node.value.node {
+                        return Some(enum_name.clone());
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// Scan an expression for generic usages.
@@ -1085,7 +1188,7 @@ fn substitute_stmt_types(stmt: &mut Spanned<Stmt>, subs: &[(String, Type)]) {
         }
         Stmt::Match { scrutinee, arms, else_arm } => {
             substitute_expr_types(scrutinee, subs);
-            for arm in arms {
+            for arm in arms.iter_mut().filter_map(|i| i.arm_mut()) {
                 substitute_expr_types(&mut arm.body, subs);
                 if let Some(guard) = &mut arm.guard {
                     substitute_expr_types(guard, subs);

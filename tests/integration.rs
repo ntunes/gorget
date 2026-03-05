@@ -6639,7 +6639,7 @@ fn format_stmt_canonical(stmt: &Stmt) -> String {
         } => {
             let subj = format_expr_canonical(&scrutinee.node);
             let mut result = format!("match {subj}:");
-            for arm in arms {
+            for arm in arms.iter().filter_map(|i| i.arm()) {
                 let pat = format_pattern_canonical(&arm.pattern.node);
                 // Unwrap Block bodies to match Gorget's representation
                 let body = match &arm.body.node {
@@ -9200,6 +9200,21 @@ Green
 Blue
 x:int
 y:float
+done",
+    );
+}
+
+#[test]
+fn meta_variant_payloads() {
+    run_gg(
+        "meta_variant_payloads.gg",
+        "\
+Circle
+Square
+Tag
+Circle
+Square
+Tag
 done",
     );
 }

@@ -1398,9 +1398,11 @@ fn test_dot_shorthand_pattern_unit() {
     if let Item::Function(f) = &module.items[0].node {
         if let FunctionBody::Block(block) = &f.body {
             if let Stmt::Match { arms, .. } = &block.stmts[0].node {
-                assert!(matches!(&arms[0].pattern.node, Pattern::DotShorthand { variant, fields }
-                    if variant.node == "Red" && fields.is_empty()));
-                return;
+                if let Some(arm) = arms[0].arm() {
+                    assert!(matches!(&arm.pattern.node, Pattern::DotShorthand { variant, fields }
+                        if variant.node == "Red" && fields.is_empty()));
+                    return;
+                }
             }
         }
     }
@@ -1415,9 +1417,11 @@ fn test_dot_shorthand_pattern_with_binding() {
     if let Item::Function(f) = &module.items[0].node {
         if let FunctionBody::Block(block) = &f.body {
             if let Stmt::Match { arms, .. } = &block.stmts[0].node {
-                assert!(matches!(&arms[0].pattern.node, Pattern::DotShorthand { variant, fields }
-                    if variant.node == "Blue" && fields.len() == 1));
-                return;
+                if let Some(arm) = arms[0].arm() {
+                    assert!(matches!(&arm.pattern.node, Pattern::DotShorthand { variant, fields }
+                        if variant.node == "Blue" && fields.len() == 1));
+                    return;
+                }
             }
         }
     }

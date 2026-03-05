@@ -461,7 +461,7 @@ fn qualify_stmt(stmt: &mut Stmt, vm: &HashMap<String, String>) {
         }
         Stmt::Match { scrutinee, arms, else_arm } => {
             qualify_expr(scrutinee, vm);
-            for arm in arms {
+            for arm in arms.iter_mut().filter_map(|i| i.arm_mut()) {
                 qualify_pattern(&mut arm.pattern, vm);
                 if let Some(guard) = &mut arm.guard {
                     qualify_expr(guard, vm);

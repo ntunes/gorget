@@ -269,6 +269,13 @@ impl Parser {
                 continue;
             }
 
+            // meta for <vars> in <range>: <single case arm>
+            if self.check(&Token::Keyword(Keyword::Meta)) {
+                let meta_for_item = self.parse_meta_for_match_item()?;
+                arms.push(meta_for_item);
+                continue;
+            }
+
             let arm_start = self.peek_span();
             self.expect_keyword(Keyword::Case)?;
             let pattern = self.parse_pattern()?;
@@ -294,12 +301,12 @@ impl Parser {
             };
 
             let arm_end = body.span;
-            arms.push(MatchArm {
+            arms.push(MatchItem::Arm(MatchArm {
                 pattern,
                 guard,
                 body,
                 span: arm_start.merge(arm_end),
-            });
+            }));
         }
 
         self.expect(&Token::Dedent)?;
@@ -717,6 +724,62 @@ impl Parser {
             },
             span,
         ))
+    }
+
+    /// Parse `meta for <vars> in <range>: <single case arm>` inside a match arm list.
+    /// Produces a `MatchItem::MetaFor` that is expanded at monomorphization time.
+    fn parse_meta_for_match_item(&mut self) -> Result<MatchItem, ParseError> {
+        let start = self.peek_span();
+        self.expect_keyword(Keyword::Meta)?;
+        self.expect_keyword(Keyword::For)?;
+
+        let var_span = self.peek_span();
+        let first = self.expect_identifier()?;
+        let mut vars = vec![Spanned::new(first.node, var_span)];
+        while self.match_token(&Token::Comma) {
+            vars.push(self.expect_identifier()?);
+        }
+        self.expect_keyword(Keyword::In)?;
+        let range = self.parse_expr()?;
+
+        // Parse `:` newline indent — then exactly one case arm as the template
+        self.expect(&Token::Colon)?;
+        self.expect(&Token::Newline)?;
+        self.expect(&Token::Indent)?;
+
+        // Skip blank lines
+        while self.check(&Token::Newline) { self.advance(); }
+
+        let arm_start = self.peek_span();
+        self.expect_keyword(Keyword::Case)?;
+        let pattern = self.parse_pattern()?;
+
+        let guard = if self.match_keyword(Keyword::If) {
+            Some(self.parse_expr()?)
+        } else {
+            None
+        };
+
+        self.expect(&Token::Colon)?;
+        let body = if self.check(&Token::Newline) {
+            let block = self.parse_block_body(arm_start)?;
+            let span = block.span;
+            Spanned::new(Expr::Block(block), span)
+        } else {
+            let expr = self.parse_expr()?;
+            self.consume_newline();
+            expr
+        };
+
+        let arm_end = body.span;
+        let arm_template = MatchArm { pattern, guard, body, span: arm_start.merge(arm_end) };
+
+        // Skip blank lines before dedent
+        while self.check(&Token::Newline) { self.advance(); }
+        self.expect(&Token::Dedent)?;
+        let end = self.previous_span();
+
+        Ok(MatchItem::MetaFor { vars, range, arm_template, span: start.merge(end) })
     }
 
     fn parse_meta_match_stmt(&mut self, start: Span) -> Result<Spanned<Stmt>, ParseError> {

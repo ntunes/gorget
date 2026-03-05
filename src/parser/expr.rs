@@ -165,7 +165,7 @@ fn stmt_contains_it(stmt: &Stmt) -> bool {
         }
         Stmt::Match { scrutinee, arms, else_arm } => {
             contains_it(scrutinee)
-                || arms.iter().any(|arm| {
+                || arms.iter().filter_map(|i| i.arm()).any(|arm| {
                     arm.guard.as_ref().is_some_and(|g| contains_it(g))
                         || contains_it(&arm.body)
                 })

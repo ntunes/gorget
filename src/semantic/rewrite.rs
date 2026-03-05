@@ -119,7 +119,7 @@ fn rewrite_stmt(stmt: &mut Stmt, res: &ResolutionMap, scopes: &ScopeTable) {
         }
         Stmt::Match { scrutinee, arms, else_arm } => {
             rewrite_expr(scrutinee, res, scopes);
-            for arm in arms {
+            for arm in arms.iter_mut().filter_map(|i| i.arm_mut()) {
                 if let Some(guard) = &mut arm.guard { rewrite_expr(guard, res, scopes); }
                 rewrite_expr(&mut arm.body, res, scopes);
             }

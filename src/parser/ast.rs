@@ -727,6 +727,29 @@ pub struct MatchArm {
     pub span: Span,
 }
 
+/// A single item inside a `match` arm list.
+/// Most items are concrete arms; a `MetaFor` item is a compile-time loop that
+/// generates arms at monomorphization time and is expanded by the meta eval pass.
+#[derive(Debug, Clone)]
+pub enum MatchItem {
+    Arm(MatchArm),
+    MetaFor {
+        vars: Vec<Spanned<String>>,
+        range: Spanned<Expr>,
+        arm_template: MatchArm,
+        span: Span,
+    },
+}
+
+impl MatchItem {
+    pub fn arm(&self) -> Option<&MatchArm> {
+        match self { MatchItem::Arm(a) => Some(a), _ => None }
+    }
+    pub fn arm_mut(&mut self) -> Option<&mut MatchArm> {
+        match self { MatchItem::Arm(a) => Some(a), _ => None }
+    }
+}
+
 // ══════════════════════════════════════════════════════════════
 // Select (channel multiplexing)
 // ══════════════════════════════════════════════════════════════
@@ -867,7 +890,7 @@ pub enum Stmt {
     /// match/case/else statement
     Match {
         scrutinee: Spanned<Expr>,
-        arms: Vec<MatchArm>,
+        arms: Vec<MatchItem>,
         else_arm: Option<Block>,
     },
 

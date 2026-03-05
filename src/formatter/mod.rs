@@ -965,8 +965,24 @@ impl Formatter {
                 self.emitter.write(":");
                 self.emitter.newline();
                 self.emitter.indent();
-                for arm in arms {
-                    self.format_match_arm(arm);
+                for item in arms {
+                    match item {
+                        crate::parser::ast::MatchItem::Arm(arm) => {
+                            self.format_match_arm(arm);
+                        }
+                        crate::parser::ast::MatchItem::MetaFor { vars, range, arm_template, .. } => {
+                            self.emitter.write("meta for ");
+                            let joined = vars.iter().map(|v| v.node.as_str()).collect::<Vec<_>>().join(", ");
+                            self.emitter.write(&joined);
+                            self.emitter.write(" in ");
+                            self.format_expr(range);
+                            self.emitter.write(":");
+                            self.emitter.newline();
+                            self.emitter.indent();
+                            self.format_match_arm(arm_template);
+                            self.emitter.dedent();
+                        }
+                    }
                 }
                 if let Some(else_body) = else_arm {
                     self.emitter.write("else:");

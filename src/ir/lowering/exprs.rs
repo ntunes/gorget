@@ -4614,7 +4614,7 @@ fn lower_block_expr(
         }
         // match used as tail expression
         ast::Stmt::Match { scrutinee, arms, else_arm } => {
-            lower_match_stmt_as_expr(ctx, builder, scrutinee, arms, else_arm.as_ref())
+            lower_match_stmt_as_expr(ctx, builder, scrutinee, arms.as_slice(), else_arm.as_ref())
         }
         _ => {
             super::stmts::lower_stmt(ctx, builder, last);
@@ -4628,7 +4628,7 @@ fn lower_match_stmt_as_expr(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
     scrutinee: &Spanned<Expr>,
-    arms: &[ast::MatchArm],
+    arms: &[ast::MatchItem],
     else_arm: Option<&ast::Block>,
 ) -> Operand {
     let scrut_op = lower_expr(ctx, builder, scrutinee);
@@ -4639,9 +4639,10 @@ fn lower_match_stmt_as_expr(
     let result_local = builder.add_local(I64_TYPE, None);
     let merge_bb = builder.new_block();
 
-    for (i, arm) in arms.iter().enumerate() {
+    let concrete_arms: Vec<&ast::MatchArm> = arms.iter().filter_map(|i| i.arm()).collect();
+    for (i, arm) in concrete_arms.iter().enumerate() {
         let arm_body_bb = builder.new_block();
-        let next_test_bb = if i + 1 < arms.len() || else_arm.is_some() {
+        let next_test_bb = if i + 1 < concrete_arms.len() || else_arm.is_some() {
             builder.new_block()
         } else {
             merge_bb
@@ -4667,7 +4668,7 @@ fn lower_match_stmt_as_expr(
         let else_val = lower_block_expr(ctx, builder, else_block);
         builder.assign(Place::local(result_local), else_val);
         builder.jump(merge_bb);
-    } else if !arms.is_empty() {
+    } else if !concrete_arms.is_empty() {
         // No else arm but we're on the fallthrough block — jump to merge
         builder.jump(merge_bb);
     }

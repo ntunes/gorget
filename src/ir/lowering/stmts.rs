@@ -1692,7 +1692,7 @@ fn lower_match_stmt(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
     scrutinee: &Spanned<Expr>,
-    arms: &[ast::MatchArm],
+    arms: &[ast::MatchItem],
     else_arm: &Option<Block>,
 ) {
     // Lower scrutinee to a temp local
@@ -1703,10 +1703,11 @@ fn lower_match_stmt(
 
     let merge_bb = builder.new_block();
 
-    // Process each arm as a test-body chain
-    for (i, arm) in arms.iter().enumerate() {
+    // Process each arm as a test-body chain (MetaFor items are always expanded before lowering)
+    let concrete_arms: Vec<&ast::MatchArm> = arms.iter().filter_map(|i| i.arm()).collect();
+    for (i, arm) in concrete_arms.iter().enumerate() {
         let arm_body_bb = builder.new_block();
-        let next_test_bb = if i + 1 < arms.len() || else_arm.is_some() {
+        let next_test_bb = if i + 1 < concrete_arms.len() || else_arm.is_some() {
             builder.new_block()
         } else {
             merge_bb
@@ -2730,18 +2731,18 @@ mod tests {
         let stmt = spanned(Stmt::Match {
             scrutinee: spanned(Expr::Identifier("x".into())),
             arms: vec![
-                ast::MatchArm {
+                ast::MatchItem::Arm(ast::MatchArm {
                     pattern: spanned(Pattern::Literal(Box::new(spanned(Expr::IntLiteral(1))))),
                     guard: None,
                     body: spanned(Expr::IntLiteral(10)),
                     span: Span { start: 0, end: 0 },
-                },
-                ast::MatchArm {
+                }),
+                ast::MatchItem::Arm(ast::MatchArm {
                     pattern: spanned(Pattern::Literal(Box::new(spanned(Expr::IntLiteral(2))))),
                     guard: None,
                     body: spanned(Expr::IntLiteral(20)),
                     span: Span { start: 0, end: 0 },
-                },
+                }),
             ],
             else_arm: Some(Block {
                 stmts: vec![spanned(Stmt::Pass)],
@@ -2771,12 +2772,12 @@ mod tests {
 
         let stmt = spanned(Stmt::Match {
             scrutinee: spanned(Expr::Identifier("x".into())),
-            arms: vec![ast::MatchArm {
+            arms: vec![ast::MatchItem::Arm(ast::MatchArm {
                 pattern: spanned(Pattern::Binding("val".into())),
                 guard: None,
                 body: spanned(Expr::IntLiteral(42)),
                 span: Span { start: 0, end: 0 },
-            }],
+            })],
             else_arm: None,
         });
 
@@ -2797,7 +2798,7 @@ mod tests {
         // match x: case 1 | 2 | 3: pass
         let stmt = spanned(Stmt::Match {
             scrutinee: spanned(Expr::Identifier("x".into())),
-            arms: vec![ast::MatchArm {
+            arms: vec![ast::MatchItem::Arm(ast::MatchArm {
                 pattern: spanned(Pattern::Or(vec![
                     spanned(Pattern::Literal(Box::new(spanned(Expr::IntLiteral(1))))),
                     spanned(Pattern::Literal(Box::new(spanned(Expr::IntLiteral(2))))),
@@ -2806,7 +2807,7 @@ mod tests {
                 guard: None,
                 body: spanned(Expr::IntLiteral(0)),
                 span: Span { start: 0, end: 0 },
-            }],
+            })],
             else_arm: None,
         });
 

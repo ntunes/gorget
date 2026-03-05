@@ -1531,6 +1531,137 @@ fn substitute_block(block: &mut Block, env: &FxHashMap<String, MetaValue>, type_
     }
 }
 
+fn substitute_pattern(pattern: &mut Spanned<Pattern>, env: &FxHashMap<String, MetaValue>, type_env: &FxHashMap<String, Type>) {
+    match &mut pattern.node {
+        Pattern::Constructor { path, fields } => {
+            // Substitute the last path segment if it is a meta string variable
+            // e.g. `case vname(c):` with vname="IntCol" → `case IntCol(c):`
+            if let Some(last) = path.last_mut() {
+                if let Some(MetaValue::Str(s)) = env.get(&last.node) {
+                    last.node = s.clone();
+                }
+            }
+            for field in fields.iter_mut() {
+                substitute_pattern(field, env, type_env);
+            }
+        }
+        Pattern::Tuple(patterns) | Pattern::Or(patterns) => {
+            for p in patterns.iter_mut() {
+                substitute_pattern(p, env, type_env);
+            }
+        }
+        Pattern::Literal(expr) => substitute_expr(expr, env, type_env),
+        Pattern::DotShorthand { fields, .. } => {
+            for f in fields.iter_mut() {
+                substitute_pattern(f, env, type_env);
+            }
+        }
+        Pattern::Wildcard | Pattern::Binding(_) | Pattern::Rest => {}
+    }
+}
+
+pub fn substitute_match_arm(arm: &mut MatchArm, env: &FxHashMap<String, MetaValue>, type_env: &FxHashMap<String, Type>) {
+    substitute_pattern(&mut arm.pattern, env, type_env);
+    if let Some(guard) = &mut arm.guard { substitute_expr(guard, env, type_env); }
+    substitute_expr(&mut arm.body, env, type_env);
+}
+
+/// Convert a Gorget type-name string (e.g. "int", "float", "str") to an AST `Type`.
+/// Public so it can be used by the generic scanner to build type substitution environments.
+/// Used to build the `type_env` so that meta string variables (like `T` in
+/// `meta for vname, T in variant_payloads(Column)`) can be substituted into
+/// generic type argument positions (e.g. `col_slice_inner[T]` → `col_slice_inner[int]`).
+pub fn meta_str_to_type(s: &str) -> Type {
+    use crate::parser::ast::{PrimitiveType, Type as AstType};
+    use crate::span::Spanned;
+    match s {
+        "int"     => AstType::Primitive(PrimitiveType::Int),
+        "int8"    => AstType::Primitive(PrimitiveType::Int8),
+        "int16"   => AstType::Primitive(PrimitiveType::Int16),
+        "int32"   => AstType::Primitive(PrimitiveType::Int32),
+        "int64"   => AstType::Primitive(PrimitiveType::Int64),
+        "uint"    => AstType::Primitive(PrimitiveType::Uint),
+        "uint8"   => AstType::Primitive(PrimitiveType::Uint8),
+        "uint16"  => AstType::Primitive(PrimitiveType::Uint16),
+        "uint32"  => AstType::Primitive(PrimitiveType::Uint32),
+        "uint64"  => AstType::Primitive(PrimitiveType::Uint64),
+        "float"   => AstType::Primitive(PrimitiveType::Float),
+        "float32" => AstType::Primitive(PrimitiveType::Float32),
+        "float64" => AstType::Primitive(PrimitiveType::Float64),
+        "bool"    => AstType::Primitive(PrimitiveType::Bool),
+        "str"     => AstType::Primitive(PrimitiveType::Str),
+        "void"    => AstType::Primitive(PrimitiveType::Void),
+        other     => AstType::Named { name: Spanned::dummy(other.to_string()), generic_args: vec![] },
+    }
+}
+
+/// Expand every `MatchItem::MetaFor` in `arms` into concrete `MatchItem::Arm` nodes in-place.
+/// Called from `evaluate_delayed_meta_block` before processing match arm bodies.
+fn expand_match_meta_for(
+    arms: &mut Vec<MatchItem>,
+    ctx: &DelayedMetaContext<'_>,
+    errors: &mut Vec<SemanticError>,
+) {
+    let mut result: Vec<MatchItem> = Vec::with_capacity(arms.len());
+    let local_env = ctx.meta_env;
+
+    for item in arms.drain(..) {
+        match item {
+            MatchItem::Arm(_) => result.push(item),
+            MatchItem::MetaFor { ref vars, ref range, ref arm_template, .. } => {
+                let range_span = range.span;
+                match eval_delayed_expr(&range.node, ctx, range_span) {
+                    Ok(MetaValue::List(items)) => {
+                        for item_val in items {
+                            let mut child_env = local_env.clone();
+                            if vars.len() == 1 {
+                                child_env.insert(vars[0].node.clone(), item_val);
+                            } else if let MetaValue::List(parts) = item_val {
+                                for (var, part) in vars.iter().zip(parts.into_iter()) {
+                                    child_env.insert(var.node.clone(), part);
+                                }
+                            } else {
+                                errors.push(meta_err(
+                                    "meta for (match): multi-variable destructuring requires a list of lists",
+                                    range_span,
+                                ));
+                                break;
+                            }
+                            // Build type_env from string meta values so that meta vars
+                            // can be used as generic type arguments (e.g. `fn[T]`).
+                            let type_env: FxHashMap<String, Type> = child_env.iter()
+                                .filter_map(|(k, v)| {
+                                    if let MetaValue::Str(s) = v {
+                                        Some((k.clone(), meta_str_to_type(s)))
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect();
+                            let mut concrete_arm = arm_template.clone();
+                            substitute_match_arm(&mut concrete_arm, &child_env, &type_env);
+                            // Also recurse into the arm body if it's a block
+                            let child_ctx = DelayedMetaContext { meta_env: &child_env, ..*ctx };
+                            if let Expr::Block(block) = &mut concrete_arm.body.node {
+                                evaluate_delayed_meta_block(block, &child_ctx, errors);
+                            }
+                            result.push(MatchItem::Arm(concrete_arm));
+                        }
+                    }
+                    Ok(_) => {
+                        errors.push(meta_err(
+                            "meta for (match): range must evaluate to a list (e.g. variant_payloads(T))",
+                            range_span,
+                        ));
+                    }
+                    Err(e) => errors.push(e),
+                }
+            }
+        }
+    }
+    *arms = result;
+}
+
 fn substitute_stmt(stmt: &mut Stmt, env: &FxHashMap<String, MetaValue>, type_env: &FxHashMap<String, Type>) {
     match stmt {
         Stmt::VarDecl { type_, value, .. } => {
@@ -1572,9 +1703,16 @@ fn substitute_stmt(stmt: &mut Stmt, env: &FxHashMap<String, MetaValue>, type_env
         }
         Stmt::Match { scrutinee, arms, else_arm } => {
             substitute_expr(scrutinee, env, type_env);
-            for arm in arms {
-                if let Some(guard) = &mut arm.guard { substitute_expr(guard, env, type_env); }
-                substitute_expr(&mut arm.body, env, type_env);
+            for item in arms.iter_mut() {
+                match item {
+                    MatchItem::Arm(arm) => {
+                        substitute_match_arm(arm, env, type_env);
+                    }
+                    MatchItem::MetaFor { range, arm_template, .. } => {
+                        substitute_expr(range, env, type_env);
+                        substitute_match_arm(arm_template, env, type_env);
+                    }
+                }
             }
             if let Some(ea) = else_arm { substitute_block(ea, env, type_env); }
         }
@@ -1651,6 +1789,14 @@ fn substitute_expr(expr: &mut Spanned<Expr>, env: &FxHashMap<String, MetaValue>,
             substitute_expr(right, env, type_env);
         }
         Expr::Call { callee, generic_args, args } => {
+            // Special case: if the callee is a bare identifier bound to a meta string,
+            // substitute it as an identifier rename (e.g. `vname(...)` → `Circle(...)`)
+            // rather than converting it to a string literal (`"Circle"(...)`).
+            if let Expr::Identifier(ref cname) = callee.node {
+                if let Some(MetaValue::Str(s)) = env.get(cname.as_str()) {
+                    callee.node = Expr::Identifier(s.clone());
+                }
+            }
             substitute_expr(callee, env, type_env);
             if let Some(ga) = generic_args {
                 for ty in ga { substitute_type(ty, type_env); }
@@ -2382,6 +2528,71 @@ fn eval_delayed_expr(
                                 &format!("variant_count: unknown type `{type_name}`"), span)),
                         }
                     }
+                    "variant_payloads" => {
+                        // variant_payloads(T) — returns a list of [variant_name, inner_type_arg] pairs
+                        // for enum variants that each hold exactly one generic payload.
+                        // e.g. for Column: [["IntCol","int"],["FloatCol","float"],...]
+                        if args.len() != 1 {
+                            return Err(meta_err("variant_payloads() takes exactly 1 argument", span));
+                        }
+                        let raw = meta_expr_to_type_name(&args[0].node.value.node);
+                        let type_name = ctx.type_subs.iter().find(|(p, _)| *p == raw)
+                            .map(|(_, ty)| type_to_canonical_name(ty))
+                            .unwrap_or(raw);
+                        match ctx.type_registry.get_type_def(&type_name) {
+                            Some(type_def) => {
+                                if let crate::ir::types::TypeDefKind::Enum(e) = &type_def.kind {
+                                    let pairs: Vec<MetaValue> = e.variants.iter().map(|v| {
+                                        let inner = if v.fields.len() == 1 {
+                                            // Extract the inner type from the GIR canonical name.
+                                            // Monomorphised types are mangled as "Base__TypeArg"
+                                            // (e.g. TypedColumn__int64_t).  Split on the first "__"
+                                            // and reverse-map the C-level suffix to a Gorget name.
+                                            let raw_name = ctx.type_registry.type_id_to_canonical_name(v.fields[0].type_id);
+                                            if let Some(idx) = raw_name.find("__") {
+                                                let suffix = &raw_name[idx + 2..];
+                                                match suffix {
+                                                    "int64_t"      => "int".to_string(),
+                                                    "int32_t"      => "int32".to_string(),
+                                                    "int16_t"      => "int16".to_string(),
+                                                    "int8_t"       => "int8".to_string(),
+                                                    "uint64_t"     => "uint".to_string(),
+                                                    "uint32_t"     => "uint32".to_string(),
+                                                    "uint16_t"     => "uint16".to_string(),
+                                                    "uint8_t"      => "uint8".to_string(),
+                                                    "double"       => "float".to_string(),
+                                                    "float"        => "float32".to_string(),
+                                                    "bool"         => "bool".to_string(),
+                                                    "Str"          => "str".to_string(),
+                                                    "GorgetString" => "String".to_string(),
+                                                    other          => other.to_string(),
+                                                }
+                                            } else {
+                                                // Primitive or non-generic named type — canonical name as-is,
+                                                // with the same "Str"→"str" normalisation used by fields().
+                                                match raw_name.as_str() {
+                                                    "Str"          => "str".to_string(),
+                                                    "GorgetString" => "String".to_string(),
+                                                    other          => other.to_string(),
+                                                }
+                                            }
+                                        } else {
+                                            // Multi-field or unit variant: fall back to empty string
+                                            String::new()
+                                        };
+                                        MetaValue::List(vec![
+                                            MetaValue::Str(v.name.clone()),
+                                            MetaValue::Str(inner),
+                                        ])
+                                    }).collect();
+                                    return Ok(MetaValue::List(pairs));
+                                }
+                                return Err(meta_err(&format!("variant_payloads: `{type_name}` is not an enum"), span));
+                            }
+                            None => return Err(meta_err(
+                                &format!("variant_payloads: unknown type `{type_name}`"), span)),
+                        }
+                    }
                     "enum_ordinal" => {
                         if args.len() != 2 {
                             return Err(meta_err("enum_ordinal() takes exactly 2 arguments: (T, \"VariantName\")", span));
@@ -2833,7 +3044,10 @@ fn recurse_delayed_meta_in_stmt(
             evaluate_delayed_meta_block(body, ctx, errors);
         }
         Stmt::Match { arms, else_arm, .. } => {
-            for arm in arms {
+            // First expand any MetaFor items into concrete arms
+            expand_match_meta_for(arms, ctx, errors);
+            // Then recurse into arm bodies
+            for arm in arms.iter_mut().filter_map(|i| i.arm_mut()) {
                 if let Expr::Block(block) = &mut arm.body.node {
                     evaluate_delayed_meta_block(block, ctx, errors);
                 }

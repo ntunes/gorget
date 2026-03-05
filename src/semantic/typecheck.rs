@@ -145,7 +145,7 @@ impl ExprVisitor for CapturedMutationDetector {
             }
             Stmt::Match { scrutinee, arms, else_arm } => {
                 self.visit_expr(scrutinee);
-                for arm in arms {
+                for arm in arms.iter().filter_map(|i| i.arm()) {
                     if self.found { return; }
                     let saved = self.locals.clone();
                     collect_pattern_bindings(&arm.pattern.node, &mut self.locals);
@@ -1318,7 +1318,8 @@ impl<'a> TypeChecker<'a> {
                     result_type = self.unify(result_type, else_type, else_arm.span);
                 }
 
-                self.check_match_exhaustiveness(scrutinee_type, arms, else_arm.is_some(), expr.span);
+                let match_items: Vec<MatchItem> = arms.iter().cloned().map(MatchItem::Arm).collect();
+                self.check_match_exhaustiveness(scrutinee_type, &match_items, else_arm.is_some(), expr.span);
 
                 result_type
             }
@@ -1801,7 +1802,7 @@ impl<'a> TypeChecker<'a> {
                 else_arm,
             } => {
                 let scrutinee_type = self.infer_expr(scrutinee);
-                for arm in arms {
+                for arm in arms.iter().filter_map(|i| i.arm()) {
                     self.assign_pattern_types(&arm.pattern, scrutinee_type);
                     if let Some(guard) = &arm.guard {
                         let gt = self.infer_expr(guard);
@@ -1918,11 +1919,16 @@ impl<'a> TypeChecker<'a> {
     fn check_match_exhaustiveness(
         &mut self,
         scrutinee_type: TypeId,
-        arms: &[MatchArm],
+        arms: &[MatchItem],
         has_else: bool,
         span: Span,
     ) {
         if has_else {
+            return;
+        }
+        // MetaFor items expand at monomorphization time; we can't check exhaustiveness
+        // statically if any are present — the expanded arms may cover all variants.
+        if arms.iter().any(|i| matches!(i, MatchItem::MetaFor { .. })) {
             return;
         }
 
@@ -1946,7 +1952,7 @@ impl<'a> TypeChecker<'a> {
         // Collect covered variant names from unguarded arms.
         let mut has_catchall = false;
         let mut covered = rustc_hash::FxHashSet::default();
-        for arm in arms {
+        for arm in arms.iter().filter_map(|i| i.arm()) {
             if arm.guard.is_some() {
                 continue; // guarded arms don't guarantee coverage
             }
@@ -2191,7 +2197,7 @@ impl<'a> TypeChecker<'a> {
             }
             Stmt::Match { arms, .. } => {
                 // Type comes from the first arm's body expression
-                if let Some(first_arm) = arms.first() {
+                if let Some(first_arm) = arms.iter().find_map(|i| i.arm()) {
                     return self.infer_expr(&first_arm.body);
                 }
                 self.types.void_id

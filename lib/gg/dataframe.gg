@@ -146,25 +146,15 @@ equip TypedColumn[T]:
 equip Column:
     int col_len(self):
         match self:
-            case IntCol(c):
-                return c.col_len()
-            case FloatCol(c):
-                return c.col_len()
-            case StrCol(c):
-                return c.col_len()
-            case BoolCol(c):
-                return c.col_len()
+            meta for vname, T in variant_payloads(Column):
+                case vname(c):
+                    return c.col_len()
 
     bool is_null_at(self, int idx):
         match self:
-            case IntCol(c):
-                return c.is_null(idx)
-            case FloatCol(c):
-                return c.is_null(idx)
-            case StrCol(c):
-                return c.is_null(idx)
-            case BoolCol(c):
-                return c.is_null(idx)
+            meta for vname, T in variant_payloads(Column):
+                case vname(c):
+                    return c.is_null(idx)
 
     str value_as_str(self, int idx):
         match self:
@@ -187,25 +177,15 @@ equip Column:
 
     str dtype_name(self):
         match self:
-            case IntCol(_):
-                return "int"
-            case FloatCol(_):
-                return "float"
-            case StrCol(_):
-                return "str"
-            case BoolCol(_):
-                return "bool"
+            meta for vname, T in variant_payloads(Column):
+                case vname(_):
+                    return T
 
     int null_count(self):
         match self:
-            case IntCol(c):
-                return c.null_count()
-            case FloatCol(c):
-                return c.null_count()
-            case StrCol(c):
-                return c.null_count()
-            case BoolCol(c):
-                return c.null_count()
+            meta for vname, T in variant_payloads(Column):
+                case vname(c):
+                    return c.null_count()
 
 # ── Column Constructors ──────────────────────────────────────
 
@@ -312,38 +292,23 @@ TypedColumn[T] col_gather_nullable_inner[T](TypedColumn[T] col, Vector[int] idxs
 # Deep-copy a Column (for head/tail/slice)
 Column col_slice(Column col, int start, int end):
     match col:
-        case IntCol(c):
-            return IntCol(col_slice_inner[int](c, start, end))
-        case FloatCol(c):
-            return FloatCol(col_slice_inner[float](c, start, end))
-        case StrCol(c):
-            return StrCol(col_slice_inner[str](c, start, end))
-        case BoolCol(c):
-            return BoolCol(col_slice_inner[bool](c, start, end))
+        meta for vname, T in variant_payloads(Column):
+            case vname(c):
+                return vname(col_slice_inner[T](c, start, end))
 
 # Filter column by boolean mask
 Column col_filter(Column col, Vector[bool] mask):
     match col:
-        case IntCol(c):
-            return IntCol(col_filter_inner[int](c, mask))
-        case FloatCol(c):
-            return FloatCol(col_filter_inner[float](c, mask))
-        case StrCol(c):
-            return StrCol(col_filter_inner[str](c, mask))
-        case BoolCol(c):
-            return BoolCol(col_filter_inner[bool](c, mask))
+        meta for vname, T in variant_payloads(Column):
+            case vname(c):
+                return vname(col_filter_inner[T](c, mask))
 
 # Gather (reorder) column by index array — preserves types and null masks
 Column col_gather(Column col, Vector[int] idxs):
     match col:
-        case IntCol(c):
-            return IntCol(col_gather_inner[int](c, idxs))
-        case FloatCol(c):
-            return FloatCol(col_gather_inner[float](c, idxs))
-        case StrCol(c):
-            return StrCol(col_gather_inner[str](c, idxs))
-        case BoolCol(c):
-            return BoolCol(col_gather_inner[bool](c, idxs))
+        meta for vname, T in variant_payloads(Column):
+            case vname(c):
+                return vname(col_gather_inner[T](c, idxs))
 
 # Concatenate two typed columns (shared generic body)
 TypedColumn[T] col_concat_inner[T](TypedColumn[T] a, TypedColumn[T] b):
@@ -364,30 +329,13 @@ TypedColumn[T] col_concat_inner[T](TypedColumn[T] a, TypedColumn[T] b):
 # Concatenate two columns of the same type — preserves types and null masks
 Column col_concat(Column a, Column b):
     match a:
-        case IntCol(ca):
-            match b:
-                case IntCol(cb):
-                    return IntCol(col_concat_inner[int](ca, cb))
-                else:
-                    return a
-        case FloatCol(ca):
-            match b:
-                case FloatCol(cb):
-                    return FloatCol(col_concat_inner[float](ca, cb))
-                else:
-                    return a
-        case StrCol(ca):
-            match b:
-                case StrCol(cb):
-                    return StrCol(col_concat_inner[str](ca, cb))
-                else:
-                    return a
-        case BoolCol(ca):
-            match b:
-                case BoolCol(cb):
-                    return BoolCol(col_concat_inner[bool](ca, cb))
-                else:
-                    return a
+        meta for vname, T in variant_payloads(Column):
+            case vname(ca):
+                match b:
+                    case vname(cb):
+                        return vname(col_concat_inner[T](ca, cb))
+                    else:
+                        return a
 
 # ── D1: DataFrame Core ───────────────────────────────────────
 

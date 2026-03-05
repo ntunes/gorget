@@ -101,6 +101,30 @@ pub fn lower_function(
     // Lower the body
     match &func.body {
         FunctionBody::Block(block) => {
+            // Run delayed meta expansion (e.g. `meta for` inside match arms using
+            // variant_payloads(T)) for non-generic functions.  For generic functions
+            // this is done inside lower_generic_function with type substitutions.
+            let expanded_block;
+            let block = {
+                let empty_subs: Vec<(String, crate::parser::ast::Type)> = vec![];
+                let empty_env = rustc_hash::FxHashMap::default();
+                let delayed_ctx = DelayedMetaContext {
+                    type_subs:      &empty_subs,
+                    features:       &[],
+                    meta_env:       &empty_env,
+                    items:          &[],
+                    trait_registry: &ctx.analysis.traits,
+                    type_registry:  &ctx.type_registry,
+                };
+                let mut meta_errors = Vec::new();
+                let mut cloned = block.clone();
+                meta::evaluate_delayed_meta_block(&mut cloned, &delayed_ctx, &mut meta_errors);
+                for e in &meta_errors {
+                    eprintln!("[delayed-meta fn] {e:?}");
+                }
+                expanded_block = cloned;
+                &expanded_block
+            };
             lower_block(ctx, &mut builder, block);
 
             // Add implicit return if the last block has no terminator

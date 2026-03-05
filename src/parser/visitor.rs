@@ -336,7 +336,7 @@ pub fn walk_stmt<V: ExprVisitor + ?Sized>(v: &mut V, stmt: &Spanned<Stmt>) {
             else_arm,
         } => {
             v.visit_expr(scrutinee);
-            for arm in arms {
+            for arm in arms.iter().filter_map(|i| i.arm()) {
                 if let Some(guard) = &arm.guard {
                     v.visit_expr(guard);
                 }

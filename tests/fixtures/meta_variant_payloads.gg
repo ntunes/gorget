@@ -1,0 +1,50 @@
+# Integration test for variant_payloads(T) + meta for inside match arm bodies.
+#
+# The meta feature generates one match arm per enum variant, substituting
+# the variant name and its inner type parameter into the arm pattern/body.
+
+struct Wrapper[T]:
+    T value
+
+enum Shape:
+    Circle(Wrapper[float])
+    Square(Wrapper[int])
+    Tag(Wrapper[str])
+
+# Returns the variant name by dispatching with meta for in match
+str dispatch_name(Shape s):
+    match s:
+        meta for vname, T in variant_payloads(Shape):
+            case vname(w):
+                return vname
+
+# Generic dispatch that uses T in a call position
+Wrapper[T] rewrap[T](Wrapper[T] w):
+    return Wrapper[T](w.value)
+
+# Dispatch to rewrap using meta for in match — exercises T substitution in generic call
+Shape rewrap_shape(Shape s):
+    match s:
+        meta for vname, T in variant_payloads(Shape):
+            case vname(w):
+                return vname(rewrap[T](w))
+
+void main():
+    Shape c = Shape.Circle(Wrapper[float](3.14))
+    Shape sq = Shape.Square(Wrapper[int](42))
+    Shape t = Shape.Tag(Wrapper[str]("hello"))
+
+    # Test variant name dispatch
+    print(dispatch_name(c))
+    print(dispatch_name(sq))
+    print(dispatch_name(t))
+
+    # Test rewrap (exercises T substitution in generic call arg position)
+    Shape c2 = rewrap_shape(c)
+    Shape sq2 = rewrap_shape(sq)
+    Shape t2 = rewrap_shape(t)
+    print(dispatch_name(c2))
+    print(dispatch_name(sq2))
+    print(dispatch_name(t2))
+
+    print("done")
