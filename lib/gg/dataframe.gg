@@ -1,7 +1,7 @@
 # gg.dataframe — Pandas-style DataFrame library for Gorget
 #
 # Core types:
-#   IntColumn / FloatColumn / StrColumn / BoolColumn — typed column with null mask
+#   TypedColumn[T] — generic typed column with null mask
 #   Column — discriminated union of column types
 #   DataFrame — ordered dict of named columns
 #
@@ -103,37 +103,21 @@ bool str_is_float(str s):
 
 # ── Column Types ─────────────────────────────────────────────
 
-struct IntColumn:
-    Vector[int] data
-    Vector[bool] mask    # true = present (not null), false = null
-
-struct FloatColumn:
-    Vector[float] data
-    Vector[bool] mask
-
-struct StrColumn:
-    Vector[str] data
-    Vector[bool] mask
-
-struct BoolColumn:
-    Vector[bool] data
+# Typed column: data array + null mask (true = present, false = null)
+struct TypedColumn[T]:
+    Vector[T] data
     Vector[bool] mask
 
 enum Column:
-    IntCol(IntColumn)
-    FloatCol(FloatColumn)
-    StrCol(StrColumn)
-    BoolCol(BoolColumn)
+    IntCol(TypedColumn[int])
+    FloatCol(TypedColumn[float])
+    StrCol(TypedColumn[str])
+    BoolCol(TypedColumn[bool])
 
 struct DataFrame:
     Dict[str, Column] columns
     Vector[str] col_names
     int num_rows
-
-# Generic column wrapper used by inner helper functions
-struct TypedColumn[T]:
-    Vector[T] data
-    Vector[bool] mask
 
 # ── GroupBy ──────────────────────────────────────────────────
 
@@ -144,65 +128,14 @@ struct GroupBy:
 
 # ── Column Access Helpers ────────────────────────────────────
 
-equip IntColumn:
+equip TypedColumn[T]:
     int col_len(self) = self.data.len()
     bool is_null(self, int idx):
         Option[bool] m = self.mask.get(idx)
         if m.is_none():
             return true
         return not m.unwrap()
-    int get_val(self, int idx) = self.data.get(idx).unwrap()
-    int null_count(self):
-        int cnt = 0
-        int i = 0
-        while i < self.mask.len():
-            if not self.mask.get(i).unwrap():
-                cnt = cnt + 1
-            i = i + 1
-        return cnt
-
-equip FloatColumn:
-    int col_len(self) = self.data.len()
-    bool is_null(self, int idx):
-        Option[bool] m = self.mask.get(idx)
-        if m.is_none():
-            return true
-        return not m.unwrap()
-    float get_val(self, int idx) = self.data.get(idx).unwrap()
-    int null_count(self):
-        int cnt = 0
-        int i = 0
-        while i < self.mask.len():
-            if not self.mask.get(i).unwrap():
-                cnt = cnt + 1
-            i = i + 1
-        return cnt
-
-equip StrColumn:
-    int col_len(self) = self.data.len()
-    bool is_null(self, int idx):
-        Option[bool] m = self.mask.get(idx)
-        if m.is_none():
-            return true
-        return not m.unwrap()
-    str get_val(self, int idx) = self.data.get(idx).unwrap()
-    int null_count(self):
-        int cnt = 0
-        int i = 0
-        while i < self.mask.len():
-            if not self.mask.get(i).unwrap():
-                cnt = cnt + 1
-            i = i + 1
-        return cnt
-
-equip BoolColumn:
-    int col_len(self) = self.data.len()
-    bool is_null(self, int idx):
-        Option[bool] m = self.mask.get(idx)
-        if m.is_none():
-            return true
-        return not m.unwrap()
-    bool get_val(self, int idx) = self.data.get(idx).unwrap()
+    T get_val(self, int idx) = self.data.get(idx).unwrap()
     int null_count(self):
         int cnt = 0
         int i = 0
@@ -281,49 +214,53 @@ equip Column:
 # ── Column Constructors ──────────────────────────────────────
 
 Column col_from_ints(Vector[int] data):
+    Vector[int] d = vec_int_copy(data)
     Vector[bool] mask = Vector[bool]()
     int i = 0
     while i < data.len():
         mask.push(true)
         i = i + 1
-    return IntCol(IntColumn(data, mask))
+    return IntCol(TypedColumn[int](d, mask))
 
 Column col_from_floats(Vector[float] data):
+    Vector[float] d = vec_float_copy(data)
     Vector[bool] mask = Vector[bool]()
     int i = 0
     while i < data.len():
         mask.push(true)
         i = i + 1
-    return FloatCol(FloatColumn(data, mask))
+    return FloatCol(TypedColumn[float](d, mask))
 
 Column col_from_strs(Vector[str] data):
+    Vector[str] d = vec_str_copy(data)
     Vector[bool] mask = Vector[bool]()
     int i = 0
     while i < data.len():
         mask.push(true)
         i = i + 1
-    return StrCol(StrColumn(data, mask))
+    return StrCol(TypedColumn[str](d, mask))
 
 Column col_from_bools(Vector[bool] data):
+    Vector[bool] d = vec_bool_copy(data)
     Vector[bool] mask = Vector[bool]()
     int i = 0
     while i < data.len():
         mask.push(true)
         i = i + 1
-    return BoolCol(BoolColumn(data, mask))
+    return BoolCol(TypedColumn[bool](d, mask))
 
 # Nullable column constructors — mask[i]=true means present, false means null
 Column col_ints_null(Vector[int] data, Vector[bool] mask):
-    return IntCol(IntColumn(data, mask))
+    return IntCol(TypedColumn[int](vec_int_copy(data), vec_bool_copy(mask)))
 
 Column col_strs_null(Vector[str] data, Vector[bool] mask):
-    return StrCol(StrColumn(data, mask))
+    return StrCol(TypedColumn[str](vec_str_copy(data), vec_bool_copy(mask)))
 
 Column col_floats_null(Vector[float] data, Vector[bool] mask):
-    return FloatCol(FloatColumn(data, mask))
+    return FloatCol(TypedColumn[float](vec_float_copy(data), vec_bool_copy(mask)))
 
 Column col_bools_null(Vector[bool] data, Vector[bool] mask):
-    return BoolCol(BoolColumn(data, mask))
+    return BoolCol(TypedColumn[bool](vec_bool_copy(data), vec_bool_copy(mask)))
 
 # ── Generic Column Inner Helpers ─────────────────────────────
 # These operate on TypedColumn[T] to eliminate 4-way dispatch boilerplate.
@@ -380,49 +317,53 @@ TypedColumn[T] col_gather_nullable_inner[T](TypedColumn[T] col, Vector[int] idxs
 Column col_slice(Column col, int start, int end):
     match col:
         case IntCol(c):
-            TypedColumn[int] r = col_slice_inner[int](TypedColumn[int](c.data, c.mask), start, end)
-            return IntCol(IntColumn(r.data, r.mask))
+            return IntCol(col_slice_inner[int](c, start, end))
         case FloatCol(c):
-            TypedColumn[float] r = col_slice_inner[float](TypedColumn[float](c.data, c.mask), start, end)
-            return FloatCol(FloatColumn(r.data, r.mask))
+            return FloatCol(col_slice_inner[float](c, start, end))
         case StrCol(c):
-            TypedColumn[str] r = col_slice_inner[str](TypedColumn[str](c.data, c.mask), start, end)
-            return StrCol(StrColumn(r.data, r.mask))
+            return StrCol(col_slice_inner[str](c, start, end))
         case BoolCol(c):
-            TypedColumn[bool] r = col_slice_inner[bool](TypedColumn[bool](c.data, c.mask), start, end)
-            return BoolCol(BoolColumn(r.data, r.mask))
+            return BoolCol(col_slice_inner[bool](c, start, end))
 
 # Filter column by boolean mask
 Column col_filter(Column col, Vector[bool] mask):
     match col:
         case IntCol(c):
-            TypedColumn[int] r = col_filter_inner[int](TypedColumn[int](c.data, c.mask), mask)
-            return IntCol(IntColumn(r.data, r.mask))
+            return IntCol(col_filter_inner[int](c, mask))
         case FloatCol(c):
-            TypedColumn[float] r = col_filter_inner[float](TypedColumn[float](c.data, c.mask), mask)
-            return FloatCol(FloatColumn(r.data, r.mask))
+            return FloatCol(col_filter_inner[float](c, mask))
         case StrCol(c):
-            TypedColumn[str] r = col_filter_inner[str](TypedColumn[str](c.data, c.mask), mask)
-            return StrCol(StrColumn(r.data, r.mask))
+            return StrCol(col_filter_inner[str](c, mask))
         case BoolCol(c):
-            TypedColumn[bool] r = col_filter_inner[bool](TypedColumn[bool](c.data, c.mask), mask)
-            return BoolCol(BoolColumn(r.data, r.mask))
+            return BoolCol(col_filter_inner[bool](c, mask))
 
 # Gather (reorder) column by index array — preserves types and null masks
 Column col_gather(Column col, Vector[int] idxs):
     match col:
         case IntCol(c):
-            TypedColumn[int] r = col_gather_inner[int](TypedColumn[int](c.data, c.mask), idxs)
-            return IntCol(IntColumn(r.data, r.mask))
+            return IntCol(col_gather_inner[int](c, idxs))
         case FloatCol(c):
-            TypedColumn[float] r = col_gather_inner[float](TypedColumn[float](c.data, c.mask), idxs)
-            return FloatCol(FloatColumn(r.data, r.mask))
+            return FloatCol(col_gather_inner[float](c, idxs))
         case StrCol(c):
-            TypedColumn[str] r = col_gather_inner[str](TypedColumn[str](c.data, c.mask), idxs)
-            return StrCol(StrColumn(r.data, r.mask))
+            return StrCol(col_gather_inner[str](c, idxs))
         case BoolCol(c):
-            TypedColumn[bool] r = col_gather_inner[bool](TypedColumn[bool](c.data, c.mask), idxs)
-            return BoolCol(BoolColumn(r.data, r.mask))
+            return BoolCol(col_gather_inner[bool](c, idxs))
+
+# Concatenate two typed columns (shared generic body)
+TypedColumn[T] col_concat_inner[T](TypedColumn[T] a, TypedColumn[T] b):
+    Vector[T] d = Vector[T]()
+    Vector[bool] m = Vector[bool]()
+    int i = 0
+    while i < a.data.len():
+        d.push(a.data.get(i).unwrap())
+        m.push(a.mask.get(i).unwrap())
+        i = i + 1
+    i = 0
+    while i < b.data.len():
+        d.push(b.data.get(i).unwrap())
+        m.push(b.mask.get(i).unwrap())
+        i = i + 1
+    return TypedColumn[T](d, m)
 
 # Concatenate two columns of the same type — preserves types and null masks
 Column col_concat(Column a, Column b):
@@ -430,73 +371,25 @@ Column col_concat(Column a, Column b):
         case IntCol(ca):
             match b:
                 case IntCol(cb):
-                    Vector[int] d = Vector[int]()
-                    Vector[bool] m = Vector[bool]()
-                    int i = 0
-                    while i < ca.data.len():
-                        d.push(ca.data.get(i).unwrap())
-                        m.push(ca.mask.get(i).unwrap())
-                        i = i + 1
-                    i = 0
-                    while i < cb.data.len():
-                        d.push(cb.data.get(i).unwrap())
-                        m.push(cb.mask.get(i).unwrap())
-                        i = i + 1
-                    return IntCol(IntColumn(d, m))
+                    return IntCol(col_concat_inner[int](ca, cb))
                 else:
                     return a
         case FloatCol(ca):
             match b:
                 case FloatCol(cb):
-                    Vector[float] d = Vector[float]()
-                    Vector[bool] m = Vector[bool]()
-                    int i = 0
-                    while i < ca.data.len():
-                        d.push(ca.data.get(i).unwrap())
-                        m.push(ca.mask.get(i).unwrap())
-                        i = i + 1
-                    i = 0
-                    while i < cb.data.len():
-                        d.push(cb.data.get(i).unwrap())
-                        m.push(cb.mask.get(i).unwrap())
-                        i = i + 1
-                    return FloatCol(FloatColumn(d, m))
+                    return FloatCol(col_concat_inner[float](ca, cb))
                 else:
                     return a
         case StrCol(ca):
             match b:
                 case StrCol(cb):
-                    Vector[str] d = Vector[str]()
-                    Vector[bool] m = Vector[bool]()
-                    int i = 0
-                    while i < ca.data.len():
-                        d.push(ca.data.get(i).unwrap())
-                        m.push(ca.mask.get(i).unwrap())
-                        i = i + 1
-                    i = 0
-                    while i < cb.data.len():
-                        d.push(cb.data.get(i).unwrap())
-                        m.push(cb.mask.get(i).unwrap())
-                        i = i + 1
-                    return StrCol(StrColumn(d, m))
+                    return StrCol(col_concat_inner[str](ca, cb))
                 else:
                     return a
         case BoolCol(ca):
             match b:
                 case BoolCol(cb):
-                    Vector[bool] d = Vector[bool]()
-                    Vector[bool] m = Vector[bool]()
-                    int i = 0
-                    while i < ca.data.len():
-                        d.push(ca.data.get(i).unwrap())
-                        m.push(ca.mask.get(i).unwrap())
-                        i = i + 1
-                    i = 0
-                    while i < cb.data.len():
-                        d.push(cb.data.get(i).unwrap())
-                        m.push(cb.mask.get(i).unwrap())
-                        i = i + 1
-                    return BoolCol(BoolColumn(d, m))
+                    return BoolCol(col_concat_inner[bool](ca, cb))
                 else:
                     return a
 
@@ -513,7 +406,7 @@ DataFrame df_from_columns(Vector[str] names, Vector[Column] cols):
         if col.col_len() > nr:
             nr = col.col_len()
         i = i + 1
-    return DataFrame(columns, names, nr)
+    return DataFrame(columns, vec_str_copy(names), nr)
 
 equip DataFrame:
     Column get_column(self, str name):
@@ -522,7 +415,8 @@ equip DataFrame:
     bool has_column(self, str name):
         return self.columns.has(name)
 
-    Vector[str] column_names(self) = self.col_names
+    Vector[str] column_names(self):
+        return vec_str_copy(self.col_names)
 
     int nrows(self) = self.num_rows
 
@@ -1069,7 +963,7 @@ int col_compare(Column col, int ia, int ib):
 Vector[int] merge_sort_idxs(Vector[int] idxs, Column col, bool ascending):
     int n = idxs.len()
     if n <= 1:
-        return idxs
+        return vec_int_copy(idxs)
     Vector[int] aux = Vector[int]()
     int i = 0
     while i < n:
@@ -1115,7 +1009,7 @@ Vector[int] merge_sort_idxs(Vector[int] idxs, Column col, bool ascending):
             idxs.set(i, aux.get(i).unwrap())
             i = i + 1
         width = width * 2
-    return idxs
+    return vec_int_copy(idxs)
 
 # ── D4: Transformation ───────────────────────────────────────
 
@@ -1177,7 +1071,7 @@ equip DataFrame:
                         new_data.push(0)
                         new_mask.push(false)
                     i = i + 1
-                return self.replace_column(col_name, IntCol(IntColumn(new_data, new_mask)))
+                return self.replace_column(col_name, IntCol(TypedColumn[int](new_data, new_mask)))
             else:
                 return self.df_slice(0, self.num_rows)
 
@@ -1196,7 +1090,7 @@ equip DataFrame:
                         new_data.push(0.0)
                         new_mask.push(false)
                     i = i + 1
-                return self.replace_column(col_name, FloatCol(FloatColumn(new_data, new_mask)))
+                return self.replace_column(col_name, FloatCol(TypedColumn[float](new_data, new_mask)))
             else:
                 return self.df_slice(0, self.num_rows)
 
@@ -1215,7 +1109,7 @@ equip DataFrame:
                         new_data.push("")
                         new_mask.push(false)
                     i = i + 1
-                return self.replace_column(col_name, StrCol(StrColumn(new_data, new_mask)))
+                return self.replace_column(col_name, StrCol(TypedColumn[str](new_data, new_mask)))
             else:
                 return self.df_slice(0, self.num_rows)
 
@@ -1233,7 +1127,7 @@ equip DataFrame:
                         new_data.push(val)
                     new_mask.push(true)
                     i = i + 1
-                return self.replace_column(col_name, IntCol(IntColumn(new_data, new_mask)))
+                return self.replace_column(col_name, IntCol(TypedColumn[int](new_data, new_mask)))
             else:
                 return self.df_slice(0, self.num_rows)
 
@@ -1251,7 +1145,7 @@ equip DataFrame:
                         new_data.push(val)
                     new_mask.push(true)
                     i = i + 1
-                return self.replace_column(col_name, FloatCol(FloatColumn(new_data, new_mask)))
+                return self.replace_column(col_name, FloatCol(TypedColumn[float](new_data, new_mask)))
             else:
                 return self.df_slice(0, self.num_rows)
 
@@ -1269,7 +1163,7 @@ equip DataFrame:
                         new_data.push(val)
                     new_mask.push(true)
                     i = i + 1
-                return self.replace_column(col_name, StrCol(StrColumn(new_data, new_mask)))
+                return self.replace_column(col_name, StrCol(TypedColumn[str](new_data, new_mask)))
             else:
                 return self.df_slice(0, self.num_rows)
 
@@ -1311,7 +1205,7 @@ GroupBy df_group_by(DataFrame df, str col):
 
 equip GroupBy:
     # Aggregate a target column by op (sum/mean/count/min/max)
-    # Produces typed output: count→IntColumn, sum/min/max→preserve source type, mean→FloatColumn
+    # Produces typed output: count→int, sum/min/max→preserve source type, mean→float
     DataFrame agg(self, str target_col, str op):
         Vector[str] keys = self.groups.keys()
         Vector[str] key_vals = Vector[str]()
@@ -1433,7 +1327,7 @@ DataFrame df_inner_join(DataFrame left, DataFrame right, str on):
     while i < left.num_rows:
         str key = lc.value_as_str(i)
         if right_idx.has(key):
-            Vector[int] rs = right_idx.get(key).unwrap()
+            Vector[int] rs = vec_int_copy(right_idx.get(key).unwrap())
             int j = 0
             while j < rs.len():
                 left_rows.push(i)
@@ -1568,7 +1462,7 @@ Result[DataFrame, str] df_from_csv(str csv_text):
                     data.push(parse_int(val).unwrap())
                     mask.push(true)
                 ri = ri + 1
-            cols.push(IntCol(IntColumn(data, mask)))
+            cols.push(IntCol(TypedColumn[int](data, mask)))
         elif all_float and nrows > 0:
             Vector[float] data = Vector[float]()
             Vector[bool] mask = Vector[bool]()
@@ -1585,7 +1479,7 @@ Result[DataFrame, str] df_from_csv(str csv_text):
                     data.push(parse_float(val).unwrap())
                     mask.push(true)
                 ri = ri + 1
-            cols.push(FloatCol(FloatColumn(data, mask)))
+            cols.push(FloatCol(TypedColumn[float](data, mask)))
         else:
             Vector[str] data = Vector[str]()
             Vector[bool] mask = Vector[bool]()
@@ -1602,7 +1496,7 @@ Result[DataFrame, str] df_from_csv(str csv_text):
                     data.push(val)
                     mask.push(true)
                 ri = ri + 1
-            cols.push(StrCol(StrColumn(data, mask)))
+            cols.push(StrCol(TypedColumn[str](data, mask)))
         i = i + 1
     return Ok(df_from_columns(clean_headers, cols))
 
@@ -1996,7 +1890,7 @@ equip DataFrame:
                                 data.push(0)
                                 mask.push(false)
                             i = i + 1
-                        return self.add_column(result_name, IntCol(IntColumn(data, mask)))
+                        return self.add_column(result_name, IntCol(TypedColumn[int](data, mask)))
                     else:
                         return self.df_slice(0, self.num_rows)
             case FloatCol(ca):
@@ -2015,7 +1909,7 @@ equip DataFrame:
                                 data.push(0.0)
                                 mask.push(false)
                             i = i + 1
-                        return self.add_column(result_name, FloatCol(FloatColumn(data, mask)))
+                        return self.add_column(result_name, FloatCol(TypedColumn[float](data, mask)))
                     else:
                         return self.df_slice(0, self.num_rows)
             else:
@@ -2042,7 +1936,7 @@ equip DataFrame:
                                 data.push(0)
                                 mask.push(false)
                             i = i + 1
-                        return self.add_column(result_name, IntCol(IntColumn(data, mask)))
+                        return self.add_column(result_name, IntCol(TypedColumn[int](data, mask)))
                     else:
                         return self.df_slice(0, self.num_rows)
             case FloatCol(ca):
@@ -2061,7 +1955,7 @@ equip DataFrame:
                                 data.push(0.0)
                                 mask.push(false)
                             i = i + 1
-                        return self.add_column(result_name, FloatCol(FloatColumn(data, mask)))
+                        return self.add_column(result_name, FloatCol(TypedColumn[float](data, mask)))
                     else:
                         return self.df_slice(0, self.num_rows)
             else:
@@ -2088,7 +1982,7 @@ equip DataFrame:
                                 data.push(0)
                                 mask.push(false)
                             i = i + 1
-                        return self.add_column(result_name, IntCol(IntColumn(data, mask)))
+                        return self.add_column(result_name, IntCol(TypedColumn[int](data, mask)))
                     else:
                         return self.df_slice(0, self.num_rows)
             case FloatCol(ca):
@@ -2107,7 +2001,7 @@ equip DataFrame:
                                 data.push(0.0)
                                 mask.push(false)
                             i = i + 1
-                        return self.add_column(result_name, FloatCol(FloatColumn(data, mask)))
+                        return self.add_column(result_name, FloatCol(TypedColumn[float](data, mask)))
                     else:
                         return self.df_slice(0, self.num_rows)
             else:
@@ -2137,7 +2031,7 @@ DataFrame df_left_join(DataFrame left, DataFrame right, str on):
     while i < left.num_rows:
         str key = lc.value_as_str(i)
         if right_idx.has(key):
-            Vector[int] rs = right_idx.get(key).unwrap()
+            Vector[int] rs = vec_int_copy(right_idx.get(key).unwrap())
             int j = 0
             while j < rs.len():
                 left_rows.push(i)
@@ -2195,7 +2089,7 @@ DataFrame df_outer_join(DataFrame left, DataFrame right, str on):
     while i < left.num_rows:
         str key = lc.value_as_str(i)
         if right_idx.has(key):
-            Vector[int] rs = right_idx.get(key).unwrap()
+            Vector[int] rs = vec_int_copy(right_idx.get(key).unwrap())
             int j = 0
             while j < rs.len():
                 left_rows.push(i)
@@ -2450,7 +2344,7 @@ DataFrame df_from_records_typed(Vector[str] headers, Vector[Vector[str]] rows):
                     data.push(parse_int(val).unwrap())
                     mask.push(true)
                 ri = ri + 1
-            cols.push(IntCol(IntColumn(data, mask)))
+            cols.push(IntCol(TypedColumn[int](data, mask)))
         elif all_float and nrows > 0:
             Vector[float] data = Vector[float]()
             Vector[bool] mask = Vector[bool]()
@@ -2467,7 +2361,7 @@ DataFrame df_from_records_typed(Vector[str] headers, Vector[Vector[str]] rows):
                     data.push(parse_float(val).unwrap())
                     mask.push(true)
                 ri = ri + 1
-            cols.push(FloatCol(FloatColumn(data, mask)))
+            cols.push(FloatCol(TypedColumn[float](data, mask)))
         elif all_bool and nrows > 0:
             Vector[bool] data = Vector[bool]()
             Vector[bool] mask = Vector[bool]()
@@ -2484,7 +2378,7 @@ DataFrame df_from_records_typed(Vector[str] headers, Vector[Vector[str]] rows):
                     data.push(val == "true")
                     mask.push(true)
                 ri = ri + 1
-            cols.push(BoolCol(BoolColumn(data, mask)))
+            cols.push(BoolCol(TypedColumn[bool](data, mask)))
         else:
             Vector[str] data = Vector[str]()
             Vector[bool] mask = Vector[bool]()
@@ -2501,7 +2395,7 @@ DataFrame df_from_records_typed(Vector[str] headers, Vector[Vector[str]] rows):
                     data.push(val)
                     mask.push(true)
                 ri = ri + 1
-            cols.push(StrCol(StrColumn(data, mask)))
+            cols.push(StrCol(TypedColumn[str](data, mask)))
         ci = ci + 1
     return df_from_columns(headers, cols)
 
@@ -2511,17 +2405,13 @@ DataFrame df_from_records_typed(Vector[str] headers, Vector[Vector[str]] rows):
 Column col_gather_nullable(Column col, Vector[int] idxs):
     match col:
         case IntCol(c):
-            TypedColumn[int] r = col_gather_nullable_inner[int](TypedColumn[int](c.data, c.mask), idxs, 0)
-            return IntCol(IntColumn(r.data, r.mask))
+            return IntCol(col_gather_nullable_inner[int](c, idxs, 0))
         case FloatCol(c):
-            TypedColumn[float] r = col_gather_nullable_inner[float](TypedColumn[float](c.data, c.mask), idxs, 0.0)
-            return FloatCol(FloatColumn(r.data, r.mask))
+            return FloatCol(col_gather_nullable_inner[float](c, idxs, 0.0))
         case StrCol(c):
-            TypedColumn[str] r = col_gather_nullable_inner[str](TypedColumn[str](c.data, c.mask), idxs, "")
-            return StrCol(StrColumn(r.data, r.mask))
+            return StrCol(col_gather_nullable_inner[str](c, idxs, ""))
         case BoolCol(c):
-            TypedColumn[bool] r = col_gather_nullable_inner[bool](TypedColumn[bool](c.data, c.mask), idxs, false)
-            return BoolCol(BoolColumn(r.data, r.mask))
+            return BoolCol(col_gather_nullable_inner[bool](c, idxs, false))
 
 Vector[str] vec_str_copy(Vector[str] v):
     Vector[str] out = Vector[str]()
@@ -2531,7 +2421,42 @@ Vector[str] vec_str_copy(Vector[str] v):
         i = i + 1
     return out
 
+Vector[int] vec_int_copy(Vector[int] v):
+    Vector[int] out = Vector[int]()
+    int i = 0
+    while i < v.len():
+        out.push(v.get(i).unwrap())
+        i = i + 1
+    return out
+
+Vector[float] vec_float_copy(Vector[float] v):
+    Vector[float] out = Vector[float]()
+    int i = 0
+    while i < v.len():
+        out.push(v.get(i).unwrap())
+        i = i + 1
+    return out
+
+Vector[bool] vec_bool_copy(Vector[bool] v):
+    Vector[bool] out = Vector[bool]()
+    int i = 0
+    while i < v.len():
+        out.push(v.get(i).unwrap())
+        i = i + 1
+    return out
+
 # ── D8: Type Casting and Clipping ────────────────────────────
+
+# Internal: return a fresh DataFrame with the same schema and data as df.
+# Necessary because returning a Move parameter directly aliases the caller's local.
+DataFrame df_copy(DataFrame df):
+    Vector[Column] cols = Vector[Column]()
+    int i = 0
+    while i < df.col_names.len():
+        str name = df.col_names.get(i).unwrap()
+        cols.push(df.get_column(name))
+        i = i + 1
+    return df_from_columns(df.col_names, cols)
 
 # Internal: rebuild df with col_name replaced by new_col.
 # new_col is a parameter so no `!` operator is needed at call sites.
@@ -2552,7 +2477,7 @@ DataFrame df_replace_col(DataFrame df, str col_name, Column new_col):
 # Target type has already been validated by the caller. Nulls propagate;
 # str→int/float that fails to parse becomes null.
 
-Column cast_int_col(IntColumn c, str target_type):
+Column cast_int_col(TypedColumn[int] c, str target_type):
     int n = c.data.len()
     if target_type == "float":
         Vector[float] d = Vector[float]()
@@ -2566,7 +2491,7 @@ Column cast_int_col(IntColumn c, str target_type):
                 d.push(0.0)
                 m.push(false)
             j = j + 1
-        return FloatCol(FloatColumn(d, m))
+        return FloatCol(TypedColumn[float](d, m))
     elif target_type == "str":
         Vector[str] d = Vector[str]()
         Vector[bool] m = Vector[bool]()
@@ -2579,7 +2504,7 @@ Column cast_int_col(IntColumn c, str target_type):
                 d.push("")
                 m.push(false)
             j = j + 1
-        return StrCol(StrColumn(d, m))
+        return StrCol(TypedColumn[str](d, m))
     elif target_type == "bool":
         Vector[bool] d = Vector[bool]()
         Vector[bool] m = Vector[bool]()
@@ -2592,10 +2517,10 @@ Column cast_int_col(IntColumn c, str target_type):
                 d.push(false)
                 m.push(false)
             j = j + 1
-        return BoolCol(BoolColumn(d, m))
+        return BoolCol(TypedColumn[bool](d, m))
     return IntCol(c)
 
-Column cast_float_col(FloatColumn c, str target_type):
+Column cast_float_col(TypedColumn[float] c, str target_type):
     int n = c.data.len()
     if target_type == "int":
         # Truncate toward zero: floor for positives, -floor(-x) for negatives
@@ -2616,7 +2541,7 @@ Column cast_float_col(FloatColumn c, str target_type):
                 d.push(0)
                 m.push(false)
             j = j + 1
-        return IntCol(IntColumn(d, m))
+        return IntCol(TypedColumn[int](d, m))
     elif target_type == "str":
         Vector[str] d = Vector[str]()
         Vector[bool] m = Vector[bool]()
@@ -2629,7 +2554,7 @@ Column cast_float_col(FloatColumn c, str target_type):
                 d.push("")
                 m.push(false)
             j = j + 1
-        return StrCol(StrColumn(d, m))
+        return StrCol(TypedColumn[str](d, m))
     elif target_type == "bool":
         Vector[bool] d = Vector[bool]()
         Vector[bool] m = Vector[bool]()
@@ -2643,10 +2568,10 @@ Column cast_float_col(FloatColumn c, str target_type):
                 d.push(false)
                 m.push(false)
             j = j + 1
-        return BoolCol(BoolColumn(d, m))
+        return BoolCol(TypedColumn[bool](d, m))
     return FloatCol(c)
 
-Column cast_str_col(StrColumn c, str target_type):
+Column cast_str_col(TypedColumn[str] c, str target_type):
     int n = c.data.len()
     if target_type == "int":
         Vector[int] d = Vector[int]()
@@ -2665,7 +2590,7 @@ Column cast_str_col(StrColumn c, str target_type):
                 d.push(0)
                 m.push(false)
             j = j + 1
-        return IntCol(IntColumn(d, m))
+        return IntCol(TypedColumn[int](d, m))
     elif target_type == "float":
         Vector[float] d = Vector[float]()
         Vector[bool] m = Vector[bool]()
@@ -2683,7 +2608,7 @@ Column cast_str_col(StrColumn c, str target_type):
                 d.push(0.0)
                 m.push(false)
             j = j + 1
-        return FloatCol(FloatColumn(d, m))
+        return FloatCol(TypedColumn[float](d, m))
     elif target_type == "bool":
         Vector[bool] d = Vector[bool]()
         Vector[bool] m = Vector[bool]()
@@ -2697,10 +2622,10 @@ Column cast_str_col(StrColumn c, str target_type):
                 d.push(false)
                 m.push(false)
             j = j + 1
-        return BoolCol(BoolColumn(d, m))
+        return BoolCol(TypedColumn[bool](d, m))
     return StrCol(c)
 
-Column cast_bool_col(BoolColumn c, str target_type):
+Column cast_bool_col(TypedColumn[bool] c, str target_type):
     int n = c.data.len()
     if target_type == "int":
         Vector[int] d = Vector[int]()
@@ -2717,7 +2642,7 @@ Column cast_bool_col(BoolColumn c, str target_type):
                 d.push(0)
                 m.push(false)
             j = j + 1
-        return IntCol(IntColumn(d, m))
+        return IntCol(TypedColumn[int](d, m))
     elif target_type == "float":
         Vector[float] d = Vector[float]()
         Vector[bool] m = Vector[bool]()
@@ -2733,7 +2658,7 @@ Column cast_bool_col(BoolColumn c, str target_type):
                 d.push(0.0)
                 m.push(false)
             j = j + 1
-        return FloatCol(FloatColumn(d, m))
+        return FloatCol(TypedColumn[float](d, m))
     elif target_type == "str":
         Vector[str] d = Vector[str]()
         Vector[bool] m = Vector[bool]()
@@ -2746,7 +2671,7 @@ Column cast_bool_col(BoolColumn c, str target_type):
                 d.push("")
                 m.push(false)
             j = j + 1
-        return StrCol(StrColumn(d, m))
+        return StrCol(TypedColumn[str](d, m))
     return BoolCol(c)
 
 # df_cast: convert a column to target_type ("int", "float", "str", "bool").
@@ -2779,10 +2704,10 @@ Result[DataFrame, str] df_cast(DataFrame df, str col_name, str target_type):
 # For int columns: lo rounds up (ceil) and hi rounds down (floor) to nearest integer.
 DataFrame df_clip(DataFrame df, str col_name, float lo, float hi):
     if not df.has_column(col_name):
-        return df
+        return df_copy(df)
     str dt = df.get_column(col_name).dtype_name()
     if dt != "int" and dt != "float":
-        return df
+        return df_copy(df)
     match df.get_column(col_name):
         case IntCol(c):
             int n = c.data.len()
@@ -2804,7 +2729,7 @@ DataFrame df_clip(DataFrame df, str col_name, float lo, float hi):
                     d.push(0)
                     m.push(false)
                 j = j + 1
-            return df_replace_col(df, col_name, IntCol(IntColumn(d, m)))
+            return df_replace_col(df, col_name, IntCol(TypedColumn[int](d, m)))
         case FloatCol(c):
             int n = c.data.len()
             Vector[float] d = Vector[float]()
@@ -2823,6 +2748,6 @@ DataFrame df_clip(DataFrame df, str col_name, float lo, float hi):
                     d.push(0.0)
                     m.push(false)
                 j = j + 1
-            return df_replace_col(df, col_name, FloatCol(FloatColumn(d, m)))
+            return df_replace_col(df, col_name, FloatCol(TypedColumn[float](d, m)))
         else:
-            return df
+            return df_copy(df)

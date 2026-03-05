@@ -1,4 +1,4 @@
-from gg.tensor import Tensor, tensor_arange, tensor_zeros, tensor_display_int, tensor_display_float, tensor_linspace, tensor_matmul, tensor_dot, tensor_eq, tensor_lt, vec_int_copy
+from gg.tensor import Tensor, tensor_arange, tensor_zeros, tensor_display, tensor_linspace, tensor_matmul, tensor_dot, tensor_eq, tensor_lt, vec_int_copy
 
 void main():
     # dot product: [0,1,2] · [1,2,3] = 0+2+6 = 8
@@ -19,7 +19,7 @@ void main():
     shb.push(2)
     mb = mb.reshape(shb)
     Tensor[int] mc = tensor_matmul[int](ma, mb)
-    print(tensor_display_int(mc))
+    print(tensor_display[int](mc))
 
     # float dot
     Tensor[float] fa = tensor_linspace(1.0, 3.0, 3)

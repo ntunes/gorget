@@ -30,7 +30,7 @@
 # Linear algebra: tensor_matmul[T], tensor_dot[T]
 # Comparisons: tensor_eq[T], tensor_lt[T], tensor_gt[T], tensor_le[T], tensor_ge[T], tensor_ne[T]
 #
-# Display (type-specific): tensor_display_int, tensor_display_float
+# Display: tensor_display[T]
 
 from std.collections import Vector
 from std.conv import int_to_str, float_to_str, parse_float
@@ -283,7 +283,7 @@ Tensor[T] tensor_clone[Numeric T](Tensor[T] t):
 
 # ── Display ───────────────────────────────────────────────────
 
-str tensor_display_int(Tensor[int] t):
+str tensor_display[Numeric T](Tensor[T] t):
     str out = "Tensor(shape=["
     int i = 0
     while i < t.shape.len():
@@ -297,26 +297,10 @@ str tensor_display_int(Tensor[int] t):
     while j < sz:
         if j > 0:
             out = out + ", "
-        out = out + int_to_str(t.flat_get(j))
-        j = j + 1
-    out = out + "])"
-    return out
-
-str tensor_display_float(Tensor[float] t):
-    str out = "Tensor(shape=["
-    int i = 0
-    while i < t.shape.len():
-        if i > 0:
-            out = out + ","
-        out = out + int_to_str(t.shape.get(i).unwrap())
-        i = i + 1
-    out = out + "], ["
-    int sz = t.size()
-    int j = 0
-    while j < sz:
-        if j > 0:
-            out = out + ", "
-        out = out + float_to_str(t.flat_get(j))
+        meta if T is float:
+            out = out + float_to_str(t.flat_get(j))
+        else:
+            out = out + int_to_str(t.flat_get(j))
         j = j + 1
     out = out + "])"
     return out

@@ -1,4 +1,4 @@
-from gg.tensor import Tensor, tensor_arange, tensor_display_int, tensor_display_float, tensor_linspace, vec_int_copy
+from gg.tensor import Tensor, tensor_arange, tensor_display, tensor_linspace, vec_int_copy
 
 void main():
     # reshape: 1D [6] → 2D [2,3]
@@ -7,7 +7,7 @@ void main():
     sh23.push(2)
     sh23.push(3)
     Tensor[int] c = a.reshape(sh23)
-    print(tensor_display_int(c))
+    print(tensor_display[int](c))
 
     # element access on reshaped
     Vector[int] idx = Vector[int]()
@@ -46,4 +46,4 @@ void main():
     fsh.push(2)
     fsh.push(3)
     Tensor[float] fc = fl.reshape(fsh)
-    print(tensor_display_float(fc))
+    print(tensor_display[float](fc))

@@ -1,16 +1,16 @@
-from gg.tensor import Tensor, tensor_zeros, tensor_ones, tensor_arange, tensor_from, tensor_display_int, tensor_linspace, tensor_display_float, vec_int_copy, tensor_compute_strides
+from gg.tensor import Tensor, tensor_zeros, tensor_ones, tensor_arange, tensor_from, tensor_display, tensor_linspace, vec_int_copy, tensor_compute_strides
 
 void main():
     # 1D int tensor from arange [0..6)
     Tensor[int] a = tensor_arange(0, 6)
-    print(tensor_display_int(a))
+    print(tensor_display[int](a))
 
     # Reshape to 2x3
     Vector[int] shape2d = Vector[int]()
     shape2d.push(2)
     shape2d.push(3)
     Tensor[int] c = a.reshape(shape2d)
-    print(tensor_display_int(c))
+    print(tensor_display[int](c))
 
     # Element access via at
     Vector[int] idx = Vector[int]()
@@ -22,9 +22,9 @@ void main():
     Vector[int] sh = Vector[int]()
     sh.push(3)
     Tensor[int] z = tensor_zeros[int](sh)
-    print(tensor_display_int(z))
+    print(tensor_display[int](z))
     Tensor[int] o = tensor_ones[int](sh)
-    print(tensor_display_int(o))
+    print(tensor_display[int](o))
 
     # size and ndim
     print(f"{c.size()}")

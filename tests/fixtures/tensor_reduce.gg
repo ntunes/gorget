@@ -1,4 +1,4 @@
-from gg.tensor import Tensor, tensor_arange, tensor_zeros, tensor_display_int, tensor_display_float, tensor_linspace, tensor_sum, tensor_min, tensor_max, tensor_mean_all, tensor_std_all, tensor_sum_axis, tensor_mean_axis, int_to_float
+from gg.tensor import Tensor, tensor_arange, tensor_zeros, tensor_display, tensor_linspace, tensor_sum, tensor_min, tensor_max, tensor_mean_all, tensor_std_all, tensor_sum_axis, tensor_mean_axis, int_to_float
 
 void main():
     # 1D int reductions
@@ -21,11 +21,11 @@ void main():
     sh.push(3)
     Tensor[int] c = b.reshape(sh)
     Tensor[int] sa0 = tensor_sum_axis[int](c, 0)
-    print(tensor_display_int(sa0))
+    print(tensor_display[int](sa0))
 
     # sum along axis 1 → [2,1] → displayed as [1,3]
     Tensor[int] sa1 = tensor_sum_axis[int](c, 1)
-    print(tensor_display_int(sa1))
+    print(tensor_display[int](sa1))
 
     # float axis sum
     Vector[int] fsh = Vector[int]()
@@ -34,4 +34,4 @@ void main():
     Tensor[float] ff = tensor_linspace(0.0, 5.0, 6)
     Tensor[float] fc = ff.reshape(fsh)
     Tensor[float] fsa = tensor_sum_axis[float](fc, 1)
-    print(tensor_display_float(fsa))
+    print(tensor_display[float](fsa))

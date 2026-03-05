@@ -1,4 +1,4 @@
-from gg.tensor import Tensor, tensor_arange, tensor_zeros, tensor_ones, tensor_display_int, tensor_display_float, tensor_badd, tensor_bsub, tensor_bmul, tensor_linspace, tensor_broadcast_shape, vec_int_copy
+from gg.tensor import Tensor, tensor_arange, tensor_zeros, tensor_ones, tensor_display, tensor_badd, tensor_bsub, tensor_bmul, tensor_linspace, tensor_broadcast_shape, vec_int_copy
 
 void main():
     # 1D broadcast: [4] + [1]
@@ -7,12 +7,12 @@ void main():
     sh1.push(1)
     Tensor[int] one = tensor_ones[int](sh1)
     Tensor[int] r1 = tensor_badd[int](a, one)
-    print(tensor_display_int(r1))
+    print(tensor_display[int](r1))
 
     # 1D + 1D same shape
     Tensor[int] b = tensor_arange(10, 14)
     Tensor[int] r2 = tensor_badd[int](a, b)
-    print(tensor_display_int(r2))
+    print(tensor_display[int](r2))
 
     # broadcast shape inference
     Vector[int] sa = Vector[int]()
@@ -28,16 +28,16 @@ void main():
 
     # bsub and bmul
     Tensor[int] r3 = tensor_bsub[int](b, a)
-    print(tensor_display_int(r3))
+    print(tensor_display[int](r3))
     Tensor[int] r4 = tensor_bmul[int](a, b)
-    print(tensor_display_int(r4))
+    print(tensor_display[int](r4))
 
     # float broadcast
     Tensor[float] fa = tensor_linspace(1.0, 4.0, 4)
     Tensor[float] fb = tensor_linspace(1.0, 1.0, 1)
     Tensor[float] rf = tensor_badd[float](fa, fb)
-    print(tensor_display_float(rf))
+    print(tensor_display[float](rf))
 
     # tensor_bsub_float: [1,2,3,4] - [1] = [0,1,2,3]
     Tensor[float] rs = tensor_bsub[float](fa, fb)
-    print(tensor_display_float(rs))
+    print(tensor_display[float](rs))

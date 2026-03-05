@@ -1,34 +1,34 @@
-from gg.tensor import Tensor, tensor_arange, tensor_zeros, tensor_display_int, tensor_display_float, tensor_add, tensor_sub, tensor_mul, tensor_neg, tensor_linspace, scalar_add, scalar_mul, vec_int_copy
+from gg.tensor import Tensor, tensor_arange, tensor_zeros, tensor_display, tensor_add, tensor_sub, tensor_mul, tensor_neg, tensor_linspace, scalar_add, scalar_mul, vec_int_copy
 
 void main():
     # int element-wise ops
     Tensor[int] a = tensor_arange(0, 4)
     Tensor[int] b = tensor_arange(1, 5)
     Tensor[int] c = tensor_add[int](a, b)
-    print(tensor_display_int(c))
+    print(tensor_display[int](c))
     Tensor[int] d = tensor_sub[int](b, a)
-    print(tensor_display_int(d))
+    print(tensor_display[int](d))
     Tensor[int] e = tensor_mul[int](a, b)
-    print(tensor_display_int(e))
+    print(tensor_display[int](e))
     Tensor[int] n = tensor_neg[int](a)
-    print(tensor_display_int(n))
+    print(tensor_display[int](n))
 
     # scalar ops
     Tensor[int] s1 = scalar_add[int](a, 10)
-    print(tensor_display_int(s1))
+    print(tensor_display[int](s1))
     Tensor[int] s2 = scalar_mul[int](b, 3)
-    print(tensor_display_int(s2))
+    print(tensor_display[int](s2))
 
     # float element-wise ops
     Tensor[float] fa = tensor_linspace(1.0, 4.0, 4)
     Tensor[float] fb = tensor_linspace(2.0, 5.0, 4)
     Tensor[float] fc = tensor_add[float](fa, fb)
-    print(tensor_display_float(fc))
+    print(tensor_display[float](fc))
     Tensor[float] fe = tensor_mul[float](fa, fb)
-    print(tensor_display_float(fe))
+    print(tensor_display[float](fe))
 
     # float scalar
     Tensor[float] fs = scalar_add[float](fa, 10.0)
-    print(tensor_display_float(fs))
+    print(tensor_display[float](fs))
     Tensor[float] fm = scalar_mul[float](fa, 2.0)
-    print(tensor_display_float(fm))
+    print(tensor_display[float](fm))
