@@ -1526,6 +1526,25 @@ done",
 }
 
 #[test]
+fn move_type_fn_arg() {
+    run_gg(
+        "move_type_fn_arg.gg",
+        "60",
+    );
+}
+
+#[test]
+fn move_type_unwrap() {
+    run_gg(
+        "move_type_unwrap.gg",
+        "\
+1
+2
+2",
+    );
+}
+
+#[test]
 fn trait_defaults() {
     run_gg(
         "trait_defaults.gg",

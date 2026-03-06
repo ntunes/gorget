@@ -1317,11 +1317,10 @@ fn lower_struct_literal(
         // Shared[T](v) takes ownership of v's data via a shallow memcpy into the shared
         // block. If v is a Move-semantics local (e.g. Vector/GorgetArray), mark it as
         // moved so the drop elaborator emits a null-guarded DropIfAlive instead of an
-        // unconditional gorget_array_free — otherwise the shared block would hold a
-        // dangling data pointer.
+        // unconditional free — otherwise the shared block would hold a dangling data pointer.
         if let Operand::Copy(place) = &val_op {
             if place.projections.is_empty() {
-                if is_gorget_array_local(place.local, builder, &ctx.type_registry) {
+                if is_move_type_local(place.local, builder, &ctx.type_registry) {
                     builder.move_zero(place.clone());
                     ctx.drops.mark_moved(place.local);
                 }
@@ -1458,15 +1457,14 @@ fn lower_struct_literal(
     let type_id = ctx.type_mapper.lookup_named(&effective_name).unwrap_or(UNIT_TYPE);
     let dst = builder.struct_init(&effective_name, type_id, field_operands.clone());
 
-    // After struct init, the struct owns a shallow copy of every GorgetArray field.
+    // After struct init, the struct owns a shallow copy of every Move-type field.
     // Without marking the originals as moved, the drop elaborator would emit
-    // gorget_array_free on those locals at scope exit, leaving the struct's fields
+    // a free on those locals at scope exit, leaving the struct's fields
     // with dangling data pointers. Emit MoveZero + mark_moved for each such local.
     for op in &field_operands {
         if let Operand::Copy(place) = op {
             if place.projections.is_empty() {
-                let is_array = is_gorget_array_local(place.local, builder, &ctx.type_registry);
-                if is_array {
+                if is_move_type_local(place.local, builder, &ctx.type_registry) {
                     builder.move_zero(place.clone());
                     ctx.drops.mark_moved(place.local);
                 }
@@ -1967,6 +1965,12 @@ fn lower_method_call(
                         vec![FunctionBuilder::copy(borrow), default_val],
                         inner_type,
                     );
+                    // If the extracted value is a Move type, zero the Option/Result
+                    // to prevent its drop from freeing the inner value's buffer.
+                    if is_move_type_local(dst, builder, &ctx.type_registry) {
+                        builder.move_zero(place.clone());
+                        ctx.drops.mark_moved(place.local);
+                    }
                     return FunctionBuilder::copy(dst);
                 } else {
                     // unwrap() / expect() → direct extraction
@@ -1976,6 +1980,12 @@ fn lower_method_call(
                         vec![FunctionBuilder::copy(borrow)],
                         inner_type,
                     );
+                    // If the extracted value is a Move type, zero the Option/Result
+                    // to prevent its drop from freeing the inner value's buffer.
+                    if is_move_type_local(dst, builder, &ctx.type_registry) {
+                        builder.move_zero(place.clone());
+                        ctx.drops.mark_moved(place.local);
+                    }
                     return FunctionBuilder::copy(dst);
                 }
             }
@@ -4286,11 +4296,11 @@ fn lower_call(
                     };
                     let new_fn = format!("{mangled}__new");
                     let dst = builder.call(&new_fn, vec![val_op.clone()], shared_type);
-                    // Shared[T](v) takes ownership of v's data. Mark GorgetArray locals
+                    // Shared[T](v) takes ownership of v's data. Mark Move-type locals
                     // as moved so the drop elaborator skips them (avoids dangling ptr).
                     if let Operand::Copy(place) = &val_op {
                         if place.projections.is_empty()
-                            && is_gorget_array_local(place.local, builder, &ctx.type_registry)
+                            && is_move_type_local(place.local, builder, &ctx.type_registry)
                         {
                             builder.move_zero(place.clone());
                             ctx.drops.mark_moved(place.local);
@@ -6034,18 +6044,21 @@ pub fn infer_operand_type(ctx: &LoweringContext, operand: &Operand) -> TypeId {
     }
 }
 
-/// Returns true if `local` has a GorgetArray-backed type (i.e. Vector[T] or the raw
-/// GorgetArray alias). These are the only Move-semantics types that get a shallow
-/// struct copy when placed into another struct's field — marking them as moved after
-/// the copy prevents the drop elaborator from emitting a double-free.
-fn is_gorget_array_local(
+/// Returns true if `local` has ANY Move-semantics type (Vector, Dict, Set,
+/// GorgetString, Box, user Move structs). Used to emit MoveZero + mark_moved
+/// after ownership transfer (function call args, unwrap, struct-init fields)
+/// to prevent double-free of shared heap buffers.
+fn is_move_type_local(
     local: LocalId,
     builder: &FunctionBuilder,
     registry: &TypeRegistry,
 ) -> bool {
     let type_id = builder.locals[local.0 as usize].type_id;
+    if type_id.0 < 12 { return false; } // primitives
     if let Some(GirType::Named(name)) = registry.get(type_id) {
-        return name.starts_with("GorgetArray") || name.starts_with("Vector__");
+        if let Some(type_def) = registry.get_type_def(name) {
+            return type_def.metadata.copy_semantics == CopySemantics::Move;
+        }
     }
     false
 }
