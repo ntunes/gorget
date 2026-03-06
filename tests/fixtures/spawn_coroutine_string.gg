@@ -1,0 +1,22 @@
+# Verify coroutine with Move-type (Task) locals properly drops them.
+# The `chain` function has an internal await, making it a coroutine.
+# Task locals in the coroutine frame must be freed by Drop instructions
+# emitted in the poll function.
+
+async int step1(int x):
+    return x + 10
+
+async int step2(int x):
+    return x * 3
+
+async int chain(int x):
+    Task[int] t1 = spawn step1(x)
+    int mid = t1.await()
+    Task[int] t2 = spawn step2(mid)
+    int result = t2.await()
+    return result
+
+async void main():
+    Task[int] t = spawn chain(5)
+    int r = t.await()
+    print(r)

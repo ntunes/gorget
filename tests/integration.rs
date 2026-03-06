@@ -9449,3 +9449,15 @@ fn spawn_many() {
     // 10,000 spawns bounded by thread pool (no thread exhaustion).
     run_gg("spawn_many.gg", "49995000");
 }
+
+#[test]
+fn spawn_coroutine_drops() {
+    // Coroutines with String/Vector locals — verifies drops emit in poll functions.
+    run_gg("spawn_coroutine_drops.gg", "Hello, Alice!\nHello, Bob!\n60");
+}
+
+#[test]
+fn spawn_coroutine_string() {
+    // Coroutine with multiple internal awaits — verifies Move-type Task drops in poll fn.
+    run_gg("spawn_coroutine_string.gg", "45");
+}

@@ -1625,6 +1625,119 @@ fn fmt_args_poll(args: &[Operand], func: &Function, registry: &TypeRegistry) -> 
         .join(", ")
 }
 
+/// Emit drop code for a local variable. `place_str` is the pre-formatted C expression
+/// for the place (e.g., `_5` in normal context, `f->_5` in coroutine poll context).
+/// Used by both normal instruction emission and coroutine poll emission.
+fn emit_drop_code(out: &mut String, place_str: &str, local_type: TypeId, registry: &TypeRegistry) {
+    let type_name_str = format_type(local_type, registry);
+    let gir_name = gir_type_name(local_type, registry);
+
+    if let Some(inner_name) = type_name_str.strip_prefix("Box__") {
+        let is_trait_box = registry.get_type_def(&format!("{inner_name}_TraitObj")).is_some();
+        if is_trait_box {
+            let _ = writeln!(out, "        free({place_str}.data);");
+        } else {
+            if let Some(inner_def) = registry.get_type_def(inner_name) {
+                if let DropStrategy::Custom(ref fn_name) = inner_def.metadata.drop_strategy {
+                    let _ = writeln!(out, "        {fn_name}({place_str});");
+                }
+            }
+            let _ = writeln!(out, "        free({place_str});");
+        }
+    } else if let Some(elem_name) = gir_name.as_deref().and_then(extract_vector_elem_name) {
+        if needs_drop_by_name(elem_name, registry) {
+            let elem_c_type = gir_to_c_type(elem_name);
+            let _ = writeln!(out, "        for (size_t __di = 0; __di < {place_str}.len; __di++) {{");
+            let _ = writeln!(
+                out,
+                "            {elem_c_type}* __de = ({elem_c_type}*)gorget_array_get(&{place_str}, __di);"
+            );
+            emit_drop_for_type_via_ptr(out, "__de", elem_name, registry, "            ", 1);
+            let _ = writeln!(out, "        }}");
+        }
+        let _ = writeln!(out, "        gorget_array_free(&{place_str});");
+    } else {
+        let strategy = lookup_drop_strategy(local_type, registry);
+        match strategy {
+            DropStrategy::None => {}
+            DropStrategy::Trivial(ref fn_name) => {
+                let _ = writeln!(out, "        {fn_name}(&{place_str});");
+            }
+            DropStrategy::Custom(ref fn_name) => {
+                let _ = writeln!(out, "        if (memcmp(&{place_str}, &({type_name_str}){{0}}, sizeof({type_name_str})) != 0) {{");
+                let _ = writeln!(out, "            {fn_name}(&{place_str});");
+                emit_field_drops(out, place_str, local_type, registry, "            ", 0);
+                out.push_str("        }\n");
+            }
+            DropStrategy::Recursive => {
+                let _ = writeln!(out, "        if (memcmp(&{place_str}, &({type_name_str}){{0}}, sizeof({type_name_str})) != 0) {{");
+                emit_field_drops(out, place_str, local_type, registry, "            ", 0);
+                out.push_str("        }\n");
+            }
+        }
+    }
+}
+
+/// Emit drop-if-alive code for a local variable. Like `emit_drop_code` but with
+/// null/zero checks so already-moved values are not double-freed.
+fn emit_drop_if_alive_code(out: &mut String, place_str: &str, local_type: TypeId, registry: &TypeRegistry) {
+    let type_name_str = format_type(local_type, registry);
+    let gir_name = gir_type_name(local_type, registry);
+
+    if let Some(inner_name) = type_name_str.strip_prefix("Box__") {
+        let is_trait_box = registry.get_type_def(&format!("{inner_name}_TraitObj")).is_some();
+        if is_trait_box {
+            let _ = writeln!(out, "        if ({place_str}.data != NULL) {{");
+            let _ = writeln!(out, "            free({place_str}.data);");
+            out.push_str("        }\n");
+        } else {
+            let _ = writeln!(out, "        if ({place_str} != NULL) {{");
+            if let Some(inner_def) = registry.get_type_def(inner_name) {
+                if let DropStrategy::Custom(ref fn_name) = inner_def.metadata.drop_strategy {
+                    let _ = writeln!(out, "            {fn_name}({place_str});");
+                }
+            }
+            let _ = writeln!(out, "            free({place_str});");
+            out.push_str("        }\n");
+        }
+    } else if let Some(elem_name) = gir_name.as_deref().and_then(extract_vector_elem_name) {
+        let _ = writeln!(out, "        if ({place_str}.data != NULL) {{");
+        if needs_drop_by_name(elem_name, registry) {
+            let elem_c_type = gir_to_c_type(elem_name);
+            let _ = writeln!(out, "            for (size_t __di = 0; __di < {place_str}.len; __di++) {{");
+            let _ = writeln!(
+                out,
+                "                {elem_c_type}* __de = ({elem_c_type}*)gorget_array_get(&{place_str}, __di);"
+            );
+            emit_drop_for_type_via_ptr(out, "__de", elem_name, registry, "                ", 1);
+            let _ = writeln!(out, "            }}");
+        }
+        let _ = writeln!(out, "            gorget_array_free(&{place_str});");
+        out.push_str("        }\n");
+    } else {
+        let strategy = lookup_drop_strategy(local_type, registry);
+        match strategy {
+            DropStrategy::None => {}
+            DropStrategy::Trivial(ref fn_name) => {
+                let _ = writeln!(out, "        if (memcmp(&{place_str}, &({type_name_str}){{0}}, sizeof({type_name_str})) != 0) {{");
+                let _ = writeln!(out, "            {fn_name}(&{place_str});");
+                out.push_str("        }\n");
+            }
+            DropStrategy::Custom(ref fn_name) => {
+                let _ = writeln!(out, "        if (memcmp(&{place_str}, &({type_name_str}){{0}}, sizeof({type_name_str})) != 0) {{");
+                let _ = writeln!(out, "            {fn_name}(&{place_str});");
+                emit_field_drops(out, place_str, local_type, registry, "            ", 0);
+                out.push_str("        }\n");
+            }
+            DropStrategy::Recursive => {
+                let _ = writeln!(out, "        if (memcmp(&{place_str}, &({type_name_str}){{0}}, sizeof({type_name_str})) != 0) {{");
+                emit_field_drops(out, place_str, local_type, registry, "            ", 0);
+                out.push_str("        }\n");
+            }
+        }
+    }
+}
+
 /// Emit one GIR instruction in the poll function context (all locals accessed via frame fields).
 /// Returns `Some(task_local_id)` if this is an await call (caller should NOT emit the await
 /// call itself — it emits the waker-check block and the post-await resume state instead).
@@ -1748,10 +1861,15 @@ fn emit_poll_inst(
             let callee_str = fmt_operand_poll(callee, func, registry);
             let args_str = fmt_args_poll(args, func, registry);
             if let Some(dst_id) = dst {
-                let dst_str = fmt_place_poll(&Place::local(LocalId(dst_id.0)), func, registry);
-                let _ = writeln!(out, "        {{ void* __callee = {callee_str}; {dst_str} = ((int64_t(*)(void*,{args_str}))__callee)({args_str}); }}");
+                let local_type = func.locals[dst_id.0 as usize].type_id;
+                if local_type == UNIT_TYPE {
+                    let _ = writeln!(out, "        {callee_str}({args_str});");
+                } else {
+                    let dst_str = fmt_place_poll(&Place::local(LocalId(dst_id.0)), func, registry);
+                    let _ = writeln!(out, "        {dst_str} = {callee_str}({args_str});");
+                }
             } else {
-                let _ = writeln!(out, "        ((void(*)(void*))({callee_str}))({args_str});");
+                let _ = writeln!(out, "        {callee_str}({args_str});");
             }
         }
 
@@ -1851,8 +1969,17 @@ fn emit_poll_inst(
             let _ = writeln!(out, "        GORGET_FREE({ptr_str}, 0);");
         }
 
-        // Drop instrumentation: skip inside coroutines (frame owns memory, no RAII stack)
-        Instruction::Drop { .. } | Instruction::DropIfAlive { .. } => {}
+        Instruction::Drop { place } => {
+            let place_str = fmt_place_poll(place, func, registry);
+            let local_type = func.locals[place.local.0 as usize].type_id;
+            emit_drop_code(out, &place_str, local_type, registry);
+        }
+
+        Instruction::DropIfAlive { place } => {
+            let place_str = fmt_place_poll(place, func, registry);
+            let local_type = func.locals[place.local.0 as usize].type_id;
+            emit_drop_if_alive_code(out, &place_str, local_type, registry);
+        }
 
         _ => {
             // Unsupported — coroutine candidacy check should have caught this
@@ -2235,17 +2362,9 @@ fn emit_spawn_helpers(out: &mut String, module: &Module) {
         out.push_str("}\n\n");
     }
 
-    // Second pass: emit coroutine (stackless state machine) helpers.
-    // Done after blocking helpers so __gorget_spawn_X/await_X are already declared.
-    for (fn_name, params, ret_type) in &module.spawned_fns {
-        if !fn_is_coroutine_candidate(fn_name, module) { continue; }
-        if let Some(func) = module.find_function(fn_name) {
-            emit_coroutine(out, fn_name, func, params, *ret_type, module);
-        }
-    }
-
     // Emit one Task__T__drop per unique Task type.
     // Called by the RAII drop elaborator; dispatches to the per-fn drop via __drop pointer.
+    // Must be emitted before coroutine helpers since poll functions may drop Task locals.
     let mut emitted_task_drops: Vec<String> = Vec::new();
     for (_, _, ret_type) in &module.spawned_fns {
         let ret_c = format_type(*ret_type, &module.type_registry);
@@ -2264,8 +2383,16 @@ fn emit_spawn_helpers(out: &mut String, module: &Module) {
         let _ = writeln!(out, "        self->__task = NULL;");
         out.push_str("    }\n}\n\n");
         // Suppress unused-function warning (drop may not be called if all tasks are awaited).
-        // Use __attribute__((unused)) via a variable reference.
         let _ = writeln!(out, "static void (*__unused_{task_name}__drop)({task_name}*) __attribute__((unused)) = {task_name}__drop;");
+    }
+
+    // Second pass: emit coroutine (stackless state machine) helpers.
+    // Done after blocking helpers + Task__T__drop so all referenced functions are declared.
+    for (fn_name, params, ret_type) in &module.spawned_fns {
+        if !fn_is_coroutine_candidate(fn_name, module) { continue; }
+        if let Some(func) = module.find_function(fn_name) {
+            emit_coroutine(out, fn_name, func, params, *ret_type, module);
+        }
     }
 }
 
@@ -5194,134 +5321,14 @@ fn emit_instruction(
 
         Instruction::Drop { place } => {
             let place_str = format_place(place, registry);
-            // Look up drop strategy from TypeDef
             let local_type = func.locals[place.local.0 as usize].type_id;
-            let type_name_str = format_type(local_type, registry);
-            // Get the full GIR name (e.g., "Vector__Tracked" instead of "GorgetArray")
-            let gir_name = gir_type_name(local_type, registry);
-
-            // Special handling for Box types: call inner Drop (if any) then free
-            if let Some(inner_name) = type_name_str.strip_prefix("Box__") {
-                // Check if this Box wraps a trait object (struct) vs concrete type (pointer)
-                let is_trait_box = registry.get_type_def(&format!("{inner_name}_TraitObj")).is_some();
-                if is_trait_box {
-                    // Trait object Box: free the heap data via .data field
-                    let _ = writeln!(out, "        free({place_str}.data);");
-                } else {
-                    // Concrete Box: call inner Drop (if any) then free the pointer
-                    if let Some(inner_def) = registry.get_type_def(inner_name) {
-                        if let DropStrategy::Custom(ref fn_name) = inner_def.metadata.drop_strategy {
-                            let _ = writeln!(out, "        {fn_name}({place_str});");
-                        }
-                    }
-                    let _ = writeln!(out, "        free({place_str});");
-                }
-            } else if let Some(elem_name) = gir_name.as_deref().and_then(extract_vector_elem_name) {
-                // Vector type: per-element drops (if needed) then free the array
-                if needs_drop_by_name(elem_name, registry) {
-                    let elem_c_type = gir_to_c_type(elem_name);
-                    let _ = writeln!(out, "        for (size_t __di = 0; __di < {place_str}.len; __di++) {{");
-                    let _ = writeln!(
-                        out,
-                        "            {elem_c_type}* __de = ({elem_c_type}*)gorget_array_get(&{place_str}, __di);"
-                    );
-                    // Outer loop uses __di/__de (unnumbered); recursive call starts at depth 1
-                    emit_drop_for_type_via_ptr(out, "__de", elem_name, registry, "            ", 1);
-                    let _ = writeln!(out, "        }}");
-                }
-                let _ = writeln!(out, "        gorget_array_free(&{place_str});");
-            } else {
-                let strategy = lookup_drop_strategy(local_type, registry);
-                match strategy {
-                    DropStrategy::None => {
-                        // No-op
-                    }
-                    DropStrategy::Trivial(ref fn_name) => {
-                        let _ = writeln!(out, "        {fn_name}(&{place_str});");
-                    }
-                    DropStrategy::Custom(ref fn_name) => {
-                        // Zero-check: if the struct was synthetically zeroed after being
-                        // moved into a collection, skip the drop — nothing to free.
-                        let _ = writeln!(out, "        if (memcmp(&{place_str}, &({type_name_str}){{0}}, sizeof({type_name_str})) != 0) {{");
-                        let _ = writeln!(out, "            {fn_name}(&{place_str});");
-                        // After custom drop, also drop fields that have their own drops
-                        emit_field_drops(out, &place_str, local_type, registry, "            ", 0);
-                        out.push_str("        }\n");
-                    }
-                    DropStrategy::Recursive => {
-                        // Zero-check: same rationale as Custom above.
-                        let _ = writeln!(out, "        if (memcmp(&{place_str}, &({type_name_str}){{0}}, sizeof({type_name_str})) != 0) {{");
-                        emit_field_drops(out, &place_str, local_type, registry, "            ", 0);
-                        out.push_str("        }\n");
-                    }
-                }
-            }
+            emit_drop_code(out, &place_str, local_type, registry);
         }
 
         Instruction::DropIfAlive { place } => {
             let place_str = format_place(place, registry);
             let local_type = func.locals[place.local.0 as usize].type_id;
-            let type_name = format_type(local_type, registry);
-            // Get the full GIR name (e.g., "Vector__Tracked" instead of "GorgetArray")
-            let gir_name = gir_type_name(local_type, registry);
-
-            // Special handling for Box types: null-check, call inner Drop, free
-            if let Some(inner_name) = type_name.strip_prefix("Box__") {
-                let is_trait_box = registry.get_type_def(&format!("{inner_name}_TraitObj")).is_some();
-                if is_trait_box {
-                    // Trait object Box: check .data for null, then free
-                    let _ = writeln!(out, "        if ({place_str}.data != NULL) {{");
-                    let _ = writeln!(out, "            free({place_str}.data);");
-                    out.push_str("        }\n");
-                } else {
-                    // Concrete Box: null-check the pointer, call inner Drop, free
-                    let _ = writeln!(out, "        if ({place_str} != NULL) {{");
-                    if let Some(inner_def) = registry.get_type_def(inner_name) {
-                        if let DropStrategy::Custom(ref fn_name) = inner_def.metadata.drop_strategy {
-                            let _ = writeln!(out, "            {fn_name}({place_str});");
-                        }
-                    }
-                    let _ = writeln!(out, "            free({place_str});");
-                    out.push_str("        }\n");
-                }
-            } else if let Some(elem_name) = gir_name.as_deref().and_then(extract_vector_elem_name) {
-                // Vector type: check .data (null = zeroed/moved), then per-element drops + free
-                let _ = writeln!(out, "        if ({place_str}.data != NULL) {{");
-                if needs_drop_by_name(elem_name, registry) {
-                    let elem_c_type = gir_to_c_type(elem_name);
-                    let _ = writeln!(out, "            for (size_t __di = 0; __di < {place_str}.len; __di++) {{");
-                    let _ = writeln!(
-                        out,
-                        "                {elem_c_type}* __de = ({elem_c_type}*)gorget_array_get(&{place_str}, __di);"
-                    );
-                    // Outer loop uses __di/__de (unnumbered); recursive call starts at depth 1
-                    emit_drop_for_type_via_ptr(out, "__de", elem_name, registry, "                ", 1);
-                    let _ = writeln!(out, "            }}");
-                }
-                let _ = writeln!(out, "            gorget_array_free(&{place_str});");
-                out.push_str("        }\n");
-            } else {
-                let strategy = lookup_drop_strategy(local_type, registry);
-                match strategy {
-                    DropStrategy::None => {}
-                    DropStrategy::Trivial(ref fn_name) => {
-                        let _ = writeln!(out, "        if (memcmp(&{place_str}, &({type_name}){{0}}, sizeof({type_name})) != 0) {{");
-                        let _ = writeln!(out, "            {fn_name}(&{place_str});");
-                        out.push_str("        }\n");
-                    }
-                    DropStrategy::Custom(ref fn_name) => {
-                        let _ = writeln!(out, "        if (memcmp(&{place_str}, &({type_name}){{0}}, sizeof({type_name})) != 0) {{");
-                        let _ = writeln!(out, "            {fn_name}(&{place_str});");
-                        emit_field_drops(out, &place_str, local_type, registry, "            ", 0);
-                        out.push_str("        }\n");
-                    }
-                    DropStrategy::Recursive => {
-                        let _ = writeln!(out, "        if (memcmp(&{place_str}, &({type_name}){{0}}, sizeof({type_name})) != 0) {{");
-                        emit_field_drops(out, &place_str, local_type, registry, "            ", 0);
-                        out.push_str("        }\n");
-                    }
-                }
-            }
+            emit_drop_if_alive_code(out, &place_str, local_type, registry);
         }
 
         Instruction::MoveZero { place } => {

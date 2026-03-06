@@ -1,0 +1,33 @@
+# Verify that coroutines properly drop Move-type locals (String, Vector).
+# Without proper drop codegen in poll functions, this leaks heap memory.
+
+async str make_greeting(str name):
+    str prefix = "Hello, "
+    str result = prefix + name + "!"
+    return result
+
+async int sum_vec(Vector[int] v):
+    int total = 0
+    int i = 0
+    while i < v.len():
+        total += v[i]
+        i += 1
+    return total
+
+async void main():
+    Vector[int] nums = Vector[int]()
+    nums.push(10)
+    nums.push(20)
+    nums.push(30)
+    Task[int] t3 = spawn sum_vec(nums)
+    int s = t3.await()
+
+    Task[str] t1 = spawn make_greeting("Alice")
+    str g1 = t1.await()
+    print(g1)
+
+    Task[str] t2 = spawn make_greeting("Bob")
+    str g2 = t2.await()
+    print(g2)
+
+    print(s)
