@@ -1534,6 +1534,24 @@ fn move_type_fn_arg() {
 }
 
 #[test]
+fn move_fn_arg_last_use() {
+    run_gg(
+        "move_fn_arg_last_use.gg",
+        "60",
+    );
+}
+
+#[test]
+fn move_fn_arg_not_last_use() {
+    run_gg(
+        "move_fn_arg_not_last_use.gg",
+        "\
+3
+3",
+    );
+}
+
+#[test]
 fn move_type_unwrap() {
     run_gg(
         "move_type_unwrap.gg",

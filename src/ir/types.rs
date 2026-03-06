@@ -300,6 +300,17 @@ impl TypeRegistry {
     pub fn all_type_def_names(&self) -> impl Iterator<Item = &String> {
         self.name_to_def.keys()
     }
+
+    /// Check whether a type has Move copy semantics (owns heap-allocated buffers).
+    pub fn is_move_type(&self, type_id: TypeId) -> bool {
+        if type_id.0 < 12 { return false; } // primitives
+        if let Some(GirType::Named(name)) = self.get(type_id) {
+            if let Some(type_def) = self.get_type_def(name) {
+                return type_def.metadata.copy_semantics == CopySemantics::Move;
+            }
+        }
+        false
+    }
 }
 
 /// Format a TypeId as a mangle-safe string fragment (for tuple/generic type names).

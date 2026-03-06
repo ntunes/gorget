@@ -2629,21 +2629,28 @@ fn lower_method_call(
                             if let Some(crate::ir::types::GirType::FnPtr { return_type, .. }) = ctx.type_registry.get(field.type_id) {
                                 let ret_type = *return_type;
                                 let mangled = format!("{type_name}__{method_name}");
-                                // Pass borrow of the Box local
-                                let recv_place = match &recv {
-                                    Operand::Copy(p) | Operand::Move(p) => p.clone(),
-                                    _ => {
-                                        let box_type = ctx.type_mapper.lookup_named(&type_name).unwrap_or(I64_TYPE);
-                                        let tmp = builder.add_local(box_type, None);
-                                        builder.assign(Place::local(tmp), recv);
-                                        Place::local(tmp)
+                                // Pass borrow of the Box local (or forward pointer if already a pointer)
+                                let recv_self = if let Operand::Copy(ref p) | Operand::Move(ref p) = recv {
+                                    let local_type = builder.locals[p.local.0 as usize].type_id;
+                                    if matches!(ctx.type_registry.get(local_type), Some(GirType::Ptr(_)) | Some(GirType::MutPtr(_))) {
+                                        // Already a pointer (auto-borrowed param) — forward directly
+                                        FunctionBuilder::copy(p.local)
+                                    } else {
+                                        let ptr_type = ctx.register_ptr_type(
+                                            ctx.type_mapper.lookup_named(&type_name).unwrap_or(I64_TYPE)
+                                        );
+                                        let recv_ref = builder.borrow(p.clone(), ptr_type);
+                                        FunctionBuilder::copy(recv_ref)
                                     }
+                                } else {
+                                    let box_type = ctx.type_mapper.lookup_named(&type_name).unwrap_or(I64_TYPE);
+                                    let tmp = builder.add_local(box_type, None);
+                                    builder.assign(Place::local(tmp), recv);
+                                    let ptr_type = ctx.register_ptr_type(box_type);
+                                    let recv_ref = builder.borrow(Place::local(tmp), ptr_type);
+                                    FunctionBuilder::copy(recv_ref)
                                 };
-                                let ptr_type = ctx.register_ptr_type(
-                                    ctx.type_mapper.lookup_named(&type_name).unwrap_or(I64_TYPE)
-                                );
-                                let recv_ref = builder.borrow(recv_place, ptr_type);
-                                let mut call_args = vec![FunctionBuilder::copy(recv_ref)];
+                                let mut call_args = vec![recv_self];
                                 for arg in args {
                                     call_args.push(lower_expr(ctx, builder, &arg.node.value));
                                 }
@@ -4032,14 +4039,28 @@ fn lower_unary_op(
 }
 
 /// Lower a call argument, respecting ownership (MutableBorrow creates a BorrowMut).
+///
+/// `callee_param_type` is the callee's declared parameter type from fn_sigs.
+/// When the callee has a Borrow-ownership Move-type param, it auto-borrows to MutPtr,
+/// so the caller must also auto-borrow. We use the callee's param type (not the caller's
+/// local type) to decide, avoiding mismatches like passing String to a function taking str.
 fn lower_call_arg(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
     arg: &Spanned<ast::CallArg>,
+    callee_param_type: Option<TypeId>,
 ) -> Operand {
-    // Special case: &name where name is already a MutableBorrow param (pointer).
+    // Whether the callee's parameter is a Move type (and therefore auto-borrowed to MutPtr)
+    let callee_expects_auto_borrow = callee_param_type
+        .map(|pt| ctx.type_registry.is_move_type(pt))
+        .unwrap_or(false);
+
+    // Special case: &name or bare name where name is already an auto-borrowed param (pointer).
     // Skip the auto-deref that Identifier would do — just forward the pointer.
-    if matches!(arg.node.ownership, Ownership::MutableBorrow) {
+    // For Borrow, only forward when callee also auto-borrows (both sides use MutPtr).
+    if matches!(arg.node.ownership, Ownership::MutableBorrow)
+        || (matches!(arg.node.ownership, Ownership::Borrow) && callee_expects_auto_borrow)
+    {
         if let Expr::Identifier(name) = &arg.node.value.node {
             if let Some((local_id, _)) = ctx.lookup_local(name) {
                 if ctx.mut_capture_locals.contains_key(&local_id) {
@@ -4064,7 +4085,31 @@ fn lower_call_arg(
             }
             val
         }
-        _ => val,
+        Ownership::Borrow if callee_expects_auto_borrow => {
+            // Auto-borrow Move-type values: pass as pointer, not by value.
+            // For Copy/Move operands of plain locals, borrow in place.
+            // For constants or complex expressions, materialize into a temp first.
+            if let Operand::Copy(ref place) | Operand::Move(ref place) = val {
+                if place.projections.is_empty() {
+                    let local_type = builder.locals[place.local.0 as usize].type_id;
+                    let ptr_type = ctx.register_mut_ptr_type(local_type);
+                    let dst = builder.add_local(ptr_type, None);
+                    builder.emit_borrow_mut(dst, place.clone());
+                    return FunctionBuilder::copy(dst);
+                }
+            }
+            // Materialize non-place values (constants, call results) into a temp local
+            if let Some(pt) = callee_param_type {
+                let tmp = builder.add_local(pt, None);
+                builder.assign(Place::local(tmp), val);
+                let ptr_type = ctx.register_mut_ptr_type(pt);
+                let dst = builder.add_local(ptr_type, None);
+                builder.emit_borrow_mut(dst, Place::local(tmp));
+                return FunctionBuilder::copy(dst);
+            }
+            Operand::Constant(Constant::Unit) // unreachable: callee_expects_auto_borrow implies callee_param_type.is_some()
+        }
+        _ => val, // Move or Borrow-of-Copy: pass by value
     }
 }
 
@@ -4638,12 +4683,28 @@ fn lower_call(
             .enumerate()
             .map(|(i, arg)| {
                 let prev_expected = ctx.expected_type;
-                if let Some(&pt) = param_types.get(i) {
+                let callee_pt = param_types.get(i).copied();
+                if let Some(pt) = callee_pt {
                     ctx.expected_type = Some(pt);
                 }
-                let op = lower_call_arg(ctx, builder, arg);
+                let op = lower_call_arg(ctx, builder, arg, callee_pt);
                 ctx.expected_type = prev_expected;
                 op
+            })
+            .collect();
+
+        // Collect Move-ownership Move-type arg locals for post-call MoveZero
+        let move_zero_locals: Vec<Place> = resolved_args.iter().zip(&lowered_args)
+            .filter_map(|(arg, op)| {
+                if !matches!(arg.node.ownership, Ownership::Move) { return None; }
+                if let Operand::Copy(place) | Operand::Move(place) = op {
+                    if place.projections.is_empty()
+                        && is_move_type_local(place.local, builder, &ctx.type_registry)
+                    {
+                        return Some(place.clone());
+                    }
+                }
+                None
             })
             .collect();
 
@@ -4660,13 +4721,21 @@ fn lower_call(
             effective_name
         };
 
-        if ret_type == UNIT_TYPE {
-            builder.call_void(call_name, lowered_args);
+        let result = if ret_type == UNIT_TYPE {
+            builder.call_void(&call_name, lowered_args);
             Operand::Constant(Constant::Unit)
         } else {
-            let dst = builder.call(call_name, lowered_args, ret_type);
+            let dst = builder.call(&call_name, lowered_args, ret_type);
             FunctionBuilder::copy(dst)
+        };
+
+        // MoveZero Move-ownership args to transfer ownership (prevent double-free)
+        for place in &move_zero_locals {
+            builder.move_zero(place.clone());
+            ctx.drops.mark_moved(place.local);
         }
+
+        result
     } else {
         // Non-identifier callee — not handled in Phase 1
         Operand::Constant(Constant::Unit)
@@ -6053,14 +6122,7 @@ fn is_move_type_local(
     builder: &FunctionBuilder,
     registry: &TypeRegistry,
 ) -> bool {
-    let type_id = builder.locals[local.0 as usize].type_id;
-    if type_id.0 < 12 { return false; } // primitives
-    if let Some(GirType::Named(name)) = registry.get(type_id) {
-        if let Some(type_def) = registry.get_type_def(name) {
-            return type_def.metadata.copy_semantics == CopySemantics::Move;
-        }
-    }
-    false
+    registry.is_move_type(builder.locals[local.0 as usize].type_id)
 }
 
 // ─── Method Spawn Codegen ──────────────────────────────────────────────────
