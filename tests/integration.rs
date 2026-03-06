@@ -9437,3 +9437,15 @@ hello from thread
 done",
     );
 }
+
+#[test]
+fn spawn_nested_await() {
+    // Spawned function internally spawns+awaits another task (Phase 4: cooperative yield).
+    run_gg("spawn_nested_await.gg", "11\n21");
+}
+
+#[test]
+fn spawn_many() {
+    // 10,000 spawns bounded by thread pool (no thread exhaustion).
+    run_gg("spawn_many.gg", "49995000");
+}

@@ -2264,11 +2264,20 @@ pub const EXECUTOR_RUNTIME: &str = r#"
 
 typedef struct GorgetTask {
     void (*run)(struct GorgetTask*);
+    int  (*poll)(struct GorgetTask*); // stackless coroutine poll fn (NULL = non-coroutine)
     pthread_mutex_t mtx;
     pthread_cond_t cond;
     volatile int done;
+    // Coroutine scheduling state (for poll-based tasks only):
+    //  0 = being polled by a worker right now
+    //  1 = in the executor queue
+    // -1 = returned POLL_PENDING, waiting for waker to fire
+    volatile int scheduled;
     GorgetWaker parent_waker;
 } GorgetTask;
+
+#define GORGET_POLL_READY   0
+#define GORGET_POLL_PENDING 1
 
 typedef struct {
     pthread_t* threads;
@@ -2282,31 +2291,8 @@ typedef struct {
 
 static GorgetExecutor __gorget_exec;
 static int __gorget_exec_init_done = 0;
-
-static void* __gorget_worker(void* arg) {
-    (void)arg;
-    for (;;) {
-        pthread_mutex_lock(&__gorget_exec.mtx);
-        while (__gorget_exec.queue_len == 0 && !__gorget_exec.shutdown)
-            pthread_cond_wait(&__gorget_exec.cond, &__gorget_exec.mtx);
-        if (__gorget_exec.shutdown && __gorget_exec.queue_len == 0) {
-            pthread_mutex_unlock(&__gorget_exec.mtx);
-            return NULL;
-        }
-        GorgetTask* task = __gorget_exec.queue[0];
-        memmove(__gorget_exec.queue, __gorget_exec.queue + 1,
-                (size_t)(--__gorget_exec.queue_len) * sizeof(GorgetTask*));
-        pthread_mutex_unlock(&__gorget_exec.mtx);
-        task->run(task);
-        // Signal task completion so await()-ers can wake up.
-        pthread_mutex_lock(&task->mtx);
-        task->done = 1;
-        pthread_cond_broadcast(&task->cond);
-        GorgetWaker pw = task->parent_waker;
-        pthread_mutex_unlock(&task->mtx);
-        if (pw.wake) pw.wake(&pw);
-    }
-}
+// Forward declaration so __gorget_executor_submit can be called by __gorget_worker.
+static void* __gorget_worker(void* arg);
 
 static void __gorget_executor_init(void) {
     if (__gorget_exec_init_done) return;
@@ -2325,6 +2311,12 @@ static void __gorget_executor_init(void) {
 
 static void __gorget_executor_submit(GorgetTask* task) {
     __gorget_executor_init();
+    // Mark as queued before entering the executor queue.
+    if (task->poll != NULL) {
+        pthread_mutex_lock(&task->mtx);
+        task->scheduled = 1;
+        pthread_mutex_unlock(&task->mtx);
+    }
     pthread_mutex_lock(&__gorget_exec.mtx);
     if (__gorget_exec.queue_len == __gorget_exec.queue_cap) {
         __gorget_exec.queue_cap *= 2;
@@ -2337,12 +2329,89 @@ static void __gorget_executor_submit(GorgetTask* task) {
     pthread_mutex_unlock(&__gorget_exec.mtx);
 }
 
-// Re-submit a task to the executor (used by future wakers for Phase 4+ cooperative yield).
+static void* __gorget_worker(void* arg) {
+    (void)arg;
+    for (;;) {
+        pthread_mutex_lock(&__gorget_exec.mtx);
+        while (__gorget_exec.queue_len == 0 && !__gorget_exec.shutdown)
+            pthread_cond_wait(&__gorget_exec.cond, &__gorget_exec.mtx);
+        if (__gorget_exec.shutdown && __gorget_exec.queue_len == 0) {
+            pthread_mutex_unlock(&__gorget_exec.mtx);
+            return NULL;
+        }
+        GorgetTask* task = __gorget_exec.queue[0];
+        memmove(__gorget_exec.queue, __gorget_exec.queue + 1,
+                (size_t)(--__gorget_exec.queue_len) * sizeof(GorgetTask*));
+        pthread_mutex_unlock(&__gorget_exec.mtx);
+        if (task->poll != NULL) {
+            // Stackless coroutine: mark as being-polled (scheduled=0), call poll().
+            pthread_mutex_lock(&task->mtx);
+            task->scheduled = 0;
+            pthread_mutex_unlock(&task->mtx);
+
+            int status = task->poll(task);
+
+            if (status == GORGET_POLL_READY) {
+                pthread_mutex_lock(&task->mtx);
+                task->done = 1;
+                pthread_cond_broadcast(&task->cond);
+                GorgetWaker pw = task->parent_waker;
+                pthread_mutex_unlock(&task->mtx);
+                if (pw.wake) pw.wake(&pw);
+            } else {
+                // POLL_PENDING: check if the waker fired while we were polling.
+                // If scheduled==1 the waker already set it; re-submit now.
+                // If scheduled==0 set it to -1 (waiting for waker).
+                pthread_mutex_lock(&task->mtx);
+                int waker_fired = (task->scheduled == 1);
+                if (!waker_fired) task->scheduled = -1;
+                pthread_mutex_unlock(&task->mtx);
+                if (waker_fired) __gorget_executor_submit(task);
+            }
+        } else {
+            task->run(task);
+            // Signal task completion so await()-ers can wake up.
+            pthread_mutex_lock(&task->mtx);
+            task->done = 1;
+            pthread_cond_broadcast(&task->cond);
+            GorgetWaker pw = task->parent_waker;
+            pthread_mutex_unlock(&task->mtx);
+            if (pw.wake) pw.wake(&pw);
+        }
+    }
+}
+
+// Re-submit a task to the executor (used by future wakers for cooperative yield).
 static void __gorget_executor_resubmit(GorgetTask* task) {
     pthread_mutex_lock(&task->mtx);
     task->done = 0;
     pthread_mutex_unlock(&task->mtx);
     __gorget_executor_submit(task);
+}
+
+// Waker callback used by stackless coroutines: called by a child task when it completes,
+// causing the parent coroutine to be re-submitted to the executor for the next poll.
+// Uses the 'scheduled' field to prevent double-submission:
+//   scheduled == -1: task is waiting for waker → submit now
+//   scheduled ==  0: waker fired while worker was inside poll() → signal waker_fired=1
+//   scheduled ==  1: already queued → no-op
+static void __gorget_fiber_waker_wake(GorgetWaker* w) {
+    GorgetTask* task = (GorgetTask*)w->data;
+    pthread_mutex_lock(&task->mtx);
+    if (task->scheduled == -1) {
+        // Task is idle, waiting for waker — safe to re-submit.
+        task->scheduled = 0;
+        pthread_mutex_unlock(&task->mtx);
+        __gorget_executor_submit(task);
+    } else if (task->scheduled == 0) {
+        // Waker fired while the task is being polled by a worker.
+        // Signal to the worker to re-submit after poll() returns.
+        task->scheduled = 1;
+        pthread_mutex_unlock(&task->mtx);
+    } else {
+        // scheduled == 1: already queued, nothing to do.
+        pthread_mutex_unlock(&task->mtx);
+    }
 }
 
 static void __gorget_executor_shutdown(void) {

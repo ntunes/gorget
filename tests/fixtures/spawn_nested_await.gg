@@ -1,0 +1,19 @@
+# Verify cooperative await: spawned function that internally spawns+awaits another task.
+# This exercises Phase 4 of the M:N scheduler (stackless coroutine state machine).
+# Without cooperative yield, this deadlocks when thread-pool is exhausted.
+
+async int double_async(int x):
+    return x * 2
+
+async int nested(int x):
+    Task[int] t = spawn double_async(x)
+    int val = t.await()
+    return val + 1
+
+async void main():
+    Task[int] a = spawn nested(5)
+    Task[int] b = spawn nested(10)
+    int ra = a.await()
+    int rb = b.await()
+    print(ra)
+    print(rb)

@@ -1521,6 +1521,591 @@ fn emit_channel_and_task_defs(out: &mut String, module: &Module) {
     }
 }
 
+// ── Coroutine (stackless state machine) helpers ──────────────────────────────
+//
+// Phase 4+5 of M:N scheduling: spawned functions that internally await other
+// tasks are transformed into stackless coroutines (poll functions + frame structs)
+// instead of blocking worker threads with condvar_wait.  This prevents thread-pool
+// deadlock when M > N tasks mutually await each other.
+
+/// True if any basic block in `fn_name` contains a `__gorget_await_*` call.
+fn fn_has_internal_await(fn_name: &str, module: &Module) -> bool {
+    let Some(func) = module.find_function(fn_name) else { return false };
+    func.blocks.iter().any(|bb| {
+        bb.instructions.iter().any(|inst| {
+            matches!(inst, Instruction::Call { func, .. } if func.starts_with("__gorget_await_"))
+        })
+    })
+}
+
+/// True if the function can be converted to a stackless coroutine.
+/// Returns false for functions with unsupported instructions / terminators.
+fn fn_is_coroutine_candidate(fn_name: &str, module: &Module) -> bool {
+    if !fn_has_internal_await(fn_name, module) {
+        return false;
+    }
+    let Some(func) = module.find_function(fn_name) else { return false };
+    for bb in &func.blocks {
+        for inst in &bb.instructions {
+            match inst {
+                // InlineC contains raw `_N` local references — can't rewrite
+                Instruction::InlineC { .. }
+                | Instruction::PushAllocator { .. }
+                | Instruction::PopAllocator
+                | Instruction::LoadThreadLocal { .. } => return false,
+                _ => {}
+            }
+        }
+        // Invoke (landingpad) terminator not yet supported in coroutine context
+        if matches!(&bb.terminator, Some(Terminator::Invoke { .. })) {
+            return false;
+        }
+        // Only support ≤1 await per basic block (simplifies state assignment)
+        let await_count = bb.instructions.iter().filter(|i| {
+            matches!(i, Instruction::Call { func, .. } if func.starts_with("__gorget_await_"))
+        }).count();
+        if await_count > 1 {
+            return false;
+        }
+    }
+    true
+}
+
+/// Format a Place for access inside a coroutine poll function (frame field: `f->_N`).
+fn fmt_place_poll(place: &Place, func: &Function, registry: &TypeRegistry) -> String {
+    let mut s = format!("f->_{}", place.local.0);
+    let mut current_type_id = {
+        let idx = place.local.0 as usize;
+        if idx < func.locals.len() { Some(func.locals[idx].type_id) } else { None }
+    };
+    for proj in &place.projections {
+        match proj {
+            Projection::Field(idx) => {
+                let field_name = current_type_id
+                    .and_then(|tid| resolve_field_name_from_type(tid, *idx, registry));
+                if let Some((name, next_type)) = field_name {
+                    let _ = write!(s, ".{name}");
+                    current_type_id = Some(next_type);
+                } else {
+                    let _ = write!(s, "._{idx}");
+                    current_type_id = None;
+                }
+            }
+            Projection::Index(local) => {
+                let _ = write!(s, "[f->_{}]", local.0);
+                current_type_id = None;
+            }
+            Projection::Deref => {
+                s = format!("(*{s})");
+                current_type_id = current_type_id.and_then(|tid| {
+                    match registry.get(tid)? {
+                        GirType::Ptr(inner) | GirType::MutPtr(inner) => Some(*inner),
+                        _ => None,
+                    }
+                });
+            }
+        }
+    }
+    s
+}
+
+/// Format an Operand for use inside a coroutine poll function.
+fn fmt_operand_poll(op: &Operand, func: &Function, registry: &TypeRegistry) -> String {
+    match op {
+        Operand::Copy(place) | Operand::Move(place) => fmt_place_poll(place, func, registry),
+        Operand::Constant(c) => format_constant(c, func, registry),
+    }
+}
+
+/// Format arguments for a function call in poll context.
+fn fmt_args_poll(args: &[Operand], func: &Function, registry: &TypeRegistry) -> String {
+    args.iter()
+        .map(|a| fmt_operand_poll(a, func, registry))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Emit one GIR instruction in the poll function context (all locals accessed via frame fields).
+/// Returns `Some(task_local_id)` if this is an await call (caller should NOT emit the await
+/// call itself — it emits the waker-check block and the post-await resume state instead).
+fn emit_poll_inst(
+    out: &mut String,
+    inst: &Instruction,
+    func: &Function,
+    registry: &TypeRegistry,
+    overflow_wrap: bool,
+) -> Option<u32> {
+    match inst {
+        Instruction::Nop => {}
+
+        Instruction::Assign { dst, value } => {
+            if matches!(value, Operand::Constant(Constant::Unit)) {
+                // Skip unit assignments (void destination)
+                return None;
+            }
+            let dst_str = fmt_place_poll(dst, func, registry);
+            if let Operand::Constant(Constant::Str(s)) = value {
+                let local_type = format_type(func.locals[dst.local.0 as usize].type_id, registry);
+                let escaped = escape_c_string(s);
+                if local_type == "Str" {
+                    let _ = writeln!(out, "        {dst_str} = gorget_str_from_literal(\"{escaped}\", {});", s.len());
+                    return None;
+                }
+                if local_type == "GorgetString" {
+                    let _ = writeln!(out, "        {dst_str} = gorget_string_new(\"{escaped}\");");
+                    return None;
+                }
+            }
+            let val_str = fmt_operand_poll(value, func, registry);
+            let _ = writeln!(out, "        {dst_str} = {val_str};");
+        }
+
+        Instruction::BinOp { dst, op, type_id, lhs, rhs } => {
+            if *type_id == UNIT_TYPE { return None; }
+            let c_type = format_type(*type_id, registry);
+            let dst_str = fmt_place_poll(&Place::local(LocalId(dst.0)), func, registry);
+            let lhs_str = fmt_operand_poll(lhs, func, registry);
+            let rhs_str = fmt_operand_poll(rhs, func, registry);
+            if *op == BinOp::Pow {
+                let _ = writeln!(out, "        {dst_str} = ({c_type})pow((double){lhs_str}, (double){rhs_str});");
+            } else if matches!(op, BinOp::AddWrap | BinOp::SubWrap | BinOp::MulWrap) {
+                let sym = match op { BinOp::AddWrap => "+", BinOp::SubWrap => "-", _ => "*" };
+                let _ = writeln!(out, "        {dst_str} = ({c_type})((uint64_t){lhs_str} {sym} (uint64_t){rhs_str});");
+            } else if matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul)
+                && c_type == "int64_t" && !overflow_wrap
+            {
+                let builtin = match op {
+                    BinOp::Add => "__builtin_add_overflow",
+                    BinOp::Sub => "__builtin_sub_overflow",
+                    _ => "__builtin_mul_overflow",
+                };
+                let _ = writeln!(out, "        if ({builtin}({lhs_str}, {rhs_str}, &{dst_str})) {{ fprintf(stderr, \"gorget: integer overflow\\n\"); exit(1); }}");
+            } else if *op == BinOp::Mod && (c_type == "int64_t" || c_type == "int32_t") {
+                let _ = writeln!(out, "        if ({rhs_str} == 0) {{ fprintf(stderr, \"gorget: division by zero\\n\"); exit(1); }}");
+                let _ = writeln!(out, "        {{ int64_t __rem = {lhs_str} % {rhs_str}; {dst_str} = (__rem != 0 && ((__rem ^ {rhs_str}) < 0)) ? __rem + {rhs_str} : __rem; }}");
+            } else if matches!(op, BinOp::Div | BinOp::Rem) && (c_type == "int64_t" || c_type == "int32_t") {
+                let _ = writeln!(out, "        if ({rhs_str} == 0) {{ fprintf(stderr, \"gorget: division by zero\\n\"); exit(1); }}");
+                let op_str = format_binop(*op);
+                let _ = writeln!(out, "        {dst_str} = {lhs_str} {op_str} {rhs_str};");
+            } else {
+                let op_str = format_binop(*op);
+                let _ = writeln!(out, "        {dst_str} = {lhs_str} {op_str} {rhs_str};");
+            }
+        }
+
+        Instruction::UnOp { dst, op, operand, .. } => {
+            let dst_str = fmt_place_poll(&Place::local(LocalId(dst.0)), func, registry);
+            let val_str = fmt_operand_poll(operand, func, registry);
+            let sym = match op { UnOp::Neg => "-", UnOp::Not => "!", UnOp::BitNot => "~" };
+            let _ = writeln!(out, "        {dst_str} = {sym}{val_str};");
+        }
+
+        Instruction::Cmp { dst, op, lhs, rhs, .. } => {
+            let dst_str = fmt_place_poll(&Place::local(LocalId(dst.0)), func, registry);
+            let lhs_str = fmt_operand_poll(lhs, func, registry);
+            let rhs_str = fmt_operand_poll(rhs, func, registry);
+            let op_str = format_cmpop(*op);
+            let _ = writeln!(out, "        {dst_str} = {lhs_str} {op_str} {rhs_str};");
+        }
+
+        Instruction::Cast { dst, target_type, value }
+        | Instruction::BitCast { dst, target_type, value }
+        | Instruction::PtrCast { dst, target_type, value } => {
+            let dst_str = fmt_place_poll(&Place::local(LocalId(dst.0)), func, registry);
+            let c_type = format_type(*target_type, registry);
+            let val_str = fmt_operand_poll(value, func, registry);
+            let _ = writeln!(out, "        {dst_str} = ({c_type}){val_str};");
+        }
+
+        Instruction::Call { dst, func: call_fn, args } => {
+            // Await call: return the task-handle local to the caller; the caller emits
+            // the waker-check block and the actual await call in the resume state.
+            if call_fn.starts_with("__gorget_await_") {
+                if let Some(Operand::Copy(p) | Operand::Move(p)) = args.first() {
+                    return Some(p.local.0);
+                }
+            }
+            let args_str = fmt_args_poll(args, func, registry);
+            if let Some(dst_id) = dst {
+                let dst_str = fmt_place_poll(&Place::local(LocalId(dst_id.0)), func, registry);
+                let _ = writeln!(out, "        {dst_str} = {call_fn}({args_str});");
+            } else {
+                let _ = writeln!(out, "        {call_fn}({args_str});");
+            }
+        }
+
+        Instruction::CallExtern { dst, func: call_fn, args } => {
+            let args_str = fmt_args_poll(args, func, registry);
+            if let Some(dst_id) = dst {
+                let dst_str = fmt_place_poll(&Place::local(LocalId(dst_id.0)), func, registry);
+                let _ = writeln!(out, "        {dst_str} = {call_fn}({args_str});");
+            } else {
+                let _ = writeln!(out, "        {call_fn}({args_str});");
+            }
+        }
+
+        Instruction::CallIndirect { dst, callee, args } => {
+            let callee_str = fmt_operand_poll(callee, func, registry);
+            let args_str = fmt_args_poll(args, func, registry);
+            if let Some(dst_id) = dst {
+                let dst_str = fmt_place_poll(&Place::local(LocalId(dst_id.0)), func, registry);
+                let _ = writeln!(out, "        {{ void* __callee = {callee_str}; {dst_str} = ((int64_t(*)(void*,{args_str}))__callee)({args_str}); }}");
+            } else {
+                let _ = writeln!(out, "        ((void(*)(void*))({callee_str}))({args_str});");
+            }
+        }
+
+        Instruction::MoveZero { place } => {
+            let place_str = fmt_place_poll(place, func, registry);
+            let local_type = func.locals[place.local.0 as usize].type_id;
+            let type_name = format_type(local_type, registry);
+            let _ = writeln!(out, "        memset(&{place_str}, 0, sizeof({type_name}));");
+        }
+
+        Instruction::Borrow { dst, place } | Instruction::BorrowMut { dst, place } => {
+            let dst_str = fmt_place_poll(&Place::local(LocalId(dst.0)), func, registry);
+            let place_str = fmt_place_poll(place, func, registry);
+            let _ = writeln!(out, "        {dst_str} = &{place_str};");
+        }
+
+        Instruction::FieldLoad { dst, base, field } => {
+            let dst_str = fmt_place_poll(&Place::local(LocalId(dst.0)), func, registry);
+            let base_str = fmt_place_poll(base, func, registry);
+            let base_type = func.locals[base.local.0 as usize].type_id;
+            let field_name = resolve_field_name_from_type(base_type, *field, registry)
+                .map(|(n, _)| n)
+                .unwrap_or_else(|| format!("_{field}"));
+            let _ = writeln!(out, "        {dst_str} = {base_str}.{field_name};");
+        }
+
+        Instruction::IndexLoad { dst, base, index } => {
+            let dst_str = fmt_place_poll(&Place::local(LocalId(dst.0)), func, registry);
+            let base_str = fmt_place_poll(base, func, registry);
+            let idx_str = fmt_operand_poll(index, func, registry);
+            let _ = writeln!(out, "        {dst_str} = {base_str}.data[{idx_str}];");
+        }
+
+        Instruction::StructInit { dst, type_name, fields } => {
+            let dst_str = fmt_place_poll(&Place::local(LocalId(dst.0)), func, registry);
+            let field_strs = fields.iter()
+                .map(|f| fmt_operand_poll(f, func, registry))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let _ = writeln!(out, "        {dst_str} = ({type_name}){{{field_strs}}};");
+        }
+
+        Instruction::TupleInit { dst, elements } => {
+            let dst_str = fmt_place_poll(&Place::local(LocalId(dst.0)), func, registry);
+            let elem_strs = elements.iter()
+                .map(|e| fmt_operand_poll(e, func, registry))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let _ = writeln!(out, "        {{ typeof({dst_str}) __ti = {{{elem_strs}}}; {dst_str} = __ti; }}");
+        }
+
+        Instruction::EnumInit { dst, type_name, variant, fields } => {
+            let dst_str = fmt_place_poll(&Place::local(LocalId(dst.0)), func, registry);
+            let tag = registry.get_type_def(type_name)
+                .and_then(|td| if let TypeDefKind::Enum(e) = &td.kind {
+                    e.variants.iter().position(|v| &v.name == variant)
+                } else { None })
+                .unwrap_or(0);
+            if fields.is_empty() {
+                let _ = writeln!(out, "        {dst_str} = ({type_name}){{.tag = {tag}}};");
+            } else {
+                let field_strs = fields.iter()
+                    .map(|f| fmt_operand_poll(f, func, registry))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let _ = writeln!(out, "        {dst_str} = ({type_name}){{.tag = {tag}, .data.{variant} = {{{field_strs}}}}};");
+            }
+        }
+
+        Instruction::TagOf { dst, operand } => {
+            let dst_str = fmt_place_poll(&Place::local(LocalId(dst.0)), func, registry);
+            let val_str = fmt_operand_poll(operand, func, registry);
+            let _ = writeln!(out, "        {dst_str} = {val_str}.tag;");
+        }
+
+        Instruction::EnumFieldLoad { dst, base, variant, field } => {
+            let dst_str = fmt_place_poll(&Place::local(LocalId(dst.0)), func, registry);
+            let base_str = fmt_place_poll(base, func, registry);
+            let _ = writeln!(out, "        {dst_str} = {base_str}.data.{variant}._{field};");
+        }
+
+        Instruction::HeapAlloc { dst, type_id, .. } => {
+            let dst_str = fmt_place_poll(&Place::local(LocalId(dst.0)), func, registry);
+            let type_name = format_type(*type_id, registry);
+            let _ = writeln!(out, "        {dst_str} = ({type_name}*)GORGET_ALLOC(sizeof({type_name}));");
+        }
+
+        Instruction::HeapAllocArray { dst, type_id, count, .. } => {
+            let dst_str = fmt_place_poll(&Place::local(LocalId(dst.0)), func, registry);
+            let type_name = format_type(*type_id, registry);
+            let count_str = fmt_operand_poll(count, func, registry);
+            let _ = writeln!(out, "        {dst_str} = ({type_name}*)GORGET_ALLOC(sizeof({type_name}) * (size_t)({count_str}));");
+        }
+
+        Instruction::Dealloc { ptr, .. } => {
+            let ptr_str = fmt_operand_poll(ptr, func, registry);
+            let _ = writeln!(out, "        GORGET_FREE({ptr_str}, 0);");
+        }
+
+        // Drop instrumentation: skip inside coroutines (frame owns memory, no RAII stack)
+        Instruction::Drop { .. } | Instruction::DropIfAlive { .. } => {}
+
+        _ => {
+            // Unsupported — coroutine candidacy check should have caught this
+            out.push_str("        /* COROUTINE_UNSUPPORTED_INST */\n");
+        }
+    }
+    None
+}
+
+/// Assign state IDs to basic blocks.
+/// Each BB with an await gets TWO state IDs (pre-await and post-await);
+/// BBs without an await get ONE state ID.
+fn coroutine_state_ids(func: &Function) -> Vec<u32> {
+    let mut ids = Vec::with_capacity(func.blocks.len());
+    let mut next = 0u32;
+    for bb in &func.blocks {
+        ids.push(next);
+        let has_await = bb.instructions.iter().any(|i| {
+            matches!(i, Instruction::Call { func, .. } if func.starts_with("__gorget_await_"))
+        });
+        next += if has_await { 2 } else { 1 };
+    }
+    ids
+}
+
+/// Emit a coroutine terminator (the last thing in a state — sets next state and continues).
+fn emit_poll_terminator(
+    out: &mut String,
+    term: &Terminator,
+    func: &Function,
+    registry: &TypeRegistry,
+    state_ids: &[u32],
+) {
+    match term {
+        Terminator::Return(_) => {
+            // Return value is already in f->_0; signal READY.
+            out.push_str("        return GORGET_POLL_READY;\n");
+        }
+        Terminator::Jump(target) => {
+            let next = state_ids[target.0 as usize];
+            let _ = writeln!(out, "        f->__state = {next}; continue;");
+        }
+        Terminator::Branch { cond, then_block, else_block } => {
+            let cond_str = fmt_operand_poll(cond, func, registry);
+            let then_id = state_ids[then_block.0 as usize];
+            let else_id = state_ids[else_block.0 as usize];
+            let _ = writeln!(out, "        if ({cond_str}) {{ f->__state = {then_id}; }} else {{ f->__state = {else_id}; }} continue;");
+        }
+        Terminator::Switch { value, cases, default } => {
+            let val_str = fmt_operand_poll(value, func, registry);
+            let _ = writeln!(out, "        switch ((int64_t)({val_str})) {{");
+            for (c, target) in cases {
+                let tid = state_ids[target.0 as usize];
+                let _ = writeln!(out, "            case {c}: f->__state = {tid}; break;");
+            }
+            let def_id = state_ids[default.0 as usize];
+            let _ = writeln!(out, "            default: f->__state = {def_id}; break;");
+            out.push_str("        } continue;\n");
+        }
+        Terminator::Unreachable => {
+            out.push_str("        __builtin_unreachable();\n");
+        }
+        Terminator::Invoke { .. } => {
+            // Should have been filtered by fn_is_coroutine_candidate
+            out.push_str("        return GORGET_POLL_READY; /* UNSUPPORTED INVOKE */\n");
+        }
+    }
+}
+
+/// Emit the coroutine frame struct, poll function, spawn/await/drop helpers.
+fn emit_coroutine(
+    out: &mut String,
+    fn_name: &str,
+    func: &Function,
+    params: &[(String, TypeId)],
+    ret_type: TypeId,
+    module: &Module,
+) {
+    let registry = &module.type_registry;
+    let ret_c = format_type(ret_type, registry);
+    let is_void = ret_c == "void";
+    let task_name = if is_void { "Task__void".to_string() } else { format!("Task__{ret_c}") };
+    let frame_name = format!("__Frame_{fn_name}");
+    let state_ids = coroutine_state_ids(func);
+
+    // ── 1. Frame struct ─────────────────────────────────────────────────────
+    let _ = writeln!(out, "typedef struct {frame_name} {{");
+    out.push_str("    GorgetTask base; /* must be first */\n");
+    out.push_str("    int __state;\n");
+    // All locals (including _0 = return place, _1.._N = params + user vars)
+    for (idx, local) in func.locals.iter().enumerate() {
+        let c_type = format_type(local.type_id, registry);
+        if c_type == "void" { continue; }
+        let _ = writeln!(out, "    {c_type} _{idx};");
+    }
+    let _ = writeln!(out, "}} {frame_name};");
+
+    // ── 2. Poll function ─────────────────────────────────────────────────────
+    let _ = writeln!(out, "static int __poll_{fn_name}(GorgetTask* __base) {{");
+    let _ = writeln!(out, "    {frame_name}* f = ({frame_name}*)__base;");
+    out.push_str("    for (;;) {\n");
+    out.push_str("    switch (f->__state) {\n");
+
+    for (bb_idx, bb) in func.blocks.iter().enumerate() {
+        let base_state = state_ids[bb_idx];
+        // Find await position (≤1 per BB guaranteed by candidacy check)
+        let await_pos = bb.instructions.iter().position(|i| {
+            matches!(i, Instruction::Call { func, .. } if func.starts_with("__gorget_await_"))
+        });
+
+        if let Some(await_pos) = await_pos {
+            // ── Pre-await state ─────────────────────────────────────────────
+            let _ = writeln!(out, "    case {base_state}: {{");
+            // Emit instructions before the await call
+            for inst in &bb.instructions[..await_pos] {
+                emit_poll_inst(out, inst, func, registry, module.overflow_wrap);
+            }
+            // The await instruction itself
+            let await_inst = &bb.instructions[await_pos];
+            let task_local = if let Instruction::Call { args, .. } = await_inst {
+                args.first().and_then(|a| match a {
+                    Operand::Copy(p) | Operand::Move(p) => Some(p.local.0),
+                    _ => None,
+                }).unwrap_or(0)
+            } else { 0 };
+            let post_await_state = base_state + 1;
+            // Waker-check block: register parent waker with child, yield if child not done
+            let _ = writeln!(out, "        f->__state = {post_await_state};");
+            let _ = writeln!(out, "        {{");
+            let _ = writeln!(out, "            GorgetTask* __child = (GorgetTask*)f->_{task_local}.__task;");
+            out.push_str("            pthread_mutex_lock(&__child->mtx);\n");
+            out.push_str("            if (!__child->done)\n");
+            out.push_str("                __child->parent_waker = (GorgetWaker){__gorget_fiber_waker_wake, (void*)f};\n");
+            out.push_str("            int __child_done = __child->done;\n");
+            out.push_str("            pthread_mutex_unlock(&__child->mtx);\n");
+            out.push_str("            if (__child_done) continue;\n");
+            out.push_str("        }\n");
+            out.push_str("        return GORGET_POLL_PENDING;\n");
+            out.push_str("    }\n");
+
+            // ── Post-await state ─────────────────────────────────────────────
+            let _ = writeln!(out, "    case {post_await_state}: {{");
+            // Emit the await call itself (non-blocking: child is done)
+            let args_str = fmt_args_poll(
+                if let Instruction::Call { args, .. } = await_inst { args } else { &[] },
+                func, registry,
+            );
+            if let Instruction::Call { dst, func: call_fn, .. } = await_inst {
+                if let Some(dst_id) = dst {
+                    let dst_str = fmt_place_poll(&Place::local(LocalId(dst_id.0)), func, registry);
+                    let _ = writeln!(out, "        {dst_str} = {call_fn}({args_str});");
+                } else {
+                    let _ = writeln!(out, "        {call_fn}({args_str});");
+                }
+            }
+            // Emit instructions after the await
+            for inst in &bb.instructions[await_pos + 1..] {
+                emit_poll_inst(out, inst, func, registry, module.overflow_wrap);
+            }
+            // Emit terminator for this BB
+            if let Some(term) = &bb.terminator {
+                emit_poll_terminator(out, term, func, registry, &state_ids);
+            }
+            out.push_str("    }\n");
+        } else {
+            // ── No-await state: emit all instructions + terminator ────────────
+            let _ = writeln!(out, "    case {base_state}: {{");
+            for inst in &bb.instructions {
+                emit_poll_inst(out, inst, func, registry, module.overflow_wrap);
+            }
+            if let Some(term) = &bb.terminator {
+                emit_poll_terminator(out, term, func, registry, &state_ids);
+            }
+            out.push_str("    }\n");
+        }
+    }
+
+    out.push_str("    default: return GORGET_POLL_READY;\n");
+    out.push_str("    } /* switch */\n");
+    out.push_str("    } /* for */\n");
+    out.push_str("}\n");
+
+    // ── 3. Drop helper ────────────────────────────────────────────────────────
+    // Waits for coroutine to complete (condvar on done=1), then frees the frame.
+    let param_c_types: Vec<String> = params.iter()
+        .map(|(_, t)| spawn_param_c_type(*t, registry))
+        .collect();
+    let param_decls = params.iter().zip(&param_c_types)
+        .map(|((name, _), c)| format!("{c} {name}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let _ = writeln!(out, "static void __spawn_drop_{fn_name}(void* __ptr) {{");
+    let _ = writeln!(out, "    {frame_name}* f = ({frame_name}*)__ptr;");
+    out.push_str("    pthread_mutex_lock(&f->base.mtx);\n");
+    out.push_str("    while (!f->base.done)\n");
+    out.push_str("        pthread_cond_wait(&f->base.cond, &f->base.mtx);\n");
+    out.push_str("    pthread_mutex_unlock(&f->base.mtx);\n");
+    out.push_str("    pthread_mutex_destroy(&f->base.mtx);\n");
+    out.push_str("    pthread_cond_destroy(&f->base.cond);\n");
+    let _ = writeln!(out, "    GORGET_FREE(f, sizeof({frame_name}));");
+    out.push_str("}\n");
+
+    // ── 4. Spawn function ─────────────────────────────────────────────────────
+    let _ = writeln!(out, "static inline {task_name} __gorget_spawn_{fn_name}({param_decls}) {{");
+    let _ = writeln!(out, "    {frame_name}* f = ({frame_name}*)GORGET_CALLOC(1, sizeof({frame_name}));");
+    out.push_str("    f->base.poll = __poll_");
+    out.push_str(fn_name);
+    out.push_str(";\n");
+    out.push_str("    pthread_mutex_init(&f->base.mtx, NULL);\n");
+    out.push_str("    pthread_cond_init(&f->base.cond, NULL);\n");
+    // Copy params into frame (_1.._N for params)
+    for (idx, (param_name, param_type)) in params.iter().enumerate() {
+        let local_idx = idx + 1; // _1 is first param
+        let gir_name = gir_type_name(*param_type, registry);
+        let is_refcounted = gir_name.as_ref().map_or(false, |n| {
+            n.starts_with("Channel__") || n.starts_with("Shared__") || n.starts_with("Weak__")
+        });
+        if is_refcounted {
+            let type_name = gir_name.as_ref().unwrap();
+            let _ = writeln!(out, "    f->_{local_idx} = {type_name}__clone({param_name});");
+        } else {
+            let _ = writeln!(out, "    f->_{local_idx} = {param_name};");
+        }
+    }
+    let _ = writeln!(out, "    __gorget_executor_submit(&f->base);");
+    let _ = writeln!(out, "    return ({task_name}){{.__task = f, .__drop = __spawn_drop_{fn_name}}};");
+    out.push_str("}\n");
+
+    // ── 5. Await function ─────────────────────────────────────────────────────
+    // Blocking wait (condvar): the CALLER blocks until the coroutine signals done=1.
+    // Since the caller is typically the main thread (not a worker), this is safe.
+    if is_void {
+        let _ = writeln!(out, "static inline void __gorget_await_{fn_name}({task_name} task) {{");
+    } else {
+        let _ = writeln!(out, "static inline {ret_c} __gorget_await_{fn_name}({task_name} task) {{");
+    }
+    let _ = writeln!(out, "    {frame_name}* f = ({frame_name}*)task.__task;");
+    out.push_str("    pthread_mutex_lock(&f->base.mtx);\n");
+    out.push_str("    while (!f->base.done)\n");
+    out.push_str("        pthread_cond_wait(&f->base.cond, &f->base.mtx);\n");
+    out.push_str("    pthread_mutex_unlock(&f->base.mtx);\n");
+    if !is_void {
+        let _ = writeln!(out, "    {ret_c} result = f->_0;");
+    }
+    out.push_str("    pthread_mutex_destroy(&f->base.mtx);\n");
+    out.push_str("    pthread_cond_destroy(&f->base.cond);\n");
+    let _ = writeln!(out, "    GORGET_FREE(f, sizeof({frame_name}));");
+    if !is_void {
+        out.push_str("    return result;\n");
+    }
+    out.push_str("}\n\n");
+}
+
 /// Emit per-spawned-function context structs, executor run functions, and spawn/await helpers.
 ///
 /// Phases 1-3 of M:N scheduling: instead of creating one OS thread per spawn, each
@@ -1536,7 +2121,11 @@ fn emit_spawn_helpers(out: &mut String, module: &Module) {
 
     out.push_str("\n/* ── Spawn/await helpers (M:N executor pool) ── */\n");
 
+    // Emit non-coroutine (blocking) helpers first so their spawn/await functions are
+    // declared before any coroutine poll functions that call them.
     for (fn_name, params, ret_type) in &module.spawned_fns {
+        if fn_is_coroutine_candidate(fn_name, module) { continue; }
+
         let ret_c = format_type(*ret_type, &module.type_registry);
         let is_void = ret_c == "void";
         let mangled_fn = mangle_name(fn_name);
@@ -1644,6 +2233,15 @@ fn emit_spawn_helpers(out: &mut String, module: &Module) {
             out.push_str("    return result;\n");
         }
         out.push_str("}\n\n");
+    }
+
+    // Second pass: emit coroutine (stackless state machine) helpers.
+    // Done after blocking helpers so __gorget_spawn_X/await_X are already declared.
+    for (fn_name, params, ret_type) in &module.spawned_fns {
+        if !fn_is_coroutine_candidate(fn_name, module) { continue; }
+        if let Some(func) = module.find_function(fn_name) {
+            emit_coroutine(out, fn_name, func, params, *ret_type, module);
+        }
     }
 
     // Emit one Task__T__drop per unique Task type.
