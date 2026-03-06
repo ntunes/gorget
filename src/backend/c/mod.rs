@@ -2280,8 +2280,27 @@ fn emit_spawn_helpers(out: &mut String, module: &Module) {
 
         // Executor run function — called by a worker thread from the pool.
         // The worker signals task->done after this returns (see __gorget_worker).
+        // Look up actual function param types to detect auto-borrowed (MutPtr) params.
+        // fn_sigs stores base types, but the function signature uses MutPtr for Move-type
+        // Borrow params. We need `&` when the actual param is MutPtr wrapping the stored type.
+        let actual_fn = module.functions.iter().find(|f| f.name == *fn_name);
         let call_args = params.iter()
-            .map(|(name, _)| format!("__ctx->__{name}"))
+            .enumerate()
+            .map(|(i, (name, stored_type))| {
+                let needs_ref = actual_fn.map_or(false, |f| {
+                    f.params.get(i).map_or(false, |&actual_type| {
+                        actual_type != *stored_type && matches!(
+                            module.type_registry.get(actual_type),
+                            Some(GirType::MutPtr(inner)) if *inner == *stored_type
+                        )
+                    })
+                });
+                if needs_ref {
+                    format!("&__ctx->__{name}")
+                } else {
+                    format!("__ctx->__{name}")
+                }
+            })
             .collect::<Vec<_>>()
             .join(", ");
         let _ = writeln!(out, "static void __spawn_run_{fn_name}(GorgetTask* __base) {{");
