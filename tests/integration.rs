@@ -7656,6 +7656,21 @@ fn shared_early_return() {
 }
 
 #[test]
+fn shared_stale_transitive() {
+    run_gg("shared_stale_transitive.gg", "stale transitive fired\n1");
+}
+
+#[test]
+fn shared_stale_call() {
+    run_gg("shared_stale_call.gg", "stale call fired\n1");
+}
+
+#[test]
+fn shared_stale_tuple() {
+    run_gg("shared_stale_tuple.gg", "stale tuple fired\n1");
+}
+
+#[test]
 fn async_task_group() {
     run_gg("async_task_group.gg", "2");
 }

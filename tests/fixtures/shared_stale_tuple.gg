@@ -1,0 +1,17 @@
+# Test: stale-condition warning through tuple.
+# auto pair = (x, 0) should be tainted by shared x,
+# and using pair.0 in a condition after await should warn
+# (via transitive: pair is tainted, pair.0 inherits taint).
+
+async void worker(int &counter):
+    counter = counter + 1
+
+async void main():
+    shared int x = 0
+    Task[void] t = spawn worker(&x)
+    auto pair = (x, 0)
+    int first = pair.0
+    t.await()
+    if first == 0:
+        print("stale tuple fired")
+    print(x)

@@ -1142,22 +1142,99 @@ impl<'a> BorrowChecker<'a> {
         }
     }
 
-    /// Find the first shared variable referenced in an expression, using span for resolution.
+    /// Find the first shared-variable taint in an expression (transitive dataflow).
+    /// Returns the name of the originating shared variable if any sub-expression
+    /// references a shared variable directly OR a local already known to be derived
+    /// from a shared variable. This gives us transitive taint propagation:
+    ///   shared int x = 0
+    ///   int a = x          // a is derived from x (direct)
+    ///   int b = a + 1      // b is derived from x (transitive via a)
+    ///   int c = some_fn(b) // c is derived from x (transitive via b)
     fn find_shared_ref_in_expr_spanned(&self, expr: &Spanned<Expr>) -> Option<String> {
         match &expr.node {
-            Expr::Identifier(name) => {
+            Expr::Identifier(_) => {
                 if let Some(&def_id) = self.resolution_map.get(&expr.span.start) {
+                    // Direct: identifier IS a shared variable
                     if self.shared_var_defs.contains_key(&def_id) {
-                        return Some(name.clone());
+                        let name = self.scopes.get_def(def_id).name.clone();
+                        return Some(name);
+                    }
+                    // Transitive: identifier is derived from a shared variable
+                    if let Some((_local_name, shared_name)) = self.shared_derived.get(&def_id) {
+                        return Some(shared_name.clone());
                     }
                 }
                 None
             }
-            Expr::BinaryOp { left, right, .. } => {
+            Expr::BinaryOp { left, right, .. }
+            | Expr::NilCoalescing { lhs: left, rhs: right } => {
                 self.find_shared_ref_in_expr_spanned(left)
                     .or_else(|| self.find_shared_ref_in_expr_spanned(right))
             }
             Expr::UnaryOp { operand, .. } => self.find_shared_ref_in_expr_spanned(operand),
+            Expr::Call { callee, args, .. } => {
+                self.find_shared_ref_in_expr_spanned(callee)
+                    .or_else(|| args.iter().find_map(|a| self.find_shared_ref_in_expr_spanned(&a.node.value)))
+            }
+            Expr::MethodCall { receiver, args, .. } => {
+                self.find_shared_ref_in_expr_spanned(receiver)
+                    .or_else(|| args.iter().find_map(|a| self.find_shared_ref_in_expr_spanned(&a.node.value)))
+            }
+            Expr::FieldAccess { object, .. }
+            | Expr::TupleFieldAccess { object, .. }
+            | Expr::OptionalChain { object, .. } => self.find_shared_ref_in_expr_spanned(object),
+            Expr::Index { object, index } => {
+                self.find_shared_ref_in_expr_spanned(object)
+                    .or_else(|| self.find_shared_ref_in_expr_spanned(index))
+            }
+            Expr::TupleLiteral(elems)
+            | Expr::ArrayLiteral(elems) => {
+                elems.iter().find_map(|e| self.find_shared_ref_in_expr_spanned(e))
+            }
+            Expr::DictLiteral(pairs) => {
+                pairs.iter().find_map(|(k, v)| {
+                    self.find_shared_ref_in_expr_spanned(k)
+                        .or_else(|| self.find_shared_ref_in_expr_spanned(v))
+                })
+            }
+            Expr::StructLiteral { args, .. } => {
+                args.iter().find_map(|a| self.find_shared_ref_in_expr_spanned(a))
+            }
+            Expr::If { condition, then_branch, elif_branches, else_branch } => {
+                self.find_shared_ref_in_expr_spanned(condition)
+                    .or_else(|| self.find_shared_ref_in_expr_spanned(then_branch))
+                    .or_else(|| elif_branches.iter().find_map(|(c, b)| {
+                        self.find_shared_ref_in_expr_spanned(c)
+                            .or_else(|| self.find_shared_ref_in_expr_spanned(b))
+                    }))
+                    .or_else(|| else_branch.as_ref().and_then(|b| self.find_shared_ref_in_expr_spanned(b)))
+            }
+            Expr::Match { scrutinee, arms, else_arm } => {
+                self.find_shared_ref_in_expr_spanned(scrutinee)
+                    .or_else(|| arms.iter().find_map(|a| self.find_shared_ref_in_expr_spanned(&a.body)))
+                    .or_else(|| else_arm.as_ref().and_then(|b| self.find_shared_ref_in_expr_spanned(b)))
+            }
+            Expr::Range { start, end, .. } => {
+                start.as_ref().and_then(|e| self.find_shared_ref_in_expr_spanned(e))
+                    .or_else(|| end.as_ref().and_then(|e| self.find_shared_ref_in_expr_spanned(e)))
+            }
+            Expr::As { expr: inner, .. }
+            | Expr::MutableBorrow { expr: inner }
+            | Expr::Move { expr: inner }
+            | Expr::Deref { expr: inner }
+            | Expr::Await { expr: inner }
+            | Expr::Try { expr: inner }
+            | Expr::TryCapture { expr: inner }
+            | Expr::Spawn { expr: inner }
+            | Expr::Is { expr: inner, .. }
+            | Expr::ImplicitClosure { body: inner } => self.find_shared_ref_in_expr_spanned(inner),
+            Expr::ListComprehension { expr, iterable, condition, .. } => {
+                self.find_shared_ref_in_expr_spanned(iterable)
+                    .or_else(|| self.find_shared_ref_in_expr_spanned(expr))
+                    .or_else(|| condition.as_ref().and_then(|c| self.find_shared_ref_in_expr_spanned(c)))
+            }
+            // Closures create a new scope — taint doesn't escape them
+            Expr::Closure { .. } => None,
             _ => None,
         }
     }
@@ -1174,7 +1251,8 @@ impl<'a> BorrowChecker<'a> {
                 }
                 None
             }
-            Expr::BinaryOp { left, right, .. } => {
+            Expr::BinaryOp { left, right, .. }
+            | Expr::NilCoalescing { lhs: left, rhs: right } => {
                 self.find_stale_in_condition(left)
                     .or_else(|| self.find_stale_in_condition(right))
             }
@@ -1183,10 +1261,25 @@ impl<'a> BorrowChecker<'a> {
                 self.find_stale_in_condition(callee)
                     .or_else(|| args.iter().find_map(|a| self.find_stale_in_condition(&a.node.value)))
             }
-            Expr::FieldAccess { object, .. } => self.find_stale_in_condition(object),
             Expr::MethodCall { receiver, args, .. } => {
                 self.find_stale_in_condition(receiver)
                     .or_else(|| args.iter().find_map(|a| self.find_stale_in_condition(&a.node.value)))
+            }
+            Expr::FieldAccess { object, .. }
+            | Expr::TupleFieldAccess { object, .. }
+            | Expr::OptionalChain { object, .. } => self.find_stale_in_condition(object),
+            Expr::Index { object, index } => {
+                self.find_stale_in_condition(object)
+                    .or_else(|| self.find_stale_in_condition(index))
+            }
+            Expr::As { expr: inner, .. }
+            | Expr::MutableBorrow { expr: inner }
+            | Expr::Move { expr: inner }
+            | Expr::Deref { expr: inner }
+            | Expr::Is { expr: inner, .. } => self.find_stale_in_condition(inner),
+            Expr::TupleLiteral(elems)
+            | Expr::ArrayLiteral(elems) => {
+                elems.iter().find_map(|e| self.find_stale_in_condition(e))
             }
             _ => None,
         }

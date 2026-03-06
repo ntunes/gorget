@@ -1,0 +1,16 @@
+# Test: transitive stale-condition warning.
+# int val = x (direct), int doubled = val * 2 (transitive via val),
+# then using doubled in a condition after await should warn.
+
+async void worker(int &counter):
+    counter = counter + 1
+
+async void main():
+    shared int x = 0
+    Task[void] t = spawn worker(&x)
+    int val = x
+    int doubled = val * 2
+    t.await()
+    if doubled == 0:
+        print("stale transitive fired")
+    print(x)
