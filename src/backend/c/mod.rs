@@ -1571,13 +1571,8 @@ fn fn_is_coroutine_candidate(fn_name: &str, module: &Module) -> bool {
         if matches!(&bb.terminator, Some(Terminator::Invoke { .. })) {
             return false;
         }
-        // Only support ≤1 await per basic block (simplifies state assignment)
-        let await_count = bb.instructions.iter().filter(|i| {
-            matches!(i, Instruction::Call { func, .. } if func.starts_with("__gorget_await_"))
-        }).count();
-        if await_count > 1 {
-            return false;
-        }
+        // Multiple awaits per BB are supported — each await gets its own
+        // pre-await/resume state pair in coroutine_state_ids.
     }
     true
 }
@@ -1628,12 +1623,66 @@ fn fmt_operand_poll(op: &Operand, func: &Function, registry: &TypeRegistry) -> S
     }
 }
 
+/// Format an Operand as Str type in poll context (wraps string literals in gorget_str_from_literal).
+fn fmt_operand_poll_as_str(op: &Operand, func: &Function, registry: &TypeRegistry) -> String {
+    if let Operand::Constant(Constant::Str(s)) = op {
+        let escaped = escape_c_string(s);
+        return format!("gorget_str_from_literal(\"{escaped}\", {})", s.len());
+    }
+    fmt_operand_poll(op, func, registry)
+}
+
 /// Format arguments for a function call in poll context.
 fn fmt_args_poll(args: &[Operand], func: &Function, registry: &TypeRegistry) -> String {
     args.iter()
         .map(|a| fmt_operand_poll(a, func, registry))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// Format arguments for a Gorget Call in poll context — wraps Constant::Str in gorget_str_from_literal.
+/// Gorget functions expect `Str` type, not bare `const char*`.
+fn fmt_args_poll_gorget(args: &[Operand], func: &Function, registry: &TypeRegistry) -> String {
+    args.iter()
+        .map(|a| fmt_operand_poll_as_str(a, func, registry))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Format arguments for printf/fprintf in poll context.
+/// Str-typed args are expanded to `(int)arg.len, arg.data`.
+/// Bool args are expanded to ternary true/false strings.
+fn fmt_printf_args_poll(args: &[Operand], func: &Function, registry: &TypeRegistry) -> String {
+    let mut parts = Vec::new();
+    for (i, arg) in args.iter().enumerate() {
+        let arg_str = fmt_operand_poll(arg, func, registry);
+        if i == 0 {
+            // First arg is the format string — pass through as bare const char*
+            parts.push(arg_str);
+            continue;
+        }
+        match arg {
+            Operand::Copy(p) | Operand::Move(p) => {
+                let local_idx = p.local.0 as usize;
+                if local_idx < func.locals.len() {
+                    let c_type = format_type(func.locals[local_idx].type_id, registry);
+                    if c_type == "Str" || c_type == "GorgetString" {
+                        // Str/GorgetString → expand to (int)len, data for %.*s
+                        parts.push(format!("(int){arg_str}.len"));
+                        parts.push(format!("{arg_str}.data"));
+                        continue;
+                    }
+                    if c_type == "bool" || c_type == "_Bool" {
+                        parts.push(format!("({arg_str} ? \"true\" : \"false\")"));
+                        continue;
+                    }
+                }
+            }
+            _ => {}
+        }
+        parts.push(arg_str);
+    }
+    parts.join(", ")
 }
 
 /// Emit drop code for a local variable. `place_str` is the pre-formatted C expression
@@ -1849,7 +1898,8 @@ fn emit_poll_inst(
                     return Some(p.local.0);
                 }
             }
-            let args_str = fmt_args_poll(args, func, registry);
+            // Gorget functions expect Str, so wrap Constant::Str args
+            let args_str = fmt_args_poll_gorget(args, func, registry);
             if let Some(dst_id) = dst {
                 let dst_str = fmt_place_poll(&Place::local(LocalId(dst_id.0)), func, registry);
                 let _ = writeln!(out, "        {dst_str} = {call_fn}({args_str});");
@@ -1859,7 +1909,13 @@ fn emit_poll_inst(
         }
 
         Instruction::CallExtern { dst, func: call_fn, args } => {
-            let args_str = fmt_args_poll(args, func, registry);
+            let is_printf = call_fn == "printf" || call_fn == "fprintf" || call_fn == "sprintf"
+                || call_fn == "gorget_string_format";
+            let args_str = if is_printf {
+                fmt_printf_args_poll(args, func, registry)
+            } else {
+                fmt_args_poll(args, func, registry)
+            };
             if let Some(dst_id) = dst {
                 let dst_str = fmt_place_poll(&Place::local(LocalId(dst_id.0)), func, registry);
                 let _ = writeln!(out, "        {dst_str} = {call_fn}({args_str});");
@@ -1911,7 +1967,55 @@ fn emit_poll_inst(
             let dst_str = fmt_place_poll(&Place::local(LocalId(dst.0)), func, registry);
             let base_str = fmt_place_poll(base, func, registry);
             let idx_str = fmt_operand_poll(index, func, registry);
-            let _ = writeln!(out, "        {dst_str} = {base_str}.data[{idx_str}];");
+            let base_idx = base.local.0 as usize;
+            let base_type = if base_idx < func.locals.len() {
+                format_type(func.locals[base_idx].type_id, registry)
+            } else {
+                "int64_t".to_string()
+            };
+            // Check if index is a Range (slice)
+            let index_is_range = match index {
+                Operand::Copy(p) | Operand::Move(p) => {
+                    let ii = p.local.0 as usize;
+                    ii < func.locals.len() && matches!(
+                        registry.get(func.locals[ii].type_id),
+                        Some(GirType::Named(n)) if n == "GorgetRange"
+                    )
+                }
+                _ => false,
+            };
+            if base_type == "Str" {
+                if index_is_range {
+                    let _ = writeln!(out, "        {dst_str} = gorget_str_slice({base_str}, {idx_str}.start, {idx_str}.end);");
+                } else {
+                    let _ = writeln!(out, "        {dst_str} = gorget_str_index({base_str}, {idx_str});");
+                }
+            } else if base_type.starts_with("GorgetArray") || base_type.starts_with("Vector__") {
+                if index_is_range {
+                    let _ = writeln!(out, "        {dst_str} = gorget_array_slice(&{base_str}, {idx_str}.start, {idx_str}.end);");
+                } else {
+                    // Infer element type from dst local type or base type name
+                    let dst_idx = dst.0 as usize;
+                    let elem_c_type = if dst_idx < func.locals.len() {
+                        format_type(func.locals[dst_idx].type_id, registry)
+                    } else {
+                        "int64_t".to_string()
+                    };
+                    let _ = writeln!(out, "        {dst_str} = *({elem_c_type}*)gorget_array_get(&{base_str}, {idx_str});");
+                }
+            } else if base_type.starts_with("GorgetDict") || base_type.starts_with("Dict__")
+                || base_type.starts_with("GorgetMap") || base_type.starts_with("HashMap__") {
+                let dst_idx = dst.0 as usize;
+                let val_c_type = if dst_idx < func.locals.len() {
+                    format_type(func.locals[dst_idx].type_id, registry)
+                } else {
+                    "int64_t".to_string()
+                };
+                let _ = writeln!(out, "        {dst_str} = *({val_c_type}*)gorget_map_get(&{base_str}, &({idx_str}));");
+            } else {
+                // Plain C array or pointer indexing
+                let _ = writeln!(out, "        {dst_str} = {base_str}.data[{idx_str}];");
+            }
         }
 
         Instruction::StructInit { dst, type_name, fields } => {
@@ -2001,17 +2105,18 @@ fn emit_poll_inst(
 }
 
 /// Assign state IDs to basic blocks.
-/// Each BB with an await gets TWO state IDs (pre-await and post-await);
-/// BBs without an await get ONE state ID.
+/// Each BB gets 1 + 2*N state IDs where N = number of awaits in that BB.
+/// (Each await requires a pre-await state and a post-await/resume state.)
 fn coroutine_state_ids(func: &Function) -> Vec<u32> {
     let mut ids = Vec::with_capacity(func.blocks.len());
     let mut next = 0u32;
     for bb in &func.blocks {
         ids.push(next);
-        let has_await = bb.instructions.iter().any(|i| {
+        let await_count = bb.instructions.iter().filter(|i| {
             matches!(i, Instruction::Call { func, .. } if func.starts_with("__gorget_await_"))
-        });
-        next += if has_await { 2 } else { 1 };
+        }).count() as u32;
+        // 1 base state + 1 extra state per await (pre-await → yield → resume)
+        next += 1 + await_count;
     }
     ids
 }
@@ -2061,6 +2166,25 @@ fn emit_poll_terminator(
 }
 
 /// Emit the coroutine frame struct, poll function, spawn/await/drop helpers.
+/// Emit the await result call for a completed child task (non-blocking path).
+fn emit_await_result_call(
+    out: &mut String,
+    await_inst: &Instruction,
+    func: &Function,
+    registry: &TypeRegistry,
+) {
+    if let Instruction::Call { dst, func: call_fn, args } = await_inst {
+        let args_str = fmt_args_poll(args, func, registry);
+        if let Some(dst_id) = dst {
+            let dst_str = fmt_place_poll(&Place::local(LocalId(dst_id.0)), func, registry);
+            let _ = writeln!(out, "        {dst_str} = {call_fn}({args_str});");
+        } else {
+            let _ = writeln!(out, "        {call_fn}({args_str});");
+        }
+    }
+}
+
+/// Emit the coroutine frame struct, poll function, spawn/await/drop helpers.
 fn emit_coroutine(
     out: &mut String,
     fn_name: &str,
@@ -2096,69 +2220,80 @@ fn emit_coroutine(
 
     for (bb_idx, bb) in func.blocks.iter().enumerate() {
         let base_state = state_ids[bb_idx];
-        // Find await position (≤1 per BB guaranteed by candidacy check)
-        let await_pos = bb.instructions.iter().position(|i| {
-            matches!(i, Instruction::Call { func, .. } if func.starts_with("__gorget_await_"))
-        });
 
-        if let Some(await_pos) = await_pos {
-            // ── Pre-await state ─────────────────────────────────────────────
+        // Collect await positions in this BB
+        let await_positions: Vec<usize> = bb.instructions.iter().enumerate()
+            .filter(|(_, i)| matches!(i, Instruction::Call { func, .. } if func.starts_with("__gorget_await_")))
+            .map(|(pos, _)| pos)
+            .collect();
+
+        if await_positions.is_empty() {
+            // ── No-await state: emit all instructions + terminator ────────────
             let _ = writeln!(out, "    case {base_state}: {{");
-            // Emit instructions before the await call
-            for inst in &bb.instructions[..await_pos] {
+            for inst in &bb.instructions {
                 emit_poll_inst(out, inst, func, registry, module.overflow_wrap);
             }
-            // The await instruction itself
-            let await_inst = &bb.instructions[await_pos];
-            let task_local = if let Instruction::Call { args, .. } = await_inst {
-                args.first().and_then(|a| match a {
-                    Operand::Copy(p) | Operand::Move(p) => Some(p.local.0),
-                    _ => None,
-                }).unwrap_or(0)
-            } else { 0 };
-            let post_await_state = base_state + 1;
-            // Waker-check block: register parent waker with child, yield if child not done
-            let _ = writeln!(out, "        f->__state = {post_await_state};");
-            let _ = writeln!(out, "        {{");
-            let _ = writeln!(out, "            GorgetTask* __child = (GorgetTask*)f->_{task_local}.__task;");
-            out.push_str("            pthread_mutex_lock(&__child->mtx);\n");
-            out.push_str("            if (!__child->done)\n");
-            out.push_str("                __child->parent_waker = (GorgetWaker){__gorget_fiber_waker_wake, (void*)f};\n");
-            out.push_str("            int __child_done = __child->done;\n");
-            out.push_str("            pthread_mutex_unlock(&__child->mtx);\n");
-            out.push_str("            if (__child_done) continue;\n");
-            out.push_str("        }\n");
-            out.push_str("        return GORGET_POLL_PENDING;\n");
-            out.push_str("    }\n");
-
-            // ── Post-await state ─────────────────────────────────────────────
-            let _ = writeln!(out, "    case {post_await_state}: {{");
-            // Emit the await call itself (non-blocking: child is done)
-            let args_str = fmt_args_poll(
-                if let Instruction::Call { args, .. } = await_inst { args } else { &[] },
-                func, registry,
-            );
-            if let Instruction::Call { dst, func: call_fn, .. } = await_inst {
-                if let Some(dst_id) = dst {
-                    let dst_str = fmt_place_poll(&Place::local(LocalId(dst_id.0)), func, registry);
-                    let _ = writeln!(out, "        {dst_str} = {call_fn}({args_str});");
-                } else {
-                    let _ = writeln!(out, "        {call_fn}({args_str});");
-                }
-            }
-            // Emit instructions after the await
-            for inst in &bb.instructions[await_pos + 1..] {
-                emit_poll_inst(out, inst, func, registry, module.overflow_wrap);
-            }
-            // Emit terminator for this BB
             if let Some(term) = &bb.terminator {
                 emit_poll_terminator(out, term, func, registry, &state_ids);
             }
             out.push_str("    }\n");
         } else {
-            // ── No-await state: emit all instructions + terminator ────────────
-            let _ = writeln!(out, "    case {base_state}: {{");
-            for inst in &bb.instructions {
+            // Process N awaits: creates N+1 states.
+            // State layout for base_state S:
+            //   S:   instructions [0..p0), yield at await p0
+            //   S+1: await p0 result + instructions [p0+1..p1), yield at await p1
+            //   ...
+            //   S+N: await p_{N-1} result + instructions [p_{N-1}+1..) + terminator
+            let mut current_state = base_state;
+
+            for (await_idx, &await_pos) in await_positions.iter().enumerate() {
+                let _ = writeln!(out, "    case {current_state}: {{");
+
+                // For resume states (not the first), emit the previous await's result call
+                if await_idx > 0 {
+                    let prev_await_pos = await_positions[await_idx - 1];
+                    let prev_inst = &bb.instructions[prev_await_pos];
+                    emit_await_result_call(out, prev_inst, func, registry);
+                }
+
+                // Emit instructions from after the previous await (or BB start) to this await
+                let inst_start = if await_idx == 0 { 0 } else { await_positions[await_idx - 1] + 1 };
+                for inst in &bb.instructions[inst_start..await_pos] {
+                    emit_poll_inst(out, inst, func, registry, module.overflow_wrap);
+                }
+
+                // Extract task local from this await call
+                let await_inst = &bb.instructions[await_pos];
+                let task_local = if let Instruction::Call { args, .. } = await_inst {
+                    args.first().and_then(|a| match a {
+                        Operand::Copy(p) | Operand::Move(p) => Some(p.local.0),
+                        _ => None,
+                    }).unwrap_or(0)
+                } else { 0 };
+
+                let resume_state = current_state + 1;
+                // Waker-check: register parent waker with child, yield if not done
+                let _ = writeln!(out, "        f->__state = {resume_state};");
+                let _ = writeln!(out, "        {{");
+                let _ = writeln!(out, "            GorgetTask* __child = (GorgetTask*)f->_{task_local}.__task;");
+                out.push_str("            pthread_mutex_lock(&__child->mtx);\n");
+                out.push_str("            if (!__child->done)\n");
+                out.push_str("                __child->parent_waker = (GorgetWaker){__gorget_fiber_waker_wake, (void*)f};\n");
+                out.push_str("            int __child_done = __child->done;\n");
+                out.push_str("            pthread_mutex_unlock(&__child->mtx);\n");
+                out.push_str("            if (__child_done) continue;\n");
+                out.push_str("        }\n");
+                out.push_str("        return GORGET_POLL_PENDING;\n");
+                out.push_str("    }\n");
+
+                current_state = resume_state;
+            }
+
+            // ── Final resume state: last await result + remaining instructions + terminator
+            let last_await_pos = *await_positions.last().unwrap();
+            let _ = writeln!(out, "    case {current_state}: {{");
+            emit_await_result_call(out, &bb.instructions[last_await_pos], func, registry);
+            for inst in &bb.instructions[last_await_pos + 1..] {
                 emit_poll_inst(out, inst, func, registry, module.overflow_wrap);
             }
             if let Some(term) = &bb.terminator {

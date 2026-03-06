@@ -1,0 +1,27 @@
+# Test coroutine with multiple awaits per basic block.
+# Exercises: (1) multi-await state machine, (2) string literal args in coroutine.
+
+async int double(int x):
+    return x * 2
+
+async int triple(int x):
+    return x * 3
+
+async int add_ten(int x):
+    return x + 10
+
+async int worker(int x):
+    # Multiple sequential spawns and awaits
+    Task[int] t1 = spawn double(x)
+    Task[int] t2 = spawn triple(x)
+    Task[int] t3 = spawn add_ten(x)
+    # Await all three sequentially (tests multi-await-per-BB coroutine states)
+    int a = t1.await()
+    int b = t2.await()
+    int c = t3.await()
+    return a + b + c
+
+async void main():
+    Task[int] t = spawn worker(5)
+    int result = t.await()
+    print(result)

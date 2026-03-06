@@ -9570,6 +9570,18 @@ fn spawn_coroutine_string() {
 }
 
 #[test]
+fn spawn_multi_await() {
+    // Coroutine with multiple awaits per basic block — verifies multi-state machine.
+    run_gg("spawn_multi_await.gg", "40");
+}
+
+#[test]
+fn spawn_coroutine_str_args() {
+    // String literal args in coroutine Call context — verifies gorget_str_from_literal wrapping.
+    run_gg("spawn_coroutine_str_args.gg", "hello world\n11");
+}
+
+#[test]
 fn method_mut_borrow_arg() {
     // MutableBorrow non-self param in equip method — callee can mutate the original.
     run_gg("method_mut_borrow_arg.gg", "60\n6");
