@@ -20,7 +20,14 @@ pub enum SemanticWarningKind {
     UnnecessaryShared { name: String },
     /// A local derived from a shared binding is used in a branch condition
     /// after an await point (stale check-then-act pattern).
-    StaleSharedCondition { local_name: String, shared_name: String },
+    StaleSharedCondition {
+        local_name: String,
+        shared_name: String,
+        /// Where the local was derived from the shared variable.
+        derivation_span: Option<Span>,
+        /// The await point that made the cached value stale.
+        await_span: Option<Span>,
+    },
 }
 
 impl std::fmt::Display for SemanticWarning {
@@ -29,8 +36,8 @@ impl std::fmt::Display for SemanticWarning {
             SemanticWarningKind::UnnecessaryShared { name } => {
                 write!(f, "variable `{name}` is declared `shared` but never crosses a concurrency boundary")
             }
-            SemanticWarningKind::StaleSharedCondition { local_name, shared_name } => {
-                write!(f, "`{local_name}` was read from shared `{shared_name}` before an await — value may be stale")
+            SemanticWarningKind::StaleSharedCondition { local_name, shared_name, .. } => {
+                write!(f, "`{local_name}` derived from shared `{shared_name}` may be stale after await")
             }
         }
     }
@@ -136,6 +143,11 @@ pub enum SemanticErrorKind {
     /// Closure passed to `spawn` captures a variable mutably — the mutable
     /// capture stores a pointer to the parent stack frame, unsafe across threads.
     SpawnClosureCaptureMutable { var_name: String },
+
+    /// Closure passed to `spawn` captures a `shared` keyword binding.
+    /// The closure captures the facade local (plain value), not the underlying
+    /// ARC+Mutex handle. Use a direct spawn argument instead.
+    SpawnClosureCaptureShared { var_name: String },
 
     // ── Borrow checking errors ──
 
@@ -392,6 +404,9 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::SpawnClosureCaptureMutable { var_name } => {
                 write!(f, "cannot spawn closure that mutably captures `{var_name}` — mutable captures hold pointers to the parent stack")
+            }
+            SemanticErrorKind::SpawnClosureCaptureShared { var_name } => {
+                write!(f, "cannot capture shared variable `{var_name}` in spawned closure — pass it as a direct spawn argument instead: `spawn fn_name({var_name})`")
             }
             SemanticErrorKind::UseAfterMove { name, .. } => {
                 write!(f, "use of moved value `{name}`")

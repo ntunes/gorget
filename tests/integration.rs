@@ -7708,6 +7708,16 @@ fn shared_stale_tuple() {
 }
 
 #[test]
+fn shared_closure_capture_error() {
+    check_gg_fails("shared_closure_capture_error.gg", "cannot capture shared variable");
+}
+
+#[test]
+fn shared_closure_inline_error() {
+    check_gg_fails("shared_closure_inline_error.gg", "cannot capture shared variable");
+}
+
+#[test]
 fn async_task_group() {
     run_gg("async_task_group.gg", "2");
 }

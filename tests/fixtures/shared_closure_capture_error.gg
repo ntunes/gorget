@@ -1,0 +1,9 @@
+# Test: shared variable captured in closure should be rejected.
+# The compiler should error because closures capture the facade local,
+# not the underlying Shared[Mutex[T]] handle.
+
+async void main():
+    shared int x = 0
+    auto f = ():
+        print(x)
+    spawn f()

@@ -186,13 +186,38 @@ impl ErrorReporter {
     }
 
     pub fn report_semantic_warning(&self, warn: &crate::semantic::errors::SemanticWarning) {
-        let labels = vec![Label::primary(
+        use crate::semantic::errors::SemanticWarningKind;
+        let mut labels = vec![Label::primary(
             self.file_id,
             warn.span.start..warn.span.end,
         )];
-        let diag = diagnostic::Diagnostic::warning()
+        let mut notes = Vec::new();
+
+        // Add secondary labels for multi-span warnings.
+        if let SemanticWarningKind::StaleSharedCondition {
+            derivation_span, await_span, shared_name, ..
+        } = &warn.kind {
+            if let Some(ds) = derivation_span {
+                labels.push(
+                    Label::secondary(self.file_id, ds.start..ds.end)
+                        .with_message(format!("read from shared `{shared_name}` here")),
+                );
+            }
+            if let Some(aws) = await_span {
+                labels.push(
+                    Label::secondary(self.file_id, aws.start..aws.end)
+                        .with_message("token released at this await — value may have changed"),
+                );
+            }
+            notes.push("re-read the shared variable after the await to get the current value".to_string());
+        }
+
+        let mut diag = diagnostic::Diagnostic::warning()
             .with_message(warn.to_string())
             .with_labels(labels);
+        if !notes.is_empty() {
+            diag = diag.with_notes(notes);
+        }
         self.emit(&diag);
     }
 

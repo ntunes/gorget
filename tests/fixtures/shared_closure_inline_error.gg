@@ -1,0 +1,7 @@
+# Test: inline closure in spawn capturing shared variable should be rejected.
+
+async void main():
+    shared int x = 0
+    spawn (():
+        print(x)
+    )()

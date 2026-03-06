@@ -142,6 +142,17 @@ struct ActiveOutlives {
 /// Snapshot of origin tracking state (for branching).
 type OriginSnapshot = FxHashMap<DefId, BorrowOrigin>;
 
+/// Info about a local derived from a shared variable, used for stale-condition tracking.
+#[derive(Debug, Clone)]
+struct SharedDerivedInfo {
+    local_name: String,
+    shared_name: String,
+    /// Where the local was derived from the shared variable (VarDecl or assignment span).
+    derivation_span: Span,
+    /// The await point that made this entry stale (set when promoted from shared_derived to stale).
+    await_span: Option<Span>,
+}
+
 /// Combined snapshot of variable states and origin tracking for branching.
 /// Used by save/restore/merge_branch_state to handle all branching state atomically.
 struct BranchState {
@@ -155,9 +166,9 @@ struct BranchState {
     /// Reverse map: closure DefId → captured variable DefIds.
     mut_capture_owners: FxHashMap<DefId, Vec<DefId>>,
     /// Locals derived from shared variables (not yet stale).
-    shared_derived: FxHashMap<DefId, (String, String)>,
+    shared_derived: FxHashMap<DefId, SharedDerivedInfo>,
     /// Locals derived from shared that became stale after await.
-    stale_shared_derived: FxHashMap<DefId, (String, String)>,
+    stale_shared_derived: FxHashMap<DefId, SharedDerivedInfo>,
     /// Whether this branch always diverges (return/break/continue/throw).
     diverges: bool,
 }
@@ -383,12 +394,11 @@ struct BorrowChecker<'a> {
     /// DefIds of variables declared with `shared` — maps to (SharedKind, name, span).
     shared_var_defs: FxHashMap<DefId, (crate::parser::ast::SharedKind, String, Span)>,
     /// Locals derived from a shared binding (read before any await).
-    /// Maps local DefId → (local_name, shared_var_name).
-    shared_derived: FxHashMap<DefId, (String, String)>,
+    shared_derived: FxHashMap<DefId, SharedDerivedInfo>,
     /// Locals derived from shared that have become stale (an await occurred
     /// between the read and the current point). Using these in branch conditions
     /// triggers a warning.
-    stale_shared_derived: FxHashMap<DefId, (String, String)>,
+    stale_shared_derived: FxHashMap<DefId, SharedDerivedInfo>,
     /// Shared variables that have been written to (assigned or compound-assigned).
     shared_written: FxHashSet<DefId>,
     /// Shared variables that have been passed as spawn arguments.
@@ -1131,13 +1141,15 @@ impl<'a> BorrowChecker<'a> {
     /// §3.4: Check a condition/scrutinee expression for stale-shared-derived locals
     /// and emit a warning if found.
     fn check_stale_condition(&mut self, condition: &Spanned<Expr>) {
-        if let Some((local_name, shared_name, span)) = self.find_stale_in_condition(condition) {
+        if let Some((info, condition_span)) = self.find_stale_in_condition(condition) {
             self.stale_warnings.push(super::errors::SemanticWarning {
                 kind: super::errors::SemanticWarningKind::StaleSharedCondition {
-                    local_name,
-                    shared_name,
+                    local_name: info.local_name,
+                    shared_name: info.shared_name,
+                    derivation_span: Some(info.derivation_span),
+                    await_span: info.await_span,
                 },
-                span,
+                span: condition_span,
             });
         }
     }
@@ -1160,8 +1172,8 @@ impl<'a> BorrowChecker<'a> {
                         return Some(name);
                     }
                     // Transitive: identifier is derived from a shared variable
-                    if let Some((_local_name, shared_name)) = self.shared_derived.get(&def_id) {
-                        return Some(shared_name.clone());
+                    if let Some(info) = self.shared_derived.get(&def_id) {
+                        return Some(info.shared_name.clone());
                     }
                 }
                 None
@@ -1240,13 +1252,13 @@ impl<'a> BorrowChecker<'a> {
     }
 
     /// Check a condition expression for uses of stale-shared-derived locals.
-    /// Returns the first match found as (local_name, shared_name, span).
-    fn find_stale_in_condition(&self, expr: &Spanned<Expr>) -> Option<(String, String, Span)> {
+    /// Returns the stale info and the span where the stale local is used in the condition.
+    fn find_stale_in_condition(&self, expr: &Spanned<Expr>) -> Option<(SharedDerivedInfo, Span)> {
         match &expr.node {
             Expr::Identifier(_) => {
                 if let Some(&def_id) = self.resolution_map.get(&expr.span.start) {
-                    if let Some((local_name, shared_name)) = self.stale_shared_derived.get(&def_id) {
-                        return Some((local_name.clone(), shared_name.clone(), expr.span));
+                    if let Some(info) = self.stale_shared_derived.get(&def_id) {
+                        return Some((info.clone(), expr.span));
                     }
                 }
                 None
@@ -1589,7 +1601,9 @@ impl<'a> BorrowChecker<'a> {
                     }
                     // §3.4 Stale-condition: move all shared_derived entries to stale
                     // (token released at await → cached values are stale)
-                    for (def_id, info) in self.shared_derived.drain() {
+                    let await_span = expr.span;
+                    for (def_id, mut info) in self.shared_derived.drain() {
+                        info.await_span = Some(await_span);
                         self.stale_shared_derived.insert(def_id, info);
                     }
                 }
@@ -1626,24 +1640,7 @@ impl<'a> BorrowChecker<'a> {
                         let callee_def_id = self.resolution_map.get(&callee.span.start).copied();
                         if let Some(cs) = callee_def_id.and_then(|id| self.closure_capture_sets.get(&id)) {
                             let cs = cs.clone(); // borrow checker appeasement
-                            for entry in &cs.captures {
-                                if entry.has_borrowed_origin {
-                                    self.error(
-                                        SemanticErrorKind::SpawnClosureCaptureBorrowed {
-                                            var_name: entry.name.clone(),
-                                        },
-                                        inner.span,
-                                    );
-                                }
-                                if entry.mode == BorrowCaptureMode::Mutable {
-                                    self.error(
-                                        SemanticErrorKind::SpawnClosureCaptureMutable {
-                                            var_name: entry.name.clone(),
-                                        },
-                                        inner.span,
-                                    );
-                                }
-                            }
+                            self.check_spawn_closure_captures(&cs, inner.span);
                         } else {
                             // No capture set (closure returned from function, etc.) — conservative reject.
                             self.error(SemanticErrorKind::SpawnRequiresDirectCall, inner.span);
@@ -1652,24 +1649,7 @@ impl<'a> BorrowChecker<'a> {
                     } else if let Expr::Closure { params, body, .. } = &callee.node {
                         // Case 3: Inline closure call — `spawn ((): body)(args)`
                         let cs = self.compute_capture_set(params, body);
-                        for entry in &cs.captures {
-                            if entry.has_borrowed_origin {
-                                self.error(
-                                    SemanticErrorKind::SpawnClosureCaptureBorrowed {
-                                        var_name: entry.name.clone(),
-                                    },
-                                    inner.span,
-                                );
-                            }
-                            if entry.mode == BorrowCaptureMode::Mutable {
-                                self.error(
-                                    SemanticErrorKind::SpawnClosureCaptureMutable {
-                                        var_name: entry.name.clone(),
-                                    },
-                                    inner.span,
-                                );
-                            }
-                        }
+                        self.check_spawn_closure_captures(&cs, inner.span);
                         self.check_spawn_args(args);
                     } else {
                         // Fallback: method calls, arbitrary expressions, etc.
@@ -1974,7 +1954,12 @@ impl<'a> BorrowChecker<'a> {
                             if let Some(def_id) = self.scopes.lookup_def_by_span(local_name, pattern.span)
                                 .or_else(|| self.find_def_by_name(local_name))
                             {
-                                self.shared_derived.insert(def_id, (local_name.clone(), shared_name));
+                                self.shared_derived.insert(def_id, SharedDerivedInfo {
+                                    local_name: local_name.clone(),
+                                    shared_name,
+                                    derivation_span: value.span,
+                                    await_span: None,
+                                });
                             }
                         }
                     }
@@ -2105,7 +2090,12 @@ impl<'a> BorrowChecker<'a> {
                         if self.current_function_is_async {
                             if let Some(shared_name) = self.find_shared_ref_in_expr_spanned(value) {
                                 let name = self.scopes.get_def(def_id).name.clone();
-                                self.shared_derived.insert(def_id, (name, shared_name));
+                                self.shared_derived.insert(def_id, SharedDerivedInfo {
+                                    local_name: name,
+                                    shared_name,
+                                    derivation_span: value.span,
+                                    await_span: None,
+                                });
                             }
                         }
                     }
@@ -3053,6 +3043,26 @@ impl<'a> BorrowChecker<'a> {
             };
             if is_borrowed {
                 self.error(SemanticErrorKind::SpawnWithBorrowedRef { name: var_name }, arg.span);
+            }
+        }
+    }
+
+    fn check_spawn_closure_captures(&mut self, cs: &CaptureSet, span: Span) {
+        for entry in &cs.captures {
+            if self.shared_var_defs.contains_key(&entry.def_id) {
+                self.error(SemanticErrorKind::SpawnClosureCaptureShared {
+                    var_name: entry.name.clone(),
+                }, span);
+            }
+            if entry.has_borrowed_origin {
+                self.error(SemanticErrorKind::SpawnClosureCaptureBorrowed {
+                    var_name: entry.name.clone(),
+                }, span);
+            }
+            if entry.mode == BorrowCaptureMode::Mutable {
+                self.error(SemanticErrorKind::SpawnClosureCaptureMutable {
+                    var_name: entry.name.clone(),
+                }, span);
             }
         }
     }
@@ -6772,7 +6782,7 @@ async void main():
         let warnings = check_warnings(source);
         assert!(
             has_warning(&warnings, |k| matches!(k,
-                crate::semantic::errors::SemanticWarningKind::StaleSharedCondition { local_name, shared_name }
+                crate::semantic::errors::SemanticWarningKind::StaleSharedCondition { local_name, shared_name, .. }
                 if local_name == "val" && shared_name == "x"
             )),
             "expected StaleSharedCondition warning, got: {:?}", warnings
