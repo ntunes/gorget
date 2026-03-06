@@ -126,6 +126,9 @@ pub struct LoweringContext<'a> {
     /// Deferred shared-async variant requests. Recorded at spawn sites, processed after
     /// all functions are lowered (so the source GIR function is available to transform).
     pub pending_shared_variants: Vec<crate::ir::transforms::shared_async::PendingSharedVariant>,
+    /// Set of equip method names that are GIR-lowered (not extern/C-runtime).
+    /// Used by lower_method_call to decide whether to auto-borrow Move-type args.
+    pub gir_equip_methods: rustc_hash::FxHashSet<String>,
 }
 
 
@@ -168,6 +171,7 @@ impl<'a> LoweringContext<'a> {
             shared_pass_raw: false,
             fn_ast_bodies: FxHashMap::default(),
             pending_shared_variants: Vec::new(),
+            gir_equip_methods: rustc_hash::FxHashSet::default(),
         }
     }
 

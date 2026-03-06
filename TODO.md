@@ -14,9 +14,6 @@
 - **`gg.httpserver` V2 — non-blocking sockets + async handlers**: Blocked on `GorgetSocket` having no `poll`/`epoll`/`kqueue` integration — reads and writes block the calling thread. Needs `gorget_socket_set_nonblocking()` + fd registration with the existing reactor (epoll fd on Linux, kqueue on macOS), and a `GorgetWaker` protocol extension for readable/writable events. API impact: handler type becomes `async Callable[HttpServerResponse(HttpRequest)]` — one-word change for users. [added: 2026-03-03]
 
 
-- **Follow-up: remove deep-copy workaround helpers**: Now that auto-borrow for Move-type function args is implemented, the manual deep-copy helpers in `lib/gg/dataframe.gg` (`vec_str_copy`, `vec_int_copy`, `vec_float_copy`, `vec_bool_copy`, `df_copy`) and `lib/gg/tensor.gg` (`vec_int_copy`) can be removed along with their ~20 call sites. Validate existing dataframe/tensor tests still pass first. [added: 2026-03-06, updated: 2026-03-06]
-
-- **Auto-borrow for equip method non-self params**: `lower_equip_method` and `lower_generic_equip_methods_with_defaults` don't handle Ownership for non-self params (not even MutableBorrow). If an equip method has a Move-type non-self param with Borrow ownership passed through the method call path, it won't auto-borrow. Method call non-self args use `lower_expr` directly (not `lower_call_arg`), so the caller-side auto-borrow also doesn't fire. Low risk: method call args are typically primitives or str, not Move types. [added: 2026-03-06]
 
 - **`gg.httpserver` V2 — keep-alive / connection reuse**: Current V1 sends `Connection: close` after every response. Future: parse `Connection: keep-alive` + `Keep-Alive: timeout=N`, loop parse→handle→write on the same socket, close on timeout or `Connection: close`. Blocked on async handler signatures (above). [added: 2026-03-03]
 

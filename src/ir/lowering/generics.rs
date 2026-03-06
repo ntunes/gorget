@@ -62,6 +62,26 @@ impl GenericCollector {
         }
     }
 
+    /// Return the set of GIR-lowered generic equip method names.
+    /// These are methods with Block/Expression bodies (not Extern/Declaration).
+    pub fn gir_equip_method_names(&self) -> Vec<String> {
+        use crate::parser::ast::FunctionBody;
+        let mut names = Vec::new();
+        for (base_name, type_args, mangled_type_name, kind) in &self.instances {
+            if !matches!(kind, TemplateKind::Struct | TemplateKind::Enum) { continue; }
+            if let Some(equip_blocks) = self.equip_templates.get(base_name) {
+                for equip in equip_blocks {
+                    for method in &equip.items {
+                        if !matches!(method.node.body, FunctionBody::Extern(_) | FunctionBody::Declaration) {
+                            names.push(format!("{mangled_type_name}__{}", method.node.name.node));
+                        }
+                    }
+                }
+            }
+        }
+        names
+    }
+
     /// Phase 1: Collect all generic templates from the AST module.
     pub fn collect_templates(&mut self, ast_module: &ast::Module) {
         for item in &ast_module.items {

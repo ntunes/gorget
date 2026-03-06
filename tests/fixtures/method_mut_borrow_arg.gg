@@ -1,0 +1,23 @@
+struct Collector:
+    int total
+
+equip Collector:
+    void add_all(&self, Vector[int] &vals):
+        int n = vals.len()
+        int i = 0
+        while i < n:
+            self.total = self.total + vals.get(i).unwrap()
+            i = i + 1
+        vals.push(100)
+        vals.push(200)
+        vals.push(300)
+
+void main():
+    Vector[int] v = Vector[int]()
+    v.push(10)
+    v.push(20)
+    v.push(30)
+    Collector c = Collector(0)
+    c.add_all(v)
+    print(c.total)
+    print(v.len())

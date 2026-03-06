@@ -664,8 +664,22 @@ pub fn lower_module(
     // Pre-scan: register non-generic equip method signatures
     for item in &ast_module.items {
         if let Item::Equip(equip) = &item.node {
-            // Skip generic equip blocks and trait equip blocks
-            if equip.generic_params.is_some() || equip.trait_.is_some() {
+            // Skip generic equip blocks (handled via monomorphization)
+            if equip.generic_params.is_some() {
+                continue;
+            }
+            // Trait equip blocks: only track GIR-lowered methods for auto-borrow
+            // (fn_sigs are registered separately by register_trait_equip_sigs)
+            if equip.trait_.is_some() {
+                if let ast::Type::Named { name: type_name, .. } = &equip.type_.node {
+                    for method in &equip.items {
+                        let method_def = &method.node;
+                        if !matches!(method_def.body, FunctionBody::Extern(_) | FunctionBody::Declaration) {
+                            let mangled = format!("{}__{}", type_name.node, method_def.name.node);
+                            ctx.gir_equip_methods.insert(mangled);
+                        }
+                    }
+                }
                 continue;
             }
             // Skip equip blocks on generic types (they're handled via monomorphization)
@@ -710,6 +724,9 @@ pub fn lower_module(
                     // Register extern binding for equip methods (e.g., UdpSocket__local_addr → gorget_udp_local_addr)
                     if let FunctionBody::Extern(c_symbol) = &method_def.body {
                         ctx.extern_bindings.insert(mangled, c_symbol.clone());
+                    } else if !matches!(method_def.body, FunctionBody::Declaration) {
+                        // Track GIR-lowered equip methods for caller-side auto-borrow
+                        ctx.gir_equip_methods.insert(mangled);
                     }
                 }
             }
@@ -719,6 +736,11 @@ pub fn lower_module(
     // Register monomorphized equip method signatures (including default trait methods)
     generic_collector.register_equip_sigs_with_defaults(
         &mut ctx.type_mapper, &mut ctx.type_registry, &mut ctx.fn_sigs, Some(ast_module));
+
+    // Track GIR-lowered generic equip methods for caller-side auto-borrow
+    for name in generic_collector.gir_equip_method_names() {
+        ctx.gir_equip_methods.insert(name);
+    }
 
     // Register built-in method signatures for Option/Result instantiations.
     // These methods are inlined by the C backend (not real functions), but

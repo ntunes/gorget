@@ -306,7 +306,7 @@ str tensor_display[Numeric T](Tensor[T] t):
 # Generic template: element-wise binary op on two tensors of the same type.
 Tensor[T] tensor_elemwise[Numeric T](Tensor[T] a, Tensor[T] b, meta op):
     int sz = a.size()
-    Tensor[T] out = tensor_zeros[T](vec_int_copy(a.shape))
+    Tensor[T] out = tensor_zeros[T](a.shape)
     int i = 0
     while i < sz:
         out.storage.set_at(i, a.flat_get(i) meta[op] b.flat_get(i))
@@ -321,7 +321,7 @@ Tensor[T] tensor_div[Numeric T](Tensor[T] a, Tensor[T] b) = tensor_elemwise[T](a
 
 Tensor[T] tensor_neg[Numeric T](Tensor[T] a):
     int sz = a.size()
-    Tensor[T] out = tensor_zeros[T](vec_int_copy(a.shape))
+    Tensor[T] out = tensor_zeros[T](a.shape)
     int i = 0
     while i < sz:
         out.storage.set_at(i, -a.flat_get(i))
@@ -333,7 +333,7 @@ Tensor[T] tensor_neg[Numeric T](Tensor[T] a):
 # Generic template: element-wise binary op between a tensor and a scalar.
 Tensor[T] tensor_scalar_op[Numeric T](Tensor[T] t, T val, meta op):
     int sz = t.size()
-    Tensor[T] out = tensor_zeros[T](vec_int_copy(t.shape))
+    Tensor[T] out = tensor_zeros[T](t.shape)
     int i = 0
     while i < sz:
         out.storage.set_at(i, t.flat_get(i) meta[op] val)
@@ -397,7 +397,7 @@ T tensor_bc_elem[Numeric T](Tensor[T] t, Vector[int] bc_shape, Vector[int] idx):
 Tensor[T] tensor_badd[Numeric T](Tensor[T] a, Tensor[T] b):
     Vector[int] bc_shape = tensor_broadcast_shape(a.shape, b.shape).unwrap()
     int sz = tensor_product(bc_shape)
-    Tensor[T] out = tensor_zeros[T](vec_int_copy(bc_shape))
+    Tensor[T] out = tensor_zeros[T](bc_shape)
     Vector[int] idx = Vector[int]()
     int di = 0
     while di < bc_shape.len():
@@ -416,7 +416,7 @@ Tensor[T] tensor_badd[Numeric T](Tensor[T] a, Tensor[T] b):
 Tensor[T] tensor_bsub[Numeric T](Tensor[T] a, Tensor[T] b):
     Vector[int] bc_shape = tensor_broadcast_shape(a.shape, b.shape).unwrap()
     int sz = tensor_product(bc_shape)
-    Tensor[T] out = tensor_zeros[T](vec_int_copy(bc_shape))
+    Tensor[T] out = tensor_zeros[T](bc_shape)
     Vector[int] idx = Vector[int]()
     int di = 0
     while di < bc_shape.len():
@@ -435,7 +435,7 @@ Tensor[T] tensor_bsub[Numeric T](Tensor[T] a, Tensor[T] b):
 Tensor[T] tensor_bmul[Numeric T](Tensor[T] a, Tensor[T] b):
     Vector[int] bc_shape = tensor_broadcast_shape(a.shape, b.shape).unwrap()
     int sz = tensor_product(bc_shape)
-    Tensor[T] out = tensor_zeros[T](vec_int_copy(bc_shape))
+    Tensor[T] out = tensor_zeros[T](bc_shape)
     Vector[int] idx = Vector[int]()
     int di = 0
     while di < bc_shape.len():

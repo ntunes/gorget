@@ -9568,3 +9568,9 @@ fn spawn_coroutine_string() {
     // Coroutine with multiple internal awaits — verifies Move-type Task drops in poll fn.
     run_gg("spawn_coroutine_string.gg", "45");
 }
+
+#[test]
+fn method_mut_borrow_arg() {
+    // MutableBorrow non-self param in equip method — callee can mutate the original.
+    run_gg("method_mut_borrow_arg.gg", "60\n6");
+}

@@ -2806,10 +2806,6 @@ fn lower_method_call(
             call_args.push(recv);
         }
 
-        for arg in args {
-            call_args.push(lower_expr(ctx, builder, &arg.node.value));
-        }
-
         // Resolve function name: try Type__method first, fallback to Trait_for_Type__method
         let effective_name = if ctx.fn_sigs.contains_key(&mangled) {
             mangled.clone()
@@ -2820,6 +2816,28 @@ fn lower_method_call(
                 .cloned()
                 .unwrap_or(mangled.clone())
         };
+
+        // Auto-borrow non-self method args via lower_call_arg.
+        // Only pass callee param types for GIR-lowered equip methods (which auto-borrow
+        // Move-type Borrow params). C runtime methods take values by value, so passing
+        // None prevents auto-borrow for those.
+        let is_gir_method = ctx.gir_equip_methods.contains(&effective_name);
+        let method_param_types: Vec<TypeId> = if is_gir_method {
+            ctx.fn_sigs.get(effective_name.as_str())
+                .map(|(params, _)| params.iter().skip(1).copied().collect())  // skip self ptr
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
+        let lowered_method_args: Vec<Operand> = args.iter()
+            .enumerate()
+            .map(|(i, arg)| {
+                let callee_pt = method_param_types.get(i).copied();
+                lower_call_arg(ctx, builder, arg, callee_pt)
+            })
+            .collect();
+        call_args.extend(lowered_method_args.iter().cloned());
 
         // For Vector.get() / .first() / .last(), auto-register Option[T] and override return type
         let fn_sig_ret = ctx.fn_sigs.get(&effective_name).map(|(_, ret)| *ret);
@@ -2867,13 +2885,37 @@ fn lower_method_call(
             effective_name
         };
 
-        if ret_type == UNIT_TYPE {
+        // Collect Move-ownership Move-type arg locals for post-call MoveZero
+        let move_zero_locals: Vec<Place> = args.iter()
+            .zip(lowered_method_args.iter())
+            .filter_map(|(arg, op)| {
+                if !matches!(arg.node.ownership, Ownership::Move) { return None; }
+                if let Operand::Copy(place) | Operand::Move(place) = op {
+                    if place.projections.is_empty()
+                        && is_move_type_local(place.local, builder, &ctx.type_registry)
+                    {
+                        return Some(place.clone());
+                    }
+                }
+                None
+            })
+            .collect();
+
+        let result = if ret_type == UNIT_TYPE {
             builder.call_void(call_name, call_args);
             Operand::Constant(Constant::Unit)
         } else {
             let dst = builder.call(call_name, call_args, ret_type);
             FunctionBuilder::copy(dst)
+        };
+
+        // MoveZero Move-ownership args to transfer ownership (prevent double-free)
+        for place in &move_zero_locals {
+            builder.move_zero(place.clone());
+            ctx.drops.mark_moved(place.local);
         }
+
+        result
     } else {
         // Can't determine receiver type — fallback
         Operand::Constant(Constant::Unit)

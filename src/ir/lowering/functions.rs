@@ -225,7 +225,15 @@ pub fn lower_equip_method(
         if p.node.name.node == "self" {
             continue; // self handled above
         }
-        let gir_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+        let base_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+        // Auto-borrow: MutableBorrow and Borrow-of-Move params become MutPtr
+        let gir_type = match p.node.ownership {
+            Ownership::MutableBorrow => ctx.register_mut_ptr_type(base_type),
+            Ownership::Borrow if ctx.type_registry.is_move_type(base_type) => {
+                ctx.register_mut_ptr_type(base_type)
+            }
+            _ => base_type,
+        };
         params.push((gir_type, Some(p.node.name.node.as_str())));
     }
 
@@ -248,8 +256,23 @@ pub fn lower_equip_method(
         if p.node.name.node == "self" {
             continue;
         }
-        let gir_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+        let base_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+        // Auto-borrow: MutableBorrow and Borrow-of-Move params become MutPtr
+        let gir_type = match p.node.ownership {
+            Ownership::MutableBorrow => ctx.register_mut_ptr_type(base_type),
+            Ownership::Borrow if ctx.type_registry.is_move_type(base_type) => {
+                ctx.register_mut_ptr_type(base_type)
+            }
+            _ => base_type,
+        };
         ctx.register_local(&p.node.name.node, LocalId(param_idx), gir_type);
+        // Register mutable borrow / auto-borrow params for auto-deref at use sites
+        if matches!(p.node.ownership, Ownership::MutableBorrow)
+            || (matches!(p.node.ownership, Ownership::Borrow)
+                && ctx.type_registry.is_move_type(base_type))
+        {
+            ctx.mut_capture_locals.insert(LocalId(param_idx), base_type);
+        }
         // Track callable parameter return types for indirect call lowering
         if let Some(ret_type) = extract_callable_return_type(&p.node.type_.node, &[], ctx) {
             ctx.callable_return_types.insert(LocalId(param_idx), ret_type);
@@ -268,7 +291,14 @@ pub fn lower_equip_method(
             if p.node.name.node == "self" {
                 continue;
             }
-            let gir_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+            let base_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+            let gir_type = match p.node.ownership {
+                Ownership::MutableBorrow => ctx.register_mut_ptr_type(base_type),
+                Ownership::Borrow if ctx.type_registry.is_move_type(base_type) => {
+                    ctx.register_mut_ptr_type(base_type)
+                }
+                _ => base_type,
+            };
             ctx.drops.register_param(LocalId(pidx), gir_type, &ctx.type_registry);
             pidx += 1;
         }
@@ -603,7 +633,15 @@ pub fn lower_generic_equip_methods_with_defaults(
             if p.node.name.node == "self" {
                 continue;
             }
-            let gir_type = substitute_and_map_type(ctx, &p.node.type_.node, &subs);
+            let base_type = substitute_and_map_type(ctx, &p.node.type_.node, &subs);
+            // Auto-borrow: MutableBorrow and Borrow-of-Move params become MutPtr
+            let gir_type = match p.node.ownership {
+                Ownership::MutableBorrow => ctx.register_mut_ptr_type(base_type),
+                Ownership::Borrow if ctx.type_registry.is_move_type(base_type) => {
+                    ctx.register_mut_ptr_type(base_type)
+                }
+                _ => base_type,
+            };
             params.push((gir_type, Some(p.node.name.node.as_str())));
         }
 
@@ -621,8 +659,23 @@ pub fn lower_generic_equip_methods_with_defaults(
             if p.node.name.node == "self" {
                 continue;
             }
-            let gir_type = substitute_and_map_type(ctx, &p.node.type_.node, &subs);
+            let base_type = substitute_and_map_type(ctx, &p.node.type_.node, &subs);
+            // Auto-borrow: MutableBorrow and Borrow-of-Move params become MutPtr
+            let gir_type = match p.node.ownership {
+                Ownership::MutableBorrow => ctx.register_mut_ptr_type(base_type),
+                Ownership::Borrow if ctx.type_registry.is_move_type(base_type) => {
+                    ctx.register_mut_ptr_type(base_type)
+                }
+                _ => base_type,
+            };
             ctx.register_local(&p.node.name.node, LocalId(param_idx), gir_type);
+            // Register mutable borrow / auto-borrow params for auto-deref at use sites
+            if matches!(p.node.ownership, Ownership::MutableBorrow)
+                || (matches!(p.node.ownership, Ownership::Borrow)
+                    && ctx.type_registry.is_move_type(base_type))
+            {
+                ctx.mut_capture_locals.insert(LocalId(param_idx), base_type);
+            }
             // Track callable parameter return types for indirect call lowering
             if let Some(ret_type) = extract_callable_return_type(&p.node.type_.node, &subs, ctx) {
                 ctx.callable_return_types.insert(LocalId(param_idx), ret_type);
@@ -641,7 +694,14 @@ pub fn lower_generic_equip_methods_with_defaults(
                 if p.node.name.node == "self" {
                     continue;
                 }
-                let gir_type = substitute_and_map_type(ctx, &p.node.type_.node, &subs);
+                let base_type = substitute_and_map_type(ctx, &p.node.type_.node, &subs);
+                let gir_type = match p.node.ownership {
+                    Ownership::MutableBorrow => ctx.register_mut_ptr_type(base_type),
+                    Ownership::Borrow if ctx.type_registry.is_move_type(base_type) => {
+                        ctx.register_mut_ptr_type(base_type)
+                    }
+                    _ => base_type,
+                };
                 ctx.drops.register_param(LocalId(pidx), gir_type, &ctx.type_registry);
                 pidx += 1;
             }
