@@ -1,0 +1,18 @@
+# Test: shared variable with early return before await.
+# Guard must be released on early return path.
+
+async int maybe_inc(int &val, bool do_it):
+    if do_it == false:
+        return val
+    val = val + 1
+    return val
+
+async void main():
+    shared int x = 10
+    Task[int] t1 = spawn maybe_inc(&x, false)
+    int r1 = t1.await()
+    print(r1)
+    Task[int] t2 = spawn maybe_inc(&x, true)
+    int r2 = t2.await()
+    print(r2)
+    print(x)

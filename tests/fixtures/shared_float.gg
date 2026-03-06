@@ -1,0 +1,13 @@
+# Test: shared float across spawn/await.
+# CFA should promote to Shared[Mutex[float]].
+
+async void add_half(float &val):
+    val = val + 0.5
+
+async void main():
+    shared float x = 1.5
+    Task[void] t1 = spawn add_half(&x)
+    Task[void] t2 = spawn add_half(&x)
+    t1.await()
+    t2.await()
+    print(x)

@@ -2925,8 +2925,8 @@ static inline int64_t gorget_shared_array_len(GorgetShared* s) {
 "#;
 
 /// Mutex[T] — async-compatible mutex returning a Guard[T] RAII handle.
-/// Lock is blocking in V1 (uses pthread_mutex_lock); async poll variant
-/// (gorget_mutex_poll_lock) is stubbed for future waker integration.
+/// Blocking lock via `gorget_mutex_lock` (uses pthread_mutex_lock).
+/// Async poll variant `gorget_mutex_poll_lock` supports waker-based notification.
 pub const MUTEX_RUNTIME: &str = r#"
 // ── Mutex[T] + Guard[T] ──
 typedef struct GorgetMutex {

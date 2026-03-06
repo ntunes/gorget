@@ -1,0 +1,14 @@
+# Test: shared str across spawn (read-only in tasks).
+# str is Copy, so CFA should choose ARC-only strategy.
+
+async int count_chars(str s):
+    return s.len()
+
+async void main():
+    shared str x = "hello"
+    Task[int] t1 = spawn count_chars(x)
+    Task[int] t2 = spawn count_chars(x)
+    int r1 = t1.await()
+    int r2 = t2.await()
+    print(r1)
+    print(r2)

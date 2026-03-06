@@ -264,9 +264,7 @@ fn lower_shared_var_decl(
 
     // Resolve inner type and lower init value
     let inner_type = ctx.resolve_var_type(type_, value);
-    let inner_c = ctx.type_name_for_id(inner_type)
-        .unwrap_or("int64_t")
-        .to_string();
+    let inner_c = ctx.c_type_name_for_id(inner_type);
 
     let prev_expected = ctx.expected_type;
     ctx.expected_type = Some(inner_type);
@@ -465,7 +463,7 @@ fn lower_assign(
                     match kind {
                         SharedLocalKind::Mutex => {
                             let operand = lower_expr(ctx, builder, value);
-                            let inner_c = ctx.type_name_for_id(inner_type).unwrap_or("int64_t").to_string();
+                            let inner_c = ctx.c_type_name_for_id(inner_type);
                             let mutex_type = ctx.type_mapper.lookup_named(&format!("Mutex__{inner_c}")).unwrap_or(inner_type);
                             super::exprs::emit_shared_mutex_lock_set(ctx, builder, hidden_local, mutex_type, inner_type, operand);
                             return;
@@ -714,7 +712,7 @@ fn lower_compound_assign(
                 use super::context::SharedLocalKind;
                 match kind {
                     SharedLocalKind::Mutex => {
-                        let inner_c = ctx.type_name_for_id(inner_type).unwrap_or("int64_t").to_string();
+                        let inner_c = ctx.c_type_name_for_id(inner_type);
                         let mutex_type = ctx.type_mapper.lookup_named(&format!("Mutex__{inner_c}")).unwrap_or(inner_type);
                         let cur_val = super::exprs::emit_shared_mutex_lock_get(ctx, builder, hidden_local, mutex_type, inner_type);
                         let rhs = lower_expr(ctx, builder, value);

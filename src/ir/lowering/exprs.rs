@@ -53,9 +53,7 @@ pub fn emit_shared_mutex_lock_get(
     let get_fn = format!("{shared_mangled}__get");
     let mutex_val = builder.call(&get_fn, vec![FunctionBuilder::copy(shared_mutex_local)], mutex_type);
     // Now lock+get+release the extracted Mutex
-    let inner_c = ctx.type_name_for_id(inner_type)
-        .unwrap_or("int64_t")
-        .to_string();
+    let inner_c = ctx.c_type_name_for_id(inner_type);
     let guard_mangled = format!("Guard__{inner_c}");
     let guard_type = ctx.type_mapper.lookup_named(&guard_mangled)
         .unwrap_or(inner_type);
@@ -86,9 +84,7 @@ pub fn emit_shared_mutex_lock_set(
     let shared_mangled = format!("Shared__{mutex_c}");
     let get_fn = format!("{shared_mangled}__get");
     let mutex_val = builder.call(&get_fn, vec![FunctionBuilder::copy(shared_mutex_local)], mutex_type);
-    let inner_c = ctx.type_name_for_id(inner_type)
-        .unwrap_or("int64_t")
-        .to_string();
+    let inner_c = ctx.c_type_name_for_id(inner_type);
     let guard_mangled = format!("Guard__{inner_c}");
     let guard_type = ctx.type_mapper.lookup_named(&guard_mangled)
         .unwrap_or(inner_type);
@@ -110,9 +106,7 @@ pub fn emit_shared_get(
     shared_local: LocalId,
     inner_type: TypeId,
 ) -> Operand {
-    let inner_c = ctx.type_name_for_id(inner_type)
-        .unwrap_or("int64_t")
-        .to_string();
+    let inner_c = ctx.c_type_name_for_id(inner_type);
     let shared_mangled = format!("Shared__{inner_c}");
     let get_fn = format!("{shared_mangled}__get");
     let val = builder.call(&get_fn, vec![FunctionBuilder::copy(shared_local)], inner_type);
@@ -152,9 +146,7 @@ pub fn emit_rwlock_read_get(
     rwlock_local: LocalId,
     inner_type: TypeId,
 ) -> Operand {
-    let inner_c = ctx.type_name_for_id(inner_type)
-        .unwrap_or("int64_t")
-        .to_string();
+    let inner_c = ctx.c_type_name_for_id(inner_type);
     let rwlock_mangled = format!("RWLock__{inner_c}");
     let read_guard_mangled = format!("ReadGuard__{inner_c}");
     let read_guard_type = ctx.type_mapper.lookup_named(&read_guard_mangled)
@@ -179,9 +171,7 @@ pub fn emit_rwlock_write_set(
     inner_type: TypeId,
     value: Operand,
 ) {
-    let inner_c = ctx.type_name_for_id(inner_type)
-        .unwrap_or("int64_t")
-        .to_string();
+    let inner_c = ctx.c_type_name_for_id(inner_type);
     let rwlock_mangled = format!("RWLock__{inner_c}");
     let write_guard_mangled = format!("WriteGuard__{inner_c}");
     let write_guard_type = ctx.type_mapper.lookup_named(&write_guard_mangled)
@@ -206,9 +196,7 @@ pub fn emit_rwlock_write_get(
     rwlock_local: LocalId,
     inner_type: TypeId,
 ) -> (LocalId, Operand) {
-    let inner_c = ctx.type_name_for_id(inner_type)
-        .unwrap_or("int64_t")
-        .to_string();
+    let inner_c = ctx.c_type_name_for_id(inner_type);
     let rwlock_mangled = format!("RWLock__{inner_c}");
     let write_guard_mangled = format!("WriteGuard__{inner_c}");
     let write_guard_type = ctx.type_mapper.lookup_named(&write_guard_mangled)
@@ -231,9 +219,7 @@ pub fn emit_rwlock_write_finish(
     inner_type: TypeId,
     new_value: Operand,
 ) {
-    let inner_c = ctx.type_name_for_id(inner_type)
-        .unwrap_or("int64_t")
-        .to_string();
+    let inner_c = ctx.c_type_name_for_id(inner_type);
     let write_guard_mangled = format!("WriteGuard__{inner_c}");
     let set_fn = format!("{write_guard_mangled}__set");
     let release_fn = format!("{write_guard_mangled}__drop");
@@ -352,7 +338,7 @@ fn lower_expr_inner(
                             emit_atomic_load(ctx, builder, hidden_local, inner_type, &atomic_name)
                         }
                         SharedLocalKind::Mutex => {
-                            let inner_c = ctx.type_name_for_id(inner_type).unwrap_or("int64_t").to_string();
+                            let inner_c = ctx.c_type_name_for_id(inner_type);
                             let mutex_type = ctx.type_mapper.lookup_named(&format!("Mutex__{inner_c}")).unwrap_or(inner_type);
                             emit_shared_mutex_lock_get(ctx, builder, hidden_local, mutex_type, inner_type)
                         }
@@ -983,9 +969,7 @@ fn lower_expr_inner(
                                 // already-lowered source function.
                                 use crate::ir::transforms::shared_async::{SharedArgSpec, PendingSharedVariant};
                                 let specs: Vec<SharedArgSpec> = shared_spawn_args.iter().map(|sa| {
-                                    let inner_c = ctx.type_name_for_id(sa.inner_type)
-                                        .unwrap_or("int64_t")
-                                        .to_string();
+                                    let inner_c = ctx.c_type_name_for_id(sa.inner_type);
                                     let mutex_mangled = format!("Mutex__{inner_c}");
                                     let guard_mangled = format!("Guard__{inner_c}");
                                     let mutex_type = ctx.type_mapper.lookup_named(&mutex_mangled)
@@ -1317,7 +1301,7 @@ fn lower_struct_literal(
         let inner_c = if let Some(rest) = effective_name.strip_prefix("Shared__") {
             rest.to_string()
         } else {
-            ctx.type_name_for_id(val_type).unwrap_or("int64_t").to_string()
+            ctx.c_type_name_for_id(val_type)
         };
         let shared_mangled = format!("Shared__{inner_c}");
         let shared_type = if let Some(tid) = ctx.type_mapper.lookup_named(&shared_mangled) {
@@ -1353,7 +1337,7 @@ fn lower_struct_literal(
         let inner_c = if let Some(rest) = effective_name.strip_prefix("Mutex__") {
             rest.to_string()
         } else {
-            ctx.type_name_for_id(val_type).unwrap_or("int64_t").to_string()
+            ctx.c_type_name_for_id(val_type)
         };
         let mutex_mangled = format!("Mutex__{inner_c}");
         let mutex_type = if let Some(tid) = ctx.type_mapper.lookup_named(&mutex_mangled) {
@@ -1408,7 +1392,7 @@ fn lower_struct_literal(
             let inner_c = if let Some(rest) = effective_name.strip_prefix("RWLock__") {
                 rest.to_string()
             } else {
-                ctx.type_name_for_id(val_type).unwrap_or("int64_t").to_string()
+                ctx.c_type_name_for_id(val_type)
             };
             let rw_mangled = format!("RWLock__{inner_c}");
             let rw_type = if let Some(tid) = ctx.type_mapper.lookup_named(&rw_mangled) {
@@ -1712,7 +1696,7 @@ fn lower_method_call(
             if name == "Box" && method_name == "new" && !args.is_empty() {
                 let val = lower_expr(ctx, builder, &args[0].node.value);
                 let inner_type = infer_operand_type_full(ctx, &val, builder);
-                let inner_c = ctx.type_name_for_id(inner_type).unwrap_or("int64_t").to_string();
+                let inner_c = ctx.c_type_name_for_id(inner_type);
 
                 // For Box.new(closure): return the closure struct directly in the GIR path.
                 // Box[Callable[...]] variables use needs_reinfer to pick up the __Closure_N type,
@@ -6569,9 +6553,7 @@ fn build_shared_token_wrapper(
 
         match sa.kind {
             SharedLocalKind::Mutex => {
-                let inner_c = ctx.type_name_for_id(sa.inner_type)
-                    .unwrap_or("int64_t")
-                    .to_string();
+                let inner_c = ctx.c_type_name_for_id(sa.inner_type);
                 let guard_mangled = format!("Guard__{inner_c}");
                 let mutex_mangled = format!("Mutex__{inner_c}");
                 let mutex_type = ctx.type_mapper.lookup_named(&mutex_mangled)
@@ -6618,9 +6600,7 @@ fn build_shared_token_wrapper(
             }
             SharedLocalKind::SharedArc => {
                 // ARC-only: get a copy (no locking — no ordering constraint)
-                let inner_c = ctx.type_name_for_id(sa.inner_type)
-                    .unwrap_or("int64_t")
-                    .to_string();
+                let inner_c = ctx.c_type_name_for_id(sa.inner_type);
                 let shared_mangled = format!("Shared__{inner_c}");
                 let val = builder.call(
                     &format!("{shared_mangled}__get"),
@@ -6640,9 +6620,7 @@ fn build_shared_token_wrapper(
                 shared_call_operands.insert(sa.arg_index, FunctionBuilder::copy(val));
             }
             SharedLocalKind::RwLock => {
-                let inner_c = ctx.type_name_for_id(sa.inner_type)
-                    .unwrap_or("int64_t")
-                    .to_string();
+                let inner_c = ctx.c_type_name_for_id(sa.inner_type);
                 let rwlock_mangled = format!("RWLock__{inner_c}");
 
                 if sa.is_mutable {

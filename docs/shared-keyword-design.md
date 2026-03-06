@@ -58,7 +58,7 @@ Multiple shared bindings: tokens acquired in declaration order (by DefId), relea
 - **Missing `shared` Suggestion (§7.2):** DONE — `SpawnWithBorrowedRef` error includes variable name and suggests `shared` declaration
 - **Unnecessary `shared` Warning (§7.4):** DONE — warns when shared binding never crosses concurrency boundary
 - **Phase 8 (Stale-Condition Warning §3.4):** DONE — locals derived from shared bindings are tracked; at await points, they become stale; using stale locals in If/While/Match conditions emits a warning; reassignment clears staleness
-- **Phase 9 (Tests + Polish):** TODO
+- **Phase 9 (Tests + Polish):** DONE — 7 new integration tests (float, string, atomic error, stale while/match, multi-spawn, early return). Fixed `c_type_name_for_id` bug (primitives fell through to int64_t). Updated outdated comments.
 
 ## See Also
 

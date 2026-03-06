@@ -7621,6 +7621,41 @@ fn shared_stale_refreshed() {
 }
 
 #[test]
+fn shared_float() {
+    run_gg("shared_float.gg", "2.500000");
+}
+
+#[test]
+fn shared_string() {
+    run_gg("shared_string.gg", "5\n5");
+}
+
+#[test]
+fn shared_atomic_error() {
+    check_gg_fails("shared_atomic_error.gg", "int or bool");
+}
+
+#[test]
+fn shared_stale_while() {
+    run_gg("shared_stale_while.gg", "stale while fired\n1");
+}
+
+#[test]
+fn shared_stale_match() {
+    run_gg("shared_stale_match.gg", "stale match fired\n1");
+}
+
+#[test]
+fn shared_multi_spawn() {
+    run_gg("shared_multi_spawn.gg", "2\n11\n20");
+}
+
+#[test]
+fn shared_early_return() {
+    run_gg("shared_early_return.gg", "10\n11\n11");
+}
+
+#[test]
 fn async_task_group() {
     run_gg("async_task_group.gg", "2");
 }

@@ -377,6 +377,29 @@ impl<'a> LoweringContext<'a> {
             .find_map(|(name, &id)| if id == type_id { Some(name.as_str()) } else { None })
     }
 
+    /// Get the C type name for a GIR TypeId, including primitive types.
+    /// Unlike `type_name_for_id`, this also handles int, float, bool, str, etc.
+    /// Falls back to named_types cache for user-defined types.
+    pub fn c_type_name_for_id(&self, type_id: TypeId) -> String {
+        use crate::ir::types::*;
+        match type_id {
+            BOOL_TYPE => "bool".to_string(),
+            I8_TYPE => "int8_t".to_string(),
+            I16_TYPE => "int16_t".to_string(),
+            I32_TYPE => "int32_t".to_string(),
+            I64_TYPE => "int64_t".to_string(),
+            U8_TYPE => "uint8_t".to_string(),
+            U16_TYPE => "uint16_t".to_string(),
+            U32_TYPE => "uint32_t".to_string(),
+            U64_TYPE => "uint64_t".to_string(),
+            F32_TYPE => "float".to_string(),
+            F64_TYPE => "double".to_string(),
+            _ => self.type_name_for_id(type_id)
+                .unwrap_or("int64_t")
+                .to_string(),
+        }
+    }
+
     /// Register closure info for call dispatch.
     pub fn register_closure_info(
         &mut self,

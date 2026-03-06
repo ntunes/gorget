@@ -1,0 +1,6 @@
+# Test: shared(atomic) with float should fail at compile time.
+# Only int and bool are valid for shared(atomic).
+
+async void main():
+    shared(atomic) float x = 1.5
+    print(x)

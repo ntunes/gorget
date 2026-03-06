@@ -1,0 +1,17 @@
+# Test: stale-condition warning in while loop condition.
+# Reading a shared variable into a local before an await, then using
+# the local in a while condition after the await, should warn.
+# The warning is non-fatal — program still compiles and runs.
+
+async void worker(int &counter):
+    counter = counter + 1
+
+async void main():
+    shared int x = 0
+    Task[void] t = spawn worker(&x)
+    int val = x
+    t.await()
+    while val == 0:
+        print("stale while fired")
+        val = 1
+    print(x)

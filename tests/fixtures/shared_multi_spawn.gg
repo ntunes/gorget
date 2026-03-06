@@ -1,0 +1,20 @@
+# Test: 3 shared tokens with 3 spawned tasks and multiple awaits.
+# Exercises acquisition ordering (ascending DefId) and release at await points.
+
+async void inc(int &a, int &b):
+    a = a + 1
+    b = b + 10
+
+async void main():
+    shared int x = 0
+    shared int y = 0
+    shared int z = 0
+    Task[void] t1 = spawn inc(&x, &y)
+    Task[void] t2 = spawn inc(&y, &z)
+    t1.await()
+    t2.await()
+    Task[void] t3 = spawn inc(&x, &z)
+    t3.await()
+    print(x)
+    print(y)
+    print(z)
