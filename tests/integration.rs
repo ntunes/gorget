@@ -7083,6 +7083,11 @@ fn async_for_else() {
     run_gg("async_for_else.gg", "6\n-1");
 }
 
+#[test]
+fn async_prefix_await() {
+    run_gg("async_prefix_await.gg", "14");
+}
+
 // Arena Allocator
 // ═══════════════════════════════════════════════════════════════
 

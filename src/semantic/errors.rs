@@ -271,6 +271,9 @@ pub enum SemanticErrorKind {
     /// Orphan rule violation: neither the trait nor the type is defined locally.
     OrphanImpl { trait_: String, type_: String },
 
+    /// `await expr.await()` — expression is awaited twice.
+    DoubleAwait,
+
     /// Variable read while mutably captured by a live closure.
     ReadWhileMutCaptured { var_name: String, closure_name: String },
 
@@ -534,6 +537,9 @@ impl std::fmt::Display for SemanticError {
                     f,
                     "orphan rule: `equip {type_} with {trait_}` requires that either `{type_}` or `{trait_}` is defined in this module"
                 )
+            }
+            SemanticErrorKind::DoubleAwait => {
+                write!(f, "expression is awaited twice — use either `await expr` or `expr.await()`, not both")
             }
             SemanticErrorKind::ReadWhileMutCaptured { var_name, closure_name } => {
                 write!(f, "cannot read `{var_name}` while it is mutably captured by closure `{closure_name}`")

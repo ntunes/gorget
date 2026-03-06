@@ -1723,20 +1723,27 @@ Person alice = Person("Alice", 30)
 ### 7.25 Await and Spawn
 
 ```ebnf
-await_expr = expr ".await()" ;
+await_expr = "await" expr | expr ".await()" ;
 spawn_expr = "spawn" expr ;
 ```
 
-- `.await()` suspends until an async operation completes. It is a postfix operator written as a method-call suffix on the expression being awaited. Must appear inside an `async` function.
+- `await` suspends until an async operation completes. Both prefix (`await expr`) and postfix (`expr.await()`) forms are supported and equivalent. Must appear inside an `async` function. Combining both on the same expression (`await expr.await()`) is a compile error.
 - `spawn` launches an async task concurrently, returning a `Task[T]`.
 
-The postfix syntax chains naturally with method calls and keeps the data-flow direction left-to-right:
+The postfix syntax chains naturally with method calls; the prefix syntax makes suspension points more visible:
 
 ```gorget
+# Prefix await — suspension point stands out
+int result = await add_async(3, 4)
+String data = await fetch("https://example.com")
+
 # Postfix .await() chains naturally
 String body = http.get(url).await().text()
 String data = fetch("https://example.com").await()
 int result = add(f().await(), g().await()).await()
+
+# ERROR: double await
+int x = await fetch().await()   # compile error: expression is awaited twice
 ```
 
 #### Suspension-Point Safety

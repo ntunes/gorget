@@ -1,0 +1,11 @@
+async int double_it(int x):
+    return x * 2
+
+async int add_async(int a, int b):
+    int x = await double_it(a)
+    int y = await double_it(b)
+    return x + y
+
+async void main():
+    int result = await add_async(3, 4)
+    print(result)

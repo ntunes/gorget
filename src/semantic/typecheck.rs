@@ -1292,6 +1292,9 @@ impl<'a> TypeChecker<'a> {
             }
 
             Expr::Await { expr: inner } => {
+                if let Expr::Await { .. } = &inner.node {
+                    self.error(SemanticErrorKind::DoubleAwait, expr.span);
+                }
                 let inner_type = self.infer_expr(inner);
                 if !self.current_function_is_async {
                     self.error(SemanticErrorKind::AwaitOutsideAsync, expr.span);
@@ -4029,6 +4032,21 @@ void main():
                 super::SemanticErrorKind::AwaitOutsideAsync
             )),
             "expected AwaitOutsideAsync error, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn double_await_rejected() {
+        let errors = check(
+            "async int fetch():\n    return 1\nasync void caller():\n    int x = await fetch().await()\n"
+        );
+        assert!(
+            errors.iter().any(|e| matches!(
+                &e.kind,
+                super::SemanticErrorKind::DoubleAwait
+            )),
+            "expected DoubleAwait error, got: {:?}",
             errors
         );
     }

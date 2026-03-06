@@ -421,6 +421,19 @@ impl Parser {
                 ))
             }
 
+            // Prefix await
+            Token::Keyword(Keyword::Await) => {
+                self.advance();
+                let operand = self.parse_expr_bp(2)?;
+                let end = operand.span;
+                Ok(Spanned::new(
+                    Expr::Await {
+                        expr: Box::new(operand),
+                    },
+                    start.merge(end),
+                ))
+            }
+
             // If expression
             Token::Keyword(Keyword::If) => self.parse_if_expr(),
 
