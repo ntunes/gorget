@@ -1556,6 +1556,51 @@ fn test_parenthesized_tuple_auto_still_works() {
     panic!("unexpected AST shape");
 }
 
+// ── shared keyword ───────────────────────────────────────────
+
+#[test]
+fn test_shared_var_decl() {
+    let module = parse("void main():\n    shared int count = 0\n");
+    if let Item::Function(ref f) = module.items[0].node {
+        if let FunctionBody::Block(ref block) = f.body {
+            if let Stmt::VarDecl { shared, type_, .. } = &block.stmts[0].node {
+                assert_eq!(shared, &SharedKind::Auto);
+                assert!(matches!(&type_.node, Type::Primitive(PrimitiveType::Int)));
+                return;
+            }
+        }
+    }
+    panic!("expected shared VarDecl");
+}
+
+#[test]
+fn test_shared_rwlock_var_decl() {
+    let module = parse("void main():\n    shared(rwlock) int cache = 0\n");
+    if let Item::Function(ref f) = module.items[0].node {
+        if let FunctionBody::Block(ref block) = f.body {
+            if let Stmt::VarDecl { shared, .. } = &block.stmts[0].node {
+                assert_eq!(shared, &SharedKind::RwLock);
+                return;
+            }
+        }
+    }
+    panic!("expected shared(rwlock) VarDecl");
+}
+
+#[test]
+fn test_shared_atomic_var_decl() {
+    let module = parse("void main():\n    shared(atomic) int flags = 0\n");
+    if let Item::Function(ref f) = module.items[0].node {
+        if let FunctionBody::Block(ref block) = f.body {
+            if let Stmt::VarDecl { shared, .. } = &block.stmts[0].node {
+                assert_eq!(shared, &SharedKind::Atomic);
+                return;
+            }
+        }
+    }
+    panic!("expected shared(atomic) VarDecl");
+}
+
 #[test]
 fn test_paren_expr_before_colon_not_closure() {
     // (A == B or C == D) before a colon must parse as a grouped expression, not a closure.

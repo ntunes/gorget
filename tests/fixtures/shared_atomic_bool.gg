@@ -1,0 +1,12 @@
+async void toggle(AtomicBool flag):
+    flag.store(true)
+
+async void main():
+    shared(atomic) bool done = false
+    print(done)
+    done = true
+    print(done)
+    done = false
+    Task[void] t = spawn toggle(done)
+    t.await()
+    print(done)

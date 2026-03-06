@@ -1,0 +1,16 @@
+# Test: token release at await, reacquire after resume (§3.1/§3.2).
+# The spawned function has an await point inside — the token should be
+# released before the await and reacquired after.
+
+from std.async import sleep
+
+async void delayed_add(int &counter, int amount):
+    counter = counter + amount
+    sleep(10)
+    counter = counter + amount
+
+async void main():
+    shared int x = 0
+    Task[void] t = spawn delayed_add(&x, 5)
+    t.await()
+    print(x)

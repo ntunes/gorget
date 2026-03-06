@@ -1,0 +1,9 @@
+async void print_val(int v):
+    print(v)
+
+async void main():
+    shared int x = 99
+    print(x)
+    Task[void] t = spawn print_val(x)
+    t.await()
+    print(x)

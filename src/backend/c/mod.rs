@@ -114,16 +114,20 @@ fn map_stdlib_name(name: &str) -> &str {
         "Process__read_stdout" => "gorget_process_read_stdout",
         "Process__read_stderr" => "gorget_process_read_stderr",
         // AtomicInt methods
+        "AtomicInt__new" => "gorget_atomic_int_new",
         "AtomicInt__load" => "gorget_atomic_int_load",
         "AtomicInt__store" => "gorget_atomic_int_store",
         "AtomicInt__add" => "gorget_atomic_int_add",
         "AtomicInt__sub" => "gorget_atomic_int_sub",
         "AtomicInt__compare_exchange" => "gorget_atomic_int_compare_exchange",
+        "AtomicInt__free" => "gorget_atomic_int_free",
         // AtomicBool methods
+        "AtomicBool__new" => "gorget_atomic_bool_new",
         "AtomicBool__load" => "gorget_atomic_bool_load",
         "AtomicBool__store" => "gorget_atomic_bool_store",
         "AtomicBool__swap" => "gorget_atomic_bool_swap",
         "AtomicBool__compare_exchange" => "gorget_atomic_bool_compare_exchange",
+        "AtomicBool__free" => "gorget_atomic_bool_free",
         // Barrier methods
         "Barrier__wait" => "gorget_barrier_wait",
         // CondVar methods
@@ -671,17 +675,19 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
     // Type definitions (structs and enums), skipping unmonomorphized templates
     emit_type_definitions(&mut out, module);
 
-    // Emit Shared[T], Weak[T], and Mutex[T] wrapper functions AFTER user struct typedefs
-    // so that inner types like 'Config' are already declared when used in wrapper sigs.
-    if needs_shared {
-        emit_shared_defs(&mut out, module);
-        emit_weak_defs(&mut out, module);
-    }
+    // Emit Mutex[T], RWLock[T] wrappers BEFORE Shared[T] — Shared[Mutex[T]] references Mutex__T.
     if needs_mutex {
         emit_mutex_defs(&mut out, module);
     }
     if !module.rwlock_types.is_empty() {
         emit_rwlock_defs(&mut out, module);
+    }
+    // Emit Shared[T] and Weak[T] wrapper functions AFTER mutex/rwlock typedefs
+    // (Shared[Mutex[T]] needs Mutex__T to be declared) and after user struct typedefs
+    // (Shared[Config] needs Config to be declared).
+    if needs_shared {
+        emit_shared_defs(&mut out, module);
+        emit_weak_defs(&mut out, module);
     }
     if !module.thread_types.is_empty() || !module.thread_spawned_fns.is_empty() {
         emit_thread_defs(&mut out, module);
@@ -1299,6 +1305,10 @@ fn emit_mutex_defs(out: &mut String, module: &Module) {
         let _ = writeln!(out,
             "static inline void {guard_name}__set({guard_name}* self, {elem_c} val) {{ \
              *({elem_c}*)self->ptr = val; }}");
+        // Guard__T__get_ptr(&self) → returns mutable pointer to inner value (for token wrappers)
+        let _ = writeln!(out,
+            "static inline {elem_c}* {guard_name}__get_ptr({guard_name}* self) {{ \
+             return ({elem_c}*)self->ptr; }}");
         // Guard__T__drop(&self) → releases the mutex (called by RAII drop)
         let _ = writeln!(out,
             "static inline void {guard_name}__drop({guard_name}* self) {{ \
@@ -1349,6 +1359,10 @@ fn emit_rwlock_defs(out: &mut String, module: &Module) {
         let _ = writeln!(out,
             "static inline void {write_guard}__set({write_guard}* self, {elem_c} val) {{ \
              *({elem_c}*)self->ptr = val; }}");
+        // WriteGuard__T__get_ptr(&self) → returns mutable pointer to inner value (for token wrappers)
+        let _ = writeln!(out,
+            "static inline {elem_c}* {write_guard}__get_ptr({write_guard}* self) {{ \
+             return ({elem_c}*)self->ptr; }}");
         // WriteGuard__T__drop(&self)
         let _ = writeln!(out,
             "static inline void {write_guard}__drop({write_guard}* self) {{ \

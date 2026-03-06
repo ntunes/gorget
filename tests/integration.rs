@@ -7551,6 +7551,71 @@ fn mutex_basic() {
 }
 
 #[test]
+fn mutex_async_contention() {
+    run_gg("mutex_async_contention.gg", "400");
+}
+
+#[test]
+fn shared_multi_token() {
+    run_gg("shared_multi_token.gg", "21\n11\n12\n22");
+}
+
+#[test]
+fn shared_await_release() {
+    run_gg("shared_await_release.gg", "10");
+}
+
+#[test]
+fn shared_spawn_mutex() {
+    run_gg("shared_spawn_mutex.gg", "2");
+}
+
+#[test]
+fn shared_spawn_readonly() {
+    run_gg("shared_spawn_readonly.gg", "42");
+}
+
+#[test]
+fn shared_arc_only() {
+    run_gg("shared_arc_only.gg", "99\n99\n99");
+}
+
+#[test]
+fn shared_atomic() {
+    run_gg("shared_atomic.gg", "0\n10\n15\n12\n212");
+}
+
+#[test]
+fn shared_atomic_bool() {
+    run_gg("shared_atomic_bool.gg", "false\ntrue\ntrue");
+}
+
+#[test]
+fn shared_rwlock() {
+    run_gg("shared_rwlock.gg", "10\n20\n25\n25\n99");
+}
+
+#[test]
+fn shared_keyword_local() {
+    run_gg("shared_keyword_local.gg", "10\n42\n50");
+}
+
+#[test]
+fn shared_transparent() {
+    run_gg("shared_transparent.gg", "5\n100\n150\n160");
+}
+
+#[test]
+fn shared_stale_warning() {
+    run_gg("shared_stale_warning.gg", "was zero before await\n1");
+}
+
+#[test]
+fn shared_stale_refreshed() {
+    run_gg("shared_stale_refreshed.gg", "refreshed\n1");
+}
+
+#[test]
 fn async_task_group() {
     run_gg("async_task_group.gg", "2");
 }

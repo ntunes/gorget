@@ -154,6 +154,10 @@ struct BranchState {
     mut_captured_vars: FxHashMap<DefId, Vec<(String, DefId, Span)>>,
     /// Reverse map: closure DefId → captured variable DefIds.
     mut_capture_owners: FxHashMap<DefId, Vec<DefId>>,
+    /// Locals derived from shared variables (not yet stale).
+    shared_derived: FxHashMap<DefId, (String, String)>,
+    /// Locals derived from shared that became stale after await.
+    stale_shared_derived: FxHashMap<DefId, (String, String)>,
     /// Whether this branch always diverges (return/break/continue/throw).
     diverges: bool,
 }
@@ -376,6 +380,23 @@ struct BorrowChecker<'a> {
     /// mut_captured_vars.  Used to clean up mut_captured_vars when the closure is moved
     /// or goes out of scope.
     mut_capture_owners: FxHashMap<DefId, Vec<DefId>>,
+    /// DefIds of variables declared with `shared` — maps to (SharedKind, name, span).
+    shared_var_defs: FxHashMap<DefId, (crate::parser::ast::SharedKind, String, Span)>,
+    /// Locals derived from a shared binding (read before any await).
+    /// Maps local DefId → (local_name, shared_var_name).
+    shared_derived: FxHashMap<DefId, (String, String)>,
+    /// Locals derived from shared that have become stale (an await occurred
+    /// between the read and the current point). Using these in branch conditions
+    /// triggers a warning.
+    stale_shared_derived: FxHashMap<DefId, (String, String)>,
+    /// Shared variables that have been written to (assigned or compound-assigned).
+    shared_written: FxHashSet<DefId>,
+    /// Shared variables that have been passed as spawn arguments.
+    shared_spawned: FxHashSet<DefId>,
+    /// Output: CFA decisions populated during analysis.
+    shared_out: FxHashMap<DefId, super::SharedStrategy>,
+    /// Stale-condition warnings collected during analysis (§3.4).
+    stale_warnings: Vec<super::errors::SemanticWarning>,
 }
 
 impl<'a> BorrowChecker<'a> {
@@ -423,6 +444,13 @@ impl<'a> BorrowChecker<'a> {
             pending_capture_set: None,
             mut_captured_vars: FxHashMap::default(),
             mut_capture_owners: FxHashMap::default(),
+            shared_var_defs: FxHashMap::default(),
+            shared_derived: FxHashMap::default(),
+            stale_shared_derived: FxHashMap::default(),
+            shared_written: FxHashSet::default(),
+            shared_spawned: FxHashSet::default(),
+            shared_out: FxHashMap::default(),
+            stale_warnings: Vec::new(),
         }
     }
 
@@ -978,6 +1006,8 @@ impl<'a> BorrowChecker<'a> {
             await_invalidated: self.await_invalidated.clone(),
             mut_captured_vars: self.mut_captured_vars.clone(),
             mut_capture_owners: self.mut_capture_owners.clone(),
+            shared_derived: self.shared_derived.clone(),
+            stale_shared_derived: self.stale_shared_derived.clone(),
             diverges: self.diverged,
         }
     }
@@ -991,6 +1021,8 @@ impl<'a> BorrowChecker<'a> {
         self.await_invalidated = state.await_invalidated.clone();
         self.mut_captured_vars = state.mut_captured_vars.clone();
         self.mut_capture_owners = state.mut_capture_owners.clone();
+        self.shared_derived = state.shared_derived.clone();
+        self.stale_shared_derived = state.stale_shared_derived.clone();
         self.diverged = state.diverges;
     }
 
@@ -1016,6 +1048,8 @@ impl<'a> BorrowChecker<'a> {
             self.await_invalidated = states[0].await_invalidated.clone();
             self.mut_captured_vars = states[0].mut_captured_vars.clone();
             self.mut_capture_owners = states[0].mut_capture_owners.clone();
+            self.shared_derived = states[0].shared_derived.clone();
+            self.stale_shared_derived = states[0].stale_shared_derived.clone();
             self.diverged = true;
             return;
         }
@@ -1027,6 +1061,8 @@ impl<'a> BorrowChecker<'a> {
         let mut merged_await_invalidated = live[0].await_invalidated.clone();
         let mut merged_mut_captured = live[0].mut_captured_vars.clone();
         let mut merged_mut_owners = live[0].mut_capture_owners.clone();
+        let mut merged_shared_derived = live[0].shared_derived.clone();
+        let mut merged_stale_shared = live[0].stale_shared_derived.clone();
 
         for state in &live[1..] {
             // Merge var states: moved in either = moved
@@ -1070,6 +1106,14 @@ impl<'a> BorrowChecker<'a> {
                     }
                 }
             }
+            // Merge shared_derived: union (conservative — if any branch has it, keep)
+            for (def_id, info) in &state.shared_derived {
+                merged_shared_derived.entry(*def_id).or_insert_with(|| info.clone());
+            }
+            // Merge stale_shared_derived: union (conservative — stale in any branch = stale)
+            for (def_id, info) in &state.stale_shared_derived {
+                merged_stale_shared.entry(*def_id).or_insert_with(|| info.clone());
+            }
         }
 
         self.var_states = merged_vars;
@@ -1079,7 +1123,73 @@ impl<'a> BorrowChecker<'a> {
         self.await_invalidated = merged_await_invalidated;
         self.mut_captured_vars = merged_mut_captured;
         self.mut_capture_owners = merged_mut_owners;
+        self.shared_derived = merged_shared_derived;
+        self.stale_shared_derived = merged_stale_shared;
         self.diverged = false;
+    }
+
+    /// §3.4: Check a condition/scrutinee expression for stale-shared-derived locals
+    /// and emit a warning if found.
+    fn check_stale_condition(&mut self, condition: &Spanned<Expr>) {
+        if let Some((local_name, shared_name, span)) = self.find_stale_in_condition(condition) {
+            self.stale_warnings.push(super::errors::SemanticWarning {
+                kind: super::errors::SemanticWarningKind::StaleSharedCondition {
+                    local_name,
+                    shared_name,
+                },
+                span,
+            });
+        }
+    }
+
+    /// Find the first shared variable referenced in an expression, using span for resolution.
+    fn find_shared_ref_in_expr_spanned(&self, expr: &Spanned<Expr>) -> Option<String> {
+        match &expr.node {
+            Expr::Identifier(name) => {
+                if let Some(&def_id) = self.resolution_map.get(&expr.span.start) {
+                    if self.shared_var_defs.contains_key(&def_id) {
+                        return Some(name.clone());
+                    }
+                }
+                None
+            }
+            Expr::BinaryOp { left, right, .. } => {
+                self.find_shared_ref_in_expr_spanned(left)
+                    .or_else(|| self.find_shared_ref_in_expr_spanned(right))
+            }
+            Expr::UnaryOp { operand, .. } => self.find_shared_ref_in_expr_spanned(operand),
+            _ => None,
+        }
+    }
+
+    /// Check a condition expression for uses of stale-shared-derived locals.
+    /// Returns the first match found as (local_name, shared_name, span).
+    fn find_stale_in_condition(&self, expr: &Spanned<Expr>) -> Option<(String, String, Span)> {
+        match &expr.node {
+            Expr::Identifier(_) => {
+                if let Some(&def_id) = self.resolution_map.get(&expr.span.start) {
+                    if let Some((local_name, shared_name)) = self.stale_shared_derived.get(&def_id) {
+                        return Some((local_name.clone(), shared_name.clone(), expr.span));
+                    }
+                }
+                None
+            }
+            Expr::BinaryOp { left, right, .. } => {
+                self.find_stale_in_condition(left)
+                    .or_else(|| self.find_stale_in_condition(right))
+            }
+            Expr::UnaryOp { operand, .. } => self.find_stale_in_condition(operand),
+            Expr::Call { callee, args, .. } => {
+                self.find_stale_in_condition(callee)
+                    .or_else(|| args.iter().find_map(|a| self.find_stale_in_condition(&a.node.value)))
+            }
+            Expr::FieldAccess { object, .. } => self.find_stale_in_condition(object),
+            Expr::MethodCall { receiver, args, .. } => {
+                self.find_stale_in_condition(receiver)
+                    .or_else(|| args.iter().find_map(|a| self.find_stale_in_condition(&a.node.value)))
+            }
+            _ => None,
+        }
     }
 
     /// Check if a DefId refers to a ConsumeCallable-typed variable.
@@ -1384,6 +1494,11 @@ impl<'a> BorrowChecker<'a> {
                     for def_id in to_invalidate {
                         self.await_invalidated.insert(def_id);
                     }
+                    // §3.4 Stale-condition: move all shared_derived entries to stale
+                    // (token released at await → cached values are stale)
+                    for (def_id, info) in self.shared_derived.drain() {
+                        self.stale_shared_derived.insert(def_id, info);
+                    }
                 }
             }
 
@@ -1411,6 +1526,8 @@ impl<'a> BorrowChecker<'a> {
                     if matches!(callee_kind, Some(DefKind::Function)) {
                         // Case 1: Direct function call — check args for borrowed origins.
                         self.check_spawn_args(args);
+                        let callee_did = self.resolution_map.get(&callee.span.start).copied();
+                        self.cfa_at_spawn(callee_did, args);
                     } else if matches!(callee_kind, Some(DefKind::Variable)) {
                         // Case 2: Closure variable call — check capture set + args.
                         let callee_def_id = self.resolution_map.get(&callee.span.start).copied();
@@ -1471,7 +1588,8 @@ impl<'a> BorrowChecker<'a> {
                     // Reject borrowed references (Param, Unknown, etc.) that might dangle.
                     let recv_origin = self.compute_expr_origin(receiver);
                     if !matches!(recv_origin, BorrowOrigin::Static | BorrowOrigin::Local(_)) {
-                        self.error(SemanticErrorKind::SpawnWithBorrowedRef, receiver.span);
+                        let recv_name = if let Expr::Identifier(n) = &receiver.node { Some(n.clone()) } else { None };
+                        self.error(SemanticErrorKind::SpawnWithBorrowedRef { name: recv_name }, receiver.span);
                     }
                     self.check_spawn_args(args);
                 } else {
@@ -1721,7 +1839,7 @@ impl<'a> BorrowChecker<'a> {
     fn check_stmt(&mut self, stmt: &Spanned<Stmt>) {
         match &stmt.node {
             Stmt::VarDecl {
-                pattern, value, type_, ..
+                pattern, value, type_, shared, ..
             } => {
                 // Check the value expression
                 self.check_expr(value);
@@ -1731,6 +1849,43 @@ impl<'a> BorrowChecker<'a> {
 
                 // Mark new bindings as Live
                 self.mark_pattern_live_spanned(pattern);
+
+                // Track shared bindings for CFA
+                if *shared != crate::parser::ast::SharedKind::None {
+                    if let Pattern::Binding(name) = &pattern.node {
+                        if let Some(def_id) = self.scopes.lookup_def_by_span(name, pattern.span)
+                            .or_else(|| self.find_def_by_name(name))
+                        {
+                            self.shared_var_defs.insert(def_id, (*shared, name.clone(), pattern.span));
+                            // Mark origin as Static — shared bindings are pointer-wrapped, safe to pass
+                            self.var_origins.insert(def_id, BorrowOrigin::Static);
+                            // For user overrides, immediately populate CFA decision
+                            match shared {
+                                crate::parser::ast::SharedKind::RwLock => {
+                                    self.shared_out.insert(def_id, super::SharedStrategy::ArcRwLock);
+                                }
+                                crate::parser::ast::SharedKind::Atomic => {
+                                    self.shared_out.insert(def_id, super::SharedStrategy::ArcAtomic);
+                                }
+                                _ => {} // Auto — decided at spawn sites
+                            }
+                        }
+                    }
+                }
+
+                // Track locals derived from shared variables (§3.4 stale-condition).
+                // Only when the VarDecl itself is not `shared` and we're in an async fn.
+                if *shared == crate::parser::ast::SharedKind::None && self.current_function_is_async {
+                    if let Pattern::Binding(local_name) = &pattern.node {
+                        if let Some(shared_name) = self.find_shared_ref_in_expr_spanned(value) {
+                            if let Some(def_id) = self.scopes.lookup_def_by_span(local_name, pattern.span)
+                                .or_else(|| self.find_def_by_name(local_name))
+                            {
+                                self.shared_derived.insert(def_id, (local_name.clone(), shared_name));
+                            }
+                        }
+                    }
+                }
 
                 // Track non-Copy variables declared inside arena scope
                 if self.arena_depth > 0 {
@@ -1844,6 +1999,24 @@ impl<'a> BorrowChecker<'a> {
             }
 
             Stmt::Assign { target, value } => {
+                // Track writes to shared variables for CFA
+                if let Expr::Identifier(_) = &target.node {
+                    if let Some(&def_id) = self.resolution_map.get(&target.span.start) {
+                        if self.shared_var_defs.contains_key(&def_id) {
+                            self.shared_written.insert(def_id);
+                        }
+                        // §3.4: Clear stale status if this local is reassigned (fresh value)
+                        self.stale_shared_derived.remove(&def_id);
+                        self.shared_derived.remove(&def_id);
+                        // If reassigning from a shared var, re-track as derived
+                        if self.current_function_is_async {
+                            if let Some(shared_name) = self.find_shared_ref_in_expr_spanned(value) {
+                                let name = self.scopes.get_def(def_id).name.clone();
+                                self.shared_derived.insert(def_id, (name, shared_name));
+                            }
+                        }
+                    }
+                }
                 // B6: When reassigning a closure variable with a new closure,
                 // release the old closure's mutable capture locks BEFORE checking
                 // the RHS. This prevents false positives where the new closure
@@ -2041,6 +2214,10 @@ impl<'a> BorrowChecker<'a> {
                                 );
                             }
                         }
+                        // Track writes to shared variables for CFA
+                        if self.shared_var_defs.contains_key(&def_id) {
+                            self.shared_written.insert(def_id);
+                        }
                     }
                 }
                 self.check_expr(target);
@@ -2164,6 +2341,7 @@ impl<'a> BorrowChecker<'a> {
                 else_body,
             } => {
                 self.check_expr(condition);
+                self.check_stale_condition(condition);
                 // Mark borrow origins for all `is` pattern bindings (including compound conditions)
                 self.mark_compound_is_origins(&condition.node);
                 let before = self.save_branch_state();
@@ -2208,6 +2386,7 @@ impl<'a> BorrowChecker<'a> {
                 else_body,
             } => {
                 self.check_expr(condition);
+                self.check_stale_condition(condition);
                 // Mark borrow origins for all `is` pattern bindings (including compound conditions)
                 self.mark_compound_is_origins(&condition.node);
 
@@ -2218,6 +2397,7 @@ impl<'a> BorrowChecker<'a> {
                 for (cond, body) in elif_branches {
                     self.restore_branch_state(&before);
                     self.check_expr(cond);
+                    self.check_stale_condition(cond);
                     self.mark_compound_is_origins(&cond.node);
                     self.check_block(body);
                     branch_states.push(self.save_branch_state());
@@ -2240,6 +2420,7 @@ impl<'a> BorrowChecker<'a> {
                 else_arm,
             } => {
                 self.check_expr(scrutinee);
+                self.check_stale_condition(scrutinee);
                 let scrutinee_origin = self.compute_expr_origin(scrutinee);
                 let before = self.save_branch_state();
                 let mut branch_states = Vec::new();
@@ -2707,21 +2888,78 @@ impl<'a> BorrowChecker<'a> {
     /// whether each has a borrowed origin.
     /// Check spawn call arguments for borrowed origins.
     /// Spawned tasks may outlive the caller, so any non-Static reference arg is unsound.
+    /// Perform CFA at a spawn site: for each shared binding arg, determine the sync strategy
+    /// based on whether the callee's corresponding parameter uses mutable borrow.
+    fn cfa_at_spawn(&mut self, callee_def_id: Option<DefId>, args: &[Spanned<CallArg>]) {
+        for (i, arg) in args.iter().enumerate() {
+            if let Expr::Identifier(_) = &arg.node.value.node {
+                if let Some(&def_id) = self.resolution_map.get(&arg.node.value.span.start) {
+                    if let Some((shared_kind, _, _)) = self.shared_var_defs.get(&def_id) {
+                        let shared_kind = *shared_kind;
+                        self.shared_spawned.insert(def_id);
+                        // Only auto-decide for SharedKind::Auto; overrides already set
+                        if shared_kind == crate::parser::ast::SharedKind::Auto {
+                            let fi = callee_def_id
+                                .and_then(|cid| self.function_info.get(&cid));
+                            let is_mutable = fi
+                                .map_or(false, |fi| {
+                                    fi.param_ownerships.get(i).map_or(false, |o| {
+                                        matches!(o, Ownership::MutableBorrow)
+                                    })
+                                });
+                            // Also check callee param type for explicit wrapper types
+                            let param_type_name = fi
+                                .and_then(|fi| fi.param_type_ids.get(i).and_then(|t| *t))
+                                .map(|tid| {
+                                    match self.types.get(tid) {
+                                        crate::semantic::types::ResolvedType::Generic(did, _) => self.scopes.get_def(*did).name.clone(),
+                                        crate::semantic::types::ResolvedType::Defined(did) => self.scopes.get_def(*did).name.clone(),
+                                        _ => String::new(),
+                                    }
+                                })
+                                .unwrap_or_default();
+                            let strategy = if is_mutable || param_type_name == "Mutex" {
+                                super::SharedStrategy::ArcMutex
+                            } else if param_type_name == "AtomicInt" || param_type_name == "AtomicBool" {
+                                super::SharedStrategy::ArcAtomic
+                            } else if param_type_name == "RWLock" {
+                                super::SharedStrategy::ArcRwLock
+                            } else {
+                                super::SharedStrategy::ArcOnly
+                            };
+                            // Upgrade: ArcOnly → ArcMutex if already ArcOnly and now mutable
+                            let entry = self.shared_out.entry(def_id).or_insert(strategy);
+                            if is_mutable && *entry == super::SharedStrategy::ArcOnly {
+                                *entry = super::SharedStrategy::ArcMutex;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn check_spawn_args(&mut self, args: &[Spanned<CallArg>]) {
         for arg in args {
-            let is_borrowed = if let Expr::Identifier(_) = &arg.node.value.node {
+            let (is_borrowed, var_name) = if let Expr::Identifier(name) = &arg.node.value.node {
                 if let Some(&def_id) = self.resolution_map.get(&arg.node.value.span.start) {
-                    self.var_origins
-                        .get(&def_id)
-                        .map_or(false, |o| !matches!(o, BorrowOrigin::Static))
+                    // Skip error for shared bindings — they're explicitly safe to cross boundaries
+                    if self.shared_var_defs.contains_key(&def_id) {
+                        (false, None)
+                    } else {
+                        let borrowed = self.var_origins
+                            .get(&def_id)
+                            .map_or(false, |o| !matches!(o, BorrowOrigin::Static));
+                        (borrowed, Some(name.clone()))
+                    }
                 } else {
-                    false
+                    (false, None)
                 }
             } else {
-                !matches!(self.compute_expr_origin(&arg.node.value), BorrowOrigin::Static)
+                (!matches!(self.compute_expr_origin(&arg.node.value), BorrowOrigin::Static), None)
             };
             if is_borrowed {
-                self.error(SemanticErrorKind::SpawnWithBorrowedRef, arg.span);
+                self.error(SemanticErrorKind::SpawnWithBorrowedRef { name: var_name }, arg.span);
             }
         }
     }
@@ -2855,6 +3093,8 @@ impl<'a> BorrowChecker<'a> {
         self.active_outlives.clear();
         self.current_function_is_async = func.qualifiers.is_async;
         self.await_invalidated.clear();
+        self.shared_derived.clear();
+        self.stale_shared_derived.clear();
         self.closure_capture_sets.clear();
         self.pending_capture_set = None;
         self.mut_captured_vars.clear();
@@ -3689,7 +3929,7 @@ pub fn check_module(
     expr_types: &FxHashMap<Span, TypeId>,
     method_resolutions: &FxHashMap<usize, DefId>,
     errors: &mut Vec<SemanticError>,
-) {
+) -> (FxHashMap<DefId, super::SharedStrategy>, Vec<super::errors::SemanticWarning>) {
     // Phase 4: compute which structs have reference-type fields
     let ref_type_structs = compute_ref_type_structs(module, scopes);
     let struct_field_ref_flags = compute_struct_field_ref_flags(module, scopes, &ref_type_structs);
@@ -3760,7 +4000,39 @@ pub fn check_module(
         }
     }
 
+    // Final CFA pass: assign default strategies for shared vars not yet decided.
+    // - If a shared var is spawned AND locally written → upgrade to ArcMutex
+    //   (main thread writes + spawned thread reads = data race without mutex)
+    // - If a shared var is spawned but never locally written → keep cfa_at_spawn's decision
+    // - If a shared var is never spawned → ArcMutex if written, ArcOnly if read-only
+    let mut warnings = Vec::new();
+    for (&def_id, (_, name, span)) in &checker.shared_var_defs {
+        let entry = checker.shared_out.entry(def_id).or_insert_with(|| {
+            // Not spawned at all — decide based on local writes
+            if checker.shared_written.contains(&def_id) {
+                super::SharedStrategy::ArcMutex
+            } else {
+                super::SharedStrategy::ArcOnly
+            }
+        });
+        // If spawned as ArcOnly but locally written, upgrade to ArcMutex
+        if *entry == super::SharedStrategy::ArcOnly && checker.shared_written.contains(&def_id) {
+            *entry = super::SharedStrategy::ArcMutex;
+        }
+        // Warn if a shared var never crosses a concurrency boundary
+        if !checker.shared_spawned.contains(&def_id) {
+            warnings.push(super::errors::SemanticWarning {
+                kind: super::errors::SemanticWarningKind::UnnecessaryShared {
+                    name: name.clone(),
+                },
+                span: *span,
+            });
+        }
+    }
+
+    warnings.extend(checker.stale_warnings);
     errors.extend(checker.errors);
+    (checker.shared_out, warnings)
 }
 
 #[cfg(test)]
@@ -5921,7 +6193,7 @@ void launch(str name):
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::SpawnWithBorrowedRef)),
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::SpawnWithBorrowedRef { .. })),
             "expected SpawnWithBorrowedRef for borrowed arg in spawn: {:?}", errors
         );
     }
@@ -5938,7 +6210,7 @@ void launch():
 ";
         let errors = check(source);
         assert!(
-            !has_error(&errors, |k| matches!(k, SemanticErrorKind::SpawnWithBorrowedRef)),
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::SpawnWithBorrowedRef { .. })),
             "unexpected SpawnWithBorrowedRef for static str: {:?}", errors
         );
     }
@@ -5959,7 +6231,7 @@ void launch(str data):
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::SpawnWithBorrowedRef)),
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::SpawnWithBorrowedRef { .. })),
             "expected SpawnWithBorrowedRef for call-derived borrowed str in spawn: {:?}", errors
         );
     }
@@ -6107,7 +6379,7 @@ void launch():
             !has_error(&errors, |k| matches!(k,
                 SemanticErrorKind::SpawnRequiresDirectCall
                 | SemanticErrorKind::SpawnClosureCaptureBorrowed { .. }
-                | SemanticErrorKind::SpawnWithBorrowedRef
+                | SemanticErrorKind::SpawnWithBorrowedRef { .. }
             )),
             "expected no spawn error for direct function call: {:?}", errors
         );
@@ -6375,6 +6647,66 @@ void main():
                 | SemanticErrorKind::WriteWhileMutCaptured { .. }
             )),
             "expected no aliasing error after closure reassignment: {:?}", errors
+        );
+    }
+
+    fn check_warnings(source: &str) -> Vec<crate::semantic::errors::SemanticWarning> {
+        let mut parser = Parser::new(source);
+        let mut module = parser.parse_module();
+        assert!(parser.errors.is_empty(), "parse errors: {:?}", parser.errors);
+        let result = semantic::analyze(&mut module, &[]);
+        result.warnings
+    }
+
+    fn has_warning(warnings: &[crate::semantic::errors::SemanticWarning], pred: impl Fn(&crate::semantic::errors::SemanticWarningKind) -> bool) -> bool {
+        warnings.iter().any(|w| pred(&w.kind))
+    }
+
+    #[test]
+    fn stale_shared_condition_warns() {
+        let source = "\
+async void worker(int &counter):
+    counter = counter + 1
+
+async void main():
+    shared int x = 0
+    Task[void] t = spawn worker(&x)
+    int val = x
+    t.await()
+    if val > 0:
+        print(val)
+";
+        let warnings = check_warnings(source);
+        assert!(
+            has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::StaleSharedCondition { local_name, shared_name }
+                if local_name == "val" && shared_name == "x"
+            )),
+            "expected StaleSharedCondition warning, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn stale_shared_condition_refreshed_no_warn() {
+        let source = "\
+async void worker(int &counter):
+    counter = counter + 1
+
+async void main():
+    shared int x = 0
+    Task[void] t = spawn worker(&x)
+    int val = x
+    t.await()
+    val = x
+    if val > 0:
+        print(val)
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::StaleSharedCondition { .. }
+            )),
+            "expected no StaleSharedCondition after refresh, got: {:?}", warnings
         );
     }
 }

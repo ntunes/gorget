@@ -1,0 +1,10 @@
+async void increment(int &counter):
+    counter = counter + 1
+
+async void main():
+    shared int x = 0
+    Task[void] t1 = spawn increment(&x)
+    Task[void] t2 = spawn increment(&x)
+    t1.await()
+    t2.await()
+    print(x)

@@ -2849,6 +2849,11 @@ typedef struct GorgetMutex {
     pthread_mutex_t lock;
     void*           data;
     size_t          data_size;
+    // Waiter queue for async poll-lock (waker-based notification)
+    pthread_mutex_t  wait_mtx;
+    GorgetWaker*     waiters;
+    int              waiter_count;
+    int              waiter_cap;
 } GorgetMutex;
 
 typedef struct {
@@ -2862,11 +2867,25 @@ static inline GorgetMutex* gorget_mutex_new(size_t size, void* init_data) {
     m->data = GORGET_ALLOC(size);
     m->data_size = size;
     memcpy(m->data, init_data, size);
+    pthread_mutex_init(&m->wait_mtx, NULL);
+    m->waiters = NULL;
+    m->waiter_count = 0;
+    m->waiter_cap = 0;
     return m;
 }
 
+// Free the mutex and its data. Does NOT free the guard — caller must release first.
+static inline void gorget_mutex_free(GorgetMutex* m) {
+    if (!m) return;
+    pthread_mutex_destroy(&m->lock);
+    pthread_mutex_destroy(&m->wait_mtx);
+    if (m->waiters) GORGET_FREE(m->waiters, (size_t)m->waiter_cap * sizeof(GorgetWaker));
+    if (m->data) GORGET_FREE(m->data, m->data_size);
+    GORGET_FREE(m, sizeof(GorgetMutex));
+}
+
 // Blocking lock — acquires the mutex and returns a guard.
-// In V1 this is synchronous (not async). The async poll variant is planned for V2.
+// For synchronous (non-async) contexts. Uses pthread_mutex_lock directly.
 static inline gorget_guard_t gorget_mutex_lock(GorgetMutex* m) {
     pthread_mutex_lock(&m->lock);
     gorget_guard_t g;
@@ -2875,10 +2894,52 @@ static inline gorget_guard_t gorget_mutex_lock(GorgetMutex* m) {
     return g;
 }
 
+// Poll-based lock for async contexts. Returns GORGET_POLL_READY (0) if the lock
+// was acquired (guard filled in), or GORGET_POLL_PENDING (1) if contended (waker
+// registered for notification when the lock becomes available).
+//
+// When a guard is released, one waiting waker is woken in FIFO order.
+// The woken task should re-call gorget_mutex_poll_lock to attempt acquisition.
+static inline int gorget_mutex_poll_lock(GorgetMutex* m, gorget_guard_t* out, GorgetWaker* waker) {
+    int r = pthread_mutex_trylock(&m->lock);
+    if (r == 0) {
+        // Lock acquired — fill guard
+        out->mutex = m;
+        out->ptr   = m->data;
+        return GORGET_POLL_READY;
+    }
+    // Lock contended — register waker for notification
+    if (waker) {
+        pthread_mutex_lock(&m->wait_mtx);
+        if (m->waiter_count == m->waiter_cap) {
+            int old_cap = m->waiter_cap;
+            m->waiter_cap = old_cap ? old_cap * 2 : 4;
+            m->waiters = (GorgetWaker*)GORGET_REALLOC(m->waiters,
+                (size_t)old_cap * sizeof(GorgetWaker),
+                (size_t)m->waiter_cap * sizeof(GorgetWaker));
+        }
+        m->waiters[m->waiter_count++] = *waker;
+        pthread_mutex_unlock(&m->wait_mtx);
+    }
+    return GORGET_POLL_PENDING;
+}
+
 // Release the guard (unlock the mutex). Safe to call on a zeroed guard.
+// Wakes one async waiter (if any) after unlocking.
 static inline void gorget_guard_release(gorget_guard_t* g) {
     if (!g->mutex) return;
-    pthread_mutex_unlock(&g->mutex->lock);
+    GorgetMutex* m = g->mutex;
+    pthread_mutex_unlock(&m->lock);
+    // Wake one async waiter (FIFO order)
+    pthread_mutex_lock(&m->wait_mtx);
+    if (m->waiter_count > 0) {
+        GorgetWaker w = m->waiters[0];
+        memmove(m->waiters, m->waiters + 1, (size_t)(--m->waiter_count) * sizeof(GorgetWaker));
+        pthread_mutex_unlock(&m->wait_mtx);
+        w.wake(&w);
+    } else {
+        pthread_mutex_unlock(&m->wait_mtx);
+    }
     g->mutex = NULL;
     g->ptr   = NULL;
 }
@@ -7170,6 +7231,10 @@ static inline int64_t gorget_atomic_int_sub(GorgetAtomicInt* a, int64_t v) {
 static inline int gorget_atomic_int_compare_exchange(GorgetAtomicInt* a, int64_t expected, int64_t desired) {
     return __atomic_compare_exchange_n(&a->__val, &expected, desired, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
 }
+static inline void gorget_atomic_int_free(GorgetAtomicInt** ap) {
+    GorgetAtomicInt* a = *ap;
+    if (a) GORGET_FREE(a, sizeof(GorgetAtomicInt));
+}
 
 // ── AtomicBool ──
 typedef struct { volatile int __val; } GorgetAtomicBool;
@@ -7191,6 +7256,10 @@ static inline int gorget_atomic_bool_swap(GorgetAtomicBool* a, int v) {
 static inline int gorget_atomic_bool_compare_exchange(GorgetAtomicBool* a, int expected, int desired) {
     int e = expected ? 1 : 0;
     return __atomic_compare_exchange_n(&a->__val, &e, desired ? 1 : 0, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+}
+static inline void gorget_atomic_bool_free(GorgetAtomicBool** ap) {
+    GorgetAtomicBool* a = *ap;
+    if (a) GORGET_FREE(a, sizeof(GorgetAtomicBool));
 }
 
 // ── Barrier ──

@@ -813,6 +813,23 @@ pub enum Pattern {
 }
 
 // ══════════════════════════════════════════════════════════════
+// Shared Bindings
+// ══════════════════════════════════════════════════════════════
+
+/// Synchronization strategy for `shared` bindings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SharedKind {
+    /// Not shared — plain binding.
+    None,
+    /// `shared` — compiler picks sync strategy via CFA.
+    Auto,
+    /// `shared(rwlock)` — user override: ARC + RwLock.
+    RwLock,
+    /// `shared(atomic)` — user override: ARC + Atomic (scalars only).
+    Atomic,
+}
+
+// ══════════════════════════════════════════════════════════════
 // Statements
 // ══════════════════════════════════════════════════════════════
 
@@ -822,6 +839,7 @@ pub enum Stmt {
     VarDecl {
         is_const: bool,
         is_mutable: bool,
+        shared: SharedKind,
         type_: Spanned<Type>,
         pattern: Spanned<Pattern>,
         value: Spanned<Expr>,

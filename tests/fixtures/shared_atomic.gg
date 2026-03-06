@@ -1,0 +1,20 @@
+async void add_n(AtomicInt counter, int n):
+    int i = 0
+    while i < n:
+        counter.add(1)
+        i += 1
+
+async void main():
+    shared(atomic) int x = 0
+    print(x)
+    x = 10
+    print(x)
+    x += 5
+    print(x)
+    x -= 3
+    print(x)
+    Task[void] t1 = spawn add_n(x, 100)
+    Task[void] t2 = spawn add_n(x, 100)
+    t1.await()
+    t2.await()
+    print(x)

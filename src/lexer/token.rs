@@ -299,6 +299,7 @@ pub enum Keyword {
     Await,
     Spawn,
     Select,
+    Shared,
 
     // Safety
     Unsafe,
@@ -412,6 +413,7 @@ impl Keyword {
             Keyword::Await => "await",
             Keyword::Spawn => "spawn",
             Keyword::Select => "select",
+            Keyword::Shared => "shared",
             Keyword::Unsafe => "unsafe",
             Keyword::Extern => "extern",
             Keyword::SelfLower => "self",
@@ -510,6 +512,7 @@ impl Keyword {
             "await" => Some(Keyword::Await),
             "spawn" => Some(Keyword::Spawn),
             "select" => Some(Keyword::Select),
+            "shared" => Some(Keyword::Shared),
             "unsafe" => Some(Keyword::Unsafe),
             "extern" => Some(Keyword::Extern),
             "self" => Some(Keyword::SelfLower),

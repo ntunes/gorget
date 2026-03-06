@@ -5,6 +5,8 @@
 
 ## Medium
 
+- **`shared` keyword — Phase 9 (Tests + Polish)**: All core phases done. Remaining: review edge cases, add more test coverage, polish diagnostics. See `docs/shared-keyword-design.md`. [updated: 2026-03-06]
+
 - **GIR Phase 5 — Optimization passes**: Dead code elimination (unreachable blocks, unused locals), constant folding, drop elision (remove drops for provably-moved values), copy propagation. These are GIR-level backend-agnostic transforms that C's optimizer can't do due to lack of ownership information. Build as optional passes before backend emission. [added: 2026-03-05]
 
 - **`gg sim` aliasing model — Tree Borrows tracking**: sim.md identifies this as the "core differentiator from naive interpreters." Implement borrow-level tracking to catch aliasing violations. Add `--tree-borrows` (default) and `--strict-aliasing` flags (stricter stacked-borrows model). Currently sim detects UB (bounds, uninit, etc.) but does not track borrow validity. [added: 2026-03-05]

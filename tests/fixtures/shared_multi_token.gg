@@ -1,0 +1,20 @@
+# Test: multiple shared bindings passed to one spawn — tokens acquired
+# in declaration order (ascending DefId) to prevent deadlocks.
+
+async void swap_add(int &a, int &b):
+    int tmp = a
+    a = b + 1
+    b = tmp + 1
+
+async void main():
+    shared int x = 10
+    shared int y = 20
+    # Sequential spawns to get deterministic output
+    Task[void] t1 = spawn swap_add(&x, &y)
+    t1.await()
+    print(x)
+    print(y)
+    Task[void] t2 = spawn swap_add(&x, &y)
+    t2.await()
+    print(x)
+    print(y)

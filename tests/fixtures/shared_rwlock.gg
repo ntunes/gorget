@@ -1,0 +1,20 @@
+async void reader(RWLock[int] data):
+    ReadGuard[int] g = data.read()
+    print(g.get())
+
+async void writer(RWLock[int] data, int val):
+    WriteGuard[int] g = data.write()
+    g.set(val)
+
+async void main():
+    shared(rwlock) int x = 10
+    print(x)
+    x = 20
+    print(x)
+    x += 5
+    print(x)
+    Task[void] t1 = spawn reader(x)
+    t1.await()
+    Task[void] t2 = spawn writer(x, 99)
+    t2.await()
+    print(x)

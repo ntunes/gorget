@@ -3586,6 +3586,7 @@ mod tests {
                                 Stmt::VarDecl {
                                     is_const: false,
                                     is_mutable: false,
+                                    shared: SharedKind::None,
                                     type_: Spanned::new(
                                         Type::Named {
                                             name: Spanned::new("Num".to_string(), dummy_span()),
@@ -4031,6 +4032,7 @@ mod tests {
                                 Stmt::VarDecl {
                                     is_const: false,
                                     is_mutable: false,
+                                    shared: SharedKind::None,
                                     type_: Spanned::new(
                                         Type::Named { name: Spanned::new("Map".to_string(), dummy_span()), generic_args: vec![] },
                                         dummy_span(),
@@ -4213,6 +4215,7 @@ mod tests {
                                 Stmt::VarDecl {
                                     is_const: false,
                                     is_mutable: false,
+                                    shared: SharedKind::None,
                                     type_: Spanned::new(
                                         Type::Named { name: Spanned::new("Small".to_string(), dummy_span()), generic_args: vec![] },
                                         dummy_span(),

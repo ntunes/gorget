@@ -554,6 +554,82 @@ impl<'a> TypeChecker<'a> {
             | (ResolvedType::Primitive(PrimitiveType::StringType), ResolvedType::Primitive(PrimitiveType::CStr)) => {
                 a
             }
+            // Mutex[T]/Shared[T] ↔ T coercion for shared variables:
+            // A shared variable has type T but may be passed where Mutex[T] or Shared[T]
+            // is expected (e.g., spawned functions that receive the raw wrapper).
+            (ResolvedType::Generic(def_id, args), _) if args.len() == 1 => {
+                let name = &self.scopes.get_def(*def_id).name;
+                let is_shared_wrapper = name == "Mutex" || name == "Shared" || name == "RWLock";
+                if is_shared_wrapper {
+                    self.unify(args[0], b, span);
+                    a
+                } else {
+                    self.error(
+                        SemanticErrorKind::TypeMismatch {
+                            expected: self.describe_resolved_type(a),
+                            found: self.describe_resolved_type(b),
+                        },
+                        span,
+                    );
+                    a
+                }
+            }
+            (_, ResolvedType::Generic(def_id, args)) if args.len() == 1 => {
+                let name = &self.scopes.get_def(*def_id).name;
+                let is_shared_wrapper = name == "Mutex" || name == "Shared" || name == "RWLock";
+                if is_shared_wrapper {
+                    self.unify(a, args[0], span);
+                    b
+                } else {
+                    self.error(
+                        SemanticErrorKind::TypeMismatch {
+                            expected: self.describe_resolved_type(a),
+                            found: self.describe_resolved_type(b),
+                        },
+                        span,
+                    );
+                    a
+                }
+            }
+            // AtomicInt ↔ int, AtomicBool ↔ bool coercion for shared(atomic) variables
+            (ResolvedType::Defined(def_id), _) => {
+                let name = &self.scopes.get_def(*def_id).name;
+                if (name == "AtomicInt" && matches!(b_ty, ResolvedType::Primitive(PrimitiveType::Int)))
+                    || (name == "AtomicBool" && matches!(b_ty, ResolvedType::Primitive(PrimitiveType::Bool)))
+                {
+                    a
+                } else {
+                    if a_ty != b_ty {
+                        self.error(
+                            SemanticErrorKind::TypeMismatch {
+                                expected: self.describe_resolved_type(a),
+                                found: self.describe_resolved_type(b),
+                            },
+                            span,
+                        );
+                    }
+                    a
+                }
+            }
+            (_, ResolvedType::Defined(def_id)) => {
+                let name = &self.scopes.get_def(*def_id).name;
+                if (name == "AtomicInt" && matches!(a_ty, ResolvedType::Primitive(PrimitiveType::Int)))
+                    || (name == "AtomicBool" && matches!(a_ty, ResolvedType::Primitive(PrimitiveType::Bool)))
+                {
+                    b
+                } else {
+                    if a_ty != b_ty {
+                        self.error(
+                            SemanticErrorKind::TypeMismatch {
+                                expected: self.describe_resolved_type(a),
+                                found: self.describe_resolved_type(b),
+                            },
+                            span,
+                        );
+                    }
+                    a
+                }
+            }
             _ => {
                 if a_ty != b_ty {
                     self.error(
@@ -1573,7 +1649,7 @@ impl<'a> TypeChecker<'a> {
     fn check_stmt(&mut self, stmt: &Spanned<Stmt>) {
         match &stmt.node {
             Stmt::VarDecl {
-                type_, pattern, value, ..
+                type_, pattern, value, shared, ..
             } => {
                 // Resolve declared type first so we can set the hint for literal coercion
                 let declared_type = match &type_.node {
@@ -1622,6 +1698,24 @@ impl<'a> TypeChecker<'a> {
                         // Use span-based lookup to avoid cross-module name collisions
                         if let Some(def_id) = self.scopes.lookup_def_by_span(name, pattern.span) {
                             self.scopes.get_def_mut(def_id).type_id = Some(type_id);
+                        }
+                    }
+                    // Validate shared(atomic) is only used with int or bool
+                    if *shared == crate::parser::ast::SharedKind::Atomic {
+                        let resolved = self.types.get(type_id);
+                        let is_atomic_compatible = matches!(
+                            resolved,
+                            super::types::ResolvedType::Primitive(PrimitiveType::Int)
+                            | super::types::ResolvedType::Primitive(PrimitiveType::Bool)
+                        );
+                        if !is_atomic_compatible {
+                            self.error(
+                                SemanticErrorKind::TypeMismatch {
+                                    expected: "int or bool (shared(atomic) only supports scalar types)".to_string(),
+                                    found: self.describe_resolved_type(type_id),
+                                },
+                                pattern.span,
+                            );
                         }
                     }
                 }

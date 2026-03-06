@@ -1,0 +1,13 @@
+async void add_ten(int &counter):
+    counter = counter + 10
+
+async void main():
+    shared int x = 5
+    print(x)
+    x = 100
+    print(x)
+    x += 50
+    print(x)
+    Task[void] t = spawn add_ten(&x)
+    t.await()
+    print(x)

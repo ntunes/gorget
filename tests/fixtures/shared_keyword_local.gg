@@ -1,0 +1,7 @@
+void main():
+    shared int x = 10
+    print(x)
+    x = 42
+    print(x)
+    x += 8
+    print(x)

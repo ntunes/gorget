@@ -8,6 +8,7 @@ use crate::errors::ParseError;
 fn make_var_decl(
     is_const: bool,
     is_mutable: bool,
+    shared: SharedKind,
     type_: Spanned<Type>,
     pattern: Spanned<Pattern>,
     value: Spanned<Expr>,
@@ -18,6 +19,7 @@ fn make_var_decl(
         Stmt::VarDecl {
             is_const,
             is_mutable,
+            shared,
             type_,
             pattern,
             value,
@@ -62,6 +64,9 @@ impl Parser {
             Token::Keyword(Keyword::Select) => self.parse_select_stmt(),
             Token::Keyword(Keyword::With) => self.parse_with_stmt(),
             Token::Keyword(Keyword::Unsafe) => self.parse_unsafe_stmt(),
+
+            // shared — shared variable declaration with automatic synchronization
+            Token::Keyword(Keyword::Shared) => self.parse_shared_var_decl(),
 
             // const — could be variable declaration
             Token::Keyword(Keyword::Const) => self.parse_const_var_decl(),
@@ -463,7 +468,52 @@ impl Parser {
         self.expect(&Token::Eq)?;
         let value = self.parse_expr()?;
         self.consume_newline();
-        Ok(make_var_decl(true, false, type_, pattern, value, start))
+        Ok(make_var_decl(true, false, SharedKind::None, type_, pattern, value, start))
+    }
+
+    /// Parse a `shared` variable declaration.
+    /// Syntax: `shared [type] name = expr` or `shared(rwlock|atomic) [type] name = expr`
+    fn parse_shared_var_decl(&mut self) -> Result<Spanned<Stmt>, ParseError> {
+        let start = self.peek_span();
+        self.expect_keyword(Keyword::Shared)?;
+
+        // Parse optional override: shared(rwlock) or shared(atomic)
+        let shared_kind = if self.match_token(&Token::LParen) {
+            let override_name = self.expect_identifier()?;
+            let kind = match override_name.node.as_str() {
+                "rwlock" => SharedKind::RwLock,
+                "atomic" => SharedKind::Atomic,
+                other => {
+                    return Err(ParseError {
+                        kind: crate::errors::ParseErrorKind::UnexpectedToken {
+                            expected: "`rwlock` or `atomic`".to_string(),
+                            got: format!("`{other}`"),
+                        },
+                        span: override_name.span,
+                    });
+                }
+            };
+            self.expect(&Token::RParen)?;
+            kind
+        } else {
+            SharedKind::Auto
+        };
+
+        let (type_, pattern) = if self.name_first {
+            let pattern = self.parse_binding_pattern()?;
+            self.expect(&Token::Colon)?;
+            let type_ = self.parse_type()?;
+            (type_, pattern)
+        } else {
+            let type_ = self.parse_type()?;
+            let pattern = self.parse_binding_pattern()?;
+            (type_, pattern)
+        };
+
+        self.expect(&Token::Eq)?;
+        let value = self.parse_expr()?;
+        self.consume_newline();
+        Ok(make_var_decl(false, false, shared_kind, type_, pattern, value, start))
     }
 
     fn parse_auto_var_decl(&mut self) -> Result<Spanned<Stmt>, ParseError> {
@@ -486,7 +536,7 @@ impl Parser {
         self.expect(&Token::Eq)?;
         let value = self.parse_expr()?;
         self.consume_newline();
-        Ok(make_var_decl(false, false, type_, pattern, value, start))
+        Ok(make_var_decl(false, false, SharedKind::None, type_, pattern, value, start))
     }
 
     /// Try to parse a declaration (type name = expr) or fall back to expression statement.
@@ -535,7 +585,7 @@ impl Parser {
             let value = self.parse_expr()?;
             self.consume_newline();
             let pattern = Spanned::new(Pattern::Binding(name.node), name.span);
-            Ok(make_var_decl(false, is_mutable, type_, pattern, value, start))
+            Ok(make_var_decl(false, is_mutable, SharedKind::None, type_, pattern, value, start))
         } else {
             self.parse_expr_or_assign_stmt()
         }
@@ -630,7 +680,7 @@ impl Parser {
             let value = self.parse_expr()?;
             self.consume_newline();
             let pattern = Spanned::new(Pattern::Binding(name.node), name.span);
-            Ok(make_var_decl(false, is_mutable, type_, pattern, value, start))
+            Ok(make_var_decl(false, is_mutable, SharedKind::None, type_, pattern, value, start))
         } else {
             self.parse_expr_or_assign_stmt()
         }

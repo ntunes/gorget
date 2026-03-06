@@ -615,6 +615,12 @@ pub fn lower_module(
                 .collect();
             ctx.fn_param_names.insert(name.clone(), param_names.clone());
 
+            // Record parameter ownerships for token wrapper generation
+            let param_ownerships: Vec<ast::Ownership> = func.params.iter()
+                .map(|p| p.node.ownership.clone())
+                .collect();
+            ctx.fn_param_ownerships.insert(name.clone(), param_ownerships.clone());
+
             // Record default parameter values
             let defaults: Vec<(usize, ast::Expr)> = func.params.iter()
                 .enumerate()
@@ -624,6 +630,11 @@ pub fn lower_module(
                 .collect();
             if !defaults.is_empty() {
                 ctx.fn_defaults.insert(name.clone(), defaults.clone());
+            }
+
+            // Store function AST for async-shared variant generation
+            if func.qualifiers.is_async && !matches!(func.body, FunctionBody::Extern(_) | FunctionBody::Declaration) {
+                ctx.fn_ast_bodies.insert(name.clone(), func.clone());
             }
 
             // Record extern binding: Gorget name → C symbol (takes priority over mangling).
@@ -636,6 +647,7 @@ pub fn lower_module(
                 // mangled name (from lower_function) resolve correctly.
                 ctx.fn_sigs.insert(mangled.clone(), (param_types, ret_type));
                 ctx.fn_param_names.insert(mangled.clone(), param_names);
+                ctx.fn_param_ownerships.insert(mangled.clone(), param_ownerships);
                 if !defaults.is_empty() {
                     ctx.fn_defaults.insert(mangled.clone(), defaults);
                 }

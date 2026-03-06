@@ -810,7 +810,7 @@ fn resolve_stmt(
 ) {
     match stmt {
         Stmt::VarDecl {
-            is_const, is_mutable, pattern, value, ..
+            is_const, is_mutable, shared, pattern, value, ..
         } => {
             // Resolve value first (before defining the variable, so `int x = x` refers to outer x)
             resolve_expr(value, scopes, errors, resolution_map);
@@ -821,6 +821,15 @@ fn resolve_stmt(
                 (DefKind::Variable, *is_mutable)
             };
             define_pattern_bindings_with_kind(&pattern.node, pattern.span, scopes, errors, kind, mutable);
+            // Mark shared bindings on their DefInfo + add to resolution_map for IR lowering
+            if *shared != crate::parser::ast::SharedKind::None {
+                if let crate::parser::ast::Pattern::Binding(name) = &pattern.node {
+                    if let Some(def_id) = scopes.lookup_from_scope(scopes.current_scope(), name) {
+                        scopes.get_def_mut(def_id).shared = *shared;
+                        resolution_map.insert(pattern.span.start, def_id);
+                    }
+                }
+            }
         }
 
         Stmt::Expr(expr) => {

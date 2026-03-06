@@ -15,12 +15,26 @@ use rustc_hash::FxHashMap;
 
 use crate::parser::ast::{Item, Module};
 use crate::span::Span;
-use errors::{SemanticError, SemanticErrorKind};
+use errors::{SemanticError, SemanticErrorKind, SemanticWarning};
 use ids::{DefId, TypeId};
 use resolve::{EnumVariantInfo, FunctionInfo, ResolutionMap, StructFieldInfo};
 use scope::ScopeTable;
 use traits::TraitRegistry;
 use types::TypeTable;
+
+/// CFA (Custody Flow Analysis) decision for a `shared` binding.
+/// Determines what synchronization primitive the compiler wraps the binding in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SharedStrategy {
+    /// `Shared[T]` — no mutable borrows cross concurrency boundaries.
+    ArcOnly,
+    /// `Mutex[T]` — mutable borrows cross spawn boundaries.
+    ArcMutex,
+    /// `RwLock[T]` — user override via `shared(rwlock)`.
+    ArcRwLock,
+    /// Atomic — user override via `shared(atomic)` (scalars only).
+    ArcAtomic,
+}
 
 /// The result of semantic analysis.
 pub struct AnalysisResult {
@@ -40,6 +54,10 @@ pub struct AnalysisResult {
     /// Threaded from typechecker through borrow checker to codegen for
     /// ownership-aware move-zeroing at call sites.
     pub method_resolutions: FxHashMap<usize, DefId>,
+    /// CFA decisions for `shared` bindings: DefId → resolved sync strategy.
+    pub shared_bindings: FxHashMap<DefId, SharedStrategy>,
+    /// Non-fatal warnings (e.g., unnecessary `shared`).
+    pub warnings: Vec<SemanticWarning>,
 }
 
 /// Run all semantic analysis passes on a parsed module.
@@ -207,7 +225,7 @@ pub fn analyze_with_source_dir(
     let immutable_by_default = module.items.iter().any(|item| {
         matches!(&item.node, Item::Directive(d) if d.name == "immutable-by-default")
     });
-    borrow::check_module(
+    let (shared_bindings, warnings) = borrow::check_module(
         module,
         &scopes,
         &types,
@@ -232,5 +250,7 @@ pub fn analyze_with_source_dir(
         expr_types,
         function_body_scopes: resolve_ctx.function_body_scopes,
         method_resolutions,
+        shared_bindings,
+        warnings,
     }
 }

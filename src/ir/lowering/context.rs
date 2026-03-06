@@ -11,6 +11,19 @@ use super::types::TypeMapper;
 
 use crate::ir::types::BlockId;
 
+/// The kind of wrapper used for a shared variable's hidden local.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SharedLocalKind {
+    /// Mutex[T] — lock-based read/write (single lock for all access)
+    Mutex,
+    /// Shared[T] — ARC-only, read via `.get()` (no locking)
+    SharedArc,
+    /// AtomicInt or AtomicBool — lock-free atomic ops
+    Atomic,
+    /// RWLock[T] — reader-writer lock (concurrent reads, exclusive writes)
+    RwLock,
+}
+
 /// Information about a loop for break/continue targeting.
 pub struct LoopInfo {
     pub header_bb: BlockId,  // target for continue
@@ -70,6 +83,9 @@ pub struct LoweringContext<'a> {
     pub fn_defaults: FxHashMap<String, Vec<(usize, crate::parser::ast::Expr)>>,
     /// Function parameter names: fn_name → Vec<param_name> (in declaration order).
     pub fn_param_names: FxHashMap<String, Vec<String>>,
+    /// Function parameter ownerships: fn_name → Vec<Ownership> (in declaration order).
+    /// Used by token wrapper generation to determine lock type per shared arg.
+    pub fn_param_ownerships: FxHashMap<String, Vec<crate::parser::ast::Ownership>>,
     /// If current function uses `throws`, the Result TypeId for wrapping return/throw.
     pub current_throws_result_type: Option<TypeId>,
     /// Target type hint for the current expression being lowered.
@@ -95,6 +111,44 @@ pub struct LoweringContext<'a> {
     /// Module-level global variable type names: var_name → AST type name (e.g. "AtomicInt").
     /// Used by infer_type_name_from_operand_full to dispatch methods on globals.
     pub global_type_names: FxHashMap<String, String>,
+    /// Shared variable facade locals → (hidden_local, inner_type, wrapper_type, kind, ast_shared).
+    /// The facade local has the user-visible inner type T; the hidden local holds the
+    /// actual Mutex[T], Shared[T], or AtomicInt/AtomicBool. The `kind` determines which
+    /// ops to emit for transparent read/write access. `ast_shared` is the original
+    /// `SharedKind` from the AST — `Auto` means CFA decided, others are user overrides.
+    pub shared_locals: FxHashMap<LocalId, (LocalId, TypeId, TypeId, SharedLocalKind, crate::parser::ast::SharedKind)>,
+    /// When true, shared variable reads return the raw wrapper local instead of auto-locking/getting.
+    /// Set during spawn arg lowering so shared vars are passed as Mutex/Shared pointers to spawned tasks.
+    pub shared_pass_raw: bool,
+    /// Function AST bodies indexed by function name. Populated during pre-scan.
+    /// Used by async shared token generation to re-lower function bodies with shared params.
+    pub fn_ast_bodies: FxHashMap<String, crate::parser::ast::FunctionDef>,
+    /// Active shared params for the current function being lowered.
+    /// Set when lowering a shared-async variant. The await handler uses this to emit
+    /// token release/reacquire around suspension points.
+    /// Maps param index → (hidden_local, facade_local, inner_type, mutex_type, guard_type, is_mutable)
+    pub active_shared_params: Vec<SharedParamInfo>,
+}
+
+/// Info about a shared parameter in an async-aware shared function variant.
+#[derive(Clone, Debug)]
+pub struct SharedParamInfo {
+    /// The raw Shared[Mutex[T]] param local
+    pub shared_local: LocalId,
+    /// The facade local (inner type T, user-visible)
+    pub facade_local: LocalId,
+    /// The guard pointer local (re-derived after each reacquire)
+    pub guard_ptr_local: LocalId,
+    /// Inner type T
+    pub inner_type: TypeId,
+    /// Mutex[T] type
+    pub mutex_type: TypeId,
+    /// Guard[T] type
+    pub guard_type: TypeId,
+    /// Whether this param is a mutable borrow
+    pub is_mutable: bool,
+    /// Declaration order for ordered acquisition/release
+    pub decl_order: u32,
 }
 
 impl<'a> LoweringContext<'a> {
@@ -122,6 +176,7 @@ impl<'a> LoweringContext<'a> {
             extern_bindings: FxHashMap::default(),
             fn_defaults: FxHashMap::default(),
             fn_param_names: FxHashMap::default(),
+            fn_param_ownerships: FxHashMap::default(),
             current_throws_result_type: None,
             expected_type: None,
             callable_return_types: FxHashMap::default(),
@@ -131,6 +186,10 @@ impl<'a> LoweringContext<'a> {
             thread_spawned_fns: FxHashMap::default(),
             global_names: rustc_hash::FxHashSet::default(),
             global_type_names: FxHashMap::default(),
+            shared_locals: FxHashMap::default(),
+            shared_pass_raw: false,
+            fn_ast_bodies: FxHashMap::default(),
+            active_shared_params: Vec::new(),
         }
     }
 
@@ -203,6 +262,17 @@ impl<'a> LoweringContext<'a> {
         self.mut_capture_locals.clear();
         self.spawn_result_locals.clear();
         self.pending_spawn_fn = None;
+        self.shared_locals.clear();
+    }
+
+    /// Take the locals map, leaving it empty. Used for save/restore during async variant generation.
+    pub fn take_locals(&mut self) -> FxHashMap<String, (LocalId, TypeId)> {
+        std::mem::take(&mut self.locals)
+    }
+
+    /// Restore a previously saved locals map.
+    pub fn restore_locals(&mut self, locals: FxHashMap<String, (LocalId, TypeId)>) {
+        self.locals = locals;
     }
 
     /// Iterate over all locals (for type inference).
@@ -448,5 +518,73 @@ impl<'a> LoweringContext<'a> {
         self.type_registry.add_type_def(type_def);
         let type_id = self.type_registry.insert(GirType::Named(option_name.to_string()));
         self.type_mapper.register_named(option_name.to_string(), type_id);
+    }
+}
+
+/// Scan an AST expression for any `.await()` calls. Returns true if found.
+pub fn expr_has_await(expr: &crate::parser::ast::Expr) -> bool {
+    use crate::parser::ast::Expr;
+    match expr {
+        Expr::Await { .. } => true,
+        Expr::Call { callee, args, .. } => {
+            expr_has_await(&callee.node) || args.iter().any(|a| expr_has_await(&a.node.value.node))
+        }
+        Expr::MethodCall { receiver, args, .. } => {
+            expr_has_await(&receiver.node) || args.iter().any(|a| expr_has_await(&a.node.value.node))
+        }
+        Expr::BinaryOp { left, right, .. } => {
+            expr_has_await(&left.node) || expr_has_await(&right.node)
+        }
+        Expr::UnaryOp { operand, .. } => expr_has_await(&operand.node),
+        Expr::Block(block) => block.stmts.iter().any(|s| stmt_has_await(&s.node)),
+        Expr::If { condition, then_branch, else_branch, .. } => {
+            expr_has_await(&condition.node)
+            || expr_has_await(&then_branch.node)
+            || else_branch.as_ref().map_or(false, |eb| expr_has_await(&eb.node))
+        }
+        Expr::Spawn { expr } => expr_has_await(&expr.node),
+        Expr::TupleLiteral(elems) => elems.iter().any(|e| expr_has_await(&e.node)),
+        Expr::Index { object, index, .. } => {
+            expr_has_await(&object.node) || expr_has_await(&index.node)
+        }
+        Expr::FieldAccess { object, .. } => expr_has_await(&object.node),
+        Expr::Closure { body, .. } => expr_has_await(&body.node),
+        _ => false,
+    }
+}
+
+/// Scan an AST statement for any `.await()` calls.
+pub fn stmt_has_await(stmt: &crate::parser::ast::Stmt) -> bool {
+    use crate::parser::ast::Stmt;
+    match stmt {
+        Stmt::Expr(e) => expr_has_await(&e.node),
+        Stmt::VarDecl { value, .. } => expr_has_await(&value.node),
+        Stmt::Assign { value, .. } => expr_has_await(&value.node),
+        Stmt::CompoundAssign { value, .. } => expr_has_await(&value.node),
+        Stmt::Return(Some(e)) => expr_has_await(&e.node),
+        Stmt::If { condition, then_body, else_body, .. } => {
+            expr_has_await(&condition.node)
+            || then_body.stmts.iter().any(|s| stmt_has_await(&s.node))
+            || else_body.as_ref().map_or(false, |eb| eb.stmts.iter().any(|s| stmt_has_await(&s.node)))
+        }
+        Stmt::While { condition, body, .. } => {
+            expr_has_await(&condition.node)
+            || body.stmts.iter().any(|s| stmt_has_await(&s.node))
+        }
+        Stmt::For { iterable, body, .. } => {
+            expr_has_await(&iterable.node)
+            || body.stmts.iter().any(|s| stmt_has_await(&s.node))
+        }
+        Stmt::Match { scrutinee, arms, .. } => {
+            expr_has_await(&scrutinee.node)
+            || arms.iter().any(|item| {
+                if let Some(arm) = item.arm() {
+                    expr_has_await(&arm.body.node)
+                } else {
+                    false
+                }
+            })
+        }
+        _ => false,
     }
 }

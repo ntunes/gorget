@@ -292,11 +292,19 @@ fn try_build_ir(
     let result = gorget::semantic::analyze_with_source_dir(&mut module, features, source_dir);
 
     if !result.errors.is_empty() {
-        let reporter = ErrorReporter::new(filename.to_string(), concat_source);
+        let reporter = ErrorReporter::new(filename.to_string(), concat_source.clone());
         for err in &result.errors {
             reporter.report_semantic_error(err);
         }
         return Err(format!("{} semantic error(s) found", result.errors.len()));
+    }
+
+    // Display warnings (non-fatal)
+    if !result.warnings.is_empty() {
+        let reporter = ErrorReporter::new(filename.to_string(), concat_source.clone());
+        for warn in &result.warnings {
+            reporter.report_semantic_warning(warn);
+        }
     }
 
     // Lower AST to GIR
@@ -1223,6 +1231,12 @@ fn main() {
             }
 
             if result.errors.is_empty() {
+                if !result.warnings.is_empty() {
+                    let reporter = ErrorReporter::new(filename.clone(), concat_source.clone());
+                    for warn in &result.warnings {
+                        reporter.report_semantic_warning(warn);
+                    }
+                }
                 println!("OK: no semantic errors");
             } else {
                 let reporter = ErrorReporter::new(filename.clone(), concat_source);
@@ -1484,6 +1498,13 @@ fn main() {
                 }
                 eprintln!("\n{} semantic error(s) found", result.errors.len());
                 process::exit(1);
+            }
+
+            if !result.warnings.is_empty() {
+                let reporter = gorget::errors::ErrorReporter::new(filename.clone(), concat_source.clone());
+                for warn in &result.warnings {
+                    reporter.report_semantic_warning(warn);
+                }
             }
 
             // Parse test-mode flags (--filter, --tag, --exclude-tag).

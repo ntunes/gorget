@@ -1073,8 +1073,8 @@ P2PEvent p2p_handle_syn(Node &node, str sender_hex, Vector[uint8] payload):
             Vector[uint8] epub = ekp.public_key()
             s.local_ephemeral_pub = bytes_slice(epub, 0, epub.len())
             # Compute shared secret and derive keys (we are responder)
-            Vector[uint8] shared = crypto_x25519_shared_secret(ekp, s.remote_ephemeral_pub).unwrap()
-            Vector[uint8] keys = p2p_derive_stream_keys(shared, false)
+            Vector[uint8] dh_secret = crypto_x25519_shared_secret(ekp, s.remote_ephemeral_pub).unwrap()
+            Vector[uint8] keys = p2p_derive_stream_keys(dh_secret, false)
             s.tx_key = bytes_slice(keys, 0, 32)
             s.rx_key = bytes_slice(keys, 32, 64)
         elif enc_bit == 1 and payload.len() >= 41:
@@ -1086,8 +1086,8 @@ P2PEvent p2p_handle_syn(Node &node, str sender_hex, Vector[uint8] payload):
             Vector[uint8] epub = ekp.public_key()
             s.local_ephemeral_pub = bytes_slice(epub, 0, epub.len())
             # Compute shared secret and derive keys (we are responder)
-            Vector[uint8] shared = crypto_x25519_shared_secret(ekp, s.remote_ephemeral_pub).unwrap()
-            Vector[uint8] keys = p2p_derive_stream_keys(shared, false)
+            Vector[uint8] dh_secret = crypto_x25519_shared_secret(ekp, s.remote_ephemeral_pub).unwrap()
+            Vector[uint8] keys = p2p_derive_stream_keys(dh_secret, false)
             s.tx_key = bytes_slice(keys, 0, 32)
             s.rx_key = bytes_slice(keys, 32, 64)
     # Extract protocol tag if flags & 0x04
@@ -1162,15 +1162,15 @@ P2PEvent p2p_handle_syn_ack(Node &node, str sender_hex, Vector[uint8] payload):
                 node.streams.push(!s)
                 return p2p_no_event()
             # Derive keys from shared secret
-            Vector[uint8] shared = crypto_x25519_dh(s.local_ephemeral_priv, responder_pub).unwrap()
-            Vector[uint8] keys = p2p_derive_stream_keys(shared, true)
+            Vector[uint8] dh_secret = crypto_x25519_dh(s.local_ephemeral_priv, responder_pub).unwrap()
+            Vector[uint8] keys = p2p_derive_stream_keys(dh_secret, true)
             s.tx_key = bytes_slice(keys, 0, 32)
             s.rx_key = bytes_slice(keys, 32, 64)
         elif enc_bit == 1 and payload.len() >= 49:
             # Encrypted only: [17..49] X25519 pubkey
             Vector[uint8] responder_pub = bytes_slice(payload, 17, 49)
-            Vector[uint8] shared = crypto_x25519_dh(s.local_ephemeral_priv, responder_pub).unwrap()
-            Vector[uint8] keys = p2p_derive_stream_keys(shared, true)
+            Vector[uint8] dh_secret = crypto_x25519_dh(s.local_ephemeral_priv, responder_pub).unwrap()
+            Vector[uint8] keys = p2p_derive_stream_keys(dh_secret, true)
             s.tx_key = bytes_slice(keys, 0, 32)
             s.rx_key = bytes_slice(keys, 32, 64)
     # Compute RTT from SYN

@@ -1,0 +1,7 @@
+async void reader(int val):
+    print(val)
+
+async void main():
+    shared int x = 42
+    Task[void] t = spawn reader(x)
+    t.await()

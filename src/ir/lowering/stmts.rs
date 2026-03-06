@@ -31,8 +31,15 @@ pub fn lower_stmt(
             type_,
             pattern,
             value,
+            shared,
             ..
-        } => lower_var_decl(ctx, builder, type_, pattern, value),
+        } => {
+            if *shared != ast::SharedKind::None {
+                lower_shared_var_decl(ctx, builder, type_, pattern, value, shared);
+            } else {
+                lower_var_decl(ctx, builder, type_, pattern, value);
+            }
+        }
 
         Stmt::Assign { target, value } => lower_assign(ctx, builder, target, value),
 
@@ -117,15 +124,12 @@ fn lower_var_decl(
     match &pattern.node {
         Pattern::Binding(name) => {
             let gir_type = ctx.resolve_var_type(type_, value);
-            // For explicit Callable[...] declarations, use map_ast_type_mut to register a FnPtr TypeId.
             // resolve_var_type → map_type_with_subs → map_ast_type (immutable) returns UNIT_TYPE for
-            // Callable generics; map_ast_type_mut (mutable) creates the actual FnPtr TypeId so the
-            // local is declared as GorgetClosure and dispatched via __gorget_closure_call_N.
+            // unregistered generic types. Fall back to map_ast_type_mut which can auto-register them
+            // (Callable, ReadGuard, WriteGuard, RWLock, etc.).
             let gir_type = if gir_type == crate::ir::types::UNIT_TYPE {
-                if let ast::Type::Named { ref name, ref generic_args } = type_.node {
-                    if matches!(name.node.as_str(), "Callable" | "MutCallable" | "ConsumeCallable")
-                        && !generic_args.is_empty()
-                    {
+                if let ast::Type::Named { name: _, ref generic_args } = type_.node {
+                    if !generic_args.is_empty() {
                         ctx.type_mapper.map_ast_type_mut(&type_.node, &mut ctx.type_registry)
                     } else {
                         gir_type
@@ -225,6 +229,226 @@ fn lower_var_decl(
     }
 }
 
+/// Lower a shared VarDecl with transparent access.
+///
+/// Creates a hidden Mutex local and registers the user-visible name with the
+/// inner type T. Reads/writes of the variable are transparently rewritten to
+/// lock+get/set through the mutex local by `lower_expr` and `lower_assign`.
+fn lower_shared_var_decl(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    type_: &Spanned<ast::Type>,
+    pattern: &Spanned<Pattern>,
+    value: &Spanned<Expr>,
+    shared: &ast::SharedKind,
+) {
+    use crate::ir::types::GirType;
+    use super::context::SharedLocalKind;
+    use super::exprs::{ensure_mutex_type_def, ensure_shared_type_def};
+    use crate::semantic::SharedStrategy;
+
+    let name = match &pattern.node {
+        Pattern::Binding(n) => n,
+        _ => {
+            lower_var_decl(ctx, builder, type_, pattern, value);
+            return;
+        }
+    };
+
+    // Look up CFA strategy via DefId
+    let strategy = ctx.analysis.resolution_map
+        .get(&pattern.span.start)
+        .and_then(|&def_id| ctx.analysis.shared_bindings.get(&def_id))
+        .copied()
+        .unwrap_or(SharedStrategy::ArcMutex); // default to Mutex for safety
+
+    // Resolve inner type and lower init value
+    let inner_type = ctx.resolve_var_type(type_, value);
+    let inner_c = ctx.type_name_for_id(inner_type)
+        .unwrap_or("int64_t")
+        .to_string();
+
+    let prev_expected = ctx.expected_type;
+    ctx.expected_type = Some(inner_type);
+    let val_operand = lower_expr(ctx, builder, value);
+    ctx.expected_type = prev_expected;
+
+    match strategy {
+        SharedStrategy::ArcAtomic => {
+            // Atomic: use AtomicInt or AtomicBool — lock-free ops
+            let atomic_name = super::exprs::atomic_type_name_for(inner_type);
+            let wrapper_type = if let Some(tid) = ctx.type_mapper.lookup_named(&atomic_name) {
+                tid
+            } else {
+                let tid = ctx.type_registry.insert(GirType::Named(atomic_name.clone()));
+                ctx.type_mapper.register_named(atomic_name.clone(), tid);
+                // AtomicInt/AtomicBool are built-in runtime types — no TypeDef needed,
+                // but register a trivial drop for RAII cleanup
+                use crate::ir::types::{TypeDef, TypeDefKind, StructDef, StructField, TypeMetadata, CopySemantics, DropStrategy};
+                let drop_fn = format!("gorget_atomic_{}_free", if inner_type == BOOL_TYPE { "bool" } else { "int" });
+                let type_def = TypeDef {
+                    name: atomic_name.clone(),
+                    kind: TypeDefKind::Struct(StructDef {
+                        fields: vec![StructField { name: "_0".to_string(), type_id: inner_type }],
+                    }),
+                    metadata: TypeMetadata {
+                        size: None,
+                        align: None,
+                        copy_semantics: CopySemantics::Copy, // pointer type, cheap to copy
+                        drop_strategy: DropStrategy::Trivial(drop_fn),
+                    },
+                };
+                ctx.type_registry.add_type_def(type_def);
+                tid
+            };
+
+            let new_fn = format!("{atomic_name}__new");
+            let wrapped = builder.call(&new_fn, vec![val_operand], wrapper_type);
+
+            let hidden_local = builder.add_local(wrapper_type, None);
+            ctx.drops.register_local(hidden_local, wrapper_type, &ctx.type_registry);
+            builder.assign(Place::local(hidden_local), FunctionBuilder::copy(wrapped));
+
+            let facade_local = builder.add_local(inner_type, Some(name));
+            ctx.register_local(name, facade_local, inner_type);
+            ctx.drops.register_local(facade_local, inner_type, &ctx.type_registry);
+
+            ctx.shared_locals.insert(facade_local, (hidden_local, inner_type, wrapper_type, SharedLocalKind::Atomic, *shared));
+
+            // Initialize facade with atomic load
+            let init_val = super::exprs::emit_atomic_load(ctx, builder, hidden_local, inner_type, &atomic_name);
+            builder.assign(Place::local(facade_local), init_val);
+        }
+
+        SharedStrategy::ArcOnly => {
+            // ArcOnly: use Shared[T] — no locking needed
+            let mangled = format!("Shared__{inner_c}");
+            let shared_type = if let Some(tid) = ctx.type_mapper.lookup_named(&mangled) {
+                tid
+            } else {
+                let tid = ctx.type_registry.insert(GirType::Named(mangled.clone()));
+                ctx.type_mapper.register_named(mangled.clone(), tid);
+                ensure_shared_type_def(ctx, &mangled, inner_type);
+                tid
+            };
+
+            let new_fn = format!("{mangled}__new");
+            let tmp = builder.add_local(inner_type, None);
+            builder.assign(Place::local(tmp), val_operand);
+            let wrapped = builder.call(&new_fn, vec![FunctionBuilder::copy(tmp)], shared_type);
+
+            let hidden_local = builder.add_local(shared_type, None);
+            ctx.drops.register_local(hidden_local, shared_type, &ctx.type_registry);
+            builder.assign(Place::local(hidden_local), FunctionBuilder::copy(wrapped));
+
+            let facade_local = builder.add_local(inner_type, Some(name));
+            ctx.register_local(name, facade_local, inner_type);
+            ctx.drops.register_local(facade_local, inner_type, &ctx.type_registry);
+
+            ctx.shared_locals.insert(facade_local, (hidden_local, inner_type, shared_type, SharedLocalKind::SharedArc, *shared));
+
+            let init_val = super::exprs::emit_shared_get(ctx, builder, hidden_local, inner_type);
+            builder.assign(Place::local(facade_local), init_val);
+        }
+
+        SharedStrategy::ArcRwLock => {
+            // ArcRwLock: use RWLock[T] — reader-writer lock (concurrent reads, exclusive writes)
+            let mangled = format!("RWLock__{inner_c}");
+            let rwlock_type = if let Some(tid) = ctx.type_mapper.lookup_named(&mangled) {
+                tid
+            } else {
+                let tid = ctx.type_registry.insert(GirType::Named(mangled.clone()));
+                ctx.type_mapper.register_named(mangled.clone(), tid);
+                super::exprs::ensure_rwlock_type_def(ctx, &mangled, inner_type);
+                tid
+            };
+
+            // Ensure ReadGuard and WriteGuard types exist
+            let read_guard_mangled = format!("ReadGuard__{inner_c}");
+            if ctx.type_mapper.lookup_named(&read_guard_mangled).is_none() {
+                let tid = ctx.type_registry.insert(GirType::Named(read_guard_mangled.clone()));
+                ctx.type_mapper.register_named(read_guard_mangled, tid);
+            }
+            let write_guard_mangled = format!("WriteGuard__{inner_c}");
+            if ctx.type_mapper.lookup_named(&write_guard_mangled).is_none() {
+                let tid = ctx.type_registry.insert(GirType::Named(write_guard_mangled.clone()));
+                ctx.type_mapper.register_named(write_guard_mangled, tid);
+            }
+
+            let new_fn = format!("{mangled}__new");
+            let tmp = builder.add_local(inner_type, None);
+            builder.assign(Place::local(tmp), val_operand);
+            let wrapped = builder.call(&new_fn, vec![FunctionBuilder::copy(tmp)], rwlock_type);
+
+            let rwlock_local = builder.add_local(rwlock_type, None);
+            ctx.drops.register_local(rwlock_local, rwlock_type, &ctx.type_registry);
+            builder.assign(Place::local(rwlock_local), FunctionBuilder::copy(wrapped));
+
+            let facade_local = builder.add_local(inner_type, Some(name));
+            ctx.register_local(name, facade_local, inner_type);
+            ctx.drops.register_local(facade_local, inner_type, &ctx.type_registry);
+
+            ctx.shared_locals.insert(facade_local, (rwlock_local, inner_type, rwlock_type, SharedLocalKind::RwLock, *shared));
+
+            let init_val = super::exprs::emit_rwlock_read_get(ctx, builder, rwlock_local, inner_type);
+            builder.assign(Place::local(facade_local), init_val);
+        }
+
+        SharedStrategy::ArcMutex => {
+            // ArcMutex: use Shared[Mutex[T]] — ARC for lifetime, Mutex for sync
+            let mutex_mangled = format!("Mutex__{inner_c}");
+            let mutex_type = if let Some(tid) = ctx.type_mapper.lookup_named(&mutex_mangled) {
+                tid
+            } else {
+                let tid = ctx.type_registry.insert(GirType::Named(mutex_mangled.clone()));
+                ctx.type_mapper.register_named(mutex_mangled.clone(), tid);
+                ensure_mutex_type_def(ctx, &mutex_mangled, inner_type);
+                tid
+            };
+
+            let guard_mangled = format!("Guard__{inner_c}");
+            if ctx.type_mapper.lookup_named(&guard_mangled).is_none() {
+                let guard_tid = ctx.type_registry.insert(GirType::Named(guard_mangled.clone()));
+                ctx.type_mapper.register_named(guard_mangled, guard_tid);
+            }
+
+            // Wrap Mutex in Shared for ARC lifetime control
+            let shared_mutex_mangled = format!("Shared__{mutex_mangled}");
+            let shared_mutex_type = if let Some(tid) = ctx.type_mapper.lookup_named(&shared_mutex_mangled) {
+                tid
+            } else {
+                let tid = ctx.type_registry.insert(GirType::Named(shared_mutex_mangled.clone()));
+                ctx.type_mapper.register_named(shared_mutex_mangled.clone(), tid);
+                ensure_shared_type_def(ctx, &shared_mutex_mangled, mutex_type);
+                tid
+            };
+
+            // Create Mutex, then wrap in Shared
+            let mutex_new_fn = format!("{mutex_mangled}__new");
+            let tmp = builder.add_local(inner_type, None);
+            builder.assign(Place::local(tmp), val_operand);
+            let mutex_val = builder.call(&mutex_new_fn, vec![FunctionBuilder::copy(tmp)], mutex_type);
+
+            let shared_new_fn = format!("{shared_mutex_mangled}__new");
+            let shared_val = builder.call(&shared_new_fn, vec![FunctionBuilder::copy(mutex_val)], shared_mutex_type);
+
+            let hidden_local = builder.add_local(shared_mutex_type, None);
+            ctx.drops.register_local(hidden_local, shared_mutex_type, &ctx.type_registry);
+            builder.assign(Place::local(hidden_local), FunctionBuilder::copy(shared_val));
+
+            let facade_local = builder.add_local(inner_type, Some(name));
+            ctx.register_local(name, facade_local, inner_type);
+            ctx.drops.register_local(facade_local, inner_type, &ctx.type_registry);
+
+            ctx.shared_locals.insert(facade_local, (hidden_local, inner_type, shared_mutex_type, SharedLocalKind::Mutex, *shared));
+
+            // Init facade: Shared.get() → Mutex, then lock → get → release
+            let init_val = super::exprs::emit_shared_mutex_lock_get(ctx, builder, hidden_local, mutex_type, inner_type);
+            builder.assign(Place::local(facade_local), init_val);
+        }
+    }
+}
+
 /// Lower an assignment.
 fn lower_assign(
     ctx: &mut LoweringContext,
@@ -234,7 +458,35 @@ fn lower_assign(
 ) {
     match &target.node {
         Expr::Identifier(name) => {
-            if let Some((local_id, type_id)) = ctx.lookup_local(name) {
+            if let Some((local_id, _type_id)) = ctx.lookup_local(name) {
+                // Shared variable: dispatch based on wrapper kind
+                if let Some(&(hidden_local, inner_type, _, kind, _)) = ctx.shared_locals.get(&local_id) {
+                    use super::context::SharedLocalKind;
+                    match kind {
+                        SharedLocalKind::Mutex => {
+                            let operand = lower_expr(ctx, builder, value);
+                            let inner_c = ctx.type_name_for_id(inner_type).unwrap_or("int64_t").to_string();
+                            let mutex_type = ctx.type_mapper.lookup_named(&format!("Mutex__{inner_c}")).unwrap_or(inner_type);
+                            super::exprs::emit_shared_mutex_lock_set(ctx, builder, hidden_local, mutex_type, inner_type, operand);
+                            return;
+                        }
+                        SharedLocalKind::Atomic => {
+                            let operand = lower_expr(ctx, builder, value);
+                            let atomic_name = super::exprs::atomic_type_name_for(inner_type);
+                            super::exprs::emit_atomic_store(ctx, builder, hidden_local, operand, &atomic_name);
+                            return;
+                        }
+                        SharedLocalKind::RwLock => {
+                            let operand = lower_expr(ctx, builder, value);
+                            super::exprs::emit_rwlock_write_set(ctx, builder, hidden_local, inner_type, operand);
+                            return;
+                        }
+                        SharedLocalKind::SharedArc => {
+                            // ArcOnly: assignment shouldn't happen (CFA upgrades to ArcMutex)
+                        }
+                    }
+                }
+                let type_id = _type_id;
                 // Check if old value needs dropping
                 let needs_drop = {
                     use crate::ir::types::GirType;
@@ -457,6 +709,98 @@ fn lower_compound_assign(
 ) {
     if let Expr::Identifier(name) = &target.node {
         if let Some((local_id, type_id)) = ctx.lookup_local(name) {
+            // Shared variable: dispatch based on wrapper kind
+            if let Some(&(hidden_local, inner_type, _, kind, _)) = ctx.shared_locals.get(&local_id) {
+                use super::context::SharedLocalKind;
+                match kind {
+                    SharedLocalKind::Mutex => {
+                        let inner_c = ctx.type_name_for_id(inner_type).unwrap_or("int64_t").to_string();
+                        let mutex_type = ctx.type_mapper.lookup_named(&format!("Mutex__{inner_c}")).unwrap_or(inner_type);
+                        let cur_val = super::exprs::emit_shared_mutex_lock_get(ctx, builder, hidden_local, mutex_type, inner_type);
+                        let rhs = lower_expr(ctx, builder, value);
+                        let gir_op = match op {
+                            ast::BinaryOp::Add => BinOp::Add,
+                            ast::BinaryOp::Sub => BinOp::Sub,
+                            ast::BinaryOp::Mul => BinOp::Mul,
+                            ast::BinaryOp::Div => BinOp::Div,
+                            ast::BinaryOp::Rem => BinOp::Rem,
+                            ast::BinaryOp::Mod => BinOp::Mod,
+                            ast::BinaryOp::BitAnd => BinOp::BitAnd,
+                            ast::BinaryOp::BitOr => BinOp::BitOr,
+                            ast::BinaryOp::BitXor => BinOp::BitXor,
+                            ast::BinaryOp::Shl => BinOp::Shl,
+                            ast::BinaryOp::Shr => BinOp::Shr,
+                            _ => BinOp::Add,
+                        };
+                        let new_val = builder.bin_op(gir_op, inner_type, cur_val, rhs);
+                        super::exprs::emit_shared_mutex_lock_set(ctx, builder, hidden_local, mutex_type, inner_type, FunctionBuilder::copy(new_val));
+                        return;
+                    }
+                    SharedLocalKind::Atomic => {
+                        // For += and -=, use native atomic add/sub (lock-free)
+                        // For other ops, fall back to load → compute → CAS loop
+                        let rhs = lower_expr(ctx, builder, value);
+                        let atomic_name = super::exprs::atomic_type_name_for(inner_type);
+                        match op {
+                            ast::BinaryOp::Add => {
+                                let add_fn = format!("{atomic_name}__add");
+                                builder.call(&add_fn, vec![FunctionBuilder::copy(hidden_local), rhs], inner_type);
+                                return;
+                            }
+                            ast::BinaryOp::Sub => {
+                                let sub_fn = format!("{atomic_name}__sub");
+                                builder.call(&sub_fn, vec![FunctionBuilder::copy(hidden_local), rhs], inner_type);
+                                return;
+                            }
+                            _ => {
+                                // Fallback: atomic load → compute → atomic store (NOT atomic, but functional)
+                                let cur_val = super::exprs::emit_atomic_load(ctx, builder, hidden_local, inner_type, &atomic_name);
+                                let gir_op = match op {
+                                    ast::BinaryOp::Mul => BinOp::Mul,
+                                    ast::BinaryOp::Div => BinOp::Div,
+                                    ast::BinaryOp::Rem => BinOp::Rem,
+                                    ast::BinaryOp::Mod => BinOp::Mod,
+                                    ast::BinaryOp::BitAnd => BinOp::BitAnd,
+                                    ast::BinaryOp::BitOr => BinOp::BitOr,
+                                    ast::BinaryOp::BitXor => BinOp::BitXor,
+                                    ast::BinaryOp::Shl => BinOp::Shl,
+                                    ast::BinaryOp::Shr => BinOp::Shr,
+                                    _ => BinOp::Add,
+                                };
+                                let new_val = builder.bin_op(gir_op, inner_type, cur_val, rhs);
+                                super::exprs::emit_atomic_store(ctx, builder, hidden_local, FunctionBuilder::copy(new_val), &atomic_name);
+                                return;
+                            }
+                        }
+                    }
+                    SharedLocalKind::RwLock => {
+                        // Write-lock, get current value, compute, set, release — all under one lock
+                        let (guard_ptr, cur_val) = super::exprs::emit_rwlock_write_get(ctx, builder, hidden_local, inner_type);
+                        let rhs = lower_expr(ctx, builder, value);
+                        let gir_op = match op {
+                            ast::BinaryOp::Add => BinOp::Add,
+                            ast::BinaryOp::Sub => BinOp::Sub,
+                            ast::BinaryOp::Mul => BinOp::Mul,
+                            ast::BinaryOp::Div => BinOp::Div,
+                            ast::BinaryOp::Rem => BinOp::Rem,
+                            ast::BinaryOp::Mod => BinOp::Mod,
+                            ast::BinaryOp::BitAnd => BinOp::BitAnd,
+                            ast::BinaryOp::BitOr => BinOp::BitOr,
+                            ast::BinaryOp::BitXor => BinOp::BitXor,
+                            ast::BinaryOp::Shl => BinOp::Shl,
+                            ast::BinaryOp::Shr => BinOp::Shr,
+                            _ => BinOp::Add,
+                        };
+                        let new_val = builder.bin_op(gir_op, inner_type, cur_val, rhs);
+                        super::exprs::emit_rwlock_write_finish(ctx, builder, guard_ptr, inner_type, FunctionBuilder::copy(new_val));
+                        return;
+                    }
+                    SharedLocalKind::SharedArc => {
+                        // ArcOnly: compound-assign shouldn't happen (CFA upgrades to ArcMutex)
+                    }
+                }
+            }
+
             let is_mut_capture = ctx.mut_capture_locals.contains_key(&local_id);
             let value_type = if is_mut_capture {
                 ctx.mut_capture_locals[&local_id]
@@ -2487,6 +2831,7 @@ fn lower_select(
 mod tests {
     use super::*;
     use crate::ir::types::TypeRegistry;
+    use crate::parser::ast::SharedKind;
     use crate::span::Span;
 
     fn spanned<T>(node: T) -> Spanned<T> {
@@ -2511,6 +2856,7 @@ mod tests {
         let stmt = spanned(Stmt::VarDecl {
             is_const: false,
             is_mutable: false,
+            shared: SharedKind::None,
             type_: spanned(ast::Type::Primitive(ast::PrimitiveType::Int)),
             pattern: spanned(Pattern::Binding("x".into())),
             value: spanned(Expr::IntLiteral(42)),

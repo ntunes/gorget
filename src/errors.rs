@@ -185,6 +185,17 @@ impl ErrorReporter {
         self.emit(&diag);
     }
 
+    pub fn report_semantic_warning(&self, warn: &crate::semantic::errors::SemanticWarning) {
+        let labels = vec![Label::primary(
+            self.file_id,
+            warn.span.start..warn.span.end,
+        )];
+        let diag = diagnostic::Diagnostic::warning()
+            .with_message(warn.to_string())
+            .with_labels(labels);
+        self.emit(&diag);
+    }
+
     fn emit(&self, diag: &diagnostic::Diagnostic<usize>) {
         let writer = StandardStream::stderr(ColorChoice::Auto);
         let config = term::Config::default();

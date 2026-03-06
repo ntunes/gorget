@@ -8,6 +8,274 @@ use crate::span::Spanned;
 
 use super::context::LoweringContext;
 
+/// Emit lock+get+release on a shared variable's hidden mutex local.
+/// Returns an operand holding the inner value. The lock is released immediately.
+pub fn emit_shared_lock_get(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    mutex_local: LocalId,
+    inner_type: TypeId,
+) -> Operand {
+    let inner_c = ctx.type_name_for_id(inner_type)
+        .unwrap_or("int64_t")
+        .to_string();
+    let guard_mangled = format!("Guard__{inner_c}");
+    let guard_type = ctx.type_mapper.lookup_named(&guard_mangled)
+        .unwrap_or(inner_type);
+    let mutex_mangled = format!("Mutex__{inner_c}");
+    let lock_fn = format!("{mutex_mangled}__lock");
+    let get_fn = format!("{guard_mangled}__get");
+    let release_fn = format!("{guard_mangled}__drop");
+    let guard = builder.call(&lock_fn, vec![FunctionBuilder::copy(mutex_local)], guard_type);
+    // Guard__T__get/release take &self (pointer to guard)
+    let guard_ptr_type = ctx.register_ptr_type(guard_type);
+    let guard_ptr = builder.add_local(guard_ptr_type, None);
+    builder.emit_borrow(guard_ptr, Place::local(guard));
+    let val = builder.call(&get_fn, vec![FunctionBuilder::copy(guard_ptr)], inner_type);
+    // Release the guard immediately so the lock doesn't deadlock on subsequent access
+    builder.call(&release_fn, vec![FunctionBuilder::copy(guard_ptr)], UNIT_TYPE);
+    FunctionBuilder::copy(val)
+}
+
+/// Emit Shared.get() → Mutex, then lock+get+release on a Shared[Mutex[T]] hidden local.
+/// Returns an operand holding the inner value T.
+pub fn emit_shared_mutex_lock_get(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    shared_mutex_local: LocalId,
+    mutex_type: TypeId,
+    inner_type: TypeId,
+) -> Operand {
+    let mutex_c = ctx.type_name_for_id(mutex_type)
+        .unwrap_or("Mutex__int64_t")
+        .to_string();
+    let shared_mangled = format!("Shared__{mutex_c}");
+    let get_fn = format!("{shared_mangled}__get");
+    let mutex_val = builder.call(&get_fn, vec![FunctionBuilder::copy(shared_mutex_local)], mutex_type);
+    // Now lock+get+release the extracted Mutex
+    let inner_c = ctx.type_name_for_id(inner_type)
+        .unwrap_or("int64_t")
+        .to_string();
+    let guard_mangled = format!("Guard__{inner_c}");
+    let guard_type = ctx.type_mapper.lookup_named(&guard_mangled)
+        .unwrap_or(inner_type);
+    let lock_fn = format!("{mutex_c}__lock");
+    let guard = builder.call(&lock_fn, vec![FunctionBuilder::copy(mutex_val)], guard_type);
+    let guard_ptr_type = ctx.register_ptr_type(guard_type);
+    let guard_ptr = builder.add_local(guard_ptr_type, None);
+    builder.emit_borrow(guard_ptr, Place::local(guard));
+    let get_val_fn = format!("{guard_mangled}__get");
+    let val = builder.call(&get_val_fn, vec![FunctionBuilder::copy(guard_ptr)], inner_type);
+    let release_fn = format!("{guard_mangled}__drop");
+    builder.call(&release_fn, vec![FunctionBuilder::copy(guard_ptr)], UNIT_TYPE);
+    FunctionBuilder::copy(val)
+}
+
+/// Emit Shared.get() → Mutex, then lock+set+release on a Shared[Mutex[T]] hidden local.
+pub fn emit_shared_mutex_lock_set(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    shared_mutex_local: LocalId,
+    mutex_type: TypeId,
+    inner_type: TypeId,
+    value: Operand,
+) {
+    let mutex_c = ctx.type_name_for_id(mutex_type)
+        .unwrap_or("Mutex__int64_t")
+        .to_string();
+    let shared_mangled = format!("Shared__{mutex_c}");
+    let get_fn = format!("{shared_mangled}__get");
+    let mutex_val = builder.call(&get_fn, vec![FunctionBuilder::copy(shared_mutex_local)], mutex_type);
+    let inner_c = ctx.type_name_for_id(inner_type)
+        .unwrap_or("int64_t")
+        .to_string();
+    let guard_mangled = format!("Guard__{inner_c}");
+    let guard_type = ctx.type_mapper.lookup_named(&guard_mangled)
+        .unwrap_or(inner_type);
+    let lock_fn = format!("{mutex_c}__lock");
+    let guard = builder.call(&lock_fn, vec![FunctionBuilder::copy(mutex_val)], guard_type);
+    let guard_ptr_type = ctx.register_ptr_type(guard_type);
+    let guard_ptr = builder.add_local(guard_ptr_type, None);
+    builder.emit_borrow(guard_ptr, Place::local(guard));
+    let set_fn = format!("{guard_mangled}__set");
+    builder.call(&set_fn, vec![FunctionBuilder::copy(guard_ptr), value], UNIT_TYPE);
+    let release_fn = format!("{guard_mangled}__drop");
+    builder.call(&release_fn, vec![FunctionBuilder::copy(guard_ptr)], UNIT_TYPE);
+}
+
+/// Emit a simple `.get()` on a Shared[T] local (no locking needed — ARC-only).
+pub fn emit_shared_get(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    shared_local: LocalId,
+    inner_type: TypeId,
+) -> Operand {
+    let inner_c = ctx.type_name_for_id(inner_type)
+        .unwrap_or("int64_t")
+        .to_string();
+    let shared_mangled = format!("Shared__{inner_c}");
+    let get_fn = format!("{shared_mangled}__get");
+    let val = builder.call(&get_fn, vec![FunctionBuilder::copy(shared_local)], inner_type);
+    FunctionBuilder::copy(val)
+}
+
+/// Emit an atomic load on a shared(atomic) variable's hidden AtomicInt/AtomicBool local.
+pub fn emit_atomic_load(
+    _ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    atomic_local: LocalId,
+    inner_type: TypeId,
+    atomic_type_name: &str,
+) -> Operand {
+    let load_fn = format!("{atomic_type_name}__load");
+    let val = builder.call(&load_fn, vec![FunctionBuilder::copy(atomic_local)], inner_type);
+    FunctionBuilder::copy(val)
+}
+
+/// Emit an atomic store on a shared(atomic) variable's hidden AtomicInt/AtomicBool local.
+pub fn emit_atomic_store(
+    _ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    atomic_local: LocalId,
+    value: Operand,
+    atomic_type_name: &str,
+) {
+    let store_fn = format!("{atomic_type_name}__store");
+    builder.call(&store_fn, vec![FunctionBuilder::copy(atomic_local), value], UNIT_TYPE);
+}
+
+/// Emit read-lock+get+release on a shared(rwlock) variable's hidden RWLock local.
+/// Returns an operand holding the inner value. The read lock is released immediately.
+pub fn emit_rwlock_read_get(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    rwlock_local: LocalId,
+    inner_type: TypeId,
+) -> Operand {
+    let inner_c = ctx.type_name_for_id(inner_type)
+        .unwrap_or("int64_t")
+        .to_string();
+    let rwlock_mangled = format!("RWLock__{inner_c}");
+    let read_guard_mangled = format!("ReadGuard__{inner_c}");
+    let read_guard_type = ctx.type_mapper.lookup_named(&read_guard_mangled)
+        .unwrap_or(inner_type);
+    let read_fn = format!("{rwlock_mangled}__read");
+    let get_fn = format!("{read_guard_mangled}__get");
+    let release_fn = format!("{read_guard_mangled}__drop");
+    let guard = builder.call(&read_fn, vec![FunctionBuilder::copy(rwlock_local)], read_guard_type);
+    let guard_ptr_type = ctx.register_ptr_type(read_guard_type);
+    let guard_ptr = builder.add_local(guard_ptr_type, None);
+    builder.emit_borrow(guard_ptr, Place::local(guard));
+    let val = builder.call(&get_fn, vec![FunctionBuilder::copy(guard_ptr)], inner_type);
+    builder.call(&release_fn, vec![FunctionBuilder::copy(guard_ptr)], UNIT_TYPE);
+    FunctionBuilder::copy(val)
+}
+
+/// Emit write-lock+set+release on a shared(rwlock) variable's hidden RWLock local.
+pub fn emit_rwlock_write_set(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    rwlock_local: LocalId,
+    inner_type: TypeId,
+    value: Operand,
+) {
+    let inner_c = ctx.type_name_for_id(inner_type)
+        .unwrap_or("int64_t")
+        .to_string();
+    let rwlock_mangled = format!("RWLock__{inner_c}");
+    let write_guard_mangled = format!("WriteGuard__{inner_c}");
+    let write_guard_type = ctx.type_mapper.lookup_named(&write_guard_mangled)
+        .unwrap_or(inner_type);
+    let write_fn = format!("{rwlock_mangled}__write");
+    let set_fn = format!("{write_guard_mangled}__set");
+    let release_fn = format!("{write_guard_mangled}__drop");
+    let guard = builder.call(&write_fn, vec![FunctionBuilder::copy(rwlock_local)], write_guard_type);
+    let guard_ptr_type = ctx.register_ptr_type(write_guard_type);
+    let guard_ptr = builder.add_local(guard_ptr_type, None);
+    builder.emit_borrow(guard_ptr, Place::local(guard));
+    builder.call(&set_fn, vec![FunctionBuilder::copy(guard_ptr), value], UNIT_TYPE);
+    builder.call(&release_fn, vec![FunctionBuilder::copy(guard_ptr)], UNIT_TYPE);
+}
+
+/// Emit write-lock+get on a shared(rwlock) variable's hidden RWLock local.
+/// Returns (guard_ptr local, current value operand). Caller must call emit_rwlock_write_finish
+/// after computing the new value and setting it.
+pub fn emit_rwlock_write_get(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    rwlock_local: LocalId,
+    inner_type: TypeId,
+) -> (LocalId, Operand) {
+    let inner_c = ctx.type_name_for_id(inner_type)
+        .unwrap_or("int64_t")
+        .to_string();
+    let rwlock_mangled = format!("RWLock__{inner_c}");
+    let write_guard_mangled = format!("WriteGuard__{inner_c}");
+    let write_guard_type = ctx.type_mapper.lookup_named(&write_guard_mangled)
+        .unwrap_or(inner_type);
+    let write_fn = format!("{rwlock_mangled}__write");
+    let get_fn = format!("{write_guard_mangled}__get");
+    let guard = builder.call(&write_fn, vec![FunctionBuilder::copy(rwlock_local)], write_guard_type);
+    let guard_ptr_type = ctx.register_ptr_type(write_guard_type);
+    let guard_ptr = builder.add_local(guard_ptr_type, None);
+    builder.emit_borrow(guard_ptr, Place::local(guard));
+    let val = builder.call(&get_fn, vec![FunctionBuilder::copy(guard_ptr)], inner_type);
+    (guard_ptr, FunctionBuilder::copy(val))
+}
+
+/// Finish a write-lock compound assign: set the new value and release the write guard.
+pub fn emit_rwlock_write_finish(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    guard_ptr: LocalId,
+    inner_type: TypeId,
+    new_value: Operand,
+) {
+    let inner_c = ctx.type_name_for_id(inner_type)
+        .unwrap_or("int64_t")
+        .to_string();
+    let write_guard_mangled = format!("WriteGuard__{inner_c}");
+    let set_fn = format!("{write_guard_mangled}__set");
+    let release_fn = format!("{write_guard_mangled}__drop");
+    builder.call(&set_fn, vec![FunctionBuilder::copy(guard_ptr), new_value], UNIT_TYPE);
+    builder.call(&release_fn, vec![FunctionBuilder::copy(guard_ptr)], UNIT_TYPE);
+}
+
+/// Map inner GIR type to the atomic wrapper type name.
+pub fn atomic_type_name_for(inner_type: TypeId) -> String {
+    if inner_type == BOOL_TYPE {
+        "AtomicBool".to_string()
+    } else {
+        "AtomicInt".to_string()
+    }
+}
+
+/// Emit lock+set+release on a shared variable's hidden mutex local.
+pub fn emit_shared_lock_set(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    mutex_local: LocalId,
+    inner_type: TypeId,
+    value: Operand,
+) {
+    let inner_c = ctx.type_name_for_id(inner_type)
+        .unwrap_or("int64_t")
+        .to_string();
+    let guard_mangled = format!("Guard__{inner_c}");
+    let guard_type = ctx.type_mapper.lookup_named(&guard_mangled)
+        .unwrap_or(inner_type);
+    let mutex_mangled = format!("Mutex__{inner_c}");
+    let lock_fn = format!("{mutex_mangled}__lock");
+    let set_fn = format!("{guard_mangled}__set");
+    let release_fn = format!("{guard_mangled}__drop");
+    let guard = builder.call(&lock_fn, vec![FunctionBuilder::copy(mutex_local)], guard_type);
+    let guard_ptr_type = ctx.register_ptr_type(guard_type);
+    let guard_ptr = builder.add_local(guard_ptr_type, None);
+    builder.emit_borrow(guard_ptr, Place::local(guard));
+    builder.call(&set_fn, vec![FunctionBuilder::copy(guard_ptr), value], UNIT_TYPE);
+    builder.call(&release_fn, vec![FunctionBuilder::copy(guard_ptr)], UNIT_TYPE);
+}
+
 /// Reverse-map a GIR TypeId to its Gorget-level primitive name.
 /// Used to resolve generic type params (e.g., T → "int") for static method dispatch.
 fn gorget_name_for_type_id(ctx: &LoweringContext, type_id: TypeId) -> String {
@@ -69,6 +337,28 @@ fn lower_expr_inner(
 
         Expr::Identifier(name) => {
             if let Some((local_id, _)) = ctx.lookup_local(name) {
+                // If this is a shared variable:
+                // - In spawn arg context (shared_pass_raw), return the raw Mutex local
+                // - Otherwise, auto-emit lock+get for transparent access
+                if let Some(&(hidden_local, inner_type, _wrapper_type, kind, _)) = ctx.shared_locals.get(&local_id) {
+                    use super::context::SharedLocalKind;
+                    if ctx.shared_pass_raw {
+                        return Operand::Copy(Place::local(hidden_local));
+                    }
+                    return match kind {
+                        SharedLocalKind::SharedArc => emit_shared_get(ctx, builder, hidden_local, inner_type),
+                        SharedLocalKind::Atomic => {
+                            let atomic_name = atomic_type_name_for(inner_type);
+                            emit_atomic_load(ctx, builder, hidden_local, inner_type, &atomic_name)
+                        }
+                        SharedLocalKind::Mutex => {
+                            let inner_c = ctx.type_name_for_id(inner_type).unwrap_or("int64_t").to_string();
+                            let mutex_type = ctx.type_mapper.lookup_named(&format!("Mutex__{inner_c}")).unwrap_or(inner_type);
+                            emit_shared_mutex_lock_get(ctx, builder, hidden_local, mutex_type, inner_type)
+                        }
+                        SharedLocalKind::RwLock => emit_rwlock_read_get(ctx, builder, hidden_local, inner_type),
+                    };
+                }
                 // If this is a mutable capture pointer, deref to get the value
                 if let Some(&value_type) = ctx.mut_capture_locals.get(&local_id) {
                     let deref_place = Place {
@@ -504,6 +794,24 @@ fn lower_expr_inner(
                 let ret_type = ctx.fn_sigs.get(fn_name.as_str())
                     .map(|(_, r)| *r)
                     .unwrap_or(UNIT_TYPE);
+
+                // §3.1/§3.2 Token release before await: release all shared param tokens
+                // in reverse declaration order before the suspension point.
+                if !ctx.active_shared_params.is_empty() {
+                    let mut params = ctx.active_shared_params.clone();
+                    params.sort_by_key(|p| p.decl_order);
+                    for sp in params.iter().rev() {
+                        let guard_type_name = ctx.type_name_for_id(sp.guard_type)
+                            .unwrap_or("Guard__int64_t")
+                            .to_string();
+                        builder.call(
+                            &format!("{guard_type_name}__drop"),
+                            vec![FunctionBuilder::copy(sp.guard_ptr_local)],
+                            UNIT_TYPE,
+                        );
+                    }
+                }
+
                 let await_fn = format!("__gorget_await_{fn_name}");
                 let result = if ret_type == UNIT_TYPE {
                     builder.call_void(&await_fn, vec![inner]);
@@ -512,6 +820,17 @@ fn lower_expr_inner(
                     let dst = builder.call(&await_fn, vec![inner], ret_type);
                     FunctionBuilder::copy(dst)
                 };
+
+                // §3.1/§3.2 Token reacquire after await: reacquire all shared param tokens
+                // in declaration order (ascending decl_order) and re-derive pointers.
+                if !ctx.active_shared_params.is_empty() {
+                    let mut params = ctx.active_shared_params.clone();
+                    params.sort_by_key(|p| p.decl_order);
+                    for sp in &params {
+                        emit_shared_param_reacquire(ctx, builder, sp);
+                    }
+                }
+
                 // Zero out the Task local after await to prevent double-join in drop.
                 // The DropIfAlive handler checks memcmp against zero before calling drop.
                 builder.move_zero(Place::local(local_id));
@@ -593,12 +912,47 @@ fn lower_expr_inner(
                     let c_name = ctx.extern_bindings.get(fn_name.as_str())
                         .cloned()
                         .unwrap_or_else(|| fn_name.clone());
-                    ctx.pending_spawn_fn = Some(c_name.clone());
-                    ctx.spawned_fn_names.insert(c_name.clone(), true);
+
                     // fn_sigs is keyed by the Gorget bare name for lookup purposes.
+                    let callee_param_types = ctx.fn_sigs.get(fn_name.as_str())
+                        .map(|(p, _)| p.clone())
+                        .unwrap_or_default();
                     let fn_ret_type = ctx.fn_sigs.get(fn_name.as_str())
                         .map(|(_, r)| *r)
                         .unwrap_or(I64_TYPE);
+
+                    // Detect shared args: check each call arg against shared_locals
+                    let param_ownerships = ctx.fn_param_ownerships.get(fn_name.as_str())
+                        .cloned()
+                        .unwrap_or_default();
+
+                    let mut shared_spawn_args: Vec<SharedSpawnArg> = Vec::new();
+                    let mut has_any_shared = false;
+                    for (i, arg) in call_args.iter().enumerate() {
+                        if let Expr::Identifier(arg_name) = &arg.node.value.node {
+                            if let Some((local_id, _)) = ctx.lookup_local(arg_name) {
+                                if let Some(&(_, inner_type, wrapper_type, kind, ast_shared)) = ctx.shared_locals.get(&local_id) {
+                                    has_any_shared = true;
+                                    // Only auto-decided shared vars get token wrappers.
+                                    // User overrides (shared(atomic), shared(rwlock)) pass
+                                    // the raw sync primitive — the callee uses it directly.
+                                    if ast_shared == ast::SharedKind::Auto {
+                                        let is_mutable = param_ownerships.get(i)
+                                            .map_or(false, |o| matches!(o, Ownership::MutableBorrow));
+                                        shared_spawn_args.push(SharedSpawnArg {
+                                            arg_index: i,
+                                            kind,
+                                            inner_type,
+                                            wrapper_type,
+                                            is_mutable,
+                                            decl_order: local_id.0,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // Map return TypeId → C type name → Task__<c_type> name
                     let ret_c = ctx.type_name_for_id(fn_ret_type)
                         .unwrap_or("int64_t")
@@ -612,7 +966,6 @@ fn lower_expr_inner(
                         tid
                     } else {
                         // Register Task TypeDef with Move semantics + RAII join-on-drop.
-                        // The drop function joins the thread and frees the __SpawnCtx.
                         ctx.type_registry.add_type_def(TypeDef {
                             name: task_name.clone(),
                             kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
@@ -627,12 +980,99 @@ fn lower_expr_inner(
                         ctx.type_mapper.register_named(task_name.clone(), tid);
                         tid
                     };
-                    let lowered_args: Vec<Operand> = call_args.iter()
-                        .map(|arg| lower_expr(ctx, builder, &arg.node.value))
-                        .collect();
-                    let spawn_fn = format!("__gorget_spawn_{c_name}");
-                    let dst = builder.call(&spawn_fn, lowered_args, task_type);
-                    return FunctionBuilder::copy(dst);
+
+                    if !shared_spawn_args.is_empty() {
+                        // Check if callee is async with await points — needs
+                        // async-aware token management (release at await, reacquire after).
+                        let callee_has_awaits = ctx.fn_ast_bodies.get(fn_name.as_str())
+                            .map_or(false, |func_def| {
+                                if let crate::parser::ast::FunctionBody::Block(block) = &func_def.body {
+                                    block.stmts.iter().any(|s| super::context::stmt_has_await(&s.node))
+                                } else {
+                                    false
+                                }
+                            });
+
+                        let wrapper_name = if callee_has_awaits {
+                            format!("__shared_async_{c_name}")
+                        } else {
+                            format!("__shared_token_{c_name}")
+                        };
+
+                        if !ctx.spawned_fn_names.contains_key(&wrapper_name) {
+                            if callee_has_awaits {
+                                // Async-aware variant: re-lower the function body with
+                                // shared param management and token release/reacquire at await points.
+                                let func_def = ctx.fn_ast_bodies.get(fn_name.as_str()).unwrap().clone();
+                                let wrapper_fn = build_shared_async_variant(
+                                    ctx,
+                                    &wrapper_name,
+                                    &func_def,
+                                    &callee_param_types,
+                                    &shared_spawn_args,
+                                    fn_ret_type,
+                                );
+                                ctx.spawn_wrapper_fns.push(wrapper_fn);
+                            } else {
+                                // Synchronous wrapper: lock for entire call, no await points.
+                                let wrapper_fn = build_shared_token_wrapper(
+                                    ctx,
+                                    &wrapper_name,
+                                    &c_name,
+                                    &callee_param_types,
+                                    &shared_spawn_args,
+                                    fn_ret_type,
+                                );
+                                ctx.spawn_wrapper_fns.push(wrapper_fn);
+                            }
+
+                            // Register wrapper signature: wrapper params → return type
+                            let wrapper_param_types: Vec<TypeId> = callee_param_types.iter().enumerate()
+                                .map(|(i, &callee_type)| {
+                                    shared_spawn_args.iter()
+                                        .find(|sa| sa.arg_index == i)
+                                        .map(|sa| sa.wrapper_type)
+                                        .unwrap_or(callee_type)
+                                })
+                                .collect();
+                            ctx.fn_sigs.insert(wrapper_name.clone(), (wrapper_param_types, fn_ret_type));
+
+                            let param_names: Vec<String> = (0..callee_param_types.len())
+                                .map(|i| format!("__p{i}"))
+                                .collect();
+                            ctx.fn_param_names.insert(wrapper_name.clone(), param_names);
+                        }
+
+                        ctx.pending_spawn_fn = Some(wrapper_name.clone());
+                        ctx.spawned_fn_names.insert(wrapper_name.clone(), true);
+
+                        // Lower args: shared vars pass the raw sync primitive
+                        ctx.shared_pass_raw = true;
+                        let lowered_args: Vec<Operand> = call_args.iter()
+                            .map(|arg| lower_expr(ctx, builder, &arg.node.value))
+                            .collect();
+                        ctx.shared_pass_raw = false;
+
+                        let spawn_fn = format!("__gorget_spawn_{wrapper_name}");
+                        let dst = builder.call(&spawn_fn, lowered_args, task_type);
+                        return FunctionBuilder::copy(dst);
+                    } else {
+                        // No Auto shared args — spawn the original function directly.
+                        // If there are user-overridden shared vars, pass them raw.
+                        ctx.pending_spawn_fn = Some(c_name.clone());
+                        ctx.spawned_fn_names.insert(c_name.clone(), true);
+
+                        if has_any_shared {
+                            ctx.shared_pass_raw = true;
+                        }
+                        let lowered_args: Vec<Operand> = call_args.iter()
+                            .map(|arg| lower_expr(ctx, builder, &arg.node.value))
+                            .collect();
+                        ctx.shared_pass_raw = false;
+                        let spawn_fn = format!("__gorget_spawn_{c_name}");
+                        let dst = builder.call(&spawn_fn, lowered_args, task_type);
+                        return FunctionBuilder::copy(dst);
+                    }
                 }
             }
             // ── Case D: spawn receiver.method(args) — method call ──
@@ -5483,6 +5923,28 @@ pub fn ensure_guard_type_def(ctx: &mut LoweringContext, guard_type_name: &str, i
     ctx.type_registry.add_type_def(type_def);
 }
 
+/// Ensure a RWLock[T] type has a TypeDef in the registry (Copy pointer, no drop in V1).
+pub fn ensure_rwlock_type_def(ctx: &mut LoweringContext, rwlock_type_name: &str, inner_type: TypeId) {
+    use crate::ir::types::{TypeDef, TypeDefKind, StructDef, StructField, TypeMetadata, CopySemantics, DropStrategy};
+    if ctx.type_registry.get_type_def(rwlock_type_name).is_some() {
+        return;
+    }
+    let type_def = TypeDef {
+        name: rwlock_type_name.to_string(),
+        kind: TypeDefKind::Struct(StructDef {
+            fields: vec![StructField { name: "_0".to_string(), type_id: inner_type }],
+        }),
+        metadata: TypeMetadata {
+            size: None,
+            align: None,
+            // Copy — GorgetRWLock* pointer, shared across threads
+            copy_semantics: CopySemantics::Copy,
+            drop_strategy: DropStrategy::None,
+        },
+    };
+    ctx.type_registry.add_type_def(type_def);
+}
+
 /// Ensure a Channel[T] type has a TypeDef in the registry (Copy pointer, no RAII drop in V1).
 /// Channel__T is an opaque GorgetChannel* pointer shared across threads.
 /// This is a no-op if map_ast_type_mut already pre-registered the type during the fn_sigs scan.
@@ -6030,6 +6492,483 @@ fn lower_closure_spawn(
     let spawn_fn = format!("__gorget_spawn_{wrapper_name}");
     let dst = builder.call(&spawn_fn, spawn_args, task_type);
     FunctionBuilder::copy(dst)
+}
+
+// ─── Token Semantics: Shared Spawn Wrappers ────────────────────────────────
+
+/// Reacquire the token for a shared param after an await point.
+/// Locks the mutex, re-derives the guard pointer, and updates the facade local.
+pub fn emit_shared_param_reacquire(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    sp: &super::context::SharedParamInfo,
+) {
+    let inner_c = ctx.type_name_for_id(sp.inner_type)
+        .unwrap_or("int64_t")
+        .to_string();
+    let mutex_mangled = format!("Mutex__{inner_c}");
+    let guard_mangled = format!("Guard__{inner_c}");
+    let shared_mutex_mangled = format!("Shared__{mutex_mangled}");
+
+    // Unwrap Shared[Mutex[T]] → Mutex[T]
+    let mutex_val = builder.call(
+        &format!("{shared_mutex_mangled}__get"),
+        vec![FunctionBuilder::copy(sp.shared_local)],
+        sp.mutex_type,
+    );
+
+    // Reacquire token: lock the mutex
+    let guard = builder.call(
+        &format!("{mutex_mangled}__lock"),
+        vec![FunctionBuilder::copy(mutex_val)],
+        sp.guard_type,
+    );
+
+    // Re-derive guard pointer
+    builder.emit_borrow(sp.guard_ptr_local, Place::local(guard));
+
+    if sp.is_mutable {
+        // Mutable: re-derive inner pointer → update facade local
+        let inner_ptr_type = ctx.register_mut_ptr_type(sp.inner_type);
+        let inner_ptr = builder.call(
+            &format!("{guard_mangled}__get_ptr"),
+            vec![FunctionBuilder::copy(sp.guard_ptr_local)],
+            inner_ptr_type,
+        );
+        builder.assign(Place::local(sp.facade_local), FunctionBuilder::copy(inner_ptr));
+    } else {
+        // Immutable: re-read value → update facade local
+        let val = builder.call(
+            &format!("{guard_mangled}__get"),
+            vec![FunctionBuilder::copy(sp.guard_ptr_local)],
+            sp.inner_type,
+        );
+        builder.assign(Place::local(sp.facade_local), FunctionBuilder::copy(val));
+    }
+}
+
+/// Information about a shared argument at a spawn site.
+/// Collected during spawn lowering, used to build the token wrapper.
+pub struct SharedSpawnArg {
+    /// Index of this arg in the callee's parameter list.
+    pub arg_index: usize,
+    /// The kind of sync primitive wrapping the shared variable.
+    pub kind: super::context::SharedLocalKind,
+    /// The inner (user-visible) type of the shared variable.
+    pub inner_type: TypeId,
+    /// The wrapper type (Mutex__T, Shared__T, AtomicInt, RWLock__T).
+    pub wrapper_type: TypeId,
+    /// Whether the callee's parameter expects a mutable borrow (&T).
+    pub is_mutable: bool,
+    /// Declaration order key (facade LocalId) for deadlock prevention.
+    /// Tokens are acquired in ascending decl_order and released in reverse.
+    pub decl_order: u32,
+}
+
+/// Build a token wrapper function for spawning with shared variables.
+///
+/// Token semantics: the wrapper acquires tokens (locks) for all shared args,
+/// calls the original function with plain types, then releases all tokens.
+/// The lock is held for the entire function call — the synchronous execution
+/// region is the spawned function body.
+///
+/// For mutable borrow params: the wrapper holds the lock and passes a pointer
+/// to the guarded value (so the callee can mutate through &T).
+/// For immutable params: the wrapper gets a copy under the lock, then calls
+/// the callee with the copy (lock still held for consistency).
+fn build_shared_token_wrapper(
+    ctx: &mut LoweringContext,
+    wrapper_name: &str,
+    callee_name: &str,
+    callee_param_types: &[TypeId],
+    shared_args: &[SharedSpawnArg],
+    return_type: TypeId,
+) -> crate::ir::Function {
+    use super::context::SharedLocalKind;
+
+    // Wrapper params: for shared args, use the wrapper type; for non-shared, use the callee's type.
+    let wrapper_param_types: Vec<TypeId> = callee_param_types.iter().enumerate()
+        .map(|(i, &callee_type)| {
+            if let Some(sa) = shared_args.iter().find(|sa| sa.arg_index == i) {
+                sa.wrapper_type
+            } else {
+                callee_type
+            }
+        })
+        .collect();
+
+    let params: Vec<(TypeId, Option<&str>)> = wrapper_param_types.iter()
+        .map(|&tid| (tid, None))
+        .collect();
+
+    let mut builder = FunctionBuilder::new(wrapper_name, return_type, &params);
+
+    // _0 = return slot, _1.. = params
+    //
+    // Deadlock prevention (§3.3): acquire tokens in ascending declaration order
+    // (by decl_order / facade LocalId), release in reverse. This ensures all
+    // tasks acquire the same set of locks in the same order.
+
+    // Phase 1: Acquire tokens in declaration order.
+    // Sort shared args by decl_order for acquisition ordering.
+    let mut sorted_shared: Vec<&SharedSpawnArg> = shared_args.iter().collect();
+    sorted_shared.sort_by_key(|sa| sa.decl_order);
+
+    // Maps arg_index → call operand (filled during acquisition, consumed during call_args assembly)
+    let mut shared_call_operands: std::collections::HashMap<usize, Operand> = std::collections::HashMap::new();
+    // Guard pointers with their decl_order for ordered release
+    let mut guard_ptrs_ordered: Vec<(u32, LocalId)> = Vec::new();
+
+    for sa in &sorted_shared {
+        let param_local = LocalId((sa.arg_index + 1) as u32);
+
+        match sa.kind {
+            SharedLocalKind::Mutex => {
+                let inner_c = ctx.type_name_for_id(sa.inner_type)
+                    .unwrap_or("int64_t")
+                    .to_string();
+                let guard_mangled = format!("Guard__{inner_c}");
+                let mutex_mangled = format!("Mutex__{inner_c}");
+                let mutex_type = ctx.type_mapper.lookup_named(&mutex_mangled)
+                    .unwrap_or(sa.inner_type);
+                let guard_type = ctx.type_mapper.lookup_named(&guard_mangled)
+                    .unwrap_or(sa.inner_type);
+
+                // Unwrap Shared[Mutex[T]] → Mutex[T]
+                let shared_mutex_mangled = format!("Shared__{mutex_mangled}");
+                let shared_get_fn = format!("{shared_mutex_mangled}__get");
+                let mutex_val = builder.call(
+                    &shared_get_fn,
+                    vec![FunctionBuilder::copy(param_local)],
+                    mutex_type,
+                );
+
+                // Acquire token: lock the mutex
+                let guard = builder.call(
+                    &format!("{mutex_mangled}__lock"),
+                    vec![FunctionBuilder::copy(mutex_val)],
+                    guard_type,
+                );
+                let guard_ptr_type = ctx.register_ptr_type(guard_type);
+                let guard_ptr = builder.add_local(guard_ptr_type, None);
+                builder.emit_borrow(guard_ptr, Place::local(guard));
+                guard_ptrs_ordered.push((sa.decl_order, guard_ptr));
+
+                if sa.is_mutable {
+                    let inner_ptr_type = ctx.register_mut_ptr_type(sa.inner_type);
+                    let inner_ptr = builder.call(
+                        &format!("{guard_mangled}__get_ptr"),
+                        vec![FunctionBuilder::copy(guard_ptr)],
+                        inner_ptr_type,
+                    );
+                    shared_call_operands.insert(sa.arg_index, FunctionBuilder::copy(inner_ptr));
+                } else {
+                    let val = builder.call(
+                        &format!("{guard_mangled}__get"),
+                        vec![FunctionBuilder::copy(guard_ptr)],
+                        sa.inner_type,
+                    );
+                    shared_call_operands.insert(sa.arg_index, FunctionBuilder::copy(val));
+                }
+            }
+            SharedLocalKind::SharedArc => {
+                // ARC-only: get a copy (no locking — no ordering constraint)
+                let inner_c = ctx.type_name_for_id(sa.inner_type)
+                    .unwrap_or("int64_t")
+                    .to_string();
+                let shared_mangled = format!("Shared__{inner_c}");
+                let val = builder.call(
+                    &format!("{shared_mangled}__get"),
+                    vec![FunctionBuilder::copy(param_local)],
+                    sa.inner_type,
+                );
+                shared_call_operands.insert(sa.arg_index, FunctionBuilder::copy(val));
+            }
+            SharedLocalKind::Atomic => {
+                // Atomic: load value (lock-free — no ordering constraint)
+                let atomic_name = atomic_type_name_for(sa.inner_type);
+                let val = builder.call(
+                    &format!("{atomic_name}__load"),
+                    vec![FunctionBuilder::copy(param_local)],
+                    sa.inner_type,
+                );
+                shared_call_operands.insert(sa.arg_index, FunctionBuilder::copy(val));
+            }
+            SharedLocalKind::RwLock => {
+                let inner_c = ctx.type_name_for_id(sa.inner_type)
+                    .unwrap_or("int64_t")
+                    .to_string();
+                let rwlock_mangled = format!("RWLock__{inner_c}");
+
+                if sa.is_mutable {
+                    let write_guard_mangled = format!("WriteGuard__{inner_c}");
+                    let write_guard_type = ctx.type_mapper.lookup_named(&write_guard_mangled)
+                        .unwrap_or(sa.inner_type);
+                    let guard = builder.call(
+                        &format!("{rwlock_mangled}__write"),
+                        vec![FunctionBuilder::copy(param_local)],
+                        write_guard_type,
+                    );
+                    let guard_ptr_type = ctx.register_ptr_type(write_guard_type);
+                    let guard_ptr = builder.add_local(guard_ptr_type, None);
+                    builder.emit_borrow(guard_ptr, Place::local(guard));
+                    guard_ptrs_ordered.push((sa.decl_order, guard_ptr));
+
+                    let inner_ptr_type = ctx.register_mut_ptr_type(sa.inner_type);
+                    let inner_ptr = builder.call(
+                        &format!("{write_guard_mangled}__get_ptr"),
+                        vec![FunctionBuilder::copy(guard_ptr)],
+                        inner_ptr_type,
+                    );
+                    shared_call_operands.insert(sa.arg_index, FunctionBuilder::copy(inner_ptr));
+                } else {
+                    let read_guard_mangled = format!("ReadGuard__{inner_c}");
+                    let read_guard_type = ctx.type_mapper.lookup_named(&read_guard_mangled)
+                        .unwrap_or(sa.inner_type);
+                    let guard = builder.call(
+                        &format!("{rwlock_mangled}__read"),
+                        vec![FunctionBuilder::copy(param_local)],
+                        read_guard_type,
+                    );
+                    let guard_ptr_type = ctx.register_ptr_type(read_guard_type);
+                    let guard_ptr = builder.add_local(guard_ptr_type, None);
+                    builder.emit_borrow(guard_ptr, Place::local(guard));
+                    guard_ptrs_ordered.push((sa.decl_order, guard_ptr));
+
+                    let val = builder.call(
+                        &format!("{read_guard_mangled}__get"),
+                        vec![FunctionBuilder::copy(guard_ptr)],
+                        sa.inner_type,
+                    );
+                    shared_call_operands.insert(sa.arg_index, FunctionBuilder::copy(val));
+                }
+            }
+        }
+    }
+
+    // Phase 2: Build call args in parameter order
+    let mut call_args: Vec<Operand> = Vec::new();
+    for (i, &_callee_type) in callee_param_types.iter().enumerate() {
+        if let Some(operand) = shared_call_operands.remove(&i) {
+            call_args.push(operand);
+        } else {
+            // Non-shared arg: pass through
+            let param_local = LocalId((i + 1) as u32);
+            call_args.push(FunctionBuilder::copy(param_local));
+        }
+    }
+
+    // Call the original function (token held for the entire call — synchronous region)
+    if return_type == UNIT_TYPE {
+        builder.call_void(callee_name, call_args);
+    } else {
+        let result = builder.call(callee_name, call_args, return_type);
+        builder.assign(Place::local(LocalId(0)), FunctionBuilder::copy(result));
+    }
+
+    // Phase 3: Release tokens in reverse declaration order
+    guard_ptrs_ordered.sort_by_key(|(order, _)| *order);
+    for &(_, guard_ptr) in guard_ptrs_ordered.iter().rev() {
+        let guard_type_id = match ctx.type_registry.get(builder.locals[guard_ptr.0 as usize].type_id) {
+            Some(GirType::Ptr(inner)) | Some(GirType::MutPtr(inner)) => *inner,
+            _ => UNIT_TYPE,
+        };
+        let guard_type_name = ctx.type_name_for_id(guard_type_id)
+            .unwrap_or("Guard__int64_t")
+            .to_string();
+        let release_fn = format!("{guard_type_name}__drop");
+        builder.call(&release_fn, vec![FunctionBuilder::copy(guard_ptr)], UNIT_TYPE);
+    }
+
+    // Return
+    if return_type == UNIT_TYPE {
+        builder.ret(FunctionBuilder::const_unit());
+    } else {
+        builder.ret(FunctionBuilder::copy(LocalId(0)));
+    }
+
+    builder.build()
+}
+
+/// Build an async-aware shared function variant.
+///
+/// Unlike the simple token wrapper (which locks for the entire call), this variant
+/// re-lowers the callee's function body with shared parameter management:
+/// - Params that are shared take `Shared[Mutex[T]]` types
+/// - At function entry: acquire tokens (lock mutexes) in declaration order
+/// - Before each await: release tokens in reverse declaration order
+/// - After each await: reacquire tokens in declaration order, re-derive pointers
+/// - At function exit: release tokens in reverse declaration order
+fn build_shared_async_variant(
+    ctx: &mut LoweringContext,
+    variant_name: &str,
+    func_def: &crate::parser::ast::FunctionDef,
+    callee_param_types: &[TypeId],
+    shared_args: &[SharedSpawnArg],
+    return_type: TypeId,
+) -> crate::ir::Function {
+    use super::context::{SharedLocalKind, SharedParamInfo};
+    use crate::parser::ast::{FunctionBody, Ownership};
+
+    // Variant params: shared args use wrapper type, others use callee type
+    let wrapper_param_types: Vec<TypeId> = callee_param_types.iter().enumerate()
+        .map(|(i, &callee_type)| {
+            if let Some(sa) = shared_args.iter().find(|sa| sa.arg_index == i) {
+                sa.wrapper_type
+            } else {
+                callee_type
+            }
+        })
+        .collect();
+
+    let params: Vec<(TypeId, Option<&str>)> = func_def.params.iter().enumerate()
+        .map(|(i, p)| (wrapper_param_types[i], Some(p.node.name.node.as_str())))
+        .collect();
+
+    let mut builder = FunctionBuilder::new(variant_name, return_type, &params);
+
+    // Save/restore context state — we're lowering a different function body
+    let saved_locals = ctx.take_locals();
+    let saved_shared_locals = std::mem::take(&mut ctx.shared_locals);
+    let saved_spawn_result_locals = std::mem::take(&mut ctx.spawn_result_locals);
+    let saved_pending_spawn_fn = ctx.pending_spawn_fn.take();
+    let saved_active_shared_params = std::mem::take(&mut ctx.active_shared_params);
+    let saved_mut_captures = std::mem::take(&mut ctx.mut_capture_locals);
+    let saved_callable_ret = std::mem::take(&mut ctx.callable_return_types);
+    let saved_throws = ctx.current_throws_result_type.take();
+
+    ctx.clear_locals();
+
+    // Register all params as locals
+    let mut shared_param_infos: Vec<SharedParamInfo> = Vec::new();
+
+    for (i, p) in func_def.params.iter().enumerate() {
+        let param_local = LocalId((i + 1) as u32);
+        let param_type = wrapper_param_types[i];
+
+        if let Some(sa) = shared_args.iter().find(|sa| sa.arg_index == i) {
+            if matches!(sa.kind, SharedLocalKind::Mutex) {
+                // This is a shared mutable param — register as Shared[Mutex[T]] type
+                // but also create a facade local with the inner type
+                ctx.register_local(&p.node.name.node, param_local, param_type);
+
+                let inner_c = ctx.type_name_for_id(sa.inner_type)
+                    .unwrap_or("int64_t")
+                    .to_string();
+                let mutex_mangled = format!("Mutex__{inner_c}");
+                let guard_mangled = format!("Guard__{inner_c}");
+                let mutex_type = ctx.type_mapper.lookup_named(&mutex_mangled)
+                    .unwrap_or(sa.inner_type);
+                let guard_type = ctx.type_mapper.lookup_named(&guard_mangled)
+                    .unwrap_or(sa.inner_type);
+
+                // Unwrap Shared[Mutex[T]] → Mutex[T]
+                let shared_mutex_mangled = format!("Shared__{mutex_mangled}");
+                let mutex_val = builder.call(
+                    &format!("{shared_mutex_mangled}__get"),
+                    vec![FunctionBuilder::copy(param_local)],
+                    mutex_type,
+                );
+
+                // Acquire token: lock the mutex
+                let guard = builder.call(
+                    &format!("{mutex_mangled}__lock"),
+                    vec![FunctionBuilder::copy(mutex_val)],
+                    guard_type,
+                );
+                let guard_ptr_type = ctx.register_ptr_type(guard_type);
+                let guard_ptr = builder.add_local(guard_ptr_type, None);
+                builder.emit_borrow(guard_ptr, Place::local(guard));
+
+                // Create facade local for the inner value
+                let facade_local = if sa.is_mutable {
+                    let inner_ptr_type = ctx.register_mut_ptr_type(sa.inner_type);
+                    let inner_ptr = builder.call(
+                        &format!("{guard_mangled}__get_ptr"),
+                        vec![FunctionBuilder::copy(guard_ptr)],
+                        inner_ptr_type,
+                    );
+                    // Re-register the param name to point to the inner pointer
+                    ctx.register_local(&p.node.name.node, inner_ptr, inner_ptr_type);
+                    ctx.mut_capture_locals.insert(inner_ptr, sa.inner_type);
+                    inner_ptr
+                } else {
+                    let val = builder.call(
+                        &format!("{guard_mangled}__get"),
+                        vec![FunctionBuilder::copy(guard_ptr)],
+                        sa.inner_type,
+                    );
+                    ctx.register_local(&p.node.name.node, val, sa.inner_type);
+                    val
+                };
+
+                shared_param_infos.push(SharedParamInfo {
+                    shared_local: param_local,
+                    facade_local,
+                    guard_ptr_local: guard_ptr,
+                    inner_type: sa.inner_type,
+                    mutex_type,
+                    guard_type,
+                    is_mutable: sa.is_mutable,
+                    decl_order: sa.decl_order,
+                });
+            } else {
+                // ARC-only, Atomic, RwLock — register normally
+                ctx.register_local(&p.node.name.node, param_local, param_type);
+            }
+        } else {
+            // Non-shared param — register with callee type
+            let base_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+            let gir_type = match p.node.ownership {
+                Ownership::MutableBorrow => ctx.register_mut_ptr_type(base_type),
+                _ => base_type,
+            };
+            ctx.register_local(&p.node.name.node, param_local, gir_type);
+            if matches!(p.node.ownership, Ownership::MutableBorrow) {
+                ctx.mut_capture_locals.insert(param_local, base_type);
+            }
+        }
+    }
+
+    // Set active_shared_params so the await handler emits release/reacquire
+    ctx.active_shared_params = shared_param_infos.clone();
+
+    // Lower the function body
+    if let FunctionBody::Block(block) = &func_def.body {
+        for stmt in &block.stmts {
+            super::stmts::lower_stmt(ctx, &mut builder, stmt);
+        }
+    }
+
+    // Emit implicit return for void functions
+    if return_type == UNIT_TYPE {
+        // Release all tokens before return
+        let mut sorted = shared_param_infos.clone();
+        sorted.sort_by_key(|p| p.decl_order);
+        for sp in sorted.iter().rev() {
+            let guard_type_name = ctx.type_name_for_id(sp.guard_type)
+                .unwrap_or("Guard__int64_t")
+                .to_string();
+            builder.call(
+                &format!("{guard_type_name}__drop"),
+                vec![FunctionBuilder::copy(sp.guard_ptr_local)],
+                UNIT_TYPE,
+            );
+        }
+        builder.ret(FunctionBuilder::const_unit());
+    }
+
+    // Restore context state
+    ctx.restore_locals(saved_locals);
+    ctx.shared_locals = saved_shared_locals;
+    ctx.spawn_result_locals = saved_spawn_result_locals;
+    ctx.pending_spawn_fn = saved_pending_spawn_fn;
+    ctx.active_shared_params = saved_active_shared_params;
+    ctx.mut_capture_locals = saved_mut_captures;
+    ctx.callable_return_types = saved_callable_ret;
+    ctx.current_throws_result_type = saved_throws;
+
+    builder.build()
 }
 
 #[cfg(test)]

@@ -761,6 +761,7 @@ impl Formatter {
             Stmt::VarDecl {
                 is_const,
                 is_mutable,
+                shared,
                 type_,
                 pattern,
                 value,
@@ -769,6 +770,12 @@ impl Formatter {
                     self.emitter.write("const ");
                 } else if *is_mutable {
                     self.emitter.write("mutable ");
+                }
+                match shared {
+                    SharedKind::Auto => self.emitter.write("shared "),
+                    SharedKind::RwLock => self.emitter.write("shared(rwlock) "),
+                    SharedKind::Atomic => self.emitter.write("shared(atomic) "),
+                    SharedKind::None => {}
                 }
                 if self.name_first {
                     // name-first: `name: type = expr`

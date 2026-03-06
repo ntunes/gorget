@@ -128,7 +128,7 @@ where  extends  live  outlives
 **Concurrency keywords:**
 
 ```
-async  await  spawn
+async  await  spawn  shared
 ```
 
 **Safety keywords:**
@@ -956,7 +956,8 @@ statement = var_decl | expr_stmt | assign_stmt | compound_assign_stmt
 ### 6.1 Variable Declarations
 
 ```ebnf
-var_decl = [ "const" ] ( type | "auto" ) pattern "=" expr NEWLINE ;
+var_decl = [ "const" | "shared" [ "(" shared_override ")" ] ] ( type | "auto" ) pattern "=" expr NEWLINE ;
+shared_override = "rwlock" | "atomic" ;
 ```
 
 Declares a new variable with an explicit type or inferred type (`auto`). Local variables are mutable by default; prefix with `const` for immutability. Note that function arguments follow the opposite convention: they are immutable borrows by default, requiring `&` for mutable access (see [Ownership](#43-ownership-rules)).
@@ -967,6 +968,17 @@ const int y = 10
 auto name = "gorget"
 const auto pi = 3.14
 ```
+
+**Shared bindings.** Prefix with `shared` to declare a binding that safely crosses concurrency boundaries (spawn/await). The compiler wraps the binding in `Shared[T]` (ARC) and optionally adds a `Mutex` or `RwLock` based on control-flow analysis of how the binding's borrows cross concurrency boundaries. User overrides (`shared(rwlock)`, `shared(atomic)`) skip CFA and use the specified primitive.
+
+```gorget
+shared int count = 0                           # CFA decides sync strategy
+shared Config config = load_config()           # read-only across boundaries → ARC only
+shared(rwlock) Dict[str, str] cache = Dict()   # user override: ARC + RwLock
+shared(atomic) int flags = 0                   # user override: ARC + Atomic
+```
+
+See [Concurrency — Shared Bindings](#shared-bindings) for details on token semantics and CFA.
 
 The pattern on the left side may be a simple binding or a destructuring pattern (see [Patterns](#8-patterns)).
 
@@ -5492,7 +5504,7 @@ statement = var_decl | expr_stmt | assign_stmt | compound_assign_stmt
           | for_stmt | while_stmt | loop_stmt | if_stmt | match_stmt
           | with_stmt | unsafe_stmt | item ;
 
-var_decl            = [ "const" ] ( type | "auto" ) pattern "=" expr NEWLINE ;
+var_decl            = [ "const" | "shared" [ "(" ( "rwlock" | "atomic" ) ")" ] ] ( type | "auto" ) pattern "=" expr NEWLINE ;
 expr_stmt           = expr NEWLINE ;
 assign_stmt         = expr "=" expr NEWLINE ;
 compound_assign_stmt = expr ( "+=" | "-=" | "*=" | "/=" | "%="

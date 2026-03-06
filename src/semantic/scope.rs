@@ -34,6 +34,8 @@ pub struct DefInfo {
     pub is_mutable: bool,
     /// Whether this variable is a function parameter (borrowed from caller, safe to re-bind).
     pub is_param: bool,
+    /// Whether this variable was declared with `shared` (for CFA).
+    pub shared: crate::parser::ast::SharedKind,
 }
 
 /// A lexical scope.
@@ -120,6 +122,7 @@ impl ScopeTable {
             type_id: None,
             is_mutable: false,
             is_param: false,
+            shared: crate::parser::ast::SharedKind::None,
         });
         def_id
     }
@@ -153,6 +156,7 @@ impl ScopeTable {
                     type_id: None,
                     is_mutable,
                     is_param: false,
+                    shared: crate::parser::ast::SharedKind::None,
                 });
                 self.scopes[self.current.0 as usize]
                     .names
@@ -178,6 +182,7 @@ impl ScopeTable {
             type_id: None,
             is_mutable,
             is_param: false,
+            shared: crate::parser::ast::SharedKind::None,
         });
         self.scopes[self.current.0 as usize]
             .names

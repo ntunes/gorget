@@ -7,6 +7,35 @@ pub struct SemanticError {
     pub span: Span,
 }
 
+/// A semantic analysis warning (non-fatal).
+#[derive(Debug, Clone)]
+pub struct SemanticWarning {
+    pub kind: SemanticWarningKind,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub enum SemanticWarningKind {
+    /// A `shared` binding never crosses a concurrency boundary.
+    UnnecessaryShared { name: String },
+    /// A local derived from a shared binding is used in a branch condition
+    /// after an await point (stale check-then-act pattern).
+    StaleSharedCondition { local_name: String, shared_name: String },
+}
+
+impl std::fmt::Display for SemanticWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.kind {
+            SemanticWarningKind::UnnecessaryShared { name } => {
+                write!(f, "variable `{name}` is declared `shared` but never crosses a concurrency boundary")
+            }
+            SemanticWarningKind::StaleSharedCondition { local_name, shared_name } => {
+                write!(f, "`{local_name}` was read from shared `{shared_name}` before an await — value may be stale")
+            }
+        }
+    }
+}
+
 /// How an arena-scoped value escapes its `with` block.
 #[derive(Debug, Clone)]
 pub enum ArenaEscapeKind {
@@ -94,8 +123,8 @@ pub enum SemanticErrorKind {
     BorrowAcrossAwait { name: String },
 
     /// Borrowed reference passed as argument to `spawn` (fire-and-forget).
-    /// Use `String` or `Shared[T]` instead.
-    SpawnWithBorrowedRef,
+    /// Use `shared` declaration or explicit `Shared[T]` instead.
+    SpawnWithBorrowedRef { name: Option<String> },
 
     /// `spawn` used with something other than a direct function call.
     /// Only `spawn fn_name(args)` is supported.
@@ -345,8 +374,12 @@ impl std::fmt::Display for SemanticError {
             SemanticErrorKind::BorrowAcrossAwait { name } => {
                 write!(f, "cannot use reference `{name}` across `await` — move owned data instead")
             }
-            SemanticErrorKind::SpawnWithBorrowedRef => {
-                write!(f, "cannot pass borrowed reference to spawned task — use String or Shared[T]")
+            SemanticErrorKind::SpawnWithBorrowedRef { name } => {
+                if let Some(n) = name {
+                    write!(f, "cannot pass borrowed reference '{n}' to spawned task — declare as `shared` for automatic synchronization, or use explicit Shared[T]")
+                } else {
+                    write!(f, "cannot pass borrowed reference to spawned task — declare as `shared` for automatic synchronization, or use explicit Shared[T]")
+                }
             }
             SemanticErrorKind::SpawnRequiresDirectCall => {
                 write!(f, "spawn requires a direct function call — use `spawn fn_name(args)`")
