@@ -1,0 +1,29 @@
+# Stress: 8 tasks each increment a shared(mutex) counter 1000 times.
+# Tests mutex waiter queue under heavy contention, no lost updates.
+# Expected: 8000
+
+async void hammer(int &counter, int n):
+    int i = 0
+    while i < n:
+        counter = counter + 1
+        i = i + 1
+
+async void main():
+    shared int x = 0
+    Task[void] t1 = spawn hammer(&x, 1000)
+    Task[void] t2 = spawn hammer(&x, 1000)
+    Task[void] t3 = spawn hammer(&x, 1000)
+    Task[void] t4 = spawn hammer(&x, 1000)
+    Task[void] t5 = spawn hammer(&x, 1000)
+    Task[void] t6 = spawn hammer(&x, 1000)
+    Task[void] t7 = spawn hammer(&x, 1000)
+    Task[void] t8 = spawn hammer(&x, 1000)
+    t1.await()
+    t2.await()
+    t3.await()
+    t4.await()
+    t5.await()
+    t6.await()
+    t7.await()
+    t8.await()
+    print(x)

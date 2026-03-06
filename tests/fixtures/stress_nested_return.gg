@@ -1,0 +1,33 @@
+# Stress: nested spawn with return values — tasks spawning tasks.
+# Main spawns 5 tasks, each internally spawns 5 sub-tasks and sums results.
+# With work-stealing, blocking await in inner tasks won't starve the pool.
+# Total = sum(0..24) = 300
+
+async int compute(int x):
+    return x * 2
+
+async int batch(int base):
+    Task[int] t0 = spawn compute(base)
+    Task[int] t1 = spawn compute(base + 1)
+    Task[int] t2 = spawn compute(base + 2)
+    Task[int] t3 = spawn compute(base + 3)
+    Task[int] t4 = spawn compute(base + 4)
+    int s = t0.await()
+    s = s + t1.await()
+    s = s + t2.await()
+    s = s + t3.await()
+    s = s + t4.await()
+    return s
+
+async void main():
+    Task[int] b0 = spawn batch(0)
+    Task[int] b1 = spawn batch(5)
+    Task[int] b2 = spawn batch(10)
+    Task[int] b3 = spawn batch(15)
+    Task[int] b4 = spawn batch(20)
+    int total = b0.await()
+    total = total + b1.await()
+    total = total + b2.await()
+    total = total + b3.await()
+    total = total + b4.await()
+    print(total)

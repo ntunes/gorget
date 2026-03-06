@@ -2291,8 +2291,10 @@ typedef struct {
 
 static GorgetExecutor __gorget_exec;
 static int __gorget_exec_init_done = 0;
-// Forward declaration so __gorget_executor_submit can be called by __gorget_worker.
+// Forward declarations for mutual recursion between worker, submit, and work-stealing.
 static void* __gorget_worker(void* arg);
+static void __gorget_run_task_inline(GorgetTask* task);
+static int __gorget_try_run_one(void);
 
 static void __gorget_executor_init(void) {
     if (__gorget_exec_init_done) return;
@@ -2343,43 +2345,73 @@ static void* __gorget_worker(void* arg) {
         memmove(__gorget_exec.queue, __gorget_exec.queue + 1,
                 (size_t)(--__gorget_exec.queue_len) * sizeof(GorgetTask*));
         pthread_mutex_unlock(&__gorget_exec.mtx);
-        if (task->poll != NULL) {
-            // Stackless coroutine: mark as being-polled (scheduled=0), call poll().
-            pthread_mutex_lock(&task->mtx);
-            task->scheduled = 0;
-            pthread_mutex_unlock(&task->mtx);
+        __gorget_run_task_inline(task);
+    }
+}
 
-            int status = task->poll(task);
+// Execute a single task inline (used for work-stealing while waiting).
+// Handles both poll-based coroutines and run-based tasks.
+static void __gorget_run_task_inline(GorgetTask* task) {
+    if (task->poll != NULL) {
+        pthread_mutex_lock(&task->mtx);
+        task->scheduled = 0;
+        pthread_mutex_unlock(&task->mtx);
 
-            if (status == GORGET_POLL_READY) {
-                pthread_mutex_lock(&task->mtx);
-                task->done = 1;
-                pthread_cond_broadcast(&task->cond);
-                GorgetWaker pw = task->parent_waker;
-                pthread_mutex_unlock(&task->mtx);
-                if (pw.wake) pw.wake(&pw);
-            } else {
-                // POLL_PENDING: check if the waker fired while we were polling.
-                // If scheduled==1 the waker already set it; re-submit now.
-                // If scheduled==0 set it to -1 (waiting for waker).
-                pthread_mutex_lock(&task->mtx);
-                int waker_fired = (task->scheduled == 1);
-                if (!waker_fired) task->scheduled = -1;
-                pthread_mutex_unlock(&task->mtx);
-                if (waker_fired) __gorget_executor_submit(task);
-            }
-        } else {
-            task->run(task);
-            // Signal task completion so await()-ers can wake up.
+        int status = task->poll(task);
+
+        if (status == GORGET_POLL_READY) {
             pthread_mutex_lock(&task->mtx);
             task->done = 1;
             pthread_cond_broadcast(&task->cond);
             GorgetWaker pw = task->parent_waker;
             pthread_mutex_unlock(&task->mtx);
             if (pw.wake) pw.wake(&pw);
+        } else {
+            pthread_mutex_lock(&task->mtx);
+            int waker_fired = (task->scheduled == 1);
+            if (!waker_fired) task->scheduled = -1;
+            pthread_mutex_unlock(&task->mtx);
+            if (waker_fired) __gorget_executor_submit(task);
         }
+    } else {
+        task->run(task);
+        pthread_mutex_lock(&task->mtx);
+        task->done = 1;
+        pthread_cond_broadcast(&task->cond);
+        GorgetWaker pw = task->parent_waker;
+        pthread_mutex_unlock(&task->mtx);
+        if (pw.wake) pw.wake(&pw);
     }
 }
+
+// Try to dequeue and run one task from the executor queue.
+// Returns 1 if a task was run, 0 if the queue was empty.
+// Used for work-stealing to prevent thread-pool starvation when tasks
+// block waiting on child tasks (e.g., TaskGroup.join, Task.await).
+static int __gorget_try_run_one(void) {
+    pthread_mutex_lock(&__gorget_exec.mtx);
+    if (__gorget_exec.queue_len == 0) {
+        pthread_mutex_unlock(&__gorget_exec.mtx);
+        return 0;
+    }
+    GorgetTask* task = __gorget_exec.queue[0];
+    memmove(__gorget_exec.queue, __gorget_exec.queue + 1,
+            (size_t)(--__gorget_exec.queue_len) * sizeof(GorgetTask*));
+    pthread_mutex_unlock(&__gorget_exec.mtx);
+    __gorget_run_task_inline(task);
+    return 1;
+}
+
+// Work-stealing wait: spins on task->done, running queued tasks to avoid pool starvation.
+// Replaces all condvar-based blocking waits in spawn_drop and await functions.
+#define GORGET_WORK_STEAL_WAIT(task_ptr) do { \
+    for (;;) { \
+        pthread_mutex_lock(&(task_ptr)->mtx); \
+        if ((task_ptr)->done) { pthread_mutex_unlock(&(task_ptr)->mtx); break; } \
+        pthread_mutex_unlock(&(task_ptr)->mtx); \
+        if (!__gorget_try_run_one()) sched_yield(); \
+    } \
+} while(0)
 
 // Re-submit a task to the executor (used by future wakers for cooperative yield).
 static void __gorget_executor_resubmit(GorgetTask* task) {
@@ -3298,14 +3330,26 @@ static inline void gorget_task_group_submit_raw(gorget_task_group_t* g,
     (task).__task = NULL; \
 } while(0)
 
-// Blocking join — waits for all submitted tasks to finish via condvar, then frees each.
+// Blocking join — waits for all submitted tasks to finish, then frees each.
+// Uses work-stealing: while waiting for a task to complete, tries to dequeue
+// and run other tasks from the executor queue. This prevents thread-pool
+// starvation when tasks block waiting on child tasks (nested spawn pattern).
 static inline void gorget_task_group_join(gorget_task_group_t* g) {
     for (int i = 0; i < g->count; i++) {
         GorgetTask* t = g->tasks[i];
-        pthread_mutex_lock(&t->mtx);
-        while (!t->done)
-            pthread_cond_wait(&t->cond, &t->mtx);
-        pthread_mutex_unlock(&t->mtx);
+        for (;;) {
+            pthread_mutex_lock(&t->mtx);
+            if (t->done) {
+                pthread_mutex_unlock(&t->mtx);
+                break;
+            }
+            pthread_mutex_unlock(&t->mtx);
+            // Work-steal: run a queued task instead of sleeping.
+            if (!__gorget_try_run_one()) {
+                // Queue empty — briefly yield, then check again.
+                sched_yield();
+            }
+        }
         // Destroy sync primitives and free ctx via the per-fn drop.
         g->drops[i](g->task_ctxs[i]);
     }

@@ -1,0 +1,43 @@
+# Stress: 4 channels, 4 producers, consumer using select to drain all.
+# Tests select fairness and correctness under contention.
+# Each producer sends values 1..100 on its channel.
+# Total = 4 * (100*101/2) = 4 * 5050 = 20200
+from std.channel import Channel
+
+async void producer(Channel[int] ch, int count):
+    int i = 1
+    while i <= count:
+        ch.send(i)
+        i = i + 1
+
+async void main():
+    Channel[int] ch1 = Channel[int](4)
+    Channel[int] ch2 = Channel[int](4)
+    Channel[int] ch3 = Channel[int](4)
+    Channel[int] ch4 = Channel[int](4)
+    Task[void] p1 = spawn producer(ch1, 100)
+    Task[void] p2 = spawn producer(ch2, 100)
+    Task[void] p3 = spawn producer(ch3, 100)
+    Task[void] p4 = spawn producer(ch4, 100)
+    int total = 0
+    int received = 0
+    while received < 400:
+        select:
+            case int v = ch1.recv():
+                total = total + v
+            case int v = ch2.recv():
+                total = total + v
+            case int v = ch3.recv():
+                total = total + v
+            case int v = ch4.recv():
+                total = total + v
+        received = received + 1
+    p1.await()
+    p2.await()
+    p3.await()
+    p4.await()
+    ch1.close()
+    ch2.close()
+    ch3.close()
+    ch4.close()
+    print(total)

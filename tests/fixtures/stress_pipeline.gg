@@ -1,0 +1,35 @@
+# Stress: 3-stage pipeline via 2 channels.
+# Producer sends 1..500, transformer doubles each, consumer sums.
+# Tests channel chaining, multi-hop async flow, backpressure.
+# Expected: 2 * (500*501/2) = 2 * 125250 = 250500
+from std.channel import Channel
+
+async void produce(Channel[int] out, int count):
+    int i = 1
+    while i <= count:
+        out.send(i)
+        i = i + 1
+
+async void transform(Channel[int] inp, Channel[int] out, int count):
+    int i = 0
+    while i < count:
+        int val = inp.recv()
+        out.send(val * 2)
+        i = i + 1
+
+async void main():
+    Channel[int] ch1 = Channel[int](8)
+    Channel[int] ch2 = Channel[int](8)
+    Task[void] prod = spawn produce(ch1, 500)
+    Task[void] xform = spawn transform(ch1, ch2, 500)
+    int total = 0
+    int i = 0
+    while i < 500:
+        int val = ch2.recv()
+        total = total + val
+        i = i + 1
+    prod.await()
+    xform.await()
+    ch1.close()
+    ch2.close()
+    print(total)

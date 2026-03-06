@@ -2177,10 +2177,7 @@ fn emit_coroutine(
         .join(", ");
     let _ = writeln!(out, "static void __spawn_drop_{fn_name}(void* __ptr) {{");
     let _ = writeln!(out, "    {frame_name}* f = ({frame_name}*)__ptr;");
-    out.push_str("    pthread_mutex_lock(&f->base.mtx);\n");
-    out.push_str("    while (!f->base.done)\n");
-    out.push_str("        pthread_cond_wait(&f->base.cond, &f->base.mtx);\n");
-    out.push_str("    pthread_mutex_unlock(&f->base.mtx);\n");
+    out.push_str("    GORGET_WORK_STEAL_WAIT(&f->base);\n");
     out.push_str("    pthread_mutex_destroy(&f->base.mtx);\n");
     out.push_str("    pthread_cond_destroy(&f->base.cond);\n");
     let _ = writeln!(out, "    GORGET_FREE(f, sizeof({frame_name}));");
@@ -2221,10 +2218,7 @@ fn emit_coroutine(
         let _ = writeln!(out, "static inline {ret_c} __gorget_await_{fn_name}({task_name} task) {{");
     }
     let _ = writeln!(out, "    {frame_name}* f = ({frame_name}*)task.__task;");
-    out.push_str("    pthread_mutex_lock(&f->base.mtx);\n");
-    out.push_str("    while (!f->base.done)\n");
-    out.push_str("        pthread_cond_wait(&f->base.cond, &f->base.mtx);\n");
-    out.push_str("    pthread_mutex_unlock(&f->base.mtx);\n");
+    out.push_str("    GORGET_WORK_STEAL_WAIT(&f->base);\n");
     if !is_void {
         let _ = writeln!(out, "    {ret_c} result = f->_0;");
     }
@@ -2320,10 +2314,7 @@ fn emit_spawn_helpers(out: &mut String, module: &Module) {
         // Called via the __drop function pointer embedded in Task__T (RAII join-on-drop).
         let _ = writeln!(out, "static void __spawn_drop_{fn_name}(void* __ptr) {{");
         let _ = writeln!(out, "    {ctx_name}* __ctx = ({ctx_name}*)__ptr;");
-        out.push_str("    pthread_mutex_lock(&__ctx->base.mtx);\n");
-        out.push_str("    while (!__ctx->base.done)\n");
-        out.push_str("        pthread_cond_wait(&__ctx->base.cond, &__ctx->base.mtx);\n");
-        out.push_str("    pthread_mutex_unlock(&__ctx->base.mtx);\n");
+        out.push_str("    GORGET_WORK_STEAL_WAIT(&__ctx->base);\n");
         out.push_str("    pthread_mutex_destroy(&__ctx->base.mtx);\n");
         out.push_str("    pthread_cond_destroy(&__ctx->base.cond);\n");
         let _ = writeln!(out, "    GORGET_FREE(__ctx, sizeof({ctx_name}));");
@@ -2369,10 +2360,7 @@ fn emit_spawn_helpers(out: &mut String, module: &Module) {
             let _ = writeln!(out, "static inline {ret_c} __gorget_await_{fn_name}({task_name} task) {{");
         }
         let _ = writeln!(out, "    {ctx_name}* __ctx = ({ctx_name}*)task.__task;");
-        out.push_str("    pthread_mutex_lock(&__ctx->base.mtx);\n");
-        out.push_str("    while (!__ctx->base.done)\n");
-        out.push_str("        pthread_cond_wait(&__ctx->base.cond, &__ctx->base.mtx);\n");
-        out.push_str("    pthread_mutex_unlock(&__ctx->base.mtx);\n");
+        out.push_str("    GORGET_WORK_STEAL_WAIT(&__ctx->base);\n");
         if !is_void {
             let _ = writeln!(out, "    {ret_c} result = __ctx->result;");
         }

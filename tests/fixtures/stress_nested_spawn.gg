@@ -1,0 +1,26 @@
+# Stress: nested spawning — main spawns 10 tasks, each spawns 10 sub-tasks.
+# Uses atomic accumulation + TaskGroup to avoid blocking await chains
+# that would exhaust the thread pool (blocking-path fallback issue).
+# Tests recursive executor submission, no deadlock from pool exhaustion.
+# Total = sum(0..99) = 4950
+
+async void leaf(AtomicInt acc, int value):
+    acc.add(value)
+
+async void inner(AtomicInt acc, int base):
+    TaskGroup group = TaskGroup()
+    int i = 0
+    while i < 10:
+        group.spawn(spawn leaf(acc, base + i))
+        i += 1
+    group.join()
+
+async void main():
+    shared(atomic) int total = 0
+    TaskGroup outer = TaskGroup()
+    int i = 0
+    while i < 10:
+        outer.spawn(spawn inner(total, i * 10))
+        i += 1
+    outer.join()
+    print(total)

@@ -1,0 +1,22 @@
+# Stress: shared(rwlock) value with 4 writer tasks, each incrementing 500 times.
+# Tests RWLock write exclusion under contention.
+# Expected: 2000
+
+async void rw_inc(RWLock[int] data, int n):
+    int i = 0
+    while i < n:
+        WriteGuard[int] g = data.write()
+        g.set(g.get() + 1)
+        i = i + 1
+
+async void main():
+    shared(rwlock) int x = 0
+    Task[void] t1 = spawn rw_inc(x, 500)
+    Task[void] t2 = spawn rw_inc(x, 500)
+    Task[void] t3 = spawn rw_inc(x, 500)
+    Task[void] t4 = spawn rw_inc(x, 500)
+    t1.await()
+    t2.await()
+    t3.await()
+    t4.await()
+    print(x)

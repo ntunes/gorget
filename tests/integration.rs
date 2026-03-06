@@ -9574,3 +9574,72 @@ fn method_mut_borrow_arg() {
     // MutableBorrow non-self param in equip method — callee can mutate the original.
     run_gg("method_mut_borrow_arg.gg", "60\n6");
 }
+
+// ── Concurrency stress tests ────────────────────────────────────────────
+
+#[test]
+fn stress_spawn_fan_out() {
+    // 200 tasks in parallel via TaskGroup + atomic counter.
+    run_gg("stress_spawn_fan_out.gg", "19900");
+}
+
+#[test]
+fn stress_mutex_hammer() {
+    // 8 tasks x 1000 increments on shared(mutex) counter.
+    run_gg("stress_mutex_hammer.gg", "8000");
+}
+
+#[test]
+fn stress_atomic_hammer() {
+    // 8 tasks x 1000 atomic increments.
+    run_gg("stress_atomic_hammer.gg", "8000");
+}
+
+#[test]
+fn stress_channel_mpsc() {
+    // 4 producers x 500 values into bounded channel, single consumer sums.
+    run_gg("stress_channel_mpsc.gg", "501000");
+}
+
+#[test]
+fn stress_shared_multi_token() {
+    // 3 shared vars, 6 tasks touching pairs — deadlock freedom.
+    run_gg("stress_shared_multi_token.gg", "2000\n2000\n2000");
+}
+
+#[test]
+fn stress_taskgroup_fan() {
+    // TaskGroup with 100 tasks, each atomic-incrementing a counter.
+    run_gg("stress_taskgroup_fan.gg", "100");
+}
+
+#[test]
+fn stress_channel_select() {
+    // 4 channels, 4 producers, consumer select-drains all.
+    run_gg("stress_channel_select.gg", "20200");
+}
+
+#[test]
+fn stress_rwlock_writers() {
+    // 4 writer tasks x 500 increments on shared(rwlock).
+    run_gg("stress_rwlock_writers.gg", "2000");
+}
+
+#[test]
+fn stress_nested_spawn() {
+    // 10 tasks each spawn 10 sub-tasks = 100 leaves, sum 0..99.
+    run_gg("stress_nested_spawn.gg", "4950");
+}
+
+#[test]
+fn stress_pipeline() {
+    // 3-stage pipeline: produce -> double -> consume via 2 channels.
+    run_gg("stress_pipeline.gg", "250500");
+}
+
+#[test]
+fn stress_nested_return() {
+    // Nested spawn with return values — 5 batches x 5 tasks, each returns x*2.
+    // sum(0..24) * 2 = 2*(24*25/2) = 600
+    run_gg("stress_nested_return.gg", "600");
+}

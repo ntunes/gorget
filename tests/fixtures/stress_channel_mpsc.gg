@@ -1,0 +1,30 @@
+# Stress: 4 producers each send 500 values into a bounded channel (capacity 8).
+# Single consumer receives all 2000 values and sums them.
+# Tests bounded backpressure with multiple concurrent producers.
+# Each producer sends values 1..500, so total = 4 * (500*501/2) = 4 * 125250 = 501000
+from std.channel import Channel
+
+async void producer(Channel[int] ch, int count):
+    int i = 1
+    while i <= count:
+        ch.send(i)
+        i = i + 1
+
+async void main():
+    Channel[int] ch = Channel[int](8)
+    Task[void] p1 = spawn producer(ch, 500)
+    Task[void] p2 = spawn producer(ch, 500)
+    Task[void] p3 = spawn producer(ch, 500)
+    Task[void] p4 = spawn producer(ch, 500)
+    int total = 0
+    int received = 0
+    while received < 2000:
+        int val = ch.recv()
+        total = total + val
+        received = received + 1
+    p1.await()
+    p2.await()
+    p3.await()
+    p4.await()
+    ch.close()
+    print(total)

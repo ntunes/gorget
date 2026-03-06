@@ -1,0 +1,29 @@
+# Stress: 8 tasks each do 1000 atomic increments.
+# Tests atomic operations under real thread contention.
+# Expected: 8000
+
+async void atomic_inc(AtomicInt counter, int n):
+    int i = 0
+    while i < n:
+        counter.add(1)
+        i = i + 1
+
+async void main():
+    shared(atomic) int x = 0
+    Task[void] t1 = spawn atomic_inc(x, 1000)
+    Task[void] t2 = spawn atomic_inc(x, 1000)
+    Task[void] t3 = spawn atomic_inc(x, 1000)
+    Task[void] t4 = spawn atomic_inc(x, 1000)
+    Task[void] t5 = spawn atomic_inc(x, 1000)
+    Task[void] t6 = spawn atomic_inc(x, 1000)
+    Task[void] t7 = spawn atomic_inc(x, 1000)
+    Task[void] t8 = spawn atomic_inc(x, 1000)
+    t1.await()
+    t2.await()
+    t3.await()
+    t4.await()
+    t5.await()
+    t6.await()
+    t7.await()
+    t8.await()
+    print(x)

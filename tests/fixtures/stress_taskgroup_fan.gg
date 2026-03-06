@@ -1,0 +1,16 @@
+# Stress: TaskGroup with 100 spawned tasks, each incrementing an atomic counter.
+# Tests TaskGroup bookkeeping, join correctness, atomic pending counter.
+# Expected: 100
+
+async void bump(AtomicInt counter):
+    counter.add(1)
+
+async void main():
+    shared(atomic) int count = 0
+    TaskGroup group = TaskGroup()
+    int i = 0
+    while i < 100:
+        group.spawn(spawn bump(count))
+        i += 1
+    group.join()
+    print(count)

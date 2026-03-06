@@ -1,0 +1,47 @@
+# Stress: 3 shared(mutex) variables, 6 tasks each touching 2 of the 3.
+# Tests token acquisition ordering (ascending DefId), deadlock freedom.
+# Each pair is incremented 500 times by each task.
+# a: touched by tasks (1,2,3,4) = 4*500 = 2000
+# b: touched by tasks (1,2,5,6) = 4*500 = 2000
+# c: touched by tasks (3,4,5,6) = 4*500 = 2000
+
+async void inc_ab(int &a, int &b, int n):
+    int i = 0
+    while i < n:
+        a = a + 1
+        b = b + 1
+        i = i + 1
+
+async void inc_ac(int &a, int &c, int n):
+    int i = 0
+    while i < n:
+        a = a + 1
+        c = c + 1
+        i = i + 1
+
+async void inc_bc(int &b, int &c, int n):
+    int i = 0
+    while i < n:
+        b = b + 1
+        c = c + 1
+        i = i + 1
+
+async void main():
+    shared int a = 0
+    shared int b = 0
+    shared int c = 0
+    Task[void] t1 = spawn inc_ab(&a, &b, 500)
+    Task[void] t2 = spawn inc_ab(&a, &b, 500)
+    Task[void] t3 = spawn inc_ac(&a, &c, 500)
+    Task[void] t4 = spawn inc_ac(&a, &c, 500)
+    Task[void] t5 = spawn inc_bc(&b, &c, 500)
+    Task[void] t6 = spawn inc_bc(&b, &c, 500)
+    t1.await()
+    t2.await()
+    t3.await()
+    t4.await()
+    t5.await()
+    t6.await()
+    print(a)
+    print(b)
+    print(c)
