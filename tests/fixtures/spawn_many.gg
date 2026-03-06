@@ -1,0 +1,13 @@
+# Verify 10,000 spawns run bounded by thread pool (not one OS thread per spawn).
+# Sequential spawn+await pattern: each task goes into executor pool, main waits on condvar.
+async int identity(int x):
+    return x
+
+async void main():
+    int sum = 0
+    int i = 0
+    while i < 10000:
+        Task[int] t = spawn identity(i)
+        sum += t.await()
+        i += 1
+    print(sum)

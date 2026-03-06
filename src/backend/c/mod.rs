@@ -1521,14 +1521,20 @@ fn emit_channel_and_task_defs(out: &mut String, module: &Module) {
     }
 }
 
-/// Emit per-spawned-function context structs, thread functions, and spawn/await helpers.
+/// Emit per-spawned-function context structs, executor run functions, and spawn/await helpers.
+///
+/// Phases 1-3 of M:N scheduling: instead of creating one OS thread per spawn, each
+/// spawned task is submitted to the shared executor thread pool (bounded N workers).
+/// Await uses a condvar on the task's GorgetTask.done field instead of pthread_join,
+/// so 10,000 concurrent spawns use only N OS threads.
+///
 /// Called after GIR function forward declarations (so spawned functions are visible).
 fn emit_spawn_helpers(out: &mut String, module: &Module) {
     if module.spawned_fns.is_empty() {
         return;
     }
 
-    out.push_str("\n/* ── Spawn/await helpers ── */\n");
+    out.push_str("\n/* ── Spawn/await helpers (M:N executor pool) ── */\n");
 
     for (fn_name, params, ret_type) in &module.spawned_fns {
         let ret_c = format_type(*ret_type, &module.type_registry);
@@ -1541,12 +1547,13 @@ fn emit_spawn_helpers(out: &mut String, module: &Module) {
             format!("Task__{ret_c}")
         };
 
-        // Context struct: { pthread_t thread; param_types params; ret_type result; }
+        // Context struct: GorgetTask base (must be first for safe pointer cast) +
+        // param fields + optional result slot.
         let _ = writeln!(out, "typedef struct {ctx_name} {{");
-        out.push_str("    pthread_t thread;\n");
+        out.push_str("    GorgetTask base; /* must be first */\n");
         for (param_name, param_type) in params {
-            // Callable params have UNIT_TYPE in GIR (void); store as GorgetClosure in the context
-            // struct so the spawned thread can call them indirectly.
+            // Callable params have UNIT_TYPE in GIR (void); store as void* so the
+            // spawned task can call them indirectly via the __callable_N ABI.
             let param_c = spawn_param_c_type(*param_type, &module.type_registry);
             let _ = writeln!(out, "    {param_c} __{param_name};");
         }
@@ -1555,29 +1562,36 @@ fn emit_spawn_helpers(out: &mut String, module: &Module) {
         }
         let _ = writeln!(out, "}} {ctx_name};");
 
-        // Thread function
-        let _ = writeln!(out, "static void* __spawn_thread_{fn_name}(void* __arg) {{");
-        let _ = writeln!(out, "    {ctx_name}* __ctx = ({ctx_name}*)__arg;");
+        // Executor run function — called by a worker thread from the pool.
+        // The worker signals task->done after this returns (see __gorget_worker).
         let call_args = params.iter()
             .map(|(name, _)| format!("__ctx->__{name}"))
             .collect::<Vec<_>>()
             .join(", ");
+        let _ = writeln!(out, "static void __spawn_run_{fn_name}(GorgetTask* __base) {{");
+        let _ = writeln!(out, "    {ctx_name}* __ctx = ({ctx_name}*)__base;");
         if is_void {
             let _ = writeln!(out, "    {mangled_fn}({call_args});");
         } else {
             let _ = writeln!(out, "    __ctx->result = {mangled_fn}({call_args});");
         }
-        out.push_str("    return NULL;\n}\n");
+        out.push_str("}\n");
 
-        // Per-fn drop helper: joins thread + frees the specific __SpawnCtx type.
-        // Called via the __drop function pointer embedded in Task__T.
+        // Per-fn drop helper: waits for completion + destroys sync primitives + frees ctx.
+        // Called via the __drop function pointer embedded in Task__T (RAII join-on-drop).
         let _ = writeln!(out, "static void __spawn_drop_{fn_name}(void* __ptr) {{");
         let _ = writeln!(out, "    {ctx_name}* __ctx = ({ctx_name}*)__ptr;");
-        out.push_str("    pthread_join(__ctx->thread, NULL);\n");
+        out.push_str("    pthread_mutex_lock(&__ctx->base.mtx);\n");
+        out.push_str("    while (!__ctx->base.done)\n");
+        out.push_str("        pthread_cond_wait(&__ctx->base.cond, &__ctx->base.mtx);\n");
+        out.push_str("    pthread_mutex_unlock(&__ctx->base.mtx);\n");
+        out.push_str("    pthread_mutex_destroy(&__ctx->base.mtx);\n");
+        out.push_str("    pthread_cond_destroy(&__ctx->base.cond);\n");
         let _ = writeln!(out, "    GORGET_FREE(__ctx, sizeof({ctx_name}));");
         out.push_str("}\n");
 
-        // Spawn function: allocates ctx, fills args, creates thread, returns Task
+        // Spawn function: allocates ctx, initialises sync primitives, sets run fn,
+        // submits to the executor pool — no pthread_create per spawn.
         let param_decls = params.iter()
             .map(|(name, type_id)| {
                 let c = spawn_param_c_type(*type_id, &module.type_registry);
@@ -1587,9 +1601,13 @@ fn emit_spawn_helpers(out: &mut String, module: &Module) {
             .join(", ");
         let _ = writeln!(out, "static inline {task_name} __gorget_spawn_{fn_name}({param_decls}) {{");
         let _ = writeln!(out, "    {ctx_name}* __ctx = ({ctx_name}*)GORGET_CALLOC(1, sizeof({ctx_name}));");
+        out.push_str("    __ctx->base.run = __spawn_run_");
+        out.push_str(fn_name);
+        out.push_str(";\n");
+        out.push_str("    pthread_mutex_init(&__ctx->base.mtx, NULL);\n");
+        out.push_str("    pthread_cond_init(&__ctx->base.cond, NULL);\n");
         for (param_name, param_type) in params {
-            // For ref-counted types, emit a retain/clone call to increment the
-            // refcount — the spawned thread gets its own reference.
+            // For ref-counted types, retain a new reference for the spawned task.
             let gir_name = gir_type_name(*param_type, &module.type_registry);
             let is_refcounted = gir_name.as_ref().map_or(false, |n|
                 n.starts_with("Channel__") || n.starts_with("Shared__") || n.starts_with("Weak__"));
@@ -1600,21 +1618,27 @@ fn emit_spawn_helpers(out: &mut String, module: &Module) {
                 let _ = writeln!(out, "    __ctx->__{param_name} = {param_name};");
             }
         }
-        let _ = writeln!(out, "    pthread_create(&__ctx->thread, NULL, __spawn_thread_{fn_name}, __ctx);");
+        let _ = writeln!(out, "    __gorget_executor_submit(&__ctx->base);");
         let _ = writeln!(out, "    return ({task_name}){{.__task = __ctx, .__drop = __spawn_drop_{fn_name}}};");
         out.push_str("}\n");
 
-        // Await function: joins thread, extracts result, frees ctx
+        // Await function: waits on condvar for task completion, extracts result, frees ctx.
+        // Blocking but bounded — only N OS threads are ever created, not one per spawn.
         if is_void {
             let _ = writeln!(out, "static inline void __gorget_await_{fn_name}({task_name} task) {{");
         } else {
             let _ = writeln!(out, "static inline {ret_c} __gorget_await_{fn_name}({task_name} task) {{");
         }
         let _ = writeln!(out, "    {ctx_name}* __ctx = ({ctx_name}*)task.__task;");
-        out.push_str("    pthread_join(__ctx->thread, NULL);\n");
+        out.push_str("    pthread_mutex_lock(&__ctx->base.mtx);\n");
+        out.push_str("    while (!__ctx->base.done)\n");
+        out.push_str("        pthread_cond_wait(&__ctx->base.cond, &__ctx->base.mtx);\n");
+        out.push_str("    pthread_mutex_unlock(&__ctx->base.mtx);\n");
         if !is_void {
             let _ = writeln!(out, "    {ret_c} result = __ctx->result;");
         }
+        out.push_str("    pthread_mutex_destroy(&__ctx->base.mtx);\n");
+        out.push_str("    pthread_cond_destroy(&__ctx->base.cond);\n");
         let _ = writeln!(out, "    GORGET_FREE(__ctx, sizeof({ctx_name}));");
         if !is_void {
             out.push_str("    return result;\n");
