@@ -327,7 +327,10 @@ fn try_build_ir(
     }
 
     // Lower AST to GIR
-    let gir_module = gorget::ir::lowering::lower_module(&module, &result, &options);
+    let mut gir_module = gorget::ir::lowering::lower_module(&module, &result, &options);
+
+    // Run GIR optimization passes (dead block/local elimination)
+    gorget::ir::transforms::optimize::optimize_module(&mut gir_module);
 
     // Determine output paths
     let input_path = Path::new(filename);
