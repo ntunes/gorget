@@ -1503,6 +1503,37 @@ fn lower_field_access(
         if local_idx < builder.locals.len() {
             let local_type_id = builder.locals[local_idx].type_id;
 
+            // Guard[T] auto-deref: guard.field → (*get_ptr(&guard)).field
+            if let Some(type_name) = ctx.type_name_for_id(local_type_id) {
+                let type_name = type_name.to_string();
+                if let Some((inner_suffix, _is_read_only)) = guard_inner_suffix(&type_name) {
+                    let (inner_ptr_local, inner_type) = emit_guard_get_ptr(
+                        ctx, builder, place, local_type_id, &type_name, inner_suffix,
+                    );
+                    let deref_place = Place {
+                        local: inner_ptr_local,
+                        projections: vec![Projection::Deref],
+                    };
+                    if let Some(inner_type_name) = ctx.type_name_for_id(inner_type) {
+                        let inner_type_name = inner_type_name.to_string();
+                        if let Some((field_idx, field_type)) = ctx.lookup_field(&inner_type_name, field_name) {
+                            let dst = builder.field_load(deref_place, field_idx, field_type);
+                            return FunctionBuilder::copy(dst);
+                        }
+                        if let Some(type_def) = ctx.type_registry.get_type_def(&inner_type_name) {
+                            if let TypeDefKind::Struct(ref s) = type_def.kind {
+                                for (i, field) in s.fields.iter().enumerate() {
+                                    if field.name == field_name {
+                                        let dst = builder.field_load(deref_place, i as u32, field.type_id);
+                                        return FunctionBuilder::copy(dst);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // If the local is a raw pointer (e.g., self in equip methods), dereference it
             // to get the underlying struct type for field access.
             // Box[T] types use explicit `*box` dereference in Gorget, handled by Expr::Deref.
@@ -6043,6 +6074,45 @@ pub fn ensure_task_group_type_def(ctx: &mut LoweringContext, tg_type_name: &str)
         },
     };
     ctx.type_registry.add_type_def(type_def);
+}
+
+/// If `type_name` is a Guard/ReadGuard/WriteGuard type, return (inner_c_suffix, is_read_only).
+pub(super) fn guard_inner_suffix(type_name: &str) -> Option<(&str, bool)> {
+    if let Some(suffix) = type_name.strip_prefix("Guard__") {
+        Some((suffix, false))
+    } else if let Some(suffix) = type_name.strip_prefix("ReadGuard__") {
+        Some((suffix, true))
+    } else if let Some(suffix) = type_name.strip_prefix("WriteGuard__") {
+        Some((suffix, false))
+    } else {
+        None
+    }
+}
+
+/// Emit a call to `Guard__T__get_ptr` (or ReadGuard/WriteGuard variant).
+/// Returns `(inner_ptr_local, inner_type_id)` where the local has type `MutPtr(inner_type)`.
+pub(super) fn emit_guard_get_ptr(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    guard_place: &Place,
+    guard_type_id: TypeId,
+    guard_type_name: &str,
+    inner_suffix: &str,
+) -> (LocalId, TypeId) {
+    let inner_type = c_suffix_to_type_id(inner_suffix, ctx);
+    // Borrow guard mutably for the get_ptr call
+    let guard_ptr_type = ctx.register_mut_ptr_type(guard_type_id);
+    let guard_ptr = builder.add_local(guard_ptr_type, None);
+    builder.emit_borrow_mut(guard_ptr, guard_place.clone());
+    // Call get_ptr → returns T* (MutPtr(inner_type))
+    let inner_ptr_type = ctx.register_mut_ptr_type(inner_type);
+    let get_ptr_fn = format!("{guard_type_name}__get_ptr");
+    let inner_ptr_local = builder.call(
+        &get_ptr_fn,
+        vec![Operand::Copy(Place::local(guard_ptr))],
+        inner_ptr_type,
+    );
+    (inner_ptr_local, inner_type)
 }
 
 /// Map a C type suffix (e.g. "bool", "int64_t", "double") to a GIR TypeId.

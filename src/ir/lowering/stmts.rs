@@ -6,7 +6,7 @@ use crate::span::Spanned;
 
 use super::context::LoweringContext;
 use super::drops::DropScopeKind;
-use super::exprs::{lower_expr, infer_operand_type_full};
+use super::exprs::{lower_expr, infer_operand_type_full, guard_inner_suffix, emit_guard_get_ptr};
 
 /// Lower a block of statements.
 pub fn lower_block(
@@ -588,6 +588,47 @@ fn lower_field_assign(
         let local_idx = place.local.0 as usize;
         if local_idx < builder.locals.len() {
             let local_type_id = builder.locals[local_idx].type_id;
+
+            // Guard[T] auto-deref for writes: guard.field = val → (*get_ptr(&guard)).field = val
+            if let Some(type_name) = ctx.type_name_for_id(local_type_id) {
+                let type_name = type_name.to_string();
+                if let Some((inner_suffix, is_read_only)) = guard_inner_suffix(&type_name) {
+                    if is_read_only {
+                        // ReadGuard: writes are forbidden — skip (type checker should catch in future)
+                        return;
+                    }
+                    let (inner_ptr_local, inner_type) = emit_guard_get_ptr(
+                        ctx, builder, place, local_type_id, &type_name, inner_suffix,
+                    );
+                    let deref_place = Place {
+                        local: inner_ptr_local,
+                        projections: vec![Projection::Deref],
+                    };
+                    if let Some(inner_type_name) = ctx.type_name_for_id(inner_type) {
+                        let inner_type_name = inner_type_name.to_string();
+                        if let Some((field_idx, field_type)) = ctx.lookup_field(&inner_type_name, field_name) {
+                            let mut target_place = deref_place;
+                            target_place.projections.push(Projection::Field(field_idx));
+                            emit_field_drop_if_needed(ctx, builder, &target_place, field_type);
+                            builder.assign(target_place, rhs);
+                            return;
+                        }
+                        if let Some(type_def) = ctx.type_registry.get_type_def(&inner_type_name) {
+                            if let TypeDefKind::Struct(ref s) = type_def.kind {
+                                for (i, f) in s.fields.iter().enumerate() {
+                                    if f.name == field_name {
+                                        let mut target_place = deref_place;
+                                        target_place.projections.push(Projection::Field(i as u32));
+                                        emit_field_drop_if_needed(ctx, builder, &target_place, f.type_id);
+                                        builder.assign(target_place, rhs);
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             // If the local is a pointer, dereference to get the struct type
             let (effective_type_id, base_place) =

@@ -1347,6 +1347,10 @@ fn emit_rwlock_defs(out: &mut String, module: &Module) {
         let _ = writeln!(out,
             "static inline {elem_c} {read_guard}__get({read_guard}* self) {{ \
              return *({elem_c}*)self->ptr; }}");
+        // ReadGuard__T__get_ptr(&self) → returns const pointer to inner value (for auto-deref)
+        let _ = writeln!(out,
+            "static inline const {elem_c}* {read_guard}__get_ptr({read_guard}* self) {{ \
+             return (const {elem_c}*)self->ptr; }}");
         // ReadGuard__T__drop(&self)
         let _ = writeln!(out,
             "static inline void {read_guard}__drop({read_guard}* self) {{ \

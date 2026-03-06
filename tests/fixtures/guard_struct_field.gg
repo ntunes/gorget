@@ -1,0 +1,11 @@
+struct Point:
+    int x
+    int y
+
+void main():
+    Mutex[Point] m = Mutex[Point](Point(10, 20))
+    Guard[Point] g = m.lock()
+    print(g.x)
+    print(g.y)
+    g.x = 42
+    print(g.x)

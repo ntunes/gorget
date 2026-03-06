@@ -7593,6 +7593,16 @@ fn mutex_basic() {
 }
 
 #[test]
+fn guard_struct_field() {
+    run_gg("guard_struct_field.gg", "10\n20\n42");
+}
+
+#[test]
+fn guard_rwlock_field() {
+    run_gg("guard_rwlock_field.gg", "8080\nserver\n9090");
+}
+
+#[test]
 fn mutex_async_contention() {
     run_gg("mutex_async_contention.gg", "400");
 }

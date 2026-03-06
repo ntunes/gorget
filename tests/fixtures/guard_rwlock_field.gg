@@ -1,0 +1,20 @@
+from std.sync import RWLock
+
+struct Config:
+    int port
+    str name
+
+void read_config(RWLock[Config] lock):
+    ReadGuard[Config] rg = lock.read()
+    print(rg.port)
+    print(rg.name)
+
+void write_config(RWLock[Config] lock):
+    WriteGuard[Config] wg = lock.write()
+    wg.port = 9090
+    print(wg.port)
+
+void main():
+    RWLock[Config] lock = RWLock[Config](Config(8080, "server"))
+    read_config(lock)
+    write_config(lock)
