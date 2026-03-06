@@ -129,6 +129,8 @@ pub struct LoweringContext<'a> {
     /// Set of equip method names that are GIR-lowered (not extern/C-runtime).
     /// Used by lower_method_call to decide whether to auto-borrow Move-type args.
     pub gir_equip_methods: rustc_hash::FxHashSet<String>,
+    /// Scheduler backend for `spawn`.
+    pub scheduler_mode: crate::ir::SchedulerMode,
 }
 
 
@@ -172,6 +174,7 @@ impl<'a> LoweringContext<'a> {
             fn_ast_bodies: FxHashMap::default(),
             pending_shared_variants: Vec::new(),
             gir_equip_methods: rustc_hash::FxHashSet::default(),
+            scheduler_mode: crate::ir::SchedulerMode::default(),
         }
     }
 

@@ -551,7 +551,13 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
     }
     if all_call_names.iter().any(|n| n.contains("gorget_executor_") || n == "gorget_spawn" || n.contains("GorgetTask"))
         || module.has_spawn {
-        out.push_str(c_runtime::EXECUTOR_RUNTIME);
+        out.push_str(c_runtime::TASK_COMMON);
+        match module.scheduler_mode {
+            crate::ir::SchedulerMode::Pool => out.push_str(c_runtime::SCHEDULER_POOL_RUNTIME),
+            crate::ir::SchedulerMode::Thread => out.push_str(c_runtime::SCHEDULER_THREAD_RUNTIME),
+            crate::ir::SchedulerMode::Inline => out.push_str(c_runtime::SCHEDULER_INLINE_RUNTIME),
+            crate::ir::SchedulerMode::Single => out.push_str(c_runtime::SCHEDULER_SINGLE_RUNTIME),
+        }
     }
     let needs_channel = !module.channel_types.is_empty()
         || all_call_names.iter().any(|n| n.contains("channel_") || n.contains("Channel"));
@@ -612,7 +618,8 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
             out.push_str(c_runtime::ASYNC_RUNTIME);
         }
         if !all_call_names.iter().any(|n| n.contains("gorget_executor_") || n == "gorget_spawn") && !module.has_spawn {
-            out.push_str(c_runtime::EXECUTOR_RUNTIME);
+            out.push_str(c_runtime::TASK_COMMON);
+            out.push_str(c_runtime::SCHEDULER_POOL_RUNTIME);
         }
         out.push_str(c_runtime::REACTOR_RUNTIME);
     }
@@ -2177,7 +2184,7 @@ fn emit_coroutine(
         .join(", ");
     let _ = writeln!(out, "static void __spawn_drop_{fn_name}(void* __ptr) {{");
     let _ = writeln!(out, "    {frame_name}* f = ({frame_name}*)__ptr;");
-    out.push_str("    GORGET_WORK_STEAL_WAIT(&f->base);\n");
+    out.push_str("    GORGET_SCHEDULER_WAIT(&f->base);\n");
     out.push_str("    pthread_mutex_destroy(&f->base.mtx);\n");
     out.push_str("    pthread_cond_destroy(&f->base.cond);\n");
     let _ = writeln!(out, "    GORGET_FREE(f, sizeof({frame_name}));");
@@ -2205,7 +2212,7 @@ fn emit_coroutine(
             let _ = writeln!(out, "    f->_{local_idx} = {param_name};");
         }
     }
-    let _ = writeln!(out, "    __gorget_executor_submit(&f->base);");
+    let _ = writeln!(out, "    GORGET_SCHEDULER_SUBMIT(&f->base);");
     let _ = writeln!(out, "    return ({task_name}){{.__task = f, .__drop = __spawn_drop_{fn_name}}};");
     out.push_str("}\n");
 
@@ -2218,7 +2225,7 @@ fn emit_coroutine(
         let _ = writeln!(out, "static inline {ret_c} __gorget_await_{fn_name}({task_name} task) {{");
     }
     let _ = writeln!(out, "    {frame_name}* f = ({frame_name}*)task.__task;");
-    out.push_str("    GORGET_WORK_STEAL_WAIT(&f->base);\n");
+    out.push_str("    GORGET_SCHEDULER_WAIT(&f->base);\n");
     if !is_void {
         let _ = writeln!(out, "    {ret_c} result = f->_0;");
     }
@@ -2314,7 +2321,7 @@ fn emit_spawn_helpers(out: &mut String, module: &Module) {
         // Called via the __drop function pointer embedded in Task__T (RAII join-on-drop).
         let _ = writeln!(out, "static void __spawn_drop_{fn_name}(void* __ptr) {{");
         let _ = writeln!(out, "    {ctx_name}* __ctx = ({ctx_name}*)__ptr;");
-        out.push_str("    GORGET_WORK_STEAL_WAIT(&__ctx->base);\n");
+        out.push_str("    GORGET_SCHEDULER_WAIT(&__ctx->base);\n");
         out.push_str("    pthread_mutex_destroy(&__ctx->base.mtx);\n");
         out.push_str("    pthread_cond_destroy(&__ctx->base.cond);\n");
         let _ = writeln!(out, "    GORGET_FREE(__ctx, sizeof({ctx_name}));");
@@ -2348,7 +2355,7 @@ fn emit_spawn_helpers(out: &mut String, module: &Module) {
                 let _ = writeln!(out, "    __ctx->__{param_name} = {param_name};");
             }
         }
-        let _ = writeln!(out, "    __gorget_executor_submit(&__ctx->base);");
+        let _ = writeln!(out, "    GORGET_SCHEDULER_SUBMIT(&__ctx->base);");
         let _ = writeln!(out, "    return ({task_name}){{.__task = __ctx, .__drop = __spawn_drop_{fn_name}}};");
         out.push_str("}\n");
 
@@ -2360,7 +2367,7 @@ fn emit_spawn_helpers(out: &mut String, module: &Module) {
             let _ = writeln!(out, "static inline {ret_c} __gorget_await_{fn_name}({task_name} task) {{");
         }
         let _ = writeln!(out, "    {ctx_name}* __ctx = ({ctx_name}*)task.__task;");
-        out.push_str("    GORGET_WORK_STEAL_WAIT(&__ctx->base);\n");
+        out.push_str("    GORGET_SCHEDULER_WAIT(&__ctx->base);\n");
         if !is_void {
             let _ = writeln!(out, "    {ret_c} result = __ctx->result;");
         }

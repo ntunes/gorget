@@ -2257,9 +2257,9 @@ static void __gorget_noop_wake(GorgetWaker* w) { (void)w; }
 static GorgetWaker __gorget_noop_waker = { __gorget_noop_wake, NULL };
 "#;
 
-/// Thread-pool executor runtime for `spawn` (pthread-based).
-pub const EXECUTOR_RUNTIME: &str = r#"
-// ── Thread-Pool Executor ──
+/// GorgetTask struct + poll constants, shared by all scheduler backends.
+pub const TASK_COMMON: &str = r#"
+// ── Task Common ──
 #include <pthread.h>
 
 typedef struct GorgetTask {
@@ -2276,8 +2276,15 @@ typedef struct GorgetTask {
     GorgetWaker parent_waker;
 } GorgetTask;
 
+#ifndef GORGET_POLL_READY
 #define GORGET_POLL_READY   0
 #define GORGET_POLL_PENDING 1
+#endif
+"#;
+
+/// M:N thread-pool executor with work-stealing (default scheduler).
+pub const SCHEDULER_POOL_RUNTIME: &str = r#"
+// ── Scheduler: Pool (M:N thread pool + work-stealing) ──
 
 typedef struct {
     pthread_t* threads;
@@ -2386,8 +2393,6 @@ static void __gorget_run_task_inline(GorgetTask* task) {
 
 // Try to dequeue and run one task from the executor queue.
 // Returns 1 if a task was run, 0 if the queue was empty.
-// Used for work-stealing to prevent thread-pool starvation when tasks
-// block waiting on child tasks (e.g., TaskGroup.join, Task.await).
 static int __gorget_try_run_one(void) {
     pthread_mutex_lock(&__gorget_exec.mtx);
     if (__gorget_exec.queue_len == 0) {
@@ -2402,17 +2407,6 @@ static int __gorget_try_run_one(void) {
     return 1;
 }
 
-// Work-stealing wait: spins on task->done, running queued tasks to avoid pool starvation.
-// Replaces all condvar-based blocking waits in spawn_drop and await functions.
-#define GORGET_WORK_STEAL_WAIT(task_ptr) do { \
-    for (;;) { \
-        pthread_mutex_lock(&(task_ptr)->mtx); \
-        if ((task_ptr)->done) { pthread_mutex_unlock(&(task_ptr)->mtx); break; } \
-        pthread_mutex_unlock(&(task_ptr)->mtx); \
-        if (!__gorget_try_run_one()) sched_yield(); \
-    } \
-} while(0)
-
 // Re-submit a task to the executor (used by future wakers for cooperative yield).
 static void __gorget_executor_resubmit(GorgetTask* task) {
     pthread_mutex_lock(&task->mtx);
@@ -2421,27 +2415,18 @@ static void __gorget_executor_resubmit(GorgetTask* task) {
     __gorget_executor_submit(task);
 }
 
-// Waker callback used by stackless coroutines: called by a child task when it completes,
-// causing the parent coroutine to be re-submitted to the executor for the next poll.
-// Uses the 'scheduled' field to prevent double-submission:
-//   scheduled == -1: task is waiting for waker → submit now
-//   scheduled ==  0: waker fired while worker was inside poll() → signal waker_fired=1
-//   scheduled ==  1: already queued → no-op
+// Waker callback used by stackless coroutines.
 static void __gorget_fiber_waker_wake(GorgetWaker* w) {
     GorgetTask* task = (GorgetTask*)w->data;
     pthread_mutex_lock(&task->mtx);
     if (task->scheduled == -1) {
-        // Task is idle, waiting for waker — safe to re-submit.
         task->scheduled = 0;
         pthread_mutex_unlock(&task->mtx);
         __gorget_executor_submit(task);
     } else if (task->scheduled == 0) {
-        // Waker fired while the task is being polled by a worker.
-        // Signal to the worker to re-submit after poll() returns.
         task->scheduled = 1;
         pthread_mutex_unlock(&task->mtx);
     } else {
-        // scheduled == 1: already queued, nothing to do.
         pthread_mutex_unlock(&task->mtx);
     }
 }
@@ -2475,7 +2460,229 @@ static void __gorget_worker_waker_wake(GorgetWaker* w) {
     pthread_cond_signal(&ctx->cond);
     pthread_mutex_unlock(&ctx->mtx);
 }
+
+#define GORGET_SCHEDULER_SUBMIT(task)  __gorget_executor_submit(task)
+#define GORGET_SCHEDULER_WAIT(task_ptr) do { \
+    for (;;) { \
+        pthread_mutex_lock(&(task_ptr)->mtx); \
+        if ((task_ptr)->done) { pthread_mutex_unlock(&(task_ptr)->mtx); break; } \
+        pthread_mutex_unlock(&(task_ptr)->mtx); \
+        if (!__gorget_try_run_one()) sched_yield(); \
+    } \
+} while(0)
 "#;
+
+/// 1:1 OS thread per spawn.
+pub const SCHEDULER_THREAD_RUNTIME: &str = r#"
+// ── Scheduler: Thread (1:1 OS thread per spawn) ──
+
+static void __gorget_run_task_to_completion(GorgetTask* task) {
+    if (task->poll != NULL) {
+        while (1) {
+            int status = task->poll(task);
+            if (status == GORGET_POLL_READY) break;
+            // Busy-wait for waker (condvar signal from child).
+            pthread_mutex_lock(&task->mtx);
+            while (task->scheduled == -1)
+                pthread_cond_wait(&task->cond, &task->mtx);
+            task->scheduled = 0;
+            pthread_mutex_unlock(&task->mtx);
+        }
+    } else {
+        task->run(task);
+    }
+    pthread_mutex_lock(&task->mtx);
+    task->done = 1;
+    pthread_cond_broadcast(&task->cond);
+    GorgetWaker pw = task->parent_waker;
+    pthread_mutex_unlock(&task->mtx);
+    if (pw.wake) pw.wake(&pw);
+}
+
+static void* __gorget_thread_entry(void* arg) {
+    GorgetTask* task = (GorgetTask*)arg;
+    __gorget_run_task_to_completion(task);
+    return NULL;
+}
+
+static void __gorget_executor_submit(GorgetTask* task) {
+    pthread_t th;
+    pthread_create(&th, NULL, __gorget_thread_entry, task);
+    pthread_detach(th);
+}
+
+static void __gorget_executor_resubmit(GorgetTask* task) {
+    pthread_mutex_lock(&task->mtx);
+    task->done = 0;
+    pthread_mutex_unlock(&task->mtx);
+    __gorget_executor_submit(task);
+}
+
+static void __gorget_fiber_waker_wake(GorgetWaker* w) {
+    GorgetTask* task = (GorgetTask*)w->data;
+    pthread_mutex_lock(&task->mtx);
+    if (task->scheduled == -1) {
+        task->scheduled = 0;
+        pthread_cond_signal(&task->cond);
+    } else if (task->scheduled == 0) {
+        task->scheduled = 1;
+    }
+    pthread_mutex_unlock(&task->mtx);
+}
+
+static void __gorget_executor_shutdown(void) { /* no-op for thread backend */ }
+
+// Stub WorkerWakerCtx for reactor compatibility.
+typedef struct {
+    pthread_mutex_t mtx;
+    pthread_cond_t cond;
+    volatile int woken;
+} __GorgetWorkerWakerCtx;
+
+static void __gorget_worker_waker_wake(GorgetWaker* w) {
+    __GorgetWorkerWakerCtx* ctx = (__GorgetWorkerWakerCtx*)w->data;
+    pthread_mutex_lock(&ctx->mtx);
+    ctx->woken = 1;
+    pthread_cond_signal(&ctx->cond);
+    pthread_mutex_unlock(&ctx->mtx);
+}
+
+#define GORGET_SCHEDULER_SUBMIT(task) __gorget_executor_submit(task)
+#define GORGET_SCHEDULER_WAIT(task_ptr) do { \
+    pthread_mutex_lock(&(task_ptr)->mtx); \
+    while (!(task_ptr)->done) \
+        pthread_cond_wait(&(task_ptr)->cond, &(task_ptr)->mtx); \
+    pthread_mutex_unlock(&(task_ptr)->mtx); \
+} while(0)
+"#;
+
+/// Synchronous inline execution (no threads).
+pub const SCHEDULER_INLINE_RUNTIME: &str = r#"
+// ── Scheduler: Inline (synchronous on caller thread) ──
+
+static void __gorget_run_task_inline_sync(GorgetTask* task) {
+    if (task->poll != NULL) {
+        while (task->poll(task) != GORGET_POLL_READY) { /* spin */ }
+    } else {
+        task->run(task);
+    }
+    task->done = 1;
+    if (task->parent_waker.wake) task->parent_waker.wake(&task->parent_waker);
+}
+
+static void __gorget_executor_submit(GorgetTask* task) {
+    __gorget_run_task_inline_sync(task);
+}
+
+static void __gorget_executor_resubmit(GorgetTask* task) {
+    task->done = 0;
+    __gorget_executor_submit(task);
+}
+
+static void __gorget_fiber_waker_wake(GorgetWaker* w) { (void)w; }
+static void __gorget_executor_shutdown(void) { }
+
+typedef struct {
+    pthread_mutex_t mtx;
+    pthread_cond_t cond;
+    volatile int woken;
+} __GorgetWorkerWakerCtx;
+
+static void __gorget_worker_waker_wake(GorgetWaker* w) {
+    __GorgetWorkerWakerCtx* ctx = (__GorgetWorkerWakerCtx*)w->data;
+    ctx->woken = 1;
+}
+
+#define GORGET_SCHEDULER_SUBMIT(task) __gorget_executor_submit(task)
+#define GORGET_SCHEDULER_WAIT(task_ptr) do { (void)(task_ptr); } while(0)
+"#;
+
+/// N:1 cooperative event loop (single-threaded).
+pub const SCHEDULER_SINGLE_RUNTIME: &str = r#"
+// ── Scheduler: Single (N:1 cooperative event loop) ──
+
+static GorgetTask** __gorget_single_queue = NULL;
+static int __gorget_single_queue_len = 0;
+static int __gorget_single_queue_cap = 0;
+
+static void __gorget_single_enqueue(GorgetTask* task) {
+    if (__gorget_single_queue_len == __gorget_single_queue_cap) {
+        int new_cap = __gorget_single_queue_cap ? __gorget_single_queue_cap * 2 : 16;
+        GorgetTask** buf = (GorgetTask**)GORGET_ALLOC((size_t)new_cap * sizeof(GorgetTask*));
+        if (__gorget_single_queue) {
+            memcpy(buf, __gorget_single_queue, (size_t)__gorget_single_queue_len * sizeof(GorgetTask*));
+            GORGET_FREE(__gorget_single_queue, (size_t)__gorget_single_queue_cap * sizeof(GorgetTask*));
+        }
+        __gorget_single_queue = buf;
+        __gorget_single_queue_cap = new_cap;
+    }
+    __gorget_single_queue[__gorget_single_queue_len++] = task;
+}
+
+static int __gorget_single_try_run_one(void) {
+    if (__gorget_single_queue_len == 0) return 0;
+    GorgetTask* task = __gorget_single_queue[0];
+    memmove(__gorget_single_queue, __gorget_single_queue + 1,
+            (size_t)(--__gorget_single_queue_len) * sizeof(GorgetTask*));
+    if (task->poll != NULL) {
+        int status = task->poll(task);
+        if (status == GORGET_POLL_READY) {
+            task->done = 1;
+            if (task->parent_waker.wake) task->parent_waker.wake(&task->parent_waker);
+        }
+        // If PENDING, the waker will re-enqueue when ready.
+    } else {
+        task->run(task);
+        task->done = 1;
+        if (task->parent_waker.wake) task->parent_waker.wake(&task->parent_waker);
+    }
+    return 1;
+}
+
+static void __gorget_executor_submit(GorgetTask* task) {
+    __gorget_single_enqueue(task);
+}
+
+static void __gorget_executor_resubmit(GorgetTask* task) {
+    task->done = 0;
+    __gorget_single_enqueue(task);
+}
+
+static void __gorget_fiber_waker_wake(GorgetWaker* w) {
+    GorgetTask* task = (GorgetTask*)w->data;
+    __gorget_single_enqueue(task);
+}
+
+static void __gorget_executor_shutdown(void) {
+    if (__gorget_single_queue) {
+        GORGET_FREE(__gorget_single_queue, (size_t)__gorget_single_queue_cap * sizeof(GorgetTask*));
+        __gorget_single_queue = NULL;
+        __gorget_single_queue_len = 0;
+        __gorget_single_queue_cap = 0;
+    }
+}
+
+typedef struct {
+    pthread_mutex_t mtx;
+    pthread_cond_t cond;
+    volatile int woken;
+} __GorgetWorkerWakerCtx;
+
+static void __gorget_worker_waker_wake(GorgetWaker* w) {
+    __GorgetWorkerWakerCtx* ctx = (__GorgetWorkerWakerCtx*)w->data;
+    ctx->woken = 1;
+}
+
+#define GORGET_SCHEDULER_SUBMIT(task) __gorget_single_enqueue(task)
+#define GORGET_SCHEDULER_WAIT(task_ptr) do { \
+    while (!(task_ptr)->done) { \
+        if (!__gorget_single_try_run_one()) break; \
+    } \
+} while(0)
+"#;
+
+/// Legacy alias — kept for backward compat with any code referencing EXECUTOR_RUNTIME.
+pub const EXECUTOR_RUNTIME: &str = "";
 
 /// Main-thread waker for event-driven async main loop.
 /// Only emitted when `has_spawn` is true (needs pthreads).
@@ -3336,21 +3543,7 @@ static inline void gorget_task_group_submit_raw(gorget_task_group_t* g,
 // starvation when tasks block waiting on child tasks (nested spawn pattern).
 static inline void gorget_task_group_join(gorget_task_group_t* g) {
     for (int i = 0; i < g->count; i++) {
-        GorgetTask* t = g->tasks[i];
-        for (;;) {
-            pthread_mutex_lock(&t->mtx);
-            if (t->done) {
-                pthread_mutex_unlock(&t->mtx);
-                break;
-            }
-            pthread_mutex_unlock(&t->mtx);
-            // Work-steal: run a queued task instead of sleeping.
-            if (!__gorget_try_run_one()) {
-                // Queue empty — briefly yield, then check again.
-                sched_yield();
-            }
-        }
-        // Destroy sync primitives and free ctx via the per-fn drop.
+        GORGET_SCHEDULER_WAIT(g->tasks[i]);
         g->drops[i](g->task_ctxs[i]);
     }
     g->count = 0;  // reset; group may be reused after join()

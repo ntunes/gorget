@@ -1,0 +1,14 @@
+# Test: directive scheduler=single — N:1 cooperative event loop.
+# All tasks run on one thread via cooperative scheduling.
+
+directive scheduler=single
+
+async int add(int a, int b):
+    return a + b
+
+async void main():
+    Task[int] t1 = spawn add(10, 20)
+    Task[int] t2 = spawn add(30, 40)
+    int a = await t1
+    int b = await t2
+    print(a + b)

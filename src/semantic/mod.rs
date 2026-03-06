@@ -150,6 +150,22 @@ pub fn analyze_with_source_dir(
                         });
                     }
                 }
+                "scheduler" => {
+                    match d.value.as_deref() {
+                        Some("pool") | Some("thread") | Some("inline") | Some("single") => {}
+                        _ => {
+                            errors.push(SemanticError {
+                                kind: SemanticErrorKind::UnknownDirective {
+                                    name: format!(
+                                        "scheduler={}",
+                                        d.value.as_deref().unwrap_or("(missing value)")
+                                    ),
+                                },
+                                span: d.span,
+                            });
+                        }
+                    }
+                }
                 _ => {
                     errors.push(SemanticError {
                         kind: SemanticErrorKind::UnknownDirective {

@@ -9643,3 +9643,21 @@ fn stress_nested_return() {
     // sum(0..24) * 2 = 2*(24*25/2) = 600
     run_gg("stress_nested_return.gg", "600");
 }
+
+#[test]
+fn scheduler_thread() {
+    // 1:1 OS thread per spawn: double(10)=20 + double(21)=42 = 62
+    run_gg("scheduler_thread.gg", "62");
+}
+
+#[test]
+fn scheduler_inline() {
+    // Synchronous inline: triple(5)=15 + triple(10)=30 = 45
+    run_gg("scheduler_inline.gg", "45");
+}
+
+#[test]
+fn scheduler_single() {
+    // Cooperative single-threaded: add(10,20)=30 + add(30,40)=70 = 100
+    run_gg("scheduler_single.gg", "100");
+}

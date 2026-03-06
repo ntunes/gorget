@@ -10,6 +10,20 @@ use instructions::{Instruction, Terminator};
 use types::{TypeId, TypeRegistry};
 use crate::span::Span;
 
+/// Compile-time selectable scheduler backend for `spawn`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SchedulerMode {
+    /// M:N thread pool + work-stealing (default).
+    #[default]
+    Pool,
+    /// 1:1 OS thread per spawn.
+    Thread,
+    /// Synchronous on caller thread.
+    Inline,
+    /// N:1 cooperative event loop.
+    Single,
+}
+
 /// A single `with X as y` binding in a test, for the C backend to generate setup code.
 #[derive(Debug, Clone)]
 pub struct TestWithBinding {
@@ -110,6 +124,8 @@ pub struct Module {
     pub hot_reload_state_hash: u64,
     /// True when a `reload()` function exists in the module.
     pub hot_reload_has_reload_fn: bool,
+    /// Scheduler backend for `spawn` (pool, thread, inline, single).
+    pub scheduler_mode: SchedulerMode,
 }
 
 impl Module {
@@ -148,6 +164,7 @@ impl Module {
             hot_reload_state_type: None,
             hot_reload_state_hash: 0,
             hot_reload_has_reload_fn: false,
+            scheduler_mode: SchedulerMode::default(),
         }
     }
 

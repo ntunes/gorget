@@ -244,6 +244,25 @@ fn print_borrow_summary(result: &gorget::semantic::AnalysisResult) {
     }
 }
 
+/// Extract `--scheduler=pool|thread|inline|single` from CLI args.
+fn parse_scheduler(args: &[String]) -> Option<gorget::ir::SchedulerMode> {
+    for a in args {
+        if let Some(val) = a.strip_prefix("--scheduler=") {
+            return match val {
+                "pool" => Some(gorget::ir::SchedulerMode::Pool),
+                "thread" => Some(gorget::ir::SchedulerMode::Thread),
+                "inline" => Some(gorget::ir::SchedulerMode::Inline),
+                "single" => Some(gorget::ir::SchedulerMode::Single),
+                _ => {
+                    eprintln!("Unknown scheduler mode: {val} (expected pool, thread, inline, single)");
+                    None
+                }
+            };
+        }
+    }
+    None
+}
+
 /// Extract all `--feature <name>` (and `--feature=<name>`) values from CLI args.
 fn parse_features(args: &[String]) -> Vec<String> {
     let mut features = Vec::new();
@@ -1007,7 +1026,7 @@ fn main() {
         let lowering_opts = gorget::ir::lowering::LoweringOptions {
             strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked,
             trace_filename, hot_reload: hot_reload_flag || source_has_hot_reload(&source),
-            sanitize,
+            sanitize, scheduler_mode: parse_scheduler(&args),
             ..Default::default()
         };
         let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts)
@@ -1123,6 +1142,7 @@ fn main() {
     let trace = args.iter().any(|a| a == "--trace");
     let no_trace = args.iter().any(|a| a == "--no-trace");
     let hot_reload_flag = args.iter().any(|a| a == "--hot-reload");
+    let scheduler_mode = parse_scheduler(&args);
     let sanitize = args.iter().any(|a| a == "--sanitize");
     let shared_mode = args.iter().any(|a| a == "--shared");
     let show_borrows = args.iter().any(|a| a == "--show-borrows");
@@ -1279,7 +1299,7 @@ fn main() {
                     overflow_checked,
                     trace_filename,
                     hot_reload: hot_reload_flag || source_has_hot_reload(&source),
-                    sanitize,
+                    sanitize, scheduler_mode,
                     ..Default::default()
                 };
                 let result = try_build_ir(filename, &source, dep_paths, None, None, Some(shared_path), &features, lowering_opts);
@@ -1345,7 +1365,7 @@ fn main() {
                 overflow_checked,
                 trace_filename,
                 hot_reload: hot_reload_flag || source_has_hot_reload(&source),
-                sanitize,
+                sanitize, scheduler_mode,
                 ..Default::default()
             };
             let result = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts);
@@ -1424,7 +1444,7 @@ fn main() {
                 test_exclude_tags: test_exclude_tags.clone(),
                 test_name_filter: test_name_filter.clone(),
                 trace_filename,
-                sanitize,
+                sanitize, scheduler_mode,
                 ..Default::default()
             };
             let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts)
@@ -1547,6 +1567,7 @@ fn main() {
                 test_name_filter,
                 overflow_wrap,
                 overflow_checked,
+                scheduler_mode: parse_scheduler(&args),
                 ..Default::default()
             };
 

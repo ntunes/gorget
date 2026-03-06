@@ -3900,6 +3900,20 @@ value     = IDENT ;
 | `directive name-first`             | *(none)*              | Enable Rust/Python-style name-before-type declaration syntax |
 | `directive trace`                  | `--trace`             | Enable execution tracing for testing      |
 | `directive hot-reload`             | `--hot-reload`        | Enable hot code reload mode               |
+| `directive scheduler=X`           | `--scheduler=X`       | Select spawn scheduler: `pool` (default), `thread`, `inline`, `single` |
+
+#### Scheduler Backends
+
+The `scheduler` directive selects the runtime execution model for `spawn`:
+
+| Value    | Model                          | Use case                              |
+|----------|--------------------------------|---------------------------------------|
+| `pool`   | M:N thread pool + work-stealing | Async-heavy, general purpose (default) |
+| `thread` | 1:1 OS thread per spawn        | CPU-bound, FFI, simple debugging      |
+| `inline` | Synchronous on caller thread   | Tests, deterministic replay, WASM     |
+| `single` | N:1 cooperative event loop     | Embedded, scripts, low overhead       |
+
+The CLI flag `--scheduler=X` overrides the source directive.
 
 #### Name-First Syntax
 
@@ -3955,6 +3969,9 @@ per-file options without editing source code.
 | `directive trace`         | *(none)*              | tracing enabled  |
 | *(none)*                  | `--trace`             | tracing enabled  |
 | `directive trace`         | `--no-trace`          | tracing disabled |
+| `directive scheduler=inline` | *(none)*          | inline scheduler |
+| *(none)*                  | `--scheduler=thread`  | thread scheduler |
+| `directive scheduler=inline` | `--scheduler=pool` | pool scheduler (CLI wins) |
 
 ---
 

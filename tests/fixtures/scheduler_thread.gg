@@ -1,0 +1,14 @@
+# Test: directive scheduler=thread — 1:1 OS thread per spawn.
+# Each spawn creates a dedicated OS thread.
+
+directive scheduler=thread
+
+async int double(int x):
+    return x * 2
+
+async void main():
+    Task[int] t1 = spawn double(10)
+    Task[int] t2 = spawn double(21)
+    int a = await t1
+    int b = await t2
+    print(a + b)

@@ -44,6 +44,8 @@ pub struct LoweringOptions {
     pub hot_reload: bool,
     /// Compile with AddressSanitizer + UBSan (`-fsanitize=address,undefined`).
     pub sanitize: bool,
+    /// Override scheduler backend (pool, thread, inline, single).
+    pub scheduler_mode: Option<crate::ir::SchedulerMode>,
 }
 
 /// Lower an AST module + analysis result into a GIR module.
@@ -461,6 +463,13 @@ pub fn lower_module(
             match d.name.as_str() {
                 "strip-asserts" => ctx.strip_asserts = true,
                 "overflow" if d.value.as_deref() == Some("wrap") => ctx.overflow_wrap = true,
+                "scheduler" => match d.value.as_deref() {
+                    Some("pool") => ctx.scheduler_mode = crate::ir::SchedulerMode::Pool,
+                    Some("thread") => ctx.scheduler_mode = crate::ir::SchedulerMode::Thread,
+                    Some("inline") => ctx.scheduler_mode = crate::ir::SchedulerMode::Inline,
+                    Some("single") => ctx.scheduler_mode = crate::ir::SchedulerMode::Single,
+                    _ => {}
+                },
                 _ => {}
             }
         }
@@ -470,6 +479,7 @@ pub fn lower_module(
     if options.no_strip_asserts { ctx.strip_asserts = false; }
     if options.overflow_wrap { ctx.overflow_wrap = true; }
     if options.overflow_checked { ctx.overflow_wrap = false; }
+    if let Some(m) = options.scheduler_mode { ctx.scheduler_mode = m; }
 
     // Register well-known stdlib constants
     {
@@ -1034,6 +1044,7 @@ pub fn lower_module(
 
     // Propagate directive flags to module
     module.overflow_wrap = ctx.overflow_wrap;
+    module.scheduler_mode = ctx.scheduler_mode;
 
     // Trace: filename provided by options (derived from source path in main.rs)
     module.trace_filename = options.trace_filename.clone();

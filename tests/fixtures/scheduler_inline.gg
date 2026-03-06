@@ -1,0 +1,14 @@
+# Test: directive scheduler=inline — synchronous on caller thread.
+# spawn runs immediately, no threading.
+
+directive scheduler=inline
+
+async int triple(int x):
+    return x * 3
+
+async void main():
+    Task[int] t1 = spawn triple(5)
+    Task[int] t2 = spawn triple(10)
+    int a = await t1
+    int b = await t2
+    print(a + b)
