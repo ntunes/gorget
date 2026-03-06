@@ -987,6 +987,25 @@ pub fn lower_module(
         module.functions.push(func);
     }
 
+    // P2.4c: Process deferred shared-async variants via GIR-to-GIR transform.
+    // Source functions are already lowered into module.functions at this point.
+    for pending in std::mem::take(&mut ctx.pending_shared_variants) {
+        let source_fn = module.functions.iter()
+            .find(|f| f.name == pending.source_fn_name)
+            .unwrap_or_else(|| panic!(
+                "shared-async variant '{}' references source function '{}' which was not lowered",
+                pending.variant_name, pending.source_fn_name
+            ))
+            .clone();
+        let variant = crate::ir::transforms::shared_async::inject_shared_token_management(
+            &source_fn,
+            &pending.variant_name,
+            &pending.shared_args,
+            &mut ctx.type_registry,
+        );
+        module.functions.push(variant);
+    }
+
     // Move type_registry back to module for validation
     module.type_registry = std::mem::take(&mut ctx.type_registry);
 

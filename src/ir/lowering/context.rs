@@ -123,33 +123,11 @@ pub struct LoweringContext<'a> {
     /// Function AST bodies indexed by function name. Populated during pre-scan.
     /// Used by async shared token generation to re-lower function bodies with shared params.
     pub fn_ast_bodies: FxHashMap<String, crate::parser::ast::FunctionDef>,
-    /// Active shared params for the current function being lowered.
-    /// Set when lowering a shared-async variant. The await handler uses this to emit
-    /// token release/reacquire around suspension points.
-    /// Maps param index → (hidden_local, facade_local, inner_type, mutex_type, guard_type, is_mutable)
-    pub active_shared_params: Vec<SharedParamInfo>,
+    /// Deferred shared-async variant requests. Recorded at spawn sites, processed after
+    /// all functions are lowered (so the source GIR function is available to transform).
+    pub pending_shared_variants: Vec<crate::ir::transforms::shared_async::PendingSharedVariant>,
 }
 
-/// Info about a shared parameter in an async-aware shared function variant.
-#[derive(Clone, Debug)]
-pub struct SharedParamInfo {
-    /// The raw Shared[Mutex[T]] param local
-    pub shared_local: LocalId,
-    /// The facade local (inner type T, user-visible)
-    pub facade_local: LocalId,
-    /// The guard pointer local (re-derived after each reacquire)
-    pub guard_ptr_local: LocalId,
-    /// Inner type T
-    pub inner_type: TypeId,
-    /// Mutex[T] type
-    pub mutex_type: TypeId,
-    /// Guard[T] type
-    pub guard_type: TypeId,
-    /// Whether this param is a mutable borrow
-    pub is_mutable: bool,
-    /// Declaration order for ordered acquisition/release
-    pub decl_order: u32,
-}
 
 impl<'a> LoweringContext<'a> {
     pub fn new(analysis: &'a AnalysisResult, type_mapper: TypeMapper, type_registry: TypeRegistry) -> Self {
@@ -189,7 +167,7 @@ impl<'a> LoweringContext<'a> {
             shared_locals: FxHashMap::default(),
             shared_pass_raw: false,
             fn_ast_bodies: FxHashMap::default(),
-            active_shared_params: Vec::new(),
+            pending_shared_variants: Vec::new(),
         }
     }
 

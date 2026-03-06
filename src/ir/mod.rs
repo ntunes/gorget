@@ -3,6 +3,7 @@ pub mod instructions;
 pub mod builder;
 pub mod lowering;
 pub mod printer;
+pub mod transforms;
 pub mod validate;
 
 use instructions::{Instruction, Terminator};
