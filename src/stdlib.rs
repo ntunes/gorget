@@ -1469,10 +1469,23 @@ fn decl_method(
 }
 
 fn gen_alloc_module() -> Module {
+    let ty_checkpoint = || Type::Named {
+        name: Spanned::dummy("ArenaCheckpoint".to_string()),
+        generic_args: vec![],
+    };
     let arena_struct = Spanned::dummy(Item::Struct(StructDef {
         attributes: vec![],
         visibility: Visibility::Public,
         name: Spanned::dummy("Arena".to_string()),
+        generic_params: None,
+        fields: vec![],
+        doc_comment: None,
+        span: Span::dummy(),
+    }));
+    let checkpoint_struct = Spanned::dummy(Item::Struct(StructDef {
+        attributes: vec![],
+        visibility: Visibility::Public,
+        name: Spanned::dummy("ArenaCheckpoint".to_string()),
         generic_params: None,
         fields: vec![],
         doc_comment: None,
@@ -1489,6 +1502,8 @@ fn gen_alloc_module() -> Module {
         where_clause: None,
         items: vec![
             Spanned::dummy(decl_method("bytes_used", Ownership::Borrow, &[], ty_int())),
+            Spanned::dummy(decl_method("checkpoint", Ownership::Borrow, &[], ty_checkpoint())),
+            Spanned::dummy(decl_method("restore", Ownership::Borrow, &[("cp", ty_checkpoint())], ty_void())),
             Spanned::dummy(decl_method("reset", Ownership::Borrow, &[], ty_void())),
             Spanned::dummy(decl_method("destroy", Ownership::Borrow, &[], ty_void())),
         ],
@@ -1634,7 +1649,7 @@ fn gen_alloc_module() -> Module {
     }));
     Module {
         items: vec![
-            arena_struct, arena_equip,
+            arena_struct, checkpoint_struct, arena_equip,
             tracking_struct, tracking_equip,
             pool_struct, pool_equip,
             tlsf_struct, tlsf_equip,

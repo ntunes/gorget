@@ -178,6 +178,30 @@ static void gorget_arena_free(GorgetArena** p) {
     *p = NULL;
 }
 
+// Arena checkpoint: captures position in the overflow block chain.
+typedef struct GorgetArenaCheckpoint {
+    GorgetArenaBlock* block;
+    size_t used;
+} GorgetArenaCheckpoint;
+
+static GorgetArenaCheckpoint gorget_arena_checkpoint(GorgetArena* arena) {
+    return (GorgetArenaCheckpoint){ .block = arena->current, .used = arena->current->used };
+}
+
+static void gorget_arena_restore(GorgetArena* arena, GorgetArenaCheckpoint cp) {
+    // Free any overflow blocks allocated after the checkpoint
+    GorgetAllocator* pa = arena->parent_alloc;
+    GorgetArenaBlock* blk = arena->current;
+    while (blk != cp.block) {
+        GorgetArenaBlock* prev = blk->prev;
+        pa->dealloc(pa->ctx, blk->data, blk->capacity);
+        pa->dealloc(pa->ctx, blk, sizeof(GorgetArenaBlock));
+        blk = prev;
+    }
+    arena->current = cp.block;
+    cp.block->used = cp.used;
+}
+
 // ── Tracking Allocator ───────────────────────────────────────
 typedef struct GorgetTrackingAllocator {
     GorgetAllocator  __alloc;       // vtable (must be first for pointer cast)

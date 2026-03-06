@@ -4410,7 +4410,7 @@ impl<'m> Interpreter<'m> {
         let is_alloc_call = name == "gorget_tracking_new" || name == "TrackingAllocator"
             || name.starts_with("gorget_tracking_")
             || name.starts_with("TrackingAllocator__")
-            || name == "gorget_arena_new" || name == "Arena"
+            || name == "gorget_arena_new" || name == "Arena" || name == "ArenaCheckpoint"
             || name.starts_with("gorget_arena_")
             || name.starts_with("Arena__")
             || name == "gorget_pool_new" || name == "PoolAllocator"
@@ -4492,6 +4492,20 @@ impl<'m> Interpreter<'m> {
                         return Ok(Some(Value::Unit));
                     }
                     "report" => { return Ok(Some(Value::Unit)); } // C runtime prints to stderr; skip
+                    "restore" => {
+                        // Restore arena bytes_used from checkpoint struct
+                        let cp_bytes = args.get(1).and_then(|v| {
+                            if let Value::Struct { fields, .. } = v {
+                                fields.first().and_then(|f| if let Value::I64(n) = f { Some(*n) } else { None })
+                            } else { None }
+                        }).unwrap_or(0);
+                        if let Some(state) = self.tracking_allocs.get_mut(&id) {
+                            if let SimAllocState::Arena { bytes_used, .. } = state {
+                                *bytes_used = cp_bytes;
+                            }
+                        }
+                        return Ok(Some(Value::Unit));
+                    }
                     _ => {}
                 }
                 if let Some(state) = self.tracking_allocs.get(&id) {
@@ -4512,6 +4526,13 @@ impl<'m> Interpreter<'m> {
                         SimAllocState::Arena { bytes_used, capacity } => match method {
                             "bytes_used" => return Ok(Some(Value::I64(*bytes_used))),
                             "capacity"   => return Ok(Some(Value::I64(*capacity))),
+                            "checkpoint" => {
+                                // Return checkpoint as a struct with the bytes_used snapshot
+                                return Ok(Some(Value::Struct {
+                                    type_name: "ArenaCheckpoint".to_string(),
+                                    fields: vec![Value::I64(*bytes_used)],
+                                }));
+                            }
                             _ => {}
                         },
                         SimAllocState::Pool { block_size, total_blocks, used_blocks } => match method {

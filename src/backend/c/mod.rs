@@ -239,6 +239,8 @@ fn map_stdlib_name(name: &str) -> &str {
         "regex_replace" => "gorget_regex_replace_pat",
         // Allocator methods
         "Arena__bytes_used" => "gorget_arena_bytes_used",
+        "Arena__checkpoint" => "gorget_arena_checkpoint",
+        "Arena__restore" => "gorget_arena_restore",
         "Arena__reset" => "gorget_arena_reset",
         "Arena__destroy" => "gorget_arena_destroy",
         "TrackingAllocator__alloc_count" => "gorget_tracking_alloc_count",
@@ -3004,6 +3006,7 @@ fn runtime_type_name(name: &str) -> Option<&'static str> {
         "GorgetString" => Some("GorgetString"),
         // Allocator types
         "Arena" => Some("GorgetArena*"),
+        "ArenaCheckpoint" => Some("GorgetArenaCheckpoint"),
         "TrackingAllocator" => Some("GorgetTrackingAllocator*"),
         "PoolAllocator" => Some("GorgetPoolAllocator*"),
         "TlsfAllocator" => Some("GorgetTlsfAllocator*"),
@@ -6113,6 +6116,7 @@ fn infer_runtime_return_type(name: &str) -> Option<&'static str> {
         "gorget_fba_new" | "FixedBufferAllocator" => Some("GorgetFixedBufferAllocator*"),
         "gorget_fallback_new" | "FallbackAllocator" => Some("GorgetFallbackAllocator*"),
         "Arena__bytes_used" | "gorget_arena_bytes_used" => Some("int64_t"),
+        "Arena__checkpoint" | "gorget_arena_checkpoint" => Some("GorgetArenaCheckpoint"),
         "TrackingAllocator__alloc_count" | "gorget_tracking_alloc_count"
         | "TrackingAllocator__free_count" | "gorget_tracking_free_count"
         | "TrackingAllocator__bytes_allocated" | "gorget_tracking_bytes_allocated"

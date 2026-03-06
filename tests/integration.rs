@@ -7480,6 +7480,11 @@ done",
 }
 
 #[test]
+fn arena_checkpoint() {
+    run_gg("arena_checkpoint.gg", "true\ntrue\ndone");
+}
+
+#[test]
 fn pool_overflow() {
     run_gg(
         "pool_overflow.gg",

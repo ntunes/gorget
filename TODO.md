@@ -19,7 +19,6 @@
 
 - **Module namespaces Phase 6 — lib prefix cleanup**: Compiler phases 1–5 are all done. Phase 6: remove manual C-style prefixes from all 22 library files (e.g., `csv_parse_field` → `parse_field` in `lib/gg/csv.gg`). Add `private` to internal helpers. Update all import statements and test fixtures. Start with smallest modules (gg.uuid, gg.log), validate pattern, then tackle yaml.gg. [added: 2026-02-26, updated: 2026-03-04]
 
-- **`std.alloc`: arena checkpoint / restore**: `Arena.checkpoint() -> ArenaCheckpoint` that captures `bytes_used` and `Arena.restore(checkpoint)` that bumps `used` back to the saved value. Useful for transient scratch work without a full `reset()`. Implement as a thin value type wrapping `(Arena*, size_t)`. [added: 2026-03-03]
 
 - **`std.alloc`: per-thread scratch arenas**: `thread_scratch()` returns a thread-local `Arena` reset automatically between calls (double-buffered to allow two scratch frames per thread concurrently). Pattern from stb/handmade: zero-overhead scratch without explicit `with` blocks. [added: 2026-03-03]
 

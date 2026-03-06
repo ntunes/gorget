@@ -1,0 +1,30 @@
+from std.alloc import Arena, ArenaCheckpoint
+
+void main():
+    with Arena(4096) as pool:
+        # Allocate some data
+        Vector[int] v1 = Vector[int]()
+        v1.push(1)
+        v1.push(2)
+        v1.push(3)
+        int used_before = pool.bytes_used()
+
+        # Take a checkpoint
+        ArenaCheckpoint cp = pool.checkpoint()
+
+        # Allocate more data
+        Vector[int] v2 = Vector[int]()
+        v2.push(10)
+        v2.push(20)
+        v2.push(30)
+        v2.push(40)
+        v2.push(50)
+        int used_after = pool.bytes_used()
+        print(used_after > used_before)
+
+        # Restore to checkpoint — reclaims v2 allocations
+        pool.restore(cp)
+        int used_restored = pool.bytes_used()
+        print(used_restored == used_before)
+
+    print("done")
