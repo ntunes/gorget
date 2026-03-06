@@ -1,7 +1,7 @@
 use rustc_hash::FxHashMap;
 
 use crate::ir::types::*;
-use crate::parser::ast::{Expr, PrimitiveType, Type};
+use crate::parser::ast::{Expr, Ownership, PrimitiveType, Type};
 use crate::semantic::AnalysisResult;
 use crate::span::Spanned;
 
@@ -353,6 +353,25 @@ impl<'a> LoweringContext<'a> {
     /// Register a mutable pointer type and return its TypeId.
     pub fn register_mut_ptr_type(&mut self, pointee: TypeId) -> TypeId {
         self.type_registry.insert(GirType::MutPtr(pointee))
+    }
+
+    /// Resolve a parameter's GIR type, applying auto-borrow for Move-type Borrow params.
+    /// MutableBorrow always becomes MutPtr; Borrow of a Move type becomes MutPtr.
+    pub fn resolve_param_type(&mut self, base_type: TypeId, ownership: Ownership) -> TypeId {
+        match ownership {
+            Ownership::MutableBorrow => self.register_mut_ptr_type(base_type),
+            Ownership::Borrow if self.type_registry.is_move_type(base_type) => {
+                self.register_mut_ptr_type(base_type)
+            }
+            _ => base_type,
+        }
+    }
+
+    /// Whether this param ownership + type combination results in auto-borrow (MutPtr).
+    pub fn is_auto_borrowed(&self, base_type: TypeId, ownership: Ownership) -> bool {
+        matches!(ownership, Ownership::MutableBorrow)
+            || (matches!(ownership, Ownership::Borrow)
+                && self.type_registry.is_move_type(base_type))
     }
 
     /// Populate the struct_fields cache from the TypeRegistry.

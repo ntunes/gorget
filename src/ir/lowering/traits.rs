@@ -231,11 +231,6 @@ pub fn register_trait_equip_sigs(
                     format!("{trait_name}_for_{type_name}__{method_name}");
                 implemented_methods.push(method_name.to_string());
 
-                // Track GIR-lowered trait equip methods for caller-side auto-borrow
-                if !matches!(method.node.body, FunctionBody::Extern(_) | FunctionBody::Declaration) {
-                    ctx.gir_equip_methods.insert(mangled.clone());
-                }
-
                 if let Some(vtable_method) = vtable_info
                     .methods
                     .iter()
@@ -280,7 +275,6 @@ pub fn register_trait_equip_sigs(
                     "{trait_name}_for_{type_name}__{}",
                     vtable_method.name
                 );
-                ctx.gir_equip_methods.insert(mangled.clone());
                 ctx.fn_sigs.insert(
                     mangled,
                     (
@@ -620,16 +614,8 @@ fn lower_trait_method_body(
         if p.node.name.node == "self" {
             continue;
         }
-        let base_type =
-            ctx.type_mapper.map_ast_type(&p.node.type_.node);
-        // Auto-borrow: MutableBorrow and Borrow-of-Move params become MutPtr
-        let gir_type = match p.node.ownership {
-            Ownership::MutableBorrow => ctx.register_mut_ptr_type(base_type),
-            Ownership::Borrow if ctx.type_registry.is_move_type(base_type) => {
-                ctx.register_mut_ptr_type(base_type)
-            }
-            _ => base_type,
-        };
+        let base_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+        let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
         params.push((gir_type, Some(p.node.name.node.as_str())));
     }
 
@@ -660,29 +646,28 @@ fn lower_trait_method_body(
         if p.node.name.node == "self" {
             continue;
         }
-        let base_type =
-            ctx.type_mapper.map_ast_type(&p.node.type_.node);
-        // Auto-borrow: MutableBorrow and Borrow-of-Move params become MutPtr
-        let gir_type = match p.node.ownership {
-            Ownership::MutableBorrow => ctx.register_mut_ptr_type(base_type),
-            Ownership::Borrow if ctx.type_registry.is_move_type(base_type) => {
-                ctx.register_mut_ptr_type(base_type)
-            }
-            _ => base_type,
-        };
-        ctx.register_local(
-            &p.node.name.node,
-            LocalId(param_idx),
-            gir_type,
-        );
-        // Register mutable borrow / auto-borrow params for auto-deref at use sites
-        if matches!(p.node.ownership, Ownership::MutableBorrow)
-            || (matches!(p.node.ownership, Ownership::Borrow)
-                && ctx.type_registry.is_move_type(base_type))
-        {
+        let base_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+        let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
+        ctx.register_local(&p.node.name.node, LocalId(param_idx), gir_type);
+        if ctx.is_auto_borrowed(base_type, p.node.ownership) {
             ctx.mut_capture_locals.insert(LocalId(param_idx), base_type);
         }
         param_idx += 1;
+    }
+
+    // Push Function drop scope and register params with drop elaborator
+    ctx.drops.push_scope(DropScopeKind::Function);
+    {
+        let mut pidx = 2u32; // skip self_void at _1
+        for p in &method_def.params {
+            if p.node.name.node == "self" {
+                continue;
+            }
+            let base_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+            let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
+            ctx.drops.register_param(LocalId(pidx), gir_type, &ctx.type_registry);
+            pidx += 1;
+        }
     }
 
     // Lower the body
@@ -692,20 +677,25 @@ fn lower_trait_method_body(
 
             let last_block_idx = builder.current_block.0 as usize;
             if builder.blocks[last_block_idx].terminator.is_none() {
+                ctx.drops.pop_scope(&mut builder, &ctx.type_registry);
                 if return_type == UNIT_TYPE {
                     builder.ret(FunctionBuilder::const_unit());
                 } else {
                     builder
                         .ret(FunctionBuilder::copy(LocalId(0)));
                 }
+            } else {
+                ctx.drops.pop_scope_no_emit();
             }
         }
         FunctionBody::Expression(expr) => {
             let operand = lower_expr(ctx, &mut builder, expr);
             builder.assign(Place::local(LocalId(0)), operand);
+            ctx.drops.pop_scope(&mut builder, &ctx.type_registry);
             builder.ret(FunctionBuilder::copy(LocalId(0)));
         }
         FunctionBody::Declaration | FunctionBody::Extern(_) => {
+            ctx.drops.pop_scope_no_emit();
             return;
         }
     }
@@ -807,16 +797,6 @@ pub fn register_unregistered_trait_equip_sigs(
                 registered_methods.push(method.node.name.node.clone());
 
                 let method_def = &method.node;
-
-                // Track GIR-lowered methods for caller-side auto-borrow
-                if !matches!(method_def.body, FunctionBody::Extern(_) | FunctionBody::Declaration) {
-                    let mangled_for_tracking = if method_def.params.first().map(|p| p.node.name.node == "self").unwrap_or(false) {
-                        format!("{type_name}__{}", method_def.name.node)
-                    } else {
-                        mangle_trait_equip_name(trait_type, &type_name, &method_def.name.node, ctx)
-                    };
-                    ctx.gir_equip_methods.insert(mangled_for_tracking);
-                }
 
                 let ret_type =
                     ctx.type_mapper.map_ast_type(&method_def.return_type.node);

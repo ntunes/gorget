@@ -668,18 +668,8 @@ pub fn lower_module(
             if equip.generic_params.is_some() {
                 continue;
             }
-            // Trait equip blocks: only track GIR-lowered methods for auto-borrow
-            // (fn_sigs are registered separately by register_trait_equip_sigs)
+            // Trait equip blocks: fn_sigs registered by register_trait_equip_sigs
             if equip.trait_.is_some() {
-                if let ast::Type::Named { name: type_name, .. } = &equip.type_.node {
-                    for method in &equip.items {
-                        let method_def = &method.node;
-                        if !matches!(method_def.body, FunctionBody::Extern(_) | FunctionBody::Declaration) {
-                            let mangled = format!("{}__{}", type_name.node, method_def.name.node);
-                            ctx.gir_equip_methods.insert(mangled);
-                        }
-                    }
-                }
                 continue;
             }
             // Skip equip blocks on generic types (they're handled via monomorphization)
@@ -724,9 +714,6 @@ pub fn lower_module(
                     // Register extern binding for equip methods (e.g., UdpSocket__local_addr → gorget_udp_local_addr)
                     if let FunctionBody::Extern(c_symbol) = &method_def.body {
                         ctx.extern_bindings.insert(mangled, c_symbol.clone());
-                    } else if !matches!(method_def.body, FunctionBody::Declaration) {
-                        // Track GIR-lowered equip methods for caller-side auto-borrow
-                        ctx.gir_equip_methods.insert(mangled);
                     }
                 }
             }
@@ -736,11 +723,6 @@ pub fn lower_module(
     // Register monomorphized equip method signatures (including default trait methods)
     generic_collector.register_equip_sigs_with_defaults(
         &mut ctx.type_mapper, &mut ctx.type_registry, &mut ctx.fn_sigs, Some(ast_module));
-
-    // Track GIR-lowered generic equip methods for caller-side auto-borrow
-    for name in generic_collector.gir_equip_method_names() {
-        ctx.gir_equip_methods.insert(name);
-    }
 
     // Register built-in method signatures for Option/Result instantiations.
     // These methods are inlined by the C backend (not real functions), but
@@ -755,6 +737,10 @@ pub fn lower_module(
     // Register fn_sigs for trait equip blocks with unregistered traits
     // (built-in traits like From, Default, Equatable, Displayable, etc.)
     traits::register_unregistered_trait_equip_sigs(&mut ctx, &trait_info, ast_module);
+
+    // Populate gir_equip_methods: walk all equip blocks and mark methods with GIR-lowered
+    // bodies (Block or Expression). This determines caller-side auto-borrow for method calls.
+    populate_gir_equip_methods(&mut ctx, ast_module, &generic_collector);
 
     // Re-scan monomorphized enum variants: trait sig registration (above) may create new
     // generic enum instantiations (e.g., Option__Color via map_ast_type_mut) whose variants
@@ -1581,6 +1567,86 @@ fn auto_register_externs(module: &mut Module) {
             return_type: I32_TYPE,
             is_variadic: true,
         });
+    }
+}
+
+/// Populate `gir_equip_methods` in a single pass over the AST.
+///
+/// A method is "GIR-lowered" if it has a Block or Expression body (not Extern or Declaration).
+/// The set is keyed by the name the caller resolves to (`Type__method` for plain/non-vtable,
+/// `Trait_for_Type__method` for vtable methods, and mangled generic names).
+fn populate_gir_equip_methods(
+    ctx: &mut LoweringContext,
+    ast_module: &ast::Module,
+    generic_collector: &GenericCollector,
+) {
+    let is_gir_body = |body: &FunctionBody| {
+        matches!(body, FunctionBody::Block(_) | FunctionBody::Expression(_))
+    };
+
+    for item in &ast_module.items {
+        if let Item::Equip(equip) = &item.node {
+            if equip.generic_params.is_some() {
+                continue; // generic equip handled below via GenericCollector
+            }
+
+            let type_name = match &equip.type_.node {
+                ast::Type::Named { name, generic_args, .. } => {
+                    if !generic_args.is_empty() {
+                        continue; // equip on generic type — handled via monomorphization
+                    }
+                    &name.node
+                }
+                _ => continue,
+            };
+
+            for method in &equip.items {
+                if !is_gir_body(&method.node.body) {
+                    continue;
+                }
+                // Type__method — used for plain equip and non-vtable trait equip methods
+                ctx.gir_equip_methods.insert(format!("{type_name}__{}", method.node.name.node));
+            }
+
+            // For trait equip blocks, also register Trait_for_Type__method names
+            if let Some(trait_ref) = &equip.trait_ {
+                let trait_name = traits::extract_trait_name(&trait_ref.trait_name.node);
+                if !trait_name.is_empty() {
+                    for method in &equip.items {
+                        if !is_gir_body(&method.node.body) {
+                            continue;
+                        }
+                        ctx.gir_equip_methods.insert(
+                            format!("{trait_name}_for_{type_name}__{}", method.node.name.node)
+                        );
+                    }
+                    // Default trait methods (not overridden) are always GIR-lowered
+                    let implemented: Vec<&str> = equip.items.iter()
+                        .map(|m| m.node.name.node.as_str())
+                        .collect();
+                    if let Some(trait_def) = ast_module.items.iter().find_map(|i| {
+                        if let Item::Trait(td) = &i.node {
+                            if td.name.node == trait_name { Some(td) } else { None }
+                        } else { None }
+                    }) {
+                        for trait_item in &trait_def.items {
+                            if let ast::TraitItem::Method(m) = &trait_item.node {
+                                if !implemented.contains(&m.name.node.as_str()) && is_gir_body(&m.body) {
+                                    ctx.gir_equip_methods.insert(
+                                        format!("{trait_name}_for_{type_name}__{}", m.name.node)
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Generic equip methods
+    for name in generic_collector.gir_equip_method_names() {
+        ctx.gir_equip_methods.insert(name);
     }
 }
 
