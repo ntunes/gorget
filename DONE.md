@@ -1,5 +1,9 @@
 # DONE
 
+- [2026-03-07] **feat: type-generic algebraic simplification**: All integer/float types now handled (not just I64). Uses type_id for correctly-typed zero/one. Fixes latent x-x→I64(0) bug for non-I64 types.
+
+- [2026-03-07] **feat: extended constant folding to I32, F32, and all integer types**: BinOp folding for I32/F32, Cmp folding for all integer+float types, UnOp folding for I32/F32/U8.
+
 - [2026-03-07] **feat: linker-level dead code elimination**: `-ffunction-sections -fdata-sections -Wl,--gc-sections` (Linux) / `-Wl,-dead_strip` (macOS) strips unused functions at link time. Avoids GIR-level dead function analysis which can't see implicit C backend references.
 
 - [2026-03-07] **feat: GIR dead function elimination (implemented, disabled)**: Module-level pass scans Call/FuncRef references and removes unreachable functions. NOT enabled because C backend generates implicit references (adapters, drop glue, vtables). dataframe_basic: 134→86 functions when enabled.
