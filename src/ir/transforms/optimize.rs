@@ -85,6 +85,11 @@ fn optimize_function_once(func: &mut Function) {
     // creating new propagation opportunities.
     propagate_constants(func);
     constant_fold(func);
+    // Copy propagation is implemented but disabled — it causes 39 integration
+    // test failures. The issue is subtle: even with same-type and call-invalidation
+    // guards, some copies are unsafe to propagate (possibly due to the C backend
+    // relying on specific local assignments for struct field access patterns).
+    // propagate_copies(func);
     simplify_algebraic(func);
     simplify_cmp(func);
     eliminate_common_subexpressions(func);
@@ -164,6 +169,150 @@ fn propagate_constants(func: &mut Function) {
                 substitute_terminator_operands(term, &known);
             }
         }
+    }
+}
+
+// ── Copy Propagation ────────────────────────────────────────────────
+
+#[allow(dead_code)]
+/// Intra-block copy propagation: when `_N = Copy(_M)` appears and neither
+/// `_N` nor `_M` is modified before the next use, replace uses of `_N`
+/// with `Copy(_M)`.  This is safe within a single basic block because
+/// instructions execute sequentially.
+///
+/// Conservatively invalidates ALL tracked copies on any Call/CallExtern
+/// (which can modify locals through borrowed pointers), and on any
+/// write to either the source or destination local.
+fn propagate_copies(func: &mut Function) {
+    for bb in &mut func.blocks {
+        // copies: dst_local → src_local (only when types match)
+        let mut copies: std::collections::HashMap<u32, Place> = std::collections::HashMap::new();
+
+        for inst in &mut bb.instructions {
+            // First: substitute known copies into operands
+            substitute_copies(inst, &copies);
+
+            // Then: track/invalidate based on this instruction's writes
+            match inst {
+                Instruction::Assign { dst, value } if dst.projections.is_empty() => {
+                    if let Operand::Copy(src_place) = value {
+                        if src_place.projections.is_empty() {
+                            // Only propagate when src and dst have the same type —
+                            // cross-type copies involve implicit coercions (e.g.,
+                            // GorgetString → Str) that the backend handles specially.
+                            let dst_type = func.locals.get(dst.local.0 as usize)
+                                .map(|l| l.type_id);
+                            let src_type = func.locals.get(src_place.local.0 as usize)
+                                .map(|l| l.type_id);
+                            if dst_type == src_type && dst_type.is_some() {
+                                copies.insert(dst.local.0, src_place.clone());
+                            } else {
+                                copies.remove(&dst.local.0);
+                            }
+                        } else {
+                            copies.remove(&dst.local.0);
+                        }
+                    } else {
+                        copies.remove(&dst.local.0);
+                    }
+                }
+                // Calls invalidate all tracked copies (aliases through pointers)
+                Instruction::Call { .. }
+                | Instruction::CallExtern { .. }
+                | Instruction::CallIndirect { .. } => {
+                    copies.clear();
+                }
+                // Assign with projections (field/index store) can modify a local
+                Instruction::Assign { dst, .. } if !dst.projections.is_empty() => {
+                    let w = dst.local.0;
+                    copies.remove(&w);
+                    copies.retain(|_, src| src.local.0 != w);
+                }
+                _ => {
+                    if let Some(written) = instruction_dst(inst) {
+                        // Invalidate any copy whose dst or src is this local
+                        copies.remove(&written);
+                        copies.retain(|_, src| src.local.0 != written);
+                    }
+                }
+            }
+        }
+
+        // Also substitute copies into the terminator
+        if !copies.is_empty() {
+            if let Some(ref mut term) = bb.terminator {
+                substitute_terminator_copies(term, &copies);
+            }
+        }
+    }
+}
+
+#[allow(dead_code)]
+/// Replace `Copy(local)` operands with the copy source where a known copy exists.
+fn substitute_copies(inst: &mut Instruction, copies: &std::collections::HashMap<u32, Place>) {
+    if copies.is_empty() { return; }
+    let replace = |op: &mut Operand| {
+        if let Operand::Copy(place) = op {
+            if place.projections.is_empty() {
+                if let Some(src) = copies.get(&place.local.0) {
+                    *place = src.clone();
+                }
+            }
+        }
+    };
+    match inst {
+        Instruction::Assign { value, .. } => replace(value),
+        Instruction::BinOp { lhs, rhs, .. } => { replace(lhs); replace(rhs); }
+        Instruction::UnOp { operand, .. } => replace(operand),
+        Instruction::Cmp { lhs, rhs, .. } => { replace(lhs); replace(rhs); }
+        Instruction::Cast { value, .. }
+        | Instruction::BitCast { value, .. }
+        | Instruction::PtrCast { value, .. }
+        | Instruction::TagOf { operand: value, .. } => replace(value),
+        Instruction::Call { args, .. }
+        | Instruction::CallExtern { args, .. } => {
+            for a in args { replace(a); }
+        }
+        Instruction::CallIndirect { callee, args, .. } => {
+            replace(callee);
+            for a in args { replace(a); }
+        }
+        Instruction::StructInit { fields, .. }
+        | Instruction::EnumInit { fields, .. } => {
+            for f in fields { replace(f); }
+        }
+        Instruction::TupleInit { elements, .. } => {
+            for e in elements { replace(e); }
+        }
+        Instruction::HeapAlloc { allocator, .. } => replace(allocator),
+        Instruction::HeapAllocArray { count, allocator, .. } => {
+            replace(count); replace(allocator);
+        }
+        Instruction::Dealloc { ptr, allocator } => {
+            replace(ptr); replace(allocator);
+        }
+        _ => {}
+    }
+}
+
+#[allow(dead_code)]
+/// Replace copy operands in terminators.
+fn substitute_terminator_copies(term: &mut Terminator, copies: &std::collections::HashMap<u32, Place>) {
+    let replace = |op: &mut Operand| {
+        if let Operand::Copy(place) = op {
+            if place.projections.is_empty() {
+                if let Some(src) = copies.get(&place.local.0) {
+                    *place = src.clone();
+                }
+            }
+        }
+    };
+    match term {
+        Terminator::Return(op) => replace(op),
+        Terminator::Branch { cond, .. } => replace(cond),
+        Terminator::Switch { value, .. } => replace(value),
+        Terminator::Invoke { args, .. } => { for a in args { replace(a); } }
+        _ => {}
     }
 }
 
