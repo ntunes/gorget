@@ -518,10 +518,18 @@ fn try_build_ir(
         .arg("-Wno-unused-variable")
         .arg("-Wno-unused-function")
         .arg("-Wno-unused-label")
+        .arg("-ffunction-sections")
+        .arg("-fdata-sections")
         .arg("-o")
         .arg(&exe_path)
         .arg(&c_path)
         .arg("-lm");
+
+    // Let the linker strip unused functions/data (dead code elimination).
+    #[cfg(not(target_os = "macos"))]
+    cc_cmd.arg("-Wl,--gc-sections");
+    #[cfg(target_os = "macos")]
+    cc_cmd.arg("-Wl,-dead_strip");
 
     if options.overflow_wrap || gir_module.runtime.overflow_wrap {
         cc_cmd.arg("-fwrapv");
