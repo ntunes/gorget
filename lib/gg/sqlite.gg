@@ -4,10 +4,10 @@
 # No -lsqlite3 linker flag needed.
 #
 # Usage:
-#   from gg.sqlite import sqlite_open, SqliteConn
+#   from gg.sqlite import open, SqliteConn
 #   from gg.db import Row, Param, Param.IntParam, Param.StrParam
 #
-#   Result[SqliteConn, str] db_r = sqlite_open("app.db")
+#   Result[SqliteConn, str] db_r = open("app.db")
 #   SqliteConn db = db_r.unwrap()
 #   db.exec_simple("CREATE TABLE IF NOT EXISTS users(name TEXT, age INT)").unwrap()
 #   db.exec("INSERT INTO users VALUES (?, ?)",
@@ -46,7 +46,7 @@ extern int _gorget_sqlite_changes(int db) = "gorget_sqlite_changes"
 
 # ── Helper: bind a Param at position idx (1-indexed) ──────────
 
-void _sqlite_bind_param(int stmt, int idx, Param p):
+private void bind_param(int stmt, int idx, Param p):
     match p:
         case IntParam(v): _gorget_sqlite_bind_int(stmt, idx, v)
         case FloatParam(v): _gorget_sqlite_bind_float(stmt, idx, v)
@@ -60,7 +60,7 @@ void _sqlite_bind_param(int stmt, int idx, Param p):
 
 # ── Helper: execute a prepared+bound stmt, collect rows ────────
 
-Result[Vector[Row], str] _sqlite_step_rows(int stmt, int db):
+private Result[Vector[Row], str] step_rows(int stmt, int db):
     Vector[Row] rows = Vector[Row]()
     bool step_done = false
     str step_err = ""
@@ -105,9 +105,9 @@ equip SqliteConn with DbConnection:
         int i = 0
         while i < params.len():
             Param p = params.get(i).unwrap()
-            _sqlite_bind_param(stmt, i + 1, p)
+            bind_param(stmt, i + 1, p)
             i += 1
-        return _sqlite_step_rows(stmt, self._handle)
+        return step_rows(stmt, self._handle)
 
     Result[int, str] exec(&self, str sql, Vector[Param] params):
         if self._handle == 0:
@@ -125,7 +125,7 @@ equip SqliteConn with DbConnection:
         int i = 0
         while i < params.len():
             Param p = params.get(i).unwrap()
-            _sqlite_bind_param(stmt, i + 1, p)
+            bind_param(stmt, i + 1, p)
             i += 1
         int r = _gorget_sqlite_step(stmt)
         _gorget_sqlite_finalize(stmt)
@@ -139,8 +139,8 @@ equip SqliteConn with DbConnection:
 
 # ── Public entry point ────────────────────────────────────────
 
-Result[SqliteConn, str] sqlite_open(str path):
+Result[SqliteConn, str] open(str path):
     int h = _gorget_sqlite_open(path)
     if h == 0:
-        return Error("sqlite_open failed for: " + path)
+        return Error("sqlite open failed for: " + path)
     return Ok(SqliteConn(h))

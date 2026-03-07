@@ -3034,7 +3034,7 @@ mod tests {
         assert!(source.is_some());
         let src = source.unwrap();
         assert!(src.contains("struct SqliteConn"));
-        assert!(src.contains("sqlite_open"));
+        assert!(src.contains("Result[SqliteConn, str] open("));
         assert!(src.contains("DbConnection"));
     }
 
@@ -3048,7 +3048,7 @@ mod tests {
             Item::Function(f) => Some(f.name.node.clone()),
             _ => None,
         }).collect();
-        assert!(fn_names.contains(&"sqlite_open".to_string()), "sqlite.gg missing sqlite_open");
+        assert!(fn_names.contains(&"open".to_string()), "sqlite.gg missing open");
     }
 
     #[test]

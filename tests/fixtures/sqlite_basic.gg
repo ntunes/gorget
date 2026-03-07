@@ -1,4 +1,4 @@
-from gg.sqlite import sqlite_open, SqliteConn
+from gg.sqlite import open, SqliteConn
 from gg.db import Row, Param
 from std.collections import Vector
 
@@ -9,7 +9,7 @@ struct User:
 
 void main():
     # Open in-memory database
-    Result[SqliteConn, str] db_r = sqlite_open(":memory:")
+    Result[SqliteConn, str] db_r = open(":memory:")
     SqliteConn db = db_r.unwrap()
 
     # Create table
