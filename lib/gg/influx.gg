@@ -19,7 +19,7 @@
 #       "from(bucket:\"mybucket\") |> range(start: -1h)", Vector[Param]()).unwrap()
 
 from gg.db import Row, Param, Queryable, DbConnection
-from gg.http import http_request, http_get, http_post, HttpResponse
+from gg.http import request, get, post, HttpResponse
 from gg.csv import parse_table
 from std.collections import Vector, Dict
 from std.conv import int_to_str, float_to_str
@@ -167,7 +167,7 @@ equip InfluxClient with DbConnection:
         hdrs["Authorization"] = "Token " + self.token
         hdrs["Content-Type"] = "application/vnd.flux"
         hdrs["Accept"] = "application/csv"
-        Result[HttpResponse, str] resp = http_request("POST", url, query, hdrs)
+        Result[HttpResponse, str] resp = request("POST", url, query, hdrs)
         if resp.is_error():
             return Error(resp.unwrap_error())
         HttpResponse r = resp.unwrap()
@@ -184,7 +184,7 @@ equip InfluxClient with DbConnection:
         Dict[str, str] hdrs = Dict[str, str]()
         hdrs["Authorization"] = "Token " + self.token
         hdrs["Content-Type"] = "text/plain; charset=utf-8"
-        Result[HttpResponse, str] resp = http_request("POST", url, body, hdrs)
+        Result[HttpResponse, str] resp = request("POST", url, body, hdrs)
         if resp.is_error():
             return Error(resp.unwrap_error())
         HttpResponse r = resp.unwrap()

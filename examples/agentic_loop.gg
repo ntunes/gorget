@@ -8,7 +8,7 @@
 # Optional:
 #   MODEL  -> override the default model name
 
-from gg.http import http_post, HttpResponse
+from gg.http import post, HttpResponse
 from gg.json import Json, json_parse, json_stringify
 from std.collections import Vector, Dict
 from std.os import getenv
@@ -97,7 +97,7 @@ void main():
 
             str body_json = json_stringify(Obj(req_body))
 
-            Result[HttpResponse, str] resp = http_post(api_url, body_json, api_headers)
+            Result[HttpResponse, str] resp = post(api_url, body_json, api_headers)
 
             if resp.is_err():
                 str err_msg = "Connection error: " + resp.unwrap_err()

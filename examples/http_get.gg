@@ -1,7 +1,7 @@
-from gg.http import http_get, HttpResponse
+from gg.http import get, HttpResponse
 
 void main():
-    Result[HttpResponse, str] result = http_get("https://httpbin.org/get")
+    Result[HttpResponse, str] result = get("https://httpbin.org/get")
     match result:
         case Ok(resp):
             print(f"Status: {resp.status_code}")

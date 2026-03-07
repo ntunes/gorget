@@ -11,7 +11,7 @@
 #   ok\nok\nok\nok\nok
 
 from gg.httpserver import HttpRequest, HttpServerResponse, http_server_handle_conn_ka
-from gg.http import http_get, http_post, HttpResponse
+from gg.http import get, post, HttpResponse
 from std.net.socket import ServerSocket, Socket, server_socket_bind
 from std.collections import Dict
 from std.conv import int_to_str
@@ -64,14 +64,14 @@ async void main():
     str base = "http://127.0.0.1:" + int_to_str(port)
 
     # 1. GET method parsed correctly
-    Result[HttpResponse, str] r1 = http_get(base + "/method")
+    Result[HttpResponse, str] r1 = get(base + "/method")
     if r1.is_ok():
         check("method", r1.unwrap().body_text == "GET")
     else:
         print("FAIL: " + r1.unwrap_err())
 
     # 2. Query string in path → split correctly
-    Result[HttpResponse, str] r2 = http_get(base + "/query?key=value&a=1")
+    Result[HttpResponse, str] r2 = get(base + "/query?key=value&a=1")
     if r2.is_ok():
         check("query", r2.unwrap().body_text == "key=value&a=1")
     else:
@@ -79,7 +79,7 @@ async void main():
 
     # 3. POST with Content-Length body parsed
     Dict[str, str] post_hdrs = Dict[str, str]()
-    Result[HttpResponse, str] r3 = http_post(base + "/body", "hello", post_hdrs)
+    Result[HttpResponse, str] r3 = post(base + "/body", "hello", post_hdrs)
     if r3.is_ok():
         check("body", r3.unwrap().body_text == "hello")
     else:
@@ -88,7 +88,7 @@ async void main():
     # 4. Custom header accessible in handler
     Dict[str, str] custom_hdrs = Dict[str, str]()
     custom_hdrs.put("x-test", "myvalue")
-    Result[HttpResponse, str] r4 = http_get(base + "/header", custom_hdrs)
+    Result[HttpResponse, str] r4 = get(base + "/header", custom_hdrs)
     if r4.is_ok():
         check("header", r4.unwrap().body_text == "myvalue")
     else:
@@ -97,7 +97,7 @@ async void main():
     # 5. Header names lowercased by parser (send X-Case, server checks x-case)
     Dict[str, str] upper_hdrs = Dict[str, str]()
     upper_hdrs.put("X-Case", "test")
-    Result[HttpResponse, str] r5 = http_get(base + "/lower", upper_hdrs)
+    Result[HttpResponse, str] r5 = get(base + "/lower", upper_hdrs)
     if r5.is_ok():
         check("lowercase", r5.unwrap().body_text == "lower")
     else:

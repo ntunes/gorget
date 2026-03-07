@@ -10,7 +10,7 @@
 #   ok\nok\nok\nok\nok\nok
 
 from gg.httpserver import HttpRequest, HttpServerResponse, http_server_handle_conn_ka
-from gg.http import http_get, http_put, http_delete, http_post, HttpResponse
+from gg.http import get, put, delete, post, HttpResponse
 from std.net.socket import ServerSocket, Socket, server_socket_bind
 from std.collections import Dict
 from std.conv import int_to_str
@@ -63,7 +63,7 @@ async void main():
 
     # 1. PUT request with body → 200 + body echoed
     Dict[str, str] empty_hdrs = Dict[str, str]()
-    Result[HttpResponse, str] r1 = http_put(base + "/resource", "put-body", empty_hdrs)
+    Result[HttpResponse, str] r1 = put(base + "/resource", "put-body", empty_hdrs)
     if r1.is_ok():
         HttpResponse resp1 = r1.unwrap()
         check("put status", resp1.status_code == 200)
@@ -73,7 +73,7 @@ async void main():
         print("FAIL: put body")
 
     # 2. DELETE request → 200
-    Result[HttpResponse, str] r2 = http_delete(base + "/resource", empty_hdrs)
+    Result[HttpResponse, str] r2 = delete(base + "/resource", empty_hdrs)
     if r2.is_ok():
         HttpResponse resp2 = r2.unwrap()
         check("delete status", resp2.status_code == 200)
@@ -81,7 +81,7 @@ async void main():
         print("FAIL: " + r2.unwrap_err())
 
     # 3. Empty body POST → 200 + empty-ok
-    Result[HttpResponse, str] r3 = http_post(base + "/empty", "", empty_hdrs)
+    Result[HttpResponse, str] r3 = post(base + "/empty", "", empty_hdrs)
     if r3.is_ok():
         HttpResponse resp3 = r3.unwrap()
         check("empty post", resp3.body_text == "empty-ok")
@@ -89,7 +89,7 @@ async void main():
         print("FAIL: " + r3.unwrap_err())
 
     # 4. Multiple custom response headers propagated to client
-    Result[HttpResponse, str] r4 = http_get(base + "/multi-header", empty_hdrs)
+    Result[HttpResponse, str] r4 = get(base + "/multi-header", empty_hdrs)
     if r4.is_ok():
         HttpResponse resp4 = r4.unwrap()
         check("multi-header-a", resp4.headers["x-header-a"] == "alpha")

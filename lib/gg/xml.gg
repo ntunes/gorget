@@ -18,7 +18,7 @@ enum XmlNode:
 
 # ── Hex parsing helper ────────────────────────────────────
 
-int xml_hex_to_int(str hex_str):
+private int hex_to_int(str hex_str):
     if hex_str.byte_len() == 0:
         return -1
     int result = 0
@@ -40,7 +40,7 @@ int xml_hex_to_int(str hex_str):
 
 # ── Entity decoding / encoding ─────────────────────────────
 
-str xml_decode_entities(str raw):
+private str decode_entities(str raw):
     str decoded = ""
     int ei = 0
     while ei < raw.byte_len():
@@ -75,7 +75,7 @@ str xml_decode_entities(str raw):
                             if ref_body.byte_len() > 1:
                                 str rb_first = ref_body.char_at(0)
                                 if rb_first == 'x' or rb_first == 'X':
-                                    nc_code = xml_hex_to_int(ref_body.byte_slice(1, ref_body.byte_len()))
+                                    nc_code = hex_to_int(ref_body.byte_slice(1, ref_body.byte_len()))
                             if nc_code < 0 and ref_body.byte_len() > 0:
                                 bool all_digits = true
                                 int di = 0
@@ -100,7 +100,7 @@ str xml_decode_entities(str raw):
             ei = ei + 1
     return decoded
 
-str xml_encode_text(str raw_text):
+private str encode_text(str raw_text):
     str encoded = ""
     int ti = 0
     while ti < raw_text.byte_len():
@@ -116,7 +116,7 @@ str xml_encode_text(str raw_text):
         ti = ti + 1
     return encoded
 
-str xml_encode_attr(str raw_attr):
+private str encode_attr(str raw_attr):
     str encoded = ""
     int ai = 0
     while ai < raw_attr.byte_len():
@@ -222,7 +222,7 @@ equip XmlParser:
             str vc = self.xml_input.char_at(self.pos)
             if vc == quote_ch:
                 self.pos = self.pos + 1
-                return xml_decode_entities(attr_val)
+                return decode_entities(attr_val)
             attr_val = attr_val + vc
             self.pos = self.pos + 1
         self.fail("unterminated attribute value")
@@ -271,7 +271,7 @@ equip XmlParser:
                 break
             text_val = text_val + xc
             self.pos = self.pos + 1
-        return Text(xml_decode_entities(text_val))
+        return Text(decode_entities(text_val))
 
     XmlNode parse_element(&self):
         # Consume '<'
@@ -371,7 +371,7 @@ String xml_stringify_node(XmlNode nd, Dict[str, str] nd_attrs, Vector[XmlNode] n
         buf.push(" ")
         buf.push(akey)
         buf.push("=\"")
-        buf.push(xml_encode_attr(nd_attrs[akey]))
+        buf.push(encode_attr(nd_attrs[akey]))
         buf.push("\"")
         ki = ki + 1
     if nd_kids.len() == 0:
@@ -391,7 +391,7 @@ String xml_stringify_node(XmlNode nd, Dict[str, str] nd_attrs, Vector[XmlNode] n
 String xml_stringify(XmlNode nd):
     match nd:
         case Text(xtv):
-            return xml_encode_text(xtv)
+            return encode_text(xtv)
         case Element(xtag, xattr_dict, xkids):
             return xml_stringify_node(nd, xattr_dict, xkids, xtag)
 

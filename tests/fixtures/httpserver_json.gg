@@ -15,7 +15,7 @@
 
 from gg.httpserver import HttpRequest, HttpServerResponse, HttpServer
 from gg.json import Json, json_parse, json_stringify
-from gg.http import http_post, HttpResponse
+from gg.http import post, HttpResponse
 from std.collections import Dict, Vector
 from std.time import sleep
 
@@ -84,7 +84,7 @@ async void main():
 
     Dict[str, str] post_hdrs = Dict[str, str]()
     post_hdrs.put("content-type", "application/json")
-    Result[HttpResponse, str] r5 = http_post("http://127.0.0.1:18098/", post_body, post_hdrs)
+    Result[HttpResponse, str] r5 = post("http://127.0.0.1:18098/", post_body, post_hdrs)
     bool t5 = false
     if r5.is_ok():
         HttpResponse resp5 = r5.unwrap()

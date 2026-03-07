@@ -7,7 +7,7 @@
 #   ok\nok
 
 from gg.httpserver import HttpRequest, HttpServerResponse, http_server_handle_conn_ka
-from gg.http import http_post, HttpResponse
+from gg.http import post, HttpResponse
 from std.net.socket import ServerSocket, Socket, server_socket_bind
 from std.collections import Dict
 from std.conv import int_to_str
@@ -57,7 +57,7 @@ async void main():
         ri = ri + 1
 
     Dict[str, str] hdrs = Dict[str, str]()
-    Result[HttpResponse, str] r = http_post(base + "/upload", big_body, hdrs)
+    Result[HttpResponse, str] r = post(base + "/upload", big_body, hdrs)
     if r.is_ok():
         HttpResponse resp = r.unwrap()
         check("status", resp.status_code == 200)

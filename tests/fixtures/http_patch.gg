@@ -1,10 +1,10 @@
-# Test: http_patch client method + PATCH route on server.
+# Test: patch client method + PATCH route on server.
 #
 # Expected output:
 #   ok\nok
 
 from gg.httpserver import HttpRequest, HttpServerResponse, http_server_handle_conn_ka
-from gg.http import http_patch, HttpResponse
+from gg.http import patch, HttpResponse
 from std.net.socket import ServerSocket, Socket, server_socket_bind
 from std.collections import Dict
 from std.conv import int_to_str
@@ -44,7 +44,7 @@ async void main():
 
     str base = "http://127.0.0.1:" + int_to_str(port)
     Dict[str, str] hdrs = Dict[str, str]()
-    Result[HttpResponse, str] r = http_patch(base + "/item", "delta", hdrs)
+    Result[HttpResponse, str] r = patch(base + "/item", "delta", hdrs)
     if r.is_ok():
         HttpResponse resp = r.unwrap()
         check("status", resp.status_code == 200)

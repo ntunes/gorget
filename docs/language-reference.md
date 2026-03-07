@@ -3231,9 +3231,9 @@ match result:
 Supports HTTP and HTTPS (TLS). Follows redirects automatically (up to 5 hops).
 
 ```gorget
-from gg.http import http_get, http_post, http_put, http_delete, http_patch, HttpResponse
+from gg.http import get, post, put, delete, patch, HttpResponse
 
-Result[HttpResponse, str] r = http_get("https://api.example.com/data")
+Result[HttpResponse, str] r = get("https://api.example.com/data")
 if r.is_ok():
     HttpResponse resp = r.unwrap()
     print("{resp.status_code}")   # e.g. 200
@@ -3253,17 +3253,17 @@ Client functions (all return `Result[HttpResponse, str]`):
 
 | Function | Signature | Description |
 |---|---|---|
-| `http_get` | `(str url, Dict[str,str] headers={})` | GET request |
-| `http_post` | `(str url, str body="", Dict[str,str] headers={})` | POST request |
-| `http_put` | `(str url, str body="", Dict[str,str] headers={})` | PUT request |
-| `http_delete` | `(str url, Dict[str,str] headers={})` | DELETE request |
-| `http_patch` | `(str url, str body="", Dict[str,str] headers={})` | PATCH request |
+| `get` | `(str url, Dict[str,str] headers={})` | GET request |
+| `post` | `(str url, str body="", Dict[str,str] headers={})` | POST request |
+| `put` | `(str url, str body="", Dict[str,str] headers={})` | PUT request |
+| `delete` | `(str url, Dict[str,str] headers={})` | DELETE request |
+| `patch` | `(str url, str body="", Dict[str,str] headers={})` | PATCH request |
 
 Helper:
 
 | Function | Signature | Description |
 |---|---|---|
-| `http_parse_url` | `(str url) → (str host, int port, str path, bool use_tls)` | Parse a URL into components |
+| `parse_url` | `(str url) → (str host, int port, str path, bool use_tls)` | Parse a URL into components |
 
 ---
 

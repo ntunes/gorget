@@ -1,7 +1,7 @@
 # gg.http -- Pure Gorget HTTP/1.1 client over TLS and plain TCP
 #
-# Provides http_get, http_post, http_put, http_delete and the underlying
-# http_request function.  Uses std.net.tls for https:// and std.net.socket
+# Provides get, post, put, delete and the underlying
+# request function.  Uses std.net.tls for https:// and std.net.socket
 # for plain http:// URLs.
 #
 # Response headers are stored with lowercase names for easy lookup:
@@ -23,7 +23,7 @@ struct HttpResponse:
 # ── URL parsing ──────────────────────────────────────────────
 
 # Returns (host, port, path, use_tls) where use_tls is false for http:// URLs.
-(str, int, str, bool) http_parse_url(str url):
+(str, int, str, bool) parse_url(str url):
     str http_rest = url
     int http_port = 443
     bool http_use_tls = true
@@ -59,7 +59,7 @@ struct HttpResponse:
 
 # ── Hex parsing (for chunked transfer encoding) ─────────────
 
-int http_parse_hex(str http_hex):
+private int parse_hex(str http_hex):
     int http_val = 0
     int http_hi = 0
     while http_hi < http_hex.byte_len():
@@ -79,13 +79,13 @@ int http_parse_hex(str http_hex):
 
 # ── Body readers ─────────────────────────────────────────────
 
-str http_read_body_fixed(TlsSocket &http_conn, int http_clen):
+private str read_body_fixed(TlsSocket &http_conn, int http_clen):
     if http_clen <= 0:
         return ""
     Vector[uint8] http_raw = http_conn.read_exact(http_clen)
     return bytes_to_str(http_raw).unwrap()
 
-str http_read_body_chunked(TlsSocket &http_conn):
+private str read_body_chunked(TlsSocket &http_conn):
     Vector[uint8] http_buf = Vector[uint8]()
     bool http_reading = true
     while http_reading:
@@ -95,7 +95,7 @@ str http_read_body_chunked(TlsSocket &http_conn):
         if http_semi.is_some():
             http_size_line = http_size_line.byte_slice(0, http_semi.unwrap())
         http_size_line = http_size_line.trim()
-        int http_chunk_sz = http_parse_hex(http_size_line)
+        int http_chunk_sz = parse_hex(http_size_line)
         if http_chunk_sz == 0:
             http_reading = false
         else:
@@ -109,7 +109,7 @@ str http_read_body_chunked(TlsSocket &http_conn):
         http_trailer = http_conn.read_line().unwrap()
     return bytes_to_str(http_buf).unwrap()
 
-str http_read_body_close(TlsSocket &http_conn):
+private str read_body_close(TlsSocket &http_conn):
     Vector[uint8] http_buf = Vector[uint8]()
     bool http_reading = true
     while http_reading:
@@ -122,13 +122,13 @@ str http_read_body_close(TlsSocket &http_conn):
 
 # ── Plain-TCP body readers (mirrors TLS versions above) ──────
 
-str http_read_body_fixed_plain(Socket &http_conn, int http_clen):
+private str read_body_fixed_plain(Socket &http_conn, int http_clen):
     if http_clen <= 0:
         return ""
     Vector[uint8] http_raw = http_conn.read_exact(http_clen)
     return bytes_to_str(http_raw).unwrap()
 
-str http_read_body_chunked_plain(Socket &http_conn):
+private str read_body_chunked_plain(Socket &http_conn):
     Vector[uint8] http_buf = Vector[uint8]()
     bool http_reading = true
     while http_reading:
@@ -137,7 +137,7 @@ str http_read_body_chunked_plain(Socket &http_conn):
         if http_semi.is_some():
             http_size_line = http_size_line.byte_slice(0, http_semi.unwrap())
         http_size_line = http_size_line.trim()
-        int http_chunk_sz = http_parse_hex(http_size_line)
+        int http_chunk_sz = parse_hex(http_size_line)
         if http_chunk_sz == 0:
             http_reading = false
         else:
@@ -149,7 +149,7 @@ str http_read_body_chunked_plain(Socket &http_conn):
         http_trailer = http_conn.read_line().unwrap()
     return bytes_to_str(http_buf).unwrap()
 
-str http_read_body_close_plain(Socket &http_conn):
+private str read_body_close_plain(Socket &http_conn):
     Vector[uint8] http_buf = Vector[uint8]()
     bool http_reading = true
     while http_reading:
@@ -163,7 +163,7 @@ str http_read_body_close_plain(Socket &http_conn):
 # ── Single-shot request (no redirect following) ───────────
 
 Result[HttpResponse, str] http_single(str http_method, str http_url, str http_body, Dict[str, str] http_hdrs):
-    auto http_parsed = http_parse_url(http_url)
+    auto http_parsed = parse_url(http_url)
     str http_host = http_parsed._0
     int http_port = http_parsed._1
     str http_path = http_parsed._2
@@ -234,17 +234,17 @@ Result[HttpResponse, str] http_single(str http_method, str http_url, str http_bo
         if http_tls_hdrs.contains("transfer-encoding"):
             str http_tls_te = http_tls_hdrs["transfer-encoding"]
             if http_tls_te.to_lower().contains("chunked"):
-                http_tls_body = http_read_body_chunked(&http_tls_conn)
+                http_tls_body = read_body_chunked(&http_tls_conn)
         if http_tls_body == "":
             if http_tls_hdrs.contains("content-length"):
                 str http_tls_cls = http_tls_hdrs["content-length"]
                 Option[int] http_tls_clo = int.parse(http_tls_cls)
                 if http_tls_clo is Some(http_tls_cl):
-                    http_tls_body = http_read_body_fixed(&http_tls_conn, http_tls_cl)
+                    http_tls_body = read_body_fixed(&http_tls_conn, http_tls_cl)
                 else:
-                    http_tls_body = http_read_body_close(&http_tls_conn)
+                    http_tls_body = read_body_close(&http_tls_conn)
             else:
-                http_tls_body = http_read_body_close(&http_tls_conn)
+                http_tls_body = read_body_close(&http_tls_conn)
 
         http_tls_conn.close()
         HttpResponse http_tls_resp = HttpResponse(http_tls_code, http_tls_body, http_tls_hdrs)
@@ -292,17 +292,17 @@ Result[HttpResponse, str] http_single(str http_method, str http_url, str http_bo
         if http_plain_hdrs.contains("transfer-encoding"):
             str http_plain_te = http_plain_hdrs["transfer-encoding"]
             if http_plain_te.to_lower().contains("chunked"):
-                http_plain_body = http_read_body_chunked_plain(&http_plain_conn)
+                http_plain_body = read_body_chunked_plain(&http_plain_conn)
         if http_plain_body == "":
             if http_plain_hdrs.contains("content-length"):
                 str http_plain_cls = http_plain_hdrs["content-length"]
                 Option[int] http_plain_clo = int.parse(http_plain_cls)
                 if http_plain_clo is Some(http_plain_cl):
-                    http_plain_body = http_read_body_fixed_plain(&http_plain_conn, http_plain_cl)
+                    http_plain_body = read_body_fixed_plain(&http_plain_conn, http_plain_cl)
                 else:
-                    http_plain_body = http_read_body_close_plain(&http_plain_conn)
+                    http_plain_body = read_body_close_plain(&http_plain_conn)
             else:
-                http_plain_body = http_read_body_close_plain(&http_plain_conn)
+                http_plain_body = read_body_close_plain(&http_plain_conn)
 
         http_plain_conn.close()
         HttpResponse http_plain_resp = HttpResponse(http_plain_code, http_plain_body, http_plain_hdrs)
@@ -315,7 +315,7 @@ Result[HttpResponse, str] http_single(str http_method, str http_url, str http_bo
 #   307, 308      → preserve original method and body
 #   Max 10 hops, then return error.
 
-Result[HttpResponse, str] http_request(str http_method, str http_url, str http_body, Dict[str, str] http_hdrs):
+Result[HttpResponse, str] request(str http_method, str http_url, str http_body, Dict[str, str] http_hdrs):
     str http_cur_url = http_url
     str http_cur_method = http_method
     str http_cur_body = http_body
@@ -348,7 +348,7 @@ Result[HttpResponse, str] http_request(str http_method, str http_url, str http_b
 
         # Handle relative redirects (path-only)
         if http_location.starts_with("/"):
-            auto http_orig = http_parse_url(http_cur_url)
+            auto http_orig = parse_url(http_cur_url)
             str http_scheme = "https://"
             if not http_orig._3:
                 http_scheme = "http://"
@@ -368,17 +368,17 @@ Result[HttpResponse, str] http_request(str http_method, str http_url, str http_b
 
 # ── Convenience functions ────────────────────────────────────
 
-Result[HttpResponse, str] http_get(str http_url, Dict[str, str] http_hdrs = Dict[str, str]()):
-    return http_request("GET", http_url, "", http_hdrs)
+Result[HttpResponse, str] get(str http_url, Dict[str, str] http_hdrs = Dict[str, str]()):
+    return request("GET", http_url, "", http_hdrs)
 
-Result[HttpResponse, str] http_post(str http_url, str http_body = "", Dict[str, str] http_hdrs = Dict[str, str]()):
-    return http_request("POST", http_url, http_body, http_hdrs)
+Result[HttpResponse, str] post(str http_url, str http_body = "", Dict[str, str] http_hdrs = Dict[str, str]()):
+    return request("POST", http_url, http_body, http_hdrs)
 
-Result[HttpResponse, str] http_put(str http_url, str http_body = "", Dict[str, str] http_hdrs = Dict[str, str]()):
-    return http_request("PUT", http_url, http_body, http_hdrs)
+Result[HttpResponse, str] put(str http_url, str http_body = "", Dict[str, str] http_hdrs = Dict[str, str]()):
+    return request("PUT", http_url, http_body, http_hdrs)
 
-Result[HttpResponse, str] http_delete(str http_url, Dict[str, str] http_hdrs = Dict[str, str]()):
-    return http_request("DELETE", http_url, "", http_hdrs)
+Result[HttpResponse, str] delete(str http_url, Dict[str, str] http_hdrs = Dict[str, str]()):
+    return request("DELETE", http_url, "", http_hdrs)
 
-Result[HttpResponse, str] http_patch(str http_url, str http_body = "", Dict[str, str] http_hdrs = Dict[str, str]()):
-    return http_request("PATCH", http_url, http_body, http_hdrs)
+Result[HttpResponse, str] patch(str http_url, str http_body = "", Dict[str, str] http_hdrs = Dict[str, str]()):
+    return request("PATCH", http_url, http_body, http_hdrs)

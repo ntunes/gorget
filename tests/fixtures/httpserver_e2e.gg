@@ -13,7 +13,7 @@
 #   6. URL path parameter via query_string + parse_query_string
 
 from gg.httpserver import HttpRequest, HttpServerResponse, parse_query_string, http_server_handle_conn_ka
-from gg.http import http_get, http_post, HttpResponse
+from gg.http import get, post, HttpResponse
 from std.net.socket import ServerSocket, Socket, server_socket_bind
 from std.collections import Dict
 from std.conv import int_to_str
@@ -66,14 +66,14 @@ void check(str label, bool ok):
 async void main():
     int port = 18086
 
-    # 6 requests → 6 connections (each http_get/post sends Connection: close)
+    # 6 requests → 6 connections (each get/post sends Connection: close)
     Task[void] srv = spawn serve_n(port, 6)
     sleep(0.05).await()
 
     str base = "http://127.0.0.1:" + int_to_str(port)
 
     # 1. GET /hello → 200 "world"
-    Result[HttpResponse, str] r1 = http_get(base + "/hello")
+    Result[HttpResponse, str] r1 = get(base + "/hello")
     if r1.is_ok():
         HttpResponse resp1 = r1.unwrap()
         check("status 200", resp1.status_code == 200)
@@ -83,7 +83,7 @@ async void main():
         print("FAIL: body")
 
     # 2. GET /json → correct Content-Type in response headers
-    Result[HttpResponse, str] r2 = http_get(base + "/json")
+    Result[HttpResponse, str] r2 = get(base + "/json")
     if r2.is_ok():
         HttpResponse resp2 = r2.unwrap()
         check("json status", resp2.status_code == 200)
@@ -94,7 +94,7 @@ async void main():
 
     # 3. POST /echo with body → body echoed
     Dict[str, str] empty_hdrs = Dict[str, str]()
-    Result[HttpResponse, str] r3 = http_post(base + "/echo", "hello body", empty_hdrs)
+    Result[HttpResponse, str] r3 = post(base + "/echo", "hello body", empty_hdrs)
     if r3.is_ok():
         HttpResponse resp3 = r3.unwrap()
         check("echo status", resp3.status_code == 200)
@@ -104,7 +104,7 @@ async void main():
         print("FAIL: echo body")
 
     # 4. Unknown path → 404
-    Result[HttpResponse, str] r4 = http_get(base + "/unknown")
+    Result[HttpResponse, str] r4 = get(base + "/unknown")
     if r4.is_ok():
         HttpResponse resp4 = r4.unwrap()
         check("404", resp4.status_code == 404)
@@ -112,7 +112,7 @@ async void main():
         print("FAIL: " + r4.unwrap_err())
 
     # 5. Custom response header propagated to client
-    Result[HttpResponse, str] r5 = http_get(base + "/powered")
+    Result[HttpResponse, str] r5 = get(base + "/powered")
     if r5.is_ok():
         HttpResponse resp5 = r5.unwrap()
         check("custom header status", resp5.status_code == 200)
@@ -122,7 +122,7 @@ async void main():
         print("FAIL: custom header")
 
     # 6. Query string parsed by handler (path + ?q=gorget)
-    Result[HttpResponse, str] r6 = http_get(base + "/search?q=gorget")
+    Result[HttpResponse, str] r6 = get(base + "/search?q=gorget")
     if r6.is_ok():
         HttpResponse resp6 = r6.unwrap()
         check("query status", resp6.status_code == 200)

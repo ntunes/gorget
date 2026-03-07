@@ -469,7 +469,7 @@ Result[Json, str] json_parse(str input):
 
 # ── Serialization ────────────────────────────────────────────
 
-str json_escape_string(str s):
+private str escape_string(str s):
     str result = "\""
     int i = 0
     while i < s.byte_len():
@@ -489,7 +489,7 @@ str json_escape_string(str s):
         i = i + 1
     return result + "\""
 
-str json_make_indent(int depth):
+private str make_indent(int depth):
     str result = ""
     int i = 0
     while i < depth:
@@ -510,7 +510,7 @@ String json_stringify_internal(Json value, bool pretty, int depth):
         case Float(f):
             return float_to_str(f)
         case Str(s):
-            return json_escape_string(s)
+            return escape_string(s)
         case Arr(items):
             if items.len() == 0:
                 return "[]"
@@ -525,12 +525,12 @@ String json_stringify_internal(Json value, bool pretty, int depth):
                     if pretty:
                         buf.push("\n")
                 if pretty:
-                    buf.push(json_make_indent(depth + 1))
+                    buf.push(make_indent(depth + 1))
                 buf.push(json_stringify_internal(items.get(idx).unwrap(), pretty, depth + 1))
                 idx = idx + 1
             if pretty:
                 buf.push("\n")
-                buf.push(json_make_indent(depth))
+                buf.push(make_indent(depth))
             buf.push("]")
             return buf
         case Obj(obj_map):
@@ -548,9 +548,9 @@ String json_stringify_internal(Json value, bool pretty, int depth):
                     if pretty:
                         buf.push("\n")
                 if pretty:
-                    buf.push(json_make_indent(depth + 1))
+                    buf.push(make_indent(depth + 1))
                 str key_str = key_list.get(idx).unwrap()
-                buf.push(json_escape_string(key_str))
+                buf.push(escape_string(key_str))
                 if pretty:
                     buf.push(": ")
                 else:
@@ -559,7 +559,7 @@ String json_stringify_internal(Json value, bool pretty, int depth):
                 idx = idx + 1
             if pretty:
                 buf.push("\n")
-                buf.push(json_make_indent(depth))
+                buf.push(make_indent(depth))
             buf.push("\}")
             return buf
 
@@ -710,7 +710,7 @@ equip JsonSerializer with Serializer:
     void write_float(&self, float v):
         self.ser_out = self.ser_out + float_to_str(v)
     void write_str(&self, str v):
-        self.ser_out = self.ser_out + json_escape_string(v)
+        self.ser_out = self.ser_out + escape_string(v)
     void write_null(&self):
         self.ser_out = self.ser_out + "null"
     void begin_struct(&self, str name, int field_count):
@@ -718,7 +718,7 @@ equip JsonSerializer with Serializer:
     void field(&self, str name, int index):
         if index > 0:
             self.ser_out = self.ser_out + ","
-        self.ser_out = self.ser_out + json_escape_string(name) + ":"
+        self.ser_out = self.ser_out + escape_string(name) + ":"
     void end_struct(&self):
         self.ser_out = self.ser_out + "\}"
     void begin_seq(&self, int len):

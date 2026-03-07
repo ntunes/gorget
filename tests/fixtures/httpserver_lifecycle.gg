@@ -12,7 +12,7 @@
 #   ok\nok\nok
 
 from gg.httpserver import HttpRequest, HttpServerResponse, http_server_handle_conn_ka, HttpServer
-from gg.http import http_get, HttpResponse
+from gg.http import get, HttpResponse
 from std.net.socket import ServerSocket, Socket, server_socket_bind, socket_connect
 from std.bytes import bytes_to_str
 from std.conv import int_to_str
@@ -34,11 +34,11 @@ async void main():
     Task[void] srv1 = spawn s1.accept_n(handle, 2)
     sleep(0.05).await()
 
-    # Both http_get requests use Connection: close → 2 separate connections
-    Result[HttpResponse, str] r1a = http_get("http://127.0.0.1:18096/ping")
+    # Both get requests use Connection: close → 2 separate connections
+    Result[HttpResponse, str] r1a = get("http://127.0.0.1:18096/ping")
     check("serve_n_req1", r1a.is_ok() and r1a.unwrap().status_code == 200)
 
-    Result[HttpResponse, str] r1b = http_get("http://127.0.0.1:18096/ping")
+    Result[HttpResponse, str] r1b = get("http://127.0.0.1:18096/ping")
     check("serve_n_req2", r1b.is_ok() and r1b.unwrap().status_code == 200)
 
     srv1.await()
