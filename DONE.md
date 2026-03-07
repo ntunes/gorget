@@ -1,5 +1,15 @@
 # DONE
 
+- [2026-03-07] **feat: linker-level dead code elimination**: `-ffunction-sections -fdata-sections -Wl,--gc-sections` (Linux) / `-Wl,-dead_strip` (macOS) strips unused functions at link time. Avoids GIR-level dead function analysis which can't see implicit C backend references.
+
+- [2026-03-07] **feat: GIR dead function elimination (implemented, disabled)**: Module-level pass scans Call/FuncRef references and removes unreachable functions. NOT enabled because C backend generates implicit references (adapters, drop glue, vtables). dataframe_basic: 134→86 functions when enabled.
+
+- [2026-03-07] **feat: GIR validator span_map consistency check**: Detects when BasicBlock span_map length doesn't match instruction count. 2 new tests (19 total validator).
+
+- [2026-03-07] **feat: optimization statistics tracking**: `optimize_module()` returns `OptStats` with before/after block/instruction/local counts. `--emit-gir` prints elimination summary.
+
+- [2026-03-07] **test: Mod vs Rem constant folding regression tests**: 2 new tests (63 total optimizer). 791→793 unit tests.
+
 - [2026-03-07] **fix: constant folding Mod vs Rem, INT64_MIN literal, full re-propagation**: Mod was incorrectly using remainder semantics in constant folding (runtime was always correct). INT64_MIN literal overflow in C fixed with `(-MAX - 1)` pattern. Full propagate→fold→propagate→fold pipeline now safe and enabled.
 
 - [2026-03-07] **fix: C backend LL suffix for all int64_t constants**: I64 constants in i32 range were emitted as bare literals (`-5` = `int` in C), causing printf format warnings. Now always emits `LL` suffix.
