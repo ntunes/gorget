@@ -129,6 +129,14 @@ fn ab_test(fixture: &str) {
 #[test] fn lir_ab_type_casts() { ab_test("type_casts.gg"); }
 #[test] fn lir_ab_use_overflow_wrap() { ab_test("use_overflow_wrap.gg"); }
 #[test] fn lir_ab_enums() { ab_test("enums.gg"); }
+#[test] fn lir_ab_functions() { ab_test("functions.gg"); }
+#[test] fn lir_ab_generics() { ab_test("generics.gg"); }
+#[test] fn lir_ab_generic_trait_equip() { ab_test("generic_trait_equip.gg"); }
 #[test] fn lir_ab_match_advanced() { ab_test("match_advanced.gg"); }
 #[test] fn lir_ab_ownership() { ab_test("ownership.gg"); }
 #[test] fn lir_ab_pattern_is() { ab_test("pattern_is.gg"); }
+#[test] fn lir_ab_test_coexist() { ab_test("test_coexist.gg"); }
+#[test] fn lir_ab_trace_test() { ab_test("trace_test.gg"); }
+#[test] fn lir_ab_trait_inherit_defaults() { ab_test("trait_inherit_defaults.gg"); }
+#[test] fn lir_ab_type_alias_fn_sig() { ab_test("type_alias_fn_sig.gg"); }
+// Async fixtures skipped — timing-sensitive output can cause false A/B mismatches.

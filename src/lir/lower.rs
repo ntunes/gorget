@@ -250,6 +250,30 @@ impl<'a> FuncLowering<'a> {
     }
 
     fn lower(&mut self) {
+        // Copy function parameters into their corresponding local slots.
+        // GIR convention: locals 1..=N correspond to the N function parameters.
+        let num_params = self.gir_func.params.len();
+        if num_params > 0 && !self.block_map.is_empty() {
+            let entry_bb = self.block_map[0];
+            for param_idx in 0..num_params {
+                let local_id = ir::types::LocalId((param_idx + 1) as u32);
+                if (local_id.0 as usize) < self.local_to_slot.len() {
+                    let param_val = self.lir_func.next_value();
+                    let slot = self.local_to_slot[local_id.0 as usize];
+                    let slot_ty = self.lir_func.slots[slot.0 as usize].ty.clone();
+                    self.lir_func.block_mut(entry_bb).insts.push(Inst::ParamRef {
+                        dst: param_val,
+                        index: param_idx as u32,
+                        ty: slot_ty,
+                    });
+                    self.lir_func.block_mut(entry_bb).insts.push(Inst::SlotStore {
+                        slot,
+                        value: param_val,
+                    });
+                }
+            }
+        }
+
         for (i, gir_block) in self.gir_func.blocks.iter().enumerate() {
             let lir_bb = self.block_map[i];
 

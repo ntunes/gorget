@@ -128,7 +128,7 @@ pub fn generate_c_inner(module: &LirModule, include_runtime: bool) -> String {
 
     // Function forward declarations
     for func in &module.functions {
-        write!(out, "{} {}(", c_type_named(&func.return_type, &struct_names), func.name).unwrap();
+        write!(out, "{} {}(", c_type_named(&func.return_type, &struct_names), c_func_name(&func.name)).unwrap();
         if func.params.is_empty() {
             write!(out, "void").unwrap();
         } else {
@@ -154,7 +154,7 @@ pub fn generate_c_inner(module: &LirModule, include_runtime: bool) -> String {
 
 fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &HashMap<u32, String>) {
     // Signature
-    write!(out, "{} {}(", c_type_named(&func.return_type, sn), func.name).unwrap();
+    write!(out, "{} {}(", c_type_named(&func.return_type, sn), c_func_name(&func.name)).unwrap();
     if func.params.is_empty() {
         write!(out, "void").unwrap();
     } else {
@@ -302,7 +302,7 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
             write!(out, "{} = NULL;", v(*dst)).unwrap();
         }
         Inst::FuncAddr { dst, func } => {
-            let name = &module.functions[func.0 as usize].name;
+            let name = c_func_name(&module.functions[func.0 as usize].name);
             write!(out, "{} = (void*)&{};", v(*dst), name).unwrap();
         }
         Inst::GlobalAddr { dst, global } => {
@@ -311,6 +311,9 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
         Inst::StrLit { dst, value } => {
             let escaped = escape_c_string(value);
             write!(out, "{} = \"{}\";", v(*dst), escaped).unwrap();
+        }
+        Inst::ParamRef { dst, index, .. } => {
+            write!(out, "{} = __p{};", v(*dst), index).unwrap();
         }
 
         // Arithmetic
@@ -451,7 +454,7 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
 
         // Calls
         Inst::Call { dst, func, args } => {
-            let fname = &module.functions[func.0 as usize].name;
+            let fname = c_func_name(&module.functions[func.0 as usize].name);
             if let Some(d) = dst {
                 write!(out, "{} = ", v(*d)).unwrap();
             }
@@ -675,6 +678,25 @@ fn c_field_name(name: &str) -> String {
     name.replace('.', "_").replace('-', "_")
 }
 
+/// C keywords and type names that cannot be used as identifiers.
+const C_RESERVED: &[&str] = &[
+    "auto", "break", "case", "char", "const", "continue", "default", "do",
+    "double", "else", "enum", "extern", "float", "for", "goto", "if",
+    "int", "long", "register", "return", "short", "signed", "sizeof",
+    "static", "struct", "switch", "typedef", "union", "unsigned", "void",
+    "volatile", "while", "inline", "restrict", "_Bool", "_Complex",
+    "_Imaginary", "bool", "true", "false",
+];
+
+/// Escape a function name that clashes with C keywords by adding a prefix.
+fn c_func_name(name: &str) -> String {
+    if C_RESERVED.contains(&name) {
+        format!("__gg_{name}")
+    } else {
+        name.to_string()
+    }
+}
+
 /// Format a float for C source.
 fn format_float(val: f64) -> String {
     if val.is_nan() {
@@ -726,6 +748,7 @@ fn infer_inst_type(inst: &Inst, module: &LirModule, _val_types: &[Option<LirType
         Inst::FuncAddr { .. } => Some(LirType::Ptr),
         Inst::GlobalAddr { .. } => Some(LirType::Ptr),
         Inst::StrLit { .. } => Some(LirType::Ptr), // simplified
+        Inst::ParamRef { ty, .. } => Some(ty.clone()),
 
         // Arithmetic — use the explicit type field.
         Inst::Add { ty, .. } | Inst::Sub { ty, .. } | Inst::Mul { ty, .. }

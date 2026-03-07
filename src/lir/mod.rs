@@ -212,6 +212,8 @@ pub enum Inst {
     GlobalAddr { dst: ValueId, global: GlobalId },
     /// String literal → materialized as Str struct (data ptr + len).
     StrLit { dst: ValueId, value: String },
+    /// Reference a function parameter by index.
+    ParamRef { dst: ValueId, index: u32, ty: LirType },
 
     // ── Arithmetic ──────────────────────────────────────────────────
     Add { dst: ValueId, ty: LirType, lhs: ValueId, rhs: ValueId, overflow: Overflow },
@@ -306,6 +308,7 @@ impl Inst {
             | Inst::FuncAddr { dst, .. }
             | Inst::GlobalAddr { dst, .. }
             | Inst::StrLit { dst, .. }
+            | Inst::ParamRef { dst, .. }
             | Inst::Add { dst, .. }
             | Inst::Sub { dst, .. }
             | Inst::Mul { dst, .. }
@@ -344,7 +347,7 @@ impl Inst {
             Inst::SlotLoad { .. } | Inst::SlotAddr { .. } => vec![],
             Inst::IConst { .. } | Inst::FConst { .. } | Inst::BoolConst { .. }
             | Inst::NullPtr { .. } | Inst::FuncAddr { .. } | Inst::GlobalAddr { .. }
-            | Inst::StrLit { .. } | Inst::Nop => vec![],
+            | Inst::StrLit { .. } | Inst::ParamRef { .. } | Inst::Nop => vec![],
 
             Inst::Add { lhs, rhs, .. }
             | Inst::Sub { lhs, rhs, .. }

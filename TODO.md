@@ -2,7 +2,7 @@
 
 ## High
 
-- **LIR: Phase 5 — expand A/B test coverage**: 36 fixtures match (7% of ~540). Named→Struct resolution done. Remaining blockers: (1) C keyword clashes (`double` function name), (2) string variable handling (printf format strings work, but Str-typed locals need attention), (3) collection methods and stdlib function calls. Next: fix C keyword escaping to unblock `functions.gg`. [updated: 2026-03-07]
+- **LIR: Phase 5 — expand A/B test coverage**: 43 fixtures match (8% of ~540). Named→Struct resolution done. ParamRef + C keyword escaping done. Remaining: ~500 CC_FAIL fixtures mostly need collection/stdlib method dispatch, string variable handling, and trait object support. Incremental gains possible by fixing specific patterns. [updated: 2026-03-07]
 
 ## Medium
 

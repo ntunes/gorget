@@ -897,7 +897,7 @@ fn subst_inst_uses(inst: &mut Inst, subst: &std::collections::HashMap<ValueId, V
         Inst::SlotLoad { .. } | Inst::SlotAddr { .. } => {}
         Inst::IConst { .. } | Inst::FConst { .. } | Inst::BoolConst { .. }
         | Inst::NullPtr { .. } | Inst::FuncAddr { .. } | Inst::GlobalAddr { .. }
-        | Inst::StrLit { .. } | Inst::Nop => {}
+        | Inst::StrLit { .. } | Inst::ParamRef { .. } | Inst::Nop => {}
         Inst::Add { lhs, rhs, .. } | Inst::Sub { lhs, rhs, .. }
         | Inst::Mul { lhs, rhs, .. } | Inst::Div { lhs, rhs, .. }
         | Inst::Rem { lhs, rhs, .. } | Inst::Mod { lhs, rhs, .. } => {

@@ -156,6 +156,7 @@ fn write_inst(f: &mut fmt::Formatter<'_>, inst: &Inst) -> fmt::Result {
         Inst::FuncAddr { dst, func } => write!(f, "{dst}: ptr = func_addr {func}"),
         Inst::GlobalAddr { dst, global } => write!(f, "{dst}: ptr = global_addr {global}"),
         Inst::StrLit { dst, value } => write!(f, "{dst}: struct.Str = str_lit {value:?}"),
+        Inst::ParamRef { dst, index, ty } => write!(f, "{dst}: {ty} = param {index}"),
 
         // Arithmetic
         Inst::Add { dst, ty, lhs, rhs, overflow } => {

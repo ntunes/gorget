@@ -418,6 +418,7 @@ fn substitute_inst_values(inst: &mut Inst, subst: &HashMap<ValueId, ValueId>) {
         | Inst::FuncAddr { .. }
         | Inst::GlobalAddr { .. }
         | Inst::StrLit { .. }
+        | Inst::ParamRef { .. }
         | Inst::Trap { .. }
         | Inst::Nop => {}
     }
