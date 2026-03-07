@@ -96,73 +96,6 @@ enum MetaControlFlow {
 /// (`type StringMap[V] = Dict[str, V]`) are expanded via a dedicated type-level rewrite.
 ///
 /// Must run **after** meta evaluation and derive expansion, but **before** name resolution.
-pub fn expand_type_aliases(module: &mut Module) {
-    // Phase 1: Collect alias definitions
-    let mut type_env: FxHashMap<String, Type> = FxHashMap::default();
-    let mut generic_aliases: FxHashMap<String, (Vec<String>, Type)> = FxHashMap::default();
-
-    for item in &module.items {
-        if let Item::TypeAlias(ta) = &item.node {
-            let param_names: Vec<String> = ta.generic_params.as_ref().map_or_else(Vec::new, |gp| {
-                gp.node.params.iter().filter_map(|p| match &p.node {
-                    GenericParam::Type { name, .. } => Some(name.node.clone()),
-                    _ => None,
-                }).collect()
-            });
-            if param_names.is_empty() {
-                type_env.insert(ta.name.node.clone(), ta.type_.node.clone());
-            } else {
-                generic_aliases.insert(ta.name.node.clone(), (param_names, ta.type_.node.clone()));
-            }
-        }
-    }
-
-    if type_env.is_empty() && generic_aliases.is_empty() {
-        return;
-    }
-
-    // Phase 2a: Fix up constructor calls for aliases whose underlying type has generic args.
-    // `IntList()` where `type IntList = Vector[int]` → `Vector[int]()`.
-    // Must run BEFORE substitute_item (which only renames identifiers without adding args).
-    {
-        let mut constructor_fixups: FxHashMap<String, (String, Vec<Spanned<Type>>)> = FxHashMap::default();
-        for (alias_name, underlying) in &type_env {
-            if let Type::Named { name, generic_args } = underlying {
-                if !generic_args.is_empty() {
-                    constructor_fixups.insert(
-                        alias_name.clone(),
-                        (name.node.clone(), generic_args.clone()),
-                    );
-                }
-            }
-        }
-        if !constructor_fixups.is_empty() {
-            for item in &mut module.items {
-                fixup_constructor_calls_in_item(&mut item.node, &constructor_fixups);
-            }
-        }
-    }
-
-    // Phase 2b: Substitute simple aliases using the existing meta substitution machinery.
-    // This handles type annotations (substitute_type) and remaining constructor identifiers.
-    if !type_env.is_empty() {
-        let empty_env = FxHashMap::default();
-        for item in &mut module.items {
-            substitute_item(&mut item.node, &empty_env, &type_env);
-        }
-    }
-
-    // Phase 2b: Expand generic aliases (requires param substitution)
-    if !generic_aliases.is_empty() {
-        for item in &mut module.items {
-            expand_generic_aliases_in_item(&mut item.node, &generic_aliases);
-        }
-    }
-
-    // Phase 3: Remove TypeAlias items (they've been fully expanded)
-    module.items.retain(|item| !matches!(&item.node, Item::TypeAlias(_)));
-}
-
 /// Fix up constructor calls where an alias maps to a generic type.
 /// E.g., `IntList()` where `type IntList = Vector[int]` → `Vector[int]()`.
 /// Uses the *original* alias name (before substitution) to identify calls to rewrite.
@@ -509,13 +442,29 @@ fn evaluate_meta_consts_impl(
     let mut env: FxHashMap<String, MetaValue> = FxHashMap::default();
     let mut type_env: FxHashMap<String, Type> = FxHashMap::default();
     let mut type_func_env: FxHashMap<String, MetaTypeFunc> = FxHashMap::default();
+    let mut generic_aliases: FxHashMap<String, (Vec<String>, Type)> = FxHashMap::default();
 
     // Phase 1: Evaluate meta consts, meta asserts, meta type aliases, and meta type functions.
+    // Also collect `type` aliases (both simple and generic) into the same type_env.
     // Scope the ctx borrow so it ends before we mutate module.items in Phase 1.5.
     {
         let ctx = MetaContext::with_source_dir(features, &module.items, source_dir.clone());
         for item in &module.items {
             process_meta_item(&item.node, &mut env, &mut type_env, &mut type_func_env, &ctx, &mut errors);
+            // Collect `type` aliases alongside `meta type` aliases
+            if let Item::TypeAlias(ta) = &item.node {
+                let param_names: Vec<String> = ta.generic_params.as_ref().map_or_else(Vec::new, |gp| {
+                    gp.node.params.iter().filter_map(|p| match &p.node {
+                        GenericParam::Type { name, .. } => Some(name.node.clone()),
+                        _ => None,
+                    }).collect()
+                });
+                if param_names.is_empty() {
+                    type_env.insert(ta.name.node.clone(), ta.type_.node.clone());
+                } else {
+                    generic_aliases.insert(ta.name.node.clone(), (param_names, ta.type_.node.clone()));
+                }
+            }
         }
     }
 
@@ -527,17 +476,47 @@ fn evaluate_meta_consts_impl(
         module.items = flatten_meta_ifs(module.items.clone(), &mut env, &mut type_env, &mut type_func_env, &ctx, &mut errors);
     }
 
+    // Phase 1.75: Fix up constructor calls for aliases whose underlying type has generic args.
+    // E.g., `IntList()` where `type IntList = Vector[int]` → `Vector[int]()`.
+    // Must run BEFORE substitute_item (which only renames identifiers without adding args).
+    {
+        let mut constructor_fixups: FxHashMap<String, (String, Vec<Spanned<Type>>)> = FxHashMap::default();
+        for (alias_name, underlying) in &type_env {
+            if let Type::Named { name, generic_args } = underlying {
+                if !generic_args.is_empty() {
+                    constructor_fixups.insert(
+                        alias_name.clone(),
+                        (name.node.clone(), generic_args.clone()),
+                    );
+                }
+            }
+        }
+        if !constructor_fixups.is_empty() {
+            for item in &mut module.items {
+                fixup_constructor_calls_in_item(&mut item.node, &constructor_fixups);
+            }
+        }
+    }
+
     // Phase 2: Substitute meta const references and type aliases throughout the AST
     for item in &mut module.items {
         substitute_item(&mut item.node, &env, &type_env);
     }
 
-    // Phase 3: Remove all meta declarations
+    // Phase 2.5: Expand generic type aliases (requires param substitution)
+    if !generic_aliases.is_empty() {
+        for item in &mut module.items {
+            expand_generic_aliases_in_item(&mut item.node, &generic_aliases);
+        }
+    }
+
+    // Phase 3: Remove all meta declarations and type aliases
     module.items.retain(|item| {
         !matches!(
             &item.node,
             Item::MetaConst(_) | Item::MetaAssert(_) | Item::MetaLog(_)
             | Item::MetaType(_) | Item::MetaTypeFunc(_) | Item::MetaIf(_)
+            | Item::TypeAlias(_)
         )
     });
 

@@ -83,10 +83,6 @@ pub fn analyze_with_source_dir(
     // Expand @derive(...) attributes into equip blocks
     derive::expand_derives(module, &mut errors);
 
-    // Expand `type` aliases: rewrite all type annotations and constructor expressions
-    // to use the underlying types, then remove the alias items from the AST.
-    meta::expand_type_aliases(module);
-
     // Validate directives
     for item in &module.items {
         if let Item::Directive(d) = &item.node {
