@@ -192,6 +192,30 @@ pub struct Function {
     /// re-read from the (re-derived) param facade. Populated by AST lowering
     /// when `with shared_param:` is used on a shared parameter.
     pub with_refresh_pairs: Vec<(LocalId, LocalId)>,
+    /// Inner spawn calls that pass a param through as a shared arg.
+    /// Each entry: `(spawn_callee_name, vec of (call_arg_index, param_index))`.
+    /// Used by the `shared_async` transform to rewrite inner spawns to pass
+    /// the `Shared[Mutex[T]]` wrapper instead of the facade value.
+    pub inner_shared_spawns: Vec<InnerSharedSpawn>,
+}
+
+/// Metadata for an inner spawn call inside a function that may need rewriting
+/// when the enclosing function becomes a shared-async variant.
+#[derive(Debug, Clone)]
+pub struct InnerSharedSpawn {
+    /// The callee being spawned (e.g., "modifier").
+    pub callee_name: String,
+    /// Callee param types (from fn_sigs).
+    pub callee_param_types: Vec<TypeId>,
+    /// Return type of the inner callee.
+    pub callee_return_type: TypeId,
+    /// Which args reference which params: (call_arg_index, param_index).
+    /// param_index is 0-based into the enclosing function's params.
+    pub shared_arg_mappings: Vec<(usize, usize)>,
+    /// Whether the callee has internal yield points (determines sync vs async variant).
+    pub callee_has_awaits: bool,
+    /// Param ownership info for the callee (for determining mutability).
+    pub callee_param_ownerships: Vec<crate::parser::ast::Ownership>,
 }
 
 /// A local variable slot.
@@ -284,6 +308,7 @@ mod tests {
             display_name: None,
             def_span: None,
             with_refresh_pairs: Vec::new(),
+            inner_shared_spawns: Vec::new(),
         });
         assert_eq!(module.functions.len(), 1);
         let f = module.find_function("main").unwrap();

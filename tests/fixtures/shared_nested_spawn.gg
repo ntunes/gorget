@@ -1,0 +1,19 @@
+# Test: nested shared spawns — inner spawn propagates shared wrapper.
+# reader() receives a shared param and spawns modifier() which also
+# takes a mutable reference to the same variable.
+
+from std.async import sleep
+
+async void modifier(int &val):
+    val = 99
+
+async void reader(int &counter):
+    Task[void] t = spawn modifier(&counter)
+    t.await()
+    print(counter)
+
+async void main():
+    shared int x = 0
+    Task[void] t = spawn reader(&x)
+    t.await()
+    print(x)

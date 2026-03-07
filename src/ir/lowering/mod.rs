@@ -910,6 +910,8 @@ pub fn lower_module(
 
     // P2.4c: Process deferred shared-async variants via GIR-to-GIR transform.
     // Source functions are already lowered into module.functions at this point.
+    // Collect inner spawn rewrites for processing after all variants are generated.
+    let mut all_inner_rewrites = Vec::new();
     for pending in std::mem::take(&mut ctx.shared.pending_variants) {
         let source_fn = module.functions.iter()
             .find(|f| f.name == pending.source_fn_name)
@@ -918,13 +920,96 @@ pub fn lower_module(
                 pending.variant_name, pending.source_fn_name
             ))
             .clone();
-        let variant = crate::ir::transforms::shared_async::inject_shared_token_management(
+        let result = crate::ir::transforms::shared_async::inject_shared_token_management(
             &source_fn,
             &pending.variant_name,
             &pending.shared_args,
             &mut ctx.type_registry,
         );
-        module.functions.push(variant);
+        module.functions.push(result.func);
+        all_inner_rewrites.extend(result.inner_rewrites);
+    }
+
+    // P2.4d: Generate wrapper functions for inner shared spawns.
+    // These are callees spawned from within a shared-async variant that need
+    // their own shared wrappers to receive the Shared[Mutex[T]] parameter.
+    for rewrite in &all_inner_rewrites {
+        // Skip if wrapper already exists
+        if module.functions.iter().any(|f| f.name == rewrite.wrapper_name) {
+            continue;
+        }
+
+        let source_fn = module.functions.iter()
+            .find(|f| f.name == rewrite.callee_name)
+            .cloned();
+
+        if let Some(source_fn) = source_fn {
+            if rewrite.callee_has_awaits {
+                // Async inner callee — use the full GIR transform
+                let inner_result = crate::ir::transforms::shared_async::inject_shared_token_management(
+                    &source_fn,
+                    &rewrite.wrapper_name,
+                    &rewrite.shared_args,
+                    &mut ctx.type_registry,
+                );
+                module.functions.push(inner_result.func);
+                // Note: we don't recurse further for simplicity.
+                // Deep nesting (3+ levels) would need iteration.
+            } else {
+                // Sync inner callee — build a token wrapper
+                use crate::ir::lowering::exprs::spawn::SharedSpawnArg;
+                use crate::ir::lowering::context::SharedLocalKind;
+                let spawn_args: Vec<SharedSpawnArg> = rewrite.shared_args.iter().map(|sa| {
+                    SharedSpawnArg {
+                        arg_index: sa.arg_index,
+                        kind: SharedLocalKind::Mutex,
+                        inner_type: sa.inner_type,
+                        wrapper_type: sa.wrapper_type,
+                        is_mutable: sa.is_mutable,
+                        decl_order: 0,
+                    }
+                }).collect();
+                let wrapper_fn = crate::ir::lowering::exprs::spawn::build_shared_token_wrapper(
+                    &mut ctx,
+                    &rewrite.wrapper_name,
+                    &rewrite.callee_name,
+                    &rewrite.callee_param_types,
+                    &spawn_args,
+                    rewrite.callee_return_type,
+                );
+                module.functions.push(wrapper_fn);
+            }
+        }
+
+        // Register the wrapper in spawn infrastructure so the C backend
+        // generates spawn/await helpers for it.
+        let wrapper_param_types: Vec<TypeId> = rewrite.callee_param_types.iter().enumerate()
+            .map(|(i, &t)| {
+                rewrite.shared_args.iter()
+                    .find(|sa| sa.arg_index == i)
+                    .map(|sa| sa.wrapper_type)
+                    .unwrap_or(t)
+            })
+            .collect();
+        ctx.fn_sigs.insert(rewrite.wrapper_name.clone(), (wrapper_param_types, rewrite.callee_return_type));
+        ctx.spawn.fn_names.insert(rewrite.wrapper_name.clone(), true);
+        let param_names: Vec<String> = (0..rewrite.callee_param_types.len())
+            .map(|i| format!("__p{i}"))
+            .collect();
+        ctx.fn_param_names.insert(rewrite.wrapper_name.clone(), param_names);
+
+        // Register task type for the wrapper
+        let ret_c = ctx.type_name_for_id(rewrite.callee_return_type)
+            .unwrap_or("int64_t")
+            .to_string();
+        let task_name = if rewrite.callee_return_type == UNIT_TYPE {
+            "Task__void".to_string()
+        } else {
+            format!("Task__{ret_c}")
+        };
+        if let Some(task_type) = ctx.type_mapper.lookup_named(&task_name) {
+            ctx.spawn.register_task_type_fn(task_type, rewrite.wrapper_name.clone());
+        }
     }
 
     // Move type_registry back to module for validation

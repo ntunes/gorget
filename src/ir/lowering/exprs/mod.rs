@@ -3,7 +3,7 @@ mod collections;
 mod methods;
 mod operators;
 mod shared;
-mod spawn;
+pub(crate) mod spawn;
 mod type_reg;
 
 pub(in crate::ir::lowering) use calls::*;
@@ -686,6 +686,48 @@ fn lower_expr_inner(
                                     }
                                 }
                             }
+                        }
+                    }
+
+                    // Detect inner shared spawn: when an arg is a param of the
+                    // current function (not a declared shared), record the mapping
+                    // so the shared_async transform can propagate the wrapper.
+                    if shared_spawn_args.is_empty() {
+                        let mut inner_mappings: Vec<(usize, usize)> = Vec::new();
+                        for (i, arg) in call_args.iter().enumerate() {
+                            if let Expr::Identifier(arg_name) = &arg.node.value.node {
+                                if let Some((local_id, _)) = ctx.lookup_local(arg_name) {
+                                    let idx = local_id.0 as usize;
+                                    // Is this a param? params are locals _1.._N
+                                    if idx >= 1 && idx <= builder.params.len() {
+                                        let param_idx = idx - 1; // 0-based param index
+                                        // Only record if the callee expects a mutable borrow
+                                        let callee_is_mut = param_ownerships.get(i)
+                                            .map_or(false, |o| matches!(o, Ownership::MutableBorrow));
+                                        if callee_is_mut {
+                                            inner_mappings.push((i, param_idx));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if !inner_mappings.is_empty() {
+                            let callee_has_awaits = ctx.shared.fn_ast_bodies.get(fn_name.as_str())
+                                .map_or(false, |func_def| {
+                                    if let crate::parser::ast::FunctionBody::Block(block) = &func_def.body {
+                                        block.stmts.iter().any(|s| super::context::stmt_has_await(&s.node))
+                                    } else {
+                                        false
+                                    }
+                                });
+                            builder.inner_shared_spawns.push(crate::ir::InnerSharedSpawn {
+                                callee_name: c_name.clone(),
+                                callee_param_types: callee_param_types.clone(),
+                                callee_return_type: fn_ret_type,
+                                shared_arg_mappings: inner_mappings,
+                                callee_has_awaits,
+                                callee_param_ownerships: param_ownerships.clone(),
+                            });
                         }
                     }
 

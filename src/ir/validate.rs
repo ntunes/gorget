@@ -894,6 +894,7 @@ mod tests {
             display_name: None,
             def_span: None,
             with_refresh_pairs: Vec::new(),
+            inner_shared_spawns: Vec::new(),
         });
 
         let errors = validate(&module);
@@ -1127,6 +1128,7 @@ mod tests {
             display_name: None,
             def_span: None,
             with_refresh_pairs: Vec::new(),
+            inner_shared_spawns: Vec::new(),
         };
         module.functions.push(func);
 
@@ -1270,6 +1272,7 @@ mod tests {
             display_name: None,
             def_span: None,
             with_refresh_pairs: Vec::new(),
+            inner_shared_spawns: Vec::new(),
         };
         module.functions.push(f);
         let errors = validate(&module);
@@ -1294,6 +1297,7 @@ mod tests {
             display_name: None,
             def_span: None,
             with_refresh_pairs: Vec::new(),
+            inner_shared_spawns: Vec::new(),
         };
         module.functions.push(f);
         let errors = validate(&module);

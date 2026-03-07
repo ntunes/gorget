@@ -66,6 +66,38 @@ pub struct PendingSharedVariant {
     pub return_type: TypeId,
 }
 
+/// Request to generate a shared wrapper for an inner callee spawned from
+/// within a shared-async variant.
+#[derive(Debug, Clone)]
+pub struct InnerSpawnRewrite {
+    /// Original spawn function name (e.g., `__gorget_spawn_modifier`).
+    pub original_spawn_fn: String,
+    /// New spawn function name (e.g., `__gorget_spawn___shared_token_modifier`).
+    pub new_spawn_fn: String,
+    /// New await function name (e.g., `__gorget_await___shared_token_modifier`).
+    pub new_await_fn: String,
+    /// The inner callee name (e.g., `modifier`).
+    pub callee_name: String,
+    /// Wrapper variant name (e.g., `__shared_token_modifier`).
+    pub wrapper_name: String,
+    /// Shared arg specs for the inner callee.
+    pub shared_args: Vec<SharedArgSpec>,
+    /// Callee param types (original, before wrapping).
+    pub callee_param_types: Vec<TypeId>,
+    /// Return type of the inner callee.
+    pub callee_return_type: TypeId,
+    /// Whether the callee has internal yield points.
+    pub callee_has_awaits: bool,
+}
+
+/// Result of `inject_shared_token_management`.
+pub struct SharedTransformResult {
+    /// The transformed function.
+    pub func: Function,
+    /// Inner spawn rewrites needed (new wrapper functions to generate).
+    pub inner_rewrites: Vec<InnerSpawnRewrite>,
+}
+
 /// Transform an already-lowered GIR function into a shared-async variant.
 ///
 /// The variant wraps shared parameters in Shared[Mutex[T]] and manages lock
@@ -76,7 +108,7 @@ pub fn inject_shared_token_management(
     variant_name: &str,
     shared_args: &[SharedArgSpec],
     type_registry: &mut TypeRegistry,
-) -> Function {
+) -> SharedTransformResult {
     let mut func = source_fn.clone();
     func.name = variant_name.to_string();
 
@@ -241,7 +273,90 @@ pub fn inject_shared_token_management(
         }
     }
 
-    func
+    // -- Step 6: Rewrite inner spawn calls that propagate shared params --
+
+    let mut inner_rewrites: Vec<InnerSpawnRewrite> = Vec::new();
+
+    for inner in &source_fn.inner_shared_spawns {
+        // Check which of the inner spawn's param mappings actually target shared params
+        let mut inner_shared_specs: Vec<SharedArgSpec> = Vec::new();
+        for &(call_arg_idx, enclosing_param_idx) in &inner.shared_arg_mappings {
+            // Is the enclosing param actually shared in this variant?
+            if let Some(sa) = shared_args.iter().find(|sa| sa.arg_index == enclosing_param_idx) {
+                inner_shared_specs.push(SharedArgSpec {
+                    arg_index: call_arg_idx,
+                    inner_type: sa.inner_type,
+                    wrapper_type: sa.wrapper_type,
+                    mutex_type: sa.mutex_type,
+                    guard_type: sa.guard_type,
+                    is_mutable: inner.callee_param_ownerships.get(call_arg_idx)
+                        .map_or(false, |o| matches!(o, crate::parser::ast::Ownership::MutableBorrow)),
+                    decl_order: 0, // single-param ordering doesn't matter
+                    inner_c_name: sa.inner_c_name.clone(),
+                });
+            }
+        }
+
+        if inner_shared_specs.is_empty() {
+            continue;
+        }
+
+        let wrapper_name = if inner.callee_has_awaits {
+            format!("__shared_async_{}", inner.callee_name)
+        } else {
+            format!("__shared_token_{}", inner.callee_name)
+        };
+        let original_spawn_fn = format!("__gorget_spawn_{}", inner.callee_name);
+        let new_spawn_fn = format!("__gorget_spawn_{wrapper_name}");
+        let original_await_fn = format!("__gorget_await_{}", inner.callee_name);
+        let new_await_fn = format!("__gorget_await_{wrapper_name}");
+
+        // Rewrite spawn/await calls in the transformed function body
+        for block in &mut func.blocks {
+            for instr in &mut block.instructions {
+                match instr {
+                    Instruction::Call { func: fname, args, dst } => {
+                        if *fname == original_spawn_fn {
+                            *fname = new_spawn_fn.clone();
+                            // Replace args: for shared positions, use the wrapper
+                            // param local instead of the facade-derived value
+                            for spec in &inner_shared_specs {
+                                let enclosing_param_idx = inner.shared_arg_mappings.iter()
+                                    .find(|(ci, _)| *ci == spec.arg_index)
+                                    .map(|(_, pi)| *pi)
+                                    .unwrap();
+                                // The enclosing param local (1-based)
+                                let param_local = LocalId((enclosing_param_idx + 1) as u32);
+                                // Replace the arg with the wrapper param
+                                if spec.arg_index < args.len() {
+                                    args[spec.arg_index] = Operand::Copy(Place::local(param_local));
+                                }
+                            }
+                            // Update dst type if needed — task type stays the same
+                            let _ = dst;
+                        } else if *fname == original_await_fn {
+                            *fname = new_await_fn.clone();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        inner_rewrites.push(InnerSpawnRewrite {
+            original_spawn_fn,
+            new_spawn_fn,
+            new_await_fn,
+            callee_name: inner.callee_name.clone(),
+            wrapper_name,
+            shared_args: inner_shared_specs,
+            callee_param_types: inner.callee_param_types.clone(),
+            callee_return_type: inner.callee_return_type,
+            callee_has_awaits: inner.callee_has_awaits,
+        });
+    }
+
+    SharedTransformResult { func, inner_rewrites }
 }
 
 /// Allocate a new local in the function and return its LocalId.
@@ -653,6 +768,7 @@ mod tests {
             display_name: Some("process".into()),
             def_span: None,
             with_refresh_pairs: Vec::new(),
+            inner_shared_spawns: Vec::new(),
         }
     }
 
@@ -679,7 +795,7 @@ mod tests {
         let source = make_test_function(&mut reg);
         let specs = make_shared_arg_spec(&mut reg);
 
-        let result = inject_shared_token_management(&source, "__shared_async_process", &specs, &mut reg);
+        let result = inject_shared_token_management(&source, "__shared_async_process", &specs, &mut reg).func;
         assert_eq!(result.name, "__shared_async_process");
     }
 
@@ -690,7 +806,7 @@ mod tests {
         let specs = make_shared_arg_spec(&mut reg);
         let wrapper_type = specs[0].wrapper_type;
 
-        let result = inject_shared_token_management(&source, "__shared_async_process", &specs, &mut reg);
+        let result = inject_shared_token_management(&source, "__shared_async_process", &specs, &mut reg).func;
 
         // param 0 should now be the wrapper type
         assert_eq!(result.params[0], wrapper_type);
@@ -707,7 +823,7 @@ mod tests {
         let orig_locals = source.locals.len();
         let specs = make_shared_arg_spec(&mut reg);
 
-        let result = inject_shared_token_management(&source, "__shared_async_process", &specs, &mut reg);
+        let result = inject_shared_token_management(&source, "__shared_async_process", &specs, &mut reg).func;
 
         // Should have 4 new locals: mutex_val, guard, guard_ptr, facade
         assert_eq!(result.locals.len(), orig_locals + 4);
@@ -719,7 +835,7 @@ mod tests {
         let source = make_test_function(&mut reg);
         let specs = make_shared_arg_spec(&mut reg);
 
-        let result = inject_shared_token_management(&source, "__shared_async_process", &specs, &mut reg);
+        let result = inject_shared_token_management(&source, "__shared_async_process", &specs, &mut reg).func;
 
         // Block 0 should start with preamble: get, lock, borrow, get_ptr (4 instructions)
         let bb0 = &result.blocks[0];
@@ -756,7 +872,7 @@ mod tests {
         let source = make_test_function(&mut reg);
         let specs = make_shared_arg_spec(&mut reg);
 
-        let result = inject_shared_token_management(&source, "__shared_async_process", &specs, &mut reg);
+        let result = inject_shared_token_management(&source, "__shared_async_process", &specs, &mut reg).func;
 
         let bb0 = &result.blocks[0];
 
@@ -788,7 +904,7 @@ mod tests {
         let source = make_test_function(&mut reg);
         let specs = make_shared_arg_spec(&mut reg);
 
-        let result = inject_shared_token_management(&source, "__shared_async_process", &specs, &mut reg);
+        let result = inject_shared_token_management(&source, "__shared_async_process", &specs, &mut reg).func;
 
         let bb0 = &result.blocks[0];
         assert!(matches!(&bb0.terminator, Some(Terminator::Return(_))));
@@ -808,7 +924,7 @@ mod tests {
         let source = make_test_function(&mut reg);
         let specs = make_shared_arg_spec(&mut reg);
 
-        let result = inject_shared_token_management(&source, "__shared_async_process", &specs, &mut reg);
+        let result = inject_shared_token_management(&source, "__shared_async_process", &specs, &mut reg).func;
 
         // The original body used LocalId(1) for counter. After remapping, all references
         // should point to the facade local instead. Verify that no instruction in the
@@ -832,7 +948,7 @@ mod tests {
         let source = make_test_function(&mut reg);
         let specs = make_shared_arg_spec(&mut reg);
 
-        let result = inject_shared_token_management(&source, "__shared_async_process", &specs, &mut reg);
+        let result = inject_shared_token_management(&source, "__shared_async_process", &specs, &mut reg).func;
 
         for (i, block) in result.blocks.iter().enumerate() {
             assert_eq!(
@@ -882,7 +998,7 @@ mod tests {
             },
         ];
 
-        let result = inject_shared_token_management(&source, "__shared_async_process", &specs, &mut reg);
+        let result = inject_shared_token_management(&source, "__shared_async_process", &specs, &mut reg).func;
 
         // Should have 8 new locals (4 per shared param)
         assert_eq!(result.locals.len(), source.locals.len() + 8);

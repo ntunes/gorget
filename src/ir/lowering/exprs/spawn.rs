@@ -467,7 +467,7 @@ pub struct SharedSpawnArg {
 /// to the guarded value (so the callee can mutate through &T).
 /// For immutable params: the wrapper gets a copy under the lock, then calls
 /// the callee with the copy (lock still held for consistency).
-pub(super) fn build_shared_token_wrapper(
+pub fn build_shared_token_wrapper(
     ctx: &mut LoweringContext,
     wrapper_name: &str,
     callee_name: &str,

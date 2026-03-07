@@ -1408,6 +1408,7 @@ mod tests {
             display_name: Some("main".into()),
             def_span: None,
             with_refresh_pairs: Vec::new(),
+            inner_shared_spawns: Vec::new(),
         };
         module.functions.push(func);
         module
@@ -1481,6 +1482,7 @@ mod tests {
             display_name: None,
             def_span: None,
             with_refresh_pairs: Vec::new(),
+            inner_shared_spawns: Vec::new(),
         };
         module.functions.push(func);
 
@@ -1512,6 +1514,7 @@ mod tests {
             display_name: None,
             def_span: None,
             with_refresh_pairs: Vec::new(),
+            inner_shared_spawns: Vec::new(),
         });
         module.functions.push(Function {
             name: "caller".into(),
@@ -1535,6 +1538,7 @@ mod tests {
             display_name: None,
             def_span: None,
             with_refresh_pairs: Vec::new(),
+            inner_shared_spawns: Vec::new(),
         });
 
         let lir = lower_module(&module);
@@ -1579,6 +1583,7 @@ mod tests {
             display_name: None,
             def_span: None,
             with_refresh_pairs: Vec::new(),
+            inner_shared_spawns: Vec::new(),
         });
 
         let lir = lower_module(&module);
@@ -1626,6 +1631,7 @@ mod tests {
             display_name: None,
             def_span: None,
             with_refresh_pairs: Vec::new(),
+            inner_shared_spawns: Vec::new(),
         });
 
         let lir = lower_module(&module);

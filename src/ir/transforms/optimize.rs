@@ -2296,6 +2296,7 @@ mod tests {
             display_name: None,
             def_span: None,
             with_refresh_pairs: Vec::new(),
+            inner_shared_spawns: Vec::new(),
         }
     }
 

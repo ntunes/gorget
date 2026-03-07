@@ -7832,6 +7832,11 @@ fn shared_with_spawned_refresh() {
 }
 
 #[test]
+fn shared_nested_spawn() {
+    run_gg("shared_nested_spawn.gg", "99\n99");
+}
+
+#[test]
 fn shared_closure_capture_error() {
     check_gg_fails("shared_closure_capture_error.gg", "cannot capture shared variable");
 }

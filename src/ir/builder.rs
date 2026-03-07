@@ -15,6 +15,8 @@ pub struct FunctionBuilder {
     pub current_span: Option<Span>,
     /// `with` refresh pairs for spawned functions: `(binding_local, param_local)`.
     pub with_refresh_pairs: Vec<(LocalId, LocalId)>,
+    /// Inner shared spawn metadata for nested spawn propagation.
+    pub inner_shared_spawns: Vec<super::InnerSharedSpawn>,
 }
 
 impl FunctionBuilder {
@@ -56,6 +58,7 @@ impl FunctionBuilder {
             current_block: BlockId(0),
             current_span: None,
             with_refresh_pairs: Vec::new(),
+            inner_shared_spawns: Vec::new(),
         }
     }
 
@@ -97,6 +100,7 @@ impl FunctionBuilder {
             display_name: None,
             def_span: None,
             with_refresh_pairs: self.with_refresh_pairs,
+            inner_shared_spawns: self.inner_shared_spawns,
         }
     }
 
