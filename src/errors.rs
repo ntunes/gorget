@@ -209,7 +209,7 @@ impl ErrorReporter {
                         .with_message("token released at this await — value may have changed"),
                 );
             }
-            notes.push("re-read the shared variable after the await to get the current value".to_string());
+            notes.push(format!("re-read `{shared_name}` after the await, or use `with {shared_name}:` to auto-refresh across await points"));
         }
 
         let mut diag = diagnostic::Diagnostic::warning()
