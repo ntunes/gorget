@@ -74,6 +74,9 @@ struct SsaBuilder<'a> {
     /// Track which blocks we've sealed (all predecessors processed).
     /// For simplicity, we process in RPO order and seal blocks lazily.
     incomplete_phis: HashMap<(BlockId, SlotId), ValueId>,
+    /// Direct value substitution map: old ValueId → reaching ValueId.
+    /// Accumulated during process_block for every eliminated SlotLoad.
+    value_subst: HashMap<ValueId, ValueId>,
 }
 
 impl<'a> SsaBuilder<'a> {
@@ -89,6 +92,7 @@ impl<'a> SsaBuilder<'a> {
             current_def: HashMap::new(),
             block_params: HashMap::new(),
             incomplete_phis: HashMap::new(),
+            value_subst: HashMap::new(),
         }
     }
 
@@ -118,30 +122,23 @@ impl<'a> SsaBuilder<'a> {
         for inst in &insts {
             match inst {
                 Inst::SlotStore { slot, value } if self.promotable.contains(slot) => {
-                    // Record this as the current definition.
-                    self.current_def.insert((bb, *slot), *value);
+                    // Resolve through substitution chain so current_def always
+                    // holds the canonical (non-eliminated) value.
+                    let resolved = self.resolve_value(*value);
+                    self.current_def.insert((bb, *slot), resolved);
                     // Don't emit the SlotStore — it's promoted.
                 }
                 Inst::SlotLoad { dst, slot, .. } if self.promotable.contains(slot) => {
                     // Replace with the reaching definition.
                     let reaching = self.read_variable(*slot, bb);
-                    // Don't emit the SlotLoad — replace all uses of dst with reaching.
-                    // We'll do a value substitution pass instead.
+                    // Update current def so subsequent loads see the same value.
                     self.current_def.insert((bb, *slot), reaching);
-                    // Record the mapping for substitution.
+                    // Record the substitution: all uses of dst should become reaching.
                     if reaching != *dst {
-                        // We need to rewrite uses of dst to reaching.
-                        // For now, just alias: emit nothing, and do a value rename pass.
-                        self.current_def.insert((bb, *slot), reaching);
-                        // Store the alias mapping.
-                        // Actually, the simplest approach: emit a "copy" by just
-                        // recording that dst = reaching, and do a global rename.
-                        // But LIR doesn't have a copy instruction. Instead, we need
-                        // to patch all uses of dst to reaching.
-                        //
-                        // For now, store the mapping and do a substitution pass.
-                        self.block_params.insert((bb, *slot), *dst);
+                        self.value_subst.insert(*dst, reaching);
                     }
+                    // Also keep block_params for the last load (used by patch_terminators).
+                    self.block_params.insert((bb, *slot), *dst);
                 }
                 other => {
                     // For non-promoted instructions, check if they store to a promoted slot
@@ -152,6 +149,17 @@ impl<'a> SsaBuilder<'a> {
         }
 
         self.func.blocks[bb.0 as usize].insts = new_insts;
+    }
+
+    /// Chase value_subst chain to find the canonical (non-eliminated) value.
+    fn resolve_value(&self, mut val: ValueId) -> ValueId {
+        let mut steps = 0;
+        while let Some(&target) = self.value_subst.get(&val) {
+            val = target;
+            steps += 1;
+            if steps > 100 { break; } // safety: prevent infinite loops
+        }
+        val
     }
 
     /// Read the current definition of a slot at block entry.
@@ -217,31 +225,25 @@ impl<'a> SsaBuilder<'a> {
     /// for SlotStore; SlotLoad is also removed there).
     fn remove_promoted_instructions(&mut self) {
         // The instructions were already filtered during process_block.
-        // But we also need to do a value substitution pass: replace all uses of
-        // SlotLoad dst values with their reaching definitions.
-
-        // Build the substitution map: old ValueId → new ValueId.
-        let mut subst: HashMap<ValueId, ValueId> = HashMap::new();
-        for (&(bb, slot), &param_val) in &self.block_params {
-            // param_val was the original SlotLoad dst. Replace it with the
-            // reaching definition from current_def.
-            if let Some(&reaching) = self.current_def.get(&(bb, slot)) {
-                if reaching != param_val {
-                    subst.insert(param_val, reaching);
-                }
-            }
+        // Apply value substitutions: replace all uses of eliminated SlotLoad
+        // dst values with their reaching definitions.
+        if self.value_subst.is_empty() {
+            return;
         }
 
-        if subst.is_empty() {
-            return;
+        // Resolve any transitive chains in the substitution map.
+        let keys: Vec<ValueId> = self.value_subst.keys().copied().collect();
+        for k in keys {
+            let resolved = self.resolve_value(k);
+            self.value_subst.insert(k, resolved);
         }
 
         // Apply substitutions across all instructions and terminators.
         for block in &mut self.func.blocks {
             for inst in &mut block.insts {
-                substitute_inst_values(inst, &subst);
+                substitute_inst_values(inst, &self.value_subst);
             }
-            substitute_term_values(&mut block.terminator, &subst);
+            substitute_term_values(&mut block.terminator, &self.value_subst);
         }
     }
 

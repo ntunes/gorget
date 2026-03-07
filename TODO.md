@@ -2,7 +2,7 @@
 
 ## High
 
-- **LIR: Phase 5 — A/B test c_lir against current backend**: Phases 1-4 done (lower, SSA, c_lir, optimizer with 7 passes + fixpoint). LIR validation: 100% of valid fixtures pass (483/483). 32 expected-error fixtures correctly fail at compilation. Next: compare c_lir output against current backend on a subset of fixtures, identify codegen gaps. [updated: 2026-03-07]
+- **LIR: Phase 5 — expand A/B test coverage**: 32 fixtures match (up from 21). SSA transitive substitution bug fixed (multiple SlotLoads from same slot left dangling ValueIds). Remaining blockers: (1) Str struct vs void* type for string variables, (2) Named type resolution (structs, enums map to void*), (3) C keyword clashes (e.g., function named `double`). Next: fix Named→Struct mapping in `map_gir_type` to unlock struct-using fixtures. [updated: 2026-03-07]
 
 ## Medium
 
@@ -31,7 +31,7 @@
 
 - **Private type in public function signature check**: Public functions whose parameters or return types reference a private type should produce a compile error. Requires walking function signature types recursively (including generics like `Vector[PrivateType]`). Private import enforcement (import-time check) is done; this is the deeper analysis for API surface leakage. [added: 2026-03-07]
 
-- **Module namespaces Phase 6 — lib prefix cleanup**: Compiler phases 1–5 are all done. Phase 6: remove manual C-style prefixes from all 22 library files (e.g., `csv_parse_field` → `parse_field` in `lib/gg/csv.gg`). Add `private` to internal helpers. Update all import statements and test fixtures. Start with smallest modules (gg.uuid, gg.log), validate pattern, then tackle yaml.gg. [added: 2026-02-26, updated: 2026-03-04]
+- **Module namespaces Phase 6 — remaining prefix cleanup**: File-based modules done (uuid, log, csv, cli, gfx, sqlite, json, xml, http, influx, yaml, toml, ssh, tensor). Remaining: synthetic stdlib modules in `src/stdlib.rs` (crypto, bytes, path etc.) still use `crypto_sha256()`, `bytes_from_str()` style. Lower priority since these are deeply wired into codegen dispatch tables. [added: 2026-02-26, updated: 2026-03-07]
 
 
 - **`std.alloc`: per-thread scratch arenas**: `thread_scratch()` returns a thread-local `Arena` reset automatically between calls (double-buffered to allow two scratch frames per thread concurrently). Pattern from stb/handmade: zero-overhead scratch without explicit `with` blocks. [added: 2026-03-03]
@@ -73,7 +73,7 @@
 
 
 
-- **Inconsistent function naming across synthetic stdlib modules**: Modules use different prefixing: `crypto_sha256()`, `bytes_from_str()`, `path_join()`, but HTTP uses bare `get()`/`post()`. Crypto has `crypto_random_bytes()` while bytes has `random_bytes()`. Adopt consistent `module_verb()` convention. (`stdlib.rs`) [added: 2026-02-16]
+- **Inconsistent function naming across synthetic stdlib modules**: File-based modules now use bare names (gg.http `get()`/`post()`, gg.yaml `parse()`/`stringify()`). Synthetic modules still use prefixed names: `crypto_sha256()`, `bytes_from_str()`, `path_join()`. Aligning these requires updating codegen dispatch tables in stdlib.rs — more invasive than file-based renames. [added: 2026-02-16, updated: 2026-03-07]
 
 
 

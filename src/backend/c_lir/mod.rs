@@ -302,8 +302,8 @@ fn emit_inst(out: &mut String, inst: &Inst, module: &LirModule, sn: &HashMap<u32
             write!(out, "{} = &__lir_g{};", v(*dst), global.0).unwrap();
         }
         Inst::StrLit { dst, value } => {
-            // Emit as a string constant. TODO: proper Str struct construction.
-            write!(out, "{} = \"{}\";", v(*dst), escape_c_string(value)).unwrap();
+            let escaped = escape_c_string(value);
+            write!(out, "{} = \"{}\";", v(*dst), escaped).unwrap();
         }
 
         // Arithmetic

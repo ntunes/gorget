@@ -117,3 +117,14 @@ fn ab_test(fixture: &str) {
 #[test] fn lir_ab_meta_enum_ordinal() { ab_test("meta_enum_ordinal.gg"); }
 #[test] fn lir_ab_meta_fields() { ab_test("meta_fields.gg"); }
 #[test] fn lir_ab_meta_implements() { ab_test("meta_implements.gg"); }
+#[test] fn lir_ab_bitwise_ops() { ab_test("bitwise_ops.gg"); }
+#[test] fn lir_ab_block_expr() { ab_test("block_expr.gg"); }
+#[test] fn lir_ab_break_nested() { ab_test("break_nested.gg"); }
+#[test] fn lir_ab_control_flow() { ab_test("control_flow.gg"); }
+#[test] fn lir_ab_extern_ffi() { ab_test("extern_ffi.gg"); }
+#[test] fn lir_ab_for_else() { ab_test("for_else.gg"); }
+#[test] fn lir_ab_named_scope_basic() { ab_test("named_scope_basic.gg"); }
+#[test] fn lir_ab_strings() { ab_test("strings.gg"); }
+#[test] fn lir_ab_type_alias_usage() { ab_test("type_alias_usage.gg"); }
+#[test] fn lir_ab_type_casts() { ab_test("type_casts.gg"); }
+#[test] fn lir_ab_use_overflow_wrap() { ab_test("use_overflow_wrap.gg"); }

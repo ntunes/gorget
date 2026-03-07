@@ -1,5 +1,11 @@
 # DONE
 
+- [2026-03-07] **fix: SSA transitive substitution bug + LIR A/B expansion to 32 fixtures**: Fixed SSA pass dropping multiple SlotLoad substitutions for the same slot (block_params HashMap overwrote earlier entries). Added `value_subst` map to accumulate all eliminated SlotLoad→reaching mappings, with transitive chain resolution. Expanded A/B test coverage from 21→32 fixtures (52% increase). New: bitwise_ops, block_expr, break_nested, control_flow, extern_ffi, for_else, named_scope_basic, strings, type_alias_usage, type_casts, use_overflow_wrap.
+
+- [2026-03-07] **feat: LIR Phase 5 — A/B test infrastructure**: Created tests/lir_ab.rs with 21 fixtures verified through both GIR and LIR C backends. Fixed c_lir: skip std header redeclarations, skip empty-param variadic externs, skip void-typed locals. Baseline: 21/521 fixtures match (4%).
+
+- [2026-03-07] **feat: module namespace cleanup Phase 6 — all file-based modules**: Removed C-style prefixes from 14 file-based library modules (gg.uuid, gg.log, gg.csv, gg.cli, gg.gfx, gg.sqlite, gg.json, gg.xml, gg.http, gg.influx, gg.yaml, gg.toml, gg.ssh, gg.tensor). Made internal helpers private. Updated all test fixtures, examples, stdlib unit tests, and docs. Total: ~50 functions renamed, ~30 helpers made private.
+
 - [2026-03-07] **feat: private visibility enforcement for imports**: `from X import Y` where Y is `private` now produces clear "cannot import private item 'Y' from module 'X'" compile error. Added `visibility` field to TypeAlias and NewtypeDef AST nodes. Private enum glob imports (`from X import Enum.*`) also caught. 4 new unit tests.
 
 - [2026-03-07] **fix: type alias transparency**: `type Count = int` and `type IntList = Vector[int]` now work as transparent aliases — the alias name is interchangeable with the underlying type in declarations, function signatures, and expressions. Implemented as AST-level rewriting in `meta::expand_type_aliases()`: collects aliases, rewrites constructor calls (e.g., `IntList()` → `Vector[int]()`), substitutes type annotations via `substitute_item`, handles generic aliases (e.g., `type StringMap[V] = Dict[str, V]`), then removes alias items. Function type aliases (`type Op = int(int, int)`) also supported. 4 new integration test fixtures.
