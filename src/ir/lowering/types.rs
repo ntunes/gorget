@@ -38,46 +38,43 @@ impl TypeMapper {
     }
 
     /// Map an AST `Type` to a GIR `TypeId`.
+    ///
+    /// Returns `UNIT_TYPE` for types not yet registered. Use `try_map_ast_type`
+    /// when you need to distinguish "genuinely void" from "unknown type."
     pub fn map_ast_type(&self, ty: &Type) -> TypeId {
+        self.try_map_ast_type(ty).unwrap_or(UNIT_TYPE)
+    }
+
+    /// Try to map an AST `Type` to a GIR `TypeId`.
+    ///
+    /// Returns `None` when the type is not registered (not yet monomorphized,
+    /// unresolved generic, function pointer, etc.). Unlike `map_ast_type`, this
+    /// lets callers distinguish "genuinely void" from "unknown type."
+    pub fn try_map_ast_type(&self, ty: &Type) -> Option<TypeId> {
         match ty {
-            Type::Primitive(prim) => self.map_primitive(prim),
+            Type::Primitive(prim) => Some(self.map_primitive(prim)),
             Type::Inferred => panic!("BUG: Inferred type should be resolved before GIR lowering"),
             Type::Named { name, generic_args } => {
                 if !generic_args.is_empty() {
-                    // Generic type — look up monomorphized name
                     let mangled = mangle_generic_name(&name.node, generic_args);
-                    if let Some(&id) = self.named_types.get(&mangled) {
-                        return id;
-                    }
-                    return UNIT_TYPE; // not yet registered (P2.3 handles this)
+                    return self.named_types.get(&mangled).copied();
                 }
-                // Non-generic named type
-                if let Some(&id) = self.named_types.get(name.node.as_str()) {
-                    return id;
-                }
-                UNIT_TYPE // not yet registered
+                self.named_types.get(name.node.as_str()).copied()
             }
             Type::Tuple(elems) => {
                 if elems.is_empty() {
-                    return UNIT_TYPE;
+                    return Some(UNIT_TYPE);
                 }
-                // Look up anonymous tuple type by mangled name
                 let mangled = mangle_tuple_name(elems);
-                if let Some(&id) = self.named_types.get(&mangled) {
-                    return id;
-                }
-                UNIT_TYPE // not yet registered
+                self.named_types.get(&mangled).copied()
             }
-            Type::Function { return_type, params, .. } => {
-                // Function pointer type
-                let ret = self.map_ast_type(&return_type.node);
-                let param_types: Vec<TypeId> = params.iter()
-                    .map(|p| self.map_ast_type(&p.node))
-                    .collect();
-                let _ = (ret, param_types);
-                UNIT_TYPE
+            Type::Function { .. } => {
+                // Immutable path can't register FnPtr types — return None.
+                // Callers needing function pointer types should use map_ast_type_mut.
+                None
             }
-            _ => UNIT_TYPE,
+            Type::SelfType => None,
+            Type::Array { .. } | Type::Slice { .. } => None,
         }
     }
 
@@ -831,6 +828,38 @@ mod tests {
             generic_args: vec![],
         };
         assert_eq!(mapper.map_ast_type(&ty), UNIT_TYPE);
+    }
+
+    #[test]
+    fn try_map_distinguishes_unknown_from_void() {
+        let mut reg = TypeRegistry::new();
+        let mapper = TypeMapper::new(&mut reg);
+
+        // Void type → Some(UNIT_TYPE)
+        let void_ty = Type::Primitive(PrimitiveType::Void);
+        assert_eq!(mapper.try_map_ast_type(&void_ty), Some(UNIT_TYPE));
+
+        // Empty tuple → Some(UNIT_TYPE)
+        let empty_tuple = Type::Tuple(vec![]);
+        assert_eq!(mapper.try_map_ast_type(&empty_tuple), Some(UNIT_TYPE));
+
+        // Unknown named type → None (NOT Some(UNIT_TYPE))
+        let unknown = Type::Named {
+            name: spanned("Unknown".to_string()),
+            generic_args: vec![],
+        };
+        assert_eq!(mapper.try_map_ast_type(&unknown), None);
+
+        // Unknown generic → None
+        let unknown_generic = Type::Named {
+            name: spanned("Vector".to_string()),
+            generic_args: vec![spanned(Type::Primitive(PrimitiveType::Int))],
+        };
+        assert_eq!(mapper.try_map_ast_type(&unknown_generic), None);
+
+        // Known primitive → Some
+        let int_ty = Type::Primitive(PrimitiveType::Int);
+        assert_eq!(mapper.try_map_ast_type(&int_ty), Some(I64_TYPE));
     }
 
     #[test]

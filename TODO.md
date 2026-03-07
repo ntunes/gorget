@@ -9,7 +9,7 @@
 
 ## Medium
 
-- **IR: Add error propagation to type mapping**: `map_ast_type()` silently returns `UNIT_TYPE` for unknown types instead of reporting errors. This masks lowering bugs. Change to `Result<TypeId, TypeError>` or at minimum emit diagnostics. [added: 2026-03-07, from: IR code review]
+- **IR: Migrate key call sites to `try_map_ast_type`**: Phase 1 done — `try_map_ast_type() -> Option<TypeId>` added alongside existing `map_ast_type()`. Callers can now distinguish "genuinely void" from "unknown type." Remaining: convert critical call sites (function params, return types) to use `try_map_ast_type` with diagnostics. Low priority — existing pipeline ordering prevents bugs in practice. [updated: 2026-03-07]
 
 - **IR: Enhance `validate.rs` further**: Phase 1 done (StructInit/EnumInit field counts, Drop on non-droppable, local TypeId validity, drop metadata consistency). Remaining: use-after-drop detection (requires dataflow analysis), return type _0 consistency check, unreachable block detection (overlap with dead block elimination pass). [updated: 2026-03-07]
 
