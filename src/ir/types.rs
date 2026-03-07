@@ -100,6 +100,28 @@ pub struct EnumVariant {
 }
 
 /// Layout and ownership metadata for a type.
+///
+/// # Drop contract
+///
+/// `DropElaborator` (in `ir/lowering/drops.rs`) decides WHEN to drop based on:
+/// - `copy_semantics == Move` → register for drop at scope exit
+/// - `drop_strategy != None` → also register (even for Copy types, e.g., ref-counted)
+///
+/// The C backend decides HOW to drop by looking up `drop_strategy` via
+/// `lookup_drop_strategy()` when it encounters a `Drop`/`DropIfAlive` instruction.
+///
+/// # Valid combinations
+///
+/// | CopySemantics | DropStrategy    | Use case                               |
+/// |---------------|-----------------|----------------------------------------|
+/// | Copy          | None            | Primitives, plain value structs        |
+/// | Copy          | Trivial(fn)     | Ref-counted types (Shared, Weak, Channel) — Copy at GIR level, decrement on drop |
+/// | Move          | None            | Ownership-tracked handles (Thread, Process) — no heap to free, move semantics prevent duplication |
+/// | Move          | Trivial(fn)     | Standard owned types (String, Vector, Guard) — single free call |
+/// | Move          | Recursive       | Structs containing droppable fields — auto-upgraded by lowering |
+/// | Move          | Custom(fn)      | User-defined Drop::drop — runs custom cleanup then field drops |
+///
+/// **Suspicious** (flagged by validator): Copy + Recursive, Copy + Custom
 #[derive(Debug, Clone)]
 pub struct TypeMetadata {
     pub size: Option<u64>,
@@ -119,23 +141,32 @@ impl Default for TypeMetadata {
     }
 }
 
+/// Determines HOW a type is cleaned up when dropped.
+///
+/// The `DropElaborator` emits `Drop { place }` instructions; the backend
+/// looks up the strategy from the `TypeRegistry` to generate actual cleanup code.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DropStrategy {
-    /// No cleanup needed (primitives, Copy structs).
+    /// No cleanup needed (primitives, Copy structs, ownership-only handles).
     None,
-    /// Single free function call (e.g., "gorget_string_free").
+    /// Single free function call (e.g., "gorget_string_free", "gorget_array_free").
+    /// Backend emits: `fn_name(&place);`
     Trivial(String),
     /// Field-by-field drop (compiler-generated glue).
+    /// Auto-assigned by lowering to structs containing Move/droppable fields.
+    /// Backend walks fields and emits per-field cleanup.
     Recursive,
-    /// User-defined Drop::drop (function name).
+    /// User-defined `Drop::drop` implementation.
+    /// Backend calls the custom function, then drops fields recursively.
     Custom(String),
 }
 
+/// Determines whether a value can be bitwise-copied or requires ownership transfer.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CopySemantics {
-    /// Bitwise copy (primitives, `str`, Copy structs).
+    /// Bitwise copy (primitives, `str`, Copy structs, ref-counted types).
     Copy,
-    /// Ownership transfer.
+    /// Ownership transfer — value cannot be used after move.
     Move,
 }
 

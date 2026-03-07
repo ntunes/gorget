@@ -13,7 +13,7 @@
 
 - **IR: Enhance `validate.rs` further**: Phase 1 done (StructInit/EnumInit field counts, Drop on non-droppable, local TypeId validity, drop metadata consistency). Remaining: use-after-drop detection (requires dataflow analysis), return type _0 consistency check, unreachable block detection (overlap with dead block elimination pass). [updated: 2026-03-07]
 
-- **IR: Fix `DropStrategy`/`DropElaborator` coordination**: `DropElaborator` in `drops.rs` doesn't reference `DropStrategy` from the type metadata in `types.rs`. No clear contract for when field-level vs type-level drop triggers. [added: 2026-03-07, from: IR code review]
+- **IR: Embed `DropStrategy` in Drop instruction**: Currently the backend reconstructs the strategy via `lookup_drop_strategy()`. Embedding it in `Instruction::Drop { place, strategy }` would make the instruction self-contained. ~20 match sites to update. Contract is now documented (types.rs, drops.rs) and validated (validate.rs). Low priority. [updated: 2026-03-07]
 
 - **IR: Continue `generics/` split**: Phase 1 done (substitute.rs extracted, 331 lines). `mod.rs` still 1,236 lines. Remaining: monomorphization helpers (~188 lines) could move to `monomorphize.rs`, but they're tightly coupled to GenericCollector::emit(). Consider done unless mod.rs grows. [updated: 2026-03-07, from: IR code review]
 

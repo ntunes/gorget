@@ -1,5 +1,7 @@
 # DONE
 
+- [2026-03-07] **IR: Document `DropStrategy`/`DropElaborator` contract**: Added comprehensive doc comments to `TypeMetadata` (valid CopySemantics × DropStrategy combinations table), `DropStrategy` (backend behavior per variant), `CopySemantics` (semantics), and `DropElaborator` (registration rules, contract with backend). No code changes — documentation-only fix for the "no clear contract" concern.
+
 - [2026-03-07] **IR: Add `try_map_ast_type` for type mapping error propagation**: Added `TypeMapper::try_map_ast_type() -> Option<TypeId>` that returns `None` for unresolved types instead of silently returning `UNIT_TYPE`. Rewrote `map_ast_type` as `try_map_ast_type().unwrap_or(UNIT_TYPE)` for backward compat. New callers can now distinguish "genuinely void" from "unknown type." 738 unit tests pass.
 
 - [2026-03-07] **IR: Enhance `validate.rs` with semantic checks**: Added 6 new validation checks beyond structural well-formedness: (1) StructInit field count vs TypeDef, (2) EnumInit variant existence + field count, (3) Drop/DropIfAlive on non-droppable types, (4) Local TypeId validity, (5) Drop metadata consistency (flags Copy+Recursive and Copy+Custom as suspicious), (6) checks wired into `validate()` which panics during lowering. Added 7 new unit tests (12 total). 737 unit + 557 integration tests pass — zero false positives on real programs.

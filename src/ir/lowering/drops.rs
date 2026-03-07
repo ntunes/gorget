@@ -9,6 +9,16 @@ use crate::ir::instructions::Place;
 use crate::ir::types::*;
 
 /// Tracks owned locals and emits drop instructions at scope boundaries.
+///
+/// **Contract with the backend**: This elaborator decides WHEN to drop by
+/// emitting `Drop { place }` / `DropIfAlive { place }` instructions.
+/// The backend decides HOW to drop by looking up the type's `DropStrategy`
+/// from the `TypeRegistry`. See `TypeMetadata` docs for valid combinations.
+///
+/// Registration rules:
+/// - `register_local`: registers Move-type locals + any type with non-None drop
+/// - `register_param`: registers Copy-type params with non-None drop (ref-counted)
+/// - Move-type params are NOT registered here (handled by body-level mechanisms)
 pub struct DropElaborator {
     /// Stack of drop scopes, innermost last.
     scopes: Vec<DropScope>,
