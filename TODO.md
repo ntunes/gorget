@@ -2,12 +2,13 @@
 
 ## High
 
-- **IR refactor: Continue `exprs/` split — Phase 4**: Phases 1-3 done (8 files: mod.rs 2,515, methods.rs 2,027, calls.rs 915, spawn.rs 671, collections.rs 506, operators.rs 374, shared.rs 259, type_reg.rs 228). `mod.rs` still has control-flow exprs (if/match/try/block ~300 lines), struct literals (~270 lines), field access (~100 lines), string interpolation (~30 lines). Further splitting has diminishing returns — these are tightly coupled to `lower_expr_inner`. Consider done unless mod.rs grows again. [updated: 2026-03-07, from: IR code review]
-
-- **IR refactor: Continue `LoweringContext` decomposition (Phase 3)**: Phases 1-2 done (GenericState, SpawnState, SharedVarState extracted; SharedLocalInfo named struct replaces 5-tuple). 24 fields remain. Remaining candidates: closure tracking (closure_info, mut_capture_locals → ClosureState), function metadata (fn_sigs [116 uses], fn_defaults, fn_param_names, fn_param_ownerships → FnMetadata), globals (global_names, global_type_names → GlobalState). fn_sigs has 116 uses — consider whether the churn is justified vs readability gain. [updated: 2026-03-07, from: IR code review]
-
+(No high-priority items at this time.)
 
 ## Medium
+
+- **IR refactor: Continue `exprs/` split — Phase 4**: Phases 1-3 done (8 files, mod.rs 2,515 lines). Remaining: control-flow exprs, struct literals, field access — tightly coupled to `lower_expr_inner`. Diminishing returns. Revisit if mod.rs grows again. [updated: 2026-03-07]
+
+- **IR refactor: Continue `LoweringContext` decomposition (Phase 3)**: Phases 1-2 done. 24 fields remain. fn_sigs has 116 uses — high churn for modest readability gain. Diminishing returns. [updated: 2026-03-07]
 
 - **IR: Migrate key call sites to `try_map_ast_type`**: Phase 1 done — `try_map_ast_type() -> Option<TypeId>` added alongside existing `map_ast_type()`. Callers can now distinguish "genuinely void" from "unknown type." Remaining: convert critical call sites (function params, return types) to use `try_map_ast_type` with diagnostics. Low priority — existing pipeline ordering prevents bugs in practice. [updated: 2026-03-07]
 
