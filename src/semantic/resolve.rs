@@ -134,9 +134,30 @@ pub fn collect_top_level(
     }
     collect_top_level_inner(module, scopes, types, errors, &mut ctx);
 
+    // Second pass: handle glob imports (`from X import EnumName.*`).
+    // All enums are now defined in scope, so we can look them up and register
+    // their variants as bare names (shadowing any prelude variant with the same name).
+    for item in &module.items {
+        if let Item::Import(ImportStmt::From { glob_types, .. }) = &item.node {
+            for glob_name in glob_types {
+                // Register the type itself as Import (in case it wasn't in `names`)
+                let _ = scopes.define(glob_name.node.clone(), DefKind::Import, glob_name.span);
+                // Find the enum's variant info and bring each variant into scope
+                if let Some(enum_def_id) = scopes.lookup(&glob_name.node) {
+                    if let Some(variant_info) = ctx.enum_variants.get(&enum_def_id).cloned() {
+                        for (vname, _vdef_id) in &variant_info.variants {
+                            let _ = scopes.define(vname.clone(), DefKind::Variant, glob_name.span);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Validate: detect imports of private items.
-    // After all FileModules have exported their public names, any remaining Import
-    // placeholder whose name matches a module's private_names set is an error.
+    // After all FileModules have exported their public names and glob imports ran,
+    // any remaining Import placeholder whose name matches a module's private_names
+    // set is a "cannot import private item" error.
     if !ctx.module_private_names.is_empty() {
         let global_names = scopes.names_in_current_scope();
         for (name, def_id) in &global_names {
@@ -153,26 +174,6 @@ pub fn collect_top_level(
                         },
                         span: def.span,
                     });
-                }
-            }
-        }
-    }
-
-    // Second pass: handle glob imports (`from X import EnumName.*`).
-    // All enums are now defined in scope, so we can look them up and register
-    // their variants as bare names (shadowing any prelude variant with the same name).
-    for item in &module.items {
-        if let Item::Import(ImportStmt::From { glob_types, .. }) = &item.node {
-            for glob_name in glob_types {
-                // Register the type itself as Import (in case it wasn't in `names`)
-                let _ = scopes.define(glob_name.node.clone(), DefKind::Import, glob_name.span);
-                // Find the enum's variant info and bring each variant into scope
-                if let Some(enum_def_id) = scopes.lookup(&glob_name.node) {
-                    if let Some(variant_info) = ctx.enum_variants.get(&enum_def_id).cloned() {
-                        for (vname, _vdef_id) in &variant_info.variants {
-                            let _ = scopes.define(vname.clone(), DefKind::Variant, glob_name.span);
-                        }
-                    }
                 }
             }
         }
@@ -1967,5 +1968,55 @@ struct Point:
             "expected PrivateImport error for 'Secret', got: {:?}",
             errors
         );
+    }
+
+    #[test]
+    fn private_enum_glob_import_error() {
+        use crate::span::Span;
+        let dummy = Span::new(0, 0);
+
+        let mut parser = Parser::new("private enum Status:\n    Active\n    Inactive\n");
+        let inner_module = parser.parse_module();
+        assert!(parser.errors.is_empty());
+
+        // `from mymod import Status.*` — glob import of private enum
+        let import_item = Spanned {
+            node: Item::Import(ImportStmt::From {
+                path: vec![Spanned { node: "mymod".to_string(), span: dummy }],
+                names: vec![],
+                glob_types: vec![Spanned { node: "Status".to_string(), span: Span::new(300, 306) }],
+                span: dummy,
+            }),
+            span: dummy,
+        };
+        let module_item = Spanned {
+            node: Item::Module {
+                path: vec!["mymod".to_string()],
+                items: inner_module.items,
+            },
+            span: dummy,
+        };
+
+        let module = Module {
+            items: vec![import_item, module_item],
+            span: dummy,
+        };
+
+        let mut scopes = ScopeTable::new();
+        let mut types = TypeTable::new();
+        let mut errors = Vec::new();
+        let _ctx = collect_top_level(&module, &mut scopes, &mut types, &mut errors);
+
+        assert!(
+            errors.iter().any(|e| matches!(
+                &e.kind,
+                SemanticErrorKind::PrivateImport { name, .. } if name == "Status"
+            )),
+            "expected PrivateImport error for 'Status' glob import, got: {:?}",
+            errors
+        );
+        // Variants should NOT be in scope (enum is private)
+        assert!(scopes.lookup("Active").is_none(), "Active variant should not be imported from private enum");
+        assert!(scopes.lookup("Inactive").is_none(), "Inactive variant should not be imported from private enum");
     }
 }
