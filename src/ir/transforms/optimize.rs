@@ -9,8 +9,38 @@ use crate::ir::{BasicBlock, Function};
 use crate::ir::instructions::{BinOp, CmpOp, Constant, Instruction, Operand, Place, Projection, Terminator, UnOp};
 use crate::ir::types::{BlockId, LocalId, TypeId};
 
+/// Optimization statistics for a module.
+#[derive(Debug, Default)]
+pub struct OptStats {
+    pub blocks_before: usize,
+    pub blocks_after: usize,
+    pub insts_before: usize,
+    pub insts_after: usize,
+    pub locals_before: usize,
+    pub locals_after: usize,
+}
+
+impl OptStats {
+    pub fn blocks_eliminated(&self) -> usize { self.blocks_before.saturating_sub(self.blocks_after) }
+    pub fn insts_eliminated(&self) -> usize { self.insts_before.saturating_sub(self.insts_after) }
+    pub fn locals_eliminated(&self) -> usize { self.locals_before.saturating_sub(self.locals_after) }
+}
+
+fn count_module(module: &crate::ir::Module) -> (usize, usize, usize) {
+    let mut blocks = 0;
+    let mut insts = 0;
+    let mut locals = 0;
+    for func in &module.functions {
+        blocks += func.blocks.len();
+        insts += func.blocks.iter().map(|b| b.instructions.len()).sum::<usize>();
+        locals += func.locals.len();
+    }
+    (blocks, insts, locals)
+}
+
 /// Run all optimization passes on every function in the module.
-pub fn optimize_module(module: &mut crate::ir::Module) {
+pub fn optimize_module(module: &mut crate::ir::Module) -> OptStats {
+    let (b0, i0, l0) = count_module(module);
     for func in &mut module.functions {
         // Phase 1: simplify values
         propagate_constants(func);
@@ -35,6 +65,12 @@ pub fn optimize_module(module: &mut crate::ir::Module) {
         merge_blocks(func);
         eliminate_dead_blocks(func);
         eliminate_unused_locals(func);
+    }
+    let (b1, i1, l1) = count_module(module);
+    OptStats {
+        blocks_before: b0, blocks_after: b1,
+        insts_before: i0, insts_after: i1,
+        locals_before: l0, locals_after: l1,
     }
 }
 

@@ -330,12 +330,17 @@ fn try_build_ir(
     // Lower AST to GIR
     let mut gir_module = gorget::ir::lowering::lower_module(&module, &result, &options);
 
-    // Run GIR optimization passes (dead block/local elimination)
-    gorget::ir::transforms::optimize::optimize_module(&mut gir_module);
+    // Run GIR optimization passes
+    let opt_stats = gorget::ir::transforms::optimize::optimize_module(&mut gir_module);
+    let _ = opt_stats; // available for --emit-gir stats or future --verbose
 
     // Dump GIR text if requested
     if emit_gir {
         print!("{}", gorget::ir::printer::print_module(&gir_module));
+        if opt_stats.insts_eliminated() > 0 || opt_stats.blocks_eliminated() > 0 {
+            eprintln!("; Optimization: {} blocks, {} instructions, {} locals eliminated",
+                opt_stats.blocks_eliminated(), opt_stats.insts_eliminated(), opt_stats.locals_eliminated());
+        }
         // Don't proceed to C codegen — just dump and exit
         let input_path = Path::new(filename);
         let stem = input_path
