@@ -1,5 +1,7 @@
 # DONE
 
+- [2026-03-07] **fix: constant folding Mod vs Rem, INT64_MIN literal, full re-propagation**: Mod was incorrectly using remainder semantics in constant folding (runtime was always correct). INT64_MIN literal overflow in C fixed with `(-MAX - 1)` pattern. Full propagate→fold→propagate→fold pipeline now safe and enabled.
+
 - [2026-03-07] **fix: C backend LL suffix for all int64_t constants**: I64 constants in i32 range were emitted as bare literals (`-5` = `int` in C), causing printf format warnings. Now always emits `LL` suffix.
 
 - [2026-03-07] **GIR optimization: constant propagation into terminators**: Propagates known constants into Branch/Switch/Return terminators. Second terminator-only pass after constant folding enables branch folding for computed-then-folded constants (e.g., `not false` → `true`). operators.gg: 7→3 blocks. 2 new tests (61 total optimizer).
