@@ -1384,7 +1384,7 @@ fn main() {
                 };
                 let result = try_build_ir(filename, &source, dep_paths, None, None, Some(shared_path), &features, lowering_opts, emit_gir, emit_lir, emit_c_lir);
                 match result {
-                    Ok(p) => if !emit_gir { println!("Built shared library: {}", p.display()); }
+                    Ok(p) => if !emit_gir && !emit_lir && !emit_c_lir { println!("Built shared library: {}", p.display()); }
                     Err(e) => {
                         eprintln!("{e}");
                         process::exit(1);
@@ -1414,7 +1414,7 @@ fn main() {
                 };
                 let result = try_build_ir(filename, &source, dep_paths, None, shared_output_path.as_deref(), None, &features, lowering_opts, emit_gir, emit_lir, emit_c_lir);
                 match result {
-                    Ok(p) => if !emit_gir { println!("Built: {}", p.display()); }
+                    Ok(p) => if !emit_gir && !emit_lir && !emit_c_lir { println!("Built: {}", p.display()); }
                     Err(e) => {
                         eprintln!("{e}");
                         process::exit(1);

@@ -87,6 +87,7 @@ impl<'a> LoweringContext<'a> {
                 name: ext.name.clone(),
                 params: ext.params.iter().map(|t| map_gir_type(t, &self.gir.type_registry)).collect(),
                 return_type: map_gir_type(&ext.return_type, &self.gir.type_registry),
+                is_variadic: ext.is_variadic,
             });
         }
 

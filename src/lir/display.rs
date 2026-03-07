@@ -35,6 +35,12 @@ impl<'a> fmt::Display for DisplayModule<'a> {
                 }
                 write!(f, "{p}")?;
             }
+            if ext.is_variadic {
+                if !ext.params.is_empty() {
+                    write!(f, ", ")?;
+                }
+                write!(f, "...")?;
+            }
             writeln!(f, ")")?;
         }
         if !module.externs.is_empty() {
@@ -353,6 +359,7 @@ mod tests {
             name: "puts".into(),
             params: vec![LirType::Ptr],
             return_type: LirType::I32,
+            is_variadic: false,
         });
 
         let mut func = LirFunction::new("main".into(), vec![], LirType::I32);

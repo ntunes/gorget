@@ -603,6 +603,7 @@ pub struct LirExtern {
     pub name: String,
     pub params: Vec<LirType>,
     pub return_type: LirType,
+    pub is_variadic: bool,
 }
 
 // ── Module ──────────────────────────────────────────────────────────────────

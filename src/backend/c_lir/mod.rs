@@ -45,7 +45,7 @@ pub fn generate_c(module: &LirModule) -> String {
     // Extern declarations
     for ext in &module.externs {
         write!(out, "{} {}(", c_type(&ext.return_type), ext.name).unwrap();
-        if ext.params.is_empty() {
+        if ext.params.is_empty() && !ext.is_variadic {
             write!(out, "void").unwrap();
         } else {
             for (i, p) in ext.params.iter().enumerate() {
@@ -53,6 +53,12 @@ pub fn generate_c(module: &LirModule) -> String {
                     write!(out, ", ").unwrap();
                 }
                 write!(out, "{}", c_type(p)).unwrap();
+            }
+            if ext.is_variadic {
+                if !ext.params.is_empty() {
+                    write!(out, ", ").unwrap();
+                }
+                write!(out, "...").unwrap();
             }
         }
         writeln!(out, ");").unwrap();
