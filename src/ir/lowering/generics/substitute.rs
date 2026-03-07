@@ -1,0 +1,331 @@
+//! AST type substitution and builtin enum injection for generic monomorphization.
+
+use rustc_hash::FxHashMap;
+
+use crate::parser::ast::{self, Expr, Stmt, Type};
+use crate::span::Spanned;
+
+/// Public entry point for type substitution (used by functions.rs, traits.rs).
+pub fn substitute_type_pub(ty: &Type, subs: &[(String, Type)]) -> Type {
+    substitute_type(ty, subs)
+}
+
+/// Recursively substitute type parameters in an AST type.
+pub(super) fn substitute_type(ty: &Type, subs: &[(String, Type)]) -> Type {
+    match ty {
+        // Self is a keyword type — look for a "Self" entry in subs.
+        Type::SelfType => {
+            for (param_name, concrete) in subs {
+                if param_name == "Self" {
+                    return concrete.clone();
+                }
+            }
+            ty.clone()
+        }
+        Type::Named { name, generic_args } if generic_args.is_empty() => {
+            // Check if this is a type parameter that should be substituted
+            for (param_name, concrete) in subs {
+                if name.node == *param_name {
+                    return concrete.clone();
+                }
+            }
+            ty.clone()
+        }
+        Type::Named { name, generic_args } => {
+            // Recursively substitute within generic args
+            let new_args: Vec<Spanned<Type>> = generic_args.iter()
+                .map(|arg| Spanned::dummy(substitute_type(&arg.node, subs)))
+                .collect();
+            Type::Named {
+                name: name.clone(),
+                generic_args: new_args,
+            }
+        }
+        Type::Tuple(elems) => {
+            Type::Tuple(elems.iter()
+                .map(|e| Spanned::dummy(substitute_type(&e.node, subs)))
+                .collect())
+        }
+        Type::Function { return_type, params, param_ownerships } => {
+            Type::Function {
+                return_type: Box::new(Spanned::dummy(substitute_type(&return_type.node, subs))),
+                params: params.iter()
+                    .map(|p| Spanned::dummy(substitute_type(&p.node, subs)))
+                    .collect(),
+                param_ownerships: param_ownerships.clone(),
+            }
+        }
+        Type::Array { element, size } => {
+            Type::Array {
+                element: Box::new(Spanned::dummy(substitute_type(&element.node, subs))),
+                size: size.clone(),
+            }
+        }
+        Type::Slice { element } => {
+            Type::Slice {
+                element: Box::new(Spanned::dummy(substitute_type(&element.node, subs))),
+            }
+        }
+        // Primitives and other types pass through unchanged
+        _ => ty.clone(),
+    }
+}
+
+/// Create a copy of a function definition with all type parameters substituted.
+/// Used for transitive discovery: we substitute concrete types and re-scan the body.
+pub(super) fn substitute_function_body(
+    template: &ast::FunctionDef,
+    subs: &[(String, Type)],
+) -> ast::FunctionDef {
+    let mut func = template.clone();
+    func.return_type = Spanned::dummy(substitute_type(&func.return_type.node, subs));
+    for p in &mut func.params {
+        p.node.type_ = Spanned::dummy(substitute_type(&p.node.type_.node, subs));
+    }
+    substitute_body_types(&mut func.body, subs);
+    func.generic_params = None;
+    func
+}
+
+fn substitute_body_types(body: &mut ast::FunctionBody, subs: &[(String, Type)]) {
+    match body {
+        ast::FunctionBody::Block(block) => substitute_block_types(block, subs),
+        ast::FunctionBody::Expression(expr) => substitute_expr_types(expr, subs),
+        _ => {}
+    }
+}
+
+fn substitute_block_types(block: &mut ast::Block, subs: &[(String, Type)]) {
+    for stmt in &mut block.stmts {
+        substitute_stmt_types(stmt, subs);
+    }
+}
+
+fn substitute_stmt_types(stmt: &mut Spanned<Stmt>, subs: &[(String, Type)]) {
+    match &mut stmt.node {
+        Stmt::VarDecl { type_, value, .. } => {
+            type_.node = substitute_type(&type_.node, subs);
+            substitute_expr_types(value, subs);
+        }
+        Stmt::Assign { target, value } => {
+            substitute_expr_types(target, subs);
+            substitute_expr_types(value, subs);
+        }
+        Stmt::CompoundAssign { target, value, .. } => {
+            substitute_expr_types(target, subs);
+            substitute_expr_types(value, subs);
+        }
+        Stmt::Return(Some(expr)) | Stmt::Expr(expr) | Stmt::Throw(expr) => {
+            substitute_expr_types(expr, subs);
+        }
+        Stmt::If { condition, then_body, elif_branches, else_body } => {
+            substitute_expr_types(condition, subs);
+            substitute_block_types(then_body, subs);
+            for (cond, body) in elif_branches {
+                substitute_expr_types(cond, subs);
+                substitute_block_types(body, subs);
+            }
+            if let Some(eb) = else_body {
+                substitute_block_types(eb, subs);
+            }
+        }
+        Stmt::While { condition, body, .. } => {
+            substitute_expr_types(condition, subs);
+            substitute_block_types(body, subs);
+        }
+        Stmt::For { iterable, body, .. } => {
+            substitute_expr_types(iterable, subs);
+            substitute_block_types(body, subs);
+        }
+        Stmt::Match { scrutinee, arms, else_arm } => {
+            substitute_expr_types(scrutinee, subs);
+            for arm in arms.iter_mut().filter_map(|i| i.arm_mut()) {
+                substitute_expr_types(&mut arm.body, subs);
+                if let Some(guard) = &mut arm.guard {
+                    substitute_expr_types(guard, subs);
+                }
+            }
+            if let Some(eb) = else_arm {
+                substitute_block_types(eb, subs);
+            }
+        }
+        Stmt::Loop { body } | Stmt::Unsafe { body } | Stmt::NamedScope { body, .. } => {
+            substitute_block_types(body, subs);
+        }
+        Stmt::MetaIf { condition, then_body, elif_branches, else_body, .. } => {
+            substitute_expr_types(condition, subs);
+            substitute_block_types(then_body, subs);
+            for (cond, body) in elif_branches {
+                substitute_expr_types(cond, subs);
+                substitute_block_types(body, subs);
+            }
+            if let Some(eb) = else_body {
+                substitute_block_types(eb, subs);
+            }
+        }
+        Stmt::MetaFor { range, body, .. } => {
+            substitute_expr_types(range, subs);
+            substitute_block_types(body, subs);
+        }
+        Stmt::MetaMatch { scrutinee, arms, else_arm, .. } => {
+            substitute_expr_types(scrutinee, subs);
+            for (case_expr, body) in arms {
+                substitute_expr_types(case_expr, subs);
+                substitute_block_types(body, subs);
+            }
+            if let Some(eb) = else_arm {
+                substitute_block_types(eb, subs);
+            }
+        }
+        Stmt::MetaWhile { condition, body, .. } => {
+            substitute_expr_types(condition, subs);
+            substitute_block_types(body, subs);
+        }
+        Stmt::MetaConst { value, .. } => {
+            substitute_expr_types(value, subs);
+        }
+        _ => {}
+    }
+}
+
+fn substitute_expr_types(expr: &mut Spanned<Expr>, subs: &[(String, Type)]) {
+    match &mut expr.node {
+        Expr::Call { callee, generic_args, args } => {
+            substitute_expr_types(callee, subs);
+            if let Some(type_args) = generic_args {
+                for arg in type_args.iter_mut() {
+                    arg.node = substitute_type(&arg.node, subs);
+                }
+            }
+            for arg in args {
+                substitute_expr_types(&mut arg.node.value, subs);
+            }
+        }
+        Expr::MethodCall { receiver, generic_args, args, .. } => {
+            substitute_expr_types(receiver, subs);
+            if let Some(type_args) = generic_args {
+                for arg in type_args.iter_mut() {
+                    arg.node = substitute_type(&arg.node, subs);
+                }
+            }
+            for arg in args {
+                substitute_expr_types(&mut arg.node.value, subs);
+            }
+        }
+        Expr::StructLiteral { generic_args, args, .. } => {
+            if let Some(type_args) = generic_args {
+                for arg in type_args.iter_mut() {
+                    arg.node = substitute_type(&arg.node, subs);
+                }
+            }
+            for arg in args {
+                substitute_expr_types(arg, subs);
+            }
+        }
+        Expr::BinaryOp { left, right, .. } => {
+            substitute_expr_types(left, subs);
+            substitute_expr_types(right, subs);
+        }
+        Expr::UnaryOp { operand, .. } => {
+            substitute_expr_types(operand, subs);
+        }
+        Expr::FieldAccess { object, .. } => {
+            substitute_expr_types(object, subs);
+        }
+        Expr::Index { object, index } => {
+            substitute_expr_types(object, subs);
+            substitute_expr_types(index, subs);
+        }
+        Expr::If { condition, then_branch, else_branch, .. } => {
+            substitute_expr_types(condition, subs);
+            substitute_expr_types(then_branch, subs);
+            if let Some(eb) = else_branch {
+                substitute_expr_types(eb, subs);
+            }
+        }
+        Expr::Move { expr: inner } | Expr::MutableBorrow { expr: inner } => {
+            substitute_expr_types(inner, subs);
+        }
+        Expr::Range { start, end, .. } => {
+            if let Some(s) = start { substitute_expr_types(s, subs); }
+            if let Some(e) = end { substitute_expr_types(e, subs); }
+        }
+        Expr::Closure { body, .. } | Expr::ImplicitClosure { body } => {
+            substitute_expr_types(body, subs);
+        }
+        Expr::TupleLiteral(elems) | Expr::ArrayLiteral(elems) => {
+            for e in elems {
+                substitute_expr_types(e, subs);
+            }
+        }
+        Expr::MetaOpInfix { left, right, .. } => {
+            substitute_expr_types(left, subs);
+            substitute_expr_types(right, subs);
+        }
+        Expr::MetaOpToken(_) => {}
+        _ => {}
+    }
+}
+
+/// Inject built-in Option[T] and Result[T, E] enum templates if not present.
+pub(super) fn inject_builtin_enums(enum_templates: &mut FxHashMap<String, ast::EnumDef>) {
+    use crate::parser::ast::*;
+
+    if !enum_templates.contains_key("Option") {
+        enum_templates.insert("Option".to_string(), ast::EnumDef {
+            attributes: vec![],
+            visibility: Visibility::Public,
+            name: Spanned::dummy("Option".to_string()),
+            generic_params: Some(Spanned::dummy(GenericParams {
+                params: vec![Spanned::dummy(GenericParam::Type { name: Spanned::dummy("T".to_string()), bounds: vec![] })],
+            })),
+            variants: vec![
+                Spanned::dummy(Variant {
+                    name: Spanned::dummy("Some".to_string()),
+                    fields: VariantFields::Tuple(vec![Spanned::dummy(Type::Named {
+                        name: Spanned::dummy("T".to_string()),
+                        generic_args: vec![],
+                    })]),
+                }),
+                Spanned::dummy(Variant {
+                    name: Spanned::dummy("None".to_string()),
+                    fields: VariantFields::Unit,
+                }),
+            ],
+            doc_comment: None,
+            span: crate::span::Span::dummy(),
+        });
+    }
+
+    if !enum_templates.contains_key("Result") {
+        enum_templates.insert("Result".to_string(), ast::EnumDef {
+            attributes: vec![],
+            visibility: Visibility::Public,
+            name: Spanned::dummy("Result".to_string()),
+            generic_params: Some(Spanned::dummy(GenericParams {
+                params: vec![
+                    Spanned::dummy(GenericParam::Type { name: Spanned::dummy("T".to_string()), bounds: vec![] }),
+                    Spanned::dummy(GenericParam::Type { name: Spanned::dummy("E".to_string()), bounds: vec![] }),
+                ],
+            })),
+            variants: vec![
+                Spanned::dummy(Variant {
+                    name: Spanned::dummy("Ok".to_string()),
+                    fields: VariantFields::Tuple(vec![Spanned::dummy(Type::Named {
+                        name: Spanned::dummy("T".to_string()),
+                        generic_args: vec![],
+                    })]),
+                }),
+                Spanned::dummy(Variant {
+                    name: Spanned::dummy("Error".to_string()),
+                    fields: VariantFields::Tuple(vec![Spanned::dummy(Type::Named {
+                        name: Spanned::dummy("E".to_string()),
+                        generic_args: vec![],
+                    })]),
+                }),
+            ],
+            doc_comment: None,
+            span: crate::span::Span::dummy(),
+        });
+    }
+}
