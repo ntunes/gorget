@@ -293,6 +293,7 @@ fn try_build_ir(
     features: &[String],
     options: gorget::ir::lowering::LoweringOptions,
     emit_gir: bool,
+    emit_lir: bool,
 ) -> Result<PathBuf, String> {
     let mut parser = Parser::new(source);
     let module = parser.parse_module();
@@ -342,6 +343,28 @@ fn try_build_ir(
                 opt_stats.blocks_eliminated(), opt_stats.insts_eliminated(), opt_stats.locals_eliminated());
         }
         // Don't proceed to C codegen — just dump and exit
+        let input_path = Path::new(filename);
+        let stem = input_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("output");
+        return Ok(PathBuf::from(stem));
+    }
+
+    // Dump LIR text if requested
+    if emit_lir {
+        let mut lir_module = gorget::lir::lower::lower_module(&gir_module);
+        for func in &mut lir_module.functions {
+            gorget::lir::ssa::construct_ssa(func);
+        }
+        print!("{}", gorget::lir::display::dump_module(&lir_module));
+        let errors = gorget::lir::validate::validate_module(&lir_module);
+        if !errors.is_empty() {
+            eprintln!("; LIR validation: {} error(s)", errors.len());
+            for e in &errors {
+                eprintln!(";   {e}");
+            }
+        }
         let input_path = Path::new(filename);
         let stem = input_path
             .file_stem()
@@ -704,7 +727,7 @@ fn run_tui() {
                 continue;
             }
             let gg_path_str = gg_path.display().to_string();
-            match try_build_ir(&gg_path_str, &source, HashMap::new(), Some(&tmp_dir), None, None, &[], gorget::ir::lowering::LoweringOptions::default(), false) {
+            match try_build_ir(&gg_path_str, &source, HashMap::new(), Some(&tmp_dir), None, None, &[], gorget::ir::lowering::LoweringOptions::default(), false, false) {
                 Err(e) => {
                     eprintln!("{e}");
                 }
@@ -740,7 +763,7 @@ fn run_tui() {
                 continue;
             }
             let gg_path_str = gg_path.display().to_string();
-            match try_build_ir(&gg_path_str, &source, HashMap::new(), Some(&tmp_dir), None, None, &[], gorget::ir::lowering::LoweringOptions::default(), false) {
+            match try_build_ir(&gg_path_str, &source, HashMap::new(), Some(&tmp_dir), None, None, &[], gorget::ir::lowering::LoweringOptions::default(), false, false) {
                 Err(e) => {
                     eprintln!("{e}");
                 }
@@ -1017,6 +1040,7 @@ fn main() {
         println!("  --shared [-o F]         Build as shared library (.dylib/.so)");
         println!("  --sanitize              Enable AddressSanitizer + UBSan for runtime bug detection");
         println!("  --emit-gir              Dump GIR (intermediate representation) to stdout instead of compiling");
+        println!("  --emit-lir              Dump LIR (low-level SSA IR) to stdout instead of compiling");
         return;
     }
 
@@ -1059,7 +1083,7 @@ fn main() {
             sanitize, scheduler_mode: parse_scheduler(&args),
             ..Default::default()
         };
-        let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false)
+        let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false)
             .unwrap_or_else(|e| { eprintln!("{e}"); process::exit(1); });
         let status = Command::new(&exe_path)
             .status()
@@ -1175,6 +1199,7 @@ fn main() {
     let scheduler_mode = parse_scheduler(&args);
     let sanitize = args.iter().any(|a| a == "--sanitize");
     let emit_gir = args.iter().any(|a| a == "--emit-gir");
+    let emit_lir = args.iter().any(|a| a == "--emit-lir");
     let shared_mode = args.iter().any(|a| a == "--shared");
     let show_borrows = args.iter().any(|a| a == "--show-borrows");
     let features = parse_features(&args);
@@ -1333,7 +1358,7 @@ fn main() {
                     sanitize, scheduler_mode,
                     ..Default::default()
                 };
-                let result = try_build_ir(filename, &source, dep_paths, None, None, Some(shared_path), &features, lowering_opts, emit_gir);
+                let result = try_build_ir(filename, &source, dep_paths, None, None, Some(shared_path), &features, lowering_opts, emit_gir, emit_lir);
                 match result {
                     Ok(p) => if !emit_gir { println!("Built shared library: {}", p.display()); }
                     Err(e) => {
@@ -1363,7 +1388,7 @@ fn main() {
                     sanitize,
                     ..Default::default()
                 };
-                let result = try_build_ir(filename, &source, dep_paths, None, shared_output_path.as_deref(), None, &features, lowering_opts, emit_gir);
+                let result = try_build_ir(filename, &source, dep_paths, None, shared_output_path.as_deref(), None, &features, lowering_opts, emit_gir, emit_lir);
                 match result {
                     Ok(p) => if !emit_gir { println!("Built: {}", p.display()); }
                     Err(e) => {
@@ -1399,7 +1424,7 @@ fn main() {
                 sanitize, scheduler_mode,
                 ..Default::default()
             };
-            let result = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false);
+            let result = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false);
             match result {
                 Ok(exe_path) => {
                     let status = Command::new(&exe_path)
@@ -1478,7 +1503,7 @@ fn main() {
                 sanitize, scheduler_mode,
                 ..Default::default()
             };
-            let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false)
+            let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false)
                 .unwrap_or_else(|e| {
                     eprintln!("{e}");
                     process::exit(1);
