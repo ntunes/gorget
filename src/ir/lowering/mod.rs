@@ -768,105 +768,8 @@ pub fn lower_module(
         }
     }
 
-    // Register runtime built-in method signatures (Str methods, etc.)
-    {
-        let str_type = ctx.type_mapper.str_type;
-        let owned_str_type = ctx.type_mapper.owned_string_type;
-        let array_type = ctx.type_mapper.named_types.get("GorgetArray").copied()
-            .unwrap_or(UNIT_TYPE);
-
-        // Str methods taking (self) returning various types
-        let str_self = vec![str_type]; // &self lowered as Str ptr, but sig says Str
-        let str_str = vec![str_type, str_type];
-
-        // Methods returning typed Vector (element type embedded in name)
-        let vec_str_type = ctx.type_mapper.named_types.get("Vector__Str").copied()
-            .unwrap_or(array_type);
-        let vec_u8_type = ctx.type_mapper.named_types.get("Vector__uint8_t").copied()
-            .unwrap_or(array_type);
-        let vec_i64_type = ctx.type_mapper.named_types.get("Vector__int64_t").copied()
-            .unwrap_or(array_type);
-        ctx.fn_sigs.insert("Str__bytes".to_string(), (str_self.clone(), vec_u8_type));
-        ctx.fn_sigs.insert("Str__codepoints".to_string(), (str_self.clone(), vec_i64_type));
-        ctx.fn_sigs.insert("Str__chars".to_string(), (str_self.clone(), vec_str_type));
-        ctx.fn_sigs.insert("Str__split".to_string(), (str_str.clone(), vec_str_type));
-        // Methods returning Str
-        for m in &["trim", "strip", "lstrip", "rstrip", "removeprefix", "removesuffix"] {
-            ctx.fn_sigs.insert(format!("Str__{m}"), (str_self.clone(), str_type));
-        }
-        ctx.fn_sigs.insert("Str__byte_slice".to_string(), (vec![str_type, I64_TYPE, I64_TYPE], str_type));
-        ctx.fn_sigs.insert("Str__byte_at".to_string(), (vec![str_type, I64_TYPE], U8_TYPE));
-        ctx.fn_sigs.insert("Str__char_at".to_string(), (vec![str_type, I64_TYPE], str_type));
-        // Methods returning GorgetString
-        for m in &["to_upper", "to_lower"] {
-            ctx.fn_sigs.insert(format!("Str__{m}"), (str_self.clone(), owned_str_type));
-        }
-        ctx.fn_sigs.insert("Str__replace".to_string(), (vec![str_type, str_type, str_type], owned_str_type));
-        ctx.fn_sigs.insert("Str__repeat".to_string(), (vec![str_type, I64_TYPE], owned_str_type));
-        ctx.fn_sigs.insert("Str__pad_left".to_string(), (vec![str_type, I64_TYPE, str_type], owned_str_type));
-        ctx.fn_sigs.insert("Str__pad_right".to_string(), (vec![str_type, I64_TYPE, str_type], owned_str_type));
-        // Methods returning int64_t
-        for m in &["len", "byte_len", "index_of", "count", "find"] {
-            let params = if *m == "len" || *m == "byte_len" {
-                str_self.clone()
-            } else {
-                str_str.clone()
-            };
-            ctx.fn_sigs.insert(format!("Str__{m}"), (params, I64_TYPE));
-        }
-        // Methods returning bool
-        for m in &["contains", "starts_with", "ends_with", "is_empty",
-                   "is_alpha", "is_digit", "is_alphanumeric", "is_whitespace",
-                   "is_upper", "is_lower", "is_ascii", "is_hex_digit"] {
-            let params = if *m == "is_empty" { str_self.clone() } else { str_str.clone() };
-            let params = if m.starts_with("is_") && *m != "is_empty" { str_self.clone() } else { params };
-            ctx.fn_sigs.insert(format!("Str__{m}"), (params, BOOL_TYPE));
-        }
-        ctx.fn_sigs.insert("Str__eq".to_string(), (str_str.clone(), BOOL_TYPE));
-        ctx.fn_sigs.insert("Str__join".to_string(), (vec![str_type, array_type], owned_str_type));
-    }
-
-    // Register uint8_t (byte) method signatures
-    {
-        for m in &["is_alpha", "is_digit", "is_alphanumeric", "is_whitespace",
-                   "is_upper", "is_lower", "is_ascii", "is_hex_digit"] {
-            ctx.fn_sigs.insert(format!("uint8_t__{m}"), (vec![U8_TYPE], BOOL_TYPE));
-        }
-        ctx.fn_sigs.insert("uint8_t__to_upper".to_string(), (vec![U8_TYPE], U8_TYPE));
-        ctx.fn_sigs.insert("uint8_t__to_lower".to_string(), (vec![U8_TYPE], U8_TYPE));
-    }
-
-    // Register primitive static method signatures (int.parse, int.default, etc.)
-    {
-        let str_type = ctx.type_mapper.str_type;
-        // Create Option TypeIds for parse results WITHOUT registering in named_types
-        // (registering in named_types would cause infer_collection_method_return_type
-        // to find these types when looking up Vector.get etc., even when the
-        // Option type definitions haven't been emitted in C)
-        let opt_int_type = ctx.type_mapper.named_types.get("Option__int64_t").copied()
-            .unwrap_or_else(|| {
-                module.type_registry.insert(GirType::Named("Option__int64_t".to_string()))
-            });
-        let opt_float_type = ctx.type_mapper.named_types.get("Option__double").copied()
-            .unwrap_or_else(|| {
-                module.type_registry.insert(GirType::Named("Option__double".to_string()))
-            });
-        let opt_bool_type = ctx.type_mapper.named_types.get("Option__bool").copied()
-            .unwrap_or_else(|| {
-                module.type_registry.insert(GirType::Named("Option__bool".to_string()))
-            });
-        // int.parse(str) → Option[int], int.default() → int, int.one() → int
-        ctx.fn_sigs.insert("int64_t__parse".to_string(), (vec![str_type], opt_int_type));
-        ctx.fn_sigs.insert("int64_t__default".to_string(), (vec![], I64_TYPE));
-        ctx.fn_sigs.insert("int64_t__one".to_string(), (vec![], I64_TYPE));
-        // float.parse(str) → Option[float], float.default() → float, float.one() → float
-        ctx.fn_sigs.insert("double__parse".to_string(), (vec![str_type], opt_float_type));
-        ctx.fn_sigs.insert("double__default".to_string(), (vec![], F64_TYPE));
-        ctx.fn_sigs.insert("double__one".to_string(), (vec![], F64_TYPE));
-        // bool.parse(str) → Option[bool], bool.default() → bool
-        ctx.fn_sigs.insert("bool__parse".to_string(), (vec![str_type], opt_bool_type));
-        ctx.fn_sigs.insert("bool__default".to_string(), (vec![], BOOL_TYPE));
-    }
+    // Register runtime built-in method signatures (Str, uint8_t, primitive statics)
+    register_runtime_method_sigs(&mut ctx);
 
     // Pre-register module-level static variables so functions can reference them.
     // Skip stdlib StaticDecl items (identified by dummy spans — start == end == 0);
@@ -1050,6 +953,103 @@ pub fn lower_module(
     module.runtime.trace_filename = options.trace_filename.clone();
 
     // Hot-reload: scan for directive + find state type from init() + compute state hash
+    setup_hot_reload(ast_module, &mut module, options);
+
+    // Collect runtime metadata (channel/shared/mutex types, spawn info) for C backend
+    collect_runtime_metadata(&ctx, &mut module);
+
+    module
+}
+
+/// Register runtime built-in method signatures for Str, uint8_t, and primitive static methods.
+fn register_runtime_method_sigs(ctx: &mut LoweringContext) {
+    let str_type = ctx.type_mapper.str_type;
+    let owned_str_type = ctx.type_mapper.owned_string_type;
+    let array_type = ctx.type_mapper.named_types.get("GorgetArray").copied()
+        .unwrap_or(UNIT_TYPE);
+
+    // Str methods taking (self) returning various types
+    let str_self = vec![str_type];
+    let str_str = vec![str_type, str_type];
+
+    // Methods returning typed Vector
+    let vec_str_type = ctx.type_mapper.named_types.get("Vector__Str").copied()
+        .unwrap_or(array_type);
+    let vec_u8_type = ctx.type_mapper.named_types.get("Vector__uint8_t").copied()
+        .unwrap_or(array_type);
+    let vec_i64_type = ctx.type_mapper.named_types.get("Vector__int64_t").copied()
+        .unwrap_or(array_type);
+    ctx.fn_sigs.insert("Str__bytes".to_string(), (str_self.clone(), vec_u8_type));
+    ctx.fn_sigs.insert("Str__codepoints".to_string(), (str_self.clone(), vec_i64_type));
+    ctx.fn_sigs.insert("Str__chars".to_string(), (str_self.clone(), vec_str_type));
+    ctx.fn_sigs.insert("Str__split".to_string(), (str_str.clone(), vec_str_type));
+    // Methods returning Str
+    for m in &["trim", "strip", "lstrip", "rstrip", "removeprefix", "removesuffix"] {
+        ctx.fn_sigs.insert(format!("Str__{m}"), (str_self.clone(), str_type));
+    }
+    ctx.fn_sigs.insert("Str__byte_slice".to_string(), (vec![str_type, I64_TYPE, I64_TYPE], str_type));
+    ctx.fn_sigs.insert("Str__byte_at".to_string(), (vec![str_type, I64_TYPE], U8_TYPE));
+    ctx.fn_sigs.insert("Str__char_at".to_string(), (vec![str_type, I64_TYPE], str_type));
+    // Methods returning GorgetString
+    for m in &["to_upper", "to_lower"] {
+        ctx.fn_sigs.insert(format!("Str__{m}"), (str_self.clone(), owned_str_type));
+    }
+    ctx.fn_sigs.insert("Str__replace".to_string(), (vec![str_type, str_type, str_type], owned_str_type));
+    ctx.fn_sigs.insert("Str__repeat".to_string(), (vec![str_type, I64_TYPE], owned_str_type));
+    ctx.fn_sigs.insert("Str__pad_left".to_string(), (vec![str_type, I64_TYPE, str_type], owned_str_type));
+    ctx.fn_sigs.insert("Str__pad_right".to_string(), (vec![str_type, I64_TYPE, str_type], owned_str_type));
+    // Methods returning int64_t
+    for m in &["len", "byte_len", "index_of", "count", "find"] {
+        let params = if *m == "len" || *m == "byte_len" {
+            str_self.clone()
+        } else {
+            str_str.clone()
+        };
+        ctx.fn_sigs.insert(format!("Str__{m}"), (params, I64_TYPE));
+    }
+    // Methods returning bool
+    for m in &["contains", "starts_with", "ends_with", "is_empty",
+               "is_alpha", "is_digit", "is_alphanumeric", "is_whitespace",
+               "is_upper", "is_lower", "is_ascii", "is_hex_digit"] {
+        let params = if m.starts_with("is_") && *m != "is_empty" { str_self.clone() }
+                     else if *m == "is_empty" { str_self.clone() }
+                     else { str_str.clone() };
+        ctx.fn_sigs.insert(format!("Str__{m}"), (params, BOOL_TYPE));
+    }
+    ctx.fn_sigs.insert("Str__eq".to_string(), (str_str.clone(), BOOL_TYPE));
+    ctx.fn_sigs.insert("Str__join".to_string(), (vec![str_type, array_type], owned_str_type));
+
+    // uint8_t (byte) method signatures
+    for m in &["is_alpha", "is_digit", "is_alphanumeric", "is_whitespace",
+               "is_upper", "is_lower", "is_ascii", "is_hex_digit"] {
+        ctx.fn_sigs.insert(format!("uint8_t__{m}"), (vec![U8_TYPE], BOOL_TYPE));
+    }
+    ctx.fn_sigs.insert("uint8_t__to_upper".to_string(), (vec![U8_TYPE], U8_TYPE));
+    ctx.fn_sigs.insert("uint8_t__to_lower".to_string(), (vec![U8_TYPE], U8_TYPE));
+
+    // Primitive static method signatures (int.parse, int.default, etc.)
+    let opt_int_type = ctx.type_mapper.named_types.get("Option__int64_t").copied()
+        .unwrap_or_else(|| ctx.type_registry.insert(GirType::Named("Option__int64_t".to_string())));
+    let opt_float_type = ctx.type_mapper.named_types.get("Option__double").copied()
+        .unwrap_or_else(|| ctx.type_registry.insert(GirType::Named("Option__double".to_string())));
+    let opt_bool_type = ctx.type_mapper.named_types.get("Option__bool").copied()
+        .unwrap_or_else(|| ctx.type_registry.insert(GirType::Named("Option__bool".to_string())));
+    ctx.fn_sigs.insert("int64_t__parse".to_string(), (vec![str_type], opt_int_type));
+    ctx.fn_sigs.insert("int64_t__default".to_string(), (vec![], I64_TYPE));
+    ctx.fn_sigs.insert("int64_t__one".to_string(), (vec![], I64_TYPE));
+    ctx.fn_sigs.insert("double__parse".to_string(), (vec![str_type], opt_float_type));
+    ctx.fn_sigs.insert("double__default".to_string(), (vec![], F64_TYPE));
+    ctx.fn_sigs.insert("double__one".to_string(), (vec![], F64_TYPE));
+    ctx.fn_sigs.insert("bool__parse".to_string(), (vec![str_type], opt_bool_type));
+    ctx.fn_sigs.insert("bool__default".to_string(), (vec![], BOOL_TYPE));
+}
+
+/// Scan AST for hot-reload directives and configure module runtime metadata.
+fn setup_hot_reload(
+    ast_module: &ast::Module,
+    module: &mut Module,
+    options: &LoweringOptions,
+) {
     let mut has_hot_reload_directive = false;
     for item in &ast_module.items {
         if let Item::Directive(d) = &item.node {
@@ -1057,52 +1057,56 @@ pub fn lower_module(
         }
     }
     module.runtime.hot_reload = has_hot_reload_directive || options.hot_reload;
-    if module.runtime.hot_reload {
-        // Find state type from init() return type
+    if !module.runtime.hot_reload {
+        return;
+    }
+
+    // Find state type from init() return type
+    for item in &ast_module.items {
+        if let Item::Function(f) = &item.node {
+            if f.name.node == "init" {
+                if let crate::parser::ast::Type::Named { name, .. } = &f.return_type.node {
+                    module.runtime.hot_reload_state_type = Some(name.node.clone());
+                }
+                break;
+            }
+        }
+    }
+    // Compute state hash from the State struct field layout
+    if let Some(ref state_type) = module.runtime.hot_reload_state_type.clone() {
         for item in &ast_module.items {
-            if let Item::Function(f) = &item.node {
-                if f.name.node == "init" {
-                    if let crate::parser::ast::Type::Named { name, .. } = &f.return_type.node {
-                        module.runtime.hot_reload_state_type = Some(name.node.clone());
+            if let Item::Struct(s) = &item.node {
+                if &s.name.node == state_type {
+                    let mut layout = String::new();
+                    for field in &s.fields {
+                        let field_type = format!("{:?}", field.node.type_.node);
+                        let field_name = &field.node.name.node;
+                        layout.push_str(&format!("{field_type} {field_name};"));
                     }
+                    module.runtime.hot_reload_state_hash = fnv1a_hash(&layout);
                     break;
                 }
             }
         }
-        // Compute state hash from the State struct field layout
-        if let Some(ref state_type) = module.runtime.hot_reload_state_type.clone() {
-            for item in &ast_module.items {
-                if let Item::Struct(s) = &item.node {
-                    if &s.name.node == state_type {
-                        let mut layout = String::new();
-                        for field in &s.fields {
-                            let field_type = format!("{:?}", field.node.type_.node);
-                            let field_name = &field.node.name.node;
-                            layout.push_str(&format!("{field_type} {field_name};"));
-                        }
-                        module.runtime.hot_reload_state_hash = fnv1a_hash(&layout);
-                        break;
-                    }
-                }
-            }
-        }
-        // Check if reload() function exists
-        module.runtime.hot_reload_has_reload_fn = ast_module.items.iter().any(|item| {
-            if let Item::Function(f) = &item.node {
-                f.name.node == "reload"
-            } else { false }
-        });
     }
+    // Check if reload() function exists
+    module.runtime.hot_reload_has_reload_fn = ast_module.items.iter().any(|item| {
+        if let Item::Function(f) = &item.node {
+            f.name.node == "reload"
+        } else { false }
+    });
+}
 
-    // Collect channel/shared/mutex element types for C backend wrapper emission
+/// Collect runtime metadata from type registry and LoweringContext for C backend emission.
+///
+/// Scans for channel/shared/mutex/rwlock/thread element types, spawned function info,
+/// and other runtime flags needed by the C backend's wrapper generation.
+fn collect_runtime_metadata(ctx: &LoweringContext, module: &mut Module) {
+    let is_template = |elem: &str| {
+        elem.split("__").any(|part| !part.is_empty() && part.chars().all(|c| c.is_uppercase()))
+    };
+
     for name in module.type_registry.all_type_def_names() {
-        // Skip template placeholders. A type is considered abstract/generic if any
-        // `__`-separated component is entirely uppercase letters (e.g. "T", "K").
-        // This catches "T" directly as well as nested cases like "Vector__T" where
-        // the inner element `T` has not been monomorphized.
-        let is_template = |elem: &str| {
-            elem.split("__").any(|part| !part.is_empty() && part.chars().all(|c| c.is_uppercase()))
-        };
         if let Some(elem) = name.strip_prefix("Channel__") {
             if !is_template(elem) && !module.runtime.channel_types.contains(&elem.to_string()) {
                 module.runtime.channel_types.push(elem.to_string());
@@ -1126,14 +1130,11 @@ pub fn lower_module(
         if name == "TaskGroup" {
             module.runtime.has_task_group = true;
         }
-        // std.sync: collect RWLock element types for wrapper emission
         if let Some(elem) = name.strip_prefix("RWLock__") {
-            // Skip template placeholders (single uppercase letter = generic param e.g. "T")
             if !elem.chars().all(|c| c.is_uppercase()) && !module.runtime.rwlock_types.contains(&elem.to_string()) {
                 module.runtime.rwlock_types.push(elem.to_string());
             }
         }
-        // Any sync type signals has_sync
         if matches!(name.as_str(), "AtomicInt" | "AtomicBool" | "Barrier" | "CondVar")
             || name.starts_with("RWLock__")
             || name.starts_with("ReadGuard__")
@@ -1141,7 +1142,6 @@ pub fn lower_module(
         {
             module.runtime.has_sync = true;
         }
-        // std.thread: collect Thread types (skip template placeholders like "T")
         if let Some(elem) = name.strip_prefix("Thread__") {
             if !elem.chars().all(|c| c.is_uppercase()) {
                 if !module.runtime.thread_types.contains(&elem.to_string()) {
@@ -1150,20 +1150,19 @@ pub fn lower_module(
                 module.runtime.has_thread = true;
             }
         }
-        // std.process: Process type
         if name == "Process" {
             module.runtime.has_process = true;
         }
     }
 
-    // Collect thread-spawned function metadata for C backend helper emission
+    // Thread-spawned function metadata
     for (fn_name, ret_type) in &ctx.spawn.thread_fns {
         if !module.runtime.thread_spawned_fns.iter().any(|(n, _)| n == fn_name) {
             module.runtime.thread_spawned_fns.push((fn_name.clone(), *ret_type));
         }
     }
 
-    // Collect spawned function metadata for C backend spawn/await helper emission
+    // Spawned function metadata for spawn/await helper emission
     for (fn_name, _) in &ctx.spawn.fn_names {
         if let Some((param_types, ret_type)) = ctx.fn_sigs.get(fn_name.as_str()) {
             let param_names = ctx.fn_param_names.get(fn_name.as_str())
@@ -1179,8 +1178,6 @@ pub fn lower_module(
         }
     }
     module.runtime.has_spawn = !ctx.spawn.fn_names.is_empty();
-
-    module
 }
 
 /// Lower a module-level static declaration into a Global IR node.
