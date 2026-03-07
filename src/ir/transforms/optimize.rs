@@ -15,6 +15,14 @@ pub fn optimize_module(module: &mut crate::ir::Module) {
         // Phase 1: simplify values
         propagate_constants(func);
         constant_fold(func);
+        // Re-propagate into terminators only: constant_fold can turn
+        // computed instructions (e.g., UnOp(Not, false)) into Assign(true),
+        // creating new propagation opportunities for branch folding.
+        // Full re-propagation into instructions is unsafe because the C
+        // backend may emit untyped integer literals that break printf format
+        // specifiers. Terminator propagation is safe because branch/switch
+        // conditions are checked by value, not passed through C format strings.
+        propagate_into_terminators(func);
         simplify_algebraic(func);
         simplify_cmp(func);
         eliminate_common_subexpressions(func);
@@ -88,6 +96,50 @@ fn propagate_constants(func: &mut Function) {
                 }
             }
         }
+
+        // Also substitute into the terminator
+        if !known.is_empty() {
+            if let Some(ref mut term) = bb.terminator {
+                substitute_terminator_operands(term, &known);
+            }
+        }
+    }
+}
+
+/// Lightweight re-propagation that only substitutes constants into terminators.
+/// Used after constant folding to enable branch folding for cases where
+/// folding created new constant assignments (e.g., UnOp(Not, false) → true).
+fn propagate_into_terminators(func: &mut Function) {
+    for bb in &mut func.blocks {
+        let mut known: std::collections::HashMap<u32, Constant> = std::collections::HashMap::new();
+        for inst in &bb.instructions {
+            match inst {
+                Instruction::Assign { dst, value } if dst.projections.is_empty() => {
+                    if let Operand::Constant(c) = value {
+                        if is_propagatable_constant(c) {
+                            known.insert(dst.local.0, c.clone());
+                        } else {
+                            known.remove(&dst.local.0);
+                        }
+                    } else {
+                        known.remove(&dst.local.0);
+                    }
+                }
+                Instruction::Call { .. } | Instruction::CallExtern { .. } | Instruction::CallIndirect { .. } => {
+                    known.clear();
+                }
+                _ => {
+                    if let Some(written) = instruction_dst(inst) {
+                        known.remove(&written);
+                    }
+                }
+            }
+        }
+        if !known.is_empty() {
+            if let Some(ref mut term) = bb.terminator {
+                substitute_terminator_operands(term, &known);
+            }
+        }
     }
 }
 
@@ -154,6 +206,28 @@ fn substitute_operands(inst: &mut Instruction, known: &std::collections::HashMap
         Instruction::PushAllocator { allocator } => sub(allocator),
         // Instructions without operands that can be substituted
         _ => {}
+    }
+}
+
+/// Replace `Copy(local)` operands in terminators with known constant values.
+fn substitute_terminator_operands(term: &mut Terminator, known: &std::collections::HashMap<u32, Constant>) {
+    let sub = |op: &mut Operand| {
+        if let Operand::Copy(p) = &*op {
+            if p.projections.is_empty() {
+                if let Some(c) = known.get(&p.local.0) {
+                    *op = Operand::Constant(c.clone());
+                }
+            }
+        }
+    };
+    match term {
+        Terminator::Return(op) => sub(op),
+        Terminator::Branch { cond, .. } => sub(cond),
+        Terminator::Switch { value, .. } => sub(value),
+        Terminator::Invoke { args, .. } => {
+            for a in args { sub(a); }
+        }
+        Terminator::Jump(_) | Terminator::Unreachable => {}
     }
 }
 
@@ -2128,6 +2202,46 @@ mod tests {
         match &f.blocks[0].instructions[2] {
             Instruction::BinOp { lhs: Operand::Copy(p), .. } if p.local == LocalId(1) => {}
             other => panic!("Expected Copy(_1), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn propagate_constant_into_branch_terminator() {
+        // _1 = true; br _1, bb1, bb2 → br const true, bb1, bb2
+        let mut f = make_func(vec![
+            bb(vec![
+                Instruction::Assign {
+                    dst: Place::local(LocalId(1)),
+                    value: Operand::Constant(Constant::Bool(true)),
+                },
+            ], Terminator::Branch {
+                cond: Operand::Copy(Place::local(LocalId(1))),
+                then_block: BlockId(1),
+                else_block: BlockId(2),
+            }),
+            bb(vec![], ret_i64(1)),
+            bb(vec![], ret_i64(2)),
+        ], vec![local(I64_TYPE), local(BOOL_TYPE)], vec![]);
+        propagate_constants(&mut f);
+        match &f.blocks[0].terminator {
+            Some(Terminator::Branch { cond: Operand::Constant(Constant::Bool(true)), .. }) => {}
+            other => panic!("Expected constant true in branch, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn propagate_constant_into_return_terminator() {
+        // _1 = 42; return _1 → return const 42
+        let mut f = make_func(vec![bb(vec![
+            Instruction::Assign {
+                dst: Place::local(LocalId(1)),
+                value: Operand::Constant(Constant::I64(42)),
+            },
+        ], ret_local(1))], vec![local(I64_TYPE), local(I64_TYPE)], vec![]);
+        propagate_constants(&mut f);
+        match &f.blocks[0].terminator {
+            Some(Terminator::Return(Operand::Constant(Constant::I64(42)))) => {}
+            other => panic!("Expected return 42, got {:?}", other),
         }
     }
 
