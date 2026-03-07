@@ -85,11 +85,7 @@ fn optimize_function_once(func: &mut Function) {
     // creating new propagation opportunities.
     propagate_constants(func);
     constant_fold(func);
-    // Copy propagation is implemented but disabled — it causes 39 integration
-    // test failures. The issue is subtle: even with same-type and call-invalidation
-    // guards, some copies are unsafe to propagate (possibly due to the C backend
-    // relying on specific local assignments for struct field access patterns).
-    // propagate_copies(func);
+    // propagate_copies(func);  // disabled: TypeId aliasing causes Str/GorgetString mismatches
     simplify_algebraic(func);
     simplify_cmp(func);
     eliminate_common_subexpressions(func);
@@ -195,6 +191,10 @@ fn propagate_copies(func: &mut Function) {
             // Then: track/invalidate based on this instruction's writes
             match inst {
                 Instruction::Assign { dst, value } if dst.projections.is_empty() => {
+                    // Writing to dst invalidates any copy whose source is dst
+                    let written = dst.local.0;
+                    copies.retain(|_, src| src.local.0 != written);
+
                     if let Operand::Copy(src_place) = value {
                         if src_place.projections.is_empty() {
                             // Only propagate when src and dst have the same type —
@@ -205,15 +205,15 @@ fn propagate_copies(func: &mut Function) {
                             let src_type = func.locals.get(src_place.local.0 as usize)
                                 .map(|l| l.type_id);
                             if dst_type == src_type && dst_type.is_some() {
-                                copies.insert(dst.local.0, src_place.clone());
+                                copies.insert(written, src_place.clone());
                             } else {
-                                copies.remove(&dst.local.0);
+                                copies.remove(&written);
                             }
                         } else {
-                            copies.remove(&dst.local.0);
+                            copies.remove(&written);
                         }
                     } else {
-                        copies.remove(&dst.local.0);
+                        copies.remove(&written);
                     }
                 }
                 // Calls invalidate all tracked copies (aliases through pointers)
