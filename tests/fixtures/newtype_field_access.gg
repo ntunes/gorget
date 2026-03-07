@@ -1,0 +1,8 @@
+newtype Meters(float)
+newtype UserId(int)
+
+void main():
+    Meters dist = Meters(3.14)
+    print(dist.0)
+    UserId uid = UserId(42)
+    print(uid.0)

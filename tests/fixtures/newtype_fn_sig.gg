@@ -1,0 +1,9 @@
+newtype Score(int)
+
+Score add_bonus(Score s, int bonus):
+    return Score(s.0 + bonus)
+
+void main():
+    Score s = Score(100)
+    Score s2 = add_bonus(s, 50)
+    print(s2.0)

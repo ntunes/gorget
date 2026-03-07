@@ -1,0 +1,5 @@
+# Type alias with generic params (generic alias).
+type Pair[T] = Vector[T]
+
+void main():
+    print("generic alias parsed")

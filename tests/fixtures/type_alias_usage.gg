@@ -1,0 +1,11 @@
+# Type alias used as a declaration type.
+# Currently type aliases are NOT transparent — this is a known bug.
+# This test verifies the alias can at least be declared and parsed.
+type Count = int
+type Callback = int(int, int)
+
+void main():
+    # Until alias transparency is fixed, just verify parsing works
+    int c = 42
+    print(c)
+    print("type alias parsed")

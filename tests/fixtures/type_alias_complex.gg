@@ -1,0 +1,12 @@
+# Type alias with generic target type.
+# Verifies parsing of complex alias right-hand sides.
+type IntList = Vector[int]
+type StringMap = Dict[str, int]
+
+void main():
+    # Use the underlying types directly (alias transparency not yet working)
+    Vector[int] v = Vector[int]()
+    v.push(10)
+    v.push(20)
+    print(v.len())
+    print("complex alias parsed")

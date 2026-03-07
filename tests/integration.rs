@@ -264,6 +264,36 @@ type alias works",
 }
 
 #[test]
+fn type_alias_usage() {
+    run_gg(
+        "type_alias_usage.gg",
+        "\
+42
+type alias parsed",
+    );
+}
+
+#[test]
+fn type_alias_complex() {
+    run_gg(
+        "type_alias_complex.gg",
+        "\
+2
+complex alias parsed",
+    );
+}
+
+#[test]
+fn type_alias_fn_sig() {
+    run_gg("type_alias_fn_sig.gg", "fn type alias parsed");
+}
+
+#[test]
+fn type_alias_callback() {
+    run_gg("type_alias_callback.gg", "generic alias parsed");
+}
+
+#[test]
 fn traits() {
     run_gg("traits.gg", "circle created");
 }
@@ -414,6 +444,21 @@ test7 done",
 #[test]
 fn newtype() {
     run_gg("newtype.gg", "newtype works");
+}
+
+#[test]
+fn newtype_field_access() {
+    run_gg(
+        "newtype_field_access.gg",
+        "\
+3.140000
+42",
+    );
+}
+
+#[test]
+fn newtype_fn_sig() {
+    run_gg("newtype_fn_sig.gg", "150");
 }
 
 /// Test that `gg run` works (compile + execute in one step).

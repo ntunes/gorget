@@ -2,6 +2,8 @@
 
 ## High
 
+- **Type alias transparency broken**: `type Count = int` parses and registers but `Count` is not interchangeable with `int` — the type checker treats it as a distinct `Defined(DefId)` without expanding to the underlying type. The `unify()` function in `typecheck.rs:385` compares by `TypeId` equality, and `resolve_type()` only chases `Var` substitutions, never expands aliases. Fix: either expand aliases during `ast_type_to_resolved()` in `types.rs:354`, or add an alias-expansion step in `resolve_type()`/`unify()`. This blocks the primary use case for `type` aliases (e.g., `type Table = Vector[Vector[str]]`). The existing `type_alias.gg` test never uses `Count` as a type annotation, masking the bug. [added: 2026-03-07]
+
 - **LIR: Phase 5 — A/B test c_lir against current backend**: Phases 1-4 done (lower, SSA, c_lir, optimizer with 7 passes + fixpoint). LIR validation: 100% of valid fixtures pass (483/483). 32 expected-error fixtures correctly fail at compilation. Next: compare c_lir output against current backend on a subset of fixtures, identify codegen gaps. [updated: 2026-03-07]
 
 ## Medium
