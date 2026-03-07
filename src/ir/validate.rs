@@ -44,6 +44,8 @@ pub enum ValidationErrorKind {
     InconsistentDropMetadata { type_name: String, copy_semantics: CopySemantics, drop_strategy: String },
     /// Return place _0 has a type that doesn't match the function's declared return_type.
     ReturnTypeMismatch { return_type: TypeId, local_0_type: TypeId },
+    /// A local was read after being MoveZero'd within the same basic block.
+    UseAfterMove { local: LocalId, block: BlockId },
 }
 
 impl std::fmt::Display for ValidationErrorKind {
@@ -89,6 +91,9 @@ impl std::fmt::Display for ValidationErrorKind {
             }
             Self::ReturnTypeMismatch { return_type, local_0_type } => {
                 write!(f, "return place _0 has type {} but function declares return type {}", local_0_type, return_type)
+            }
+            Self::UseAfterMove { local, block } => {
+                write!(f, "local _{} read after MoveZero in bb{}", local.0, block.0)
             }
         }
     }
@@ -187,6 +192,7 @@ fn check_function(
     check_return_type_consistency(func, ctx, errors);
     check_local_type_ids(func, ctx, type_registry, errors);
     check_drop_targets(func, ctx, type_registry, errors);
+    check_use_after_move(func, ctx, errors);
 
     for (i, block) in func.blocks.iter().enumerate() {
         let block_ctx = format!("{}, bb{}", ctx, i);
@@ -582,6 +588,171 @@ fn check_drop_metadata_consistency(module: &Module, errors: &mut Vec<ValidationE
     }
 }
 
+/// Intra-block use-after-move detection.
+///
+/// Within each basic block, track which locals have been MoveZero'd.
+/// If any subsequent instruction reads a moved local (before it's reassigned),
+/// flag it as a potential use-after-move bug.
+///
+/// This is a conservative intra-block analysis — it won't catch cross-block
+/// use-after-move patterns, which would require a full dataflow framework.
+fn check_use_after_move(
+    func: &Function,
+    ctx: &str,
+    errors: &mut Vec<ValidationError>,
+) {
+    for (block_idx, block) in func.blocks.iter().enumerate() {
+        let mut moved: FxHashSet<u32> = FxHashSet::default();
+
+        for inst in &block.instructions {
+            // First: check if this instruction READS any moved locals
+            let reads = collect_read_locals_for_validate(inst);
+            for r in &reads {
+                if moved.contains(r) {
+                    errors.push(ValidationError {
+                        kind: ValidationErrorKind::UseAfterMove {
+                            local: LocalId(*r),
+                            block: BlockId(block_idx as u32),
+                        },
+                        context: ctx.into(),
+                    });
+                }
+            }
+
+            // Then: update moved set based on writes
+            match inst {
+                Instruction::MoveZero { place } if place.projections.is_empty() => {
+                    moved.insert(place.local.0);
+                }
+                // Any assignment to a simple local restores it (un-moves it)
+                Instruction::Assign { dst, .. } if dst.projections.is_empty() => {
+                    moved.remove(&dst.local.0);
+                }
+                // Other instructions that write to a local destination
+                _ => {
+                    if let Some(written) = instruction_write_local(inst) {
+                        moved.remove(&written);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Get the destination local of an instruction (for un-moving tracking).
+fn instruction_write_local(inst: &Instruction) -> Option<u32> {
+    match inst {
+        Instruction::BinOp { dst, .. }
+        | Instruction::UnOp { dst, .. }
+        | Instruction::Cmp { dst, .. }
+        | Instruction::Cast { dst, .. }
+        | Instruction::BitCast { dst, .. }
+        | Instruction::PtrCast { dst, .. }
+        | Instruction::FieldLoad { dst, .. }
+        | Instruction::IndexLoad { dst, .. }
+        | Instruction::HeapAlloc { dst, .. }
+        | Instruction::HeapAllocArray { dst, .. }
+        | Instruction::StructInit { dst, .. }
+        | Instruction::EnumInit { dst, .. }
+        | Instruction::TupleInit { dst, .. }
+        | Instruction::TagOf { dst, .. }
+        | Instruction::EnumFieldLoad { dst, .. }
+        | Instruction::Borrow { dst, .. }
+        | Instruction::BorrowMut { dst, .. }
+        | Instruction::LoadThreadLocal { dst, .. } => Some(dst.0),
+        Instruction::Call { dst: Some(d), .. }
+        | Instruction::CallIndirect { dst: Some(d), .. }
+        | Instruction::CallExtern { dst: Some(d), .. } => Some(d.0),
+        _ => None,
+    }
+}
+
+/// Collect all locals READ by an instruction (for use-after-move checking).
+fn collect_read_locals_for_validate(inst: &Instruction) -> Vec<u32> {
+    let mut reads = Vec::new();
+
+    let push_op = |reads: &mut Vec<u32>, op: &Operand| {
+        if let Operand::Copy(p) | Operand::Move(p) = op {
+            reads.push(p.local.0);
+            for proj in &p.projections {
+                if let Projection::Index(id) = proj {
+                    reads.push(id.0);
+                }
+            }
+        }
+    };
+    let push_place = |reads: &mut Vec<u32>, p: &Place| {
+        reads.push(p.local.0);
+        for proj in &p.projections {
+            if let Projection::Index(id) = proj {
+                reads.push(id.0);
+            }
+        }
+    };
+
+    match inst {
+        Instruction::Assign { dst, value } => {
+            if !dst.projections.is_empty() {
+                push_place(&mut reads, dst);
+            }
+            push_op(&mut reads, value);
+        }
+        Instruction::BinOp { lhs, rhs, .. } | Instruction::Cmp { lhs, rhs, .. } => {
+            push_op(&mut reads, lhs);
+            push_op(&mut reads, rhs);
+        }
+        Instruction::UnOp { operand, .. }
+        | Instruction::Cast { value: operand, .. }
+        | Instruction::BitCast { value: operand, .. }
+        | Instruction::PtrCast { value: operand, .. }
+        | Instruction::TagOf { operand, .. } => {
+            push_op(&mut reads, operand);
+        }
+        Instruction::FieldLoad { base, .. } | Instruction::EnumFieldLoad { base, .. } => {
+            push_place(&mut reads, base);
+        }
+        Instruction::IndexLoad { base, index, .. } => {
+            push_place(&mut reads, base);
+            push_op(&mut reads, index);
+        }
+        Instruction::Call { args, .. } | Instruction::CallExtern { args, .. } => {
+            for a in args { push_op(&mut reads, a); }
+        }
+        Instruction::CallIndirect { callee, args, .. } => {
+            push_op(&mut reads, callee);
+            for a in args { push_op(&mut reads, a); }
+        }
+        Instruction::StructInit { fields, .. } | Instruction::EnumInit { fields, .. } => {
+            for f in fields { push_op(&mut reads, f); }
+        }
+        Instruction::TupleInit { elements, .. } => {
+            for e in elements { push_op(&mut reads, e); }
+        }
+        // Drop/DropIfAlive of a moved local is OK — that's the normal pattern
+        // (MoveZero + DropIfAlive). Don't flag these as reads.
+        Instruction::Drop { .. } | Instruction::DropIfAlive { .. } => {}
+        // MoveZero reads the place to move from
+        // But we handle MoveZero specially in the caller, so don't add reads here
+        Instruction::MoveZero { .. } => {}
+        Instruction::Borrow { place, .. } | Instruction::BorrowMut { place, .. } => {
+            push_place(&mut reads, place);
+        }
+        Instruction::HeapAlloc { allocator, .. } => { push_op(&mut reads, allocator); }
+        Instruction::HeapAllocArray { count, allocator, .. } => {
+            push_op(&mut reads, count);
+            push_op(&mut reads, allocator);
+        }
+        Instruction::Dealloc { ptr, allocator } => {
+            push_op(&mut reads, ptr);
+            push_op(&mut reads, allocator);
+        }
+        Instruction::PushAllocator { allocator } => { push_op(&mut reads, allocator); }
+        Instruction::PopAllocator | Instruction::Nop
+        | Instruction::InlineC { .. } | Instruction::LoadThreadLocal { .. } => {}
+    }
+    reads
+}
+
 /// Check whether a type needs dropping (mirrors logic in drops.rs).
 fn type_needs_drop(type_id: TypeId, registry: &TypeRegistry) -> bool {
     if type_id.0 < 12 { return false; }
@@ -958,6 +1129,85 @@ mod tests {
         assert!(
             !errors.iter().any(|e| matches!(e.kind, ValidationErrorKind::ReturnTypeMismatch { .. })),
             "Should not flag matching return type"
+        );
+    }
+
+    #[test]
+    fn use_after_move_detected() {
+        let mut module = Module::new();
+        let mut b = FunctionBuilder::new("f", I64_TYPE, &[]);
+        let x = b.add_local(I64_TYPE, Some("x"));
+        b.assign(Place::local(x), FunctionBuilder::const_i64(42));
+        // MoveZero _1 — local is now moved
+        b.move_zero(Place::local(x));
+        // Read _1 after move — use-after-move
+        b.assign(
+            Place::local(LocalId(0)),
+            Operand::Copy(Place::local(x)),
+        );
+        b.ret(Operand::Copy(Place::local(LocalId(0))));
+        module.functions.push(b.build());
+
+        let errors = validate(&module);
+        assert!(errors.iter().any(|e| matches!(
+            &e.kind,
+            ValidationErrorKind::UseAfterMove { local: LocalId(1), .. }
+        )), "Should detect use-after-move. Errors: {:?}", errors);
+    }
+
+    #[test]
+    fn no_use_after_move_with_reassign() {
+        let mut module = Module::new();
+        let mut b = FunctionBuilder::new("f", I64_TYPE, &[]);
+        let x = b.add_local(I64_TYPE, Some("x"));
+        b.assign(Place::local(x), FunctionBuilder::const_i64(42));
+        // MoveZero _1
+        b.move_zero(Place::local(x));
+        // Reassign _1 — restores it
+        b.assign(Place::local(x), FunctionBuilder::const_i64(99));
+        // Read _1 — should be OK since it was reassigned
+        b.assign(
+            Place::local(LocalId(0)),
+            Operand::Copy(Place::local(x)),
+        );
+        b.ret(Operand::Copy(Place::local(LocalId(0))));
+        module.functions.push(b.build());
+
+        let errors = validate(&module);
+        assert!(
+            !errors.iter().any(|e| matches!(e.kind, ValidationErrorKind::UseAfterMove { .. })),
+            "Should not flag use after reassign. Errors: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn drop_after_move_not_flagged() {
+        // MoveZero + DropIfAlive is the standard pattern — don't flag it
+        let mut module = Module::new();
+        // Need a droppable type
+        module.type_registry.add_type_def(TypeDef {
+            name: "Buf".into(),
+            kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
+            metadata: TypeMetadata {
+                size: None,
+                align: None,
+                drop_strategy: DropStrategy::Trivial("buf_free".into()),
+                copy_semantics: CopySemantics::Move,
+            },
+        });
+        let buf_id = module.type_registry.insert(GirType::Named("Buf".into()));
+
+        let mut b = FunctionBuilder::new("f", UNIT_TYPE, &[]);
+        let x = b.add_local(buf_id, Some("x"));
+        b.move_zero(Place::local(x));
+        b.drop_if_alive(Place::local(x));
+        b.ret(Operand::Constant(Constant::Unit));
+        module.functions.push(b.build());
+
+        let errors = validate(&module);
+        assert!(
+            !errors.iter().any(|e| matches!(e.kind, ValidationErrorKind::UseAfterMove { .. })),
+            "DropIfAlive after MoveZero is normal — should not flag. Errors: {:?}", errors
         );
     }
 
