@@ -1,5 +1,7 @@
 # DONE
 
+- [2026-03-07] **feat: LIR Named→Struct type resolution + aggregate SlotStore → memcpy**: `map_gir_type_with_structs` resolves `GirType::Named(name)` to `LirType::Struct(sid)` via struct registry instead of defaulting to `LirType::Ptr`. c_lir emitter handles aggregate `SlotStore` via `memcpy` instead of direct assignment. Expands A/B coverage to 36 fixtures (+4: enums, match_advanced, ownership, pattern_is).
+
 - [2026-03-07] **fix: SSA transitive substitution bug + LIR A/B expansion to 32 fixtures**: Fixed SSA pass dropping multiple SlotLoad substitutions for the same slot (block_params HashMap overwrote earlier entries). Added `value_subst` map to accumulate all eliminated SlotLoad→reaching mappings, with transitive chain resolution. Expanded A/B test coverage from 21→32 fixtures (52% increase). New: bitwise_ops, block_expr, break_nested, control_flow, extern_ffi, for_else, named_scope_basic, strings, type_alias_usage, type_casts, use_overflow_wrap.
 
 - [2026-03-07] **feat: LIR Phase 5 — A/B test infrastructure**: Created tests/lir_ab.rs with 21 fixtures verified through both GIR and LIR C backends. Fixed c_lir: skip std header redeclarations, skip empty-param variadic externs, skip void-typed locals. Baseline: 21/521 fixtures match (4%).

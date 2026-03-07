@@ -251,7 +251,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
         // Instructions
         for inst in &block.insts {
             write!(out, "    ").unwrap();
-            emit_inst(out, inst, module, sn);
+            emit_inst(out, inst, func, module, sn);
             writeln!(out).unwrap();
         }
 
@@ -264,14 +264,21 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
     writeln!(out, "}}").unwrap();
 }
 
-fn emit_inst(out: &mut String, inst: &Inst, module: &LirModule, sn: &HashMap<u32, String>) {
+fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModule, sn: &HashMap<u32, String>) {
     let v = |id: ValueId| -> String { format!("__v{}", id.0) };
     let s = |id: SlotId| -> String { format!("__s{}", id.0) };
 
     match inst {
         // Slot access
         Inst::SlotStore { slot, value } => {
-            write!(out, "{} = {};", s(*slot), v(*value)).unwrap();
+            let slot_ty = &func.slots[slot.0 as usize].ty;
+            if slot_ty.is_aggregate() {
+                // Aggregate store: value is a pointer to source data. Use memcpy.
+                let ty_name = c_type_named(slot_ty, sn);
+                write!(out, "memcpy(&{}, {}, sizeof({}));", s(*slot), v(*value), ty_name).unwrap();
+            } else {
+                write!(out, "{} = {};", s(*slot), v(*value)).unwrap();
+            }
         }
         Inst::SlotLoad { dst, slot, .. } => {
             write!(out, "{} = {};", v(*dst), s(*slot)).unwrap();

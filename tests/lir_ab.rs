@@ -128,3 +128,7 @@ fn ab_test(fixture: &str) {
 #[test] fn lir_ab_type_alias_usage() { ab_test("type_alias_usage.gg"); }
 #[test] fn lir_ab_type_casts() { ab_test("type_casts.gg"); }
 #[test] fn lir_ab_use_overflow_wrap() { ab_test("use_overflow_wrap.gg"); }
+#[test] fn lir_ab_enums() { ab_test("enums.gg"); }
+#[test] fn lir_ab_match_advanced() { ab_test("match_advanced.gg"); }
+#[test] fn lir_ab_ownership() { ab_test("ownership.gg"); }
+#[test] fn lir_ab_pattern_is() { ab_test("pattern_is.gg"); }

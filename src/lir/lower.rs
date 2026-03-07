@@ -85,8 +85,8 @@ impl<'a> LoweringContext<'a> {
         for ext in &self.gir.externs {
             self.module.add_extern(LirExtern {
                 name: ext.name.clone(),
-                params: ext.params.iter().map(|t| map_gir_type(t, &self.gir.type_registry)).collect(),
-                return_type: map_gir_type(&ext.return_type, &self.gir.type_registry),
+                params: ext.params.iter().map(|t| map_gir_type_with_structs(t, &self.gir.type_registry, Some(&self.struct_reg))).collect(),
+                return_type: map_gir_type_with_structs(&ext.return_type, &self.gir.type_registry, Some(&self.struct_reg)),
                 is_variadic: ext.is_variadic,
             });
         }
@@ -95,7 +95,7 @@ impl<'a> LoweringContext<'a> {
         for global in &self.gir.globals {
             self.module.add_global(LirGlobal {
                 name: global.name.clone(),
-                ty: map_gir_type(&global.type_id, &self.gir.type_registry),
+                ty: map_gir_type_with_structs(&global.type_id, &self.gir.type_registry, Some(&self.struct_reg)),
                 init: lower_global_init(&global.init),
                 is_const: false, // GIR doesn't distinguish const vs mut globals
             });
@@ -149,7 +149,7 @@ impl<'a> LoweringContext<'a> {
                         .map(|f| {
                             (
                                 f.name.clone(),
-                                map_gir_type(&f.type_id, &self.gir.type_registry),
+                                map_gir_type_with_structs(&f.type_id, &self.gir.type_registry, Some(&self.struct_reg)),
                             )
                         })
                         .collect();
@@ -166,7 +166,7 @@ impl<'a> LoweringContext<'a> {
                         for (i, f) in variant.fields.iter().enumerate() {
                             fields.push((
                                 format!("{}_{}", variant.name, i),
-                                map_gir_type(&f.type_id, &self.gir.type_registry),
+                                map_gir_type_with_structs(&f.type_id, &self.gir.type_registry, Some(&self.struct_reg)),
                             ));
                         }
                     }
@@ -217,9 +217,9 @@ impl<'a> FuncLowering<'a> {
         let params: Vec<LirType> = gir_func
             .params
             .iter()
-            .map(|t| map_gir_type(t, gir_types))
+            .map(|t| map_gir_type_with_structs(t, gir_types, Some(struct_reg)))
             .collect();
-        let return_type = map_gir_type(&gir_func.return_type, gir_types);
+        let return_type = map_gir_type_with_structs(&gir_func.return_type, gir_types, Some(struct_reg));
         let mut lir_func = LirFunction::new(gir_func.name.clone(), params, return_type);
 
         // Create LIR slots for each GIR local.
@@ -227,7 +227,7 @@ impl<'a> FuncLowering<'a> {
             .locals
             .iter()
             .map(|local| {
-                let ty = map_gir_type(&local.type_id, gir_types);
+                let ty = map_gir_type_with_structs(&local.type_id, gir_types, Some(struct_reg));
                 lir_func.add_slot(ty, local.name_hint.clone())
             })
             .collect();
@@ -284,7 +284,7 @@ impl<'a> FuncLowering<'a> {
                 let l = self.lower_operand(lhs, bb);
                 let r = self.lower_operand(rhs, bb);
                 let result = self.lir_func.next_value();
-                let ty = map_gir_type(type_id, self.gir_types);
+                let ty = map_gir_type_with_structs(type_id, self.gir_types, Some(self.struct_reg));
                 let inst = lower_binop(result, *op, l, r, ty);
                 self.lir_func.block_mut(bb).insts.push(inst);
                 self.store_to_local(*dst, result, bb);
@@ -298,7 +298,7 @@ impl<'a> FuncLowering<'a> {
             } => {
                 let val = self.lower_operand(operand, bb);
                 let result = self.lir_func.next_value();
-                let ty = map_gir_type(type_id, self.gir_types);
+                let ty = map_gir_type_with_structs(type_id, self.gir_types, Some(self.struct_reg));
                 let inst = lower_unop(result, *op, val, ty);
                 self.lir_func.block_mut(bb).insts.push(inst);
                 self.store_to_local(*dst, result, bb);
@@ -329,7 +329,7 @@ impl<'a> FuncLowering<'a> {
                 value,
             } => {
                 let val = self.lower_operand(value, bb);
-                let to = map_gir_type(target_type, self.gir_types);
+                let to = map_gir_type_with_structs(target_type, self.gir_types, Some(self.struct_reg));
                 let result = self.lir_func.next_value();
                 // Determine cast kind based on types.
                 self.lir_func.block_mut(bb).insts.push(Inst::IntCast {
@@ -346,7 +346,7 @@ impl<'a> FuncLowering<'a> {
                 value,
             } => {
                 let val = self.lower_operand(value, bb);
-                let to = map_gir_type(target_type, self.gir_types);
+                let to = map_gir_type_with_structs(target_type, self.gir_types, Some(self.struct_reg));
                 let result = self.lir_func.next_value();
                 self.lir_func.block_mut(bb).insts.push(Inst::Bitcast {
                     dst: result,
@@ -766,7 +766,7 @@ impl<'a> FuncLowering<'a> {
     fn lower_terminator(&mut self, term: &Terminator, bb: BlockId) -> Term {
         match term {
             Terminator::Return(operand) => {
-                let ret_type = map_gir_type(&self.gir_func.return_type, self.gir_types);
+                let ret_type = map_gir_type_with_structs(&self.gir_func.return_type, self.gir_types, Some(self.struct_reg));
                 if ret_type == LirType::Void {
                     Term::RetVoid
                 } else {
@@ -980,7 +980,7 @@ impl<'a> FuncLowering<'a> {
             Constant::Null => Inst::NullPtr { dst },
             Constant::Unit => Inst::IConst { dst, ty: LirType::I32, value: 0 }, // unit = zero
             Constant::SizeOf(type_id) => {
-                let ty = map_gir_type(type_id, self.gir_types);
+                let ty = map_gir_type_with_structs(type_id, self.gir_types, Some(self.struct_reg));
                 let size = super::types::scalar_size(&ty).unwrap_or(8);
                 Inst::IConst { dst, ty: LirType::I64, value: size as i64 }
             }
@@ -1069,7 +1069,7 @@ impl<'a> FuncLowering<'a> {
             if let Some(def) = self.gir_types.get_type_def(name) {
                 if let gir_types::TypeDefKind::Struct(sdef) = &def.kind {
                     if let Some(f) = sdef.fields.get(field as usize) {
-                        return map_gir_type(&f.type_id, self.gir_types);
+                        return map_gir_type_with_structs(&f.type_id, self.gir_types, Some(self.struct_reg));
                     }
                 }
             }
@@ -1132,7 +1132,7 @@ impl<'a> FuncLowering<'a> {
                     for v in &edef.variants {
                         if v.name == variant_name {
                             if let Some(f) = v.fields.get(field as usize) {
-                                return map_gir_type(&f.type_id, self.gir_types);
+                                return map_gir_type_with_structs(&f.type_id, self.gir_types, Some(self.struct_reg));
                             }
                         }
                     }
@@ -1174,7 +1174,7 @@ impl<'a> FuncLowering<'a> {
     fn resolve_place_type(&self, place: &Place) -> LirType {
         let local_type = self.gir_func.locals[place.local.0 as usize].type_id;
         if place.projections.is_empty() {
-            return map_gir_type(&local_type, self.gir_types);
+            return map_gir_type_with_structs(&local_type, self.gir_types, Some(self.struct_reg));
         }
 
         // Walk projections to determine final type.
@@ -1207,7 +1207,7 @@ impl<'a> FuncLowering<'a> {
             }
         }
 
-        map_gir_type(&current_type, self.gir_types)
+        map_gir_type_with_structs(&current_type, self.gir_types, Some(self.struct_reg))
     }
 }
 
@@ -1215,6 +1215,14 @@ impl<'a> FuncLowering<'a> {
 
 /// Map a GIR TypeId to an LIR type.
 pub fn map_gir_type(type_id: &GirTypeId, registry: &TypeRegistry) -> LirType {
+    map_gir_type_with_structs(type_id, registry, None)
+}
+
+pub fn map_gir_type_with_structs(
+    type_id: &GirTypeId,
+    registry: &TypeRegistry,
+    struct_reg: Option<&StructRegistry>,
+) -> LirType {
     // Check primitive type constants first.
     match *type_id {
         gir_types::BOOL_TYPE => return LirType::Bool,
@@ -1248,9 +1256,13 @@ pub fn map_gir_type(type_id: &GirTypeId, registry: &TypeRegistry) -> LirType {
             GirType::Unit => LirType::Void,
             GirType::Ptr(_) | GirType::MutPtr(_) => LirType::Ptr,
             GirType::FnPtr { .. } => LirType::Ptr,
-            GirType::Named(_name) => {
-                // Named types are aggregates → Ptr or Struct.
-                // For now, default to Ptr (address-only).
+            GirType::Named(name) => {
+                // Named types are aggregates — resolve to Struct if registered.
+                if let Some(sr) = struct_reg {
+                    if let Some(sid) = sr.lookup(name) {
+                        return LirType::Struct(sid);
+                    }
+                }
                 LirType::Ptr
             }
         }

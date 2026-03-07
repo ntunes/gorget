@@ -2,7 +2,7 @@
 
 ## High
 
-- **LIR: Phase 5 — expand A/B test coverage**: 32 fixtures match (up from 21). SSA transitive substitution bug fixed (multiple SlotLoads from same slot left dangling ValueIds). Remaining blockers: (1) Str struct vs void* type for string variables, (2) Named type resolution (structs, enums map to void*), (3) C keyword clashes (e.g., function named `double`). Next: fix Named→Struct mapping in `map_gir_type` to unlock struct-using fixtures. [updated: 2026-03-07]
+- **LIR: Phase 5 — expand A/B test coverage**: 36 fixtures match (7% of ~540). Named→Struct resolution done. Remaining blockers: (1) C keyword clashes (`double` function name), (2) string variable handling (printf format strings work, but Str-typed locals need attention), (3) collection methods and stdlib function calls. Next: fix C keyword escaping to unblock `functions.gg`. [updated: 2026-03-07]
 
 ## Medium
 
