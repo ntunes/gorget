@@ -8,6 +8,21 @@ use super::{BasicBlock, ExternDecl, Function, Global, GlobalInit, Module};
 pub fn print_module(module: &Module) -> String {
     let mut out = String::new();
 
+    // Summary statistics
+    let total_blocks: usize = module.functions.iter().map(|f| f.blocks.len()).sum();
+    let total_insts: usize = module.functions.iter()
+        .flat_map(|f| f.blocks.iter())
+        .map(|b| b.instructions.len())
+        .sum();
+    let total_locals: usize = module.functions.iter().map(|f| f.locals.len()).sum();
+    writeln!(out, "; GIR module: {} functions, {} blocks, {} instructions, {} locals",
+        module.functions.len(), total_blocks, total_insts, total_locals).unwrap();
+    writeln!(out, "; {} type defs, {} externs, {} globals",
+        module.type_registry.type_defs().len(),
+        module.externs.len(),
+        module.globals.len()).unwrap();
+    writeln!(out).unwrap();
+
     // Type definitions
     if !module.type_registry.type_defs().is_empty() {
         writeln!(out, "; -- Type definitions --").unwrap();
