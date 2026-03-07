@@ -1,0 +1,23 @@
+from std.sync import Channel
+
+void main():
+    Channel[int] ch = Channel[int](1)
+
+    # Send one item
+    ch.send(42)
+
+    # recv_timeout succeeds immediately (data available)
+    Option[int] got = ch.recv_timeout(1000)
+    match got:
+        case Some(val):
+            print(val)
+        else:
+            print("timeout")
+
+    # recv_timeout times out (no data, short timeout)
+    Option[int] got2 = ch.recv_timeout(50)
+    match got2:
+        case Some(val):
+            print(val)
+        else:
+            print("timeout")

@@ -3066,6 +3066,63 @@ static bool gorget_channel_is_closed(GorgetChannel* ch) {
     return ch->closed != 0;
 }
 
+// Blocking recv with timeout (ms). Returns 1 if received, 0 on timeout.
+static int gorget_channel_recv_timeout(GorgetChannel* ch, void* out, int64_t timeout_ms) {
+    pthread_mutex_lock(&ch->mtx);
+    if (ch->count > 0 || (ch->capacity == 0 && ch->count == 1)) goto have_data;
+
+    {
+        struct timespec deadline;
+        clock_gettime(CLOCK_REALTIME, &deadline);
+        deadline.tv_sec  += timeout_ms / 1000;
+        deadline.tv_nsec += (timeout_ms % 1000) * 1000000L;
+        if (deadline.tv_nsec >= 1000000000L) {
+            deadline.tv_sec++;
+            deadline.tv_nsec -= 1000000000L;
+        }
+        while (ch->count == 0 && !ch->closed) {
+            int rc = pthread_cond_timedwait(&ch->not_empty, &ch->mtx, &deadline);
+            if (rc != 0) { /* ETIMEDOUT */
+                pthread_mutex_unlock(&ch->mtx);
+                return 0;
+            }
+        }
+        if (ch->count == 0) {
+            pthread_mutex_unlock(&ch->mtx);
+            return 0; /* closed + empty */
+        }
+    }
+
+have_data:
+    if (ch->capacity == 0) {
+        memcpy(out, ch->buf, ch->elem_size);
+        ch->count = 0;
+        if (ch->send_waiter_count > 0) {
+            GorgetWaker w = ch->send_waiters[0];
+            memmove(ch->send_waiters, ch->send_waiters + 1, (--ch->send_waiter_count) * sizeof(GorgetWaker));
+            pthread_mutex_unlock(&ch->mtx);
+            w.wake(&w);
+        } else {
+            pthread_cond_signal(&ch->not_full);
+            pthread_mutex_unlock(&ch->mtx);
+        }
+    } else {
+        memcpy(out, (char*)ch->buf + ch->head * ch->elem_size, ch->elem_size);
+        ch->head = (ch->head + 1) % ch->capacity;
+        ch->count--;
+        if (ch->send_waiter_count > 0) {
+            GorgetWaker w = ch->send_waiters[0];
+            memmove(ch->send_waiters, ch->send_waiters + 1, (--ch->send_waiter_count) * sizeof(GorgetWaker));
+            pthread_mutex_unlock(&ch->mtx);
+            w.wake(&w);
+        } else {
+            pthread_cond_signal(&ch->not_full);
+            pthread_mutex_unlock(&ch->mtx);
+        }
+    }
+    return 1;
+}
+
 static void gorget_channel_close(GorgetChannel* ch) {
     pthread_mutex_lock(&ch->mtx);
     ch->closed = 1;

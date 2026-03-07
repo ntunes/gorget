@@ -73,6 +73,8 @@ pub struct RuntimeFeatures {
     pub has_sync: bool,
     /// Channel element C type names (e.g., ["int64_t"] for Channel[int]).
     pub channel_types: Vec<String>,
+    /// Channel element types that need recv_timeout wrapper (subset of channel_types).
+    pub channel_recv_timeout_types: Vec<String>,
     /// Shared[T] inner C type names (e.g., ["int64_t"] for Shared[int]).
     pub shared_types: Vec<String>,
     /// Weak[T] inner C type names (e.g., ["int64_t"] for Weak[int]).

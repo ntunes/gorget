@@ -422,6 +422,30 @@ pub(super) fn lower_method_call(
                         let dst = builder.call(&poll_fn, vec![ch_ptr, out_ptr, waker], BOOL_TYPE);
                         return FunctionBuilder::copy(dst);
                     }
+                    "recv_timeout" if !args.is_empty() => {
+                        let ms = lower_expr(ctx, builder, &args[0].node.value);
+                        let option_name = format!("Option__{elem_suffix}");
+                        let option_type = ctx.lookup_type_by_name(&option_name)
+                            .unwrap_or(I64_TYPE);
+                        let recv_fn = format!("{chan_tn}__recv_timeout");
+                        let dst = builder.call(&recv_fn, vec![ch_ptr, ms], option_type);
+                        return FunctionBuilder::copy(dst);
+                    }
+                    "len" => {
+                        let len_fn = format!("{chan_tn}__len");
+                        let dst = builder.call(&len_fn, vec![ch_ptr], I64_TYPE);
+                        return FunctionBuilder::copy(dst);
+                    }
+                    "capacity" => {
+                        let cap_fn = format!("{chan_tn}__capacity");
+                        let dst = builder.call(&cap_fn, vec![ch_ptr], I64_TYPE);
+                        return FunctionBuilder::copy(dst);
+                    }
+                    "is_closed" => {
+                        let closed_fn = format!("{chan_tn}__is_closed");
+                        let dst = builder.call(&closed_fn, vec![ch_ptr], BOOL_TYPE);
+                        return FunctionBuilder::copy(dst);
+                    }
                     _ => {}
                 }
             }
@@ -1287,9 +1311,19 @@ fn infer_collection_method_return_type(
         let elem_suffix = type_name.strip_prefix("Channel__").unwrap_or("int64_t");
         return ctx.type_mapper.lookup_named(elem_suffix).unwrap_or(I64_TYPE);
     }
-    // Channel.poll_recv → bool
-    if type_name.starts_with("Channel__") && method_name == "poll_recv" {
+    // Channel.poll_recv / is_closed → bool
+    if type_name.starts_with("Channel__") && (method_name == "poll_recv" || method_name == "is_closed") {
         return BOOL_TYPE;
+    }
+    // Channel.len / capacity → int
+    if type_name.starts_with("Channel__") && (method_name == "len" || method_name == "capacity") {
+        return I64_TYPE;
+    }
+    // Channel.recv_timeout → Option[T]
+    if type_name.starts_with("Channel__") && method_name == "recv_timeout" {
+        let elem_suffix = type_name.strip_prefix("Channel__").unwrap_or("int64_t");
+        let option_name = format!("Option__{elem_suffix}");
+        return ctx.lookup_type_by_name(&option_name).unwrap_or(I64_TYPE);
     }
 
     match method_name {

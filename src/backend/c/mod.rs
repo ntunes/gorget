@@ -725,6 +725,11 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
         emit_thread_defs(&mut out, module);
     }
 
+    // Emit Channel recv_timeout implementations (needs Option__T from type_definitions)
+    if !module.runtime.channel_types.is_empty() {
+        emit_channel_recv_timeout_defs(&mut out, module);
+    }
+
     // Forward declarations for all functions (before globals so vtable refs resolve)
     let skip_names = template_type_names(module);
     for func in &module.functions {
@@ -1407,6 +1412,40 @@ fn emit_rwlock_defs(out: &mut String, module: &Module) {
     }
 }
 
+/// Emit Channel__T__recv_timeout implementations (after Option__T is defined).
+/// Only emits for channel types where recv_timeout is actually called.
+fn emit_channel_recv_timeout_defs(out: &mut String, module: &Module) {
+    // Scan GIR for Channel__T__recv_timeout calls to avoid emitting unused wrappers
+    // (which would reference Option__T that may not be defined).
+    let mut needed: Vec<&str> = Vec::new();
+    for func in &module.functions {
+        for bb in &func.blocks {
+            for inst in &bb.instructions {
+                if let Instruction::Call { func: fname, .. } = inst {
+                    if fname.ends_with("__recv_timeout") {
+                        if let Some(elem) = fname.strip_prefix("Channel__")
+                            .and_then(|s| s.strip_suffix("__recv_timeout"))
+                        {
+                            if !needed.iter().any(|n| *n == elem) {
+                                needed.push(elem);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for elem_c in needed {
+        let chan_name = format!("Channel__{elem_c}");
+        let option_name = format!("Option__{elem_c}");
+        let _ = writeln!(out,
+            "{option_name} {chan_name}__recv_timeout({chan_name}* self, int64_t ms) {{ \
+             {option_name} __r; {elem_c} __val; \
+             if (gorget_channel_recv_timeout(*self, &__val, ms)) {{ __r.tag = 0; __r.data.Some._0 = __val; }} \
+             else {{ __r.tag = 1; }} return __r; }}");
+    }
+}
+
 /// Emit Thread__T typedef + join/id methods.
 /// The internal `__GorgetThread__T` context struct is also emitted here.
 /// Per-function spawn helpers (which reference GIR functions) are in emit_thread_helpers.
@@ -1530,6 +1569,7 @@ fn emit_channel_and_task_defs(out: &mut String, module: &Module) {
         let _ = writeln!(out,
             "static inline bool {chan_name}__is_closed({chan_name}* self) {{ \
              return gorget_channel_is_closed(*self); }}");
+        // recv_timeout — defined later (after Option__T) by emit_channel_recv_timeout_defs
         // poll_send(&self, val, waker) → bool
         let _ = writeln!(out,
             "static inline bool {chan_name}__poll_send({chan_name}* self, {elem_c} val, GorgetWaker* waker) {{ \
@@ -5241,7 +5281,8 @@ fn emit_instruction(
                         } else if ret_cstr && c_type == "Str" {
                             let _ = writeln!(out, "        _{id} = gorget_str_from_cstr({c_name}({args_str}));", id = dst_id.0);
                         } else if c_type.starts_with("Option__") && !is_user_fn
-                            && !c_name.ends_with("__upgrade") {
+                            && !c_name.ends_with("__upgrade")
+                            && !c_name.ends_with("__recv_timeout") {
                             // Option wrapping for runtime functions.
                             // GorgetRegexMatch uses .start == -1 sentinel; int options use >= 0.
                             // Note: __upgrade functions already return Option directly — skip wrapping.

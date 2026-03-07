@@ -1692,6 +1692,10 @@ fn gen_channel_module() -> Module {
             Spanned::dummy(decl_method("len", Ownership::Borrow, &[], ty_int())),
             Spanned::dummy(decl_method("capacity", Ownership::Borrow, &[], ty_int())),
             Spanned::dummy(decl_method("is_closed", Ownership::Borrow, &[], ty_bool())),
+            Spanned::dummy(decl_method("recv_timeout", Ownership::Borrow, &[("ms", ty_int())], Type::Named {
+                name: Spanned::dummy("Option".to_string()),
+                generic_args: vec![Spanned::dummy(ty_t())],
+            })),
         ],
         span: Span::dummy(),
     }));

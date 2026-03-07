@@ -7155,6 +7155,11 @@ fn spawn_blocking_basic() {
 }
 
 #[test]
+fn spawn_blocking_multi() {
+    run_gg("spawn_blocking_multi.gg", "one\ntwo\nthree");
+}
+
+#[test]
 fn async_blocking_coroutine() {
     run_gg("async_blocking_coroutine.gg", "coroutine+blocking");
 }
@@ -7177,6 +7182,11 @@ fn async_channel_poll() {
 #[test]
 fn async_channel_multi() {
     run_gg("async_channel_multi.gg", "4\n45");
+}
+
+#[test]
+fn channel_recv_timeout() {
+    run_gg("channel_recv_timeout.gg", "42\ntimeout");
 }
 
 #[test]

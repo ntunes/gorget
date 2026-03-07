@@ -38,7 +38,6 @@
 
 - **Inline bounds follow-up — find new syntax for `outlives` to fully remove `where`**: The `where` keyword is now only used for `where a outlives b`. Options: (1) inline on the lifetime param `live(a outlives b)`, (2) a dedicated `outlives` section, (3) lifetime annotations on the param itself. Survey and decide before removing `where` entirely. [added: 2026-03-02]
 
-- **`spawn_blocking` — multiple concurrent tasks test**: Basic single-task `spawn blocking` works end-to-end. Add a test with multiple concurrent blocking tasks to stress the blocking pool. [added: 2026-03-07]
 
 - **Selective token hold across await (optimization)**: CFA could prove that an awaited task doesn't touch a given shared variable, allowing the token to be held across await instead of released. This would eliminate stale-condition warnings for disjoint shared state. Requires transitive closure over spawn chains; must conservatively release for opaque callables/indirection. Deadlock risk on false negatives makes this a "nice to have" — current release-on-await + stale warning is safe and the user fix is one line (re-read after await). Implement only if stale warnings become noisy in practice. [added: 2026-03-06]
 

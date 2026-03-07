@@ -1,0 +1,19 @@
+from std.fs import read_file, write_file
+
+str blocking_read(str path):
+    return read_file(path)
+
+async void main():
+    write_file("/tmp/gorget_sb1.txt", "one")
+    write_file("/tmp/gorget_sb2.txt", "two")
+    write_file("/tmp/gorget_sb3.txt", "three")
+
+    # Spawn 3 blocking tasks concurrently
+    Task[str] t1 = spawn blocking blocking_read("/tmp/gorget_sb1.txt")
+    Task[str] t2 = spawn blocking blocking_read("/tmp/gorget_sb2.txt")
+    Task[str] t3 = spawn blocking blocking_read("/tmp/gorget_sb3.txt")
+
+    # Await and print each result
+    print(t1.await())
+    print(t2.await())
+    print(t3.await())
