@@ -459,9 +459,9 @@ impl<'a> FuncLowering<'a> {
                 field,
             } => {
                 let base_val = self.lower_place_addr(base, bb);
-                // We need the struct type to emit FieldPtr. Determine from the GIR type.
-                let gir_type_id = self.gir_func.locals[base.local.0 as usize].type_id;
-                let struct_id = self.resolve_struct_id_for_field(gir_type_id, *field, self.module_structs);
+                // Use effective type after base projections (e.g., Deref→Field chain).
+                let effective_type = self.effective_place_type(base);
+                let struct_id = self.resolve_struct_id_for_field(effective_type, *field, self.module_structs);
                 let fptr = self.lir_func.next_value();
                 self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
                     dst: fptr,
@@ -470,7 +470,7 @@ impl<'a> FuncLowering<'a> {
                     field: *field,
                 });
                 let result = self.lir_func.next_value();
-                let field_ty = self.resolve_field_type(gir_type_id, *field);
+                let field_ty = self.resolve_field_type(effective_type, *field);
                 self.lir_func.block_mut(bb).insts.push(Inst::Load {
                     dst: result,
                     ptr: fptr,
@@ -905,11 +905,13 @@ impl<'a> FuncLowering<'a> {
             .insts
             .push(Inst::SlotAddr { dst: addr, slot });
 
+        // Track the current GIR type through each projection step.
+        let mut current_gir_type = self.gir_func.locals[place.local.0 as usize].type_id;
+
         for proj in &place.projections {
             match proj {
                 Projection::Field(field) => {
-                    let gir_type_id = self.gir_func.locals[place.local.0 as usize].type_id;
-                    let struct_id = self.resolve_struct_id_for_field(gir_type_id, *field, self.module_structs);
+                    let struct_id = self.resolve_struct_id_for_field(current_gir_type, *field, self.module_structs);
                     let next = self.lir_func.next_value();
                     self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
                         dst: next,
@@ -918,6 +920,8 @@ impl<'a> FuncLowering<'a> {
                         field: *field,
                     });
                     addr = next;
+                    // Update type to the field's type for subsequent projections.
+                    current_gir_type = self.resolve_field_gir_type_id(current_gir_type, *field);
                 }
                 Projection::Index(idx_local) => {
                     let idx_slot = self.local_to_slot[idx_local.0 as usize];
@@ -945,6 +949,8 @@ impl<'a> FuncLowering<'a> {
                         ty: LirType::Ptr,
                     });
                     addr = ptr_val;
+                    // Update type to the pointee type.
+                    current_gir_type = self.resolve_deref_gir_type_id(current_gir_type);
                 }
             }
         }
@@ -1066,6 +1072,48 @@ impl<'a> FuncLowering<'a> {
             }
         }
         LirType::I64 // fallback
+    }
+
+    /// Return the GIR TypeId of a struct field (for tracking types through projection chains).
+    fn resolve_field_gir_type_id(&self, gir_type_id: GirTypeId, field: u32) -> GirTypeId {
+        let gir_type = self.gir_types.get(gir_type_id);
+        if let Some(GirType::Named(name)) = gir_type {
+            if let Some(def) = self.gir_types.get_type_def(name) {
+                if let gir_types::TypeDefKind::Struct(sdef) = &def.kind {
+                    if let Some(f) = sdef.fields.get(field as usize) {
+                        return f.type_id;
+                    }
+                }
+            }
+        }
+        gir_type_id // fallback: keep same type
+    }
+
+    /// Resolve the pointee type for a Deref projection.
+    fn resolve_deref_gir_type_id(&self, gir_type_id: GirTypeId) -> GirTypeId {
+        match self.gir_types.get(gir_type_id) {
+            Some(GirType::Ptr(inner)) | Some(GirType::MutPtr(inner)) => *inner,
+            _ => gir_type_id, // fallback
+        }
+    }
+
+    /// Compute the effective GIR type after following all projections in a place.
+    fn effective_place_type(&self, place: &Place) -> GirTypeId {
+        let mut ty = self.gir_func.locals[place.local.0 as usize].type_id;
+        for proj in &place.projections {
+            match proj {
+                Projection::Field(field) => {
+                    ty = self.resolve_field_gir_type_id(ty, *field);
+                }
+                Projection::Deref => {
+                    ty = self.resolve_deref_gir_type_id(ty);
+                }
+                Projection::Index(_) => {
+                    // Element type — keep as-is for now (array element type tracking TBD)
+                }
+            }
+        }
+        ty
     }
 
     fn resolve_enum_field_type(
