@@ -600,8 +600,8 @@ fn simplify_algebraic(func: &mut Function) {
     for bb in &mut func.blocks {
         for inst in &mut bb.instructions {
             let simplified = match inst {
-                Instruction::BinOp { dst, op, lhs, rhs, .. } => {
-                    simplify_binop(*dst, *op, lhs, rhs)
+                Instruction::BinOp { dst, op, type_id, lhs, rhs } => {
+                    simplify_binop(*dst, *op, *type_id, lhs, rhs)
                 }
                 _ => None,
             };
@@ -648,76 +648,129 @@ fn simplify_cmp(func: &mut Function) {
     }
 }
 
-fn simplify_binop(dst: LocalId, op: BinOp, lhs: &Operand, rhs: &Operand) -> Option<Instruction> {
+fn simplify_binop(dst: LocalId, op: BinOp, type_id: TypeId, lhs: &Operand, rhs: &Operand) -> Option<Instruction> {
+    use crate::ir::types::*;
     let assign_op = |op: Operand| -> Instruction {
         Instruction::Assign { dst: Place::local(dst), value: op }
     };
-    let zero_i64 = || Operand::Constant(Constant::I64(0));
+    let typed_zero = || -> Operand {
+        Operand::Constant(match type_id {
+            I32_TYPE => Constant::I32(0),
+            I16_TYPE => Constant::I16(0),
+            I8_TYPE => Constant::I8(0),
+            U64_TYPE => Constant::U64(0),
+            U32_TYPE => Constant::U32(0),
+            U16_TYPE => Constant::U16(0),
+            U8_TYPE => Constant::U8(0),
+            F64_TYPE => Constant::F64(0.0),
+            F32_TYPE => Constant::F32(0.0),
+            _ => Constant::I64(0), // default to I64
+        })
+    };
+    let typed_one = || -> Operand {
+        Operand::Constant(match type_id {
+            I32_TYPE => Constant::I32(1),
+            I16_TYPE => Constant::I16(1),
+            I8_TYPE => Constant::I8(1),
+            U64_TYPE => Constant::U64(1),
+            U32_TYPE => Constant::U32(1),
+            U16_TYPE => Constant::U16(1),
+            U8_TYPE => Constant::U8(1),
+            F64_TYPE => Constant::F64(1.0),
+            F32_TYPE => Constant::F32(1.0),
+            _ => Constant::I64(1), // default to I64
+        })
+    };
 
     // Check for x op x patterns (same local, no projections)
     if let (Operand::Copy(lp), Operand::Copy(rp)) = (lhs, rhs) {
         if lp.local == rp.local && lp.projections.is_empty() && rp.projections.is_empty() {
             match op {
                 BinOp::Sub | BinOp::SubWrap | BinOp::BitXor => {
-                    return Some(assign_op(zero_i64()));
+                    return Some(assign_op(typed_zero()));
                 }
                 _ => {}
             }
         }
     }
 
-    // Extract constant value from either side
-    let lhs_i64 = match lhs { Operand::Constant(Constant::I64(v)) => Some(*v), _ => None };
+    // Helper: check if an operand is zero or one for any integer type
+    let is_zero = |op: &Operand| -> bool {
+        matches!(op,
+            Operand::Constant(Constant::I64(0)) |
+            Operand::Constant(Constant::I32(0)) |
+            Operand::Constant(Constant::I16(0)) |
+            Operand::Constant(Constant::I8(0)) |
+            Operand::Constant(Constant::U64(0)) |
+            Operand::Constant(Constant::U32(0)) |
+            Operand::Constant(Constant::U16(0)) |
+            Operand::Constant(Constant::U8(0))
+        )
+    };
+    let is_one = |op: &Operand| -> bool {
+        matches!(op,
+            Operand::Constant(Constant::I64(1)) |
+            Operand::Constant(Constant::I32(1)) |
+            Operand::Constant(Constant::I16(1)) |
+            Operand::Constant(Constant::I8(1)) |
+            Operand::Constant(Constant::U64(1)) |
+            Operand::Constant(Constant::U32(1)) |
+            Operand::Constant(Constant::U16(1)) |
+            Operand::Constant(Constant::U8(1))
+        )
+    };
+
+    // Extract I64 constant from RHS (used for Pow check)
     let rhs_i64 = match rhs { Operand::Constant(Constant::I64(v)) => Some(*v), _ => None };
 
     match op {
         // Additive identity: x + 0 → x, 0 + x → x
         BinOp::Add | BinOp::AddWrap => {
-            if rhs_i64 == Some(0) { return Some(assign_op(lhs.clone())); }
-            if lhs_i64 == Some(0) { return Some(assign_op(rhs.clone())); }
+            if is_zero(rhs) { return Some(assign_op(lhs.clone())); }
+            if is_zero(lhs) { return Some(assign_op(rhs.clone())); }
         }
         // Subtractive identity: x - 0 → x
         BinOp::Sub | BinOp::SubWrap => {
-            if rhs_i64 == Some(0) { return Some(assign_op(lhs.clone())); }
+            if is_zero(rhs) { return Some(assign_op(lhs.clone())); }
         }
         // Multiplicative identity/absorbing: x * 1 → x, 1 * x → x, x * 0 → 0, 0 * x → 0
         BinOp::Mul | BinOp::MulWrap => {
-            if rhs_i64 == Some(1) { return Some(assign_op(lhs.clone())); }
-            if lhs_i64 == Some(1) { return Some(assign_op(rhs.clone())); }
-            if rhs_i64 == Some(0) { return Some(assign_op(zero_i64())); }
-            if lhs_i64 == Some(0) { return Some(assign_op(zero_i64())); }
+            if is_one(rhs) { return Some(assign_op(lhs.clone())); }
+            if is_one(lhs) { return Some(assign_op(rhs.clone())); }
+            if is_zero(rhs) { return Some(assign_op(typed_zero())); }
+            if is_zero(lhs) { return Some(assign_op(typed_zero())); }
         }
         // Division identity: x / 1 → x
         BinOp::Div => {
-            if rhs_i64 == Some(1) { return Some(assign_op(lhs.clone())); }
+            if is_one(rhs) { return Some(assign_op(lhs.clone())); }
         }
         // Remainder: x % 1 → 0
         BinOp::Rem | BinOp::Mod => {
-            if rhs_i64 == Some(1) { return Some(assign_op(zero_i64())); }
+            if is_one(rhs) { return Some(assign_op(typed_zero())); }
         }
         // Bitwise AND absorbing: x & 0 → 0, 0 & x → 0
         BinOp::BitAnd => {
-            if rhs_i64 == Some(0) { return Some(assign_op(zero_i64())); }
-            if lhs_i64 == Some(0) { return Some(assign_op(zero_i64())); }
+            if is_zero(rhs) { return Some(assign_op(typed_zero())); }
+            if is_zero(lhs) { return Some(assign_op(typed_zero())); }
         }
         // Bitwise OR identity: x | 0 → x, 0 | x → x
         BinOp::BitOr => {
-            if rhs_i64 == Some(0) { return Some(assign_op(lhs.clone())); }
-            if lhs_i64 == Some(0) { return Some(assign_op(rhs.clone())); }
+            if is_zero(rhs) { return Some(assign_op(lhs.clone())); }
+            if is_zero(lhs) { return Some(assign_op(rhs.clone())); }
         }
         // Bitwise XOR identity: x ^ 0 → x, 0 ^ x → x
         BinOp::BitXor => {
-            if rhs_i64 == Some(0) { return Some(assign_op(lhs.clone())); }
-            if lhs_i64 == Some(0) { return Some(assign_op(rhs.clone())); }
+            if is_zero(rhs) { return Some(assign_op(lhs.clone())); }
+            if is_zero(lhs) { return Some(assign_op(rhs.clone())); }
         }
         // Shift identity: x << 0 → x, x >> 0 → x
         BinOp::Shl | BinOp::Shr => {
-            if rhs_i64 == Some(0) { return Some(assign_op(lhs.clone())); }
+            if is_zero(rhs) { return Some(assign_op(lhs.clone())); }
         }
         // Power: x ** 1 → x, x ** 0 → 1
         BinOp::Pow => {
             if rhs_i64 == Some(1) { return Some(assign_op(lhs.clone())); }
-            if rhs_i64 == Some(0) { return Some(assign_op(Operand::Constant(Constant::I64(1)))); }
+            if rhs_i64 == Some(0) { return Some(assign_op(typed_one())); }
         }
     }
 
