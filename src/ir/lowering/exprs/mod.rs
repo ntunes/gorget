@@ -81,9 +81,9 @@ fn lower_expr_inner(
                 // If this is a shared variable:
                 // - In spawn arg context (shared_pass_raw), return the raw Mutex local
                 // - Otherwise, auto-emit lock+get for transparent access
-                if let Some(&(hidden_local, inner_type, _wrapper_type, kind, _)) = ctx.shared_locals.get(&local_id) {
+                if let Some(&(hidden_local, inner_type, _wrapper_type, kind, _)) = ctx.shared.locals.get(&local_id) {
                     use super::context::SharedLocalKind;
-                    if ctx.shared_pass_raw {
+                    if ctx.shared.pass_raw {
                         return Operand::Copy(Place::local(hidden_local));
                     }
                     return match kind {
@@ -523,7 +523,7 @@ fn lower_expr_inner(
             // Check if the inner expression is a known spawn result (Task local)
             let task_local = if let Operand::Copy(ref place) | Operand::Move(ref place) = inner {
                 if place.projections.is_empty() {
-                    ctx.spawn_result_locals.get(&place.local).cloned()
+                    ctx.spawn.result_locals.get(&place.local).cloned()
                         .map(|fn_name| (place.local, fn_name))
                 } else {
                     None
@@ -649,7 +649,7 @@ fn lower_expr_inner(
                     for (i, arg) in call_args.iter().enumerate() {
                         if let Expr::Identifier(arg_name) = &arg.node.value.node {
                             if let Some((local_id, _)) = ctx.lookup_local(arg_name) {
-                                if let Some(&(_, inner_type, wrapper_type, kind, ast_shared)) = ctx.shared_locals.get(&local_id) {
+                                if let Some(&(_, inner_type, wrapper_type, kind, ast_shared)) = ctx.shared.locals.get(&local_id) {
                                     has_any_shared = true;
                                     // Only auto-decided shared vars get token wrappers.
                                     // User overrides (shared(atomic), shared(rwlock)) pass
@@ -702,7 +702,7 @@ fn lower_expr_inner(
                     if !shared_spawn_args.is_empty() {
                         // Check if callee is async with await points — needs
                         // async-aware token management (release at await, reacquire after).
-                        let callee_has_awaits = ctx.fn_ast_bodies.get(fn_name.as_str())
+                        let callee_has_awaits = ctx.shared.fn_ast_bodies.get(fn_name.as_str())
                             .map_or(false, |func_def| {
                                 if let crate::parser::ast::FunctionBody::Block(block) = &func_def.body {
                                     block.stmts.iter().any(|s| super::context::stmt_has_await(&s.node))
@@ -717,7 +717,7 @@ fn lower_expr_inner(
                             format!("__shared_token_{c_name}")
                         };
 
-                        if !ctx.spawned_fn_names.contains_key(&wrapper_name) {
+                        if !ctx.spawn.fn_names.contains_key(&wrapper_name) {
                             if callee_has_awaits {
                                 // Async-aware variant: defer generation until after all functions
                                 // are lowered. The GIR-to-GIR transform will operate on the
@@ -742,7 +742,7 @@ fn lower_expr_inner(
                                         inner_c_name: inner_c,
                                     }
                                 }).collect();
-                                ctx.pending_shared_variants.push(PendingSharedVariant {
+                                ctx.shared.pending_variants.push(PendingSharedVariant {
                                     source_fn_name: c_name.clone(),
                                     variant_name: wrapper_name.clone(),
                                     shared_args: specs,
@@ -758,7 +758,7 @@ fn lower_expr_inner(
                                     &shared_spawn_args,
                                     fn_ret_type,
                                 );
-                                ctx.spawn_wrapper_fns.push(wrapper_fn);
+                                ctx.spawn.wrapper_fns.push(wrapper_fn);
                             }
 
                             // Register wrapper signature: wrapper params → return type
@@ -778,15 +778,15 @@ fn lower_expr_inner(
                             ctx.fn_param_names.insert(wrapper_name.clone(), param_names);
                         }
 
-                        ctx.pending_spawn_fn = Some(wrapper_name.clone());
-                        ctx.spawned_fn_names.insert(wrapper_name.clone(), true);
+                        ctx.spawn.pending_fn = Some(wrapper_name.clone());
+                        ctx.spawn.fn_names.insert(wrapper_name.clone(), true);
 
                         // Lower args: shared vars pass the raw sync primitive
-                        ctx.shared_pass_raw = true;
+                        ctx.shared.pass_raw = true;
                         let lowered_args: Vec<Operand> = call_args.iter()
                             .map(|arg| lower_expr(ctx, builder, &arg.node.value))
                             .collect();
-                        ctx.shared_pass_raw = false;
+                        ctx.shared.pass_raw = false;
 
                         let spawn_fn = format!("__gorget_spawn_{wrapper_name}");
                         let dst = builder.call(&spawn_fn, lowered_args, task_type);
@@ -794,16 +794,16 @@ fn lower_expr_inner(
                     } else {
                         // No Auto shared args — spawn the original function directly.
                         // If there are user-overridden shared vars, pass them raw.
-                        ctx.pending_spawn_fn = Some(c_name.clone());
-                        ctx.spawned_fn_names.insert(c_name.clone(), true);
+                        ctx.spawn.pending_fn = Some(c_name.clone());
+                        ctx.spawn.fn_names.insert(c_name.clone(), true);
 
                         if has_any_shared {
-                            ctx.shared_pass_raw = true;
+                            ctx.shared.pass_raw = true;
                         }
                         let lowered_args: Vec<Operand> = call_args.iter()
                             .map(|arg| lower_expr(ctx, builder, &arg.node.value))
                             .collect();
-                        ctx.shared_pass_raw = false;
+                        ctx.shared.pass_raw = false;
                         let spawn_fn = format!("__gorget_spawn_{c_name}");
                         let dst = builder.call(&spawn_fn, lowered_args, task_type);
                         return FunctionBuilder::copy(dst);
@@ -1469,7 +1469,7 @@ fn lower_method_call(
     if let Expr::Identifier(name) = &receiver.node {
         // Resolve generic type params to concrete type names (e.g., T → "int" when T=int).
         // This enables T.default(), T.one(), T.parse() etc. inside monomorphized generic bodies.
-        let resolved_name: String = if let Some(&type_id) = ctx.generic_type_params.get(name.as_str()) {
+        let resolved_name: String = if let Some(&type_id) = ctx.generics.generic_type_params.get(name.as_str()) {
             gorget_name_for_type_id(ctx, type_id)
         } else {
             name.clone()
@@ -1656,7 +1656,7 @@ fn lower_method_call(
     if method_name == "await" {
         let task_local = if let Operand::Copy(ref place) | Operand::Move(ref place) = recv {
             if place.projections.is_empty() {
-                ctx.spawn_result_locals.get(&place.local).cloned()
+                ctx.spawn.result_locals.get(&place.local).cloned()
                     .map(|fn_name| (place.local, fn_name))
             } else {
                 None
@@ -4294,7 +4294,7 @@ fn lower_call(
                     ctx.type_mapper.register_named(thread_name.clone(), tid);
                     tid
                 };
-                ctx.thread_spawned_fns.entry(fn_name.clone()).or_insert(fn_ret_type);
+                ctx.spawn.thread_fns.entry(fn_name.clone()).or_insert(fn_ret_type);
                 let spawn_fn = format!("__gorget_thread_spawn_{fn_name}");
                 let dst = builder.call(&spawn_fn, vec![], thread_type);
                 return FunctionBuilder::copy(dst);

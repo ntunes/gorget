@@ -463,14 +463,14 @@ pub fn lower_generic_function(
 
         FunctionBody::Declaration | FunctionBody::Extern(_) => {
             ctx.drops.pop_scope_no_emit();
-            ctx.type_name_subs.clear();
-            ctx.generic_type_params.clear();
+            ctx.generics.type_name_subs.clear();
+            ctx.generics.generic_type_params.clear();
             return;
         }
     }
 
-    ctx.type_name_subs.clear();
-    ctx.generic_type_params.clear();
+    ctx.generics.type_name_subs.clear();
+    ctx.generics.generic_type_params.clear();
     module.functions.push(builder.build());
 }
 
@@ -516,7 +516,7 @@ pub fn lower_generic_equip_methods_with_defaults(
             let template_mangled = super::types::mangle_generic_name(base_name, generic_args);
             // mangled_type_name is already the concrete name (e.g., "Pair__int64_t")
             if template_mangled != mangled_type_name {
-                ctx.type_name_subs.insert(template_mangled, mangled_type_name.to_string());
+                ctx.generics.type_name_subs.insert(template_mangled, mangled_type_name.to_string());
             }
         }
     }
@@ -695,8 +695,8 @@ pub fn lower_generic_equip_methods_with_defaults(
         }
     }
 
-    ctx.type_name_subs.clear();
-    ctx.generic_type_params.clear();
+    ctx.generics.type_name_subs.clear();
+    ctx.generics.generic_type_params.clear();
 }
 
 /// Build type parameter substitutions from generic params + concrete type args.
@@ -790,10 +790,10 @@ fn extract_callable_return_type(
 /// (e.g., I64_TYPE for int). This enables `map_type_with_subs` to resolve
 /// bare type parameters in variable declarations inside generic bodies.
 fn build_generic_type_params(ctx: &mut LoweringContext, subs: &[(String, Type)]) {
-    ctx.generic_type_params.clear();
+    ctx.generics.generic_type_params.clear();
     for (param_name, concrete_ty) in subs {
         let type_id = ctx.type_mapper.map_ast_type(concrete_ty);
-        ctx.generic_type_params.insert(param_name.clone(), type_id);
+        ctx.generics.generic_type_params.insert(param_name.clone(), type_id);
     }
 }
 
@@ -801,9 +801,9 @@ fn build_generic_type_params(ctx: &mut LoweringContext, subs: &[(String, Type)])
 ///
 /// For each registered type name that contains a type parameter placeholder
 /// (e.g., `Container__T`), computes the concrete mangled name (e.g.,
-/// `Container__int64_t`) and stores the mapping in ctx.type_name_subs.
+/// `Container__int64_t`) and stores the mapping in ctx.generics.type_name_subs.
 fn build_type_name_subs(ctx: &mut LoweringContext, subs: &[(String, Type)]) {
-    ctx.type_name_subs.clear();
+    ctx.generics.type_name_subs.clear();
 
     // Build a map of param-mangled-fragment → concrete-mangled-fragment.
     // E.g., for sub T → int:  "T" → "int64_t"
@@ -814,7 +814,7 @@ fn build_type_name_subs(ctx: &mut LoweringContext, subs: &[(String, Type)]) {
     }).collect();
 
     // Store fragment subs for on-the-fly resolution of names not in the pre-computed map
-    ctx.generic_fragment_subs = fragment_subs.clone();
+    ctx.generics.generic_fragment_subs = fragment_subs.clone();
 
     // Scan all known type names in the registry for template patterns.
     // For each name like "Container__T", substitute "T" → "int64_t" to get "Container__int64_t".
@@ -838,7 +838,7 @@ fn build_type_name_subs(ctx: &mut LoweringContext, subs: &[(String, Type)]) {
             }
         }
         if changed && name != substituted {
-            ctx.type_name_subs.insert(name, substituted);
+            ctx.generics.type_name_subs.insert(name, substituted);
         }
     }
 }

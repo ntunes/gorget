@@ -30,6 +30,64 @@ pub struct LoopInfo {
     pub exit_bb: BlockId,    // target for break
 }
 
+/// State for generic monomorphization within a function body.
+#[derive(Default)]
+pub struct GenericState {
+    /// Type name substitutions for generic monomorphization.
+    /// Maps template type names (e.g., "Container__T") to monomorphized names
+    /// (e.g., "Container__int64_t") during generic function body lowering.
+    pub type_name_subs: FxHashMap<String, String>,
+    /// Raw generic param → concrete mangled fragment subs (e.g., "T" → "int64_t").
+    /// Used by resolve_type_name for on-the-fly substitution of names not in the
+    /// pre-computed type_name_subs map.
+    pub generic_fragment_subs: Vec<(String, String)>,
+    /// Generic type parameter → concrete TypeId substitutions.
+    /// Maps bare type parameters (e.g., "T") to their concrete TypeIds (e.g., I64_TYPE)
+    /// during generic function body lowering.
+    pub generic_type_params: FxHashMap<String, TypeId>,
+}
+
+/// State for spawn/concurrency tracking during lowering.
+#[derive(Default)]
+pub struct SpawnState {
+    /// Spawn wrapper functions accumulated during lowering; emitted into the module after
+    /// all regular functions. Each wrapper reconstructs the closure struct from flat args
+    /// and calls the corresponding __Closure_N__call function.
+    pub wrapper_fns: Vec<crate::ir::Function>,
+    /// Task variable LocalId → spawned fn_name (e.g., local for `t1` → "produce").
+    /// Set by Spawn lowering, consumed by Await lowering.
+    pub result_locals: FxHashMap<LocalId, String>,
+    /// Set during Spawn lowering; consumed by lower_var_decl to register result_locals.
+    pub pending_fn: Option<String>,
+    /// Accumulated set of all spawned fn names (NOT cleared between functions).
+    pub fn_names: FxHashMap<String, bool>,
+    /// Accumulated set of thread-spawned fn names: fn_name → return TypeId.
+    /// NOT cleared between functions. Used to emit thread spawn/join helpers.
+    pub thread_fns: FxHashMap<String, TypeId>,
+    /// Scheduler backend for `spawn`.
+    pub scheduler_mode: crate::ir::SchedulerMode,
+}
+
+/// State for `shared` variable tracking during lowering.
+#[derive(Default)]
+pub struct SharedVarState {
+    /// Shared variable facade locals → (hidden_local, inner_type, wrapper_type, kind, ast_shared).
+    /// The facade local has the user-visible inner type T; the hidden local holds the
+    /// actual Mutex[T], Shared[T], or AtomicInt/AtomicBool. The `kind` determines which
+    /// ops to emit for transparent read/write access. `ast_shared` is the original
+    /// `SharedKind` from the AST — `Auto` means CFA decided, others are user overrides.
+    pub locals: FxHashMap<LocalId, (LocalId, TypeId, TypeId, SharedLocalKind, crate::parser::ast::SharedKind)>,
+    /// When true, shared variable reads return the raw wrapper local instead of auto-locking/getting.
+    /// Set during spawn arg lowering so shared vars are passed as Mutex/Shared pointers to spawned tasks.
+    pub pass_raw: bool,
+    /// Function AST bodies indexed by function name. Populated during pre-scan.
+    /// Used by async shared token generation to re-lower function bodies with shared params.
+    pub fn_ast_bodies: FxHashMap<String, crate::parser::ast::FunctionDef>,
+    /// Deferred shared-async variant requests. Recorded at spawn sites, processed after
+    /// all functions are lowered (so the source GIR function is available to transform).
+    pub pending_variants: Vec<crate::ir::transforms::shared_async::PendingSharedVariant>,
+}
+
 /// Tracks lowering state within a function.
 pub struct LoweringContext<'a> {
     pub analysis: &'a AnalysisResult,
@@ -51,24 +109,14 @@ pub struct LoweringContext<'a> {
     /// Closure info: struct_name → (call_fn_name, struct_type_id, by-value captures with field indices).
     /// Each capture entry is (name, type_id, struct_field_index).
     pub closure_info: FxHashMap<String, (String, TypeId, Vec<(String, TypeId, u32)>)>,
-    /// Spawn wrapper functions accumulated during lowering; emitted into the module after
-    /// all regular functions. Each wrapper reconstructs the closure struct from flat args
-    /// and calls the corresponding __Closure_N__call function.
-    pub spawn_wrapper_fns: Vec<crate::ir::Function>,
     /// Stack of active loops for break/continue targeting.
     loop_stack: Vec<LoopInfo>,
-    /// Type name substitutions for generic monomorphization.
-    /// Maps template type names (e.g., "Container__T") to monomorphized names
-    /// (e.g., "Container__int64_t") during generic function body lowering.
-    pub type_name_subs: FxHashMap<String, String>,
-    /// Raw generic param → concrete mangled fragment subs (e.g., "T" → "int64_t").
-    /// Used by resolve_type_name for on-the-fly substitution of names not in the
-    /// pre-computed type_name_subs map.
-    pub generic_fragment_subs: Vec<(String, String)>,
-    /// Generic type parameter → concrete TypeId substitutions.
-    /// Maps bare type parameters (e.g., "T") to their concrete TypeIds (e.g., I64_TYPE)
-    /// during generic function body lowering.
-    pub generic_type_params: FxHashMap<String, TypeId>,
+    /// Generic monomorphization state.
+    pub generics: GenericState,
+    /// Spawn/concurrency tracking.
+    pub spawn: SpawnState,
+    /// Shared variable tracking.
+    pub shared: SharedVarState,
     /// Module-level constants: name → Constant value (for imports like PI, E, etc.)
     pub module_constants: FxHashMap<String, crate::ir::instructions::Constant>,
     /// Whether `directive strip-asserts` is active (asserts become no-ops).
@@ -95,42 +143,15 @@ pub struct LoweringContext<'a> {
     /// Callable parameter return types: LocalId → return TypeId.
     /// Populated during function setup for parameters with Callable/function types.
     pub callable_return_types: FxHashMap<LocalId, TypeId>,
-    /// Task variable LocalId → spawned fn_name (e.g., local for `t1` → "produce").
-    /// Set by Spawn lowering, consumed by Await lowering.
-    pub spawn_result_locals: FxHashMap<LocalId, String>,
-    /// Set during Spawn lowering; consumed by lower_var_decl to register spawn_result_locals.
-    pub pending_spawn_fn: Option<String>,
-    /// Accumulated set of all spawned fn names (NOT cleared between functions).
-    pub spawned_fn_names: FxHashMap<String, bool>,
-    /// Accumulated set of thread-spawned fn names: fn_name → return TypeId.
-    /// NOT cleared between functions. Used to emit thread spawn/join helpers.
-    pub thread_spawned_fns: FxHashMap<String, TypeId>,
     /// Module-level global variable names (from StaticDecl items).
     /// Used by Expr::Identifier lowering to emit Constant::GlobalRef instead of I64(0).
     pub global_names: rustc_hash::FxHashSet<String>,
     /// Module-level global variable type names: var_name → AST type name (e.g. "AtomicInt").
     /// Used by infer_type_name_from_operand_full to dispatch methods on globals.
     pub global_type_names: FxHashMap<String, String>,
-    /// Shared variable facade locals → (hidden_local, inner_type, wrapper_type, kind, ast_shared).
-    /// The facade local has the user-visible inner type T; the hidden local holds the
-    /// actual Mutex[T], Shared[T], or AtomicInt/AtomicBool. The `kind` determines which
-    /// ops to emit for transparent read/write access. `ast_shared` is the original
-    /// `SharedKind` from the AST — `Auto` means CFA decided, others are user overrides.
-    pub shared_locals: FxHashMap<LocalId, (LocalId, TypeId, TypeId, SharedLocalKind, crate::parser::ast::SharedKind)>,
-    /// When true, shared variable reads return the raw wrapper local instead of auto-locking/getting.
-    /// Set during spawn arg lowering so shared vars are passed as Mutex/Shared pointers to spawned tasks.
-    pub shared_pass_raw: bool,
-    /// Function AST bodies indexed by function name. Populated during pre-scan.
-    /// Used by async shared token generation to re-lower function bodies with shared params.
-    pub fn_ast_bodies: FxHashMap<String, crate::parser::ast::FunctionDef>,
-    /// Deferred shared-async variant requests. Recorded at spawn sites, processed after
-    /// all functions are lowered (so the source GIR function is available to transform).
-    pub pending_shared_variants: Vec<crate::ir::transforms::shared_async::PendingSharedVariant>,
     /// Set of equip method names that are GIR-lowered (not extern/C-runtime).
     /// Used by lower_method_call to decide whether to auto-borrow Move-type args.
     pub gir_equip_methods: rustc_hash::FxHashSet<String>,
-    /// Scheduler backend for `spawn`.
-    pub scheduler_mode: crate::ir::SchedulerMode,
 }
 
 
@@ -147,11 +168,10 @@ impl<'a> LoweringContext<'a> {
             enum_variants: FxHashMap::default(),
             struct_fields: FxHashMap::default(),
             closure_info: FxHashMap::default(),
-            spawn_wrapper_fns: Vec::new(),
             loop_stack: Vec::new(),
-            type_name_subs: FxHashMap::default(),
-            generic_fragment_subs: Vec::new(),
-            generic_type_params: FxHashMap::default(),
+            generics: GenericState::default(),
+            spawn: SpawnState::default(),
+            shared: SharedVarState::default(),
             module_constants: FxHashMap::default(),
             strip_asserts: false,
             overflow_wrap: false,
@@ -163,32 +183,23 @@ impl<'a> LoweringContext<'a> {
             current_throws_result_type: None,
             expected_type: None,
             callable_return_types: FxHashMap::default(),
-            spawn_result_locals: FxHashMap::default(),
-            pending_spawn_fn: None,
-            spawned_fn_names: FxHashMap::default(),
-            thread_spawned_fns: FxHashMap::default(),
             global_names: rustc_hash::FxHashSet::default(),
             global_type_names: FxHashMap::default(),
-            shared_locals: FxHashMap::default(),
-            shared_pass_raw: false,
-            fn_ast_bodies: FxHashMap::default(),
-            pending_shared_variants: Vec::new(),
             gir_equip_methods: rustc_hash::FxHashSet::default(),
-            scheduler_mode: crate::ir::SchedulerMode::default(),
         }
     }
 
     /// Resolve a type name, applying any active substitutions.
     pub fn resolve_type_name(&self, name: &str) -> String {
-        if let Some(resolved) = self.type_name_subs.get(name) {
+        if let Some(resolved) = self.generics.type_name_subs.get(name) {
             return resolved.clone();
         }
         // On-the-fly fragment substitution for names like "Vector__T" → "Vector__int64_t"
         // that weren't in the pre-computed map (because the template type was never registered).
-        if !self.generic_fragment_subs.is_empty() {
+        if !self.generics.generic_fragment_subs.is_empty() {
             let mut result = name.to_string();
             let mut changed = false;
-            for (param, concrete) in &self.generic_fragment_subs {
+            for (param, concrete) in &self.generics.generic_fragment_subs {
                 let pattern_end = format!("__{param}");
                 let pattern_mid = format!("__{param}__");
                 if result.ends_with(&pattern_end) {
@@ -214,10 +225,10 @@ impl<'a> LoweringContext<'a> {
         // Check bare type parameter substitution (e.g., T → int64_t)
         if let Type::Named { name, generic_args } = ty {
             if generic_args.is_empty() {
-                if let Some(&id) = self.generic_type_params.get(name.node.as_str()) {
+                if let Some(&id) = self.generics.generic_type_params.get(name.node.as_str()) {
                     return id;
                 }
-            } else if !self.type_name_subs.is_empty() || !self.generic_fragment_subs.is_empty() {
+            } else if !self.generics.type_name_subs.is_empty() || !self.generics.generic_fragment_subs.is_empty() {
                 // For generic named types, check if the mangled name needs substitution.
                 // resolve_type_name handles both type_name_subs (pre-computed) and
                 // generic_fragment_subs (on-the-fly), e.g. "Vector__T" → "Vector__int64_t".
@@ -245,9 +256,9 @@ impl<'a> LoweringContext<'a> {
     pub fn clear_locals(&mut self) {
         self.locals.clear();
         self.mut_capture_locals.clear();
-        self.spawn_result_locals.clear();
-        self.pending_spawn_fn = None;
-        self.shared_locals.clear();
+        self.spawn.result_locals.clear();
+        self.spawn.pending_fn = None;
+        self.shared.locals.clear();
     }
 
     /// Take the locals map, leaving it empty. Used for save/restore during async variant generation.

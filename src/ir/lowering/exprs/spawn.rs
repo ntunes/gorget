@@ -130,7 +130,7 @@ pub(super) fn lower_method_spawn(
     // 7. Build or reuse wrapper (idempotent, keyed by wrapper name)
     let wrapper_name = format!("__spawn_method_wrap_{effective_name}");
 
-    if !ctx.spawned_fn_names.contains_key(&wrapper_name) {
+    if !ctx.spawn.fn_names.contains_key(&wrapper_name) {
         let wrapper_fn = build_method_spawn_wrapper(
             ctx,
             &wrapper_name,
@@ -140,7 +140,7 @@ pub(super) fn lower_method_spawn(
             &explicit_arg_types,
             fn_ret_type,
         );
-        ctx.spawn_wrapper_fns.push(wrapper_fn);
+        ctx.spawn.wrapper_fns.push(wrapper_fn);
 
         // Register wrapper signature: [recv_value_type, explicit_arg_types...] → fn_ret_type
         let mut sig_params = vec![recv_value_type];
@@ -154,8 +154,8 @@ pub(super) fn lower_method_spawn(
     }
 
     // 8. Register for spawn
-    ctx.pending_spawn_fn = Some(wrapper_name.clone());
-    ctx.spawned_fn_names.insert(wrapper_name.clone(), true);
+    ctx.spawn.pending_fn = Some(wrapper_name.clone());
+    ctx.spawn.fn_names.insert(wrapper_name.clone(), true);
 
     // 9. Register Task type (same boilerplate as direct-fn spawn)
     let ret_c = ctx.type_name_for_id(fn_ret_type)
@@ -333,7 +333,7 @@ fn build_spawn_wrapper(
 ///
 /// Generates (or reuses) a thin wrapper function that reconstructs the closure
 /// struct from flat parameters, then emits a call to `__gorget_spawn_<wrapper>`.
-/// The Task local is registered in `ctx.spawn_result_locals` for await dispatch.
+/// The Task local is registered in `ctx.spawn.result_locals` for await dispatch.
 pub(super) fn lower_closure_spawn(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
@@ -357,7 +357,7 @@ pub(super) fn lower_closure_spawn(
     let wrapper_name = format!("__spawn_wrap_{struct_name}");
 
     // Emit the wrapper function once (idempotent — skip if already registered).
-    if !ctx.spawned_fn_names.contains_key(&wrapper_name) {
+    if !ctx.spawn.fn_names.contains_key(&wrapper_name) {
         let wrapper_fn = build_spawn_wrapper(
             ctx,
             &wrapper_name,
@@ -368,7 +368,7 @@ pub(super) fn lower_closure_spawn(
             struct_name,
             struct_type_id,
         );
-        ctx.spawn_wrapper_fns.push(wrapper_fn);
+        ctx.spawn.wrapper_fns.push(wrapper_fn);
 
         // Register the wrapper's signature so the module assembly loop can
         // populate module.spawned_fns for the C backend.
@@ -381,8 +381,8 @@ pub(super) fn lower_closure_spawn(
         ctx.fn_param_names.insert(wrapper_name.clone(), param_names);
     }
 
-    ctx.pending_spawn_fn = Some(wrapper_name.clone());
-    ctx.spawned_fn_names.insert(wrapper_name.clone(), true);
+    ctx.spawn.pending_fn = Some(wrapper_name.clone());
+    ctx.spawn.fn_names.insert(wrapper_name.clone(), true);
 
     // Register the Task type (same logic as direct-fn spawn).
     let ret_c = ctx.type_name_for_id(fn_ret_type)
