@@ -4,6 +4,7 @@
 //! vtable dispatch, closures, coercions) are explicit here.
 
 pub mod display;
+pub mod lower;
 pub mod types;
 pub mod validate;
 
