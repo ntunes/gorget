@@ -1,5 +1,33 @@
 # DONE
 
+- [2026-03-07] **GIR optimization: comparison simplification (x cmp x)**: `x == x` → true, `x < x` → false, etc. Combined with branch folding to eliminate dead guards. 3 new tests (45 total optimizer). 772 unit + 557 integration pass.
+
+- [2026-03-07] **GIR optimization: switch simplification**: Switch with no cases → Jump to default. Switch where all targets identical → Jump. 2 new tests (42 total optimizer). 769 unit tests pass.
+
+- [2026-03-07] **GIR optimization: strength reduction**: Converts wrapping multiplication by powers of 2 to left shifts (`x *~ 4 → x << 2`). Only reduces MulWrap, not checked Mul (shift doesn't preserve overflow trapping). Conservative div reduction for non-negative constant dividends. 6 new tests (40 total optimizer). 767 unit + 557 integration pass.
+
+- [2026-03-07] **fix: Dealloc allocator operand in optimizer local tracking**: `mark_instruction_locals` and `remap_instruction_locals` for `Dealloc` only handled `ptr`, ignoring `allocator`. Could cause incorrect unused-local elimination or local renumbering.
+
+- [2026-03-07] **GIR optimization: algebraic simplification**: New pass simplifies BinOp with identity/absorbing elements (x+0→x, x*1→x, x*0→0, x-x→0, x^x→0, x**0→1, etc.). 7 new tests (34 total optimizer). 761 unit + 557 integration pass.
+
+- [2026-03-07] **GIR optimization: intra-block constant propagation**: Substitutes Copy(local) operands with known constant values within same BB. Only propagates scalar numerics/booleans. Invalidates all on Call/CallExtern/CallIndirect. 2 new tests (27 total optimizer).
+
+- [2026-03-07] **GIR optimization: dead store elimination**: New pass removes assignments to simple locals overwritten before being read within the same BB. Only removes pure stores (constants/copies). Reusable `push_operand_reads`/`push_place_reads` helpers. 3 new tests (25 total optimizer). 752 unit + 557 integration pass.
+
+- [2026-03-07] **GIR optimization: block merging**: Merges a block into its unique predecessor when the predecessor's terminator is `Jump(target)` and the target has exactly one predecessor. 4 new tests (22 total optimizer). 749 unit + 557 integration pass.
+
+- [2026-03-07] **fix: resolve 53 integration test failures from duplicate Option TypeIds**: The `register_runtime_method_sigs` extraction changed Option type fallback from `module.type_registry` (empty/orphan) to `ctx.type_registry` (live), creating duplicate `GirType::Named("Option__int64_t")` entries. Fixed with `lookup_type_by_name` + safe primitive-type fallbacks. Also removed stale `stmts.rs` (should have been deleted when `stmts/` directory was introduced). 745 unit + 557 integration tests pass.
+
+- [2026-03-07] **GIR optimization: identity branch simplification**: When `Branch` has `then_block == else_block`, replace with `Jump` (condition is dead code). 1 new test.
+
+- [2026-03-07] **GIR optimization: jump threading pass**: New pass `thread_jumps` eliminates empty trampoline blocks (no instructions, Jump terminator) by redirecting predecessors to the final target. Resolves chains (bb1→bb2→bb3 → bb1→bb3). Runs after constant branch folding, before dead block elimination. 4 new tests (17 total). 744 unit tests pass.
+
+- [2026-03-07] **GIR validator: return type consistency check**: `check_return_type_consistency` verifies `_0.type_id == func.return_type` for every function. Catches lowering bugs where return type is fixed up but the return place is not. 2 new tests (14 total validator tests). 744 unit tests, zero false positives.
+
+- [2026-03-07] **IR refactor: extract helper functions from `lower_module`**: Extracted 3 helper functions from `lower_module` (1132 → 910 lines): `register_runtime_method_sigs` (Str/uint8_t/primitive method sigs), `setup_hot_reload` (directive scanning + state hash), `collect_runtime_metadata` (channel/shared/mutex type collection for C backend).
+
+- [2026-03-07] **IR refactor: Split `stmts/` into module directory**: Extracted 3 submodules from `stmts.rs` (3,257 → 1,540 lines): `for_loops.rs` (874 lines — all for-loop variants: string, array, enumerate, dict, set, iterable, range), `patterns.rs` (369 lines — match statement lowering, pattern conditions, pattern bindings), `assigns.rs` (514 lines — assignment, field assign, index assign, compound assign, shared variable lock/store). 738 unit + 557 integration tests pass.
+
 - [2026-03-07] **IR: Document `DropStrategy`/`DropElaborator` contract**: Added comprehensive doc comments to `TypeMetadata` (valid CopySemantics × DropStrategy combinations table), `DropStrategy` (backend behavior per variant), `CopySemantics` (semantics), and `DropElaborator` (registration rules, contract with backend). No code changes — documentation-only fix for the "no clear contract" concern.
 
 - [2026-03-07] **IR: Add `try_map_ast_type` for type mapping error propagation**: Added `TypeMapper::try_map_ast_type() -> Option<TypeId>` that returns `None` for unresolved types instead of silently returning `UNIT_TYPE`. Rewrote `map_ast_type` as `try_map_ast_type().unwrap_or(UNIT_TYPE)` for backward compat. New callers can now distinguish "genuinely void" from "unknown type." 738 unit tests pass.
