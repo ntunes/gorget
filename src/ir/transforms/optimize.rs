@@ -15,13 +15,11 @@ pub fn optimize_module(module: &mut crate::ir::Module) {
         // Phase 1: simplify values
         propagate_constants(func);
         constant_fold(func);
-        // Re-propagate into terminators after folding: constant_fold can
-        // turn computed instructions (e.g., UnOp(Not, false)) into
-        // Assign(true), enabling branch folding. Full re-propagation into
-        // instruction operands is unsafe: cascading fold→propagate→fold
-        // can evaluate wrapping arithmetic at Rust precision instead of C,
-        // producing different results.
-        propagate_into_terminators(func);
+        // Re-propagate after folding: constant_fold can turn computed
+        // instructions (e.g., UnOp(Not, false)) into Assign(true),
+        // creating new propagation opportunities.
+        propagate_constants(func);
+        constant_fold(func);
         simplify_algebraic(func);
         simplify_cmp(func);
         eliminate_common_subexpressions(func);
@@ -108,40 +106,6 @@ fn propagate_constants(func: &mut Function) {
 /// Lightweight re-propagation that only substitutes constants into terminators.
 /// Used after constant folding to enable branch folding for cases where
 /// folding created new constant assignments (e.g., UnOp(Not, false) → true).
-fn propagate_into_terminators(func: &mut Function) {
-    for bb in &mut func.blocks {
-        let mut known: std::collections::HashMap<u32, Constant> = std::collections::HashMap::new();
-        for inst in &bb.instructions {
-            match inst {
-                Instruction::Assign { dst, value } if dst.projections.is_empty() => {
-                    if let Operand::Constant(c) = value {
-                        if is_propagatable_constant(c) {
-                            known.insert(dst.local.0, c.clone());
-                        } else {
-                            known.remove(&dst.local.0);
-                        }
-                    } else {
-                        known.remove(&dst.local.0);
-                    }
-                }
-                Instruction::Call { .. } | Instruction::CallExtern { .. } | Instruction::CallIndirect { .. } => {
-                    known.clear();
-                }
-                _ => {
-                    if let Some(written) = instruction_dst(inst) {
-                        known.remove(&written);
-                    }
-                }
-            }
-        }
-        if !known.is_empty() {
-            if let Some(ref mut term) = bb.terminator {
-                substitute_terminator_operands(term, &known);
-            }
-        }
-    }
-}
-
 /// Check if a constant is safe to propagate into operand positions.
 /// Strings, function refs, and global refs have complex ABI (e.g., Str struct
 /// vs const char*) and must not be substituted.
@@ -282,7 +246,14 @@ fn fold_binop_i64(a: i64, op: BinOp, b: i64) -> Option<Constant> {
         BinOp::Sub => a.checked_sub(b)?,
         BinOp::Mul => a.checked_mul(b)?,
         BinOp::Div => { if b == 0 { return None; } a.checked_div(b)? }
-        BinOp::Rem | BinOp::Mod => { if b == 0 { return None; } a.checked_rem(b)? }
+        BinOp::Rem => { if b == 0 { return None; } a.checked_rem(b)? }
+        BinOp::Mod => {
+            // Mathematical modulo: result has sign of divisor.
+            // ((a % b) + b) % b
+            if b == 0 { return None; }
+            let r = a.checked_rem(b)?;
+            ((r.wrapping_add(b)).checked_rem(b))?
+        }
         BinOp::BitAnd => a & b,
         BinOp::BitOr => a | b,
         BinOp::BitXor => a ^ b,
@@ -304,7 +275,8 @@ fn fold_binop_f64(a: f64, op: BinOp, b: f64) -> Option<Constant> {
         BinOp::Sub => a - b,
         BinOp::Mul => a * b,
         BinOp::Div => { if b == 0.0 { return None; } a / b }
-        BinOp::Rem | BinOp::Mod => { if b == 0.0 { return None; } a % b }
+        BinOp::Rem => { if b == 0.0 { return None; } a % b }
+        BinOp::Mod => { if b == 0.0 { return None; } ((a % b) + b) % b }
         BinOp::Pow => a.powf(b),
         _ => return None, // bitwise ops don't apply to floats
     }))

@@ -9301,8 +9301,22 @@ fn format_constant(constant: &Constant, _func: &Function, _registry: &TypeRegist
         }
         Constant::I8(n) => format!("(int8_t){n}"),
         Constant::I16(n) => format!("(int16_t){n}"),
-        Constant::I32(n) => format!("{n}"),
-        Constant::I64(n) => format!("{n}LL"),
+        Constant::I32(n) => {
+            if *n == i32::MIN {
+                "(-2147483647 - 1)".to_string()
+            } else {
+                format!("{n}")
+            }
+        }
+        Constant::I64(n) => {
+            // INT64_MIN (-9223372036854775808) can't be written as a literal in C
+            // because 9223372036854775808 overflows long long before negation.
+            if *n == i64::MIN {
+                "(-9223372036854775807LL - 1LL)".to_string()
+            } else {
+                format!("{n}LL")
+            }
+        }
         Constant::U8(n) => format!("(uint8_t){n}"),
         Constant::U16(n) => format!("(uint16_t){n}"),
         Constant::U32(n) => format!("{n}u"),
