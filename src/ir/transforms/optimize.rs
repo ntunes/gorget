@@ -495,6 +495,16 @@ fn fold_constant_branches(func: &mut Function) {
                     .unwrap_or(*default);
                 Some(Terminator::Jump(target))
             }
+            // Switch with no cases → Jump to default
+            Some(Terminator::Switch { cases, default, .. }) if cases.is_empty() => {
+                Some(Terminator::Jump(*default))
+            }
+            // Switch where all targets (cases + default) are the same → Jump
+            Some(Terminator::Switch { cases, default, .. })
+                if !cases.is_empty() && cases.iter().all(|(_, b)| b == default) =>
+            {
+                Some(Terminator::Jump(*default))
+            }
             _ => None,
         };
         if let Some(new_term) = folded {
@@ -1488,6 +1498,37 @@ mod tests {
         ], vec![local(I64_TYPE), local(BOOL_TYPE)], vec![BOOL_TYPE]);
         fold_constant_branches(&mut f);
         assert!(matches!(f.blocks[0].terminator, Some(Terminator::Jump(BlockId(1)))));
+    }
+
+    #[test]
+    fn fold_switch_empty_cases() {
+        // Switch with no cases → Jump to default
+        let mut f = make_func(vec![
+            bb(vec![], Terminator::Switch {
+                value: Operand::Copy(Place::local(LocalId(1))),
+                cases: vec![],
+                default: BlockId(1),
+            }),
+            bb(vec![], ret_i64(0)),
+        ], vec![local(I64_TYPE), local(I64_TYPE)], vec![I64_TYPE]);
+        fold_constant_branches(&mut f);
+        assert!(matches!(f.blocks[0].terminator, Some(Terminator::Jump(BlockId(1)))));
+    }
+
+    #[test]
+    fn fold_switch_all_same_target() {
+        // Switch where all cases + default go to bb2 → Jump(bb2)
+        let mut f = make_func(vec![
+            bb(vec![], Terminator::Switch {
+                value: Operand::Copy(Place::local(LocalId(1))),
+                cases: vec![(1, BlockId(2)), (2, BlockId(2)), (3, BlockId(2))],
+                default: BlockId(2),
+            }),
+            bb(vec![], ret_i64(0)),
+            bb(vec![], ret_i64(42)),
+        ], vec![local(I64_TYPE), local(I64_TYPE)], vec![I64_TYPE]);
+        fold_constant_branches(&mut f);
+        assert!(matches!(f.blocks[0].terminator, Some(Terminator::Jump(BlockId(2)))));
     }
 
     // ── Drop Elision Tests ──────────────────────────────────────────
