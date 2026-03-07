@@ -490,6 +490,7 @@ fn eliminate_common_subexpressions(func: &mut Function) {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum CseKey {
     BinOp { op: BinOp, lhs: CseOperand, rhs: CseOperand },
+    UnOp { op: UnOp, operand: CseOperand },
     Cmp { op: CmpOp, lhs: CseOperand, rhs: CseOperand },
 }
 
@@ -499,6 +500,7 @@ impl CseKey {
             CseKey::BinOp { lhs, rhs, .. } | CseKey::Cmp { lhs, rhs, .. } => {
                 lhs.is_local(local) || rhs.is_local(local)
             }
+            CseKey::UnOp { operand, .. } => operand.is_local(local),
         }
     }
 }
@@ -541,6 +543,10 @@ fn cse_key(inst: &Instruction) -> Option<CseKey> {
             let r = operand_to_cse(rhs)?;
             Some(CseKey::BinOp { op: *op, lhs: l, rhs: r })
         }
+        Instruction::UnOp { op, operand, .. } => {
+            let o = operand_to_cse(operand)?;
+            Some(CseKey::UnOp { op: *op, operand: o })
+        }
         Instruction::Cmp { op, lhs, rhs, .. } => {
             let l = operand_to_cse(lhs)?;
             let r = operand_to_cse(rhs)?;
@@ -552,7 +558,8 @@ fn cse_key(inst: &Instruction) -> Option<CseKey> {
 
 fn cse_dst(inst: &Instruction) -> Option<LocalId> {
     match inst {
-        Instruction::BinOp { dst, .. } | Instruction::Cmp { dst, .. } => Some(*dst),
+        Instruction::BinOp { dst, .. } | Instruction::UnOp { dst, .. }
+        | Instruction::Cmp { dst, .. } => Some(*dst),
         _ => None,
     }
 }

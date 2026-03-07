@@ -251,7 +251,7 @@ pub enum BinOp {
     MulWrap,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UnOp {
     Neg,
     Not,

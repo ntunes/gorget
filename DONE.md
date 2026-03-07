@@ -1,5 +1,9 @@
 # DONE
 
+- [2026-03-07] **GIR optimization: CSE for UnOp instructions**: Extended common subexpression elimination to also track and reuse UnOp (Neg, Not, BitNot) computations. Added `CseKey::UnOp` variant, `cse_key`/`cse_dst` matching, and `reads_local` invalidation.
+
+- [2026-03-07] **GIR optimization: common subexpression elimination (CSE)**: Intra-block hash-based tracking of BinOp and Cmp computations. Replaces redundant evaluations with Copy of first result. Invalidates on calls and operand reassignment (including Assign to Place). 5 new tests (50 total optimizer). 778 unit + 557 integration pass.
+
 - [2026-03-07] **feat: `--emit-gir` flag for IR inspection**: `gg build --emit-gir <file>` dumps optimized GIR text to stdout. Module summary shows function/block/instruction/local counts. Useful for inspecting optimization pass output.
 
 - [2026-03-07] **GIR optimization: Nop elimination**: Removes `Instruction::Nop` entries from basic blocks with synchronized span_map adjustment. Runs at start of Phase 2.
