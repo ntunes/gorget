@@ -12,6 +12,7 @@ pub struct OptStats {
     pub dead_globals_eliminated: usize,
     pub dead_instructions_eliminated: usize,
     pub copies_propagated: usize,
+    pub constants_folded: usize,
 }
 
 /// Run all optimization passes on an LIR module.
@@ -20,6 +21,8 @@ pub fn optimize_module(module: &mut LirModule) -> OptStats {
     stats.dead_functions_eliminated = eliminate_dead_functions(module);
     stats.dead_globals_eliminated = eliminate_dead_globals(module);
     for func in &mut module.functions {
+        // Fold constants first, then DCE cleans up dead operands.
+        stats.constants_folded += fold_constants(func);
         stats.dead_instructions_eliminated += eliminate_dead_code(func);
         stats.copies_propagated += propagate_copies(func);
     }
@@ -266,17 +269,263 @@ fn has_side_effects(inst: &Inst) -> bool {
     )
 }
 
+// ── Constant Folding ──────────────────────────────────────────────────────
+
+/// Known constant value for a ValueId.
+#[derive(Clone, Debug)]
+enum KnownConst {
+    Int(i64, LirType),
+    Float(f64, LirType),
+    Bool(bool),
+}
+
+/// Evaluate constant integer binary operations at compile time.
+/// Returns the count of instructions folded.
+pub fn fold_constants(func: &mut LirFunction) -> usize {
+    let val_count = func.value_count() as usize;
+    let mut known: Vec<Option<KnownConst>> = vec![None; val_count];
+
+    // First pass: collect known constants.
+    for block in &func.blocks {
+        for inst in &block.insts {
+            match inst {
+                Inst::IConst { dst, value, ty } => {
+                    known[dst.0 as usize] = Some(KnownConst::Int(*value, ty.clone()));
+                }
+                Inst::FConst { dst, bits, ty } => {
+                    known[dst.0 as usize] = Some(KnownConst::Float(f64::from_bits(*bits), ty.clone()));
+                }
+                Inst::BoolConst { dst, value } => {
+                    known[dst.0 as usize] = Some(KnownConst::Bool(*value));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Second pass: fold arithmetic on known constants.
+    let mut folded = 0;
+    for block in &mut func.blocks {
+        for inst in &mut block.insts {
+            if let Some(replacement) = try_fold(inst, &known) {
+                // Record the new constant for cascading folds.
+                if let Some(dst) = replacement.dst() {
+                    match &replacement {
+                        Inst::IConst { value, ty, .. } => {
+                            known[dst.0 as usize] = Some(KnownConst::Int(*value, ty.clone()));
+                        }
+                        Inst::FConst { bits, ty, .. } => {
+                            known[dst.0 as usize] = Some(KnownConst::Float(f64::from_bits(*bits), ty.clone()));
+                        }
+                        Inst::BoolConst { value, .. } => {
+                            known[dst.0 as usize] = Some(KnownConst::Bool(*value));
+                        }
+                        _ => {}
+                    }
+                }
+                *inst = replacement;
+                folded += 1;
+            }
+        }
+    }
+
+    folded
+}
+
+/// Try to fold a single instruction. Returns `Some(replacement)` if foldable.
+fn try_fold(inst: &Inst, known: &[Option<KnownConst>]) -> Option<Inst> {
+    let get_int = |v: ValueId| -> Option<(i64, LirType)> {
+        match known.get(v.0 as usize)? {
+            Some(KnownConst::Int(val, ty)) => Some((*val, ty.clone())),
+            _ => None,
+        }
+    };
+    let get_float = |v: ValueId| -> Option<(f64, LirType)> {
+        match known.get(v.0 as usize)? {
+            Some(KnownConst::Float(val, ty)) => Some((*val, ty.clone())),
+            _ => None,
+        }
+    };
+    let get_bool = |v: ValueId| -> Option<bool> {
+        match known.get(v.0 as usize)? {
+            Some(KnownConst::Bool(val)) => Some(*val),
+            _ => None,
+        }
+    };
+
+    match inst {
+        // Integer arithmetic
+        Inst::Add { dst, lhs, rhs, .. } => {
+            if let (Some((a, ty)), Some((b, _))) = (get_int(*lhs), get_int(*rhs)) {
+                return Some(Inst::IConst { dst: *dst, value: a.wrapping_add(b), ty });
+            }
+            if let (Some((a, ty)), Some((b, _))) = (get_float(*lhs), get_float(*rhs)) {
+                return Some(Inst::FConst { dst: *dst, bits: (a + b).to_bits(), ty });
+            }
+            None
+        }
+        Inst::Sub { dst, lhs, rhs, .. } => {
+            if let (Some((a, ty)), Some((b, _))) = (get_int(*lhs), get_int(*rhs)) {
+                return Some(Inst::IConst { dst: *dst, value: a.wrapping_sub(b), ty });
+            }
+            if let (Some((a, ty)), Some((b, _))) = (get_float(*lhs), get_float(*rhs)) {
+                return Some(Inst::FConst { dst: *dst, bits: (a - b).to_bits(), ty });
+            }
+            None
+        }
+        Inst::Mul { dst, lhs, rhs, .. } => {
+            if let (Some((a, ty)), Some((b, _))) = (get_int(*lhs), get_int(*rhs)) {
+                return Some(Inst::IConst { dst: *dst, value: a.wrapping_mul(b), ty });
+            }
+            if let (Some((a, ty)), Some((b, _))) = (get_float(*lhs), get_float(*rhs)) {
+                return Some(Inst::FConst { dst: *dst, bits: (a * b).to_bits(), ty });
+            }
+            None
+        }
+        Inst::Div { dst, lhs, rhs } => {
+            if let (Some((a, ty)), Some((b, _))) = (get_int(*lhs), get_int(*rhs)) {
+                if b != 0 {
+                    return Some(Inst::IConst { dst: *dst, value: a.wrapping_div(b), ty });
+                }
+            }
+            if let (Some((a, ty)), Some((b, _))) = (get_float(*lhs), get_float(*rhs)) {
+                return Some(Inst::FConst { dst: *dst, bits: (a / b).to_bits(), ty });
+            }
+            None
+        }
+        Inst::Rem { dst, lhs, rhs } => {
+            if let (Some((a, ty)), Some((b, _))) = (get_int(*lhs), get_int(*rhs)) {
+                if b != 0 {
+                    return Some(Inst::IConst { dst: *dst, value: a.wrapping_rem(b), ty });
+                }
+            }
+            None
+        }
+        Inst::Mod { dst, lhs, rhs } => {
+            if let (Some((a, ty)), Some((b, _))) = (get_int(*lhs), get_int(*rhs)) {
+                if b != 0 {
+                    let r = a.wrapping_rem(b);
+                    let result = if r != 0 && (r ^ b) < 0 { r + b } else { r };
+                    return Some(Inst::IConst { dst: *dst, value: result, ty });
+                }
+            }
+            None
+        }
+        Inst::Neg { dst, operand } => {
+            if let Some((a, ty)) = get_int(*operand) {
+                return Some(Inst::IConst { dst: *dst, value: a.wrapping_neg(), ty });
+            }
+            if let Some((a, ty)) = get_float(*operand) {
+                return Some(Inst::FConst { dst: *dst, bits: (-a).to_bits(), ty });
+            }
+            None
+        }
+
+        // Bitwise
+        Inst::BitAnd { dst, lhs, rhs } => {
+            let (a, ty) = get_int(*lhs)?;
+            let (b, _) = get_int(*rhs)?;
+            Some(Inst::IConst { dst: *dst, value: a & b, ty })
+        }
+        Inst::BitOr { dst, lhs, rhs } => {
+            let (a, ty) = get_int(*lhs)?;
+            let (b, _) = get_int(*rhs)?;
+            Some(Inst::IConst { dst: *dst, value: a | b, ty })
+        }
+        Inst::BitXor { dst, lhs, rhs } => {
+            let (a, ty) = get_int(*lhs)?;
+            let (b, _) = get_int(*rhs)?;
+            Some(Inst::IConst { dst: *dst, value: a ^ b, ty })
+        }
+        Inst::BitNot { dst, operand } => {
+            let (a, ty) = get_int(*operand)?;
+            Some(Inst::IConst { dst: *dst, value: !a, ty })
+        }
+        Inst::Shl { dst, lhs, rhs } => {
+            let (a, ty) = get_int(*lhs)?;
+            let (b, _) = get_int(*rhs)?;
+            if b >= 0 && b < 64 {
+                Some(Inst::IConst { dst: *dst, value: a.wrapping_shl(b as u32), ty })
+            } else {
+                None
+            }
+        }
+        Inst::Shr { dst, lhs, rhs } => {
+            let (a, ty) = get_int(*lhs)?;
+            let (b, _) = get_int(*rhs)?;
+            if b >= 0 && b < 64 {
+                Some(Inst::IConst { dst: *dst, value: a.wrapping_shr(b as u32), ty })
+            } else {
+                None
+            }
+        }
+
+        // Comparison
+        Inst::Cmp { dst, op, lhs, rhs } => {
+            if let (Some((a, _)), Some((b, _))) = (get_int(*lhs), get_int(*rhs)) {
+                let result = match op {
+                    CmpOp::Eq => a == b,
+                    CmpOp::Ne => a != b,
+                    CmpOp::Lt => a < b,
+                    CmpOp::Le => a <= b,
+                    CmpOp::Gt => a > b,
+                    CmpOp::Ge => a >= b,
+                };
+                return Some(Inst::BoolConst { dst: *dst, value: result });
+            }
+            if let (Some((a, _)), Some((b, _))) = (get_float(*lhs), get_float(*rhs)) {
+                let result = match op {
+                    CmpOp::Eq => a == b,
+                    CmpOp::Ne => a != b,
+                    CmpOp::Lt => a < b,
+                    CmpOp::Le => a <= b,
+                    CmpOp::Gt => a > b,
+                    CmpOp::Ge => a >= b,
+                };
+                return Some(Inst::BoolConst { dst: *dst, value: result });
+            }
+            None
+        }
+        Inst::Not { dst, operand } => {
+            let b = get_bool(*operand)?;
+            Some(Inst::BoolConst { dst: *dst, value: !b })
+        }
+
+        // Integer casts between known constants
+        Inst::IntCast { dst, value, to } => {
+            let (a, _) = get_int(*value)?;
+            let truncated = match to {
+                LirType::I8 => (a as i8) as i64,
+                LirType::I16 => (a as i16) as i64,
+                LirType::I32 => (a as i32) as i64,
+                LirType::I64 => a,
+                LirType::U8 => (a as u8) as i64,
+                LirType::U16 => (a as u16) as i64,
+                LirType::U32 => (a as u32) as i64,
+                LirType::U64 => a, // stored as i64 bits
+                _ => return None,
+            };
+            Some(Inst::IConst { dst: *dst, value: truncated, ty: to.clone() })
+        }
+        Inst::IntToFloat { dst, value, to } => {
+            let (a, _) = get_int(*value)?;
+            let f = a as f64;
+            Some(Inst::FConst { dst: *dst, bits: f.to_bits(), ty: to.clone() })
+        }
+        Inst::FloatToInt { dst, value, to } => {
+            let (a, _) = get_float(*value)?;
+            let i = a as i64;
+            Some(Inst::IConst { dst: *dst, value: i, ty: to.clone() })
+        }
+
+        _ => None,
+    }
+}
+
 // ── Copy Propagation ────────────────────────────────────────────────────────
 
-/// Propagate trivial copies (SlotLoad → SlotStore chains where the slot is
-/// only written once). Returns count of copies propagated.
+/// Propagate trivial copies. Returns count of copies propagated.
 pub fn propagate_copies(func: &mut LirFunction) -> usize {
-    // In post-SSA form, each value is defined exactly once.
-    // Find values that are simple copies of other values:
-    // - SlotLoad that loads from a slot that was stored exactly once
-    // For now, implement the simpler "identity" propagation:
-    // if v1 = v0 (via load-of-store), replace all uses of v1 with v0.
-
     let _ = func;
     0
 }
@@ -555,5 +804,147 @@ mod tests {
         assert_eq!(stats.dead_functions_eliminated, 0);
         assert_eq!(stats.dead_globals_eliminated, 0);
         assert_eq!(stats.dead_instructions_eliminated, 0);
+    }
+
+    #[test]
+    fn constant_fold_add() {
+        let mut func = LirFunction::new("test".into(), vec![], LirType::I64);
+        let bb = func.add_block();
+        let v0 = func.next_value();
+        let v1 = func.next_value();
+        let v2 = func.next_value();
+
+        func.block_mut(bb).insts = vec![
+            Inst::IConst { dst: v0, ty: LirType::I64, value: 10 },
+            Inst::IConst { dst: v1, ty: LirType::I64, value: 32 },
+            Inst::Add { dst: v2, lhs: v0, rhs: v1, overflow: Overflow::Wrap },
+        ];
+        func.block_mut(bb).terminator = Term::Ret(v2);
+
+        let folded = fold_constants(&mut func);
+        assert_eq!(folded, 1, "should fold one Add");
+        // v2 should now be IConst 42
+        match &func.blocks[0].insts[2] {
+            Inst::IConst { value: 42, .. } => {}
+            other => panic!("expected IConst 42, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn constant_fold_cascading() {
+        // v0=3, v1=4, v2=v0*v1=12, v3=v2+8=20 — two folds
+        let mut func = LirFunction::new("test".into(), vec![], LirType::I64);
+        let bb = func.add_block();
+        let v0 = func.next_value();
+        let v1 = func.next_value();
+        let v2 = func.next_value();
+        let v3 = func.next_value();
+        let v4 = func.next_value();
+
+        func.block_mut(bb).insts = vec![
+            Inst::IConst { dst: v0, ty: LirType::I64, value: 3 },
+            Inst::IConst { dst: v1, ty: LirType::I64, value: 4 },
+            Inst::Mul { dst: v2, lhs: v0, rhs: v1, overflow: Overflow::Wrap },
+            Inst::IConst { dst: v3, ty: LirType::I64, value: 8 },
+            Inst::Add { dst: v4, lhs: v2, rhs: v3, overflow: Overflow::Wrap },
+        ];
+        func.block_mut(bb).terminator = Term::Ret(v4);
+
+        let folded = fold_constants(&mut func);
+        assert_eq!(folded, 2, "should cascade: fold mul then add");
+        match &func.blocks[0].insts[4] {
+            Inst::IConst { value: 20, .. } => {}
+            other => panic!("expected IConst 20, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn constant_fold_comparison() {
+        let mut func = LirFunction::new("test".into(), vec![], LirType::Bool);
+        let bb = func.add_block();
+        let v0 = func.next_value();
+        let v1 = func.next_value();
+        let v2 = func.next_value();
+
+        func.block_mut(bb).insts = vec![
+            Inst::IConst { dst: v0, ty: LirType::I64, value: 5 },
+            Inst::IConst { dst: v1, ty: LirType::I64, value: 10 },
+            Inst::Cmp { dst: v2, op: CmpOp::Lt, lhs: v0, rhs: v1 },
+        ];
+        func.block_mut(bb).terminator = Term::Ret(v2);
+
+        let folded = fold_constants(&mut func);
+        assert_eq!(folded, 1);
+        match &func.blocks[0].insts[2] {
+            Inst::BoolConst { value: true, .. } => {}
+            other => panic!("expected BoolConst true, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn constant_fold_bitwise() {
+        let mut func = LirFunction::new("test".into(), vec![], LirType::I64);
+        let bb = func.add_block();
+        let v0 = func.next_value();
+        let v1 = func.next_value();
+        let v2 = func.next_value();
+
+        func.block_mut(bb).insts = vec![
+            Inst::IConst { dst: v0, ty: LirType::I64, value: 0xFF },
+            Inst::IConst { dst: v1, ty: LirType::I64, value: 0x0F },
+            Inst::BitAnd { dst: v2, lhs: v0, rhs: v1 },
+        ];
+        func.block_mut(bb).terminator = Term::Ret(v2);
+
+        let folded = fold_constants(&mut func);
+        assert_eq!(folded, 1);
+        match &func.blocks[0].insts[2] {
+            Inst::IConst { value: 0x0F, .. } => {}
+            other => panic!("expected IConst 0x0F, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn constant_fold_float() {
+        let mut func = LirFunction::new("test".into(), vec![], LirType::F64);
+        let bb = func.add_block();
+        let v0 = func.next_value();
+        let v1 = func.next_value();
+        let v2 = func.next_value();
+
+        func.block_mut(bb).insts = vec![
+            Inst::FConst { dst: v0, ty: LirType::F64, bits: 2.5_f64.to_bits() },
+            Inst::FConst { dst: v1, ty: LirType::F64, bits: 3.0_f64.to_bits() },
+            Inst::Mul { dst: v2, lhs: v0, rhs: v1, overflow: Overflow::Wrap },
+        ];
+        func.block_mut(bb).terminator = Term::Ret(v2);
+
+        let folded = fold_constants(&mut func);
+        assert_eq!(folded, 1);
+        match &func.blocks[0].insts[2] {
+            Inst::FConst { bits, .. } => {
+                assert_eq!(f64::from_bits(*bits), 7.5);
+            }
+            other => panic!("expected FConst 7.5, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn constant_fold_div_by_zero_not_folded() {
+        let mut func = LirFunction::new("test".into(), vec![], LirType::I64);
+        let bb = func.add_block();
+        let v0 = func.next_value();
+        let v1 = func.next_value();
+        let v2 = func.next_value();
+
+        func.block_mut(bb).insts = vec![
+            Inst::IConst { dst: v0, ty: LirType::I64, value: 42 },
+            Inst::IConst { dst: v1, ty: LirType::I64, value: 0 },
+            Inst::Div { dst: v2, lhs: v0, rhs: v1 },
+        ];
+        func.block_mut(bb).terminator = Term::Ret(v2);
+
+        let folded = fold_constants(&mut func);
+        assert_eq!(folded, 0, "division by zero should not be folded");
     }
 }
