@@ -6,7 +6,7 @@
 use std::collections::{HashSet, VecDeque};
 
 use crate::ir::{BasicBlock, Function};
-use crate::ir::instructions::{BinOp, CmpOp, Constant, Instruction, Operand, Place, Terminator, UnOp};
+use crate::ir::instructions::{BinOp, CmpOp, Constant, Instruction, Operand, Place, Projection, Terminator, UnOp};
 use crate::ir::types::{BlockId, LocalId};
 
 /// Run all optimization passes on every function in the module.
@@ -15,6 +15,7 @@ pub fn optimize_module(module: &mut crate::ir::Module) {
         constant_fold(func);
         fold_constant_branches(func);
         elide_dead_drops(func);
+        eliminate_dead_stores(func);
         thread_jumps(func);
         merge_blocks(func);
         eliminate_dead_blocks(func);
@@ -229,6 +230,204 @@ fn elide_dead_drops(func: &mut Function) {
             });
         }
     }
+}
+
+// ── Dead Store Elimination ────────────────────────────────────────────
+
+/// Within each basic block, remove assignments to simple locals (no projections)
+/// that are overwritten before being read.  An assignment `_N = expr` is dead if
+/// _N is reassigned later in the same block with no intervening read of _N.
+///
+/// Only operates on `Assign { dst: Place::local(_), value: Constant|Copy }` — we
+/// don't remove Calls/BinOps/etc. that might have side effects.
+fn eliminate_dead_stores(func: &mut Function) {
+    for bb in &mut func.blocks {
+        // last_store[local_id] = instruction index of the last Assign to that local
+        let mut last_store: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+        let mut dead_indices: Vec<usize> = Vec::new();
+
+        for (i, inst) in bb.instructions.iter().enumerate() {
+            // First: check if this instruction READS any locals
+            let reads = collect_read_locals(inst);
+            // Any read clears the "pending dead store" for that local
+            for r in &reads {
+                last_store.remove(r);
+            }
+
+            // Then: check if this instruction WRITES a simple local
+            match inst {
+                Instruction::Assign { dst, value } if dst.projections.is_empty() => {
+                    // Only remove stores of constants or copies (no side effects)
+                    let is_pure = matches!(value, Operand::Constant(_) | Operand::Copy(_));
+                    if is_pure {
+                        if let Some(prev_idx) = last_store.insert(dst.local.0, i) {
+                            dead_indices.push(prev_idx);
+                        }
+                    } else {
+                        // Move operand — might have side effect (drop of moved value)
+                        last_store.insert(dst.local.0, i);
+                    }
+                }
+                // Non-Assign writes (BinOp dst, Call dst, etc.) clear tracking
+                _ => {
+                    if let Some(written) = instruction_dst(inst) {
+                        last_store.remove(&written);
+                    }
+                }
+            }
+        }
+
+        // Also check terminator for reads — don't remove stores read by terminators
+        if let Some(ref term) = bb.terminator {
+            let term_reads = collect_terminator_read_locals(term);
+            for r in &term_reads {
+                // If this local's last store is pending as dead, un-mark it
+                if let Some(idx) = last_store.get(r) {
+                    dead_indices.retain(|&d| d != *idx);
+                }
+            }
+        }
+
+        if !dead_indices.is_empty() {
+            let dead_set: HashSet<usize> = dead_indices.into_iter().collect();
+            let mut idx = 0;
+            bb.instructions.retain(|_| {
+                let keep = !dead_set.contains(&idx);
+                idx += 1;
+                keep
+            });
+        }
+    }
+}
+
+/// Get the destination local of an instruction (if it writes to a simple local).
+fn instruction_dst(inst: &Instruction) -> Option<u32> {
+    match inst {
+        Instruction::BinOp { dst, .. }
+        | Instruction::UnOp { dst, .. }
+        | Instruction::Cmp { dst, .. }
+        | Instruction::Cast { dst, .. }
+        | Instruction::BitCast { dst, .. }
+        | Instruction::PtrCast { dst, .. }
+        | Instruction::FieldLoad { dst, .. }
+        | Instruction::IndexLoad { dst, .. }
+        | Instruction::HeapAlloc { dst, .. }
+        | Instruction::HeapAllocArray { dst, .. }
+        | Instruction::StructInit { dst, .. }
+        | Instruction::EnumInit { dst, .. }
+        | Instruction::TupleInit { dst, .. }
+        | Instruction::TagOf { dst, .. }
+        | Instruction::EnumFieldLoad { dst, .. }
+        | Instruction::Borrow { dst, .. }
+        | Instruction::BorrowMut { dst, .. }
+        | Instruction::LoadThreadLocal { dst, .. } => Some(dst.0),
+        Instruction::Call { dst: Some(d), .. }
+        | Instruction::CallIndirect { dst: Some(d), .. }
+        | Instruction::CallExtern { dst: Some(d), .. } => Some(d.0),
+        _ => None,
+    }
+}
+
+/// Collect all locals READ by an instruction (operands, not destinations).
+fn collect_read_locals(inst: &Instruction) -> Vec<u32> {
+    let mut reads = Vec::new();
+
+    match inst {
+        Instruction::Assign { dst, value } => {
+            if !dst.projections.is_empty() {
+                push_place_reads(&mut reads, dst);
+            }
+            push_operand_reads(&mut reads, value);
+        }
+        Instruction::BinOp { lhs, rhs, .. } | Instruction::Cmp { lhs, rhs, .. } => {
+            push_operand_reads(&mut reads, lhs);
+            push_operand_reads(&mut reads, rhs);
+        }
+        Instruction::UnOp { operand, .. }
+        | Instruction::Cast { value: operand, .. }
+        | Instruction::BitCast { value: operand, .. }
+        | Instruction::PtrCast { value: operand, .. }
+        | Instruction::TagOf { operand, .. } => {
+            push_operand_reads(&mut reads, operand);
+        }
+        Instruction::FieldLoad { base, .. } | Instruction::EnumFieldLoad { base, .. } => {
+            push_place_reads(&mut reads, base);
+        }
+        Instruction::IndexLoad { base, index, .. } => {
+            push_place_reads(&mut reads, base);
+            push_operand_reads(&mut reads, index);
+        }
+        Instruction::Call { args, .. } | Instruction::CallExtern { args, .. } => {
+            for a in args { push_operand_reads(&mut reads, a); }
+        }
+        Instruction::CallIndirect { callee, args, .. } => {
+            push_operand_reads(&mut reads, callee);
+            for a in args { push_operand_reads(&mut reads, a); }
+        }
+        Instruction::StructInit { fields, .. } | Instruction::EnumInit { fields, .. } => {
+            for f in fields { push_operand_reads(&mut reads, f); }
+        }
+        Instruction::TupleInit { elements, .. } => {
+            for e in elements { push_operand_reads(&mut reads, e); }
+        }
+        Instruction::MoveZero { place } | Instruction::Drop { place }
+        | Instruction::DropIfAlive { place } | Instruction::Borrow { place, .. }
+        | Instruction::BorrowMut { place, .. } => {
+            push_place_reads(&mut reads, place);
+        }
+        Instruction::HeapAlloc { allocator, .. } => { push_operand_reads(&mut reads, allocator); }
+        Instruction::HeapAllocArray { count, allocator, .. } => {
+            push_operand_reads(&mut reads, count);
+            push_operand_reads(&mut reads, allocator);
+        }
+        Instruction::Dealloc { ptr, allocator } => {
+            push_operand_reads(&mut reads, ptr);
+            push_operand_reads(&mut reads, allocator);
+        }
+        Instruction::PushAllocator { allocator } => { push_operand_reads(&mut reads, allocator); }
+        Instruction::PopAllocator | Instruction::Nop
+        | Instruction::InlineC { .. } | Instruction::LoadThreadLocal { .. } => {}
+    }
+    reads
+}
+
+fn push_operand_reads(reads: &mut Vec<u32>, op: &Operand) {
+    match op {
+        Operand::Copy(p) | Operand::Move(p) => push_place_reads(reads, p),
+        Operand::Constant(_) => {}
+    }
+}
+
+fn push_place_reads(reads: &mut Vec<u32>, p: &Place) {
+    reads.push(p.local.0);
+    for proj in &p.projections {
+        if let Projection::Index(id) = proj {
+            reads.push(id.0);
+        }
+    }
+}
+
+/// Collect all locals read by a terminator.
+fn collect_terminator_read_locals(term: &Terminator) -> Vec<u32> {
+    let mut reads = Vec::new();
+    let add_op = |op: &Operand, reads: &mut Vec<u32>| {
+        match op {
+            Operand::Copy(p) | Operand::Move(p) => {
+                reads.push(p.local.0);
+            }
+            Operand::Constant(_) => {}
+        }
+    };
+    match term {
+        Terminator::Return(op) => add_op(op, &mut reads),
+        Terminator::Branch { cond, .. } => add_op(cond, &mut reads),
+        Terminator::Switch { value, .. } => add_op(value, &mut reads),
+        Terminator::Invoke { args, .. } => {
+            for a in args { add_op(a, &mut reads); }
+        }
+        Terminator::Jump(_) | Terminator::Unreachable => {}
+    }
+    reads
 }
 
 // ── Jump Threading ────────────────────────────────────────────────────
@@ -1151,6 +1350,65 @@ mod tests {
         // bb0 should keep its Branch (bb1 has 2 predecessors from the Branch)
         assert_eq!(format!("{:?}", f.blocks[0].terminator), format!("{:?}", orig_term));
     }
+
+    // ── Dead Store Elimination Tests ────────────────────────────────
+
+    #[test]
+    fn elide_dead_store_overwritten() {
+        // _1 = 42; _1 = 99; return _1 → first assign removed
+        let mut f = make_func(vec![bb(vec![
+            Instruction::Assign {
+                dst: Place::local(LocalId(1)),
+                value: Operand::Constant(Constant::I64(42)),
+            },
+            Instruction::Assign {
+                dst: Place::local(LocalId(1)),
+                value: Operand::Constant(Constant::I64(99)),
+            },
+        ], ret_local(1))], vec![local(I64_TYPE), local(I64_TYPE)], vec![]);
+        eliminate_dead_stores(&mut f);
+        assert_eq!(f.blocks[0].instructions.len(), 1);
+        match &f.blocks[0].instructions[0] {
+            Instruction::Assign { value: Operand::Constant(Constant::I64(99)), .. } => {}
+            other => panic!("Expected assign 99, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn no_elide_store_read_between() {
+        // _1 = 42; _2 = Copy(_1); _1 = 99 → keep both assigns
+        let mut f = make_func(vec![bb(vec![
+            Instruction::Assign {
+                dst: Place::local(LocalId(1)),
+                value: Operand::Constant(Constant::I64(42)),
+            },
+            Instruction::Assign {
+                dst: Place::local(LocalId(2)),
+                value: Operand::Copy(Place::local(LocalId(1))),
+            },
+            Instruction::Assign {
+                dst: Place::local(LocalId(1)),
+                value: Operand::Constant(Constant::I64(99)),
+            },
+        ], ret_local(1))], vec![local(I64_TYPE), local(I64_TYPE), local(I64_TYPE)], vec![]);
+        eliminate_dead_stores(&mut f);
+        assert_eq!(f.blocks[0].instructions.len(), 3);
+    }
+
+    #[test]
+    fn no_elide_store_read_by_terminator() {
+        // _1 = 42; return _1 → keep (read by terminator)
+        let mut f = make_func(vec![bb(vec![
+            Instruction::Assign {
+                dst: Place::local(LocalId(1)),
+                value: Operand::Constant(Constant::I64(42)),
+            },
+        ], ret_local(1))], vec![local(I64_TYPE), local(I64_TYPE)], vec![]);
+        eliminate_dead_stores(&mut f);
+        assert_eq!(f.blocks[0].instructions.len(), 1);
+    }
+
+    // ── Block Merging Tests ──────────────────────────────────────────
 
     #[test]
     fn no_merge_self_loop() {
