@@ -42,6 +42,8 @@ pub enum ValidationErrorKind {
     /// Type metadata inconsistency: Copy semantics with a non-None drop strategy
     /// (except for ref-counted types which are intentionally Copy+Drop).
     InconsistentDropMetadata { type_name: String, copy_semantics: CopySemantics, drop_strategy: String },
+    /// Return place _0 has a type that doesn't match the function's declared return_type.
+    ReturnTypeMismatch { return_type: TypeId, local_0_type: TypeId },
 }
 
 impl std::fmt::Display for ValidationErrorKind {
@@ -84,6 +86,9 @@ impl std::fmt::Display for ValidationErrorKind {
             }
             Self::InconsistentDropMetadata { type_name, copy_semantics, drop_strategy } => {
                 write!(f, "type '{}' has {:?} semantics but {} drop strategy", type_name, copy_semantics, drop_strategy)
+            }
+            Self::ReturnTypeMismatch { return_type, local_0_type } => {
+                write!(f, "return place _0 has type {} but function declares return type {}", local_0_type, return_type)
             }
         }
     }
@@ -179,6 +184,7 @@ fn check_function(
     }
 
     // Semantic checks on function-level properties
+    check_return_type_consistency(func, ctx, errors);
     check_local_type_ids(func, ctx, type_registry, errors);
     check_drop_targets(func, ctx, type_registry, errors);
 
@@ -455,6 +461,31 @@ fn check_instruction_types(
             }
         }
         _ => {}
+    }
+}
+
+/// Check that the return place `_0` has a type matching `func.return_type`.
+///
+/// The return place (local 0) is where the function's return value is stored.
+/// Its type should always agree with the declared return type. A mismatch indicates
+/// a bug in the lowering — e.g., the return type was fixed up but `_0` was not.
+fn check_return_type_consistency(
+    func: &Function,
+    ctx: &str,
+    errors: &mut Vec<ValidationError>,
+) {
+    if func.locals.is_empty() {
+        return; // Already caught by NoReturnPlace check
+    }
+    let local_0_type = func.locals[0].type_id;
+    if local_0_type != func.return_type {
+        errors.push(ValidationError {
+            kind: ValidationErrorKind::ReturnTypeMismatch {
+                return_type: func.return_type,
+                local_0_type,
+            },
+            context: ctx.into(),
+        });
     }
 }
 
@@ -884,6 +915,50 @@ mod tests {
             ValidationErrorKind::InconsistentDropMetadata { type_name, .. }
                 if type_name == "BadType"
         )));
+    }
+
+    #[test]
+    fn return_type_mismatch_detected() {
+        let mut module = Module::new();
+        // Create function where return_type is I64 but _0 is F64
+        let func = Function {
+            name: "bad_ret".into(),
+            params: vec![],
+            return_type: I64_TYPE,
+            locals: vec![Local {
+                type_id: F64_TYPE, // _0 has wrong type
+                name_hint: None,
+            }],
+            blocks: vec![{
+                let mut bb = BasicBlock::new();
+                bb.terminator = Some(Terminator::Return(Operand::Constant(Constant::I64(0))));
+                bb
+            }],
+            is_test_fn: false,
+            display_name: None,
+            def_span: None,
+        };
+        module.functions.push(func);
+
+        let errors = validate(&module);
+        assert!(errors.iter().any(|e| matches!(
+            &e.kind,
+            ValidationErrorKind::ReturnTypeMismatch { .. }
+        )), "Should detect return type mismatch. Errors: {:?}", errors);
+    }
+
+    #[test]
+    fn return_type_consistency_ok() {
+        let mut module = Module::new();
+        let mut b = FunctionBuilder::new("ok_ret", I64_TYPE, &[]);
+        b.ret(FunctionBuilder::const_i64(42));
+        module.functions.push(b.build());
+
+        let errors = validate(&module);
+        assert!(
+            !errors.iter().any(|e| matches!(e.kind, ValidationErrorKind::ReturnTypeMismatch { .. })),
+            "Should not flag matching return type"
+        );
     }
 
     #[test]
