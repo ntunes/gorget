@@ -5,6 +5,7 @@
 
 pub mod display;
 pub mod lower;
+pub mod ssa;
 pub mod types;
 pub mod validate;
 

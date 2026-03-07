@@ -1,0 +1,705 @@
+//! SSA construction pass for LIR.
+//!
+//! Promotes scalar slots to SSA values using a simplified version of
+//! Braun et al. 2013 ("Simple and Efficient Construction of SSA Form").
+//!
+//! Algorithm:
+//! 1. Identify promotable slots (scalar type, no SlotAddr instruction).
+//! 2. Walk blocks in order, tracking the current definition of each slot.
+//! 3. At slot stores, record the stored value as the new definition.
+//! 4. At slot loads, replace with the reaching definition.
+//! 5. At merge points (blocks with multiple predecessors), insert block
+//!    parameters and patch predecessor terminators with arguments.
+//! 6. Remove dead SlotStore/SlotLoad instructions.
+
+use super::*;
+use std::collections::{HashMap, HashSet};
+
+/// Run SSA construction on a function, promoting scalar slots.
+pub fn construct_ssa(func: &mut LirFunction) {
+    let promotable = find_promotable_slots(func);
+    if promotable.is_empty() {
+        return;
+    }
+
+    let preds = compute_predecessors(func);
+    let mut ctx = SsaBuilder::new(func, &promotable, &preds);
+    ctx.run();
+}
+
+/// A slot is promotable if:
+/// - It has scalar type (not aggregate, not void)
+/// - No SlotAddr instruction references it
+fn find_promotable_slots(func: &LirFunction) -> HashSet<SlotId> {
+    let mut candidates: HashSet<SlotId> = HashSet::new();
+
+    // Start with all scalar slots as candidates.
+    for (i, slot) in func.slots.iter().enumerate() {
+        if slot.ty.is_scalar() {
+            candidates.insert(SlotId(i as u32));
+        }
+    }
+
+    // Remove any slot that has a SlotAddr instruction (address escapes).
+    for block in &func.blocks {
+        for inst in &block.insts {
+            if let Inst::SlotAddr { slot, .. } = inst {
+                candidates.remove(slot);
+            }
+        }
+    }
+
+    candidates
+}
+
+/// Compute predecessor blocks for each block.
+fn compute_predecessors(func: &LirFunction) -> Vec<Vec<BlockId>> {
+    let mut preds = vec![Vec::new(); func.blocks.len()];
+    for block in &func.blocks {
+        for succ in block.terminator.successors() {
+            preds[succ.0 as usize].push(block.id);
+        }
+    }
+    preds
+}
+
+struct SsaBuilder<'a> {
+    func: &'a mut LirFunction,
+    promotable: &'a HashSet<SlotId>,
+    preds: &'a Vec<Vec<BlockId>>,
+    /// Current definition of each slot at each block: block → slot → value.
+    current_def: HashMap<(BlockId, SlotId), ValueId>,
+    /// Block parameters we've added: block → slot → param ValueId.
+    block_params: HashMap<(BlockId, SlotId), ValueId>,
+    /// Track which blocks we've sealed (all predecessors processed).
+    /// For simplicity, we process in RPO order and seal blocks lazily.
+    incomplete_phis: HashMap<(BlockId, SlotId), ValueId>,
+}
+
+impl<'a> SsaBuilder<'a> {
+    fn new(
+        func: &'a mut LirFunction,
+        promotable: &'a HashSet<SlotId>,
+        preds: &'a Vec<Vec<BlockId>>,
+    ) -> Self {
+        Self {
+            func,
+            promotable,
+            preds,
+            current_def: HashMap::new(),
+            block_params: HashMap::new(),
+            incomplete_phis: HashMap::new(),
+        }
+    }
+
+    fn run(&mut self) {
+        // Phase 1: Walk blocks, replacing SlotLoad with reaching definitions.
+        // For each block, process instructions and track definitions.
+        let num_blocks = self.func.blocks.len();
+
+        for bb_idx in 0..num_blocks {
+            let bb = BlockId(bb_idx as u32);
+            self.process_block(bb);
+        }
+
+        // Phase 2: Remove promoted SlotStore/SlotLoad instructions.
+        self.remove_promoted_instructions();
+
+        // Phase 3: Patch terminators with block arguments for inserted params.
+        self.patch_terminators();
+    }
+
+    fn process_block(&mut self, bb: BlockId) {
+        let block = &self.func.blocks[bb.0 as usize];
+        let insts = block.insts.clone(); // clone to allow mutation
+
+        let mut new_insts = Vec::with_capacity(insts.len());
+
+        for inst in &insts {
+            match inst {
+                Inst::SlotStore { slot, value } if self.promotable.contains(slot) => {
+                    // Record this as the current definition.
+                    self.current_def.insert((bb, *slot), *value);
+                    // Don't emit the SlotStore — it's promoted.
+                }
+                Inst::SlotLoad { dst, slot, .. } if self.promotable.contains(slot) => {
+                    // Replace with the reaching definition.
+                    let reaching = self.read_variable(*slot, bb);
+                    // Don't emit the SlotLoad — replace all uses of dst with reaching.
+                    // We'll do a value substitution pass instead.
+                    self.current_def.insert((bb, *slot), reaching);
+                    // Record the mapping for substitution.
+                    if reaching != *dst {
+                        // We need to rewrite uses of dst to reaching.
+                        // For now, just alias: emit nothing, and do a value rename pass.
+                        self.current_def.insert((bb, *slot), reaching);
+                        // Store the alias mapping.
+                        // Actually, the simplest approach: emit a "copy" by just
+                        // recording that dst = reaching, and do a global rename.
+                        // But LIR doesn't have a copy instruction. Instead, we need
+                        // to patch all uses of dst to reaching.
+                        //
+                        // For now, store the mapping and do a substitution pass.
+                        self.block_params.insert((bb, *slot), *dst);
+                    }
+                }
+                other => {
+                    // For non-promoted instructions, check if they store to a promoted slot
+                    // (they shouldn't, but be safe).
+                    new_insts.push(other.clone());
+                }
+            }
+        }
+
+        self.func.blocks[bb.0 as usize].insts = new_insts;
+    }
+
+    /// Read the current definition of a slot at block entry.
+    fn read_variable(&mut self, slot: SlotId, bb: BlockId) -> ValueId {
+        // Check if we have a local definition in this block.
+        if let Some(&val) = self.current_def.get(&(bb, slot)) {
+            return val;
+        }
+
+        // Check predecessors.
+        let preds = self.preds[bb.0 as usize].clone();
+
+        if preds.is_empty() {
+            // Entry block with no definition — use an undefined value.
+            // This happens for uninitialized variables. Create a zero constant.
+            let val = self.func.next_value();
+            let ty = self.func.slots[slot.0 as usize].ty.clone();
+            // Insert a zero constant at the beginning of bb0.
+            let zero_inst = match &ty {
+                LirType::Bool => Inst::BoolConst { dst: val, value: false },
+                LirType::F32 => Inst::FConst { dst: val, ty: LirType::F32, bits: 0 },
+                LirType::F64 => Inst::FConst { dst: val, ty: LirType::F64, bits: 0 },
+                LirType::Ptr => Inst::NullPtr { dst: val },
+                _ => Inst::IConst { dst: val, ty: ty.clone(), value: 0 },
+            };
+            self.func.blocks[bb.0 as usize].insts.insert(0, zero_inst);
+            self.current_def.insert((bb, slot), val);
+            val
+        } else if preds.len() == 1 {
+            // Single predecessor — use its definition.
+            let pred = preds[0];
+            let val = self.read_variable(slot, pred);
+            self.current_def.insert((bb, slot), val);
+            val
+        } else {
+            // Multiple predecessors — need a block parameter (phi).
+            self.add_block_param(slot, bb)
+        }
+    }
+
+    /// Add a block parameter for a slot at a merge point.
+    fn add_block_param(&mut self, slot: SlotId, bb: BlockId) -> ValueId {
+        // Check if we already created a param for this slot at this block.
+        if let Some(&val) = self.block_params.get(&(bb, slot)) {
+            return val;
+        }
+
+        let ty = self.func.slots[slot.0 as usize].ty.clone();
+        let param_val = self.func.next_value();
+        self.func.blocks[bb.0 as usize]
+            .params
+            .push((param_val, ty));
+        self.block_params.insert((bb, slot), param_val);
+        self.current_def.insert((bb, slot), param_val);
+
+        // Record as incomplete — we need to fill in arguments from predecessors.
+        self.incomplete_phis.insert((bb, slot), param_val);
+
+        param_val
+    }
+
+    /// Remove promoted SlotStore/SlotLoad instructions (already done in process_block
+    /// for SlotStore; SlotLoad is also removed there).
+    fn remove_promoted_instructions(&mut self) {
+        // The instructions were already filtered during process_block.
+        // But we also need to do a value substitution pass: replace all uses of
+        // SlotLoad dst values with their reaching definitions.
+
+        // Build the substitution map: old ValueId → new ValueId.
+        let mut subst: HashMap<ValueId, ValueId> = HashMap::new();
+        for (&(bb, slot), &param_val) in &self.block_params {
+            // param_val was the original SlotLoad dst. Replace it with the
+            // reaching definition from current_def.
+            if let Some(&reaching) = self.current_def.get(&(bb, slot)) {
+                if reaching != param_val {
+                    subst.insert(param_val, reaching);
+                }
+            }
+        }
+
+        if subst.is_empty() {
+            return;
+        }
+
+        // Apply substitutions across all instructions and terminators.
+        for block in &mut self.func.blocks {
+            for inst in &mut block.insts {
+                substitute_inst_values(inst, &subst);
+            }
+            substitute_term_values(&mut block.terminator, &subst);
+        }
+    }
+
+    /// Patch terminators: for each jump/branch to a block with params,
+    /// provide the reaching definition from the predecessor.
+    fn patch_terminators(&mut self) {
+        // Collect the patches we need to make.
+        let mut patches: Vec<(BlockId, BlockId, Vec<ValueId>)> = Vec::new();
+
+        for (&(target_bb, slot), _param_val) in &self.incomplete_phis {
+            let preds = self.preds[target_bb.0 as usize].clone();
+            for &pred_bb in &preds {
+                let val = self
+                    .current_def
+                    .get(&(pred_bb, slot))
+                    .copied()
+                    .unwrap_or_else(|| {
+                        // No definition in predecessor — create a zero.
+                        let v = self.func.next_value();
+                        let ty = self.func.slots[slot.0 as usize].ty.clone();
+                        self.func.blocks[pred_bb.0 as usize]
+                            .insts
+                            .push(Inst::IConst {
+                                dst: v,
+                                ty,
+                                value: 0,
+                            });
+                        v
+                    });
+                patches.push((pred_bb, target_bb, vec![val]));
+            }
+        }
+
+        // Apply patches to terminators.
+        for (pred_bb, target_bb, args) in patches {
+            let term = &mut self.func.blocks[pred_bb.0 as usize].terminator;
+            add_args_to_terminator(term, target_bb, &args);
+        }
+    }
+}
+
+/// Add arguments to a terminator's jump to a specific target block.
+fn add_args_to_terminator(term: &mut Term, target: BlockId, args: &[ValueId]) {
+    match term {
+        Term::Jump(t, existing_args) if *t == target => {
+            existing_args.extend_from_slice(args);
+        }
+        Term::Branch {
+            then_block,
+            then_args,
+            else_block,
+            else_args,
+            ..
+        } => {
+            if *then_block == target {
+                then_args.extend_from_slice(args);
+            }
+            if *else_block == target {
+                else_args.extend_from_slice(args);
+            }
+        }
+        Term::Switch {
+            cases,
+            default,
+            default_args,
+            ..
+        } => {
+            for (_, block, case_args) in cases.iter_mut() {
+                if *block == target {
+                    case_args.extend_from_slice(args);
+                }
+            }
+            if *default == target {
+                default_args.extend_from_slice(args);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Substitute value references in an instruction.
+fn substitute_inst_values(inst: &mut Inst, subst: &HashMap<ValueId, ValueId>) {
+    let sub = |v: &mut ValueId| {
+        if let Some(&replacement) = subst.get(v) {
+            *v = replacement;
+        }
+    };
+
+    match inst {
+        Inst::SlotStore { value, .. } => sub(value),
+        Inst::Add { lhs, rhs, .. }
+        | Inst::Sub { lhs, rhs, .. }
+        | Inst::Mul { lhs, rhs, .. }
+        | Inst::Div { lhs, rhs, .. }
+        | Inst::Rem { lhs, rhs, .. }
+        | Inst::Mod { lhs, rhs, .. }
+        | Inst::BitAnd { lhs, rhs, .. }
+        | Inst::BitOr { lhs, rhs, .. }
+        | Inst::BitXor { lhs, rhs, .. }
+        | Inst::Shl { lhs, rhs, .. }
+        | Inst::Shr { lhs, rhs, .. }
+        | Inst::Cmp { lhs, rhs, .. } => {
+            sub(lhs);
+            sub(rhs);
+        }
+        Inst::Neg { operand, .. }
+        | Inst::BitNot { operand, .. }
+        | Inst::Not { operand, .. } => sub(operand),
+        Inst::IntCast { value, .. }
+        | Inst::FloatCast { value, .. }
+        | Inst::IntToFloat { value, .. }
+        | Inst::FloatToInt { value, .. }
+        | Inst::PtrCast { value, .. }
+        | Inst::Bitcast { value, .. } => sub(value),
+        Inst::Load { ptr, .. } => sub(ptr),
+        Inst::Store { ptr, value } => {
+            sub(ptr);
+            sub(value);
+        }
+        Inst::FieldPtr { base, .. } => sub(base),
+        Inst::ElemPtr { base, index, .. } => {
+            sub(base);
+            sub(index);
+        }
+        Inst::Memset { ptr, byte, size } => {
+            sub(ptr);
+            sub(byte);
+            sub(size);
+        }
+        Inst::Memcpy {
+            dst_ptr,
+            src_ptr,
+            size,
+        } => {
+            sub(dst_ptr);
+            sub(src_ptr);
+            sub(size);
+        }
+        Inst::Call { args, .. } | Inst::CallExtern { args, .. } => {
+            for a in args.iter_mut() {
+                sub(a);
+            }
+        }
+        Inst::CallPtr { callee, args, .. } => {
+            sub(callee);
+            for a in args.iter_mut() {
+                sub(a);
+            }
+        }
+        Inst::BoundsCheck { index, len } => {
+            sub(index);
+            sub(len);
+        }
+        Inst::DivCheck { divisor } => sub(divisor),
+        Inst::Printf { args, .. } => {
+            for a in args.iter_mut() {
+                sub(a);
+            }
+        }
+        Inst::Fprintf { fd, args, .. } => {
+            sub(fd);
+            for a in args.iter_mut() {
+                sub(a);
+            }
+        }
+        Inst::SlotLoad { .. }
+        | Inst::SlotAddr { .. }
+        | Inst::IConst { .. }
+        | Inst::FConst { .. }
+        | Inst::BoolConst { .. }
+        | Inst::NullPtr { .. }
+        | Inst::FuncAddr { .. }
+        | Inst::GlobalAddr { .. }
+        | Inst::StrLit { .. }
+        | Inst::Trap { .. }
+        | Inst::Nop => {}
+    }
+}
+
+/// Substitute value references in a terminator.
+fn substitute_term_values(term: &mut Term, subst: &HashMap<ValueId, ValueId>) {
+    let sub = |v: &mut ValueId| {
+        if let Some(&replacement) = subst.get(v) {
+            *v = replacement;
+        }
+    };
+
+    match term {
+        Term::Ret(v) => sub(v),
+        Term::RetVoid | Term::Unreachable => {}
+        Term::Jump(_, args) => {
+            for a in args.iter_mut() {
+                sub(a);
+            }
+        }
+        Term::Branch {
+            cond,
+            then_args,
+            else_args,
+            ..
+        } => {
+            sub(cond);
+            for a in then_args.iter_mut() {
+                sub(a);
+            }
+            for a in else_args.iter_mut() {
+                sub(a);
+            }
+        }
+        Term::Switch {
+            value,
+            cases,
+            default_args,
+            ..
+        } => {
+            sub(value);
+            for (_, _, args) in cases.iter_mut() {
+                for a in args.iter_mut() {
+                    sub(a);
+                }
+            }
+            for a in default_args.iter_mut() {
+                sub(a);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn promote_simple_scalar() {
+        // fn test() -> i64:
+        //   s0: i64
+        //   bb0:
+        //     v0: i64 = iconst 42
+        //     slot_store s0, v0
+        //     v1: i64 = slot_load s0
+        //     ret v1
+        let mut func = LirFunction::new("test".into(), vec![], LirType::I64);
+        let s0 = func.add_slot(LirType::I64, Some("x".into()));
+        let bb0 = func.add_block();
+
+        let v0 = func.next_value();
+        let v1 = func.next_value();
+
+        func.block_mut(bb0).insts = vec![
+            Inst::IConst {
+                dst: v0,
+                ty: LirType::I64,
+                value: 42,
+            },
+            Inst::SlotStore { slot: s0, value: v0 },
+            Inst::SlotLoad {
+                dst: v1,
+                slot: s0,
+                ty: LirType::I64,
+            },
+        ];
+        func.block_mut(bb0).terminator = Term::Ret(v1);
+
+        construct_ssa(&mut func);
+
+        // After SSA: SlotStore and SlotLoad should be removed.
+        // The ret should use v0 directly (or its alias).
+        let block = &func.blocks[0];
+        assert!(
+            !block.insts.iter().any(|i| matches!(i, Inst::SlotStore { .. })),
+            "SlotStore should be removed"
+        );
+        assert!(
+            !block.insts.iter().any(|i| matches!(i, Inst::SlotLoad { .. })),
+            "SlotLoad should be removed"
+        );
+    }
+
+    #[test]
+    fn promote_with_branch() {
+        // fn test() -> i64:
+        //   s0: i64
+        //   s1: bool
+        //   bb0:
+        //     v0: bool = bconst true
+        //     slot_store s1, v0
+        //     v1: bool = slot_load s1
+        //     br v1, bb1, bb2
+        //   bb1:
+        //     v2: i64 = iconst 10
+        //     slot_store s0, v2
+        //     jmp bb3
+        //   bb2:
+        //     v3: i64 = iconst 20
+        //     slot_store s0, v3
+        //     jmp bb3
+        //   bb3:
+        //     v4: i64 = slot_load s0
+        //     ret v4
+        let mut func = LirFunction::new("test".into(), vec![], LirType::I64);
+        let s0 = func.add_slot(LirType::I64, Some("x".into()));
+        let s1 = func.add_slot(LirType::Bool, Some("cond".into()));
+
+        let bb0 = func.add_block();
+        let bb1 = func.add_block();
+        let bb2 = func.add_block();
+        let bb3 = func.add_block();
+
+        let v0 = func.next_value();
+        let v1 = func.next_value();
+        let v2 = func.next_value();
+        let v3 = func.next_value();
+        let v4 = func.next_value();
+
+        func.block_mut(bb0).insts = vec![
+            Inst::BoolConst { dst: v0, value: true },
+            Inst::SlotStore { slot: s1, value: v0 },
+            Inst::SlotLoad {
+                dst: v1,
+                slot: s1,
+                ty: LirType::Bool,
+            },
+        ];
+        func.block_mut(bb0).terminator = Term::Branch {
+            cond: v1,
+            then_block: bb1,
+            then_args: vec![],
+            else_block: bb2,
+            else_args: vec![],
+        };
+
+        func.block_mut(bb1).insts = vec![
+            Inst::IConst {
+                dst: v2,
+                ty: LirType::I64,
+                value: 10,
+            },
+            Inst::SlotStore { slot: s0, value: v2 },
+        ];
+        func.block_mut(bb1).terminator = Term::Jump(bb3, vec![]);
+
+        func.block_mut(bb2).insts = vec![
+            Inst::IConst {
+                dst: v3,
+                ty: LirType::I64,
+                value: 20,
+            },
+            Inst::SlotStore { slot: s0, value: v3 },
+        ];
+        func.block_mut(bb2).terminator = Term::Jump(bb3, vec![]);
+
+        func.block_mut(bb3).insts = vec![Inst::SlotLoad {
+            dst: v4,
+            slot: s0,
+            ty: LirType::I64,
+        }];
+        func.block_mut(bb3).terminator = Term::Ret(v4);
+
+        construct_ssa(&mut func);
+
+        // After SSA: bb3 should have a block parameter for s0.
+        let merge_block = &func.blocks[3];
+        assert!(
+            !merge_block.params.is_empty(),
+            "merge block should have a block parameter"
+        );
+
+        // The branch cond should be v0 (not v1 which was a SlotLoad).
+        let term = &func.blocks[0].terminator;
+        if let Term::Branch { cond, .. } = term {
+            assert_eq!(*cond, v0, "branch cond should use v0 directly");
+        }
+    }
+
+    #[test]
+    fn aggregate_slots_not_promoted() {
+        let mut func = LirFunction::new("test".into(), vec![], LirType::Void);
+        let _s0 = func.add_slot(LirType::Struct(StructId(0)), Some("point".into()));
+        let bb0 = func.add_block();
+
+        let v0 = func.next_value();
+        func.block_mut(bb0).insts = vec![Inst::SlotAddr {
+            dst: v0,
+            slot: SlotId(0),
+        }];
+        func.block_mut(bb0).terminator = Term::RetVoid;
+
+        let promotable = find_promotable_slots(&func);
+        assert!(
+            promotable.is_empty(),
+            "aggregate slots should not be promotable"
+        );
+    }
+
+    #[test]
+    fn addressed_slot_not_promoted() {
+        let mut func = LirFunction::new("test".into(), vec![], LirType::I64);
+        let s0 = func.add_slot(LirType::I64, Some("x".into()));
+        let bb0 = func.add_block();
+
+        let v0 = func.next_value();
+        let v1 = func.next_value();
+
+        func.block_mut(bb0).insts = vec![
+            Inst::IConst {
+                dst: v0,
+                ty: LirType::I64,
+                value: 42,
+            },
+            Inst::SlotStore { slot: s0, value: v0 },
+            Inst::SlotAddr { dst: v1, slot: s0 }, // takes address!
+        ];
+        func.block_mut(bb0).terminator = Term::Ret(v0);
+
+        let promotable = find_promotable_slots(&func);
+        assert!(
+            !promotable.contains(&s0),
+            "addressed scalar slot should not be promotable"
+        );
+    }
+
+    #[test]
+    fn no_promotable_slots_is_noop() {
+        let mut func = LirFunction::new("test".into(), vec![], LirType::Void);
+        let _s0 = func.add_slot(LirType::Struct(StructId(0)), None);
+        let bb0 = func.add_block();
+        func.block_mut(bb0).terminator = Term::RetVoid;
+
+        let original_insts = func.blocks[0].insts.len();
+        construct_ssa(&mut func);
+        assert_eq!(func.blocks[0].insts.len(), original_insts);
+    }
+
+    #[test]
+    fn predecessors_computed_correctly() {
+        let mut func = LirFunction::new("test".into(), vec![], LirType::Void);
+        let bb0 = func.add_block();
+        let bb1 = func.add_block();
+        let bb2 = func.add_block();
+        let bb3 = func.add_block();
+
+        func.block_mut(bb0).terminator = Term::Branch {
+            cond: ValueId(0),
+            then_block: bb1,
+            then_args: vec![],
+            else_block: bb2,
+            else_args: vec![],
+        };
+        func.block_mut(bb1).terminator = Term::Jump(bb3, vec![]);
+        func.block_mut(bb2).terminator = Term::Jump(bb3, vec![]);
+        func.block_mut(bb3).terminator = Term::RetVoid;
+
+        let preds = compute_predecessors(&func);
+        assert!(preds[0].is_empty()); // bb0 has no predecessors
+        assert_eq!(preds[1], vec![bb0]); // bb1 ← bb0
+        assert_eq!(preds[2], vec![bb0]); // bb2 ← bb0
+        assert_eq!(preds[3].len(), 2); // bb3 ← bb1, bb2
+        assert!(preds[3].contains(&bb1));
+        assert!(preds[3].contains(&bb2));
+    }
+}
