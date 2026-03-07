@@ -7,7 +7,7 @@ use std::collections::{HashSet, VecDeque};
 
 use crate::ir::{BasicBlock, Function};
 use crate::ir::instructions::{BinOp, CmpOp, Constant, Instruction, Operand, Place, Terminator, UnOp};
-use crate::ir::types::LocalId;
+use crate::ir::types::{BlockId, LocalId};
 
 /// Run all optimization passes on every function in the module.
 pub fn optimize_module(module: &mut crate::ir::Module) {
@@ -16,6 +16,7 @@ pub fn optimize_module(module: &mut crate::ir::Module) {
         fold_constant_branches(func);
         elide_dead_drops(func);
         thread_jumps(func);
+        merge_blocks(func);
         eliminate_dead_blocks(func);
         eliminate_unused_locals(func);
     }
@@ -310,6 +311,67 @@ fn remap_terminator_targets(term: &mut Terminator, forward: &[u32]) {
             error.0 = forward[error.0 as usize];
         }
         Terminator::Return(_) | Terminator::Unreachable => {}
+    }
+}
+
+// ── Block Merging ─────────────────────────────────────────────────────
+
+/// Merge a block into its unique predecessor when:
+/// - The predecessor ends with `Jump(target)`
+/// - The target has exactly one predecessor (that block)
+///
+/// This reduces block count and can enable further optimizations within the
+/// merged block. Runs after jump threading (which creates merge opportunities)
+/// and before dead block elimination (which renumbers).
+fn merge_blocks(func: &mut Function) {
+    if func.blocks.len() <= 1 {
+        return;
+    }
+
+    // Count predecessors for each block.
+    let n = func.blocks.len();
+    let mut pred_count = vec![0u32; n];
+    // Block 0 has an implicit entry predecessor.
+    pred_count[0] = 1;
+    for bb in &func.blocks {
+        for succ in successors(bb) {
+            if (succ as usize) < n {
+                pred_count[succ as usize] += 1;
+            }
+        }
+    }
+
+    // Iteratively merge until no more progress.
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for i in 0..func.blocks.len() {
+            // Check: does this block jump to a block with exactly one predecessor?
+            let target = match &func.blocks[i].terminator {
+                Some(Terminator::Jump(BlockId(t))) => *t as usize,
+                _ => continue,
+            };
+            if target >= func.blocks.len() || target == i {
+                continue;
+            }
+            if pred_count[target] != 1 {
+                continue;
+            }
+
+            // Merge: append target's instructions and take its terminator.
+            // We need to drain target first to avoid double-borrow.
+            let target_insts = std::mem::take(&mut func.blocks[target].instructions);
+            let target_term = func.blocks[target].terminator.take();
+
+            func.blocks[i].instructions.extend(target_insts);
+            func.blocks[i].terminator = target_term;
+
+            // The merged block inherits target's successors — update pred_count.
+            // target is now dead (no terminator, no instructions) but we don't
+            // remove it here — dead block elimination handles that.
+            pred_count[target] = 0;
+            changed = true;
+        }
     }
 }
 
@@ -1034,5 +1096,69 @@ mod tests {
         }], ret_local(1))], vec![local(I64_TYPE), local(I64_TYPE)], vec![]);
         constant_fold(&mut f);
         assert!(matches!(&f.blocks[0].instructions[0], Instruction::BinOp { .. }));
+    }
+
+    // ── Block Merging Tests ──────────────────────────────────────────
+
+    #[test]
+    fn merge_simple_chain() {
+        // bb0: assign _1=42, Jump(bb1)
+        // bb1: return _1
+        // → merged into: bb0: assign _1=42, return _1
+        let mut f = make_func(vec![
+            bb(vec![Instruction::Assign {
+                dst: Place::local(LocalId(1)),
+                value: Operand::Constant(Constant::I64(42)),
+            }], Terminator::Jump(BlockId(1))),
+            bb(vec![], ret_local(1)),
+        ], vec![local(I64_TYPE), local(I64_TYPE)], vec![]);
+        merge_blocks(&mut f);
+        // bb0 should now contain the assign + return
+        assert_eq!(f.blocks[0].instructions.len(), 1);
+        assert!(matches!(f.blocks[0].terminator, Some(Terminator::Return(_))));
+    }
+
+    #[test]
+    fn merge_chain_of_three() {
+        // bb0: Jump(bb1), bb1: assign _1=10, Jump(bb2), bb2: return _1
+        let mut f = make_func(vec![
+            bb(vec![], Terminator::Jump(BlockId(1))),
+            bb(vec![Instruction::Assign {
+                dst: Place::local(LocalId(1)),
+                value: Operand::Constant(Constant::I64(10)),
+            }], Terminator::Jump(BlockId(2))),
+            bb(vec![], ret_local(1)),
+        ], vec![local(I64_TYPE), local(I64_TYPE)], vec![]);
+        merge_blocks(&mut f);
+        // bb0 should absorb bb1 and bb2
+        assert_eq!(f.blocks[0].instructions.len(), 1);
+        assert!(matches!(f.blocks[0].terminator, Some(Terminator::Return(_))));
+    }
+
+    #[test]
+    fn no_merge_multiple_predecessors() {
+        // bb0: Branch(cond, bb1, bb1) — bb1 has 2 predecessors, don't merge
+        let mut f = make_func(vec![
+            bb(vec![], Terminator::Branch {
+                cond: Operand::Constant(Constant::Bool(true)),
+                then_block: BlockId(1),
+                else_block: BlockId(1),
+            }),
+            bb(vec![], ret_i64(0)),
+        ], vec![local(I64_TYPE)], vec![]);
+        let orig_term = f.blocks[0].terminator.clone();
+        merge_blocks(&mut f);
+        // bb0 should keep its Branch (bb1 has 2 predecessors from the Branch)
+        assert_eq!(format!("{:?}", f.blocks[0].terminator), format!("{:?}", orig_term));
+    }
+
+    #[test]
+    fn no_merge_self_loop() {
+        // bb0: Jump(bb0) — self loop, don't merge with self
+        let mut f = make_func(vec![
+            bb(vec![], Terminator::Jump(BlockId(0))),
+        ], vec![local(I64_TYPE)], vec![]);
+        merge_blocks(&mut f);
+        assert!(matches!(f.blocks[0].terminator, Some(Terminator::Jump(BlockId(0)))));
     }
 }
