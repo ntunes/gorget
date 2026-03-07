@@ -1,9 +1,9 @@
-from gg.toml import TomlValue, toml_parse, toml_stringify, toml_stringify_value
+from gg.toml import TomlValue, parse, stringify, stringify_value
 
 void main():
     # ── Test 1: Basic key-value pairs ───────────────────────
     str toml_basic = "title = \"TOML Example\"\ncount = 42\npi = 3.14\nenabled = true"
-    Result[TomlValue, str] parsed_basic = toml_parse(toml_basic)
+    Result[TomlValue, str] parsed_basic = parse(toml_basic)
     match parsed_basic:
         case Ok(doc1):
             print(doc1.get("title").as_str())
@@ -18,7 +18,7 @@ void main():
 
     # ── Test 2: Nested tables ──────────────────────────────
     str toml_nested = "[server]\nhost = \"localhost\"\nport = 8080\n\n[server.tls]\ncert = \"server.pem\""
-    Result[TomlValue, str] parsed_nested = toml_parse(toml_nested)
+    Result[TomlValue, str] parsed_nested = parse(toml_nested)
     match parsed_nested:
         case Ok(doc2):
             print(doc2.get("server").get("host").as_str())
@@ -30,7 +30,7 @@ void main():
 
     # ── Test 3: Arrays ─────────────────────────────────────
     str toml_arr = "ports = [80, 443, 8080]\ntags = [\"web\", \"prod\"]"
-    Result[TomlValue, str] parsed_arr = toml_parse(toml_arr)
+    Result[TomlValue, str] parsed_arr = parse(toml_arr)
     match parsed_arr:
         case Ok(doc3):
             int ports_len = doc3.get("ports").len()
@@ -45,7 +45,7 @@ void main():
 
     # ── Test 4: Array of tables ────────────────────────────
     str toml_aot = "[[fruits]]\nname = \"apple\"\n\n[[fruits]]\nname = \"banana\""
-    Result[TomlValue, str] parsed_aot = toml_parse(toml_aot)
+    Result[TomlValue, str] parsed_aot = parse(toml_aot)
     match parsed_aot:
         case Ok(doc4):
             int fruits_len = doc4.get("fruits").len()
@@ -57,7 +57,7 @@ void main():
 
     # ── Test 5: Integers with prefixes ─────────────────────
     str toml_ints = "hex = 0xFF\noct = 0o77\nbin = 0b1010\nsep = 1_000"
-    Result[TomlValue, str] parsed_ints = toml_parse(toml_ints)
+    Result[TomlValue, str] parsed_ints = parse(toml_ints)
     match parsed_ints:
         case Ok(doc5):
             int hex_val = doc5.get("hex").as_int()
@@ -73,7 +73,7 @@ void main():
 
     # ── Test 6: Dotted keys ────────────────────────────────
     str toml_dotted = "name.first = \"Tom\"\nname.last = \"Preston\""
-    Result[TomlValue, str] parsed_dotted = toml_parse(toml_dotted)
+    Result[TomlValue, str] parsed_dotted = parse(toml_dotted)
     match parsed_dotted:
         case Ok(doc6):
             print(doc6.get("name").get("first").as_str())
@@ -83,7 +83,7 @@ void main():
 
     # ── Test 7: Type checks ───────────────────────────────
     str toml_types = "s = \"hello\"\nn = 5\nf = 2.5\nb = false"
-    Result[TomlValue, str] parsed_types = toml_parse(toml_types)
+    Result[TomlValue, str] parsed_types = parse(toml_types)
     match parsed_types:
         case Ok(doc7):
             bool is_str = doc7.get("s").is_string()
@@ -101,7 +101,7 @@ void main():
 
     # ── Test 8: has() and has_index() ────────────────────────
     str toml_has = "name = \"Alice\"\ncount = 0\n\n[data]\nitems = [10, 20]"
-    Result[TomlValue, str] parsed_has = toml_parse(toml_has)
+    Result[TomlValue, str] parsed_has = parse(toml_has)
     match parsed_has:
         case Ok(doc_has):
             bool has_name = doc_has.has("name")
@@ -123,7 +123,7 @@ void main():
 
     # ── Test 9: Error handling ──────────────────────────────
     str toml_bad = "key = "
-    Result[TomlValue, str] parsed_bad = toml_parse(toml_bad)
+    Result[TomlValue, str] parsed_bad = parse(toml_bad)
     match parsed_bad:
         case Ok(doc8):
             print("should not reach here")
@@ -132,7 +132,7 @@ void main():
 
     # ── Test 10: Comments ──────────────────────────────────
     str toml_comments = "# This is a comment\nval = 99 # inline comment"
-    Result[TomlValue, str] parsed_comments = toml_parse(toml_comments)
+    Result[TomlValue, str] parsed_comments = parse(toml_comments)
     match parsed_comments:
         case Ok(doc9):
             int comment_val = doc9.get("val").as_int()
@@ -142,7 +142,7 @@ void main():
 
     # ── Test 11: Unicode escapes ─────────────────────────
     str toml_uni = "alpha = \"\\u0041\"\nbeta = \"\\U00000042\""
-    Result[TomlValue, str] parsed_uni = toml_parse(toml_uni)
+    Result[TomlValue, str] parsed_uni = parse(toml_uni)
     match parsed_uni:
         case Ok(doc10):
             print(doc10.get("alpha").as_str())

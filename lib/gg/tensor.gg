@@ -64,7 +64,7 @@ Vector[int] tensor_compute_strides(Vector[int] shape):
     return st
 
 # Product of all elements (total number of elements)
-int tensor_product(Vector[int] v):
+private int product(Vector[int] v):
     int p = 1
     int i = 0
     while i < v.len():
@@ -82,7 +82,7 @@ Vector[int] vec_int_copy(Vector[int] v):
     return out
 
 # Odometer-style multi-index increment. Returns true if successful, false if wrapped around.
-bool tensor_increment_index(Vector[int] indices, Vector[int] shape):
+private bool increment_index(Vector[int] indices, Vector[int] shape):
     int n = indices.len()
     int i = n - 1
     while i >= 0:
@@ -96,7 +96,7 @@ bool tensor_increment_index(Vector[int] indices, Vector[int] shape):
     return false
 
 # Compute flat storage address from multi-index considering strides and offset.
-int tensor_flat_addr(Vector[int] strides, int offset, Vector[int] indices):
+private int flat_addr(Vector[int] strides, int offset, Vector[int] indices):
     int flat = offset
     int i = 0
     while i < indices.len():
@@ -105,7 +105,7 @@ int tensor_flat_addr(Vector[int] strides, int offset, Vector[int] indices):
     return flat
 
 # Compute strided flat index from sequential logical index i.
-int tensor_flat_to_addr(Vector[int] strides, int offset, Vector[int] shape, int i):
+private int flat_to_addr(Vector[int] strides, int offset, Vector[int] shape, int i):
     int n = shape.len()
     int remaining = i
     int addr = offset
@@ -130,7 +130,7 @@ int tensor_flat_to_addr(Vector[int] strides, int offset, Vector[int] shape, int 
 equip Tensor[T]:
     # Shape and metadata
     int ndim(self) = self.shape.len()
-    int size(self) = tensor_product(self.shape)
+    int size(self) = product(self.shape)
     int storage_len(self) = self.storage.slen()
 
     bool is_contiguous(self):
@@ -185,26 +185,26 @@ equip Tensor[T]:
 
     # Element access — dispatches to Shared[Vector[T]].at/set_at (Phase 0a)
     T at(self, Vector[int] indices):
-        return self.storage.at(tensor_flat_addr(self.strides, self.offset, indices))
+        return self.storage.at(flat_addr(self.strides, self.offset, indices))
 
     void set_at(&self, Vector[int] indices, T val):
-        self.storage.set_at(tensor_flat_addr(self.strides, self.offset, indices), val)
+        self.storage.set_at(flat_addr(self.strides, self.offset, indices), val)
 
     T flat_get(self, int i):
         if self.is_contiguous():
             return self.storage.at(self.offset + i)
-        return self.storage.at(tensor_flat_to_addr(self.strides, self.offset, self.shape, i))
+        return self.storage.at(flat_to_addr(self.strides, self.offset, self.shape, i))
 
     void flat_set(&self, int i, T val):
         if self.is_contiguous():
             self.storage.set_at(self.offset + i, val)
         else:
-            self.storage.set_at(tensor_flat_to_addr(self.strides, self.offset, self.shape, i), val)
+            self.storage.set_at(flat_to_addr(self.strides, self.offset, self.shape, i), val)
 
 # ── Generic Constructors ─────────────────────────────────────
 
 Tensor[T] tensor_zeros[Numeric T](Vector[int] shape):
-    int sz = tensor_product(shape)
+    int sz = product(shape)
     Vector[T] data = Vector[T]()
     int i = 0
     while i < sz:
@@ -215,7 +215,7 @@ Tensor[T] tensor_zeros[Numeric T](Vector[int] shape):
     return Tensor[T](Shared[Vector[T]](data), s, strides, 0)
 
 Tensor[T] tensor_ones[Numeric T](Vector[int] shape):
-    int sz = tensor_product(shape)
+    int sz = product(shape)
     Vector[T] data = Vector[T]()
     int i = 0
     while i < sz:
@@ -271,7 +271,7 @@ Tensor[T] tensor_clone[Numeric T](Tensor[T] t):
     while k < sz:
         new_data.push(t.at(indices))
         if k < sz - 1:
-            tensor_increment_index(indices, t.shape)
+            increment_index(indices, t.shape)
         k = k + 1
     Vector[int] new_shape = vec_int_copy(t.shape)
     Vector[int] new_strides = tensor_compute_strides(new_shape)
@@ -396,7 +396,7 @@ T tensor_bc_elem[Numeric T](Tensor[T] t, Vector[int] bc_shape, Vector[int] idx):
 
 Tensor[T] tensor_badd[Numeric T](Tensor[T] a, Tensor[T] b):
     Vector[int] bc_shape = tensor_broadcast_shape(a.shape, b.shape).unwrap()
-    int sz = tensor_product(bc_shape)
+    int sz = product(bc_shape)
     Tensor[T] out = tensor_zeros[T](bc_shape)
     Vector[int] idx = Vector[int]()
     int di = 0
@@ -409,13 +409,13 @@ Tensor[T] tensor_badd[Numeric T](Tensor[T] a, Tensor[T] b):
         T bv = tensor_bc_elem[T](b, bc_shape, idx)
         out.storage.set_at(k, av + bv)
         if k < sz - 1:
-            tensor_increment_index(idx, bc_shape)
+            increment_index(idx, bc_shape)
         k = k + 1
     return out
 
 Tensor[T] tensor_bsub[Numeric T](Tensor[T] a, Tensor[T] b):
     Vector[int] bc_shape = tensor_broadcast_shape(a.shape, b.shape).unwrap()
-    int sz = tensor_product(bc_shape)
+    int sz = product(bc_shape)
     Tensor[T] out = tensor_zeros[T](bc_shape)
     Vector[int] idx = Vector[int]()
     int di = 0
@@ -428,13 +428,13 @@ Tensor[T] tensor_bsub[Numeric T](Tensor[T] a, Tensor[T] b):
         T bv = tensor_bc_elem[T](b, bc_shape, idx)
         out.storage.set_at(k, av - bv)
         if k < sz - 1:
-            tensor_increment_index(idx, bc_shape)
+            increment_index(idx, bc_shape)
         k = k + 1
     return out
 
 Tensor[T] tensor_bmul[Numeric T](Tensor[T] a, Tensor[T] b):
     Vector[int] bc_shape = tensor_broadcast_shape(a.shape, b.shape).unwrap()
-    int sz = tensor_product(bc_shape)
+    int sz = product(bc_shape)
     Tensor[T] out = tensor_zeros[T](bc_shape)
     Vector[int] idx = Vector[int]()
     int di = 0
@@ -447,7 +447,7 @@ Tensor[T] tensor_bmul[Numeric T](Tensor[T] a, Tensor[T] b):
         T bv = tensor_bc_elem[T](b, bc_shape, idx)
         out.storage.set_at(k, av * bv)
         if k < sz - 1:
-            tensor_increment_index(idx, bc_shape)
+            increment_index(idx, bc_shape)
         k = k + 1
     return out
 
@@ -546,7 +546,7 @@ Tensor[T] tensor_sum_axis[Numeric T](Tensor[T] t, int axis):
             aj = aj + 1
         out.set_at(out_idx, acc)
         if k < out_sz - 1:
-            tensor_increment_index(out_idx, out_shape)
+            increment_index(out_idx, out_shape)
         k = k + 1
     return out
 

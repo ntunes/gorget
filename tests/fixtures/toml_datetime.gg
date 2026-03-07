@@ -1,8 +1,8 @@
-from gg.toml import toml_parse, TomlValue
+from gg.toml import parse, TomlValue
 
 void main():
     str src = "ts = 2024-01-15T10:30:00Z\nname = \"test\"\n"
-    Result[TomlValue, str] r = toml_parse(src)
+    Result[TomlValue, str] r = parse(src)
     match r:
         case Ok(root):
             TomlValue ts = root.get("ts")

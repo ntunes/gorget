@@ -1,13 +1,13 @@
-from gg.toml import TomlValue, toml_parse, toml_stringify, toml_stringify_value
+from gg.toml import TomlValue, parse, stringify, stringify_value
 
 void main():
     # ── Test 1: Simple key-value roundtrip ─────────────────
     str toml1 = "name = \"Alice\"\ncount = 42\nflag = true"
-    auto r1 = toml_parse(toml1)
+    auto r1 = parse(toml1)
     match r1:
         case Ok(doc1):
-            str ser1 = toml_stringify(doc1)
-            auto r1b = toml_parse(ser1)
+            str ser1 = stringify(doc1)
+            auto r1b = parse(ser1)
             match r1b:
                 case Ok(doc1b):
                     print(doc1b.get("name").as_str())
@@ -22,11 +22,11 @@ void main():
 
     # ── Test 2: Nested table roundtrip ───────────────────────
     str toml2 = "[server]\nhost = \"localhost\"\nport = 8080"
-    auto r2 = toml_parse(toml2)
+    auto r2 = parse(toml2)
     match r2:
         case Ok(doc2):
-            str ser2 = toml_stringify(doc2)
-            auto r2b = toml_parse(ser2)
+            str ser2 = stringify(doc2)
+            auto r2b = parse(ser2)
             match r2b:
                 case Ok(doc2b):
                     print(doc2b.get("server").get("host").as_str())
@@ -39,11 +39,11 @@ void main():
 
     # ── Test 3: Array-of-tables roundtrip ────────────────────
     str toml3 = "[[items]]\nname = \"first\"\n\n[[items]]\nname = \"second\""
-    auto r3 = toml_parse(toml3)
+    auto r3 = parse(toml3)
     match r3:
         case Ok(doc3):
-            str ser3 = toml_stringify(doc3)
-            auto r3b = toml_parse(ser3)
+            str ser3 = stringify(doc3)
+            auto r3b = parse(ser3)
             match r3b:
                 case Ok(doc3b):
                     int ilen = doc3b.get("items").len()
@@ -55,19 +55,19 @@ void main():
         case Error(e3):
             print("error")
 
-    # ── Test 4: toml_stringify_value on each variant ─────────
-    print(toml_stringify_value(Str("hello")))
+    # ── Test 4: stringify_value on each variant ─────────
+    print(stringify_value(Str("hello")))
     int iv = 99
-    print(toml_stringify_value(Int(iv)))
-    print(toml_stringify_value(Bool(true)))
-    print(toml_stringify_value(Bool(false)))
+    print(stringify_value(Int(iv)))
+    print(stringify_value(Bool(true)))
+    print(stringify_value(Bool(false)))
     TomlValue fv = Float(3.14)
     bool is_flt = fv.is_float()
     print(f"{is_flt}")
 
     # ── Test 5: keys() on a table ────────────────────────────
     str toml5 = "a = 1\nb = 2\nc = 3"
-    auto r5 = toml_parse(toml5)
+    auto r5 = parse(toml5)
     match r5:
         case Ok(doc5):
             auto keys5 = doc5.keys()
@@ -78,7 +78,7 @@ void main():
 
     # ── Test 6: is_array() on array value ────────────────────
     str toml6 = "items = [1, 2, 3]"
-    auto r6 = toml_parse(toml6)
+    auto r6 = parse(toml6)
     match r6:
         case Ok(doc6):
             bool is_arr = doc6.get("items").is_array()
@@ -90,7 +90,7 @@ void main():
 
     # ── Test 7: is_datetime() and as_str() ───────────────────
     str toml7 = "event = 2024-01-15T09:30:00Z"
-    auto r7 = toml_parse(toml7)
+    auto r7 = parse(toml7)
     match r7:
         case Ok(doc7):
             bool is_dt = doc7.get("event").is_datetime()

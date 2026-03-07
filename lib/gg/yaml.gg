@@ -415,7 +415,7 @@ equip YamlParser:
                     self.consume_newline()
                 Yaml yaml_val = self.parse_block_value(yaml_map_indent + 1)
                 if yaml_key == "<<":
-                    yaml_map = yaml_merge_into(yaml_map, yaml_val)
+                    yaml_map = merge_into(yaml_map, yaml_val)
                 else:
                     yaml_map.put(yaml_key, yaml_val)
             elif self.yaml_input.char_at(self.yaml_pos) == '#':
@@ -425,14 +425,14 @@ equip YamlParser:
                     self.consume_newline()
                 Yaml yaml_val = self.parse_block_value(yaml_map_indent + 1)
                 if yaml_key == "<<":
-                    yaml_map = yaml_merge_into(yaml_map, yaml_val)
+                    yaml_map = merge_into(yaml_map, yaml_val)
                 else:
                     yaml_map.put(yaml_key, yaml_val)
             else:
                 # Inline value
                 Yaml yaml_val = self.parse_inline_value(yaml_map_indent)
                 if yaml_key == "<<":
-                    yaml_map = yaml_merge_into(yaml_map, yaml_val)
+                    yaml_map = merge_into(yaml_map, yaml_val)
                 else:
                     yaml_map.put(yaml_key, yaml_val)
         return Map(yaml_map)
@@ -600,7 +600,7 @@ equip YamlParser:
             if self.failed():
                 return Null()
             if yaml_fkey == "<<":
-                yaml_fmap = yaml_merge_into(yaml_fmap, yaml_fval)
+                yaml_fmap = merge_into(yaml_fmap, yaml_fval)
             else:
                 yaml_fmap.put(yaml_fkey, yaml_fval)
             self.skip_flow_ws()
@@ -742,7 +742,7 @@ equip YamlParser:
         while yaml_end > yaml_start and self.yaml_input.char_at(yaml_end - 1) == ' ':
             yaml_end = yaml_end - 1
         str yaml_text = self.yaml_input.byte_slice(yaml_start, yaml_end)
-        return yaml_resolve_scalar(yaml_text)
+        return resolve_scalar(yaml_text)
 
     # ── Double-quoted string ─────────────────────────────────
 
@@ -894,7 +894,7 @@ equip YamlParser:
         # Multi-line plain scalars are always strings (never resolved to int/bool/null)
         if yaml_has_continuation:
             return Str(yaml_text)
-        return yaml_resolve_scalar(yaml_text)
+        return resolve_scalar(yaml_text)
 
     # ── Block scalar (literal | and folded >) ─────────────────
 
@@ -1046,7 +1046,7 @@ equip YamlParser:
 
 # ── Merge key helper ─────────────────────────────────────────
 
-Dict[str, Yaml] yaml_merge_into(Dict[str, Yaml] yaml_target, Yaml yaml_source):
+private Dict[str, Yaml] merge_into(Dict[str, Yaml] yaml_target, Yaml yaml_source):
     match yaml_source:
         case Map(yaml_merge_map):
             Vector[str] yaml_mkeys = yaml_merge_map.keys()
@@ -1078,7 +1078,7 @@ Dict[str, Yaml] yaml_merge_into(Dict[str, Yaml] yaml_target, Yaml yaml_source):
 
 # ── Scalar resolution ────────────────────────────────────────
 
-Yaml yaml_resolve_scalar(str yaml_text):
+private Yaml resolve_scalar(str yaml_text):
     if yaml_text == "" or yaml_text == "null" or yaml_text == "Null" or yaml_text == "NULL" or yaml_text == "~":
         return Null()
     if yaml_text == "true" or yaml_text == "True" or yaml_text == "TRUE":
@@ -1093,16 +1093,16 @@ Yaml yaml_resolve_scalar(str yaml_text):
     if yaml_text == ".nan" or yaml_text == ".NaN" or yaml_text == ".NAN":
         return Float(NAN)
     # Try integer (decimal, hex, octal, binary)
-    if yaml_is_int(yaml_text):
-        int yaml_ival = yaml_parse_int_value(yaml_text)
+    if is_int(yaml_text):
+        int yaml_ival = parse_int_value(yaml_text)
         return Int(yaml_ival)
     # Try float
-    if yaml_is_float(yaml_text):
+    if is_float(yaml_text):
         float yaml_fval = parse_float(yaml_text).unwrap_or(0.0)
         return Float(yaml_fval)
     return Str(yaml_text)
 
-bool yaml_is_int(str yaml_text):
+private bool is_int(str yaml_text):
     int yaml_len = yaml_text.byte_len()
     if yaml_len == 0:
         return false
@@ -1176,7 +1176,7 @@ bool yaml_is_int(str yaml_text):
             return false
     return yaml_idx > 0
 
-int yaml_parse_int_value(str yaml_text):
+private int parse_int_value(str yaml_text):
     int yaml_len = yaml_text.byte_len()
     int yaml_idx = 0
     int yaml_sign = 1
@@ -1230,7 +1230,7 @@ int yaml_parse_int_value(str yaml_text):
         yaml_idx = yaml_idx + 1
     return yaml_sign * yaml_dval
 
-bool yaml_is_float(str yaml_text):
+private bool is_float(str yaml_text):
     int yaml_len = yaml_text.byte_len()
     if yaml_len == 0:
         return false
@@ -1270,14 +1270,14 @@ bool yaml_is_float(str yaml_text):
 
 # ── Public API ───────────────────────────────────────────────
 
-Result[Yaml, str] yaml_parse(str yaml_input):
+Result[Yaml, str] parse(str yaml_input):
     YamlParser yaml_p = YamlParser(yaml_input, 0, "", Vector[str](), Vector[Yaml]())
     Yaml yaml_doc = yaml_p.parse_document()
     if yaml_p.failed():
         return Error(yaml_p.yaml_err)
     return Ok(yaml_doc)
 
-Result[Vector[Yaml], str] yaml_parse_all(str yaml_input):
+Result[Vector[Yaml], str] parse_all(str yaml_input):
     YamlParser yaml_p = YamlParser(yaml_input, 0, "", Vector[str](), Vector[Yaml]())
     Vector[Yaml] yaml_docs = yaml_p.parse_all_documents()
     if yaml_p.failed():
@@ -1286,7 +1286,7 @@ Result[Vector[Yaml], str] yaml_parse_all(str yaml_input):
 
 # ── Serialization (compact flow-style) ──────────────────────
 
-str yaml_escape_str(str yaml_s):
+private str escape_str(str yaml_s):
     str yaml_out = "\""
     int yaml_idx = 0
     while yaml_idx < yaml_s.byte_len():
@@ -1306,7 +1306,7 @@ str yaml_escape_str(str yaml_s):
         yaml_idx = yaml_idx + 1
     return yaml_out + "\""
 
-bool yaml_needs_quoting(str yaml_s):
+private bool needs_quoting(str yaml_s):
     if yaml_s.byte_len() == 0:
         return true
     # Check if it could be confused with a special value
@@ -1340,16 +1340,16 @@ bool yaml_needs_quoting(str yaml_s):
     if yaml_first == '|' or yaml_first == '>' or yaml_first == '%' or yaml_first == '@' or yaml_first == '`':
         return true
     # Check if it looks like a number
-    if yaml_is_int(yaml_s) or yaml_is_float(yaml_s):
+    if is_int(yaml_s) or is_float(yaml_s):
         return true
     return false
 
-str yaml_format_scalar(str yaml_s):
-    if yaml_needs_quoting(yaml_s):
-        return yaml_escape_str(yaml_s)
+private str format_scalar(str yaml_s):
+    if needs_quoting(yaml_s):
+        return escape_str(yaml_s)
     return yaml_s
 
-str yaml_stringify(Yaml yaml_val):
+str stringify(Yaml yaml_val):
     match yaml_val:
         case Null():
             return "null"
@@ -1362,7 +1362,7 @@ str yaml_stringify(Yaml yaml_val):
         case Float(yaml_fv):
             return float_to_str(yaml_fv)
         case Str(yaml_sv):
-            return yaml_format_scalar(yaml_sv)
+            return format_scalar(yaml_sv)
         case Seq(yaml_items):
             if yaml_items.len() == 0:
                 return "[]"
@@ -1371,7 +1371,7 @@ str yaml_stringify(Yaml yaml_val):
             while yaml_idx < yaml_items.len():
                 if yaml_idx > 0:
                     yaml_out = yaml_out + ", "
-                yaml_out = yaml_out + yaml_stringify(yaml_items.get(yaml_idx).unwrap())
+                yaml_out = yaml_out + stringify(yaml_items.get(yaml_idx).unwrap())
                 yaml_idx = yaml_idx + 1
             return yaml_out + "]"
         case Map(yaml_map):
@@ -1384,27 +1384,27 @@ str yaml_stringify(Yaml yaml_val):
                 if yaml_idx > 0:
                     yaml_out = yaml_out + ", "
                 str yaml_k = yaml_keys.get(yaml_idx).unwrap()
-                yaml_out = yaml_out + yaml_format_scalar(yaml_k) + ": " + yaml_stringify(yaml_map[yaml_k])
+                yaml_out = yaml_out + format_scalar(yaml_k) + ": " + stringify(yaml_map[yaml_k])
                 yaml_idx = yaml_idx + 1
             return yaml_out + "\}"
 
-str yaml_stringify_all(Vector[Yaml] yaml_docs):
+str stringify_all(Vector[Yaml] yaml_docs):
     if yaml_docs.len() == 0:
         return ""
     if yaml_docs.len() == 1:
-        return yaml_stringify(yaml_docs.get(0).unwrap())
+        return stringify(yaml_docs.get(0).unwrap())
     str yaml_out = ""
     int yaml_idx = 0
     while yaml_idx < yaml_docs.len():
         if yaml_idx > 0:
             yaml_out = yaml_out + "\n"
-        yaml_out = yaml_out + "--- " + yaml_stringify(yaml_docs.get(yaml_idx).unwrap())
+        yaml_out = yaml_out + "--- " + stringify(yaml_docs.get(yaml_idx).unwrap())
         yaml_idx = yaml_idx + 1
     return yaml_out
 
 # ── Helpers ───────────────────────────────────────────────────
 
-bool yaml_str_contains_newline(str yaml_s):
+private bool str_contains_newline(str yaml_s):
     int yaml_idx = 0
     while yaml_idx < yaml_s.byte_len():
         if yaml_s.char_at(yaml_idx) == '\n':
@@ -1414,7 +1414,7 @@ bool yaml_str_contains_newline(str yaml_s):
 
 # ── Pretty printing (block-style) ───────────────────────────
 
-str yaml_make_indent(int yaml_depth):
+private str make_indent(int yaml_depth):
     str yaml_out = ""
     int yaml_idx = 0
     while yaml_idx < yaml_depth:
@@ -1422,8 +1422,8 @@ str yaml_make_indent(int yaml_depth):
         yaml_idx = yaml_idx + 1
     return yaml_out
 
-str yaml_pretty_internal(Yaml yaml_val, int yaml_depth):
-    str yaml_ind = yaml_make_indent(yaml_depth)
+private str pretty_internal(Yaml yaml_val, int yaml_depth):
+    str yaml_ind = make_indent(yaml_depth)
     match yaml_val:
         case Null():
             return "null"
@@ -1436,9 +1436,9 @@ str yaml_pretty_internal(Yaml yaml_val, int yaml_depth):
         case Float(yaml_fv):
             return float_to_str(yaml_fv)
         case Str(yaml_sv):
-            if yaml_str_contains_newline(yaml_sv):
+            if str_contains_newline(yaml_sv):
                 # Emit as literal block scalar
-                str yaml_block_ind = yaml_make_indent(yaml_depth)
+                str yaml_block_ind = make_indent(yaml_depth)
                 str yaml_out = "|\n"
                 int yaml_bi = 0
                 int yaml_line_start = 0
@@ -1456,7 +1456,7 @@ str yaml_pretty_internal(Yaml yaml_val, int yaml_depth):
                     str yaml_bline = yaml_sv.byte_slice(yaml_line_start, yaml_sv.byte_len())
                     yaml_out = yaml_out + yaml_block_ind + yaml_bline + "\n"
                 return yaml_out
-            return yaml_format_scalar(yaml_sv)
+            return format_scalar(yaml_sv)
         case Seq(yaml_items):
             if yaml_items.len() == 0:
                 return "[]"
@@ -1465,7 +1465,7 @@ str yaml_pretty_internal(Yaml yaml_val, int yaml_depth):
             while yaml_idx < yaml_items.len():
                 if yaml_idx > 0:
                     yaml_out = yaml_out + "\n"
-                yaml_out = yaml_out + yaml_ind + "- " + yaml_pretty_internal(yaml_items.get(yaml_idx).unwrap(), yaml_depth + 1)
+                yaml_out = yaml_out + yaml_ind + "- " + pretty_internal(yaml_items.get(yaml_idx).unwrap(), yaml_depth + 1)
                 yaml_idx = yaml_idx + 1
             return yaml_out
         case Map(yaml_map):
@@ -1479,7 +1479,7 @@ str yaml_pretty_internal(Yaml yaml_val, int yaml_depth):
                     yaml_out = yaml_out + "\n"
                 str yaml_k = yaml_keys.get(yaml_idx).unwrap()
                 Yaml yaml_v = yaml_map[yaml_k]
-                str yaml_formatted_key = yaml_format_scalar(yaml_k)
+                str yaml_formatted_key = format_scalar(yaml_k)
                 # Check if value is a collection
                 bool yaml_is_collection = false
                 match yaml_v:
@@ -1492,26 +1492,26 @@ str yaml_pretty_internal(Yaml yaml_val, int yaml_depth):
                     else:
                         yaml_is_collection = false
                 if yaml_is_collection:
-                    yaml_out = yaml_out + yaml_ind + yaml_formatted_key + ":\n" + yaml_pretty_internal(yaml_v, yaml_depth + 1)
+                    yaml_out = yaml_out + yaml_ind + yaml_formatted_key + ":\n" + pretty_internal(yaml_v, yaml_depth + 1)
                 else:
-                    yaml_out = yaml_out + yaml_ind + yaml_formatted_key + ": " + yaml_pretty_internal(yaml_v, yaml_depth + 1)
+                    yaml_out = yaml_out + yaml_ind + yaml_formatted_key + ": " + pretty_internal(yaml_v, yaml_depth + 1)
                 yaml_idx = yaml_idx + 1
             return yaml_out
 
-str yaml_pretty(Yaml yaml_val):
-    return yaml_pretty_internal(yaml_val, 0)
+str pretty(Yaml yaml_val):
+    return pretty_internal(yaml_val, 0)
 
-str yaml_pretty_all(Vector[Yaml] yaml_docs):
+str pretty_all(Vector[Yaml] yaml_docs):
     if yaml_docs.len() == 0:
         return ""
     if yaml_docs.len() == 1:
-        return yaml_pretty(yaml_docs.get(0).unwrap())
+        return pretty(yaml_docs.get(0).unwrap())
     str yaml_out = ""
     int yaml_idx = 0
     while yaml_idx < yaml_docs.len():
         if yaml_idx > 0:
             yaml_out = yaml_out + "\n"
-        yaml_out = yaml_out + "---\n" + yaml_pretty(yaml_docs.get(yaml_idx).unwrap())
+        yaml_out = yaml_out + "---\n" + pretty(yaml_docs.get(yaml_idx).unwrap())
         yaml_idx = yaml_idx + 1
     return yaml_out
 

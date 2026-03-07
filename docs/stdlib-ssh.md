@@ -7,16 +7,16 @@ with automatic `~/.ssh/config` resolution.
 ## Import
 
 ```gorget
-from gg.ssh import ssh_connect, Session, CommandResult
+from gg.ssh import connect, Session, CommandResult
 ```
 
 ## Quick Start
 
 ```gorget
-from gg.ssh import ssh_connect, Session, CommandResult
+from gg.ssh import connect, Session, CommandResult
 
 void main():
-    Result[Session, str] res = ssh_connect("myserver", 22, "deploy", "s3cret")
+    Result[Session, str] res = connect("myserver", 22, "deploy", "s3cret")
     Session session = res.unwrap()
 
     CommandResult result = session.run("uname -a")
@@ -41,7 +41,7 @@ struct CommandResult:
 
 ### Session
 
-An authenticated SSH connection. Created by `ssh_connect()`.
+An authenticated SSH connection. Created by `connect()`.
 
 ```gorget
 struct Session:
@@ -72,10 +72,10 @@ struct SshConfig:
 
 ## Free Functions
 
-### ssh_connect
+### connect
 
 ```gorget
-Result[Session, str] ssh_connect(str host, int port, str user, str password)
+Result[Session, str] connect(str host, int port, str user, str password)
 ```
 
 Open an SSH connection, perform key exchange, and authenticate.
@@ -131,7 +131,7 @@ call this when done with a session.
 
 ## SSH Config
 
-`ssh_connect` automatically reads `~/.ssh/config` (if it exists) and applies
+`connect` automatically reads `~/.ssh/config` (if it exists) and applies
 matching directives before connecting. This lets you use host aliases and
 per-host settings just like OpenSSH.
 
@@ -166,18 +166,18 @@ With this config:
 
 ```gorget
 # Connects to 10.0.1.50:2222 as "deploy"
-ssh_connect("prod", 22, "", "password")
+connect("prod", 22, "", "password")
 
 # Connects to staging.example.com:22 as "ci"
-ssh_connect("staging", 22, "", "password")
+connect("staging", 22, "", "password")
 
 # No matching block — connects to literal host
-ssh_connect("other.example.com", 22, "root", "password")
+connect("other.example.com", 22, "root", "password")
 ```
 
 ### Override Precedence
 
-Explicit non-default arguments to `ssh_connect` take priority over config
+Explicit non-default arguments to `connect` take priority over config
 values:
 
 - A `port` other than `22` overrides the config's `Port`.

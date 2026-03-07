@@ -3111,8 +3111,8 @@ void main():
 | Name | Kind | Description |
 |---|---|---|
 | `TomlValue` | enum | TOML value: `Str(str)`, `Int(int)`, `Float(float)`, `Bool(bool)`, `DateTime(str)`, `Array(Vector[TomlValue])`, `Table(Dict[str, TomlValue])` — **`DateTime` stores raw text only; year/month/day fields are not decomposed** |
-| `toml_parse` | `TomlValue(str)` | Parse a TOML string into a `TomlValue` |
-| `toml_stringify` | `str(TomlValue)` | Serialize a `TomlValue` to a TOML string |
+| `parse` | `TomlValue(str)` | Parse a TOML string into a `TomlValue` |
+| `stringify` | `str(TomlValue)` | Serialize a `TomlValue` to a TOML string |
 
 **`gg.xml`** — XML parsing and serialization
 
@@ -3434,7 +3434,7 @@ Low-level SDL2 bindings for window management, rendering, input handling, and au
 |---|---|---|
 | `Session` | struct | SSH session with `exec(str) → CommandResult` method for remote command execution |
 | `CommandResult` | struct | Command execution result (exit code, output) |
-| `ssh_connect` | `Session(...)` | Establish SSH connection (host, port, username, password, crypto parameters) |
+| `connect` | `Session(...)` | Establish SSH connection (host, port, username, password, crypto parameters) |
 
 The SSH module implements the SSH-2 protocol including key exchange, encryption, and SFTP operations.
 

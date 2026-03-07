@@ -2044,7 +2044,7 @@ mod tests {
         let src = source.unwrap();
         assert!(src.contains("struct Session"));
         assert!(src.contains("struct CommandResult"));
-        assert!(src.contains("ssh_connect"));
+        assert!(src.contains("connect"));
         assert!(src.contains("channel_exec"));
     }
 
@@ -2069,7 +2069,7 @@ mod tests {
 
         assert!(struct_names.contains(&"Session".to_string()));
         assert!(struct_names.contains(&"CommandResult".to_string()));
-        assert!(fn_names.contains(&"ssh_connect".to_string()));
+        assert!(fn_names.contains(&"connect".to_string()));
         assert!(fn_names.contains(&"send_packet".to_string()));
         assert!(fn_names.contains(&"read_packet".to_string()));
         assert_eq!(equip_count, 1);
@@ -2315,8 +2315,8 @@ mod tests {
         assert!(source.is_some());
         let src = source.unwrap();
         assert!(src.contains("enum TomlValue"));
-        assert!(src.contains("toml_parse"));
-        assert!(src.contains("toml_stringify"));
+        assert!(src.contains("parse"));
+        assert!(src.contains("stringify"));
         assert!(src.contains("equip TomlValue"));
         assert!(src.contains("Arr(Vector[TomlValue])"));
         assert!(src.contains("Tbl(Dict[str, TomlValue])"));
@@ -2345,8 +2345,8 @@ mod tests {
 
         assert!(enum_names.contains(&"TomlValue".to_string()));
         assert!(struct_names.contains(&"TomlParser".to_string()));
-        assert!(fn_names.contains(&"toml_parse".to_string()));
-        assert!(fn_names.contains(&"toml_stringify".to_string()));
+        assert!(fn_names.contains(&"parse".to_string()));
+        assert!(fn_names.contains(&"stringify".to_string()));
         assert_eq!(equip_count, 2); // equip TomlParser + equip TomlValue
     }
 
@@ -2418,9 +2418,9 @@ mod tests {
         assert!(source.is_some());
         let src = source.unwrap();
         assert!(src.contains("enum Yaml"));
-        assert!(src.contains("yaml_parse"));
-        assert!(src.contains("yaml_stringify"));
-        assert!(src.contains("yaml_pretty"));
+        assert!(src.contains("parse"));
+        assert!(src.contains("stringify"));
+        assert!(src.contains("pretty"));
         assert!(src.contains("equip Yaml"));
         assert!(src.contains("equip YamlParser"));
     }
@@ -2448,9 +2448,9 @@ mod tests {
 
         assert!(enum_names.contains(&"Yaml".to_string()));
         assert!(struct_names.contains(&"YamlParser".to_string()));
-        assert!(fn_names.contains(&"yaml_parse".to_string()));
-        assert!(fn_names.contains(&"yaml_stringify".to_string()));
-        assert!(fn_names.contains(&"yaml_pretty".to_string()));
+        assert!(fn_names.contains(&"parse".to_string()));
+        assert!(fn_names.contains(&"stringify".to_string()));
+        assert!(fn_names.contains(&"pretty".to_string()));
         assert_eq!(equip_count, 2); // equip YamlParser + equip Yaml
     }
 

@@ -1,9 +1,9 @@
-from gg.toml import TomlValue, toml_parse, toml_stringify_value
+from gg.toml import TomlValue, parse, stringify_value
 
 void main():
     # ── Multiline basic strings ──
     str ml = "msg = \"\"\"\nhello\nworld\"\"\""
-    auto r1 = toml_parse(ml)
+    auto r1 = parse(ml)
     match r1:
         case Ok(doc1):
             print(doc1.get("msg").as_str())
@@ -12,7 +12,7 @@ void main():
 
     # ── Literal strings (no escapes) ──
     str lit = "path = 'C:\\Users\\me'"
-    auto r2 = toml_parse(lit)
+    auto r2 = parse(lit)
     match r2:
         case Ok(doc2):
             print(doc2.get("path").as_str())
@@ -21,7 +21,7 @@ void main():
 
     # ── Multiline literal strings ──
     str mllit = "text = '''\nline1\nline2'''"
-    auto r3 = toml_parse(mllit)
+    auto r3 = parse(mllit)
     match r3:
         case Ok(doc3):
             print(doc3.get("text").as_str())
@@ -30,7 +30,7 @@ void main():
 
     # ── Inline table ──
     str inl = f"point = {{x = 1, y = 2}}"
-    auto r4 = toml_parse(inl)
+    auto r4 = parse(inl)
     match r4:
         case Ok(doc4):
             int px = doc4.get("point").get("x").as_int()
@@ -42,7 +42,7 @@ void main():
 
     # ── Negative integer ──
     str neg = "val = -42"
-    auto r5 = toml_parse(neg)
+    auto r5 = parse(neg)
     match r5:
         case Ok(doc5):
             int nv = doc5.get("val").as_int()
@@ -52,7 +52,7 @@ void main():
 
     # ── Negative float ──
     str negf = "temp = -3.5"
-    auto r6 = toml_parse(negf)
+    auto r6 = parse(negf)
     match r6:
         case Ok(doc6):
             float fv = doc6.get("temp").as_float()
@@ -62,7 +62,7 @@ void main():
 
     # ── inf and nan ──
     str specials = "pos_inf = inf\nneg_inf = -inf\nnan_val = nan"
-    auto r7 = toml_parse(specials)
+    auto r7 = parse(specials)
     match r7:
         case Ok(doc7):
             float pinf = doc7.get("pos_inf").as_float()
@@ -76,7 +76,7 @@ void main():
 
     # ── Empty array ──
     str earr = "list = []"
-    auto r8 = toml_parse(earr)
+    auto r8 = parse(earr)
     match r8:
         case Ok(doc8):
             int alen = doc8.get("list").len()
@@ -86,7 +86,7 @@ void main():
 
     # ── Boolean keys ──
     str bools = "yes = true\nno = false"
-    auto r9 = toml_parse(bools)
+    auto r9 = parse(bools)
     match r9:
         case Ok(doc9):
             print(doc9.get("yes").as_bool())
@@ -96,7 +96,7 @@ void main():
 
     # ── Escape sequences in basic strings ──
     str esc = "tab = \"a\\tb\"\nnl = \"a\\nb\""
-    auto r10 = toml_parse(esc)
+    auto r10 = parse(esc)
     match r10:
         case Ok(doc10):
             str tab_s = doc10.get("tab").as_str()
