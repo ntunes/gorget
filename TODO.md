@@ -2,7 +2,7 @@
 
 ## High
 
-- **LIR: SSA-form lower IR between GIR and backends**: Design complete (`docs/lir-design.md`). 6-phase plan: (1) data structures + skeleton, (2) GIR→LIR lowering (10 sub-phases), (3) C backend on LIR, (4) LIR optimizations, (5) LLVM backend, (6) WASM backend. Unblocks dead function elimination, copy propagation, function inlining, and multi-backend support. [added: 2026-03-07]
+- **LIR: Phase 3 cont'd — A/B test c_lir against current backend**: Phase 3 skeleton done (`src/backend/c_lir/`, `--emit-c-lir`). Next: run integration tests through LIR pipeline, close gaps until c_lir passes fixture parity. Then Phase 4: LIR optimizations (dead function elimination, copy propagation, inlining). [updated: 2026-03-07]
 
 ## Medium
 

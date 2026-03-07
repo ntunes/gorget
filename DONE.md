@@ -1,5 +1,17 @@
 # DONE
 
+- [2026-03-07] **feat: LIR Phase 3 — thin C backend from LIR (c_lir)**: `src/backend/c_lir/mod.rs` — 1:1 LIR→C translation. Struct defs, externs, globals, functions with goto-based control flow, block params, all instruction categories. `--emit-c-lir` flag for A/B comparison. 5 tests.
+
+- [2026-03-07] **feat: --emit-lir and --emit-c-lir CLI flags**: Inspect LIR and LIR-generated C output from `gg build`.
+
+- [2026-03-07] **feat: LIR end-to-end integration tests**: 5 tests through full pipeline (hello world, arithmetic, branching, function calls, while loops).
+
+- [2026-03-07] **feat: LIR Phase 2.5 — SSA construction pass (Braun et al.)**: Promotes scalar slots to SSA values with block parameters at merge points. Aggregate and addressed slots remain as stack allocations. 6 tests.
+
+- [2026-03-07] **feat: LIR Phase 2 — GIR→LIR lowering (all instruction categories)**: Covers all GIR instruction variants: scalars, arithmetic, control flow, calls, structs, enums, tuples, casts, memory, ownership, allocator. Pre-SSA slot-based output. 7 tests.
+
+- [2026-03-07] **feat: LIR Phase 1 — data structures, display, and validation**: `src/lir/` module with LirModule, LirFunction, Block, Inst (44 variants), Term (6 variants), LirType, StructDef, Slot, validate, display. 23 unit tests. StructRegistry + builtin struct defs (Str, GorgetString, GorgetArray, Closure, TraitObj, TaskHandle).
+
 - [2026-03-07] **docs: LIR design — SSA-form lower IR between GIR and backends**: Complete design for a new compilation layer that makes all implicit C backend operations explicit (drop glue, vtable dispatch, closure calls, type coercions, collection methods, spawn wrappers). SSA with block parameters. 6-phase implementation plan. Unblocks dead function elimination, copy propagation, inlining, LLVM and WASM backends.
 
 - [2026-03-07] **docs: design direction pillars integrated into language-design.md**: 8 pillars (Memory Safety, Type System, Error Handling, Concurrency, Syntax, Tooling, C Interop, Stdlib, Learnability) with explicit targets and anti-targets.
