@@ -1,0 +1,25 @@
+from std.sync import Channel
+
+# Producer sends items on the channel, yielding if buffer is full.
+async void producer(Channel[int] ch, int count):
+    for i in 0..count:
+        ch.send(i)
+    ch.close()
+
+# Consumer receives items and sums them.
+async int consumer(Channel[int] ch, int count):
+    int total = 0
+    for i in 0..count:
+        int val = ch.recv()
+        total = total + val
+    return total
+
+async void main():
+    Channel[int] ch = Channel[int](2)
+
+    Task[void] prod = spawn producer(ch, 10)
+    Task[int] cons = spawn consumer(ch, 10)
+
+    prod.await()
+    int result = cons.await()
+    print(result)

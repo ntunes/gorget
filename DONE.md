@@ -1,5 +1,7 @@
 # DONE
 
+- [2026-03-07] **feat: async-aware Channel send/recv — coroutine yield via poll**: Channel send/recv in coroutines now use `gorget_channel_poll_send`/`gorget_channel_poll_recv` with waker protocol instead of blocking `pthread_cond_wait`. Same self-managed state transition pattern as Mutex/RwLock. Added `gorget_rwlock_free()` destructor. Test: `async_channel_poll`.
+
 - [2026-03-07] **feat: `spawn blocking` language construct**: Full pipeline — parser (`spawn blocking expr`), AST (`SpawnBlocking`), type checker (returns `Task[T]`), borrow checker, IR lowering (tracks `blocking_fn_names`), C backend (`GORGET_BLOCKING_SUBMIT` macro routes to expandable blocking pool instead of M:N executor). Fixed NULL waker crash in blocking pool worker. Test: `spawn_blocking_basic`.
 
 - [2026-03-07] **feat: async-aware RwLock[T].read()/.write() — coroutine yield via poll-lock**: Same pattern as Mutex — tryrdlock/trywrlock + waker protocol. Added waker queue to GorgetRWLock, forward-declared GorgetWaker in SYNC_RUNTIME for emission order safety. Test: async_rwlock.

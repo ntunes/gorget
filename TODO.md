@@ -18,7 +18,7 @@
 
 - **IR: Continue `generics/` split**: Phase 1 done (substitute.rs extracted, 331 lines). `mod.rs` still 1,236 lines. Remaining: monomorphization helpers (~188 lines) could move to `monomorphize.rs`, but they're tightly coupled to GenericCollector::emit(). Consider done unless mod.rs grows. [updated: 2026-03-07, from: IR code review]
 
-- **Async lock cleanup: RwLock free + waker queue dealloc**: `GorgetRWLock` has no `gorget_rwlock_free()` — waker queue memory leaks. Add destructor parallel to `gorget_mutex_free()`. [added: 2026-03-07]
+- **Async Channel: rendezvous (capacity=0) poll_send ack**: Current poll_send for rendezvous channels treats deposit-into-slot as completion (no ack wait). True rendezvous semantics require two-phase state machine (deposit → wait for count==0). Low priority — buffered channels work correctly. [added: 2026-03-07]
 
 
 - **`gg sim` aliasing model — Tree Borrows tracking**: sim.md identifies this as the "core differentiator from naive interpreters." Implement borrow-level tracking to catch aliasing violations. Add `--tree-borrows` (default) and `--strict-aliasing` flags (stricter stacked-borrows model). Currently sim detects UB (bounds, uninit, etc.) but does not track borrow validity. [added: 2026-03-05]

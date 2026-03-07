@@ -7950,6 +7950,15 @@ static inline GorgetRWLock* gorget_rwlock_new(size_t size, void* init_data) {
     rw->waiter_cap = 0;
     return rw;
 }
+// Free the rwlock and its data. Does NOT free the guard — caller must release first.
+static inline void gorget_rwlock_free(GorgetRWLock* rw) {
+    if (!rw) return;
+    pthread_rwlock_destroy(&rw->lock);
+    pthread_mutex_destroy(&rw->wait_mtx);
+    if (rw->waiters) GORGET_FREE(rw->waiters, (size_t)rw->waiter_cap * sizeof(GorgetWaker));
+    if (rw->data) GORGET_FREE(rw->data, rw->data_size);
+    GORGET_FREE(rw, sizeof(GorgetRWLock));
+}
 // Register a waker on the rwlock's wait queue.
 static inline void gorget_rwlock_register_waiter(GorgetRWLock* rw, GorgetWaker* waker) {
     if (!waker) return;

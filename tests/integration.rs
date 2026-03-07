@@ -7170,6 +7170,11 @@ fn async_rwlock() {
 }
 
 #[test]
+fn async_channel_poll() {
+    run_gg("async_channel_poll.gg", "45");
+}
+
+#[test]
 fn async_condition_await() {
     run_gg("async_condition_await.gg", "20\nyes");
 }

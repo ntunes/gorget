@@ -1518,6 +1518,10 @@ fn emit_channel_and_task_defs(out: &mut String, module: &Module) {
         let _ = writeln!(out,
             "static inline void {chan_name}__close({chan_name}* self) {{ \
              gorget_channel_close(*self); }}");
+        // poll_send(&self, val, waker) → bool
+        let _ = writeln!(out,
+            "static inline bool {chan_name}__poll_send({chan_name}* self, {elem_c} val, GorgetWaker* waker) {{ \
+             return gorget_channel_poll_send(*self, &val, waker); }}");
         // poll_recv(&self, *out, waker) → bool
         let _ = writeln!(out,
             "static inline bool {chan_name}__poll_recv({chan_name}* self, {elem_c}* out, GorgetWaker* waker) {{ \
@@ -1583,6 +1587,10 @@ enum YieldKind {
     RwLockRead,
     /// `RwLock__*__write` — async-aware trywrlock + waker yield.
     RwLockWrite,
+    /// `Channel__*__send` — async-aware poll send + waker yield.
+    ChannelSend,
+    /// `Channel__*__recv` — async-aware poll recv + waker yield.
+    ChannelRecv,
 }
 
 /// Known blocking function names that should be auto-offloaded in coroutines.
@@ -1662,6 +1670,43 @@ fn is_rwlock_write_call(func_name: &str) -> bool {
     func_name.starts_with("RWLock__") && func_name.ends_with("__write")
 }
 
+/// True if a GIR call is a Channel send call (pattern: `Channel__*__send`).
+fn is_channel_send_call(func_name: &str) -> bool {
+    func_name.starts_with("Channel__") && func_name.ends_with("__send")
+}
+
+/// True if a GIR call is a Channel recv call (pattern: `Channel__*__recv`).
+fn is_channel_recv_call(func_name: &str) -> bool {
+    func_name.starts_with("Channel__") && func_name.ends_with("__recv")
+}
+
+/// Extract channel call info: (dst_local_id, channel_arg_str, value_arg_str_or_none, poll_fn_name).
+fn extract_channel_call_info(inst: &Instruction, func: &Function, registry: &TypeRegistry, is_send: bool) -> (u32, String, Option<String>, String) {
+    match inst {
+        Instruction::Call { dst, func: fname, args } => {
+            let d = dst.map(|id| id.0).unwrap_or(0);
+            let ch = if !args.is_empty() {
+                fmt_operand_poll(&args[0], func, registry)
+            } else {
+                "NULL".to_string()
+            };
+            let val = if is_send && args.len() > 1 {
+                Some(fmt_operand_poll(&args[1], func, registry))
+            } else {
+                None
+            };
+            // Channel__int64_t__send → Channel__int64_t__poll_send
+            let poll_fn = if is_send {
+                fname.replace("__send", "__poll_send")
+            } else {
+                fname.replace("__recv", "__poll_recv")
+            };
+            (d, ch, val, poll_fn)
+        }
+        _ => (0, "NULL".to_string(), None, String::new()),
+    }
+}
+
 /// Extract (dst_local_id, mutex_operand_str) from a Mutex lock instruction in poll context.
 fn extract_lock_call_info(inst: &Instruction, func: &Function, registry: &TypeRegistry) -> (u32, String) {
     match inst {
@@ -1694,6 +1739,10 @@ fn classify_yield(inst: &Instruction, func: &Function) -> Option<YieldKind> {
                 Some(YieldKind::RwLockRead)
             } else if is_rwlock_write_call(fname) {
                 Some(YieldKind::RwLockWrite)
+            } else if is_channel_send_call(fname) {
+                Some(YieldKind::ChannelSend)
+            } else if is_channel_recv_call(fname) {
+                Some(YieldKind::ChannelRecv)
             } else if is_blocking_call(fname) {
                 Some(YieldKind::Blocking)
             } else {
@@ -1709,6 +1758,10 @@ fn classify_yield(inst: &Instruction, func: &Function) -> Option<YieldKind> {
                 Some(YieldKind::RwLockRead)
             } else if is_rwlock_write_call(fname) {
                 Some(YieldKind::RwLockWrite)
+            } else if is_channel_send_call(fname) {
+                Some(YieldKind::ChannelSend)
+            } else if is_channel_recv_call(fname) {
+                Some(YieldKind::ChannelRecv)
             } else if is_blocking_call(fname) {
                 Some(YieldKind::Blocking)
             } else {
@@ -1725,7 +1778,7 @@ fn fn_has_internal_await(fn_name: &str, module: &Module) -> bool {
     let Some(func) = module.find_function(fn_name) else { return false };
     func.blocks.iter().any(|bb| {
         bb.instructions.iter().any(|inst| {
-            matches!(classify_yield(inst, func), Some(YieldKind::Await | YieldKind::Sleep | YieldKind::MutexLock | YieldKind::RwLockRead | YieldKind::RwLockWrite))
+            matches!(classify_yield(inst, func), Some(YieldKind::Await | YieldKind::Sleep | YieldKind::MutexLock | YieldKind::RwLockRead | YieldKind::RwLockWrite | YieldKind::ChannelSend | YieldKind::ChannelRecv))
         })
     })
 }
@@ -2363,7 +2416,7 @@ fn coroutine_state_ids(func: &Function) -> Vec<u32> {
         let yield_count = bb.instructions.iter()
             .filter(|i| {
                 let kind = classify_yield(i, func);
-                matches!(kind, Some(YieldKind::Await | YieldKind::Sleep | YieldKind::MutexLock | YieldKind::RwLockRead | YieldKind::RwLockWrite))
+                matches!(kind, Some(YieldKind::Await | YieldKind::Sleep | YieldKind::MutexLock | YieldKind::RwLockRead | YieldKind::RwLockWrite | YieldKind::ChannelSend | YieldKind::ChannelRecv))
             })
             .count() as u32;
         next += 1 + yield_count;
@@ -2515,6 +2568,10 @@ fn emit_coroutine(
                         YieldKind::MutexLock | YieldKind::RwLockRead | YieldKind::RwLockWrite => {
                             // Guard already filled by poll_lock/poll_read/poll_write in the previous state.
                         }
+                        YieldKind::ChannelSend => {}
+                        YieldKind::ChannelRecv => {
+                            // Recv result already written to frame local by poll_recv.
+                        }
                     }
                 }
 
@@ -2525,8 +2582,8 @@ fn emit_coroutine(
                 }
 
                 let resume_state = current_state + 1;
-                // Lock yield kinds manage their own state transition (only advance on success).
-                if !matches!(yield_kind, YieldKind::MutexLock | YieldKind::RwLockRead | YieldKind::RwLockWrite) {
+                // Lock/channel yield kinds manage their own state transition (only advance on success).
+                if !matches!(yield_kind, YieldKind::MutexLock | YieldKind::RwLockRead | YieldKind::RwLockWrite | YieldKind::ChannelSend | YieldKind::ChannelRecv) {
                     let _ = writeln!(out, "        f->__state = {resume_state};");
                 }
 
@@ -2590,6 +2647,23 @@ fn emit_coroutine(
                         let _ = writeln!(out, "            if (__r == GORGET_POLL_READY) {{ f->__state = {resume_state}; continue; }}");
                         out.push_str("        }\n");
                     }
+                    YieldKind::ChannelSend => {
+                        let (_dst, ch_arg, val_arg, poll_fn) = extract_channel_call_info(&bb.instructions[yield_pos], func, registry, true);
+                        let val_str = val_arg.unwrap_or_else(|| "0".to_string());
+                        let _ = writeln!(out, "        {{");
+                        let _ = writeln!(out, "            GorgetWaker __w = (GorgetWaker){{__gorget_fiber_waker_wake, (void*)f}};");
+                        let _ = writeln!(out, "            int __r = {poll_fn}({ch_arg}, {val_str}, &__w);");
+                        let _ = writeln!(out, "            if (__r) {{ f->__state = {resume_state}; continue; }}");
+                        out.push_str("        }\n");
+                    }
+                    YieldKind::ChannelRecv => {
+                        let (dst_local, ch_arg, _, poll_fn) = extract_channel_call_info(&bb.instructions[yield_pos], func, registry, false);
+                        let _ = writeln!(out, "        {{");
+                        let _ = writeln!(out, "            GorgetWaker __w = (GorgetWaker){{__gorget_fiber_waker_wake, (void*)f}};");
+                        let _ = writeln!(out, "            int __r = {poll_fn}({ch_arg}, &f->_{dst_local}, &__w);");
+                        let _ = writeln!(out, "            if (__r) {{ f->__state = {resume_state}; continue; }}");
+                        out.push_str("        }\n");
+                    }
                     YieldKind::Blocking => unreachable!("blocking calls filtered out of yield_positions"),
                 }
 
@@ -2609,6 +2683,12 @@ fn emit_coroutine(
                 YieldKind::Sleep | YieldKind::Blocking => {}
                 YieldKind::MutexLock | YieldKind::RwLockRead | YieldKind::RwLockWrite => {
                     // Guard already filled by poll_lock/poll_read/poll_write in the previous state.
+                }
+                YieldKind::ChannelSend => {
+                    // Send completed in previous state — nothing to extract.
+                }
+                YieldKind::ChannelRecv => {
+                    // Recv result already written to frame local by poll_recv in previous state.
                 }
             }
             for inst in &bb.instructions[last_pos + 1..] {
