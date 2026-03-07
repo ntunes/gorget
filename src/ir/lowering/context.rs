@@ -533,29 +533,10 @@ impl<'a> LoweringContext<'a> {
     /// Auto-register an Option[T] type if it doesn't exist yet.
     /// Used when Vector.get() is called and Option[T] wasn't pre-registered.
     pub fn ensure_option_type_registered(&mut self, option_name: &str, inner_type: TypeId) {
-        use crate::ir::types::*;
-        if self.type_mapper.named_types.contains_key(option_name) {
-            return;
-        }
-        let type_def = TypeDef {
-            name: option_name.to_string(),
-            kind: TypeDefKind::Enum(EnumDef {
-                variants: vec![
-                    EnumVariant {
-                        name: "Some".to_string(),
-                        fields: vec![StructField { name: "_0".to_string(), type_id: inner_type }],
-                    },
-                    EnumVariant {
-                        name: "None".to_string(),
-                        fields: vec![],
-                    },
-                ],
-            }),
-            metadata: TypeMetadata::default(),
-        };
-        self.type_registry.add_type_def(type_def);
-        let type_id = self.type_registry.insert(GirType::Named(option_name.to_string()));
-        self.type_mapper.register_named(option_name.to_string(), type_id);
+        use super::types::make_option_type_def;
+        self.type_mapper.get_or_register(option_name, &mut self.type_registry, |n| {
+            make_option_type_def(n, inner_type)
+        });
     }
 }
 

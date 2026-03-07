@@ -94,50 +94,16 @@ impl TypeMapper {
                     let base = name.node.as_str();
                     if base == "Option" && generic_args.len() == 1 {
                         let inner_type = self.map_ast_type_mut(&generic_args[0].node, registry);
-                        let type_def = TypeDef {
-                            name: mangled.clone(),
-                            kind: TypeDefKind::Enum(EnumDef {
-                                variants: vec![
-                                    EnumVariant {
-                                        name: "Some".to_string(),
-                                        fields: vec![StructField { name: "_0".to_string(), type_id: inner_type }],
-                                    },
-                                    EnumVariant {
-                                        name: "None".to_string(),
-                                        fields: vec![],
-                                    },
-                                ],
-                            }),
-                            metadata: TypeMetadata::default(),
-                        };
-                        registry.add_type_def(type_def);
-                        let type_id = registry.insert(GirType::Named(mangled.clone()));
-                        self.named_types.insert(mangled, type_id);
-                        return type_id;
+                        return self.get_or_register(&mangled, registry, |n| {
+                            make_option_type_def(n, inner_type)
+                        });
                     }
                     if base == "Result" && generic_args.len() == 2 {
                         let ok_type = self.map_ast_type_mut(&generic_args[0].node, registry);
                         let err_type = self.map_ast_type_mut(&generic_args[1].node, registry);
-                        let type_def = TypeDef {
-                            name: mangled.clone(),
-                            kind: TypeDefKind::Enum(EnumDef {
-                                variants: vec![
-                                    EnumVariant {
-                                        name: "Ok".to_string(),
-                                        fields: vec![StructField { name: "_0".to_string(), type_id: ok_type }],
-                                    },
-                                    EnumVariant {
-                                        name: "Error".to_string(),
-                                        fields: vec![StructField { name: "_0".to_string(), type_id: err_type }],
-                                    },
-                                ],
-                            }),
-                            metadata: TypeMetadata::default(),
-                        };
-                        registry.add_type_def(type_def);
-                        let type_id = registry.insert(GirType::Named(mangled.clone()));
-                        self.named_types.insert(mangled, type_id);
-                        return type_id;
+                        return self.get_or_register(&mangled, registry, |n| {
+                            make_result_type_def(n, ok_type, err_type)
+                        });
                     }
                     // Auto-register collection types (Vector[T], etc.) with proper drop metadata
                     if matches!(base, "Vector" | "Set" | "HashSet" | "Dict" | "HashMap") {
@@ -146,89 +112,36 @@ impl TypeMapper {
                             "Set" | "HashSet" => "gorget_set_free",
                             _ => "gorget_array_free",
                         };
-                        registry.add_type_def(TypeDef {
-                            name: mangled.clone(),
-                            kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
-                            metadata: TypeMetadata {
-                                size: None,
-                                align: None,
-                                drop_strategy: DropStrategy::Trivial(drop_fn.to_string()),
-                                copy_semantics: CopySemantics::Move,
-                            },
+                        return self.get_or_register(&mangled, registry, |n| {
+                            make_opaque_type_def(n, CopySemantics::Move, DropStrategy::Trivial(drop_fn.to_string()))
                         });
-                        let type_id = registry.insert(GirType::Named(mangled.clone()));
-                        self.named_types.insert(mangled, type_id);
-                        return type_id;
                     }
                     // Auto-register concurrency types: Channel[T], Shared[T], Weak[T], Mutex[T], Guard[T].
-                    // These are opaque C pointer typedefs with no GIR-level fields.
-                    // Registering here (in the fn_sigs pre-scan path) means function parameters
-                    // of these types resolve to the correct TypeId before bodies are lowered.
                     if matches!(base, "Channel" | "Shared" | "Weak" | "Mutex" | "Guard") {
                         let (copy_sem, drop_strat) = match base {
-                            "Guard" => {
-                                // Guard[T] is Move + RAII drop that unlocks the mutex.
-                                (CopySemantics::Move, DropStrategy::Trivial(format!("{mangled}__drop")))
-                            }
-                            "Shared" | "Weak" | "Channel" => {
-                                // Shared[T] / Weak[T] / Channel[T]: Copy pointer + Trivial RAII drop (refcount).
-                                (CopySemantics::Copy, DropStrategy::Trivial(format!("{mangled}__drop")))
-                            }
-                            _ => {
-                                // Mutex: opaque pointer — Copy, no drop.
-                                (CopySemantics::Copy, DropStrategy::None)
-                            }
+                            "Guard" => (CopySemantics::Move, DropStrategy::Trivial(format!("{mangled}__drop"))),
+                            "Shared" | "Weak" | "Channel" => (CopySemantics::Copy, DropStrategy::Trivial(format!("{mangled}__drop"))),
+                            _ => (CopySemantics::Copy, DropStrategy::None),
                         };
-                        registry.add_type_def(TypeDef {
-                            name: mangled.clone(),
-                            kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
-                            metadata: TypeMetadata {
-                                size: None,
-                                align: None,
-                                copy_semantics: copy_sem,
-                                drop_strategy: drop_strat,
-                            },
+                        return self.get_or_register(&mangled, registry, |n| {
+                            make_opaque_type_def(n, copy_sem, drop_strat)
                         });
-                        let type_id = registry.insert(GirType::Named(mangled.clone()));
-                        self.named_types.insert(mangled, type_id);
-                        return type_id;
                     }
                     // Auto-register std.sync generic types: RWLock[T], ReadGuard[T], WriteGuard[T].
                     if matches!(base, "RWLock" | "ReadGuard" | "WriteGuard") {
                         let (copy_sem, drop_strat) = match base {
-                            "ReadGuard" => (CopySemantics::Move, DropStrategy::Trivial(format!("{mangled}__drop"))),
-                            "WriteGuard" => (CopySemantics::Move, DropStrategy::Trivial(format!("{mangled}__drop"))),
-                            _ => (CopySemantics::Copy, DropStrategy::None), // RWLock is a pointer (Copy)
+                            "ReadGuard" | "WriteGuard" => (CopySemantics::Move, DropStrategy::Trivial(format!("{mangled}__drop"))),
+                            _ => (CopySemantics::Copy, DropStrategy::None),
                         };
-                        registry.add_type_def(TypeDef {
-                            name: mangled.clone(),
-                            kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
-                            metadata: TypeMetadata {
-                                size: None,
-                                align: None,
-                                copy_semantics: copy_sem,
-                                drop_strategy: drop_strat,
-                            },
+                        return self.get_or_register(&mangled, registry, |n| {
+                            make_opaque_type_def(n, copy_sem, drop_strat)
                         });
-                        let type_id = registry.insert(GirType::Named(mangled.clone()));
-                        self.named_types.insert(mangled, type_id);
-                        return type_id;
                     }
                     // Auto-register std.thread generic type: Thread[T].
                     if base == "Thread" {
-                        registry.add_type_def(TypeDef {
-                            name: mangled.clone(),
-                            kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
-                            metadata: TypeMetadata {
-                                size: None,
-                                align: None,
-                                copy_semantics: CopySemantics::Move,
-                                drop_strategy: DropStrategy::None, // join() consumes it
-                            },
+                        return self.get_or_register(&mangled, registry, |n| {
+                            make_opaque_type_def(n, CopySemantics::Move, DropStrategy::None)
                         });
-                        let type_id = registry.insert(GirType::Named(mangled.clone()));
-                        self.named_types.insert(mangled, type_id);
-                        return type_id;
                     }
                     // Callable/MutCallable/ConsumeCallable generics: return a FnPtr TypeId
                     // so locals declared as Callable[T(P)] get GorgetClosure C type and
@@ -249,52 +162,21 @@ impl TypeMapper {
                 }
                 // Auto-register the non-generic TaskGroup type (Move pointer, RAII join+free).
                 if name.node == "TaskGroup" {
-                    registry.add_type_def(TypeDef {
-                        name: "TaskGroup".to_string(),
-                        kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
-                        metadata: TypeMetadata {
-                            size: None,
-                            align: None,
-                            copy_semantics: CopySemantics::Move,
-                            drop_strategy: DropStrategy::Trivial("gorget_task_group_free".to_string()),
-                        },
+                    return self.get_or_register("TaskGroup", registry, |n| {
+                        make_opaque_type_def(n, CopySemantics::Move, DropStrategy::Trivial("gorget_task_group_free".to_string()))
                     });
-                    let type_id = registry.insert(GirType::Named("TaskGroup".to_string()));
-                    self.named_types.insert("TaskGroup".to_string(), type_id);
-                    return type_id;
                 }
                 // Auto-register non-generic std.sync types (AtomicInt, AtomicBool, Barrier).
                 if matches!(name.node.as_str(), "AtomicInt" | "AtomicBool" | "Barrier") {
-                    let n = name.node.clone();
-                    registry.add_type_def(TypeDef {
-                        name: n.clone(),
-                        kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
-                        metadata: TypeMetadata {
-                            size: None,
-                            align: None,
-                            copy_semantics: CopySemantics::Copy, // opaque pointer
-                            drop_strategy: DropStrategy::None,
-                        },
+                    return self.get_or_register(&name.node, registry, |n| {
+                        make_opaque_type_def(n, CopySemantics::Copy, DropStrategy::None)
                     });
-                    let type_id = registry.insert(GirType::Named(n.clone()));
-                    self.named_types.insert(n, type_id);
-                    return type_id;
                 }
                 // Auto-register std.process Process type (non-generic, Move, RAII).
                 if name.node == "Process" {
-                    registry.add_type_def(TypeDef {
-                        name: "Process".to_string(),
-                        kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
-                        metadata: TypeMetadata {
-                            size: None,
-                            align: None,
-                            copy_semantics: CopySemantics::Move,
-                            drop_strategy: DropStrategy::None,
-                        },
+                    return self.get_or_register("Process", registry, |n| {
+                        make_opaque_type_def(n, CopySemantics::Move, DropStrategy::None)
                     });
-                    let type_id = registry.insert(GirType::Named("Process".to_string()));
-                    self.named_types.insert("Process".to_string(), type_id);
-                    return type_id;
                 }
                 UNIT_TYPE
             }
@@ -340,6 +222,27 @@ impl TypeMapper {
     /// Register a named type that has already been added to the TypeRegistry.
     pub fn register_named(&mut self, name: String, type_id: TypeId) {
         self.named_types.insert(name, type_id);
+    }
+
+    /// Idempotent type registration: returns existing TypeId if `name` is already
+    /// registered, otherwise creates the TypeDef + GirType::Named entry.
+    ///
+    /// `make_def` is called only when the type doesn't exist yet; it receives the
+    /// name and must return the TypeDef to register.
+    pub fn get_or_register(
+        &mut self,
+        name: &str,
+        registry: &mut TypeRegistry,
+        make_def: impl FnOnce(&str) -> TypeDef,
+    ) -> TypeId {
+        if let Some(&id) = self.named_types.get(name) {
+            return id;
+        }
+        let type_def = make_def(name);
+        registry.add_type_def(type_def);
+        let type_id = registry.insert(GirType::Named(name.to_string()));
+        self.named_types.insert(name.to_string(), type_id);
+        type_id
     }
 
     /// Look up a named type's GIR TypeId.
@@ -775,6 +678,78 @@ pub fn mangle_type_for_name(ty: &Type) -> String {
         // are GorgetClosure at runtime, so use that as the C name fragment.
         Type::Function { .. } => "GorgetClosure".to_string(),
         _ => "unknown".to_string(),
+    }
+}
+
+// ── TypeDef factory helpers (used by get_or_register + ensure_*_type_def) ──
+
+/// Create an opaque struct TypeDef with no fields (pointers, handles, etc.).
+pub fn make_opaque_type_def(name: &str, copy_semantics: CopySemantics, drop_strategy: DropStrategy) -> TypeDef {
+    TypeDef {
+        name: name.to_string(),
+        kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
+        metadata: TypeMetadata {
+            size: None,
+            align: None,
+            copy_semantics,
+            drop_strategy,
+        },
+    }
+}
+
+/// Create an Option[T] enum TypeDef (Some(_0: T) | None).
+pub fn make_option_type_def(name: &str, inner_type: TypeId) -> TypeDef {
+    TypeDef {
+        name: name.to_string(),
+        kind: TypeDefKind::Enum(EnumDef {
+            variants: vec![
+                EnumVariant {
+                    name: "Some".to_string(),
+                    fields: vec![StructField { name: "_0".to_string(), type_id: inner_type }],
+                },
+                EnumVariant {
+                    name: "None".to_string(),
+                    fields: vec![],
+                },
+            ],
+        }),
+        metadata: TypeMetadata::default(),
+    }
+}
+
+/// Create a Result[T, E] enum TypeDef (Ok(_0: T) | Error(_0: E)).
+pub fn make_result_type_def(name: &str, ok_type: TypeId, err_type: TypeId) -> TypeDef {
+    TypeDef {
+        name: name.to_string(),
+        kind: TypeDefKind::Enum(EnumDef {
+            variants: vec![
+                EnumVariant {
+                    name: "Ok".to_string(),
+                    fields: vec![StructField { name: "_0".to_string(), type_id: ok_type }],
+                },
+                EnumVariant {
+                    name: "Error".to_string(),
+                    fields: vec![StructField { name: "_0".to_string(), type_id: err_type }],
+                },
+            ],
+        }),
+        metadata: TypeMetadata::default(),
+    }
+}
+
+/// Create a single-field wrapper TypeDef (Box[T], Shared[T], etc.).
+pub fn make_wrapper_type_def(name: &str, inner_type: TypeId, copy_semantics: CopySemantics, drop_strategy: DropStrategy) -> TypeDef {
+    TypeDef {
+        name: name.to_string(),
+        kind: TypeDefKind::Struct(StructDef {
+            fields: vec![StructField { name: "_0".to_string(), type_id: inner_type }],
+        }),
+        metadata: TypeMetadata {
+            size: None,
+            align: None,
+            copy_semantics,
+            drop_strategy,
+        },
     }
 }
 

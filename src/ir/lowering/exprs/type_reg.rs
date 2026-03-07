@@ -82,181 +82,82 @@ pub fn resolve_tuple_field_type(ctx: &LoweringContext, tuple_type_id: TypeId, in
 
 /// Ensure a Box type has a TypeDef in the registry so the C backend can emit its typedef.
 pub fn ensure_box_type_def(ctx: &mut LoweringContext, box_type_name: &str, inner_type: TypeId) {
-    use crate::ir::types::{TypeDef, TypeDefKind, StructDef, StructField, TypeMetadata, CopySemantics, DropStrategy};
-    // Check if TypeDef already exists
-    if ctx.type_registry.get_type_def(box_type_name).is_some() {
-        return;
-    }
-    let type_def = TypeDef {
-        name: box_type_name.to_string(),
-        kind: TypeDefKind::Struct(StructDef {
-            fields: vec![StructField { name: "_0".to_string(), type_id: inner_type }],
-        }),
-        metadata: TypeMetadata {
-            size: None,
-            align: None,
-            copy_semantics: CopySemantics::Move,
-            drop_strategy: DropStrategy::Trivial("free".to_string()),
-        },
-    };
-    ctx.type_registry.add_type_def(type_def);
+    use crate::ir::types::{CopySemantics, DropStrategy};
+    use super::super::types::make_wrapper_type_def;
+    if ctx.type_registry.get_type_def(box_type_name).is_some() { return; }
+    ctx.type_registry.add_type_def(
+        make_wrapper_type_def(box_type_name, inner_type, CopySemantics::Move, DropStrategy::Trivial("free".to_string()))
+    );
 }
 
-/// Ensure a Shared[T] type has a TypeDef in the registry (Copy pointer, no drop in V1).
+/// Ensure a Shared[T] type has a TypeDef in the registry (Copy pointer, drop decrements refcount).
 pub fn ensure_shared_type_def(ctx: &mut LoweringContext, shared_type_name: &str, inner_type: TypeId) {
-    use crate::ir::types::{TypeDef, TypeDefKind, StructDef, StructField, TypeMetadata, CopySemantics, DropStrategy};
-    if ctx.type_registry.get_type_def(shared_type_name).is_some() {
-        return;
-    }
-    let drop_fn = format!("{shared_type_name}__drop");
-    let type_def = TypeDef {
-        name: shared_type_name.to_string(),
-        kind: TypeDefKind::Struct(StructDef {
-            fields: vec![StructField { name: "_0".to_string(), type_id: inner_type }],
-        }),
-        metadata: TypeMetadata {
-            size: None,
-            align: None,
-            // Copy — Shared[T] is a GorgetShared* pointer, cheap to copy.
-            // Drop decrements the strong ref count and frees data when it hits zero.
-            copy_semantics: CopySemantics::Copy,
-            drop_strategy: DropStrategy::Trivial(drop_fn),
-        },
-    };
-    ctx.type_registry.add_type_def(type_def);
+    use crate::ir::types::{CopySemantics, DropStrategy};
+    use super::super::types::make_wrapper_type_def;
+    if ctx.type_registry.get_type_def(shared_type_name).is_some() { return; }
+    ctx.type_registry.add_type_def(
+        make_wrapper_type_def(shared_type_name, inner_type, CopySemantics::Copy, DropStrategy::Trivial(format!("{shared_type_name}__drop")))
+    );
 }
 
 /// Ensure a Weak[T] type has a TypeDef in the registry (Copy pointer, drop decrements weak count).
 pub fn ensure_weak_type_def(ctx: &mut LoweringContext, weak_type_name: &str, inner_type: TypeId) {
-    use crate::ir::types::{TypeDef, TypeDefKind, StructDef, StructField, TypeMetadata, CopySemantics, DropStrategy};
-    if ctx.type_registry.get_type_def(weak_type_name).is_some() {
-        return;
-    }
-    let drop_fn = format!("{weak_type_name}__drop");
-    let type_def = TypeDef {
-        name: weak_type_name.to_string(),
-        kind: TypeDefKind::Struct(StructDef {
-            fields: vec![StructField { name: "_0".to_string(), type_id: inner_type }],
-        }),
-        metadata: TypeMetadata {
-            size: None,
-            align: None,
-            // Copy — Weak[T] is a GorgetShared* pointer, cheap to copy.
-            // Drop decrements the weak ref count and frees control block when both hit zero.
-            copy_semantics: CopySemantics::Copy,
-            drop_strategy: DropStrategy::Trivial(drop_fn),
-        },
-    };
-    ctx.type_registry.add_type_def(type_def);
+    use crate::ir::types::{CopySemantics, DropStrategy};
+    use super::super::types::make_wrapper_type_def;
+    if ctx.type_registry.get_type_def(weak_type_name).is_some() { return; }
+    ctx.type_registry.add_type_def(
+        make_wrapper_type_def(weak_type_name, inner_type, CopySemantics::Copy, DropStrategy::Trivial(format!("{weak_type_name}__drop")))
+    );
 }
 
 /// Ensure a Mutex[T] type has a TypeDef in the registry (Copy pointer, no drop).
 pub fn ensure_mutex_type_def(ctx: &mut LoweringContext, mutex_type_name: &str, inner_type: TypeId) {
-    use crate::ir::types::{TypeDef, TypeDefKind, StructDef, StructField, TypeMetadata, CopySemantics, DropStrategy};
-    if ctx.type_registry.get_type_def(mutex_type_name).is_some() {
-        return;
-    }
-    let type_def = TypeDef {
-        name: mutex_type_name.to_string(),
-        kind: TypeDefKind::Struct(StructDef {
-            fields: vec![StructField { name: "_0".to_string(), type_id: inner_type }],
-        }),
-        metadata: TypeMetadata {
-            size: None,
-            align: None,
-            // Copy — it's a GorgetMutex* pointer, shared across tasks
-            copy_semantics: CopySemantics::Copy,
-            // No drop (lifetime managed explicitly by user; same pattern as Channel)
-            drop_strategy: DropStrategy::None,
-        },
-    };
-    ctx.type_registry.add_type_def(type_def);
+    use crate::ir::types::{CopySemantics, DropStrategy};
+    use super::super::types::make_wrapper_type_def;
+    if ctx.type_registry.get_type_def(mutex_type_name).is_some() { return; }
+    ctx.type_registry.add_type_def(
+        make_wrapper_type_def(mutex_type_name, inner_type, CopySemantics::Copy, DropStrategy::None)
+    );
 }
 
 /// Ensure a Guard[T] type has a TypeDef in the registry (Move value struct, drop releases mutex).
 pub fn ensure_guard_type_def(ctx: &mut LoweringContext, guard_type_name: &str, inner_type: TypeId) {
-    use crate::ir::types::{TypeDef, TypeDefKind, StructDef, StructField, TypeMetadata, CopySemantics, DropStrategy};
-    if ctx.type_registry.get_type_def(guard_type_name).is_some() {
-        return;
-    }
-    let type_def = TypeDef {
-        name: guard_type_name.to_string(),
-        kind: TypeDefKind::Struct(StructDef {
-            fields: vec![StructField { name: "_0".to_string(), type_id: inner_type }],
-        }),
-        metadata: TypeMetadata {
-            size: None,
-            align: None,
-            // Move — Guard is owned; duplicating would break mutual exclusion
-            copy_semantics: CopySemantics::Move,
-            // Drop unlocks the mutex
-            drop_strategy: DropStrategy::Trivial(format!("{guard_type_name}__drop")),
-        },
-    };
-    ctx.type_registry.add_type_def(type_def);
+    use crate::ir::types::{CopySemantics, DropStrategy};
+    use super::super::types::make_wrapper_type_def;
+    if ctx.type_registry.get_type_def(guard_type_name).is_some() { return; }
+    ctx.type_registry.add_type_def(
+        make_wrapper_type_def(guard_type_name, inner_type, CopySemantics::Move, DropStrategy::Trivial(format!("{guard_type_name}__drop")))
+    );
 }
 
-/// Ensure a RWLock[T] type has a TypeDef in the registry (Copy pointer, no drop in V1).
+/// Ensure a RWLock[T] type has a TypeDef in the registry (Copy pointer, no drop).
 pub fn ensure_rwlock_type_def(ctx: &mut LoweringContext, rwlock_type_name: &str, inner_type: TypeId) {
-    use crate::ir::types::{TypeDef, TypeDefKind, StructDef, StructField, TypeMetadata, CopySemantics, DropStrategy};
-    if ctx.type_registry.get_type_def(rwlock_type_name).is_some() {
-        return;
-    }
-    let type_def = TypeDef {
-        name: rwlock_type_name.to_string(),
-        kind: TypeDefKind::Struct(StructDef {
-            fields: vec![StructField { name: "_0".to_string(), type_id: inner_type }],
-        }),
-        metadata: TypeMetadata {
-            size: None,
-            align: None,
-            // Copy — GorgetRWLock* pointer, shared across threads
-            copy_semantics: CopySemantics::Copy,
-            drop_strategy: DropStrategy::None,
-        },
-    };
-    ctx.type_registry.add_type_def(type_def);
+    use crate::ir::types::{CopySemantics, DropStrategy};
+    use super::super::types::make_wrapper_type_def;
+    if ctx.type_registry.get_type_def(rwlock_type_name).is_some() { return; }
+    ctx.type_registry.add_type_def(
+        make_wrapper_type_def(rwlock_type_name, inner_type, CopySemantics::Copy, DropStrategy::None)
+    );
 }
 
-/// Ensure a Channel[T] type has a TypeDef in the registry (Copy pointer, no RAII drop in V1).
-/// Channel__T is an opaque GorgetChannel* pointer shared across threads.
-/// This is a no-op if map_ast_type_mut already pre-registered the type during the fn_sigs scan.
+/// Ensure a Channel[T] type has a TypeDef in the registry (Copy pointer, no drop).
 pub fn ensure_channel_type_def(ctx: &mut LoweringContext, channel_type_name: &str) {
-    use crate::ir::types::{TypeDef, TypeDefKind, StructDef, TypeMetadata, CopySemantics, DropStrategy};
-    if ctx.type_registry.get_type_def(channel_type_name).is_some() {
-        return;
-    }
-    ctx.type_registry.add_type_def(TypeDef {
-        name: channel_type_name.to_string(),
-        kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
-        metadata: TypeMetadata {
-            size: None,
-            align: None,
-            copy_semantics: CopySemantics::Copy,
-            drop_strategy: DropStrategy::None,
-        },
-    });
+    use crate::ir::types::{CopySemantics, DropStrategy};
+    use super::super::types::make_opaque_type_def;
+    if ctx.type_registry.get_type_def(channel_type_name).is_some() { return; }
+    ctx.type_registry.add_type_def(
+        make_opaque_type_def(channel_type_name, CopySemantics::Copy, DropStrategy::None)
+    );
 }
 
 /// Ensure TaskGroup has a TypeDef in the registry (Move pointer, drop waits for all children).
 pub fn ensure_task_group_type_def(ctx: &mut LoweringContext, tg_type_name: &str) {
-    use crate::ir::types::{TypeDef, TypeDefKind, StructDef, TypeMetadata, CopySemantics, DropStrategy};
-    if ctx.type_registry.get_type_def(tg_type_name).is_some() {
-        return;
-    }
-    let type_def = TypeDef {
-        name: tg_type_name.to_string(),
-        kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
-        metadata: TypeMetadata {
-            size: None,
-            align: None,
-            // Move — TaskGroup owns its child tasks
-            copy_semantics: CopySemantics::Move,
-            // Drop blocks until all children complete, then frees
-            drop_strategy: DropStrategy::Trivial("gorget_task_group_free".to_string()),
-        },
-    };
-    ctx.type_registry.add_type_def(type_def);
+    use crate::ir::types::{CopySemantics, DropStrategy};
+    use super::super::types::make_opaque_type_def;
+    if ctx.type_registry.get_type_def(tg_type_name).is_some() { return; }
+    ctx.type_registry.add_type_def(
+        make_opaque_type_def(tg_type_name, CopySemantics::Move, DropStrategy::Trivial("gorget_task_group_free".to_string()))
+    );
 }
 
 /// If `type_name` is a Guard/ReadGuard/WriteGuard type, return (inner_c_suffix, is_read_only).
