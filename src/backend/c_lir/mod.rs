@@ -42,8 +42,18 @@ pub fn generate_c(module: &LirModule) -> String {
         writeln!(out).unwrap();
     }
 
-    // Extern declarations
+    // Extern declarations (skip functions already provided by included headers)
     for ext in &module.externs {
+        if is_std_header_fn(&ext.name) {
+            continue;
+        }
+        // Skip variadic externs with no named params — these are Gorget runtime
+        // functions that lack proper type info in the LIR; declaring them as
+        // `int32_t foo(...)` is invalid C.  They'll be resolved at link time
+        // when the runtime is included.
+        if ext.is_variadic && ext.params.is_empty() {
+            continue;
+        }
         write!(out, "{} {}(", c_type(&ext.return_type), ext.name).unwrap();
         if ext.params.is_empty() && !ext.is_variadic {
             write!(out, "void").unwrap();
@@ -122,6 +132,11 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule) {
     // Slot declarations
     for (i, slot) in func.slots.iter().enumerate() {
         let ty_str = c_type(&slot.ty);
+        if ty_str == "void" {
+            // Type couldn't be resolved — skip (will cause errors if used)
+            writeln!(out, "    // __s{i}: void (unresolved type)").unwrap();
+            continue;
+        }
         write!(out, "    {ty_str} __s{i}").unwrap();
         // Zero-initialize
         if slot.ty.is_scalar() {
@@ -167,7 +182,12 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule) {
 
     for (i, ty) in val_types.iter().enumerate() {
         if let Some(ty) = ty {
-            writeln!(out, "    {} __v{i};", c_type(ty)).unwrap();
+            let ts = c_type(ty);
+            if ts == "void" {
+                writeln!(out, "    // __v{i}: void (unresolved type)").unwrap();
+            } else {
+                writeln!(out, "    {} __v{i};", ts).unwrap();
+            }
         }
     }
 
@@ -567,6 +587,22 @@ fn emit_global_init(out: &mut String, init: &LirGlobalInit) {
 }
 
 /// Map LirType to C type string.
+/// Returns true if the function is provided by standard C headers
+/// (stdio.h, stdlib.h, string.h) and should not be re-declared.
+fn is_std_header_fn(name: &str) -> bool {
+    matches!(
+        name,
+        "printf" | "fprintf" | "sprintf" | "snprintf" | "puts" | "putchar" | "getchar"
+            | "fopen" | "fclose" | "fread" | "fwrite" | "fgets" | "fputs" | "fflush"
+            | "fseek" | "ftell" | "rewind" | "feof" | "ferror"
+            | "malloc" | "calloc" | "realloc" | "free" | "exit" | "abort" | "atexit"
+            | "atoi" | "atol" | "atof" | "strtol" | "strtod"
+            | "memcpy" | "memmove" | "memset" | "memcmp"
+            | "strlen" | "strcpy" | "strncpy" | "strcat" | "strncat" | "strcmp" | "strncmp"
+            | "strstr" | "strchr" | "strrchr"
+    )
+}
+
 fn c_type(ty: &LirType) -> String {
     match ty {
         LirType::I8 => "int8_t".into(),
