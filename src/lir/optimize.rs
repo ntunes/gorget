@@ -775,10 +775,229 @@ pub fn merge_linear_blocks(func: &mut LirFunction) {
 
 // ── Copy Propagation ────────────────────────────────────────────────────────
 
-/// Propagate trivial copies. Returns count of copies propagated.
+/// Propagate trivial block params (phis where all incoming values are identical).
+/// Returns count of copies propagated.
 pub fn propagate_copies(func: &mut LirFunction) -> usize {
-    let _ = func;
-    0
+    if func.blocks.is_empty() {
+        return 0;
+    }
+
+    // Collect predecessor info: for each block, what values are passed as jump args.
+    // Map: (target_block, param_index) → set of argument ValueIds.
+    let mut param_sources: std::collections::HashMap<(u32, usize), HashSet<ValueId>> =
+        std::collections::HashMap::new();
+
+    for block in &func.blocks {
+        let collect_args = |target: BlockId, args: &[ValueId]| {
+            let mut entries = Vec::new();
+            for (i, &arg) in args.iter().enumerate() {
+                entries.push(((target.0, i), arg));
+            }
+            entries
+        };
+
+        let entries: Vec<((u32, usize), ValueId)> = match &block.terminator {
+            Term::Jump(target, args) => collect_args(*target, args),
+            Term::Branch { then_block, then_args, else_block, else_args, .. } => {
+                let mut e = collect_args(*then_block, then_args);
+                e.extend(collect_args(*else_block, else_args));
+                e
+            }
+            Term::Switch { cases, default, default_args, .. } => {
+                let mut e = Vec::new();
+                for (_, target, args) in cases {
+                    e.extend(collect_args(*target, args));
+                }
+                e.extend(collect_args(*default, default_args));
+                e
+            }
+            Term::Ret(_) | Term::RetVoid | Term::Unreachable => Vec::new(),
+        };
+
+        for ((block_id, param_idx), arg) in entries {
+            param_sources.entry((block_id, param_idx)).or_default().insert(arg);
+        }
+    }
+
+    // Find trivial params: all predecessors pass the same value.
+    // Track both the substitution map and which (block, param_index) to remove.
+    let mut subst: std::collections::HashMap<ValueId, ValueId> = std::collections::HashMap::new();
+    let mut removed_params: std::collections::HashMap<u32, HashSet<usize>> =
+        std::collections::HashMap::new();
+
+    for block in &func.blocks {
+        for (param_idx, (param_vid, _)) in block.params.iter().enumerate() {
+            if let Some(sources) = param_sources.get(&(block.id.0, param_idx)) {
+                if sources.len() == 1 {
+                    let &single_val = sources.iter().next().unwrap();
+                    if single_val != *param_vid {
+                        subst.insert(*param_vid, single_val);
+                        removed_params.entry(block.id.0).or_default().insert(param_idx);
+                    }
+                }
+            }
+        }
+    }
+
+    if subst.is_empty() {
+        return 0;
+    }
+
+    // Chase substitution chains: if a → b and b → c, then a → c.
+    let keys: Vec<ValueId> = subst.keys().copied().collect();
+    for key in &keys {
+        let mut val = subst[key];
+        while let Some(&next) = subst.get(&val) {
+            if next == val { break; }
+            val = next;
+        }
+        subst.insert(*key, val);
+    }
+
+    let count = subst.len();
+
+    // Apply substitutions to all instructions and terminators.
+    for block in &mut func.blocks {
+        for inst in &mut block.insts {
+            subst_inst_uses(inst, &subst);
+        }
+        subst_term_uses(&mut block.terminator, &subst);
+        block.params.retain(|(vid, _)| !subst.contains_key(vid));
+    }
+
+    // Remove the corresponding jump args from predecessors.
+    for block in &mut func.blocks {
+        remove_jump_args_for_removed_params(&mut block.terminator, &removed_params);
+    }
+
+    count
+}
+
+/// Substitute ValueIds in an instruction's operands.
+fn subst_inst_uses(inst: &mut Inst, subst: &std::collections::HashMap<ValueId, ValueId>) {
+    // Apply substitution to all used values.
+    let mut uses = inst.uses();
+    let mut any_changed = false;
+    for u in &mut uses {
+        if let Some(&replacement) = subst.get(u) {
+            *u = replacement;
+            any_changed = true;
+        }
+    }
+    if !any_changed {
+        return;
+    }
+    // Write substituted values back into the instruction.
+    // We use the same match structure as `uses()` to maintain correspondence.
+    let mut idx = 0;
+    let next = |uses: &[ValueId], idx: &mut usize| -> ValueId { let v = uses[*idx]; *idx += 1; v };
+
+    match inst {
+        Inst::SlotStore { value, .. } => { *value = next(&uses, &mut idx); }
+        Inst::SlotLoad { .. } | Inst::SlotAddr { .. } => {}
+        Inst::IConst { .. } | Inst::FConst { .. } | Inst::BoolConst { .. }
+        | Inst::NullPtr { .. } | Inst::FuncAddr { .. } | Inst::GlobalAddr { .. }
+        | Inst::StrLit { .. } | Inst::Nop => {}
+        Inst::Add { lhs, rhs, .. } | Inst::Sub { lhs, rhs, .. }
+        | Inst::Mul { lhs, rhs, .. } | Inst::Div { lhs, rhs, .. }
+        | Inst::Rem { lhs, rhs, .. } | Inst::Mod { lhs, rhs, .. } => {
+            *lhs = next(&uses, &mut idx); *rhs = next(&uses, &mut idx);
+        }
+        Inst::Neg { operand, .. } => { *operand = next(&uses, &mut idx); }
+        Inst::BitAnd { lhs, rhs, .. } | Inst::BitOr { lhs, rhs, .. }
+        | Inst::BitXor { lhs, rhs, .. } | Inst::Shl { lhs, rhs, .. }
+        | Inst::Shr { lhs, rhs, .. } => {
+            *lhs = next(&uses, &mut idx); *rhs = next(&uses, &mut idx);
+        }
+        Inst::BitNot { operand, .. } => { *operand = next(&uses, &mut idx); }
+        Inst::Cmp { lhs, rhs, .. } => { *lhs = next(&uses, &mut idx); *rhs = next(&uses, &mut idx); }
+        Inst::Not { operand, .. } => { *operand = next(&uses, &mut idx); }
+        Inst::IntCast { value, .. } | Inst::FloatCast { value, .. }
+        | Inst::IntToFloat { value, .. } | Inst::FloatToInt { value, .. }
+        | Inst::PtrCast { value, .. } | Inst::Bitcast { value, .. } => {
+            *value = next(&uses, &mut idx);
+        }
+        Inst::Load { ptr, .. } => { *ptr = next(&uses, &mut idx); }
+        Inst::Store { ptr, value } => { *ptr = next(&uses, &mut idx); *value = next(&uses, &mut idx); }
+        Inst::FieldPtr { base, .. } => { *base = next(&uses, &mut idx); }
+        Inst::ElemPtr { base, index, .. } => { *base = next(&uses, &mut idx); *index = next(&uses, &mut idx); }
+        Inst::Memset { ptr, byte, size } => {
+            *ptr = next(&uses, &mut idx); *byte = next(&uses, &mut idx); *size = next(&uses, &mut idx);
+        }
+        Inst::Memcpy { dst_ptr, src_ptr, size } => {
+            *dst_ptr = next(&uses, &mut idx); *src_ptr = next(&uses, &mut idx); *size = next(&uses, &mut idx);
+        }
+        Inst::Call { args, .. } => { for a in args { *a = next(&uses, &mut idx); } }
+        Inst::CallExtern { args, .. } => { for a in args { *a = next(&uses, &mut idx); } }
+        Inst::CallPtr { callee, args, .. } => {
+            *callee = next(&uses, &mut idx); for a in args { *a = next(&uses, &mut idx); }
+        }
+        Inst::BoundsCheck { index, len } => { *index = next(&uses, &mut idx); *len = next(&uses, &mut idx); }
+        Inst::DivCheck { divisor } => { *divisor = next(&uses, &mut idx); }
+        Inst::Trap { .. } => {}
+        Inst::Printf { args, .. } => { for a in args { *a = next(&uses, &mut idx); } }
+        Inst::Fprintf { fd, args, .. } => {
+            *fd = next(&uses, &mut idx); for a in args { *a = next(&uses, &mut idx); }
+        }
+    }
+}
+
+/// Substitute ValueIds in a terminator's operands.
+fn subst_term_uses(term: &mut Term, subst: &std::collections::HashMap<ValueId, ValueId>) {
+    let s = |v: &mut ValueId| {
+        if let Some(&replacement) = subst.get(v) {
+            *v = replacement;
+        }
+    };
+
+    match term {
+        Term::Ret(v) => s(v),
+        Term::RetVoid | Term::Unreachable => {}
+        Term::Jump(_, args) => { for a in args { s(a); } }
+        Term::Branch { cond, then_args, else_args, .. } => {
+            s(cond);
+            for a in then_args { s(a); }
+            for a in else_args { s(a); }
+        }
+        Term::Switch { value, cases, default_args, .. } => {
+            s(value);
+            for (_, _, args) in cases { for a in args { s(a); } }
+            for a in default_args { s(a); }
+        }
+    }
+}
+
+/// Remove jump args at indices corresponding to removed block params.
+fn remove_jump_args_for_removed_params(
+    term: &mut Term,
+    removed: &std::collections::HashMap<u32, HashSet<usize>>,
+) {
+    let filter_args = |target: BlockId, args: &mut Vec<ValueId>| {
+        if let Some(indices) = removed.get(&target.0) {
+            let mut new_args = Vec::new();
+            for (i, arg) in args.iter().enumerate() {
+                if !indices.contains(&i) {
+                    new_args.push(*arg);
+                }
+            }
+            *args = new_args;
+        }
+    };
+
+    match term {
+        Term::Jump(target, args) => filter_args(*target, args),
+        Term::Branch { then_block, then_args, else_block, else_args, .. } => {
+            filter_args(*then_block, then_args);
+            filter_args(*else_block, else_args);
+        }
+        Term::Switch { cases, default, default_args, .. } => {
+            for (_, target, args) in cases {
+                filter_args(*target, args);
+            }
+            filter_args(*default, default_args);
+        }
+        Term::Ret(_) | Term::RetVoid | Term::Unreachable => {}
+    }
 }
 
 #[cfg(test)]
@@ -1324,5 +1543,70 @@ mod tests {
 
         let folded = fold_constants(&mut func);
         assert_eq!(folded, 0, "division by zero should not be folded");
+    }
+
+    #[test]
+    fn copy_propagation_trivial_phi() {
+        // bb0: v0 = 42; jmp bb1(v0)
+        // bb1(v1): ret v1
+        // → v1 should be replaced by v0, bb1 param removed.
+        let mut func = LirFunction::new("test".into(), vec![], LirType::I64);
+        let bb0 = func.add_block();
+        let bb1 = func.add_block();
+
+        let v0 = func.next_value();
+        let v1 = func.next_value();
+
+        func.block_mut(bb0).insts.push(Inst::IConst {
+            dst: v0, ty: LirType::I64, value: 42,
+        });
+        func.block_mut(bb0).terminator = Term::Jump(bb1, vec![v0]);
+
+        func.block_mut(bb1).params.push((v1, LirType::I64));
+        func.block_mut(bb1).terminator = Term::Ret(v1);
+
+        let propagated = propagate_copies(&mut func);
+        assert_eq!(propagated, 1);
+        assert!(func.blocks[1].params.is_empty(), "trivial param should be removed");
+        // Terminator should now use v0 directly.
+        assert_eq!(func.blocks[1].terminator, Term::Ret(v0));
+        // Jump args should be empty.
+        match &func.blocks[0].terminator {
+            Term::Jump(_, args) => assert!(args.is_empty()),
+            _ => panic!("expected Jump"),
+        }
+    }
+
+    #[test]
+    fn copy_propagation_non_trivial_phi_preserved() {
+        // bb0: v0 = 1; jmp bb2(v0)
+        // bb1: v1 = 2; jmp bb2(v1)
+        // bb2(v2): ret v2
+        // → v2 has different sources, should NOT be propagated.
+        let mut func = LirFunction::new("test".into(), vec![], LirType::I64);
+        let bb0 = func.add_block();
+        let bb1 = func.add_block();
+        let bb2 = func.add_block();
+
+        let v0 = func.next_value();
+        let v1 = func.next_value();
+        let v2 = func.next_value();
+
+        func.block_mut(bb0).insts.push(Inst::IConst {
+            dst: v0, ty: LirType::I64, value: 1,
+        });
+        func.block_mut(bb0).terminator = Term::Jump(bb2, vec![v0]);
+
+        func.block_mut(bb1).insts.push(Inst::IConst {
+            dst: v1, ty: LirType::I64, value: 2,
+        });
+        func.block_mut(bb1).terminator = Term::Jump(bb2, vec![v1]);
+
+        func.block_mut(bb2).params.push((v2, LirType::I64));
+        func.block_mut(bb2).terminator = Term::Ret(v2);
+
+        let propagated = propagate_copies(&mut func);
+        assert_eq!(propagated, 0, "non-trivial phi should not be propagated");
+        assert_eq!(func.blocks[2].params.len(), 1, "param should be preserved");
     }
 }

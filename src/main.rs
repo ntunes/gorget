@@ -359,9 +359,10 @@ fn try_build_ir(
             gorget::lir::ssa::construct_ssa(func);
         }
         let stats = gorget::lir::optimize::optimize_module(&mut lir_module);
-        eprintln!("; LIR opt: {} dead fns, {} dead globals, {} dead insts, {} folded",
+        eprintln!("; LIR opt: {} dead fns, {} dead globals, {} dead insts, {} folded, {} copies prop'd",
             stats.dead_functions_eliminated, stats.dead_globals_eliminated,
-            stats.dead_instructions_eliminated, stats.constants_folded);
+            stats.dead_instructions_eliminated, stats.constants_folded,
+            stats.copies_propagated);
         print!("{}", gorget::lir::display::dump_module(&lir_module));
         let errors = gorget::lir::validate::validate_module(&lir_module);
         if !errors.is_empty() {

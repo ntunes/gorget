@@ -401,7 +401,7 @@ impl Inst {
 // ── Terminators ─────────────────────────────────────────────────────────────
 
 /// Block terminator — transfers control flow.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Term {
     /// Return a value.
     Ret(ValueId),
