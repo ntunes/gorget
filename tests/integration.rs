@@ -7139,6 +7139,21 @@ fn async_sleep_spawn() {
 }
 
 #[test]
+fn async_sleep_yield() {
+    run_gg("async_sleep_yield.gg", "4\n9\n16\n25\n54");
+}
+
+#[test]
+fn async_blocking_io() {
+    run_gg("async_blocking_io.gg", "hello from blocking io");
+}
+
+#[test]
+fn async_blocking_coroutine() {
+    run_gg("async_blocking_coroutine.gg", "coroutine+blocking");
+}
+
+#[test]
 fn async_condition_await() {
     run_gg("async_condition_await.gg", "20\nyes");
 }

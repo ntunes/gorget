@@ -1,0 +1,23 @@
+from std.async import sleep
+
+# Spawned coroutine that sleeps (should yield, not block the worker).
+async int compute_after_sleep(int x):
+    sleep(50)
+    return x * x
+
+# Spawn 4 tasks that each sleep 50ms. If sleep blocks worker threads,
+# total time >= 200ms. If sleep yields via reactor, total time ~50ms.
+async void main():
+    Task[int] a = spawn compute_after_sleep(2)
+    Task[int] b = spawn compute_after_sleep(3)
+    Task[int] c = spawn compute_after_sleep(4)
+    Task[int] d = spawn compute_after_sleep(5)
+    int ra = a.await()
+    int rb = b.await()
+    int rc = c.await()
+    int rd = d.await()
+    print(ra)
+    print(rb)
+    print(rc)
+    print(rd)
+    print(ra + rb + rc + rd)

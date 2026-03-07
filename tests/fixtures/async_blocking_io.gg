@@ -1,0 +1,13 @@
+from std.fs import read_file, write_file
+
+# Spawned coroutine that reads a file (blocking I/O → offloaded to blocking pool).
+async str do_read(str path):
+    str content = read_file(path)
+    return content
+
+async void main():
+    write_file("/tmp/gorget_blocking_test.txt", "hello from blocking io")
+
+    Task[str] t = spawn do_read("/tmp/gorget_blocking_test.txt")
+    str result = t.await()
+    print(result)

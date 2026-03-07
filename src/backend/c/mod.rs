@@ -471,6 +471,20 @@ fn generate_c_impl(module: &Module, hr_opts: Option<&HotReloadOpts>) -> GirCodeg
 
     // Conditionally include optional runtime sections based on functions used
     let all_call_names = collect_all_call_names(module);
+
+    // Pre-scan: detect if any coroutine candidate has blocking or sleep yield points.
+    // This determines whether BLOCKING_POOL_RUNTIME and reactor async sleep are needed.
+    // Pre-scan: detect if any coroutine candidate has blocking calls.
+    // This is used for diagnostic/future io_uring integration purposes.
+    let _has_coroutine_blocking = module.runtime.spawned_fns.iter().any(|(fn_name, _, _)| {
+        if !fn_is_coroutine_candidate(fn_name, module) { return false; }
+        let Some(func) = module.find_function(fn_name) else { return false };
+        func.blocks.iter().any(|bb| {
+            bb.instructions.iter().any(|inst| {
+                classify_yield(inst, func) == Some(YieldKind::Blocking)
+            })
+        })
+    });
     if all_call_names.iter().any(|n| n.starts_with("gorget_bytes_") || n == "bytes_from_str" || n == "bytes_to_str") {
         out.push_str(c_runtime::BYTES_RUNTIME);
     }
@@ -592,6 +606,15 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
             out.push_str(c_runtime::MUTEX_RUNTIME);
         }
         out.push_str(c_runtime::TASK_GROUP_RUNTIME);
+    }
+    // Blocking pool (standalone pool) is emitted when explicitly requested via spawn_blocking.
+    // For auto-detected blocking calls in coroutines, __gorget_blocking_enter/exit is used
+    // instead (Go-style temp worker approach, already part of SCHEDULER_POOL_RUNTIME).
+    if module.runtime.has_blocking_pool {
+        if !needs_async_runtime {
+            out.push_str(c_runtime::ASYNC_RUNTIME);
+        }
+        out.push_str(c_runtime::BLOCKING_POOL_RUNTIME);
     }
     // Detect std.async.async_sleep(ms) calls — mapped to gorget_reactor_sleep_ms in KNOWN_MAPPINGS.
     // Also detect legacy int-arg sleep() calls from std.async import (pre-rename path).
@@ -1540,13 +1563,118 @@ fn emit_channel_and_task_defs(out: &mut String, module: &Module) {
 // tasks are transformed into stackless coroutines (poll functions + frame structs)
 // instead of blocking worker threads with condvar_wait.  This prevents thread-pool
 // deadlock when M > N tasks mutually await each other.
+//
+// Phase 6: sleep and blocking I/O calls are also yield points in coroutines.
+// Sleep uses the reactor (gorget_reactor_sleep_async), blocking I/O is offloaded
+// to the blocking thread pool (__gorget_blocking_submit).
 
-/// True if any basic block in `fn_name` contains a `__gorget_await_*` call.
+/// Yield point classification inside a coroutine poll function.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum YieldKind {
+    /// `__gorget_await_*` — wait for a child task to complete.
+    Await,
+    /// `gorget_reactor_sleep_ms` / `sleep(int)` — timer-based yield via reactor.
+    Sleep,
+    /// Known blocking stdlib call — offload to blocking thread pool.
+    Blocking,
+}
+
+/// Known blocking function names that should be auto-offloaded in coroutines.
+/// Includes both GIR names (pre-mapping) and C names (post-mapping) since
+/// classify_yield runs on GIR instructions where names haven't been mapped yet.
+const BLOCKING_STDLIB_CALLS: &[&str] = &[
+    // File I/O (GIR names + C names)
+    "read_file", "gorget_read_file",
+    "write_file", "gorget_write_file",
+    "append_file", "gorget_append_file",
+    "gorget_file_read_all",
+    "gorget_file_read_handle",
+    "gorget_file_write_handle",
+    "gorget_file_create",
+    "gorget_file_open_read",
+    "gorget_file_append",
+    "readdir", "gorget_readdir",
+    // Network (blocking socket ops)
+    "gorget_socket_connect",
+    "gorget_tls_connect",
+    "gorget_socket_read_line",
+    "gorget_tls_read_line",
+    "gorget_socket_read_bytes",
+    "gorget_tls_read_bytes",
+    "gorget_socket_accept",
+    // SQLite
+    "gorget_sqlite_open",
+    "gorget_sqlite_exec",
+    "gorget_sqlite_query",
+    // Process
+    "gorget_exec", "gorget_exec_output",
+    // HTTP client
+    "http_get", "gorget_http_get",
+    "http_post", "gorget_http_post",
+    "http_put", "gorget_http_put",
+    "http_delete", "gorget_http_delete",
+];
+
+/// True if a GIR call is a sleep call dispatched to the reactor.
+fn is_sleep_call(func_name: &str, args: &[Operand], func: &Function) -> bool {
+    if func_name == "gorget_reactor_sleep_ms" || func_name == "async_sleep" {
+        return true;
+    }
+    if func_name == "sleep" || func_name == "gg_sleep" {
+        // Only int-arg variant is reactor sleep
+        if let Some(arg) = args.first() {
+            return match arg {
+                Operand::Constant(Constant::I64(_)) => true,
+                Operand::Copy(p) | Operand::Move(p) => {
+                    let t = func.locals[p.local.0 as usize].type_id;
+                    t == I64_TYPE || t == I32_TYPE
+                }
+                _ => false,
+            };
+        }
+    }
+    false
+}
+
+/// True if a GIR call is a known blocking stdlib call.
+fn is_blocking_call(func_name: &str) -> bool {
+    BLOCKING_STDLIB_CALLS.contains(&func_name)
+}
+
+/// Classify an instruction as a yield point (if any).
+fn classify_yield(inst: &Instruction, func: &Function) -> Option<YieldKind> {
+    match inst {
+        Instruction::Call { func: fname, args, .. } => {
+            if fname.starts_with("__gorget_await_") {
+                Some(YieldKind::Await)
+            } else if is_sleep_call(fname, args, func) {
+                Some(YieldKind::Sleep)
+            } else if is_blocking_call(fname) {
+                Some(YieldKind::Blocking)
+            } else {
+                None
+            }
+        }
+        Instruction::CallExtern { func: fname, args, .. } => {
+            if is_sleep_call(fname, args, func) {
+                Some(YieldKind::Sleep)
+            } else if is_blocking_call(fname) {
+                Some(YieldKind::Blocking)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// True if any basic block in `fn_name` contains a true yield point (await or sleep).
+/// Blocking calls are NOT yield points — they run inline with temp worker replacement.
 fn fn_has_internal_await(fn_name: &str, module: &Module) -> bool {
     let Some(func) = module.find_function(fn_name) else { return false };
     func.blocks.iter().any(|bb| {
         bb.instructions.iter().any(|inst| {
-            matches!(inst, Instruction::Call { func, .. } if func.starts_with("__gorget_await_"))
+            matches!(classify_yield(inst, func), Some(YieldKind::Await | YieldKind::Sleep))
         })
     })
 }
@@ -1647,6 +1775,38 @@ fn fmt_args_poll(args: &[Operand], func: &Function, registry: &TypeRegistry) -> 
 fn fmt_args_poll_gorget(args: &[Operand], func: &Function, registry: &TypeRegistry) -> String {
     args.iter()
         .map(|a| fmt_operand_poll_as_str(a, func, registry))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Format arguments for a mapped C stdlib call in poll context.
+/// Str-typed args are converted to `const char*` via `gorget_str_to_cstr()` since
+/// C runtime functions expect null-terminated strings.
+fn fmt_args_poll_cstr(args: &[Operand], func: &Function, registry: &TypeRegistry) -> String {
+    args.iter()
+        .map(|a| {
+            if let Operand::Constant(Constant::Str(s)) = a {
+                let escaped = escape_c_string(s);
+                return format!("\"{escaped}\"");
+            }
+            let base = fmt_operand_poll(a, func, registry);
+            match a {
+                Operand::Copy(p) | Operand::Move(p) => {
+                    let local_idx = p.local.0 as usize;
+                    if local_idx < func.locals.len() {
+                        let c_type = format_type(func.locals[local_idx].type_id, registry);
+                        if c_type == "Str" {
+                            return format!("gorget_str_to_cstr({base})");
+                        }
+                        if c_type == "GorgetString" {
+                            return format!("{base}.data");
+                        }
+                    }
+                    base
+                }
+                _ => base,
+            }
+        })
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -1832,6 +1992,17 @@ fn emit_poll_inst(
                 }
             }
             let val_str = fmt_operand_poll(value, func, registry);
+            // Type coercion: GorgetString → Str via compound literal
+            let dst_type = format_type(func.locals[dst.local.0 as usize].type_id, registry);
+            if dst_type == "Str" {
+                if let Operand::Copy(p) | Operand::Move(p) = value {
+                    let src_type = format_type(func.locals[p.local.0 as usize].type_id, registry);
+                    if src_type == "GorgetString" {
+                        let _ = writeln!(out, "        {dst_str} = (Str){{ .data = {val_str}.data, .len = {val_str}.len }};");
+                        return None;
+                    }
+                }
+            }
             let _ = writeln!(out, "        {dst_str} = {val_str};");
         }
 
@@ -1900,13 +2071,28 @@ fn emit_poll_inst(
                     return Some(p.local.0);
                 }
             }
-            // Gorget functions expect Str, so wrap Constant::Str args
-            let args_str = fmt_args_poll_gorget(args, func, registry);
+            // Map GIR stdlib names to C runtime names
+            let c_fn = map_stdlib_name(call_fn);
+            let was_mapped = c_fn != call_fn;
+            // Blocking calls: wrap with enter/exit to keep pool at capacity
+            let is_blocking = is_blocking_call(call_fn) || is_blocking_call(c_fn);
+            if is_blocking {
+                out.push_str("        __gorget_blocking_enter();\n");
+            }
+            // Mapped C functions expect const char*, unmapped Gorget functions expect Str
+            let args_str = if was_mapped {
+                fmt_args_poll_cstr(args, func, registry)
+            } else {
+                fmt_args_poll_gorget(args, func, registry)
+            };
             if let Some(dst_id) = dst {
                 let dst_str = fmt_place_poll(&Place::local(LocalId(dst_id.0)), func, registry);
-                let _ = writeln!(out, "        {dst_str} = {call_fn}({args_str});");
+                let _ = writeln!(out, "        {dst_str} = {c_fn}({args_str});");
             } else {
-                let _ = writeln!(out, "        {call_fn}({args_str});");
+                let _ = writeln!(out, "        {c_fn}({args_str});");
+            }
+            if is_blocking {
+                out.push_str("        __gorget_blocking_exit();\n");
             }
         }
 
@@ -2118,11 +2304,11 @@ fn coroutine_state_ids(func: &Function) -> Vec<u32> {
     let mut next = 0u32;
     for bb in &func.blocks {
         ids.push(next);
-        let await_count = bb.instructions.iter().filter(|i| {
-            matches!(i, Instruction::Call { func, .. } if func.starts_with("__gorget_await_"))
-        }).count() as u32;
-        // 1 base state + 1 extra state per await (pre-await → yield → resume)
-        next += 1 + await_count;
+        // Only count true yield points (await + sleep); blocking calls are inline.
+        let yield_count = bb.instructions.iter()
+            .filter(|i| matches!(classify_yield(i, func), Some(YieldKind::Await | YieldKind::Sleep)))
+            .count() as u32;
+        next += 1 + yield_count;
     }
     ids
 }
@@ -2218,23 +2404,30 @@ fn emit_coroutine(
     }
     let _ = writeln!(out, "}} {frame_name};");
 
-    // ── 2. Poll function ─────────────────────────────────────────────────────
+    // No pre-scan thunks needed: blocking calls use the notify-and-block approach
+    // (see YieldKind::Blocking in the poll function below).
+
+    // ── 2b. Poll function ────────────────────────────────────────────────────
     let _ = writeln!(out, "static int __poll_{fn_name}(GorgetTask* __base) {{");
     let _ = writeln!(out, "    {frame_name}* f = ({frame_name}*)__base;");
     out.push_str("    for (;;) {\n");
     out.push_str("    switch (f->__state) {\n");
 
+
     for (bb_idx, bb) in func.blocks.iter().enumerate() {
         let base_state = state_ids[bb_idx];
 
-        // Collect await positions in this BB
-        let await_positions: Vec<usize> = bb.instructions.iter().enumerate()
-            .filter(|(_, i)| matches!(i, Instruction::Call { func, .. } if func.starts_with("__gorget_await_")))
-            .map(|(pos, _)| pos)
+        // Collect TRUE yield positions (await + sleep only; blocking calls are inline).
+        let yield_positions: Vec<(usize, YieldKind)> = bb.instructions.iter().enumerate()
+            .filter_map(|(pos, i)| {
+                let kind = classify_yield(i, func)?;
+                if kind == YieldKind::Blocking { return None; }
+                Some((pos, kind))
+            })
             .collect();
 
-        if await_positions.is_empty() {
-            // ── No-await state: emit all instructions + terminator ────────────
+        if yield_positions.is_empty() {
+            // ── No-yield state: emit all instructions + terminator ────────────
             let _ = writeln!(out, "    case {base_state}: {{");
             for inst in &bb.instructions {
                 emit_poll_inst(out, inst, func, registry, module.runtime.overflow_wrap);
@@ -2244,62 +2437,98 @@ fn emit_coroutine(
             }
             out.push_str("    }\n");
         } else {
-            // Process N awaits: creates N+1 states.
-            // State layout for base_state S:
-            //   S:   instructions [0..p0), yield at await p0
-            //   S+1: await p0 result + instructions [p0+1..p1), yield at await p1
-            //   ...
-            //   S+N: await p_{N-1} result + instructions [p_{N-1}+1..) + terminator
+            // Process N yield points: creates N+1 states.
             let mut current_state = base_state;
 
-            for (await_idx, &await_pos) in await_positions.iter().enumerate() {
+            for (yield_idx, &(yield_pos, yield_kind)) in yield_positions.iter().enumerate() {
                 let _ = writeln!(out, "    case {current_state}: {{");
 
-                // For resume states (not the first), emit the previous await's result call
-                if await_idx > 0 {
-                    let prev_await_pos = await_positions[await_idx - 1];
-                    let prev_inst = &bb.instructions[prev_await_pos];
-                    emit_await_result_call(out, prev_inst, func, registry);
+                // For resume states (not the first), emit the previous yield's resume code
+                if yield_idx > 0 {
+                    let (prev_pos, prev_kind) = yield_positions[yield_idx - 1];
+                    let prev_inst = &bb.instructions[prev_pos];
+                    match prev_kind {
+                        YieldKind::Await => {
+                            emit_await_result_call(out, prev_inst, func, registry);
+                        }
+                        YieldKind::Sleep | YieldKind::Blocking => {
+                            // Sleep/blocking: no result to extract on resume — work is done
+                        }
+                    }
                 }
 
-                // Emit instructions from after the previous await (or BB start) to this await
-                let inst_start = if await_idx == 0 { 0 } else { await_positions[await_idx - 1] + 1 };
-                for inst in &bb.instructions[inst_start..await_pos] {
+                // Emit instructions from after the previous yield (or BB start) to this yield
+                let inst_start = if yield_idx == 0 { 0 } else { yield_positions[yield_idx - 1].0 + 1 };
+                for inst in &bb.instructions[inst_start..yield_pos] {
                     emit_poll_inst(out, inst, func, registry, module.runtime.overflow_wrap);
                 }
 
-                // Extract task local from this await call
-                let await_inst = &bb.instructions[await_pos];
-                let task_local = if let Instruction::Call { args, .. } = await_inst {
-                    args.first().and_then(|a| match a {
-                        Operand::Copy(p) | Operand::Move(p) => Some(p.local.0),
-                        _ => None,
-                    }).unwrap_or(0)
-                } else { 0 };
-
                 let resume_state = current_state + 1;
-                // Waker-check: register parent waker with child, yield if not done
                 let _ = writeln!(out, "        f->__state = {resume_state};");
-                let _ = writeln!(out, "        {{");
-                let _ = writeln!(out, "            GorgetTask* __child = (GorgetTask*)f->_{task_local}.__task;");
-                out.push_str("            pthread_mutex_lock(&__child->mtx);\n");
-                out.push_str("            if (!__child->done)\n");
-                out.push_str("                __child->parent_waker = (GorgetWaker){__gorget_fiber_waker_wake, (void*)f};\n");
-                out.push_str("            int __child_done = __child->done;\n");
-                out.push_str("            pthread_mutex_unlock(&__child->mtx);\n");
-                out.push_str("            if (__child_done) continue;\n");
-                out.push_str("        }\n");
+
+                match yield_kind {
+                    YieldKind::Await => {
+                        // Extract task local from this await call
+                        let await_inst = &bb.instructions[yield_pos];
+                        let task_local = if let Instruction::Call { args, .. } = await_inst {
+                            args.first().and_then(|a| match a {
+                                Operand::Copy(p) | Operand::Move(p) => Some(p.local.0),
+                                _ => None,
+                            }).unwrap_or(0)
+                        } else { 0 };
+
+                        // Waker-check: register parent waker with child, yield if not done
+                        let _ = writeln!(out, "        {{");
+                        let _ = writeln!(out, "            GorgetTask* __child = (GorgetTask*)f->_{task_local}.__task;");
+                        out.push_str("            pthread_mutex_lock(&__child->mtx);\n");
+                        out.push_str("            if (!__child->done)\n");
+                        out.push_str("                __child->parent_waker = (GorgetWaker){__gorget_fiber_waker_wake, (void*)f};\n");
+                        out.push_str("            int __child_done = __child->done;\n");
+                        out.push_str("            pthread_mutex_unlock(&__child->mtx);\n");
+                        out.push_str("            if (__child_done) continue;\n");
+                        out.push_str("        }\n");
+                    }
+                    YieldKind::Sleep => {
+                        // Extract sleep argument and emit async reactor call
+                        let sleep_inst = &bb.instructions[yield_pos];
+                        let sleep_arg = match sleep_inst {
+                            Instruction::Call { args, func: fname, .. }
+                            | Instruction::CallExtern { args, func: fname, .. } => {
+                                if !args.is_empty() {
+                                    let raw = fmt_operand_poll(&args[0], func, registry);
+                                    if fname == "sleep" || fname == "gg_sleep" {
+                                        // int-arg sleep → already in ms
+                                        raw
+                                    } else {
+                                        raw
+                                    }
+                                } else {
+                                    "0".to_string()
+                                }
+                            }
+                            _ => "0".to_string(),
+                        };
+                        let _ = writeln!(out, "        gorget_reactor_sleep_async({sleep_arg}, (GorgetWaker){{__gorget_fiber_waker_wake, (void*)f}});");
+                    }
+                    YieldKind::Blocking => unreachable!("blocking calls filtered out of yield_positions"),
+                }
+
                 out.push_str("        return GORGET_POLL_PENDING;\n");
                 out.push_str("    }\n");
 
                 current_state = resume_state;
             }
 
-            // ── Final resume state: last await result + remaining instructions + terminator
-            let last_await_pos = *await_positions.last().unwrap();
+            // ── Final resume state: last yield result + remaining instructions + terminator
+            let (last_pos, last_kind) = *yield_positions.last().unwrap();
             let _ = writeln!(out, "    case {current_state}: {{");
-            emit_await_result_call(out, &bb.instructions[last_await_pos], func, registry);
-            for inst in &bb.instructions[last_await_pos + 1..] {
+            match last_kind {
+                YieldKind::Await => {
+                    emit_await_result_call(out, &bb.instructions[last_pos], func, registry);
+                }
+                YieldKind::Sleep | YieldKind::Blocking => {}
+            }
+            for inst in &bb.instructions[last_pos + 1..] {
                 emit_poll_inst(out, inst, func, registry, module.runtime.overflow_wrap);
             }
             if let Some(term) = &bb.terminator {

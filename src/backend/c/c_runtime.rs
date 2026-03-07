@@ -2455,6 +2455,30 @@ static void __gorget_fiber_waker_wake(GorgetWaker* w) {
     }
 }
 
+// Notify the executor that the current worker is about to do blocking I/O.
+// Spawns a temporary replacement worker so the pool stays at capacity.
+static volatile int __gorget_blocking_active = 0;
+
+static void __gorget_blocking_enter(void) {
+    __gorget_executor_init();
+    __atomic_add_fetch(&__gorget_blocking_active, 1, __ATOMIC_SEQ_CST);
+    // Spawn a temporary detached worker to keep the pool at capacity.
+    pthread_t tmp;
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    pthread_create(&tmp, &attr, __gorget_worker, NULL);
+    pthread_attr_destroy(&attr);
+}
+
+static void __gorget_blocking_exit(void) {
+    __atomic_sub_fetch(&__gorget_blocking_active, 1, __ATOMIC_SEQ_CST);
+    // Signal workers to check the queue — the temp worker will exit if idle.
+    pthread_mutex_lock(&__gorget_exec.mtx);
+    pthread_cond_broadcast(&__gorget_exec.cond);
+    pthread_mutex_unlock(&__gorget_exec.mtx);
+}
+
 static void __gorget_executor_shutdown(void) {
     if (!__gorget_exec_init_done) return;
     pthread_mutex_lock(&__gorget_exec.mtx);
@@ -3322,7 +3346,9 @@ typedef struct {
 
 typedef struct {
     int                  fd;    /* timerfd (Linux) or kqueue ident (macOS) */
-    GorgetReactorWaiter* w;
+    GorgetReactorWaiter* w;     /* NULL when is_async=1 */
+    int                  is_async;
+    GorgetWaker          async_waker;
 } GorgetReactorEntry;
 
 typedef struct {
@@ -3351,14 +3377,18 @@ static void* __gorget_reactor_thread(void* arg) {
             pthread_mutex_lock(&r->mtx);
             for (size_t j = 0; j < r->len; j++) {
                 if (r->entries[j].fd == fd) {
-                    GorgetReactorWaiter* w = r->entries[j].w;
+                    GorgetReactorEntry entry = r->entries[j];
                     r->entries[j] = r->entries[--r->len];
                     pthread_mutex_unlock(&r->mtx);
-                    /* wake the sleeping task */
-                    pthread_mutex_lock(&w->mtx);
-                    w->woken = 1;
-                    pthread_cond_signal(&w->cond);
-                    pthread_mutex_unlock(&w->mtx);
+                    if (entry.is_async) {
+                        close(fd);
+                        entry.async_waker.wake(&entry.async_waker);
+                    } else {
+                        pthread_mutex_lock(&entry.w->mtx);
+                        entry.w->woken = 1;
+                        pthread_cond_signal(&entry.w->cond);
+                        pthread_mutex_unlock(&entry.w->mtx);
+                    }
                     goto reactor_next;
                 }
             }
@@ -3376,13 +3406,17 @@ static void* __gorget_reactor_thread(void* arg) {
             pthread_mutex_lock(&r->mtx);
             for (size_t j = 0; j < r->len; j++) {
                 if ((uintptr_t)r->entries[j].fd == ident) {
-                    GorgetReactorWaiter* w = r->entries[j].w;
+                    GorgetReactorEntry entry = r->entries[j];
                     r->entries[j] = r->entries[--r->len];
                     pthread_mutex_unlock(&r->mtx);
-                    pthread_mutex_lock(&w->mtx);
-                    w->woken = 1;
-                    pthread_cond_signal(&w->cond);
-                    pthread_mutex_unlock(&w->mtx);
+                    if (entry.is_async) {
+                        entry.async_waker.wake(&entry.async_waker);
+                    } else {
+                        pthread_mutex_lock(&entry.w->mtx);
+                        entry.w->woken = 1;
+                        pthread_cond_signal(&entry.w->cond);
+                        pthread_mutex_unlock(&entry.w->mtx);
+                    }
                     goto reactor_next_apple;
                 }
             }
@@ -3448,6 +3482,7 @@ static void gorget_reactor_sleep_ms(int64_t ms) {
         }
         __gorget_reactor.entries[__gorget_reactor.len].fd = fd;
         __gorget_reactor.entries[__gorget_reactor.len].w  = &waiter;
+        __gorget_reactor.entries[__gorget_reactor.len].is_async = 0;
         __gorget_reactor.len++;
         pthread_mutex_unlock(&__gorget_reactor.mtx);
 
@@ -3480,6 +3515,7 @@ static void gorget_reactor_sleep_ms(int64_t ms) {
         }
         __gorget_reactor.entries[__gorget_reactor.len].fd = ident;
         __gorget_reactor.entries[__gorget_reactor.len].w  = &waiter;
+        __gorget_reactor.entries[__gorget_reactor.len].is_async = 0;
         __gorget_reactor.len++;
         pthread_mutex_unlock(&__gorget_reactor.mtx);
 
@@ -3502,6 +3538,195 @@ static void gorget_reactor_sleep_ms(int64_t ms) {
 reactor_sleep_cleanup:
     pthread_mutex_destroy(&waiter.mtx);
     pthread_cond_destroy(&waiter.cond);
+}
+
+/* Non-blocking async sleep: register timer + fire waker when it expires.
+ * Used by coroutine poll functions instead of the blocking gorget_reactor_sleep_ms. */
+static void gorget_reactor_sleep_async(int64_t ms, GorgetWaker waker) {
+    if (ms <= 0) { waker.wake(&waker); return; }
+    pthread_once(&__gorget_reactor_once, __gorget_reactor_init);
+
+#ifdef __linux__
+    int fd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+    if (fd >= 0) {
+        struct itimerspec ts = {{0,0},{0,0}};
+        ts.it_value.tv_sec  = (time_t)(ms / 1000);
+        ts.it_value.tv_nsec = (long)((ms % 1000) * 1000000LL);
+        timerfd_settime(fd, 0, &ts, NULL);
+
+        struct epoll_event ev;
+        ev.events  = EPOLLIN | EPOLLET;
+        ev.data.fd = fd;
+        epoll_ctl(__gorget_reactor.event_fd, EPOLL_CTL_ADD, fd, &ev);
+
+        pthread_mutex_lock(&__gorget_reactor.mtx);
+        if (__gorget_reactor.len == __gorget_reactor.cap) {
+            __gorget_reactor.cap *= 2;
+            __gorget_reactor.entries = (GorgetReactorEntry*)GORGET_REALLOC(
+                __gorget_reactor.entries,
+                (__gorget_reactor.cap / 2) * sizeof(GorgetReactorEntry),
+                __gorget_reactor.cap * sizeof(GorgetReactorEntry));
+        }
+        GorgetReactorEntry* e = &__gorget_reactor.entries[__gorget_reactor.len++];
+        e->fd = fd;
+        e->w  = NULL;
+        e->is_async = 1;
+        e->async_waker = waker;
+        pthread_mutex_unlock(&__gorget_reactor.mtx);
+        return;
+    }
+#elif defined(__APPLE__) || defined(__FreeBSD__)
+    if (__gorget_reactor.event_fd >= 0) {
+        static _Atomic int __reactor_async_timer_id = 1000000;
+        int ident = (int)__atomic_fetch_add(&__reactor_async_timer_id, 1, __ATOMIC_SEQ_CST);
+        struct kevent change;
+        EV_SET(&change, (uintptr_t)ident, EVFILT_TIMER, EV_ADD | EV_ONESHOT, NOTE_MSECONDS, ms, NULL);
+        kevent(__gorget_reactor.event_fd, &change, 1, NULL, 0, NULL);
+
+        pthread_mutex_lock(&__gorget_reactor.mtx);
+        if (__gorget_reactor.len == __gorget_reactor.cap) {
+            __gorget_reactor.cap *= 2;
+            __gorget_reactor.entries = (GorgetReactorEntry*)GORGET_REALLOC(
+                __gorget_reactor.entries,
+                (__gorget_reactor.cap / 2) * sizeof(GorgetReactorEntry),
+                __gorget_reactor.cap * sizeof(GorgetReactorEntry));
+        }
+        GorgetReactorEntry* e = &__gorget_reactor.entries[__gorget_reactor.len++];
+        e->fd = ident;
+        e->w  = NULL;
+        e->is_async = 1;
+        e->async_waker = waker;
+        pthread_mutex_unlock(&__gorget_reactor.mtx);
+        return;
+    }
+#endif
+    /* Fallback: fire waker immediately (timer not available). */
+    waker.wake(&waker);
+}
+"#;
+
+/// Blocking thread pool: expandable pool for offloading blocking I/O from async worker threads.
+/// Starts with 0 threads, grows on demand up to GORGET_BLOCKING_POOL_MAX, idle threads exit
+/// after 10 seconds. Work items carry a GorgetWaker that fires on completion.
+pub const BLOCKING_POOL_RUNTIME: &str = r#"
+// ── Blocking Thread Pool ──
+#ifndef GORGET_BLOCKING_POOL_MAX
+#define GORGET_BLOCKING_POOL_MAX 256
+#endif
+#define __GORGET_BLOCKING_IDLE_SEC 10
+
+typedef struct {
+    void (*fn_ptr)(void*);
+    void* arg;
+    GorgetWaker waker;
+} __GorgetBlockingWork;
+
+typedef struct {
+    __GorgetBlockingWork* queue;
+    int queue_len, queue_cap;
+    int thread_count;
+    int idle_count;
+    pthread_mutex_t mtx;
+    pthread_cond_t cond;
+    volatile int shutdown;
+} GorgetBlockingPool;
+
+static GorgetBlockingPool __gorget_bpool;
+static int __gorget_bpool_init_done = 0;
+static void* __gorget_blocking_worker(void* arg);
+
+static void __gorget_blocking_pool_init(void) {
+    if (__gorget_bpool_init_done) return;
+    __gorget_bpool_init_done = 1;
+    __gorget_bpool.queue_cap = 16;
+    __gorget_bpool.queue = (__GorgetBlockingWork*)GORGET_ALLOC(
+        16 * sizeof(__GorgetBlockingWork));
+    __gorget_bpool.queue_len = 0;
+    __gorget_bpool.thread_count = 0;
+    __gorget_bpool.idle_count = 0;
+    __gorget_bpool.shutdown = 0;
+    pthread_mutex_init(&__gorget_bpool.mtx, NULL);
+    pthread_cond_init(&__gorget_bpool.cond, NULL);
+}
+
+static void __gorget_blocking_submit(void (*fn_ptr)(void*), void* arg, GorgetWaker waker) {
+    __gorget_blocking_pool_init();
+    pthread_mutex_lock(&__gorget_bpool.mtx);
+    /* Enqueue work item */
+    if (__gorget_bpool.queue_len == __gorget_bpool.queue_cap) {
+        int old_cap = __gorget_bpool.queue_cap;
+        __gorget_bpool.queue_cap *= 2;
+        __gorget_bpool.queue = (__GorgetBlockingWork*)GORGET_REALLOC(
+            __gorget_bpool.queue,
+            (size_t)old_cap * sizeof(__GorgetBlockingWork),
+            (size_t)__gorget_bpool.queue_cap * sizeof(__GorgetBlockingWork));
+    }
+    __gorget_bpool.queue[__gorget_bpool.queue_len++] = (__GorgetBlockingWork){fn_ptr, arg, waker};
+    /* Spawn a new thread if no idle workers and below cap */
+    if (__gorget_bpool.idle_count == 0 &&
+        __gorget_bpool.thread_count < GORGET_BLOCKING_POOL_MAX) {
+        __gorget_bpool.thread_count++;
+        pthread_t th;
+        pthread_attr_t attr;
+        pthread_attr_init(&attr);
+        pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+        pthread_create(&th, &attr, __gorget_blocking_worker, NULL);
+        pthread_attr_destroy(&attr);
+    }
+    pthread_cond_signal(&__gorget_bpool.cond);
+    pthread_mutex_unlock(&__gorget_bpool.mtx);
+}
+
+static void* __gorget_blocking_worker(void* arg) {
+    (void)arg;
+    for (;;) {
+        pthread_mutex_lock(&__gorget_bpool.mtx);
+        __gorget_bpool.idle_count++;
+
+        /* Wait for work with timeout */
+        struct timespec deadline;
+        clock_gettime(CLOCK_REALTIME, &deadline);
+        deadline.tv_sec += __GORGET_BLOCKING_IDLE_SEC;
+
+        while (__gorget_bpool.queue_len == 0 && !__gorget_bpool.shutdown) {
+            int rc = pthread_cond_timedwait(&__gorget_bpool.cond, &__gorget_bpool.mtx, &deadline);
+            if (rc != 0) break; /* ETIMEDOUT or error */
+        }
+        if (__gorget_bpool.queue_len == 0) {
+            /* Timed out or shutting down — exit this thread */
+            __gorget_bpool.idle_count--;
+            __gorget_bpool.thread_count--;
+            pthread_mutex_unlock(&__gorget_bpool.mtx);
+            return NULL;
+        }
+        __gorget_bpool.idle_count--;
+        __GorgetBlockingWork work = __gorget_bpool.queue[0];
+        memmove(__gorget_bpool.queue, __gorget_bpool.queue + 1,
+                (size_t)(--__gorget_bpool.queue_len) * sizeof(__GorgetBlockingWork));
+        pthread_mutex_unlock(&__gorget_bpool.mtx);
+
+        /* Execute blocking work */
+        work.fn_ptr(work.arg);
+        /* Wake the parent coroutine */
+        work.waker.wake(&work.waker);
+    }
+    return NULL;
+}
+
+static void __gorget_blocking_pool_shutdown(void) {
+    if (!__gorget_bpool_init_done) return;
+    pthread_mutex_lock(&__gorget_bpool.mtx);
+    __gorget_bpool.shutdown = 1;
+    pthread_cond_broadcast(&__gorget_bpool.cond);
+    pthread_mutex_unlock(&__gorget_bpool.mtx);
+    /* Detached threads will exit on their own — give them a moment. */
+    struct timespec ts = {0, 50000000}; /* 50ms */
+    nanosleep(&ts, NULL);
+    GORGET_FREE(__gorget_bpool.queue,
+        (size_t)__gorget_bpool.queue_cap * sizeof(__GorgetBlockingWork));
+    pthread_mutex_destroy(&__gorget_bpool.mtx);
+    pthread_cond_destroy(&__gorget_bpool.cond);
+    __gorget_bpool_init_done = 0;
 }
 "#;
 

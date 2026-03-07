@@ -309,22 +309,50 @@ fn build_reacquire_sequence(
     instrs
 }
 
-/// Scan a block for `__gorget_await_*` calls and splice release/reacquire around them.
+/// Known blocking function names — yield points for token release.
+/// Includes both GIR names (pre-mapping) and C names (post-mapping).
+const BLOCKING_STDLIB_CALLS: &[&str] = &[
+    "read_file", "gorget_read_file", "write_file", "gorget_write_file",
+    "append_file", "gorget_append_file",
+    "gorget_file_read_all", "gorget_file_read_handle", "gorget_file_write_handle",
+    "gorget_file_create", "gorget_file_open_read", "gorget_file_append",
+    "readdir", "gorget_readdir",
+    "gorget_socket_connect", "gorget_tls_connect",
+    "gorget_socket_read_line", "gorget_tls_read_line",
+    "gorget_socket_read_bytes", "gorget_tls_read_bytes", "gorget_socket_accept",
+    "gorget_sqlite_open", "gorget_sqlite_exec", "gorget_sqlite_query",
+    "gorget_exec", "gorget_exec_output",
+    "http_get", "gorget_http_get", "http_post", "gorget_http_post",
+    "http_put", "gorget_http_put", "http_delete", "gorget_http_delete",
+];
+
+/// True if a GIR call instruction is a yield point (await, sleep, or blocking I/O).
+fn is_yield_point(instr: &Instruction) -> bool {
+    match instr {
+        Instruction::Call { func, .. } | Instruction::CallExtern { func, .. } => {
+            func.starts_with("__gorget_await_")
+                || func == "gorget_reactor_sleep_ms"
+                || func == "async_sleep"
+                || func == "sleep"
+                || func == "gg_sleep"
+                || BLOCKING_STDLIB_CALLS.contains(&func.as_str())
+        }
+        _ => false,
+    }
+}
+
+/// Scan a block for yield points (await, sleep, blocking I/O) and splice
+/// release/reacquire around them for shared-variable token management.
 fn splice_around_awaits(
     block: &mut BasicBlock,
     shared_locals: &[SharedParamLocals],
     shared_args: &[SharedArgSpec],
     type_registry: &mut TypeRegistry,
 ) {
-    // Find indices of await calls (process in reverse to avoid invalidation)
+    // Find indices of yield points (process in reverse to avoid invalidation)
     let await_indices: Vec<usize> = block.instructions.iter().enumerate()
         .filter_map(|(i, instr)| {
-            if let Instruction::Call { func, .. } = instr {
-                if func.starts_with("__gorget_await_") {
-                    return Some(i);
-                }
-            }
-            None
+            if is_yield_point(instr) { Some(i) } else { None }
         })
         .collect();
 

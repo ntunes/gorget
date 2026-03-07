@@ -67,6 +67,8 @@ pub struct RuntimeFeatures {
     pub scheduler_mode: SchedulerMode,
     /// Whether any TaskGroup was used (triggers TaskGroup runtime emission).
     pub has_task_group: bool,
+    /// Whether the blocking thread pool is needed (auto-offloaded blocking calls or spawn_blocking).
+    pub has_blocking_pool: bool,
     /// Whether any std.sync types are used (AtomicInt, AtomicBool, Barrier, RWLock).
     pub has_sync: bool,
     /// Channel element C type names (e.g., ["int64_t"] for Channel[int]).
