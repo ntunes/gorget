@@ -5398,6 +5398,18 @@ fn emit_instruction(
                     let _ = writeln!(out, "        _{id} = gorget_array_slice(&{base_str}, {idx_str}.start, {idx_str}.end);", id = dst.0);
                 } else {
                     let _ = writeln!(out, "        _{id} = *({c_type}*)gorget_array_get(&{base_str}, {idx_str});", id = dst.0);
+                    // For Move types, zero the element in the vector after copying
+                    // to prevent double-free when the vector is dropped.
+                    let elem_type_id = if (dst.0 as usize) < func.locals.len() {
+                        Some(func.locals[dst.0 as usize].type_id)
+                    } else {
+                        None
+                    };
+                    if let Some(tid) = elem_type_id {
+                        if registry.is_move_type(tid) {
+                            let _ = writeln!(out, "        memset(({c_type}*)gorget_array_get(&{base_str}, {idx_str}), 0, sizeof({c_type}));");
+                        }
+                    }
                 }
             } else if base_type.starts_with("GorgetDict") || base_type.starts_with("Dict__")
                 || base_type.starts_with("GorgetMap") || base_type.starts_with("HashMap__") {

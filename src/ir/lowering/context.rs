@@ -79,8 +79,20 @@ pub struct SpawnState {
     /// Accumulated set of thread-spawned fn names: fn_name → return TypeId.
     /// NOT cleared between functions. Used to emit thread spawn/join helpers.
     pub thread_fns: FxHashMap<String, TypeId>,
+    /// Task TypeId → spawned fn_name. Enables await dispatch for tasks stored
+    /// in collections (where result_locals doesn't have an entry because the
+    /// task local has projections like vector indexing).
+    pub task_type_fns: FxHashMap<TypeId, Vec<String>>,
     /// Scheduler backend for `spawn`.
     pub scheduler_mode: crate::ir::SchedulerMode,
+}
+
+impl SpawnState {
+    /// Register a Task TypeId → spawned fn_name mapping for await dispatch
+    /// on tasks stored in collections (where result_locals doesn't apply).
+    pub fn register_task_type_fn(&mut self, task_type: TypeId, fn_name: String) {
+        self.task_type_fns.entry(task_type).or_default().push(fn_name);
+    }
 }
 
 /// State for `shared` variable tracking during lowering.

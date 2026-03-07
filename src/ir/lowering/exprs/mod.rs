@@ -502,25 +502,34 @@ fn lower_expr_inner(
         // In synchronous GIR mode for non-task expressions, just lower the inner expression.
         Expr::Await { expr } => {
             let inner = lower_expr(ctx, builder, expr);
-            // Check if the inner expression is a known spawn result (Task local)
+            // Direct local lookup (simple `await task` case)
             let task_local = if let Operand::Copy(ref place) | Operand::Move(ref place) = inner {
                 if place.projections.is_empty() {
                     ctx.spawn.result_locals.get(&place.local).cloned()
-                        .map(|fn_name| (place.local, fn_name))
+                        .map(|fn_name| (Some(place.local), fn_name))
                 } else {
                     None
                 }
             } else {
                 None
             };
-            if let Some((local_id, fn_name)) = task_local {
+            // Fallback: type-based lookup for indexed tasks (e.g., `await tasks[j]`)
+            let resolved = task_local.or_else(|| {
+                let type_id = if let Operand::Copy(ref place) | Operand::Move(ref place) = inner {
+                    Some(builder.locals[place.local.0 as usize].type_id)
+                } else {
+                    None
+                };
+                type_id.and_then(|tid| {
+                    ctx.spawn.task_type_fns.get(&tid).and_then(|fns| {
+                        if fns.len() == 1 { Some((None, fns[0].clone())) } else { None }
+                    })
+                })
+            });
+            if let Some((maybe_local_id, fn_name)) = resolved {
                 let ret_type = ctx.fn_sigs.get(fn_name.as_str())
                     .map(|(_, r)| *r)
                     .unwrap_or(UNIT_TYPE);
-
-                // Token release/reacquire around await points is now handled by the
-                // GIR-to-GIR transform in ir::transforms::shared_async. The normal
-                // lowering path just emits the await call directly.
 
                 let await_fn = format!("__gorget_await_{fn_name}");
                 let result = if ret_type == UNIT_TYPE {
@@ -532,9 +541,10 @@ fn lower_expr_inner(
                 };
 
                 // Zero out the Task local after await to prevent double-join in drop.
-                // The DropIfAlive handler checks memcmp against zero before calling drop.
-                builder.move_zero(Place::local(local_id));
-                ctx.drops.mark_moved(local_id);
+                if let Some(local_id) = maybe_local_id {
+                    builder.move_zero(Place::local(local_id));
+                    ctx.drops.mark_moved(local_id);
+                }
                 return result;
             }
             inner
@@ -763,6 +773,7 @@ fn lower_expr_inner(
 
                         ctx.spawn.pending_fn = Some(wrapper_name.clone());
                         ctx.spawn.fn_names.insert(wrapper_name.clone(), true);
+                        ctx.spawn.register_task_type_fn(task_type, wrapper_name.clone());
 
                         // Lower args: shared vars pass the raw sync primitive
                         ctx.shared.pass_raw = true;
@@ -779,6 +790,7 @@ fn lower_expr_inner(
                         // If there are user-overridden shared vars, pass them raw.
                         ctx.spawn.pending_fn = Some(c_name.clone());
                         ctx.spawn.fn_names.insert(c_name.clone(), true);
+                        ctx.spawn.register_task_type_fn(task_type, c_name.clone());
 
                         if has_any_shared {
                             ctx.shared.pass_raw = true;

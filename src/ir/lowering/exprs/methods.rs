@@ -232,17 +232,31 @@ pub(super) fn lower_method_call(
     // Check spawn_result_locals FIRST, before type check, since the declared type may be I64_TYPE
     // (lower_type returns I64_TYPE for unknown Task[T] types) even when the local is a spawn result.
     if method_name == "await" {
+        // Direct local lookup (simple `task.await()` case)
         let task_local = if let Operand::Copy(ref place) | Operand::Move(ref place) = recv {
             if place.projections.is_empty() {
                 ctx.spawn.result_locals.get(&place.local).cloned()
-                    .map(|fn_name| (place.local, fn_name))
+                    .map(|fn_name| (Some(place.local), fn_name))
             } else {
                 None
             }
         } else {
             None
         };
-        if let Some((local_id, fn_name)) = task_local {
+        // Fallback: type-based lookup for indexed tasks (e.g., `tasks[j].await()`)
+        let resolved = task_local.or_else(|| {
+            let type_id = if let Operand::Copy(ref place) | Operand::Move(ref place) = recv {
+                Some(builder.locals[place.local.0 as usize].type_id)
+            } else {
+                None
+            };
+            type_id.and_then(|tid| {
+                ctx.spawn.task_type_fns.get(&tid).and_then(|fns| {
+                    if fns.len() == 1 { Some((None, fns[0].clone())) } else { None }
+                })
+            })
+        });
+        if let Some((maybe_local_id, fn_name)) = resolved {
             let ret_type = ctx.fn_sigs.get(fn_name.as_str())
                 .map(|(_, r)| *r)
                 .unwrap_or(UNIT_TYPE);
@@ -255,8 +269,10 @@ pub(super) fn lower_method_call(
                 FunctionBuilder::copy(dst)
             };
             // Zero out the Task local after await to prevent double-join in drop.
-            builder.move_zero(Place::local(local_id));
-            ctx.drops.mark_moved(local_id);
+            if let Some(local_id) = maybe_local_id {
+                builder.move_zero(Place::local(local_id));
+                ctx.drops.mark_moved(local_id);
+            }
             return result;
         }
         return recv; // fallback pass-through (no known spawn source)

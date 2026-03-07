@@ -9587,6 +9587,12 @@ fn spawn_coroutine_str_args() {
 }
 
 #[test]
+fn spawn_vector_await() {
+    // Spawn tasks into a vector and await them by index — type-based await dispatch.
+    run_gg("spawn_vector_await.gg", "30");
+}
+
+#[test]
 fn method_mut_borrow_arg() {
     // MutableBorrow non-self param in equip method — callee can mutate the original.
     run_gg("method_mut_borrow_arg.gg", "60\n6");

@@ -184,6 +184,9 @@ pub(super) fn lower_method_spawn(
         tid
     };
 
+    // Register task type → fn mapping for await dispatch on indexed tasks
+    ctx.spawn.register_task_type_fn(task_type, wrapper_name.clone());
+
     // 10. Build spawn args: receiver value + explicit args
     let recv_local = match &recv {
         Operand::Copy(place) | Operand::Move(place) if place.projections.is_empty() => {
@@ -410,6 +413,9 @@ pub(super) fn lower_closure_spawn(
         ctx.type_mapper.register_named(task_name.clone(), tid);
         tid
     };
+
+    // Register task type → fn mapping for await dispatch on indexed tasks
+    ctx.spawn.register_task_type_fn(task_type, wrapper_name.clone());
 
     // Extract capture field values from the closure struct using actual field indices.
     // The field_index is the position in the struct (which may differ from the

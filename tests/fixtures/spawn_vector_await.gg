@@ -1,0 +1,17 @@
+# Spawn tasks into a vector and await them by index.
+# Tests type-based await dispatch for collection-stored tasks.
+async int compute(int x):
+    return x * x
+
+async void main():
+    Vector[Task[int]] tasks = Vector[Task[int]]()
+    int i = 0
+    while i < 5:
+        tasks.push(!spawn compute(i))
+        i += 1
+    int sum = 0
+    int j = 0
+    while j < 5:
+        sum += tasks[j].await()
+        j += 1
+    print(sum)
