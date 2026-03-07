@@ -46,6 +46,8 @@ pub enum ValidationErrorKind {
     ReturnTypeMismatch { return_type: TypeId, local_0_type: TypeId },
     /// A local was read after being MoveZero'd within the same basic block.
     UseAfterMove { local: LocalId, block: BlockId },
+    /// span_map length doesn't match instruction count.
+    SpanMapMismatch { block: BlockId, insts: usize, spans: usize },
 }
 
 impl std::fmt::Display for ValidationErrorKind {
@@ -94,6 +96,9 @@ impl std::fmt::Display for ValidationErrorKind {
             }
             Self::UseAfterMove { local, block } => {
                 write!(f, "local _{} read after MoveZero in bb{}", local.0, block.0)
+            }
+            Self::SpanMapMismatch { block, insts, spans } => {
+                write!(f, "bb{}: span_map has {} entries but {} instructions", block.0, spans, insts)
             }
         }
     }
@@ -202,6 +207,18 @@ fn check_function(
             errors.push(ValidationError {
                 kind: ValidationErrorKind::MissingTerminator {
                     block: BlockId(i as u32),
+                },
+                context: block_ctx.clone(),
+            });
+        }
+
+        // Span map must match instruction count.
+        if block.span_map.len() != block.instructions.len() {
+            errors.push(ValidationError {
+                kind: ValidationErrorKind::SpanMapMismatch {
+                    block: BlockId(i as u32),
+                    insts: block.instructions.len(),
+                    spans: block.span_map.len(),
                 },
                 context: block_ctx.clone(),
             });
@@ -1231,5 +1248,51 @@ mod tests {
             !errors.iter().any(|e| matches!(e.kind, ValidationErrorKind::InconsistentDropMetadata { .. })),
             "Copy + Trivial should be allowed for ref-counted types"
         );
+    }
+
+    #[test]
+    fn span_map_mismatch_detected() {
+        let mut module = Module::new();
+        let f = Function {
+            name: "test".into(),
+            params: vec![],
+            return_type: I64_TYPE,
+            locals: vec![Local { type_id: I64_TYPE, name_hint: None }],
+            blocks: vec![BasicBlock {
+                instructions: vec![Instruction::Nop, Instruction::Nop],
+                terminator: Some(Terminator::Return(Operand::Constant(Constant::I64(0)))),
+                span_map: vec![None], // 1 entry for 2 instructions — mismatch!
+                terminator_span: None,
+            }],
+            is_test_fn: false,
+            display_name: None,
+            def_span: None,
+        };
+        module.functions.push(f);
+        let errors = validate(&module);
+        assert!(errors.iter().any(|e| matches!(e.kind, ValidationErrorKind::SpanMapMismatch { .. })));
+    }
+
+    #[test]
+    fn span_map_correct_no_error() {
+        let mut module = Module::new();
+        let f = Function {
+            name: "test".into(),
+            params: vec![],
+            return_type: I64_TYPE,
+            locals: vec![Local { type_id: I64_TYPE, name_hint: None }],
+            blocks: vec![BasicBlock {
+                instructions: vec![Instruction::Nop],
+                terminator: Some(Terminator::Return(Operand::Constant(Constant::I64(0)))),
+                span_map: vec![None], // 1 entry for 1 instruction — correct
+                terminator_span: None,
+            }],
+            is_test_fn: false,
+            display_name: None,
+            def_span: None,
+        };
+        module.functions.push(f);
+        let errors = validate(&module);
+        assert!(!errors.iter().any(|e| matches!(e.kind, ValidationErrorKind::SpanMapMismatch { .. })));
     }
 }
