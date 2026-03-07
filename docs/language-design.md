@@ -72,7 +72,7 @@ Long-term objectives grouped by pillar. These targets and anti-targets guide eve
 | Pipe operator (`\|>`) — left-to-right composition, no inside-out nesting | Implicit falsy coercions (`0 == false`, `"" == false`) |
 | `for/else` and `while/else` — loop-completion semantics without extra flags | Verbosity for its own sake — names earn their length |
 | Uniform Function Call Syntax — `arr.filter(f)` and `filter(arr, f)` are identical | Magic / spooky action at a distance — behavior visible at the call site or nowhere |
-| Intent annotations (`in`, `out`, `inout`) — document and enforce data flow contracts | Multiple incompatible ways to do the same common task |
+| | Multiple incompatible ways to do the same common task |
 
 ### Tooling
 
@@ -95,7 +95,7 @@ Long-term objectives grouped by pillar. These targets and anti-targets guide eve
 | C as the compilation target — portable, zero new backend dependency | JVM / managed runtime requirement — kills the bare-metal story |
 | C ABI compatibility — generated symbols follow C calling conventions | Hidden runtime dependencies — hello world must not silently link a 150kB runtime |
 | Explicit `unsafe` blocks — auditable regions where safety guarantees are suspended | Name mangling without an escape hatch — FFI must produce predictable C names |
-| Auto-import C headers — parse `.h` files and generate typed bindings | Incompatible calling conventions without explicit annotation |
+| | Incompatible calling conventions without explicit annotation |
 | WASM target — browser and edge compute deployment path | Requiring manual translation layers to call existing C libraries |
 | Embedded / no-stdlib mode — bare runtime, no OS primitives required | Platform-specific ABI surprises — stdcall/cdecl confusion |
 
