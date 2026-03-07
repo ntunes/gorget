@@ -16,6 +16,7 @@ pub fn optimize_module(module: &mut crate::ir::Module) {
         propagate_constants(func);
         constant_fold(func);
         simplify_algebraic(func);
+        simplify_cmp(func);
         reduce_strength(func);
         fold_constant_branches(func);
         // Phase 2: eliminate dead code
@@ -307,6 +308,42 @@ fn simplify_algebraic(func: &mut Function) {
             let simplified = match inst {
                 Instruction::BinOp { dst, op, lhs, rhs, .. } => {
                     simplify_binop(*dst, *op, lhs, rhs)
+                }
+                _ => None,
+            };
+            if let Some(new_inst) = simplified {
+                *inst = new_inst;
+            }
+        }
+    }
+}
+
+/// Simplify Cmp instructions with identical operands:
+///   x == x → true,  x != x → false
+///   x <  x → false, x >  x → false
+///   x <= x → true,  x >= x → true
+fn simplify_cmp(func: &mut Function) {
+    for bb in &mut func.blocks {
+        for inst in &mut bb.instructions {
+            let simplified = match inst {
+                Instruction::Cmp { dst, op, lhs, rhs, .. } => {
+                    // Only fire when both operands are the same simple local
+                    if let (Operand::Copy(lp), Operand::Copy(rp)) = (lhs, rhs) {
+                        if lp.local == rp.local && lp.projections.is_empty() && rp.projections.is_empty() {
+                            let result = match op {
+                                CmpOp::Eq | CmpOp::Le | CmpOp::Ge => true,
+                                CmpOp::Ne | CmpOp::Lt | CmpOp::Gt => false,
+                            };
+                            Some(Instruction::Assign {
+                                dst: Place::local(*dst),
+                                value: Operand::Constant(Constant::Bool(result)),
+                            })
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
                 }
                 _ => None,
             };
@@ -1924,6 +1961,50 @@ mod tests {
             Instruction::Assign { value: Operand::Constant(Constant::I64(1)), .. } => {}
             other => panic!("Expected 1, got {:?}", other),
         }
+    }
+
+    // ── Comparison Simplification Tests ─────────────────────────────
+
+    #[test]
+    fn simplify_cmp_eq_self() {
+        // _2 = Cmp(Eq, Copy(_1), Copy(_1)) → _2 = true
+        let mut f = make_func(vec![bb(vec![Instruction::Cmp {
+            dst: LocalId(2), op: CmpOp::Eq, type_id: I64_TYPE,
+            lhs: Operand::Copy(Place::local(LocalId(1))),
+            rhs: Operand::Copy(Place::local(LocalId(1))),
+        }], ret_local(2))], vec![local(BOOL_TYPE), local(I64_TYPE), local(BOOL_TYPE)], vec![I64_TYPE]);
+        simplify_cmp(&mut f);
+        match &f.blocks[0].instructions[0] {
+            Instruction::Assign { value: Operand::Constant(Constant::Bool(true)), .. } => {}
+            other => panic!("Expected true, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn simplify_cmp_lt_self() {
+        // _2 = Cmp(Lt, Copy(_1), Copy(_1)) → _2 = false
+        let mut f = make_func(vec![bb(vec![Instruction::Cmp {
+            dst: LocalId(2), op: CmpOp::Lt, type_id: I64_TYPE,
+            lhs: Operand::Copy(Place::local(LocalId(1))),
+            rhs: Operand::Copy(Place::local(LocalId(1))),
+        }], ret_local(2))], vec![local(BOOL_TYPE), local(I64_TYPE), local(BOOL_TYPE)], vec![I64_TYPE]);
+        simplify_cmp(&mut f);
+        match &f.blocks[0].instructions[0] {
+            Instruction::Assign { value: Operand::Constant(Constant::Bool(false)), .. } => {}
+            other => panic!("Expected false, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn no_simplify_cmp_different_locals() {
+        // _3 = Cmp(Eq, Copy(_1), Copy(_2)) → unchanged
+        let mut f = make_func(vec![bb(vec![Instruction::Cmp {
+            dst: LocalId(3), op: CmpOp::Eq, type_id: I64_TYPE,
+            lhs: Operand::Copy(Place::local(LocalId(1))),
+            rhs: Operand::Copy(Place::local(LocalId(2))),
+        }], ret_local(3))], vec![local(BOOL_TYPE), local(I64_TYPE), local(I64_TYPE), local(BOOL_TYPE)], vec![I64_TYPE, I64_TYPE]);
+        simplify_cmp(&mut f);
+        assert!(matches!(&f.blocks[0].instructions[0], Instruction::Cmp { .. }));
     }
 
     // ── Strength Reduction Tests ──────────────────────────────────
