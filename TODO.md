@@ -12,7 +12,7 @@
 
 - **IR: Migrate key call sites to `try_map_ast_type`**: Phase 1 done — `try_map_ast_type() -> Option<TypeId>` added alongside existing `map_ast_type()`. Callers can now distinguish "genuinely void" from "unknown type." Remaining: convert critical call sites (function params, return types) to use `try_map_ast_type` with diagnostics. Low priority — existing pipeline ordering prevents bugs in practice. [updated: 2026-03-07]
 
-- **IR: Enhance `validate.rs` further**: Phase 1 done (StructInit/EnumInit field counts, Drop on non-droppable, local TypeId validity, drop metadata consistency). Remaining: use-after-drop detection (requires dataflow analysis), return type _0 consistency check, unreachable block detection (overlap with dead block elimination pass). [updated: 2026-03-07]
+- **IR: Enhance `validate.rs` further**: Phases 1-3 done (StructInit/EnumInit field counts, Drop on non-droppable, local TypeId validity, drop metadata consistency, return type _0 consistency, intra-block use-after-move detection). Remaining: cross-block use-after-move (requires full dataflow framework — reaching definitions or gen/kill bit-vector analysis). Unreachable block check deferred — overlaps with dead block elimination and would fire on normal pre-optimization IR. [updated: 2026-03-07]
 
 - **IR: Embed `DropStrategy` in Drop instruction**: Currently the backend reconstructs the strategy via `lookup_drop_strategy()`. Embedding it in `Instruction::Drop { place, strategy }` would make the instruction self-contained. ~20 match sites to update. Contract is now documented (types.rs, drops.rs) and validated (validate.rs). Low priority. [updated: 2026-03-07]
 
