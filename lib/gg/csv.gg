@@ -8,250 +8,250 @@ from std.collections import Vector
 # ── CsvParser ────────────────────────────────────────────────
 
 struct CsvParser:
-    str csv_input
-    int csv_pos
-    str csv_err
-    str csv_delim
+    str input
+    int pos
+    str err
+    str delim
 
 equip CsvParser:
-    bool csv_failed(self) = self.csv_err != ""
+    bool failed(self) = self.err != ""
 
-    void csv_fail(&self, str msg):
-        if self.csv_err == "":
-            self.csv_err = consuming msg
+    void fail(&self, str msg):
+        if self.err == "":
+            self.err = consuming msg
 
-    bool csv_at_end(self) = self.csv_pos >= self.csv_input.byte_len()
+    bool at_end(self) = self.pos >= self.input.byte_len()
 
-    str csv_peek(self) = self.csv_input.char_at(self.csv_pos)
+    str peek(self) = self.input.char_at(self.pos)
 
-    void csv_advance(&self):
-        self.csv_pos = self.csv_pos + 1
+    void advance(&self):
+        self.pos = self.pos + 1
 
-    str csv_parse_field(&self):
-        if self.csv_failed():
+    str parse_field(&self):
+        if self.failed():
             return ""
-        if self.csv_at_end():
+        if self.at_end():
             return ""
-        if self.csv_peek() == '"':
-            return self.csv_parse_quoted()
+        if self.peek() == '"':
+            return self.parse_quoted()
         # Unquoted field — consume until delimiter, \r, \n, or EOF
-        str csv_val = ""
-        while not self.csv_at_end():
-            str csv_ch = self.csv_peek()
-            if csv_ch == self.csv_delim or csv_ch == '\r' or csv_ch == '\n':
-                return csv_val
-            csv_val = csv_val + csv_ch
-            self.csv_advance()
-        return csv_val
+        str val = ""
+        while not self.at_end():
+            str ch = self.peek()
+            if ch == self.delim or ch == '\r' or ch == '\n':
+                return val
+            val = val + ch
+            self.advance()
+        return val
 
-    str csv_parse_quoted(&self):
+    str parse_quoted(&self):
         # Skip opening quote
-        self.csv_advance()
-        str csv_val = ""
-        while not self.csv_at_end():
-            str csv_ch = self.csv_peek()
-            if csv_ch == '"':
-                self.csv_advance()
+        self.advance()
+        str val = ""
+        while not self.at_end():
+            str ch = self.peek()
+            if ch == '"':
+                self.advance()
                 # "" inside quoted field = literal "
-                if not self.csv_at_end() and self.csv_peek() == '"':
-                    csv_val = csv_val + "\""
-                    self.csv_advance()
+                if not self.at_end() and self.peek() == '"':
+                    val = val + "\""
+                    self.advance()
                 else:
-                    return csv_val
+                    return val
             else:
-                csv_val = csv_val + csv_ch
-                self.csv_advance()
-        self.csv_fail("unterminated quoted field")
+                val = val + ch
+                self.advance()
+        self.fail("unterminated quoted field")
         return ""
 
-    Vector[str] csv_parse_record(&self):
-        Vector[str] csv_fields = Vector[str]()
-        if self.csv_failed():
-            return csv_fields
+    Vector[str] parse_record(&self):
+        Vector[str] fields = Vector[str]()
+        if self.failed():
+            return fields
         # Parse first field
-        str csv_fld = self.csv_parse_field()
-        if self.csv_failed():
-            return csv_fields
-        csv_fields.push(csv_fld)
+        str fld = self.parse_field()
+        if self.failed():
+            return fields
+        fields.push(fld)
         # Parse remaining fields separated by delimiter
-        while not self.csv_at_end() and not self.csv_failed():
-            str csv_ch = self.csv_peek()
-            if csv_ch == self.csv_delim:
-                self.csv_advance()
-                str csv_next = self.csv_parse_field()
-                if self.csv_failed():
-                    return csv_fields
-                csv_fields.push(csv_next)
+        while not self.at_end() and not self.failed():
+            str ch = self.peek()
+            if ch == self.delim:
+                self.advance()
+                str next = self.parse_field()
+                if self.failed():
+                    return fields
+                fields.push(next)
             else:
                 # End of record — consume line ending
-                if csv_ch == '\r':
-                    self.csv_advance()
-                    if not self.csv_at_end() and self.csv_peek() == '\n':
-                        self.csv_advance()
-                elif csv_ch == '\n':
-                    self.csv_advance()
-                return csv_fields
-        return csv_fields
+                if ch == '\r':
+                    self.advance()
+                    if not self.at_end() and self.peek() == '\n':
+                        self.advance()
+                elif ch == '\n':
+                    self.advance()
+                return fields
+        return fields
 
-    Vector[Vector[str]] csv_parse_all(&self):
-        Vector[Vector[str]] csv_records = Vector[Vector[str]]()
-        while not self.csv_at_end() and not self.csv_failed():
+    Vector[Vector[str]] parse_all(&self):
+        Vector[Vector[str]] records = Vector[Vector[str]]()
+        while not self.at_end() and not self.failed():
             # Skip bare trailing newlines
-            if self.csv_peek() == '\r' or self.csv_peek() == '\n':
-                if self.csv_peek() == '\r':
-                    self.csv_advance()
-                    if not self.csv_at_end() and self.csv_peek() == '\n':
-                        self.csv_advance()
+            if self.peek() == '\r' or self.peek() == '\n':
+                if self.peek() == '\r':
+                    self.advance()
+                    if not self.at_end() and self.peek() == '\n':
+                        self.advance()
                 else:
-                    self.csv_advance()
+                    self.advance()
                 continue
-            Vector[str] csv_rec = self.csv_parse_record()
-            if self.csv_failed():
-                return csv_records
-            csv_records.push(csv_rec)
-        return csv_records
+            Vector[str] rec = self.parse_record()
+            if self.failed():
+                return records
+            records.push(rec)
+        return records
 
 # ── CsvTable ─────────────────────────────────────────────────
 
 struct CsvTable:
-    Vector[str] csv_headers
-    Vector[Vector[str]] csv_rows
+    Vector[str] headers_data
+    Vector[Vector[str]] rows_data
 
 equip CsvTable:
-    int row_count(self) = self.csv_rows.len()
+    int row_count(self) = self.rows_data.len()
 
-    int col_count(self) = self.csv_headers.len()
+    int col_count(self) = self.headers_data.len()
 
-    Vector[str] headers(self) = self.csv_headers
+    Vector[str] headers(self) = self.headers_data
 
-    Vector[str] row(self, int csv_n):
-        return self.csv_rows.get(csv_n).unwrap()
+    Vector[str] row(self, int n):
+        return self.rows_data.get(n).unwrap()
 
-    str get(self, int csv_row_idx, int csv_col_idx):
-        Vector[str] csv_r = self.csv_rows.get(csv_row_idx).unwrap()
-        return csv_r.get(csv_col_idx).unwrap()
+    str get(self, int row_idx, int col_idx):
+        Vector[str] r = self.rows_data.get(row_idx).unwrap()
+        return r.get(col_idx).unwrap()
 
-    str get_named(self, int csv_row_idx, str csv_col):
-        int csv_ci = self.column_index(csv_col)
-        if csv_ci < 0:
+    str get_named(self, int row_idx, str col):
+        int ci = self.column_index(col)
+        if ci < 0:
             return ""
-        Vector[str] csv_r = self.csv_rows.get(csv_row_idx).unwrap()
-        return csv_r.get(csv_ci).unwrap()
+        Vector[str] r = self.rows_data.get(row_idx).unwrap()
+        return r.get(ci).unwrap()
 
-    bool has_column(self, str csv_name):
-        int csv_k = 0
-        while csv_k < self.csv_headers.len():
-            if self.csv_headers.get(csv_k).unwrap() == csv_name:
+    bool has_column(self, str name):
+        int k = 0
+        while k < self.headers_data.len():
+            if self.headers_data.get(k).unwrap() == name:
                 return true
-            csv_k = csv_k + 1
+            k = k + 1
         return false
 
-    int column_index(self, str csv_name):
-        int csv_k = 0
-        while csv_k < self.csv_headers.len():
-            if self.csv_headers.get(csv_k).unwrap() == csv_name:
-                return csv_k
-            csv_k = csv_k + 1
+    int column_index(self, str name):
+        int k = 0
+        while k < self.headers_data.len():
+            if self.headers_data.get(k).unwrap() == name:
+                return k
+            k = k + 1
         return -1
 
 # ── Stringify helper ─────────────────────────────────────────
 
-str csv_stringify_field(str csv_field, str csv_sep):
+private str stringify_field(str field, str sep):
     # Check if quoting is needed
-    bool csv_need_quote = false
-    int csv_fi = 0
-    while csv_fi < csv_field.byte_len():
-        str csv_fc = csv_field.char_at(csv_fi)
-        if csv_fc == csv_sep or csv_fc == '"' or csv_fc == '\n' or csv_fc == '\r':
-            csv_need_quote = true
-        csv_fi = csv_fi + 1
-    if not csv_need_quote:
-        return csv_field
+    bool need_quote = false
+    int fi = 0
+    while fi < field.byte_len():
+        str fc = field.char_at(fi)
+        if fc == sep or fc == '"' or fc == '\n' or fc == '\r':
+            need_quote = true
+        fi = fi + 1
+    if not need_quote:
+        return field
     # Quote: wrap in " and double any " chars
-    str csv_out = "\""
-    int csv_fj = 0
-    while csv_fj < csv_field.byte_len():
-        str csv_qc = csv_field.char_at(csv_fj)
-        if csv_qc == '"':
-            csv_out = csv_out + "\"\""
+    str out = "\""
+    int fj = 0
+    while fj < field.byte_len():
+        str qc = field.char_at(fj)
+        if qc == '"':
+            out = out + "\"\""
         else:
-            csv_out = csv_out + csv_qc
-        csv_fj = csv_fj + 1
-    return csv_out + "\""
+            out = out + qc
+        fj = fj + 1
+    return out + "\""
 
 # ── Public API ───────────────────────────────────────────────
 
-Result[Vector[Vector[str]], str] csv_parse(str csv_text):
-    return csv_parse_delim(csv_text, ",")
+Result[Vector[Vector[str]], str] parse(str text):
+    return parse_delim(text, ",")
 
-Result[Vector[Vector[str]], str] csv_parse_delim(str csv_text, str csv_sep):
-    CsvParser csv_p = CsvParser(csv_text, 0, "", csv_sep)
-    Vector[Vector[str]] csv_recs = csv_p.csv_parse_all()
-    if csv_p.csv_failed():
-        return Error(csv_p.csv_err)
-    return Ok(csv_recs)
+Result[Vector[Vector[str]], str] parse_delim(str text, str sep):
+    CsvParser p = CsvParser(text, 0, "", sep)
+    Vector[Vector[str]] recs = p.parse_all()
+    if p.failed():
+        return Error(p.err)
+    return Ok(recs)
 
-Result[CsvTable, str] csv_parse_table(str csv_text):
-    return csv_parse_table_delim(csv_text, ",")
+Result[CsvTable, str] parse_table(str text):
+    return parse_table_delim(text, ",")
 
-Result[CsvTable, str] csv_parse_table_delim(str csv_text, str csv_sep):
-    CsvParser csv_p = CsvParser(csv_text, 0, "", csv_sep)
-    Vector[Vector[str]] csv_all = csv_p.csv_parse_all()
-    if csv_p.csv_failed():
-        return Error(csv_p.csv_err)
-    if csv_all.len() == 0:
-        Vector[str] csv_empty_hdr = Vector[str]()
-        Vector[Vector[str]] csv_empty_rows = Vector[Vector[str]]()
-        return Ok(CsvTable(csv_empty_hdr, csv_empty_rows))
-    Vector[str] csv_hdr = csv_all.get(0).unwrap()
-    Vector[Vector[str]] csv_data = Vector[Vector[str]]()
-    int csv_ri = 1
-    while csv_ri < csv_all.len():
-        csv_data.push(csv_all.get(csv_ri).unwrap())
-        csv_ri = csv_ri + 1
-    return Ok(CsvTable(csv_hdr, csv_data))
+Result[CsvTable, str] parse_table_delim(str text, str sep):
+    CsvParser p = CsvParser(text, 0, "", sep)
+    Vector[Vector[str]] all = p.parse_all()
+    if p.failed():
+        return Error(p.err)
+    if all.len() == 0:
+        Vector[str] empty_hdr = Vector[str]()
+        Vector[Vector[str]] empty_rows = Vector[Vector[str]]()
+        return Ok(CsvTable(empty_hdr, empty_rows))
+    Vector[str] hdr = all.get(0).unwrap()
+    Vector[Vector[str]] data = Vector[Vector[str]]()
+    int ri = 1
+    while ri < all.len():
+        data.push(all.get(ri).unwrap())
+        ri = ri + 1
+    return Ok(CsvTable(hdr, data))
 
-str csv_stringify(Vector[Vector[str]] csv_rows):
-    return csv_stringify_delim(csv_rows, ",")
+str stringify(Vector[Vector[str]] rows):
+    return stringify_delim(rows, ",")
 
-str csv_stringify_delim(Vector[Vector[str]] csv_rows, str csv_sep):
-    str csv_out = ""
-    int csv_ri = 0
-    while csv_ri < csv_rows.len():
-        Vector[str] csv_row = csv_rows.get(csv_ri).unwrap()
-        int csv_ci = 0
-        while csv_ci < csv_row.len():
-            if csv_ci > 0:
-                csv_out = csv_out + csv_sep
-            csv_out = csv_out + csv_stringify_field(csv_row.get(csv_ci).unwrap(), csv_sep)
-            csv_ci = csv_ci + 1
-        csv_out = csv_out + "\r\n"
-        csv_ri = csv_ri + 1
-    return csv_out
+str stringify_delim(Vector[Vector[str]] rows, str sep):
+    str out = ""
+    int ri = 0
+    while ri < rows.len():
+        Vector[str] r = rows.get(ri).unwrap()
+        int ci = 0
+        while ci < r.len():
+            if ci > 0:
+                out = out + sep
+            out = out + stringify_field(r.get(ci).unwrap(), sep)
+            ci = ci + 1
+        out = out + "\r\n"
+        ri = ri + 1
+    return out
 
-str csv_stringify_table(CsvTable csv_tbl):
-    return csv_stringify_table_delim(csv_tbl, ",")
+str stringify_table(CsvTable tbl):
+    return stringify_table_delim(tbl, ",")
 
-str csv_stringify_table_delim(CsvTable csv_tbl, str csv_sep):
-    str csv_out = ""
+str stringify_table_delim(CsvTable tbl, str sep):
+    str out = ""
     # Headers
-    int csv_hi = 0
-    while csv_hi < csv_tbl.csv_headers.len():
-        if csv_hi > 0:
-            csv_out = csv_out + csv_sep
-        csv_out = csv_out + csv_stringify_field(csv_tbl.csv_headers.get(csv_hi).unwrap(), csv_sep)
-        csv_hi = csv_hi + 1
-    csv_out = csv_out + "\r\n"
+    int hi = 0
+    while hi < tbl.headers_data.len():
+        if hi > 0:
+            out = out + sep
+        out = out + stringify_field(tbl.headers_data.get(hi).unwrap(), sep)
+        hi = hi + 1
+    out = out + "\r\n"
     # Rows
-    int csv_ri = 0
-    while csv_ri < csv_tbl.csv_rows.len():
-        Vector[str] csv_row = csv_tbl.csv_rows.get(csv_ri).unwrap()
-        int csv_ci = 0
-        while csv_ci < csv_row.len():
-            if csv_ci > 0:
-                csv_out = csv_out + csv_sep
-            csv_out = csv_out + csv_stringify_field(csv_row.get(csv_ci).unwrap(), csv_sep)
-            csv_ci = csv_ci + 1
-        csv_out = csv_out + "\r\n"
-        csv_ri = csv_ri + 1
-    return csv_out
+    int ri = 0
+    while ri < tbl.rows_data.len():
+        Vector[str] r = tbl.rows_data.get(ri).unwrap()
+        int ci = 0
+        while ci < r.len():
+            if ci > 0:
+                out = out + sep
+            out = out + stringify_field(r.get(ci).unwrap(), sep)
+            ci = ci + 1
+        out = out + "\r\n"
+        ri = ri + 1
+    return out

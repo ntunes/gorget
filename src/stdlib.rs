@@ -2660,8 +2660,8 @@ mod tests {
         let src = source.unwrap();
         assert!(src.contains("struct CsvParser"));
         assert!(src.contains("struct CsvTable"));
-        assert!(src.contains("csv_parse"));
-        assert!(src.contains("csv_stringify"));
+        assert!(src.contains("Result[Vector[Vector[str]], str] parse("));
+        assert!(src.contains("str stringify("));
         assert!(src.contains("equip CsvParser"));
         assert!(src.contains("equip CsvTable"));
     }
@@ -2687,10 +2687,10 @@ mod tests {
 
         assert!(struct_names.contains(&"CsvParser".to_string()));
         assert!(struct_names.contains(&"CsvTable".to_string()));
-        assert!(fn_names.contains(&"csv_parse".to_string()));
-        assert!(fn_names.contains(&"csv_stringify".to_string()));
-        assert!(fn_names.contains(&"csv_parse_table".to_string()));
-        assert!(fn_names.contains(&"csv_stringify_table".to_string()));
+        assert!(fn_names.contains(&"parse".to_string()));
+        assert!(fn_names.contains(&"stringify".to_string()));
+        assert!(fn_names.contains(&"parse_table".to_string()));
+        assert!(fn_names.contains(&"stringify_table".to_string()));
         assert!(equip_count >= 2, "expected at least 2 equip blocks, got {equip_count}");
     }
 

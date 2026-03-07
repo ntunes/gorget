@@ -5424,14 +5424,6 @@ fn log_levels() {
     run_gg(
         "log_levels.gg",
         "\
-0
-1
-2
-3
-DEBUG
-INFO
-WARN
-ERROR
 [ERROR] visible error
 [DEBUG] debug now visible
 [INFO] info now visible

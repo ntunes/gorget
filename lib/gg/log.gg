@@ -15,7 +15,7 @@ enum LogLevel:
 
 # ── Level helpers ────────────────────────────────────────────
 
-int log_level_int(LogLevel log_l):
+private int level_int(LogLevel log_l):
     match log_l:
         case Debug():
             return 0
@@ -26,7 +26,7 @@ int log_level_int(LogLevel log_l):
         case Err():
             return 3
 
-str log_level_name(LogLevel log_l):
+private str level_name(LogLevel log_l):
     match log_l:
         case Debug():
             return "DEBUG"
@@ -58,13 +58,13 @@ equip Logger:
         self.log_min_level = log_l
 
     void log_msg(&self, LogLevel log_l, str log_msg):
-        if log_level_int(log_l) < log_level_int(self.log_min_level):
+        if level_int(log_l) < level_int(self.log_min_level):
             return
         str log_out = ""
         if self.log_show_timestamp:
             int log_ts = time()
             log_out = log_out + "[" + format_time(log_ts, "%Y-%m-%d %H:%M:%S") + "] "
-        log_out = log_out + "[" + log_level_name(log_l) + "]"
+        log_out = log_out + "[" + level_name(log_l) + "]"
         if self.log_prefix != "":
             log_out = log_out + " " + self.log_prefix + ":"
         log_out = log_out + " " + log_msg

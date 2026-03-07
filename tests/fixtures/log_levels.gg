@@ -1,22 +1,6 @@
-from gg.log import Logger, LogLevel, log_level_int, log_level_name
+from gg.log import Logger, LogLevel
 
 void main():
-    # Verify log_level_int helper
-    int di = log_level_int(Debug())
-    int ii = log_level_int(Info())
-    int wi = log_level_int(Warn())
-    int ei = log_level_int(Err())
-    print(f"{di}")
-    print(f"{ii}")
-    print(f"{wi}")
-    print(f"{ei}")
-
-    # Verify log_level_name helper
-    print(log_level_name(Debug()))
-    print(log_level_name(Info()))
-    print(log_level_name(Warn()))
-    print(log_level_name(Err()))
-
     # Start at Err level — only errors print
     Logger lg = Logger.new(Err())
     lg.debug("hidden debug")

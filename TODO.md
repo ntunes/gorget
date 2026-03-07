@@ -29,6 +29,8 @@
 
 - **`gg.httpserver` V2 — keep-alive / connection reuse**: Current V1 sends `Connection: close` after every response. Future: parse `Connection: keep-alive` + `Keep-Alive: timeout=N`, loop parse→handle→write on the same socket, close on timeout or `Connection: close`. Blocked on async handler signatures (above). [added: 2026-03-03]
 
+- **Private type in public function signature check**: Public functions whose parameters or return types reference a private type should produce a compile error. Requires walking function signature types recursively (including generics like `Vector[PrivateType]`). Private import enforcement (import-time check) is done; this is the deeper analysis for API surface leakage. [added: 2026-03-07]
+
 - **Module namespaces Phase 6 — lib prefix cleanup**: Compiler phases 1–5 are all done. Phase 6: remove manual C-style prefixes from all 22 library files (e.g., `csv_parse_field` → `parse_field` in `lib/gg/csv.gg`). Add `private` to internal helpers. Update all import statements and test fixtures. Start with smallest modules (gg.uuid, gg.log), validate pattern, then tackle yaml.gg. [added: 2026-02-26, updated: 2026-03-04]
 
 

@@ -1,9 +1,9 @@
-from gg.csv import csv_parse, csv_parse_delim, csv_parse_table, csv_stringify, csv_stringify_delim, csv_stringify_table, CsvTable
+from gg.csv import parse, parse_delim, parse_table, stringify, stringify_delim, stringify_table, CsvTable
 from std.collections import Vector
 
 void main():
     # ── Simple 2-row CSV ──
-    auto csv_r1 = csv_parse("a,b,c\n1,2,3\n")
+    auto csv_r1 = parse("a,b,c\n1,2,3\n")
     match csv_r1:
         case Ok(csv_rows):
             print(csv_rows.len())
@@ -19,7 +19,7 @@ void main():
             print("error")
 
     # ── Quoted fields with embedded commas ──
-    auto csv_r2 = csv_parse("name,value\n\"a,b\",c\n")
+    auto csv_r2 = parse("name,value\n\"a,b\",c\n")
     match csv_r2:
         case Ok(csv_rows):
             Vector[str] csv_qr = csv_rows.get(1).unwrap()
@@ -29,7 +29,7 @@ void main():
             print("error")
 
     # ── Quoted fields with escaped quotes ("") ──
-    auto csv_r3 = csv_parse("x\n\"he said \"\"hi\"\"\"\n")
+    auto csv_r3 = parse("x\n\"he said \"\"hi\"\"\"\n")
     match csv_r3:
         case Ok(csv_rows):
             Vector[str] csv_qr = csv_rows.get(1).unwrap()
@@ -38,7 +38,7 @@ void main():
             print("error")
 
     # ── Quoted fields with embedded newlines ──
-    auto csv_r4 = csv_parse("x\n\"line1\nline2\"\n")
+    auto csv_r4 = parse("x\n\"line1\nline2\"\n")
     match csv_r4:
         case Ok(csv_rows):
             Vector[str] csv_qr = csv_rows.get(1).unwrap()
@@ -47,7 +47,7 @@ void main():
             print("error")
 
     # ── Custom delimiter (tab) ──
-    auto csv_r5 = csv_parse_delim("a\tb\tc\n1\t2\t3\n", "\t")
+    auto csv_r5 = parse_delim("a\tb\tc\n1\t2\t3\n", "\t")
     match csv_r5:
         case Ok(csv_rows):
             print(csv_rows.len())
@@ -58,7 +58,7 @@ void main():
             print("error")
 
     # ── Empty fields ──
-    auto csv_r6 = csv_parse("a,,b\n")
+    auto csv_r6 = parse("a,,b\n")
     match csv_r6:
         case Ok(csv_rows):
             Vector[str] csv_er = csv_rows.get(0).unwrap()
@@ -68,7 +68,7 @@ void main():
             print("error")
 
     # ── CsvTable with headers ──
-    auto csv_r7 = csv_parse_table("name,age,city\nAlice,30,NYC\nBob,25,LA\n")
+    auto csv_r7 = parse_table("name,age,city\nAlice,30,NYC\nBob,25,LA\n")
     match csv_r7:
         case Ok(csv_tbl):
             print(csv_tbl.row_count())
@@ -93,7 +93,7 @@ void main():
     csv_sr2.push("1")
     csv_sr2.push("2")
     csv_data.push(csv_sr2)
-    str csv_out = csv_stringify(csv_data)
+    str csv_out = stringify(csv_data)
     print(csv_out == "x,y\r\n1,2\r\n")
 
     # ── Stringify with quoting ──
@@ -102,7 +102,7 @@ void main():
     csv_qr1.push("has,comma")
     csv_qr1.push("normal")
     csv_qdata.push(csv_qr1)
-    str csv_qout = csv_stringify(csv_qdata)
+    str csv_qout = stringify(csv_qdata)
     print(csv_qout == "\"has,comma\",normal\r\n")
 
     # ── Stringify table ──
@@ -115,11 +115,11 @@ void main():
     csv_tr1.push("2")
     csv_trows.push(csv_tr1)
     CsvTable csv_table = CsvTable(csv_hdr, csv_trows)
-    str csv_tout = csv_stringify_table(csv_table)
+    str csv_tout = stringify_table(csv_table)
     print(csv_tout == "a,b\r\n1,2\r\n")
 
     # ── Empty input ──
-    auto csv_r8 = csv_parse("")
+    auto csv_r8 = parse("")
     match csv_r8:
         case Ok(csv_rows):
             print(csv_rows.len())
@@ -127,7 +127,7 @@ void main():
             print("error")
 
     # ── Parse error: unterminated quote ──
-    auto csv_r9 = csv_parse("\"unterminated\n")
+    auto csv_r9 = parse("\"unterminated\n")
     match csv_r9:
         case Error(csv_msg):
             print(csv_msg)
@@ -135,7 +135,7 @@ void main():
             print("unexpected")
 
     # ── CRLF line endings ──
-    auto csv_r10 = csv_parse("a,b\r\n1,2\r\n")
+    auto csv_r10 = parse("a,b\r\n1,2\r\n")
     match csv_r10:
         case Ok(csv_rows):
             print(csv_rows.len())

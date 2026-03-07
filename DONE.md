@@ -1,5 +1,7 @@
 # DONE
 
+- [2026-03-07] **feat: private visibility enforcement for imports**: `from X import Y` where Y is `private` now produces clear "cannot import private item 'Y' from module 'X'" compile error. Added `visibility` field to TypeAlias and NewtypeDef AST nodes. Private enum glob imports (`from X import Enum.*`) also caught. 4 new unit tests.
+
 - [2026-03-07] **fix: type alias transparency**: `type Count = int` and `type IntList = Vector[int]` now work as transparent aliases — the alias name is interchangeable with the underlying type in declarations, function signatures, and expressions. Implemented as AST-level rewriting in `meta::expand_type_aliases()`: collects aliases, rewrites constructor calls (e.g., `IntList()` → `Vector[int]()`), substitutes type annotations via `substitute_item`, handles generic aliases (e.g., `type StringMap[V] = Dict[str, V]`), then removes alias items. Function type aliases (`type Op = int(int, int)`) also supported. 4 new integration test fixtures.
 
 - [2026-03-07] **fix: LIR projection type tracking**: `lower_place_addr` and `FieldLoad` now track GIR types through Field/Deref projection chains instead of always using the base local's type. Fixes field-index-out-of-range validation errors on nested struct field access (e.g., `response.body.cap`). LIR validation: 89% → 100% of valid fixtures (483/483).

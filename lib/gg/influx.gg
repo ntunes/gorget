@@ -20,7 +20,7 @@
 
 from gg.db import Row, Param, Queryable, DbConnection
 from gg.http import http_request, http_get, http_post, HttpResponse
-from gg.csv import csv_parse_table
+from gg.csv import parse_table
 from std.collections import Vector, Dict
 from std.conv import int_to_str, float_to_str
 

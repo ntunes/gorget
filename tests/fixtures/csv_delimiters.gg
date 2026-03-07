@@ -1,10 +1,10 @@
-from gg.csv import csv_parse, csv_parse_delim, csv_parse_table, csv_parse_table_delim, csv_stringify_delim, csv_stringify_table_delim, CsvTable
+from gg.csv import parse, parse_delim, parse_table, parse_table_delim, stringify_delim, stringify_table_delim, CsvTable
 from std.collections import Vector
 
 void main():
     # ── Test 1: csv_parse_table_delim (tab-delimited) ────────
     str tsv = "name\tage\tcity\nAlice\t30\tNYC\nBob\t25\tLA\n"
-    auto r1 = csv_parse_table_delim(tsv, "\t")
+    auto r1 = parse_table_delim(tsv, "\t")
     match r1:
         case Ok(tbl1):
             int row_cnt = tbl1.row_count()
@@ -27,7 +27,7 @@ void main():
     r2b.push("1")
     r2b.push("2")
     rows2.push(r2b)
-    str out2 = csv_stringify_delim(rows2, "|")
+    str out2 = stringify_delim(rows2, "|")
     print(out2 == "x|y\r\n1|2\r\n")
 
     # ── Test 3: csv_stringify_table_delim (semicolon) ─────────
@@ -40,12 +40,12 @@ void main():
     r3a.push("world")
     rows3.push(r3a)
     CsvTable tbl3 = CsvTable(hdr3, rows3)
-    str out3 = csv_stringify_table_delim(tbl3, ";")
+    str out3 = stringify_table_delim(tbl3, ";")
     print(out3 == "a;b\r\nhello;world\r\n")
 
     # ── Test 4: Tab-delimited roundtrip ──────────────────────
     str tsv4 = "p\tq\n10\t20\n30\t40\n"
-    auto r4 = csv_parse_table_delim(tsv4, "\t")
+    auto r4 = parse_table_delim(tsv4, "\t")
     match r4:
         case Ok(tbl4):
             Vector[str] hdr4 = Vector[str]()
@@ -57,8 +57,8 @@ void main():
                 rows4.push(tbl4.row(ri))
                 ri = ri + 1
             CsvTable rebuilt4 = CsvTable(hdr4, rows4)
-            str out4 = csv_stringify_table_delim(rebuilt4, "\t")
-            auto r4b = csv_parse_table_delim(out4, "\t")
+            str out4 = stringify_table_delim(rebuilt4, "\t")
+            auto r4b = parse_table_delim(out4, "\t")
             match r4b:
                 case Ok(tbl4b):
                     print(tbl4b.row_count())
@@ -71,7 +71,7 @@ void main():
 
     # ── Test 5: Single-column CSV ─────────────────────────────
     str single = "val\nalpha\nbeta\n"
-    auto r5 = csv_parse_table_delim(single, ",")
+    auto r5 = parse_table_delim(single, ",")
     match r5:
         case Ok(tbl5):
             int sc_rows = tbl5.row_count()
@@ -84,7 +84,7 @@ void main():
 
     # ── Test 6: Header-only CSV (0 data rows) ─────────────────
     str header_only = "col1,col2\n"
-    auto r6 = csv_parse_table_delim(header_only, ",")
+    auto r6 = parse_table_delim(header_only, ",")
     match r6:
         case Ok(tbl6):
             int ho_rows = tbl6.row_count()

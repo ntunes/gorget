@@ -1,14 +1,14 @@
-from gg.csv import csv_parse, csv_parse_table, csv_stringify, CsvTable
+from gg.csv import parse, parse_table, stringify, CsvTable
 from std.collections import Vector
 
 void main():
     # ── Error: unterminated quoted field ──
-    Result[Vector[Vector[str]], str] r_err = csv_parse("\"unclosed")
+    Result[Vector[Vector[str]], str] r_err = parse("\"unclosed")
     bool csv_is_err = r_err.is_err()
     print(f"{csv_is_err}")
 
     # ── has_column / column_index ──
-    CsvTable tbl = csv_parse_table("name,age,city\nAlice,30,NYC\nBob,25,LA").unwrap()
+    CsvTable tbl = parse_table("name,age,city\nAlice,30,NYC\nBob,25,LA").unwrap()
     print(tbl.has_column("age"))
     print(tbl.has_column("zip"))
     int city_idx = tbl.column_index("city")
@@ -20,9 +20,9 @@ void main():
 
     # ── Roundtrip: field with embedded delimiter and escaped double-quote ──
     str tricky = "\"hello, world\",plain\n\"say \"\"hi\"\"\",end"
-    Vector[Vector[str]] rows = csv_parse(tricky).unwrap()
-    str serialized = csv_stringify(rows)
-    Vector[Vector[str]] rows2 = csv_parse(serialized).unwrap()
+    Vector[Vector[str]] rows = parse(tricky).unwrap()
+    str serialized = stringify(rows)
+    Vector[Vector[str]] rows2 = parse(serialized).unwrap()
     Vector[str] r0 = rows2.get(0).unwrap()
     print(r0.get(0).unwrap())
     print(r0.get(1).unwrap())
@@ -31,7 +31,7 @@ void main():
     print(r1.get(1).unwrap())
 
     # ── Empty input → Ok with 0 rows ──
-    Vector[Vector[str]] empty_rows = csv_parse("").unwrap()
+    Vector[Vector[str]] empty_rows = parse("").unwrap()
     int empty_len = empty_rows.len()
     print(f"{empty_len}")
 
