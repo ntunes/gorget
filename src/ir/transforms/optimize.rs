@@ -598,15 +598,54 @@ fn eliminate_self_assigns(func: &mut Function) {
 ///   x ^ x                                         → 0
 fn simplify_algebraic(func: &mut Function) {
     for bb in &mut func.blocks {
+        // Track local definitions for peephole patterns (e.g., double negation)
+        let mut local_defs: std::collections::HashMap<u32, (UnOp, Operand)> = std::collections::HashMap::new();
         for inst in &mut bb.instructions {
             let simplified = match inst {
                 Instruction::BinOp { dst, op, type_id, lhs, rhs } => {
                     simplify_binop(*dst, *op, *type_id, lhs, rhs)
                 }
+                // Double negation: Op(Op(x)) → x for involutory ops (Not, Neg, BitNot)
+                Instruction::UnOp { dst, op, operand, .. } => {
+                    if let Operand::Copy(place) = operand {
+                        if place.projections.is_empty() {
+                            if let Some((inner_op, inner_operand)) = local_defs.get(&place.local.0) {
+                                if inner_op == op {
+                                    Some(Instruction::Assign {
+                                        dst: Place::local(*dst),
+                                        value: inner_operand.clone(),
+                                    })
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                }
                 _ => None,
             };
+            // Track UnOp definitions before applying simplification
+            if let Instruction::UnOp { dst, op, operand, .. } = inst {
+                local_defs.insert(dst.0, (*op, operand.clone()));
+            }
             if let Some(new_inst) = simplified {
+                // Clear tracking for this dst since it's now an Assign, not UnOp
+                if let Instruction::Assign { dst: place, .. } = &new_inst {
+                    local_defs.remove(&place.local.0);
+                }
                 *inst = new_inst;
+            }
+            // Invalidate tracking on non-UnOp writes to a local
+            if let Some(written) = instruction_dst(inst) {
+                if !matches!(inst, Instruction::UnOp { .. }) {
+                    local_defs.remove(&written);
+                }
             }
         }
     }
@@ -919,6 +958,7 @@ fn cse_dst(inst: &Instruction) -> Option<LocalId> {
 /// Replace expensive operations with cheaper equivalents:
 ///   x * 2^n → x << n   (multiplication by power of 2)
 ///   x / 2^n → x >> n   (unsigned division by power of 2, only for positive constants)
+///   x % 2^n → x & (2^n - 1) (remainder by power of 2, unsigned types or known non-negative)
 fn reduce_strength(func: &mut Function) {
     for bb in &mut func.blocks {
         for inst in &mut bb.instructions {
@@ -930,6 +970,9 @@ fn reduce_strength(func: &mut Function) {
                 }
                 Instruction::BinOp { dst, op: BinOp::Div, type_id, lhs, rhs } => {
                     reduce_div_pow2(*dst, *type_id, lhs, rhs)
+                }
+                Instruction::BinOp { dst, op: BinOp::Rem, type_id, lhs, rhs } => {
+                    reduce_rem_pow2(*dst, *type_id, lhs, rhs)
                 }
                 _ => None,
             };
@@ -979,6 +1022,27 @@ fn reduce_div_pow2(dst: LocalId, type_id: TypeId, lhs: &Operand, rhs: &Operand) 
                 });
             }
         }
+    }
+    None
+}
+
+/// x % 2^n → x & (2^n - 1) (only safe for unsigned types or known non-negative signed values)
+/// For signed integers, `(-7) % 4 = -3` but `(-7) & 3 = 1` — different result.
+fn reduce_rem_pow2(dst: LocalId, type_id: TypeId, lhs: &Operand, rhs: &Operand) -> Option<Instruction> {
+    use crate::ir::types::*;
+    let shift = pow2_shift(rhs)?;
+    let mask = (1i64 << shift) - 1;
+    // Safe for unsigned types unconditionally
+    let is_unsigned = matches!(type_id, U64_TYPE | U32_TYPE | U16_TYPE | U8_TYPE);
+    // Safe for signed types only when dividend is a known non-negative constant
+    let is_non_negative_const = matches!(lhs, Operand::Constant(Constant::I64(v)) if *v >= 0)
+        || matches!(lhs, Operand::Constant(Constant::I32(v)) if *v >= 0);
+    if is_unsigned || is_non_negative_const {
+        return Some(Instruction::BinOp {
+            dst, op: BinOp::BitAnd, type_id,
+            lhs: lhs.clone(),
+            rhs: Operand::Constant(Constant::I64(mask)),
+        });
     }
     None
 }
@@ -2702,6 +2766,83 @@ mod tests {
     }
 
     #[test]
+    fn simplify_double_not() {
+        // _1 = UnOp(Not, Copy(_0)); _2 = UnOp(Not, Copy(_1)) → _2 = Copy(_0)
+        let mut f = make_func(vec![bb(vec![
+            Instruction::UnOp {
+                dst: LocalId(1), op: UnOp::Not, type_id: BOOL_TYPE,
+                operand: Operand::Copy(Place::local(LocalId(0))),
+            },
+            Instruction::UnOp {
+                dst: LocalId(2), op: UnOp::Not, type_id: BOOL_TYPE,
+                operand: Operand::Copy(Place::local(LocalId(1))),
+            },
+        ], ret_local(2))], vec![local(BOOL_TYPE); 3], vec![BOOL_TYPE]);
+        simplify_algebraic(&mut f);
+        match &f.blocks[0].instructions[1] {
+            Instruction::Assign { value: Operand::Copy(p), .. } if p.local == LocalId(0) => {}
+            other => panic!("Expected Copy(_0), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn simplify_double_neg() {
+        // _1 = UnOp(Neg, Copy(_0)); _2 = UnOp(Neg, Copy(_1)) → _2 = Copy(_0)
+        let mut f = make_func(vec![bb(vec![
+            Instruction::UnOp {
+                dst: LocalId(1), op: UnOp::Neg, type_id: I64_TYPE,
+                operand: Operand::Copy(Place::local(LocalId(0))),
+            },
+            Instruction::UnOp {
+                dst: LocalId(2), op: UnOp::Neg, type_id: I64_TYPE,
+                operand: Operand::Copy(Place::local(LocalId(1))),
+            },
+        ], ret_local(2))], vec![local(I64_TYPE); 3], vec![I64_TYPE]);
+        simplify_algebraic(&mut f);
+        match &f.blocks[0].instructions[1] {
+            Instruction::Assign { value: Operand::Copy(p), .. } if p.local == LocalId(0) => {}
+            other => panic!("Expected Copy(_0), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn simplify_double_bitnot() {
+        // _1 = UnOp(BitNot, Copy(_0)); _2 = UnOp(BitNot, Copy(_1)) → _2 = Copy(_0)
+        let mut f = make_func(vec![bb(vec![
+            Instruction::UnOp {
+                dst: LocalId(1), op: UnOp::BitNot, type_id: I64_TYPE,
+                operand: Operand::Copy(Place::local(LocalId(0))),
+            },
+            Instruction::UnOp {
+                dst: LocalId(2), op: UnOp::BitNot, type_id: I64_TYPE,
+                operand: Operand::Copy(Place::local(LocalId(1))),
+            },
+        ], ret_local(2))], vec![local(I64_TYPE); 3], vec![I64_TYPE]);
+        simplify_algebraic(&mut f);
+        match &f.blocks[0].instructions[1] {
+            Instruction::Assign { value: Operand::Copy(p), .. } if p.local == LocalId(0) => {}
+            other => panic!("Expected Copy(_0), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn no_simplify_mixed_unops() {
+        // _1 = UnOp(Neg, Copy(_0)); _2 = UnOp(Not, Copy(_1)) → unchanged (different ops)
+        let mut f = make_func(vec![bb(vec![
+            Instruction::UnOp {
+                dst: LocalId(1), op: UnOp::Neg, type_id: I64_TYPE,
+                operand: Operand::Copy(Place::local(LocalId(0))),
+            },
+            Instruction::UnOp {
+                dst: LocalId(2), op: UnOp::Not, type_id: BOOL_TYPE,
+                operand: Operand::Copy(Place::local(LocalId(1))),
+            },
+        ], ret_local(2))], vec![local(I64_TYPE), local(I64_TYPE), local(BOOL_TYPE)], vec![I64_TYPE]);
+        simplify_algebraic(&mut f);
+        assert!(matches!(&f.blocks[0].instructions[1], Instruction::UnOp { .. }));
+    }
+
+    #[test]
     fn simplify_bitand_self() {
         // _2 = BinOp(BitAnd, Copy(_1), Copy(_1)) → _2 = Copy(_1)
         let mut f = make_func(vec![bb(vec![Instruction::BinOp {
@@ -2892,6 +3033,51 @@ mod tests {
         match &f.blocks[0].instructions[0] {
             Instruction::BinOp { op: BinOp::Div, .. } => {}
             other => panic!("Expected unchanged Div, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn reduce_rem_pow2_non_negative() {
+        // _1 = Rem(100, 8) → BitAnd(100, 7) — non-negative constant
+        let mut f = make_func(vec![bb(vec![Instruction::BinOp {
+            dst: LocalId(1), op: BinOp::Rem, type_id: I64_TYPE,
+            lhs: Operand::Constant(Constant::I64(100)),
+            rhs: Operand::Constant(Constant::I64(8)),
+        }], ret_local(1))], vec![local(I64_TYPE), local(I64_TYPE)], vec![]);
+        reduce_strength(&mut f);
+        match &f.blocks[0].instructions[0] {
+            Instruction::BinOp { op: BinOp::BitAnd, rhs: Operand::Constant(Constant::I64(7)), .. } => {}
+            other => panic!("Expected BitAnd with mask 7, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn no_reduce_rem_pow2_signed_unknown() {
+        // _2 = Rem(Copy(_1), 4) → unchanged (signed, sign unknown)
+        let mut f = make_func(vec![bb(vec![Instruction::BinOp {
+            dst: LocalId(2), op: BinOp::Rem, type_id: I64_TYPE,
+            lhs: Operand::Copy(Place::local(LocalId(1))),
+            rhs: Operand::Constant(Constant::I64(4)),
+        }], ret_local(2))], vec![local(I64_TYPE), local(I64_TYPE), local(I64_TYPE)], vec![I64_TYPE]);
+        reduce_strength(&mut f);
+        match &f.blocks[0].instructions[0] {
+            Instruction::BinOp { op: BinOp::Rem, .. } => {}
+            other => panic!("Expected unchanged Rem, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn no_reduce_rem_negative_dividend() {
+        // _1 = Rem(-7, 4) → unchanged (negative, (-7)%4 ≠ (-7)&3)
+        let mut f = make_func(vec![bb(vec![Instruction::BinOp {
+            dst: LocalId(1), op: BinOp::Rem, type_id: I64_TYPE,
+            lhs: Operand::Constant(Constant::I64(-7)),
+            rhs: Operand::Constant(Constant::I64(4)),
+        }], ret_local(1))], vec![local(I64_TYPE), local(I64_TYPE)], vec![]);
+        reduce_strength(&mut f);
+        match &f.blocks[0].instructions[0] {
+            Instruction::BinOp { op: BinOp::Rem, .. } => {}
+            other => panic!("Expected unchanged Rem, got {:?}", other),
         }
     }
 
