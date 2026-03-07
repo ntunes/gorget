@@ -10,6 +10,12 @@
 
 - [2026-03-07] **feat: async-aware Mutex[T].lock() — coroutine yield point via poll-lock**: `Mutex__*__lock` calls in spawned async functions become YieldKind::MutexLock — trylock + waker protocol instead of blocking pthread_mutex_lock. Self-managed state transition (retry-on-same-case). Shared-token functions excluded from coroutine candidacy.
 
+- [2026-03-07] **feat: `with shared_var:` auto-refresh across yield points**: Bare `with x:` syntax for shared variables — binding is guaranteed fresh after every await and blocking call. Parser supports bare form (no `as` needed) and rename form (`with x as y:`). Borrow checker exempts with-tracked bindings from stale warnings. IR emits re-read after await/sleep/I/O calls. Warning note now suggests `with` pattern as fix.
+
+- [2026-03-07] **refactor: unify `type` and `meta type` alias expansion**: Both `type Count = int` and `meta type Count = int` now feed into the same `type_env` during meta evaluation. Removed standalone `expand_type_aliases()` pass — constructor fixup, substitution, and generic alias expansion all happen inside `evaluate_meta_consts_impl`.
+
+- [2026-03-07] **fix: type alias transparency**: `type Count = int` and `type IntList = Vector[int]` now work as transparent aliases. AST-level rewriting in `meta::expand_type_aliases()`: collects aliases, rewrites constructor calls, substitutes type annotations, handles generic aliases and function type aliases. 4 integration test fixtures.
+
 - [2026-03-07] **feat: M:N Scheduler Phase 6 — blocking thread pool + async sleep + I/O integration**: Async sleep via reactor (`gorget_reactor_sleep_async` + waker callback → true coroutine yield). Go-style blocking I/O (`__gorget_blocking_enter/exit` wraps known blocking stdlib calls). Token release at blocking points in `shared_async.rs`. Poll function type coercion (Str→const char*, GorgetString→Str). Three test fixtures: `async_sleep_yield`, `async_blocking_io`, `async_blocking_coroutine`. 880 unit + 567 integration tests pass.
 
 - [2026-03-07] **feat: LIR ParamRef instruction + C keyword escaping → 43 A/B fixtures**: Added `Inst::ParamRef` to connect function parameters to local slots in the LIR. Added C keyword escaping (`c_func_name`) to avoid conflicts with `double`, `float`, etc. Expands A/B coverage from 36→43 fixtures (+7: functions, generics, generic_trait_equip, test_coexist, trace_test, trait_inherit_defaults, type_alias_fn_sig).
