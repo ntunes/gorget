@@ -1,5 +1,9 @@
 # DONE
 
+- [2026-03-07] **GIR optimization: constant propagation into terminators**: Propagates known constants into Branch/Switch/Return terminators. Second terminator-only pass after constant folding enables branch folding for computed-then-folded constants (e.g., `not false` → `true`). operators.gg: 7→3 blocks. 2 new tests (61 total optimizer).
+
+- [2026-03-07] **GIR optimization: cast folding and self-assign elimination**: Cast folding evaluates `Cast(Constant, target)` at compile time for all primitive numeric/bool conversions. Self-assign elimination converts `_N = Copy(_N)` to Nop. 9 new tests (59 total optimizer).
+
 - [2026-03-07] **GIR optimization: CSE for UnOp instructions**: Extended common subexpression elimination to also track and reuse UnOp (Neg, Not, BitNot) computations. Added `CseKey::UnOp` variant, `cse_key`/`cse_dst` matching, and `reads_local` invalidation.
 
 - [2026-03-07] **GIR optimization: common subexpression elimination (CSE)**: Intra-block hash-based tracking of BinOp and Cmp computations. Replaces redundant evaluations with Copy of first result. Invalidates on calls and operand reassignment (including Assign to Place). 5 new tests (50 total optimizer). 778 unit + 557 integration pass.
