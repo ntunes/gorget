@@ -2,7 +2,7 @@
 
 ## High
 
-- **LIR: Phase 5 — A/B test c_lir against current backend**: Phases 1-4 done (lower, SSA, c_lir, optimizer with 7 passes + fixpoint). 457/515 fixtures (89%) pass LIR validation. Remaining failures: GIR Str/GorgetString field index mismatches on complex string operations. Next: close validation gaps, then compare c_lir output against current backend. [updated: 2026-03-07]
+- **LIR: Phase 5 — A/B test c_lir against current backend**: Phases 1-4 done (lower, SSA, c_lir, optimizer with 7 passes + fixpoint). LIR validation: 100% of valid fixtures pass (483/483). 32 expected-error fixtures correctly fail at compilation. Next: compare c_lir output against current backend on a subset of fixtures, identify codegen gaps. [updated: 2026-03-07]
 
 ## Medium
 
