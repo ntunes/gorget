@@ -15,6 +15,7 @@ pub fn optimize_module(module: &mut crate::ir::Module) {
         constant_fold(func);
         fold_constant_branches(func);
         elide_dead_drops(func);
+        thread_jumps(func);
         eliminate_dead_blocks(func);
         eliminate_unused_locals(func);
     }
@@ -221,6 +222,89 @@ fn elide_dead_drops(func: &mut Function) {
                 keep
             });
         }
+    }
+}
+
+// ── Jump Threading ────────────────────────────────────────────────────
+
+/// Thread jumps through empty blocks: if a block has no instructions and its
+/// terminator is `Jump(target)`, redirect predecessors to `target` directly.
+///
+/// This cleans up the CFG after constant branch folding turns `Branch` into
+/// `Jump`, leaving the unused branch target as an empty trampoline block.
+/// Runs before dead block elimination so that the threaded blocks become
+/// unreachable and get removed.
+fn thread_jumps(func: &mut Function) {
+    if func.blocks.is_empty() {
+        return;
+    }
+
+    let n = func.blocks.len();
+
+    // Build a forwarding table: for each block, where does it ultimately jump?
+    // Follow chains (bb1 → bb2 → bb3) but cap depth to avoid infinite loops
+    // in malformed IR (blocks that form a cycle of empty jumps).
+    let mut forward = vec![None; n];
+    for (i, block) in func.blocks.iter().enumerate() {
+        if !block.instructions.is_empty() {
+            continue;
+        }
+        if let Some(Terminator::Jump(target)) = &block.terminator {
+            forward[i] = Some(target.0);
+        }
+    }
+
+    // Resolve chains: if bb1 → bb2 and bb2 → bb3, then bb1 → bb3
+    let mut resolved = vec![0u32; n];
+    for i in 0..n {
+        let mut target = i as u32;
+        let mut depth = 0;
+        while let Some(next) = forward[target as usize] {
+            if next == target || depth > n { break; } // cycle guard
+            target = next;
+            depth += 1;
+        }
+        resolved[i] = target;
+    }
+
+    // Check if any remapping actually changed
+    let has_changes = resolved.iter().enumerate().any(|(i, &t)| t != i as u32);
+    if !has_changes {
+        return;
+    }
+
+    // Don't remap block 0 (entry block) — it can't be skipped
+    resolved[0] = 0;
+
+    // Rewrite all terminator block references through the forwarding table
+    for bb in &mut func.blocks {
+        if let Some(ref mut term) = bb.terminator {
+            remap_terminator_targets(term, &resolved);
+        }
+    }
+}
+
+/// Remap block targets in a terminator using a forwarding table.
+fn remap_terminator_targets(term: &mut Terminator, forward: &[u32]) {
+    match term {
+        Terminator::Jump(target) => {
+            target.0 = forward[target.0 as usize];
+        }
+        Terminator::Branch { then_block, else_block, .. } => {
+            then_block.0 = forward[then_block.0 as usize];
+            else_block.0 = forward[else_block.0 as usize];
+        }
+        Terminator::Switch { cases, default, .. } => {
+            for (_, target) in cases.iter_mut() {
+                target.0 = forward[target.0 as usize];
+            }
+            default.0 = forward[default.0 as usize];
+        }
+        Terminator::Invoke { normal, error, .. } => {
+            normal.0 = forward[normal.0 as usize];
+            error.0 = forward[error.0 as usize];
+        }
+        Terminator::Return(_) | Terminator::Unreachable => {}
     }
 }
 
@@ -841,6 +925,71 @@ mod tests {
         ], vec![local(I64_TYPE), local(I64_TYPE)], vec![]);
         elide_dead_drops(&mut f);
         assert_eq!(f.blocks[1].instructions.len(), 1);
+    }
+
+    // ── Jump Threading Tests ──────────────────────────────────────────
+
+    #[test]
+    fn thread_simple_jump() {
+        // bb0 → bb1 (empty) → bb2. After threading, bb0 → bb2.
+        let mut f = make_func(vec![
+            bb(vec![], Terminator::Jump(BlockId(1))),
+            bb(vec![], Terminator::Jump(BlockId(2))),  // empty trampoline
+            bb(vec![], ret_i64(42)),
+        ], vec![local(I64_TYPE)], vec![]);
+        thread_jumps(&mut f);
+        assert!(matches!(f.blocks[0].terminator, Some(Terminator::Jump(BlockId(2)))));
+    }
+
+    #[test]
+    fn thread_chain() {
+        // bb0 → bb1 → bb2 → bb3. All intermediates empty.
+        let mut f = make_func(vec![
+            bb(vec![], Terminator::Jump(BlockId(1))),
+            bb(vec![], Terminator::Jump(BlockId(2))),
+            bb(vec![], Terminator::Jump(BlockId(3))),
+            bb(vec![], ret_i64(0)),
+        ], vec![local(I64_TYPE)], vec![]);
+        thread_jumps(&mut f);
+        assert!(matches!(f.blocks[0].terminator, Some(Terminator::Jump(BlockId(3)))));
+    }
+
+    #[test]
+    fn thread_branch_targets() {
+        // bb0 branches to bb1 (empty→bb3) and bb2 (empty→bb3).
+        let mut f = make_func(vec![
+            bb(vec![], Terminator::Branch {
+                cond: Operand::Copy(Place::local(LocalId(1))),
+                then_block: BlockId(1), else_block: BlockId(2),
+            }),
+            bb(vec![], Terminator::Jump(BlockId(3))),  // empty → bb3
+            bb(vec![], Terminator::Jump(BlockId(3))),  // empty → bb3
+            bb(vec![], ret_i64(0)),
+        ], vec![local(I64_TYPE), local(BOOL_TYPE)], vec![BOOL_TYPE]);
+        thread_jumps(&mut f);
+        match &f.blocks[0].terminator {
+            Some(Terminator::Branch { then_block, else_block, .. }) => {
+                assert_eq!(then_block.0, 3);
+                assert_eq!(else_block.0, 3);
+            }
+            other => panic!("Expected Branch, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn no_thread_non_empty_block() {
+        // bb1 has instructions — should NOT be threaded
+        let mut f = make_func(vec![
+            bb(vec![], Terminator::Jump(BlockId(1))),
+            bb(vec![Instruction::Assign {
+                dst: Place::local(LocalId(1)),
+                value: Operand::Constant(Constant::I64(5)),
+            }], Terminator::Jump(BlockId(2))),
+            bb(vec![], ret_local(1)),
+        ], vec![local(I64_TYPE), local(I64_TYPE)], vec![]);
+        thread_jumps(&mut f);
+        // bb0 should still go to bb1 (not threaded past it)
+        assert!(matches!(f.blocks[0].terminator, Some(Terminator::Jump(BlockId(1)))));
     }
 
     #[test]
