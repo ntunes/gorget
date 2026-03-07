@@ -686,8 +686,13 @@ fn simplify_binop(dst: LocalId, op: BinOp, type_id: TypeId, lhs: &Operand, rhs: 
     if let (Operand::Copy(lp), Operand::Copy(rp)) = (lhs, rhs) {
         if lp.local == rp.local && lp.projections.is_empty() && rp.projections.is_empty() {
             match op {
+                // x - x → 0, x ^ x → 0
                 BinOp::Sub | BinOp::SubWrap | BinOp::BitXor => {
                     return Some(assign_op(typed_zero()));
+                }
+                // x & x → x, x | x → x (idempotent)
+                BinOp::BitAnd | BinOp::BitOr => {
+                    return Some(assign_op(lhs.clone()));
                 }
                 _ => {}
             }
@@ -2694,6 +2699,36 @@ mod tests {
         }], ret_local(3))], vec![local(BOOL_TYPE), local(I64_TYPE), local(I64_TYPE), local(BOOL_TYPE)], vec![I64_TYPE, I64_TYPE]);
         simplify_cmp(&mut f);
         assert!(matches!(&f.blocks[0].instructions[0], Instruction::Cmp { .. }));
+    }
+
+    #[test]
+    fn simplify_bitand_self() {
+        // _2 = BinOp(BitAnd, Copy(_1), Copy(_1)) → _2 = Copy(_1)
+        let mut f = make_func(vec![bb(vec![Instruction::BinOp {
+            dst: LocalId(2), op: BinOp::BitAnd, type_id: I64_TYPE,
+            lhs: Operand::Copy(Place::local(LocalId(1))),
+            rhs: Operand::Copy(Place::local(LocalId(1))),
+        }], ret_local(2))], vec![local(I64_TYPE); 3], vec![I64_TYPE]);
+        simplify_algebraic(&mut f);
+        match &f.blocks[0].instructions[0] {
+            Instruction::Assign { value: Operand::Copy(p), .. } if p.local == LocalId(1) => {}
+            other => panic!("Expected Copy(_1), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn simplify_bitor_self() {
+        // _2 = BinOp(BitOr, Copy(_1), Copy(_1)) → _2 = Copy(_1)
+        let mut f = make_func(vec![bb(vec![Instruction::BinOp {
+            dst: LocalId(2), op: BinOp::BitOr, type_id: I64_TYPE,
+            lhs: Operand::Copy(Place::local(LocalId(1))),
+            rhs: Operand::Copy(Place::local(LocalId(1))),
+        }], ret_local(2))], vec![local(I64_TYPE); 3], vec![I64_TYPE]);
+        simplify_algebraic(&mut f);
+        match &f.blocks[0].instructions[0] {
+            Instruction::Assign { value: Operand::Copy(p), .. } if p.local == LocalId(1) => {}
+            other => panic!("Expected Copy(_1), got {:?}", other),
+        }
     }
 
     // ── Common Subexpression Elimination Tests ──────────────────────
