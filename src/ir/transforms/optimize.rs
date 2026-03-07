@@ -651,17 +651,19 @@ fn simplify_algebraic(func: &mut Function) {
     }
 }
 
-/// Simplify Cmp instructions with identical operands:
-///   x == x → true,  x != x → false
+/// Simplify Cmp instructions:
+///   x == x → true,  x != x → false (identical operands)
 ///   x <  x → false, x >  x → false
 ///   x <= x → true,  x >= x → true
+///   x == true → x,  x == false → Not(x) (boolean comparisons)
+///   x != true → Not(x), x != false → x
 fn simplify_cmp(func: &mut Function) {
     for bb in &mut func.blocks {
         for inst in &mut bb.instructions {
             let simplified = match inst {
-                Instruction::Cmp { dst, op, lhs, rhs, .. } => {
-                    // Only fire when both operands are the same simple local
-                    if let (Operand::Copy(lp), Operand::Copy(rp)) = (lhs, rhs) {
+                Instruction::Cmp { dst, op, type_id, lhs, rhs } => {
+                    // Same-local identity
+                    if let (Operand::Copy(lp), Operand::Copy(rp)) = (&*lhs, &*rhs) {
                         if lp.local == rp.local && lp.projections.is_empty() && rp.projections.is_empty() {
                             let result = match op {
                                 CmpOp::Eq | CmpOp::Le | CmpOp::Ge => true,
@@ -674,6 +676,10 @@ fn simplify_cmp(func: &mut Function) {
                         } else {
                             None
                         }
+                    }
+                    // Boolean comparison simplification (Eq/Ne with true/false)
+                    else if matches!(op, CmpOp::Eq | CmpOp::Ne) {
+                        simplify_bool_cmp(*dst, *op, *type_id, lhs, rhs)
                     } else {
                         None
                     }
@@ -684,6 +690,32 @@ fn simplify_cmp(func: &mut Function) {
                 *inst = new_inst;
             }
         }
+    }
+}
+
+/// Simplify boolean comparisons:
+///   x == true → x,  true == x → x
+///   x == false → Not(x), false == x → Not(x)
+///   x != true → Not(x), true != x → Not(x)
+///   x != false → x, false != x → x
+fn simplify_bool_cmp(dst: LocalId, op: CmpOp, type_id: TypeId, lhs: &Operand, rhs: &Operand) -> Option<Instruction> {
+    let (other, bool_val) = match (lhs, rhs) {
+        (other, Operand::Constant(Constant::Bool(b))) => (other, *b),
+        (Operand::Constant(Constant::Bool(b)), other) => (other, *b),
+        _ => return None,
+    };
+    // eq+true or ne+false → identity; eq+false or ne+true → negate
+    let is_identity = (op == CmpOp::Eq && bool_val) || (op == CmpOp::Ne && !bool_val);
+    if is_identity {
+        Some(Instruction::Assign {
+            dst: Place::local(dst),
+            value: other.clone(),
+        })
+    } else {
+        Some(Instruction::UnOp {
+            dst, op: UnOp::Not, type_id,
+            operand: other.clone(),
+        })
     }
 }
 
@@ -2763,6 +2795,66 @@ mod tests {
         }], ret_local(3))], vec![local(BOOL_TYPE), local(I64_TYPE), local(I64_TYPE), local(BOOL_TYPE)], vec![I64_TYPE, I64_TYPE]);
         simplify_cmp(&mut f);
         assert!(matches!(&f.blocks[0].instructions[0], Instruction::Cmp { .. }));
+    }
+
+    #[test]
+    fn simplify_cmp_eq_true() {
+        // _2 = Cmp(Eq, Copy(_1), true) → _2 = Copy(_1)
+        let mut f = make_func(vec![bb(vec![Instruction::Cmp {
+            dst: LocalId(2), op: CmpOp::Eq, type_id: BOOL_TYPE,
+            lhs: Operand::Copy(Place::local(LocalId(1))),
+            rhs: Operand::Constant(Constant::Bool(true)),
+        }], ret_local(2))], vec![local(BOOL_TYPE); 3], vec![BOOL_TYPE]);
+        simplify_cmp(&mut f);
+        match &f.blocks[0].instructions[0] {
+            Instruction::Assign { value: Operand::Copy(p), .. } if p.local == LocalId(1) => {}
+            other => panic!("Expected Copy(_1), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn simplify_cmp_eq_false() {
+        // _2 = Cmp(Eq, Copy(_1), false) → _2 = UnOp(Not, Copy(_1))
+        let mut f = make_func(vec![bb(vec![Instruction::Cmp {
+            dst: LocalId(2), op: CmpOp::Eq, type_id: BOOL_TYPE,
+            lhs: Operand::Copy(Place::local(LocalId(1))),
+            rhs: Operand::Constant(Constant::Bool(false)),
+        }], ret_local(2))], vec![local(BOOL_TYPE); 3], vec![BOOL_TYPE]);
+        simplify_cmp(&mut f);
+        match &f.blocks[0].instructions[0] {
+            Instruction::UnOp { op: UnOp::Not, operand: Operand::Copy(p), .. } if p.local == LocalId(1) => {}
+            other => panic!("Expected Not(Copy(_1)), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn simplify_cmp_ne_true() {
+        // _2 = Cmp(Ne, Copy(_1), true) → _2 = UnOp(Not, Copy(_1))
+        let mut f = make_func(vec![bb(vec![Instruction::Cmp {
+            dst: LocalId(2), op: CmpOp::Ne, type_id: BOOL_TYPE,
+            lhs: Operand::Copy(Place::local(LocalId(1))),
+            rhs: Operand::Constant(Constant::Bool(true)),
+        }], ret_local(2))], vec![local(BOOL_TYPE); 3], vec![BOOL_TYPE]);
+        simplify_cmp(&mut f);
+        match &f.blocks[0].instructions[0] {
+            Instruction::UnOp { op: UnOp::Not, operand: Operand::Copy(p), .. } if p.local == LocalId(1) => {}
+            other => panic!("Expected Not(Copy(_1)), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn simplify_cmp_ne_false() {
+        // _2 = Cmp(Ne, Copy(_1), false) → _2 = Copy(_1)
+        let mut f = make_func(vec![bb(vec![Instruction::Cmp {
+            dst: LocalId(2), op: CmpOp::Ne, type_id: BOOL_TYPE,
+            lhs: Operand::Copy(Place::local(LocalId(1))),
+            rhs: Operand::Constant(Constant::Bool(false)),
+        }], ret_local(2))], vec![local(BOOL_TYPE); 3], vec![BOOL_TYPE]);
+        simplify_cmp(&mut f);
+        match &f.blocks[0].instructions[0] {
+            Instruction::Assign { value: Operand::Copy(p), .. } if p.local == LocalId(1) => {}
+            other => panic!("Expected Copy(_1), got {:?}", other),
+        }
     }
 
     #[test]
