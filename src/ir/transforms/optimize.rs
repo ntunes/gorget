@@ -1787,6 +1787,112 @@ fn remap_terminator_locals(term: &mut Terminator, remap: &[u32]) {
     }
 }
 
+// ── Dead Function Elimination ────────────────────────────────────────
+
+/// Remove functions that are never called and not entry points.
+///
+/// **NOT YET ENABLED**: The C backend generates implicit function references
+/// (closure adapters, drop glue, vtable entries) that aren't visible in GIR.
+/// Enabling this requires either: (1) the backend annotating which functions
+/// it will reference, or (2) moving this pass to after C codegen (linker-level).
+#[allow(dead_code)]
+/// Entry points: `main`, test functions (`is_test_fn`).
+/// A function is "called" if it appears in a Call/CallIndirect/Invoke
+/// instruction or as a FuncRef constant anywhere in the module.
+fn eliminate_dead_functions(module: &mut crate::ir::Module) {
+    // Collect all referenced function names
+    let mut called: HashSet<String> = HashSet::new();
+
+    for func in &module.functions {
+        for bb in &func.blocks {
+            for inst in &bb.instructions {
+                match inst {
+                    Instruction::Call { func: name, .. } => { called.insert(name.clone()); }
+                    Instruction::CallIndirect { .. } => {} // can't statically resolve
+                    _ => {}
+                }
+                // Check for FuncRef constants in operands
+                collect_func_refs_from_instruction(inst, &mut called);
+            }
+            if let Some(ref term) = bb.terminator {
+                if let Terminator::Invoke { func: name, .. } = term {
+                    called.insert(name.clone());
+                }
+                collect_func_refs_from_terminator(term, &mut called);
+            }
+        }
+    }
+
+    let before = module.functions.len();
+    module.functions.retain(|f| {
+        f.name == "main" || f.is_test_fn || called.contains(&f.name)
+    });
+    let _eliminated = before - module.functions.len();
+}
+
+#[allow(dead_code)]
+fn collect_func_refs_from_operand(op: &Operand, called: &mut HashSet<String>) {
+    if let Operand::Constant(Constant::FuncRef(name)) = op {
+        called.insert(name.clone());
+    }
+}
+
+#[allow(dead_code)]
+fn collect_func_refs_from_instruction(inst: &Instruction, called: &mut HashSet<String>) {
+    match inst {
+        Instruction::Assign { value, .. } => collect_func_refs_from_operand(value, called),
+        Instruction::BinOp { lhs, rhs, .. } | Instruction::Cmp { lhs, rhs, .. } => {
+            collect_func_refs_from_operand(lhs, called);
+            collect_func_refs_from_operand(rhs, called);
+        }
+        Instruction::UnOp { operand, .. }
+        | Instruction::Cast { value: operand, .. }
+        | Instruction::BitCast { value: operand, .. }
+        | Instruction::PtrCast { value: operand, .. }
+        | Instruction::TagOf { operand, .. } => {
+            collect_func_refs_from_operand(operand, called);
+        }
+        Instruction::Call { args, .. } | Instruction::CallExtern { args, .. } => {
+            for a in args { collect_func_refs_from_operand(a, called); }
+        }
+        Instruction::CallIndirect { callee, args, .. } => {
+            collect_func_refs_from_operand(callee, called);
+            for a in args { collect_func_refs_from_operand(a, called); }
+        }
+        Instruction::StructInit { fields, .. } | Instruction::EnumInit { fields, .. } => {
+            for f in fields { collect_func_refs_from_operand(f, called); }
+        }
+        Instruction::TupleInit { elements, .. } => {
+            for e in elements { collect_func_refs_from_operand(e, called); }
+        }
+        Instruction::HeapAlloc { allocator, .. } => collect_func_refs_from_operand(allocator, called),
+        Instruction::HeapAllocArray { count, allocator, .. } => {
+            collect_func_refs_from_operand(count, called);
+            collect_func_refs_from_operand(allocator, called);
+        }
+        Instruction::Dealloc { ptr, allocator } => {
+            collect_func_refs_from_operand(ptr, called);
+            collect_func_refs_from_operand(allocator, called);
+        }
+        Instruction::IndexLoad { index, .. } => collect_func_refs_from_operand(index, called),
+        Instruction::PushAllocator { allocator } => collect_func_refs_from_operand(allocator, called),
+        _ => {}
+    }
+}
+
+#[allow(dead_code)]
+fn collect_func_refs_from_terminator(term: &Terminator, called: &mut HashSet<String>) {
+    match term {
+        Terminator::Return(op) => collect_func_refs_from_operand(op, called),
+        Terminator::Branch { cond, .. } => collect_func_refs_from_operand(cond, called),
+        Terminator::Switch { value, .. } => collect_func_refs_from_operand(value, called),
+        Terminator::Invoke { args, .. } => {
+            for a in args { collect_func_refs_from_operand(a, called); }
+        }
+        Terminator::Jump(_) | Terminator::Unreachable => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
