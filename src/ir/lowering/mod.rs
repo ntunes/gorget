@@ -1028,12 +1028,20 @@ fn register_runtime_method_sigs(ctx: &mut LoweringContext) {
     ctx.fn_sigs.insert("uint8_t__to_lower".to_string(), (vec![U8_TYPE], U8_TYPE));
 
     // Primitive static method signatures (int.parse, int.default, etc.)
+    // IMPORTANT: Use lookup_type_by_name first to find the canonical TypeId for
+    // Option types.  Inserting a new GirType::Named into the registry creates a
+    // *duplicate* entry that diverges from the TypeId used by collection method
+    // return-type inference (e.g. Vector.get → Option[int]), causing type mismatches
+    // in downstream codegen.
     let opt_int_type = ctx.type_mapper.named_types.get("Option__int64_t").copied()
-        .unwrap_or_else(|| ctx.type_registry.insert(GirType::Named("Option__int64_t".to_string())));
+        .or_else(|| ctx.lookup_type_by_name("Option__int64_t"))
+        .unwrap_or(I64_TYPE);
     let opt_float_type = ctx.type_mapper.named_types.get("Option__double").copied()
-        .unwrap_or_else(|| ctx.type_registry.insert(GirType::Named("Option__double".to_string())));
+        .or_else(|| ctx.lookup_type_by_name("Option__double"))
+        .unwrap_or(F64_TYPE);
     let opt_bool_type = ctx.type_mapper.named_types.get("Option__bool").copied()
-        .unwrap_or_else(|| ctx.type_registry.insert(GirType::Named("Option__bool".to_string())));
+        .or_else(|| ctx.lookup_type_by_name("Option__bool"))
+        .unwrap_or(BOOL_TYPE);
     ctx.fn_sigs.insert("int64_t__parse".to_string(), (vec![str_type], opt_int_type));
     ctx.fn_sigs.insert("int64_t__default".to_string(), (vec![], I64_TYPE));
     ctx.fn_sigs.insert("int64_t__one".to_string(), (vec![], I64_TYPE));
