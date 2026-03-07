@@ -1177,13 +1177,9 @@ fn test_live_group_named() {
         assert_eq!(f.params[1].node.live_group.as_deref(), Some("b"));
         let wc = f.where_clause.as_ref().expect("where clause");
         assert_eq!(wc.node.bounds.len(), 1);
-        match &wc.node.bounds[0].node {
-            WhereBound::Outlives { longer, shorter } => {
-                assert_eq!(longer.node, "a");
-                assert_eq!(shorter.node, "b");
-            }
-            _ => panic!("expected Outlives"),
-        }
+        let WhereBound::Outlives { longer, shorter } = &wc.node.bounds[0].node;
+        assert_eq!(longer.node, "a");
+        assert_eq!(shorter.node, "b");
     } else {
         panic!("expected function");
     }
