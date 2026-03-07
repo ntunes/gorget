@@ -1,5 +1,7 @@
 # DONE
 
+- [2026-03-07] **IR refactor: Split `exprs/` Phase 3 — extract `operators.rs` and `collections.rs`**: Extracted 2 more submodules from `exprs/mod.rs` (3,371 → 2,515 lines): `operators.rs` (374 lines — binary/unary ops, short-circuit, operator overloads, `in` operator) and `collections.rs` (506 lines — array/dict/set literals, list/dict/set comprehensions, optional chaining, range expressions). Module now has 8 files. 730 unit + 557 integration tests pass.
+
 - [2026-03-07] **IR refactor: `SharedLocalInfo` named struct**: Replaced 5-tuple `(LocalId, TypeId, TypeId, SharedLocalKind, SharedKind)` in `SharedVarState.locals` with named struct `SharedLocalInfo` with fields: `hidden_local`, `inner_type`, `wrapper_type`, `kind`, `ast_shared`. Updated 9 use sites across context.rs, stmts.rs, exprs/mod.rs. 730 unit + 557 integration tests pass.
 
 - [2026-03-07] **IR refactor: Split `exprs/` Phase 2 — extract `methods.rs` and `calls.rs`**: Extracted 2 more submodules from `exprs/mod.rs` (6,281 → 3,371 lines): `methods.rs` (2,027 lines — method call dispatch, collection method inference, iterator adapters map/filter/fold/collect, index access, type name resolution) and `calls.rs` (915 lines — function call lowering, argument resolution, print calls, string interpolation segments, printf format helpers). Fixed visibility: `pub(super)` for intra-`exprs` access, `pub(in crate::ir::lowering)` re-exports from mod.rs for cross-module access. Module total: 7,526 lines across 6 files vs original 7,560 monolithic. 730 unit + 557 integration tests pass.
